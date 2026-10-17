@@ -15,6 +15,10 @@ import pytest
 
 from services import PG_DATABASE, PG_HOST, PG_PASSWORD, PG_PORT, PG_USER, pg_conninfo, require
 
+# Needs server/tests/docker-compose.yml; CI starts it where Docker runs (Linux).
+pytestmark = pytest.mark.services
+
+
 
 @pytest.fixture(scope="module")
 def server(module_launcher):

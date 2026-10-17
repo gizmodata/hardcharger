@@ -81,12 +81,21 @@ jobs:
           server/build/hardcharger --print-duckdb-version
 
       - uses: astral-sh/setup-uv@v10.3.0
+      # PostgreSQL and an S3 gateway for the DuckLake suites (Docker runs on the Linux
+      # runners only; the macOS job deselects those suites by marker, visibly).
+      - name: Test services
+        if: runner.os == 'Linux'
+        run: docker compose -f server/tests/docker-compose.yml up -d --wait
       - name: Hardcharger tests
         working-directory: server/tests
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -r pyproject.toml
-          .venv/bin/python -m pytest -q
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            .venv/bin/python -m pytest -q
+          else
+            .venv/bin/python -m pytest -q -m "not services"
+          fi
       - name: Warp SQL conformance suite
         working-directory: third_party/warp-sql/conformance
         env:
@@ -104,6 +113,9 @@ jobs:
         run: |
           stage="dist/hardcharger-${{ matrix.name }}"
           cmake --install server/build --prefix "$stage"
+          # Only the server ships: never the license-test build (it trusts a key its
+          # environment names) or the unit tests.
+          test "$(ls "$stage/bin")" = "hardcharger"
           mkdir -p "$stage/lib"
           cp -P server/.deps/duckdb-install/lib/libduckdb.* "$stage/lib/"
           cp LICENSE CHANGELOG.md "$stage/"

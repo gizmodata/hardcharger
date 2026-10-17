@@ -14,3 +14,6 @@ dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["."]
+markers = [
+  "services: needs the containers in docker-compose.yml (PostgreSQL, S3); fails, never skips, without them",
+]

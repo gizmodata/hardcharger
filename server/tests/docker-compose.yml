@@ -30,7 +30,9 @@ services:
       ROOT_SECRET_KEY: minioadmin
     ports:
       - "127.0.0.1:59000:9000"
-    command: --port :9000 --health /health posix /data
+    # The posix backend serves directories under /data as buckets: create the one the
+    # tests use, then start the gateway.
+    entrypoint: ["sh", "-c", "mkdir -p /data/ducklake && exec versitygw --port :9000 --health /health posix /data"]
     tmpfs:
       - /data  # nothing outlives the containers
     healthcheck:
@@ -38,12 +40,3 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
-
-  s3-setup:
-    image: curlimages/curl:8.16.0
-    depends_on:
-      s3:
-        condition: service_healthy
-    command: >
-      -sS --aws-sigv4 aws:amz:us-east-1:s3 --user minioadmin:minioadmin
-      -X PUT http://s3:9000/ducklake

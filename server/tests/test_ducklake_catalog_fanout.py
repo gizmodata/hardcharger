@@ -19,6 +19,10 @@ import pytest
 
 from services import PG_PORT, S3_PORT, pg_conninfo, require
 
+# Needs server/tests/docker-compose.yml; CI starts it where Docker runs (Linux).
+pytestmark = pytest.mark.services
+
+
 CATALOGS = 10
 MAX_SESSIONS_PER_STEP = 3
 
