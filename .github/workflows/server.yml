@@ -112,13 +112,23 @@ jobs:
           PGPASSWORD=hardcharger "$pg/createdb" -h 127.0.0.1 -p 55433 -U hardcharger hardcharger
 
       - uses: astral-sh/setup-uv@v10.3.0
+      # PostgreSQL and an S3 gateway for the DuckLake suites (Docker runs on the Linux
+      # runners only; the macOS job deselects those suites by marker, visibly).
+      - name: Test services
+        if: runner.os == 'Linux'
+        run: docker compose -f server/tests/docker-compose.yml up -d --wait
       - name: Hardcharger tests
         working-directory: server/tests
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -r pyproject.toml
-          # Everything, access control included, on the test-license build...
-          HARDCHARGER_TEST_BINARY=../build-test/hardcharger .venv/bin/python -m pytest -q
+          # Everything, access control included, on the test-license build (the DuckLake
+          # suites need Docker, which only the Linux runners have; macOS deselects them by
+          # marker, visibly)...
+          markers=()
+          if [ "$RUNNER_OS" != "Linux" ]; then markers=(-m "not services"); fi
+          HARDCHARGER_TEST_BINARY=../build-test/hardcharger HARDCHARGER_TEST_UNIT_BINARY=../build-test/hardcharger-unit-tests \
+            .venv/bin/python -m pytest -q "${markers[@]}"
           # ...and the suites that need no license on the binary that ships.
           .venv/bin/python -m pytest -q test_server.py
       - name: Warp SQL conformance suite
@@ -138,6 +148,10 @@ jobs:
         run: |
           stage="dist/hardcharger-${{ matrix.name }}"
           cmake --install server/build --prefix "$stage"
+          # Only the release server ships: never the unit tests, and never a build that
+          # trusts the tests' license key.
+          test "$(ls "$stage/bin")" = "hardcharger"
+          if "$stage/bin/hardcharger" --version | grep -q "test-license"; then exit 1; fi
           mkdir -p "$stage/lib"
           cp -P server/.deps/duckdb-install/lib/libduckdb.* "$stage/lib/"
           cp LICENSE CHANGELOG.md "$stage/"
@@ -203,15 +217,20 @@ jobs:
             -p 127.0.0.1:55433:5432 postgres:17-alpine
           for _ in $(seq 1 30); do docker exec hardcharger-test-pg pg_isready -U hardcharger && break; sleep 1; done
       - uses: astral-sh/setup-uv@v10.3.0
+      - name: Test services
+        run: docker compose -f server/tests/docker-compose.yml up -d --wait
       - name: Hardcharger tests (ASan)
         working-directory: server/tests
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
           HARDCHARGER_TEST_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger
+          HARDCHARGER_TEST_UNIT_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-unit-tests
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -r pyproject.toml
-          .venv/bin/python -m pytest -q
+          # The release build (which this job doesn't build) is checked in the build job.
+          .venv/bin/python -m pytest -q \
+            --deselect test_inline_license_key.py::test_shipped_binary_refuses_test_signed_keys
       - name: Warp SQL conformance suite (ASan)
         working-directory: third_party/warp-sql/conformance
         env:

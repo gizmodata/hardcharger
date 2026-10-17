@@ -64,34 +64,81 @@ target_link_libraries(hardcharger_authz PUBLIC warpsql_duckdb OpenSSL::Crypto)
 target_compile_options(hardcharger_authz PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
 # Test builds trust a license key whose private half is in server/tests/license, so the
-# access-control tests can run without a GizmoData license. Never for a release.
+# Enterprise tests can run without a GizmoData license. Never for a release.
 option(HARDCHARGER_TRUST_TEST_LICENSES "Trust the tests' license signing key (tests only)" OFF)
 
-add_executable(hardcharger
+# Everything but main(), shared by the server and the unit tests.
+add_library(hardcharger_core STATIC
+  src/admission.cc
   src/audit.cc
   src/auth.cc
+  src/catalog_log.cc
   src/config.cc
   src/engine.cc
+  src/guards.cc
+  src/health.cc
+  src/http_client.cc
+  src/instrumentation.cc
+  src/jwks.cc
   src/license.cc
   src/logging.cc
-  src/main.cc
+  src/metrics.cc
+  src/oauth.cc
+  src/patterns.cc
+  src/sessions.cc
+  src/settings.cc
+  src/sql_functions.cc
+  src/sql_text.cc
   src/tokens.cc)
-target_include_directories(hardcharger PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(hardcharger PRIVATE hardcharger_authz warpsql_duckdb jwt-cpp::jwt-cpp
-                                          yaml-cpp::yaml-cpp)
+target_include_directories(hardcharger_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(hardcharger_core PUBLIC hardcharger_authz warpsql_duckdb jwt-cpp::jwt-cpp
+                                              yaml-cpp::yaml-cpp)
+target_compile_options(hardcharger_core PRIVATE -Wall -Wextra)
 if(HARDCHARGER_TRUST_TEST_LICENSES)
   file(READ "${CMAKE_CURRENT_SOURCE_DIR}/tests/license/test-license-public.pem" TEST_LICENSE_KEY)
   file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/test_license.hpp"
        "// Generated: the tests' license key (HARDCHARGER_TRUST_TEST_LICENSES).\n"
        "#define HARDCHARGER_TEST_LICENSE_PUBLIC_KEY R\"(${TEST_LICENSE_KEY})\"\n")
-  target_compile_definitions(hardcharger PRIVATE HARDCHARGER_TRUST_TEST_LICENSES=1)
+  target_compile_definitions(hardcharger_core PRIVATE HARDCHARGER_TRUST_TEST_LICENSES=1)
 endif()
-target_compile_options(hardcharger PRIVATE -Wall -Wextra)
-if(APPLE)
-  set_target_properties(hardcharger PROPERTIES BUILD_RPATH "${WARPSQL_DUCKDB_PREFIX}/lib"
+
+function(hardcharger_rpath target)
+  if(APPLE)
+    set_target_properties(${target} PROPERTIES BUILD_RPATH "${WARPSQL_DUCKDB_PREFIX}/lib"
                                                INSTALL_RPATH "@executable_path/../lib")
-else()
-  set_target_properties(hardcharger PROPERTIES BUILD_RPATH "${WARPSQL_DUCKDB_PREFIX}/lib"
+  else()
+    set_target_properties(${target} PROPERTIES BUILD_RPATH "${WARPSQL_DUCKDB_PREFIX}/lib"
                                                INSTALL_RPATH "\$ORIGIN/../lib")
-endif()
+  endif()
+endfunction()
+
+add_executable(hardcharger src/main.cc)
+target_link_libraries(hardcharger PRIVATE hardcharger_core)
+target_compile_options(hardcharger PRIVATE -Wall -Wextra)
+hardcharger_rpath(hardcharger)
+
+# Unit tests of components that have no SQL surface of their own (googletest 1.18.0).
+# server/tests runs them through the per-file wrappers.
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/refs/tags/v1.18.0.tar.gz
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(googletest)
+add_executable(hardcharger-unit-tests
+  unit/admission_test.cc
+  unit/catalog_log_test.cc
+  unit/guards_test.cc
+  unit/http_client_test.cc
+  unit/ingest_test.cc
+  unit/instrumentation_test.cc
+  unit/log_level_test.cc
+  unit/metrics_test.cc
+  unit/patterns_test.cc
+  unit/sensitive_paths_test.cc
+  unit/sql_text_test.cc)
+target_link_libraries(hardcharger-unit-tests PRIVATE hardcharger_core GTest::gtest_main)
+hardcharger_rpath(hardcharger-unit-tests)
+
 install(TARGETS hardcharger RUNTIME DESTINATION bin)

@@ -77,6 +77,10 @@ using ScopedTokenSigner =
 // DuckDB should have (SHOW GRANTS and ALTER ... OWNER TO are DuckDB's there too).
 std::optional<std::string> AccessControlStatementKind(std::string_view sql);
 
+// On a server with access control: whether `sql` is one of the statements the session
+// guard runs itself (GRANT, CREATE USER, SHOW GRANTS, ...), which DuckDB can't parse.
+bool LooksLikeAccessControlStatement(std::string_view sql);
+
 class AccessControl {
  public:
   // Opens the store and loads it. Throws std::runtime_error (never quoting the store's

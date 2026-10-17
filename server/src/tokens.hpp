@@ -6,7 +6,11 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_set>
+
+#include "logging.hpp"
 
 #include "warpsql/backend.hpp"
 
@@ -22,7 +26,8 @@ class JwtTokenService : public warpsql::TokenService {
   // against the store on every request, so a dropped or disabled user, a changed
   // password or a revoked scoped token stops working at once, on every replica.
   JwtTokenService(std::string secret_key, std::chrono::seconds lifetime, std::string instance_id,
-                  bool allow_cross_instance, std::shared_ptr<authz::AccessControl> access = nullptr);
+                  bool allow_cross_instance, LogLevel log_level = LogLevel::kInfo,
+                  std::shared_ptr<authz::AccessControl> access = nullptr);
 
   Issued Issue(const warpsql::Principal& principal) override;
   warpsql::Principal Validate(std::string_view token) override;
@@ -37,7 +42,12 @@ class JwtTokenService : public warpsql::TokenService {
   std::chrono::seconds lifetime_;
   std::string instance_id_;
   bool allow_cross_instance_;
+  LogLevel log_level_;
   std::shared_ptr<authz::AccessControl> access_;
+  // Tokens seen validated (SHA-256), so a token's first use logs at INFO and its
+  // repeats only at DEBUG. Bounded: cleared when full.
+  std::mutex seen_mutex_;
+  std::unordered_set<std::string> seen_;
 };
 
 // A random 256-bit key, hex encoded, for servers started without a secret key.

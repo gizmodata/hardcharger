@@ -12,6 +12,7 @@
 #include <stdexcept>
 
 #include "logging.hpp"
+#include "patterns.hpp"
 
 namespace hardcharger {
 
@@ -84,13 +85,17 @@ authz::Identity IdentityOf(const warpsql::Principal& principal) {
 
 Authenticator::Authenticator(const Config& config, const License& license,
                              std::shared_ptr<authz::AccessControl> access,
-                             std::function<warpsql::Principal(std::string_view)> server_tokens)
+                             std::function<warpsql::Principal(std::string_view)> server_tokens,
+                             std::shared_ptr<Jwks> jwks)
     : username_(config.username),
       password_(config.password),
+      jwks_(std::move(jwks)),
       allowed_issuer_(config.token_allowed_issuer),
       allowed_audience_(config.token_allowed_audience),
       default_role_(config.token_default_role),
       groups_claim_(config.token_groups_claim),
+      authorized_emails_(config.token_authorized_emails),
+      log_level_(ParseLogLevel(config.auth_log_level)),
       license_(license),
       access_(std::move(access)),
       server_tokens_(std::move(server_tokens)) {
@@ -118,11 +123,12 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
       }
       if (scoped) return *scoped;
     }
-    if (!verify_key_pem_.empty()) return ExchangeToken(password);
+    if (AcceptsTokens()) return ExchangeToken(password);
   }
   const bool user_ok = SameSecret(username, username_);
   const bool password_ok = SameSecret(password, password_);
   if (user_ok && password_ok) {
+    LogAt(log_level_, LogLevel::kInfo, "signed in", {{"user", std::string(username)}, {"method", "password"}});
     return warpsql::Principal{std::string(username), "admin", "password", {}};
   }
   // A user of the access-control store (never under the administrator's name). The
@@ -133,16 +139,18 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
     // and timing does not say which name is the administrator's.
     auto store_user = access_->AuthenticatePassword(username, password);
     if (store_user && !user_ok) {
+      LogAt(log_level_, LogLevel::kInfo, "signed in",
+            {{"user", store_user->user_name}, {"method", "password"}, {"role", "user"}});
       return warpsql::Principal{store_user->user_name, "user", "password",
                                 {{"credential", store_user->credential}}};
     }
   }
-  Log(LogLevel::kInfo, "sign-in refused", {{"user", std::string(username)}, {"method", "password"}});
+  LogAt(log_level_, LogLevel::kInfo, "sign-in refused", {{"user", std::string(username)}, {"method", "password"}});
   throw Refused();
 }
 
 warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) {
-  if (verify_key_pem_.empty()) {
+  if (!AcceptsTokens()) {
     throw Error(ErrorCode::kInvalidCredentials, "this server does not accept sign-in tokens");
   }
   jwt::decoded_jwt<Traits> decoded = [&] {
@@ -153,13 +161,15 @@ warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) 
     }
   }();
   try {
-    auto verifier = jwt::verify<Traits>().allow_algorithm(
-        jwt::algorithm::rs256(verify_key_pem_, "", "", ""));
+    auto verifier = jwt::verify<Traits>();
+    AllowSigningKey(decoded, verifier);
     if (!allowed_issuer_.empty()) verifier.with_issuer(allowed_issuer_);
     if (!allowed_audience_.empty()) verifier.with_audience(allowed_audience_);
     verifier.verify(decoded);
+  } catch (const Error&) {
+    throw;
   } catch (const std::exception& e) {
-    Log(LogLevel::kInfo, "sign-in token refused", {{"reason", e.what()}});
+    LogAt(log_level_, LogLevel::kInfo, "sign-in token refused", {{"reason", e.what()}});
     throw TokenRefused();
   }
 
@@ -171,12 +181,18 @@ warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) 
   if (principal.name.empty()) {
     throw TokenRefused();
   }
+  // Which users a trusted issuer may sign in (globs such as *@example.com).
+  if (!MatchesAnyIgnoringCase(authorized_emails_, principal.name)) {
+    LogAt(log_level_, LogLevel::kInfo, "sign-in token names an unauthorized user", {{"user", principal.name}});
+    throw Error(ErrorCode::kInvalidCredentials,
+                "User '" + principal.name + "' is not authorized. Contact your administrator.");
+  }
   if (decoded.has_payload_claim("role")) {
     principal.role = decoded.get_payload_claim("role").as_string();
   } else if (!default_role_.empty()) {
     principal.role = default_role_;
   } else {
-    Log(LogLevel::kInfo, "sign-in token has no role", {{"user", principal.name}});
+    LogAt(log_level_, LogLevel::kInfo, "sign-in token has no role", {{"user", principal.name}});
     throw TokenRefused();
   }
   if (principal.role != "admin" && principal.role != "user" && principal.role != "readonly") {
@@ -212,12 +228,48 @@ warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) 
   if (access_ && principal.role != "admin") {
     access_->RequireStoreUser(principal.name);
   }
+  LogAt(log_level_, LogLevel::kInfo, "signed in", {{"user", principal.name}, {"method", "token"},
+                                                   {"role", principal.role}});
   return principal;
+}
+
+template <class Decoded, class Verifier>
+void Authenticator::AllowSigningKey(const Decoded& decoded, Verifier& verifier) {
+  if (jwks_ == nullptr) {
+    verifier.allow_algorithm(jwt::algorithm::rs256(verify_key_pem_, "", "", ""));
+    return;
+  }
+  if (!license_.Has("external_auth")) {
+    throw Error(ErrorCode::kInvalidCredentials,
+                LicenseRequired("external_auth", "Sign-in with an identity provider's tokens (JWKS)"));
+  }
+  // The provider says which of its keys signed the token; its JWK may fix the algorithm.
+  if (!decoded.has_header_claim("kid")) {
+    throw std::runtime_error("the token has no 'kid' header, which JWKS verification needs");
+  }
+  const Jwks::Key key = jwks_->Find(decoded.get_header_claim("kid").as_string());
+  std::string algorithm = key.algorithm;
+  if (algorithm.empty() && decoded.has_header_claim("alg")) algorithm = decoded.get_header_claim("alg").as_string();
+  if (algorithm == "RS256" || algorithm.empty()) {
+    verifier.allow_algorithm(jwt::algorithm::rs256(key.pem, "", "", ""));
+  } else if (algorithm == "RS384") {
+    verifier.allow_algorithm(jwt::algorithm::rs384(key.pem, "", "", ""));
+  } else if (algorithm == "RS512") {
+    verifier.allow_algorithm(jwt::algorithm::rs512(key.pem, "", "", ""));
+  } else if (algorithm == "ES256") {
+    verifier.allow_algorithm(jwt::algorithm::es256(key.pem, "", "", ""));
+  } else if (algorithm == "ES384") {
+    verifier.allow_algorithm(jwt::algorithm::es384(key.pem, "", "", ""));
+  } else if (algorithm == "ES512") {
+    verifier.allow_algorithm(jwt::algorithm::es512(key.pem, "", "", ""));
+  } else {
+    throw std::runtime_error("unsupported signing algorithm '" + algorithm + "'");
+  }
 }
 
 boost::json::array Authenticator::GrantTypes() {
   boost::json::array grants{"password"};
-  if (!verify_key_pem_.empty()) {
+  if (AcceptsTokens()) {
     grants.push_back("token_exchange");
   }
   return grants;

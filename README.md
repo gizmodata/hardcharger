@@ -85,11 +85,20 @@ cmake --build server/build-test
 
 ```bash
 cd server/tests && uv venv .venv && uv pip install --python .venv/bin/python -r pyproject.toml
-HARDCHARGER_TEST_BINARY=../build-test/hardcharger \
-  .venv/bin/python -m pytest -q                     # Hardcharger's own tests
+HARDCHARGER_TEST_BINARY=../build-test/hardcharger HARDCHARGER_TEST_UNIT_BINARY=../build-test/hardcharger-unit-tests \
+  .venv/bin/python -m pytest -q                     # everything, with the 1.x battery
+#   needs: docker compose -f docker-compose.yml up -d --wait (PostgreSQL + S3 for the
+#   DuckLake suites; -m "not services" without Docker), and ../build/hardcharger (the
+#   release build) for the test that it refuses test-signed licenses
 cd ../../third_party/warp-sql/conformance           # the Warp SQL conformance suite
 WARP_SQL_TEST_SERVER_BINARY=../../../server/build/hardcharger \
 WARP_SQL_TEST_SERVER_PASSWORD_ENV=HARDCHARGER_PASSWORD \
 WARP_SQL_TEST_SERVER_USERNAME=warp HARDCHARGER_USERNAME=warp \
   .venv/bin/python -m pytest -q
 ```
+
+The build also makes `hardcharger-unit-tests` (googletest; the pytest suite runs it) and
+`hardcharger-license-test`, a server that also trusts a license key named by its
+environment, so the tests can exercise Enterprise features with keys they sign. It is
+never installed or shipped. `server/tests/BATTERY.md` tracks the GizmoSQL 1.x test
+battery file by file.

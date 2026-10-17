@@ -41,9 +41,13 @@ std::string Trim(const std::string& text) {
 
 }  // namespace
 
-std::string ReadLicenseKey(const std::string& inline_key, const std::string& key_file) {
-  if (!Trim(inline_key).empty()) {
-    return Trim(inline_key);
+std::string ReadLicenseKey(const std::string& inline_key, const std::string& key_file, bool inline_set) {
+  // An inline key wins over the file even when it is invalid (as in 1.x): a key that
+  // was set on purpose must never be silently replaced by another one.
+  if (inline_set || !inline_key.empty()) {
+    const std::string key = Trim(inline_key);
+    if (key.empty()) Fail("the inline license key is empty");
+    return key;
   }
   if (key_file.empty()) {
     return {};

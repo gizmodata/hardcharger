@@ -66,7 +66,11 @@ const std::unordered_set<std::string>& AllowedTableFunctions() {
       // Bulk ingest reads the caller's own
       // upload through it; it reads nothing
       // else (the SDK refuses any other call).
-      "warp_upload"};
+      "warp_upload",
+      // The server's own, which read only what the session may see (its own sessions,
+      // the settings rows that aren't admin-only).
+      "gizmosql_settings", "hardcharger_settings", "gizmosql_sessions", "hardcharger_sessions",
+      "gizmosql_metrics", "hardcharger_metrics"};
   return kNames;
 }
 

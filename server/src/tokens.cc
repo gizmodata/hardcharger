@@ -2,6 +2,7 @@
 
 #include <jwt-cpp/jwt.h>
 #include <jwt-cpp/traits/boost-json/traits.h>
+#include <openssl/evp.h>
 #include <openssl/rand.h>
 
 #include <array>
@@ -57,12 +58,13 @@ std::string RandomUuid() {
 }
 
 JwtTokenService::JwtTokenService(std::string secret_key, std::chrono::seconds lifetime,
-                                 std::string instance_id, bool allow_cross_instance,
+                                 std::string instance_id, bool allow_cross_instance, LogLevel log_level,
                                  std::shared_ptr<authz::AccessControl> access)
     : secret_key_(std::move(secret_key)),
       lifetime_(lifetime),
       instance_id_(std::move(instance_id)),
       allow_cross_instance_(allow_cross_instance),
+      log_level_(log_level),
       access_(std::move(access)) {}
 
 warpsql::TokenService::Issued JwtTokenService::Issue(const warpsql::Principal& principal) {
@@ -167,16 +169,29 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
     if (principal.claims.contains("scope_id")) {
       throw invalid("this server does not run access control, so it accepts no scoped tokens");
     }
-    return principal;
+  } else {
+    if (const auto* scope = principal.claims.if_contains("scope_id")) {
+      if (!scope->is_string()) throw invalid("a valid access token is required");
+      // (After this insertion `scope` may dangle: it is not used again.)
+      principal.claims["expires_at"] = std::chrono::duration_cast<std::chrono::seconds>(
+                                           decoded.get_expires_at().time_since_epoch())
+                                           .count();
+    }
+    access_->CheckToken(IdentityOf(principal));
   }
-  if (const auto* scope = principal.claims.if_contains("scope_id")) {
-    if (!scope->is_string()) throw invalid("a valid access token is required");
-    // (After this insertion `scope` may dangle: it is not used again.)
-    principal.claims["expires_at"] = std::chrono::duration_cast<std::chrono::seconds>(
-                                         decoded.get_expires_at().time_since_epoch())
-                                         .count();
+  bool first_use = false;
+  {
+    constexpr std::size_t kMaxSeen = 50000;
+    std::array<unsigned char, 32> digest{};
+    unsigned int length = 0;
+    EVP_Digest(token.data(), token.size(), digest.data(), &length, EVP_sha256(), nullptr);
+    std::string key(reinterpret_cast<const char*>(digest.data()), length);
+    std::lock_guard lock(seen_mutex_);
+    if (seen_.size() >= kMaxSeen) seen_.clear();
+    first_use = seen_.insert(std::move(key)).second;
   }
-  access_->CheckToken(IdentityOf(principal));
+  LogAt(log_level_, first_use ? LogLevel::kInfo : LogLevel::kDebug, "Bearer Token was validated successfully",
+        {{"user", principal.name}, {"role", principal.role}, {"first_use", first_use ? "true" : "false"}});
   return principal;
 }
 

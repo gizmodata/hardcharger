@@ -222,6 +222,8 @@ std::optional<std::string> AccessControlStatementKind(std::string_view sql) {
   return CommandKind(*parsed);
 }
 
+bool LooksLikeAccessControlStatement(std::string_view sql) { return LooksLikeRbacStatement(std::string(sql)); }
+
 // ---- AccessControl ----
 
 AccessControl::AccessControl(const Options& options) {

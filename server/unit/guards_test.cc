@@ -1,0 +1,480 @@
+// The admin command guard and the unredacted-secrets block: ports the 36 unit cases of
+// GizmoSQL 1.x's tests/integration/test_admin_command_guard.cpp verbatim. 1.x walked
+// DuckDB's parse tree; Hardcharger classifies from DuckDB's tokens and statement types
+// (v2 C API), so these run against a real DuckDB connection. Gated()/Category() split
+// the SQL into statements as the server does and classify each one; the 4 cases 1.x
+// ran only on DuckDB 2 all apply.
+#include <gtest/gtest.h>
+
+#include <optional>
+#include <string>
+
+#include "duckdb_v2.hpp"
+#include "guards.hpp"
+#include "sql_text.hpp"
+#include "warpsql/errors.hpp"
+
+namespace {
+
+struct Db {
+  warpduckdb::Environment environment;
+  warpduckdb::Instance instance;
+  warpduckdb::Connection connection;
+  Db() {
+    warpduckdb::Call([&](auto* e) { return duckdb_v2_environment_create(environment.out(), e); });
+    warpduckdb::Call([&](auto* e) {
+      return duckdb_v2_instance_create_with_options(environment.get(), nullptr, nullptr, 0, instance.out(), e);
+    });
+    warpduckdb::Call([&](auto* e) { return duckdb_v2_connection_create(instance.get(), connection.out(), e); });
+  }
+};
+
+duckdb_v2_connection_handle Connection() {
+  static Db db;
+  return db.connection.get();
+}
+
+// The category of the first gated statement; nullopt when none is, or when DuckDB can't
+// parse the SQL (the server then hands DuckDB's own parse error back).
+std::optional<std::string> ClassifyGatedCommand(const std::string& sql) {
+  for (const auto& piece : hardcharger::SplitStatements(Connection(), sql)) {
+    if (hardcharger::ParseSettingCommand(piece)) {
+      // SET [GLOBAL] gizmosql.*: GLOBAL needs an admin (the settings registry refuses it).
+      if (hardcharger::ParseSettingCommand(piece)->scope == hardcharger::SettingCommand::Scope::kGlobal) {
+        return "SET GLOBAL gizmosql." + hardcharger::ParseSettingCommand(piece)->name;
+      }
+      continue;
+    }
+    DUCKDB_V2_STATEMENT_TYPE type;
+    try {
+      type = hardcharger::StatementType(Connection(), piece.text);
+    } catch (const std::exception&) {
+      return std::nullopt;
+    }
+    if (auto category = hardcharger::ClassifyGatedCommand(Connection(), piece, type)) return category;
+  }
+  return std::nullopt;
+}
+
+// Refused for everyone while block_unredacted_secrets is on (the default).
+std::optional<std::string> ClassifyUnredactedSecretsSet(const std::string& sql) {
+  for (const auto& piece : hardcharger::SplitStatements(Connection(), sql)) {
+    try {
+      hardcharger::CheckStatement({Connection(), true, true, nullptr}, piece, DUCKDB_V2_STATEMENT_TYPE_INVALID);
+    } catch (const warpsql::Error& error) {
+      return std::string(error.what());
+    }
+  }
+  return std::nullopt;
+}
+
+struct CheckResult {
+  bool is_ok;
+  std::string text;
+  bool ok() const { return is_ok; }
+  const std::string& message() const { return text; }
+};
+
+CheckResult CheckNonAdminCommandAllowed(const std::string& sql) {
+  for (const auto& piece : hardcharger::SplitStatements(Connection(), sql)) {
+    try {
+      hardcharger::CheckStatement({Connection(), false, false, nullptr}, piece,
+                                  hardcharger::StatementType(Connection(), piece.text));
+    } catch (const warpsql::Error& error) {
+      return {false, error.what()};
+    }
+  }
+  return {true, ""};
+}
+
+bool Gated(const std::string& sql) { return ClassifyGatedCommand(sql).has_value(); }
+
+std::string Category(const std::string& sql) { return ClassifyGatedCommand(sql).value_or(""); }
+
+}  // namespace
+
+TEST(AdminCommandGuard, AttachIsGated) {
+  EXPECT_TRUE(Gated("ATTACH 'lake.db' AS lake"));
+  EXPECT_TRUE(Gated("ATTACH DATABASE 'lake.db' AS lake"));
+  EXPECT_TRUE(Gated("ATTACH 'ducklake:metadata.db' AS my_lake (DATA_PATH 'data/')"));
+  EXPECT_TRUE(Gated("ATTACH 'postgres://user@host/db' AS pg (TYPE postgres)"));
+  EXPECT_EQ(Category("ATTACH 'x.db' AS x"), "ATTACH");
+}
+
+TEST(AdminCommandGuard, DetachIsGated) {
+  EXPECT_TRUE(Gated("DETACH lake"));
+  EXPECT_TRUE(Gated("DETACH DATABASE lake"));
+  // The exact thing the customer worried about: detaching a user DuckLake catalog.
+  EXPECT_TRUE(Gated("detach my_ducklake_catalog"));
+  EXPECT_EQ(Category("DETACH lake"), "DETACH");
+}
+
+// EXPLAIN ANALYZE executes the wrapped statement, so wrapping a gated statement
+// in EXPLAIN [ANALYZE] must not get it past the gate.
+TEST(AdminCommandGuard, ExplainWrappedStatementsAreGated) {
+  EXPECT_TRUE(Gated("EXPLAIN ANALYZE COPY (SELECT 42) TO '/tmp/x.csv'"));
+  EXPECT_TRUE(Gated("EXPLAIN ANALYZE SET GLOBAL threads = 3"));
+  EXPECT_TRUE(Gated("EXPLAIN ANALYZE CHECKPOINT"));
+  EXPECT_TRUE(Gated("EXPLAIN ANALYZE SELECT * FROM read_text('/etc/passwd')"));
+  EXPECT_TRUE(
+      Gated("EXPLAIN ANALYZE COPY (SELECT * FROM read_text('/etc/passwd')) "
+            "TO 's3://bucket/x.csv'"));
+  EXPECT_TRUE(Gated("EXPLAIN SELECT * FROM duckdb_secrets()"));
+  EXPECT_FALSE(Gated("EXPLAIN ANALYZE SELECT 42"));
+}
+
+TEST(AdminCommandGuard, AttachDetachEvasionStillCaught) {
+  EXPECT_TRUE(Gated("  \n\t ATTACH 'x.db' AS x"));
+  EXPECT_TRUE(Gated("aTtAcH 'x.db' AS x"));
+  EXPECT_TRUE(Gated("/* sneaky */ DETACH lake"));
+  EXPECT_TRUE(Gated("-- comment\nDETACH lake"));
+  // Multi-statement: one gated statement gates the batch.
+  EXPECT_TRUE(Gated("SELECT 1; ATTACH 'x.db' AS x"));
+}
+
+// =============================================================================
+// SET GLOBAL / RESET GLOBAL, and dangerous bare SET.
+// =============================================================================
+
+TEST(UnredactedSecretsSet, TrueIsMatched) {
+  EXPECT_TRUE(
+      ClassifyUnredactedSecretsSet("SET allow_unredacted_secrets = true").has_value());
+  EXPECT_TRUE(
+      ClassifyUnredactedSecretsSet("SET allow_unredacted_secrets=true").has_value());
+  EXPECT_TRUE(ClassifyUnredactedSecretsSet("/* c */ SET ALLOW_UNREDACTED_SECRETS = TRUE")
+                  .has_value());
+}
+
+// DuckDB casts the SET value to BOOLEAN, so every one of these enables the
+// setting and must be matched, not just the literal `true`.
+TEST(UnredactedSecretsSet, TrueEquivalentsAreMatched) {
+  for (const char* sql : {
+           "SET allow_unredacted_secrets = 1",
+           "SET allow_unredacted_secrets = 'true'",
+           "SET allow_unredacted_secrets = 't'",
+           "SET allow_unredacted_secrets = 'yes'",
+           "SET allow_unredacted_secrets = true::BOOLEAN",
+           "SET allow_unredacted_secrets = (true)",
+           "SET allow_unredacted_secrets = NOT false",
+           "SET allow_unredacted_secrets = (SELECT true)",
+           "SET allow_unredacted_secrets TO true",
+           "SET GLOBAL allow_unredacted_secrets = true",
+           "SET \"allow_unredacted_secrets\" = true",
+           "PRAGMA allow_unredacted_secrets = true",
+           "SELECT 1; SET allow_unredacted_secrets = true",
+       }) {
+    EXPECT_TRUE(ClassifyUnredactedSecretsSet(sql).has_value()) << sql;
+  }
+}
+
+TEST(UnredactedSecretsSet, ExplainWrappedSetIsMatched) {
+  EXPECT_TRUE(
+      ClassifyUnredactedSecretsSet("EXPLAIN ANALYZE SET allow_unredacted_secrets = true")
+          .has_value());
+  EXPECT_TRUE(ClassifyUnredactedSecretsSet("EXPLAIN SET allow_unredacted_secrets = true")
+                  .has_value());
+}
+
+TEST(UnredactedSecretsSet, FalseAndOtherSqlAreNotMatched) {
+  for (const char* sql : {
+           "SET allow_unredacted_secrets = false",
+           "SET allow_unredacted_secrets = 0",
+           "SET allow_unredacted_secrets = 'false'",
+           "PRAGMA allow_unredacted_secrets = false",
+           "RESET allow_unredacted_secrets",
+           "SELECT current_setting('allow_unredacted_secrets')",
+           "SET threads = 4",
+           "SELECT 1",
+       }) {
+    EXPECT_FALSE(ClassifyUnredactedSecretsSet(sql).has_value()) << sql;
+  }
+}
+
+TEST(AdminCommandGuard, SetGlobalIsGated) {
+  EXPECT_TRUE(Gated("SET GLOBAL memory_limit = '10GB'"));
+  EXPECT_TRUE(Gated("SET GLOBAL search_path = 'x'"));  // any setting under explicit GLOBAL
+  EXPECT_TRUE(Gated("RESET GLOBAL memory_limit"));
+  EXPECT_TRUE(Gated("SET GLOBAL gizmosql.query_log_level = 'DEBUG'"));
+}
+
+TEST(AdminCommandGuard, BareSetOfDangerousGlobalSettingIsGated) {
+  EXPECT_TRUE(Gated("SET memory_limit = '100GB'"));
+  EXPECT_TRUE(Gated("SET threads = 1"));
+  EXPECT_TRUE(Gated("SET enable_external_access = false"));
+  EXPECT_TRUE(Gated("SET allow_unsigned_extensions = true"));
+  EXPECT_TRUE(Gated("SET temp_directory = '/tmp/evil'"));
+  EXPECT_TRUE(Gated("SET disabled_filesystems = ''"));
+  EXPECT_TRUE(Gated("RESET memory_limit"));
+}
+
+TEST(AdminCommandGuard, HarmlessSessionSetIsAllowed) {
+  EXPECT_FALSE(Gated("SET SESSION memory_limit = '1GB'"));  // explicit session
+  EXPECT_FALSE(Gated("SET search_path = 'main'"));          // bare, harmless setting
+  EXPECT_FALSE(Gated("SET TimeZone = 'UTC'"));
+  EXPECT_FALSE(Gated("SET timezone = 'UTC'"));
+  EXPECT_FALSE(Gated("SET gizmosql.query_log_level = 'DEBUG'"));  // bare session-scoped
+}
+
+// =============================================================================
+// INSTALL / LOAD extensions.
+// =============================================================================
+
+TEST(AdminCommandGuard, InstallLoadIsGated) {
+  EXPECT_TRUE(Gated("INSTALL httpfs"));
+  EXPECT_TRUE(Gated("FORCE INSTALL httpfs"));
+  EXPECT_TRUE(Gated("LOAD httpfs"));
+  EXPECT_TRUE(Gated("install spatial"));
+  EXPECT_EQ(Category("INSTALL httpfs"), "INSTALL extension");
+  EXPECT_EQ(Category("LOAD httpfs"), "LOAD extension");
+}
+
+// =============================================================================
+// CHECKPOINT.
+// =============================================================================
+
+TEST(AdminCommandGuard, CheckpointIsGated) {
+  EXPECT_TRUE(Gated("CHECKPOINT"));
+  EXPECT_TRUE(Gated("FORCE CHECKPOINT"));
+  EXPECT_TRUE(Gated("checkpoint"));
+  EXPECT_EQ(Category("CHECKPOINT"), "CHECKPOINT");
+}
+
+TEST(AdminCommandGuard, HarmlessPragmaIsAllowed) {
+  EXPECT_FALSE(Gated("PRAGMA table_info('my_table')"));
+  EXPECT_FALSE(Gated("PRAGMA database_list"));
+  EXPECT_FALSE(Gated("PRAGMA version"));
+}
+
+// =============================================================================
+// COPY — local gated, remote allowed; nested reads still gated.
+// =============================================================================
+
+TEST(AdminCommandGuard, CopyLocalIsGated) {
+  EXPECT_TRUE(Gated("COPY my_table TO '/tmp/out.csv'"));
+  EXPECT_TRUE(Gated("COPY my_table TO 'out.parquet' (FORMAT parquet)"));
+  EXPECT_TRUE(Gated("COPY my_table FROM '/etc/passwd'"));
+  EXPECT_TRUE(Gated("COPY (SELECT 1) TO '/tmp/x.csv'"));
+  EXPECT_EQ(Category("COPY my_table TO '/tmp/out.csv'"), "COPY TO (local filesystem)");
+  EXPECT_EQ(Category("COPY t FROM '/x.csv'"), "COPY FROM (local filesystem)");
+}
+
+TEST(AdminCommandGuard, CopyRemoteIsAllowed) {
+  EXPECT_FALSE(Gated("COPY my_table TO 's3://bucket/out.parquet' (FORMAT parquet)"));
+  EXPECT_FALSE(Gated("COPY my_table TO 'gs://bucket/out.parquet'"));
+  EXPECT_FALSE(Gated("COPY my_table FROM 'https://example.com/data.csv'"));
+}
+
+TEST(AdminCommandGuard, CopyRemoteButNestedLocalReadIsGated) {
+  // COPY target is remote (allowed) but it reads a local file in the subquery.
+  EXPECT_TRUE(Gated(
+      "COPY (SELECT * FROM read_csv('/etc/passwd')) TO 's3://bucket/out.parquet'"));
+}
+
+// =============================================================================
+// EXPORT DATABASE.
+// =============================================================================
+
+TEST(AdminCommandGuard, ExportImportDatabaseAlwaysGated) {
+  // Full-database egress (EXPORT) / ingress (IMPORT) is gated regardless of
+  // local vs remote — it is not bounded by object grants.
+  EXPECT_TRUE(Gated("EXPORT DATABASE '/tmp/dump'"));
+  EXPECT_TRUE(Gated("EXPORT DATABASE 'dump_dir' (FORMAT parquet)"));
+  EXPECT_TRUE(Gated("EXPORT DATABASE 's3://bucket/dump'"));
+  EXPECT_EQ(Category("EXPORT DATABASE '/tmp/dump'"), "EXPORT DATABASE");
+  EXPECT_EQ(Category("EXPORT DATABASE 's3://bucket/dump'"), "EXPORT DATABASE");
+
+  EXPECT_TRUE(Gated("IMPORT DATABASE '/tmp/dump'"));
+  EXPECT_TRUE(Gated("IMPORT DATABASE 's3://bucket/dump'"));
+  EXPECT_EQ(Category("IMPORT DATABASE '/tmp/dump'"), "IMPORT DATABASE");
+}
+
+// =============================================================================
+// read_* table functions — local gated, remote allowed, any nesting.
+// =============================================================================
+
+TEST(AdminCommandGuard, ReadFunctionsLocalAreGated) {
+  EXPECT_TRUE(Gated("SELECT * FROM read_csv('/etc/passwd')"));
+  EXPECT_TRUE(Gated("SELECT * FROM read_csv_auto('data.csv')"));
+  EXPECT_TRUE(Gated("SELECT * FROM read_parquet('/data/x.parquet')"));
+  EXPECT_TRUE(Gated("SELECT * FROM read_json('cfg.json')"));
+  EXPECT_TRUE(Gated("SELECT * FROM read_text('/etc/hosts')"));
+  EXPECT_TRUE(Gated("SELECT * FROM read_blob('/etc/shadow')"));
+  EXPECT_TRUE(Gated("SELECT * FROM glob('/home/*')"));
+  EXPECT_TRUE(Gated("SELECT * FROM parquet_scan('local.parquet')"));
+}
+
+TEST(AdminCommandGuard, ReadFunctionsRemoteAreAllowed) {
+  EXPECT_FALSE(Gated("SELECT * FROM read_parquet('s3://bucket/x.parquet')"));
+  EXPECT_FALSE(Gated("SELECT * FROM read_csv('https://example.com/data.csv')"));
+  EXPECT_FALSE(Gated("SELECT * FROM read_json('gs://bucket/data.json')"));
+  EXPECT_FALSE(Gated("SELECT * FROM glob('s3://bucket/*')"));
+}
+
+TEST(AdminCommandGuard, ReadFunctionsNonLiteralPathIsGated) {
+  // Cannot prove the path is remote -> fail closed (gate it).
+  EXPECT_TRUE(Gated("SELECT * FROM read_parquet(some_path_column)"));
+  EXPECT_TRUE(Gated("SELECT * FROM read_csv(concat('/tmp/', 'x.csv'))"));
+}
+
+TEST(AdminCommandGuard, ReadFunctionsNestedAreGated) {
+  EXPECT_TRUE(Gated(
+      "SELECT a FROM (SELECT * FROM read_csv('/etc/passwd')) sub"));
+  EXPECT_TRUE(Gated(
+      "WITH t AS (SELECT * FROM read_parquet('/x.parquet')) SELECT * FROM t"));
+  EXPECT_TRUE(Gated(
+      "SELECT * FROM my_table JOIN read_csv('/etc/passwd') USING (id)"));
+  EXPECT_TRUE(Gated(
+      "SELECT * FROM my_table WHERE id IN (SELECT id FROM read_csv('/x.csv'))"));
+  EXPECT_TRUE(Gated(
+      "CREATE TABLE stolen AS SELECT * FROM read_csv('/etc/passwd')"));
+  EXPECT_TRUE(Gated(
+      "INSERT INTO t SELECT * FROM read_parquet('/x.parquet')"));
+  EXPECT_TRUE(Gated(
+      "SELECT * FROM read_csv('a.csv') UNION ALL SELECT * FROM my_table"));
+}
+
+TEST(AdminCommandGuard, PrepareIndirectionIsGated) {
+  // PREPARE staging a gated read is caught at prepare time, closing the
+  // PREPARE/EXECUTE indirection (a non-admin can't then EXECUTE it).
+  EXPECT_TRUE(Gated("PREPARE p AS SELECT * FROM read_csv('/etc/passwd')"));
+  EXPECT_FALSE(Gated("PREPARE p AS SELECT * FROM my_table"));
+}
+
+// =============================================================================
+// duckdb_secrets() — always gated.
+// =============================================================================
+
+TEST(AdminCommandGuard, CreateDropSecretIsGated) {
+  // Secrets hold credentials — every CREATE/DROP SECRET variant is admin-only.
+  EXPECT_TRUE(Gated("CREATE SECRET s (TYPE s3, KEY_ID 'k', SECRET 'v')"));
+  EXPECT_TRUE(Gated("CREATE OR REPLACE SECRET s (TYPE s3, KEY_ID 'k', SECRET 'v')"));
+  EXPECT_TRUE(Gated("CREATE PERSISTENT SECRET s (TYPE s3, KEY_ID 'k', SECRET 'v')"));
+  EXPECT_TRUE(Gated(
+      "CREATE OR REPLACE PERSISTENT SECRET s (TYPE s3, KEY_ID 'k', SECRET 'v')"));
+  EXPECT_TRUE(Gated("CREATE TEMPORARY SECRET s (TYPE s3, KEY_ID 'k', SECRET 'v')"));
+  EXPECT_EQ(Category("CREATE SECRET s (TYPE s3)"), "CREATE SECRET");
+
+  EXPECT_TRUE(Gated("DROP SECRET s"));
+  EXPECT_TRUE(Gated("DROP SECRET IF EXISTS s"));
+  EXPECT_TRUE(Gated("DROP PERSISTENT SECRET s"));
+  EXPECT_TRUE(Gated("DROP TEMPORARY SECRET s"));
+  EXPECT_EQ(Category("DROP SECRET s"), "DROP SECRET");
+
+  // Ordinary CREATE/DROP are not secret operations and stay allowed.
+  EXPECT_FALSE(Gated("CREATE TABLE t (id INTEGER)"));
+  EXPECT_FALSE(Gated("DROP TABLE t"));
+  EXPECT_FALSE(Gated("DROP VIEW v"));
+}
+
+TEST(AdminCommandGuard, DuckDBSecretsIsAlwaysGated) {
+  EXPECT_TRUE(Gated("SELECT * FROM duckdb_secrets()"));
+  EXPECT_TRUE(Gated("SELECT name FROM duckdb_secrets() WHERE name = 'x'"));
+  EXPECT_TRUE(Gated("SELECT * FROM (SELECT * FROM duckdb_secrets()) s"));
+  EXPECT_EQ(Category("SELECT * FROM duckdb_secrets()"), "duckdb_secrets()");
+}
+
+// =============================================================================
+// Replacement scans (SELECT * FROM '<path>').
+// =============================================================================
+
+TEST(AdminCommandGuard, LocalReplacementScanIsGated) {
+  EXPECT_TRUE(Gated("SELECT * FROM '/etc/passwd'"));
+  EXPECT_TRUE(Gated("SELECT * FROM 'data.parquet'"));
+  EXPECT_TRUE(Gated("SELECT * FROM './local/data.csv'"));
+  EXPECT_TRUE(Gated("SELECT * FROM 'subdir/file.json'"));
+}
+
+TEST(AdminCommandGuard, RemoteReplacementScanIsAllowed) {
+  EXPECT_FALSE(Gated("SELECT * FROM 's3://bucket/data.parquet'"));
+  EXPECT_FALSE(Gated("SELECT * FROM 'https://example.com/data.csv'"));
+}
+
+// =============================================================================
+// Allowed (negative) cases — ordinary queries non-admins should run.
+// =============================================================================
+
+TEST(AdminCommandGuard, QuackFunctionsAreGated) {
+  // DuckDB's Quack remote protocol: quack_serve() would open a network server
+  // inside GizmoSQL. CALL, table-function and scalar forms are all gated.
+  EXPECT_EQ(Category("CALL quack_serve('quack:localhost:9494')"), "quack_serve()");
+  EXPECT_EQ(Category("SELECT * FROM quack_query('quack:host', 'SELECT 1')"),
+            "quack_query()");
+  EXPECT_EQ(Category("SELECT quack_cancel('lake', 42)"), "quack_cancel()");
+  EXPECT_FALSE(Gated("SELECT 'quack_serve' AS s"));
+}
+
+TEST(AdminCommandGuard, CopyInsideCteIsGated) {
+  // DuckDB 2.0 allows COPY TO as a CTE body, so a SELECT can write a file.
+  EXPECT_EQ(Category("WITH c AS (COPY (SELECT 42) TO '/tmp/out.csv') SELECT 1"),
+            "COPY TO (local filesystem)");
+  EXPECT_EQ(Category("SELECT * FROM (WITH c AS (COPY (SELECT 42) TO 'x.csv') SELECT 1) t"),
+            "COPY TO (local filesystem)");
+  EXPECT_EQ(Category("SELECT 1 UNION ALL (WITH c AS (COPY (SELECT 1) TO 'x.csv') SELECT 2)"),
+            "COPY TO (local filesystem)");
+  EXPECT_FALSE(Gated("WITH c AS (COPY (SELECT 42) TO 's3://bucket/out.csv') SELECT 1"));
+}
+
+TEST(AdminCommandGuard, ConnectAndExternalResourceAreGated) {
+  // CONNECT attaches its target and then forwards raw SQL to it.
+  EXPECT_EQ(Category("CONNECT 'other.db'"), "CONNECT");
+  EXPECT_EQ(Category("DISCONNECT"), "DISCONNECT");
+}
+
+TEST(AdminCommandGuard, NewSingleFileReadersAreGated) {
+  EXPECT_EQ(Category("SELECT * FROM read_single_csv_file('/etc/passwd')"),
+            "read_single_csv_file() (local filesystem)");
+  EXPECT_EQ(Category("SELECT * FROM read_single_json_file('/etc/x.json')"),
+            "read_single_json_file() (local filesystem)");
+}
+
+TEST(AdminCommandGuard, DmlSourcesAreWalked) {
+  EXPECT_EQ(Category("UPDATE t SET a = x.a FROM read_csv('/etc/passwd') x"),
+            "read_csv() (local filesystem)");
+  EXPECT_EQ(Category("DELETE FROM t USING read_csv('/etc/passwd') x WHERE t.a = x.a"),
+            "read_csv() (local filesystem)");
+  EXPECT_FALSE(Gated("UPDATE t SET a = 1 WHERE b = 2"));
+}
+
+TEST(AdminCommandGuard, OrdinaryQueriesAreAllowed) {
+  EXPECT_FALSE(Gated("SELECT 1"));
+  EXPECT_FALSE(Gated("SELECT * FROM my_table WHERE id > 10"));
+  EXPECT_FALSE(Gated("SELECT a, b FROM schema1.my_table JOIN other USING (id)"));
+  EXPECT_FALSE(Gated("INSERT INTO my_table VALUES (1, 'a')"));
+  EXPECT_FALSE(Gated("UPDATE my_table SET a = 1 WHERE id = 2"));
+  EXPECT_FALSE(Gated("DELETE FROM my_table WHERE id = 2"));
+  EXPECT_FALSE(Gated("CREATE TABLE t (id INTEGER, name VARCHAR)"));
+  EXPECT_FALSE(Gated("CREATE TABLE t AS SELECT * FROM other_table"));
+  EXPECT_FALSE(Gated("SHOW TABLES"));
+  EXPECT_FALSE(Gated("DESCRIBE my_table"));
+  EXPECT_FALSE(Gated("BEGIN TRANSACTION"));
+  EXPECT_FALSE(Gated("COMMIT"));
+  EXPECT_FALSE(Gated("SELECT * FROM range(100)"));  // non-filesystem table function
+  EXPECT_FALSE(Gated("SELECT * FROM duckdb_settings()"));  // not duckdb_secrets
+}
+
+TEST(AdminCommandGuard, UnparseableSqlIsAllowedThroughToDuckDB) {
+  // We don't gate what we can't parse; DuckDB surfaces the real error later.
+  EXPECT_FALSE(Gated("this is not valid sql @#$%"));
+  EXPECT_FALSE(Gated(""));
+}
+
+// =============================================================================
+// The Flight-error wrapper.
+// =============================================================================
+
+TEST(AdminCommandGuard, CheckWrapperReturnsErrorForGated) {
+  auto st = CheckNonAdminCommandAllowed("ATTACH 'x.db' AS x");
+  EXPECT_FALSE(st.ok());
+  EXPECT_NE(st.message().find("admin"), std::string::npos);
+  EXPECT_NE(st.message().find("ATTACH"), std::string::npos);
+}
+
+TEST(AdminCommandGuard, CheckWrapperOkForAllowed) {
+  EXPECT_TRUE(CheckNonAdminCommandAllowed("SELECT 1").ok());
+  EXPECT_TRUE(CheckNonAdminCommandAllowed("SELECT * FROM my_table").ok());
+}
+
+// =============================================================================
+// End-to-end integration: prove the gate is wired into the query path and keys
+// off the session role. A non-admin token is rejected for gated commands and
+// allowed for ordinary queries; an admin (basic-auth) session is unaffected.
