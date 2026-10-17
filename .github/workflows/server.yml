@@ -30,9 +30,18 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: true
-          ssh-key: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
+      # The warp-sql submodule is private: fetch it with its read-only deploy key (the
+      # key reaches only that repository, so the main checkout uses the usual token).
+      - name: Fetch the warp-sql submodule
+        env:
+          DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
+        run: |
+          key="$RUNNER_TEMP/warp_sql_key"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          chmod 600 "$key"
+          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+            git submodule update --init --depth 1
+          rm -f "$key"
 
       - name: Install build tools (Linux)
         if: runner.os == 'Linux'
