@@ -11,6 +11,7 @@
 #include "duckdb_sql.hpp"
 #include "instrumentation.hpp"
 #include "logging.hpp"
+#include "platform.hpp"
 #include "settings.hpp"
 #include "sql_functions.hpp"
 #include "tokens.hpp"
@@ -349,8 +350,12 @@ void Backend::AttachSystemCatalog() {
   // DuckDB can't make an in-memory catalog read-only once it holds the views, so they
   // are written to a small private file that is then attached READ_ONLY: every write to
   // the system catalog is refused by DuckDB itself, for every user.
-  std::string base = std::filesystem::temp_directory_path().string() + "/hardcharger-system-XXXXXX";
-  if (mkdtemp(base.data()) == nullptr) throw std::runtime_error("cannot create a directory for the system catalog");
+  std::string base;
+  try {
+    base = MakePrivateTempDirectory("hardcharger-system-");
+  } catch (const std::exception&) {
+    throw std::runtime_error("cannot create a directory for the system catalog");
+  }
   system_catalog_dir_ = base;
   runtime_.scratch_dir = base;
   const std::string file = system_catalog_dir_ + "/system.duckdb";

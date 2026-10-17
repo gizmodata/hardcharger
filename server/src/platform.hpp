@@ -27,6 +27,10 @@ void SetEnv(const char* name, const std::optional<std::string>& value);
 // database), USERPROFILE on Windows. Empty when unknown.
 std::string HomeDirectory();
 
+// A new directory only this user can use, named `prefix` plus a random suffix, in the
+// system's temporary directory (mkdtemp). Throws when it can't be made.
+std::string MakePrivateTempDirectory(const std::string& prefix);
+
 std::tm UtcTime(std::time_t seconds);
 int64_t ProcessId();
 std::string HostName();

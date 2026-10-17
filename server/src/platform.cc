@@ -23,7 +23,10 @@
 #include <openssl/x509.h>
 
 #include <cmath>
+#include <cstdio>
 #include <iterator>
+#include <random>
+#include <stdexcept>
 #include <cstdlib>
 #include <fstream>
 
@@ -36,6 +39,27 @@ std::filesystem::path PathFromUtf8(const std::string& text) {
 std::string Utf8Path(const std::filesystem::path& path) {
   const std::u8string text = path.generic_u8string();
   return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+}
+
+std::string MakePrivateTempDirectory(const std::string& prefix) {
+#ifdef _WIN32
+  // %TEMP% is the user's own (inheritable ACL); a random name no one can take first,
+  // created atomically by create_directory (false when it already exists).
+  std::random_device random;
+  for (int attempt = 0; attempt < 100; attempt++) {
+    char suffix[13];
+    std::snprintf(suffix, sizeof(suffix), "%06x%06x", random() & 0xffffff, random() & 0xffffff);
+    const auto path = std::filesystem::temp_directory_path() / (prefix + suffix);
+    std::error_code ec;
+    if (std::filesystem::create_directory(path, ec)) return Utf8Path(path);
+    if (ec) break;
+  }
+  throw std::runtime_error("cannot create a private temporary directory");
+#else
+  std::string base = std::filesystem::temp_directory_path().string() + "/" + prefix + "XXXXXX";
+  if (mkdtemp(base.data()) == nullptr) throw std::runtime_error("cannot create a private temporary directory");
+  return base;
+#endif
 }
 
 #ifdef _WIN32
