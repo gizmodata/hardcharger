@@ -62,7 +62,8 @@ Measured on one machine (Apple M5 Max) against GizmoSQL 1.41 with the same data
 | 10 concurrent clients, p95 latency | **471 ms** | 1,328 ms | **2.8× lower** |
 
 Over a real network: two AWS c8gn.8xlarge machines, TLS on both servers, median of five runs
-([details and method](docs/benchmarks.md#remote-throughput-after-the-transfer-work-2026-10-17-featurethroughput)):
+([details and method](docs/benchmarks.md#remote-throughput-after-the-transfer-work-2026-10-17-featurethroughput);
+the loads: [partitioned uploads](docs/benchmarks.md#partitioned-uploads-and-split-results-by-default-2026-10-17-featureingest-partitions)):
 
 | Workload | Hardcharger | GizmoSQL 1.42 | |
 |---|---:|---:|---:|
@@ -70,7 +71,8 @@ Over a real network: two AWS c8gn.8xlarge machines, TLS on both servers, median 
 | Fetch TPC-H SF1 lineitem (6M rows) | **0.148 s** | 1.74 s | **11.7× faster** |
 | Fetch 100M narrow rows | **0.45 s** | 5.43 s | **12.0× faster** |
 | Fetch SF1 lineitem across regions (46 ms away) | **1.96 s** | 12.26 s | **6.3× faster** |
-| Load SF10 lineitem (bulk ingest) | 9.34 s | 9.43 s | on par |
+| Load SF10 lineitem (bulk ingest, 8 upload parts) | **3.00 s** | 9.44 s | **3.1× faster** |
+| Load SF1 lineitem across regions (8 upload parts) | **2.91 s** | 13.94 s | **4.8× faster** |
 
 ## ⚙️ How it's fast
 

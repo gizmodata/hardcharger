@@ -638,3 +638,152 @@ About 1.3 hours of three Spot c8gn.8xlarge (~$0.35/h each) and ~25 GB across reg
 about $2. Everything was tagged `Purpose=hardcharger-benchmark` and deleted; describe
 calls in both regions showed no instances, volumes, security groups, key pairs,
 placement groups or Spot requests left.
+
+## Partitioned uploads and split results by default (2026-10-17, feature/ingest-partitions)
+
+Two changes since the section above, measured on fresh VMs with the same scripts:
+
+1. **Partitioned ingest** (Warp SQL spec §8.3, capability `partitioned_ingest`): a client
+   opens one ingest, sends its upload as N parts at once, each over its own connection,
+   and commits them as one. The server reads every part through one reader, so DuckDB
+   inserts from all of them in parallel, in one transaction, with each part's body in a
+   bounded queue (4 MiB). All or nothing: any failed part, refused batch or broken
+   connection fails the ingest and nothing is written. Rows land in no defined order;
+   ordered ingest is one part (or §8.1's single stream). The Go/Python ADBC driver
+   (`adbc.warp.ingest.parts`, default 8) and the C++ client (`IngestOptions::parts`,
+   default 8) use it for uploads of two batches or more when the server offers it.
+2. **Split results by default**: the Go/Python ADBC driver, JDBC, the C++ client and the
+   `hardcharger` CLI ask for up to 8 partitions, in order. The server keeps results of
+   fewer than two batches in one stream, and a server without `result_partitions` never
+   sees the header. `max_result_partitions` stays 32.
+
+### Setup
+
+As in the section above: two c8gn.8xlarge Spot instances in one placement group in
+us-east-2c (LAN) and a third in us-west-2c (WAN), Ubuntu 24.04 arm64, TLS on every system
+with one self-signed P-256 certificate, `threads=32`, `memory_limit=40GB`, the database in
+`/dev/shm`. iperf3 server to client: LAN 1 stream 9.5 Gbit/s, 8 streams 76.3, 16 streams
+99.8; WAN 1 stream 0.5 Gbit/s, 8 streams 3.9, 16 streams 7.5.
+
+- **Hardcharger**: the `hardcharger-linux-arm64` CI artifact of feature/ingest-partitions
+  at `748961a5` (warp-sql `80cb327`), default settings. Client: `adbc-driver-warpsql` from
+  warp-sql-adbc feature/ingest-partitions (`b418e16`), built for linux-arm64. "N upload
+  parts" rows set `adbc.warp.ingest.parts` = N; plain "Warp SQL" rows set it, and
+  `result_partitions`, to 1.
+- **GizmoSQL** 1.42.0 and **Quack** (DuckDB `2.0.0.dev2610161340`) as before.
+- **5 measured repetitions**, one warm-up, `bench/remote/run_ingest_parts.sh lan|wan`.
+  Every ingest repetition is checked (row count, `sum(l_extendedprice)`,
+  `count(DISTINCT l_orderkey)` against the source file), and every fetch's warm-up sums
+  three columns of every batch and compares them with the server's. All matched. Raw
+  results: `bench/remote/results/2026-10-17-ingest-partitions/`.
+
+### Headline (TLS, median seconds)
+
+| Workload | GizmoSQL 1.42.0 | Quack | Hardcharger before (one stream) | Hardcharger now (default 8) |
+|---|---:|---:|---:|---:|
+| LAN ingest SF1 | 1.612 | 0.976 (0.620 unordered) | 1.306 | **0.664** |
+| LAN ingest SF10 | 9.441 | 2.873 (**2.672** unordered) | 9.143 | 3.003 |
+| WAN ingest SF1 | 13.935 | **2.146** (2.547 unordered) | 13.989 | 2.906 (16 parts: 2.570) |
+| LAN fetch SF1 | | 0.178 | 0.899 | **0.174** |
+| LAN fetch SF10 | | **0.855** | 8.758 | 1.384 |
+| WAN fetch SF1 | 12.26 (section above) | **2.014** | 14.015 | 2.301 |
+
+### Results (TLS)
+
+#### LAN fetch sf1 (6,001,215 rows)
+
+| System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Quack (attach) | 0.178 | 0.153 | 0.324 | 33.8 | 5,909 | 743 | 8.4 | 3.4 |
+| Hardcharger (Warp SQL) | 0.899 | 0.896 | 0.906 | 6.7 | 1,154 | 1,045 | 0.7 | 1.9 |
+| Hardcharger (Warp SQL, 8 partitions, in order) | 0.174 | 0.169 | 0.181 | 34.5 | 5,955 | 1,045 | 4.1 | 10.8 |
+
+#### LAN fetch sf10 (59,986,052 rows)
+
+| System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Quack (attach) | 0.855 | 0.842 | 0.983 | 70.1 | 12,258 | 7,427 | 17.0 | 9.3 |
+| Hardcharger (Warp SQL) | 8.758 | 8.749 | 8.768 | 6.8 | 1,184 | 10,447 | 0.7 | 2.1 |
+| Hardcharger (Warp SQL, 8 partitions, in order) | 1.384 | 1.376 | 1.394 | 43.4 | 7,491 | 10,450 | 4.5 | 14.2 |
+
+#### LAN ingest sf1 (6,001,215 rows)
+
+| System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Quack (attach, insertion order kept) | 0.976 | 0.846 | 0.984 | 6.2 | 1,063 | 855 | 1.5 | 7.8 |
+| Quack (attach, unordered) | 0.620 | 0.531 | 0.688 | 9.7 | 1,671 | 855 | 2.8 | 13.2 |
+| GizmoSQL 1.42.0 (Flight SQL) | 1.612 | 1.553 | 1.617 | 3.7 | 643 | 1,047 | 0.3 | 5.0 |
+| Hardcharger (Warp SQL) | 1.306 | 1.291 | 1.408 | 4.6 | 794 | 1,048 | 0.5 | 5.2 |
+| Hardcharger (Warp SQL, 8 upload parts) | 0.664 | 0.579 | 0.962 | 9.0 | 1,561 | 1,048 | 0.9 | 14.2 |
+| Hardcharger (Warp SQL, 16 upload parts) | 0.678 | 0.494 | 0.711 | 8.9 | 1,530 | 1,048 | 1.0 | 10.2 |
+
+#### LAN ingest sf10 (59,986,052 rows)
+
+| System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Quack (attach, insertion order kept) | 2.873 | 2.719 | 3.013 | 20.9 | 3,608 | 8,569 | 4.9 | 25.8 |
+| Quack (attach, unordered) | 2.672 | 2.629 | 2.700 | 22.5 | 3,880 | 8,546 | 6.7 | 29.1 |
+| GizmoSQL 1.42.0 (Flight SQL) | 9.441 | 9.336 | 9.449 | 6.4 | 1,098 | 10,470 | 0.6 | 8.1 |
+| Hardcharger (Warp SQL) | 9.143 | 9.140 | 9.363 | 6.6 | 1,134 | 10,476 | 0.7 | 8.4 |
+| Hardcharger (Warp SQL, 8 upload parts) | 3.003 | 2.971 | 3.100 | 20.0 | 3,452 | 10,475 | 2.0 | 24.8 |
+| Hardcharger (Warp SQL, 16 upload parts) | 2.985 | 2.898 | 3.253 | 20.1 | 3,472 | 10,479 | 2.0 | 25.7 |
+
+#### WAN fetch sf1 (6,001,215 rows)
+
+| System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Quack (attach) | 2.014 | 1.700 | 2.333 | 3.0 | 521 | 766 | 0.8 | 0.5 |
+| Hardcharger (Warp SQL) | 14.015 | 13.938 | 14.561 | 0.4 | 74 | 1,078 | 0.1 | 0.2 |
+| Hardcharger (Warp SQL, 8 partitions, in order) | 2.301 | 2.206 | 2.817 | 2.6 | 451 | 1,078 | 0.3 | 1.0 |
+
+#### WAN ingest sf1 (6,001,215 rows)
+
+| System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Quack (attach, insertion order kept) | 2.146 | 2.142 | 2.214 | 2.8 | 483 | 889 | 0.7 | 3.6 |
+| Quack (attach, unordered) | 2.547 | 2.419 | 3.950 | 2.4 | 407 | 890 | 0.6 | 3.1 |
+| GizmoSQL 1.42.0 (Flight SQL) | 13.935 | 13.912 | 14.003 | 0.4 | 74 | 1,087 | 0.1 | 0.5 |
+| Hardcharger (Warp SQL) | 13.989 | 13.961 | 14.061 | 0.4 | 74 | 1,089 | 0.1 | 0.6 |
+| Hardcharger (Warp SQL, 8 upload parts) | 2.906 | 2.680 | 3.498 | 2.1 | 357 | 1,088 | 0.3 | 2.8 |
+| Hardcharger (Warp SQL, 16 upload parts) | 2.570 | 2.091 | 3.023 | 2.3 | 404 | 1,088 | 0.3 | 3.0 |
+
+### Reading the numbers
+
+- **Ingest went from on par with GizmoSQL to on par with Quack.** LAN SF10: 9.14 s in one
+  stream, 3.00 s in 8 parts (3.0x), against Quack's 2.87 s with insertion order and 2.67 s
+  without; SF1 0.66 s beats Quack with insertion order (0.98 s) and trails it without
+  (0.62 s) by 7%. Over the WAN,
+  where one flow carries 0.5 Gbit/s, SF1 went from 14.0 s to 2.9 s (8 parts) and 2.6 s (16).
+- **The LAN SF10 load is now bound by DuckDB's insert, not the network.** The server used
+  24.8 cores for Hardcharger's 8 parts and 25.7 for 16 (Quack: 25.8 and 29.1); 16 parts
+  were no faster than 8. Warp SQL sends 10.5 GB on the wire where Quack sends 8.5 GB.
+- **The split-results default pays off on any link.** LAN SF1 fetch 0.90 s -> 0.17 s, SF10
+  8.76 s -> 1.38 s, WAN SF1 14.0 s -> 2.30 s, with no option set. Small results are
+  unchanged: the server keeps a result of fewer than two batches in one stream.
+- **Local runs** (loopback, Apple M5 Max, Python ADBC driver, median of 3, TLS): SF10
+  ingest 7.83 s in one part, 3.98 s in 8 (Quack 4.32 s, GizmoSQL 6.17 s); SF1 0.90 s ->
+  0.50 s (Quack 0.71 s, 0.57 s unordered; GizmoSQL 0.79 s); plaintext SF10 5.2-5.3 s ->
+  3.6-3.8 s (interleaved A/B; a run of 7.5 s for 8 parts during a parallel build on the
+  same machine did not reproduce).
+
+### Where Hardcharger still loses
+
+- **LAN SF10 ingest, to Quack by 5-12%** (3.00 s against 2.87 s ordered, 2.67 s
+  unordered): both are bound by DuckDB's insert on the server; Warp SQL's wire format is
+  23% larger for lineitem.
+- **WAN SF1 ingest, to Quack by 20-35%** with 8 parts (2.91 s against 2.15 s); 16 parts
+  come closer (2.57 s). Quack's client had 49 connections open after an SF1 load (95-128
+  after SF10); Hardcharger's had one per part.
+- **SF10 fetch at the default 8 partitions, to Quack by 62%** (1.38 s against 0.86 s); 32
+  partitions took 0.97 s in the section above. The default stays 8, which suits the WAN
+  better (32 in order over the WAN was erratic).
+- **WAN SF1 fetch, to Quack by 14%** (2.30 s against 2.01 s).
+- **Ordered bulk loads** stay on one stream (9.14 s for SF10 on the LAN), where Quack keeps
+  insertion order at 2.87 s.
+
+### Cost
+
+About 1.1 hours of three Spot c8gn.8xlarge (~$0.35/h each) and ~20 GB across regions:
+under $2. Everything was tagged `Purpose=hardcharger-benchmark` and deleted; describe calls
+in both regions showed no instances, volumes, security groups, key pairs, placement groups
+or Spot requests left.

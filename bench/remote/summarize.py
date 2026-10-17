@@ -51,6 +51,8 @@ def name(r: dict) -> str:
         extras.append("zstd")
     if r.get("partitions", 1) > 1:
         extras.append(f"{r['partitions']} partitions" + (", any order" if r.get("order") == "any" else ", in order"))
+    if r["workload"] == "ingest" and r.get("ingest_parts", 1) > 1:
+        extras.append(f"{r['ingest_parts']} upload parts")
     return f"{HARDCHARGER} (Warp SQL{''.join(', ' + e for e in extras)})"
 
 

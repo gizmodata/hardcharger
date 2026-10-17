@@ -172,7 +172,7 @@ case "${1:-}" in
       aws ec2 delete-key-pair --region "$r" --key-name "$KEY_NAME" >/dev/null 2>&1 || true
     done
     aws ec2 delete-placement-group --region "$EAST" --group-name hardcharger-bench-pg 2>/dev/null || true
-    "$0" check
+    bash "${BASH_SOURCE[0]}" check
     ;;
   check)
     for r in "$EAST" "$WEST"; do
