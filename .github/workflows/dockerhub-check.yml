@@ -15,6 +15,14 @@ jobs:
       contents: read
       id-token: write  # Docker Hub's OIDC sign-in
     steps:
+      # What Docker Hub's trust rules see: the claims of this run's OIDC token (never the token).
+      - name: OIDC claims
+        run: |
+          token=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r .value)
+          echo "::add-mask::$token"
+          payload=$(cut -d. -f2 <<< "$token" | tr '_-' '/+')
+          while [ $(( ${#payload} % 4 )) -ne 0 ]; do payload="$payload="; done
+          base64 -d <<< "$payload" | jq '{sub, aud, repository, repository_owner, ref, ref_type, event_name, workflow_ref, job_workflow_ref, environment}'
       - uses: docker/login-action@v4
         env:
           DOCKERHUB_OIDC_CONNECTIONID: 07b8e4b3-1db1-46b5-a5e1-7d2fff417c60
