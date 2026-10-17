@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-17
+
 ### Added
 
 - The Hardcharger server (`server/`): DuckDB 2.0 behind the Warp SQL protocol, built on
@@ -27,6 +29,10 @@ own changelog in `python/CHANGELOG.md`.
   memory limit, storage version, unsigned extensions, a plaintext health port, a default
   statement timeout, statement logging, text or JSON logs, TLS and mTLS, graceful drain.
 - Tests (`server/tests`, 27) for all of the above.
+- Release artifacts: `hardcharger-linux-amd64`, `-linux-arm64` and `-macos-arm64`
+  tarballs (server plus `libduckdb`), and the image `ghcr.io/gizmodata/hardcharger`.
+- A TPC-H SF10 benchmark (`bench/tpch.py`, results in `docs/benchmarks.md`): 1.44× faster
+  than GizmoSQL 1.41 over the 22 queries, and 1.6× faster at moving 10M rows.
 
 ### Known gaps
 
