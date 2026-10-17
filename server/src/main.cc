@@ -34,6 +34,7 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  warpsql::InitializeProcess();  // first: before anything uses OpenSSL
   hc::Loaded loaded;
   try {
     loaded = hc::LoadConfig(argc, argv);
