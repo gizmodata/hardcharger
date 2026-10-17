@@ -1,6 +1,8 @@
 #include "sql_text.hpp"
 
 #include <algorithm>
+#include <ctime>
+#include <format>
 #include <regex>
 
 #include "duckdb_v2.hpp"
@@ -183,6 +185,34 @@ std::optional<std::string> ParseKillSession(const Piece& piece) {
     if (match[group].matched) return match[group].str();
   }
   return std::string();
+}
+
+namespace {
+
+std::string Doubled(std::string_view text, char quote) {
+  std::string out(1, quote);
+  for (char c : text) {
+    out += c;
+    if (c == quote) out += quote;
+  }
+  out += quote;
+  return out;
+}
+
+}  // namespace
+
+std::string SqlLiteral(std::string_view text) { return Doubled(text, '\''); }
+
+std::string SqlIdentifier(std::string_view name) { return Doubled(name, '"'); }
+
+std::string SqlTimestamp(std::chrono::system_clock::time_point time) {
+  const auto us = std::chrono::duration_cast<std::chrono::microseconds>(time.time_since_epoch()).count();
+  const std::time_t seconds = static_cast<std::time_t>(us / 1000000);
+  std::tm utc{};
+  gmtime_r(&seconds, &utc);
+  char buffer[32];
+  const std::size_t length = std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &utc);
+  return std::format("'{}.{:06}+00'::TIMESTAMPTZ", std::string_view(buffer, length), us % 1000000);
 }
 
 }  // namespace hardcharger

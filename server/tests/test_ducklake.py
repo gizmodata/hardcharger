@@ -3,12 +3,12 @@
 DuckLake on PostgreSQL metadata (server/tests/docker-compose.yml): INSTALL/LOAD ducklake
 and postgres, a postgres secret and a DUCKLAKE secret with METADATA_PARAMETERS, ATTACH
 'ducklake:ducklake_secret', USE, DDL, DML and queries; then 10 concurrent sessions each
-do the setup and read. 1.x skipped without PostgreSQL; these fail. Not ported: 1.x's
-check of its instrumentation rows for the session (instrumentation is not in this
-version yet).
+do the setup and read, and instrumentation recorded the session's DuckLake statements
+and their executions. 1.x skipped without PostgreSQL; these fail.
 """
 
 import concurrent.futures
+import time
 import uuid
 
 import pytest
@@ -23,7 +23,7 @@ pytestmark = pytest.mark.services
 @pytest.fixture(scope="module")
 def server(module_launcher):
     require(port=PG_PORT, what="PostgreSQL")
-    return module_launcher.start()
+    return module_launcher.start(features=["instrumentation"], args=["--enable-instrumentation"])
 
 
 def setup(session, data_path: str, metadata_schema: str, alias: str) -> None:
@@ -61,6 +61,18 @@ def test_ducklake_setup_and_query(server, tmp_path):
     aggregate = session.rows(sql="SELECT count(*) AS n, sum(population) AS total FROM test_cities")
     assert aggregate == [{"n": 5, "total": 37400068 + 28514000 + 25582000 + 21650000 + 21581000}]
     assert session.scalar(sql="SELECT current_database()") == "my_ducklake"
+    # Instrumentation recorded them: CREATE, INSERT and both SELECTs, each executed and
+    # succeeded (the instrumentation catalog is named in full: the session uses the lake).
+    sid = session.scalar(sql="SELECT GIZMOSQL_CURRENT_SESSION()")
+    query = (f"SELECT count(DISTINCT s.statement_id) AS statements, count(e.execution_id) AS executions, "
+             f"count(*) FILTER (WHERE e.status = 'success') AS succeeded "
+             f"FROM _gizmosql_instr.main.sql_statements s JOIN _gizmosql_instr.main.sql_executions e USING (statement_id) "
+             f"WHERE s.session_id = '{sid}' AND s.sql_text LIKE '%test' || '_cities%' AND NOT s.is_internal "
+             f"AND e.cursor_close_time IS NOT NULL")
+    deadline = time.monotonic() + 10
+    while (counts := session.rows(sql=query)[0])["executions"] < 4 and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert counts == {"statements": 4, "executions": 4, "succeeded": 4}, counts
 
 
 def test_ducklake_concurrent_queries(server, tmp_path):

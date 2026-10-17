@@ -7,7 +7,9 @@
 #include <ctime>
 #include <format>
 #include <mutex>
+#include <sstream>
 #include <stdexcept>
+#include <thread>
 
 namespace hardcharger {
 
@@ -19,9 +21,10 @@ bool json_format = false;
 FILE* output = stderr;
 LogFields default_fields;
 std::function<void(LogLevel, std::string_view)> capture;
+std::function<void(const LogRecord&)> sink;
+thread_local int sink_exclusions = 0;
 
-std::string Timestamp() {
-  const auto now = std::chrono::system_clock::now();
+std::string Timestamp(std::chrono::system_clock::time_point now) {
   const auto millis =
       std::chrono::floor<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
   const std::time_t seconds = std::chrono::system_clock::to_time_t(now);
@@ -35,20 +38,29 @@ std::string Timestamp() {
 }
 
 void Write(LogLevel level, std::string_view message, const LogFields& fields) {
+  const auto now = std::chrono::system_clock::now();
   std::lock_guard lock(log_mutex);
   if (capture) {
     capture(level, message);
     return;
   }
+  if (sink && sink_exclusions == 0) {
+    LogRecord record{now, level, std::string(message), default_fields};
+    record.fields.insert(record.fields.end(), fields.begin(), fields.end());
+    std::ostringstream thread;
+    thread << std::this_thread::get_id();
+    record.thread = thread.str();
+    sink(record);
+  }
   std::string line;
   if (json_format) {
-    boost::json::object record{{"time", Timestamp()}, {"level", LogLevelName(level)},
+    boost::json::object record{{"time", Timestamp(now)}, {"level", LogLevelName(level)},
                                {"message", message}};
     for (const auto& [key, value] : default_fields) record[key] = value;
     for (const auto& [key, value] : fields) record[key] = value;
     line = boost::json::serialize(record);
   } else {
-    line = std::format("{} {:<7} {}", Timestamp(), LogLevelName(level), message);
+    line = std::format("{} {:<7} {}", Timestamp(now), LogLevelName(level), message);
     for (const auto& [key, value] : fields) {
       line += std::format(" {}={}", key, value);
     }
@@ -110,6 +122,15 @@ void LogAt(LogLevel threshold, LogLevel level, std::string_view message, const L
   if (!ignore_logger_threshold && level < min_level) return;
   Write(level, message, fields);
 }
+
+void SetLogSink(std::function<void(const LogRecord&)> destination) {
+  std::lock_guard lock(log_mutex);
+  sink = std::move(destination);
+}
+
+LogSinkExclusion::LogSinkExclusion() { sink_exclusions++; }
+
+LogSinkExclusion::~LogSinkExclusion() { sink_exclusions--; }
 
 void SetLogCaptureForTesting(std::function<void(LogLevel, std::string_view)> sink) {
   std::lock_guard lock(log_mutex);

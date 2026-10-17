@@ -78,6 +78,9 @@ class Instrumentation {
   std::string StatementCreated(const Session& session, std::string_view sql, std::string_view method,
                                bool accepted, std::string_view error);
   void ExecutionStarted(const ExecutionRecord& record);
+  // A statement waiting in the statement queue ('queued'), and its leaving it.
+  void ExecutionQueued(const ExecutionRecord& record);
+  void ExecutionAdmitted(const ExecutionRecord& record);
   void ExecutionFinished(const ExecutionRecord& record);
 
   // Quotes `text` as a SQL string literal ('it''s').

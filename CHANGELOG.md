@@ -51,8 +51,25 @@ own changelog in `python/CHANGELOG.md`.
 - `cluster_id`, `max_header_bytes` (1.x's `--max-metadata-size`), `result_batch_rows`
   (default 2048, as 1.x streamed), and GizmoSQL 1.x's flags as aliases (`--readonly`,
   `-D`, `--tls CERT KEY`, `--query-timeout`, ...).
-- GizmoSQL 1.x options this version doesn't implement yet (instrumentation, catalog
-  logging, OAuth, JWKS, OpenTelemetry) stop the server when set, rather than being ignored.
+- Instrumentation (license feature `instrumentation`): `enable_instrumentation` records
+  instances, sessions, statements and executions (with their queue wait, fetch timeline
+  and status) in `_gizmosql_instr`, under 1.x's tables, views and columns, in a DuckDB
+  file next to the database (`instrumentation_db_path`) or in a DuckLake or PostgreSQL
+  catalog the init SQL attaches (`instrumentation_catalog`, `instrumentation_schema`). A
+  killed server's open rows are closed at the next start; a legacy schema with naive
+  timestamps is migrated. Queued statements show as `queued` while they wait.
+- `instance_tag`, `SET gizmosql.session_tag` and `SET gizmosql.query_tag`, recorded with
+  the instance, the session and each statement; `capture_query_profile` (`off`,
+  `standard`, `detailed`; also `SET [GLOBAL]`) stores DuckDB's JSON query profile with
+  each execution.
+- Catalog logging (license feature `instrumentation`): `enable_catalog_logging` also
+  writes every log line to `_gizmosql_logs.logs` (1.x's columns), in its own file
+  (`log_catalog_db_path`) or a DuckLake or PostgreSQL catalog (`log_catalog`,
+  `log_schema`), in batches from a background writer.
+- The instrumentation and log catalogs are the server's: admins may read them, nobody may
+  write, detach or `USE` them, and non-admins don't see them in metadata.
+- GizmoSQL 1.x options this version doesn't implement yet (OAuth, JWKS, OpenTelemetry)
+  stop the server when set, rather than being ignored.
 - The GizmoSQL 1.x test battery, ported (`server/tests`, scoreboard in
   `server/tests/BATTERY.md`), with C++ unit tests (`server/unit`, googletest 1.18.0) and a
   never-installed `hardcharger-license-test` build for the Enterprise features.
@@ -75,8 +92,14 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Known gaps
 
-- Not yet ported from GizmoSQL 1.x: instrumentation and catalog logging, OAuth sign-in,
-  per-catalog `catalog_access` rules (only "no write access anywhere" is enforced), RBAC.
+- Not yet ported from GizmoSQL 1.x: OAuth sign-in, per-catalog `catalog_access` rules
+  (only "no write access anywhere" is enforced), RBAC.
+- Instrumentation's fetch times are when the server took each batch from DuckDB, not when
+  the client received it (the Warp SQL SDK has no delivery callback); its `peer` column
+  is empty (the SDK's principal carries no peer address).
+- SQL's own catalog functions (`duckdb_databases()`, `information_schema`, `SHOW
+  DATABASES`) still list the instrumentation and log catalogs to non-admins (reading
+  them is refused).
 - Listing the schemas or tables of one catalog still opens every attached catalog: the v2
   C API has no catalog-scoped listing.
 - VARIANT (and other struct or extension) Arrow parameters can't be bound yet.

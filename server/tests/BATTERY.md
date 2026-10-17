@@ -7,10 +7,10 @@ updated. Nothing is skipped; a missing dependency fails its test.
 
 ## Totals
 
-- **59 C++ test files, 565 gtest cases:** 304 passing, 4 failing, 15 not applicable, 242 not yet.
-  - by file: 41 ported & passing, 2 ported & partly failing, 2 not applicable, 12 not yet, 2 passing except their not-applicable cases.
+- **59 C++ test files, 565 gtest cases:** 349 passing, 5 failing, 15 not applicable, 196 not yet.
+  - by file: 45 ported & passing, 3 ported & partly failing, 2 not applicable, 6 not yet, 3 passing except their not-applicable cases.
   - server-side cases (all but the 142 that test the `gizmosql_client` binary): 423, of which
-    304 pass (72%) and 4 fail.
+    349 pass (83%) and 5 fail.
 - **Scripts and driver suites (12 files, 134 cases or checks):** 22 passing, 0 failing, 17 not applicable, 95 not yet.
 - Hardcharger's own tests (`test_server.py`, 27) and the Warp SQL conformance suite (76) pass too.
 
@@ -56,21 +56,21 @@ through the same-named pytest file.
 | `integration/test_set_query_log_level.cpp` | 2 | 2 | 0 | 0 | 0 | `test_set_query_log_level.py` | ported & passing |
 | `integration/test_internal_query_log_level.cpp` | 3 | 3 | 0 | 0 | 0 | `test_internal_query_log_level.py` | ported & passing |
 | `integration/test_log_level_filtering.cpp` | 14 | 14 | 0 | 0 | 0 | `test_log_level_filtering.py` | ported & passing; C++ unit tests |
-| `integration/test_query_profile_capture.cpp` | 6 | 0 | 0 | 0 | 6 | — | not yet; not yet: needs instrumentation |
+| `integration/test_query_profile_capture.cpp` | 6 | 6 | 0 | 0 | 0 | `test_query_profile_capture.py` | ported & passing; DuckDB's profiler output file |
 | `integration/test_enterprise_gating.cpp` | 7 | 7 | 0 | 0 | 0 | `test_enterprise_gating.py` | ported & passing |
-| `integration/test_instance_session_query_tags.cpp` | 15 | 0 | 0 | 0 | 15 | — | not yet; not yet: 11 need instrumentation, 4 the client |
+| `integration/test_instance_session_query_tags.cpp` | 15 | 11 | 0 | 0 | 4 | `test_instance_session_query_tags.py` | mixed; not yet: the 4 client cases (needs a Warp SQL client binary); +1 |
 | `integration/test_metrics.cpp` | 11 | 11 | 0 | 0 | 0 | `test_metrics.py` | ported & passing; unit cases in C++ |
 | `integration/test_admission_controller.cpp` | 14 | 14 | 0 | 0 | 0 | `test_admission_controller.py` | ported & passing; C++ unit tests |
-| `integration/test_statement_queue.cpp` | 8 | 8 | 0 | 0 | 0 | `test_statement_queue.py` | ported & passing; 2 re-expressed without instrumentation; +1 |
+| `integration/test_statement_queue.cpp` | 8 | 8 | 0 | 0 | 0 | `test_statement_queue.py` | ported & passing; +1 |
 | `integration/test_admission_queue_telemetry.cpp` | 2 | 0 | 0 | 2 | 0 | — | not applicable; N/A: no OTLP export (decision pending); gizmosql_queue_depth on /metrics |
 | `integration/test_catalog_access.cpp` | 42 | 0 | 0 | 0 | 42 | — | not yet; not yet: needs the catalogs a statement touches (authorization module) |
 | `integration/test_catalog_wildcards.cpp` | 12 | 12 | 0 | 0 | 0 | `test_catalog_wildcards.py` | ported & passing; C++ unit tests; +2 |
-| `integration/test_system_managed_catalog_visibility.cpp` | 2 | 0 | 0 | 0 | 2 | — | not yet; not yet: needs instrumentation |
+| `integration/test_system_managed_catalog_visibility.cpp` | 2 | 1 | 1 | 0 | 0 | `test_system_managed_catalog_visibility.py` | ported, partly failing; hiding it from SQL's own catalog functions needs DuckDB internals |
 | `integration/test_system_catalog.cpp` | 4 | 4 | 0 | 0 | 0 | `test_system_catalog.py` | ported & passing; +1 (DETACH) |
-| `integration/test_instrumentation.cpp` | 17 | 0 | 0 | 0 | 17 | — | not yet; not yet: instrumentation |
-| `integration/test_instrumentation_ducklake.cpp` | 7 | 0 | 0 | 0 | 7 | — | not yet; not yet: instrumentation |
-| `integration/test_catalog_logging.cpp` | 3 | 0 | 0 | 0 | 3 | — | not yet; not yet: catalog logging |
-| `integration/test_ducklake.cpp` | 2 | 2 | 0 | 0 | 0 | `test_ducklake.py` | ported & passing; instrumentation sub-check dropped |
+| `integration/test_instrumentation.cpp` | 17 | 17 | 0 | 0 | 0 | `test_instrumentation.py` | ported & passing; manager cases against real servers; failed write as a C++ unit test; +2 |
+| `integration/test_instrumentation_ducklake.cpp` | 7 | 7 | 0 | 0 | 0 | `test_instrumentation_ducklake.py` | ported & passing; catalog logging through a real server, also on DuckLake; +1 |
+| `integration/test_catalog_logging.cpp` | 3 | 3 | 0 | 0 | 0 | `test_catalog_logging.py` | ported & passing; non-admin, license and file-location cases; writer as a C++ unit test; +5 |
+| `integration/test_ducklake.cpp` | 2 | 2 | 0 | 0 | 0 | `test_ducklake.py` | ported & passing |
 | `integration/test_ducklake_catalog_fanout.cpp` | 2 | 0 | 2 | 0 | 0 | `test_ducklake_catalog_fanout.py` | ported, partly failing; per step: 4 of 7 pass; schema/table listing fans out |
 | `integration/test_geoarrow.cpp` | 3 | 3 | 0 | 0 | 0 | `test_geoarrow.py` | ported & passing; extension name required |
 | `integration/test_variant.cpp` | 4 | 2 | 2 | 0 | 0 | `test_variant.py` | ported, partly failing; VARIANT parameters: SDK and DuckDB bind gaps |

@@ -14,6 +14,7 @@
 #include "engine.hpp"
 #include "logging.hpp"
 #include "runtime.hpp"
+#include "sql_text.hpp"
 #include "tokens.hpp"
 #include "version.hpp"
 
@@ -200,18 +201,9 @@ std::string Replace(std::string text, std::string_view from, std::string_view to
   return text;
 }
 
-std::string Quoted(std::string_view identifier) { return "\"" + Replace(std::string(identifier), "\"", "\"\"") + "\""; }
+std::string Quoted(std::string_view identifier) { return SqlIdentifier(identifier); }
 
-// A TIMESTAMPTZ literal with microseconds, in UTC.
-std::string Time(WallTime time) {
-  const auto us = std::chrono::duration_cast<std::chrono::microseconds>(time.time_since_epoch()).count();
-  const std::time_t seconds = static_cast<std::time_t>(us / 1000000);
-  std::tm utc{};
-  gmtime_r(&seconds, &utc);
-  char buffer[32];
-  const std::size_t length = std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &utc);
-  return std::format("'{}.{:06}+00'::TIMESTAMPTZ", std::string_view(buffer, length), us % 1000000);
-}
+std::string Time(WallTime time) { return SqlTimestamp(time); }
 
 std::string Time(const std::optional<WallTime>& time) { return time ? Time(*time) : "NULL"; }
 
@@ -238,7 +230,7 @@ int64_t MemoryTotal() {
 
 }  // namespace
 
-std::string Instrumentation::Literal(std::string_view text) { return "'" + Replace(std::string(text), "'", "''") + "'"; }
+std::string Instrumentation::Literal(std::string_view text) { return SqlLiteral(text); }
 
 Instrumentation::Instrumentation(Runtime& runtime, duckdb_v2_instance_handle instance, std::string duckdb_version)
     : runtime_(runtime),
@@ -451,6 +443,18 @@ void Instrumentation::ExecutionStarted(const ExecutionRecord& r) {
           " (execution_id, statement_id, execution_start_time, enqueue_time, status) VALUES (" +
           Literal(r.execution_id) + ", " + Literal(r.statement_id) + ", " + Time(r.start) + ", " + Time(r.enqueue_time) +
           ", 'executing')");
+}
+
+void Instrumentation::ExecutionQueued(const ExecutionRecord& r) {
+  Enqueue("INSERT INTO " + Table("sql_executions") +
+          " (execution_id, statement_id, execution_start_time, enqueue_time, status) VALUES (" +
+          Literal(r.execution_id) + ", " + Literal(r.statement_id) + ", " + Time(r.start) + ", " + Time(r.enqueue_time) +
+          ", 'queued')");
+}
+
+void Instrumentation::ExecutionAdmitted(const ExecutionRecord& r) {
+  Enqueue("UPDATE " + Table("sql_executions") + " SET status = 'executing', execution_start_time = " + Time(r.start) +
+          " WHERE execution_id = " + Literal(r.execution_id) + " AND status = 'queued'");
 }
 
 void Instrumentation::ExecutionFinished(const ExecutionRecord& r) {

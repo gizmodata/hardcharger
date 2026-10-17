@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "engine.hpp"
+#include "catalog_log.hpp"
 #include "instrumentation.hpp"
 #include "version.hpp"
 
@@ -389,18 +390,25 @@ std::vector<Setting> Build() {
            .get_global = config_value([](const Runtime& r) {
              return r.instrumentation ? r.instrumentation->schema() : std::string();
            })});
-  // Catalog logging is not in this version; its settings are listed (off) so tools that
-  // read them see the same rows as on GizmoSQL 1.x.
-  for (const auto& [name, type, flag, env, def] :
-       std::vector<std::tuple<std::string, std::string, std::string, std::string, std::string>>{
-           {"enable_catalog_logging", "BOOLEAN", "--enable-catalog-logging", "GIZMOSQL_ENABLE_CATALOG_LOGGING", "false"},
-           {"log_catalog", "VARCHAR", "--log-catalog", "GIZMOSQL_LOG_CATALOG", ""},
-           {"log_schema", "VARCHAR", "--log-schema", "GIZMOSQL_LOG_SCHEMA", ""}}) {
-    startup({.name = name, .input_type = type, .legacy_flag = flag, .legacy_env = env, .default_value = def,
-             .description = "Not in this Hardcharger version (always off).", .feature = "instrumentation",
-             .admin_only = true,
-             .get_global = config_value([def](const Runtime&) { return def; })});
-  }
+  startup({.name = "enable_catalog_logging", .input_type = "BOOLEAN", .option = "enable_catalog_logging",
+           .legacy_flag = "--enable-catalog-logging", .legacy_env = "GIZMOSQL_ENABLE_CATALOG_LOGGING",
+           .default_value = "false", .description = "Log lines are also written to a logs table.",
+           .feature = "instrumentation", .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return Bool(r.catalog_log != nullptr); })});
+  startup({.name = "log_catalog", .input_type = "VARCHAR", .option = "log_catalog", .legacy_flag = "--log-catalog",
+           .legacy_env = "GIZMOSQL_LOG_CATALOG",
+           .description = "Catalog of the logs table (empty when catalog logging is off).",
+           .feature = "instrumentation", .admin_only = true,
+           .get_global = config_value([](const Runtime& r) {
+             return r.catalog_log ? r.catalog_log->catalog() : std::string();
+           })});
+  startup({.name = "log_schema", .input_type = "VARCHAR", .option = "log_schema", .legacy_flag = "--log-schema",
+           .legacy_env = "GIZMOSQL_LOG_SCHEMA",
+           .description = "Schema of the logs table (empty when catalog logging is off).",
+           .feature = "instrumentation", .admin_only = true,
+           .get_global = config_value([](const Runtime& r) {
+             return r.catalog_log ? r.catalog_log->schema() : std::string();
+           })});
   return s;
 }
 

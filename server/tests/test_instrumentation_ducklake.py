@@ -6,6 +6,11 @@ GIZMOSQL_INSTRUMENTATION_CATALOG): DuckLake on PostgreSQL metadata with data on 
 one catalog; a restart reuses the schema; the catalog is read-only even for an admin;
 a legacy schema with naive timestamps is migrated. 1.x skipped without PostgreSQL or
 MinIO; these fail.
+
+PostgresCatalogLogging.ForkLogsToPostgres drove 1.x's log sink directly with synthetic
+lines; here a real server logs into the PostgreSQL catalog (--log-catalog,
+--log-schema), the table and its indexes are checked in PostgreSQL itself, and the same
+runs against DuckLake, which 1.x left to shared code.
 """
 
 import time
@@ -168,3 +173,54 @@ def test_postgres_schema_writes_and_cascade(launcher):
     admin.execute(sql="CALL postgres_clear_cache()")
     assert admin.scalar(sql=f"SELECT count(*) FROM {p}sessions") == 0
     assert admin.scalar(sql=f"SELECT count(*) FROM {p}sql_executions") == 0
+
+
+def check_forked_logs(admin, table: str, cluster_id: str) -> None:
+    sid = admin.scalar(sql="SELECT GIZMOSQL_CURRENT_SESSION()")
+    for i in range(3):
+        assert admin.scalar(sql=f"SELECT {i} AS log_probe") == i
+    eventually(admin, f"SELECT count(*) FROM {table} WHERE session_id = '{sid}' AND username = 'admin' "
+                      # Spelled in two parts, so this query's own log line doesn't match.
+                      "AND message = 'Client SQL command execution succeeded' AND fields LIKE '%log' || '_probe%'",
+               lambda n: n == 3)
+    # One statement, one snapshot: every query adds lines of its own.
+    row = admin.rows(sql=f"SELECT count(*) AS total, "
+                         f"count(*) FILTER (WHERE CAST(cluster_id AS VARCHAR) = '{cluster_id}') AS clustered, "
+                         f"count(*) FILTER (WHERE log_time IS NOT NULL AND level IN ('DEBUG', 'INFO', 'WARN', 'ERROR')) "
+                         f"AS well_formed FROM {table}")[0]
+    assert row["total"] > 0 and row["clustered"] == row["total"] and row["well_formed"] == row["total"], row
+    detail = admin.error(sql=f"DELETE FROM {table}")["detail"]
+    assert "read-only" in detail and "log catalog" in detail, detail
+
+
+def test_postgres_catalog_logging(launcher):
+    schema = f"gizmosql_logs_{uuid.uuid4().hex[:6]}"
+    cluster_id = "abcdef01-2345-6789-abcd-ef0123456789"
+    reset_schema(launcher=launcher, schema=schema)
+    init_sql = f"INSTALL postgres; LOAD postgres; ATTACH '{pg_conninfo()}' AS pg_log_cat (TYPE postgres);"
+    server = launcher.start(features=["instrumentation"],
+                            args=["--enable-catalog-logging", "--log-catalog", "pg_log_cat", "--log-schema", schema,
+                                  "--cluster-id", cluster_id],
+                            env={"INIT_SQL_COMMANDS": init_sql})
+    check_forked_logs(admin=server.admin(), table=f"pg_log_cat.{schema}.logs", cluster_id=cluster_id)
+    server.stop()
+    # In PostgreSQL itself: the native table, its indexes, and every line written.
+    admin = launcher.start().admin()
+    admin.execute(sql="INSTALL postgres; LOAD postgres;")
+    admin.execute(sql=f"ATTACH '{pg_conninfo()}' AS pgadmin (TYPE postgres)")
+    indexes = admin.scalar(sql=f"SELECT count(*) FROM postgres_query('pgadmin', 'SELECT indexname FROM pg_indexes "
+                               f"WHERE schemaname = ''{schema}'' AND tablename = ''logs''')")
+    assert indexes == 8, indexes
+    assert admin.scalar(sql=f"SELECT count(*) FROM pgadmin.{schema}.logs WHERE message = 'stopped'") == 1
+    admin.execute(sql=f"CALL postgres_execute('pgadmin', 'DROP SCHEMA IF EXISTS {schema} CASCADE')")
+
+
+def test_ducklake_catalog_logging(launcher, lake):
+    catalog, schema = lake
+    cluster_id = "abcdef01-2345-6789-abcd-ef0123456789"
+    server = launcher.start(features=["instrumentation"],
+                            args=["--enable-catalog-logging", "--log-catalog", catalog, "--cluster-id", cluster_id],
+                            env={"INIT_SQL_COMMANDS": lake_init_sql(catalog=catalog, metadata_schema=schema)})
+    admin = server.admin()
+    assert admin.scalar(sql="SELECT value FROM gizmosql_settings() WHERE name = 'gizmosql.log_catalog'") == catalog
+    check_forked_logs(admin=admin, table=f"{catalog}.main.logs", cluster_id=cluster_id)

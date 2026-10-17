@@ -6,6 +6,7 @@
 // messages appear, it never turns them into info messages (GizmoSQL 1.x issue #136).
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -38,6 +39,29 @@ void Log(LogLevel level, std::string_view message, const LogFields& fields = {})
 // threshold, so its own threshold decides alone.
 void LogAt(LogLevel threshold, LogLevel level, std::string_view message, const LogFields& fields = {},
            bool ignore_logger_threshold = false);
+
+// A line as written: its time, level and message, the default fields, then its own.
+struct LogRecord {
+  std::chrono::system_clock::time_point time;
+  LogLevel level;
+  std::string message;
+  LogFields fields;
+  std::string thread;  // the logging thread's id
+};
+
+// A second destination for every line written (catalog logging), or none. It is called
+// under the logger's lock, so it must only queue the record.
+void SetLogSink(std::function<void(const LogRecord&)> sink);
+
+// While one exists on a thread, that thread's lines skip the sink: the sink's own writer
+// logs its failures this way, so a failing write can't feed itself.
+class LogSinkExclusion {
+ public:
+  LogSinkExclusion();
+  ~LogSinkExclusion();
+  LogSinkExclusion(const LogSinkExclusion&) = delete;
+  LogSinkExclusion& operator=(const LogSinkExclusion&) = delete;
+};
 
 // For tests: receives every line written (level and message) instead of the output.
 void SetLogCaptureForTesting(std::function<void(LogLevel, std::string_view)> capture);

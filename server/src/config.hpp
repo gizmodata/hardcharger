@@ -92,6 +92,13 @@ struct Config {
   std::string instrumentation_db_path;  // empty: gizmosql_instrumentation.db next to the database
   std::string instrumentation_catalog;  // a catalog the init SQL attaches, instead of the file
   std::string instrumentation_schema = "main";
+
+  // Catalog logging (Enterprise: instrumentation): every log line also goes to a
+  // `logs` table, in its own DuckDB file or in a catalog the init SQL attaches.
+  bool enable_catalog_logging = false;
+  std::string log_catalog_db_path;  // empty: gizmosql_logs.db next to the database
+  std::string log_catalog;          // an attached catalog (DuckLake, PostgreSQL) instead
+  std::string log_schema = "main";
   std::string instance_tag;  // JSON object recorded with this instance
   std::string capture_query_profile = "off";  // off, standard or detailed
 

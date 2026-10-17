@@ -216,6 +216,15 @@ const std::vector<Option>& Options() {
        "an attached catalog (DuckLake, PostgreSQL) for them instead", TEXT(instrumentation_catalog)},
       {"instrumentation_schema", Kind::kString, {"GIZMOSQL_INSTRUMENTATION_SCHEMA"}, {},
        "schema for them in that catalog", TEXT(instrumentation_schema)},
+      // Catalog logging
+      {"enable_catalog_logging", Kind::kBool, {"GIZMOSQL_ENABLE_CATALOG_LOGGING"}, {},
+       "also write every log line to a logs table (Enterprise)", FLAG(enable_catalog_logging)},
+      {"log_catalog_db_path", Kind::kString, {"GIZMOSQL_LOG_DB_PATH"}, {},
+       "DuckDB file for the logs table (default: next to the database)", TEXT(log_catalog_db_path)},
+      {"log_catalog", Kind::kString, {"GIZMOSQL_LOG_CATALOG"}, {},
+       "an attached catalog (DuckLake, PostgreSQL) for it instead", TEXT(log_catalog)},
+      {"log_schema", Kind::kString, {"GIZMOSQL_LOG_SCHEMA"}, {}, "schema for it in that catalog",
+       TEXT(log_schema)},
       {"instance_tag", Kind::kString, {"GIZMOSQL_INSTANCE_TAG"}, {}, "JSON object recorded with this instance",
        TEXT(instance_tag)},
       {"capture_query_profile", Kind::kString, {"GIZMOSQL_CAPTURE_QUERY_PROFILE"}, {},
@@ -239,7 +248,7 @@ const std::vector<Option>& Options() {
 
 // GizmoSQL 1.x options this version does not implement. Setting one (to anything but
 // its "off" value) stops the server: silently ignoring it would run a deployment
-// without something it asked for (instrumentation, OAuth sign-in, telemetry, ...).
+// without something it asked for (OAuth sign-in, telemetry, ...).
 struct Unsupported {
   std::string flag;
   std::vector<std::string> env;
@@ -248,10 +257,6 @@ struct Unsupported {
 
 const std::vector<Unsupported>& UnsupportedOptions() {
   static const std::vector<Unsupported> options = {
-      {"--enable-catalog-logging", {"GIZMOSQL_ENABLE_CATALOG_LOGGING"}, true},
-      {"--log-catalog", {"GIZMOSQL_LOG_CATALOG"}, false},
-      {"--log-schema", {"GIZMOSQL_LOG_SCHEMA"}, false},
-      {"--log-catalog-db-path", {"GIZMOSQL_LOG_DB_PATH"}, false},
       {"--token-jwks-uri", {"GIZMOSQL_TOKEN_JWKS_URI"}, false},
       {"--oauth-client-id", {"GIZMOSQL_OAUTH_CLIENT_ID"}, false},
       {"--oauth-client-secret", {"GIZMOSQL_OAUTH_CLIENT_SECRET"}, false},

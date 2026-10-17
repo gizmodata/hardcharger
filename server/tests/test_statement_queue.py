@@ -6,11 +6,9 @@ skip it unless they SET SESSION gizmosql.bypass_queue = false. A queued statemen
 be killed (KILL SESSION) or time out (Warp-Statement-Timeout, 1.x: a gRPC deadline),
 and then never runs once a slot frees.
 
-Two cases re-expressed: 1.x read enqueue_time and status 'cancelled' from its
-instrumentation tables, which this version doesn't have; QueuedExecutionRecordsEnqueueTime
-reads the queue wait from gizmosql_queue_wait_seconds instead, and
-KilledWhileQueuedRecordsCancelled asserts the killed statement fails promptly with
-session_ended and never runs. The instrumentation side is left for that feature.
+A queued statement is in instrumentation while it waits (status 'queued'), with its
+enqueue_time; QueuedExecutionRecordsEnqueueTime also checks the queue-wait metric, and
+KilledWhileQueuedRecordsCancelled also that the victim fails with session_ended.
 """
 
 import threading
@@ -21,8 +19,9 @@ import pytest
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
-    return module_launcher.start(features=["statement_queue", "kill_session", "metrics"],
-                                 args=["--max-concurrent-statements", "2", "--enable-metrics", "--metrics-port", "0"])
+    return module_launcher.start(features=["statement_queue", "kill_session", "metrics", "instrumentation"],
+                                 args=["--max-concurrent-statements", "2", "--enable-metrics", "--metrics-port", "0",
+                                       "--enable-instrumentation"])
 
 
 def queued_session(server):
@@ -94,18 +93,44 @@ def test_queue_serializes_concurrent_statements(server):
     assert waited >= 0.8, f"the probe should have queued for a slot; waited {waited:.2f}s"
 
 
-def test_queued_execution_records_its_queue_wait(server):
+def recorded(server, sql: str, timeout: float = 10):
+    """The first row of `sql` (an admin's read of instrumentation), once there is one."""
+    admin = server.admin()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        rows = admin.rows(sql=sql)
+        if rows:
+            return rows[0]
+        time.sleep(0.1)
+    raise AssertionError(f"nothing recorded: {sql}")
+
+
+def test_queued_execution_records_enqueue_time(server):
     metric = "SELECT value FROM gizmosql_metrics() WHERE name = 'gizmosql_queue_wait_seconds_sum'"
     before = server.admin().scalar(sql=metric)
     holders = hold_slots(server=server, count=2, ms=1500)
     assert wait_until(lambda: active(server) == 2)
-    queued_session(server=server).scalar(sql="SELECT 1")
+    probe = queued_session(server=server)
+    outcome = {}
+    worker = threading.Thread(target=lambda: outcome.setdefault("value", probe.scalar(sql="SELECT 4242 AS qprobe")))
+    worker.start()
+    # While it waits, a monitor sees it queued. (Spelled in two parts, so the
+    # monitor's own statement doesn't match.)
+    waiting = recorded(server=server, sql="SELECT status FROM _gizmosql_instr.execution_details "
+                                          "WHERE sql_text LIKE '%qpr' || 'obe%' AND status = 'queued'")
+    assert waiting == {"status": "queued"}
+    worker.join(timeout=10)
+    assert outcome == {"value": 4242}
     for thread in holders:
         thread.join()
+    row = recorded(server=server, sql="SELECT queue_wait_ms, status FROM _gizmosql_instr.execution_details "
+                                      "WHERE sql_text LIKE '%qpr' || 'obe%' AND status = 'success' "
+                                      "AND queue_wait_ms IS NOT NULL")
+    assert row["queue_wait_ms"] >= 500, row
     assert server.admin().scalar(sql=metric) - before >= 0.5
 
 
-def test_killed_while_queued_fails_promptly(server):
+def test_killed_while_queued_records_cancelled(server):
     holders = hold_slots(server=server, count=2, ms=3000)
     assert wait_until(lambda: active(server) == 2)
     victim = queued_session(server=server)
@@ -122,6 +147,9 @@ def test_killed_while_queued_fails_promptly(server):
     assert outcome["problem"]["code"] == "session_ended", outcome
     for thread in holders:
         thread.join()
+    row = recorded(server=server, sql="SELECT status, error_message FROM _gizmosql_instr.execution_details "
+                                      "WHERE sql_text LIKE '%''nev' || 'er'' AS v%'")
+    assert row == {"status": "cancelled", "error_message": "cancelled while queued"}, row
 
 
 def test_expired_queued_write_never_executes_after_slot_release(server):

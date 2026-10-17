@@ -56,6 +56,7 @@ void CheckLicensedOptions(const hc::Loaded& loaded, const hc::License& license) 
   };
   require(c.enable_metrics, "metrics", "Cannot enable metrics: enable_metrics");
   require(c.enable_instrumentation, "instrumentation", "Instrumentation (enable_instrumentation)");
+  require(c.enable_catalog_logging, "instrumentation", "Catalog logging (--enable-catalog-logging)");
   require(c.capture_query_profile != "off", "instrumentation", "Query profile capture (capture_query_profile)");
   require(!c.instance_tag.empty(), "instrumentation", "The instance tag (instance_tag)");
   for (const char* option : {"max_concurrent_statements", "max_queued_statements", "max_queue_wait",

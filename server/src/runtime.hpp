@@ -17,6 +17,7 @@
 
 namespace hardcharger {
 
+class CatalogLog;
 class HealthChecker;
 class Instrumentation;
 
@@ -51,6 +52,7 @@ struct Runtime {
   Metrics metrics;
   HealthChecker* health = nullptr;  // set once the backend has started it
   Instrumentation* instrumentation = nullptr;  // set while instrumentation runs
+  CatalogLog* catalog_log = nullptr;           // set while catalog logging runs
 
   // Live-adjustable with SET GLOBAL.
   std::atomic<int64_t> query_timeout_seconds;

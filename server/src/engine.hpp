@@ -15,6 +15,7 @@
 #include "duckdb_session.hpp"
 #include "guards.hpp"
 #include "health.hpp"
+#include "catalog_log.hpp"
 #include "instrumentation.hpp"
 #include "license.hpp"
 #include "logging.hpp"
@@ -55,6 +56,7 @@ class Backend : public warpduckdb::DuckDBBackend {
   std::string system_catalog_dir_;
   std::unique_ptr<HealthChecker> health_;
   std::unique_ptr<Instrumentation> instrumentation_;
+  std::unique_ptr<CatalogLog> catalog_log_;  // last: it takes the lines of everything above
 };
 
 class Session : public warpduckdb::DuckDBSession {
@@ -127,7 +129,13 @@ class Session : public warpduckdb::DuckDBSession {
   // until its rows are read: running state, metrics, the slot.
   warpsql::StatementOutcome Track(StatementKind kind, std::string_view sql, const std::string& statement_id,
                                   const std::function<warpsql::StatementOutcome()>& work);
-  void GuardInstrumentation(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type) const;
+  // A catalog the server owns (instrumentation, logs) and what it is called in messages.
+  struct ManagedCatalog {
+    std::string name;
+    std::string label;
+  };
+  std::vector<ManagedCatalog> ManagedCatalogs() const;
+  void GuardManagedCatalog(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type, const ManagedCatalog& managed) const;
   // Turns DuckDB's profiler on or off for the next execution; returns where it will write
   // the profile (empty: none).
   std::string PrepareProfile(const std::string& execution_id);

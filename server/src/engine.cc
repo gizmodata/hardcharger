@@ -114,9 +114,9 @@ std::string Replace(std::string text, std::string_view from, std::string_view to
   return text;
 }
 
-// The rows of `rows` whose first column (a catalog name) isn't `catalog`.
-std::shared_ptr<arrow::RecordBatchReader> WithoutCatalog(std::shared_ptr<arrow::RecordBatchReader> rows,
-                                                         const std::string& catalog) {
+// The rows of `rows` whose first column (a catalog name) is none of `catalogs`.
+std::shared_ptr<arrow::RecordBatchReader> WithoutCatalogs(std::shared_ptr<arrow::RecordBatchReader> rows,
+                                                          const std::vector<std::string>& catalogs) {
   auto schema = rows->schema();
   arrow::RecordBatchVector kept;
   for (;;) {
@@ -127,7 +127,8 @@ std::shared_ptr<arrow::RecordBatchReader> WithoutCatalog(std::shared_ptr<arrow::
     const auto names = std::static_pointer_cast<arrow::StringArray>(batch->column(0));
     int64_t run_start = 0;
     for (int64_t i = 0; i <= batch->num_rows(); i++) {
-      const bool drop = i < batch->num_rows() && names->IsValid(i) && names->GetView(i) == catalog;
+      const bool drop = i < batch->num_rows() && names->IsValid(i) &&
+                        std::find(catalogs.begin(), catalogs.end(), names->GetView(i)) != catalogs.end();
       if (drop || i == batch->num_rows()) {
         if (i > run_start) kept.push_back(batch->Slice(run_start, i - run_start));
         run_start = i + 1;
@@ -156,7 +157,13 @@ class Execution {
         started_(started),
         record_(std::move(record)),
         profile_(std::move(profile)) {
-    if (auto* instrumentation = Instr()) instrumentation->ExecutionStarted(record_);
+    if (auto* instrumentation = Instr()) {
+      if (record_.enqueue_time) {
+        instrumentation->ExecutionAdmitted(record_);
+      } else {
+        instrumentation->ExecutionStarted(record_);
+      }
+    }
   }
   ~Execution() {
     End("cancelled", "cancelled", "the result was abandoned");
@@ -278,9 +285,18 @@ Backend::Backend(Runtime& runtime)
     instrumentation_ = std::make_unique<Instrumentation>(runtime_, instance(), duckdb_version());
     instrumentation_->Attach();
   }
+  if (runtime_.config.enable_catalog_logging) {
+    catalog_log_ = std::make_unique<CatalogLog>(runtime_, instance());
+    catalog_log_->Attach();
+  }
   RunInitSql();
+  // Both after the init SQL, which may attach their catalogs.
+  if (catalog_log_) {
+    catalog_log_->Start();
+    runtime_.catalog_log = catalog_log_.get();
+  }
   if (instrumentation_) {
-    instrumentation_->Start();  // after the init SQL, which may attach its catalog
+    instrumentation_->Start();
     runtime_.instrumentation = instrumentation_.get();
   }
   // Init SQL may move DuckDB's secret directory; wherever it ends up is protected.
@@ -291,6 +307,10 @@ Backend::Backend(Runtime& runtime)
 Backend::~Backend() {
   StopHealthCheck();
   StopInstrumentation();
+  if (catalog_log_) {
+    runtime_.catalog_log = nullptr;
+    catalog_log_->Stop();
+  }
   if (!system_catalog_dir_.empty()) {
     std::error_code ec;
     std::filesystem::remove_all(system_catalog_dir_, ec);
@@ -498,7 +518,7 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   }
   // What runs decides what is a write (EXPLAIN ANALYZE INSERT ... inserts).
   const DUCKDB_V2_STATEMENT_TYPE executed = ExecutedType(connection(), piece, type);
-  if (runtime_.instrumentation != nullptr) GuardInstrumentation(piece, executed);
+  for (const auto& managed : ManagedCatalogs()) GuardManagedCatalog(piece, executed, managed);
   // catalog_access rules (license feature catalog_permissions): without the plan's
   // catalogs (the v2 C API doesn't expose them) only the sound part is enforced here: a
   // principal no rule grants write access to any catalog may not modify state.
@@ -536,13 +556,22 @@ void Session::NoteTransaction(const Piece& piece) {
   }
 }
 
-// The instrumentation catalog belongs to the server: only admins may read it, nobody
-// may change it, detach it, make it current or put it on the search path. Without the
-// statement's catalogs (the v2 C API doesn't expose them) the check reads the tokens: a
-// statement naming the catalog is checked, and as it can be neither current nor on the
-// search path, an unqualified name can't reach it.
-void Session::GuardInstrumentation(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type) const {
-  const std::string& catalog = runtime_.instrumentation->catalog();
+std::vector<Session::ManagedCatalog> Session::ManagedCatalogs() const {
+  std::vector<ManagedCatalog> out;
+  if (runtime_.instrumentation != nullptr) out.push_back({runtime_.instrumentation->catalog(), "instrumentation"});
+  if (runtime_.catalog_log != nullptr) out.push_back({runtime_.catalog_log->catalog(), "log"});
+  return out;
+}
+
+// The instrumentation and log catalogs belong to the server: only admins may read them,
+// nobody may change them, detach them, make them current or put them on the search path.
+// Without the statement's catalogs (the v2 C API doesn't expose them) the check reads
+// the tokens: a statement naming the catalog is checked, and as it can be neither
+// current nor on the search path, an unqualified name can't reach it.
+void Session::GuardManagedCatalog(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type,
+                                  const ManagedCatalog& managed) const {
+  const std::string& catalog = managed.name;
+  const std::string what = "the " + managed.label + " catalog '" + catalog + "'";
   std::string lowered = catalog;
   std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) { return std::tolower(c); });
   bool named = false;
@@ -552,19 +581,17 @@ void Session::GuardInstrumentation(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE 
   }
   if (!named) return;
   if (!admin()) {
-    throw Error(ErrorCode::kPermissionDenied,
-                "Access denied: Only administrators can read the instrumentation catalog '" + catalog + "'.", "42501");
+    throw Error(ErrorCode::kPermissionDenied, "Access denied: Only administrators can read " + what + ".", "42501");
   }
   if (type == DUCKDB_V2_STATEMENT_TYPE_DETACH) {
-    throw Error(ErrorCode::kPermissionDenied, "Cannot DETACH the instrumentation catalog '" + catalog + "'.", "42501");
+    throw Error(ErrorCode::kPermissionDenied, "Cannot DETACH " + what + ".", "42501");
   }
   const auto& t = piece.tokens;
   const bool use = !t.empty() && t[0].IsWord("USE");
   const bool search_path = !t.empty() && (t[0].IsWord("SET") || t[0].IsWord("PRAGMA")) &&
                            std::any_of(t.begin(), t.end(), [](const Token& x) { return x.Value() == "search_path"; });
   if (use || search_path || !ReadOnlyStatement(type)) {
-    throw Error(ErrorCode::kPermissionDenied,
-                "Cannot modify the instrumentation catalog '" + catalog + "': it is read-only (Access denied).",
+    throw Error(ErrorCode::kPermissionDenied, "Cannot modify " + what + ": it is read-only (Access denied).",
                 "42501");
   }
 }
@@ -599,8 +626,12 @@ warpsql::StatementOutcome Session::RunCommand(const Piece& piece) {
 warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sql, const std::string& statement_id,
                                          const std::function<warpsql::StatementOutcome()>& work) {
   const auto started = std::chrono::steady_clock::now();
-  const auto queued_at = std::chrono::system_clock::now();
-  bool queued = false;
+  Instrumentation* const instrumentation = statement_id.empty() ? nullptr : runtime_.instrumentation;
+  ExecutionRecord record;
+  if (instrumentation != nullptr) {
+    record.execution_id = RandomUuid();
+    record.statement_id = statement_id;
+  }
   AdmissionSlot slot;
   AdmissionController& queue = runtime_.admission;
   if (queue.Limit() > 0) {
@@ -608,14 +639,25 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
     // Admins skip the queue unless they asked not to; nobody else can skip it.
     const bool bypass = admin() && mine.bypass_queue.value_or(runtime_.config.admin_bypass_queue_default);
     if (bypass) runtime_.metrics.CountQueueBypass();
-    queued = !bypass;
+    if (!bypass && instrumentation != nullptr) {
+      // Recorded while it waits ('queued'), so a monitor sees what is queued.
+      record.enqueue_time = record.start = std::chrono::system_clock::now();
+      instrumentation->ExecutionQueued(record);
+    }
     try {
       slot = queue.Acquire(!bypass, mine.max_queue_wait.value_or(queue.DefaultMaxQueueWaitSeconds()),
                            [this] { return killed_.load() || interrupted_.load(); }, std::chrono::milliseconds(100));
     } catch (const AdmissionController::Refused& refused) {
       runtime_.metrics.CountQueueRejected();
+      const bool cancelled = killed_ || refused.reason == AdmissionController::Refusal::kAborted;
+      if (record.enqueue_time) {
+        record.end = record.cursor_close = std::chrono::system_clock::now();
+        record.status = cancelled ? "cancelled" : "error";
+        record.error = cancelled ? "cancelled while queued" : refused.message;
+        instrumentation->ExecutionFinished(record);
+      }
       if (killed_) throw KilledError();
-      if (refused.reason == AdmissionController::Refusal::kAborted) {
+      if (cancelled) {
         throw Error(ErrorCode::kStatementCancelled, "INTERRUPT Error: the statement was cancelled while queued",
                     "57014");
       }
@@ -626,13 +668,8 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
   }
 
   running_++;
-  ExecutionRecord record;
-  if (runtime_.instrumentation != nullptr && !statement_id.empty()) {
-    record.execution_id = RandomUuid();
-    record.statement_id = statement_id;
-    record.start = std::chrono::system_clock::now();
-    if (queued) record.enqueue_time = queued_at;
-  }
+  // The execution clock starts when it leaves the queue.
+  if (instrumentation != nullptr) record.start = std::chrono::system_clock::now();
   std::string profile;
   if (!record.execution_id.empty()) profile = PrepareProfile(record.execution_id);
   auto execution = std::make_shared<Execution>(*this, kind, Abbreviate(sql), std::move(slot), started, std::move(record),
@@ -831,28 +868,31 @@ std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(warpsql::MetadataKin
               {"metadata", std::to_string(static_cast<int>(kind))}});
   }
   auto rows = DuckDBSession::Metadata(kind, filter);
-  // The instrumentation catalog is invisible to non-admins in the catalog, schema and
+  // The server's own catalogs are invisible to non-admins in the catalog, schema and
   // table lists (their first column is the catalog).
   const bool listing = kind == warpsql::MetadataKind::kCatalogs || kind == warpsql::MetadataKind::kDbSchemas ||
                        kind == warpsql::MetadataKind::kTables;
-  if (admin() || runtime_.instrumentation == nullptr || !listing) return rows;
-  return WithoutCatalog(std::move(rows), runtime_.instrumentation->catalog());
+  const auto managed = ManagedCatalogs();
+  if (admin() || managed.empty() || !listing) return rows;
+  std::vector<std::string> hidden;
+  for (const auto& catalog : managed) hidden.push_back(catalog.name);
+  return WithoutCatalogs(std::move(rows), hidden);
 }
 
 warpsql::OptionErrors Session::SetOptions(const json::object& options) {
   CheckAlive();
   SessionScope scope(this);
-  if (const auto* catalog = options.if_contains("catalog"); catalog && catalog->is_string() &&
-                                                           runtime_.instrumentation != nullptr &&
-                                                           catalog->as_string() == runtime_.instrumentation->catalog()) {
-    json::object rest = options;
-    rest.erase("catalog");
-    auto errors = DuckDBSession::SetOptions(rest);
-    errors.emplace("catalog", Error(ErrorCode::kPermissionDenied,
-                                    "the instrumentation catalog can't be the session's catalog (read access to "
-                                    "catalog '" + runtime_.instrumentation->catalog() + "' is for administrators "
-                                    "querying it by name)"));
-    return errors;
+  if (const auto* catalog = options.if_contains("catalog"); catalog && catalog->is_string()) {
+    for (const auto& managed : ManagedCatalogs()) {
+      if (catalog->as_string() != managed.name) continue;
+      json::object rest = options;
+      rest.erase("catalog");
+      auto errors = DuckDBSession::SetOptions(rest);
+      errors.emplace("catalog", Error(ErrorCode::kPermissionDenied,
+                                      "the " + managed.label + " catalog can't be the session's catalog (read access "
+                                      "to catalog '" + managed.name + "' is for administrators querying it by name)"));
+      return errors;
+    }
   }
   auto errors = DuckDBSession::SetOptions(options);
   if (const auto* autocommit = options.if_contains("autocommit");
