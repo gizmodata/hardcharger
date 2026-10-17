@@ -4,7 +4,11 @@
 #pragma once
 
 #include <chrono>
+#include <mutex>
 #include <string>
+#include <unordered_set>
+
+#include "logging.hpp"
 
 #include "warpsql/backend.hpp"
 
@@ -13,7 +17,7 @@ namespace hardcharger {
 class JwtTokenService : public warpsql::TokenService {
  public:
   JwtTokenService(std::string secret_key, std::chrono::seconds lifetime, std::string instance_id,
-                  bool allow_cross_instance);
+                  bool allow_cross_instance, LogLevel log_level = LogLevel::kInfo);
 
   Issued Issue(const warpsql::Principal& principal) override;
   warpsql::Principal Validate(std::string_view token) override;
@@ -23,6 +27,11 @@ class JwtTokenService : public warpsql::TokenService {
   std::chrono::seconds lifetime_;
   std::string instance_id_;
   bool allow_cross_instance_;
+  LogLevel log_level_;
+  // Tokens seen validated (SHA-256), so a token's first use logs at INFO and its
+  // repeats only at DEBUG. Bounded: cleared when full.
+  std::mutex seen_mutex_;
+  std::unordered_set<std::string> seen_;
 };
 
 // A random 256-bit key, hex encoded, for servers started without a secret key.

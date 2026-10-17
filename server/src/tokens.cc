@@ -2,6 +2,7 @@
 
 #include <jwt-cpp/jwt.h>
 #include <jwt-cpp/traits/boost-json/traits.h>
+#include <openssl/evp.h>
 #include <openssl/rand.h>
 
 #include <array>
@@ -54,11 +55,12 @@ std::string RandomUuid() {
 }
 
 JwtTokenService::JwtTokenService(std::string secret_key, std::chrono::seconds lifetime,
-                                 std::string instance_id, bool allow_cross_instance)
+                                 std::string instance_id, bool allow_cross_instance, LogLevel log_level)
     : secret_key_(std::move(secret_key)),
       lifetime_(lifetime),
       instance_id_(std::move(instance_id)),
-      allow_cross_instance_(allow_cross_instance) {}
+      allow_cross_instance_(allow_cross_instance),
+      log_level_(log_level) {}
 
 warpsql::TokenService::Issued JwtTokenService::Issue(const warpsql::Principal& principal) {
   const auto now = std::chrono::system_clock::now();
@@ -126,6 +128,19 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
   if (principal.name.empty()) {
     throw invalid("a valid access token is required");
   }
+  bool first_use = false;
+  {
+    constexpr std::size_t kMaxSeen = 50000;
+    std::array<unsigned char, 32> digest{};
+    unsigned int length = 0;
+    EVP_Digest(token.data(), token.size(), digest.data(), &length, EVP_sha256(), nullptr);
+    std::string key(reinterpret_cast<const char*>(digest.data()), length);
+    std::lock_guard lock(seen_mutex_);
+    if (seen_.size() >= kMaxSeen) seen_.clear();
+    first_use = seen_.insert(std::move(key)).second;
+  }
+  LogAt(log_level_, first_use ? LogLevel::kInfo : LogLevel::kDebug, "Bearer Token was validated successfully",
+        {{"user", principal.name}, {"role", principal.role}, {"first_use", first_use ? "true" : "false"}});
   return principal;
 }
 

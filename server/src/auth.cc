@@ -11,6 +11,7 @@
 #include <stdexcept>
 
 #include "logging.hpp"
+#include "patterns.hpp"
 
 namespace hardcharger {
 
@@ -64,6 +65,8 @@ Authenticator::Authenticator(const Config& config, const License& license)
       allowed_issuer_(config.token_allowed_issuer),
       allowed_audience_(config.token_allowed_audience),
       default_role_(config.token_default_role),
+      authorized_emails_(config.token_authorized_emails),
+      log_level_(ParseLogLevel(config.auth_log_level)),
       license_(license) {
   if (!config.token_signature_verify_cert_path.empty()) {
     std::string pem = ReadFile(config.token_signature_verify_cert_path);
@@ -82,9 +85,10 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
   const bool user_ok = SameSecret(username, username_);
   const bool password_ok = SameSecret(password, password_);
   if (!user_ok || !password_ok) {
-    Log(LogLevel::kInfo, "sign-in refused", {{"user", std::string(username)}, {"method", "password"}});
+    LogAt(log_level_, LogLevel::kInfo, "sign-in refused", {{"user", std::string(username)}, {"method", "password"}});
     throw Refused();
   }
+  LogAt(log_level_, LogLevel::kInfo, "signed in", {{"user", std::string(username)}, {"method", "password"}});
   return warpsql::Principal{std::string(username), "admin", "password", {}};
 }
 
@@ -106,7 +110,7 @@ warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) 
     if (!allowed_audience_.empty()) verifier.with_audience(allowed_audience_);
     verifier.verify(decoded);
   } catch (const std::exception& e) {
-    Log(LogLevel::kInfo, "sign-in token refused", {{"reason", e.what()}});
+    LogAt(log_level_, LogLevel::kInfo, "sign-in token refused", {{"reason", e.what()}});
     throw TokenRefused();
   }
 
@@ -118,12 +122,18 @@ warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) 
   if (principal.name.empty()) {
     throw TokenRefused();
   }
+  // Which users a trusted issuer may sign in (globs such as *@example.com).
+  if (!MatchesAnyIgnoringCase(authorized_emails_, principal.name)) {
+    LogAt(log_level_, LogLevel::kInfo, "sign-in token names an unauthorized user", {{"user", principal.name}});
+    throw Error(ErrorCode::kInvalidCredentials,
+                "User '" + principal.name + "' is not authorized. Contact your administrator.");
+  }
   if (decoded.has_payload_claim("role")) {
     principal.role = decoded.get_payload_claim("role").as_string();
   } else if (!default_role_.empty()) {
     principal.role = default_role_;
   } else {
-    Log(LogLevel::kInfo, "sign-in token has no role", {{"user", principal.name}});
+    LogAt(log_level_, LogLevel::kInfo, "sign-in token has no role", {{"user", principal.name}});
     throw TokenRefused();
   }
   if (principal.role != "admin" && principal.role != "user" && principal.role != "readonly") {
@@ -136,6 +146,8 @@ warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) 
     }
     principal.claims["catalog_access"] = decoded.get_payload_claim("catalog_access").to_json();
   }
+  LogAt(log_level_, LogLevel::kInfo, "signed in", {{"user", principal.name}, {"method", "token"},
+                                                   {"role", principal.role}});
   return principal;
 }
 

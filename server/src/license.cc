@@ -3,6 +3,7 @@
 #include <jwt-cpp/jwt.h>
 #include <jwt-cpp/traits/boost-json/traits.h>
 
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -35,11 +36,30 @@ std::string Trim(const std::string& text) {
 
 [[noreturn]] void Fail(const std::string& why) { throw std::runtime_error("License Error: " + why); }
 
+// The key that signs license keys. Only the license-test build (never shipped) may
+// trust another one, named by its environment, so tests can sign their own keys.
+std::string TrustedPublicKey() {
+#ifdef HARDCHARGER_TEST_LICENSE_ANCHOR
+  if (const char* path = std::getenv("HARDCHARGER_TEST_LICENSE_PUBLIC_KEY"); path && *path) {
+    std::ifstream in(path);
+    if (!in) Fail(std::string("cannot read HARDCHARGER_TEST_LICENSE_PUBLIC_KEY ") + path);
+    std::stringstream contents;
+    contents << in.rdbuf();
+    return contents.str();
+  }
+#endif
+  return kGizmoDataPublicKey;
+}
+
 }  // namespace
 
 std::string ReadLicenseKey(const std::string& inline_key, const std::string& key_file) {
-  if (!Trim(inline_key).empty()) {
-    return Trim(inline_key);
+  // An inline key wins over the file even when it is invalid (as in 1.x): a key that
+  // was set on purpose must never be silently replaced by another one.
+  if (!inline_key.empty()) {
+    const std::string key = Trim(inline_key);
+    if (key.empty()) Fail("the inline license key is empty");
+    return key;
   }
   if (key_file.empty()) {
     return {};
@@ -72,7 +92,7 @@ License LoadLicense(const std::string& key) {
   }
   try {
     jwt::verify<Traits>()
-        .allow_algorithm(jwt::algorithm::rs256(kGizmoDataPublicKey, "", "", ""))
+        .allow_algorithm(jwt::algorithm::rs256(TrustedPublicKey(), "", "", ""))
         .with_issuer(kIssuer)
         .verify(decoded);
   } catch (const jwt::error::token_verification_exception& e) {

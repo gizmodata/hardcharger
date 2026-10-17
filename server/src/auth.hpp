@@ -9,6 +9,7 @@
 
 #include "config.hpp"
 #include "license.hpp"
+#include "logging.hpp"
 #include "warpsql/backend.hpp"
 
 namespace hardcharger {
@@ -29,6 +30,8 @@ class Authenticator : public warpsql::Authenticator {
   std::string allowed_issuer_;
   std::string allowed_audience_;
   std::string default_role_;
+  std::vector<std::string> authorized_emails_;
+  LogLevel log_level_;
   const License& license_;
 };
 

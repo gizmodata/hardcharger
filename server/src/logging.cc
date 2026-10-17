@@ -16,16 +16,9 @@ namespace {
 std::mutex log_mutex;
 LogLevel min_level = LogLevel::kInfo;
 bool json_format = false;
-
-std::string_view LevelName(LogLevel level) {
-  switch (level) {
-    case LogLevel::kDebug: return "debug";
-    case LogLevel::kInfo: return "info";
-    case LogLevel::kWarning: return "warning";
-    case LogLevel::kError: return "error";
-  }
-  return "info";
-}
+FILE* output = stderr;
+LogFields default_fields;
+std::function<void(LogLevel, std::string_view)> capture;
 
 std::string Timestamp() {
   const auto now = std::chrono::system_clock::now();
@@ -41,37 +34,86 @@ std::string Timestamp() {
   return std::format("{}.{:03}Z", std::string_view(buffer, length), millis);
 }
 
-}  // namespace
-
-void ConfigureLogging(std::string_view level, std::string_view format) {
-  if (level == "debug") min_level = LogLevel::kDebug;
-  else if (level == "info") min_level = LogLevel::kInfo;
-  else if (level == "warning" || level == "warn") min_level = LogLevel::kWarning;
-  else if (level == "error") min_level = LogLevel::kError;
-  else throw std::invalid_argument("log_level must be debug, info, warning or error");
-  json_format = format == "json";
-}
-
-void Log(LogLevel level, std::string_view message, const LogFields& fields) {
-  if (level < min_level) {
+void Write(LogLevel level, std::string_view message, const LogFields& fields) {
+  std::lock_guard lock(log_mutex);
+  if (capture) {
+    capture(level, message);
     return;
   }
   std::string line;
   if (json_format) {
-    boost::json::object record{{"time", Timestamp()}, {"level", LevelName(level)},
+    boost::json::object record{{"time", Timestamp()}, {"level", LogLevelName(level)},
                                {"message", message}};
-    for (const auto& [key, value] : fields) {
-      record[key] = value;
-    }
+    for (const auto& [key, value] : default_fields) record[key] = value;
+    for (const auto& [key, value] : fields) record[key] = value;
     line = boost::json::serialize(record);
   } else {
-    line = std::format("{} {:<7} {}", Timestamp(), LevelName(level), message);
+    line = std::format("{} {:<7} {}", Timestamp(), LogLevelName(level), message);
     for (const auto& [key, value] : fields) {
       line += std::format(" {}={}", key, value);
     }
   }
+  std::fprintf(output, "%s\n", line.c_str());
+  std::fflush(output);
+}
+
+}  // namespace
+
+LogLevel ParseLogLevel(std::string_view name) {
+  std::string v(name);
+  for (auto& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (v == "debug") return LogLevel::kDebug;
+  if (v == "info") return LogLevel::kInfo;
+  if (v == "warning" || v == "warn") return LogLevel::kWarning;
+  if (v == "error") return LogLevel::kError;
+  throw std::invalid_argument("log levels are debug, info, warning or error, not '" + std::string(name) + "'");
+}
+
+std::string_view LogLevelName(LogLevel level) {
+  switch (level) {
+    case LogLevel::kDebug: return "debug";
+    case LogLevel::kInfo: return "info";
+    case LogLevel::kWarning: return "warning";
+    case LogLevel::kError: return "error";
+  }
+  return "info";
+}
+
+void ConfigureLogging(std::string_view level, std::string_view format, const std::string& file) {
+  const LogLevel parsed = ParseLogLevel(level);
+  FILE* destination = stderr;
+  if (file == "-") {
+    destination = stdout;
+  } else if (!file.empty()) {
+    destination = std::fopen(file.c_str(), "a");
+    if (destination == nullptr) throw std::invalid_argument("cannot open log_file " + file);
+  }
   std::lock_guard lock(log_mutex);
-  std::fprintf(stderr, "%s\n", line.c_str());
+  min_level = parsed;
+  json_format = format == "json";
+  output = destination;
+}
+
+void SetDefaultLogFields(LogFields fields) {
+  std::lock_guard lock(log_mutex);
+  default_fields = std::move(fields);
+}
+
+void Log(LogLevel level, std::string_view message, const LogFields& fields) {
+  if (level < min_level) return;
+  Write(level, message, fields);
+}
+
+void LogAt(LogLevel threshold, LogLevel level, std::string_view message, const LogFields& fields,
+           bool ignore_logger_threshold) {
+  if (level < threshold) return;
+  if (!ignore_logger_threshold && level < min_level) return;
+  Write(level, message, fields);
+}
+
+void SetLogCaptureForTesting(std::function<void(LogLevel, std::string_view)> sink) {
+  std::lock_guard lock(log_mutex);
+  capture = std::move(sink);
 }
 
 }  // namespace hardcharger
