@@ -9,8 +9,12 @@ namespace hardcharger::client {
 
 // Opens `url` in the user's browser: the command in HARDCHARGER_BROWSER when set (the URL
 // is its one argument), else the platform's opener (open, xdg-open, ShellExecute). The
-// URL is never passed through a shell. Returns false when nothing could be started.
+// URL is never passed through a shell. On Windows HARDCHARGER_BROWSER is a command line
+// (program and arguments), the URL appended as its last, quoted argument. Returns false when nothing could be started.
 bool OpenBrowser(const std::string& url);
+
+// Lets the console show ANSI colors and screen control (Windows; nothing elsewhere).
+void EnableTerminalColors();
 
 // Whether standard output is a terminal.
 bool IsOutputTerminal();

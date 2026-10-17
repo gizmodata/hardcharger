@@ -227,11 +227,11 @@ add_library(hardcharger_client STATIC
   client/warp_connection.cc)
 target_include_directories(hardcharger_client PUBLIC client "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(hardcharger_client PUBLIC warpsql_client replxx::replxx)
-target_compile_options(hardcharger_client PRIVATE -Wall -Wextra)
+target_compile_options(hardcharger_client PRIVATE ${HARDCHARGER_WARNINGS})
 add_executable(hardcharger-client client/main.cc)
 set_target_properties(hardcharger-client PROPERTIES OUTPUT_NAME hardcharger)
 target_link_libraries(hardcharger-client PRIVATE hardcharger_client)
-target_compile_options(hardcharger-client PRIVATE -Wall -Wextra)
+target_compile_options(hardcharger-client PRIVATE ${HARDCHARGER_WARNINGS})
 
 # The client's tests: GizmoSQL 1.x's client test files, ported (client/tests/). They run
 # against a real hardcharger-server, which server/tests starts and names in

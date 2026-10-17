@@ -33,7 +33,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from conftest import CLIENT_BINARY, clean_environment, free_port
+from conftest import BASH, CLIENT_BINARY, clean_environment, free_port, home_env
 
 pytestmark = pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
 
@@ -82,7 +82,7 @@ def client_env(server=None, home: pathlib.Path | None = None, **extra: str) -> d
     """A clean environment (no HARDCHARGER_* from this shell) with the server's password."""
     env = clean_environment()
     if home is not None:
-        env["HOME"] = str(home)
+        env.update(home_env(home=home))
     if server is not None:
         env["HARDCHARGER_PASSWORD"] = server.password
     env.update(extra)
@@ -100,7 +100,7 @@ def run(server, *args: str, env: dict[str, str] | None = None, input: str | None
 
 
 def run_bash(script: str, env: dict[str, str]) -> subprocess.CompletedProcess:
-    return subprocess.run(args=["bash", "-c", script], env=env, capture_output=True, text=True, timeout=120)
+    return subprocess.run(args=[BASH, "-c", script], env=env, capture_output=True, text=True, timeout=120)
 
 
 # ---- 1.x: test_client_cli.cpp ----
@@ -520,6 +520,7 @@ def enter(child: pexpect.spawn, text: str) -> None:
     child.send(text + "\r")
 
 
+@pytest.mark.pty
 def test_interactive_session(server, home):
     child = spawn(server, home)
     child.expect(r"Hardcharger Client \d+\.\d+\.\d+")
@@ -545,6 +546,7 @@ def test_interactive_session(server, home):
     assert ".mode csv" in history
 
 
+@pytest.mark.pty
 def test_interactive_ctrl_c_cancels_and_the_shell_goes_on(server, home):
     child = spawn(server, home)
     child.expect(PROMPT)
@@ -564,6 +566,7 @@ def test_interactive_ctrl_c_cancels_and_the_shell_goes_on(server, home):
     child.expect(pexpect.EOF)
 
 
+@pytest.mark.pty
 def test_interactive_tab_completion(server, home):
     child = spawn(server, home)
     child.expect(PROMPT)
@@ -576,6 +579,7 @@ def test_interactive_tab_completion(server, home):
     child.expect(pexpect.EOF)
 
 
+@pytest.mark.pty
 def test_interactive_pager(server, home):
     child = spawn(server, home)
     child.expect(PROMPT)
@@ -594,6 +598,7 @@ def test_interactive_pager(server, home):
     child.expect(pexpect.EOF)
 
 
+@pytest.mark.pty
 def test_interactive_init_file(server, home):
     (home / ".hardchargerrc").write_text(".mode csv\n.headers off\n")
     child = spawn(server, home)
@@ -613,6 +618,7 @@ def test_interactive_init_file(server, home):
     child.expect(pexpect.EOF)
 
 
+@pytest.mark.pty
 def test_interactive_password_prompt(server, home):
     env = client_env(home=home)  # no HARDCHARGER_PASSWORD: the client asks
     child = spawn(server, home, env=env)
@@ -632,6 +638,7 @@ def test_interactive_password_prompt(server, home):
     assert child.exitstatus == 1
 
 
+@pytest.mark.pty
 def test_interactive_without_a_server_starts_disconnected(home):
     child = pexpect.spawn(command=binary(), args=[], env=client_env(home=home), encoding="utf-8",
                           dimensions=(40, 160), timeout=30)
@@ -768,7 +775,7 @@ def idp():
     provider.stop()
 
 
-def fake_browser(tmp_path: pathlib.Path, code: str) -> pathlib.Path:
+def fake_browser(tmp_path: pathlib.Path, code: str) -> pathlib.Path | str:
     """A "browser" that signs in at once: it follows the authorization URL's redirect_uri
     with an authorization code, as the identity provider would after the user signed in."""
     script = tmp_path / "browser.py"
@@ -777,6 +784,9 @@ def fake_browser(tmp_path: pathlib.Path, code: str) -> pathlib.Path:
         "query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(sys.argv[1]).query))\n"
         f"params = urllib.parse.urlencode({{'code': {code!r}, 'state': query['state']}})\n"
         "urllib.request.urlopen(query['redirect_uri'] + '?' + params, timeout=30).read()\n")
+    if sys.platform == "win32":
+        # There HARDCHARGER_BROWSER is a command line; the client appends the URL.
+        return f'"{sys.executable}" -I "{script}"'
     launcher = tmp_path / "browser.sh"
     launcher.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -I {shlex.quote(str(script))} \"$1\"\n")
     launcher.chmod(0o755)

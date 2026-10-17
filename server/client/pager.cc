@@ -13,6 +13,7 @@
 #define NOMINMAX
 #endif
 #include <conio.h>
+#include <io.h>
 #include <windows.h>
 #else
 #include <sys/ioctl.h>
@@ -148,7 +149,12 @@ void ClearLine() {
 }  // namespace
 
 void Pager::Display(const std::string& content) {
-#ifndef _WIN32
+#ifdef _WIN32
+  if (!_isatty(_fileno(stdout)) || !_isatty(_fileno(stdin))) {
+    std::cout << content;
+    return;
+  }
+#else
   if (!isatty(STDOUT_FILENO)) {
     std::cout << content;
     return;

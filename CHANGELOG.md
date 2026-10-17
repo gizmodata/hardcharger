@@ -65,6 +65,13 @@ own changelog in `python/CHANGELOG.md`.
   once); closing the console or shutting Windows down stops it at once. Outbound HTTPS
   (OpenID discovery, JWKS, OPA) trusts the Windows certificate store unless
   `SSL_CERT_FILE` names a bundle. DuckDB is linked statically there.
+- The `hardcharger` client on Windows: Ctrl+C cancels the running statement (a console
+  control handler hands it to a thread of the client's own), Ctrl+Break exits as SIGTERM
+  does, colors and the pager use the console's ANSI mode, the password prompt doesn't
+  echo, browser sign-in opens the default browser (or runs `HARDCHARGER_BROWSER`, a
+  command line there, with the URL appended as its last argument, never through
+  cmd.exe), and TLS trusts the Windows certificate store. Its cases at a terminal
+  (pexpect, a pty) are marked `pty` and deselected on Windows, which has no pty.
 - The sensitive-path guard on Windows: the account database and registry hives
   (`System32\config`), installer answer files, DPAPI keys, Credential Manager and the
   vaults, machine and user private keys, `%APPDATA%` credential files (gcloud,

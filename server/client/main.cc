@@ -19,6 +19,7 @@
 #include "options.hpp"
 #include "output_renderer.hpp"
 #include "password_prompt.hpp"
+#include "platform.hpp"
 #include "shell_loop.hpp"
 #include "signal_watcher.hpp"
 #include "sql_processor.hpp"
@@ -41,7 +42,9 @@ void SigtermHandler(int /*signum*/) {
 int main(int argc, char** argv) {
 #ifdef _WIN32
   SetConsoleOutputCP(CP_UTF8);
+  SetConsoleCP(CP_UTF8);
 #endif
+  EnableTerminalColors();
 
   ClientConfig config;
   CommandLine cl;

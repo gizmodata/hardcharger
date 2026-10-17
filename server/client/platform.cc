@@ -23,16 +23,57 @@ extern char** environ;
 
 namespace hardcharger::client {
 
+#ifdef _WIN32
+namespace {
+std::wstring Wide(const std::string& text) {
+  if (text.empty()) return {};
+  const int size = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+  std::wstring out(static_cast<std::size_t>(size), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), size);
+  return out;
+}
+}  // namespace
+
+void EnableTerminalColors() {
+  // Windows 10 consoles interpret ANSI escape sequences (colors, the pager's screen
+  // control) only when asked to.
+  for (DWORD id : {STD_OUTPUT_HANDLE, STD_ERROR_HANDLE}) {
+    HANDLE handle = GetStdHandle(id);
+    DWORD mode = 0;
+    if (handle != INVALID_HANDLE_VALUE && GetConsoleMode(handle, &mode)) {
+      SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
+  }
+}
+#else
+void EnableTerminalColors() {}
+#endif
+
 bool OpenBrowser(const std::string& url) {
   const char* custom = std::getenv("HARDCHARGER_BROWSER");
   const bool has_custom = custom != nullptr && *custom != '\0';
 #ifdef _WIN32
+  // The URL as one quoted argument: a URL has no '"' (it would be percent-encoded).
+  if (url.find('"') != std::string::npos) return false;
+  const std::wstring wide_url = Wide(url);
   if (has_custom) {
-    // TODO(windows): start HARDCHARGER_BROWSER with CreateProcess (the URL as its argument).
-    auto result = reinterpret_cast<intptr_t>(ShellExecuteA(nullptr, "open", custom, url.c_str(), nullptr, SW_SHOWNORMAL));
-    return result > 32;
+    // HARDCHARGER_BROWSER is a command line here (Windows passes programs one string):
+    // the program and any arguments, the URL appended as the last one. CreateProcess
+    // runs it directly, never through cmd.exe, so nothing in the URL is interpreted.
+    std::wstring command = Wide(custom) + L" \"" + wide_url + L"\"";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION info{};
+    if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &info)) {
+      return false;
+    }
+    // As on POSIX: a custom command may do the sign-in itself, so it isn't waited for.
+    CloseHandle(info.hThread);
+    CloseHandle(info.hProcess);
+    return true;
   }
-  auto result = reinterpret_cast<intptr_t>(ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+  auto result = reinterpret_cast<intptr_t>(
+      ShellExecuteW(nullptr, L"open", wide_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
   return result > 32;
 #else
 #if defined(__APPLE__)

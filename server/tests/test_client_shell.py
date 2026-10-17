@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-from conftest import BINARY, CLIENT_BINARY, clean_environment
+from conftest import BASH, BINARY, CLIENT_BINARY, clean_environment
 
 SCRIPT = pathlib.Path(__file__).resolve().parent / "test_client_shell.sh"
 NAMES = re.findall(pattern=r'^\s*run_test(?:_not_contains|_exit_code)? "([^"]+)"', string=SCRIPT.read_text(),
@@ -27,7 +27,7 @@ def outcome():
             pytest.fail(reason=f"{binary} is missing: build the server first")
     env = {**clean_environment(), "HARDCHARGER_TEST_BINARY": str(BINARY),
            "HARDCHARGER_TEST_CLIENT_BINARY": str(CLIENT_BINARY)}
-    result = subprocess.run(args=["bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=600)
+    result = subprocess.run(args=[BASH, str(SCRIPT)], env=env, capture_output=True, text=True, timeout=600)
     lines = ANSI.sub("", result.stdout).splitlines()
     passed = {line.split("PASS: ", 1)[1] for line in lines if line.strip().startswith("PASS: ")}
     failed = {line.split("FAIL: ", 1)[1] for line in lines if line.strip().startswith("FAIL: ")}

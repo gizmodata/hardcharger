@@ -159,8 +159,8 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' ./hardcharger-macos-arm64/bin/hardcharger
 
 On Windows (PowerShell), unzip `hardcharger-windows-amd64.zip` or `-arm64.zip`, or run
 `Hardcharger-windows-amd64.msi` / `-arm64.msi`, which installs under Program Files and
-puts `hardcharger-server.exe` on the PATH. Ctrl+C or Ctrl+Break stops the server as
-SIGINT or SIGTERM does elsewhere.
+puts `hardcharger-server.exe` and the `hardcharger.exe` client on the PATH. Ctrl+C or
+Ctrl+Break stops the server as SIGINT or SIGTERM does elsewhere.
 
 ```powershell
 Expand-Archive hardcharger-windows-amd64.zip -DestinationPath .

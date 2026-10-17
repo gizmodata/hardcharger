@@ -38,6 +38,8 @@ done
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hardcharger-shell-test.XXXXXX")"
 export HOME="$WORK/home"
 mkdir -p "$HOME"
+# On Windows (Git's bash) the client's home directory is USERPROFILE.
+if command -v cygpath >/dev/null 2>&1; then export USERPROFILE="$(cygpath -w "$HOME")"; fi
 SERVER_PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 USERNAME="shelltester"
 PASSWORD="shellpass123"

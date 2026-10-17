@@ -5,7 +5,10 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
+#include <cstdlib>
 #include <functional>
+#include <mutex>
 #include <system_error>
 #include <thread>
 
@@ -69,30 +72,69 @@ class SignalWatcher {
 
 #else
 
-// TODO(windows): not built or tested on Windows yet; the Windows port finishes it.
+// Windows: a console control handler. It only counts the Ctrl-C and hands it to a thread
+// of the watcher's own, which runs the callback as ordinary code, as on POSIX (Windows
+// would otherwise run it on the handler's thread, and the handler must return quickly).
+// Ctrl+Break, which a parent sends to a child it started in its own process group, is
+// SIGTERM's counterpart: the client exits at once, as it does on SIGTERM. Closing the
+// console and shutdown take Windows' default (the process ends).
 class SignalWatcher {
  public:
-  explicit SignalWatcher(std::function<void()> on_interrupt) {
-    callback() = std::move(on_interrupt);
+  explicit SignalWatcher(std::function<void()> on_interrupt) : callback_(std::move(on_interrupt)) {
+    Current() = this;
+    thread_ = std::thread([this] {
+      std::unique_lock lock(mutex_);
+      for (;;) {
+        wake_.wait(lock, [this] { return stopped_ || pending_ > 0; });
+        if (stopped_) return;
+        pending_--;
+        lock.unlock();
+        callback_();
+        lock.lock();
+      }
+    });
     SetConsoleCtrlHandler(&Handler, TRUE);
   }
+
   ~SignalWatcher() {
     SetConsoleCtrlHandler(&Handler, FALSE);
-    callback() = nullptr;
+    {
+      std::lock_guard lock(mutex_);
+      stopped_ = true;
+    }
+    wake_.notify_all();
+    thread_.join();
+    Current() = nullptr;
   }
+
   SignalWatcher(const SignalWatcher&) = delete;
   SignalWatcher& operator=(const SignalWatcher&) = delete;
 
  private:
-  static std::function<void()>& callback() {
-    static std::function<void()> instance;
-    return instance;
+  static std::atomic<SignalWatcher*>& Current() {
+    static std::atomic<SignalWatcher*> current{nullptr};
+    return current;
   }
+
   static BOOL WINAPI Handler(DWORD event) {
-    if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT) return FALSE;
-    if (auto& cb = callback()) cb();
+    if (event == CTRL_BREAK_EVENT) std::_Exit(0);
+    if (event != CTRL_C_EVENT) return FALSE;
+    if (SignalWatcher* watcher = Current().load()) {
+      {
+        std::lock_guard lock(watcher->mutex_);
+        watcher->pending_++;
+      }
+      watcher->wake_.notify_one();
+    }
     return TRUE;  // handled: the process goes on
   }
+
+  std::function<void()> callback_;
+  std::mutex mutex_;
+  std::condition_variable wake_;
+  int pending_ = 0;
+  bool stopped_ = false;
+  std::thread thread_;
 };
 
 #endif

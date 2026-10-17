@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import secrets
+import shutil
 import signal
 import socket
 import subprocess
@@ -50,6 +51,11 @@ if sys.platform == "win32":
 else:
     STOP_SIGNAL = signal.SIGTERM
     POPEN_FLAGS = {}
+
+
+# bash for the scripted tests, found on PATH (on Windows, Git's bash: CreateProcess would
+# look in System32 first and find WSL's).
+BASH = shutil.which("bash") or "bash"
 
 
 def protected_system_file(posix: str) -> str:
