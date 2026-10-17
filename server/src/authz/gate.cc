@@ -38,6 +38,7 @@
 #include <duckdb/parser/tableref/table_function_ref.hpp>
 
 #include "authz/duckdb_internal.hpp"
+#include "authz/types.hpp"
 
 namespace hardcharger::authz {
 
@@ -219,6 +220,13 @@ class Walker {
       if (show.query) WalkNode(*show.query);
       if (!show.GetTableName().GetIdentifierName().empty() &&
           show.show_type != dd::ShowType::SHOW_SPECIAL && show.show_type != dd::ShowType::SHOW_FROM) {
+        // SHOW name shows a setting's value when one has that name (bound into a
+        // constant: the plan check never sees which).
+        const std::string name = show.GetTableName().GetIdentifierName();
+        if (show.show_type == dd::ShowType::SHOW && IsSensitiveSetting(name)) {
+          Flag("reading the setting " + name);
+          return;
+        }
         NamedTable(show.qualified_name);
       }
     } else if (ref.type == dd::TableReferenceType::SUBQUERY) {

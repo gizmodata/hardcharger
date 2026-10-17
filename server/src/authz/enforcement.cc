@@ -9,6 +9,7 @@
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/main/attached_database.hpp>
 #include <duckdb/execution/operator/helper/physical_set.hpp>
+#include <duckdb/execution/expression_executor.hpp>
 #include <duckdb/main/client_context.hpp>
 #include <duckdb/main/config.hpp>
 #include <duckdb/main/database_manager.hpp>
@@ -32,6 +33,7 @@
 #include <duckdb/planner/operator/logical_set.hpp>
 #include <duckdb/planner/operator/logical_update.hpp>
 #include <duckdb/planner/parsed_data/bound_create_table_info.hpp>
+#include <duckdb/planner/expression/bound_function_expression.hpp>
 #include <duckdb/planner/expression_iterator.hpp>
 #include <duckdb/planner/logical_operator_visitor.hpp>
 #include <duckdb/planner/planner_extension.hpp>
@@ -286,6 +288,7 @@ class PlanChecker {
 
   void Visit(dd::LogicalOperator& op,
              dd::optional_ptr<dd::TableCatalogEntry> dml_target = nullptr) {
+    CheckSettingReads(op);
     switch (op.type) {
       // ---- reads ----------------------------------------------------------
       case OpType::LOGICAL_GET:
@@ -486,6 +489,36 @@ class PlanChecker {
         Deny(principal_, Lower(dd::LogicalOperatorToString(op.type)) +
                              " is not available under access control");
     }
+  }
+
+  // current_setting('<name>') of a setting that holds a credential needs MANAGE
+  // CONFIG. DuckDB reads the value when it binds the call (its argument may be any
+  // constant expression), so the check reads the bound argument.
+  void CheckSettingReads(dd::LogicalOperator& op) {
+    if (OnlySuperusers()) return;
+    dd::LogicalOperatorVisitor::EnumerateExpressions(op, [&](dd::unique_ptr<dd::Expression>* e) {
+      if (e && *e) CheckSettingRead(**e);
+    });
+  }
+
+  void CheckSettingRead(const dd::Expression& expr) {
+    if (expr.GetExpressionClass() == dd::ExpressionClass::BOUND_FUNCTION) {
+      const auto& call = expr.Cast<dd::BoundFunctionExpression>();
+      if (Lower(compat::Str(call.Function().GetName())) == "current_setting") {
+        dd::Value name;
+        const auto& arguments = call.GetChildren();
+        const bool known = !arguments.empty() && arguments[0]->IsFoldable() &&
+                           dd::ExpressionExecutor::TryEvaluateScalar(context_, *arguments[0], name) &&
+                           !name.IsNull();
+        // Fail closed: a setting that cannot be named might be any of them.
+        const std::string setting = known ? name.ToString() : "(unknown)";
+        if (!known || IsSensitiveSetting(setting)) {
+          RequireSystem(SystemPrivilege::kManageConfig, "reading the setting " + setting);
+        }
+      }
+    }
+    dd::ExpressionIterator::EnumerateChildren(
+        expr, [&](const dd::Expression& child) { CheckSettingRead(child); });
   }
 
   std::vector<PendingOwnership> TakeOwnership() { return std::move(ownership_); }
@@ -1251,7 +1284,7 @@ std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(
       category == "duckdb_secrets()") {
     return SystemPrivilege::kManageSecrets;
   }
-  if (starts("SET GLOBAL ") || starts("RESET GLOBAL "))
+  if (starts("SET GLOBAL ") || starts("RESET GLOBAL ") || starts("reading the setting "))
     return SystemPrivilege::kManageConfig;
   if (category == "EXPORT DATABASE") return SystemPrivilege::kExportDatabase;
   if (category == "IMPORT DATABASE") return SystemPrivilege::kImportDatabase;

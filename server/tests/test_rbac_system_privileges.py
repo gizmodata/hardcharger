@@ -14,7 +14,8 @@ def server(module_launcher, store, tmp_path_factory):
     server = start_rbac_server(launcher=module_launcher, store_uri=store.new_database(),
                                args=["--database", str(work / "rbac_sys.duckdb")],
                                env={"HARDCHARGER_INIT_SQL_COMMANDS":
-                                    f"SET secret_directory = '{secrets_dir}'; INSTALL httpfs; LOAD httpfs;"})
+                                    f"SET secret_directory = '{secrets_dir}'; INSTALL httpfs; LOAD httpfs; "
+                                    "SET http_proxy_password = 'proxy-pw-123';"})
     admin = server.admin()
     for sql in [
         "CREATE TABLE t AS SELECT 1 AS id",
@@ -175,3 +176,25 @@ def test_a_refusal_names_the_privilege_that_would_allow_it(server):
     expect_blocked(client=nob, sql="SELECT * FROM query('SELECT 1')", why="available to the administrator only")
     expect_blocked(client=nob, sql="SELECT * FROM create_external_resource('x', 'y')",
                    why="available to the administrator only")
+
+
+def test_settings_that_hold_credentials_need_manage_config(server):
+    nob, con = server.user(name="nob"), server.user(name="con")
+    for sql in ["SELECT current_setting('http_proxy_password') AS v",
+                # DuckDB folds the argument when it binds the call: so does the check.
+                "SELECT current_setting('http_proxy_' || 'password') AS v",
+                "SELECT current_setting(lower('HTTP_PROXY_PASSWORD')) AS v",
+                "SHOW http_proxy_password"]:
+        error = expect_blocked(client=nob, sql=sql, why="needs the MANAGE CONFIG")
+        assert "proxy-pw-123" not in error.detail
+    # duckdb_settings() leaves them out.
+    listed = expect_allowed(client=nob, sql="SELECT name, value FROM duckdb_settings() WHERE name LIKE 'http_proxy%'")
+    assert "proxy-pw-123" not in str(listed.to_pylist())
+    assert "http_proxy_password" not in listed.column("name").to_pylist()
+    assert expect_allowed(client=nob, sql="SELECT count(*) AS n FROM duckdb_settings()").column("n").to_pylist()[0] > 100
+    # Positive twins: other settings, and a holder of MANAGE CONFIG.
+    expect_allowed(client=nob, sql="SELECT current_setting('threads') AS v")
+    assert expect_allowed(client=con, sql="SELECT current_setting('http_proxy_password') AS v").to_pylist() == [
+        {"v": "proxy-pw-123"}]
+    assert "proxy-pw-123" in str(expect_allowed(
+        client=con, sql="SELECT value FROM duckdb_settings() WHERE name = 'http_proxy_password'").to_pylist())

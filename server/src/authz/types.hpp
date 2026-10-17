@@ -53,6 +53,10 @@ std::string SystemPrivilegeName(SystemPrivilege privilege);
 const std::vector<SystemPrivilege>& AllSystemPrivileges();
 std::optional<SystemPrivilege> SystemPrivilegeFromName(const std::string& name);
 
+// Does the setting hold a credential (http_proxy_password, s3_secret_access_key, ...),
+// by its name? Reading one needs MANAGE CONFIG.
+bool IsSensitiveSetting(const std::string& name);
+
 // What a tenant's user is told about a catalog, schema, table or view it
 // cannot see: exactly what it is told about one that does not exist.
 std::string HiddenObjectMessage(const std::string& user_name);

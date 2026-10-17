@@ -6,6 +6,7 @@
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/main/attached_database.hpp>
 #include <duckdb/main/client_context.hpp>
+#include <duckdb/main/config.hpp>
 #include <duckdb/main/database_manager.hpp>
 #include <duckdb/parser/expression/columnref_expression.hpp>
 #include <duckdb/parser/expression/conjunction_expression.hpp>
@@ -246,6 +247,25 @@ void CheckBound(const dd::Expression& expr) {
 
 // ---- the plan rewrite --------------------------------------------------------
 
+// Every setting name (DuckDB's, its aliases and the loaded extensions') that holds a
+// credential.
+std::vector<std::string> SensitiveSettingNames(dd::ClientContext& context) {
+  std::vector<std::string> names;
+  for (const auto& name : dd::DBConfig::GetOptionNames()) {
+    if (IsSensitiveSetting(compat::Str(name))) names.push_back(compat::Str(name));
+  }
+  for (dd::idx_t i = 0; i < dd::DBConfig::GetAliasCount(); ++i) {
+    if (auto alias = dd::DBConfig::GetAliasByIndex(i)) {
+      const std::string name = alias->alias;
+      if (IsSensitiveSetting(name)) names.push_back(name);
+    }
+  }
+  for (const auto& [name, option] : dd::DBConfig::GetConfig(context).GetExtensionSettings()) {
+    if (IsSensitiveSetting(compat::Str(name))) names.push_back(compat::Str(name));
+  }
+  return names;
+}
+
 class PolicyRewriter {
  public:
   PolicyRewriter(dd::ClientContext& context, const Snapshot& snapshot,
@@ -317,8 +337,8 @@ class PolicyRewriter {
 
   // The metadata table functions a tenant user may call list every attached
   // catalog; keep the rows of the catalogs the user can see. This covers
-  // information_schema, SHOW and Hardcharger's own helper views too, which are
-  // built on them, however the statement reaches them.
+  // information_schema, SHOW and other views built on them, however the statement
+  // reaches them.
   void RestrictMetadataRows(dd::unique_ptr<dd::LogicalOperator>& op) {
     static const std::unordered_set<std::string> kCatalogListing = {
         "duckdb_databases",   "duckdb_tables",    "duckdb_views",        "duckdb_columns",
@@ -327,13 +347,38 @@ class PolicyRewriter {
     auto& get = op->Cast<dd::LogicalGet>();
     const std::string function = Lower(compat::Str(get.function.GetName()));
     if (!kCatalogListing.count(function)) return;
+    std::vector<std::string> visible;
+    for (const auto& db : dd::DatabaseManager::Get(context_).GetDatabases()) {
+      const std::string name = compat::Str(db->GetName());
+      if (snapshot_.CatalogVisible(principal_, name)) visible.push_back(name);
+    }
+    FilterRows(op, function, "database_name", visible, /*keep_listed=*/true);
+  }
+
+  // duckdb_settings() lists every setting's value, the HTTP proxy's password among
+  // them: without MANAGE CONFIG, the settings that hold credentials are left out.
+  void HideSensitiveSettings(dd::unique_ptr<dd::LogicalOperator>& op) {
+    auto& get = op->Cast<dd::LogicalGet>();
+    const std::string function = Lower(compat::Str(get.function.GetName()));
+    if (function != "duckdb_settings") return;
+    if (snapshot_.HasSystemPrivilege(principal_, SystemPrivilege::kManageConfig)) return;
+    FilterRows(op, function, "name", SensitiveSettingNames(context_), /*keep_listed=*/false);
+  }
+
+  // A filter over a table function's rows on one of its text columns: keep the rows
+  // whose value is in `values` (or, with keep_listed false, those whose value is not).
+  void FilterRows(dd::unique_ptr<dd::LogicalOperator>& op, const std::string& function,
+                  const std::string& column_name, const std::vector<std::string>& values,
+                  bool keep_listed) {
+    if (!keep_listed && values.empty()) return;
+    auto& get = op->Cast<dd::LogicalGet>();
     dd::idx_t column = dd::DConstants::INVALID_INDEX;
     for (dd::idx_t i = 0; i < get.names.size(); ++i) {
-      if (IdentifiersEqual(compat::Str(get.names[i]), "database_name")) column = i;
+      if (IdentifiersEqual(compat::Str(get.names[i]), column_name)) column = i;
     }
     if (column == dd::DConstants::INVALID_INDEX) {
-      Refuse("the table function " + function + " cannot be limited to user " +
-             principal_.user_name + "'s catalogs");
+      Refuse("the table function " + function + " cannot be limited for user " +
+             principal_.user_name);
     }
     auto& column_ids = get.GetMutableColumnIds();
     const size_t original_columns = column_ids.size();
@@ -349,21 +394,18 @@ class PolicyRewriter {
       position = column_ids.size() - 1;
     }
     const dd::ColumnBinding binding(get.table_index, dd::ProjectionIndex(*position));
-    auto in = dd::make_uniq<dd::BoundOperatorExpression>(dd::ExpressionType::COMPARE_IN,
-                                                         dd::LogicalType::BOOLEAN);
+    auto in = dd::make_uniq<dd::BoundOperatorExpression>(
+        keep_listed ? dd::ExpressionType::COMPARE_IN : dd::ExpressionType::COMPARE_NOT_IN,
+        dd::LogicalType::BOOLEAN);
     auto& in_children = in->GetChildrenMutable();
     in_children.push_back(
         dd::make_uniq<dd::BoundColumnRefExpression>(get.returned_types[column], binding));
-    for (const auto& db : dd::DatabaseManager::Get(context_).GetDatabases()) {
-      const std::string name = compat::Str(db->GetName());
-      if (snapshot_.CatalogVisible(principal_, name)) {
-        in_children.push_back(
-            dd::make_uniq<dd::BoundConstantExpression>(dd::Value(name)));
-      }
+    for (const auto& value : values) {
+      in_children.push_back(dd::make_uniq<dd::BoundConstantExpression>(dd::Value(value)));
     }
     dd::unique_ptr<dd::Expression> predicate;
     if (in_children.size() == 1) {
-      predicate = dd::make_uniq<dd::BoundConstantExpression>(dd::Value::BOOLEAN(false));
+      predicate = dd::make_uniq<dd::BoundConstantExpression>(dd::Value::BOOLEAN(!keep_listed));
     } else {
       predicate = std::move(in);
     }
@@ -383,6 +425,7 @@ class PolicyRewriter {
     auto table = get.GetTable();
     if (!table) {
       if (tenant_user_) RestrictMetadataRows(op);
+      if (op->type == OpType::LOGICAL_GET) HideSensitiveSettings(op);
       return;
     }
     const ObjectPath path = PathOfEntry(*table);
@@ -575,8 +618,19 @@ void ApplyPolicies(dd::ClientContext& context, const Snapshot& snapshot,
                    const Principal& principal,
                    dd::unique_ptr<dd::LogicalOperator>& plan) {
   if (!plan || principal.superuser) return;
+  // Most statements need no rewrite: no policies, no tenants, no settings listing.
+  std::function<bool(const dd::LogicalOperator&)> lists_settings = [&](const dd::LogicalOperator& op) {
+    if (op.type == OpType::LOGICAL_GET &&
+        Lower(compat::Str(op.Cast<dd::LogicalGet>().function.GetName())) == "duckdb_settings") {
+      return true;
+    }
+    for (const auto& child : op.children) {
+      if (child && lists_settings(*child)) return true;
+    }
+    return false;
+  };
   if (snapshot.row_policies().empty() && snapshot.mask_bindings().empty() &&
-      snapshot.catalog_tenants().empty()) {
+      snapshot.catalog_tenants().empty() && !lists_settings(*plan)) {
     return;
   }
   PolicyRewriter(context, snapshot, principal).Rewrite(plan);

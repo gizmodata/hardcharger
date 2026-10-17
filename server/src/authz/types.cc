@@ -127,4 +127,14 @@ std::string HiddenObjectMessage(const std::string& user_name) {
          user_name + " cannot see";
 }
 
+bool IsSensitiveSetting(const std::string& name) {
+  std::string lower = name;
+  for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  for (const char* word : {"password", "secret", "token", "access_key", "key_id", "account_key",
+                           "connection_string", "credential", "private_key"}) {
+    if (lower.find(word) != std::string::npos) return true;
+  }
+  return false;
+}
+
 }  // namespace hardcharger::authz
