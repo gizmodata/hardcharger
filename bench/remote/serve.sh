@@ -42,8 +42,8 @@ case "$SYSTEM" in
     ;;
   hardcharger)
     HC=$(ls -d "$B"/hardcharger-linux-arm64)
-    HARDCHARGER_PASSWORD="$BENCH_PASSWORD" nohup "$HC/bin/hardcharger" \
-      --database "$DB" --username bench --port 31337 \
+    HARDCHARGER_ADMIN_PASSWORD="$BENCH_PASSWORD" nohup "$HC/bin/hardcharger" \
+      --database "$DB" --admin-username bench --port 31337 \
       $([ "$TLS" = 1 ] && echo --tls-cert "$B/tls.crt" --tls-key "$B/tls.key") --memory-limit "$MEMORY_LIMIT" \
       --init-sql-commands "SET threads=$THREADS;" ${HC_EXTRA:-} >"$LOG" 2>&1 </dev/null &
     ;;
