@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Builds a static OpenSSL 3 into server/.deps/openssl-install, for the portable Linux build
+# (build-portable-linux.sh): EL8 ships OpenSSL 1.1.1, and static, the binaries need no
+# libssl at all. Other builds use the system's OpenSSL 3. `build-deps.sh openssl` runs it.
+set -euo pipefail
+OPENSSL_VERSION=3.5.9
+OPENSSL_SHA256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PREFIX="${HARDCHARGER_DEPS_DIR:-$HERE/.deps}/openssl-install"
+[ -f "$PREFIX/.openssl-$OPENSSL_VERSION.stamp" ] && exit 0
+src=$(mktemp -d)
+curl -fsSL -o "$src/openssl.tar.gz" \
+  "https://github.com/openssl/openssl/releases/download/openssl-$OPENSSL_VERSION/openssl-$OPENSSL_VERSION.tar.gz"
+echo "$OPENSSL_SHA256  $src/openssl.tar.gz" | sha256sum -c -
+tar -xzf "$src/openssl.tar.gz" -C "$src" --strip-components=1
+rm -rf "$PREFIX"
+(cd "$src" && ./config no-shared no-tests no-docs --prefix="$PREFIX" --libdir=lib \
+   && make -j"${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" build_libs >/dev/null \
+   && make install_dev >/dev/null)
+rm -rf "$src"
+touch "$PREFIX/.openssl-$OPENSSL_VERSION.stamp"
+echo "OpenSSL $OPENSSL_VERSION installed in $PREFIX"

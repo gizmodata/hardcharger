@@ -1,34 +1,34 @@
 #!/usr/bin/env bash
-# Prints the CI cache key for server/.deps (the DuckDB, Arrow and replxx installs build-deps.sh
-# makes): the platform, the exact toolchain that compiled them, and a hash of every
-# recipe they come from (the build scripts, every DuckDB patch, and the built-in
-# extensions' list and pins). A runner image that moves to a new compiler, or any change to
-# a recipe, gets a new key and a cold build instead of a cache whose objects or pins no
-# longer match.
+# Prints the CI cache key for one dependency's install in server/.deps (see
+# build-deps.sh): the dependency, the platform (with the sanitizer, for instrumented
+# builds), the exact toolchain that compiled it, and a hash of that dependency's own
+# recipes only. A runner image's new compiler, or a change to a recipe, rebuilds just the
+# dependencies it touches: a replxx bump never rebuilds DuckDB.
 #
-#   server/scripts/ci-deps-key.sh <platform> <toolchain> [more recipe files...]
+#   server/scripts/ci-deps-key.sh <dependency> <platform> <toolchain> [more recipe files...]
 #
-# <toolchain> is a description of the compiler (e.g. `c++ --version | head -1`, or the
-# Xcode and clang builds); it goes into the key as readable text. There is no restore
-# prefix to share: the cache holds finished installs, never a build tree a later run
-# could resume, so a key that differs in anything must start cold.
+# <toolchain> describes the compiler (e.g. `c++ --version | head -1`, the Xcode and clang
+# builds, or the manylinux image); it goes into the key as readable text. Each cache holds
+# a finished install, never a build tree a later run could resume, so a key that differs
+# in anything starts cold and there is no restore prefix. Changing what a key is made of
+# means a new generation (v3 below).
 set -euo pipefail
-platform="${1:?platform}"
-toolchain="${2:?toolchain}"
-shift 2
+dep="${1:?dependency: arrow | duckdb | replxx | openssl}"
+platform="${2:?platform}"
+toolchain="${3:?toolchain}"
+shift 3
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
-recipes=(
-  third_party/warp-sql/cpp/scripts/build-arrow.sh
-  third_party/warp-sql/cpp/scripts/build-duckdb.sh
-  server/scripts/build-deps.sh
-  server/scripts/build-replxx.sh
-  server/scripts/build-extension-deps.sh
-  server/scripts/duckdb-extensions.cmake
-  server/scripts/patch-duckdb*.cmake
-  server/scripts/ci-deps-key.sh
-  "$@"
-)
+case "$dep" in
+  arrow) recipes=(third_party/warp-sql/cpp/scripts/build-arrow.sh server/scripts/deps-arrow.sh) ;;
+  duckdb) recipes=(third_party/warp-sql/cpp/scripts/build-duckdb.sh server/scripts/deps-duckdb.sh
+                   server/scripts/patch-duckdb*.cmake server/scripts/duckdb-extensions.cmake
+                   server/scripts/build-extension-deps.sh) ;;
+  replxx) recipes=(server/scripts/build-replxx.sh) ;;
+  openssl) recipes=(server/scripts/deps-openssl.sh) ;;
+  *) echo "ci-deps-key: no dependency '$dep'" >&2; exit 2 ;;
+esac
+recipes+=("$@")
 for recipe in "${recipes[@]}"; do
   [ -f "$recipe" ] || { echo "ci-deps-key: no recipe $recipe" >&2; exit 1; }
 done
@@ -36,4 +36,4 @@ done
 tool=$(printf '%s' "$toolchain" | tr -cs 'A-Za-z0-9.' '-' | sed 's/^-//; s/-$//')
 [ -n "$tool" ] || { echo "ci-deps-key: empty toolchain" >&2; exit 1; }
 sum=$(cat "${recipes[@]}" | shasum -a 256 | cut -c1-16)
-echo "deps-v2-$platform-$tool-$sum"
+echo "deps-$dep-v3-$platform-$tool-$sum"

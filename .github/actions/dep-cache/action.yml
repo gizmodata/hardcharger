@@ -1,0 +1,57 @@
+# One dependency's install in server/.deps (see server/scripts/build-deps.sh), cached on its
+# own: restored by its own key (server/scripts/ci-deps-key.sh), built only when that
+# misses, and saved right after it is built, so a later failure never throws it away.
+name: dependency cache
+description: Restore, or build and save, one of server/.deps' dependencies
+inputs:
+  dependency:
+    description: arrow, duckdb, replxx or openssl
+    required: true
+  platform:
+    description: the platform part of the key (with the sanitizer, for instrumented builds)
+    required: true
+  toolchain:
+    description: the exact toolchain that builds it
+    required: true
+  extra-recipes:
+    description: more files whose contents the key covers (space-separated)
+    default: ""
+  build:
+    description: the command that builds it (it gets the dependency's name as its last argument)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: ${{ inputs.dependency }} cache key
+      id: key
+      shell: bash
+      env:
+        DEP: ${{ inputs.dependency }}
+        PLATFORM: ${{ inputs.platform }}
+        TOOLCHAIN: ${{ inputs.toolchain }}
+        EXTRA: ${{ inputs.extra-recipes }}
+      run: |
+        read -r -a extra <<< "$EXTRA"
+        key=$(server/scripts/ci-deps-key.sh "$DEP" "$PLATFORM" "$TOOLCHAIN" "${extra[@]}")
+        echo "$key"
+        echo "key=$key" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v6
+      id: restore
+      with:
+        path: server/.deps/${{ inputs.dependency }}-install
+        key: ${{ steps.key.outputs.key }}
+    - name: Build ${{ inputs.dependency }}
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        DEP: ${{ inputs.dependency }}
+        BUILD: ${{ inputs.build }}
+      run: |
+        read -r -a build <<< "$BUILD"
+        "${build[@]}" "$DEP"
+    # A tag's caches can't be restored by any other ref, so only branch runs save.
+    - if: steps.restore.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
+      uses: actions/cache/save@v6
+      with:
+        path: server/.deps/${{ inputs.dependency }}-install
+        key: ${{ steps.key.outputs.key }}

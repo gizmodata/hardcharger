@@ -75,59 +75,59 @@ jobs:
           brew install ninja openssl@3
           echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
-      # DuckDB and Arrow (and on Linux a static OpenSSL 3) take a while to build; cache
-      # them by their recipes and by the exact toolchain (server/scripts/ci-deps-key.sh):
-      # on Linux the manylinux image's tag and digest, on macOS the Xcode and clang
-      # builds. Restored here and saved right after they are built, so a later test
-      # failure never throws a fresh build away.
-      - name: Dependency cache key
-        id: deps
+      # Each dependency is cached on its own (.github/actions/dep-cache), keyed on its own
+      # recipes and the exact toolchain: on Linux the manylinux image's tag and digest, on
+      # macOS the Xcode and clang builds. Only what misses is built (in the manylinux image
+      # on Linux), and each is saved right after it is built.
+      - name: Toolchain
+        id: toolchain
         run: |
-          extra=()
           if [ "$RUNNER_OS" = macOS ]; then
             clang=$(clang --version | head -1 | sed -nE 's/.*\((clang-[0-9.]+)\).*/\1/p')
             [ -n "$clang" ] || { echo "no clang build in: $(clang --version)"; exit 1; }
             toolchain="$(xcodebuild -version | tr '\n' ' ') $clang"
+            build="server/scripts/build-deps.sh"
+            duckdb_extra=""
           else
             image="${HARDCHARGER_MANYLINUX_IMAGE##*/}"
             digest="${image##*@sha256:}"
             [ -n "$image" ] && [ "$digest" != "$image" ] || { echo "no pinned manylinux image: '$image'"; exit 1; }
             toolchain="${image%%@*} ${digest:0:12}"
-            extra=(server/scripts/build-portable-linux.sh)
+            build="server/scripts/in-manylinux.sh deps"
+            # DuckDB's extensions link the static OpenSSL.
+            duckdb_extra="server/scripts/deps-openssl.sh"
           fi
-          key=$(server/scripts/ci-deps-key.sh "${{ matrix.name }}" "$toolchain" "${extra[@]}")
-          echo "$key"
-          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "toolchain=$toolchain" | tee -a "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "duckdb_extra=$duckdb_extra" >> "$GITHUB_OUTPUT"
           # The DuckDB build's peak memory is what limits its parallelism on 2-CPU runners.
           echo "CMAKE_BUILD_PARALLEL_LEVEL=$(getconf _NPROCESSORS_ONLN)" >> "$GITHUB_ENV"
-      - uses: actions/cache/restore@v6
-        id: cache
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/dep-cache
         with:
-          path: |
-            server/.deps/duckdb-install
-            server/.deps/arrow-install
-            server/.deps/replxx-install
-            server/.deps/openssl-install
-          key: ${{ steps.deps.outputs.key }}
-      - name: Build DuckDB and Arrow
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          if [ "$RUNNER_OS" = Linux ]; then
-            server/scripts/in-manylinux.sh deps
-          else
-            server/scripts/build-deps.sh
-          fi
-      # A tag's caches can't be restored by any other ref, so only branch runs save.
-      - name: Save the dependency cache
-        if: steps.cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
-        uses: actions/cache/save@v6
+          dependency: openssl
+          platform: ${{ matrix.name }}
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          build: ${{ steps.toolchain.outputs.build }}
+      - uses: ./.github/actions/dep-cache
         with:
-          path: |
-            server/.deps/duckdb-install
-            server/.deps/arrow-install
-            server/.deps/replxx-install
-            server/.deps/openssl-install
-          key: ${{ steps.deps.outputs.key }}
+          dependency: arrow
+          platform: ${{ matrix.name }}
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          build: ${{ steps.toolchain.outputs.build }}
+      - uses: ./.github/actions/dep-cache
+        with:
+          dependency: replxx
+          platform: ${{ matrix.name }}
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          build: ${{ steps.toolchain.outputs.build }}
+      - uses: ./.github/actions/dep-cache
+        with:
+          dependency: duckdb
+          platform: ${{ matrix.name }}
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          extra-recipes: ${{ steps.toolchain.outputs.duckdb_extra }}
+          build: ${{ steps.toolchain.outputs.build }}
 
       - uses: mozilla-actions/sccache-action@v0.0.11
       # On Linux, in the manylinux image (server/scripts/build-portable-linux.sh, which
@@ -297,33 +297,28 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build libssl-dev flex bison
-      # The same dependency cache as the linux-amd64 build (same key).
-      - name: Dependency cache key
-        id: deps
-        run: |
-          key=$(server/scripts/ci-deps-key.sh linux-amd64 "$(c++ --version | head -1)")
-          echo "$key"
-          echo "key=$key" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v6
-        id: cache
+      # The dependencies, uninstrumented (only the server is built with ASan), each cached on its own.
+      - name: Toolchain
+        id: toolchain
+        run: echo "toolchain=$(c++ --version | head -1)" | tee -a "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/dep-cache
         with:
-          path: |
-            server/.deps/duckdb-install
-            server/.deps/arrow-install
-            server/.deps/replxx-install
-          key: ${{ steps.deps.outputs.key }}
-      - name: Build DuckDB and Arrow
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: server/scripts/build-deps.sh
-      - name: Save the dependency cache
-        if: steps.cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
-        uses: actions/cache/save@v6
+          dependency: arrow
+          platform: linux-amd64
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          build: server/scripts/build-deps.sh
+      - uses: ./.github/actions/dep-cache
         with:
-          path: |
-            server/.deps/duckdb-install
-            server/.deps/arrow-install
-            server/.deps/replxx-install
-          key: ${{ steps.deps.outputs.key }}
+          dependency: replxx
+          platform: linux-amd64
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          build: server/scripts/build-deps.sh
+      - uses: ./.github/actions/dep-cache
+        with:
+          dependency: duckdb
+          platform: linux-amd64
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          build: server/scripts/build-deps.sh
       - uses: mozilla-actions/sccache-action@v0.0.11
       - name: Build the server with AddressSanitizer
         run: |
@@ -421,32 +416,28 @@ jobs:
       # instrumented programs (PostgreSQL's configure checks).
       - name: Lower ASLR entropy for TSan
         run: sudo sysctl -w vm.mmap_rnd_bits=28
-      # Its own dependency cache: instrumented builds are not interchangeable with the
-      # others, so the platform is `linux-amd64-tsan` and the toolchain is clang's.
-      - name: Dependency cache key
-        id: deps
-        run: |
-          key=$(server/scripts/ci-deps-key.sh linux-amd64-tsan "$(clang --version | head -1)")
-          echo "$key"
-          echo "key=$key" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v6
-        id: cache
+      # Instrumented, so their own caches: platform `linux-amd64-tsan`, clang's toolchain.
+      - name: Toolchain
+        id: toolchain
+        run: echo "toolchain=$(clang --version | head -1)" | tee -a "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/dep-cache
         with:
-          path: |
-            server/.deps/duckdb-install
-            server/.deps/arrow-install
-          key: ${{ steps.deps.outputs.key }}
-      - name: Build DuckDB and Arrow (ThreadSanitizer)
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: server/scripts/build-deps.sh
-      - name: Save the dependency cache
-        if: steps.cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
-        uses: actions/cache/save@v6
+          dependency: arrow
+          platform: linux-amd64-tsan
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          build: server/scripts/build-deps.sh
+      - uses: ./.github/actions/dep-cache
         with:
-          path: |
-            server/.deps/duckdb-install
-            server/.deps/arrow-install
-          key: ${{ steps.deps.outputs.key }}
+          dependency: replxx
+          platform: linux-amd64-tsan
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          build: server/scripts/build-deps.sh
+      - uses: ./.github/actions/dep-cache
+        with:
+          dependency: duckdb
+          platform: linux-amd64-tsan
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          build: server/scripts/build-deps.sh
       - uses: mozilla-actions/sccache-action@v0.0.11
       - name: Build the server with ThreadSanitizer
         run: |

@@ -10,23 +10,22 @@
 # server/.deps/duckdb-install/lib) still hold when the tests run the binaries on the host:
 #
 #   docker run --rm -v "$PWD:$PWD" -w "$PWD" quay.io/pypa/manylinux_2_28_$(uname -m) \
-#     server/scripts/build-portable-linux.sh deps
+#     server/scripts/build-portable-linux.sh deps openssl arrow replxx duckdb
 #   docker run ... server/scripts/build-portable-linux.sh server <build dir> [cmake args...]
 #
-# server/scripts/in-manylinux.sh runs it so in CI. `deps` builds DuckDB, Arrow and a static OpenSSL 3 (EL8 ships 1.1.1; static, so the
-# binaries need no libssl at all) into server/.deps, which CI caches. `server` builds the
+# server/scripts/in-manylinux.sh runs it so in CI. `deps` builds the dependencies named
+# (build-deps.sh: openssl, a static OpenSSL 3 since EL8 ships 1.1.1, then arrow, replxx,
+# duckdb) into server/.deps, which CI caches one by one. `server` builds the
 # server against them (every compile through sccache when it is on PATH), then fails when
 # a shipped file (the server, libduckdb) needs a glibc symbol newer than 2.28 or a
 # GLIBCXX newer than EL8's 3.4.25.
 set -euo pipefail
 
-MODE="${1:?deps | server <build dir> [cmake args...] | build <build dir> [cmake --build args...]}"
+MODE="${1:?deps <dependency...> | server <build dir> [cmake args...] | build <build dir> [cmake --build args...]}"
 shift
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEPS="$ROOT/server/.deps"
-OPENSSL_VERSION=3.5.9
-OPENSSL_SHA256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
-OPENSSL_PREFIX="$DEPS/openssl-install"
+OPENSSL_PREFIX="$DEPS/openssl-install"  # deps-openssl.sh's
 
 cd "$ROOT"
 # The checkout (and DuckDB's clone in server/.deps) belongs to the host's runner user and
@@ -47,35 +46,10 @@ trap give_back EXIT
 dnf install -y -q --setopt=install_weak_deps=False \
   ninja-build perl-IPC-Cmd perl-Pod-Html perl-Time-Piece flex bison >/dev/null
 
+# The dependencies build-deps.sh names (in CI: one per call, each cached on its own); the
+# static OpenSSL first, as DuckDB's extensions link it.
 build_deps() {
-  if [ ! -f "$OPENSSL_PREFIX/.openssl-$OPENSSL_VERSION.stamp" ]; then
-    local src
-    src=$(mktemp -d)
-    curl -fsSL -o "$src/openssl.tar.gz" \
-      "https://github.com/openssl/openssl/releases/download/openssl-$OPENSSL_VERSION/openssl-$OPENSSL_VERSION.tar.gz"
-    echo "$OPENSSL_SHA256  $src/openssl.tar.gz" | sha256sum -c -
-    tar -xzf "$src/openssl.tar.gz" -C "$src" --strip-components=1
-    (cd "$src" && ./config no-shared no-tests no-docs --prefix="$OPENSSL_PREFIX" --libdir=lib \
-       && make -j"${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}" build_libs >/dev/null && make install_dev >/dev/null)
-    rm -rf "$src"
-    touch "$OPENSSL_PREFIX/.openssl-$OPENSSL_VERSION.stamp"
-  fi
-  # Arrow's bundled uriparser calls reallocarray when CMake finds it. glibc 2.28 has it
-  # but declares it only under _GNU_SOURCE (2.29 moved it to _DEFAULT_SOURCE, which is
-  # all uriparser asks for), and gcc 14 refuses the implicit declaration. Arrow's C code
-  # (uriparser, lz4, zstd) is built with _GNU_SOURCE, as g++ builds all C++ anyway;
-  # build-deps.sh then finds Arrow built and goes on to DuckDB, whose C is untouched.
-  CFLAGS="${CFLAGS:-} -D_GNU_SOURCE" WARPSQL_DEPS_DIR="$DEPS" third_party/warp-sql/cpp/scripts/build-arrow.sh
-  # The extensions' libraries (libcurl for httpfs, libpq for the postgres scanner) link
-  # the static OpenSSL too.
-  OPENSSL_ROOT_DIR="$OPENSSL_PREFIX" server/scripts/build-deps.sh
-  # CMake installs libraries into lib64 on RPM-based systems; the server's CMake, its
-  # packaging and the Debian/macOS builds all use lib.
-  local prefix
-  for prefix in "$DEPS/duckdb-install" "$DEPS/arrow-install"; do
-    if [ -d "$prefix/lib64" ] && [ ! -e "$prefix/lib" ]; then ln -s lib64 "$prefix/lib"; fi
-  done
-  [ -f "$DEPS/duckdb-install/lib/libduckdb.so" ] || { echo "no libduckdb.so in $DEPS/duckdb-install/lib" >&2; exit 1; }
+  server/scripts/build-deps.sh "$@"
 }
 
 build_server() {
@@ -96,9 +70,9 @@ build_server() {
 }
 
 case "$MODE" in
-  deps) build_deps ;;
+  deps) build_deps "$@" ;;
   server) build_server "$@" ;;
   # More targets of a configured build dir: build <build dir> [cmake --build args...]
   build) BUILD_DIR="${1:?build dir}"; cmake --build "$@" ;;
-  *) echo "unknown mode $MODE (deps | server <build dir> [cmake args...] | build <build dir> [args...])" >&2; exit 2 ;;
+  *) echo "unknown mode $MODE (deps <dependency...> | server <build dir> [cmake args...] | build <build dir> [args...])" >&2; exit 2 ;;
 esac
