@@ -154,7 +154,11 @@ own changelog in `python/CHANGELOG.md`.
   plan, so nested SQL is caught where it runs: no file or URL reads (also through
   `query('...')`), no secrets, no extensions, no table function outside the allow-list
   (`destroy_external_resource`, `pragma_storage_info`, ...), no server-wide or credential
-  settings, and no reading a credential setting. Sequence functions (`nextval`, `setval`,
+  settings, and no reading a credential setting. Creating a macro or type (temporary
+  ones included, except PIVOT's own enum) needs an administrator, since a macro's or
+  type's body runs unchecked when it is used; nested SQL through `query()`,
+  `query_table()` and `json_execute_serialized_sql()` is refused because those table
+  functions are off the non-administrator allow-list. Sequence functions (`nextval`, `setval`,
   `currval`) need write (currval: read) access to their catalog. `DESCRIBE` of a catalog
   the user may not see is refused. A plain server (no store) now routes every non-admin
   token principal through the same plan check.

@@ -444,7 +444,12 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb
       runtime_(runtime),
       sensitive_paths_(sensitive_paths),
       principal_(std::move(principal)),
-      access_controlled_(access != nullptr),
+      // A rules-only administrator is unchecked and runs no access-control statements,
+      // so it needs no guard: binding it would only add the plan check's per-statement
+      // work to an unrestricted session. An RBAC administrator keeps its guard (it runs
+      // GRANT, CREATE USER, ...).
+      access_controlled_(access != nullptr &&
+                         !(access->catalog_rules_only() && principal_.role == "admin")),
       rbac_(access != nullptr && !access->catalog_rules_only()),
       id_(RandomUuid()),
       started_at_us_(NowMicros()) {

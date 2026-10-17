@@ -339,15 +339,14 @@ class PlanChecker {
       // (catalog_access principals read no view with another's rights.)
       case OpType::LOGICAL_CREATE_MACRO:
       case OpType::LOGICAL_CREATE_TYPE: {
-        if (principal_.catalog_rules) {
-          auto& create = op.Cast<dd::LogicalCreate>();
-          // PIVOT without an IN list creates its own temporary enum, which reads nothing
-          // and writes no catalog: a read-only principal may PIVOT (as in GizmoSQL 1.x).
-          if (create.info->temporary && op.type == OpType::LOGICAL_CREATE_TYPE &&
-              PartsOf(*create.info).back().rfind("__pivot_enum_", 0) == 0) {
-            return;
-          }
-          return RequireRuleWrite(CatalogOf(*create.info, create.info->temporary));
+        // Never for a non-administrator, temporary ones included: a macro's or type's
+        // body runs unchecked when it is used (FROM m(), a column of the type), so it
+        // would be a way around the plan check. PIVOT without an IN list is the one
+        // exception: it creates its own temporary enum, which reads nothing.
+        auto& create = op.Cast<dd::LogicalCreate>();
+        if (create.info->temporary && op.type == OpType::LOGICAL_CREATE_TYPE &&
+            PartsOf(*create.info).back().rfind("__pivot_enum_", 0) == 0) {
+          return;
         }
         Deny(principal_, op.type == OpType::LOGICAL_CREATE_MACRO ? "creating macros needs an administrator"
                                                                  : "creating types needs an administrator");

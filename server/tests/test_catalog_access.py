@@ -319,5 +319,9 @@ def test_read_only_principals_can_run_pivot(server, admin):
         for sql in ["SELECT 1; CREATE TEMPORARY TABLE pivot_tmp AS SELECT 1 AS x",
                     "SELECT 1; CREATE TEMPORARY TYPE pivot_mood AS ENUM ('a', 'b')"]:
             detail = session.error(sql=sql)["detail"]
+            # Hardcharger refuses a non-admin CREATE TEMPORARY TABLE/TYPE either as a temp
+            # write it lacks or (for a macro/type, whose body runs unchecked) as needing an
+            # administrator; 1.x gave only the first two. Any of them refuses it.
             assert ("cannot run statements that modify state" in detail
-                    or "do not have write access to catalog 'temp'" in detail), f"{sql}: {detail}"
+                    or "do not have write access to catalog 'temp'" in detail
+                    or "needs an administrator" in detail), f"{sql}: {detail}"

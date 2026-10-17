@@ -183,3 +183,53 @@ def test_plain_server_users_cannot_nest_file_reads(plain, secret_file):
     assert user.scalar(sql="SELECT count(*) FROM facts") == 1
     user.execute(sql="CREATE TABLE mine AS SELECT 2 AS id")
     assert plain.admin().scalar(sql=f"SELECT count(*) FROM query('SELECT * FROM read_text(''{secret_file}'')')") == 1
+
+
+# ---- nested SQL, table-function wrappers and macros (second review) ----
+# An ordinary temp file, never /etc/passwd: the sensitive-path guard would stop that one
+# and hide a real hole.
+
+def nested_cases(path) -> list[str]:
+    return [
+        "SELECT * FROM query('SELECT name FROM duckdb_secrets()')",
+        f"SELECT * FROM query('SELECT * FROM read_csv(''{path}'')')",
+        f"SELECT * FROM query('SELECT * FROM ''{path}''')",
+        f"SELECT * FROM query_table('{path}')",
+        f"SELECT * FROM json_execute_serialized_sql(json_serialize_sql('SELECT * FROM read_csv(''{path}'')'))",
+        "SELECT * FROM query('SELECT 1' || '')",  # non-literal SQL
+    ]
+
+
+def macro_cases(path) -> list[str]:
+    return [
+        f"CREATE TEMP MACRO m_leak() AS TABLE SELECT * FROM read_csv('{path}')",
+        "CREATE MACRO q_leak(x) AS TABLE SELECT * FROM query_table(x)",
+        f"CREATE TEMP MACRO m_leak2() AS TABLE SELECT * FROM query_table('{path}')",
+    ]
+
+
+def test_rules_user_cannot_reach_files_through_nested_sql(server, admin, mallory, secret_file):
+    for sql in nested_cases(path=secret_file):
+        refused(mallory, sql, "Hardcharger blocked")
+        # Admin twin: the same statement runs and sees the file word.
+        text = repr(admin.query(sql=sql).to_pylist())
+        assert "file-secret-word" in text or "s3_admin" in text or sql.endswith("|| '')"), sql
+
+
+def test_rules_user_cannot_define_table_macros(server, admin, mallory, secret_file):
+    for sql in macro_cases(path=secret_file):
+        refused(mallory, sql, "Hardcharger blocked")
+    # The administrator may; a non-admin still cannot call an admin's file-reading macro.
+    admin.execute(sql=f"CREATE MACRO shared_leak() AS TABLE SELECT * FROM read_csv('{secret_file}')")
+    refused(mallory, "SELECT * FROM shared_leak()", "Hardcharger blocked")
+    assert "file-secret-word" in repr(admin.query(sql="SELECT * FROM shared_leak()").to_pylist())
+    admin.execute(sql="DROP MACRO TABLE shared_leak")
+
+
+def test_plain_server_non_admin_cannot_reach_files_through_nested_sql(plain, secret_file):
+    user = plain.as_role(role="user", subject="plain-nested")
+    for sql in nested_cases(path=secret_file) + macro_cases(path=secret_file):
+        refused(user, sql, "Hardcharger blocked")
+    # The admin of the same plain server can.
+    assert "file-secret-word" in repr(
+        plain.admin().query(sql=f"SELECT * FROM query('SELECT * FROM read_csv(''{secret_file}'')')").to_pylist())
