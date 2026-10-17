@@ -6,3 +6,18 @@
 # warp-sql symbol: a race there is a bug to fix, not to suppress. Syntax:
 #   race:<symbol or file substring>   thread_leak:<...>   deadlock:<...>
 # https://github.com/google/sanitizers/wiki/ThreadSanitizerSuppressions
+
+# jemalloc, DuckDB's allocator (DuckDB builds it in on Linux): its thread caches and
+# extent metadata (tcache.c tcache_bin_flush_impl_small, edata.h edata_nfree_inc/sub,
+# base.c base_alloc_edata) are managed with its own lock-free protocol, which TSan cannot
+# model, so every allocation-heavy run reports races whose top frames are all jemalloc.
+# The standard jemalloc suppression (GizmoSQL's tests/tsan.supp has the same).
+race:third_party/jemalloc
+
+# DuckDB storage: a commit appends rows into a transient column segment
+# (ColumnSegment::Append -> ValidityAppend/SetInvalidUnsafe) while another thread scans
+# the same segment (ValidityScan/AlignedScan). DuckDB publishes the committed row count
+# under the row group lock and readers never look past it, so the overlapping bytes are
+# never used; TSan cannot see that invariant. Seen with the instrumentation writer
+# appending while a reader scans its table.
+race:duckdb::ColumnSegment::Append

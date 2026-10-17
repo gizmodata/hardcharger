@@ -394,8 +394,10 @@ jobs:
       CFLAGS: -fsanitize=thread -gline-tables-only
       CXXFLAGS: -fsanitize=thread -gline-tables-only
       LDFLAGS: -fsanitize=thread
-      # Instrumented servers use several times the memory: fewer workers.
+      # Instrumented servers use several times the memory: fewer workers. They also run
+      # several times slower: the waits tests size by hand stretch five times.
       HARDCHARGER_TEST_XDIST_WORKERS: "3"
+      HARDCHARGER_TEST_TIMEOUT_SCALE: "5"
       TSAN_REPORTS: ${{ github.workspace }}/tsan-reports
     steps:
       - uses: actions/checkout@v7
