@@ -126,6 +126,8 @@ own changelog in `python/CHANGELOG.md`.
   write access to catalog ..."). Under RBAC the rules grant nothing.
 - The instrumentation and log catalogs are now also left out of SQL's own catalog
   functions (`duckdb_databases()`, `information_schema`, SHOW ...) for non-administrators.
+- Instrumentation writes to a shared DuckLake catalog that lose a commit race to another
+  server are tried again (a few times, backing off) instead of being dropped.
 - `PIVOT` without an `IN` list runs (it expands into several statements), also for
   read-only principals.
 - Access control and the battery's features work together: store users never see or
