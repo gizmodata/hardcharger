@@ -111,3 +111,20 @@ def launcher(tmp_path):
     launch = Launcher(tmp_path=tmp_path)
     yield launch
     launch.stop_all()
+
+
+@pytest.fixture(scope="module")
+def module_launcher(tmp_path_factory):
+    """Servers shared by the tests of one module (seeded once, as GizmoSQL 1.x's fixtures)."""
+    launch = Launcher(tmp_path=tmp_path_factory.mktemp("servers"))
+    yield launch
+    launch.stop_all()
+
+
+@pytest.fixture(scope="session")
+def store():
+    """The PostgreSQL the access-control tests keep their grant stores on."""
+    from rbac import Store
+    databases = Store()
+    yield databases
+    databases.drop_all()

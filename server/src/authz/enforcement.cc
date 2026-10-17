@@ -239,18 +239,24 @@ std::string ScopeLimits(const TokenScope& scope) {
 // Does SET (or RESET) of `name` in `scope` change the setting for the whole server?
 // Explicitly GLOBAL does; so does a bare SET of a setting DuckDB keeps only globally
 // (memory_limit, threads, extension settings, ...), which DuckDB applies globally.
-bool ChangesWholeServer(const dd::Identifier& name, dd::SetScope scope) {
+bool ChangesWholeServer(dd::ClientContext& context, const dd::Identifier& name,
+                        dd::SetScope scope) {
   if (scope == dd::SetScope::GLOBAL) return true;
   if (scope != dd::SetScope::AUTOMATIC) return false;
   try {
     if (auto option = dd::DBConfig::GetOptionByName(name)) {
       return dd::PhysicalSet::GetSettingScope(*option, scope) == dd::SetScope::GLOBAL;
     }
+    // An extension's setting (TimeZone, Calendar, ...): its declared default scope.
+    dd::ExtensionOption extension_option;
+    if (dd::DBConfig::GetConfig(context).TryGetExtensionOption(name, extension_option)) {
+      return extension_option.ResolveScope(name, scope) == dd::SetScope::GLOBAL;
+    }
   } catch (...) {
     return true;  // DuckDB cannot tell either: treat it as global (fail closed)
   }
-  // An extension's setting (or none at all, which DuckDB then reports): its scope is
-  // the extension's to say, so it counts as global.
+  // No such setting yet: DuckDB would autoload an extension that has one. That is the
+  // administrator's to allow.
   return true;
 }
 
@@ -371,7 +377,7 @@ class PlanChecker {
         if (BlockedSettings().count(Lower(compat::Str(set.name)))) {
           Deny(principal_, "changing " + compat::Str(set.name) + " is not allowed");
         }
-        if (ChangesWholeServer(set.name, set.scope)) {
+        if (ChangesWholeServer(context_, set.name, set.scope)) {
           RequireSystem(SystemPrivilege::kManageConfig, "SET GLOBAL");
         }
         // USE c / SET schema / SET search_path: no catalog the user cannot see.
@@ -387,7 +393,7 @@ class PlanChecker {
             BlockedSettings().count(Lower(compat::Str(reset.name)))) {
           Deny(principal_, "changing " + compat::Str(reset.name) + " is not allowed");
         }
-        if (reset.scope != dd::SetScope::VARIABLE && ChangesWholeServer(reset.name, reset.scope)) {
+        if (reset.scope != dd::SetScope::VARIABLE && ChangesWholeServer(context_, reset.name, reset.scope)) {
           RequireSystem(SystemPrivilege::kManageConfig, "RESET GLOBAL");
         }
         return;
