@@ -1,6 +1,7 @@
 """The PostgreSQL grant store: replicas writing at once, a restart, and connection
 errors that never echo the connection string."""
 
+import subprocess
 import threading
 import urllib.parse
 
@@ -82,7 +83,11 @@ def test_connection_errors_never_echo_the_connection_string(launcher, store):
     wrong_password = urllib.parse.urlunsplit(parts._replace(
         netloc=f"{parts.username}:{secret}@{parts.hostname}:{parts.port}"))
     running = launcher.start(env=rbac_env(store_uri=wrong_password), expect_up=False)
-    assert running.process.wait(timeout=60) == 1
+    try:
+        assert running.process.wait(timeout=60) == 1
+    except subprocess.TimeoutExpired:
+        pytest.fail(reason="the server started with a wrong store password: does the test PostgreSQL "
+                           "check passwords (not trust authentication)?")
     log = running.log()
     assert secret not in log, log
     assert "could not connect to the PostgreSQL store" in log, log
