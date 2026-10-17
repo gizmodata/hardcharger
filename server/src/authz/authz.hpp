@@ -200,6 +200,10 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // another tenant's objects reads exactly like one about something that does not exist.
   warpsql::Error ForTenant(const warpsql::Error& error) const;
 
+  // Runs Hardcharger's own statements on the session's connection (its profiler
+  // settings, ...) unchecked: they are the server's, not the user's.
+  void RunInternal(const std::function<void()>& run);
+
   // The session's connection is going away; nothing may touch it after this.
   void Detach();
 

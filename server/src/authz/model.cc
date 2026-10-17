@@ -273,6 +273,11 @@ CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const
   return CatalogAccessLevel::kNone;
 }
 
+std::string CatalogAccessDenied(const std::string& catalog, CatalogAccessLevel needed, const std::string& user) {
+  return "Access denied: You do not have " + std::string(needed == CatalogAccessLevel::kWrite ? "write" : "read") +
+         " access to catalog '" + catalog + "' (catalog_access of user " + user + ")";
+}
+
 AccessDecision Snapshot::Check(const Principal& principal, const AccessRequest& request) const {
   if (principal.superuser) return {true, "superuser", "superuser"};
   if (principal.catalog_rules) {
@@ -453,7 +458,7 @@ bool Snapshot::LostRightsSince(const Snapshot& before, const Principal& principa
 
 bool Snapshot::HasSystemPrivilege(const Principal& principal, SystemPrivilege privilege) const {
   if (principal.superuser) return true;
-  if (principal.catalog_rules) return true;  // the server's statement guards decide
+  if (principal.catalog_rules) return principal.rules_administrator;
   if (principal.scope) return false;  // a scoped token holds none
   const auto roles = RolesOf(principal);
   for (const auto& r : system_privileges_) {

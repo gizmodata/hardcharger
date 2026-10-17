@@ -3,6 +3,8 @@
 #include <arrow/api.h>
 #include <openssl/evp.h>
 
+#include <algorithm>
+
 #include <duckdb.hpp>
 #include <duckdb/main/attached_database.hpp>
 #include <duckdb/main/capi_v2/capi_v2_internal.hpp>
@@ -298,10 +300,11 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
   Principal principal;
   std::string credential;
   std::string tenant;
-  // Rules only: a session without rules is the administrator, or another user who may
-  // reach everything but the server's own catalogs.
+  // Rules only: a session without rules is the administrator, or another user who
+  // reaches every catalog but the server's own, with a non-administrator's limits
+  // (every plan checked: no files, secrets, extensions, ...).
   if (catalog_rules_only_ && !catalog_rules_licensed_) who.catalog_access.reset();
-  if (catalog_rules_only_ && !who.catalog_access && !who.superuser && !hidden_catalogs_.empty()) {
+  if (catalog_rules_only_ && !who.catalog_access && !who.superuser) {
     who.catalog_access = std::vector<CatalogAccessRule>{{"*", "write"}};
   }
   if (catalog_rules_only_ ? !who.catalog_access : who.superuser) {
@@ -319,6 +322,7 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
       rules.push_back(CatalogRule{rule.catalog, level});
     }
     principal.catalog_rules = std::move(rules);
+    principal.rules_administrator = who.superuser;
     principal.hidden_catalogs = who.superuser ? std::vector<std::string>{} : hidden_catalogs_;
   } else {
     auto found = engine_->PrincipalForUser(who.user_name);
@@ -460,6 +464,11 @@ SessionGuard::SessionGuard(AccessControl& owner, duckdb_v2_connection_handle con
 
 SessionGuard::~SessionGuard() = default;
 
+void SessionGuard::RunInternal(const std::function<void()>& run) {
+  RbacSessionState::BypassScope internal(ContextOf(connection_));
+  run();
+}
+
 void SessionGuard::Detach() {
   std::lock_guard lock(mutex_);
   connection_ = nullptr;
@@ -591,11 +600,20 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
   // would say whether the name exists.
   NamedTableCallback named_table;
   std::optional<SessionObjectResolver> resolver;
-  if (!tenant_id_.empty()) {
+  if (snapshot->RestrictsCatalogs(principal)) {
     resolver.emplace(*dd::capiv2::Convert(connection_));
     named_table = [&](const std::vector<std::string>& parts) {
       auto hidden = [&](const std::string& catalog) {
-        return !snapshot->CatalogVisible(principal, catalog);
+        if (snapshot->CatalogVisible(principal, catalog)) return false;
+        // A catalog_access refusal says so, in GizmoSQL 1.x's words; only the server's
+        // own catalogs read as missing.
+        const bool servers = std::any_of(principal.hidden_catalogs.begin(), principal.hidden_catalogs.end(),
+                                         [&](const std::string& c) { return IdentifiersEqual(c, catalog); });
+        if (principal.catalog_rules && !servers) {
+          throw Error(ErrorCode::kPermissionDenied,
+                      CatalogAccessDenied(catalog, CatalogAccessLevel::kRead, principal.user_name), "42501");
+        }
+        return true;
       };
       // A leading part that names an attached catalog counts as one, whatever DuckDB
       // makes of the rest (it reads beta.t as beta.main.t when there is no schema beta).
@@ -721,7 +739,7 @@ warpsql::StatementOutcome SessionGuard::Execute(
   }
   auto busy = MarkBusy();
   try {
-    if (!identity_.superuser && !owner_.catalog_rules_only_) CheckBeforeBind(sql);
+    if (!identity_.superuser) CheckBeforeBind(sql);
     auto outcome = run();
     AuditAllowed();
     if (outcome.rows) outcome.rows = Track(std::move(outcome.rows), std::move(busy));
@@ -743,7 +761,7 @@ std::unique_ptr<warpsql::PreparedStatement> SessionGuard::Prepare(
   }
   auto busy = MarkBusy();
   try {
-    if (!identity_.superuser && !owner_.catalog_rules_only_) CheckBeforeBind(sql);
+    if (!identity_.superuser) CheckBeforeBind(sql);
     auto inner = prepare();
     // What the statement creates or drops is recorded once it has run successfully.
     auto state = StateOf(connection_);

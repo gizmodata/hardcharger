@@ -148,6 +148,26 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Security review of rules-only access control (catalog_access rules without an RBAC
+  store): a non-administrator principal no longer holds every system privilege. It is
+  held to a GizmoSQL 1.x non-administrator's limits, checked on each statement's own
+  plan, so nested SQL is caught where it runs: no file or URL reads (also through
+  `query('...')`), no secrets, no extensions, no table function outside the allow-list
+  (`destroy_external_resource`, `pragma_storage_info`, ...), no server-wide or credential
+  settings, and no reading a credential setting. Sequence functions (`nextval`, `setval`,
+  `currval`) need write (currval: read) access to their catalog. `DESCRIBE` of a catalog
+  the user may not see is refused. A plain server (no store) now routes every non-admin
+  token principal through the same plan check.
+- Credential redaction, in the shared logging code (also on main): SQL comments
+  (`CREATE /* */ SECRET`), string literals and dollar-quoting no longer hide the keyword,
+  so `CREATE [OR REPLACE] [PERSISTENT|TEMP] SECRET`, `CREATE`/`ALTER USER` and
+  `SET`/`PRAGMA` of a credential setting are redacted wherever they appear, with a
+  raw-word backstop. DuckDB parse errors that echo such a statement are dropped, ATTACH
+  connection strings and credential-setting values are masked (idempotently, the 1.x key
+  list plus `x-amz-*` and `user:***@` URLs), and all of it reaches the log output,
+  `_gizmosql_instr` (`sql_text`, `prepare_error`, `error_message`), the `_gizmosql_logs`
+  catalog and the access-control audit records, which are redacted before they are sealed
+  so the hash chain still verifies.
 - Statement logs, instrumentation's `sql_statements` and the catalog logs no longer keep
   `CREATE SECRET` or `CREATE`/`ALTER USER` text, which can carry credentials.
 - The server could crash while stopping: a thread finishing after OpenSSL's exit cleanup

@@ -6,6 +6,7 @@
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/execution/expression_executor.hpp>
+#include <duckdb/function/scalar/sequence_utils.hpp>
 #include <duckdb/execution/operator/helper/physical_set.hpp>
 #include <duckdb/main/attached_database.hpp>
 #include <duckdb/main/client_context.hpp>
@@ -488,6 +489,32 @@ class PlanChecker {
 
   void CheckSettingRead(const dd::Expression& expr) {
     if (expr.GetExpressionClass() == dd::ExpressionClass::BOUND_FUNCTION) {
+      CheckSequenceUse(expr.Cast<dd::BoundFunctionExpression>());
+    }
+    CheckCurrentSetting(expr);
+  }
+
+  // nextval / setval change a sequence and currval reads it: for a catalog_access
+  // principal they need write (read) access to the sequence's catalog. DuckDB binds
+  // the sequence when it binds the call (its name must be a constant).
+  void CheckSequenceUse(const dd::BoundFunctionExpression& call) {
+    if (!principal_.catalog_rules || principal_.rules_administrator) return;
+    const std::string name = Lower(compat::Str(call.Function().GetName()));
+    if (name != "nextval" && name != "currval" && name != "setval") return;
+    const auto& info = call.BindInfo();
+    if (!info) return;  // a NULL sequence name: DuckDB returns NULL
+    const auto& sequence = info->Cast<dd::NextvalBindData>().sequence;
+    const std::string catalog = compat::Str(sequence.ParentCatalog().GetName());
+    RequireVisible(catalog);
+    const auto level = CatalogRuleLevel(*principal_.catalog_rules, catalog);
+    const auto needed = name == "currval" ? CatalogAccessLevel::kRead : CatalogAccessLevel::kWrite;
+    if (level == CatalogAccessLevel::kNone || (needed == CatalogAccessLevel::kWrite && level != needed)) {
+      DenyByCatalogAccess(catalog, needed);
+    }
+  }
+
+  void CheckCurrentSetting(const dd::Expression& expr) {
+    if (expr.GetExpressionClass() == dd::ExpressionClass::BOUND_FUNCTION) {
       const auto& call = expr.Cast<dd::BoundFunctionExpression>();
       if (Lower(compat::Str(call.Function().GetName())) == "current_setting") {
         dd::Value name;
@@ -538,9 +565,9 @@ class PlanChecker {
         RequireSystem(SystemPrivilege::kManageSecrets, "duckdb_secrets()");
         return;
       }
-      // catalog_access rules govern catalogs only: other table functions are the
-      // server's statement guards' to decide.
-      if (!AllowedTableFunctions().count(name) && !principal_.catalog_rules) {
+      // The administrator with catalog_access rules may call any; everyone else only
+      // the ones that read no table and no file.
+      if (!AllowedTableFunctions().count(name) && !principal_.rules_administrator) {
         Deny(principal_, "the table function " + name + " is not available under access control");
       }
       if ((name == "pragma_table_info" || name == "pragma_show") && !get.parameters.empty()) {
@@ -645,10 +672,7 @@ class PlanChecker {
 
   // GizmoSQL 1.x's words for a catalog_access refusal, which its clients match.
   [[noreturn]] void DenyByCatalogAccess(const std::string& catalog, CatalogAccessLevel needed) {
-    throw dd::PermissionException("Access denied: You do not have " +
-                                  std::string(needed == CatalogAccessLevel::kWrite ? "write" : "read") +
-                                  " access to catalog '" + catalog + "' (catalog_access of user " +
-                                  principal_.user_name + ")");
+    throw dd::PermissionException(CatalogAccessDenied(catalog, needed, principal_.user_name));
   }
 
   void RequireObject(const ObjectPath& path, ObjectType type, Privilege privilege,

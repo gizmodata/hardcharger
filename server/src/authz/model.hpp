@@ -180,6 +180,8 @@ struct CatalogRule {
 // The level the rules give `catalog`. DuckDB's system catalog (which holds
 // information_schema) and Hardcharger's _gizmosql_system are read for all.
 CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const std::string& catalog);
+// GizmoSQL 1.x's words for a catalog_access refusal, which its clients match.
+std::string CatalogAccessDenied(const std::string& catalog, CatalogAccessLevel needed, const std::string& user);
 
 // Who is asking. The administrator (a superuser) is never looked up in the
 // store and is allowed everything. A view owned by a role reads with that
@@ -199,10 +201,12 @@ struct Principal {
   std::vector<std::string> idp_groups;
   // Logged in with a scoped token: never more than this.
   std::optional<TokenScope> scope;
-  // Without a store (catalog_permissions only): the token's catalog_access rules
-  // decide alone, by catalog; system privileges are the server's statement guards'
-  // to decide, so the principal holds them all here.
+  // Without a store (rules-only access control): the token's catalog_access rules
+  // decide alone, by catalog. Such a principal holds no system privilege (no files,
+  // URLs, secrets, extensions, ATTACH, server-wide or credential settings), as a
+  // GizmoSQL 1.x non-administrator, unless it is the administrator with rules.
   std::optional<std::vector<CatalogRule>> catalog_rules;
+  bool rules_administrator = false;
   // Catalogs the server keeps for itself (instrumentation, logs), which no one but
   // the administrator sees.
   std::vector<std::string> hidden_catalogs;

@@ -489,19 +489,29 @@ void Session::FinishRunning() { running_--; }
 
 std::string Session::PrepareProfile(const std::string& execution_id) {
   const int mode = settings().capture_query_profile.value_or(runtime_.capture_query_profile.load());
+  if (mode == 0 && profile_mode_ == 0) return {};
+  // The server's own settings on the session's connection: not the user's to check
+  // (profiling_output names a file, which only an administrator may write).
+  auto internal = [&](const std::string& sql) {
+    if (guard_) {
+      guard_->RunInternal([&] { warpduckdb::RunSql(connection(), sql); });
+    } else {
+      warpduckdb::RunSql(connection(), sql);
+    }
+  };
   if (mode != profile_mode_) {
     // DuckDB's profiler, per connection: JSON written to a file of the server's own.
     if (mode == 0) {
-      warpduckdb::RunSql(connection(), "PRAGMA disable_profiling");
+      internal("PRAGMA disable_profiling");
     } else {
-      warpduckdb::RunSql(connection(), std::string("SET enable_profiling = 'json'; SET profiling_mode = '") +
-                                           (mode == 2 ? "detailed" : "standard") + "'");
+      internal(std::string("SET enable_profiling = 'json'; SET profiling_mode = '") +
+               (mode == 2 ? "detailed" : "standard") + "'");
     }
     profile_mode_ = mode;
   }
   if (mode == 0 || runtime_.scratch_dir.empty()) return {};
   const std::string path = runtime_.scratch_dir + "/profile-" + execution_id + ".json";
-  warpduckdb::RunSql(connection(), "SET profiling_output = '" + path + "'");
+  internal("SET profiling_output = '" + path + "'");
   return path;
 }
 
@@ -717,12 +727,13 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
     outcome = work();
   } catch (const Error& error) {
     const std::string_view error_class = ClassifyStatementError(error.what());
-    execution->End(error.code() == ErrorCode::kStatementCancelled ? "cancelled" : "error", error_class, error.what());
+    const std::string logged_error = LoggableError(sql, error.what());
+    execution->End(error.code() == ErrorCode::kStatementCancelled ? "cancelled" : "error", error_class, logged_error);
     // A failed statement inside a transaction leaves it aborted until a ROLLBACK.
     if (transaction_ == Transaction::kOpen) transaction_ = Transaction::kAborted;
     LogQuery(LogLevel::kInfo, "statement failed",
              {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"status", "error"},
-              {"error", error.what()}, {"sql", Abbreviate(sql)}});
+              {"error", logged_error}, {"sql", Abbreviate(sql)}});
     if (killed_) throw KilledError();
     throw;
   }
@@ -799,7 +810,7 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
     // Refused or unparseable: a failed statement all the same, for metrics and the record.
     runtime_.metrics.RecordStatement(StatementKind::kOther, "error", ClassifyStatementError(error.what()), 0);
     if (runtime_.instrumentation != nullptr) {
-      runtime_.instrumentation->StatementCreated(*this, Abbreviate(sql), "statement", false, error.what());
+      runtime_.instrumentation->StatementCreated(*this, Abbreviate(sql), "statement", false, LoggableError(sql, error.what()));
     }
     throw;
   }
@@ -881,7 +892,7 @@ std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sq
     prepared = guard_ ? guard_->Prepare(sql, [&] { return DuckDBSession::Prepare(sql); })
                       : DuckDBSession::Prepare(sql);
   } catch (const Error& error) {
-    record(false, error.what());
+    record(false, LoggableError(sql, error.what()));
     throw;
   }
   prepared_statement_ids_[prepared.get()] = record(true, "");
@@ -980,10 +991,14 @@ warpsql::OptionErrors Session::SetOptions(const json::object& options) {
   }
   auto errors = DuckDBSession::SetOptions(options);
   if (guard_) {
-    // {"catalog": "other_tenants_db"} says no more than a missing catalog would.
+    // A restricted user's {"catalog": "other_tenants_db"} says no more than a missing
+    // catalog would: mask only an error that names a catalog it may not see, and keep
+    // every other error (unknown option, bad value) as the SDK reported it.
     for (auto& [name, error] : errors) {
       const Error hidden = guard_->ForTenant(error);
-      error = Error(ErrorCode::kInvalidOptionValue, hidden.what(), hidden.sqlstate());
+      if (std::string_view(hidden.what()) != std::string_view(error.what())) {
+        error = Error(ErrorCode::kInvalidOptionValue, hidden.what(), hidden.sqlstate());
+      }
     }
   }
   if (const auto* autocommit = options.if_contains("autocommit");

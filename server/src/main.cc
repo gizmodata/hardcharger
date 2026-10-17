@@ -389,11 +389,12 @@ int main(int argc, char** argv) {
                 "does not answer)",
                 {{"url", RedactUrl(config.rbac_opa_url)}});
       }
-    } else if (license.Has("catalog_permissions") || config.enable_instrumentation ||
-               config.enable_catalog_logging) {
-      // Without a store, the same plan check enforces sign-in tokens' catalog_access
-      // rules (GizmoSQL 1.x's per-catalog permissions) and keeps the server's own
-      // catalogs (instrumentation, logs) out of non-administrators' sight.
+    } else {
+      // Without a store, the same plan check holds every principal but the
+      // administrator to a non-administrator's limits, checked on each statement's own
+      // plan (nested SQL included), enforces sign-in tokens' catalog_access rules
+      // (GizmoSQL 1.x's per-catalog permissions) and keeps the server's own catalogs
+      // (instrumentation, logs) out of non-administrators' sight.
       hc::authz::Options options;
       options.administrator_name = config.username;
       options.catalog_rules_only = true;

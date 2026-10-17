@@ -7,6 +7,8 @@
 #include <ctime>
 #include <format>
 #include <mutex>
+#include <cctype>
+#include <optional>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -140,14 +142,150 @@ void SetLogCaptureForTesting(std::function<void(LogLevel, std::string_view)> sin
   capture = std::move(sink);
 }
 
-std::string LoggableSql(std::string_view sql) {
-  static const std::regex kSecret(R"(\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:PERSISTENT|TEMPORARY|TEMP)\s+)?SECRET\b)",
-                                  std::regex::icase | std::regex::optimize);
+namespace {
+
+// The SQL with comments (nested block comments too) and string-literal bodies dropped,
+// so a keyword match reads the statement's real words — not a keyword hidden in a
+// comment, nor one quoted inside a string. Quoted identifiers are kept (they can be an
+// object name but never a keyword the match cares about). Handles '', E'', and
+// $tag$...$tag$ dollar-quoting.
+std::string WordsOnly(std::string_view sql) {
+  std::string out;
+  out.reserve(sql.size());
+  std::size_t i = 0;
+  const std::size_t n = sql.size();
+  while (i < n) {
+    const char c = sql[i];
+    if (c == '-' && i + 1 < n && sql[i + 1] == '-') {
+      for (i += 2; i < n && sql[i] != '\n'; ++i) {
+      }
+      out += ' ';
+    } else if (c == '/' && i + 1 < n && sql[i + 1] == '*') {
+      int depth = 1;
+      i += 2;
+      while (i < n && depth > 0) {
+        if (sql[i] == '/' && i + 1 < n && sql[i + 1] == '*') {
+          depth++;
+          i += 2;
+        } else if (sql[i] == '*' && i + 1 < n && sql[i + 1] == '/') {
+          depth--;
+          i += 2;
+        } else {
+          ++i;
+        }
+      }
+      out += ' ';
+    } else if (c == '\'' || ((c == 'e' || c == 'E') && i + 1 < n && sql[i + 1] == '\'')) {
+      i += (c == '\'') ? 1 : 2;  // a string body, dropped
+      while (i < n) {
+        if (sql[i] == '\'') {
+          if (i + 1 < n && sql[i + 1] == '\'') {
+            i += 2;
+            continue;
+          }
+          ++i;
+          break;
+        }
+        ++i;
+      }
+      out += ' ';
+    } else if (c == '$') {
+      std::size_t tag_end = i + 1;
+      while (tag_end < n && (std::isalnum(static_cast<unsigned char>(sql[tag_end])) || sql[tag_end] == '_')) {
+        ++tag_end;
+      }
+      if (tag_end < n && sql[tag_end] == '$') {  // $tag$ ... $tag$
+        const std::string tag(sql.substr(i, tag_end - i + 1));
+        const std::size_t close = sql.find(tag, tag_end + 1);
+        i = close == std::string_view::npos ? n : close + tag.size();
+        out += ' ';
+      } else {
+        out += c;
+        ++i;
+      }
+    } else if (c == '"') {  // a quoted identifier, kept
+      out += c;
+      for (++i; i < n; ++i) {
+        out += sql[i];
+        if (sql[i] == '"') {
+          if (i + 1 < n && sql[i + 1] == '"') {
+            out += sql[++i];
+            continue;
+          }
+          ++i;
+          break;
+        }
+      }
+    } else {
+      out += c;
+      ++i;
+    }
+  }
+  return out;
+}
+
+// A credential-bearing statement, matched on its words (comments and strings removed)
+// and, as a backstop, on a plain split of the raw text. Returns what it is, or none.
+std::optional<std::string> SensitiveStatement(std::string_view sql) {
+  static const std::regex kSecret(
+      R"(\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:PERSISTENT|TEMPORARY|TEMP)\s+)?SECRET\b)",
+      std::regex::icase | std::regex::optimize);
   static const std::regex kUser(R"(\b(?:CREATE|ALTER)\s+USER\b)", std::regex::icase | std::regex::optimize);
-  if (std::regex_search(sql.begin(), sql.end(), kSecret)) return "[REDACTED: secret DDL]";
-  if (std::regex_search(sql.begin(), sql.end(), kUser)) return "[REDACTED: user DDL]";
-  constexpr std::size_t kMax = 4000;
-  return sql.size() <= kMax ? std::string(sql) : std::string(sql.substr(0, kMax)) + "…";
+  // SET / PRAGMA [GLOBAL|SESSION|LOCAL] <name with a credential word>.
+  static const std::regex kSetting(
+      R"(\b(?:SET|PRAGMA)\s+(?:(?:GLOBAL|SESSION|LOCAL)\s+)?[A-Za-z0-9_.]*(?:password|passwd|pwd|secret|token|access_key|accountkey)[A-Za-z0-9_.]*\b)",
+      std::regex::icase | std::regex::optimize);
+  auto check = [&](const std::string& text) -> std::optional<std::string> {
+    if (std::regex_search(text, kSecret)) return "secret DDL";
+    if (std::regex_search(text, kUser)) return "user DDL";
+    if (std::regex_search(text, kSetting)) return "a credential setting";
+    return std::nullopt;
+  };
+  if (auto kind = check(WordsOnly(sql))) return kind;
+  // Backstop: the raw text with punctuation turned to spaces, in case the tokenizer
+  // ever mis-reads a statement.
+  std::string raw(sql);
+  for (char& ch : raw) {
+    if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_' && ch != '.') ch = ' ';
+  }
+  return check(raw);
+}
+
+// Masks credential values a statement or a connection error may carry, idempotently:
+//   key=value for the usual credential keys and x-amz-*; 'key': 'value' when the key is
+//   quoted; and the password of a user:password@ URL authority.
+std::string MaskCredentials(std::string text) {
+  static const std::regex kPair(
+      R"(((?:password|passwd|pwd|secret|token|access_key|accountkey|sig|x-amz-[a-z-]+)\s*=\s*)('[^']*'|"[^"]*"|[^\s"';)]+))",
+      std::regex::icase | std::regex::optimize);
+  static const std::regex kQuoted(
+      R"(('(?:password|passwd|pwd|secret|token|access_key|accountkey|sig)'\s*:\s*)('[^']*'))",
+      std::regex::icase | std::regex::optimize);
+  static const std::regex kAuthority(R"((://[^:/@\s"']*:)[^@\s"']*@)");
+  text = std::regex_replace(text, kPair, "$1***");
+  text = std::regex_replace(text, kQuoted, "$1'***'");
+  text = std::regex_replace(text, kAuthority, "$1***@");
+  return text;
+}
+
+}  // namespace
+
+std::string LoggableSql(std::string_view sql) {
+  if (auto kind = SensitiveStatement(sql)) return "[REDACTED: " + *kind + "]";
+  // Not a whole-statement credential statement, but an ATTACH connection string can
+  // still carry a password: mask just the value, keep the rest.
+  std::string text(sql);
+  if (text.size() > 4000) text = text.substr(0, 4000) + "\xe2\x80\xa6";
+  return MaskCredentials(std::move(text));
+}
+
+std::string LoggableError(std::string_view sql, std::string_view error) {
+  // DuckDB's parser errors and "LINE n: ..." excerpts echo the statement; the error of
+  // a credential statement is dropped whole.
+  if (SensitiveStatement(sql)) return "[REDACTED: error of a credential statement]";
+  std::string text(error);
+  if (auto at = text.find("\nLINE "); at != std::string::npos) text.resize(at);
+  return MaskCredentials(std::move(text));
 }
 
 }  // namespace hardcharger

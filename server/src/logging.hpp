@@ -74,4 +74,9 @@ bool LogEnabled(LogLevel level);
 // keywords sit (comments cannot hide them); long text is shortened.
 std::string LoggableSql(std::string_view sql);
 
+// An error message as it may be logged or stored: a credential statement's error is
+// dropped whole (DuckDB's parser errors echo the statement), and any connection-string
+// password or credential-setting value in another statement's error is removed.
+std::string LoggableError(std::string_view sql, std::string_view error);
+
 }  // namespace hardcharger
