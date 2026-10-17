@@ -86,33 +86,6 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' ./hardcharger-macos-arm64/bin/hardcharger
 
 ## 🔌 Connect
 
-### Command line
-
-`hardcharger`, the command-line client, ships beside `hardcharger-server` in every tarball
-and in the image:
-
-```bash
-HARDCHARGER_PASSWORD='change-me' hardcharger --host localhost --username hardcharger \
-  --command "SELECT 42 AS answer"
-```
-
-```text
-┌─────────┐
-│ answer  │
-│ integer │
-├─────────┤
-│      42 │
-├─────────┤
-│ 1 row   │
-└─────────┘
-```
-
-Without `--command` (or `--file`, or a pipe) it is an interactive shell: history, tab
-completion, syntax highlighting, a pager, dot commands (`.help`), and Ctrl-C cancels the
-running statement. Output modes: `--csv`, `--json`, `--markdown`, `--table`, or `.mode` for
-the rest. It is GizmoSQL's `gizmosql_client`, on Warp SQL
-([migrating](docs/migrating-from-gizmosql.md#the-command-line-client)).
-
 ### Python (ADBC)
 
 ```python
@@ -159,6 +132,74 @@ curl -s localhost:31337/warp/v1/sessions/$SESSION/statements -H "Authorization: 
 
 Ask for `Accept: application/vnd.apache.arrow.stream` and the rows arrive as an Arrow IPC
 stream in that same response.
+
+## 💻 Command-line client
+
+`hardcharger`, the command-line client, ships beside `hardcharger-server` in every tarball
+and in the image. Run it with no statement for an interactive shell (it asks for the
+password, or reads `HARDCHARGER_PASSWORD`):
+
+```console
+$ hardcharger --host localhost --username hardcharger
+Password:
+Hardcharger Client 0.2.0
+Connected to localhost:31337
+Type '.help' for help, '.quit' to exit.
+
+my.main> CREATE OR REPLACE TABLE trips AS SELECT * FROM (VALUES (1, 'Boston', 12.5), (2, 'Denver', 30.0)) t(id, city, miles);
+OK, 2 rows affected
+my.main> SELECT city, miles FROM trips ORDER BY miles DESC;
+┌─────────┬──────────────┐
+│  city   │    miles     │
+│ varchar │ decimal(3,1) │
+├─────────┼──────────────┤
+│ Denver  │         30.0 │
+│ Boston  │         12.5 │
+├─────────┴──────────────┤
+│ 2 rows  2 columns      │
+└────────────────────────┘
+my.main> .quit
+```
+
+History, tab completion, syntax highlighting, a pager for long results, dot commands
+(`.help`, `.tables`, `.mode`, ...), and Ctrl-C cancels the running statement while the
+shell goes on.
+
+One statement with `--command` (`-c`), in any output mode (`--csv`, `--json`,
+`--markdown`, `--table`, or `.mode` for the rest):
+
+```console
+$ HARDCHARGER_PASSWORD='change-me' hardcharger --host localhost --username hardcharger --csv \
+    --command "SELECT city, miles FROM trips ORDER BY id"
+city,miles
+Boston,12.5
+Denver,30.0
+```
+
+A script from a heredoc, a pipe or `--file`; the exit status is 1 when a statement fails:
+
+```console
+$ export HARDCHARGER_PASSWORD='change-me'
+$ hardcharger --host localhost --username hardcharger --quiet <<'SQL'
+INSERT INTO trips VALUES (3, 'Austin', 8.5);
+SELECT count(*) AS trips, sum(miles) AS miles FROM trips;
+SQL
+OK, 1 rows affected
+┌────────┬───────────────┐
+│ trips  │     miles     │
+│ bigint │ decimal(38,1) │
+├────────┼───────────────┤
+│      3 │          51.0 │
+├────────┴───────────────┤
+│ 1 row  2 columns       │
+└────────────────────────┘
+```
+
+TLS is `--tls` (with `--tls-roots`, or mutual TLS with `--mtls-cert` and `--mtls-key`), and
+`--auth-type external` signs in through the server's browser sign-in. It is GizmoSQL's
+`gizmosql_client`, on Warp SQL:
+[docs/migrating-from-gizmosql.md](docs/migrating-from-gizmosql.md#the-command-line-client)
+maps its options and lists what changed.
 
 ## 📦 Everything included
 
