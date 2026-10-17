@@ -112,10 +112,15 @@ std::string Replace(std::string text, std::string_view from, std::string_view to
 
 // Rows of one tracked statement: when they are all read (or the reader goes away), the
 // statement's slot is given back and its outcome counted.
+//
+// A read that fails because the session was killed (or the statement cancelled) throws
+// the Warp SQL error that says so: the SDK's reading loop reports a warpsql::Error as it
+// is, where a plain Arrow failure would become an execution_error.
 class TrackedReader : public arrow::RecordBatchReader {
  public:
-  TrackedReader(std::shared_ptr<arrow::RecordBatchReader> rows, std::function<void(std::string_view, std::string_view)> done)
-      : rows_(std::move(rows)), done_(std::move(done)) {}
+  TrackedReader(std::shared_ptr<arrow::RecordBatchReader> rows, std::function<void(std::string_view, std::string_view)> done,
+                std::function<void(const arrow::Status&)> translate)
+      : rows_(std::move(rows)), done_(std::move(done)), translate_(std::move(translate)) {}
   ~TrackedReader() override { Finish("cancelled", ""); }
 
   std::shared_ptr<arrow::Schema> schema() const override { return rows_->schema(); }
@@ -124,6 +129,7 @@ class TrackedReader : public arrow::RecordBatchReader {
     if (!status.ok()) {
       const std::string_view error_class = ClassifyStatementError(status.message());
       Finish(error_class == "cancelled" ? "cancelled" : "error", error_class);
+      if (translate_) translate_(status);
     } else if (*batch == nullptr) {
       Finish("ok", "");
     }
@@ -138,6 +144,7 @@ class TrackedReader : public arrow::RecordBatchReader {
 
   std::shared_ptr<arrow::RecordBatchReader> rows_;
   std::function<void(std::string_view, std::string_view)> done_;
+  std::function<void(const arrow::Status&)> translate_;
 };
 
 }  // namespace
@@ -416,7 +423,12 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
     throw;
   }
   if (outcome.rows) {
-    outcome.rows = std::make_shared<TrackedReader>(std::move(outcome.rows), done);
+    outcome.rows = std::make_shared<TrackedReader>(std::move(outcome.rows), done, [this](const arrow::Status& status) {
+      if (killed_) throw KilledError();
+      if (interrupted_ && ClassifyStatementError(status.message()) == "cancelled") {
+        throw Error(ErrorCode::kStatementCancelled, status.message(), "57014");
+      }
+    });
   } else {
     done("ok", "");
   }

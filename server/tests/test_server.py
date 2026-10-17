@@ -257,6 +257,7 @@ def test_health_port_serves_only_health(launcher):
     from conftest import free_port
     health_port = free_port()
     server = launcher.start(env={"HARDCHARGER_HEALTH_PORT": str(health_port)})
+    launcher.wait_healthy(running=server)
     assert httpx.get(url=f"http://127.0.0.1:{health_port}/health").json() == {"status": "serving"}
     assert httpx.get(url=f"http://127.0.0.1:{health_port}/warp/v1/health").status_code == 200
     assert httpx.get(url=f"http://127.0.0.1:{health_port}/warp").status_code == 404

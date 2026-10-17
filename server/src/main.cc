@@ -183,7 +183,8 @@ int main(int argc, char** argv) {
       hc::Log(hc::LogLevel::kInfo, note);
     }
     const hc::License license =
-        hc::LoadLicense(hc::ReadLicenseKey(config.license_key, config.license_key_file));
+        hc::LoadLicense(hc::ReadLicenseKey(config.license_key, config.license_key_file,
+                                           loaded.sources.contains("license_key")));
     CheckLicensedOptions(loaded, license);
 
     std::string secret_key = config.secret_key;

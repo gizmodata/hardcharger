@@ -35,18 +35,22 @@ void HealthChecker::RunOnce() {
 }
 
 void HealthChecker::Start() {
-  RunOnce();
+  {
+    std::lock_guard lock(mutex_);
+    last_error_ = "the first health check has not finished yet";
+    last_finished_ = std::chrono::steady_clock::now();  // staleness counts from the start
+  }
+  // The first check runs on the thread too: one that hangs must not hold up startup.
   thread_ = std::thread([this] { Loop(); });
 }
 
 void HealthChecker::Loop() {
   std::unique_lock lock(mutex_);
   while (!stopping_) {
-    wake_.wait_for(lock, interval_, [this] { return stopping_; });
-    if (stopping_) break;
     lock.unlock();
     RunOnce();
     lock.lock();
+    wake_.wait_for(lock, interval_, [this] { return stopping_; });
   }
   exited_ = true;
   wake_.notify_all();

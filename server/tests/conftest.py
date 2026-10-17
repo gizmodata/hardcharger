@@ -203,6 +203,15 @@ class Launcher:
             pytest.fail(reason=f"server did not come up: {running.log()}")
         return running
 
+    @staticmethod
+    def wait_healthy(running: "Running", timeout: float = 10) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if httpx.get(url=f"{running.base_url}/warp/v1/health", timeout=2).status_code == 200:
+                return
+            time.sleep(0.05)
+        pytest.fail(reason=f"server never became healthy: {running.log()}")
+
     def stop_all(self) -> None:
         for running in self.started:
             running.stop()

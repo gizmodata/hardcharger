@@ -53,10 +53,10 @@ std::string TrustedPublicKey() {
 
 }  // namespace
 
-std::string ReadLicenseKey(const std::string& inline_key, const std::string& key_file) {
+std::string ReadLicenseKey(const std::string& inline_key, const std::string& key_file, bool inline_set) {
   // An inline key wins over the file even when it is invalid (as in 1.x): a key that
   // was set on purpose must never be silently replaced by another one.
-  if (!inline_key.empty()) {
+  if (inline_set || !inline_key.empty()) {
     const std::string key = Trim(inline_key);
     if (key.empty()) Fail("the inline license key is empty");
     return key;

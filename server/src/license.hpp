@@ -25,8 +25,9 @@ struct License {
 // silently running without the features it names.
 License LoadLicense(const std::string& key);
 
-// The key from config: the inline key wins over the file (as in 1.x).
-std::string ReadLicenseKey(const std::string& inline_key, const std::string& key_file);
+// The key from config: the inline key wins over the file (as in 1.x), even when it is
+// empty or invalid. `inline_set`: license_key was given at all (an empty value too).
+std::string ReadLicenseKey(const std::string& inline_key, const std::string& key_file, bool inline_set = false);
 
 // The message for an option that needs a feature the license doesn't grant.
 std::string LicenseRequired(const std::string& feature, const std::string& what);
