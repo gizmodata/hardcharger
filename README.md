@@ -60,6 +60,11 @@ Measured on one machine (Apple M5 Max) against GizmoSQL 1.41 with the same data
 | 10 concurrent clients | **39.0 queries/s** | 21.9 queries/s | **1.8× the throughput** |
 | 10 concurrent clients, p95 latency | **471 ms** | 1,328 ms | **2.8× lower** |
 
+Over a network (AWS, 100 Gbit/s, TLS, [details](docs/benchmarks.md#remote-throughput-after-the-transfer-work-2026-10-17-featurethroughput)):
+fetching TPC-H SF10 lineitem (10.5 GB of Arrow) takes Hardcharger **0.97 s** read in 32
+partitions (GizmoSQL 1.42: 15.2 s; Quack: 0.80 s), and loading it takes 9.3 s (GizmoSQL:
+9.4 s).
+
 ## ⚡ Quick start
 
 ### Docker

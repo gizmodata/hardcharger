@@ -13,7 +13,7 @@ set -euo pipefail
 SIZE_GB=${1:-8}
 B=$HOME/bench
 FILE=/dev/shm/ktls-payload.bin
-PORT=44330
+PORT=${PORT:-44330}
 sudo modprobe tls 2>/dev/null || true
 command -v /usr/bin/time >/dev/null || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq time >/dev/null
 lsmod | grep -q '^tls ' && echo "kernel tls module: loaded" || echo "kernel tls module: NOT loaded"
