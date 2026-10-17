@@ -621,6 +621,13 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
           IdentifiersEqual(c->name, options_.administrator_name)) {
         return AccessControlError(c->name + " is the server administrator's name");
       }
+      for (const auto& administrator : options_.certificate_administrators) {
+        if (IdentifiersEqual(c->name, administrator)) {
+          return AccessControlError(c->name +
+                                    " signs in as the server administrator with a client certificate "
+                                    "(mtls_admin_identities)");
+        }
+      }
       ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name));
       message = "User " + c->name + " created";
       UserRecord user{StoreTransaction::NewId(), c->name, hash, true, {}};

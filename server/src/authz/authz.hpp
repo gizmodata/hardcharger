@@ -49,6 +49,8 @@ struct Options {
   std::string store_uri;
   // The server administrator's user name, which no store user may take.
   std::string administrator_name;
+  // mtls_admin_identities: client certificate identities that are the administrator too.
+  std::vector<std::string> certificate_administrators;
   // Open Policy Agent decision URL asked after Hardcharger's own check; empty: none.
   std::string policy_service_url;
   std::chrono::milliseconds policy_service_timeout{2000};

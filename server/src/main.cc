@@ -342,6 +342,7 @@ int main(int argc, char** argv) {
       hc::authz::Options options;
       options.store_uri = config.rbac_store_uri;
       options.administrator_name = config.admin_username;
+      options.certificate_administrators = config.mtls_admin_identities;
       options.policy_service_url = config.rbac_opa_url;
       options.policy_service_timeout = std::chrono::milliseconds(config.rbac_opa_timeout_ms);
       // Access-control audit records form a hash chain from here on.

@@ -85,6 +85,9 @@ class RbacEngine {
     std::chrono::milliseconds poll_interval{1000};
     // The server administrator's user name, which no store user may take.
     std::string administrator_name;
+    // Client certificate identities that sign in as the administrator (mtls_admin_identities),
+    // which no store user may take either.
+    std::vector<std::string> certificate_administrators;
     // An external policy service (Open Policy Agent decision URL) asked after
     // Hardcharger's own check; empty: none.
     std::string policy_service_url;

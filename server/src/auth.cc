@@ -309,6 +309,19 @@ warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view ident
   // names are), with or without access control.
   for (const auto& admin : certificate_admins_) {
     if (IgnoringCaseEquals(admin, name)) {
+      // A store user of the same name would share the administrator's sessions (handles
+      // belong to a principal by name): neither sign-in may be ambiguous.
+      if (access_ && access_->CertificateUser(name)) {
+        LogAt(log_level_, LogLevel::kWarning, "sign-in refused: an administrator identity is also a store user",
+              {{"method", "client_certificate"}, {"certificate_identity", name}});
+        audit.emplace_back("status", "denied");
+        audit.emplace_back("reason", "the identity is both an administrator identity and a store user");
+        Audit(LogLevel::kWarning, "client certificate sign-in refused", audit);
+        throw Error(ErrorCode::kUnknownCertificateIdentity,
+                    "the client certificate's identity '" + name +
+                        "' is both one of mtls_admin_identities and a user of the access-control "
+                        "store; an administrator drops the user or removes the identity");
+      }
       return signed_in(warpsql::Principal{admin, "admin", "client_certificate", {}, {}});
     }
   }

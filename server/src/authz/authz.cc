@@ -234,6 +234,7 @@ AccessControl::AccessControl(const Options& options)
   // Rules only: an empty store of the process's own, which no statement can change.
   engine_options.store_uri = catalog_rules_only_ ? "memory" : options.store_uri;
   engine_options.administrator_name = options.administrator_name;
+  engine_options.certificate_administrators = options.certificate_administrators;
   engine_options.policy_service_url = options.policy_service_url;
   engine_options.policy_service_timeout = options.policy_service_timeout;
   engine_options.poll_interval = catalog_rules_only_ ? std::chrono::milliseconds(0) : options.poll_interval;

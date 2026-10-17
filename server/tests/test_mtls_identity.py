@@ -209,10 +209,12 @@ def test_a_bound_token_minted_with_a_broken_cnf_is_refused(launcher, pki):
 @pytest.fixture
 def rbac(launcher, store, pki):
     ops = pki.issue(name="ops@example.com")
+    store_uri = store.new_database()
     server = start(launcher=launcher, pki=pki, probe=ops,
                    args=["--mtls-admin-identities", "ops@example.com"],
-                   env={**rbac_env(store_uri=store.new_database()), "HARDCHARGER_AUDIT_CHAIN_KEY": AUDIT_KEY})
+                   env={**rbac_env(store_uri=store_uri), "HARDCHARGER_AUDIT_CHAIN_KEY": AUDIT_KEY})
     server.ops = ops
+    server.store_uri = store_uri
     return server
 
 
@@ -275,6 +277,23 @@ def test_an_admin_identity_is_the_administrator_under_access_control(rbac, pki):
     ops = rbac.client(identity=rbac.ops, token=rbac.certificate_token(identity=rbac.ops))
     expect_allowed(client=ops, sql='CREATE USER "frank@example.com"')
     expect_allowed(client=ops, sql="CREATE TABLE ops_only AS SELECT 1 AS id")
+
+
+def test_an_admin_identity_is_no_store_user_name(rbac, pki, launcher, store):
+    # Handles belong to a principal by name: the administrator and a store user of the
+    # same name would share sessions. No store user may take an admin identity's name...
+    admin = rbac.admin(identity=rbac.ops)
+    expect_error(call=lambda: admin.run(sql='CREATE USER "OPS@example.com"'), code="sql_error",
+                 why="signs in as the server administrator with a client certificate")
+    expect_allowed(client=admin, sql='CREATE USER "nina@example.com"')
+    # ... and one that already has it (made before the identity was configured, or on a
+    # replica configured otherwise) makes the certificate sign-in refuse.
+    nina = pki.issue(name="nina@example.com")
+    rbac.certificate_token(identity=nina)  # a store user, as such
+    other = start(launcher=launcher, pki=pki, probe=nina, args=["--mtls-admin-identities", "nina@example.com"],
+                  env={**rbac_env(store_uri=rbac.store_uri)})
+    body = problem(response=other.certificate_grant(identity=nina), status=401, code="unknown_certificate_identity")
+    assert "both one of mtls_admin_identities and a user" in body["detail"], body
 
 
 def test_certificate_sign_ins_are_audited(rbac, pki, tmp_path):
