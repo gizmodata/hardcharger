@@ -61,10 +61,49 @@ Measured on one machine (Apple M5 Max) against GizmoSQL 1.41 with the same data
 | 10 concurrent clients | **39.0 queries/s** | 21.9 queries/s | **1.8× the throughput** |
 | 10 concurrent clients, p95 latency | **471 ms** | 1,328 ms | **2.8× lower** |
 
-Over a network (AWS, 100 Gbit/s, TLS, [details](docs/benchmarks.md#remote-throughput-after-the-transfer-work-2026-10-17-featurethroughput)):
-fetching TPC-H SF10 lineitem (10.5 GB of Arrow) takes Hardcharger **0.97 s** read in 32
-partitions (GizmoSQL 1.42: 15.2 s; Quack: 0.80 s), and loading it takes 9.3 s (GizmoSQL:
-9.4 s).
+Over a real network: two AWS c8gn.8xlarge machines, TLS on both servers, median of five runs
+([details and method](docs/benchmarks.md#remote-throughput-after-the-transfer-work-2026-10-17-featurethroughput)):
+
+| Workload | Hardcharger | GizmoSQL 1.42 | |
+|---|---:|---:|---:|
+| Fetch TPC-H SF10 lineitem (60M rows, 10.5 GB of Arrow) | **0.97 s** | 15.2 s | **15.7× faster** |
+| Fetch TPC-H SF1 lineitem (6M rows) | **0.148 s** | 1.74 s | **11.7× faster** |
+| Fetch 100M narrow rows | **0.45 s** | 5.43 s | **12.0× faster** |
+| Fetch SF1 lineitem across regions (46 ms away) | **1.96 s** | 12.26 s | **6.3× faster** |
+| Load SF10 lineitem (bulk ingest) | 9.34 s | 9.43 s | on par |
+
+## ⚙️ How it's fast
+
+Every result travels through an **asynchronous pipeline**: no stage waits for another
+unless a queue is full.
+
+```mermaid
+flowchart LR
+  D[(DuckDB 2.0<br/>parallel execution)] --> P[Produce<br/>Arrow batches,<br/>122,880 rows each]
+  P --> Z[Compress<br/>zstd worker pool,<br/>when asked for]
+  Z --> T[Encrypt and send<br/>TLS in 1 MiB writes,<br/>overlapped with the next]
+  T --> C1[connection 1]
+  T --> C2[connection 2]
+  T --> CN[connection N]
+```
+
+- 🔁 **Overlapped stages.** DuckDB keeps producing while earlier batches are being compressed
+  and encrypted, and the socket never waits for the next batch to be built. With TLS on, one
+  stream runs as fast as plain HTTP.
+- 🧵 **Parallel compression.** zstd runs on a pool of threads, several batches at once,
+  and the batches still leave in order.
+- 🔀 **Partitioned results.** A client can ask for a large result as several partitions and
+  read them over separate connections at once, past the limits of a single TCP stream and a
+  single core. The order is kept when the query asks for one. The drivers and the
+  `hardcharger` CLI ask for it with one option (`result_partitions`, `--result-partitions`).
+- 📦 **Big batches.** Results go out in 122,880-row batches, so per-batch overhead is
+  negligible; small queries still answer in one round trip.
+- 📥 **Parallel ingest.** Uploads are read in 1 MiB pieces and inserted on all of DuckDB's
+  threads, in one transaction: a failed load leaves nothing behind.
+
+Correctness is never traded for speed: a result is complete only when every partition has
+arrived with its end-of-stream marker, so a query that fails mid-stream can never look like
+a short, successful one.
 
 ## ⚡ Quick start
 
