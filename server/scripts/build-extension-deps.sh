@@ -57,7 +57,7 @@ if [ ! -f "$LIBPQ/.libpq-$POSTGRES_VERSION.stamp" ]; then
     ssl_flags=(--with-includes="$OPENSSL_ROOT_DIR/include" --with-libraries="$OPENSSL_ROOT_DIR/lib")
   fi
   (cd "$src/postgres" \
-     && CFLAGS="-O2 -fPIC" ./configure --prefix="$LIBPQ" --with-ssl=openssl "${ssl_flags[@]}" \
+     && CFLAGS="${CFLAGS:-} -O2 -fPIC" ./configure --prefix="$LIBPQ" --with-ssl=openssl "${ssl_flags[@]}" \
           --without-readline --without-icu --without-zlib --without-zstd --without-lz4 \
           --without-gssapi --without-ldap >/dev/null \
      && make -s -j"$JOBS" -C src/include >/dev/null \

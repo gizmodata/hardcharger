@@ -373,8 +373,157 @@ jobs:
         if: always()
         run: sccache --show-stats || true
 
+  # ThreadSanitizer: everything instrumented, built with clang (DuckDB with its patches
+  # and built-in extensions, Arrow, the extensions' libraries, the server and its unit
+  # tests; an uninstrumented dependency hides races and invents false ones), then the
+  # server and conformance suites. Each sanitized process writes its reports to a file;
+  # any unsuppressed report fails the job (server/tests/tsan.supp holds the few
+  # justified third-party suppressions). OpenSSL and the C++ runtime are the system's.
+  tsan:
+    name: thread sanitizer (linux-amd64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CC: clang
+      CXX: clang++
+      CFLAGS: -fsanitize=thread -gline-tables-only
+      CXXFLAGS: -fsanitize=thread -gline-tables-only
+      LDFLAGS: -fsanitize=thread
+      # Instrumented servers use several times the memory: fewer workers.
+      HARDCHARGER_TEST_XDIST_WORKERS: "3"
+      TSAN_REPORTS: ${{ github.workspace }}/tsan-reports
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fetch the warp-sql submodule
+        env:
+          DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
+        run: |
+          key="$RUNNER_TEMP/warp_sql_key"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          chmod 600 "$key"
+          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+            git submodule update --init --depth 1
+          rm -f "$key"
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang ninja-build libssl-dev flex bison
+          clang --version | head -1
+      # Recent kernels randomize mmap with more bits than TSan's shadow layout allows
+      # ("unexpected memory mapping" at startup), and the dependency builds already run
+      # instrumented programs (PostgreSQL's configure checks).
+      - name: Lower ASLR entropy for TSan
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      # Its own dependency cache: instrumented builds are not interchangeable with the
+      # others, so the platform is `linux-amd64-tsan` and the toolchain is clang's.
+      - name: Dependency cache key
+        id: deps
+        run: |
+          key=$(server/scripts/ci-deps-key.sh linux-amd64-tsan "$(clang --version | head -1)")
+          echo "$key"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v6
+        id: cache
+        with:
+          path: |
+            server/.deps/duckdb-install
+            server/.deps/arrow-install
+          key: ${{ steps.deps.outputs.key }}
+      - name: Build DuckDB and Arrow (ThreadSanitizer)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: server/scripts/build-deps.sh
+      - name: Save the dependency cache
+        if: steps.cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            server/.deps/duckdb-install
+            server/.deps/arrow-install
+          key: ${{ steps.deps.outputs.key }}
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - name: Build the server with ThreadSanitizer
+        run: |
+          cmake -S server -B server/build-tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake --build server/build-tsan
+      - name: Start PostgreSQL
+        run: |
+          docker run -d --name hardcharger-test-pg -e POSTGRES_USER=hardcharger \
+            -e POSTGRES_PASSWORD=hardcharger -e POSTGRES_DB=hardcharger \
+            -p 127.0.0.1:55433:5432 postgres:17-alpine
+          for _ in $(seq 1 30); do docker exec hardcharger-test-pg pg_isready -U hardcharger && break; sleep 1; done
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Test services
+        run: docker compose -f server/tests/docker-compose.yml up -d --wait
+      # exitcode=66 marks a process that printed an unsuppressed report; halt_on_error=0
+      # keeps going so one run collects every race; log_path gives each process its own
+      # report file, which the step after the suites checks.
+      - name: Hardcharger tests (TSan)
+        working-directory: server/tests
+        env:
+          TSAN_OPTIONS: >-
+            halt_on_error=0 exitcode=66 second_deadlock_stack=1
+            suppressions=${{ github.workspace }}/server/tests/tsan.supp
+            log_path=${{ github.workspace }}/tsan-reports/tsan
+          HARDCHARGER_TEST_BINARY: ${{ github.workspace }}/server/build-tsan/hardcharger-server
+          HARDCHARGER_TEST_UNIT_BINARY: ${{ github.workspace }}/server/build-tsan/hardcharger-unit-tests
+        run: |
+          mkdir -p "$TSAN_REPORTS"
+          uv venv .venv --python 3.14
+          uv pip install --python .venv/bin/python -r pyproject.toml
+          echo "CPUs: $(getconf _NPROCESSORS_ONLN); pytest-xdist workers: $HARDCHARGER_TEST_XDIST_WORKERS"
+          .venv/bin/python -m pytest -q -n "$HARDCHARGER_TEST_XDIST_WORKERS" -m "not serial" --durations=10
+          .venv/bin/python -m pytest -q -m serial --durations=5
+      - name: Warp SQL conformance suite (TSan)
+        if: success() || failure()
+        working-directory: third_party/warp-sql/conformance
+        env:
+          TSAN_OPTIONS: >-
+            halt_on_error=0 exitcode=66 second_deadlock_stack=1
+            suppressions=${{ github.workspace }}/server/tests/tsan.supp
+            log_path=${{ github.workspace }}/tsan-reports/tsan
+          WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-tsan/hardcharger-server
+          WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+          WARP_SQL_TEST_SERVER_USERNAME: warp
+          HARDCHARGER_ADMIN_USERNAME: warp
+          HARDCHARGER_PRINT_QUERIES: "false"
+        run: |
+          uv venv .venv --python 3.14
+          uv pip install --python .venv/bin/python -e .
+          .venv/bin/python -m pytest -q
+      # Any report file means an unsuppressed report: print them all and fail.
+      - name: ThreadSanitizer reports
+        if: always()
+        run: |
+          shopt -s nullglob
+          reports=("$TSAN_REPORTS"/tsan.*)
+          if [ ${#reports[@]} -eq 0 ]; then
+            echo "No ThreadSanitizer reports." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## ThreadSanitizer: ${#reports[@]} processes reported"
+            echo
+            grep -h "^SUMMARY: ThreadSanitizer" "${reports[@]}" | sort | uniq -c | sort -rn | sed 's/^/    /'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          for report in "${reports[@]}"; do
+            echo "::group::$report"
+            cat "$report"
+            echo "::endgroup::"
+          done
+          exit 1
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: tsan-reports
+          path: tsan-reports/
+          if-no-files-found: ignore
+      - name: sccache statistics
+        if: always()
+        run: sccache --show-stats || true
+
   image:
-    needs: [build, portable, sanitize]
+    needs: [build, portable, sanitize, tsan]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -449,7 +598,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, portable, sanitize, image]
+    needs: [build, portable, sanitize, tsan, image]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

@@ -1,0 +1,8 @@
+# ThreadSanitizer suppressions for the server and conformance suites under the
+# `thread sanitizer` job (.github/workflows/server.yml; TSAN_OPTIONS=suppressions=...).
+#
+# Every entry hides reports, so each names known-benign behaviour in third-party code
+# (DuckDB internals, OpenSSL, the C++ runtime) with the reason. Never a Hardcharger or
+# warp-sql symbol: a race there is a bug to fix, not to suppress. Syntax:
+#   race:<symbol or file substring>   thread_leak:<...>   deadlock:<...>
+# https://github.com/google/sanitizers/wiki/ThreadSanitizerSuppressions
