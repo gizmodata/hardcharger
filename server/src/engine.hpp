@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -14,6 +15,7 @@
 #include "duckdb_session.hpp"
 #include "guards.hpp"
 #include "health.hpp"
+#include "instrumentation.hpp"
 #include "license.hpp"
 #include "logging.hpp"
 #include "runtime.hpp"
@@ -38,6 +40,8 @@ class Backend : public warpduckdb::DuckDBBackend {
   // Starts the background health check; call once the server is about to serve.
   void StartHealthCheck();
   void StopHealthCheck();
+  // Closes this instance's instrumentation records (sessions, instance) and stops it.
+  void StopInstrumentation();
 
  protected:
   std::unique_ptr<warpsql::EngineSession> NewSession(const warpsql::Principal& principal) override;
@@ -50,6 +54,7 @@ class Backend : public warpduckdb::DuckDBBackend {
   SensitivePaths sensitive_paths_;
   std::string system_catalog_dir_;
   std::unique_ptr<HealthChecker> health_;
+  std::unique_ptr<Instrumentation> instrumentation_;
 };
 
 class Session : public warpduckdb::DuckDBSession {
@@ -98,6 +103,7 @@ class Session : public warpduckdb::DuckDBSession {
     std::optional<LogLevel> query_log_level;
     std::optional<bool> bypass_queue;
     std::optional<int64_t> max_queue_wait;
+    std::optional<int> capture_query_profile;  // 0 off, 1 standard, 2 detailed
     std::string session_tag;
     std::string query_tag;
   };
@@ -105,6 +111,8 @@ class Session : public warpduckdb::DuckDBSession {
   void UpdateSettings(const std::function<void(Settings&)>& update);
   LogLevel QueryLogLevel() const;
   void LogQuery(LogLevel level, std::string_view message, const LogFields& fields) const;
+  // A tracked execution ended (its Execution calls it).
+  void FinishRunning();
 
  protected:
   // GizmoSQL 1.x drivers read a column's default from this key.
@@ -117,8 +125,12 @@ class Session : public warpduckdb::DuckDBSession {
   warpsql::StatementOutcome RunCommand(const Piece& piece);
   // Takes a queue slot (when the queue is on), runs `work`, and tracks its outcome
   // until its rows are read: running state, metrics, the slot.
-  warpsql::StatementOutcome Track(StatementKind kind, std::string_view sql,
+  warpsql::StatementOutcome Track(StatementKind kind, std::string_view sql, const std::string& statement_id,
                                   const std::function<warpsql::StatementOutcome()>& work);
+  void GuardInstrumentation(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type) const;
+  // Turns DuckDB's profiler on or off for the next execution; returns where it will write
+  // the profile (empty: none).
+  std::string PrepareProfile(const std::string& execution_id);
 
   Runtime& runtime_;
   const SensitivePaths& sensitive_paths_;
@@ -130,10 +142,13 @@ class Session : public warpduckdb::DuckDBSession {
   std::atomic<bool> interrupted_ = false;  // the current statement was cancelled
   std::atomic<Transaction> transaction_ = Transaction::kNone;
   bool manual_commit_ = false;  // the autocommit session option is off
+  int profile_mode_ = 0;        // what the connection's profiler is set to
   void NoteTransaction(const Piece& piece);
 
   mutable std::mutex settings_mutex_;
   Settings settings_;
+  // Instrumentation's statement id for each prepared statement of this session.
+  std::map<const warpsql::PreparedStatement*, std::string> prepared_statement_ids_;
 };
 
 // The session whose statement this thread is running, for the SQL functions; null

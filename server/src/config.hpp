@@ -87,6 +87,14 @@ struct Config {
   int64_t health_check_staleness_seconds = 0;  // 0 = 3 x interval
   std::vector<std::string> cors_origins;
 
+  // Instrumentation (Enterprise: instrumentation)
+  bool enable_instrumentation = false;
+  std::string instrumentation_db_path;  // empty: gizmosql_instrumentation.db next to the database
+  std::string instrumentation_catalog;  // a catalog the init SQL attaches, instead of the file
+  std::string instrumentation_schema = "main";
+  std::string instance_tag;  // JSON object recorded with this instance
+  std::string capture_query_profile = "off";  // off, standard or detailed
+
   // Metrics (Enterprise: metrics)
   bool enable_metrics = false;
   int64_t metrics_port = 9091;  // 0 = no HTTP endpoint

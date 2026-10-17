@@ -55,6 +55,9 @@ void CheckLicensedOptions(const hc::Loaded& loaded, const hc::License& license) 
     if (used && !license.Has(feature)) throw std::runtime_error(hc::LicenseRequired(feature, what));
   };
   require(c.enable_metrics, "metrics", "Cannot enable metrics: enable_metrics");
+  require(c.enable_instrumentation, "instrumentation", "Instrumentation (enable_instrumentation)");
+  require(c.capture_query_profile != "off", "instrumentation", "Query profile capture (capture_query_profile)");
+  require(!c.instance_tag.empty(), "instrumentation", "The instance tag (instance_tag)");
   for (const char* option : {"max_concurrent_statements", "max_queued_statements", "max_queue_wait",
                              "admin_bypass_queue_default"}) {
     require(loaded.sources.contains(option), "statement_queue", std::string("The statement queue (") + option + ")");
@@ -324,6 +327,7 @@ int main(int argc, char** argv) {
     if (metrics_endpoint) metrics_endpoint->Stop();
     if (exit_marker) exit_marker->Clean();
     backend->StopHealthCheck();
+    backend->StopInstrumentation();
     hc::Log(hc::LogLevel::kInfo, "stopped");
   } catch (const std::exception& e) {
     hc::Log(hc::LogLevel::kError, e.what());

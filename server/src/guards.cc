@@ -495,6 +495,17 @@ DUCKDB_V2_STATEMENT_TYPE StatementType(duckdb_v2_connection_handle connection, s
   return type;
 }
 
+DUCKDB_V2_STATEMENT_TYPE ExecutedType(duckdb_v2_connection_handle connection, const Piece& piece,
+                                      DUCKDB_V2_STATEMENT_TYPE type) {
+  const auto& t = piece.tokens;
+  if (type != DUCKDB_V2_STATEMENT_TYPE_EXPLAIN || t.size() < 2 || !(t[1].IsWord("ANALYZE") || t[1].IsWord("ANALYSE"))) {
+    return type;
+  }
+  auto inner = Wrapped(piece, type);
+  if (!inner || inner->tokens.empty()) return type;
+  return ExecutedType(connection, *inner, StatementType(connection, inner->text));
+}
+
 std::optional<std::string> ClassifyGatedCommand(duckdb_v2_connection_handle connection, const Piece& piece,
                                                 DUCKDB_V2_STATEMENT_TYPE type) {
   const auto& t = piece.tokens;

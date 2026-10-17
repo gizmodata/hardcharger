@@ -8,6 +8,7 @@
 #include <sstream>
 
 #include "duckdb_sql.hpp"
+#include "instrumentation.hpp"
 #include "logging.hpp"
 #include "settings.hpp"
 #include "sql_functions.hpp"
@@ -113,40 +114,146 @@ std::string Replace(std::string text, std::string_view from, std::string_view to
   return text;
 }
 
-// Rows of one tracked statement: when they are all read (or the reader goes away), the
-// statement's slot is given back and its outcome counted.
+// The rows of `rows` whose first column (a catalog name) isn't `catalog`.
+std::shared_ptr<arrow::RecordBatchReader> WithoutCatalog(std::shared_ptr<arrow::RecordBatchReader> rows,
+                                                         const std::string& catalog) {
+  auto schema = rows->schema();
+  arrow::RecordBatchVector kept;
+  for (;;) {
+    auto next = rows->Next();
+    if (!next.ok()) throw Error(ErrorCode::kExecutionError, next.status().message());
+    auto batch = *next;
+    if (batch == nullptr) break;
+    const auto names = std::static_pointer_cast<arrow::StringArray>(batch->column(0));
+    int64_t run_start = 0;
+    for (int64_t i = 0; i <= batch->num_rows(); i++) {
+      const bool drop = i < batch->num_rows() && names->IsValid(i) && names->GetView(i) == catalog;
+      if (drop || i == batch->num_rows()) {
+        if (i > run_start) kept.push_back(batch->Slice(run_start, i - run_start));
+        run_start = i + 1;
+      }
+    }
+  }
+  auto reader = arrow::RecordBatchReader::Make(std::move(kept), schema);
+  if (!reader.ok()) throw Error(ErrorCode::kExecutionError, reader.status().message());
+  return *reader;
+}
+
+}  // namespace
+
+// One execution of a statement, from its queue slot to its result being let go: gives
+// the slot back, counts it in metrics, logs its success and records its timeline in
+// instrumentation, each exactly once.
+class Execution {
+ public:
+  // `profile`: where DuckDB writes this execution's profile, when one is captured.
+  Execution(Session& session, StatementKind kind, std::string sql, AdmissionSlot slot,
+            std::chrono::steady_clock::time_point started, ExecutionRecord record, std::string profile)
+      : session_(session),
+        kind_(kind),
+        sql_(std::move(sql)),
+        slot_(std::move(slot)),
+        started_(started),
+        record_(std::move(record)),
+        profile_(std::move(profile)) {
+    if (auto* instrumentation = Instr()) instrumentation->ExecutionStarted(record_);
+  }
+  ~Execution() {
+    End("cancelled", "cancelled", "the result was abandoned");
+    Close();
+  }
+
+  // The engine has the outcome (rows to read, or the update done).
+  void Produced() { record_.end = std::chrono::system_clock::now(); }
+  void Batch(int64_t rows) {
+    if (!record_.fetch_start) record_.fetch_start = std::chrono::system_clock::now();
+    record_.rows += rows;
+  }
+  // status: ok, error or cancelled.
+  void End(std::string_view status, std::string_view error_class, std::string_view error) {
+    if (ended_) return;
+    ended_ = true;
+    const auto now = std::chrono::system_clock::now();
+    if (!record_.end) record_.end = now;
+    record_.fetch_end = now;
+    record_.status = status == "ok" ? "success" : std::string(status);
+    record_.error = std::string(error);
+    slot_.Release();
+    session_.FinishRunning();
+    Runtime& runtime = session_.runtime();
+    if (status == "ok" && runtime.config.print_queries) {
+      session_.LogQuery(LogLevel::kInfo, "Client SQL command execution succeeded",
+                        {{"session_id", session_.id()}, {"user", session_.principal().name}, {"kind", "sql"},
+                         {"status", "success"}, {"is_internal", "false"}, {"sql", sql_}});
+    }
+    runtime.metrics.RecordStatement(kind_, status, error_class,
+                                    std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count());
+  }
+  // The result was let go (read to its end, abandoned, or an update's outcome taken).
+  void Close() {
+    if (closed_) return;
+    closed_ = true;
+    record_.cursor_close = std::chrono::system_clock::now();
+    if (!profile_.empty()) {
+      // DuckDB writes the profile when the query ends, which it has once the result is let go.
+      std::ifstream in(profile_);
+      std::stringstream contents;
+      contents << in.rdbuf();
+      record_.query_profile = contents.str();
+      std::error_code ec;
+      std::filesystem::remove(profile_, ec);
+    }
+    if (auto* instrumentation = Instr()) instrumentation->ExecutionFinished(record_);
+  }
+
+ private:
+  Instrumentation* Instr() const { return record_.execution_id.empty() ? nullptr : session_.runtime().instrumentation; }
+
+  Session& session_;
+  const StatementKind kind_;
+  const std::string sql_;
+  AdmissionSlot slot_;
+  const std::chrono::steady_clock::time_point started_;
+  ExecutionRecord record_;
+  const std::string profile_;
+  bool ended_ = false;
+  bool closed_ = false;
+};
+
+namespace {
+
+// Rows of one tracked statement, driving its Execution.
 //
 // A read that fails because the session was killed (or the statement cancelled) throws
 // the Warp SQL error that says so: the SDK's reading loop reports a warpsql::Error as it
 // is, where a plain Arrow failure would become an execution_error.
 class TrackedReader : public arrow::RecordBatchReader {
  public:
-  TrackedReader(std::shared_ptr<arrow::RecordBatchReader> rows, std::function<void(std::string_view, std::string_view)> done,
+  TrackedReader(std::shared_ptr<arrow::RecordBatchReader> rows, std::shared_ptr<Execution> execution,
                 std::function<void(const arrow::Status&)> translate)
-      : rows_(std::move(rows)), done_(std::move(done)), translate_(std::move(translate)) {}
-  ~TrackedReader() override { Finish("cancelled", ""); }
+      : execution_(std::move(execution)), rows_(std::move(rows)), translate_(std::move(translate)) {}
 
   std::shared_ptr<arrow::Schema> schema() const override { return rows_->schema(); }
   arrow::Status ReadNext(std::shared_ptr<arrow::RecordBatch>* batch) override {
     auto status = rows_->ReadNext(batch);
     if (!status.ok()) {
       const std::string_view error_class = ClassifyStatementError(status.message());
-      Finish(error_class == "cancelled" ? "cancelled" : "error", error_class);
+      execution_->End(error_class == "cancelled" ? "cancelled" : "error", error_class, status.message());
       if (translate_) translate_(status);
     } else if (*batch == nullptr) {
-      Finish("ok", "");
+      execution_->End("ok", "", "");
+    } else {
+      execution_->Batch((*batch)->num_rows());
     }
     return status;
   }
   arrow::Status Close() override { return rows_->Close(); }
 
  private:
-  void Finish(std::string_view status, std::string_view error_class) {
-    if (done_) std::exchange(done_, nullptr)(status, error_class);
-  }
-
+  // Declared before rows_, so the DuckDB result is gone (its query ended, its profile
+  // written) before the execution closes.
+  std::shared_ptr<Execution> execution_;
   std::shared_ptr<arrow::RecordBatchReader> rows_;
-  std::function<void(std::string_view, std::string_view)> done_;
   std::function<void(const arrow::Status&)> translate_;
 };
 
@@ -167,7 +274,15 @@ Backend::Backend(Runtime& runtime)
   warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), connection.out(), err); });
   RegisterSqlFunctions(connection.get(), runtime_);
   AttachSystemCatalog();
+  if (runtime_.config.enable_instrumentation) {
+    instrumentation_ = std::make_unique<Instrumentation>(runtime_, instance(), duckdb_version());
+    instrumentation_->Attach();
+  }
   RunInitSql();
+  if (instrumentation_) {
+    instrumentation_->Start();  // after the init SQL, which may attach its catalog
+    runtime_.instrumentation = instrumentation_.get();
+  }
   // Init SQL may move DuckDB's secret directory; wherever it ends up is protected.
   sensitive_paths_.AddSecretDirectory(
       warpduckdb::QueryText(connection.get(), "SELECT current_setting('secret_directory')"));
@@ -175,6 +290,7 @@ Backend::Backend(Runtime& runtime)
 
 Backend::~Backend() {
   StopHealthCheck();
+  StopInstrumentation();
   if (!system_catalog_dir_.empty()) {
     std::error_code ec;
     std::filesystem::remove_all(system_catalog_dir_, ec);
@@ -188,6 +304,7 @@ void Backend::AttachSystemCatalog() {
   std::string base = std::filesystem::temp_directory_path().string() + "/hardcharger-system-XXXXXX";
   if (mkdtemp(base.data()) == nullptr) throw std::runtime_error("cannot create a directory for the system catalog");
   system_catalog_dir_ = base;
+  runtime_.scratch_dir = base;
   const std::string file = system_catalog_dir_ + "/system.duckdb";
   warpduckdb::Connection connection;
   warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), connection.out(), err); });
@@ -232,6 +349,13 @@ void Backend::StartHealthCheck() {
                                             std::chrono::seconds(config.health_check_staleness_seconds));
   health_->Start();
   runtime_.health = health_.get();
+}
+
+void Backend::StopInstrumentation() {
+  if (instrumentation_) {
+    instrumentation_->Stop();
+    runtime_.instrumentation = nullptr;
+  }
 }
 
 void Backend::StopHealthCheck() {
@@ -279,18 +403,40 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb
       started_at_us_(NowMicros()) {
   runtime_.sessions.Add(this, capped);
   runtime_.metrics.CountSessionOpened();
+  if (runtime_.instrumentation != nullptr) runtime_.instrumentation->SessionStarted(*this);
   LogAt(runtime_.session_log_level, LogLevel::kInfo, "session opened",
         {{"session_id", id_}, {"user", principal_.name}, {"role", principal_.role}});
 }
 
 Session::~Session() {
   runtime_.sessions.Remove(this);
+  if (runtime_.instrumentation != nullptr) runtime_.instrumentation->SessionEnded(*this, killed_ ? "killed" : "closed");
   LogAt(runtime_.session_log_level, LogLevel::kInfo, "session closed",
         {{"session_id", id_}, {"user", principal_.name}, {"reason", killed_ ? "killed" : "closed"}});
 }
 
 void Session::CheckAlive() const {
   if (killed_) throw KilledError();
+}
+
+void Session::FinishRunning() { running_--; }
+
+std::string Session::PrepareProfile(const std::string& execution_id) {
+  const int mode = settings().capture_query_profile.value_or(runtime_.capture_query_profile.load());
+  if (mode != profile_mode_) {
+    // DuckDB's profiler, per connection: JSON written to a file of the server's own.
+    if (mode == 0) {
+      warpduckdb::RunSql(connection(), "PRAGMA disable_profiling");
+    } else {
+      warpduckdb::RunSql(connection(), std::string("SET enable_profiling = 'json'; SET profiling_mode = '") +
+                                           (mode == 2 ? "detailed" : "standard") + "'");
+    }
+    profile_mode_ = mode;
+  }
+  if (mode == 0 || runtime_.scratch_dir.empty()) return {};
+  const std::string path = runtime_.scratch_dir + "/profile-" + execution_id + ".json";
+  warpduckdb::RunSql(connection(), "SET profiling_output = '" + path + "'");
+  return path;
 }
 
 void Session::Kill() {
@@ -350,10 +496,13 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
       }
     }
   }
+  // What runs decides what is a write (EXPLAIN ANALYZE INSERT ... inserts).
+  const DUCKDB_V2_STATEMENT_TYPE executed = ExecutedType(connection(), piece, type);
+  if (runtime_.instrumentation != nullptr) GuardInstrumentation(piece, executed);
   // catalog_access rules (license feature catalog_permissions): without the plan's
   // catalogs (the v2 C API doesn't expose them) only the sound part is enforced here: a
   // principal no rule grants write access to any catalog may not modify state.
-  if (!ReadOnlyStatement(type) && runtime_.license.Has("catalog_permissions")) {
+  if (!ReadOnlyStatement(executed) && runtime_.license.Has("catalog_permissions")) {
     if (const auto* rules = principal_.claims.if_contains("catalog_access"); rules && rules->is_array()) {
       bool may_write = false;
       for (const auto& rule : rules->as_array()) {
@@ -369,7 +518,7 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
       }
     }
   }
-  if (principal_.role == "readonly" && !ReadOnlyStatement(type)) {
+  if (principal_.role == "readonly" && !ReadOnlyStatement(executed)) {
     throw Error(ErrorCode::kPermissionDenied,
                 "User '" + principal_.name + "' has a readonly session and cannot run statements that modify state.",
                 "42501");
@@ -384,6 +533,39 @@ void Session::NoteTransaction(const Piece& piece) {
     transaction_ = Transaction::kOpen;
   } else if (t[0].IsWord("COMMIT") || t[0].IsWord("END") || t[0].IsWord("ROLLBACK") || t[0].IsWord("ABORT")) {
     transaction_ = manual_commit_ ? Transaction::kOpen : Transaction::kNone;
+  }
+}
+
+// The instrumentation catalog belongs to the server: only admins may read it, nobody
+// may change it, detach it, make it current or put it on the search path. Without the
+// statement's catalogs (the v2 C API doesn't expose them) the check reads the tokens: a
+// statement naming the catalog is checked, and as it can be neither current nor on the
+// search path, an unqualified name can't reach it.
+void Session::GuardInstrumentation(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type) const {
+  const std::string& catalog = runtime_.instrumentation->catalog();
+  std::string lowered = catalog;
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) { return std::tolower(c); });
+  bool named = false;
+  for (const Token& token : piece.tokens) {
+    const bool text = token.Is(DUCKDB_V2_TOKEN_TYPE_STRING_LITERAL);
+    if (token.Value() == lowered || (text && token.Value().find(catalog) != std::string::npos)) named = true;
+  }
+  if (!named) return;
+  if (!admin()) {
+    throw Error(ErrorCode::kPermissionDenied,
+                "Access denied: Only administrators can read the instrumentation catalog '" + catalog + "'.", "42501");
+  }
+  if (type == DUCKDB_V2_STATEMENT_TYPE_DETACH) {
+    throw Error(ErrorCode::kPermissionDenied, "Cannot DETACH the instrumentation catalog '" + catalog + "'.", "42501");
+  }
+  const auto& t = piece.tokens;
+  const bool use = !t.empty() && t[0].IsWord("USE");
+  const bool search_path = !t.empty() && (t[0].IsWord("SET") || t[0].IsWord("PRAGMA")) &&
+                           std::any_of(t.begin(), t.end(), [](const Token& x) { return x.Value() == "search_path"; });
+  if (use || search_path || !ReadOnlyStatement(type)) {
+    throw Error(ErrorCode::kPermissionDenied,
+                "Cannot modify the instrumentation catalog '" + catalog + "': it is read-only (Access denied).",
+                "42501");
   }
 }
 
@@ -414,9 +596,11 @@ warpsql::StatementOutcome Session::RunCommand(const Piece& piece) {
   throw Error(ErrorCode::kSqlError, "Session '" + target + "' not found", "42704");
 }
 
-warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sql,
+warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sql, const std::string& statement_id,
                                          const std::function<warpsql::StatementOutcome()>& work) {
   const auto started = std::chrono::steady_clock::now();
+  const auto queued_at = std::chrono::system_clock::now();
+  bool queued = false;
   AdmissionSlot slot;
   AdmissionController& queue = runtime_.admission;
   if (queue.Limit() > 0) {
@@ -424,6 +608,7 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
     // Admins skip the queue unless they asked not to; nobody else can skip it.
     const bool bypass = admin() && mine.bypass_queue.value_or(runtime_.config.admin_bypass_queue_default);
     if (bypass) runtime_.metrics.CountQueueBypass();
+    queued = !bypass;
     try {
       slot = queue.Acquire(!bypass, mine.max_queue_wait.value_or(queue.DefaultMaxQueueWaitSeconds()),
                            [this] { return killed_.load() || interrupted_.load(); }, std::chrono::milliseconds(100));
@@ -441,42 +626,42 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
   }
 
   running_++;
-  auto shared_slot = std::make_shared<AdmissionSlot>(std::move(slot));
-  auto done = [this, kind, started, shared_slot, logged = Abbreviate(sql)](std::string_view status,
-                                                                           std::string_view error_class) {
-    shared_slot->Release();
-    running_--;
-    if (status == "ok" && runtime_.config.print_queries) {
-      LogQuery(LogLevel::kInfo, "Client SQL command execution succeeded",
-               {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"status", "success"},
-                {"is_internal", "false"}, {"sql", logged}});
-    }
-    runtime_.metrics.RecordStatement(kind, status, error_class,
-                                     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
-  };
+  ExecutionRecord record;
+  if (runtime_.instrumentation != nullptr && !statement_id.empty()) {
+    record.execution_id = RandomUuid();
+    record.statement_id = statement_id;
+    record.start = std::chrono::system_clock::now();
+    if (queued) record.enqueue_time = queued_at;
+  }
+  std::string profile;
+  if (!record.execution_id.empty()) profile = PrepareProfile(record.execution_id);
+  auto execution = std::make_shared<Execution>(*this, kind, Abbreviate(sql), std::move(slot), started, std::move(record),
+                                               std::move(profile));
   warpsql::StatementOutcome outcome;
   try {
     outcome = work();
   } catch (const Error& error) {
     const std::string_view error_class = ClassifyStatementError(error.what());
-    done(error.code() == ErrorCode::kStatementCancelled ? "cancelled" : "error", error_class);
+    execution->End(error.code() == ErrorCode::kStatementCancelled ? "cancelled" : "error", error_class, error.what());
     // A failed statement inside a transaction leaves it aborted until a ROLLBACK.
     if (transaction_ == Transaction::kOpen) transaction_ = Transaction::kAborted;
     LogQuery(LogLevel::kInfo, "statement failed",
-          {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"status", "error"},
-           {"error", error.what()}, {"sql", Abbreviate(sql)}});
+             {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"status", "error"},
+              {"error", error.what()}, {"sql", Abbreviate(sql)}});
     if (killed_) throw KilledError();
     throw;
   }
+  execution->Produced();
   if (outcome.rows) {
-    outcome.rows = std::make_shared<TrackedReader>(std::move(outcome.rows), done, [this](const arrow::Status& status) {
+    outcome.rows = std::make_shared<TrackedReader>(std::move(outcome.rows), std::move(execution),
+                                                   [this](const arrow::Status& status) {
       if (killed_) throw KilledError();
       if (interrupted_ && ClassifyStatementError(status.message()) == "cancelled") {
         throw Error(ErrorCode::kStatementCancelled, status.message(), "57014");
       }
     });
   } else {
-    done("ok", "");
+    execution->End("ok", "", "");
   }
   return outcome;
 }
@@ -509,10 +694,17 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
       steps.push_back(step);
     }
   } catch (const Error& error) {
-    // Refused or unparseable: a failed statement all the same, for metrics.
+    // Refused or unparseable: a failed statement all the same, for metrics and the record.
     runtime_.metrics.RecordStatement(StatementKind::kOther, "error", ClassifyStatementError(error.what()), 0);
+    if (runtime_.instrumentation != nullptr) {
+      runtime_.instrumentation->StatementCreated(*this, Abbreviate(sql), "statement", false, error.what());
+    }
     throw;
   }
+  const std::string statement_id =
+      runtime_.instrumentation != nullptr
+          ? runtime_.instrumentation->StatementCreated(*this, Abbreviate(sql), "statement", true, "")
+          : std::string();
   if (runtime_.config.print_queries) {
     LogQuery(LogLevel::kInfo, "statement",
           {{"session_id", id_}, {"user", principal_.name}, {"role", principal_.role}, {"kind", "sql"},
@@ -520,7 +712,8 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
   }
 
   if (steps.size() == 1 && !steps[0].command) {
-    auto outcome = Track(ClassifyStatement(steps[0].type), sql, [&] { return DuckDBSession::Execute(sql, parameters); });
+    auto outcome = Track(ClassifyStatement(steps[0].type), sql, statement_id,
+                         [&] { return DuckDBSession::Execute(sql, parameters); });
     if (steps[0].type == DUCKDB_V2_STATEMENT_TYPE_TRANSACTION) NoteTransaction(pieces[0]);
     return outcome;
   }
@@ -533,11 +726,11 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
     if (step.command) {
       outcome = RunCommand(*step.piece);
     } else if (step.type == DUCKDB_V2_STATEMENT_TYPE_TRANSACTION) {
-      outcome = Track(StatementKind::kOther, step.piece->text,
+      outcome = Track(StatementKind::kOther, step.piece->text, statement_id,
                       [&] { return DuckDBSession::Execute(step.piece->text, parameters); });
       NoteTransaction(*step.piece);
     } else {
-      outcome = Track(ClassifyStatement(step.type), step.piece->text,
+      outcome = Track(ClassifyStatement(step.type), step.piece->text, statement_id,
                       [&] { return DuckDBSession::Execute(step.piece->text, parameters); });
     }
     if (i + 1 < steps.size() && outcome.rows) {
@@ -560,18 +753,31 @@ std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sq
     throw Error(ErrorCode::kSqlError, "SQL text must not contain a NUL byte", "22021");
   }
   const auto pieces = SplitStatements(connection(), sql);
-  if (pieces.size() == 1) {
-    if (ParseSettingCommand(pieces[0]) || ParseKillSession(pieces[0])) {
-      throw Error(ErrorCode::kSqlError, "SET gizmosql.* and KILL SESSION can't be prepared; run them directly");
+  auto record = [&](bool accepted, std::string_view error) {
+    return runtime_.instrumentation != nullptr
+               ? runtime_.instrumentation->StatementCreated(*this, Abbreviate(sql), "prepared", accepted, error)
+               : std::string();
+  };
+  std::unique_ptr<warpsql::PreparedStatement> prepared;
+  try {
+    if (pieces.size() == 1) {
+      if (ParseSettingCommand(pieces[0]) || ParseKillSession(pieces[0])) {
+        throw Error(ErrorCode::kSqlError, "SET gizmosql.* and KILL SESSION can't be prepared; run them directly");
+      }
+      Authorize(pieces[0]);
     }
-    Authorize(pieces[0]);
+    if (runtime_.config.print_queries) {
+      LogQuery(LogLevel::kInfo, "prepare",
+               {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"is_internal", "false"},
+                {"sql", Abbreviate(sql)}});
+    }
+    prepared = DuckDBSession::Prepare(sql);
+  } catch (const Error& error) {
+    record(false, error.what());
+    throw;
   }
-  if (runtime_.config.print_queries) {
-    LogQuery(LogLevel::kInfo, "prepare",
-          {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"is_internal", "false"},
-           {"sql", Abbreviate(sql)}});
-  }
-  return DuckDBSession::Prepare(sql);
+  prepared_statement_ids_[prepared.get()] = record(true, "");
+  return prepared;
 }
 
 warpsql::StatementOutcome Session::ExecutePrepared(warpsql::PreparedStatement& statement,
@@ -579,7 +785,9 @@ warpsql::StatementOutcome Session::ExecutePrepared(warpsql::PreparedStatement& s
   CheckAlive();
   SessionScope scope(this);
   interrupted_ = false;
+  const auto id = prepared_statement_ids_.find(&statement);
   return Track(StatementKind::kOther, "(prepared statement)",
+               id == prepared_statement_ids_.end() ? std::string() : id->second,
                [&] { return DuckDBSession::ExecutePrepared(statement, parameters); });
 }
 
@@ -622,12 +830,30 @@ std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(warpsql::MetadataKin
              {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"is_internal", "true"},
               {"metadata", std::to_string(static_cast<int>(kind))}});
   }
-  return DuckDBSession::Metadata(kind, filter);
+  auto rows = DuckDBSession::Metadata(kind, filter);
+  // The instrumentation catalog is invisible to non-admins in the catalog, schema and
+  // table lists (their first column is the catalog).
+  const bool listing = kind == warpsql::MetadataKind::kCatalogs || kind == warpsql::MetadataKind::kDbSchemas ||
+                       kind == warpsql::MetadataKind::kTables;
+  if (admin() || runtime_.instrumentation == nullptr || !listing) return rows;
+  return WithoutCatalog(std::move(rows), runtime_.instrumentation->catalog());
 }
 
 warpsql::OptionErrors Session::SetOptions(const json::object& options) {
   CheckAlive();
   SessionScope scope(this);
+  if (const auto* catalog = options.if_contains("catalog"); catalog && catalog->is_string() &&
+                                                           runtime_.instrumentation != nullptr &&
+                                                           catalog->as_string() == runtime_.instrumentation->catalog()) {
+    json::object rest = options;
+    rest.erase("catalog");
+    auto errors = DuckDBSession::SetOptions(rest);
+    errors.emplace("catalog", Error(ErrorCode::kPermissionDenied,
+                                    "the instrumentation catalog can't be the session's catalog (read access to "
+                                    "catalog '" + runtime_.instrumentation->catalog() + "' is for administrators "
+                                    "querying it by name)"));
+    return errors;
+  }
   auto errors = DuckDBSession::SetOptions(options);
   if (const auto* autocommit = options.if_contains("autocommit");
       autocommit != nullptr && autocommit->is_bool() && !errors.contains("autocommit")) {

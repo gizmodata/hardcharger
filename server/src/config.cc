@@ -1,5 +1,6 @@
 #include "config.hpp"
 
+#include <boost/json.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
@@ -205,6 +206,21 @@ const std::vector<Option>& Options() {
        NUMBER(health_check_staleness_seconds)},
       {"cors_origins", Kind::kList, {}, {}, "browser origins allowed to call the server",
        LIST(cors_origins)},
+      // Instrumentation
+      {"enable_instrumentation", Kind::kBool, {"GIZMOSQL_ENABLE_INSTRUMENTATION"}, {},
+       "record sessions, statements and executions in SQL tables (Enterprise)", FLAG(enable_instrumentation)},
+      {"instrumentation_db_path", Kind::kString, {"GIZMOSQL_INSTRUMENTATION_DB_PATH"}, {},
+       "DuckDB file for the instrumentation tables (default: next to the database)",
+       TEXT(instrumentation_db_path)},
+      {"instrumentation_catalog", Kind::kString, {"GIZMOSQL_INSTRUMENTATION_CATALOG"}, {},
+       "an attached catalog (DuckLake, PostgreSQL) for them instead", TEXT(instrumentation_catalog)},
+      {"instrumentation_schema", Kind::kString, {"GIZMOSQL_INSTRUMENTATION_SCHEMA"}, {},
+       "schema for them in that catalog", TEXT(instrumentation_schema)},
+      {"instance_tag", Kind::kString, {"GIZMOSQL_INSTANCE_TAG"}, {}, "JSON object recorded with this instance",
+       TEXT(instance_tag)},
+      {"capture_query_profile", Kind::kString, {"GIZMOSQL_CAPTURE_QUERY_PROFILE"}, {},
+       "record DuckDB's query profile with each execution: off, standard or detailed",
+       TEXT(capture_query_profile)},
       // Metrics
       {"enable_metrics", Kind::kBool, {"GIZMOSQL_ENABLE_METRICS"}, {},
        "collect runtime metrics and serve /metrics (Enterprise)", FLAG(enable_metrics)},
@@ -232,12 +248,6 @@ struct Unsupported {
 
 const std::vector<Unsupported>& UnsupportedOptions() {
   static const std::vector<Unsupported> options = {
-      {"--enable-instrumentation", {"GIZMOSQL_ENABLE_INSTRUMENTATION"}, true},
-      {"--instrumentation-db-path", {"GIZMOSQL_INSTRUMENTATION_DB_PATH"}, false},
-      {"--instrumentation-catalog", {"GIZMOSQL_INSTRUMENTATION_CATALOG"}, false},
-      {"--instrumentation-schema", {"GIZMOSQL_INSTRUMENTATION_SCHEMA"}, false},
-      {"--instance-tag", {"GIZMOSQL_INSTANCE_TAG"}, false},
-      {"--capture-query-profile", {"GIZMOSQL_CAPTURE_QUERY_PROFILE"}, false},
       {"--enable-catalog-logging", {"GIZMOSQL_ENABLE_CATALOG_LOGGING"}, true},
       {"--log-catalog", {"GIZMOSQL_LOG_CATALOG"}, false},
       {"--log-schema", {"GIZMOSQL_LOG_SCHEMA"}, false},
@@ -368,6 +378,18 @@ void Validate(Loaded& loaded) {
   }
   if (c.health_check_staleness_seconds == 0) {
     c.health_check_staleness_seconds = 3 * c.health_check_interval_seconds;
+  }
+  if (c.capture_query_profile != "off" && c.capture_query_profile != "standard" &&
+      c.capture_query_profile != "detailed") {
+    throw std::invalid_argument("capture_query_profile must be off, standard or detailed, not '" +
+                                c.capture_query_profile + "'");
+  }
+  if (!c.instance_tag.empty()) {
+    boost::system::error_code ec;
+    const auto tag = boost::json::parse(c.instance_tag, ec);
+    if (ec || !tag.is_object()) {
+      throw std::invalid_argument("Invalid JSON for instance_tag: it must be a JSON object, not '" + c.instance_tag + "'");
+    }
   }
   if (!c.reject_unknown_sessions) {
     throw std::invalid_argument(

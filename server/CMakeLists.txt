@@ -46,6 +46,7 @@ add_library(hardcharger_core STATIC
   src/engine.cc
   src/guards.cc
   src/health.cc
+  src/instrumentation.cc
   src/logging.cc
   src/metrics.cc
   src/patterns.cc
@@ -97,6 +98,7 @@ add_executable(hardcharger-unit-tests
   unit/admission_test.cc
   unit/guards_test.cc
   unit/ingest_test.cc
+  unit/instrumentation_test.cc
   unit/log_level_test.cc
   unit/metrics_test.cc
   unit/patterns_test.cc

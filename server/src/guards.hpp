@@ -69,6 +69,11 @@ std::optional<std::string> ClassifyGatedCommand(duckdb_v2_connection_handle conn
 // Throws warpsql::Error(kPermissionDenied) when `piece` may not run.
 void CheckStatement(const GuardContext& context, const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type);
 
+// The type of the statement that actually runs: EXPLAIN ANALYZE runs the statement it
+// wraps, so it counts as that statement (plain EXPLAIN runs nothing).
+DUCKDB_V2_STATEMENT_TYPE ExecutedType(duckdb_v2_connection_handle connection, const Piece& piece,
+                                      DUCKDB_V2_STATEMENT_TYPE type);
+
 // The statement's type as DuckDB parses it; throws DuckDB's parse error.
 DUCKDB_V2_STATEMENT_TYPE StatementType(duckdb_v2_connection_handle connection, std::string_view sql);
 

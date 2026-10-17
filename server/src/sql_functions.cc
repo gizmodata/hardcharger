@@ -10,6 +10,7 @@
 
 #include "duckdb_v2.hpp"
 #include "engine.hpp"
+#include "instrumentation.hpp"
 #include "runtime.hpp"
 #include "settings.hpp"
 #include "version.hpp"
@@ -354,11 +355,13 @@ void RegisterSqlFunctions(duckdb_v2_connection_handle connection, Runtime& runti
          return r.config.cluster_id.empty() ? std::nullopt : std::optional(r.config.cluster_id);
        })},
       {"INSTRUMENTATION_ENABLED", "BOOLEAN",
-       [](Runtime&, const Session*) { return ContextValue{std::nullopt, false}; }},
-      {"INSTRUMENTATION_CATALOG", "VARCHAR",
-       text([](Runtime&, const Session*) -> std::optional<std::string> { return std::nullopt; })},
-      {"INSTRUMENTATION_SCHEMA", "VARCHAR",
-       text([](Runtime&, const Session*) -> std::optional<std::string> { return std::nullopt; })},
+       [](Runtime& r, const Session*) { return ContextValue{std::nullopt, r.instrumentation != nullptr}; }},
+      {"INSTRUMENTATION_CATALOG", "VARCHAR", text([](Runtime& r, const Session*) -> std::optional<std::string> {
+         return r.instrumentation ? std::optional(r.instrumentation->catalog()) : std::nullopt;
+       })},
+      {"INSTRUMENTATION_SCHEMA", "VARCHAR", text([](Runtime& r, const Session*) -> std::optional<std::string> {
+         return r.instrumentation ? std::optional(r.instrumentation->schema()) : std::nullopt;
+       })},
   };
   for (const auto& [suffix, type, value] : scalars) {
     for (const char* prefix : {"HARDCHARGER_", "GIZMOSQL_"}) {

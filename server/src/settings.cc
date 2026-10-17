@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "engine.hpp"
+#include "instrumentation.hpp"
 #include "version.hpp"
 
 namespace hardcharger {
@@ -69,6 +70,16 @@ std::string ValidJsonTag(const std::optional<std::string>& value, const std::str
 }
 
 std::string Bool(bool value) { return value ? "true" : "false"; }
+
+std::string ProfileModeName(int mode) { return mode == 2 ? "detailed" : mode == 1 ? "standard" : "off"; }
+
+int ParseProfileMode(const std::string& value) {
+  const std::string v = Lower(value);
+  if (v == "off") return 0;
+  if (v == "standard") return 1;
+  if (v == "detailed") return 2;
+  Invalid("Invalid value for capture_query_profile: '" + value + "' (use off, standard or detailed)");
+}
 
 const char* ScopeName(SettingScope scope) {
   switch (scope) {
@@ -135,21 +146,27 @@ std::vector<Setting> Build() {
   s.push_back({.name = "capture_query_profile",
                .scope = SettingScope::kSessionOrGlobal,
                .input_type = "VARCHAR",
+               .option = "capture_query_profile",
                .legacy_flag = "--capture-query-profile",
                .legacy_env = "GIZMOSQL_CAPTURE_QUERY_PROFILE",
                .default_value = "off",
-               .description = "Capture DuckDB query profiles into instrumentation (needs instrumentation).",
+               .description = "Record DuckDB's query profile with each execution in instrumentation "
+                              "(off, standard, detailed).",
                .feature = "instrumentation",
-               .get_global = [](const Runtime&) -> O { return "off"; },
-               .set_session = [](Session&, const O&) {
-                 throw Error(ErrorCode::kNotImplemented,
-                             "capture_query_profile records into instrumentation, which this Hardcharger "
-                             "version does not have yet");
+               .get_session = [](const Session& x) -> O {
+                 auto v = x.settings().capture_query_profile;
+                 return v ? O(ProfileModeName(*v)) : std::nullopt;
                },
-               .set_global = [](Runtime&, const O&) {
-                 throw Error(ErrorCode::kNotImplemented,
-                             "capture_query_profile records into instrumentation, which this Hardcharger "
-                             "version does not have yet");
+               .get_global = [](const Runtime& r) -> O { return ProfileModeName(r.capture_query_profile); },
+               .set_session = [](Session& x, const O& v) {
+                 std::optional<int> mode;
+                 if (v) mode = ParseProfileMode(*v);
+                 x.UpdateSettings([&](Session::Settings& s) { s.capture_query_profile = mode; });
+               },
+               .set_global = [](Runtime& r, const O& v) {
+                 r.capture_query_profile = v ? ParseProfileMode(*v) : (r.config.capture_query_profile == "detailed" ? 2
+                                                                       : r.config.capture_query_profile == "standard" ? 1
+                                                                                                                      : 0);
                }});
   s.push_back({.name = "bypass_queue",
                .scope = SettingScope::kSession,
@@ -188,6 +205,9 @@ std::vector<Setting> Build() {
                  .set_session = [name, session_tag](Session& x, const O& v) {
                    const std::string value = ValidJsonTag(v, name);
                    x.UpdateSettings([&](Session::Settings& s) { (session_tag ? s.session_tag : s.query_tag) = value; });
+                   if (session_tag && x.runtime().instrumentation != nullptr) {
+                     x.runtime().instrumentation->SessionTagChanged(x, value);
+                   }
                  }});
   }
   s.push_back({.name = "max_concurrent_statements",
@@ -346,20 +366,39 @@ std::vector<Setting> Build() {
            .description = "Runtime metrics are collected and served (/metrics, gizmosql_metrics()).",
            .feature = "metrics",
            .get_global = config_value([](const Runtime& r) { return Bool(r.config.enable_metrics); })});
-  // Instrumentation and catalog logging are not in this version; their settings are
-  // listed (off) so tools that read them see the same rows as on GizmoSQL 1.x.
+  startup({.name = "instance_tag", .input_type = "VARCHAR", .option = "instance_tag", .legacy_flag = "--instance-tag",
+           .legacy_env = "GIZMOSQL_INSTANCE_TAG", .description = "JSON object recorded with this instance.",
+           .feature = "instrumentation",
+           .get_global = config_value([](const Runtime& r) { return r.config.instance_tag; })});
+  startup({.name = "enable_instrumentation", .input_type = "BOOLEAN", .option = "enable_instrumentation",
+           .legacy_flag = "--enable-instrumentation", .legacy_env = "GIZMOSQL_ENABLE_INSTRUMENTATION",
+           .default_value = "false", .description = "Sessions, statements and executions are recorded.",
+           .feature = "instrumentation", .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return Bool(r.instrumentation != nullptr); })});
+  startup({.name = "instrumentation_catalog", .input_type = "VARCHAR", .option = "instrumentation_catalog",
+           .legacy_flag = "--instrumentation-catalog", .legacy_env = "GIZMOSQL_INSTRUMENTATION_CATALOG",
+           .description = "Catalog of the instrumentation tables (empty when instrumentation is off).",
+           .feature = "instrumentation", .admin_only = true,
+           .get_global = config_value([](const Runtime& r) {
+             return r.instrumentation ? r.instrumentation->catalog() : std::string();
+           })});
+  startup({.name = "instrumentation_schema", .input_type = "VARCHAR", .option = "instrumentation_schema",
+           .legacy_flag = "--instrumentation-schema", .legacy_env = "GIZMOSQL_INSTRUMENTATION_SCHEMA",
+           .description = "Schema of the instrumentation tables (empty when instrumentation is off).",
+           .feature = "instrumentation", .admin_only = true,
+           .get_global = config_value([](const Runtime& r) {
+             return r.instrumentation ? r.instrumentation->schema() : std::string();
+           })});
+  // Catalog logging is not in this version; its settings are listed (off) so tools that
+  // read them see the same rows as on GizmoSQL 1.x.
   for (const auto& [name, type, flag, env, def] :
        std::vector<std::tuple<std::string, std::string, std::string, std::string, std::string>>{
-           {"instance_tag", "VARCHAR", "--instance-tag", "GIZMOSQL_INSTANCE_TAG", ""},
-           {"enable_instrumentation", "BOOLEAN", "--enable-instrumentation", "GIZMOSQL_ENABLE_INSTRUMENTATION", "false"},
-           {"instrumentation_catalog", "VARCHAR", "--instrumentation-catalog", "GIZMOSQL_INSTRUMENTATION_CATALOG", ""},
-           {"instrumentation_schema", "VARCHAR", "--instrumentation-schema", "GIZMOSQL_INSTRUMENTATION_SCHEMA", ""},
            {"enable_catalog_logging", "BOOLEAN", "--enable-catalog-logging", "GIZMOSQL_ENABLE_CATALOG_LOGGING", "false"},
            {"log_catalog", "VARCHAR", "--log-catalog", "GIZMOSQL_LOG_CATALOG", ""},
            {"log_schema", "VARCHAR", "--log-schema", "GIZMOSQL_LOG_SCHEMA", ""}}) {
     startup({.name = name, .input_type = type, .legacy_flag = flag, .legacy_env = env, .default_value = def,
              .description = "Not in this Hardcharger version (always off).", .feature = "instrumentation",
-             .admin_only = name != "instance_tag",
+             .admin_only = true,
              .get_global = config_value([def](const Runtime&) { return def; })});
   }
   return s;
