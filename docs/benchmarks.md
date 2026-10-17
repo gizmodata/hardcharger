@@ -64,4 +64,17 @@ because the query text carries SF1's fraction; it does on both).
 - Bulk transfer over HTTP/1.1 moves ~2 GB/s on loopback, faster than the gRPC stream and
   on par with handing Arrow over in-process. zstd costs time on loopback, where bandwidth
   is free; it pays off on real networks.
-- Not measured yet: concurrency (many clients), TLS, and transfer across a real network.
+- Not measured yet: TLS, and transfer across a real network.
+
+### Ten clients at once
+
+`bench/concurrency.py`: ten clients, each with its own connection and session, each
+running Q01, Q03, Q06, Q10, Q14 and Q19 six times (360 queries), same machine and data:
+
+| | Throughput | Median latency | p95 latency |
+|---|---:|---:|---:|
+| Hardcharger | 39.0 queries/s | 223 ms | 471 ms |
+| GizmoSQL 1.41 | 21.9 queries/s | 277 ms | 1,328 ms |
+
+Hardcharger finishes the 360 queries in 9.2 s against 16.5 s (1.8× the throughput), and its
+slowest queries wait far less (p95 2.8× lower).

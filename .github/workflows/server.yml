@@ -148,8 +148,90 @@ jobs:
           name: hardcharger-${{ matrix.name }}
           path: dist/hardcharger-${{ matrix.name }}.tar.gz
 
+  # The server and the Warp SQL conformance suite again, on an AddressSanitizer build: a
+  # use-after-free that only crashed now and then (borrowed DuckDB handles destroyed) fails
+  # here every time. The suites fail when the server dies or exits non-zero.
+  sanitize:
+    name: address sanitizer (linux-amd64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fetch the warp-sql submodule
+        env:
+          DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
+        run: |
+          key="$RUNNER_TEMP/warp_sql_key"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          chmod 600 "$key"
+          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+            git submodule update --init --depth 1
+          rm -f "$key"
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build libssl-dev
+      # The same dependency cache as the linux-amd64 build (same key).
+      - name: Dependency cache key
+        id: deps
+        run: |
+          pins=$(cat third_party/warp-sql/cpp/scripts/build-duckdb.sh third_party/warp-sql/cpp/scripts/build-arrow.sh \
+                     server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake | shasum -a 256 | cut -c1-16)
+          compiler=$(c++ --version | head -1 | shasum -a 256 | cut -c1-12)
+          echo "key=deps-linux-amd64-$pins-$compiler" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        id: cache
+        with:
+          path: |
+            server/.deps/duckdb-install
+            server/.deps/arrow-install
+          key: ${{ steps.deps.outputs.key }}
+      - name: Build DuckDB and Arrow
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: server/scripts/build-deps.sh
+      # A test-license build, so the access-control suites run under the sanitizer too.
+      - name: Build the server with AddressSanitizer
+        run: |
+          cmake -S server -B server/build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DHARDCHARGER_TRUST_TEST_LICENSES=ON \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
+          cmake --build server/build-asan
+      - name: Start PostgreSQL
+        run: |
+          docker run -d --name hardcharger-test-pg -e POSTGRES_USER=hardcharger \
+            -e POSTGRES_PASSWORD=hardcharger -e POSTGRES_DB=hardcharger \
+            -p 127.0.0.1:55433:5432 postgres:17-alpine
+          for _ in $(seq 1 30); do docker exec hardcharger-test-pg pg_isready -U hardcharger && break; sleep 1; done
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Hardcharger tests (ASan)
+        working-directory: server/tests
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          HARDCHARGER_TEST_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger
+        run: |
+          uv venv .venv --python 3.14
+          uv pip install --python .venv/bin/python -r pyproject.toml
+          .venv/bin/python -m pytest -q
+      - name: Warp SQL conformance suite (ASan)
+        working-directory: third_party/warp-sql/conformance
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger
+          WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_PASSWORD
+          WARP_SQL_TEST_SERVER_USERNAME: warp
+          WARP_SQL_TEST_SERVER_LOG: ${{ runner.temp }}/conformance-server.log
+          HARDCHARGER_USERNAME: warp
+          HARDCHARGER_PRINT_QUERIES: "false"
+        run: |
+          uv venv .venv --python 3.14
+          uv pip install --python .venv/bin/python -e .
+          .venv/bin/python -m pytest -q
+      - name: Server log
+        if: failure()
+        run: tail -200 "$RUNNER_TEMP/conformance-server.log" || true
+
   image:
-    needs: build
+    needs: [build, sanitize]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -197,7 +279,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, image]
+    needs: [build, sanitize, image]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
