@@ -46,7 +46,15 @@ def name(r: dict) -> str:
             ", insertion order kept" if r["preserve_order"] == "true" else ", unordered"
         )
         return f"Quack ({r['quack_mode']}{order})"
-    return f"Hardcharger 0.2.0 (Warp SQL{', zstd' if r['compression'] == 'zstd' else ''})"
+    extras = []
+    if r["compression"] == "zstd":
+        extras.append("zstd")
+    if r.get("partitions", 1) > 1:
+        extras.append(f"{r['partitions']} partitions" + (", any order" if r.get("order") == "any" else ", in order"))
+    return f"{HARDCHARGER} (Warp SQL{''.join(', ' + e for e in extras)})"
+
+
+HARDCHARGER = "Hardcharger"
 
 
 def main() -> None:
@@ -54,7 +62,10 @@ def main() -> None:
     parser.add_argument("--results", nargs="+", required=True)
     parser.add_argument("--cpu")
     parser.add_argument("--label", default="", help="only rows with this label")
+    parser.add_argument("--hardcharger", default="Hardcharger 0.2.0", help="how Hardcharger rows are named")
     args = parser.parse_args()
+    global HARDCHARGER
+    HARDCHARGER = args.hardcharger
     times, cores = load_cpu(path=args.cpu)
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for path in args.results:

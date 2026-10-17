@@ -16,6 +16,8 @@ THREADS=${THREADS:-32}
 MEMORY_LIMIT=${MEMORY_LIMIT:-40GB}
 TLS=${TLS:-1}
 export BENCH_PASSWORD=${BENCH_PASSWORD:-bench-password-not-secret}
+# WARPSQL_STREAM_STATS=1: Hardcharger logs each result stream's stage times.
+export WARPSQL_STREAM_STATS=${WARPSQL_STREAM_STATS:-0}
 
 # Match the server processes exactly (pgrep -x on the name, or an anchored command line),
 # never a pattern that a shell command naming the same path would also match.

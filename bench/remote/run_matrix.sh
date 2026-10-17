@@ -41,7 +41,14 @@ for system in "${SYSTEMS[@]}"; do
   case "$system" in
     gizmosql) variants=("") ;;
     quack) variants=("--preserve-order true" "--preserve-order false") ;;
-    hardcharger) variants=("--compression none" "--compression zstd") ;;
+    # One stream (with and without zstd), then results split into partitions read at
+    # once (Warp SQL §6.10). PARTITIONS lists the counts; ingest is one upload either way.
+    hardcharger)
+      variants=("--compression none" "--compression zstd")
+      for p in ${PARTITIONS:-8 16}; do
+        variants+=("--compression none --partitions $p --order any" "--compression none --partitions $p --order preserve")
+      done
+      ;;
   esac
   for v in "${variants[@]}"; do
     for d in $FETCH; do
@@ -49,6 +56,8 @@ for system in "${SYSTEMS[@]}"; do
       [[ "$v" == "--preserve-order false" ]] && continue
       run --system "$system" --workload fetch --dataset "$d" $v
     done
+    # Partitions change only how results come back; ingest once per compression.
+    [[ "$v" == *--partitions* ]] && continue
     for d in $INGEST; do run --system "$system" --workload ingest --dataset "$d" $v; done
   done
 done

@@ -33,6 +33,56 @@ import pyarrow as pa
 
 PASSWORD = os.environ.get("BENCH_PASSWORD", "bench-password-not-secret")
 TABLES = {"sf1": "sf1.lineitem", "sf10": "sf10.lineitem", "narrow": "main.narrow"}
+# What a fetch is checked against: computed by the server through the same protocol, and
+# by the client over the batches it received (on the warm-up and on one extra, untimed
+# repetition at the end, so the measured repetitions only count rows).
+FETCH_CHECK_SQL = {
+    "lineitem": "SELECT count(*), sum(l_orderkey)::VARCHAR, sum(l_extendedprice)::VARCHAR, "
+    "sum(length(l_comment))::VARCHAR FROM {table}",
+    "narrow": "SELECT count(*), sum(id)::VARCHAR, sum(bucket)::VARCHAR, sum(x)::VARCHAR FROM {table}",
+}
+FETCH_CHECK_COLUMNS = {
+    "lineitem": ("l_orderkey", "l_extendedprice", "l_comment"),
+    "narrow": ("id", "bucket", "x"),
+}
+
+
+class FetchChecksum:
+    """Row count and three column sums over the batches of a fetch (order-independent)."""
+
+    def __init__(self, kind: str):
+        self.columns = FETCH_CHECK_COLUMNS[kind]
+        self.rows = 0
+        self.sums = [0, 0, 0]
+
+    def add(self, batch: pa.RecordBatch) -> None:
+        import pyarrow.compute as pc
+
+        self.rows += batch.num_rows
+        for i, name in enumerate(self.columns):
+            column = batch.column(batch.schema.get_field_index(name))
+            if pa.types.is_string(column.type) or pa.types.is_large_string(column.type) or pa.types.is_string_view(column.type):
+                column = pc.utf8_length(column)
+            value = pc.sum(column).as_py()
+            self.sums[i] += value if value is not None else 0
+
+    def matches(self, expected: tuple) -> bool:
+        from decimal import Decimal
+
+        if self.rows != int(expected[0]):
+            return False
+        for got, want in zip(self.sums, expected[1:]):
+            if isinstance(got, float):
+                if abs(got - float(want)) > 1e-9 * max(1.0, abs(float(want))):
+                    return False
+            elif Decimal(str(got)) != Decimal(str(want)):
+                return False
+        return True
+
+    def __repr__(self) -> str:
+        return f"rows={self.rows} sums={self.sums}"
+
+
 CHECK_SQL = (
     "SELECT count(*), sum(l_extendedprice)::VARCHAR, count(DISTINCT l_orderkey) FROM {table}"
 )
@@ -44,8 +94,11 @@ def cpu_seconds() -> float:
 
 
 def net_bytes() -> tuple[int, int]:
-    """Bytes received and sent on every non-loopback interface (the wire, TLS included)."""
+    """Bytes received and sent on every non-loopback interface (the wire, TLS included).
+    Zero where /proc/net/dev doesn't exist (a laptop run on loopback)."""
     rx = tx = 0
+    if not os.path.exists("/proc/net/dev"):
+        return 0, 0
     with open("/proc/net/dev") as f:
         for line in f.readlines()[2:]:
             name, data = line.split(":", 1)
@@ -61,6 +114,8 @@ def tcp_connections(port: int) -> int:
     """Established TCP connections to the server port right now (from /proc/net/tcp)."""
     count = 0
     for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        if not os.path.exists(path):
+            continue
         with open(path) as f:
             for line in f.readlines()[1:]:
                 fields = line.split()
@@ -79,7 +134,17 @@ def cert_fingerprint(path: str) -> str:
 class AdbcSystem:
     """GizmoSQL over Flight SQL, or Hardcharger over Warp SQL: both are ADBC DB-API drivers."""
 
-    def __init__(self, system: str, host: str, port: int, cert: str, compression: str, tls: bool):
+    def __init__(
+        self,
+        system: str,
+        host: str,
+        port: int,
+        cert: str,
+        compression: str,
+        tls: bool,
+        partitions: int = 1,
+        order: str = "preserve",
+    ):
         if system == "gizmosql":
             from adbc_driver_gizmosql import dbapi
 
@@ -100,6 +165,11 @@ class AdbcSystem:
             from adbc_driver_warpsql import dbapi
 
             db_kwargs = {"adbc.warp.ipc_compression": compression}
+            if partitions > 1:
+                # Parallel partitioned results: the server may split a result into this many
+                # partitions, which the driver fetches over separate connections.
+                db_kwargs["adbc.warp.statement.result_partitions"] = str(partitions)
+                db_kwargs["adbc.warp.statement.result_order"] = order
             # The driver refuses TLS options on a plaintext URI.
             tls_kwargs = {"tls_root_certs": cert} if tls else {}
             self.conn = dbapi.connect(
@@ -111,17 +181,11 @@ class AdbcSystem:
             )
         self.cur = self.conn.cursor()
 
-    def fetch(self, sql: str, collect: str) -> tuple[int, int, int]:
+    def fetch(self, sql: str, collect: str, check: "FetchChecksum | None") -> tuple[int, int, int]:
         self.cur.execute(operation=sql)
         if collect == "table":
-            table = self.cur.fetch_arrow_table()
-            return table.num_rows, table.nbytes, len(table.to_batches())
-        rows = nbytes = batches = 0
-        for batch in self.cur.fetch_record_batch():
-            rows += batch.num_rows
-            nbytes += batch.nbytes
-            batches += 1
-        return rows, nbytes, batches
+            return drain(batches=self.cur.fetch_arrow_table().to_batches(), check=check)
+        return drain(batches=self.cur.fetch_record_batch(), check=check)
 
     def execute(self, sql: str) -> None:
         self.cur.execute(operation=sql)
@@ -175,17 +239,11 @@ class QuackSystem:
     def qualify(self, table: str) -> str:
         return table if self.quack_mode == "query" else f"remote.{table}"
 
-    def fetch(self, sql: str, collect: str) -> tuple[int, int, int]:
+    def fetch(self, sql: str, collect: str, check: "FetchChecksum | None") -> tuple[int, int, int]:
         rel = self.con.sql(query=self.remote_sql(sql=sql))
         if collect == "table":
-            table = rel.to_arrow_table()
-            return table.num_rows, table.nbytes, len(table.to_batches())
-        rows = nbytes = batches = 0
-        for batch in rel.to_arrow_reader():
-            rows += batch.num_rows
-            nbytes += batch.nbytes
-            batches += 1
-        return rows, nbytes, batches
+            return drain(batches=rel.to_arrow_table().to_batches(), check=check)
+        return drain(batches=rel.to_arrow_reader(), check=check)
 
     def execute(self, sql: str) -> None:
         self.con.execute(query=sql)
@@ -200,6 +258,17 @@ class QuackSystem:
             self.con.execute(query=f"CREATE TABLE {table_name} AS SELECT * FROM bench_source")
         finally:
             self.con.unregister(view_name="bench_source")
+
+
+def drain(batches, check: "FetchChecksum | None") -> tuple[int, int, int]:
+    rows = nbytes = count = 0
+    for batch in batches:
+        rows += batch.num_rows
+        nbytes += batch.nbytes
+        count += 1
+        if check is not None:
+            check.add(batch=batch)
+    return rows, nbytes, count
 
 
 def load_table(path: str) -> pa.Table:
@@ -228,6 +297,8 @@ def main() -> None:
     parser.add_argument("--collect", default="stream", choices=["stream", "table"])
     parser.add_argument("--preserve-order", default="true", choices=["true", "false"])
     parser.add_argument("--tls", default="true", choices=["true", "false"])
+    parser.add_argument("--partitions", type=int, default=1, help="Hardcharger: result partitions")
+    parser.add_argument("--order", default="preserve", choices=["preserve", "any"])
     parser.add_argument("--cert", default=os.path.expanduser("~/bench/tls.crt"))
     parser.add_argument("--data-dir", default=os.path.expanduser("~/bench/data"))
     parser.add_argument("--network", default="lan")
@@ -252,6 +323,8 @@ def main() -> None:
             port=port,
             cert=args.cert,
             compression=args.compression,
+            partitions=args.partitions,
+            order=args.order,
             tls=args.tls == "true",
         )
 
@@ -266,11 +339,17 @@ def main() -> None:
         "preserve_order": args.preserve_order if args.system == "quack" else None,
         "label": args.label,
         "tls": args.tls == "true",
+        "partitions": args.partitions if args.system == "hardcharger" else 1,
+        "order": args.order if args.system == "hardcharger" and args.partitions > 1 else None,
     }
 
     if args.workload == "fetch":
         sql = f"SELECT * FROM {sut.qualify(table=TABLES[args.dataset])}"
         expected_rows = None
+        kind = "narrow" if args.dataset == "narrow" else "lineitem"
+        expected_check = sut.query_one(
+            sql=FETCH_CHECK_SQL[kind].format(table=sut.qualify(table=TABLES[args.dataset]))
+        )
     else:
         data = load_table(path=os.path.join(args.data_dir, f"lineitem_{args.dataset}.arrow"))
         with open(os.path.join(args.data_dir, f"lineitem_{args.dataset}.check.json")) as f:
@@ -285,13 +364,17 @@ def main() -> None:
         if args.workload == "fetch":
             (rx0, tx0), cpu0, t0 = net_bytes(), cpu_seconds(), time.perf_counter()
             start_epoch = time.time()
-            rows, nbytes, batches = sut.fetch(sql=sql, collect=args.collect)
+            check = FetchChecksum(kind=kind) if not measured else None
+            rows, nbytes, batches = sut.fetch(sql=sql, collect=args.collect, check=check)
             elapsed = time.perf_counter() - t0
             cpu = cpu_seconds() - cpu0
             rx1, tx1 = net_bytes()
             if expected_rows is None:
                 expected_rows = rows
             assert rows == expected_rows, (rows, expected_rows)
+            if check is not None and not check.matches(expected=expected_check):
+                print(f"VERIFY FAILED: fetched {check}, server says {expected_check}", file=sys.stderr)
+                sys.exit(1)
             extra = {"batches": batches}
         else:
             sut.execute(sql=f"DROP TABLE IF EXISTS {target}")
@@ -335,6 +418,15 @@ def main() -> None:
         )
         if measured:
             times.append(elapsed)
+    if args.workload == "fetch":
+        # One more, untimed repetition that checks every row's contribution again, so a
+        # measured configuration is never one whose data went wrong.
+        check = FetchChecksum(kind=kind)
+        rows, _, _ = sut.fetch(sql=sql, collect=args.collect, check=check)
+        if not check.matches(expected=expected_check):
+            print(f"VERIFY FAILED: fetched {check}, server says {expected_check}", file=sys.stderr)
+            sys.exit(1)
+        print(f"verified: {check} matches the server's {expected_check}", flush=True)
     s = summarize(seconds=times)
     print(
         f"SUMMARY {json.dumps(config)} median {s['median']:.3f}s p10 {s['p10']:.3f}s "
