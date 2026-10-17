@@ -276,13 +276,37 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/login-action@v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      # Hardcharger is not public yet: never push to a Docker Hub repository anyone can pull.
+      - name: Check the Docker Hub repository is private
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          token=$(jq -n --arg u "$DOCKERHUB_USERNAME" --arg p "$DOCKERHUB_PASSWORD" '{username: $u, password: $p}' |
+            curl -sf -H 'Content-Type: application/json' -d @- https://hub.docker.com/v2/users/login | jq -r .token)
+          [ -n "$token" ] && [ "$token" != null ] || { echo "Docker Hub sign-in failed"; exit 1; }
+          echo "::add-mask::$token"
+          private=$(curl -sf -H "Authorization: Bearer $token" \
+            https://hub.docker.com/v2/repositories/gizmodata/hardcharger/ | jq -r .is_private)
+          [ "$private" = true ] || { echo "docker.io/gizmodata/hardcharger is not private (is_private=$private)"; exit 1; }
       - name: Build (and on a tag, push) the image
         run: |
           tags="--tag ghcr.io/gizmodata/hardcharger:dev"
           push=""
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF_NAME#v}"
-            tags="--tag ghcr.io/gizmodata/hardcharger:$version --tag ghcr.io/gizmodata/hardcharger:latest"
+            tags=""
+            for repo in ghcr.io/gizmodata/hardcharger docker.io/gizmodata/hardcharger; do
+              tags="$tags --tag $repo:$version --tag $repo:latest"
+            done
             push="--push"
           fi
           docker buildx build --platform linux/amd64,linux/arm64 --file docker/Dockerfile $tags $push .
