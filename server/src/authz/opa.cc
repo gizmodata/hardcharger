@@ -1,16 +1,16 @@
 #include "authz/opa.hpp"
 
+#include <openssl/ssl.h>
+
 #include <boost/asio/co_spawn.hpp>
-#include <boost/asio/use_awaitable.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl.hpp>
+#include <boost/asio/use_awaitable.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/url/parse.hpp>
-#include <openssl/ssl.h>
-
 #include <optional>
 #include <stdexcept>
 

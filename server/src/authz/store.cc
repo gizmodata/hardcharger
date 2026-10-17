@@ -1,15 +1,15 @@
 #include "authz/store.hpp"
 
+#include <openssl/rand.h>
+
 #include <algorithm>
+#include <boost/json.hpp>
 #include <chrono>
+#include <duckdb.hpp>
 #include <filesystem>
 #include <random>
 #include <regex>
 #include <thread>
-
-#include <duckdb.hpp>
-#include <boost/json.hpp>
-#include <openssl/rand.h>
 
 #include "authz/duckdb_internal.hpp"
 
@@ -34,8 +34,7 @@ arrow::Status Exec(dd::Connection& conn, const std::string& sql) {
   return arrow::Status::OK();
 }
 
-arrow::Result<dd::unique_ptr<dd::QueryResult>> Run(dd::Connection& conn,
-                                                   const std::string& sql,
+arrow::Result<dd::unique_ptr<dd::QueryResult>> Run(dd::Connection& conn, const std::string& sql,
                                                    dd::vector<dd::Value> params = {}) {
   auto stmt = conn.Prepare(sql);
   if (stmt->HasError()) return StoreError("prepare failed", stmt->GetError());
@@ -72,8 +71,7 @@ std::string GetString(dd::QueryResult& result, dd::idx_t col, dd::idx_t row) {
   auto v = compat::ResultValue(result, col, row);
   return v.IsNull() ? std::string() : v.ToString();
 }
-std::optional<std::string> GetOptString(dd::QueryResult& result, dd::idx_t col,
-                                        dd::idx_t row) {
+std::optional<std::string> GetOptString(dd::QueryResult& result, dd::idx_t col, dd::idx_t row) {
   auto v = compat::ResultValue(result, col, row);
   if (v.IsNull()) return std::nullopt;
   return v.ToString();
@@ -101,11 +99,10 @@ GrantScope ScopeFrom(const std::string& s) {
 }
 
 std::optional<Privilege> PrivilegeFrom(const std::string& name) {
-  for (auto p :
-       {Privilege::kSelect, Privilege::kInsert, Privilege::kUpdate, Privilege::kDelete,
-        Privilege::kCreateTable, Privilege::kCreateView, Privilege::kCreateSchema,
-        Privilege::kDropTable, Privilege::kDropView, Privilege::kDropSchema,
-        Privilege::kAlterTable, Privilege::kAlterView, Privilege::kAll}) {
+  for (auto p : {Privilege::kSelect, Privilege::kInsert, Privilege::kUpdate, Privilege::kDelete,
+                 Privilege::kCreateTable, Privilege::kCreateView, Privilege::kCreateSchema,
+                 Privilege::kDropTable, Privilege::kDropView, Privilege::kDropSchema,
+                 Privilege::kAlterTable, Privilege::kAlterView, Privilege::kAll}) {
     if (PrivilegeName(p) == name) return p;
   }
   return std::nullopt;
@@ -159,19 +156,16 @@ std::string RedactConnectionString(std::string message, const std::string& uri) 
   for (size_t at; !uri.empty() && (at = message.find(uri)) != std::string::npos;) {
     message.replace(at, uri.size(), "<connection string>");
   }
-  message =
-      std::regex_replace(message, std::regex(R"((://[^:/@\s"']*:)[^@\s"']*@)"), "$1***@");
+  message = std::regex_replace(message, std::regex(R"((://[^:/@\s"']*:)[^@\s"']*@)"), "$1***@");
   message = std::regex_replace(
-      message,
-      std::regex(R"((password\s*=\s*)('[^']*'|"[^"]*"|[^\s"']+))", std::regex::icase),
+      message, std::regex(R"((password\s*=\s*)('[^']*'|"[^"]*"|[^\s"']+))", std::regex::icase),
       "$1***");
   return message;
 }
 
 bool LooksLikePostgres(const std::string& uri) {
   return uri.rfind("postgresql://", 0) == 0 || uri.rfind("postgres://", 0) == 0 ||
-         uri.find("dbname=") != std::string::npos ||
-         uri.find("host=") != std::string::npos;
+         uri.find("dbname=") != std::string::npos || uri.find("host=") != std::string::npos;
 }
 
 }  // namespace
@@ -339,33 +333,30 @@ arrow::Status RbacStore::InitializeSchema() {
           "granted_by VARCHAR NOT NULL, PRIMARY KEY (role_id, privilege, granted_by))",
   };
   for (const auto& sql : ddl) ARROW_RETURN_NOT_OK(Exec(conn, sql));
+  ARROW_RETURN_NOT_OK(Run(conn, "INSERT INTO " + T("meta") +
+                                    " SELECT 'data_version', '1' WHERE NOT EXISTS (SELECT 1 FROM " +
+                                    T("meta") + " WHERE key = 'data_version')")
+                          .status());
   ARROW_RETURN_NOT_OK(
       Run(conn, "INSERT INTO " + T("meta") +
-                    " SELECT 'data_version', '1' WHERE NOT EXISTS (SELECT 1 FROM " +
-                    T("meta") + " WHERE key = 'data_version')")
-          .status());
-  ARROW_RETURN_NOT_OK(
-      Run(conn, "INSERT INTO " + T("meta") +
-                    " SELECT 'schema_version', '1' WHERE NOT EXISTS (SELECT 1 FROM " +
-                    T("meta") + " WHERE key = 'schema_version')")
+                    " SELECT 'schema_version', '1' WHERE NOT EXISTS (SELECT 1 FROM " + T("meta") +
+                    " WHERE key = 'schema_version')")
           .status());
   ARROW_RETURN_NOT_OK(
       Run(conn,
           "INSERT INTO " + T("roles") +
               " SELECT $1, $2, $3, true WHERE NOT EXISTS (SELECT 1 FROM " + T("roles") +
               " WHERE role_id = $1)",
-          {Text(kPublicRoleId), Text(kPublicRoleName),
-           Text(FoldIdentifier(kPublicRoleName))})
+          {Text(kPublicRoleId), Text(kPublicRoleName), Text(FoldIdentifier(kPublicRoleName))})
           .status());
   return arrow::Status::OK();
 }
 
 arrow::Result<int64_t> RbacStore::CurrentVersion() {
   std::lock_guard<std::mutex> lock(mutex_);
-  ARROW_ASSIGN_OR_RAISE(auto result, Run(*conn_, "SELECT value FROM " + T("meta") +
-                                                     " WHERE key = 'data_version'"));
-  if (compat::ResultRowCount(*result) != 1)
-    return StoreError("corrupt store", "no data version");
+  ARROW_ASSIGN_OR_RAISE(
+      auto result, Run(*conn_, "SELECT value FROM " + T("meta") + " WHERE key = 'data_version'"));
+  if (compat::ResultRowCount(*result) != 1) return StoreError("corrupt store", "no data version");
   return std::stoll(GetString(*result, 0, 0));
 }
 
@@ -376,27 +367,22 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::Load() {
 
 arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   auto& conn = *conn_;
-  ARROW_ASSIGN_OR_RAISE(
-      auto version_result,
-      Run(conn, "SELECT value FROM " + T("meta") + " WHERE key = 'data_version'"));
+  ARROW_ASSIGN_OR_RAISE(auto version_result, Run(conn, "SELECT value FROM " + T("meta") +
+                                                           " WHERE key = 'data_version'"));
   if (compat::ResultRowCount(*version_result) != 1) {
     return StoreError("corrupt store", "no data version");
   }
   const int64_t version = std::stoll(GetString(*version_result, 0, 0));
 
   std::vector<UserRecord> users;
-  ARROW_ASSIGN_OR_RAISE(auto u,
-                        Run(conn, "SELECT user_id, name, password_hash, enabled FROM " +
-                                      T("users") + " ORDER BY name_key"));
+  ARROW_ASSIGN_OR_RAISE(auto u, Run(conn, "SELECT user_id, name, password_hash, enabled FROM " +
+                                              T("users") + " ORDER BY name_key"));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*u); ++r) {
-    users.push_back({GetString(*u, 0, r),
-                     GetString(*u, 1, r),
-                     GetOptString(*u, 2, r),
-                     GetBool(*u, 3, r),
-                     {}});
+    users.push_back(
+        {GetString(*u, 0, r), GetString(*u, 1, r), GetOptString(*u, 2, r), GetBool(*u, 3, r), {}});
   }
-  ARROW_ASSIGN_OR_RAISE(auto ua, Run(conn, "SELECT user_id, attribute, value FROM " +
-                                               T("user_attributes")));
+  ARROW_ASSIGN_OR_RAISE(auto ua,
+                        Run(conn, "SELECT user_id, attribute, value FROM " + T("user_attributes")));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*ua); ++r) {
     const std::string id = GetString(*ua, 0, r);
     for (auto& user : users) {
@@ -405,32 +391,29 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   }
 
   std::vector<RoleRecord> roles;
-  ARROW_ASSIGN_OR_RAISE(auto ro, Run(conn, "SELECT role_id, name, builtin FROM " +
-                                               T("roles") + " ORDER BY name_key"));
+  ARROW_ASSIGN_OR_RAISE(auto ro, Run(conn, "SELECT role_id, name, builtin FROM " + T("roles") +
+                                               " ORDER BY name_key"));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*ro); ++r) {
     roles.push_back({GetString(*ro, 0, r), GetString(*ro, 1, r), GetBool(*ro, 2, r)});
   }
 
   std::vector<MembershipRecord> memberships;
-  ARROW_ASSIGN_OR_RAISE(auto m,
-                        Run(conn,
-                            "SELECT member_kind, member_id, role_id, admin_option, "
-                            "granted_by FROM " +
-                                T("memberships")));
+  ARROW_ASSIGN_OR_RAISE(auto m, Run(conn,
+                                    "SELECT member_kind, member_id, role_id, admin_option, "
+                                    "granted_by FROM " +
+                                        T("memberships")));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*m); ++r) {
     memberships.push_back(
         {GetString(*m, 0, r) == "role" ? PrincipalKind::kRole : PrincipalKind::kUser,
-         GetString(*m, 1, r), GetString(*m, 2, r), GetBool(*m, 3, r),
-         GetString(*m, 4, r)});
+         GetString(*m, 1, r), GetString(*m, 2, r), GetBool(*m, 3, r), GetString(*m, 4, r)});
   }
 
   std::vector<ObjectGrantRecord> grants;
   ARROW_ASSIGN_OR_RAISE(
-      auto g,
-      Run(conn,
-          "SELECT grant_id, role_id, scope, catalog_name, schema_path, object_name, "
-          "privilege, columns, grant_option, granted_by FROM " +
-              T("object_grants") + " ORDER BY grant_id"));
+      auto g, Run(conn,
+                  "SELECT grant_id, role_id, scope, catalog_name, schema_path, object_name, "
+                  "privilege, columns, grant_option, granted_by FROM " +
+                      T("object_grants") + " ORDER BY grant_id"));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*g); ++r) {
     auto privilege = PrivilegeFrom(GetString(*g, 6, r));
     if (!privilege) continue;  // written by a newer version; never widens access
@@ -450,11 +433,10 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
 
   std::vector<OwnerRecord> owners;
   ARROW_ASSIGN_OR_RAISE(
-      auto o,
-      Run(conn,
-          "SELECT catalog_name, schema_path, object_name, object_type, owner_kind, "
-          "owner_id, definition_hash FROM " +
-              T("owners")));
+      auto o, Run(conn,
+                  "SELECT catalog_name, schema_path, object_name, object_type, owner_kind, "
+                  "owner_id, definition_hash FROM " +
+                      T("owners")));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*o); ++r) {
     OwnerRecord owner;
     owner.object.catalog = GetString(*o, 0, r);
@@ -469,9 +451,8 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
 
   std::vector<SystemPrivilegeRecord> system_privileges;
   ARROW_ASSIGN_OR_RAISE(
-      auto sp,
-      Run(conn, "SELECT role_id, privilege, admin_option, granted_by FROM " +
-                    T("system_privileges") + " ORDER BY role_id, privilege, granted_by"));
+      auto sp, Run(conn, "SELECT role_id, privilege, admin_option, granted_by FROM " +
+                             T("system_privileges") + " ORDER BY role_id, privilege, granted_by"));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*sp); ++r) {
     auto privilege = SystemPrivilegeFromName(GetString(*sp, 1, r));
     if (!privilege) return StoreError("corrupt store", "unknown system privilege");
@@ -480,17 +461,16 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   }
 
   std::vector<RowPolicyRecord> row_policies;
-  ARROW_ASSIGN_OR_RAISE(
-      auto rp, Run(conn,
-                   "SELECT policy_id, name, catalog_name, schema_path, object_name, "
-                   "permissive, role_ids, predicate FROM " +
-                       T("row_policies") + " ORDER BY policy_id"));
+  ARROW_ASSIGN_OR_RAISE(auto rp,
+                        Run(conn,
+                            "SELECT policy_id, name, catalog_name, schema_path, object_name, "
+                            "permissive, role_ids, predicate FROM " +
+                                T("row_policies") + " ORDER BY policy_id"));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*rp); ++r) {
     RowPolicyRecord p;
     p.id = GetString(*rp, 0, r);
     p.name = GetString(*rp, 1, r);
-    p.table = {GetString(*rp, 2, r), FromJson(GetString(*rp, 3, r)),
-               GetString(*rp, 4, r)};
+    p.table = {GetString(*rp, 2, r), FromJson(GetString(*rp, 3, r)), GetString(*rp, 4, r)};
     p.permissive = GetBool(*rp, 5, r);
     p.role_ids = FromJson(GetString(*rp, 6, r));
     p.predicate = GetString(*rp, 7, r);
@@ -502,16 +482,14 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
                                      "return_type, body FROM " +
                                          T("masking_policies") + " ORDER BY name_key"));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*mp); ++r) {
-    masking_policies.push_back({GetString(*mp, 0, r), GetString(*mp, 1, r),
-                                GetString(*mp, 2, r), GetString(*mp, 3, r),
-                                GetString(*mp, 4, r), GetString(*mp, 5, r)});
+    masking_policies.push_back({GetString(*mp, 0, r), GetString(*mp, 1, r), GetString(*mp, 2, r),
+                                GetString(*mp, 3, r), GetString(*mp, 4, r), GetString(*mp, 5, r)});
   }
   std::vector<MaskBindingRecord> mask_bindings;
-  ARROW_ASSIGN_OR_RAISE(auto mb,
-                        Run(conn,
-                            "SELECT catalog_name, schema_path, object_name, "
-                            "column_name, policy_id, exempt_role_ids FROM " +
-                                T("mask_bindings") + " ORDER BY table_key, column_key"));
+  ARROW_ASSIGN_OR_RAISE(auto mb, Run(conn,
+                                     "SELECT catalog_name, schema_path, object_name, "
+                                     "column_name, policy_id, exempt_role_ids FROM " +
+                                         T("mask_bindings") + " ORDER BY table_key, column_key"));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*mb); ++r) {
     mask_bindings.push_back(
         {{GetString(*mb, 0, r), FromJson(GetString(*mb, 1, r)), GetString(*mb, 2, r)},
@@ -521,45 +499,40 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   }
 
   std::vector<TenantRecord> tenants;
-  ARROW_ASSIGN_OR_RAISE(
-      auto tn, Run(conn, "SELECT tenant_id, name, default_catalog FROM " + T("tenants") +
-                             " ORDER BY name_key"));
+  ARROW_ASSIGN_OR_RAISE(auto tn, Run(conn, "SELECT tenant_id, name, default_catalog FROM " +
+                                               T("tenants") + " ORDER BY name_key"));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*tn); ++r) {
     tenants.push_back({GetString(*tn, 0, r), GetString(*tn, 1, r), GetString(*tn, 2, r)});
   }
   std::vector<PrincipalTenantRecord> principal_tenants;
-  ARROW_ASSIGN_OR_RAISE(auto pt,
-                        Run(conn, "SELECT principal_kind, principal_id, tenant_id FROM " +
-                                      T("principal_tenants")));
+  ARROW_ASSIGN_OR_RAISE(auto pt, Run(conn, "SELECT principal_kind, principal_id, tenant_id FROM " +
+                                               T("principal_tenants")));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*pt); ++r) {
     principal_tenants.push_back(
         {GetString(*pt, 0, r) == "role" ? PrincipalKind::kRole : PrincipalKind::kUser,
          GetString(*pt, 1, r), GetString(*pt, 2, r)});
   }
   std::vector<CatalogTenantRecord> catalog_tenants;
-  ARROW_ASSIGN_OR_RAISE(
-      auto ct, Run(conn, "SELECT catalog_name, tenant_id FROM " + T("catalog_tenants") +
-                             " ORDER BY catalog_key"));
+  ARROW_ASSIGN_OR_RAISE(auto ct, Run(conn, "SELECT catalog_name, tenant_id FROM " +
+                                               T("catalog_tenants") + " ORDER BY catalog_key"));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*ct); ++r) {
     catalog_tenants.push_back({GetString(*ct, 0, r), GetString(*ct, 1, r)});
   }
 
   std::vector<GroupMappingRecord> group_mappings;
   ARROW_ASSIGN_OR_RAISE(
-      auto gm,
-      Run(conn, "SELECT mapping_id, issuer, group_name, role_id FROM " +
-                    T("group_mappings") + " ORDER BY group_name, issuer, role_id"));
+      auto gm, Run(conn, "SELECT mapping_id, issuer, group_name, role_id FROM " +
+                             T("group_mappings") + " ORDER BY group_name, issuer, role_id"));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*gm); ++r) {
-    group_mappings.push_back({GetString(*gm, 0, r), GetString(*gm, 1, r),
-                              GetString(*gm, 2, r), GetString(*gm, 3, r)});
+    group_mappings.push_back(
+        {GetString(*gm, 0, r), GetString(*gm, 1, r), GetString(*gm, 2, r), GetString(*gm, 3, r)});
   }
 
   std::vector<ScopedTokenRecord> scoped_tokens;
-  ARROW_ASSIGN_OR_RAISE(auto st,
-                        Run(conn,
-                            "SELECT token_id, name, user_id, parent_id, privileges, "
-                            "catalogs, expires_at, created_by FROM " +
-                                T("scoped_tokens") + " ORDER BY user_id, name_key"));
+  ARROW_ASSIGN_OR_RAISE(auto st, Run(conn,
+                                     "SELECT token_id, name, user_id, parent_id, privileges, "
+                                     "catalogs, expires_at, created_by FROM " +
+                                         T("scoped_tokens") + " ORDER BY user_id, name_key"));
   for (dd::idx_t r = 0; r < compat::ResultRowCount(*st); ++r) {
     ScopedTokenRecord t;
     t.id = GetString(*st, 0, r);
@@ -576,11 +549,11 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   }
 
   return std::make_shared<const Snapshot>(
-      version, std::move(users), std::move(roles), std::move(memberships),
-      std::move(grants), std::move(owners), std::move(system_privileges),
-      std::move(row_policies), std::move(masking_policies), std::move(mask_bindings),
-      std::move(tenants), std::move(principal_tenants), std::move(catalog_tenants),
-      std::move(group_mappings), std::move(scoped_tokens));
+      version, std::move(users), std::move(roles), std::move(memberships), std::move(grants),
+      std::move(owners), std::move(system_privileges), std::move(row_policies),
+      std::move(masking_policies), std::move(mask_bindings), std::move(tenants),
+      std::move(principal_tenants), std::move(catalog_tenants), std::move(group_mappings),
+      std::move(scoped_tokens));
 }
 
 arrow::Status RbacStore::Mutate(
@@ -597,11 +570,10 @@ arrow::Status RbacStore::Mutate(
     ARROW_RETURN_NOT_OK(Exec(conn, "BEGIN TRANSACTION"));
     auto body = [&]() -> arrow::Status {
       // Bump the version first: the row lock serializes writers on every replica.
-      ARROW_RETURN_NOT_OK(
-          Run(conn, "UPDATE " + T("meta") +
-                        " SET value = CAST(CAST(value AS BIGINT) + 1 AS VARCHAR) "
-                        "WHERE key = 'data_version'")
-              .status());
+      ARROW_RETURN_NOT_OK(Run(conn, "UPDATE " + T("meta") +
+                                        " SET value = CAST(CAST(value AS BIGINT) + 1 AS VARCHAR) "
+                                        "WHERE key = 'data_version'")
+                              .status());
       ARROW_ASSIGN_OR_RAISE(auto snapshot, LoadLocked());
       StoreTransaction txn(*this, conn);
       ARROW_RETURN_NOT_OK(fn(txn, *snapshot));
@@ -611,8 +583,7 @@ arrow::Status RbacStore::Mutate(
     if (last.ok()) return last;
     (void)conn.Query("ROLLBACK");
     if (!IsRetryableConflict(last.message())) return last;
-    const int backoff_ms =
-        std::min(10 * (attempt + 1), 200) + static_cast<int>(jitter() % 25);
+    const int backoff_ms = std::min(10 * (attempt + 1), 200) + static_cast<int>(jitter() % 25);
     std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
   }
   return last;
@@ -649,20 +620,18 @@ arrow::Status StoreTransaction::InsertUser(const UserRecord& user) {
 
 arrow::Status StoreTransaction::UpdateUser(const UserRecord& user) {
   return Run(conn_,
-             "UPDATE " + T("users") +
-                 " SET password_hash = $2, enabled = $3 WHERE user_id = $1",
+             "UPDATE " + T("users") + " SET password_hash = $2, enabled = $3 WHERE user_id = $1",
              {Text(user.id), OptText(user.password_hash), Bool(user.enabled)})
       .status();
 }
 
-arrow::Status StoreTransaction::SetUserAttribute(
-    const std::string& user_id, const std::string& attribute,
-    const std::optional<std::string>& value) {
-  ARROW_RETURN_NOT_OK(Run(conn_,
-                          "DELETE FROM " + T("user_attributes") +
-                              " WHERE user_id = $1 AND attribute = $2",
-                          {Text(user_id), Text(attribute)})
-                          .status());
+arrow::Status StoreTransaction::SetUserAttribute(const std::string& user_id,
+                                                 const std::string& attribute,
+                                                 const std::optional<std::string>& value) {
+  ARROW_RETURN_NOT_OK(
+      Run(conn_, "DELETE FROM " + T("user_attributes") + " WHERE user_id = $1 AND attribute = $2",
+          {Text(user_id), Text(attribute)})
+          .status());
   if (!value) return arrow::Status::OK();
   return Run(conn_, "INSERT INTO " + T("user_attributes") + " VALUES ($1, $2, $3)",
              {Text(user_id), Text(attribute), Text(*value)})
@@ -671,30 +640,24 @@ arrow::Status StoreTransaction::SetUserAttribute(
 
 arrow::Status StoreTransaction::UpsertTenant(const TenantRecord& t) {
   ARROW_RETURN_NOT_OK(
-      Run(conn_, "DELETE FROM " + T("tenants") + " WHERE tenant_id = $1", {Text(t.id)})
-          .status());
+      Run(conn_, "DELETE FROM " + T("tenants") + " WHERE tenant_id = $1", {Text(t.id)}).status());
   return Run(conn_, "INSERT INTO " + T("tenants") + " VALUES ($1, $2, $3, $4)",
-             {Text(t.id), Text(t.name), Text(FoldIdentifier(t.name)),
-              Text(t.default_catalog)})
+             {Text(t.id), Text(t.name), Text(FoldIdentifier(t.name)), Text(t.default_catalog)})
       .status();
 }
 
 arrow::Status StoreTransaction::DeleteTenant(const std::string& tenant_id) {
-  ARROW_RETURN_NOT_OK(Run(conn_,
-                          "DELETE FROM " + T("catalog_tenants") + " WHERE tenant_id = $1",
+  ARROW_RETURN_NOT_OK(
+      Run(conn_, "DELETE FROM " + T("catalog_tenants") + " WHERE tenant_id = $1", {Text(tenant_id)})
+          .status());
+  ARROW_RETURN_NOT_OK(Run(conn_, "DELETE FROM " + T("principal_tenants") + " WHERE tenant_id = $1",
                           {Text(tenant_id)})
                           .status());
-  ARROW_RETURN_NOT_OK(
-      Run(conn_, "DELETE FROM " + T("principal_tenants") + " WHERE tenant_id = $1",
-          {Text(tenant_id)})
-          .status());
-  return Run(conn_, "DELETE FROM " + T("tenants") + " WHERE tenant_id = $1",
-             {Text(tenant_id)})
+  return Run(conn_, "DELETE FROM " + T("tenants") + " WHERE tenant_id = $1", {Text(tenant_id)})
       .status();
 }
 
-arrow::Status StoreTransaction::SetPrincipalTenant(PrincipalKind kind,
-                                                   const std::string& id,
+arrow::Status StoreTransaction::SetPrincipalTenant(PrincipalKind kind, const std::string& id,
                                                    const std::string& tenant_id) {
   const std::string kind_name = kind == PrincipalKind::kRole ? "role" : "user";
   ARROW_RETURN_NOT_OK(Run(conn_,
@@ -710,10 +673,9 @@ arrow::Status StoreTransaction::SetPrincipalTenant(PrincipalKind kind,
 
 arrow::Status StoreTransaction::SetCatalogTenant(const std::string& catalog,
                                                  const std::string& tenant_id) {
-  ARROW_RETURN_NOT_OK(
-      Run(conn_, "DELETE FROM " + T("catalog_tenants") + " WHERE catalog_key = $1",
-          {Text(FoldIdentifier(catalog))})
-          .status());
+  ARROW_RETURN_NOT_OK(Run(conn_, "DELETE FROM " + T("catalog_tenants") + " WHERE catalog_key = $1",
+                          {Text(FoldIdentifier(catalog))})
+                          .status());
   if (tenant_id.empty()) return arrow::Status::OK();
   return Run(conn_, "INSERT INTO " + T("catalog_tenants") + " VALUES ($1, $2, $3)",
              {Text(FoldIdentifier(catalog)), Text(catalog), Text(tenant_id)})
@@ -724,8 +686,7 @@ arrow::Status StoreTransaction::InsertScopedToken(const ScopedTokenRecord& t) {
   std::vector<std::string> privileges;
   for (auto p : t.privileges) privileges.push_back(PrivilegeName(p));
   return Run(conn_,
-             "INSERT INTO " + T("scoped_tokens") +
-                 " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             "INSERT INTO " + T("scoped_tokens") + " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
              {Text(t.id), Text(t.name), Text(FoldIdentifier(t.name)), Text(t.user_id),
               Text(t.parent_id), Text(ToJson(privileges)), Text(ToJson(t.catalogs)),
               Text(std::to_string(t.expires_at)), Text(t.created_by)})
@@ -733,8 +694,7 @@ arrow::Status StoreTransaction::InsertScopedToken(const ScopedTokenRecord& t) {
 }
 
 arrow::Status StoreTransaction::DeleteScopedToken(const std::string& token_id) {
-  return Run(conn_, "DELETE FROM " + T("scoped_tokens") + " WHERE token_id = $1",
-             {Text(token_id)})
+  return Run(conn_, "DELETE FROM " + T("scoped_tokens") + " WHERE token_id = $1", {Text(token_id)})
       .status();
 }
 
@@ -753,115 +713,96 @@ arrow::Status StoreTransaction::DeleteGroupMapping(const std::string& mapping_id
 arrow::Status StoreTransaction::UpsertRowPolicy(const RowPolicyRecord& p) {
   ARROW_RETURN_NOT_OK(DeleteRowPolicy(p.id));
   return Run(conn_,
-             "INSERT INTO " + T("row_policies") +
-                 " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             "INSERT INTO " + T("row_policies") + " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
              {Text(p.id), Text(p.name), Text(ObjectKey(p.table)), Text(p.table.catalog),
-              Text(ToJson(p.table.schema_path)), Text(p.table.object_name),
-              Bool(p.permissive), Text(ToJson(p.role_ids)), Text(p.predicate)})
+              Text(ToJson(p.table.schema_path)), Text(p.table.object_name), Bool(p.permissive),
+              Text(ToJson(p.role_ids)), Text(p.predicate)})
       .status();
 }
 
 arrow::Status StoreTransaction::DeleteRowPolicy(const std::string& policy_id) {
-  return Run(conn_, "DELETE FROM " + T("row_policies") + " WHERE policy_id = $1",
-             {Text(policy_id)})
+  return Run(conn_, "DELETE FROM " + T("row_policies") + " WHERE policy_id = $1", {Text(policy_id)})
       .status();
 }
 
 arrow::Status StoreTransaction::UpsertMaskingPolicy(const MaskingPolicyRecord& m) {
   ARROW_RETURN_NOT_OK(
-      Run(conn_, "DELETE FROM " + T("masking_policies") + " WHERE policy_id = $1",
-          {Text(m.id)})
+      Run(conn_, "DELETE FROM " + T("masking_policies") + " WHERE policy_id = $1", {Text(m.id)})
           .status());
-  return Run(conn_,
-             "INSERT INTO " + T("masking_policies") +
-                 " VALUES ($1, $2, $3, $4, $5, $6, $7)",
+  return Run(conn_, "INSERT INTO " + T("masking_policies") + " VALUES ($1, $2, $3, $4, $5, $6, $7)",
              {Text(m.id), Text(m.name), Text(FoldIdentifier(m.name)), Text(m.parameter),
               Text(m.parameter_type), Text(m.return_type), Text(m.body)})
       .status();
 }
 
 arrow::Status StoreTransaction::DeleteMaskingPolicy(const std::string& policy_id) {
-  ARROW_RETURN_NOT_OK(Run(conn_,
-                          "DELETE FROM " + T("mask_bindings") + " WHERE policy_id = $1",
-                          {Text(policy_id)})
-                          .status());
+  ARROW_RETURN_NOT_OK(
+      Run(conn_, "DELETE FROM " + T("mask_bindings") + " WHERE policy_id = $1", {Text(policy_id)})
+          .status());
   return Run(conn_, "DELETE FROM " + T("masking_policies") + " WHERE policy_id = $1",
              {Text(policy_id)})
       .status();
 }
 
 arrow::Status StoreTransaction::SetMaskBinding(const MaskBindingRecord& b, bool remove) {
-  ARROW_RETURN_NOT_OK(Run(conn_,
-                          "DELETE FROM " + T("mask_bindings") +
-                              " WHERE table_key = $1 AND column_key = $2",
-                          {Text(ObjectKey(b.table)), Text(FoldIdentifier(b.column))})
-                          .status());
+  ARROW_RETURN_NOT_OK(
+      Run(conn_, "DELETE FROM " + T("mask_bindings") + " WHERE table_key = $1 AND column_key = $2",
+          {Text(ObjectKey(b.table)), Text(FoldIdentifier(b.column))})
+          .status());
   if (remove) return arrow::Status::OK();
   return Run(conn_,
-             "INSERT INTO " + T("mask_bindings") +
-                 " VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-             {Text(ObjectKey(b.table)), Text(FoldIdentifier(b.column)),
-              Text(b.table.catalog), Text(ToJson(b.table.schema_path)),
-              Text(b.table.object_name), Text(b.column), Text(b.policy_id),
-              Text(ToJson(b.exempt_role_ids))})
+             "INSERT INTO " + T("mask_bindings") + " VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+             {Text(ObjectKey(b.table)), Text(FoldIdentifier(b.column)), Text(b.table.catalog),
+              Text(ToJson(b.table.schema_path)), Text(b.table.object_name), Text(b.column),
+              Text(b.policy_id), Text(ToJson(b.exempt_role_ids))})
       .status();
 }
 
 arrow::Status StoreTransaction::DeleteUser(const std::string& user_id) {
-  ARROW_RETURN_NOT_OK(Run(conn_,
-                          "DELETE FROM " + T("memberships") +
-                              " WHERE member_kind = 'user' AND member_id = $1",
-                          {Text(user_id)})
-                          .status());
-  ARROW_RETURN_NOT_OK(Run(conn_,
-                          "DELETE FROM " + T("user_attributes") + " WHERE user_id = $1",
-                          {Text(user_id)})
-                          .status());
+  ARROW_RETURN_NOT_OK(
+      Run(conn_,
+          "DELETE FROM " + T("memberships") + " WHERE member_kind = 'user' AND member_id = $1",
+          {Text(user_id)})
+          .status());
+  ARROW_RETURN_NOT_OK(
+      Run(conn_, "DELETE FROM " + T("user_attributes") + " WHERE user_id = $1", {Text(user_id)})
+          .status());
   ARROW_RETURN_NOT_OK(SetPrincipalTenant(PrincipalKind::kUser, user_id, ""));
-  ARROW_RETURN_NOT_OK(Run(conn_,
-                          "DELETE FROM " + T("scoped_tokens") + " WHERE user_id = $1",
-                          {Text(user_id)})
-                          .status());
-  return Run(conn_, "DELETE FROM " + T("users") + " WHERE user_id = $1", {Text(user_id)})
-      .status();
+  ARROW_RETURN_NOT_OK(
+      Run(conn_, "DELETE FROM " + T("scoped_tokens") + " WHERE user_id = $1", {Text(user_id)})
+          .status());
+  return Run(conn_, "DELETE FROM " + T("users") + " WHERE user_id = $1", {Text(user_id)}).status();
 }
 
 arrow::Status StoreTransaction::InsertRole(const RoleRecord& role) {
   return Run(conn_, "INSERT INTO " + T("roles") + " VALUES ($1, $2, $3, $4)",
-             {Text(role.id), Text(role.name), Text(FoldIdentifier(role.name)),
-              Bool(role.builtin)})
+             {Text(role.id), Text(role.name), Text(FoldIdentifier(role.name)), Bool(role.builtin)})
       .status();
 }
 
 arrow::Status StoreTransaction::DeleteRole(const std::string& role_id) {
+  ARROW_RETURN_NOT_OK(Run(conn_,
+                          "DELETE FROM " + T("memberships") +
+                              " WHERE role_id = $1 OR (member_kind = 'role' AND member_id = $1)",
+                          {Text(role_id)})
+                          .status());
   ARROW_RETURN_NOT_OK(
-      Run(conn_,
-          "DELETE FROM " + T("memberships") +
-              " WHERE role_id = $1 OR (member_kind = 'role' AND member_id = $1)",
-          {Text(role_id)})
+      Run(conn_, "DELETE FROM " + T("object_grants") + " WHERE role_id = $1", {Text(role_id)})
           .status());
-  ARROW_RETURN_NOT_OK(Run(conn_,
-                          "DELETE FROM " + T("object_grants") + " WHERE role_id = $1",
-                          {Text(role_id)})
-                          .status());
-  ARROW_RETURN_NOT_OK(Run(conn_,
-                          "DELETE FROM " + T("system_privileges") + " WHERE role_id = $1",
-                          {Text(role_id)})
-                          .status());
+  ARROW_RETURN_NOT_OK(
+      Run(conn_, "DELETE FROM " + T("system_privileges") + " WHERE role_id = $1", {Text(role_id)})
+          .status());
   ARROW_RETURN_NOT_OK(SetPrincipalTenant(PrincipalKind::kRole, role_id, ""));
-  ARROW_RETURN_NOT_OK(Run(conn_,
-                          "DELETE FROM " + T("group_mappings") + " WHERE role_id = $1",
-                          {Text(role_id)})
-                          .status());
-  return Run(conn_, "DELETE FROM " + T("roles") + " WHERE role_id = $1", {Text(role_id)})
-      .status();
+  ARROW_RETURN_NOT_OK(
+      Run(conn_, "DELETE FROM " + T("group_mappings") + " WHERE role_id = $1", {Text(role_id)})
+          .status());
+  return Run(conn_, "DELETE FROM " + T("roles") + " WHERE role_id = $1", {Text(role_id)}).status();
 }
 
 arrow::Status StoreTransaction::InsertMembership(const MembershipRecord& m) {
   return Run(conn_, "INSERT INTO " + T("memberships") + " VALUES ($1, $2, $3, $4, $5)",
-             {Text(m.member_kind == PrincipalKind::kRole ? "role" : "user"),
-              Text(m.member_id), Text(m.role_id), Bool(m.admin_option),
-              Text(m.granted_by)})
+             {Text(m.member_kind == PrincipalKind::kRole ? "role" : "user"), Text(m.member_id),
+              Text(m.role_id), Bool(m.admin_option), Text(m.granted_by)})
       .status();
 }
 
@@ -871,8 +812,8 @@ arrow::Status StoreTransaction::DeleteMembership(PrincipalKind member_kind,
   return Run(conn_,
              "DELETE FROM " + T("memberships") +
                  " WHERE member_kind = $1 AND member_id = $2 AND role_id = $3",
-             {Text(member_kind == PrincipalKind::kRole ? "role" : "user"),
-              Text(member_id), Text(role_id)})
+             {Text(member_kind == PrincipalKind::kRole ? "role" : "user"), Text(member_id),
+              Text(role_id)})
       .status();
 }
 
@@ -880,10 +821,10 @@ arrow::Status StoreTransaction::InsertGrant(const ObjectGrantRecord& g) {
   return Run(conn_,
              "INSERT INTO " + T("object_grants") +
                  " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-             {Text(g.id), Text(g.role_id), Text(ScopeName(g.scope)),
-              Text(g.target.catalog), Text(ToJson(g.target.schema_path)),
-              Text(g.target.object_name), Text(PrivilegeName(g.privilege)),
-              Text(ToJson(g.columns)), Bool(g.grant_option), Text(g.granted_by)})
+             {Text(g.id), Text(g.role_id), Text(ScopeName(g.scope)), Text(g.target.catalog),
+              Text(ToJson(g.target.schema_path)), Text(g.target.object_name),
+              Text(PrivilegeName(g.privilege)), Text(ToJson(g.columns)), Bool(g.grant_option),
+              Text(g.granted_by)})
       .status();
 }
 
@@ -892,33 +833,29 @@ arrow::Status StoreTransaction::UpdateGrant(const ObjectGrantRecord& g) {
              "UPDATE " + T("object_grants") +
                  " SET columns = $2, grant_option = $3, granted_by = $4 WHERE grant_id = "
                  "$1",
-             {Text(g.id), Text(ToJson(g.columns)), Bool(g.grant_option),
-              Text(g.granted_by)})
+             {Text(g.id), Text(ToJson(g.columns)), Bool(g.grant_option), Text(g.granted_by)})
       .status();
 }
 
 arrow::Status StoreTransaction::DeleteGrant(const std::string& grant_id) {
-  return Run(conn_, "DELETE FROM " + T("object_grants") + " WHERE grant_id = $1",
-             {Text(grant_id)})
+  return Run(conn_, "DELETE FROM " + T("object_grants") + " WHERE grant_id = $1", {Text(grant_id)})
       .status();
 }
 
 arrow::Status StoreTransaction::UpsertOwner(const OwnerRecord& o) {
   ARROW_RETURN_NOT_OK(DeleteOwner(o.object));
-  return Run(conn_,
-             "INSERT INTO " + T("owners") + " VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-             {Text(ObjectKey(o.object)), Text(o.object.catalog),
-              Text(ToJson(o.object.schema_path)), Text(o.object.object_name),
-              Text(ObjectTypeName(o.type)), Text(OwnerKindName(o.owner_kind)),
-              Text(o.owner_id), Text(o.definition_hash)})
+  return Run(conn_, "INSERT INTO " + T("owners") + " VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+             {Text(ObjectKey(o.object)), Text(o.object.catalog), Text(ToJson(o.object.schema_path)),
+              Text(o.object.object_name), Text(ObjectTypeName(o.type)),
+              Text(OwnerKindName(o.owner_kind)), Text(o.owner_id), Text(o.definition_hash)})
       .status();
 }
 
 arrow::Status StoreTransaction::UpsertSystemPrivilege(const SystemPrivilegeRecord& r) {
   ARROW_RETURN_NOT_OK(DeleteSystemPrivilege(r));
   return Run(conn_, "INSERT INTO " + T("system_privileges") + " VALUES ($1, $2, $3, $4)",
-             {Text(r.role_id), Text(SystemPrivilegeName(r.privilege)),
-              Bool(r.admin_option), Text(r.granted_by)})
+             {Text(r.role_id), Text(SystemPrivilegeName(r.privilege)), Bool(r.admin_option),
+              Text(r.granted_by)})
       .status();
 }
 
@@ -926,8 +863,7 @@ arrow::Status StoreTransaction::DeleteSystemPrivilege(const SystemPrivilegeRecor
   return Run(conn_,
              "DELETE FROM " + T("system_privileges") +
                  " WHERE role_id = $1 AND privilege = $2 AND granted_by = $3",
-             {Text(r.role_id), Text(SystemPrivilegeName(r.privilege)),
-              Text(r.granted_by)})
+             {Text(r.role_id), Text(SystemPrivilegeName(r.privilege)), Text(r.granted_by)})
       .status();
 }
 

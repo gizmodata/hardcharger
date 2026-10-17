@@ -12,25 +12,23 @@
 #pragma once
 
 #include <atomic>
+#include <boost/json.hpp>
+#include <duckdb.hpp>
+#include <duckdb/main/client_context_state.hpp>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include <duckdb.hpp>
-#include <duckdb/main/client_context_state.hpp>
-
 #include "authz/engine.hpp"
-
-#include <boost/json.hpp>
 
 namespace hardcharger::authz {
 
 // Who is acting, as the external policy service receives it
 // ({"action", "user", "roles", "active_role", "tenant", "scoped_token", ...}).
 boost::json::object PolicyInput(const Snapshot& snapshot, const Principal& principal,
-                           const std::string& action);
+                                const std::string& action);
 
 constexpr const char* kRbacSessionStateName = "hardcharger_authz";
 
@@ -105,8 +103,7 @@ class RbacSessionState : public duckdb::ClientContextState {
                 duckdb::optional_ptr<duckdb::ErrorData> error) override;
 
  private:
-  duckdb::RebindQueryInfo RebindIfGrantsChanged(
-      const duckdb::PreparedStatementData& prepared);
+  duckdb::RebindQueryInfo RebindIfGrantsChanged(const duckdb::PreparedStatementData& prepared);
 
   std::weak_ptr<RbacEngine> engine_;
   mutable std::mutex principal_mutex_;
@@ -136,8 +133,7 @@ class RbacSessionState : public duckdb::ClientContextState {
 // one of its categories ("ATTACH", "read_csv() (files and URLs)", ...), if any.
 // Categories with none (query(), passthrough SQL, grammar settings, ...) stay
 // the administrator's.
-std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(
-    const std::string& category);
+std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(const std::string& category);
 
 // Record what a statement that ran successfully created or dropped.
 void ApplyOwnership(RbacEngine& engine, const Principal& principal,

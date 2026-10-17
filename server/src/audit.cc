@@ -1,10 +1,10 @@
 #include "audit.hpp"
 
-#include <boost/json.hpp>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <openssl/rand.h>
 
+#include <boost/json.hpp>
 #include <chrono>
 #include <map>
 #include <mutex>
@@ -56,8 +56,8 @@ std::string Canonical(const std::string& prev, std::string_view message,
   out.append(message.data(), message.size());
   out += '\n';
   for (const auto& [key, value] : fields) {
-    out += std::to_string(key.size()) + ':' + key + std::to_string(value.size()) + ':' + value +
-           '\n';
+    out +=
+        std::to_string(key.size()) + ':' + key + std::to_string(value.size()) + ':' + value + '\n';
   }
   return out;
 }
@@ -79,7 +79,8 @@ std::string NewChainId() {
   unsigned char bytes[8];
   if (RAND_bytes(bytes, sizeof(bytes)) != 1) {
     const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-    for (std::size_t i = 0; i < sizeof(bytes); ++i) bytes[i] = static_cast<unsigned char>(now >> (8 * i));
+    for (std::size_t i = 0; i < sizeof(bytes); ++i)
+      bytes[i] = static_cast<unsigned char>(now >> (8 * i));
   }
   return Hex(bytes, sizeof(bytes));
 }
@@ -182,13 +183,13 @@ AuditChainReport VerifyAuditLog(std::istream& in, const std::string& key, bool p
     std::string prev;
     int64_t expected = records.begin()->first;
     if (expected != 1 && !partial) {
-      report.problems.push_back("chain " + chain + " starts at sequence " + std::to_string(expected) +
-                                ": its first records are missing");
+      report.problems.push_back("chain " + chain + " starts at sequence " +
+                                std::to_string(expected) + ": its first records are missing");
     }
     for (auto& [seq, entry] : records) {
       auto& [line, record] = entry;
-      const std::string where = "line " + std::to_string(line) + " (chain " + chain + ", sequence " +
-                                std::to_string(seq) + ")";
+      const std::string where = "line " + std::to_string(line) + " (chain " + chain +
+                                ", sequence " + std::to_string(seq) + ")";
       ++report.records;
       if (seq != expected) {
         report.problems.push_back(where + ": sequence " + std::to_string(expected) +
@@ -223,14 +224,15 @@ AuditChainReport VerifyAuditLog(std::istream& in, const std::string& key, bool p
         report.problems.push_back(where + ": the record does not cover its chain fields");
         complete = false;
       }
-      const std::string digest = Digest(key, Canonical(claimed_prev, Field(record, "message"), covered));
+      const std::string digest =
+          Digest(key, Canonical(claimed_prev, Field(record, "message"), covered));
       if (complete && digest != Field(record, kHash)) {
         report.problems.push_back(where + ": was changed after it was written");
       }
       prev = Field(record, kHash);
     }
-    report.chains.push_back(chain + ": sequence " + std::to_string(records.begin()->first) + " to " +
-                            std::to_string(records.rbegin()->first));
+    report.chains.push_back(chain + ": sequence " + std::to_string(records.begin()->first) +
+                            " to " + std::to_string(records.rbegin()->first));
   }
   return report;
 }

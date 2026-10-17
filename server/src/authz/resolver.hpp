@@ -19,8 +19,7 @@ namespace hardcharger::authz {
 // whether the first part of a dotted name is a catalog.
 class SessionObjectResolver : public ObjectResolver {
  public:
-  explicit SessionObjectResolver(duckdb::Connection& connection)
-      : connection_(connection) {}
+  explicit SessionObjectResolver(duckdb::Connection& connection) : connection_(connection) {}
   arrow::Result<ResolvedObject> ResolveObject(const QualifiedName& name) override;
   arrow::Result<ObjectPath> ResolveSchema(const QualifiedName& name) override;
   arrow::Result<std::string> ResolveCatalog(const std::string& name) override;

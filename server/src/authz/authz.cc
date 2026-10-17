@@ -4,19 +4,19 @@
 #include <openssl/evp.h>
 
 #include <duckdb.hpp>
+#include <duckdb/main/attached_database.hpp>
 #include <duckdb/main/capi_v2/capi_v2_internal.hpp>
 #include <duckdb/main/client_context.hpp>
 #include <duckdb/main/config.hpp>
 #include <duckdb/main/database_manager.hpp>
-#include <duckdb/main/attached_database.hpp>
 
+#include "audit.hpp"
 #include "authz/ddl.hpp"
 #include "authz/enforcement.hpp"
 #include "authz/engine.hpp"
 #include "authz/gate.hpp"
 #include "authz/resolver.hpp"
 #include "duckdb_sql.hpp"
-#include "audit.hpp"
 #include "logging.hpp"
 
 namespace hardcharger::authz {
@@ -100,7 +100,8 @@ std::shared_ptr<arrow::RecordBatchReader> Rows(const CommandResult& result) {
       }
     }
     std::shared_ptr<arrow::Array> array;
-    if (!builder.Finish(&array).ok()) throw Error(ErrorCode::kExecutionError, "could not build the result");
+    if (!builder.Finish(&array).ok())
+      throw Error(ErrorCode::kExecutionError, "could not build the result");
     columns.push_back(std::move(array));
   }
   auto batch = arrow::RecordBatch::Make(schema, static_cast<int64_t>(result.rows.size()), columns);
@@ -108,7 +109,6 @@ std::shared_ptr<arrow::RecordBatchReader> Rows(const CommandResult& result) {
   if (!reader.ok()) throw Error(ErrorCode::kExecutionError, reader.status().message());
   return *reader;
 }
-
 
 // A client-prepared statement under access control: the DuckDB statement and what its
 // first successful run must record (who owns what it creates).
@@ -193,7 +193,8 @@ bool ContainsWord(const std::string& text, const std::string& word) {
   };
   const std::string haystack = lower(text), needle = lower(word);
   auto identifier = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
-  for (auto at = haystack.find(needle); at != std::string::npos; at = haystack.find(needle, at + 1)) {
+  for (auto at = haystack.find(needle); at != std::string::npos;
+       at = haystack.find(needle, at + 1)) {
     const auto end = at + needle.size();
     if ((at == 0 || !identifier(haystack[at - 1])) &&
         (end >= haystack.size() || !identifier(haystack[end]))) {
@@ -272,8 +273,8 @@ void AccessControl::CheckToken(const Identity& who) const {
   if (user == nullptr || !user->enabled) {
     // "is not defined on this server" / "is disabled", as at sign-in.
     auto refused = engine_->PrincipalForUser(who.user_name);
-    throw Error(ErrorCode::kInvalidToken,
-                refused.ok() ? "user " + who.user_name + " is disabled" : refused.status().message());
+    throw Error(ErrorCode::kInvalidToken, refused.ok() ? "user " + who.user_name + " is disabled"
+                                                       : refused.status().message());
   }
   if (!who.credential.empty() && Fingerprint(user->password_hash) != who.credential) {
     throw Error(ErrorCode::kInvalidToken, "the password of user " + user->name +
@@ -368,9 +369,9 @@ void AccessControl::OnSnapshot(const Snapshot& snapshot) {
     if (guard->user_id_.empty()) continue;  // the administrator
     const UserRecord* user = snapshot.FindUserById(guard->user_id_);
     const bool tenant_changed =
-        !guard->tenant_id_.empty() && (!snapshot.FindTenantById(guard->tenant_id_) ||
-                                       TenantCatalogsKey(snapshot, guard->tenant_id_) !=
-                                           guard->tenant_catalogs_);
+        !guard->tenant_id_.empty() &&
+        (!snapshot.FindTenantById(guard->tenant_id_) ||
+         TenantCatalogsKey(snapshot, guard->tenant_id_) != guard->tenant_catalogs_);
     const bool scope_gone =
         !guard->identity_.scope_id.empty() &&
         !snapshot.ValidScope(guard->identity_.scope_id, guard->user_id_, NowSeconds());
@@ -401,7 +402,9 @@ void AccessControl::OnSnapshot(const Snapshot& snapshot) {
     if (state && snapshot.LostRightsSince(*previous, state->principal())) {
       guard->InterruptRunning();
       Audit(LogLevel::kInfo, "stopped a running statement after its user lost access",
-          {{"kind", "access_control"}, {"user", guard->identity_.user_name}, {"reason", "rights revoked"}});
+            {{"kind", "access_control"},
+             {"user", guard->identity_.user_name},
+             {"reason", "rights revoked"}});
     }
   }
 }
@@ -452,7 +455,7 @@ void SessionGuard::End(const std::string& reason) {
     if (connection_) duckdb_v2_connection_interrupt(connection_, nullptr);
   }
   Audit(LogLevel::kInfo, "ended a session after an access-control change",
-      {{"kind", "access_control"}, {"user", identity_.user_name}, {"reason", reason}});
+        {{"kind", "access_control"}, {"user", identity_.user_name}, {"reason", reason}});
 }
 
 void SessionGuard::InterruptRunning() {
@@ -481,16 +484,23 @@ void SessionGuard::AuditAllowed() {
   std::string objects;
   for (const auto& access : accesses) objects += (objects.empty() ? "" : "; ") + access;
   Audit(LogLevel::kInfo, "access control allowed a statement",
-      {{"kind", "access_control"}, {"status", "allowed"}, {"user", identity_.user_name}, {"objects", objects},
-       {"active_role", state->active_role_name()}});
+        {{"kind", "access_control"},
+         {"status", "allowed"},
+         {"user", identity_.user_name},
+         {"objects", objects},
+         {"active_role", state->active_role_name()}});
 }
 
 void SessionGuard::AuditDenied(const Error& error, std::string_view sql) {
   if (std::string_view(error.what()).find("Hardcharger blocked") == std::string_view::npos) return;
   auto state = StateOf(connection_);
   Audit(LogLevel::kWarning, "access control refused a statement",
-      {{"kind", "access_control"}, {"status", "denied"}, {"user", identity_.user_name}, {"error", error.what()}, {"sql", LoggableSql(sql)},
-       {"active_role", state ? state->active_role_name() : ""}});
+        {{"kind", "access_control"},
+         {"status", "denied"},
+         {"user", identity_.user_name},
+         {"error", error.what()},
+         {"sql", LoggableSql(sql)},
+         {"active_role", state ? state->active_role_name() : ""}});
 }
 
 Error SessionGuard::ForTenant(const Error& error) const {
@@ -564,12 +574,14 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
       // makes of the rest (it reads beta.t as beta.main.t when there is no schema beta).
       if (parts.size() >= 2) {
         if (auto catalog = resolver->ResolveCatalog(parts[0]); catalog.ok() && hidden(*catalog)) {
-          throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name), "42501");
+          throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name),
+                      "42501");
         }
       }
       auto resolved = resolver->ResolveObject(QualifiedName{parts});
       if (resolved.ok() && hidden(resolved->path.catalog)) {
-        throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name), "42501");
+        throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name),
+                    "42501");
       }
     };
   }
@@ -612,8 +624,11 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
   auto executed = engine->Execute(parsed.command, actor, resolver);
   if (!executed.ok()) {
     Audit(LogLevel::kWarning, "access-control statement refused",
-        {{"kind", "access_control"}, {"status", "rejected"}, {"user", identity_.user_name}, {"statement", parsed.kind},
-         {"error", executed.status().message()}});
+          {{"kind", "access_control"},
+           {"status", "rejected"},
+           {"user", identity_.user_name},
+           {"statement", parsed.kind},
+           {"error", executed.status().message()}});
     throw ForTenant(FromStatus(executed.status()));
   }
   CommandResult result = std::move(*executed);
@@ -623,8 +638,8 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
       throw Error(ErrorCode::kExecutionError,
                   "Hardcharger access control: this server cannot sign scoped tokens");
     }
-    const std::string token =
-        owner_.signer_(result.minted->user_name, result.minted->token_id, result.minted->expires_at);
+    const std::string token = owner_.signer_(result.minted->user_name, result.minted->token_id,
+                                             result.minted->expires_at);
     result.column_names.push_back("token");
     for (auto& row : result.rows) row.push_back(token);
   }
@@ -636,7 +651,10 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
     owner_.EndSessionsOf(user_id, parsed.kind == "DROP USER" ? "user dropped" : "user disabled");
   }
   Audit(LogLevel::kInfo, "access-control statement",
-      {{"kind", "access_control"}, {"user", identity_.user_name}, {"statement", parsed.kind}, {"status", "success"}});
+        {{"kind", "access_control"},
+         {"user", identity_.user_name},
+         {"statement", parsed.kind},
+         {"status", "success"}});
   warpsql::StatementOutcome outcome;
   outcome.rows = Rows(result);
   return outcome;
@@ -760,7 +778,8 @@ std::shared_ptr<arrow::RecordBatchReader> SessionGuard::Metadata(
   auto state = StateOf(connection_);
   if (!state) {
     throw Error(ErrorCode::kPermissionDenied,
-                "Hardcharger blocked this request: the session has no access-control state", "42501");
+                "Hardcharger blocked this request: the session has no access-control state",
+                "42501");
   }
   // Hardcharger's own lookup over DuckDB's catalog views. Names are not protected (as
   // duckdb_tables() shows them), except to a tenant's users, who see only their

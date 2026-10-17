@@ -1,10 +1,10 @@
 #include "authz/password.hpp"
 
-#include <vector>
-
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+
+#include <vector>
 
 namespace hardcharger::authz {
 
@@ -16,8 +16,8 @@ constexpr size_t kHashBytes = 32;
 
 std::string Base64Encode(const unsigned char* data, size_t len) {
   std::string out(4 * ((len + 2) / 3), '\0');
-  const int n = EVP_EncodeBlock(reinterpret_cast<unsigned char*>(out.data()), data,
-                                static_cast<int>(len));
+  const int n =
+      EVP_EncodeBlock(reinterpret_cast<unsigned char*>(out.data()), data, static_cast<int>(len));
   out.resize(n < 0 ? 0 : static_cast<size_t>(n));
   return out;
 }
@@ -25,9 +25,8 @@ std::string Base64Encode(const unsigned char* data, size_t len) {
 bool Base64Decode(const std::string& text, std::vector<unsigned char>& out) {
   if (text.empty() || text.size() % 4 != 0) return false;
   out.assign(3 * text.size() / 4, 0);
-  const int n =
-      EVP_DecodeBlock(out.data(), reinterpret_cast<const unsigned char*>(text.data()),
-                      static_cast<int>(text.size()));
+  const int n = EVP_DecodeBlock(out.data(), reinterpret_cast<const unsigned char*>(text.data()),
+                                static_cast<int>(text.size()));
   if (n < 0) return false;
   size_t padding = 0;
   if (text.back() == '=') ++padding;
@@ -36,8 +35,8 @@ bool Base64Decode(const std::string& text, std::vector<unsigned char>& out) {
   return true;
 }
 
-bool Derive(const std::string& password, const unsigned char* salt, size_t salt_len,
-            int iterations, unsigned char* out, size_t out_len) {
+bool Derive(const std::string& password, const unsigned char* salt, size_t salt_len, int iterations,
+            unsigned char* out, size_t out_len) {
   return PKCS5_PBKDF2_HMAC(password.data(), static_cast<int>(password.size()), salt,
                            static_cast<int>(salt_len), iterations, EVP_sha256(),
                            static_cast<int>(out_len), out) == 1;
@@ -50,13 +49,11 @@ arrow::Result<std::string> HashPassword(const std::string& password, int iterati
     return arrow::Status::Invalid("Hardcharger access control: a password cannot be empty");
   }
   if (iterations < 1000) {
-    return arrow::Status::Invalid(
-        "Hardcharger access control: too few password hash iterations");
+    return arrow::Status::Invalid("Hardcharger access control: too few password hash iterations");
   }
   unsigned char salt[kSaltBytes];
   if (RAND_bytes(salt, sizeof(salt)) != 1) {
-    return arrow::Status::IOError(
-        "Hardcharger access control: no secure random source for a salt");
+    return arrow::Status::IOError("Hardcharger access control: no secure random source for a salt");
   }
   unsigned char hash[kHashBytes];
   if (!Derive(password, salt, sizeof(salt), iterations, hash, sizeof(hash))) {
@@ -88,8 +85,7 @@ bool VerifyPassword(const std::string& password, const std::string& stored_hash)
   if (!Base64Decode(parts[2], salt) || !Base64Decode(parts[3], expected)) return false;
   if (expected.size() != kHashBytes) return false;
   unsigned char actual[kHashBytes];
-  if (!Derive(password, salt.data(), salt.size(), iterations, actual, sizeof(actual)))
-    return false;
+  if (!Derive(password, salt.data(), salt.size(), iterations, actual, sizeof(actual))) return false;
   return CRYPTO_memcmp(actual, expected.data(), kHashBytes) == 0;
 }
 

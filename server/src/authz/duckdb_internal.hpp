@@ -3,12 +3,11 @@
 // through its v2 C API (duckdb_v2.h).
 #pragma once
 
-#include <string>
-#include <unordered_set>
-
 #include <duckdb.hpp>
 #include <duckdb/parser/expression/constant_expression.hpp>
 #include <duckdb/parser/parser.hpp>
+#include <string>
+#include <unordered_set>
 
 namespace hardcharger::authz::ddb {
 
@@ -48,14 +47,32 @@ inline duckdb::Value ConstantValue(const duckdb::ConstantExpression& constant) {
 // Table functions that read files or URLs (DuckDB's own and its bundled extensions').
 // Under access control they need the READ FILESYSTEM system privilege.
 inline bool IsFileReadingTableFunction(const std::string& name_lower) {
-  static const std::unordered_set<std::string> kNames = {
-      "read_csv",          "read_csv_auto",         "read_parquet",        "parquet_scan",
-      "read_json",         "read_json_auto",        "read_json_objects",   "read_ndjson",
-      "read_ndjson_auto",  "read_ndjson_objects",   "read_text",           "read_blob",
-      "glob",              "sniff_csv",             "parquet_metadata",    "parquet_schema",
-      "parquet_file_metadata", "parquet_kv_metadata", "read_text_auto",
-      "read_single_csv_file", "read_single_json_file", "read_duckdb", "read_xlsx",
-      "parquet_bloom_probe", "read_json_objects_auto", "read_ndjson_objects_auto"};
+  static const std::unordered_set<std::string> kNames = {"read_csv",
+                                                         "read_csv_auto",
+                                                         "read_parquet",
+                                                         "parquet_scan",
+                                                         "read_json",
+                                                         "read_json_auto",
+                                                         "read_json_objects",
+                                                         "read_ndjson",
+                                                         "read_ndjson_auto",
+                                                         "read_ndjson_objects",
+                                                         "read_text",
+                                                         "read_blob",
+                                                         "glob",
+                                                         "sniff_csv",
+                                                         "parquet_metadata",
+                                                         "parquet_schema",
+                                                         "parquet_file_metadata",
+                                                         "parquet_kv_metadata",
+                                                         "read_text_auto",
+                                                         "read_single_csv_file",
+                                                         "read_single_json_file",
+                                                         "read_duckdb",
+                                                         "read_xlsx",
+                                                         "parquet_bloom_probe",
+                                                         "read_json_objects_auto",
+                                                         "read_ndjson_objects_auto"};
   return kNames.contains(name_lower);
 }
 

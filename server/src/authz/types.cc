@@ -37,8 +37,8 @@ std::string PrivilegeName(Privilege privilege) {
 }
 
 const std::vector<Privilege>& TableLevelPrivileges() {
-  static const std::vector<Privilege> kPrivileges = {
-      Privilege::kSelect, Privilege::kInsert, Privilege::kUpdate, Privilege::kDelete};
+  static const std::vector<Privilege> kPrivileges = {Privilege::kSelect, Privilege::kInsert,
+                                                     Privilege::kUpdate, Privilege::kDelete};
   return kPrivileges;
 }
 
@@ -57,9 +57,8 @@ bool IdentifiersEqual(const std::string& a, const std::string& b) {
 }
 
 std::string QuoteIdentifierIfNeeded(const std::string& identifier) {
-  bool plain =
-      !identifier.empty() &&
-      (std::isalpha(static_cast<unsigned char>(identifier[0])) || identifier[0] == '_');
+  bool plain = !identifier.empty() &&
+               (std::isalpha(static_cast<unsigned char>(identifier[0])) || identifier[0] == '_');
   for (char c : identifier) {
     if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) plain = false;
   }

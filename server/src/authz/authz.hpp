@@ -163,8 +163,8 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // user may not see is left out.
   std::shared_ptr<arrow::RecordBatchReader> Metadata(
       warpsql::MetadataKind kind, const warpsql::MetadataFilter& filter,
-      const std::function<std::shared_ptr<arrow::RecordBatchReader>(const warpsql::MetadataFilter&)>&
-          run);
+      const std::function<
+          std::shared_ptr<arrow::RecordBatchReader>(const warpsql::MetadataFilter&)>& run);
 
   // An error as this session's user may see it: for a tenant's user, one that names
   // another tenant's objects reads exactly like one about something that does not exist.

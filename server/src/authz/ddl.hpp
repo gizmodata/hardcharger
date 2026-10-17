@@ -6,12 +6,12 @@
 
 #pragma once
 
+#include <arrow/result.h>
+
 #include <optional>
 #include <string>
 #include <variant>
 #include <vector>
-
-#include <arrow/result.h>
 
 #include "authz/types.hpp"
 
@@ -221,10 +221,9 @@ using RbacCommand =
                  DropRoleCommand, RoleMembershipCommand, ObjectPrivilegeCommand,
                  SystemPrivilegeCommand, AlterOwnerCommand, ShowGrantsCommand,
                  CreateRowPolicyCommand, DropRowPolicyCommand, CreateMaskingPolicyCommand,
-                 DropMaskingPolicyCommand, SetColumnMaskCommand, ShowPoliciesCommand,
-                 TenantCommand, CatalogTenantCommand, TenantDefaultCatalogCommand,
-                 ShowTenantsCommand, SetRoleCommand, GroupMappingCommand,
-                 ScopedTokenCommand>;
+                 DropMaskingPolicyCommand, SetColumnMaskCommand, ShowPoliciesCommand, TenantCommand,
+                 CatalogTenantCommand, TenantDefaultCatalogCommand, ShowTenantsCommand,
+                 SetRoleCommand, GroupMappingCommand, ScopedTokenCommand>;
 
 // True when `sql` begins like an access-control statement (GRANT, REVOKE,
 // CREATE/ALTER/DROP USER or ROLE, ALTER TABLE|VIEW ... OWNER TO, SHOW GRANTS).

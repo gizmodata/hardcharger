@@ -1,11 +1,11 @@
 #include "authz/engine.hpp"
 
-#include "authz/policies.hpp"
-
 #include <algorithm>
 #include <ctime>
-#include <sstream>
 #include <set>
+#include <sstream>
+
+#include "authz/policies.hpp"
 
 namespace hardcharger::authz {
 
@@ -40,9 +40,7 @@ std::string ScopeLabel(GrantScope scope) {
   return "TABLE";
 }
 
-bool SamePath(const ObjectPath& a, const ObjectPath& b) {
-  return ObjectKey(a) == ObjectKey(b);
-}
+bool SamePath(const ObjectPath& a, const ObjectPath& b) { return ObjectKey(a) == ObjectKey(b); }
 
 // Privileges that one GRANT row stands for (ALL expands to the DML set).
 std::vector<Privilege> Expand(Privilege p) {
@@ -68,8 +66,8 @@ arrow::Result<ResolvedGrantee> ResolveGrantee(const Snapshot& snap, const Grante
   if (const auto* role = snap.FindRoleByName(g.name)) {
     return ResolvedGrantee{PrincipalKind::kRole, role->id, role->name};
   }
-  return AccessControlError((g.kind == GranteeKind::kRole ? "role " : "user or role ") +
-                            g.name + " does not exist");
+  return AccessControlError((g.kind == GranteeKind::kRole ? "role " : "user or role ") + g.name +
+                            " does not exist");
 }
 
 arrow::Status CheckNameFree(const Snapshot& snap, const std::string& name) {
@@ -98,8 +96,7 @@ arrow::Result<std::string> TenantForName(const Snapshot& snap, const std::string
 }
 
 // Does the principal hold the tenant's tenant_admin role?
-bool IsTenantAdmin(const Snapshot& snap, const Principal& actor,
-                   const std::string& tenant_id) {
+bool IsTenantAdmin(const Snapshot& snap, const Principal& actor, const std::string& tenant_id) {
   if (tenant_id.empty() || actor.superuser) return false;
   const RoleRecord* admin = snap.TenantRole(tenant_id, kTenantAdminSuffix);
   return admin && snap.RolesOf(actor).count(admin->id) > 0;
@@ -111,8 +108,7 @@ std::string TenantName(const Snapshot& snap, const std::string& tenant_id) {
   return "tenant " + (t ? t->name : tenant_id);
 }
 
-std::vector<std::string> OwnedObjects(const Snapshot& snap, OwnerKind kind,
-                                      const std::string& id) {
+std::vector<std::string> OwnedObjects(const Snapshot& snap, OwnerKind kind, const std::string& id) {
   std::vector<std::string> owned;
   for (const auto& o : snap.owners()) {
     if (o.owner_kind == kind && o.owner_id == id) owned.push_back(o.object.ToString());
@@ -126,12 +122,12 @@ std::vector<std::string> OwnedObjects(const Snapshot& snap, OwnerKind kind,
 
 arrow::Result<std::shared_ptr<RbacEngine>> RbacEngine::Create(const Options& options) {
   std::shared_ptr<RbacEngine> engine(new RbacEngine(options));
-  ARROW_ASSIGN_OR_RAISE(engine->dummy_hash_, HashPassword("hardcharger-timing-equalizer",
-                                                          options.password_iterations));
+  ARROW_ASSIGN_OR_RAISE(engine->dummy_hash_,
+                        HashPassword("hardcharger-timing-equalizer", options.password_iterations));
   ARROW_ASSIGN_OR_RAISE(engine->store_, RbacStore::Open(options.store_uri));
   if (!options.policy_service_url.empty()) {
-    engine->policy_service_ = std::make_unique<PolicyService>(
-        options.policy_service_url, options.policy_service_timeout);
+    engine->policy_service_ =
+        std::make_unique<PolicyService>(options.policy_service_url, options.policy_service_timeout);
   }
   ARROW_ASSIGN_OR_RAISE(auto snapshot, engine->store_->Load());
   engine->Publish(std::move(snapshot));
@@ -194,8 +190,8 @@ arrow::Status RbacEngine::Refresh() {
   return arrow::Status::OK();
 }
 
-arrow::Result<Principal> RbacEngine::AuthenticatePassword(
-    const std::string& user_name, const std::string& password) const {
+arrow::Result<Principal> RbacEngine::AuthenticatePassword(const std::string& user_name,
+                                                          const std::string& password) const {
   static const auto kFailure = AccessControlError("invalid user name or password");
   auto snap = snapshot();
   const UserRecord* user = snap->FindUserByName(user_name);
@@ -208,15 +204,13 @@ arrow::Result<Principal> RbacEngine::AuthenticatePassword(
   return Principal::User(user->id, user->name);
 }
 
-arrow::Result<Principal> RbacEngine::PrincipalForUser(
-    const std::string& user_name) const {
+arrow::Result<Principal> RbacEngine::PrincipalForUser(const std::string& user_name) const {
   auto snap = snapshot();
   const UserRecord* user = snap->FindUserByName(user_name);
   if (!user) {
-    return AccessControlError(
-        "user " + user_name +
-        " is not defined on this server. An administrator creates it with "
-        "CREATE USER");
+    return AccessControlError("user " + user_name +
+                              " is not defined on this server. An administrator creates it with "
+                              "CREATE USER");
   }
   if (!user->enabled) return AccessControlError("user " + user->name + " is disabled");
   return Principal::User(user->id, user->name);
@@ -229,8 +223,7 @@ bool RbacEngine::IsActive(const Principal& principal) const {
 }
 
 arrow::Status RbacEngine::RecordOwner(const ObjectPath& object, ObjectType type,
-                                      const Principal& owner,
-                                      const std::string& definition_hash) {
+                                      const Principal& owner, const std::string& definition_hash) {
   ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot&) {
     OwnerRecord record;
     record.object = object;
@@ -266,8 +259,7 @@ std::optional<int64_t> ParseDuration(const std::string& text) {
   int64_t n = 0;
   std::string unit, rest;
   if (!(in >> n) || n <= 0 || !(in >> unit) || (in >> rest)) return std::nullopt;
-  for (auto& ch : unit)
-    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  for (auto& ch : unit) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
   if (!unit.empty() && unit.back() == 's') unit.pop_back();
   if (unit == "second") return n;
   if (unit == "minute") return n * 60;
@@ -312,17 +304,14 @@ arrow::Result<CommandResult> RbacEngine::ExecuteScopedToken(const ScopedTokenCom
   };
   if (c.kind == ScopedTokenCommand::Kind::kShow) {
     CommandResult result;
-    result.column_names = {"name",     "user",       "allows",
-                           "catalogs", "expires_at", "minted_under"};
+    result.column_names = {"name", "user", "allows", "catalogs", "expires_at", "minted_under"};
     for (const auto& t : snap->scoped_tokens()) {
       if (!actor.superuser && t.user_id != actor.user_id) continue;
       const auto* user = snap->FindUserById(t.user_id);
-      const auto* parent =
-          t.parent_id.empty() ? nullptr : snap->FindScopedToken(t.parent_id);
-      result.rows.push_back({t.name, user ? user->name : t.user_id,
-                             privilege_list(t.privileges),
-                             t.catalogs.empty() ? "(any)" : Join(t.catalogs),
-                             IsoTime(t.expires_at), parent ? parent->name : ""});
+      const auto* parent = t.parent_id.empty() ? nullptr : snap->FindScopedToken(t.parent_id);
+      result.rows.push_back({t.name, user ? user->name : t.user_id, privilege_list(t.privileges),
+                             t.catalogs.empty() ? "(any)" : Join(t.catalogs), IsoTime(t.expires_at),
+                             parent ? parent->name : ""});
     }
     return result;
   }
@@ -330,8 +319,8 @@ arrow::Result<CommandResult> RbacEngine::ExecuteScopedToken(const ScopedTokenCom
   const UserRecord* user = nullptr;
   if (actor.superuser) {
     if (!c.for_user) {
-      return AccessControlError("the administrator names the user: " + CommandKind(c) +
-                                " " + c.name + " FOR USER name ...");
+      return AccessControlError("the administrator names the user: " + CommandKind(c) + " " +
+                                c.name + " FOR USER name ...");
     }
     user = snap->FindUserByName(*c.for_user);
     if (!user) return AccessControlError("user " + *c.for_user + " does not exist");
@@ -339,11 +328,10 @@ arrow::Result<CommandResult> RbacEngine::ExecuteScopedToken(const ScopedTokenCom
     user = snap->FindUserById(actor.user_id);
     if (!user) return AccessControlError("user " + actor.user_name + " does not exist");
     if (c.for_user && !IdentifiersEqual(*c.for_user, user->name)) {
-      return AccessControlError(actor.scope
-                                    ? "a scoped token mints tokens only for the user it "
-                                      "belongs to"
-                                    : "users mint scoped tokens only for yourself; the "
-                                      "administrator mints them for others");
+      return AccessControlError(actor.scope ? "a scoped token mints tokens only for the user it "
+                                              "belongs to"
+                                            : "users mint scoped tokens only for yourself; the "
+                                              "administrator mints them for others");
     }
   }
   const ScopedTokenRecord* existing = nullptr;
@@ -353,16 +341,14 @@ arrow::Result<CommandResult> RbacEngine::ExecuteScopedToken(const ScopedTokenCom
 
   if (c.kind == ScopedTokenCommand::Kind::kDrop) {
     if (!existing) {
-      return AccessControlError("user " + user->name + " has no scoped token named " +
-                                c.name);
+      return AccessControlError("user " + user->name + " has no scoped token named " + c.name);
     }
     // The token and every token minted under it.
     std::set<std::string> doomed{existing->id};
     for (bool grew = true; grew;) {
       grew = false;
       for (const auto& t : snap->scoped_tokens()) {
-        if (!t.parent_id.empty() && doomed.count(t.parent_id) &&
-            doomed.insert(t.id).second)
+        if (!t.parent_id.empty() && doomed.count(t.parent_id) && doomed.insert(t.id).second)
           grew = true;
       }
     }
@@ -374,17 +360,15 @@ arrow::Result<CommandResult> RbacEngine::ExecuteScopedToken(const ScopedTokenCom
       ARROW_ASSIGN_OR_RAISE(auto fresh, store_->Load());
       Publish(std::move(fresh));
     }
-    return Message(
-        "Scoped token " + existing->name + " of user " + user->name + " revoked" +
-        (doomed.size() > 1
-             ? " with " + std::to_string(doomed.size() - 1) + " token(s) minted under it"
-             : ""));
+    return Message("Scoped token " + existing->name + " of user " + user->name + " revoked" +
+                   (doomed.size() > 1
+                        ? " with " + std::to_string(doomed.size() - 1) + " token(s) minted under it"
+                        : ""));
   }
 
   // CREATE
   if (existing) {
-    return AccessControlError("user " + user->name +
-                              " already has a scoped token named " + c.name);
+    return AccessControlError("user " + user->name + " already has a scoped token named " + c.name);
   }
   int64_t seconds = 3600;
   if (c.valid_for) {
@@ -420,8 +404,7 @@ arrow::Result<CommandResult> RbacEngine::ExecuteScopedToken(const ScopedTokenCom
       if (token.catalogs.empty()) token.catalogs = parent.catalogs;
       for (const auto& cat : token.catalogs) {
         bool inside = false;
-        for (const auto& pc : parent.catalogs)
-          inside = inside || IdentifiersEqual(pc, cat);
+        for (const auto& pc : parent.catalogs) inside = inside || IdentifiersEqual(pc, cat);
         if (!inside) {
           return AccessControlError("a token minted under scoped token " + parent.name +
                                     " cannot reach catalog " + cat);
@@ -431,8 +414,8 @@ arrow::Result<CommandResult> RbacEngine::ExecuteScopedToken(const ScopedTokenCom
     if (token.expires_at > parent.expires_at) {
       if (c.valid_for) {
         return AccessControlError("a token minted under scoped token " + parent.name +
-                                  " cannot outlast it (it expires " +
-                                  IsoTime(parent.expires_at) + ")");
+                                  " cannot outlast it (it expires " + IsoTime(parent.expires_at) +
+                                  ")");
       }
       token.expires_at = parent.expires_at;
     }
@@ -441,8 +424,8 @@ arrow::Result<CommandResult> RbacEngine::ExecuteScopedToken(const ScopedTokenCom
   ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot& now) {
     for (const auto& t : now.scoped_tokens()) {
       if (t.user_id == user->id && IdentifiersEqual(t.name, c.name)) {
-        return AccessControlError("user " + user->name +
-                                  " already has a scoped token named " + c.name);
+        return AccessControlError("user " + user->name + " already has a scoped token named " +
+                                  c.name);
       }
     }
     return txn.InsertScopedToken(token);
@@ -460,8 +443,7 @@ arrow::Result<CommandResult> RbacEngine::ExecuteScopedToken(const ScopedTokenCom
   return result;
 }
 
-arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
-                                                 const Principal& actor,
+arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, const Principal& actor,
                                                  ObjectResolver& resolver) {
   // A scoped token may read its grants, narrow itself and mint narrower
   // tokens; it never changes access control.
@@ -490,8 +472,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
     std::vector<std::string> role_ids;
     if (!show->principal) {
       if (actor.superuser) {
-        result.rows.push_back(
-            {"ALL", "SERVER", "*", "", actor.user_name, "SUPERUSER", "YES", ""});
+        result.rows.push_back({"ALL", "SERVER", "*", "", actor.user_name, "SUPERUSER", "YES", ""});
         return result;
       }
       // The roles the session acts with (SET ROLE narrows them).
@@ -514,27 +495,24 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
       }
       // Role memberships of the principal itself.
       for (const auto& m : snap->memberships()) {
-        const bool member =
-            (who.kind == PrincipalKind::kUser && m.member_kind == PrincipalKind::kUser &&
-             m.member_id == who.id) ||
-            (who.kind == PrincipalKind::kRole && m.member_kind == PrincipalKind::kRole &&
-             m.member_id == who.id);
+        const bool member = (who.kind == PrincipalKind::kUser &&
+                             m.member_kind == PrincipalKind::kUser && m.member_id == who.id) ||
+                            (who.kind == PrincipalKind::kRole &&
+                             m.member_kind == PrincipalKind::kRole && m.member_id == who.id);
         if (!member) continue;
         const auto* role = snap->FindRoleById(m.role_id);
-        result.rows.push_back(
-            {"ROLE", "ROLE", role ? role->name : m.role_id, "", who.name,
-             who.kind == PrincipalKind::kUser ? "USER" : "ROLE",
-             m.admin_option ? "YES" : "NO", grantor_name(m.granted_by)});
+        result.rows.push_back({"ROLE", "ROLE", role ? role->name : m.role_id, "", who.name,
+                               who.kind == PrincipalKind::kUser ? "USER" : "ROLE",
+                               m.admin_option ? "YES" : "NO", grantor_name(m.granted_by)});
       }
     }
     for (const auto& role_id : role_ids) {
       const auto* role = snap->FindRoleById(role_id);
       for (const auto& g : snap->grants()) {
         if (g.role_id != role_id) continue;
-        result.rows.push_back(
-            {PrivilegeName(g.privilege), ScopeLabel(g.scope), g.target.ToString(),
-             Join(g.columns), role ? role->name : role_id, "ROLE",
-             g.grant_option ? "YES" : "NO", grantor_name(g.granted_by)});
+        result.rows.push_back({PrivilegeName(g.privilege), ScopeLabel(g.scope), g.target.ToString(),
+                               Join(g.columns), role ? role->name : role_id, "ROLE",
+                               g.grant_option ? "YES" : "NO", grantor_name(g.granted_by)});
       }
     }
     for (const auto& role_id : role_ids) {
@@ -542,8 +520,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
       for (const auto& r : snap->system_privileges()) {
         if (r.role_id != role_id) continue;
         result.rows.push_back({SystemPrivilegeName(r.privilege), "SYSTEM", "", "",
-                               role ? role->name : role_id, "ROLE",
-                               r.admin_option ? "YES" : "NO",
+                               role ? role->name : role_id, "ROLE", r.admin_option ? "YES" : "NO",
                                grantor_name(r.granted_by)});
       }
     }
@@ -553,8 +530,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
                                o.type == ObjectType::kView     ? "VIEW"
                                : o.type == ObjectType::kSchema ? "SCHEMA"
                                                                : "TABLE",
-                               o.object.ToString(), "", actor.user_name, "USER", "YES",
-                               ""});
+                               o.object.ToString(), "", actor.user_name, "USER", "YES", ""});
       }
     }
     return result;
@@ -578,9 +554,8 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
     auto snap = snapshot();
     auto tenant = TenantForName(*snap, name);
     if (!tenant.ok() || !IsTenantAdmin(*snap, actor, *tenant)) {
-      return AccessControlError(
-          "Hardcharger blocked " + CommandKind(command) +
-          ": only administrators manage users and roles on this server");
+      return AccessControlError("Hardcharger blocked " + CommandKind(command) +
+                                ": only administrators manage users and roles on this server");
     }
   }
 
@@ -589,9 +564,8 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
   // and memberships the change left without a grantor able to make them
   // (REVOKE ... CASCADE, the default; RESTRICT refuses instead).
   size_t cascaded = 0;
-  auto mutate_with =
-      [&](bool restrict,
-          const std::function<arrow::Status(StoreTransaction&, const Snapshot&)>& fn)
+  auto mutate_with = [&](bool restrict,
+                         const std::function<arrow::Status(StoreTransaction&, const Snapshot&)>& fn)
       -> arrow::Status {
     ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot& snap) {
       cascaded = 0;
@@ -610,22 +584,20 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
       for (const auto& r : fallen.system_privileges) {
         ARROW_RETURN_NOT_OK(txn.DeleteSystemPrivilege(r));
       }
-      cascaded = fallen.grant_ids.size() + fallen.memberships.size() +
-                 fallen.system_privileges.size();
+      cascaded =
+          fallen.grant_ids.size() + fallen.memberships.size() + fallen.system_privileges.size();
       return arrow::Status::OK();
     }));
     ARROW_ASSIGN_OR_RAISE(auto snap, store_->Load());
     Publish(std::move(snap));
     return arrow::Status::OK();
   };
-  auto mutate =
-      [&](const std::function<arrow::Status(StoreTransaction&, const Snapshot&)>& fn) {
-        return mutate_with(false, fn);
-      };
+  auto mutate = [&](const std::function<arrow::Status(StoreTransaction&, const Snapshot&)>& fn) {
+    return mutate_with(false, fn);
+  };
   auto with_cascade_note = [&](std::string text) {
     if (cascaded > 0) {
-      text += "; also revoked " + std::to_string(cascaded) +
-              " grant(s) that were made through it";
+      text += "; also revoked " + std::to_string(cascaded) + " grant(s) that were made through it";
     }
     return Message(text);
   };
@@ -636,27 +608,25 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
   if (const auto* c = std::get_if<CreateUserCommand>(&command)) {
     std::optional<std::string> hash;
     if (c->password) {
-      ARROW_ASSIGN_OR_RAISE(auto h,
-                            HashPassword(*c->password, options_.password_iterations));
+      ARROW_ASSIGN_OR_RAISE(auto h, HashPassword(*c->password, options_.password_iterations));
       hash = std::move(h);
     }
-    ARROW_RETURN_NOT_OK(
-        mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
-          if (c->if_not_exists && snap.FindUserByName(c->name)) {
-            message = "User " + c->name + " already exists";
-            return arrow::Status::OK();
-          }
-          ARROW_RETURN_NOT_OK(CheckNameFree(snap, c->name));
-          if (!options_.administrator_name.empty() &&
-              IdentifiersEqual(c->name, options_.administrator_name)) {
-            return AccessControlError(c->name + " is the server administrator's name");
-          }
-          ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name));
-          message = "User " + c->name + " created";
-          UserRecord user{StoreTransaction::NewId(), c->name, hash, true, {}};
-          ARROW_RETURN_NOT_OK(txn.InsertUser(user));
-          return txn.SetPrincipalTenant(PrincipalKind::kUser, user.id, tenant);
-        }));
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      if (c->if_not_exists && snap.FindUserByName(c->name)) {
+        message = "User " + c->name + " already exists";
+        return arrow::Status::OK();
+      }
+      ARROW_RETURN_NOT_OK(CheckNameFree(snap, c->name));
+      if (!options_.administrator_name.empty() &&
+          IdentifiersEqual(c->name, options_.administrator_name)) {
+        return AccessControlError(c->name + " is the server administrator's name");
+      }
+      ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name));
+      message = "User " + c->name + " created";
+      UserRecord user{StoreTransaction::NewId(), c->name, hash, true, {}};
+      ARROW_RETURN_NOT_OK(txn.InsertUser(user));
+      return txn.SetPrincipalTenant(PrincipalKind::kUser, user.id, tenant);
+    }));
     return Message(message);
   }
 
@@ -664,43 +634,41 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
   if (const auto* c = std::get_if<AlterUserCommand>(&command)) {
     std::optional<std::string> hash;
     if (c->action == AlterUserCommand::Action::kSetPassword) {
-      ARROW_ASSIGN_OR_RAISE(auto h,
-                            HashPassword(c->password, options_.password_iterations));
+      ARROW_ASSIGN_OR_RAISE(auto h, HashPassword(c->password, options_.password_iterations));
       hash = std::move(h);
     }
     std::string user_id;
-    ARROW_RETURN_NOT_OK(
-        mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
-          const auto* existing = snap.FindUserByName(c->name);
-          if (!existing) return AccessControlError("user " + c->name + " does not exist");
-          UserRecord user = *existing;
-          user_id = user.id;
-          switch (c->action) {
-            case AlterUserCommand::Action::kSetPassword:
-              user.password_hash = hash;
-              message = "Password changed for user " + user.name;
-              break;
-            case AlterUserCommand::Action::kClearPassword:
-              user.password_hash.reset();
-              message = "Password login removed for user " + user.name;
-              break;
-            case AlterUserCommand::Action::kEnable:
-              user.enabled = true;
-              message = "User " + user.name + " enabled";
-              break;
-            case AlterUserCommand::Action::kDisable:
-              user.enabled = false;
-              message = "User " + user.name + " disabled";
-              break;
-            case AlterUserCommand::Action::kSetAttribute:
-              message = "Attribute " + c->attribute + " set for user " + user.name;
-              return txn.SetUserAttribute(user.id, c->attribute, c->value);
-            case AlterUserCommand::Action::kUnsetAttribute:
-              message = "Attribute " + c->attribute + " removed for user " + user.name;
-              return txn.SetUserAttribute(user.id, c->attribute, std::nullopt);
-          }
-          return txn.UpdateUser(user);
-        }));
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      const auto* existing = snap.FindUserByName(c->name);
+      if (!existing) return AccessControlError("user " + c->name + " does not exist");
+      UserRecord user = *existing;
+      user_id = user.id;
+      switch (c->action) {
+        case AlterUserCommand::Action::kSetPassword:
+          user.password_hash = hash;
+          message = "Password changed for user " + user.name;
+          break;
+        case AlterUserCommand::Action::kClearPassword:
+          user.password_hash.reset();
+          message = "Password login removed for user " + user.name;
+          break;
+        case AlterUserCommand::Action::kEnable:
+          user.enabled = true;
+          message = "User " + user.name + " enabled";
+          break;
+        case AlterUserCommand::Action::kDisable:
+          user.enabled = false;
+          message = "User " + user.name + " disabled";
+          break;
+        case AlterUserCommand::Action::kSetAttribute:
+          message = "Attribute " + c->attribute + " set for user " + user.name;
+          return txn.SetUserAttribute(user.id, c->attribute, c->value);
+        case AlterUserCommand::Action::kUnsetAttribute:
+          message = "Attribute " + c->attribute + " removed for user " + user.name;
+          return txn.SetUserAttribute(user.id, c->attribute, std::nullopt);
+      }
+      return txn.UpdateUser(user);
+    }));
     result = Message(message);
     if (c->action == AlterUserCommand::Action::kDisable ||
         c->action == AlterUserCommand::Action::kSetPassword ||
@@ -713,26 +681,24 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
   // ---- DROP USER ---------------------------------------------------------
   if (const auto* c = std::get_if<DropUserCommand>(&command)) {
     std::string user_id;
-    ARROW_RETURN_NOT_OK(
-        mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
-          const auto* user = snap.FindUserByName(c->name);
-          if (!user) {
-            if (c->if_exists) {
-              message = "User " + c->name + " does not exist";
-              return arrow::Status::OK();
-            }
-            return AccessControlError("user " + c->name + " does not exist");
-          }
-          auto owned = OwnedObjects(snap, OwnerKind::kUser, user->id);
-          if (!owned.empty()) {
-            return AccessControlError(
-                "user " + user->name + " owns " + Join(owned) +
-                ". Change the owner first (ALTER TABLE|VIEW ... OWNER TO)");
-          }
-          user_id = user->id;
-          message = "User " + user->name + " dropped";
-          return txn.DeleteUser(user->id);
-        }));
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      const auto* user = snap.FindUserByName(c->name);
+      if (!user) {
+        if (c->if_exists) {
+          message = "User " + c->name + " does not exist";
+          return arrow::Status::OK();
+        }
+        return AccessControlError("user " + c->name + " does not exist");
+      }
+      auto owned = OwnedObjects(snap, OwnerKind::kUser, user->id);
+      if (!owned.empty()) {
+        return AccessControlError("user " + user->name + " owns " + Join(owned) +
+                                  ". Change the owner first (ALTER TABLE|VIEW ... OWNER TO)");
+      }
+      user_id = user->id;
+      message = "User " + user->name + " dropped";
+      return txn.DeleteUser(user->id);
+    }));
     result = Message(message);
     if (!user_id.empty()) result.terminate_user_ids.push_back(user_id);
     return result;
@@ -740,54 +706,49 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
 
   // ---- CREATE ROLE -------------------------------------------------------
   if (const auto* c = std::get_if<CreateRoleCommand>(&command)) {
-    ARROW_RETURN_NOT_OK(
-        mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
-          if (c->if_not_exists && snap.FindRoleByName(c->name)) {
-            message = "Role " + c->name + " already exists";
-            return arrow::Status::OK();
-          }
-          ARROW_RETURN_NOT_OK(CheckNameFree(snap, c->name));
-          ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name));
-          message = "Role " + c->name + " created";
-          RoleRecord role{StoreTransaction::NewId(), c->name, false};
-          ARROW_RETURN_NOT_OK(txn.InsertRole(role));
-          return txn.SetPrincipalTenant(PrincipalKind::kRole, role.id, tenant);
-        }));
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      if (c->if_not_exists && snap.FindRoleByName(c->name)) {
+        message = "Role " + c->name + " already exists";
+        return arrow::Status::OK();
+      }
+      ARROW_RETURN_NOT_OK(CheckNameFree(snap, c->name));
+      ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name));
+      message = "Role " + c->name + " created";
+      RoleRecord role{StoreTransaction::NewId(), c->name, false};
+      ARROW_RETURN_NOT_OK(txn.InsertRole(role));
+      return txn.SetPrincipalTenant(PrincipalKind::kRole, role.id, tenant);
+    }));
     return Message(message);
   }
 
   // ---- DROP ROLE ---------------------------------------------------------
   if (const auto* c = std::get_if<DropRoleCommand>(&command)) {
-    ARROW_RETURN_NOT_OK(
-        mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
-          const auto* role = snap.FindRoleByName(c->name);
-          if (!role) {
-            if (c->if_exists) {
-              message = "Role " + c->name + " does not exist";
-              return arrow::Status::OK();
-            }
-            return AccessControlError("role " + c->name + " does not exist");
-          }
-          if (role->builtin)
-            return AccessControlError("the built-in role " + role->name +
-                                      " cannot be dropped");
-          auto owned = OwnedObjects(snap, OwnerKind::kRole, role->id);
-          if (!owned.empty()) {
-            return AccessControlError(
-                "role " + role->name + " owns " + Join(owned) +
-                ". Change the owner first (ALTER TABLE|VIEW ... OWNER TO)");
-          }
-          message = "Role " + role->name + " dropped";
-          return txn.DeleteRole(role->id);
-        }));
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      const auto* role = snap.FindRoleByName(c->name);
+      if (!role) {
+        if (c->if_exists) {
+          message = "Role " + c->name + " does not exist";
+          return arrow::Status::OK();
+        }
+        return AccessControlError("role " + c->name + " does not exist");
+      }
+      if (role->builtin)
+        return AccessControlError("the built-in role " + role->name + " cannot be dropped");
+      auto owned = OwnedObjects(snap, OwnerKind::kRole, role->id);
+      if (!owned.empty()) {
+        return AccessControlError("role " + role->name + " owns " + Join(owned) +
+                                  ". Change the owner first (ALTER TABLE|VIEW ... OWNER TO)");
+      }
+      message = "Role " + role->name + " dropped";
+      return txn.DeleteRole(role->id);
+    }));
     return Message(message);
   }
 
   // ---- GRANT / REVOKE role -----------------------------------------------
   if (const auto* c = std::get_if<RoleMembershipCommand>(&command)) {
     std::vector<std::string> done;
-    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn,
-                                   const Snapshot& snap) -> arrow::Status {
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
       for (const auto& role_name : c->roles) {
         const auto* role = snap.FindRoleByName(role_name);
         if (!role) return AccessControlError("role " + role_name + " does not exist");
@@ -796,20 +757,19 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
               "every user already holds PUBLIC; it cannot be granted or revoked");
         }
         const std::string role_tenant = snap.TenantOf(PrincipalKind::kRole, role->id);
-        if (!snap.CanAdminRole(actor, role->id) &&
-            !IsTenantAdmin(snap, actor, role_tenant)) {
-          return AccessControlError("Hardcharger blocked " + CommandKind(command) +
-                                    ": user " + actor.user_name +
-                                    " may not grant or revoke role " + role->name +
+        if (!snap.CanAdminRole(actor, role->id) && !IsTenantAdmin(snap, actor, role_tenant)) {
+          return AccessControlError("Hardcharger blocked " + CommandKind(command) + ": user " +
+                                    actor.user_name + " may not grant or revoke role " +
+                                    role->name +
                                     " (only an administrator, or a holder of it "
                                     "WITH ADMIN OPTION)");
         }
         for (const auto& g : c->grantees) {
           ARROW_ASSIGN_OR_RAISE(auto grantee, ResolveGrantee(snap, g));
           if (snap.TenantOf(grantee.kind, grantee.id) != role_tenant) {
-            return AccessControlError(
-                "role " + role->name + " belongs to " + TenantName(snap, role_tenant) +
-                " and " + grantee.name + " does not: roles never cross tenants");
+            return AccessControlError("role " + role->name + " belongs to " +
+                                      TenantName(snap, role_tenant) + " and " + grantee.name +
+                                      " does not: roles never cross tenants");
           }
           const MembershipRecord* existing = nullptr;
           for (const auto& m : snap.memberships()) {
@@ -823,15 +783,13 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
               if (grantee.id == role->id)
                 return AccessControlError("a role cannot be granted to itself");
               if (snap.WouldCreateCycle(role->id, grantee.id)) {
-                return AccessControlError("granting " + role->name + " to " +
-                                          grantee.name +
+                return AccessControlError("granting " + role->name + " to " + grantee.name +
                                           " would create a cycle of roles");
               }
             }
             if (existing) {
               if (c->with_admin_option && !existing->admin_option) {
-                ARROW_RETURN_NOT_OK(
-                    txn.DeleteMembership(grantee.kind, grantee.id, role->id));
+                ARROW_RETURN_NOT_OK(txn.DeleteMembership(grantee.kind, grantee.id, role->id));
                 MembershipRecord updated = *existing;
                 updated.admin_option = true;
                 updated.granted_by = grantor;
@@ -855,8 +813,8 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
             // Others revoke only what they granted; the administrator, anything.
             if (!actor.superuser && existing->granted_by != grantor &&
                 !IsTenantAdmin(snap, actor, role_tenant)) {
-              return AccessControlError("Hardcharger blocked REVOKE: " + grantee.name +
-                                        " holds " + role->name +
+              return AccessControlError("Hardcharger blocked REVOKE: " + grantee.name + " holds " +
+                                        role->name +
                                         " from another grantor; only that grantor "
                                         "or an administrator can revoke it");
             }
@@ -865,8 +823,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
               MembershipRecord updated = *existing;
               updated.admin_option = false;
               ARROW_RETURN_NOT_OK(txn.InsertMembership(updated));
-              done.push_back("Revoked the admin option on " + role->name + " from " +
-                             grantee.name);
+              done.push_back("Revoked the admin option on " + role->name + " from " + grantee.name);
             } else {
               done.push_back("Revoked " + role->name + " from " + grantee.name);
             }
@@ -894,20 +851,17 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
         break;
       }
       case GrantScope::kCatalog: {
-        ARROW_ASSIGN_OR_RAISE(target.catalog,
-                              resolver.ResolveCatalog(c->target.parts.at(0)));
+        ARROW_ASSIGN_OR_RAISE(target.catalog, resolver.ResolveCatalog(c->target.parts.at(0)));
         break;
       }
     }
     // Columns must exist, and are recorded as the table spells them.
     for (const auto& item : c->privileges) {
       for (const auto& col : item.columns) {
-        auto it =
-            std::find_if(table_columns.begin(), table_columns.end(),
-                         [&](const std::string& t) { return IdentifiersEqual(t, col); });
+        auto it = std::find_if(table_columns.begin(), table_columns.end(),
+                               [&](const std::string& t) { return IdentifiersEqual(t, col); });
         if (it == table_columns.end()) {
-          return AccessControlError("column " + col + " does not exist in " +
-                                    target.ToString());
+          return AccessControlError("column " + col + " does not exist in " + target.ToString());
         }
       }
     }
@@ -924,10 +878,8 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
                   "role, then GRANT the role TO USER " +
                   grantee.name);
             }
-            const std::string role_tenant =
-                snap.TenantOf(PrincipalKind::kRole, grantee.id);
-            if (!role_tenant.empty() &&
-                snap.TenantOfCatalog(target.catalog) != role_tenant) {
+            const std::string role_tenant = snap.TenantOf(PrincipalKind::kRole, grantee.id);
+            if (!role_tenant.empty() && snap.TenantOfCatalog(target.catalog) != role_tenant) {
               return AccessControlError("role " + grantee.name + " belongs to " +
                                         TenantName(snap, role_tenant) +
                                         "; it can hold privileges "
@@ -939,22 +891,21 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
             for (Privilege p : Expand(item.privilege)) {
               const auto columns =
                   p == Privilege::kSelect ? item.columns : std::vector<std::string>{};
-              const std::string what =
-                  PrivilegeName(p) + (columns.empty() ? "" : " (" + Join(columns) + ")") +
-                  " on " + target.ToString();
+              const std::string what = PrivilegeName(p) +
+                                       (columns.empty() ? "" : " (" + Join(columns) + ")") +
+                                       " on " + target.ToString();
               if (c->grant && !snap.CanGrant(actor, c->scope, target, p, columns)) {
                 return AccessControlError(
-                    "Hardcharger blocked GRANT: user " + actor.user_name +
-                    " may not grant " + what +
-                    " (only its owner, or a role granted it WITH GRANT OPTION)");
+                    "Hardcharger blocked GRANT: user " + actor.user_name + " may not grant " +
+                    what + " (only its owner, or a role granted it WITH GRANT OPTION)");
               }
               for (const auto& grantee : grantees) {
                 // One record per grantor, so each grant stands or falls with its own grantor.
                 std::vector<const ObjectGrantRecord*> matching;
                 const ObjectGrantRecord* own = nullptr;
                 for (const auto& g : snap.grants()) {
-                  if (g.role_id == grantee.id && g.scope == c->scope &&
-                      g.privilege == p && SamePath(g.target, target)) {
+                  if (g.role_id == grantee.id && g.scope == c->scope && g.privilege == p &&
+                      SamePath(g.target, target)) {
                     matching.push_back(&g);
                     if (g.granted_by == grantor) own = &g;
                   }
@@ -972,10 +923,9 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
                       changed = true;
                     } else if (!own->columns.empty()) {
                       for (const auto& col : columns) {
-                        if (std::none_of(updated.columns.begin(), updated.columns.end(),
-                                         [&](const std::string& m) {
-                                           return IdentifiersEqual(m, col);
-                                         })) {
+                        if (std::none_of(
+                                updated.columns.begin(), updated.columns.end(),
+                                [&](const std::string& m) { return IdentifiersEqual(m, col); })) {
                           updated.columns.push_back(col);
                           changed = true;
                         }
@@ -1013,10 +963,10 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
                 }
                 if (revocable.empty()) {
                   if (!matching.empty()) {
-                    return AccessControlError(
-                        "Hardcharger blocked REVOKE: " + grantee.name + " has " + what +
-                        " from another grantor; only that grantor or "
-                        "an administrator can revoke it");
+                    return AccessControlError("Hardcharger blocked REVOKE: " + grantee.name +
+                                              " has " + what +
+                                              " from another grantor; only that grantor or "
+                                              "an administrator can revoke it");
                   }
                   done.push_back(grantee.name + " does not have " + what);
                   continue;
@@ -1036,13 +986,11 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
                   // (not a silent no-op as in Postgres).
                   ObjectGrantRecord narrowed = *existing;
                   std::vector<std::string> remaining;
-                  const auto& base =
-                      existing->columns.empty() ? table_columns : existing->columns;
+                  const auto& base = existing->columns.empty() ? table_columns : existing->columns;
                   for (const auto& col : base) {
-                    if (std::none_of(columns.begin(), columns.end(),
-                                     [&](const std::string& r) {
-                                       return IdentifiersEqual(r, col);
-                                     })) {
+                    if (std::none_of(columns.begin(), columns.end(), [&](const std::string& r) {
+                          return IdentifiersEqual(r, col);
+                        })) {
                       remaining.push_back(col);
                     }
                   }
@@ -1053,9 +1001,9 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
                     ARROW_RETURN_NOT_OK(txn.UpdateGrant(narrowed));
                   }
                 }
-                done.push_back((c->with_grant_option ? "Revoked the grant option for "
-                                                     : "Revoked ") +
-                               what + " from " + grantee.name);
+                done.push_back(
+                    (c->with_grant_option ? "Revoked the grant option for " : "Revoked ") + what +
+                    " from " + grantee.name);
               }
             }
           }
@@ -1074,8 +1022,8 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
             const std::string name = SystemPrivilegeName(p);
             if (c->grant && !snap.CanGrantSystemPrivilege(actor, p)) {
               return AccessControlError(
-                  "Hardcharger blocked GRANT: user " + actor.user_name + " may not grant " +
-                  name + " (only an administrator, or a holder of it WITH ADMIN OPTION)");
+                  "Hardcharger blocked GRANT: user " + actor.user_name + " may not grant " + name +
+                  " (only an administrator, or a holder of it WITH ADMIN OPTION)");
             }
             for (const auto& g : c->grantees) {
               ARROW_ASSIGN_OR_RAISE(auto grantee, ResolveGrantee(snap, g));
@@ -1100,8 +1048,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
                 }
               }
               if (c->grant) {
-                SystemPrivilegeRecord record{grantee.id, p, c->with_admin_option,
-                                             grantor};
+                SystemPrivilegeRecord record{grantee.id, p, c->with_admin_option, grantor};
                 if (own && (own->admin_option || !c->with_admin_option)) {
                   done.push_back(grantee.name + " already has " + name);
                   continue;
@@ -1117,10 +1064,10 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
               }
               if (revocable.empty()) {
                 if (!matching.empty()) {
-                  return AccessControlError(
-                      "Hardcharger blocked REVOKE: " + grantee.name + " has " + name +
-                      " from another grantor; only that grantor or an "
-                      "administrator can revoke it");
+                  return AccessControlError("Hardcharger blocked REVOKE: " + grantee.name +
+                                            " has " + name +
+                                            " from another grantor; only that grantor or an "
+                                            "administrator can revoke it");
                 }
                 done.push_back(grantee.name + " does not have " + name);
                 continue;
@@ -1133,9 +1080,8 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
                   ARROW_RETURN_NOT_OK(txn.DeleteSystemPrivilege(r));
                 }
               }
-              done.push_back(
-                  (c->with_admin_option ? "Revoked the admin option on " : "Revoked ") +
-                  name + " from " + grantee.name);
+              done.push_back((c->with_admin_option ? "Revoked the admin option on " : "Revoked ") +
+                             name + " from " + grantee.name);
             }
           }
           return arrow::Status::OK();
@@ -1154,75 +1100,69 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
   }
   if (const auto* c = std::get_if<TenantCommand>(&command)) {
     CommandResult result;
-    ARROW_RETURN_NOT_OK(
-        mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
-          const auto* existing = snap.FindTenantByName(c->name);
-          if (c->create) {
-            if (existing) {
-              if (c->if_exists) {
-                message = "Tenant " + c->name + " already exists";
-                return arrow::Status::OK();
-              }
-              return AccessControlError("tenant " + c->name + " already exists");
-            }
-            if (c->name.find('/') != std::string::npos)
-              return AccessControlError("a tenant name cannot contain /");
-            TenantRecord tenant{StoreTransaction::NewId(), c->name, ""};
-            ARROW_RETURN_NOT_OK(txn.UpsertTenant(tenant));
-            for (const char* suffix : {kTenantPublicSuffix, kTenantAdminSuffix}) {
-              ARROW_RETURN_NOT_OK(CheckNameFree(snap, c->name + suffix));
-              RoleRecord role{StoreTransaction::NewId(), c->name + suffix, true};
-              ARROW_RETURN_NOT_OK(txn.InsertRole(role));
-              ARROW_RETURN_NOT_OK(
-                  txn.SetPrincipalTenant(PrincipalKind::kRole, role.id, tenant.id));
-            }
-            message = "Tenant " + c->name + " created, with roles " + c->name +
-                      kTenantPublicSuffix + " and " + c->name + kTenantAdminSuffix;
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      const auto* existing = snap.FindTenantByName(c->name);
+      if (c->create) {
+        if (existing) {
+          if (c->if_exists) {
+            message = "Tenant " + c->name + " already exists";
             return arrow::Status::OK();
           }
-          if (!existing) {
-            if (c->if_exists) {
-              message = "Tenant " + c->name + " does not exist";
-              return arrow::Status::OK();
-            }
-            return AccessControlError("tenant " + c->name + " does not exist");
-          }
-          std::vector<std::string> members;
-          for (const auto& u : snap.users()) {
-            if (snap.TenantOf(PrincipalKind::kUser, u.id) == existing->id)
-              members.push_back(u.name);
-          }
-          if (!members.empty()) {
-            std::sort(members.begin(), members.end());
-            return AccessControlError("tenant " + existing->name + " still has users (" +
-                                      Join(members) + "); drop them first");
-          }
-          if (!snap.TenantCatalogs(existing->id).empty()) {
-            return AccessControlError(
-                "tenant " + existing->name +
-                " still has catalogs; ALTER CATALOG ... UNSET TENANT first");
-          }
-          for (const auto& r : snap.roles()) {
-            if (snap.TenantOf(PrincipalKind::kRole, r.id) == existing->id) {
-              ARROW_RETURN_NOT_OK(txn.DeleteRole(r.id));
-            }
-          }
-          message = "Tenant " + existing->name + " dropped";
-          return txn.DeleteTenant(existing->id);
-        }));
+          return AccessControlError("tenant " + c->name + " already exists");
+        }
+        if (c->name.find('/') != std::string::npos)
+          return AccessControlError("a tenant name cannot contain /");
+        TenantRecord tenant{StoreTransaction::NewId(), c->name, ""};
+        ARROW_RETURN_NOT_OK(txn.UpsertTenant(tenant));
+        for (const char* suffix : {kTenantPublicSuffix, kTenantAdminSuffix}) {
+          ARROW_RETURN_NOT_OK(CheckNameFree(snap, c->name + suffix));
+          RoleRecord role{StoreTransaction::NewId(), c->name + suffix, true};
+          ARROW_RETURN_NOT_OK(txn.InsertRole(role));
+          ARROW_RETURN_NOT_OK(txn.SetPrincipalTenant(PrincipalKind::kRole, role.id, tenant.id));
+        }
+        message = "Tenant " + c->name + " created, with roles " + c->name + kTenantPublicSuffix +
+                  " and " + c->name + kTenantAdminSuffix;
+        return arrow::Status::OK();
+      }
+      if (!existing) {
+        if (c->if_exists) {
+          message = "Tenant " + c->name + " does not exist";
+          return arrow::Status::OK();
+        }
+        return AccessControlError("tenant " + c->name + " does not exist");
+      }
+      std::vector<std::string> members;
+      for (const auto& u : snap.users()) {
+        if (snap.TenantOf(PrincipalKind::kUser, u.id) == existing->id) members.push_back(u.name);
+      }
+      if (!members.empty()) {
+        std::sort(members.begin(), members.end());
+        return AccessControlError("tenant " + existing->name + " still has users (" +
+                                  Join(members) + "); drop them first");
+      }
+      if (!snap.TenantCatalogs(existing->id).empty()) {
+        return AccessControlError("tenant " + existing->name +
+                                  " still has catalogs; ALTER CATALOG ... UNSET TENANT first");
+      }
+      for (const auto& r : snap.roles()) {
+        if (snap.TenantOf(PrincipalKind::kRole, r.id) == existing->id) {
+          ARROW_RETURN_NOT_OK(txn.DeleteRole(r.id));
+        }
+      }
+      message = "Tenant " + existing->name + " dropped";
+      return txn.DeleteTenant(existing->id);
+    }));
     return Message(message);
   }
   if (const auto* c = std::get_if<CatalogTenantCommand>(&command)) {
     ARROW_ASSIGN_OR_RAISE(auto catalog, resolver.ResolveCatalog(c->catalog));
     CommandResult result;
     std::vector<std::string> affected_users;
-    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn,
-                                   const Snapshot& snap) -> arrow::Status {
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
       const std::string current = snap.TenantOfCatalog(catalog);
       auto users_of = [&](const std::string& tenant_id) {
         for (const auto& u : snap.users()) {
-          if (!tenant_id.empty() &&
-              snap.TenantOf(PrincipalKind::kUser, u.id) == tenant_id) {
+          if (!tenant_id.empty() && snap.TenantOf(PrincipalKind::kUser, u.id) == tenant_id) {
             affected_users.push_back(u.id);
           }
         }
@@ -1240,8 +1180,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
           }
         }
         users_of(current);
-        message =
-            "Catalog " + catalog + " no longer belongs to " + TenantName(snap, current);
+        message = "Catalog " + catalog + " no longer belongs to " + TenantName(snap, current);
         return txn.SetCatalogTenant(catalog, "");
       }
       const auto* tenant = snap.FindTenantByName(*c->tenant);
@@ -1253,19 +1192,16 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
       ARROW_RETURN_NOT_OK(txn.SetCatalogTenant(catalog, tenant->id));
       // The tenant admin may do everything there, and grant it on.
       const RoleRecord* admin = snap.TenantRole(tenant->id, kTenantAdminSuffix);
-      if (!admin)
-        return AccessControlError("tenant " + tenant->name + " has no tenant_admin role");
-      for (Privilege p :
-           {Privilege::kSelect, Privilege::kInsert, Privilege::kUpdate,
-            Privilege::kDelete, Privilege::kCreateTable, Privilege::kCreateView,
-            Privilege::kCreateSchema, Privilege::kDropTable, Privilege::kDropView,
-            Privilege::kDropSchema, Privilege::kAlterTable, Privilege::kAlterView}) {
+      if (!admin) return AccessControlError("tenant " + tenant->name + " has no tenant_admin role");
+      for (Privilege p : {Privilege::kSelect, Privilege::kInsert, Privilege::kUpdate,
+                          Privilege::kDelete, Privilege::kCreateTable, Privilege::kCreateView,
+                          Privilege::kCreateSchema, Privilege::kDropTable, Privilege::kDropView,
+                          Privilege::kDropSchema, Privilege::kAlterTable, Privilege::kAlterView}) {
         bool have = false;
         for (const auto& g : snap.grants()) {
-          have =
-              have || (g.role_id == admin->id && g.scope == GrantScope::kCatalog &&
-                       g.privilege == p && IdentifiersEqual(g.target.catalog, catalog) &&
-                       g.granted_by.empty());
+          have = have ||
+                 (g.role_id == admin->id && g.scope == GrantScope::kCatalog && g.privilege == p &&
+                  IdentifiersEqual(g.target.catalog, catalog) && g.granted_by.empty());
         }
         if (have) continue;
         ObjectGrantRecord grant;
@@ -1291,22 +1227,19 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
     if (!c->catalog.empty()) {
       ARROW_ASSIGN_OR_RAISE(catalog, resolver.ResolveCatalog(c->catalog));
     }
-    ARROW_RETURN_NOT_OK(
-        mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
-          const auto* tenant = snap.FindTenantByName(c->tenant);
-          if (!tenant)
-            return AccessControlError("tenant " + c->tenant + " does not exist");
-          if (!catalog.empty() && snap.TenantOfCatalog(catalog) != tenant->id) {
-            return AccessControlError("catalog " + catalog +
-                                      " does not belong to tenant " + tenant->name);
-          }
-          TenantRecord updated = *tenant;
-          updated.default_catalog = catalog;
-          message = catalog.empty()
-                        ? "Tenant " + tenant->name + " has no default catalog"
-                        : "Tenant " + tenant->name + "'s default catalog is " + catalog;
-          return txn.UpsertTenant(updated);
-        }));
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      const auto* tenant = snap.FindTenantByName(c->tenant);
+      if (!tenant) return AccessControlError("tenant " + c->tenant + " does not exist");
+      if (!catalog.empty() && snap.TenantOfCatalog(catalog) != tenant->id) {
+        return AccessControlError("catalog " + catalog + " does not belong to tenant " +
+                                  tenant->name);
+      }
+      TenantRecord updated = *tenant;
+      updated.default_catalog = catalog;
+      message = catalog.empty() ? "Tenant " + tenant->name + " has no default catalog"
+                                : "Tenant " + tenant->name + "'s default catalog is " + catalog;
+      return txn.UpsertTenant(updated);
+    }));
     return Message(message);
   }
 
@@ -1330,38 +1263,36 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
     }
     ARROW_RETURN_NOT_OK(ValidatePolicySql(c->predicate));
     ARROW_RETURN_NOT_OK(resolver.CheckRowPredicate(table, c->predicate));
-    ARROW_RETURN_NOT_OK(
-        mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
-          RowPolicyRecord record;
-          for (const auto* p : snap.RowPoliciesOn(table.path)) {
-            if (IdentifiersEqual(p->name, c->name)) {
-              if (!c->or_replace) {
-                return AccessControlError("row policy " + c->name +
-                                          " already exists on " + table.path.ToString());
-              }
-              record.id = p->id;
-            }
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      RowPolicyRecord record;
+      for (const auto* p : snap.RowPoliciesOn(table.path)) {
+        if (IdentifiersEqual(p->name, c->name)) {
+          if (!c->or_replace) {
+            return AccessControlError("row policy " + c->name + " already exists on " +
+                                      table.path.ToString());
           }
-          if (record.id.empty()) record.id = StoreTransaction::NewId();
-          record.name = c->name;
-          record.table = table.path;
-          record.permissive = c->permissive;
-          record.predicate = c->predicate;
-          for (const auto& role_name : c->roles) {
-            const auto* role = snap.FindRoleByName(role_name);
-            if (!role) return AccessControlError("role " + role_name + " does not exist");
-            record.role_ids.push_back(role->id);
-          }
-          message = "Row policy " + c->name + " on " + table.path.ToString() +
-                    (c->or_replace ? " created or replaced" : " created");
-          return txn.UpsertRowPolicy(record);
-        }));
+          record.id = p->id;
+        }
+      }
+      if (record.id.empty()) record.id = StoreTransaction::NewId();
+      record.name = c->name;
+      record.table = table.path;
+      record.permissive = c->permissive;
+      record.predicate = c->predicate;
+      for (const auto& role_name : c->roles) {
+        const auto* role = snap.FindRoleByName(role_name);
+        if (!role) return AccessControlError("role " + role_name + " does not exist");
+        record.role_ids.push_back(role->id);
+      }
+      message = "Row policy " + c->name + " on " + table.path.ToString() +
+                (c->or_replace ? " created or replaced" : " created");
+      return txn.UpsertRowPolicy(record);
+    }));
     return Message(message);
   }
   if (const auto* c = std::get_if<DropRowPolicyCommand>(&command)) {
     ARROW_ASSIGN_OR_RAISE(auto table, resolver.ResolveObject(c->table));
-    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn,
-                                   const Snapshot& snap) -> arrow::Status {
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
       for (const auto* p : snap.RowPoliciesOn(table.path)) {
         if (IdentifiersEqual(p->name, c->name)) {
           message = "Row policy " + p->name + " on " + table.path.ToString() + " dropped";
@@ -1381,59 +1312,55 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
   // ---- masking policies ----------------------------------------------------
   if (const auto* c = std::get_if<CreateMaskingPolicyCommand>(&command)) {
     ARROW_RETURN_NOT_OK(ValidatePolicySql(c->body, c->parameter));
-    MaskingPolicyRecord candidate{
-        "", c->name, c->parameter, c->parameter_type, c->return_type, c->body};
+    MaskingPolicyRecord candidate{"",     c->name, c->parameter, c->parameter_type, c->return_type,
+                                  c->body};
     ARROW_RETURN_NOT_OK(resolver.CheckMaskingPolicy(candidate));
-    ARROW_RETURN_NOT_OK(
-        mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
-          MaskingPolicyRecord record = candidate;
-          if (const auto* existing = snap.FindMaskingPolicyByName(c->name)) {
-            if (!c->or_replace)
-              return AccessControlError("masking policy " + c->name + " already exists");
-            record.id = existing->id;
-          } else {
-            record.id = StoreTransaction::NewId();
-          }
-          message = "Masking policy " + c->name +
-                    (c->or_replace ? " created or replaced" : " created");
-          return txn.UpsertMaskingPolicy(record);
-        }));
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      MaskingPolicyRecord record = candidate;
+      if (const auto* existing = snap.FindMaskingPolicyByName(c->name)) {
+        if (!c->or_replace)
+          return AccessControlError("masking policy " + c->name + " already exists");
+        record.id = existing->id;
+      } else {
+        record.id = StoreTransaction::NewId();
+      }
+      message = "Masking policy " + c->name + (c->or_replace ? " created or replaced" : " created");
+      return txn.UpsertMaskingPolicy(record);
+    }));
     return Message(message);
   }
   if (const auto* c = std::get_if<DropMaskingPolicyCommand>(&command)) {
-    ARROW_RETURN_NOT_OK(
-        mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
-          const auto* existing = snap.FindMaskingPolicyByName(c->name);
-          if (!existing) {
-            if (c->if_exists) {
-              message = "Masking policy " + c->name + " does not exist";
-              return arrow::Status::OK();
-            }
-            return AccessControlError("masking policy " + c->name + " does not exist");
-          }
-          for (const auto& b : snap.mask_bindings()) {
-            if (b.policy_id == existing->id) {
-              return AccessControlError(
-                  "masking policy " + existing->name + " masks " + b.table.ToString() +
-                  "." + b.column +
-                  "; unset it there first (ALTER TABLE ... MODIFY COLUMN ... "
-                  "UNSET MASKING POLICY)");
-            }
-          }
-          message = "Masking policy " + existing->name + " dropped";
-          return txn.DeleteMaskingPolicy(existing->id);
-        }));
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      const auto* existing = snap.FindMaskingPolicyByName(c->name);
+      if (!existing) {
+        if (c->if_exists) {
+          message = "Masking policy " + c->name + " does not exist";
+          return arrow::Status::OK();
+        }
+        return AccessControlError("masking policy " + c->name + " does not exist");
+      }
+      for (const auto& b : snap.mask_bindings()) {
+        if (b.policy_id == existing->id) {
+          return AccessControlError("masking policy " + existing->name + " masks " +
+                                    b.table.ToString() + "." + b.column +
+                                    "; unset it there first (ALTER TABLE ... MODIFY COLUMN ... "
+                                    "UNSET MASKING POLICY)");
+        }
+      }
+      message = "Masking policy " + existing->name + " dropped";
+      return txn.DeleteMaskingPolicy(existing->id);
+    }));
     return Message(message);
   }
   if (const auto* c = std::get_if<SetColumnMaskCommand>(&command)) {
     ARROW_ASSIGN_OR_RAISE(auto table, resolver.ResolveObject(c->table));
     if (table.type != ObjectType::kTable) {
-      return AccessControlError("masking policies go on table columns; " +
-                                table.path.ToString() + " is a view");
+      return AccessControlError("masking policies go on table columns; " + table.path.ToString() +
+                                " is a view");
     }
-    auto column = std::find_if(
-        table.columns.begin(), table.columns.end(),
-        [&](const std::string& t) { return IdentifiersEqual(t, c->column); });
+    auto column =
+        std::find_if(table.columns.begin(), table.columns.end(),
+                     [&](const std::string& t) { return IdentifiersEqual(t, c->column); });
     if (column == table.columns.end()) {
       return AccessControlError("column " + c->column + " does not exist in " +
                                 table.path.ToString());
@@ -1442,33 +1369,28 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
     if (c->policy) {
       auto snap = snapshot();
       const auto* policy = snap->FindMaskingPolicyByName(*c->policy);
-      if (!policy)
-        return AccessControlError("masking policy " + *c->policy + " does not exist");
+      if (!policy) return AccessControlError("masking policy " + *c->policy + " does not exist");
       ARROW_RETURN_NOT_OK(resolver.CheckMaskBinding(table, column_name, *policy));
     }
-    ARROW_RETURN_NOT_OK(
-        mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
-          MaskBindingRecord binding;
-          binding.table = table.path;
-          binding.column = column_name;
-          if (!c->policy) {
-            message = "Masking policy removed from " + table.path.ToString() + "." +
-                      column_name;
-            return txn.SetMaskBinding(binding, /*remove=*/true);
-          }
-          const auto* policy = snap.FindMaskingPolicyByName(*c->policy);
-          if (!policy)
-            return AccessControlError("masking policy " + *c->policy + " does not exist");
-          binding.policy_id = policy->id;
-          for (const auto& role_name : c->exempt_roles) {
-            const auto* role = snap.FindRoleByName(role_name);
-            if (!role) return AccessControlError("role " + role_name + " does not exist");
-            binding.exempt_role_ids.push_back(role->id);
-          }
-          message =
-              table.path.ToString() + "." + column_name + " is masked by " + policy->name;
-          return txn.SetMaskBinding(binding, /*remove=*/false);
-        }));
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      MaskBindingRecord binding;
+      binding.table = table.path;
+      binding.column = column_name;
+      if (!c->policy) {
+        message = "Masking policy removed from " + table.path.ToString() + "." + column_name;
+        return txn.SetMaskBinding(binding, /*remove=*/true);
+      }
+      const auto* policy = snap.FindMaskingPolicyByName(*c->policy);
+      if (!policy) return AccessControlError("masking policy " + *c->policy + " does not exist");
+      binding.policy_id = policy->id;
+      for (const auto& role_name : c->exempt_roles) {
+        const auto* role = snap.FindRoleByName(role_name);
+        if (!role) return AccessControlError("role " + role_name + " does not exist");
+        binding.exempt_role_ids.push_back(role->id);
+      }
+      message = table.path.ToString() + "." + column_name + " is masked by " + policy->name;
+      return txn.SetMaskBinding(binding, /*remove=*/false);
+    }));
     return Message(message);
   }
   if (const auto* c = std::get_if<SetRoleCommand>(&command)) {
@@ -1526,38 +1448,33 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
       role = snap->FindRoleByName(*c->role);
       if (!role) return AccessControlError("role " + *c->role + " does not exist");
       if (role->id == kPublicRoleId) {
-        return AccessControlError(
-            "everyone holds PUBLIC already; map the group to another role");
+        return AccessControlError("everyone holds PUBLIC already; map the group to another role");
       }
     }
     std::string mapping_message;
-    ARROW_RETURN_NOT_OK(
-        mutate([&](StoreTransaction& txn, const Snapshot& now) -> arrow::Status {
-          if (c->kind == GroupMappingCommand::Kind::kCreate) {
-            for (const auto& m : now.group_mappings()) {
-              if (m.group == c->group && m.issuer == c->issuer && m.role_id == role->id) {
-                return AccessControlError("group '" + c->group +
-                                          "' is already mapped to role " + role->name);
-              }
-            }
-            mapping_message = "Users in group '" + c->group + "' hold role " + role->name;
-            return txn.InsertGroupMapping(
-                {StoreTransaction::NewId(), c->issuer, c->group, role->id});
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& now) -> arrow::Status {
+      if (c->kind == GroupMappingCommand::Kind::kCreate) {
+        for (const auto& m : now.group_mappings()) {
+          if (m.group == c->group && m.issuer == c->issuer && m.role_id == role->id) {
+            return AccessControlError("group '" + c->group + "' is already mapped to role " +
+                                      role->name);
           }
-          std::vector<std::string> ids;
-          for (const auto& m : now.group_mappings()) {
-            if (m.group == c->group && m.issuer == c->issuer &&
-                (!role || m.role_id == role->id)) {
-              ids.push_back(m.id);
-            }
-          }
-          if (ids.empty())
-            return AccessControlError("group '" + c->group + "' has no such mapping");
-          for (const auto& id : ids) ARROW_RETURN_NOT_OK(txn.DeleteGroupMapping(id));
-          mapping_message = "Removed " + std::to_string(ids.size()) + " mapping" +
-                            (ids.size() == 1 ? "" : "s") + " of group '" + c->group + "'";
-          return arrow::Status::OK();
-        }));
+        }
+        mapping_message = "Users in group '" + c->group + "' hold role " + role->name;
+        return txn.InsertGroupMapping({StoreTransaction::NewId(), c->issuer, c->group, role->id});
+      }
+      std::vector<std::string> ids;
+      for (const auto& m : now.group_mappings()) {
+        if (m.group == c->group && m.issuer == c->issuer && (!role || m.role_id == role->id)) {
+          ids.push_back(m.id);
+        }
+      }
+      if (ids.empty()) return AccessControlError("group '" + c->group + "' has no such mapping");
+      for (const auto& id : ids) ARROW_RETURN_NOT_OK(txn.DeleteGroupMapping(id));
+      mapping_message = "Removed " + std::to_string(ids.size()) + " mapping" +
+                        (ids.size() == 1 ? "" : "s") + " of group '" + c->group + "'";
+      return arrow::Status::OK();
+    }));
     return Message(mapping_message);
   }
   if (std::holds_alternative<ShowTenantsCommand>(command)) {
@@ -1569,15 +1486,14 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
     for (const auto& t : snap->tenants()) {
       if (!actor.superuser && t.id != own) continue;
       const auto tenant_catalogs = snap->TenantCatalogs(t.id);
-      const std::vector<std::string> catalogs(tenant_catalogs.begin(),
-                                              tenant_catalogs.end());
+      const std::vector<std::string> catalogs(tenant_catalogs.begin(), tenant_catalogs.end());
       int64_t users = 0, roles = 0;
       for (const auto& u : snap->users())
         users += snap->TenantOf(PrincipalKind::kUser, u.id) == t.id;
       for (const auto& r : snap->roles())
         roles += snap->TenantOf(PrincipalKind::kRole, r.id) == t.id;
-      result.rows.push_back({t.name, t.default_catalog, Join(catalogs),
-                             std::to_string(users), std::to_string(roles)});
+      result.rows.push_back({t.name, t.default_catalog, Join(catalogs), std::to_string(users),
+                             std::to_string(roles)});
     }
     return result;
   }
@@ -1605,8 +1521,8 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
                                  : " (exempt: " + role_names(b.exempt_role_ids) + ")"));
           }
         }
-        result.rows.push_back({m.name, m.parameter, m.parameter_type, m.return_type,
-                               m.body, Join(bound, "; ")});
+        result.rows.push_back(
+            {m.name, m.parameter, m.parameter_type, m.return_type, m.body, Join(bound, "; ")});
       }
       return result;
     }
@@ -1618,9 +1534,9 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
     result.column_names = {"policy", "table", "kind", "roles", "using"};
     for (const auto& p : snap->row_policies()) {
       if (only && ObjectKey(p.table) != ObjectKey(*only)) continue;
-      result.rows.push_back(
-          {p.name, p.table.ToString(), p.permissive ? "PERMISSIVE" : "RESTRICTIVE",
-           p.role_ids.empty() ? "(all)" : role_names(p.role_ids), p.predicate});
+      result.rows.push_back({p.name, p.table.ToString(),
+                             p.permissive ? "PERMISSIVE" : "RESTRICTIVE",
+                             p.role_ids.empty() ? "(all)" : role_names(p.role_ids), p.predicate});
     }
     return result;
   }
@@ -1629,21 +1545,18 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
   if (const auto* c = std::get_if<AlterOwnerCommand>(&command)) {
     ARROW_ASSIGN_OR_RAISE(auto obj, resolver.ResolveObject(c->target));
     if ((obj.type == ObjectType::kView) != c->is_view) {
-      return AccessControlError(obj.path.ToString() + " is a " +
-                                (obj.type == ObjectType::kView ? "view" : "table") +
-                                "; use ALTER " +
-                                (obj.type == ObjectType::kView ? "VIEW" : "TABLE"));
+      return AccessControlError(
+          obj.path.ToString() + " is a " + (obj.type == ObjectType::kView ? "view" : "table") +
+          "; use ALTER " + (obj.type == ObjectType::kView ? "VIEW" : "TABLE"));
     }
-    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn,
-                                   const Snapshot& snap) -> arrow::Status {
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
       const OwnerRecord* current = snap.FindOwner(obj.path);
       OwnerRecord record;
       record.object = obj.path;
       record.type = obj.type;
       record.definition_hash = obj.definition_hash;
       const bool to_administrator =
-          !options_.administrator_name.empty() &&
-          c->new_owner.kind != GranteeKind::kRole &&
+          !options_.administrator_name.empty() && c->new_owner.kind != GranteeKind::kRole &&
           IdentifiersEqual(c->new_owner.name, options_.administrator_name);
       ResolvedGrantee owner{PrincipalKind::kUser, "", ""};
       if (to_administrator) {
@@ -1654,11 +1567,9 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
             owner.kind == PrincipalKind::kUser ? OwnerKind::kUser : OwnerKind::kRole;
         record.owner_id = owner.id;
         const std::string owner_tenant = snap.TenantOf(owner.kind, owner.id);
-        if (!owner_tenant.empty() &&
-            snap.TenantOfCatalog(obj.path.catalog) != owner_tenant) {
-          return AccessControlError(
-              owner.name + " belongs to " + TenantName(snap, owner_tenant) +
-              "; it can own objects only in that tenant's catalogs");
+        if (!owner_tenant.empty() && snap.TenantOfCatalog(obj.path.catalog) != owner_tenant) {
+          return AccessControlError(owner.name + " belongs to " + TenantName(snap, owner_tenant) +
+                                    "; it can own objects only in that tenant's catalogs");
         }
       }
       if (!actor.superuser) {
@@ -1670,8 +1581,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command,
             ((owner.kind == PrincipalKind::kUser && owner.id == actor.user_id) ||
              (owner.kind == PrincipalKind::kRole && snap.RolesOf(actor).count(owner.id)));
         if (!owns || !to_self_or_role) {
-          return AccessControlError("Hardcharger blocked ALTER OWNER: user " +
-                                    actor.user_name +
+          return AccessControlError("Hardcharger blocked ALTER OWNER: user " + actor.user_name +
                                     " may not change the "
                                     "owner of " +
                                     obj.path.ToString() +

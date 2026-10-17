@@ -2,8 +2,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <unordered_set>
-
 #include <duckdb/parser/expression/constant_expression.hpp>
 #include <duckdb/parser/expression/function_expression.hpp>
 #include <duckdb/parser/expression/subquery_expression.hpp>
@@ -36,6 +34,7 @@
 #include <duckdb/parser/tableref/showref.hpp>
 #include <duckdb/parser/tableref/subqueryref.hpp>
 #include <duckdb/parser/tableref/table_function_ref.hpp>
+#include <unordered_set>
 
 #include "authz/duckdb_internal.hpp"
 #include "authz/types.hpp"
@@ -58,16 +57,15 @@ std::string Lower(std::string s) {
 // (destroy_external_resource('query', '<sql>') runs <sql>); the metadata functions
 // are instance-wide.
 bool AlwaysGated(const std::string& name) {
-  static const std::unordered_set<std::string> kNames = {
-      "duckdb_secrets",
-      "create_external_resource",
-      "destroy_external_resource",
-      "register_external_resource",
-      "register_external_resource_type",
-      "deregister_external_resource",
-      "duckdb_external_resources",
-      "duckdb_external_resource_types",
-      "duckdb_extension_repositories"};
+  static const std::unordered_set<std::string> kNames = {"duckdb_secrets",
+                                                         "create_external_resource",
+                                                         "destroy_external_resource",
+                                                         "register_external_resource",
+                                                         "register_external_resource_type",
+                                                         "deregister_external_resource",
+                                                         "duckdb_external_resources",
+                                                         "duckdb_external_resource_types",
+                                                         "duckdb_extension_repositories"};
   return kNames.contains(name);
 }
 
@@ -78,17 +76,34 @@ bool IsQuackFunction(const std::string& name) { return name.rfind("quack_", 0) =
 // Settings that change the whole instance even when SET without GLOBAL: resource
 // limits, external access and extensions, secrets and the filesystem.
 bool IsInstanceSetting(const std::string& name) {
-  static const std::unordered_set<std::string> kNames = {
-      "memory_limit", "max_memory", "threads", "worker_threads", "external_threads",
-      "temp_directory", "max_temp_directory_size", "enable_external_access",
-      "allow_unsigned_extensions", "allow_community_extensions",
-      "allow_extensions_metadata_query", "autoinstall_known_extensions",
-      "autoload_known_extensions", "custom_extension_repository",
-      "autoinstall_extension_repository", "extension_directory", "enable_external_file_cache",
-      "secret_directory", "allow_persistent_secrets", "disabled_filesystems",
-      "allowed_directories", "allowed_paths", "home_directory", "lock_configuration",
-      "allow_extension_repositories", "extension_repository_directory",
-      "extension_directories", "redact_http_logs"};
+  static const std::unordered_set<std::string> kNames = {"memory_limit",
+                                                         "max_memory",
+                                                         "threads",
+                                                         "worker_threads",
+                                                         "external_threads",
+                                                         "temp_directory",
+                                                         "max_temp_directory_size",
+                                                         "enable_external_access",
+                                                         "allow_unsigned_extensions",
+                                                         "allow_community_extensions",
+                                                         "allow_extensions_metadata_query",
+                                                         "autoinstall_known_extensions",
+                                                         "autoload_known_extensions",
+                                                         "custom_extension_repository",
+                                                         "autoinstall_extension_repository",
+                                                         "extension_directory",
+                                                         "enable_external_file_cache",
+                                                         "secret_directory",
+                                                         "allow_persistent_secrets",
+                                                         "disabled_filesystems",
+                                                         "allowed_directories",
+                                                         "allowed_paths",
+                                                         "home_directory",
+                                                         "lock_configuration",
+                                                         "allow_extension_repositories",
+                                                         "extension_repository_directory",
+                                                         "extension_directories",
+                                                         "redact_http_logs"};
   return kNames.contains(name);
 }
 
@@ -106,10 +121,10 @@ bool LooksLikePath(const std::string& name) {
       name.find(':') != std::string::npos || name.rfind("~", 0) == 0) {
     return true;
   }
-  static const char* kExtensions[] = {".csv",  ".tsv",   ".txt",  ".parquet", ".pq",
-                                      ".json", ".ndjson", ".jsonl", ".arrow",  ".feather",
-                                      ".gz",   ".zst",   ".bz2",  ".xz",     ".orc",
-                                      ".avro", ".xlsx",  ".duckdb", ".db"};
+  static const char* kExtensions[] = {".csv",  ".tsv",    ".txt",    ".parquet", ".pq",
+                                      ".json", ".ndjson", ".jsonl",  ".arrow",   ".feather",
+                                      ".gz",   ".zst",    ".bz2",    ".xz",      ".orc",
+                                      ".avro", ".xlsx",   ".duckdb", ".db"};
   const std::string low = Lower(name);
   for (const char* ext : kExtensions) {
     const std::string e(ext);
@@ -122,7 +137,8 @@ bool LooksLikePath(const std::string& name) {
 
 class Walker {
  public:
-  Walker(const std::function<bool(const std::string&)>& permitted, const NamedTableCallback& named_table)
+  Walker(const std::function<bool(const std::string&)>& permitted,
+         const NamedTableCallback& named_table)
       : permitted_(permitted), named_table_(named_table) {}
 
   void NamedTable(const dd::QualifiedName& name) {
@@ -219,7 +235,8 @@ class Walker {
       auto& show = ref.Cast<dd::ShowRef>();
       if (show.query) WalkNode(*show.query);
       if (!show.GetTableName().GetIdentifierName().empty() &&
-          show.show_type != dd::ShowType::SHOW_SPECIAL && show.show_type != dd::ShowType::SHOW_FROM) {
+          show.show_type != dd::ShowType::SHOW_SPECIAL &&
+          show.show_type != dd::ShowType::SHOW_FROM) {
         // SHOW name shows a setting's value when one has that name (bound into a
         // constant: the plan check never sees which).
         const std::string name = show.GetTableName().GetIdentifierName();
@@ -238,8 +255,7 @@ class Walker {
   void CheckExpression(dd::ParsedExpression& expression) {
     if (violation) return;
     if (expression.GetExpressionClass() == dd::ExpressionClass::FUNCTION) {
-      const std::string name =
-          Lower(Str(expression.Cast<dd::FunctionExpression>().FunctionName()));
+      const std::string name = Lower(Str(expression.Cast<dd::FunctionExpression>().FunctionName()));
       if (IsQuackFunction(name)) {
         Flag(name + "()");
         return;
@@ -260,7 +276,8 @@ class Walker {
     if (!ref.function || ref.function->GetExpressionClass() != dd::ExpressionClass::FUNCTION) {
       return;
     }
-    const std::string name = Lower(Str(ref.function->Cast<dd::FunctionExpression>().FunctionName()));
+    const std::string name =
+        Lower(Str(ref.function->Cast<dd::FunctionExpression>().FunctionName()));
     if (AlwaysGated(name) || IsQuackFunction(name) || name == "query" || name == "query_table") {
       Flag(name + "()");
     } else if (ddb::IsFileReadingTableFunction(name)) {
@@ -283,7 +300,8 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
   switch (statement.type) {
     case dd::StatementType::PREPARE_STATEMENT: {
       auto& prepare = statement.Cast<dd::PrepareStatement>();
-      return prepare.statement ? Classify(*prepare.statement, permitted, named_table) : std::nullopt;
+      return prepare.statement ? Classify(*prepare.statement, permitted, named_table)
+                               : std::nullopt;
     }
     case dd::StatementType::EXPLAIN_STATEMENT: {
       // EXPLAIN ANALYZE runs what it wraps.
@@ -366,8 +384,8 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
     case dd::StatementType::COPY_STATEMENT: {
       auto& copy = statement.Cast<dd::CopyStatement>();
       if (!copy.info) return gate("COPY");
-      if (auto category =
-              gate(std::string(copy.info->is_from ? "COPY FROM" : "COPY TO") + " (files and URLs)")) {
+      if (auto category = gate(std::string(copy.info->is_from ? "COPY FROM" : "COPY TO") +
+                               " (files and URLs)")) {
         return category;
       }
       if (copy.info->select_statement) walker.WalkNode(*copy.info->select_statement);

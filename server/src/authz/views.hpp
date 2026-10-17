@@ -14,13 +14,12 @@
 
 #pragma once
 
-#include <string>
-#include <unordered_map>
-#include <vector>
-
 #include <duckdb.hpp>
 #include <duckdb/planner/column_binding_map.hpp>
 #include <duckdb/planner/operator/logical_extension_operator.hpp>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "authz/types.hpp"
 

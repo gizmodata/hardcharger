@@ -1,15 +1,12 @@
 #include "authz/enforcement.hpp"
 
 #include <chrono>
-#include <set>
-#include <unordered_set>
-
 #include <duckdb/catalog/catalog.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
-#include <duckdb/main/attached_database.hpp>
-#include <duckdb/execution/operator/helper/physical_set.hpp>
 #include <duckdb/execution/expression_executor.hpp>
+#include <duckdb/execution/operator/helper/physical_set.hpp>
+#include <duckdb/main/attached_database.hpp>
 #include <duckdb/main/client_context.hpp>
 #include <duckdb/main/config.hpp>
 #include <duckdb/main/database_manager.hpp>
@@ -19,13 +16,18 @@
 #include <duckdb/parser/parsed_data/create_info.hpp>
 #include <duckdb/parser/parsed_data/create_table_info.hpp>
 #include <duckdb/parser/parsed_data/create_view_info.hpp>
+#include <duckdb/parser/parsed_data/drop_info.hpp>
 #include <duckdb/parser/qualified_name.hpp>
 #include <duckdb/parser/statement/select_statement.hpp>
-#include <duckdb/parser/parsed_data/drop_info.hpp>
+#include <duckdb/planner/expression/bound_function_expression.hpp>
+#include <duckdb/planner/expression_iterator.hpp>
+#include <duckdb/planner/logical_operator_visitor.hpp>
+#include <duckdb/planner/operator/logical_alter.hpp>
 #include <duckdb/planner/operator/logical_create.hpp>
 #include <duckdb/planner/operator/logical_create_index.hpp>
 #include <duckdb/planner/operator/logical_create_table.hpp>
 #include <duckdb/planner/operator/logical_delete.hpp>
+#include <duckdb/planner/operator/logical_drop.hpp>
 #include <duckdb/planner/operator/logical_get.hpp>
 #include <duckdb/planner/operator/logical_insert.hpp>
 #include <duckdb/planner/operator/logical_merge_into.hpp>
@@ -33,18 +35,14 @@
 #include <duckdb/planner/operator/logical_set.hpp>
 #include <duckdb/planner/operator/logical_update.hpp>
 #include <duckdb/planner/parsed_data/bound_create_table_info.hpp>
-#include <duckdb/planner/expression/bound_function_expression.hpp>
-#include <duckdb/planner/expression_iterator.hpp>
-#include <duckdb/planner/logical_operator_visitor.hpp>
 #include <duckdb/planner/planner_extension.hpp>
-#include <duckdb/planner/operator/logical_alter.hpp>
-#include <duckdb/planner/operator/logical_drop.hpp>
+#include <set>
+#include <unordered_set>
 
 #include "authz/duckdb_internal.hpp"
-#include "authz/resolver.hpp"
 #include "authz/policies.hpp"
+#include "authz/resolver.hpp"
 #include "authz/views.hpp"
-
 
 namespace hardcharger::authz {
 
@@ -57,41 +55,18 @@ using OpType = dd::LogicalOperatorType;
 // Table functions anyone may call under access control: they read no table
 // and no file. Metadata functions list names, not data.
 const std::unordered_set<std::string>& AllowedTableFunctions() {
-  static const std::unordered_set<std::string> kNames = {"range",
-                                                         "generate_series",
-                                                         "unnest",
-                                                         "repeat",
-                                                         "repeat_row",
-                                                         "json_each",
-                                                         "json_tree",
-                                                         "test_all_types",
-                                                         "sql_auto_complete",
-                                                         "duckdb_tables",
-                                                         "duckdb_columns",
-                                                         "duckdb_views",
-                                                         "duckdb_schemas",
-                                                         "duckdb_databases",
-                                                         "duckdb_indexes",
-                                                         "duckdb_constraints",
-                                                         "duckdb_functions",
-                                                         "duckdb_types",
-                                                         "duckdb_keywords",
-                                                         "duckdb_settings",
-                                                         "duckdb_sequences",
-                                                         "duckdb_dependencies",
-                                                         "duckdb_extensions",
-                                                         "duckdb_optimizers",
-                                                         "pragma_table_info",
-                                                         "pragma_show",
-                                                         "pragma_version",
-                                                         "pragma_platform",
-                                                         "pragma_database_size",
-                                                         "pragma_collations",
-                                                         "pragma_user_agent",
-                                                         // Bulk ingest reads the caller's own
-                                                         // upload through it; it reads nothing
-                                                         // else (the SDK refuses any other call).
-                                                         "warp_upload"};
+  static const std::unordered_set<std::string> kNames = {
+      "range", "generate_series", "unnest", "repeat", "repeat_row", "json_each", "json_tree",
+      "test_all_types", "sql_auto_complete", "duckdb_tables", "duckdb_columns", "duckdb_views",
+      "duckdb_schemas", "duckdb_databases", "duckdb_indexes", "duckdb_constraints",
+      "duckdb_functions", "duckdb_types", "duckdb_keywords", "duckdb_settings", "duckdb_sequences",
+      "duckdb_dependencies", "duckdb_extensions", "duckdb_optimizers", "pragma_table_info",
+      "pragma_show", "pragma_version", "pragma_platform", "pragma_database_size",
+      "pragma_collations", "pragma_user_agent",
+      // Bulk ingest reads the caller's own
+      // upload through it; it reads nothing
+      // else (the SDK refuses any other call).
+      "warp_upload"};
   return kNames;
 }
 
@@ -99,8 +74,8 @@ const std::unordered_set<std::string>& AllowedTableFunctions() {
 // optimizer (and with it the plan check) off, or switching the SQL grammar.
 const std::unordered_set<std::string>& BlockedSettings() {
   static const std::unordered_set<std::string> kNames = {
-      "enable_optimizer", "disabled_optimizers", "current_dialect",
-      "active_grammar_extensions", "enable_legacy_parser"};
+      "enable_optimizer", "disabled_optimizers", "current_dialect", "active_grammar_extensions",
+      "enable_legacy_parser"};
   return kNames;
 }
 
@@ -109,10 +84,7 @@ std::string Lower(std::string s) {
   return s;
 }
 
-bool IsTempCatalog(const std::string& catalog) {
-  return IdentifiersEqual(catalog, TEMP_CATALOG);
-}
-
+bool IsTempCatalog(const std::string& catalog) { return IdentifiersEqual(catalog, TEMP_CATALOG); }
 
 std::string TableFunctionName(const dd::LogicalGet& get) {
   return compat::Str(get.function.GetName());
@@ -123,8 +95,7 @@ std::string TableFunctionName(const dd::LogicalGet& get) {
 std::vector<std::string> NameParts(const dd::QualifiedName& name) {
   const auto path = compat::Strs(name.Path());
   std::vector<std::string> parts(path.begin(), path.end());
-  if (!parts.empty() && parts.back().empty())
-    parts.pop_back();  // CREATE SCHEMA has no name
+  if (!parts.empty() && parts.back().empty()) parts.pop_back();  // CREATE SCHEMA has no name
   return parts;
 }
 
@@ -135,8 +106,7 @@ std::vector<std::string> PartsOf(const Info& info) {
 
 // The catalog and schema path a CREATE / DROP SCHEMA names: a lone name is a
 // schema of the session's default catalog, as DuckDB resolves it.
-ObjectPath SchemaTarget(dd::ClientContext& context,
-                        const std::vector<std::string>& parts) {
+ObjectPath SchemaTarget(dd::ClientContext& context, const std::vector<std::string>& parts) {
   ObjectPath target;
   if (parts.size() == 1) {
     target.catalog = compat::Str(dd::DatabaseManager::GetDefaultDatabase(context));
@@ -164,15 +134,14 @@ dd::optional_ptr<dd::CatalogEntry> LookUpSchema(dd::ClientContext& context,
 
 // Look an entry up inside the current transaction (the hook runs while the
 // statement is being planned, so no new transaction or lock may be taken).
-dd::optional_ptr<dd::CatalogEntry> LookUp(dd::ClientContext& context,
-                                          dd::CatalogType type,
+dd::optional_ptr<dd::CatalogEntry> LookUp(dd::ClientContext& context, dd::CatalogType type,
                                           const std::vector<std::string>& parts) {
   try {
     dd::vector<dd::Identifier> path;
     for (const auto& p : parts) path.emplace_back(p);
-    return dd::Catalog::GetEntry(
-        context, dd::EntryLookupInfo(type, dd::QualifiedName::FromPath(path)),
-        dd::OnEntryNotFound::RETURN_NULL);
+    return dd::Catalog::GetEntry(context,
+                                 dd::EntryLookupInfo(type, dd::QualifiedName::FromPath(path)),
+                                 dd::OnEntryNotFound::RETURN_NULL);
   } catch (...) {
     return nullptr;
   }
@@ -205,16 +174,14 @@ std::string DefinitionHashOf(dd::CreateInfo& info) {
 // What a scoped token allows, for refusals: "only SELECT, INSERT only on catalog x".
 std::string ScopeLimits(const TokenScope& scope) {
   std::vector<std::string> verbs;
-  for (auto p :
-       {Privilege::kSelect, Privilege::kInsert, Privilege::kUpdate, Privilege::kDelete}) {
+  for (auto p : {Privilege::kSelect, Privilege::kInsert, Privilege::kUpdate, Privilege::kDelete}) {
     if (scope.privileges.count(p)) verbs.push_back(PrivilegeName(p));
   }
   std::string text = "allows only ";
   for (size_t i = 0; i < verbs.size(); ++i) text += (i ? ", " : "") + verbs[i];
   if (!scope.catalogs.empty()) {
     text += scope.catalogs.size() == 1 ? ", only on catalog " : ", only on catalogs ";
-    for (size_t i = 0; i < scope.catalogs.size(); ++i)
-      text += (i ? ", " : "") + scope.catalogs[i];
+    for (size_t i = 0; i < scope.catalogs.size(); ++i) text += (i ? ", " : "") + scope.catalogs[i];
   }
   return text;
 }
@@ -222,20 +189,19 @@ std::string ScopeLimits(const TokenScope& scope) {
 [[noreturn]] void Deny(const Principal& who, const std::string& what) {
   if (who.scope) {
     throw dd::PermissionException("Hardcharger blocked this statement: " + what +
-                                  ". This session logged in with scoped token " +
-                                  who.scope->name + " of user " + who.user_name +
-                                  ", which " + ScopeLimits(*who.scope));
+                                  ". This session logged in with scoped token " + who.scope->name +
+                                  " of user " + who.user_name + ", which " +
+                                  ScopeLimits(*who.scope));
   }
   if (!who.active_role_name.empty()) {
-    throw dd::PermissionException(
-        "Hardcharger blocked this statement: " + what + ". This session acts with role " +
-        who.active_role_name + " only (SET ROLE); RESET ROLE brings back all of user " +
-        who.user_name + "'s roles (see SHOW GRANTS)");
+    throw dd::PermissionException("Hardcharger blocked this statement: " + what +
+                                  ". This session acts with role " + who.active_role_name +
+                                  " only (SET ROLE); RESET ROLE brings back all of user " +
+                                  who.user_name + "'s roles (see SHOW GRANTS)");
   }
-  throw dd::PermissionException(
-      "Hardcharger blocked this statement: " + what +
-      ". Access control on this server lets user " + who.user_name +
-      " do only what their roles are granted (see SHOW GRANTS)");
+  throw dd::PermissionException("Hardcharger blocked this statement: " + what +
+                                ". Access control on this server lets user " + who.user_name +
+                                " do only what their roles are granted (see SHOW GRANTS)");
 }
 
 bool WritesFiles(const std::string& setting) {
@@ -278,8 +244,8 @@ class PlanChecker {
  public:
   using ViewColumns = std::unordered_map<const ViewMarker*, std::vector<std::string>>;
 
-  PlanChecker(dd::ClientContext& context, const Snapshot& snapshot,
-              const Principal& principal, const ViewColumns& view_columns)
+  PlanChecker(dd::ClientContext& context, const Snapshot& snapshot, const Principal& principal,
+              const ViewColumns& view_columns)
       : context_(context),
         snapshot_(snapshot),
         principal_(principal),
@@ -406,7 +372,8 @@ class PlanChecker {
             BlockedSettings().count(Lower(compat::Str(reset.name)))) {
           Deny(principal_, "changing " + compat::Str(reset.name) + " is not allowed");
         }
-        if (reset.scope != dd::SetScope::VARIABLE && ChangesWholeServer(context_, reset.name, reset.scope)) {
+        if (reset.scope != dd::SetScope::VARIABLE &&
+            ChangesWholeServer(context_, reset.name, reset.scope)) {
           RequireSystem(SystemPrivilege::kManageConfig, "RESET GLOBAL");
         }
         return;
@@ -507,9 +474,10 @@ class PlanChecker {
       if (Lower(compat::Str(call.Function().GetName())) == "current_setting") {
         dd::Value name;
         const auto& arguments = call.GetChildren();
-        const bool known = !arguments.empty() && arguments[0]->IsFoldable() &&
-                           dd::ExpressionExecutor::TryEvaluateScalar(context_, *arguments[0], name) &&
-                           !name.IsNull();
+        const bool known =
+            !arguments.empty() && arguments[0]->IsFoldable() &&
+            dd::ExpressionExecutor::TryEvaluateScalar(context_, *arguments[0], name) &&
+            !name.IsNull();
         // Fail closed: a setting that cannot be named might be any of them.
         const std::string setting = known ? name.ToString() : "(unknown)";
         if (!known || IsSensitiveSetting(setting)) {
@@ -529,8 +497,7 @@ class PlanChecker {
   }
 
  private:
-  void VisitChildren(dd::LogicalOperator& op,
-                     dd::optional_ptr<dd::TableCatalogEntry> dml_target) {
+  void VisitChildren(dd::LogicalOperator& op, dd::optional_ptr<dd::TableCatalogEntry> dml_target) {
     for (auto& child : op.children) {
       if (child) Visit(*child, dml_target);
     }
@@ -554,19 +521,16 @@ class PlanChecker {
         return;
       }
       if (!AllowedTableFunctions().count(name)) {
-        Deny(principal_,
-             "the table function " + name + " is not available under access control");
+        Deny(principal_, "the table function " + name + " is not available under access control");
       }
-      if ((name == "pragma_table_info" || name == "pragma_show") &&
-          !get.parameters.empty()) {
+      if ((name == "pragma_table_info" || name == "pragma_show") && !get.parameters.empty()) {
         RequireVisibleTableArgument(get.parameters[0]);
       }
       return;
     }
     std::vector<std::string> columns;
     for (const auto& index : get.GetColumnIds()) {
-      if (index.IsRowIdColumn() || index.IsVirtualColumn() || index.IsEmptyColumn())
-        continue;
+      if (index.IsRowIdColumn() || index.IsVirtualColumn() || index.IsEmptyColumn()) continue;
       const auto& column = table->GetColumn(dd::LogicalIndex(index.GetPrimaryIndex()));
       columns.push_back(compat::Str(column.Name()));
     }
@@ -578,8 +542,7 @@ class PlanChecker {
 
   ObjectPath PathOf(dd::CatalogEntry& entry) { return PathOfEntry(entry); }
 
-  void Require(dd::CatalogEntry& entry, Privilege privilege,
-               std::vector<std::string> columns) {
+  void Require(dd::CatalogEntry& entry, Privilege privilege, std::vector<std::string> columns) {
     RequireObject(PathOf(entry), ObjectTypeOf(entry), privilege, std::move(columns));
   }
 
@@ -592,8 +555,7 @@ class PlanChecker {
     bool quoted = false;
     auto check = [&]() {
       if (part.empty()) return;
-      auto db =
-          dd::DatabaseManager::Get(context_).GetDatabase(context_, dd::Identifier(part));
+      auto db = dd::DatabaseManager::Get(context_).GetDatabase(context_, dd::Identifier(part));
       if (db) RequireVisible(compat::Str(db->GetName()));
       part.clear();
     };
@@ -626,8 +588,7 @@ class PlanChecker {
     if (parts.size() >= 2) {
       // A leading part naming a catalog the user cannot see, whatever DuckDB
       // made of the rest.
-      auto db = dd::DatabaseManager::Get(context_).GetDatabase(context_,
-                                                               dd::Identifier(parts[0]));
+      auto db = dd::DatabaseManager::Get(context_).GetDatabase(context_, dd::Identifier(parts[0]));
       if (db) RequireVisible(compat::Str(db->GetName()));
     }
     if (auto entry = LookUp(context_, dd::CatalogType::TABLE_ENTRY, parts)) {
@@ -650,8 +611,8 @@ class PlanChecker {
       // owner reads (a list of allowed rows, say). Only the caller's own
       // statement may read one.
       if (in_owned_view_) {
-        Deny(principal_, "the view " + owned_view_ + " cannot read a temporary " +
-                             TypeWord(type) + " of this session");
+        Deny(principal_, "the view " + owned_view_ + " cannot read a temporary " + TypeWord(type) +
+                             " of this session");
       }
       return;
     }
@@ -660,8 +621,7 @@ class PlanChecker {
                request.columns);
     {
       std::string schema;
-      for (const auto& part : path.schema_path)
-        schema += (schema.empty() ? "" : ".") + part;
+      for (const auto& part : path.schema_path) schema += (schema.empty() ? "" : ".") + part;
       boost::json::array columns;
       for (const auto& column : request.columns) columns.emplace_back(column);
       objects_.push_back(boost::json::object{{"catalog", path.catalog},
@@ -677,18 +637,15 @@ class PlanChecker {
       if (decision.allowed) continue;
       if (!rights.owner_of_view.empty()) {
         // Never name what the view reads: the caller may not know it.
-        Deny(principal_,
-             "the view " + rights.owner_of_view +
-                 " cannot be read, because its owner lacks a privilege on an object "
-                 "the view reads");
+        Deny(principal_, "the view " + rights.owner_of_view +
+                             " cannot be read, because its owner lacks a privilege on an object "
+                             "the view reads");
       }
-      std::string what = "user " + principal_.user_name + " has no " +
-                         PrivilegeName(privilege) + " privilege on " +
-                         TypeWord(request.type) + " " + path.ToString();
-      if (privilege == Privilege::kSelect &&
-          decision.reason.rfind("no SELECT on column", 0) == 0) {
-        what = "user " + principal_.user_name + " has " + decision.reason + " of " +
-               path.ToString();
+      std::string what = "user " + principal_.user_name + " has no " + PrivilegeName(privilege) +
+                         " privilege on " + TypeWord(request.type) + " " + path.ToString();
+      if (privilege == Privilege::kSelect && decision.reason.rfind("no SELECT on column", 0) == 0) {
+        what =
+            "user " + principal_.user_name + " has " + decision.reason + " of " + path.ToString();
       }
       if (!unowned_view_.empty()) {
         what += " (read through the view " + unowned_view_ +
@@ -716,14 +673,12 @@ class PlanChecker {
     for (const auto& rights : rights_) {
       if (snapshot_.HasSystemPrivilege(rights.principal, privilege)) continue;
       if (!rights.owner_of_view.empty()) {
-        Deny(principal_,
-             "the view " + rights.owner_of_view +
-                 " cannot be read, because its owner lacks a privilege on an object "
-                 "the view reads");
+        Deny(principal_, "the view " + rights.owner_of_view +
+                             " cannot be read, because its owner lacks a privilege on an object "
+                             "the view reads");
       }
       Deny(principal_, what + " needs the " + SystemPrivilegeName(privilege) +
-                           " privilege, which user " + principal_.user_name +
-                           " does not hold");
+                           " privilege, which user " + principal_.user_name + " does not hold");
     }
   }
 
@@ -783,23 +738,21 @@ class PlanChecker {
       case OwnerKind::kUser: {
         const UserRecord* user = snapshot_.FindUserById(owner.owner_id);
         if (!user || !user->enabled) {
-          Deny(principal_,
-               "the view " + view_name +
-                   " cannot be read, because its owner is disabled or was dropped");
+          Deny(principal_, "the view " + view_name +
+                               " cannot be read, because its owner is disabled or was dropped");
         }
         return Principal::User(user->id, user->name);
       }
       case OwnerKind::kRole: {
         const RoleRecord* role = snapshot_.FindRoleById(owner.owner_id);
         if (!role) {
-          Deny(principal_, "the view " + view_name +
-                               " cannot be read, because its owner was dropped");
+          Deny(principal_,
+               "the view " + view_name + " cannot be read, because its owner was dropped");
         }
         return Principal::Role(role->id, role->name);
       }
     }
-    Deny(principal_,
-         "the view " + view_name + " has an owner record that is not understood");
+    Deny(principal_, "the view " + view_name + " has an owner record that is not understood");
   }
 
   void RequireAllColumns(dd::TableCatalogEntry& table) {
@@ -817,13 +770,11 @@ class PlanChecker {
     ObjectPath target;
     dd::optional_ptr<dd::CatalogEntry> existing;
     if (type == ObjectType::kSchema) {
-      if (parts.empty())
-        Deny(principal_, "the new schema's name could not be determined");
+      if (parts.empty()) Deny(principal_, "the new schema's name could not be determined");
       target = SchemaTarget(context_, parts);
       existing = LookUpSchema(context_, target);
     } else {
-      if (parts.size() < 3)
-        Deny(principal_, "the new object's schema could not be determined");
+      if (parts.size() < 3) Deny(principal_, "the new object's schema could not be determined");
       target.catalog = parts[0];
       target.schema_path.assign(parts.begin() + 1, parts.end() - 1);
       target.object_name = parts.back();
@@ -836,11 +787,10 @@ class PlanChecker {
     RequireVisible(target.catalog);
     AccessRequest request{target, type, privilege, {}};
     if (!snapshot_.Check(principal_, request).allowed) {
-      Deny(principal_,
-           "user " + principal_.user_name + " has no " + PrivilegeName(privilege) +
-               " privilege on " +
-               (type == ObjectType::kSchema ? "catalog " + target.catalog
-                                            : "schema " + ContainerOf(target)));
+      Deny(principal_, "user " + principal_.user_name + " has no " + PrivilegeName(privilege) +
+                           " privilege on " +
+                           (type == ObjectType::kSchema ? "catalog " + target.catalog
+                                                        : "schema " + ContainerOf(target)));
     }
     ownership_.push_back({PendingOwnership::Kind::kCreate, target, type});
   }
@@ -862,9 +812,8 @@ class PlanChecker {
                                                               : Privilege::kDropTable;
     AccessRequest request{path, type, privilege, {}};
     if (!snapshot_.Check(principal_, request).allowed) {
-      Deny(principal_, "user " + principal_.user_name + " may not drop " +
-                           TypeWord(type) + " " + path.ToString() +
-                           " (only its owner, or a role granted " +
+      Deny(principal_, "user " + principal_.user_name + " may not drop " + TypeWord(type) + " " +
+                           path.ToString() + " (only its owner, or a role granted " +
                            PrivilegeName(privilege) + ")");
     }
     ownership_.push_back({PendingOwnership::Kind::kDrop, path, type});
@@ -878,8 +827,7 @@ class PlanChecker {
       case dd::CatalogType::SCHEMA_ENTRY: {
         // Found the way DuckDB finds it: the named catalog, or the session's.
         auto entry = LookUpSchema(context_, SchemaTarget(context_, parts));
-        if (!entry)
-          return;  // DROP SCHEMA IF EXISTS of nothing; DuckDB reports a missing schema
+        if (!entry) return;  // DROP SCHEMA IF EXISTS of nothing; DuckDB reports a missing schema
         CheckDropOf(*entry);
         return;
       }
@@ -887,8 +835,7 @@ class PlanChecker {
       case dd::CatalogType::VIEW_ENTRY: {
         // The binder has already qualified the name of an existing object.
         auto entry = LookUp(context_, dd::CatalogType::TABLE_ENTRY, parts);
-        if (!entry)
-          return;  // DROP ... IF EXISTS of nothing; DuckDB reports a missing object
+        if (!entry) return;  // DROP ... IF EXISTS of nothing; DuckDB reports a missing object
         CheckDropOf(*entry);
         return;
       }
@@ -915,8 +862,7 @@ class PlanChecker {
     if (IsTempCatalog(path.catalog)) return;
     RequireVisible(path.catalog);
     const ObjectType type = ObjectTypeOf(*entry);
-    if (info.type == dd::AlterType::ALTER_TABLE ||
-        info.type == dd::AlterType::ALTER_VIEW) {
+    if (info.type == dd::AlterType::ALTER_TABLE || info.type == dd::AlterType::ALTER_VIEW) {
       // A rename moves the object out from under its owner record: owners only.
       AccessRequest request{
           path,
@@ -924,9 +870,8 @@ class PlanChecker {
           type == ObjectType::kView ? Privilege::kAlterView : Privilege::kAlterTable,
           {}};
       if (!snapshot_.Check(principal_, request).allowed) {
-        Deny(principal_, "user " + principal_.user_name + " may not alter " +
-                             TypeWord(type) + " " + path.ToString() +
-                             " (only its owner, or a role granted " +
+        Deny(principal_, "user " + principal_.user_name + " may not alter " + TypeWord(type) + " " +
+                             path.ToString() + " (only its owner, or a role granted " +
                              PrivilegeName(request.privilege) + ")");
       }
       return;
@@ -986,21 +931,20 @@ void RequireActiveRole(const Snapshot& snapshot, const Principal& principal) {
                          .count();
     if (now >= principal.scope->expires_at) {
       throw dd::PermissionException("Hardcharger blocked this statement: scoped token " +
-                                    principal.scope->name + " of user " +
-                                    principal.user_name + " has expired");
+                                    principal.scope->name + " of user " + principal.user_name +
+                                    " has expired");
     }
   }
   if (snapshot.HoldsActiveRole(principal)) return;
   const RoleRecord* role = snapshot.FindRoleById(principal.active_role_id);
-  throw dd::PermissionException(
-      "Hardcharger blocked this statement: user " + principal.user_name +
-      " no longer holds role " + (role ? role->name : std::string("(dropped)")) +
-      ", which SET ROLE made active. Run SET ROLE with another role, "
-      "or RESET ROLE");
+  throw dd::PermissionException("Hardcharger blocked this statement: user " + principal.user_name +
+                                " no longer holds role " +
+                                (role ? role->name : std::string("(dropped)")) +
+                                ", which SET ROLE made active. Run SET ROLE with another role, "
+                                "or RESET ROLE");
 }
 
-void PreOptimize(dd::OptimizerExtensionInput& input,
-                 dd::unique_ptr<dd::LogicalOperator>& plan) {
+void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalOperator>& plan) {
   auto& context = input.context;
   auto state = context.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
   if (!state) return;  // a Hardcharger-internal connection
@@ -1021,19 +965,17 @@ void PreOptimize(dd::OptimizerExtensionInput& input,
         if (op.type == OpType::LOGICAL_CREATE_TABLE) {
           auto parts = PartsOf(*op.Cast<dd::LogicalCreateTable>().info->base);
           if (parts.size() >= 3 && !IsTempCatalog(parts[0])) {
-            ownership.push_back(
-                {PendingOwnership::Kind::kCreate,
-                 {parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()},
-                 ObjectType::kTable});
+            ownership.push_back({PendingOwnership::Kind::kCreate,
+                                 {parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()},
+                                 ObjectType::kTable});
           }
         } else if (op.type == OpType::LOGICAL_CREATE_VIEW) {
           auto parts = PartsOf(*op.Cast<dd::LogicalCreate>().info);
           if (parts.size() >= 3 && !IsTempCatalog(parts[0])) {
-            ownership.push_back(
-                {PendingOwnership::Kind::kCreate,
-                 {parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()},
-                 ObjectType::kView,
-                 DefinitionHashOf(*op.Cast<dd::LogicalCreate>().info)});
+            ownership.push_back({PendingOwnership::Kind::kCreate,
+                                 {parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()},
+                                 ObjectType::kView,
+                                 DefinitionHashOf(*op.Cast<dd::LogicalCreate>().info)});
           }
         }
         for (auto& child : op.children) {
@@ -1090,8 +1032,7 @@ void PreOptimize(dd::OptimizerExtensionInput& input,
 // denied statement fails before its result columns are described; the plan that runs
 // is checked again (and has the policies applied) before it is optimized.
 void PostBind(dd::PlannerExtensionInput& input, dd::BoundStatement& statement) {
-  auto state =
-      input.context.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
+  auto state = input.context.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
   if (!state || state->unchecked() || !statement.plan) return;
   auto engine = state->engine();
   if (!engine) {
@@ -1115,8 +1056,7 @@ void PostBind(dd::PlannerExtensionInput& input, dd::BoundStatement& statement) {
 
 // ---------------------------------------------------------------------------
 
-RbacSessionState::RbacSessionState(std::shared_ptr<RbacEngine> engine,
-                                   Principal principal)
+RbacSessionState::RbacSessionState(std::shared_ptr<RbacEngine> engine, Principal principal)
     : engine_(engine), principal_(std::move(principal)) {}
 
 RbacSessionState::BypassScope::BypassScope(dd::ClientContext& context)
@@ -1129,8 +1069,8 @@ RbacSessionState::BypassScope::~BypassScope() {
 }
 
 void RbacSessionState::NoteChecked(int64_t snapshot_version,
-                                   std::vector<PendingOwnership> ownership,
-                                   bool prepare_only, std::vector<std::string> accesses) {
+                                   std::vector<PendingOwnership> ownership, bool prepare_only,
+                                   std::vector<std::string> accesses) {
   std::lock_guard<std::mutex> lock(mutex_);
   last_accesses_ = std::move(accesses);
   ++checked_pending_;
@@ -1166,9 +1106,9 @@ void RbacSessionState::NoteBindChecked() {
   bind_checked_pending_ = true;
 }
 
-dd::RebindQueryInfo RbacSessionState::OnFinalizePrepare(
-    dd::ClientContext&, dd::PreparedStatementData& prepared,
-    dd::PreparedStatementMode mode) {
+dd::RebindQueryInfo RbacSessionState::OnFinalizePrepare(dd::ClientContext&,
+                                                        dd::PreparedStatementData& prepared,
+                                                        dd::PreparedStatementMode mode) {
   std::lock_guard<std::mutex> lock(mutex_);
   // A statement with parameters that DuckDB prepared without optimizing (it is
   // planned again with the values for each run). It may go ahead when the
@@ -1180,8 +1120,7 @@ dd::RebindQueryInfo RbacSessionState::OnFinalizePrepare(
       prepared.types.size() == 1 && prepared.types[0].id() == dd::LogicalTypeId::UNKNOWN;
   const bool replanned_on_run =
       prepared.statement_type != dd::StatementType::PREPARE_STATEMENT &&
-      (!prepared.properties.bound_all_parameters ||
-       prepared.properties.always_require_rebind) &&
+      (!prepared.properties.bound_all_parameters || prepared.properties.always_require_rebind) &&
       (bind_checked || unplanned);
   // File the plan's ownership changes: applied at QueryEnd when it runs now,
   // or handed to Hardcharger to apply after a later successful execution.
@@ -1194,9 +1133,8 @@ dd::RebindQueryInfo RbacSessionState::OnFinalizePrepare(
   planned_ownership_.clear();
   if (checked_pending_ > 0) {
     --checked_pending_;
-  } else if (!unchecked() &&
-             (prepared.statement_type == dd::StatementType::PREPARE_STATEMENT ||
-              replanned_on_run)) {
+  } else if (!unchecked() && (prepared.statement_type == dd::StatementType::PREPARE_STATEMENT ||
+                              replanned_on_run)) {
     // A statement prepared without optimizing (above): checked on a fresh bind
     // already, and not recorded as checked, so the run's re-plan is checked too.
     // DuckDB 2.x prepares a statement it must re-plan before every run (bound
@@ -1236,13 +1174,11 @@ dd::RebindQueryInfo RbacSessionState::RebindIfGrantsChanged(
 }
 
 dd::RebindQueryInfo RbacSessionState::OnRebindPreparedStatement(
-    dd::ClientContext&, dd::BindPreparedStatementCallbackInfo& info,
-    dd::RebindQueryInfo) {
+    dd::ClientContext&, dd::BindPreparedStatementCallbackInfo& info, dd::RebindQueryInfo) {
   return RebindIfGrantsChanged(info.prepared_statement);
 }
 
-void RbacSessionState::QueryEnd(dd::ClientContext&,
-                                dd::optional_ptr<dd::ErrorData> error) {
+void RbacSessionState::QueryEnd(dd::ClientContext&, dd::optional_ptr<dd::ErrorData> error) {
   std::vector<PendingOwnership> pending;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1266,22 +1202,18 @@ void ApplyOwnership(RbacEngine& engine, const Principal& principal,
   }
 }
 
-std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(
-    const std::string& category) {
+std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(const std::string& category) {
   auto starts = [&](const char* prefix) { return category.rfind(prefix, 0) == 0; };
   auto ends = [&](const std::string& suffix) {
     return category.size() >= suffix.size() &&
            category.compare(category.size() - suffix.size(), suffix.size(), suffix) == 0;
   };
-  if (category == "ATTACH" || category == "DETACH")
-    return SystemPrivilege::kManageCatalogs;
+  if (category == "ATTACH" || category == "DETACH") return SystemPrivilege::kManageCatalogs;
   if (category == "INSTALL extension" || category == "LOAD extension" ||
-      category == "CREATE EXTENSION REPOSITORY" ||
-      category == "DROP EXTENSION REPOSITORY") {
+      category == "CREATE EXTENSION REPOSITORY" || category == "DROP EXTENSION REPOSITORY") {
     return SystemPrivilege::kManageExtensions;
   }
-  if (category == "CREATE SECRET" || category == "DROP SECRET" ||
-      category == "duckdb_secrets()") {
+  if (category == "CREATE SECRET" || category == "DROP SECRET" || category == "duckdb_secrets()") {
     return SystemPrivilege::kManageSecrets;
   }
   if (starts("SET GLOBAL ") || starts("RESET GLOBAL ") || starts("reading the setting "))

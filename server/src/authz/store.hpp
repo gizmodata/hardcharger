@@ -11,15 +11,15 @@
 
 #pragma once
 
+#include <arrow/result.h>
+#include <arrow/status.h>
+
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
-
-#include <arrow/result.h>
-#include <arrow/status.h>
 
 #include "authz/model.hpp"
 
@@ -51,8 +51,7 @@ class RbacStore {
   // inside the transaction and a handle to write with. Commits when `fn`
   // returns OK; rolls back otherwise. A serialization conflict with another
   // replica is retried.
-  arrow::Status Mutate(
-      const std::function<arrow::Status(StoreTransaction&, const Snapshot&)>& fn);
+  arrow::Status Mutate(const std::function<arrow::Status(StoreTransaction&, const Snapshot&)>& fn);
 
   const std::string& description() const { return description_; }
 
@@ -94,8 +93,7 @@ class StoreTransaction {
   // An empty tenant_id removes the assignment.
   arrow::Status SetPrincipalTenant(PrincipalKind kind, const std::string& id,
                                    const std::string& tenant_id);
-  arrow::Status SetCatalogTenant(const std::string& catalog,
-                                 const std::string& tenant_id);
+  arrow::Status SetCatalogTenant(const std::string& catalog, const std::string& tenant_id);
   arrow::Status InsertGroupMapping(const GroupMappingRecord& mapping);
   arrow::Status InsertScopedToken(const ScopedTokenRecord& token);
   arrow::Status DeleteScopedToken(const std::string& token_id);
@@ -118,8 +116,7 @@ class StoreTransaction {
   arrow::Result<std::shared_ptr<const Snapshot>> Reload();
 
  private:
-  StoreTransaction(RbacStore& store, duckdb::Connection& conn)
-      : store_(store), conn_(conn) {}
+  StoreTransaction(RbacStore& store, duckdb::Connection& conn) : store_(store), conn_(conn) {}
   RbacStore& store_;
   duckdb::Connection& conn_;
   friend class RbacStore;

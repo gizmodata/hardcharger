@@ -3,9 +3,9 @@
 
 #pragma once
 
-#include <string>
-
 #include <arrow/result.h>
+
+#include <string>
 
 namespace hardcharger::authz {
 

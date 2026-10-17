@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <arrow/result.h>
+#include <arrow/status.h>
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -14,9 +17,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <arrow/result.h>
-#include <arrow/status.h>
 
 #include "authz/ddl.hpp"
 #include "authz/model.hpp"
@@ -53,8 +53,7 @@ class ObjectResolver {
   virtual arrow::Status CheckMaskingPolicy(const MaskingPolicyRecord& policy) {
     return arrow::Status::OK();
   }
-  virtual arrow::Status CheckMaskBinding(const ResolvedObject& table,
-                                         const std::string& column,
+  virtual arrow::Status CheckMaskBinding(const ResolvedObject& table, const std::string& column,
                                          const MaskingPolicyRecord& policy) {
     return arrow::Status::OK();
   }
@@ -123,8 +122,7 @@ class RbacEngine {
   bool IsActive(const Principal& principal) const;
 
   // Ownership bookkeeping for objects created / dropped through Hardcharger.
-  arrow::Status RecordOwner(const ObjectPath& object, ObjectType type,
-                            const Principal& owner,
+  arrow::Status RecordOwner(const ObjectPath& object, ObjectType type, const Principal& owner,
                             const std::string& definition_hash = "");
   arrow::Status ForgetOwner(const ObjectPath& object);
 

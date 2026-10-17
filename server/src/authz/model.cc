@@ -17,8 +17,7 @@ bool PathEquals(const std::vector<std::string>& a, const std::vector<std::string
 
 // A schema grant covers the schema and every schema nested under it (DuckDB
 // 2.x), so reorganizing objects into sub-schemas never silently drops access.
-bool PathHasPrefix(const std::vector<std::string>& path,
-                   const std::vector<std::string>& prefix) {
+bool PathHasPrefix(const std::vector<std::string>& path, const std::vector<std::string>& prefix) {
   if (prefix.size() > path.size()) return false;
   for (size_t i = 0; i < prefix.size(); ++i) {
     if (!IdentifiersEqual(path[i], prefix[i])) return false;
@@ -41,15 +40,13 @@ std::string ObjectKey(const ObjectPath& path) {
   return key;
 }
 
-Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users,
-                   std::vector<RoleRecord> roles,
-                   std::vector<MembershipRecord> memberships,
-                   std::vector<ObjectGrantRecord> grants, std::vector<OwnerRecord> owners,
+Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users, std::vector<RoleRecord> roles,
+                   std::vector<MembershipRecord> memberships, std::vector<ObjectGrantRecord> grants,
+                   std::vector<OwnerRecord> owners,
                    std::vector<SystemPrivilegeRecord> system_privileges,
                    std::vector<RowPolicyRecord> row_policies,
                    std::vector<MaskingPolicyRecord> masking_policies,
-                   std::vector<MaskBindingRecord> mask_bindings,
-                   std::vector<TenantRecord> tenants,
+                   std::vector<MaskBindingRecord> mask_bindings, std::vector<TenantRecord> tenants,
                    std::vector<PrincipalTenantRecord> principal_tenants,
                    std::vector<CatalogTenantRecord> catalog_tenants,
                    std::vector<GroupMappingRecord> group_mappings,
@@ -118,8 +115,7 @@ std::set<std::string> Snapshot::EffectiveRoleIds(const std::string& user_id) con
   const std::string tenant = TenantOf(PrincipalKind::kUser, user_id);
   const RoleRecord* tenant_public =
       tenant.empty() ? nullptr : TenantRole(tenant, kTenantPublicSuffix);
-  std::set<std::string> roles =
-      RoleClosure(tenant_public ? tenant_public->id : kPublicRoleId);
+  std::set<std::string> roles = RoleClosure(tenant_public ? tenant_public->id : kPublicRoleId);
   for (const auto& m : memberships_) {
     if (m.member_kind == PrincipalKind::kUser && m.member_id == user_id) {
       for (const auto& r : RoleClosure(m.role_id)) roles.insert(r);
@@ -159,8 +155,7 @@ std::set<std::string> Snapshot::RolesOf(const Principal& principal) const {
   const std::string tenant = TenantOf(PrincipalKind::kUser, principal.user_id);
   const RoleRecord* tenant_public =
       tenant.empty() ? nullptr : TenantRole(tenant, kTenantPublicSuffix);
-  std::set<std::string> active =
-      RoleClosure(tenant_public ? tenant_public->id : kPublicRoleId);
+  std::set<std::string> active = RoleClosure(tenant_public ? tenant_public->id : kPublicRoleId);
   for (const auto& r : RoleClosure(principal.active_role_id)) active.insert(r);
   return active;
 }
@@ -173,11 +168,9 @@ const ScopedTokenRecord* Snapshot::FindScopedToken(const std::string& id) const 
 }
 
 std::optional<TokenScope> Snapshot::ValidScope(const std::string& token_id,
-                                               const std::string& user_id,
-                                               int64_t now) const {
+                                               const std::string& user_id, int64_t now) const {
   const ScopedTokenRecord* token = FindScopedToken(token_id);
-  if (!token || token->user_id != user_id || token->expires_at <= now)
-    return std::nullopt;
+  if (!token || token->user_id != user_id || token->expires_at <= now) return std::nullopt;
   // Every token it was minted under must still be there (a bounded walk).
   const ScopedTokenRecord* up = token;
   for (int depth = 0; !up->parent_id.empty(); ++depth) {
@@ -190,8 +183,7 @@ std::optional<TokenScope> Snapshot::ValidScope(const std::string& token_id,
 }
 
 bool Snapshot::HoldsActiveRole(const Principal& principal) const {
-  if (principal.active_role_id.empty() || principal.superuser || principal.is_role())
-    return true;
+  if (principal.active_role_id.empty() || principal.superuser || principal.is_role()) return true;
   return HeldRoleIds(principal).count(principal.active_role_id) > 0;
 }
 
@@ -206,8 +198,7 @@ std::set<std::string> Snapshot::HeldRoleIds(const Principal& principal) const {
       continue;
     }
     // Roles never cross a tenant, mapped ones included.
-    if (!FindRoleById(m.role_id) || TenantOf(PrincipalKind::kRole, m.role_id) != tenant)
-      continue;
+    if (!FindRoleById(m.role_id) || TenantOf(PrincipalKind::kRole, m.role_id) != tenant) continue;
     for (const auto& r : RoleClosure(m.role_id)) roles.insert(r);
   }
   return roles;
@@ -226,8 +217,7 @@ bool Snapshot::IsOwner(const Principal& principal, const OwnerRecord& owner) con
   return false;
 }
 
-bool Snapshot::GrantCovers(const ObjectGrantRecord& grant,
-                           const AccessRequest& request) const {
+bool Snapshot::GrantCovers(const ObjectGrantRecord& grant, const AccessRequest& request) const {
   // Privilege
   if (grant.privilege != request.privilege &&
       !(grant.privilege == Privilege::kAll && IsTableLevel(request.privilege))) {
@@ -247,16 +237,14 @@ bool Snapshot::GrantCovers(const ObjectGrantRecord& grant,
   return false;
 }
 
-AccessDecision Snapshot::Check(const Principal& principal,
-                               const AccessRequest& request) const {
+AccessDecision Snapshot::Check(const Principal& principal, const AccessRequest& request) const {
   if (principal.superuser) return {true, "superuser", "superuser"};
   // A scoped token narrows everything below, the owner's rights included.
   if (principal.scope) {
     if (!principal.scope->privileges.count(request.privilege)) {
       return {false, "scoped token: privilege not allowed", ""};
     }
-    if (!principal.scope->catalogs.empty() &&
-        !IdentifiersEqual(request.object.catalog, "temp")) {
+    if (!principal.scope->catalogs.empty() && !IdentifiersEqual(request.object.catalog, "temp")) {
       bool reachable = false;
       for (const auto& c : principal.scope->catalogs) {
         reachable = reachable || IdentifiersEqual(c, request.object.catalog);
@@ -305,21 +293,18 @@ AccessDecision Snapshot::Check(const Principal& principal,
       if (!GrantCovers(*grant, request)) continue;
       const RoleRecord* role = FindRoleById(role_id);
       if (request.privilege != Privilege::kSelect || grant->columns.empty()) {
-        return {true, "granted " + PrivilegeName(grant->privilege),
-                role ? role->name : role_id};
+        return {true, "granted " + PrivilegeName(grant->privilege), role ? role->name : role_id};
       }
       for (const auto& c : grant->columns) covered_columns.insert(FoldIdentifier(c));
       if (satisfying_role.empty() && role) satisfying_role = role->name;
     }
   }
-  if (request.privilege == Privilege::kSelect && !covered_columns.empty() &&
-      !all_columns) {
+  if (request.privilege == Privilege::kSelect && !covered_columns.empty() && !all_columns) {
     std::vector<std::string> missing;
     for (const auto& c : request.columns) {
       if (!covered_columns.count(FoldIdentifier(c))) missing.push_back(c);
     }
-    if (missing.empty())
-      return {true, "granted SELECT on the columns read", satisfying_role};
+    if (missing.empty()) return {true, "granted SELECT on the columns read", satisfying_role};
     std::string list;
     for (size_t i = 0; i < missing.size(); ++i) list += (i ? ", " : "") + missing[i];
     return {false, "no SELECT on column(s) " + list, ""};
@@ -338,8 +323,7 @@ std::set<std::string> Snapshot::RightsOf(const Principal& principal) const {
       for (const auto& c : g->columns) columns.push_back(FoldIdentifier(c));
       std::sort(columns.begin(), columns.end());
       std::string key = "grant\x1f" + PrivilegeName(g->privilege) + "\x1f" +
-                        std::to_string(static_cast<int>(g->scope)) + "\x1f" +
-                        ObjectKey(g->target);
+                        std::to_string(static_cast<int>(g->scope)) + "\x1f" + ObjectKey(g->target);
       // Each column is its own right, so narrowing a column grant takes one away.
       if (columns.empty()) {
         rights.insert(key);
@@ -371,8 +355,7 @@ std::string PolicyFingerprint(const Snapshot& snap, const Principal& principal) 
     parts.insert("protected\x1f" + ObjectKey(p.table));
     for (const auto* applicable : snap.ApplicableRowPolicies(principal, p.table)) {
       if (applicable->id == p.id) {
-        parts.insert("row\x1f" + ObjectKey(p.table) + "\x1f" + p.id + "\x1f" +
-                     p.predicate +
+        parts.insert("row\x1f" + ObjectKey(p.table) + "\x1f" + p.id + "\x1f" + p.predicate +
                      (p.permissive ? "\x1f"
                                      "p"
                                    : "\x1f"
@@ -386,8 +369,8 @@ std::string PolicyFingerprint(const Snapshot& snap, const Principal& principal) 
     for (const auto& [column, applicable] : snap.ApplicableMasks(principal, b.table)) {
       if (IdentifiersEqual(column, b.column)) exempt = false;
     }
-    parts.insert("mask\x1f" + ObjectKey(b.table) + "\x1f" + FoldIdentifier(b.column) +
-                 "\x1f" + (policy ? policy->body : "") +
+    parts.insert("mask\x1f" + ObjectKey(b.table) + "\x1f" + FoldIdentifier(b.column) + "\x1f" +
+                 (policy ? policy->body : "") +
                  (exempt ? "\x1f"
                            "exempt"
                          : ""));
@@ -403,17 +386,15 @@ std::string PolicyFingerprint(const Snapshot& snap, const Principal& principal) 
 }  // namespace
 
 bool Snapshot::LostRightsSince(const Snapshot& before, const Principal& principal) const {
-  if (PolicyFingerprint(before, principal) != PolicyFingerprint(*this, principal))
-    return true;
+  if (PolicyFingerprint(before, principal) != PolicyFingerprint(*this, principal)) return true;
   const auto after = RightsOf(principal);
   static const std::string kOwnerPrefix = "owner\x1f";
   for (const auto& right : before.RightsOf(principal)) {
     if (after.count(right)) continue;
     if (right.rfind(kOwnerPrefix, 0) == 0) {
       const std::string key = right.substr(kOwnerPrefix.size());
-      if (std::none_of(owners_.begin(), owners_.end(), [&](const OwnerRecord& o) {
-            return ObjectKey(o.object) == key;
-          })) {
+      if (std::none_of(owners_.begin(), owners_.end(),
+                       [&](const OwnerRecord& o) { return ObjectKey(o.object) == key; })) {
         continue;  // dropped: nothing left to protect
       }
     }
@@ -422,8 +403,7 @@ bool Snapshot::LostRightsSince(const Snapshot& before, const Principal& principa
   return false;
 }
 
-bool Snapshot::HasSystemPrivilege(const Principal& principal,
-                                  SystemPrivilege privilege) const {
+bool Snapshot::HasSystemPrivilege(const Principal& principal, SystemPrivilege privilege) const {
   if (principal.superuser) return true;
   if (principal.scope) return false;  // a scoped token holds none
   const auto roles = RolesOf(principal);
@@ -443,8 +423,7 @@ bool Snapshot::CanGrantSystemPrivilege(const Principal& principal,
   return false;
 }
 
-const MaskingPolicyRecord* Snapshot::FindMaskingPolicyByName(
-    const std::string& name) const {
+const MaskingPolicyRecord* Snapshot::FindMaskingPolicyByName(const std::string& name) const {
   for (const auto& m : masking_policies_) {
     if (IdentifiersEqual(m.name, name)) return &m;
   }
@@ -458,8 +437,7 @@ const MaskingPolicyRecord* Snapshot::FindMaskingPolicyById(const std::string& id
   return nullptr;
 }
 
-std::vector<const RowPolicyRecord*> Snapshot::RowPoliciesOn(
-    const ObjectPath& table) const {
+std::vector<const RowPolicyRecord*> Snapshot::RowPoliciesOn(const ObjectPath& table) const {
   std::vector<const RowPolicyRecord*> found;
   const std::string key = ObjectKey(table);
   for (const auto& p : row_policies_) {
@@ -468,8 +446,8 @@ std::vector<const RowPolicyRecord*> Snapshot::RowPoliciesOn(
   return found;
 }
 
-std::vector<const RowPolicyRecord*> Snapshot::ApplicableRowPolicies(
-    const Principal& principal, const ObjectPath& table) const {
+std::vector<const RowPolicyRecord*> Snapshot::ApplicableRowPolicies(const Principal& principal,
+                                                                    const ObjectPath& table) const {
   std::vector<const RowPolicyRecord*> found;
   const auto roles = RolesOf(principal);
   for (const auto* p : RowPoliciesOn(table)) {
@@ -538,8 +516,7 @@ std::set<std::string> Snapshot::TenantCatalogs(const std::string& tenant_id) con
   return catalogs;
 }
 
-bool Snapshot::CatalogVisible(const Principal& principal,
-                              const std::string& catalog) const {
+bool Snapshot::CatalogVisible(const Principal& principal, const std::string& catalog) const {
   const std::string tenant = TenantOfPrincipal(principal);
   if (tenant.empty()) return true;
   if (IdentifiersEqual(catalog, "temp") || IdentifiersEqual(catalog, "system")) {
@@ -548,8 +525,7 @@ bool Snapshot::CatalogVisible(const Principal& principal,
   return TenantOfCatalog(catalog) == tenant;
 }
 
-const RoleRecord* Snapshot::TenantRole(const std::string& tenant_id,
-                                       const char* suffix) const {
+const RoleRecord* Snapshot::TenantRole(const std::string& tenant_id, const char* suffix) const {
   const TenantRecord* tenant = FindTenantById(tenant_id);
   return tenant ? FindRoleByName(tenant->name + suffix) : nullptr;
 }
@@ -562,9 +538,8 @@ namespace {
 
 // Does a grant held WITH GRANT OPTION cover passing on `wanted` (same
 // privilege, a scope at least as wide, and every column wanted)?
-bool HolderCovers(const ObjectGrantRecord& holder, GrantScope scope,
-                  const ObjectPath& target, Privilege privilege,
-                  const std::vector<std::string>& columns) {
+bool HolderCovers(const ObjectGrantRecord& holder, GrantScope scope, const ObjectPath& target,
+                  Privilege privilege, const std::vector<std::string>& columns) {
   if (!holder.grant_option) return false;
   if (holder.privilege != privilege &&
       !(holder.privilege == Privilege::kAll && IsTableLevel(privilege))) {
@@ -607,9 +582,8 @@ ObjectPath OwnedTarget(GrantScope scope, const ObjectPath& target) {
 
 }  // namespace
 
-bool Snapshot::CanGrant(const Principal& principal, GrantScope scope,
-                        const ObjectPath& target, Privilege privilege,
-                        const std::vector<std::string>& columns) const {
+bool Snapshot::CanGrant(const Principal& principal, GrantScope scope, const ObjectPath& target,
+                        Privilege privilege, const std::vector<std::string>& columns) const {
   if (principal.superuser) return true;
   const auto roles = RolesOf(principal);
   if (roles.empty()) return false;
@@ -636,8 +610,7 @@ bool Snapshot::CanGrant(const Principal& principal, GrantScope scope,
   return false;
 }
 
-bool Snapshot::CanAdminRole(const Principal& principal,
-                            const std::string& role_id) const {
+bool Snapshot::CanAdminRole(const Principal& principal, const std::string& role_id) const {
   if (principal.superuser) return true;
   const auto roles = RolesOf(principal);
   if (roles.empty()) return false;
@@ -657,8 +630,7 @@ Snapshot::Fallen Snapshot::FallenDelegations() const {
   // stops changing.
   std::vector<bool> m_ok(memberships_.size()), g_ok(grants_.size()),
       s_ok(system_privileges_.size());
-  for (size_t i = 0; i < memberships_.size(); ++i)
-    m_ok[i] = memberships_[i].granted_by.empty();
+  for (size_t i = 0; i < memberships_.size(); ++i) m_ok[i] = memberships_[i].granted_by.empty();
   for (size_t i = 0; i < grants_.size(); ++i) g_ok[i] = grants_[i].granted_by.empty();
   for (size_t i = 0; i < system_privileges_.size(); ++i) {
     s_ok[i] = system_privileges_[i].granted_by.empty();
