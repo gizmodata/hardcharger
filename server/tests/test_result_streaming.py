@@ -2,9 +2,11 @@
 
 A 100,000-row result arrives in many Arrow batches (Warp SQL §6.4), every column intact
 (types, ids contiguous across batches, every 7th value NULL, timestamps, booleans, sums
-in closed form), and no batch is larger than one DuckDB vector (2048 rows,
-result_batch_rows' default, as 1.x streamed). A prepared WHERE id >= ? bound to 0 and
-then to 90000 on the same handle streams 100,000 and then 10,000 rows. Both apply.
+in closed form), and no batch is larger than result_batch_rows: 2048 here, one DuckDB
+vector, as 1.x streamed (Hardcharger's default is 122,880, so the server is started with
+2048 to keep 1.x's many-batch shape). A prepared WHERE id >= ? bound to 0 and then to
+90000 on the same handle streams 100,000 and then 10,000 rows. Both apply. A third test
+checks the default batch size.
 """
 
 import datetime
@@ -22,7 +24,8 @@ INIT_SQL = ("CREATE TABLE stream_rows AS SELECT i AS id, 'row-' || i AS label, "
 
 @pytest.fixture(scope="module")
 def session(module_launcher):
-    return module_launcher.start(env={"HARDCHARGER_INIT_SQL_COMMANDS": INIT_SQL}).admin()
+    return module_launcher.start(env={"HARDCHARGER_INIT_SQL_COMMANDS": INIT_SQL,
+                                      "HARDCHARGER_RESULT_BATCH_ROWS": "2048"}).admin()
 
 
 def stats(batches: list[pa.RecordBatch]) -> dict:
@@ -74,3 +77,15 @@ def test_prepared_query_streams_many_batches_in_order(session):
     tail = read_batches(content=session.execute_prepared(prepared_id=prepared["prepared_id"], parameters=[90000]).content)
     t = stats(batches=tail)
     assert t["rows"] == 10000 and t["batches"] > 1, t
+
+
+def test_default_batch_size_is_a_row_group(module_launcher):
+    # Without the setting, results come in batches of up to 122,880 rows (one DuckDB row
+    # group): far fewer per-batch costs on large results, and small results unchanged.
+    session = module_launcher.start(env={"HARDCHARGER_INIT_SQL_COMMANDS": INIT_SQL}).admin()
+    response = session.submit(sql="SELECT id FROM range(1000000) t(id)", arrow=True)
+    assert response.status_code == 200, response.text
+    s = stats(batches=read_batches(content=response.content))
+    assert s["rows"] == 1_000_000 and s["max_batch_rows"] == 122_880, s
+    small = read_batches(content=session.submit(sql="SELECT 42 AS answer", arrow=True).content)
+    assert stats(batches=small) == {"batches": 1, "rows": 1, "max_batch_rows": 1}

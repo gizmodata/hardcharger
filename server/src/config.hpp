@@ -33,7 +33,7 @@ struct Config {
   bool allow_unsigned_extensions = false;
   std::string init_sql_commands;       // run at startup, before the file
   std::string init_sql_commands_file;  // a SQL file run at startup
-  int64_t result_batch_rows = 2048;    // rows per Arrow batch in results
+  int64_t result_batch_rows = 122880;  // rows per Arrow batch in results (a DuckDB row group)
 
   // Authentication
   std::string admin_username = "hardcharger";

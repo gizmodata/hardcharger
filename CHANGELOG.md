@@ -33,6 +33,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- `result_batch_rows` defaults to 122,880 (one DuckDB row group) instead of 2,048:
+  SF10 lineitem over TLS 4.6 s -> 3.5 s, with zstd 26.4 s -> 6.3 s; small results are
+  unchanged (one batch), a full scan's first batch takes 21 ms instead of 2 ms.
 - Data transfer, from the Warp SQL SDK: TLS result streams encrypt whole gathered writes
   and overlap encrypting, encoding and producing (a TLS stream went from about a third
   of plaintext to the same speed on one AWS connection); uploads are read in 1 MiB pieces (plaintext
