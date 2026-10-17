@@ -202,6 +202,26 @@ def test_settings_for_the_whole_server_need_manage_config(joe):
     expect_allowed(client=joe, sql="SET SESSION TimeZone = 'UTC'")
 
 
+def test_settings_that_write_files_need_write_filesystem(server, joe, tmp_path):
+    # DuckDB writes every statement's text to log_query_path, and profiles to
+    # profiling_output: wherever they point, as COPY TO would.
+    target = tmp_path / "written-by-joe.log"
+    for sql in [f"SET log_query_path = '{target}'", f"SET profiling_output = '{target}'",
+                f"PRAGMA profile_output = '{target}'"]:
+        expect_blocked(client=joe, sql=sql, why="needs the WRITE FILESYSTEM privilege")
+    expect_allowed(client=joe, sql="SELECT 1")
+    assert not target.exists()
+    # Positive twin: a role that holds WRITE FILESYSTEM may.
+    admin = server.admin_client
+    expect_allowed(client=admin, sql="CREATE ROLE log_writer")
+    expect_allowed(client=admin, sql="GRANT WRITE FILESYSTEM TO log_writer")
+    expect_allowed(client=admin, sql="GRANT log_writer TO joe")
+    expect_allowed(client=joe, sql=f"SET log_query_path = '{target}'")
+    expect_allowed(client=joe, sql="SELECT 'logged' AS marker")
+    expect_allowed(client=admin, sql="REVOKE log_writer FROM joe")
+    assert target.exists()
+
+
 def test_table_functions_are_allow_listed(joe):
     # Files and URLs are refused before DuckDB binds them (binding already reaches the
     # network), so no request leaves the server on the user's behalf.

@@ -236,6 +236,11 @@ std::string ScopeLimits(const TokenScope& scope) {
       " do only what their roles are granted (see SHOW GRANTS)");
 }
 
+bool WritesFiles(const std::string& setting) {
+  return setting == "log_query_path" || setting == "profiling_output" ||
+         setting == "profile_output";
+}
+
 // Does SET (or RESET) of `name` in `scope` change the setting for the whole server?
 // Explicitly GLOBAL does; so does a bare SET of a setting DuckDB keeps only globally
 // (memory_limit, threads, extension settings, ...), which DuckDB applies globally.
@@ -379,6 +384,11 @@ class PlanChecker {
         }
         if (ChangesWholeServer(context_, set.name, set.scope)) {
           RequireSystem(SystemPrivilege::kManageConfig, "SET GLOBAL");
+        }
+        // Session settings that make DuckDB write files wherever they point (every
+        // statement's text, or its profile): writing files, as COPY TO is.
+        if (WritesFiles(Lower(compat::Str(set.name)))) {
+          RequireSystem(SystemPrivilege::kWriteFilesystem, "SET " + compat::Str(set.name));
         }
         // USE c / SET schema / SET search_path: no catalog the user cannot see.
         const std::string setting = Lower(compat::Str(set.name));
