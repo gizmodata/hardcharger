@@ -18,6 +18,12 @@ defaults:
   run:
     working-directory: python
 
+# A newer run on the same branch makes an older one pointless: cancel it. Never on a tag:
+# a release run must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
