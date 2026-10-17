@@ -19,8 +19,10 @@ import pytest
 
 from services import PG_PORT, S3_PORT, pg_conninfo, require
 
-# Needs server/tests/docker-compose.yml; CI starts it where Docker runs (Linux).
-pytestmark = pytest.mark.services
+# Needs server/tests/docker-compose.yml; CI starts it where Docker runs (Linux). Serial:
+# it counts every PostgreSQL session of the shared DuckLake database, so any other
+# DuckLake test running at the same time would count too.
+pytestmark = [pytest.mark.services, pytest.mark.serial]
 
 
 CATALOGS = 10

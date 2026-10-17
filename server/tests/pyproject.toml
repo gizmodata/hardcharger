@@ -11,6 +11,7 @@ dependencies = [
   "pyarrow>=26.0.0",
   "pyjwt>=2.15.1",
   "pytest>=9.1.1",
+  "pytest-xdist>=3.8.0",
   "pyyaml>=6.0.3",
 ]
 
@@ -19,4 +20,5 @@ testpaths = ["."]
 markers = [
   "performance: throughput gates (slow)",
   "services: needs the containers in docker-compose.yml (PostgreSQL, S3); fails, never skips, without them",
+  "serial: runs alone, after the parallel (pytest-xdist) pass: timing gates, and counts over a whole shared database",
 ]

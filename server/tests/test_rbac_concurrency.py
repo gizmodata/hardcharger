@@ -73,7 +73,10 @@ def run(base_url: str, rbac: bool, clients: int, queries: list[str], expected: l
     return seconds
 
 
+# Serial: a throughput ratio between two servers means nothing while other tests share
+# the CPUs.
 @pytest.mark.performance
+@pytest.mark.serial
 def test_access_control_does_not_cost_concurrency(launcher, store):
     baseline = launcher.start(env={"HARDCHARGER_SECRET_KEY": "hardcharger-rbac-tests-secret-key-0123456789",
                                    "HARDCHARGER_ALLOW_CROSS_INSTANCE_TOKENS": "true",

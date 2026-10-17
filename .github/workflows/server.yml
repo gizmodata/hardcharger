@@ -26,6 +26,9 @@ concurrency:
 # dies with the runner).
 env:
   SCCACHE_GHA_ENABLED: "true"
+  # pytest-xdist workers for the server tests. The tests mostly wait on servers they
+  # start, so more workers than CPUs pays (measured; see the commit that set it).
+  HARDCHARGER_TEST_XDIST_WORKERS: "4"
 
 jobs:
   build:
@@ -149,10 +152,14 @@ jobs:
           uv pip install --python .venv/bin/python -r pyproject.toml
           # Everything, access control included, on the one build, the one that ships (the
           # DuckLake suites need Docker, which only the Linux runners have; macOS deselects
-          # them by marker, visibly).
-          markers=()
-          if [ "$RUNNER_OS" != "Linux" ]; then markers=(-m "not services"); fi
-          .venv/bin/python -m pytest -q "${markers[@]}"
+          # them by marker, visibly): in parallel (pytest-xdist; every test starts its own
+          # servers on ports, directories and databases of its own), then the `serial`
+          # tests alone.
+          only=""
+          if [ "$RUNNER_OS" != "Linux" ]; then only=" and not services"; fi
+          echo "CPUs: $(getconf _NPROCESSORS_ONLN); pytest-xdist workers: $HARDCHARGER_TEST_XDIST_WORKERS"
+          .venv/bin/python -m pytest -q -n "$HARDCHARGER_TEST_XDIST_WORKERS" -m "not serial$only" --durations=10
+          .venv/bin/python -m pytest -q -m "serial$only" --durations=5
       # The 1.x client shell script, ported (test_client_shell.py runs it too, case by case).
       - name: Client shell tests
         run: bash server/tests/test_client_shell.sh
@@ -272,7 +279,10 @@ jobs:
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -r pyproject.toml
-          .venv/bin/python -m pytest -q
+          # In parallel, then the `serial` tests alone (as in the build job).
+          echo "CPUs: $(getconf _NPROCESSORS_ONLN); pytest-xdist workers: $HARDCHARGER_TEST_XDIST_WORKERS"
+          .venv/bin/python -m pytest -q -n "$HARDCHARGER_TEST_XDIST_WORKERS" -m "not serial" --durations=10
+          .venv/bin/python -m pytest -q -m serial --durations=5
       - name: Warp SQL conformance suite (ASan)
         working-directory: third_party/warp-sql/conformance
         env:

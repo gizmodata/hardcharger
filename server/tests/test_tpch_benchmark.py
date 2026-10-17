@@ -14,6 +14,10 @@ import time
 
 import pytest
 
+# Serial: the 30 s limits are a performance check, which other tests on the same CPUs
+# would turn into a measure of the machine's load.
+pytestmark = pytest.mark.serial
+
 QUERIES = range(1, 23)
 
 

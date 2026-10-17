@@ -31,10 +31,40 @@ CLIENT_TESTS_BINARY = pathlib.Path(
     os.environ.get("HARDCHARGER_TEST_CLIENT_TESTS_BINARY", BUILD / "hardcharger-client-tests")).resolve()
 
 
+# Ports for the servers the tests start. The OS's "any free port" (bind to 0) is free only
+# until the socket closes, and the server binds it a moment later: under pytest-xdist
+# another worker's bind to 0 can be handed the same port in between. So each worker
+# takes ports from a block of its own, below every OS's ephemeral range (Linux starts
+# at 32768, macOS at 49152), and never hands out the same port twice while it has others.
+_PORTS_FIRST, _PORTS_END = 20000, 32000
+
+
+def _worker_ports() -> range:
+    count = max(1, int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1")))
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
+    index = int(worker.removeprefix("gw")) if worker.removeprefix("gw").isdigit() else 0
+    size = (_PORTS_END - _PORTS_FIRST) // count
+    first = _PORTS_FIRST + (index % count) * size
+    return range(first, first + size)
+
+
+_PORTS = _worker_ports()
+_next_port = _PORTS.start
+
+
 def free_port() -> int:
-    with socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+    """A port no other worker of this run hands out, that nothing has bound right now."""
+    global _next_port
+    for _ in range(len(_PORTS)):
+        port = _next_port
+        _next_port = _PORTS.start + (_next_port + 1 - _PORTS.start) % len(_PORTS)
+        with socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                continue  # in use (or lingering): try the next one
+            return port
+    pytest.fail(reason=f"no free port in {_PORTS.start}-{_PORTS.stop - 1}")
 
 
 def _test_home() -> pathlib.Path:
