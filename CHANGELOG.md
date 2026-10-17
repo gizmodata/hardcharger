@@ -7,6 +7,29 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- A long poll on a finished statement answered only after its whole wait; it answers at
+  once.
+- A streamed query sent its Arrow schema only with its first batch, so an aggregate's
+  response stayed silent until the query ended and proxies' idle timeouts could cut it;
+  the schema now goes first.
+- A client that hung up while a query's stream waited for its next batch went unnoticed
+  until the query ended; the query is cancelled within a second. A statement that
+  changes data (`INSERT … RETURNING`) is never undone because its reader left or deleted
+  it: it runs to the end.
+- Finished statements stayed in their session forever; they are forgotten 10 minutes
+  after they finish (once any retained result has expired), or beyond 1,000 a session.
+- Prepared statements describe their result (`result_schema`, `result_kind`) without
+  running; executing a query for zero parameter rows returns no rows instead of a count.
+- Table schemas from metadata report nullability, precision and scale; the session
+  document follows SQL `USE`; a missing or existing table is SQLSTATE 42P01 / 42P07.
+
+### Added
+
+- `POST /warp/v1/sessions/{id}/cancel` stops whatever the session is running.
+- Primary and imported keys of every table in one metadata request.
+
 ## [0.1.0] - 2026-10-17
 
 ### Added
