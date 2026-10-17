@@ -43,7 +43,10 @@ configure_file(src/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version
 # (Release, no DuckDB debug or safety switches): its symbols are mangled with DuckDB's
 # template arguments, so a mismatch is undefined behaviour, not a link error.
 find_package(OpenSSL 3 REQUIRED)
-add_library(hardcharger_authz STATIC
+# An object library: its objects go into hardcharger_core, as it and the rest of the
+# server call each other (logging, audit), which static libraries linked in one order
+# can't express for GNU ld.
+add_library(hardcharger_authz OBJECT
   src/authz/authz.cc
   src/authz/ddl.cc
   src/authz/enforcement.cc
@@ -91,8 +94,8 @@ add_library(hardcharger_core STATIC
   src/sql_text.cc
   src/tokens.cc)
 target_include_directories(hardcharger_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(hardcharger_core PUBLIC hardcharger_authz warpsql_duckdb jwt-cpp::jwt-cpp
-                                              yaml-cpp::yaml-cpp)
+target_sources(hardcharger_core PRIVATE $<TARGET_OBJECTS:hardcharger_authz>)
+target_link_libraries(hardcharger_core PUBLIC warpsql_duckdb OpenSSL::Crypto jwt-cpp::jwt-cpp yaml-cpp::yaml-cpp)
 target_compile_options(hardcharger_core PRIVATE -Wall -Wextra)
 if(HARDCHARGER_TRUST_TEST_LICENSES)
   file(READ "${CMAKE_CURRENT_SOURCE_DIR}/tests/license/test-license-public.pem" TEST_LICENSE_KEY)
