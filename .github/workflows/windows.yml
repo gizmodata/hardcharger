@@ -93,16 +93,20 @@ jobs:
           path: C:\vcpkg\installed
           key: ${{ steps.openssl.outputs.key }}
 
+      # The recipes are the other platforms' own; the static C runtime (/MT) they need
+      # with MSVC comes from .github/cmake/msvc-static-crt.cmake.
       # Arrow, replxx (the client's line editor) and DuckDB: one cache each, keyed on its
       # own recipe (its pin is in it) and the toolset, restored and saved separately, so a
-      # change to one never rebuilds another (DuckDB takes 35-50 minutes cold).
+      # change to one never rebuilds another (DuckDB takes 25-50 minutes cold). DuckDB's
+      # key has build-deps.sh, which patches it, but not the other two's recipes.
       - name: Dependency cache keys
         id: deps
         run: |
           toolset="${{ matrix.name }}-msvc${{ steps.msvc.outputs.version }}"
           hash() { cat "$@" | sha256sum | cut -c1-16; }
-          echo "arrow=deps-arrow-$toolset-$(hash third_party/warp-sql/cpp/scripts/build-arrow.sh)" >> "$GITHUB_OUTPUT"
-          echo "replxx=deps-replxx-$toolset-$(hash server/scripts/build-replxx.sh)" >> "$GITHUB_OUTPUT"
+          crt=.github/cmake/msvc-static-crt.cmake
+          echo "arrow=deps-arrow-$toolset-$(hash third_party/warp-sql/cpp/scripts/build-arrow.sh $crt)" >> "$GITHUB_OUTPUT"
+          echo "replxx=deps-replxx-$toolset-$(hash server/scripts/build-replxx.sh $crt)" >> "$GITHUB_OUTPUT"
           echo "duckdb=deps-duckdb-$toolset-$(hash third_party/warp-sql/cpp/scripts/build-duckdb.sh \
                 server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v6
@@ -112,9 +116,11 @@ jobs:
           key: ${{ steps.deps.outputs.arrow }}
       - name: Build Arrow
         if: steps.arrow-cache.outputs.cache-hit != 'true'
+        env:
+          CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/.github/cmake/msvc-static-crt.cmake
         run: |
           start=$SECONDS
-          server/scripts/build-deps.sh arrow
+          WARPSQL_DEPS_DIR="$PWD/server/.deps" third_party/warp-sql/cpp/scripts/build-arrow.sh
           echo "Arrow built in $(( (SECONDS - start) / 60 )) min"
       # Each saved as soon as it is built, so a later failure doesn't throw it away.
       - uses: actions/cache/save@v6
@@ -129,7 +135,9 @@ jobs:
           key: ${{ steps.deps.outputs.replxx }}
       - name: Build replxx
         if: steps.replxx-cache.outputs.cache-hit != 'true'
-        run: server/scripts/build-deps.sh replxx
+        env:
+          CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/.github/cmake/msvc-static-crt.cmake
+        run: HARDCHARGER_DEPS_DIR="$PWD/server/.deps" server/scripts/build-replxx.sh
       - uses: actions/cache/save@v6
         if: steps.replxx-cache.outputs.cache-hit != 'true'
         with:
@@ -140,11 +148,15 @@ jobs:
         with:
           path: server/.deps/duckdb-install
           key: ${{ steps.deps.outputs.duckdb }}
+      # build-deps.sh builds Arrow and replxx too (about 12 minutes more, only when DuckDB
+      # itself must be rebuilt); what this step leaves of them isn't saved.
       - name: Build DuckDB
         if: steps.duckdb-cache.outputs.cache-hit != 'true'
+        env:
+          CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/.github/cmake/msvc-static-crt.cmake
         run: |
           start=$SECONDS
-          server/scripts/build-deps.sh duckdb
+          server/scripts/build-deps.sh
           echo "DuckDB built in $(( (SECONDS - start) / 60 )) min"
       - uses: actions/cache/save@v6
         if: steps.duckdb-cache.outputs.cache-hit != 'true'

@@ -228,6 +228,10 @@ add_library(hardcharger_client STATIC
 target_include_directories(hardcharger_client PUBLIC client "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(hardcharger_client PUBLIC warpsql_client replxx::replxx)
 target_compile_options(hardcharger_client PRIVATE ${HARDCHARGER_WARNINGS})
+if(WIN32)
+  # windows.h without GDI: its ERROR macro would replace CommandResult::ERROR.
+  target_compile_definitions(hardcharger_client PUBLIC NOGDI)
+endif()
 add_executable(hardcharger-client client/main.cc)
 set_target_properties(hardcharger-client PROPERTIES OUTPUT_NAME hardcharger)
 target_link_libraries(hardcharger-client PRIVATE hardcharger_client)

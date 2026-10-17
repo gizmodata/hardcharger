@@ -26,12 +26,6 @@ fi
 
 generator=()
 if command -v ninja >/dev/null 2>&1; then generator=(-G Ninja); fi
-# MSVC: the static C runtime (/MT), as DuckDB and everything linked with it.
-platform_args=()
-case "$(uname -s)" in
-  MINGW* | MSYS* | CYGWIN*)
-    platform_args+=(-DCMAKE_POLICY_DEFAULT_CMP0091=NEW "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded") ;;
-esac
 cmake -S "$SRC" -B "$BUILD" "${generator[@]}" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$PREFIX" \
@@ -40,8 +34,7 @@ cmake -S "$SRC" -B "$BUILD" "${generator[@]}" \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DBUILD_SHARED_LIBS=OFF \
   -DREPLXX_BUILD_EXAMPLES=OFF \
-  -DREPLXX_BUILD_PACKAGE=OFF \
-  ${platform_args[@]+"${platform_args[@]}"}
+  -DREPLXX_BUILD_PACKAGE=OFF
 cmake --build "$BUILD" --config Release
 cmake --install "$BUILD" --config Release
 
