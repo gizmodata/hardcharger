@@ -54,6 +54,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Documentation
 
+- README: hardcharger-adbc is a native Go driver whose library every ADBC driver manager loads
+  as `driver = "hardcharger"` with `hardcharger://` URIs.
 - README: the client examples use the Hardcharger drivers, `adbc-driver-hardcharger`
   (`from adbc_driver_hardcharger import dbapi as hardcharger`, `hardcharger://` URIs) and
   `hardcharger-jdbc` (`jdbc:hardcharger://`); a Python quick start with `pip install hardcharger`

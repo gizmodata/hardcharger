@@ -165,10 +165,11 @@ with hardcharger.connect(uri="hardcharger://localhost?tls=false", username="hard
 ```
 
 `hardcharger://host` is HTTPS on port 31337; `?tls=false` is plain HTTP for local
-development. [adbc-driver-hardcharger](https://github.com/gizmodata/hardcharger-adbc) adds
-query and session tags, `hardcharger.*` settings and browser sign-in to the
-[Warp SQL ADBC driver](https://github.com/gizmodata/warp-sql-adbc), which is written in Go
-and also loads into any ADBC driver manager (C/C++, R, Rust, ...) as `driver = "hardcharger"`.
+development. [hardcharger-adbc](https://github.com/gizmodata/hardcharger-adbc) is a native
+Go driver, on the [Warp SQL ADBC driver](https://github.com/gizmodata/warp-sql-adbc), with
+query and session tags, `hardcharger.*` settings and browser sign-in. Its library loads into
+any ADBC driver manager (C/C++, R, Rust, ...) as `driver = "hardcharger"`, with the same
+`hardcharger://` URIs, and Go programs import it directly.
 
 ### Java (JDBC)
 
