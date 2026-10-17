@@ -1,8 +1,7 @@
 """Port of GizmoSQL 1.x tests/integration/test_variant.cpp (4 cases; DuckDB 2 only in 1.x, so all apply).
 
-Two cases fail today and run as strict expected failures (each turns red once it passes):
-binding a VARIANT parameter (the SDK can't bind struct or extension Arrow parameters)
-and the parameter schema of SELECT ?::VARIANT (DuckDB's v2 bind reports no type for it).
+One case fails today and runs as a strict expected failure (it turns red once it passes):
+binding a VARIANT parameter (the SDK can't bind struct or extension Arrow parameters).
 
 VARIANT exports as Arrow's canonical arrow.parquet.variant extension (a struct of
 binary metadata and value; only the NULL row is null at the top level), ingests back
@@ -83,8 +82,6 @@ def test_variant_binds_as_prepared_statement_parameter(session, expected_text):
         assert result.column(1)[0].as_py() == expected_text[row], row
 
 
-@pytest.mark.xfail(strict=True, reason="DuckDB 2.0's v2 statement bind reports no type for the parameter of "
-                   "?::VARIANT, so the parameter schema says null")
 def test_variant_parameter_schema_advertises_extension(session):
     import base64
     import pyarrow.ipc as ipc

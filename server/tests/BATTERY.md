@@ -7,10 +7,10 @@ updated. Nothing is skipped; a missing dependency fails its test.
 
 ## Totals
 
-- **59 C++ test files, 565 gtest cases:** 360 passing, 5 failing, 16 not applicable, 184 not yet.
+- **59 C++ test files, 565 gtest cases:** 361 passing, 4 failing, 16 not applicable, 184 not yet.
   - by file: 46 ported & passing, 3 passing except their not-applicable cases, 1 partly ported (the rest not yet), 3 ported & partly failing, 2 not applicable, 4 not yet.
   - server-side cases (all but the 142 that test the `gizmosql_client` binary): 423, of which
-    360 pass (85%) and 5 fail.
+    361 pass (85%) and 4 fail.
 - **Scripts and driver suites (12 files, 134 cases or checks):** 22 passing, 0 failing, 17 not applicable, 95 not yet.
 - Hardcharger's own tests (`test_server.py`, 27) and the Warp SQL conformance suite (76) pass too.
 
@@ -73,7 +73,7 @@ through the same-named pytest file.
 | `integration/test_ducklake.cpp` | 2 | 2 | 0 | 0 | 0 | `test_ducklake.py` | ported & passing |
 | `integration/test_ducklake_catalog_fanout.cpp` | 2 | 0 | 2 | 0 | 0 | `test_ducklake_catalog_fanout.py` | ported, partly failing; per step: 4 of 7 pass; schema/table listing fans out |
 | `integration/test_geoarrow.cpp` | 3 | 3 | 0 | 0 | 0 | `test_geoarrow.py` | ported & passing; extension name required |
-| `integration/test_variant.cpp` | 4 | 2 | 2 | 0 | 0 | `test_variant.py` | ported, partly failing; VARIANT parameters: SDK and DuckDB bind gaps |
+| `integration/test_variant.cpp` | 4 | 3 | 1 | 0 | 0 | `test_variant.py` | ported, partly failing; binding a VARIANT parameter: SDK gap |
 | `integration/test_sqlite_backend.cpp` | 10 | 0 | 0 | 10 | 0 | — | not applicable; N/A: Hardcharger is DuckDB only |
 | `integration/test_read_only_mode.cpp` | 1 | 1 | 0 | 0 | 0 | `test_read_only_mode.py` | ported & passing |
 | `integration/test_memory_limit.cpp` | 2 | 2 | 0 | 0 | 0 | `test_memory_limit.py` | ported & passing |

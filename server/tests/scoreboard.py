@@ -62,7 +62,7 @@ rows = [
  ("integration/test_ducklake.cpp", 2, 2, 0, 0, 0, "test_ducklake.py", ""),
  ("integration/test_ducklake_catalog_fanout.cpp", 2, 0, 2, 0, 0, "test_ducklake_catalog_fanout.py", "per step: 4 of 7 pass; schema/table listing fans out"),
  ("integration/test_geoarrow.cpp", 3, 3, 0, 0, 0, "test_geoarrow.py", "extension name required"),
- ("integration/test_variant.cpp", 4, 2, 2, 0, 0, "test_variant.py", "VARIANT parameters: SDK and DuckDB bind gaps"),
+ ("integration/test_variant.cpp", 4, 3, 1, 0, 0, "test_variant.py", "binding a VARIANT parameter: SDK gap"),
  ("integration/test_sqlite_backend.cpp", 10, 0, 0, 10, 0, "", "N/A: Hardcharger is DuckDB only"),
  # Settings, startup
  ("integration/test_read_only_mode.cpp", 1, 1, 0, 0, 0, "test_read_only_mode.py", ""),

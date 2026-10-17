@@ -99,7 +99,10 @@ own changelog in `python/CHANGELOG.md`.
   that leaves before an unretained streamed result's first batch now cancels it; a
   long-poll on a finished statement answers at once; dictionary-encoded parameters bind;
   ingest turns null-typed columns into VARCHAR, converts day_time intervals and refuses
-  types DuckDB can't store; listing catalogs no longer opens every attached catalog.
+  types DuckDB can't store; listing catalogs no longer opens every attached catalog;
+  parameter types and the ingest scan no longer destroy (or keep using) a type DuckDB
+  only lent them, which freed it twice and made `SELECT ?::VARIANT` advertise a null
+  parameter in release builds.
 
 ### Known gaps
 

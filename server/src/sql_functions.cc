@@ -188,9 +188,9 @@ void TableBind(duckdb_v2_function_bind_info_handle info, duckdb_v2_table_functio
     Call([&](auto* e) { return duckdb_v2_schema_get_count(columns.get(), &count, e); });
     for (idx_t i = 0; i < count; i++) {
       duckdb_v2_identifier_t name{};
-      warpduckdb::LogicalType type;
-      Call([&](auto* e) { return duckdb_v2_schema_get_field(columns.get(), i, &name, type.out(), e); });
-      Call([&](auto* e) { return duckdb_v2_table_function_bind_add_result_column(result, &name, type.get(), e); });
+      duckdb_v2_logical_type_handle type = nullptr;  // borrowed from the schema: not ours to destroy
+      Call([&](auto* e) { return duckdb_v2_schema_get_field(columns.get(), i, &name, &type, e); });
+      Call([&](auto* e) { return duckdb_v2_table_function_bind_add_result_column(result, &name, type, e); });
     }
     duckdb_v2_opaque data{scan.release(), [](void* p) { delete static_cast<TableScan*>(p); }, nullptr};
     Call([&](auto* e) { return duckdb_v2_function_bind_set_bind_data(info, &data, e); });
