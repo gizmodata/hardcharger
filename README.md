@@ -95,11 +95,15 @@ flowchart LR
 - 🔀 **Partitioned results.** A client can ask for a large result as several partitions and
   read them over separate connections at once, past the limits of a single TCP stream and a
   single core. The order is kept when the query asks for one. The drivers and the
-  `hardcharger` CLI ask for it with one option (`result_partitions`, `--result-partitions`).
+  `hardcharger` CLI read large results as 8 partitions by default (`result_partitions`,
+  `--result-partitions` change it); small results still come as one stream.
 - 📦 **Big batches.** Results go out in 122,880-row batches, so per-batch overhead is
   negligible; small queries still answer in one round trip.
 - 📥 **Parallel ingest.** Uploads are read in 1 MiB pieces and inserted on all of DuckDB's
   threads, in one transaction: a failed load leaves nothing behind.
+- 📤 **Partitioned uploads.** The drivers send a large load as 8 parts over separate
+  connections at once (`adbc.warp.ingest.parts`), inserted from all of them in parallel and
+  committed as one: all or nothing.
 
 Correctness is never traded for speed: a result is complete only when every partition has
 arrived with its end-of-stream marker, so a query that fails mid-stream can never look like
