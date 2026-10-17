@@ -318,6 +318,12 @@ void Session::UpdateSettings(const std::function<void(Settings&)>& update) {
   update(settings_);
 }
 
+void Session::LogQuery(LogLevel level, std::string_view message, const LogFields& fields) const {
+  // The statement log level (SET [GLOBAL] gizmosql.query_log_level) decides alone, so a
+  // session that asks for DEBUG gets it whatever the logger's own level.
+  LogAt(QueryLogLevel(), level, message, fields, true);
+}
+
 LogLevel Session::QueryLogLevel() const {
   std::lock_guard lock(settings_mutex_);
   return settings_.query_log_level.value_or(runtime_.query_log_level.load());
@@ -417,9 +423,15 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
 
   running_++;
   auto shared_slot = std::make_shared<AdmissionSlot>(std::move(slot));
-  auto done = [this, kind, started, shared_slot](std::string_view status, std::string_view error_class) {
+  auto done = [this, kind, started, shared_slot, logged = Abbreviate(sql)](std::string_view status,
+                                                                           std::string_view error_class) {
     shared_slot->Release();
     running_--;
+    if (status == "ok" && runtime_.config.print_queries) {
+      LogQuery(LogLevel::kInfo, "Client SQL command execution succeeded",
+               {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"status", "success"},
+                {"is_internal", "false"}, {"sql", logged}});
+    }
     runtime_.metrics.RecordStatement(kind, status, error_class,
                                      std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
   };
@@ -431,7 +443,7 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
     done(error.code() == ErrorCode::kStatementCancelled ? "cancelled" : "error", error_class);
     // A failed statement inside a transaction leaves it aborted until a ROLLBACK.
     if (transaction_ == Transaction::kOpen) transaction_ = Transaction::kAborted;
-    LogAt(QueryLogLevel(), LogLevel::kInfo, "statement failed",
+    LogQuery(LogLevel::kInfo, "statement failed",
           {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"status", "error"},
            {"error", error.what()}, {"sql", Abbreviate(sql)}});
     if (killed_) throw KilledError();
@@ -483,7 +495,7 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
     throw;
   }
   if (runtime_.config.print_queries) {
-    LogAt(QueryLogLevel(), LogLevel::kInfo, "statement",
+    LogQuery(LogLevel::kInfo, "statement",
           {{"session_id", id_}, {"user", principal_.name}, {"role", principal_.role}, {"kind", "sql"},
            {"is_internal", "false"}, {"sql", Abbreviate(sql)}});
   }
@@ -536,7 +548,7 @@ std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sq
     Authorize(pieces[0]);
   }
   if (runtime_.config.print_queries) {
-    LogAt(QueryLogLevel(), LogLevel::kInfo, "prepare",
+    LogQuery(LogLevel::kInfo, "prepare",
           {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"is_internal", "false"},
            {"sql", Abbreviate(sql)}});
   }
@@ -569,12 +581,12 @@ int64_t Session::Ingest(const warpsql::IngestTarget& target, std::shared_ptr<arr
   };
   const auto started = std::chrono::steady_clock::now();
   if (runtime_.config.print_queries) {
-    LogAt(QueryLogLevel(), LogLevel::kInfo, "ingest", with({{"status", "attempt"}}));
+    LogQuery(LogLevel::kInfo, "ingest", with({{"status", "attempt"}}));
   }
   const int64_t ingested = DuckDBSession::Ingest(target, std::move(rows));
   if (runtime_.config.print_queries) {
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
-    LogAt(QueryLogLevel(), LogLevel::kInfo, "ingest",
+    LogQuery(LogLevel::kInfo, "ingest",
           with({{"status", "success"}, {"rows_ingested", std::to_string(ingested)},
                 {"duration_ms", std::to_string(ms.count())}}));
   }
@@ -587,10 +599,9 @@ std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(warpsql::MetadataKin
   SessionScope scope(this);
   if (runtime_.config.print_queries) {
     // Metadata requests run SQL of the server's own: logged only at DEBUG.
-    LogAt(QueryLogLevel(), LogLevel::kDebug, "metadata",
-          {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"is_internal", "true"},
-           {"metadata", std::to_string(static_cast<int>(kind))}},
-          QueryLogLevel() == LogLevel::kDebug);
+    LogQuery(LogLevel::kDebug, "metadata",
+             {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"is_internal", "true"},
+              {"metadata", std::to_string(static_cast<int>(kind))}});
   }
   return DuckDBSession::Metadata(kind, filter);
 }

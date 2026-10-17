@@ -104,6 +104,7 @@ class Session : public warpduckdb::DuckDBSession {
   Settings settings() const;
   void UpdateSettings(const std::function<void(Settings&)>& update);
   LogLevel QueryLogLevel() const;
+  void LogQuery(LogLevel level, std::string_view message, const LogFields& fields) const;
 
  protected:
   // GizmoSQL 1.x drivers read a column's default from this key.
