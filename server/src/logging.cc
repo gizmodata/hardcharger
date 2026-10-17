@@ -35,8 +35,10 @@ std::string Timestamp() {
   std::tm utc{};
   gmtime_r(&seconds, &utc);
   char buffer[32];
-  std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &utc);
-  return std::format("{}.{:03}Z", buffer, millis);
+  // Format the written length, not the array: some libc++ versions format a char array
+  // as all of its elements, NULs and uninitialized bytes included.
+  const std::size_t length = std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &utc);
+  return std::format("{}.{:03}Z", std::string_view(buffer, length), millis);
 }
 
 }  // namespace
