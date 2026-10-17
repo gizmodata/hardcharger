@@ -40,10 +40,13 @@ def admin(server):
 
 
 def eventually(session, sql: str, predicate=bool, timeout: float = 10):
+    """The first column of `sql`'s first row once `predicate` holds for it (None while
+    there are no rows yet: the instrumentation writer is asynchronous)."""
     deadline = time.monotonic() + timeout
     value = None
     while time.monotonic() < deadline:
-        value = session.scalar(sql=sql)
+        rows = session.query(sql=sql).to_pylist()
+        value = next(iter(rows[0].values())) if rows else None
         if predicate(value):
             return value
         time.sleep(0.05)

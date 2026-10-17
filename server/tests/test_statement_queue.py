@@ -16,6 +16,8 @@ import time
 
 import pytest
 
+from conftest import TIMEOUT_SCALE
+
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
@@ -81,7 +83,9 @@ def test_settings_table_is_composable(server):
 
 
 def test_queue_serializes_concurrent_statements(server):
-    holders = hold_slots(server=server, count=2, ms=2000)
+    # The holders must still hold their slots when the probe arrives, however slow the
+    # build: they sleep 2 s (stretched by TIMEOUT_SCALE); the probe must wait 0.8 s.
+    holders = hold_slots(server=server, count=2, ms=int(2000 * TIMEOUT_SCALE))
     assert wait_until(lambda: active(server) == 2)
     probe = queued_session(server=server)
     started = time.monotonic()

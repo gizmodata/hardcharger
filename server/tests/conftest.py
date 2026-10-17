@@ -25,6 +25,9 @@ from warp_client import Client, mint_server_token
 BUILD = pathlib.Path(__file__).resolve().parent.parent / "build"
 # Absolute (a relative name is the caller's, but servers run in their own directories).
 BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_BINARY", BUILD / "hardcharger-server")).resolve()
+# Sanitizer builds run several times slower: HARDCHARGER_TEST_TIMEOUT_SCALE stretches the
+# waits that tests size by hand (CI's TSan job sets it), never what they assert.
+TIMEOUT_SCALE = float(os.environ.get("HARDCHARGER_TEST_TIMEOUT_SCALE", "1"))
 UNIT_TEST_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_UNIT_BINARY", BUILD / "hardcharger-unit-tests")).resolve()
 CLIENT_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_CLIENT_BINARY", BUILD / "hardcharger")).resolve()
 CLIENT_TESTS_BINARY = pathlib.Path(

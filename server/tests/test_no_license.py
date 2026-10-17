@@ -60,7 +60,8 @@ def test_instrumentation_catalog_logging_profiles_and_tags(server):
                               "JOIN _hardcharger_instr.sql_executions e USING (statement_id) "
                               "JOIN _hardcharger_instr.sessions s USING (session_id) "
                               "WHERE st.sql_text = 'SELECT ''no-license-probe'''")
-        if rows:
+        # The profile lands after the statement's own row: wait for it too.
+        if rows and rows[0]["profiled"]:
             break
         time.sleep(0.2)
     assert rows == [{"who": "tester", "q": "1", "profiled": True}], rows
