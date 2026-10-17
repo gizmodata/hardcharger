@@ -142,6 +142,28 @@ const std::vector<Option>& Options() {
       {"token_authorized_emails", Kind::kList, {"GIZMOSQL_TOKEN_AUTHORIZED_EMAILS"}, {},
        "users a sign-in token may name (globs, case-insensitive; *: anyone)",
        LIST(token_authorized_emails)},
+      {"token_jwks_uri", Kind::kString, {"GIZMOSQL_TOKEN_JWKS_URI"}, {},
+       "JWKS of the identity provider whose ID tokens sign users in (Enterprise)", TEXT(token_jwks_uri)},
+      // Browser sign-in
+      {"oauth_client_id", Kind::kString, {"GIZMOSQL_OAUTH_CLIENT_ID"}, {},
+       "OAuth client id; set, the browser sign-in server runs (Enterprise)", TEXT(oauth_client_id)},
+      {"oauth_client_secret", Kind::kString, {"GIZMOSQL_OAUTH_CLIENT_SECRET"}, {}, "OAuth client secret",
+       TEXT(oauth_client_secret)},
+      {"oauth_scopes", Kind::kString, {"GIZMOSQL_OAUTH_SCOPES"}, {}, "OAuth scopes requested",
+       TEXT(oauth_scopes)},
+      {"oauth_port", Kind::kInt, {"GIZMOSQL_OAUTH_PORT"}, {}, "port of the browser sign-in server",
+       NUMBER(oauth_port)},
+      {"oauth_base_url", Kind::kString, {"GIZMOSQL_OAUTH_BASE_URL"}, {},
+       "public URL of the browser sign-in server (default http(s)://localhost:<oauth_port>)",
+       TEXT(oauth_base_url)},
+      {"oauth_redirect_uri", Kind::kString, {"GIZMOSQL_OAUTH_REDIRECT_URI"}, {},
+       "redirect URI registered with the provider (default <base url>/oauth/callback)",
+       TEXT(oauth_redirect_uri)},
+      {"oauth_instance_id", Kind::kString, {"GIZMOSQL_OAUTH_INSTANCE_ID"}, {},
+       "prefix of the OAuth state, for a shared callback proxy", TEXT(oauth_instance_id)},
+      {"oauth_disable_tls", Kind::kBool, {"GIZMOSQL_OAUTH_DISABLE_TLS"}, {},
+       "serve browser sign-in over plain HTTP even with TLS on (behind a TLS proxy)",
+       FLAG(oauth_disable_tls)},
       // Sessions
       {"max_sessions", Kind::kInt, {"GIZMOSQL_MAX_SESSIONS"}, {},
        "most non-admin sessions at once (0: unlimited)", NUMBER(max_sessions)},
@@ -248,7 +270,7 @@ const std::vector<Option>& Options() {
 
 // GizmoSQL 1.x options this version does not implement. Setting one (to anything but
 // its "off" value) stops the server: silently ignoring it would run a deployment
-// without something it asked for (OAuth sign-in, telemetry, ...).
+// without something it asked for (telemetry, ...).
 struct Unsupported {
   std::string flag;
   std::vector<std::string> env;
@@ -257,11 +279,7 @@ struct Unsupported {
 
 const std::vector<Unsupported>& UnsupportedOptions() {
   static const std::vector<Unsupported> options = {
-      {"--token-jwks-uri", {"GIZMOSQL_TOKEN_JWKS_URI"}, false},
-      {"--oauth-client-id", {"GIZMOSQL_OAUTH_CLIENT_ID"}, false},
-      {"--oauth-client-secret", {"GIZMOSQL_OAUTH_CLIENT_SECRET"}, false},
       {"--otel-enabled", {"GIZMOSQL_OTEL_ENABLED"}, true},
-      {"--verify-tls", {}, false},
   };
   return options;
 }
@@ -413,6 +431,17 @@ Loaded LoadConfig(int argc, char** argv) {
     if (arg == "--help" || arg == "-h") { loaded.action = Action::kHelp; return loaded; }
     if (arg == "--version") { loaded.action = Action::kVersion; return loaded; }
     if (arg == "--print-duckdb-version") { loaded.action = Action::kPrintDuckDBVersion; return loaded; }
+    // A self-check of outbound HTTPS (the trust store a container really has).
+    if (arg == "--verify-tls" || arg.starts_with("--verify-tls=")) {
+      loaded.action = Action::kVerifyTls;
+      if (arg != "--verify-tls") {
+        loaded.verify_tls_url = arg.substr(13);
+      } else if (i + 1 < argc) {
+        loaded.verify_tls_url = argv[i + 1];
+      }
+      if (loaded.verify_tls_url.empty()) throw std::invalid_argument("--verify-tls needs a URL");
+      return loaded;
+    }
     std::optional<std::string> inline_value;
     if (const auto eq = arg.find('='); eq != std::string::npos && arg.starts_with("--")) {
       inline_value = arg.substr(eq + 1);
@@ -520,6 +549,7 @@ std::string Usage() {
     out << "]\n";
   }
   out << "\n  --tls CERT KEY  (GizmoSQL 1.x form of --tls-cert and --tls-key)\n"
+      << "  --verify-tls URL  (fetch URL over HTTPS with the system's CA bundle, then exit)\n"
       << "  --version, --print-duckdb-version, --help\n";
   return out.str();
 }

@@ -7,10 +7,10 @@ updated. Nothing is skipped; a missing dependency fails its test.
 
 ## Totals
 
-- **59 C++ test files, 565 gtest cases:** 349 passing, 5 failing, 15 not applicable, 196 not yet.
-  - by file: 45 ported & passing, 3 ported & partly failing, 2 not applicable, 6 not yet, 3 passing except their not-applicable cases.
+- **59 C++ test files, 565 gtest cases:** 360 passing, 5 failing, 16 not applicable, 184 not yet.
+  - by file: 46 ported & passing, 3 ported & partly failing, 2 not applicable, 4 not yet, 4 passing except their not-applicable cases.
   - server-side cases (all but the 142 that test the `gizmosql_client` binary): 423, of which
-    349 pass (83%) and 5 fail.
+    360 pass (85%) and 5 fail.
 - **Scripts and driver suites (12 files, 134 cases or checks):** 22 passing, 0 failing, 17 not applicable, 95 not yet.
 - Hardcharger's own tests (`test_server.py`, 27) and the Warp SQL conformance suite (76) pass too.
 
@@ -27,10 +27,10 @@ through the same-named pytest file.
 | `integration/test_credential_parsing.cpp` | 5 | 4 | 0 | 1 | 0 | `test_credential_parsing.py` | mixed; N/A: the ':'-in-user-name startup check (Warp sends JSON fields) |
 | `integration/test_cross_instance_tokens.cpp` | 7 | 7 | 0 | 0 | 0 | `test_cross_instance_tokens.py` | ported & passing; wrong-secret case now asserts invalid_token |
 | `integration/test_token_authorized_emails.cpp` | 7 | 7 | 0 | 0 | 0 | `test_token_authorized_emails.py` | ported & passing |
-| `integration/test_oauth_server.cpp` | 9 | 0 | 0 | 0 | 9 | — | not yet; not yet: the OAuth server (external_auth) |
+| `integration/test_oauth_server.cpp` | 9 | 8 | 0 | 1 | 0 | `test_oauth_server.py` | mixed; N/A: the non-Enterprise stub; mock provider in Python; JWKS (RSA and EC) cases; +6 |
 | `integration/test_auth_log_level.cpp` | 2 | 2 | 0 | 0 | 0 | `test_auth_log_level.py` | ported & passing; +1 case |
 | `integration/test_catalog_permissions_enterprise.cpp` | 8 | 8 | 0 | 0 | 0 | `test_catalog_permissions_enterprise.py` | ported & passing; each case licensed and unlicensed |
-| `integration/test_system_ca_certs.cpp` | 3 | 0 | 0 | 0 | 3 | — | not yet; not yet: no outbound HTTPS client yet (JWKS, OAuth) |
+| `integration/test_system_ca_certs.cpp` | 3 | 3 | 0 | 0 | 0 | `test_system_ca_certs.py` | ported & passing; C++ unit tests; --verify-tls end to end; +2 |
 | `integration/test_active_session_count.cpp` | 2 | 2 | 0 | 0 | 0 | `test_active_session_count.py` | ported & passing; read through gizmosql_sessions() |
 | `integration/test_session_idle.cpp` | 5 | 5 | 0 | 0 | 0 | `test_session_idle.py` | ported & passing; against servers, not a unit |
 | `integration/test_max_sessions.cpp` | 4 | 4 | 0 | 0 | 0 | `test_max_sessions.py` | ported & passing |

@@ -15,7 +15,10 @@
 #include "config.hpp"
 #include "duckdb_sql.hpp"
 #include "engine.hpp"
+#include "http_client.hpp"
+#include "jwks.hpp"
 #include "license.hpp"
+#include "oauth.hpp"
 #include "logging.hpp"
 #include "runtime.hpp"
 #include "tokens.hpp"
@@ -59,10 +62,79 @@ void CheckLicensedOptions(const hc::Loaded& loaded, const hc::License& license) 
   require(c.enable_catalog_logging, "instrumentation", "Catalog logging (--enable-catalog-logging)");
   require(c.capture_query_profile != "off", "instrumentation", "Query profile capture (capture_query_profile)");
   require(!c.instance_tag.empty(), "instrumentation", "The instance tag (instance_tag)");
+  require(!c.oauth_client_id.empty(), "external_auth", "Server-side OAuth sign-in (oauth_client_id)");
   for (const char* option : {"max_concurrent_statements", "max_queued_statements", "max_queue_wait",
                              "admin_bypass_queue_default"}) {
     require(loaded.sources.contains(option), "statement_queue", std::string("The statement queue (") + option + ")");
   }
+}
+
+// The identity provider's keys and endpoints. Its JWKS verifies ID tokens when named
+// (token_jwks_uri), or when tokens have an issuer and an audience but no configured key:
+// then the issuer's OpenID configuration names it. Browser sign-in needs the provider's
+// authorization and token endpoints, from the same document.
+struct IdentityProvider {
+  std::shared_ptr<hc::Jwks> jwks;
+  hc::OidcEndpoints endpoints;
+};
+
+IdentityProvider DiscoverIdentityProvider(const hc::Config& c) {
+  IdentityProvider provider;
+  const bool oauth = !c.oauth_client_id.empty();
+  const bool by_issuer =
+      !c.token_allowed_issuer.empty() && !c.token_allowed_audience.empty() && c.token_signature_verify_cert_path.empty();
+  if (oauth || (c.token_jwks_uri.empty() && by_issuer)) {
+    try {
+      provider.endpoints = hc::DiscoverOidc(c.token_allowed_issuer);
+    } catch (const std::exception& e) {
+      // Without OAuth this only costs JWKS sign-in, as in GizmoSQL 1.x; OAuth can't run.
+      if (oauth) throw std::runtime_error(std::string("OAuth sign-in needs the issuer's OpenID configuration: ") + e.what());
+      hc::Log(hc::LogLevel::kWarning, "OpenID discovery failed; identity provider tokens won't be accepted",
+              {{"issuer", c.token_allowed_issuer}, {"error", e.what()}});
+      return provider;
+    }
+  }
+  const std::string uri = !c.token_jwks_uri.empty() ? c.token_jwks_uri : provider.endpoints.jwks_uri;
+  if (!uri.empty() && (!c.token_jwks_uri.empty() || by_issuer || oauth)) {
+    provider.jwks = std::make_shared<hc::Jwks>(uri);
+    hc::Log(hc::LogLevel::kInfo, "identity provider tokens are verified with its JWKS", {{"jwks_uri", uri}});
+  }
+  return provider;
+}
+
+std::unique_ptr<hc::OAuthServer> MakeOAuthServer(const hc::Config& c, const IdentityProvider& provider,
+                                                 const std::string& secret_key) {
+  if (c.oauth_client_id.empty()) return nullptr;
+  if (c.token_allowed_issuer.empty() || c.token_allowed_audience.empty()) {
+    throw std::runtime_error("oauth_client_id needs token_allowed_issuer and token_allowed_audience");
+  }
+  if (provider.endpoints.authorization_endpoint.empty() || provider.endpoints.token_endpoint.empty()) {
+    throw std::runtime_error("the issuer's OpenID configuration has no authorization_endpoint or token_endpoint");
+  }
+  const bool tls = !c.tls_cert.empty() && !c.oauth_disable_tls;
+  if (c.oauth_disable_tls && !c.tls_cert.empty()) {
+    hc::Log(hc::LogLevel::kWarning, "the OAuth server runs without TLS (oauth_disable_tls): only behind a TLS proxy");
+  }
+  const std::string base = !c.oauth_base_url.empty()
+                               ? c.oauth_base_url
+                               : std::string(tls ? "https" : "http") + "://localhost:" + std::to_string(c.oauth_port);
+  hc::OAuthServer::Options options;
+  options.host = c.host;
+  options.port = static_cast<uint16_t>(c.oauth_port);
+  options.client_id = c.oauth_client_id;
+  options.client_secret = c.oauth_client_secret;
+  options.scopes = c.oauth_scopes;
+  options.redirect_uri = !c.oauth_redirect_uri.empty() ? c.oauth_redirect_uri : base + "/oauth/callback";
+  options.secret_key = secret_key;
+  options.instance_id = c.oauth_instance_id;
+  options.authorized_emails = c.token_authorized_emails;
+  if (tls) {
+    options.tls_cert = c.tls_cert;
+    options.tls_key = c.tls_key;
+  }
+  options.authorization_endpoint = provider.endpoints.authorization_endpoint;
+  options.token_endpoint = provider.endpoints.token_endpoint;
+  return std::make_unique<hc::OAuthServer>(std::move(options));
 }
 
 double ParseBytes(const std::string& text) {
@@ -217,6 +289,18 @@ int main(int argc, char** argv) {
       std::cout << std::string(version.ptr, version.len) << "\n";
       return 0;
     }
+    case hc::Action::kVerifyTls: {
+      const auto bundle = hc::FindSystemCaCertFile();
+      std::cout << "verify-tls: CA bundle " << bundle.value_or("(none found; set SSL_CERT_FILE)") << "\n";
+      try {
+        const hc::HttpResponse response = hc::HttpGet(loaded.verify_tls_url);
+        std::cout << "verify-tls: OK " << loaded.verify_tls_url << " -> HTTP " << response.status << "\n";
+        return 0;
+      } catch (const std::exception& e) {
+        std::cout << "verify-tls: FAILED " << e.what() << "\n";
+        return 1;
+      }
+    }
     case hc::Action::kServe:
       break;
   }
@@ -255,7 +339,9 @@ int main(int argc, char** argv) {
         secret_key, std::chrono::seconds(config.token_lifetime_seconds), instance_id,
         config.allow_cross_instance_tokens, hc::ParseLogLevel(config.auth_log_level));
     auto backend = std::make_shared<hc::Backend>(runtime);
-    auto authenticator = std::make_shared<hc::Authenticator>(config, license);
+    const IdentityProvider provider = DiscoverIdentityProvider(config);
+    auto authenticator = std::make_shared<hc::Authenticator>(config, license, provider.jwks);
+    auto oauth = MakeOAuthServer(config, provider, secret_key);
     backend->StartHealthCheck();
 
     std::unique_ptr<hc::MetricsEndpoint> metrics_endpoint;
@@ -272,6 +358,7 @@ int main(int argc, char** argv) {
 
     warpsql::Server server(ServerOptionsFrom(config), backend, authenticator, tokens);
     server.Start();
+    if (oauth) oauth->Start();
     hc::Log(hc::LogLevel::kInfo, "Hardcharger is ready",
             {{"version", hc::kVersion},
              {"duckdb", backend->duckdb_version()},
@@ -281,6 +368,7 @@ int main(int argc, char** argv) {
              {"url", std::string(config.tls_cert.empty() ? "http" : "https") + "://" +
                          config.host + ":" + std::to_string(server.port()) + "/warp"},
              {"metrics_port", metrics_endpoint ? std::to_string(metrics_endpoint->port()) : ""},
+             {"oauth_port", oauth ? std::to_string(oauth->port()) : ""},
              {"database", config.database}});
 
     // First signal: with graceful_shutdown, drain (finish running work, refuse new work)
@@ -326,6 +414,7 @@ int main(int argc, char** argv) {
     signals.join();
     if (watcher.joinable()) watcher.join();
     if (metrics_endpoint) metrics_endpoint->Stop();
+    if (oauth) oauth->Stop();
     if (exit_marker) exit_marker->Clean();
     backend->StopHealthCheck();
     backend->StopInstrumentation();

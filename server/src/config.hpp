@@ -47,6 +47,19 @@ struct Config {
   std::string token_allowed_audience;
   std::string token_default_role;  // for sign-in tokens without a role claim
   std::vector<std::string> token_authorized_emails = {"*"};  // globs, case-insensitive
+  // An identity provider's keys (Enterprise: external_auth): this JWKS, else the one
+  // token_allowed_issuer's OpenID configuration names (with an audience and no PEM key).
+  std::string token_jwks_uri;
+
+  // Browser sign-in (Enterprise: external_auth), GizmoSQL 1.x's OAuth server.
+  std::string oauth_client_id;  // set: the OAuth server runs
+  std::string oauth_client_secret;
+  std::string oauth_scopes = "openid profile email";
+  int64_t oauth_port = 31339;
+  std::string oauth_base_url;      // empty: http(s)://localhost:<oauth_port>
+  std::string oauth_redirect_uri;  // empty: <base url>/oauth/callback
+  std::string oauth_instance_id;   // routes a shared proxy's callbacks: state = <id>.<hash>
+  bool oauth_disable_tls = false;  // plain HTTP behind a TLS-terminating proxy
 
   // Sessions
   int64_t max_sessions = 0;  // non-admin sessions at once; 0 = unlimited
@@ -111,11 +124,12 @@ struct Config {
 };
 
 // What the command line asked for besides configuration.
-enum class Action { kServe, kHelp, kVersion, kPrintDuckDBVersion };
+enum class Action { kServe, kHelp, kVersion, kPrintDuckDBVersion, kVerifyTls };
 
 struct Loaded {
   Config config;
   Action action = Action::kServe;
+  std::string verify_tls_url;  // kVerifyTls: the URL to fetch
   std::vector<std::string> notes;  // e.g. legacy environment names in use
   // Where each option that was set came from: "flag", "env HARDCHARGER_X", "file", ...
   std::map<std::string, std::string> sources;

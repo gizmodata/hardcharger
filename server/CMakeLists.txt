@@ -42,14 +42,17 @@ configure_file(src/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version
 add_library(hardcharger_core STATIC
   src/admission.cc
   src/auth.cc
+  src/catalog_log.cc
   src/config.cc
   src/engine.cc
   src/guards.cc
   src/health.cc
-  src/catalog_log.cc
+  src/http_client.cc
   src/instrumentation.cc
+  src/jwks.cc
   src/logging.cc
   src/metrics.cc
+  src/oauth.cc
   src/patterns.cc
   src/sessions.cc
   src/settings.cc
@@ -99,6 +102,7 @@ add_executable(hardcharger-unit-tests
   unit/admission_test.cc
   unit/catalog_log_test.cc
   unit/guards_test.cc
+  unit/http_client_test.cc
   unit/ingest_test.cc
   unit/instrumentation_test.cc
   unit/log_level_test.cc

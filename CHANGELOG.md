@@ -68,8 +68,19 @@ own changelog in `python/CHANGELOG.md`.
   `log_schema`), in batches from a background writer.
 - The instrumentation and log catalogs are the server's: admins may read them, nobody may
   write, detach or `USE` them, and non-admins don't see them in metadata.
-- GizmoSQL 1.x options this version doesn't implement yet (OAuth, JWKS, OpenTelemetry)
-  stop the server when set, rather than being ignored.
+- Identity provider sign-in (license feature `external_auth`): ID tokens verified with the
+  provider's JWKS (`token_jwks_uri`, or the one `token_allowed_issuer`'s OpenID
+  configuration names), RS256/384/512 and ES256/384/512, through `token_exchange` or as
+  the password of user `token`.
+- Browser sign-in (license feature `external_auth`): `oauth_client_id` runs GizmoSQL 1.x's
+  OAuth server on `oauth_port` (default 31339) with its routes (`/oauth/initiate`,
+  `/oauth/start`, `/oauth/callback`, `/oauth/token/<uuid>`), as a confidential client
+  (`oauth_client_secret`, `oauth_scopes`, `oauth_base_url`, `oauth_redirect_uri`,
+  `oauth_instance_id` for a shared callback proxy, `oauth_disable_tls` behind a TLS proxy).
+- `--verify-tls URL`: fetches a URL with the system's CA bundle (`SSL_CERT_FILE`, else the
+  first well-known bundle), as outbound HTTPS does, and exits 0 or 1.
+- GizmoSQL 1.x's OpenTelemetry options stop the server when set, rather than being
+  ignored (this version has no OpenTelemetry export).
 - The GizmoSQL 1.x test battery, ported (`server/tests`, scoreboard in
   `server/tests/BATTERY.md`), with C++ unit tests (`server/unit`, googletest 1.18.0) and a
   never-installed `hardcharger-license-test` build for the Enterprise features.
@@ -92,8 +103,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Known gaps
 
-- Not yet ported from GizmoSQL 1.x: OAuth sign-in, per-catalog `catalog_access` rules
-  (only "no write access anywhere" is enforced), RBAC.
+- Not yet ported from GizmoSQL 1.x: per-catalog `catalog_access` rules (only "no write
+  access anywhere" is enforced), RBAC, OpenTelemetry.
+- Browser sign-in has only 1.x's routes on `oauth_port`; Warp SQL's `oauth_browser` flow
+  (`/warp/v1/auth/oauth/flows`) needs the Warp SQL SDK to offer it.
 - Instrumentation's fetch times are when the server took each batch from DuckDB, not when
   the client received it (the Warp SQL SDK has no delivery callback); its `peer` column
   is empty (the SDK's principal carries no peer address).

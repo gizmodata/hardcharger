@@ -9,10 +9,10 @@ rows = [
  ("integration/test_credential_parsing.cpp", 5, 4, 0, 1, 0, "test_credential_parsing.py", "N/A: the ':'-in-user-name startup check (Warp sends JSON fields)"),
  ("integration/test_cross_instance_tokens.cpp", 7, 7, 0, 0, 0, "test_cross_instance_tokens.py", "wrong-secret case now asserts invalid_token"),
  ("integration/test_token_authorized_emails.cpp", 7, 7, 0, 0, 0, "test_token_authorized_emails.py", ""),
- ("integration/test_oauth_server.cpp", 9, 0, 0, 0, 9, "", "not yet: the OAuth server (external_auth)"),
+ ("integration/test_oauth_server.cpp", 9, 8, 0, 1, 0, "test_oauth_server.py", "N/A: the non-Enterprise stub; mock provider in Python; JWKS (RSA and EC) cases; +6"),
  ("integration/test_auth_log_level.cpp", 2, 2, 0, 0, 0, "test_auth_log_level.py", "+1 case"),
  ("integration/test_catalog_permissions_enterprise.cpp", 8, 8, 0, 0, 0, "test_catalog_permissions_enterprise.py", "each case licensed and unlicensed"),
- ("integration/test_system_ca_certs.cpp", 3, 0, 0, 0, 3, "", "not yet: no outbound HTTPS client yet (JWKS, OAuth)"),
+ ("integration/test_system_ca_certs.cpp", 3, 3, 0, 0, 0, "test_system_ca_certs.py", "C++ unit tests; --verify-tls end to end; +2"),
  # Sessions, limits and lifecycle
  ("integration/test_active_session_count.cpp", 2, 2, 0, 0, 0, "test_active_session_count.py", "read through gizmosql_sessions()"),
  ("integration/test_session_idle.cpp", 5, 5, 0, 0, 0, "test_session_idle.py", "against servers, not a unit"),

@@ -59,9 +59,10 @@ Error TokenRefused() {
 
 }  // namespace
 
-Authenticator::Authenticator(const Config& config, const License& license)
+Authenticator::Authenticator(const Config& config, const License& license, std::shared_ptr<Jwks> jwks)
     : username_(config.username),
       password_(config.password),
+      jwks_(std::move(jwks)),
       allowed_issuer_(config.token_allowed_issuer),
       allowed_audience_(config.token_allowed_audience),
       default_role_(config.token_default_role),
@@ -79,7 +80,7 @@ Authenticator::Authenticator(const Config& config, const License& license)
 
 warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username,
                                                        std::string_view password) {
-  if (username == kTokenUser && !verify_key_pem_.empty()) {
+  if (username == kTokenUser && AcceptsTokens()) {
     return ExchangeToken(password);
   }
   const bool user_ok = SameSecret(username, username_);
@@ -93,7 +94,7 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
 }
 
 warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) {
-  if (verify_key_pem_.empty()) {
+  if (!AcceptsTokens()) {
     throw Error(ErrorCode::kInvalidCredentials, "this server does not accept sign-in tokens");
   }
   jwt::decoded_jwt<Traits> decoded = [&] {
@@ -104,11 +105,13 @@ warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) 
     }
   }();
   try {
-    auto verifier = jwt::verify<Traits>().allow_algorithm(
-        jwt::algorithm::rs256(verify_key_pem_, "", "", ""));
+    auto verifier = jwt::verify<Traits>();
+    AllowSigningKey(decoded, verifier);
     if (!allowed_issuer_.empty()) verifier.with_issuer(allowed_issuer_);
     if (!allowed_audience_.empty()) verifier.with_audience(allowed_audience_);
     verifier.verify(decoded);
+  } catch (const Error&) {
+    throw;
   } catch (const std::exception& e) {
     LogAt(log_level_, LogLevel::kInfo, "sign-in token refused", {{"reason", e.what()}});
     throw TokenRefused();
@@ -151,9 +154,43 @@ warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) 
   return principal;
 }
 
+template <class Decoded, class Verifier>
+void Authenticator::AllowSigningKey(const Decoded& decoded, Verifier& verifier) {
+  if (jwks_ == nullptr) {
+    verifier.allow_algorithm(jwt::algorithm::rs256(verify_key_pem_, "", "", ""));
+    return;
+  }
+  if (!license_.Has("external_auth")) {
+    throw Error(ErrorCode::kInvalidCredentials,
+                LicenseRequired("external_auth", "Sign-in with an identity provider's tokens (JWKS)"));
+  }
+  // The provider says which of its keys signed the token; its JWK may fix the algorithm.
+  if (!decoded.has_header_claim("kid")) {
+    throw std::runtime_error("the token has no 'kid' header, which JWKS verification needs");
+  }
+  const Jwks::Key key = jwks_->Find(decoded.get_header_claim("kid").as_string());
+  std::string algorithm = key.algorithm;
+  if (algorithm.empty() && decoded.has_header_claim("alg")) algorithm = decoded.get_header_claim("alg").as_string();
+  if (algorithm == "RS256" || algorithm.empty()) {
+    verifier.allow_algorithm(jwt::algorithm::rs256(key.pem, "", "", ""));
+  } else if (algorithm == "RS384") {
+    verifier.allow_algorithm(jwt::algorithm::rs384(key.pem, "", "", ""));
+  } else if (algorithm == "RS512") {
+    verifier.allow_algorithm(jwt::algorithm::rs512(key.pem, "", "", ""));
+  } else if (algorithm == "ES256") {
+    verifier.allow_algorithm(jwt::algorithm::es256(key.pem, "", "", ""));
+  } else if (algorithm == "ES384") {
+    verifier.allow_algorithm(jwt::algorithm::es384(key.pem, "", "", ""));
+  } else if (algorithm == "ES512") {
+    verifier.allow_algorithm(jwt::algorithm::es512(key.pem, "", "", ""));
+  } else {
+    throw std::runtime_error("unsupported signing algorithm '" + algorithm + "'");
+  }
+}
+
 boost::json::array Authenticator::GrantTypes() {
   boost::json::array grants{"password"};
-  if (!verify_key_pem_.empty()) {
+  if (AcceptsTokens()) {
     grants.push_back("token_exchange");
   }
   return grants;
