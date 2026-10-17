@@ -17,6 +17,16 @@ updated. Nothing is skipped; a missing dependency fails its test.
   on the same test-license build, including `test_rbac_battery.py`, which checks the battery's
   features under access control (the server's own catalogs, SQL functions, settings,
   KILL SESSION, system privileges, credentials kept out of logs and instrumentation).
+- **Security regression suites** (added from two security reviews of the integration, all pass):
+  `test_rules_security.py` (19) — rules-only access control and plain-server non-admin token
+  principals hold no system privilege: no file/URL reads (also through `query()`,
+  `query_table()`, `json_execute_serialized_sql()`), no secrets, no settings reads/writes, no
+  table function off the allow-list, no catalog they can't see (through DESCRIBE or sequences),
+  and no macro/type creation (whose body runs unchecked). `test_redaction.py` (16) and
+  `redaction_test.cc` (9) — credential redaction survives comments, string literals,
+  dollar-quoting, DuckDB parse errors, ATTACH connection strings and credential settings, in the
+  log output, instrumentation, the log catalog and the audit chain (redacted before sealing).
+  Each negative test has a positive twin, and each was proven to fail on the pre-fix commit.
 
 Ported files keep the 1.x file name (`test_x.cpp` → `test_x.py`); each docstring cites
 the 1.x file and lists what doesn't apply and why. 1.x cases that unit-tested an internal
