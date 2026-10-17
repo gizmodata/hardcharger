@@ -7,7 +7,7 @@
       -bindpath Stage=<the unpacked hardcharger-windows-*> -bindpath installer
       -ext WixToolset.UI.wixext -o Hardcharger-<arch>.msi
 
-  It installs bin\ (hardcharger-server.exe and the Visual C++ runtime DLLs beside it), LICENSE
+  It installs bin\ (hardcharger-server.exe and the hardcharger.exe client), LICENSE
   and CHANGELOG.md under Program Files\Hardcharger, and puts bin\ on the system PATH.
   The UpgradeCode and the GUIDs below are permanent: changing the UpgradeCode orphans
   existing installs.

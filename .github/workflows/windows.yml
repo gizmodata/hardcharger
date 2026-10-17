@@ -245,6 +245,8 @@ jobs:
       - name: Hardcharger tests
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         working-directory: server/tests
+        env:
+          PYTHONUTF8: "1"  # the servers and the client write UTF-8, not the ANSI code page
         run: |
           uv venv .venv --python ${{ matrix.test_python }}
           uv pip install --python .venv/Scripts/python.exe -r pyproject.toml
@@ -269,33 +271,38 @@ jobs:
           WARP_SQL_TEST_SERVER_BINARY="$(cygpath -m "$GITHUB_WORKSPACE/build-warp/warp-duckdb.exe")" \
             .venv/Scripts/python.exe -m pytest -q -rfE
 
-      # The same layout as the other platforms' tarballs: bin/ (the server and, beside it,
-      # the Visual C++ runtime it needs, from this toolset's redistributable folder, whose
-      # name changes with the toolset), LICENSE and CHANGELOG.md.
+      # The same layout as the other platforms' tarballs: bin/ (the server and the client,
+      # single-file executables: every dependency and the C++ runtime linked in), LICENSE
+      # and CHANGELOG.md. The import gate fails on any DLL but Windows' own.
       - name: Package
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: |
           stage="dist/hardcharger-${{ matrix.name }}"
           cmake --install server/build --prefix "$stage"
-          # The server and the client ship, never the tests.
+          # The server and the client ship, nothing else (never the tests, never a DLL).
           test "$(ls "$stage/bin" | tr '\n' ' ')" = "hardcharger-server.exe hardcharger.exe "
-          redist="$(cygpath -u "$VCToolsRedistDir")/${{ matrix.arch }}"
-          crt=$(ls -d "$redist"/Microsoft.VC*.CRT | sort | tail -1)
-          [ -d "$crt" ] || { echo "no Microsoft.VC*.CRT under $redist"; exit 1; }
-          echo "Visual C++ runtime from $crt"
-          for dll in vcruntime140.dll vcruntime140_1.dll msvcp140.dll; do
-            if [ -f "$crt/$dll" ]; then cp "$crt/$dll" "$stage/bin/"; fi
-          done
-          test -f "$stage/bin/vcruntime140.dll" && test -f "$stage/bin/msvcp140.dll"
+          .github/scripts/check-windows-imports.sh "$stage/bin/hardcharger-server.exe" "$stage/bin/hardcharger.exe"
           cp LICENSE CHANGELOG.md "$stage/"
           "$stage/bin/hardcharger-server.exe" --version
           "$stage/bin/hardcharger.exe" --version
-          (cd dist && 7z a -tzip "hardcharger-${{ matrix.name }}.zip" "hardcharger-${{ matrix.name }}" > /dev/null)
-          # What the zip runs with: nothing but itself and Windows' own DLLs.
-          for exe in hardcharger-server hardcharger; do
-            dumpbin -nologo -dependents "$stage/bin/$exe.exe" | grep -i "\.dll"
-          done
           ls -R "$stage"
+          (cd dist && 7z a -tzip "hardcharger-${{ matrix.name }}.zip" "hardcharger-${{ matrix.name }}" > /dev/null)
+      # The gate is proven to fail: an executable that imports duckdb.dll (linked against
+      # an import library made for the purpose) must be refused, by name.
+      - name: Prove the import gate fails on a DLL dependency
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
+        run: |
+          proof="$RUNNER_TEMP/gate-proof"
+          mkdir -p "$proof"
+          printf 'LIBRARY duckdb\nEXPORTS\n  duckdb_library_version\n' > "$proof/duckdb.def"
+          printf 'const char *duckdb_library_version(void);\nint main(void) { return duckdb_library_version()[0]; }\n' > "$proof/probe.c"
+          (cd "$proof" && lib -nologo -def:duckdb.def -out:duckdb.lib -machine:${{ matrix.arch }} &&
+             cl -nologo probe.c duckdb.lib -Fe:probe.exe)
+          if .github/scripts/check-windows-imports.sh "$proof/probe.exe" 2> "$proof/gate.err"; then
+            echo "the import gate passed an executable that imports duckdb.dll"; exit 1
+          fi
+          cat "$proof/gate.err"
+          grep -q "imports duckdb.dll" "$proof/gate.err"
       # The README's Windows example, as written there, from a fresh folder.
       - name: Run the zip as the README says
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}

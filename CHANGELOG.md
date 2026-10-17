@@ -58,13 +58,16 @@ own changelog in `python/CHANGELOG.md`.
   for each commit on `main` that passes every CI gate (ghcr.io only).
 
 - Windows x64 and arm64 builds (MSVC): `hardcharger-windows-{amd64,arm64}.zip` (bin\
-  with `hardcharger-server.exe`, the `hardcharger.exe` client and the Visual C++
-  runtime beside them, LICENSE, CHANGELOG.md) and an MSI of each that installs under Program Files and puts `bin\` on
+  with `hardcharger-server.exe` and the `hardcharger.exe` client, LICENSE,
+  CHANGELOG.md) and an MSI of each that installs under Program Files and puts `bin\` on
   the PATH (unsigned for now). On Windows the console's Ctrl+C and Ctrl+Break stop the
   server as SIGINT and SIGTERM do elsewhere (drain first when `graceful_shutdown` is on, a second one stops at
   once); closing the console or shutting Windows down stops it at once. Outbound HTTPS
   (OpenID discovery, JWKS, OPA) trusts the Windows certificate store unless
-  `SSL_CERT_FILE` names a bundle. DuckDB is linked statically there.
+  `SSL_CERT_FILE` names a bundle. The executables are single files: DuckDB and its
+  built-in extensions, Arrow, OpenSSL, Boost, yaml-cpp, zstd, replxx and the C++ runtime
+  (/MT) are linked in, so they import only Windows' own DLLs (CI checks the list) and
+  need no Visual C++ Redistributable.
 - The `hardcharger` client on Windows: Ctrl+C cancels the running statement (a console
   control handler hands it to a thread of the client's own), Ctrl+Break exits as SIGTERM
   does, colors and the pager use the console's ANSI mode, the password prompt doesn't
