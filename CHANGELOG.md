@@ -117,6 +117,17 @@ own changelog in `python/CHANGELOG.md`.
   `server/tests/BATTERY.md`), with C++ unit tests (`server/unit`, googletest 1.18.0). The
   Enterprise tests run on the test-license build, with a license each test signs for
   exactly the features it names.
+- Per-catalog permissions (license feature `catalog_permissions`): a sign-in token's
+  `catalog_access` rules (`read`, `write`, `none` per catalog name or glob, first match
+  wins, no match is no access) are enforced on every statement's plan by access control,
+  without a store: reads and writes per catalog (temp included), and what the user sees
+  in SHOW DATABASES, `information_schema`, `duckdb_*()`, the `_gizmosql_system` views and
+  the metadata requests; refusals read as in GizmoSQL 1.x ("Access denied: You do not have
+  write access to catalog ..."). Under RBAC the rules grant nothing.
+- The instrumentation and log catalogs are now also left out of SQL's own catalog
+  functions (`duckdb_databases()`, `information_schema`, SHOW ...) for non-administrators.
+- `PIVOT` without an `IN` list runs (it expands into several statements), also for
+  read-only principals.
 - Access control and the battery's features work together: store users never see or
   write the instrumentation and log catalogs (admins read them, nobody writes them), may
   call the server's SQL functions (`gizmosql_settings()`, ...), and are refused files,
@@ -162,17 +173,12 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Known gaps
 
-- Not yet ported from GizmoSQL 1.x: per-catalog `catalog_access` rules on servers without
-  access control (only "no write access anywhere" is enforced; under access control the
-  claims grant nothing, by design), OpenTelemetry.
+- Not yet ported from GizmoSQL 1.x: OpenTelemetry.
 - Browser sign-in has only 1.x's routes on `oauth_port`; Warp SQL's `oauth_browser` flow
   (`/warp/v1/auth/oauth/flows`) needs the Warp SQL SDK to offer it.
 - Instrumentation's fetch times are when the server took each batch from DuckDB, not when
   the client received it (the Warp SQL SDK has no delivery callback); its `peer` column
   is empty (the SDK's principal carries no peer address).
-- SQL's own catalog functions (`duckdb_databases()`, `information_schema`, `SHOW
-  DATABASES`) still list the instrumentation and log catalogs to non-admins (reading
-  them is refused).
 - Listing the schemas or tables of one catalog still opens every attached catalog: the v2
   C API has no catalog-scoped listing.
 - VARIANT (and other struct or extension) Arrow parameters can't be bound yet.

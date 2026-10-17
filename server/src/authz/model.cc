@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <string_view>
 
 namespace hardcharger::authz {
 
@@ -237,8 +238,55 @@ bool Snapshot::GrantCovers(const ObjectGrantRecord& grant, const AccessRequest& 
   return false;
 }
 
+namespace {
+
+// GizmoSQL 1.x's catalog pattern match: '*' any run (also empty), '?' one character.
+bool GlobMatches(std::string_view pattern, std::string_view text) {
+  std::size_t p = 0, t = 0, star = std::string_view::npos, mark = 0;
+  while (t < text.size()) {
+    if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == text[t])) {
+      ++p;
+      ++t;
+    } else if (p < pattern.size() && pattern[p] == '*') {
+      star = p++;
+      mark = t;
+    } else if (star != std::string_view::npos) {
+      p = star + 1;
+      t = ++mark;
+    } else {
+      return false;
+    }
+  }
+  while (p < pattern.size() && pattern[p] == '*') ++p;
+  return p == pattern.size();
+}
+
+}  // namespace
+
+CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const std::string& catalog) {
+  if (IdentifiersEqual(catalog, "system") || IdentifiersEqual(catalog, "_gizmosql_system")) {
+    return CatalogAccessLevel::kRead;
+  }
+  for (const auto& rule : rules) {
+    if (GlobMatches(rule.pattern, catalog)) return rule.level;
+  }
+  return CatalogAccessLevel::kNone;
+}
+
 AccessDecision Snapshot::Check(const Principal& principal, const AccessRequest& request) const {
   if (principal.superuser) return {true, "superuser", "superuser"};
+  if (principal.catalog_rules) {
+    const auto level = CatalogRuleLevel(*principal.catalog_rules, request.object.catalog);
+    const bool reading = request.privilege == Privilege::kSelect;
+    if (level == CatalogAccessLevel::kWrite || (reading && level == CatalogAccessLevel::kRead)) {
+      return {true, "catalog_access", "catalog_access"};
+    }
+    return {false,
+            level == CatalogAccessLevel::kRead
+                ? "catalog_access allows only reading catalog " + request.object.catalog
+                : "catalog_access allows no access to catalog " + request.object.catalog,
+            ""};
+  }
   // A scoped token narrows everything below, the owner's rights included.
   if (principal.scope) {
     if (!principal.scope->privileges.count(request.privilege)) {
@@ -405,6 +453,7 @@ bool Snapshot::LostRightsSince(const Snapshot& before, const Principal& principa
 
 bool Snapshot::HasSystemPrivilege(const Principal& principal, SystemPrivilege privilege) const {
   if (principal.superuser) return true;
+  if (principal.catalog_rules) return true;  // the server's statement guards decide
   if (principal.scope) return false;  // a scoped token holds none
   const auto roles = RolesOf(principal);
   for (const auto& r : system_privileges_) {
@@ -516,7 +565,22 @@ std::set<std::string> Snapshot::TenantCatalogs(const std::string& tenant_id) con
   return catalogs;
 }
 
+bool Snapshot::RestrictsCatalogs(const Principal& principal) const {
+  if (principal.superuser) return false;
+  return principal.catalog_rules || !principal.hidden_catalogs.empty() ||
+         !TenantOfPrincipal(principal).empty();
+}
+
 bool Snapshot::CatalogVisible(const Principal& principal, const std::string& catalog) const {
+  if (principal.superuser) return true;
+  for (const auto& hidden : principal.hidden_catalogs) {
+    if (IdentifiersEqual(hidden, catalog)) return false;
+  }
+  if (principal.catalog_rules) {
+    // DuckDB's temp is listed for everyone; what may be done there, the rules decide.
+    return IdentifiersEqual(catalog, "temp") ||
+           CatalogRuleLevel(*principal.catalog_rules, catalog) != CatalogAccessLevel::kNone;
+  }
   const std::string tenant = TenantOfPrincipal(principal);
   if (tenant.empty()) return true;
   if (IdentifiersEqual(catalog, "temp") || IdentifiersEqual(catalog, "system")) {

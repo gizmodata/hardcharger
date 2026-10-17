@@ -262,7 +262,7 @@ class PolicyRewriter {
         snapshot_(snapshot),
         principal_(principal),
         policy_context_(PolicyContext::For(snapshot, principal)),
-        tenant_user_(!snapshot.TenantOfPrincipal(principal).empty()) {}
+        restricted_(snapshot.RestrictsCatalogs(principal)) {}
 
   void Rewrite(dd::unique_ptr<dd::LogicalOperator>& plan) {
     Walk(plan);
@@ -321,7 +321,7 @@ class PolicyRewriter {
     }
   }
 
-  // The metadata table functions a tenant user may call list every attached
+  // The metadata table functions a restricted user may call list every attached
   // catalog; keep the rows of the catalogs the user can see. This covers
   // information_schema, SHOW and other views built on them, however the statement
   // reaches them.
@@ -338,6 +338,8 @@ class PolicyRewriter {
       const std::string name = compat::Str(db->GetName());
       if (snapshot_.CatalogVisible(principal_, name)) visible.push_back(name);
     }
+    // The session's own temp catalog is not among the instance's databases.
+    if (snapshot_.CatalogVisible(principal_, TEMP_CATALOG)) visible.push_back(TEMP_CATALOG);
     FilterRows(op, function, "database_name", visible, /*keep_listed=*/true);
   }
 
@@ -410,7 +412,7 @@ class PolicyRewriter {
     auto& get = op->Cast<dd::LogicalGet>();
     auto table = get.GetTable();
     if (!table) {
-      if (tenant_user_) RestrictMetadataRows(op);
+      if (restricted_) RestrictMetadataRows(op);
       if (op->type == OpType::LOGICAL_GET) HideSensitiveSettings(op);
       return;
     }
@@ -561,7 +563,7 @@ class PolicyRewriter {
   PolicyContext policy_context_;
   dd::column_binding_map_t<dd::unique_ptr<dd::Expression>> masks_;
   std::unordered_set<const dd::LogicalOperator*> policy_filters_;
-  const bool tenant_user_;
+  const bool restricted_;  // sees only some catalogs (tenant, catalog_access, hidden)
 };
 
 }  // namespace
@@ -595,7 +597,8 @@ arrow::Result<dd::unique_ptr<dd::ParsedExpression>> PreparePolicyExpression(
 void ApplyPolicies(dd::ClientContext& context, const Snapshot& snapshot, const Principal& principal,
                    dd::unique_ptr<dd::LogicalOperator>& plan) {
   if (!plan || principal.superuser) return;
-  // Most statements need no rewrite: no policies, no tenants, no settings listing.
+  // Most statements need no rewrite: no policies, no tenants, no catalog limits, no
+  // settings listing.
   std::function<bool(const dd::LogicalOperator&)> lists_settings =
       [&](const dd::LogicalOperator& op) {
         if (op.type == OpType::LOGICAL_GET &&
@@ -608,7 +611,8 @@ void ApplyPolicies(dd::ClientContext& context, const Snapshot& snapshot, const P
         return false;
       };
   if (snapshot.row_policies().empty() && snapshot.mask_bindings().empty() &&
-      snapshot.catalog_tenants().empty() && !lists_settings(*plan)) {
+      snapshot.catalog_tenants().empty() && !snapshot.RestrictsCatalogs(principal) &&
+      !lists_settings(*plan)) {
     return;
   }
   PolicyRewriter(context, snapshot, principal).Rewrite(plan);

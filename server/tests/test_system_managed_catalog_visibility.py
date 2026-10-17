@@ -4,12 +4,11 @@ An admin sees the instrumentation catalog everywhere (catalogs metadata,
 duckdb_databases(), tables metadata, gizmosql_settings()). A non-admin sees it nowhere
 and can't read it ("Only administrators").
 
-Done for non-admins: the catalogs, db-schemas and tables metadata requests (Warp SQL §10;
+For non-admins: the catalogs, db-schemas and tables metadata requests (Warp SQL §10;
 1.x: GetCatalogs, GetDbSchemas, GetTables), the instrumentation rows of
-gizmosql_settings(), and refusing any statement that names the catalog. Not yet: hiding it
-from SQL's own catalog functions (duckdb_databases(), duckdb_schemas(), duckdb_tables(),
-information_schema, SHOW DATABASES, SHOW ALL TABLES), which needs DuckDB internals to
-rewrite; that part runs as a strict expected failure.
+gizmosql_settings(), refusing any statement that names the catalog, and SQL's own catalog
+functions (duckdb_databases(), duckdb_schemas(), duckdb_tables(), information_schema,
+SHOW DATABASES, SHOW ALL TABLES), whose rows access control's plan rewrite filters.
 """
 
 import pytest
@@ -49,7 +48,6 @@ def test_non_admin_metadata_never_shows_it(user):
     assert "Only administrators" in user.error(sql=f"SELECT * FROM {CATALOG}.main.sessions LIMIT 1")["detail"]
 
 
-@pytest.mark.xfail(strict=True, reason="hiding a catalog from DuckDB's own catalog functions needs DuckDB internals")
 def test_non_admin_sql_catalog_functions_never_show_it(user):
     for sql in ["SELECT database_name FROM duckdb_databases()", "SELECT DISTINCT database_name FROM duckdb_schemas()",
                 "SELECT DISTINCT database_name FROM duckdb_tables()",

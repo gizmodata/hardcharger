@@ -54,6 +54,20 @@ struct Options {
   std::chrono::milliseconds policy_service_timeout{2000};
   // How often to look for changes other replicas made.
   std::chrono::milliseconds poll_interval{1000};
+  // No store: only sign-in tokens' catalog_access rules restrict sessions (license
+  // feature catalog_permissions, GizmoSQL 1.x's per-catalog permissions). Users, roles
+  // and grants don't exist; access-control statements are refused.
+  bool catalog_rules_only = false;
+  // Whether the rules apply (license feature catalog_permissions); without it a
+  // token's catalog_access rules are ignored, as in GizmoSQL 1.x.
+  bool catalog_rules_licensed = false;
+};
+
+// One catalog_access rule of a sign-in token: a catalog name or glob ('*', '?') and
+// "read", "write" or "none". The first rule that matches a catalog decides.
+struct CatalogAccessRule {
+  std::string catalog;
+  std::string access;
 };
 
 // Who a session acts for, from its access token.
@@ -66,6 +80,8 @@ struct Identity {
   std::string scope_id;  // a scoped token's store record
   std::string idp_issuer;
   std::vector<std::string> idp_groups;
+  // The token's catalog_access rules (catalog_rules_only servers; ignored under RBAC).
+  std::optional<std::vector<CatalogAccessRule>> catalog_access;
 };
 
 // Signs a scoped token for (user name, scope id, expiry in seconds since the epoch).
@@ -97,6 +113,13 @@ class AccessControl {
   // How CREATE SCOPED TOKEN signs the tokens it hands out.
   void SetScopedTokenSigner(ScopedTokenSigner signer);
 
+  // The catalogs the server keeps for itself (instrumentation, logs): sessions bound
+  // after this see them only as the administrator.
+  void SetHiddenCatalogs(std::vector<std::string> catalogs);
+
+  // Without a store: catalog_access rules only (Options::catalog_rules_only).
+  bool catalog_rules_only() const { return catalog_rules_only_; }
+
   // Password sign-in of a store user. nullopt for any failure (unknown user, wrong
   // password, disabled): the same answer, after the same work.
   struct SignIn {
@@ -127,6 +150,9 @@ class AccessControl {
   friend class SessionGuard;
 
   std::shared_ptr<RbacEngine> engine_;
+  bool catalog_rules_only_ = false;
+  bool catalog_rules_licensed_ = false;
+  std::vector<std::string> hidden_catalogs_;
   ScopedTokenSigner signer_;
   std::mutex sessions_mutex_;
   std::vector<std::weak_ptr<SessionGuard>> sessions_;

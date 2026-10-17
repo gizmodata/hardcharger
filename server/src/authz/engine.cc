@@ -217,7 +217,8 @@ arrow::Result<Principal> RbacEngine::PrincipalForUser(const std::string& user_na
 }
 
 bool RbacEngine::IsActive(const Principal& principal) const {
-  if (principal.superuser) return true;
+  // A rules-only principal has no store record: its token decides.
+  if (principal.superuser || principal.catalog_rules) return true;
   const UserRecord* user = snapshot()->FindUserById(principal.user_id);
   return user && user->enabled;
 }

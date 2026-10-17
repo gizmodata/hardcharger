@@ -389,6 +389,16 @@ int main(int argc, char** argv) {
                 "does not answer)",
                 {{"url", RedactUrl(config.rbac_opa_url)}});
       }
+    } else if (license.Has("catalog_permissions") || config.enable_instrumentation ||
+               config.enable_catalog_logging) {
+      // Without a store, the same plan check enforces sign-in tokens' catalog_access
+      // rules (GizmoSQL 1.x's per-catalog permissions) and keeps the server's own
+      // catalogs (instrumentation, logs) out of non-administrators' sight.
+      hc::authz::Options options;
+      options.administrator_name = config.username;
+      options.catalog_rules_only = true;
+      options.catalog_rules_licensed = license.Has("catalog_permissions");
+      access = std::make_shared<hc::authz::AccessControl>(options);
     }
 
     std::string secret_key = config.secret_key;
@@ -399,12 +409,14 @@ int main(int argc, char** argv) {
     }
     hc::Runtime runtime(config, license, instance_id);
     if (config.enable_metrics) runtime.metrics.Enable();
+    // Sign-in and tokens deal with the store's users; rules-only access control has none.
+    const auto store_access = access && !access->catalog_rules_only() ? access : nullptr;
     auto tokens = std::make_shared<hc::JwtTokenService>(
         secret_key, std::chrono::seconds(config.token_lifetime_seconds), instance_id,
-        config.allow_cross_instance_tokens, hc::ParseLogLevel(config.auth_log_level), access);
-    if (access) {
+        config.allow_cross_instance_tokens, hc::ParseLogLevel(config.auth_log_level), store_access);
+    if (store_access) {
       // CREATE SCOPED TOKEN signs with the server's key.
-      access->SetScopedTokenSigner(
+      store_access->SetScopedTokenSigner(
           [tokens](const std::string& user, const std::string& scope_id, int64_t expires_at) {
             return tokens->IssueScoped(user, scope_id, expires_at);
           });
@@ -412,7 +424,7 @@ int main(int argc, char** argv) {
     auto backend = std::make_shared<hc::Backend>(runtime, access);
     const IdentityProvider provider = DiscoverIdentityProvider(config);
     auto authenticator = std::make_shared<hc::Authenticator>(
-        config, license, access, [tokens](std::string_view token) { return tokens->Validate(token); },
+        config, license, store_access, [tokens](std::string_view token) { return tokens->Validate(token); },
         provider.jwks);
     auto oauth = MakeOAuthServer(config, provider, secret_key);
     backend->StartHealthCheck();

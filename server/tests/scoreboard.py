@@ -50,9 +50,9 @@ rows = [
  ("integration/test_statement_queue.cpp", 8, 8, 0, 0, 0, "test_statement_queue.py", "+1"),
  ("integration/test_admission_queue_telemetry.cpp", 2, 0, 0, 2, 0, "", "N/A: no OTLP export (decision pending); gizmosql_queue_depth on /metrics"),
  # Catalog access and system catalog
- ("integration/test_catalog_access.cpp", 42, 0, 0, 0, 42, "", "not yet: catalog_access claims need a claims policy in the authorization module's plan check (under RBAC they grant nothing)"),
+ ("integration/test_catalog_access.cpp", 42, 42, 0, 0, 0, "test_catalog_access.py", "enforced by access control's plan check (rules only, no store); 7 SQL forms as one parametrized case"),
  ("integration/test_catalog_wildcards.cpp", 12, 12, 0, 0, 0, "test_catalog_wildcards.py", "C++ unit tests; +2"),
- ("integration/test_system_managed_catalog_visibility.cpp", 2, 1, 1, 0, 0, "test_system_managed_catalog_visibility.py", "hiding it from SQL's own catalog functions needs DuckDB internals"),
+ ("integration/test_system_managed_catalog_visibility.cpp", 2, 2, 0, 0, 0, "test_system_managed_catalog_visibility.py", "SQL's catalog functions filtered by access control's plan rewrite"),
  ("integration/test_system_catalog.cpp", 4, 4, 0, 0, 0, "test_system_catalog.py", "+1 (DETACH)"),
  # Instrumentation and catalog logging
  ("integration/test_instrumentation.cpp", 17, 17, 0, 0, 0, "test_instrumentation.py", "manager cases against real servers; failed write as a C++ unit test; +2"),

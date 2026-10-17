@@ -1,5 +1,6 @@
 #include "authz/enforcement.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <duckdb/catalog/catalog.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
@@ -328,15 +329,28 @@ class PlanChecker {
       }
       case OpType::LOGICAL_CREATE_SEQUENCE: {
         auto& create = op.Cast<dd::LogicalCreate>();
+        if (principal_.catalog_rules) return RequireRuleWrite(CatalogOf(*create.info, create.info->temporary));
         if (create.info->temporary) return;  // session-local
         Deny(principal_, "creating sequences needs an administrator");
       }
       // Not even temporary ones: a session's macro or type is found before the
       // catalog's, also inside a view, and would change what the view computes.
+      // (catalog_access principals read no view with another's rights.)
       case OpType::LOGICAL_CREATE_MACRO:
-        Deny(principal_, "creating macros needs an administrator");
-      case OpType::LOGICAL_CREATE_TYPE:
-        Deny(principal_, "creating types needs an administrator");
+      case OpType::LOGICAL_CREATE_TYPE: {
+        if (principal_.catalog_rules) {
+          auto& create = op.Cast<dd::LogicalCreate>();
+          // PIVOT without an IN list creates its own temporary enum, which reads nothing
+          // and writes no catalog: a read-only principal may PIVOT (as in GizmoSQL 1.x).
+          if (create.info->temporary && op.type == OpType::LOGICAL_CREATE_TYPE &&
+              PartsOf(*create.info).back().rfind("__pivot_enum_", 0) == 0) {
+            return;
+          }
+          return RequireRuleWrite(CatalogOf(*create.info, create.info->temporary));
+        }
+        Deny(principal_, op.type == OpType::LOGICAL_CREATE_MACRO ? "creating macros needs an administrator"
+                                                                 : "creating types needs an administrator");
+      }
       case OpType::LOGICAL_DROP:
         CheckDrop(op);
         return;
@@ -349,7 +363,7 @@ class PlanChecker {
         const auto& set = op.Cast<dd::LogicalSet>();
         // A variable's value is computed by a query (which would otherwise go
         // unchecked here), and getvariable() hands it to any view that asks.
-        if (set.scope == dd::SetScope::VARIABLE) {
+        if (set.scope == dd::SetScope::VARIABLE && !principal_.catalog_rules) {
           Deny(principal_, "SET VARIABLE is not available under access control");
         }
         if (BlockedSettings().count(Lower(compat::Str(set.name)))) {
@@ -524,7 +538,9 @@ class PlanChecker {
         RequireSystem(SystemPrivilege::kManageSecrets, "duckdb_secrets()");
         return;
       }
-      if (!AllowedTableFunctions().count(name)) {
+      // catalog_access rules govern catalogs only: other table functions are the
+      // server's statement guards' to decide.
+      if (!AllowedTableFunctions().count(name) && !principal_.catalog_rules) {
         Deny(principal_, "the table function " + name + " is not available under access control");
       }
       if ((name == "pragma_table_info" || name == "pragma_show") && !get.parameters.empty()) {
@@ -602,8 +618,37 @@ class PlanChecker {
 
   void RequireVisible(const std::string& catalog) {
     if (!snapshot_.CatalogVisible(principal_, catalog)) {
+      const bool hidden = std::any_of(principal_.hidden_catalogs.begin(), principal_.hidden_catalogs.end(),
+                                      [&](const std::string& c) { return IdentifiersEqual(c, catalog); });
+      if (principal_.catalog_rules && !hidden) DenyByCatalogAccess(catalog, CatalogAccessLevel::kRead);
       throw dd::CatalogException(HiddenObjectMessage(principal_.user_name));
     }
+  }
+
+  // For a catalog_access principal: the statement changes `catalog`, which its rules
+  // must let it write. (A session-local object lives in temp, which the rules govern.)
+  void RequireRuleWrite(const std::string& catalog) {
+    if (CatalogRuleLevel(*principal_.catalog_rules, catalog) != CatalogAccessLevel::kWrite) {
+      DenyByCatalogAccess(catalog, CatalogAccessLevel::kWrite);
+    }
+  }
+
+  // The catalog a CREATE / DROP / ALTER names: temp for a temporary object, else the
+  // one it names, else the session's default.
+  template <class Info>
+  std::string CatalogOf(const Info& info, bool temporary) {
+    if (temporary) return TEMP_CATALOG;
+    const auto parts = PartsOf(info);
+    if (parts.size() >= 2) return parts[0];
+    return compat::Str(dd::DatabaseManager::GetDefaultDatabase(context_));
+  }
+
+  // GizmoSQL 1.x's words for a catalog_access refusal, which its clients match.
+  [[noreturn]] void DenyByCatalogAccess(const std::string& catalog, CatalogAccessLevel needed) {
+    throw dd::PermissionException("Access denied: You do not have " +
+                                  std::string(needed == CatalogAccessLevel::kWrite ? "write" : "read") +
+                                  " access to catalog '" + catalog + "' (catalog_access of user " +
+                                  principal_.user_name + ")");
   }
 
   void RequireObject(const ObjectPath& path, ObjectType type, Privilege privilege,
@@ -618,7 +663,9 @@ class PlanChecker {
         Deny(principal_, "the view " + owned_view_ + " cannot read a temporary " + TypeWord(type) +
                              " of this session");
       }
-      return;
+      // catalog_access rules govern temp too (as in GizmoSQL 1.x): a read-only token
+      // creates no temporary tables.
+      if (!principal_.catalog_rules) return;
     }
     AccessRequest request{path, type, privilege, std::move(columns)};
     NoteAccess(PrivilegeName(privilege) + " on " + TypeWord(type) + " " + path.ToString(),
@@ -644,6 +691,10 @@ class PlanChecker {
         Deny(principal_, "the view " + rights.owner_of_view +
                              " cannot be read, because its owner lacks a privilege on an object "
                              "the view reads");
+      }
+      if (rights.principal.catalog_rules) {
+        DenyByCatalogAccess(path.catalog, privilege == Privilege::kSelect ? CatalogAccessLevel::kRead
+                                                                         : CatalogAccessLevel::kWrite);
       }
       std::string what = "user " + principal_.user_name + " has no " + PrivilegeName(privilege) +
                          " privilege on " + TypeWord(request.type) + " " + path.ToString();
@@ -770,7 +821,10 @@ class PlanChecker {
   // existing object changes nothing and never takes its ownership.
   void CheckCreate(dd::CreateInfo& info, ObjectType type, Privilege privilege) {
     auto parts = PartsOf(info);
-    if (info.temporary || (!parts.empty() && IsTempCatalog(parts[0]))) return;
+    if (info.temporary || (!parts.empty() && IsTempCatalog(parts[0]))) {
+      if (principal_.catalog_rules) RequireRuleWrite(TEMP_CATALOG);
+      return;
+    }
     ObjectPath target;
     dd::optional_ptr<dd::CatalogEntry> existing;
     if (type == ObjectType::kSchema) {
@@ -790,6 +844,7 @@ class PlanChecker {
     }
     RequireVisible(target.catalog);
     AccessRequest request{target, type, privilege, {}};
+    if (principal_.catalog_rules) RequireRuleWrite(target.catalog);
     if (!snapshot_.Check(principal_, request).allowed) {
       Deny(principal_, "user " + principal_.user_name + " has no " + PrivilegeName(privilege) +
                            " privilege on " +
@@ -808,6 +863,11 @@ class PlanChecker {
   // Dropping (or replacing) an object: its owner, or DROP TABLE / VIEW / SCHEMA.
   void CheckDropOf(dd::CatalogEntry& entry) {
     ObjectPath path = PathOf(entry);
+    if (principal_.catalog_rules) {
+      RequireVisible(path.catalog);
+      RequireRuleWrite(path.catalog);
+      return;
+    }
     if (IsTempCatalog(path.catalog)) return;
     RequireVisible(path.catalog);
     const ObjectType type = ObjectTypeOf(entry);
@@ -826,7 +886,10 @@ class PlanChecker {
   void CheckDrop(dd::LogicalOperator& op) {
     auto& info = *op.Cast<dd::LogicalDrop>().info;
     auto parts = PartsOf(info);
-    if (!parts.empty() && IsTempCatalog(parts[0])) return;
+    if (!parts.empty() && IsTempCatalog(parts[0])) {
+      if (principal_.catalog_rules) RequireRuleWrite(TEMP_CATALOG);
+      return;
+    }
     switch (info.type) {
       case dd::CatalogType::SCHEMA_ENTRY: {
         // Found the way DuckDB finds it: the named catalog, or the session's.
@@ -847,6 +910,7 @@ class PlanChecker {
         RequireSystem(SystemPrivilege::kManageSecrets, "DROP SECRET");
         return;
       default:
+        if (principal_.catalog_rules) return RequireRuleWrite(CatalogOf(info, false));
         Deny(principal_, "dropping this kind of object needs an administrator");
     }
   }
@@ -854,6 +918,11 @@ class PlanChecker {
   void CheckAlter(dd::LogicalOperator& op) {
     auto& info = *op.Cast<dd::LogicalAlter>().info;
     auto parts = PartsOf(info);
+    if (principal_.catalog_rules) {
+      const std::string catalog = !parts.empty() && IsTempCatalog(parts[0]) ? TEMP_CATALOG : CatalogOf(info, false);
+      RequireVisible(catalog);
+      return RequireRuleWrite(catalog);
+    }
     if (!parts.empty() && IsTempCatalog(parts[0])) return;
     const auto catalog_type = info.GetCatalogType();
     if (catalog_type != dd::CatalogType::TABLE_ENTRY &&

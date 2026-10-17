@@ -316,6 +316,13 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
     instrumentation_->Start();
     runtime_.instrumentation = instrumentation_.get();
   }
+  // Access control hides the server's own catalogs from everyone but the administrator.
+  if (access_) {
+    std::vector<std::string> hidden;
+    if (instrumentation_) hidden.push_back(instrumentation_->catalog());
+    if (catalog_log_) hidden.push_back(catalog_log_->catalog());
+    access_->SetHiddenCatalogs(std::move(hidden));
+  }
   // Init SQL may move DuckDB's secret directory; wherever it ends up is protected.
   sensitive_paths_.AddSecretDirectory(
       warpduckdb::QueryText(connection.get(), "SELECT current_setting('secret_directory')"));
@@ -415,7 +422,7 @@ json::object Backend::ServerInfo() {
   json::object info = DuckDBBackend::ServerInfo();
   info["edition"] = runtime_.license.Edition();
   info["instance_id"] = runtime_.instance_id;
-  info["access_control"] = access_ != nullptr;
+  info["access_control"] = access_ != nullptr && !access_->catalog_rules_only();
   return info;
 }
 
@@ -438,6 +445,7 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb
       sensitive_paths_(sensitive_paths),
       principal_(std::move(principal)),
       access_controlled_(access != nullptr),
+      rbac_(access != nullptr && !access->catalog_rules_only()),
       id_(RandomUuid()),
       started_at_us_(NowMicros()) {
   // User connections are created in exactly one place, the DuckDBSession constructor,
@@ -548,7 +556,7 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   // Under access control, what a store user may reach outside the database (files, URLs,
   // ATTACH, ...) is the access-control gate's to decide, by its system privileges; the
   // rest of the statement guard (secrets, sensitive paths) holds for everyone.
-  CheckStatement({connection(), admin() || access_controlled_, config.block_unredacted_secrets, &sensitive_paths_},
+  CheckStatement({connection(), admin() || rbac_, config.block_unredacted_secrets, &sensitive_paths_},
                  piece, type);
   if (type == DUCKDB_V2_STATEMENT_TYPE_DETACH) {
     for (const Token& token : piece.tokens) {
@@ -561,26 +569,14 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   // What runs decides what is a write (EXPLAIN ANALYZE INSERT ... inserts).
   const DUCKDB_V2_STATEMENT_TYPE executed = ExecutedType(connection(), piece, type);
   for (const auto& managed : ManagedCatalogs()) GuardManagedCatalog(piece, executed, managed);
-  // catalog_access rules (license feature catalog_permissions): without the plan's
-  // catalogs (the v2 C API doesn't expose them) only the sound part is enforced here: a
-  // principal no rule grants write access to any catalog may not modify state.
-  if (!ReadOnlyStatement(executed) && runtime_.license.Has("catalog_permissions")) {
-    if (const auto* rules = principal_.claims.if_contains("catalog_access"); rules && rules->is_array()) {
-      bool may_write = false;
-      for (const auto& rule : rules->as_array()) {
-        const auto* access = rule.is_object() ? rule.as_object().if_contains("access") : nullptr;
-        if (access && access->is_string() && access->as_string() == "write") may_write = true;
-      }
-      if (!may_write) {
-        throw Error(ErrorCode::kPermissionDenied,
-                    "Access denied: user '" + principal_.name +
-                        "' does not have write access to any catalog (catalog_access) and cannot run "
-                        "statements that modify state.",
-                    "42501");
-      }
-    }
-  }
-  if (principal_.role == "readonly" && !ReadOnlyStatement(executed)) {
+  // catalog_access rules (license feature catalog_permissions) are access control's to
+  // enforce, on each plan (rules-only access control, or under RBAC, where they grant
+  // nothing).
+  // PIVOT without an IN list runs as a group (a temporary enum of the values, then the
+  // query): it reads, and the enum is the session's own.
+  const bool pivot = executed == DUCKDB_V2_STATEMENT_TYPE_MULTI && !piece.tokens.empty() &&
+                     (piece.tokens[0].IsWord("PIVOT") || piece.tokens[0].IsWord("UNPIVOT"));
+  if (principal_.role == "readonly" && !ReadOnlyStatement(executed) && !pivot) {
     throw Error(ErrorCode::kPermissionDenied,
                 "User '" + principal_.name + "' has a readonly session and cannot run statements that modify state.",
                 "42501");
@@ -752,11 +748,11 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
   if (sql.find('\0') != std::string_view::npos) {
     throw Error(ErrorCode::kSqlError, "SQL text must not contain a NUL byte", "22021");
   }
-  if (!access_controlled_) RefuseAccessControlStatement(sql);
+  if (!rbac_) RefuseAccessControlStatement(sql);
   const bool has_parameters = !parameters.is_null();
   // An access-control statement (GRANT, CREATE USER, ...) is the guard's, text and all:
   // it runs one at a time, and the guard refuses anything riding along.
-  if (guard_ && authz::LooksLikeAccessControlStatement(sql)) {
+  if (rbac_ && authz::LooksLikeAccessControlStatement(sql)) {
     const std::string statement_id =
         runtime_.instrumentation != nullptr
             ? runtime_.instrumentation->StatementCreated(*this, Abbreviate(sql), "statement", true, "")
@@ -787,7 +783,7 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
     for (const Piece& piece : pieces) {
       Step step{&piece};
       step.command = ParseSettingCommand(piece).has_value() || ParseKillSession(piece).has_value();
-      if (!step.command && guard_ && authz::LooksLikeAccessControlStatement(piece.text)) {
+      if (!step.command && rbac_ && authz::LooksLikeAccessControlStatement(piece.text)) {
         // As DuckDB sees the batch: one it can't parse fails as the syntax error it is;
         // one it would take for something else (SHOW GRANTS, RESET ROLE) is refused.
         StatementType(connection(), piece.text);
@@ -869,8 +865,8 @@ std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sq
   };
   std::unique_ptr<warpsql::PreparedStatement> prepared;
   try {
-    if (!access_controlled_) RefuseAccessControlStatement(sql);
-    const bool access_control = guard_ && authz::LooksLikeAccessControlStatement(sql);
+    if (!rbac_) RefuseAccessControlStatement(sql);
+    const bool access_control = rbac_ && authz::LooksLikeAccessControlStatement(sql);
     if (pieces.size() == 1 && !access_control) {
       if (ParseSettingCommand(pieces[0]) || ParseKillSession(pieces[0])) {
         throw Error(ErrorCode::kSqlError, "SET gizmosql.* and KILL SESSION can't be prepared; run them directly");

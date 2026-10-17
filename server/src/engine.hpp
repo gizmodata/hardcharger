@@ -156,7 +156,8 @@ class Session : public warpduckdb::DuckDBSession {
   Runtime& runtime_;
   const SensitivePaths& sensitive_paths_;
   const warpsql::Principal principal_;
-  const bool access_controlled_;
+  const bool access_controlled_;  // bound to access control (RBAC, or catalog_access rules only)
+  const bool rbac_;               // ... with a store: users, roles, grants, access-control statements
   std::shared_ptr<authz::SessionGuard> guard_;  // set exactly when access_controlled_
   const std::string id_;
   const int64_t started_at_us_;

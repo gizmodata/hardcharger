@@ -69,6 +69,18 @@ authz::Identity IdentityOf(const warpsql::Principal& principal) {
     return value && value->is_string() ? std::string(value->as_string()) : std::string();
   };
   who.credential = text("credential");
+  // [{"catalog": "prod_*", "access": "read"}, ...]; a malformed rule grants nothing.
+  if (const auto* rules = principal.claims.if_contains("catalog_access"); rules && rules->is_array()) {
+    std::vector<authz::CatalogAccessRule> parsed;
+    for (const auto& rule : rules->as_array()) {
+      const auto* object = rule.if_object();
+      const auto* catalog = object ? object->if_contains("catalog") : nullptr;
+      const auto* access = object ? object->if_contains("access") : nullptr;
+      parsed.push_back({catalog && catalog->is_string() ? std::string(catalog->as_string()) : std::string(),
+                        access && access->is_string() ? std::string(access->as_string()) : "none"});
+    }
+    who.catalog_access = std::move(parsed);
+  }
   who.scope_id = text("scope_id");
   if (const auto* idp = principal.claims.if_contains("idp"); idp && idp->is_object()) {
     if (const auto* issuer = idp->as_object().if_contains("iss"); issuer && issuer->is_string()) {

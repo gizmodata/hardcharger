@@ -7,10 +7,10 @@ updated. Nothing is skipped; a missing dependency fails its test.
 
 ## Totals
 
-- **59 C++ test files, 565 gtest cases:** 361 passing, 4 failing, 16 not applicable, 184 not yet.
-  - by file: 46 ported & passing, 3 passing except their not-applicable cases, 1 partly ported (the rest not yet), 3 ported & partly failing, 2 not applicable, 4 not yet.
+- **59 C++ test files, 565 gtest cases:** 404 passing, 3 failing, 16 not applicable, 142 not yet.
+  - by file: 48 ported & passing, 3 passing except their not-applicable cases, 1 partly ported (the rest not yet), 2 ported & partly failing, 2 not applicable, 3 not yet.
   - server-side cases (all but the 142 that test the `gizmosql_client` binary): 423, of which
-    361 pass (85%) and 4 fail.
+    404 pass (96%) and 3 fail.
 - **Scripts and driver suites (12 files, 134 cases or checks):** 22 passing, 0 failing, 17 not applicable, 95 not yet.
 - Hardcharger's own tests (`test_server.py`, 28) and the Warp SQL conformance suite (96) pass too.
 - **Access control** (the RBAC port, `test_rbac_*.py`, 18 files, 271 tests): all pass,
@@ -67,9 +67,9 @@ through the same-named pytest file.
 | `integration/test_admission_controller.cpp` | 14 | 14 | 0 | 0 | 0 | `test_admission_controller.py` | ported & passing; C++ unit tests |
 | `integration/test_statement_queue.cpp` | 8 | 8 | 0 | 0 | 0 | `test_statement_queue.py` | ported & passing; +1 |
 | `integration/test_admission_queue_telemetry.cpp` | 2 | 0 | 0 | 2 | 0 | — | not applicable; N/A: no OTLP export (decision pending); gizmosql_queue_depth on /metrics |
-| `integration/test_catalog_access.cpp` | 42 | 0 | 0 | 0 | 42 | — | not yet; not yet: catalog_access claims need a claims policy in the authorization module's plan check (under RBAC they grant nothing) |
+| `integration/test_catalog_access.cpp` | 42 | 42 | 0 | 0 | 0 | `test_catalog_access.py` | ported & passing; enforced by access control's plan check (rules only, no store); 7 SQL forms as one parametrized case |
 | `integration/test_catalog_wildcards.cpp` | 12 | 12 | 0 | 0 | 0 | `test_catalog_wildcards.py` | ported & passing; C++ unit tests; +2 |
-| `integration/test_system_managed_catalog_visibility.cpp` | 2 | 1 | 1 | 0 | 0 | `test_system_managed_catalog_visibility.py` | ported, partly failing; hiding it from SQL's own catalog functions needs DuckDB internals |
+| `integration/test_system_managed_catalog_visibility.cpp` | 2 | 2 | 0 | 0 | 0 | `test_system_managed_catalog_visibility.py` | ported & passing; SQL's catalog functions filtered by access control's plan rewrite |
 | `integration/test_system_catalog.cpp` | 4 | 4 | 0 | 0 | 0 | `test_system_catalog.py` | ported & passing; +1 (DETACH) |
 | `integration/test_instrumentation.cpp` | 17 | 17 | 0 | 0 | 0 | `test_instrumentation.py` | ported & passing; manager cases against real servers; failed write as a C++ unit test; +2 |
 | `integration/test_instrumentation_ducklake.cpp` | 7 | 7 | 0 | 0 | 0 | `test_instrumentation_ducklake.py` | ported & passing; catalog logging through a real server, also on DuckLake; +1 |

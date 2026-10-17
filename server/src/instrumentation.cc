@@ -385,11 +385,24 @@ void Instrumentation::Enqueue(std::string sql) {
 }
 
 void Instrumentation::Run(const std::string& sql) {
-  try {
-    warpduckdb::RunSql(connection_.get(), sql);
-  } catch (const std::exception& e) {
-    // One failed write must not stop the others.
-    Log(LogLevel::kWarning, "instrumentation write failed", {{"error", e.what()}});
+  // In a catalog several servers share (DuckLake), two writers' commits can conflict:
+  // such a write is tried again, a few times, before it is given up.
+  constexpr int kAttempts = 4;
+  for (int attempt = 1;; attempt++) {
+    try {
+      warpduckdb::RunSql(connection_.get(), sql);
+      return;
+    } catch (const std::exception& e) {
+      const std::string error = e.what();
+      const bool conflict = error.find("onflict") != std::string::npos;
+      if (conflict && attempt < kAttempts) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50 * attempt));
+        continue;
+      }
+      // One failed write must not stop the others.
+      Log(LogLevel::kWarning, "instrumentation write failed", {{"error", error}});
+      return;
+    }
   }
 }
 

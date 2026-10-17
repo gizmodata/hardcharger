@@ -226,13 +226,15 @@ bool LooksLikeAccessControlStatement(std::string_view sql) { return LooksLikeRba
 
 // ---- AccessControl ----
 
-AccessControl::AccessControl(const Options& options) {
+AccessControl::AccessControl(const Options& options)
+    : catalog_rules_only_(options.catalog_rules_only), catalog_rules_licensed_(options.catalog_rules_licensed) {
   RbacEngine::Options engine_options;
-  engine_options.store_uri = options.store_uri;
+  // Rules only: an empty store of the process's own, which no statement can change.
+  engine_options.store_uri = catalog_rules_only_ ? "memory" : options.store_uri;
   engine_options.administrator_name = options.administrator_name;
   engine_options.policy_service_url = options.policy_service_url;
   engine_options.policy_service_timeout = options.policy_service_timeout;
-  engine_options.poll_interval = options.poll_interval;
+  engine_options.poll_interval = catalog_rules_only_ ? std::chrono::milliseconds(0) : options.poll_interval;
   auto engine = RbacEngine::Create(engine_options);
   if (!engine.ok()) throw std::runtime_error(engine.status().message());
   engine_ = *engine;
@@ -254,6 +256,8 @@ void AccessControl::InstallEnforcement(duckdb_v2_instance_handle instance) {
 
 void AccessControl::SetScopedTokenSigner(ScopedTokenSigner signer) { signer_ = std::move(signer); }
 
+void AccessControl::SetHiddenCatalogs(std::vector<std::string> catalogs) { hidden_catalogs_ = std::move(catalogs); }
+
 std::optional<AccessControl::SignIn> AccessControl::AuthenticatePassword(
     std::string_view user_name, std::string_view password) const {
   auto principal = engine_->AuthenticatePassword(std::string(user_name), std::string(password));
@@ -269,7 +273,7 @@ void AccessControl::RequireStoreUser(const std::string& user_name) const {
 }
 
 void AccessControl::CheckToken(const Identity& who) const {
-  if (who.superuser) return;
+  if (who.superuser || catalog_rules_only_) return;
   auto snapshot = engine_->snapshot();
   const UserRecord* user = snapshot->FindUserByName(who.user_name);
   if (user == nullptr || !user->enabled) {
@@ -294,8 +298,28 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
   Principal principal;
   std::string credential;
   std::string tenant;
-  if (who.superuser) {
+  // Rules only: a session without rules is the administrator, or another user who may
+  // reach everything but the server's own catalogs.
+  if (catalog_rules_only_ && !catalog_rules_licensed_) who.catalog_access.reset();
+  if (catalog_rules_only_ && !who.catalog_access && !who.superuser && !hidden_catalogs_.empty()) {
+    who.catalog_access = std::vector<CatalogAccessRule>{{"*", "write"}};
+  }
+  if (catalog_rules_only_ ? !who.catalog_access : who.superuser) {
+    // Without rules a token restricts nothing (as in GizmoSQL 1.x); under RBAC the
+    // administrator is allowed everything.
     principal = Principal::Superuser(who.user_name);
+  } else if (catalog_rules_only_) {
+    // The rules restrict even the administrator, who alone sees the server's catalogs.
+    principal.user_name = who.user_name;
+    std::vector<CatalogRule> rules;
+    for (const auto& rule : *who.catalog_access) {
+      const auto level = rule.access == "write"  ? CatalogAccessLevel::kWrite
+                         : rule.access == "read" ? CatalogAccessLevel::kRead
+                                                 : CatalogAccessLevel::kNone;
+      rules.push_back(CatalogRule{rule.catalog, level});
+    }
+    principal.catalog_rules = std::move(rules);
+    principal.hidden_catalogs = who.superuser ? std::vector<std::string>{} : hidden_catalogs_;
   } else {
     auto found = engine_->PrincipalForUser(who.user_name);
     if (!found.ok()) throw Error(ErrorCode::kPermissionDenied, found.status().message(), "42501");
@@ -312,6 +336,7 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
     }
     principal.idp_issuer = who.idp_issuer;
     principal.idp_groups = who.idp_groups;
+    principal.hidden_catalogs = hidden_catalogs_;
     // The external policy service may refuse the session.
     if (const auto* service = engine_->policy_service()) {
       switch (service->Decide(PolicyInput(*snapshot, principal, "connect"))) {
@@ -685,16 +710,18 @@ warpsql::StatementOutcome SessionGuard::Execute(
     std::string_view sql, bool has_parameters,
     const std::function<warpsql::StatementOutcome()>& run) {
   RequireLive();
-  if (auto command = ParseCommand(sql)) {
-    if (has_parameters) {
-      throw Error(ErrorCode::kSqlError,
-                  "Hardcharger access control: " + command->kind + " takes no bind parameters");
+  if (!owner_.catalog_rules_only_) {
+    if (auto command = ParseCommand(sql)) {
+      if (has_parameters) {
+        throw Error(ErrorCode::kSqlError,
+                    "Hardcharger access control: " + command->kind + " takes no bind parameters");
+      }
+      return RunCommand(*command);
     }
-    return RunCommand(*command);
   }
   auto busy = MarkBusy();
   try {
-    if (!identity_.superuser) CheckBeforeBind(sql);
+    if (!identity_.superuser && !owner_.catalog_rules_only_) CheckBeforeBind(sql);
     auto outcome = run();
     AuditAllowed();
     if (outcome.rows) outcome.rows = Track(std::move(outcome.rows), std::move(busy));
@@ -709,12 +736,14 @@ std::unique_ptr<warpsql::PreparedStatement> SessionGuard::Prepare(
     std::string_view sql,
     const std::function<std::unique_ptr<warpsql::PreparedStatement>()>& prepare) {
   RequireLive();
-  if (auto command = ParseCommand(sql)) {
-    return std::make_unique<PreparedAccessControl>(std::move(*command));
+  if (!owner_.catalog_rules_only_) {
+    if (auto command = ParseCommand(sql)) {
+      return std::make_unique<PreparedAccessControl>(std::move(*command));
+    }
   }
   auto busy = MarkBusy();
   try {
-    if (!identity_.superuser) CheckBeforeBind(sql);
+    if (!identity_.superuser && !owner_.catalog_rules_only_) CheckBeforeBind(sql);
     auto inner = prepare();
     // What the statement creates or drops is recorded once it has run successfully.
     auto state = StateOf(connection_);
@@ -796,13 +825,13 @@ std::shared_ptr<arrow::RecordBatchReader> SessionGuard::Metadata(
   {
     RbacSessionState::BypassScope internal(ContextOf(connection_));
     rows = run(filter);
+    const Principal principal = state->principal();
+    auto snapshot = owner_.engine_->snapshot();
     // Table types and data types name no catalog: everyone sees all of them.
-    if (tenant_id_.empty() || kind == warpsql::MetadataKind::kTableTypes ||
+    if (!snapshot->RestrictsCatalogs(principal) || kind == warpsql::MetadataKind::kTableTypes ||
         kind == warpsql::MetadataKind::kTypeInfo) {
       return rows;
     }
-    const Principal principal = state->principal();
-    auto snapshot = owner_.engine_->snapshot();
     std::vector<int> catalog_columns = {0};
     if (kind == warpsql::MetadataKind::kImportedKeys ||
         kind == warpsql::MetadataKind::kExportedKeys ||

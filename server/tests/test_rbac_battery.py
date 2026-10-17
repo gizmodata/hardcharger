@@ -66,6 +66,11 @@ def test_store_users_cannot_read_or_list_the_servers_catalogs(joe):
             raised.value
     catalogs = joe.metadata(kind="catalogs").column(0).to_pylist()
     assert not set(MANAGED) & set(catalogs), catalogs
+    # Nor in SQL's own catalog functions and views.
+    for sql in ["SELECT database_name FROM duckdb_databases()", "SELECT DISTINCT table_catalog FROM information_schema.tables",
+                "SELECT database_name FROM duckdb_tables()"]:
+        names = set(joe.run(sql=sql).column(0).to_pylist())
+        assert not set(MANAGED) & names, f"{sql}: {names}"
 
 
 def test_store_users_cannot_write_or_detach_them(joe):

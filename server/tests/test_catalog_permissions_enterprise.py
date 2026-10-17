@@ -6,10 +6,9 @@ catalog_permissions license feature: without it such a token is refused at sign-
 ("Enterprise", "catalog"); a token without rules signs in either way. Every case runs
 both unlicensed and licensed (1.x ran one or the other, depending on its environment).
 
-Enforcement: the v2 C API doesn't say which catalogs a statement reads or writes, so
-Hardcharger enforces the part that needs no catalog: a principal no rule grants write
-access may not modify state ("Access denied ... write access"). That covers these 8
-cases; per-catalog rules (catalog_access.cpp's 42) wait for the authorization module.
+Enforcement is access control's plan check, per catalog (test_catalog_access.py has
+the 42 cases of catalog_access.cpp); a refusal says "Access denied: You do not have
+write access to catalog ...".
 """
 
 import datetime
@@ -120,5 +119,6 @@ def test_catalog_access_rejection_has_helpful_message(server, key):
     response = exchange(server=server, key=key, user="readonly_user", role="user",
                         catalog_access=[{"catalog": "*", "access": "read"}])
     if gated(server=server, response=response):
-        detail = session_for(server=server, response=response).error(sql="INSERT INTO x VALUES (1)")["detail"]
+        server.admin().execute(sql="CREATE TABLE IF NOT EXISTS helpful_x (id INTEGER)")
+        detail = session_for(server=server, response=response).error(sql="INSERT INTO helpful_x VALUES (1)")["detail"]
         assert "Access denied" in detail and "write access" in detail, detail

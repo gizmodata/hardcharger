@@ -169,6 +169,18 @@ struct OwnerRecord {
   std::string definition_hash;
 };
 
+// A catalog_access rule from a sign-in token (GizmoSQL 1.x's per-catalog
+// permissions, license feature catalog_permissions): the first rule whose pattern
+// matches a catalog decides; no match is no access.
+enum class CatalogAccessLevel { kNone, kRead, kWrite };
+struct CatalogRule {
+  std::string pattern;  // '*' any run, '?' one character; case-sensitive
+  CatalogAccessLevel level = CatalogAccessLevel::kNone;
+};
+// The level the rules give `catalog`. DuckDB's system catalog (which holds
+// information_schema) and Hardcharger's _gizmosql_system are read for all.
+CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const std::string& catalog);
+
 // Who is asking. The administrator (a superuser) is never looked up in the
 // store and is allowed everything. A view owned by a role reads with that
 // role's rights: a role principal has `role_id` set and no `user_id`.
@@ -187,6 +199,13 @@ struct Principal {
   std::vector<std::string> idp_groups;
   // Logged in with a scoped token: never more than this.
   std::optional<TokenScope> scope;
+  // Without a store (catalog_permissions only): the token's catalog_access rules
+  // decide alone, by catalog; system privileges are the server's statement guards'
+  // to decide, so the principal holds them all here.
+  std::optional<std::vector<CatalogRule>> catalog_rules;
+  // Catalogs the server keeps for itself (instrumentation, logs), which no one but
+  // the administrator sees.
+  std::vector<std::string> hidden_catalogs;
 
   static Principal Superuser(std::string name) {
     Principal p;
@@ -274,6 +293,9 @@ class Snapshot {
   // May the principal see objects of this catalog? System-scope principals:
   // always. Tenant users: their tenant's catalogs, plus temp and system.
   bool CatalogVisible(const Principal& principal, const std::string& catalog) const;
+  // Does the principal see only some catalogs (a tenant's user, catalog_access
+  // rules, the server's hidden catalogs)? Then listings are filtered for it.
+  bool RestrictsCatalogs(const Principal& principal) const;
   const RoleRecord* TenantRole(const std::string& tenant_id, const char* suffix) const;
 
   const MaskingPolicyRecord* FindMaskingPolicyByName(const std::string& name) const;
