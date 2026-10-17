@@ -7,6 +7,7 @@
 #include <ctime>
 #include <format>
 #include <mutex>
+#include <regex>
 #include <stdexcept>
 
 namespace hardcharger {
@@ -72,6 +73,16 @@ void Log(LogLevel level, std::string_view message, const LogFields& fields) {
   }
   std::lock_guard lock(log_mutex);
   std::fprintf(stderr, "%s\n", line.c_str());
+}
+
+std::string LoggableSql(std::string_view sql) {
+  static const std::regex kSecret(R"(\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:PERSISTENT|TEMPORARY|TEMP)\s+)?SECRET\b)",
+                                  std::regex::icase | std::regex::optimize);
+  static const std::regex kUser(R"(\b(?:CREATE|ALTER)\s+USER\b)", std::regex::icase | std::regex::optimize);
+  if (std::regex_search(sql.begin(), sql.end(), kSecret)) return "[REDACTED: secret DDL]";
+  if (std::regex_search(sql.begin(), sql.end(), kUser)) return "[REDACTED: user DDL]";
+  constexpr std::size_t kMax = 4000;
+  return sql.size() <= kMax ? std::string(sql) : std::string(sql.substr(0, kMax)) + "…";
 }
 
 }  // namespace hardcharger

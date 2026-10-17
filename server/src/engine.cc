@@ -32,16 +32,22 @@ warpduckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
   return options;
 }
 
+// Without access control, its statements get a clear error instead of DuckDB's syntax error.
+void RefuseAccessControlStatement(std::string_view sql) {
+  if (auto kind = authz::AccessControlStatementKind(sql)) {
+    throw Error(ErrorCode::kSqlError,
+                "Hardcharger access control is not enabled on this server, so " + *kind +
+                    " is not available. (Server operators: set rbac_store_uri, with a GizmoData "
+                    "Enterprise license that includes the rbac feature)");
+  }
+}
+
 // Statements a "readonly" principal may run. A strict allow-list until the authorization
 // module (with DuckDB's own read-only analysis) lands.
 bool ReadOnlyStatement(DUCKDB_V2_STATEMENT_TYPE type) {
   return type == DUCKDB_V2_STATEMENT_TYPE_SELECT || type == DUCKDB_V2_STATEMENT_TYPE_EXPLAIN;
 }
 
-std::string Abbreviate(std::string_view sql) {
-  constexpr std::size_t kMax = 4000;
-  return sql.size() <= kMax ? std::string(sql) : std::string(sql.substr(0, kMax)) + "…";
-}
 
 }  // namespace
 
@@ -147,10 +153,11 @@ void Session::Authorize(std::string_view sql) {
 
 warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::value& parameters) {
   if (print_queries_) {
-    Log(LogLevel::kInfo, "statement", {{"user", principal_.name}, {"sql", Abbreviate(sql)}});
+    Log(LogLevel::kInfo, "statement", {{"user", principal_.name}, {"sql", LoggableSql(sql)}});
   }
   RequireLive();
   if (!access_controlled_) {
+    RefuseAccessControlStatement(sql);
     Authorize(sql);
     return DuckDBSession::Execute(sql, parameters);
   }
@@ -162,10 +169,11 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
 
 std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sql) {
   if (print_queries_) {
-    Log(LogLevel::kInfo, "prepare", {{"user", principal_.name}, {"sql", Abbreviate(sql)}});
+    Log(LogLevel::kInfo, "prepare", {{"user", principal_.name}, {"sql", LoggableSql(sql)}});
   }
   RequireLive();
   if (!access_controlled_) {
+    RefuseAccessControlStatement(sql);
     Authorize(sql);
     return DuckDBSession::Prepare(sql);
   }

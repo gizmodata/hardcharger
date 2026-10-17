@@ -17,4 +17,9 @@ void ConfigureLogging(std::string_view level, std::string_view format);
 
 void Log(LogLevel level, std::string_view message, const LogFields& fields = {});
 
+// SQL as it may be logged: statements that can carry credentials (CREATE SECRET,
+// CREATE / ALTER USER ... PASSWORD) are replaced by what they are, wherever their
+// keywords sit (comments cannot hide them); long text is shortened.
+std::string LoggableSql(std::string_view sql);
+
 }  // namespace hardcharger

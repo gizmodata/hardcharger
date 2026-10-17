@@ -72,6 +72,11 @@ struct Identity {
 using ScopedTokenSigner =
     std::function<std::string(const std::string&, const std::string&, int64_t)>;
 
+// On a server without access control: the kind of access-control statement `sql` is
+// ("CREATE ROLE", ...), so it can be refused with a clear error, or nullopt for SQL
+// DuckDB should have (SHOW GRANTS and ALTER ... OWNER TO are DuckDB's there too).
+std::optional<std::string> AccessControlStatementKind(std::string_view sql);
+
 class AccessControl {
  public:
   // Opens the store and loads it. Throws std::runtime_error (never quoting the store's

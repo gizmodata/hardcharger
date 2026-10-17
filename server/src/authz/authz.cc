@@ -108,10 +108,6 @@ std::shared_ptr<arrow::RecordBatchReader> Rows(const CommandResult& result) {
   return *reader;
 }
 
-std::string Abbreviate(std::string_view sql) {
-  constexpr std::size_t kMax = 4000;
-  return sql.size() <= kMax ? std::string(sql) : std::string(sql.substr(0, kMax)) + "…";
-}
 
 // A client-prepared statement under access control: the DuckDB statement and what its
 // first successful run must record (who owns what it creates).
@@ -213,6 +209,17 @@ std::string TextAt(const arrow::RecordBatch& batch, int column, int64_t row) {
 
 }  // namespace
 
+std::optional<std::string> AccessControlStatementKind(std::string_view sql) {
+  const std::string text(sql);
+  if (!LooksLikeRbacStatement(text)) return std::nullopt;
+  auto parsed = ParseRbacStatement(text);
+  if (!parsed.ok() || std::holds_alternative<ShowGrantsCommand>(*parsed) ||
+      std::holds_alternative<AlterOwnerCommand>(*parsed)) {
+    return std::nullopt;  // DuckDB reports what it makes of it
+  }
+  return CommandKind(*parsed);
+}
+
 // ---- AccessControl ----
 
 AccessControl::AccessControl(const Options& options) {
@@ -262,8 +269,10 @@ void AccessControl::CheckToken(const Identity& who) const {
   auto snapshot = engine_->snapshot();
   const UserRecord* user = snapshot->FindUserByName(who.user_name);
   if (user == nullptr || !user->enabled) {
-    throw Error(ErrorCode::kInvalidToken, "this access token's user " + who.user_name +
-                                              " was dropped or disabled");
+    // "is not defined on this server" / "is disabled", as at sign-in.
+    auto refused = engine_->PrincipalForUser(who.user_name);
+    throw Error(ErrorCode::kInvalidToken,
+                refused.ok() ? "user " + who.user_name + " is disabled" : refused.status().message());
   }
   if (!who.credential.empty() && Fingerprint(user->password_hash) != who.credential) {
     throw Error(ErrorCode::kInvalidToken, "the password of user " + user->name +
@@ -479,7 +488,7 @@ void SessionGuard::AuditDenied(const Error& error, std::string_view sql) {
   if (std::string_view(error.what()).find("Hardcharger blocked") == std::string_view::npos) return;
   auto state = StateOf(connection_);
   Log(LogLevel::kWarning, "access control refused a statement",
-      {{"user", identity_.user_name}, {"error", error.what()}, {"sql", Abbreviate(sql)},
+      {{"user", identity_.user_name}, {"error", error.what()}, {"sql", LoggableSql(sql)},
        {"active_role", state ? state->active_role_name() : ""}});
 }
 
