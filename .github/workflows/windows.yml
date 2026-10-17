@@ -32,9 +32,9 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     env:
-      # OpenSSL from vcpkg: static libraries on the DLL C runtime (/MD), as everything
-      # else here is built.
-      VCPKG_TRIPLET: ${{ matrix.arch }}-windows-static-md
+      # OpenSSL from vcpkg: static libraries on the static C runtime (/MT), as everything
+      # here is built (DuckDB always builds with it on MSVC).
+      VCPKG_TRIPLET: ${{ matrix.arch }}-windows-static
       # cl.exe for every CMake project, never a MinGW gcc a runner image puts on PATH.
       CC: cl
       CXX: cl
@@ -89,41 +89,59 @@ jobs:
           path: C:\vcpkg\installed
           key: ${{ steps.openssl.outputs.key }}
 
-      # DuckDB and Arrow, by their pins (the same scripts as server.yml's builds).
-      - name: Dependency cache key
+      # Arrow and DuckDB, each cached by its own recipe, so a change to one doesn't
+      # rebuild the other (DuckDB takes 40-50 minutes cold).
+      - name: Dependency cache keys
         id: deps
         run: |
-          pins=$(cat third_party/warp-sql/cpp/scripts/build-duckdb.sh third_party/warp-sql/cpp/scripts/build-arrow.sh \
-                     server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake | sha256sum | cut -c1-16)
-          echo "key=deps-${{ matrix.name }}-msvc${{ steps.msvc.outputs.version }}-$pins" >> "$GITHUB_OUTPUT"
+          toolset="${{ matrix.name }}-msvc${{ steps.msvc.outputs.version }}"
+          arrow=$(sha256sum third_party/warp-sql/cpp/scripts/build-arrow.sh | cut -c1-16)
+          duckdb=$(cat third_party/warp-sql/cpp/scripts/build-duckdb.sh server/scripts/build-deps.sh \
+                       server/scripts/patch-duckdb.cmake | sha256sum | cut -c1-16)
+          echo "arrow=deps-arrow-$toolset-$arrow" >> "$GITHUB_OUTPUT"
+          echo "duckdb=deps-duckdb-$toolset-$duckdb" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v6
-        id: deps-cache
+        id: arrow-cache
         with:
-          path: |
-            server/.deps/duckdb-install
-            server/.deps/arrow-install
-          key: ${{ steps.deps.outputs.key }}
-      - name: Build DuckDB and Arrow
-        if: steps.deps-cache.outputs.cache-hit != 'true'
+          path: server/.deps/arrow-install
+          key: ${{ steps.deps.outputs.arrow }}
+      - uses: actions/cache/restore@v6
+        id: duckdb-cache
+        with:
+          path: server/.deps/duckdb-install
+          key: ${{ steps.deps.outputs.duckdb }}
+      - name: Build Arrow
+        if: steps.arrow-cache.outputs.cache-hit != 'true'
+        run: |
+          start=$SECONDS
+          WARPSQL_DEPS_DIR="$(cygpath -m "$GITHUB_WORKSPACE/server/.deps")" third_party/warp-sql/cpp/scripts/build-arrow.sh
+          echo "Arrow built in $(( (SECONDS - start) / 60 )) min"
+      # Saved at once, so a later failure doesn't throw the build away.
+      - uses: actions/cache/save@v6
+        if: steps.arrow-cache.outputs.cache-hit != 'true'
+        with:
+          path: server/.deps/arrow-install
+          key: ${{ steps.deps.outputs.arrow }}
+      - name: Build DuckDB
+        if: steps.duckdb-cache.outputs.cache-hit != 'true'
+        env:
+          HARDCHARGER_DEPS_SKIP_ARROW: "1"
         run: |
           start=$SECONDS
           server/scripts/build-deps.sh
-          echo "dependencies built in $(( (SECONDS - start) / 60 )) min"
-      # Saved now, so a later failure doesn't throw the build away.
+          echo "DuckDB built in $(( (SECONDS - start) / 60 )) min"
       - uses: actions/cache/save@v6
-        if: steps.deps-cache.outputs.cache-hit != 'true'
+        if: steps.duckdb-cache.outputs.cache-hit != 'true'
         with:
-          path: |
-            server/.deps/duckdb-install
-            server/.deps/arrow-install
-          key: ${{ steps.deps.outputs.key }}
+          path: server/.deps/duckdb-install
+          key: ${{ steps.deps.outputs.duckdb }}
 
       - name: Build the server
         run: |
           start=$SECONDS
           openssl="/c/vcpkg/installed/$VCPKG_TRIPLET"
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE
+                -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE
           cmake --build server/build
           server/build/hardcharger-server.exe --version
           server/build/hardcharger-server.exe --print-duckdb-version
@@ -134,7 +152,7 @@ jobs:
           openssl="/c/vcpkg/installed/$VCPKG_TRIPLET"
           deps="$(cygpath -m "$PWD/server/.deps")"
           cmake -S third_party/warp-sql/cpp -B build-warp -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE \
+                -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE \
                 -DWARPSQL_ARROW_PREFIX="$deps/arrow-install" -DWARPSQL_DUCKDB_PREFIX="$deps/duckdb-install"
           cmake --build build-warp --target warp-duckdb
 

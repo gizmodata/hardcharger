@@ -7,6 +7,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
 
+# MSVC: the static C runtime (/MT) for everything, as DuckDB always builds with it.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 # Warnings, as each compiler spells them.
 if(MSVC)
   set(HARDCHARGER_WARNINGS /W3)
@@ -89,7 +92,7 @@ set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
 set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(YAML_MSVC_SHARED_RT ON CACHE BOOL "" FORCE)  # the DLL C runtime, as everything else
+set(YAML_MSVC_SHARED_RT OFF CACHE BOOL "" FORCE)  # MSVC: the static C runtime, as everything else
 FetchContent_Declare(
   yaml-cpp
   URL https://github.com/jbeder/yaml-cpp/archive/refs/tags/yaml-cpp-0.9.0.tar.gz
@@ -183,7 +186,6 @@ hardcharger_rpath(hardcharger-server)
 # server/tests runs them through the per-file wrappers.
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)  # MSVC: the DLL C runtime, as everything else
 FetchContent_Declare(
   googletest
   URL https://github.com/google/googletest/archive/refs/tags/v1.18.0.tar.gz
