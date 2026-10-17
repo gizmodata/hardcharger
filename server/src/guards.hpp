@@ -46,6 +46,9 @@ class SensitivePaths {
     std::string category;
   };
   void Add(const std::string& path, const std::string& category);
+#ifdef _WIN32
+  void AddWindowsDefaults();
+#endif
 
   bool enabled_;
   std::string home_;

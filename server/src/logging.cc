@@ -14,6 +14,8 @@
 #include <stdexcept>
 #include <thread>
 
+#include "platform.hpp"
+
 namespace hardcharger {
 
 namespace {
@@ -31,8 +33,7 @@ std::string Timestamp(std::chrono::system_clock::time_point now) {
   const auto millis =
       std::chrono::floor<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
   const std::time_t seconds = std::chrono::system_clock::to_time_t(now);
-  std::tm utc{};
-  gmtime_r(&seconds, &utc);
+  const std::tm utc = UtcTime(seconds);
   char buffer[32];
   // Format the written length, not the array: some libc++ versions format a char array
   // as all of its elements, NULs and uninitialized bytes included.

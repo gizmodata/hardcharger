@@ -257,6 +257,8 @@ std::string Metrics::Render() const {
 
 #include <thread>
 
+#include "platform.hpp"
+
 namespace hardcharger {
 
 namespace {
@@ -269,7 +271,7 @@ using tcp = asio::ip::tcp;
 class MetricsEndpoint::Impl {
  public:
   Impl(const Metrics& metrics, const std::string& address, uint16_t port)
-      : metrics_(metrics), acceptor_(io_, tcp::endpoint(asio::ip::make_address(address), port)) {}
+      : metrics_(metrics), acceptor_(io_, tcp::endpoint(asio::ip::make_address(address), port), kListenerReusesAddress) {}
 
   uint16_t port() const { return acceptor_.local_endpoint().port(); }
 

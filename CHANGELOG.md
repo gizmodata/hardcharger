@@ -57,6 +57,22 @@ own changelog in `python/CHANGELOG.md`.
 - `ghcr.io/gizmodata/hardcharger:main` and `:sha-<commit>`: the development image, pushed
   for each commit on `main` that passes every CI gate (ghcr.io only).
 
+- Windows x64 and arm64 builds (MSVC): `hardcharger-windows-{amd64,arm64}.zip` (bin\
+  with `hardcharger-server.exe`, the `hardcharger.exe` client and the Visual C++
+  runtime beside them, LICENSE, CHANGELOG.md) and an MSI of each that installs under Program Files and puts `bin\` on
+  the PATH (unsigned for now). On Windows the console's Ctrl+C and Ctrl+Break stop the
+  server as SIGINT and SIGTERM do elsewhere (drain first when `graceful_shutdown` is on, a second one stops at
+  once); closing the console or shutting Windows down stops it at once. Outbound HTTPS
+  (OpenID discovery, JWKS, OPA) trusts the Windows certificate store unless
+  `SSL_CERT_FILE` names a bundle. DuckDB is linked statically there.
+- The sensitive-path guard on Windows: the account database and registry hives
+  (`System32\config`), installer answer files, DPAPI keys, Credential Manager and the
+  vaults, machine and user private keys, `%APPDATA%` credential files (gcloud,
+  PostgreSQL's `pgpass.conf`, GnuPG), `_netrc`, the `\\.\` and `\\?\` device namespace,
+  administrative shares (`\\host\C$`) and Kubernetes' `C:\var\run\secrets`, across
+  Windows' spellings of a path (either separator, any case, `\\?\C:\`, trailing dots and
+  spaces, `::$DATA` streams, 8.3 names, `file:` URLs).
+
 ### Changed
 
 - `hardcharger` reads large results over up to 8 connections by default (was 1);
@@ -159,6 +175,9 @@ own changelog in `python/CHANGELOG.md`.
   prepared statement returned no rows from the second execution on, and every execution showed
   the rows of the moment it was prepared: the rows were built when the statement was bound.
   They are now read again for each execution.
+- The sensitive-path guard missed `file:/path` (one slash), which DuckDB opens as `/path`:
+  `read_text('file:/etc/passwd')` read the file. Every file URL form DuckDB accepts is now
+  checked as the path it opens.
 
 ### Documentation
 

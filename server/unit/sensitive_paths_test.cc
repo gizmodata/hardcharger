@@ -9,6 +9,7 @@
 #include <string>
 
 #include "guards.hpp"
+#include "platform.hpp"
 
 namespace fs = std::filesystem;
 using hardcharger::SensitivePaths;
@@ -50,16 +51,69 @@ TEST_F(SensitivePathPolicyTest, DefaultCategories) {
   EXPECT_EQ(Check(home() / ".duckdb" / "stored_secrets" / "s.duckdb_secret"), "DuckDB persistent secrets");
   EXPECT_EQ(Check(root_ / "server.key"), "Hardcharger server credentials");
   EXPECT_EQ(Check(root_ / "extra" / "any" / "file"), "operator-protected path");
+#ifdef _WIN32
+  const std::string windows = hardcharger::EnvUtf8("SystemRoot").value_or("C:\\Windows");
+  EXPECT_EQ(Check(windows + "\\System32\\config\\SAM"), "system account files");
+  EXPECT_EQ(Check(windows + "\\Panther\\unattend.xml"), "system account files");
+  EXPECT_EQ(Check("\\\\.\\pipe\\some-pipe"), "Windows device namespace");
+  EXPECT_EQ(Check("C:\\var\\run\\secrets\\kubernetes.io\\token"), "container and Kubernetes secrets");
+#else
   EXPECT_EQ(Check("/etc/passwd"), "system account files");
   EXPECT_EQ(Check("/proc/self/environ"), "process information (/proc)");
   EXPECT_EQ(Check("/run/secrets/token"), "container and Kubernetes secrets");
+#endif
 }
 
+#ifdef _WIN32
+// Windows' credential stores, its spellings of one path, and the shares that reach a
+// drive over SMB.
+TEST_F(SensitivePathPolicyTest, WindowsStoresAndSpellings) {
+  const fs::path roaming = home() / "AppData" / "Roaming";
+  EXPECT_EQ(Check(roaming / "Microsoft" / "Credentials" / "ABCDEF"), "Windows credential and key store");
+  EXPECT_EQ(Check(roaming / "Microsoft" / "Protect" / "S-1-5-21" / "key"), "Windows credential and key store");
+  EXPECT_EQ(Check(home() / "AppData" / "Local" / "Microsoft" / "Vault" / "x"), "Windows credential and key store");
+  EXPECT_EQ(Check(roaming / "postgresql" / "pgpass.conf"), "user credential store");
+  EXPECT_EQ(Check(home() / "_netrc"), "user credential store");
+
+  const std::string key = (home() / ".ssh" / "key").string();  // C:\...\.ssh\key
+  auto respelled = [&](const std::string& from, const std::string& to) {
+    std::string out = key;
+    out.replace(out.find(from), from.size(), to);
+    return out;
+  };
+  EXPECT_TRUE(policy_->Check(respelled(".ssh", ".SSH")).has_value());          // case
+  EXPECT_TRUE(policy_->Check(fs::path(key).generic_string()).has_value());     // '/'
+  EXPECT_TRUE(policy_->Check("\\\\?\\" + key).has_value());                  // \\?\C:\...
+  EXPECT_TRUE(policy_->Check("\\\\.\\" + key).has_value());                  // \\.\C:\...
+  EXPECT_TRUE(policy_->Check(respelled(".ssh", ".ssh.")).has_value());         // trailing dot
+  EXPECT_TRUE(policy_->Check(respelled(".ssh", ".ssh  ")).has_value());        // trailing spaces
+  EXPECT_TRUE(policy_->Check(key + "::$DATA").has_value());                    // the default stream
+  EXPECT_TRUE(policy_->Check(key + ":other").has_value());                     // another stream
+  EXPECT_TRUE(policy_->Check("file:///" + fs::path(key).generic_string()).has_value());
+  EXPECT_TRUE(policy_->Check("file:/" + fs::path(key).generic_string()).has_value());
+  EXPECT_EQ(Check("\\\\localhost\\C$\\Users\\someone\\.ssh\\id_rsa"), "Windows administrative share");
+  EXPECT_EQ(Check("//127.0.0.1/admin$/System32/config/SAM"), "Windows administrative share");
+  EXPECT_EQ(Check("\\\\?\\UNC\\localhost\\c$\\x"), "Windows administrative share");
+  EXPECT_EQ(Check("\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\x"), "Windows device namespace");
+  EXPECT_FALSE(Check("\\\\fileserver.invalid\\data\\sales.csv").has_value());
+  EXPECT_TRUE(policy_->Check((home() / "*" / "KEY").string()).has_value());  // patterns ignore case
+}
+#else
 TEST_F(SensitivePathPolicyTest, OnlyOwnCgroupFileIsReadableInProc) {
   EXPECT_FALSE(Check("/proc/self/cgroup").has_value());
   EXPECT_EQ(Check("/proc/self/environ"), "process information (/proc)");
   EXPECT_EQ(Check("/proc/1/cgroup"), "process information (/proc)");
 }
+
+// DuckDB opens file:/x (one slash) as /x too.
+TEST_F(SensitivePathPolicyTest, EveryFileUrlForm) {
+  const auto key = (home() / ".ssh" / "key").generic_string();
+  EXPECT_TRUE(policy_->Check("file:" + key).has_value());
+  EXPECT_TRUE(policy_->Check("file://" + key).has_value());
+  EXPECT_TRUE(policy_->Check("file://localhost" + key).has_value());
+  EXPECT_EQ(policy_->Check("file:/etc/passwd"), "system account files");
+}
+#endif
 
 TEST_F(SensitivePathPolicyTest, OrdinaryPathsAreAllowed) {
   EXPECT_FALSE(Check(root_ / "data" / "ok.csv").has_value());
@@ -81,7 +135,7 @@ TEST_F(SensitivePathPolicyTest, OtherSpellingsResolveToTheSamePath) {
   EXPECT_TRUE(Check(root_ / "data" / "innocent.csv").has_value());
   fs::current_path(root_ / "data");
   EXPECT_TRUE(policy_->Check("../home/.ssh/key").has_value());
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(_WIN32)
   std::string upper = key.string();
   upper.replace(upper.find(".ssh"), 4, ".SSH");
   EXPECT_TRUE(policy_->Check(upper).has_value());

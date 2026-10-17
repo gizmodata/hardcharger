@@ -1,0 +1,32 @@
+// Generated into the build by CMakeLists.txt (Windows): the version Explorer, the
+// installer and `Get-Item hardcharger-server.exe | % VersionInfo` show.
+#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "GizmoData LLC"
+      VALUE "FileDescription", "Hardcharger server"
+      VALUE "FileVersion", "@PROJECT_VERSION@"
+      VALUE "InternalName", "hardcharger-server"
+      VALUE "OriginalFilename", "hardcharger-server.exe"
+      VALUE "ProductName", "Hardcharger"
+      VALUE "ProductVersion", "@PROJECT_VERSION@"
+      VALUE "LegalCopyright", "Copyright GizmoData LLC. Apache License 2.0."
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

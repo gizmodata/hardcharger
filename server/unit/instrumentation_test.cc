@@ -7,6 +7,7 @@
 #include "duckdb_sql.hpp"
 #include "duckdb_v2.hpp"
 #include "instrumentation.hpp"
+#include "platform.hpp"
 #include "runtime.hpp"
 
 namespace {
@@ -27,7 +28,7 @@ struct Db {
 }  // namespace
 
 TEST(InstrumentationTest, FailedWriteDoesNotAffectOtherWrites) {
-  const auto file = std::filesystem::temp_directory_path() / ("hc_instr_" + std::to_string(::getpid()) + ".db");
+  const auto file = std::filesystem::temp_directory_path() / ("hc_instr_" + std::to_string(hardcharger::ProcessId()) + ".db");
   std::filesystem::remove(file);
   hardcharger::Config config;
   config.admin_password = "x";

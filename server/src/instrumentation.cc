@@ -1,11 +1,6 @@
 #include "instrumentation.hpp"
 
 #include <arrow/config.h>
-#include <sys/utsname.h>
-#include <unistd.h>
-#if defined(__APPLE__)
-#include <sys/sysctl.h>
-#endif
 
 #include <filesystem>
 #include <format>
@@ -13,6 +8,7 @@
 #include "duckdb_sql.hpp"
 #include "engine.hpp"
 #include "logging.hpp"
+#include "platform.hpp"
 #include "runtime.hpp"
 #include "sql_text.hpp"
 #include "tokens.hpp"
@@ -201,23 +197,6 @@ std::string Nullable(std::string_view text) { return text.empty() ? "NULL" : Ins
 
 std::string Json(std::string_view text) { return text.empty() ? "NULL" : Instrumentation::Literal(text) + "::JSON"; }
 
-std::string Hostname() {
-  char name[256] = {};
-  if (gethostname(name, sizeof(name) - 1) != 0) return {};
-  return name;
-}
-
-int64_t MemoryTotal() {
-#if defined(__APPLE__)
-  int64_t bytes = 0;
-  std::size_t size = sizeof(bytes);
-  if (sysctlbyname("hw.memsize", &bytes, &size, nullptr, 0) == 0) return bytes;
-  return 0;
-#else
-  return static_cast<int64_t>(sysconf(_SC_PHYS_PAGES)) * static_cast<int64_t>(sysconf(_SC_PAGESIZE));
-#endif
-}
-
 }  // namespace
 
 std::string Instrumentation::Literal(std::string_view text) { return SqlLiteral(text); }
@@ -296,8 +275,7 @@ void Instrumentation::Start() {
                            " SET stop_time = now(), status = 'stopped', stop_reason = 'unclean_shutdown' WHERE "
                            "status = 'running';");
   }
-  utsname host{};
-  uname(&host);
+  const OsInfo host = Os();
   const bool tls = !config.tls_cert.empty();
   Run("INSERT INTO " + Table("instances") +
       " (instance_id, cluster_id, hardcharger_version, duckdb_version, arrow_version, hostname, "
@@ -306,13 +284,13 @@ void Instrumentation::Start() {
       "memory_total_bytes, start_time, status, instance_tag) VALUES (" +
       Literal(runtime_.instance_id) + ", " + Nullable(config.cluster_id) + ", " + Literal(kVersion) +
       ", " + Literal(duckdb_version_) + ", " +
-      Literal(arrow::GetBuildInfo().version_string) + ", " + Nullable(Hostname()) + ", " + Nullable(config.host) +
+      Literal(arrow::GetBuildInfo().version_string) + ", " + Nullable(HostName()) + ", " + Nullable(config.host) +
       ", NULL, " + std::to_string(config.port) + ", " + Nullable(config.database) + ", " + (tls ? "true" : "false") +
       ", " + Nullable(config.tls_cert) + ", " + Nullable(config.tls_key) + ", " +
       (config.mtls_ca_cert.empty() ? "false" : "true") + ", " + Nullable(config.mtls_ca_cert) + ", " +
-      (config.read_only ? "true" : "false") + ", " + Nullable(host.sysname) + ", " + Nullable(host.nodename) + ", " +
+      (config.read_only ? "true" : "false") + ", " + Nullable(host.system) + ", " + Nullable(host.node) + ", " +
       Nullable(host.release) + ", " + Nullable(host.machine) + ", NULL, " +
-      std::to_string(std::thread::hardware_concurrency()) + ", " + std::to_string(MemoryTotal()) + ", " +
+      std::to_string(std::thread::hardware_concurrency()) + ", " + std::to_string(PhysicalMemoryBytes()) + ", " +
       Time(runtime_.started_at) + ", 'running', " + Json(config.instance_tag) + ")");
   writer_ = std::thread([this] { WriterLoop(); });
   Log(LogLevel::kInfo, "instrumentation on", {{"catalog", catalog_}, {"schema", schema_}});

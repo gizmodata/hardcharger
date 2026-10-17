@@ -16,12 +16,19 @@ file is never listed, and passes either way. A path an admin computes at run tim
 admin command guard fails closed).
 """
 
+import os
+import sys
+
 import pytest
 
 from conftest import run_unit_tests
 
-UNIT_CASES = ["DefaultCategories", "OnlyOwnCgroupFileIsReadableInProc", "OrdinaryPathsAreAllowed",
-              "OtherSpellingsResolveToTheSamePath", "SecretDirectoryAddedAfterStartup"]
+# The 5 1.x cases, plus each platform's own: Windows has no /proc (its device namespace,
+# credential stores and path spellings instead); elsewhere every file: URL form.
+UNIT_CASES = ["DefaultCategories", "OrdinaryPathsAreAllowed", "OtherSpellingsResolveToTheSamePath",
+              "SecretDirectoryAddedAfterStartup",
+              *(["WindowsStoresAndSpellings"] if sys.platform == "win32"
+                else ["OnlyOwnCgroupFileIsReadableInProc", "EveryFileUrlForm"])]
 
 
 @pytest.fixture(scope="module")
@@ -49,6 +56,11 @@ def admin(module_launcher, guard_dir):
     return server.admin()
 
 
+# A system file every host has that the guard always protects.
+SYSTEM_ACCOUNTS_FILE = (f"{os.environ.get('SystemRoot', 'C:/Windows')}/System32/config/SAM"
+                        if sys.platform == "win32" else "/etc/passwd")
+
+
 def blocked(problem: dict) -> None:
     assert problem["code"] == "permission_denied", problem
     assert "blocked access to" in problem["detail"] and "Permission denied" in problem["detail"], problem
@@ -57,9 +69,12 @@ def blocked(problem: dict) -> None:
 def test_admin_is_refused_protected_paths(admin, guard_dir):
     token = guard_dir / "protected" / "token.txt"
     for sql in [f"SELECT content FROM read_text('{token}')", f"SELECT * FROM read_csv('{token}')",
-                "SELECT content FROM read_text('/etc/passwd')",
+                f"SELECT content FROM read_text('{SYSTEM_ACCOUNTS_FILE}')",
                 f"SELECT * FROM read_text('{guard_dir}/public.csv/../protected/token.txt')",
-                f"SELECT * FROM read_text('file://{token}')", f"SELECT * FROM '{token}'"]:
+                f"SELECT * FROM read_text('file://{token}')", f"SELECT * FROM '{token}'",
+                # file:/x (one slash) is DuckDB's file URL too (and on Windows file:/C:/x).
+                f"SELECT * FROM read_text('file:/{token.as_posix().lstrip('/')}')",
+                f"SELECT content FROM read_text('file:/{SYSTEM_ACCOUNTS_FILE.lstrip('/')}')"]:
         blocked(problem=admin.error(sql=sql))
 
 

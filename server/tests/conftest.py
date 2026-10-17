@@ -15,6 +15,7 @@ import secrets
 import signal
 import socket
 import subprocess
+import sys
 import time
 
 import httpx
@@ -23,8 +24,9 @@ import pytest
 from warp_client import Client, mint_server_token
 
 BUILD = pathlib.Path(__file__).resolve().parent.parent / "build"
+EXE = ".exe" if sys.platform == "win32" else ""
 # Absolute (a relative name is the caller's, but servers run in their own directories).
-BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_BINARY", BUILD / "hardcharger-server")).resolve()
+BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_BINARY", BUILD / f"hardcharger-server{EXE}")).resolve()
 # Sanitizer builds run several times slower: HARDCHARGER_TEST_TIMEOUT_SCALE stretches the
 # waits that tests size by hand (CI's TSan job sets it), never what they assert.
 TIMEOUT_SCALE = float(os.environ.get("HARDCHARGER_TEST_TIMEOUT_SCALE", "1"))
@@ -32,10 +34,22 @@ TIMEOUT_SCALE = float(os.environ.get("HARDCHARGER_TEST_TIMEOUT_SCALE", "1"))
 # Only the TSan job sets it: instrumented code runs 5-15x slower, and there the workload is
 # run for its races and its results; the build jobs keep 1 and are where the limits count.
 PERF_SCALE = float(os.environ.get("HARDCHARGER_TEST_PERF_SCALE", "1"))
-UNIT_TEST_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_UNIT_BINARY", BUILD / "hardcharger-unit-tests")).resolve()
-CLIENT_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_CLIENT_BINARY", BUILD / "hardcharger")).resolve()
+UNIT_TEST_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_UNIT_BINARY",
+                                               BUILD / f"hardcharger-unit-tests{EXE}")).resolve()
+CLIENT_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_CLIENT_BINARY", BUILD / f"hardcharger{EXE}")).resolve()
 CLIENT_TESTS_BINARY = pathlib.Path(
-    os.environ.get("HARDCHARGER_TEST_CLIENT_TESTS_BINARY", BUILD / "hardcharger-client-tests")).resolve()
+    os.environ.get("HARDCHARGER_TEST_CLIENT_TESTS_BINARY", BUILD / f"hardcharger-client-tests{EXE}")).resolve()
+
+
+# How the tests ask a server to stop, as `kill` does with SIGTERM: on Windows a console
+# Ctrl+Break event, which reaches only a process started in its own process group
+# (POPEN_FLAGS; Ctrl+C can't be sent to one). A hard kill (SIGKILL) is process.kill().
+if sys.platform == "win32":
+    STOP_SIGNAL = signal.CTRL_BREAK_EVENT
+    POPEN_FLAGS = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+else:
+    STOP_SIGNAL = signal.SIGTERM
+    POPEN_FLAGS = {}
 
 
 # Ports for the servers the tests start. The OS's "any free port" (bind to 0) is free only
@@ -85,7 +99,11 @@ def _test_home() -> pathlib.Path:
         real = pathlib.Path.home() / ".duckdb" / "extensions"
         real.mkdir(parents=True, exist_ok=True)
         (_HOME / ".duckdb").mkdir()
-        (_HOME / ".duckdb" / "extensions").symlink_to(real)
+        if sys.platform == "win32":
+            import _winapi
+            _winapi.CreateJunction(str(real), str(_HOME / ".duckdb" / "extensions"))  # no privilege needed
+        else:
+            (_HOME / ".duckdb" / "extensions").symlink_to(real)
     return _HOME
 
 
@@ -96,6 +114,8 @@ def clean_environment() -> dict[str, str]:
     # A value this shell exports (for a real server) must never reach a test server.
     env = {k: v for k, v in os.environ.items() if not k.startswith("HARDCHARGER_")}
     env["HOME"] = str(_test_home())
+    if sys.platform == "win32":
+        env["USERPROFILE"] = str(_test_home())  # DuckDB's (and the server's) home there
     return env
 
 
@@ -161,8 +181,8 @@ class Running:
 
     def stop(self) -> None:
         if self.process.poll() is None:
-            self.process.send_signal(signal.SIGTERM)
-            self.process.send_signal(signal.SIGTERM)
+            self.process.send_signal(STOP_SIGNAL)
+            self.process.send_signal(STOP_SIGNAL)
             try:
                 self.process.wait(timeout=20)
             except subprocess.TimeoutExpired:
@@ -195,7 +215,7 @@ class Launcher:
             args=[str(binary), "--host", "127.0.0.1", "--port", str(port), *(args or [])],
             env={**clean_environment(), "HARDCHARGER_ADMIN_PASSWORD": password, "HARDCHARGER_ADMIN_USERNAME": username,
                  **env},
-            stdout=subprocess.DEVNULL, stderr=log_path.open("w"), cwd=self.tmp_path)
+            stdout=subprocess.DEVNULL, stderr=log_path.open("w"), cwd=self.tmp_path, **POPEN_FLAGS)
         running = Running(base_url=f"http://127.0.0.1:{port}", username=username, password=password,
                           secret_key=secret_key, process=process, log_path=log_path, port=port)
         self.started.append(running)

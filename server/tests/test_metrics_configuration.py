@@ -9,7 +9,6 @@ endpoint closed while SQL still works; an unclean exit sets hardcharger_last_exi
 and counts hardcharger_unclean_exits_total, and a clean stop clears the badge.
 """
 
-import signal
 import socket
 
 import httpx
@@ -35,7 +34,7 @@ def test_unclean_exit_is_detected_and_clean_shutdown_clears_badge(launcher, tmp_
         assert scalar(server, "SELECT value FROM hardcharger_metrics() WHERE name = 'hardcharger_last_exit_unclean'") == expected_badge
         assert scalar(server, "SELECT value FROM hardcharger_metrics() WHERE name = 'hardcharger_unclean_exits_total'") == expected_count
         if stop == "kill":
-            server.process.send_signal(signal.SIGKILL)
+            server.process.kill()
             server.process.wait(timeout=10)
         else:
             server.stop()

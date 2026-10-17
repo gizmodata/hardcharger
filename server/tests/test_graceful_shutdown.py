@@ -8,13 +8,12 @@ through an in-process call and one through raise(SIGTERM); here every case sends
 SIGTERM to the server process. All 5 apply, plus graceful_shutdown=false (stop at once).
 """
 
-import signal
 import threading
 import time
 
 import httpx
 
-from conftest import problem
+from conftest import STOP_SIGNAL, problem
 
 LONG = "SELECT count(*) FROM range(10000000000) a, range(100000) b"
 
@@ -48,7 +47,7 @@ def test_drains_in_flight_and_rejects_new_work(launcher):
     probe = server.admin()
     outcome = run_in_background(session=slow, sql="SELECT sleep_ms(4000) AS slept")
     wait_running(session=probe)
-    server.process.send_signal(signal.SIGTERM)
+    server.process.send_signal(STOP_SIGNAL)
     time.sleep(0.5)
     started = time.monotonic()
     body = problem(response=probe.submit(sql="SELECT 1"), status=503, code="server_draining")
@@ -64,7 +63,7 @@ def test_stops_promptly_when_idle(launcher):
     server = launcher.start(env={"HARDCHARGER_SHUTDOWN_GRACE_PERIOD_SECONDS": "300"})
     assert server.admin().scalar(sql="SELECT 1") == 1
     started = time.monotonic()
-    server.process.send_signal(signal.SIGTERM)
+    server.process.send_signal(STOP_SIGNAL)
     assert server.process.wait(timeout=10) == 0
     assert time.monotonic() - started < 10
 
@@ -75,7 +74,7 @@ def test_real_signal_drives_drain(launcher):
     probe = server.admin()
     outcome = run_in_background(session=slow, sql="SELECT sleep_ms(3000) AS slept")
     wait_running(session=probe)
-    server.process.send_signal(signal.SIGTERM)
+    server.process.send_signal(STOP_SIGNAL)
     time.sleep(0.5)
     problem(response=probe.submit(sql="SELECT 1"), status=503, code="server_draining")
     outcome["thread"].join(timeout=30)
@@ -89,7 +88,7 @@ def test_grace_period_elapsed_forces_stop(launcher):
     outcome = run_in_background(session=slow, sql=LONG)
     wait_running(session=server.admin())
     started = time.monotonic()
-    server.process.send_signal(signal.SIGTERM)
+    server.process.send_signal(STOP_SIGNAL)
     assert server.process.wait(timeout=15) == 0
     assert time.monotonic() - started < 15
     outcome["thread"].join(timeout=30)
@@ -103,10 +102,10 @@ def test_second_signal_forces_stop(launcher):
     outcome = run_in_background(session=slow, sql=LONG)
     wait_running(session=server.admin())
     started = time.monotonic()
-    server.process.send_signal(signal.SIGTERM)
+    server.process.send_signal(STOP_SIGNAL)
     time.sleep(1)
     assert server.process.poll() is None, "the first signal must only drain"
-    server.process.send_signal(signal.SIGTERM)
+    server.process.send_signal(STOP_SIGNAL)
     assert server.process.wait(timeout=15) == 0
     assert time.monotonic() - started < 15
     outcome["thread"].join(timeout=30)
@@ -118,7 +117,7 @@ def test_without_graceful_shutdown_the_first_signal_stops(launcher):
     outcome = run_in_background(session=slow, sql=LONG)
     wait_running(session=server.admin())
     started = time.monotonic()
-    server.process.send_signal(signal.SIGTERM)
+    server.process.send_signal(STOP_SIGNAL)
     assert server.process.wait(timeout=15) == 0
     assert time.monotonic() - started < 10
     outcome["thread"].join(timeout=30)

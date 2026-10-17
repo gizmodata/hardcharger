@@ -1,7 +1,7 @@
 // The outbound HTTPS trust store: GizmoSQL 1.x's SystemCaCerts cases, against
 // Hardcharger's FindSystemCaCertFile (server/tests/test_system_ca_certs.py runs them).
 #include <gtest/gtest.h>
-#include <unistd.h>
+#include <openssl/ssl.h>
 
 #include <cstdlib>
 #include <filesystem>
@@ -10,27 +10,17 @@
 #include <string>
 
 #include "http_client.hpp"
+#include "platform.hpp"
 
 namespace {
 
 // Sets an environment variable for one scope, then puts back what was there.
 class ScopedEnv {
  public:
-  ScopedEnv(const char* name, const char* value) : name_(name) {
-    if (const char* previous = std::getenv(name)) previous_ = previous;
-    if (value != nullptr) {
-      setenv(name, value, 1);
-    } else {
-      unsetenv(name);
-    }
+  ScopedEnv(const char* name, const char* value) : name_(name), previous_(hardcharger::EnvUtf8(name)) {
+    hardcharger::SetEnv(name, value != nullptr ? std::optional<std::string>(value) : std::nullopt);
   }
-  ~ScopedEnv() {
-    if (previous_) {
-      setenv(name_, previous_->c_str(), 1);
-    } else {
-      unsetenv(name_);
-    }
-  }
+  ~ScopedEnv() { hardcharger::SetEnv(name_, previous_); }
 
  private:
   const char* name_;
@@ -40,15 +30,32 @@ class ScopedEnv {
 }  // namespace
 
 TEST(SystemCaCerts, RespectsSslCertFileEnv) {
-  const auto bundle = std::filesystem::temp_directory_path() / ("hc_ca_" + std::to_string(::getpid()) + ".pem");
+  const auto bundle = std::filesystem::temp_directory_path() / ("hc_ca_" + std::to_string(hardcharger::ProcessId()) + ".pem");
   std::ofstream(bundle) << "# test bundle\n";
   {
-    ScopedEnv env("SSL_CERT_FILE", bundle.c_str());
+    ScopedEnv env("SSL_CERT_FILE", bundle.string().c_str());
     EXPECT_EQ(hardcharger::FindSystemCaCertFile(), bundle.string());
   }
   std::filesystem::remove(bundle);
 }
 
+#ifdef _WIN32
+// Windows has no bundle file: without SSL_CERT_FILE (or with a missing one), the
+// certificate store's trusted roots are used.
+TEST(SystemCaCerts, IgnoresNonexistentSslCertFileEnv) {
+  ScopedEnv env("SSL_CERT_FILE", "C:/definitely/does/not/exist/ca.pem");
+  EXPECT_FALSE(hardcharger::FindSystemCaCertFile().has_value());
+}
+
+TEST(SystemCaCerts, FindsASystemBundle) {
+  ScopedEnv env("SSL_CERT_FILE", nullptr);
+  EXPECT_FALSE(hardcharger::FindSystemCaCertFile().has_value());
+  SSL_CTX* context = SSL_CTX_new(TLS_client_method());
+  ASSERT_NE(context, nullptr);
+  EXPECT_TRUE(hardcharger::AddSystemTrustStore(context)) << "no trusted roots in the Windows certificate store";
+  SSL_CTX_free(context);
+}
+#else
 // A missing SSL_CERT_FILE is passed over for the system's bundle (1.x accepted finding
 // nothing; every host this runs on has one).
 TEST(SystemCaCerts, IgnoresNonexistentSslCertFileEnv) {
@@ -64,6 +71,7 @@ TEST(SystemCaCerts, FindsASystemBundle) {
   ASSERT_TRUE(found.has_value()) << "no system CA bundle found: the list in http_client.cc is stale for this OS";
   EXPECT_TRUE(std::ifstream(*found).good()) << *found;
 }
+#endif
 
 TEST(UrlEncode, KeepsUnreservedAndEncodesTheRest) {
   EXPECT_EQ(hardcharger::UrlEncode("openid profile email"), "openid%20profile%20email");

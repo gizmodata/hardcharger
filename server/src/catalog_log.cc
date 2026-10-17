@@ -1,7 +1,5 @@
 #include "catalog_log.hpp"
 
-#include <unistd.h>
-
 #include <algorithm>
 #include <boost/json.hpp>
 #include <cctype>
@@ -9,6 +7,7 @@
 #include <filesystem>
 
 #include "duckdb_sql.hpp"
+#include "platform.hpp"
 #include "runtime.hpp"
 #include "sql_text.hpp"
 
@@ -103,7 +102,7 @@ std::string Row(const LogRecord& record) {
   return "(" + SqlTimestamp(record.time) + ", " + SqlLiteral(LevelName(record.level)) + ", " + Text(instance_id) +
          ", " + Text(cluster_id) + ", " + Text(session_id) + ", " + Text(username) + ", " + Text(role) + ", " +
          Text(peer) + ", " + Text(component) + ", " + Text(trace_id) + ", " + Text(span_id) + ", " +
-         std::to_string(getpid()) + ", " + Text(record.thread) + ", NULL, NULL, NULL, " + SqlLiteral(record.message) +
+         std::to_string(ProcessId()) + ", " + Text(record.thread) + ", NULL, NULL, NULL, " + SqlLiteral(record.message) +
          ", " + (rest.empty() ? std::string("NULL") : SqlLiteral(boost::json::serialize(rest))) + ")";
 }
 

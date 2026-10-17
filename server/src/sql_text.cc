@@ -6,6 +6,7 @@
 #include <regex>
 
 #include "duckdb_v2.hpp"
+#include "platform.hpp"
 
 namespace hardcharger {
 
@@ -205,8 +206,7 @@ std::string SqlIdentifier(std::string_view name) { return Doubled(name, '"'); }
 std::string SqlTimestamp(std::chrono::system_clock::time_point time) {
   const auto us = std::chrono::duration_cast<std::chrono::microseconds>(time.time_since_epoch()).count();
   const std::time_t seconds = static_cast<std::time_t>(us / 1000000);
-  std::tm utc{};
-  gmtime_r(&seconds, &utc);
+  const std::tm utc = UtcTime(seconds);
   char buffer[32];
   const std::size_t length = std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &utc);
   return std::format("'{}.{:06}+00'::TIMESTAMPTZ", std::string_view(buffer, length), us % 1000000);

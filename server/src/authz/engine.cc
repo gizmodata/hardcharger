@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include "authz/policies.hpp"
+#include "platform.hpp"
 
 namespace hardcharger::authz {
 
@@ -277,12 +278,7 @@ std::optional<int64_t> ParseDuration(const std::string& text) {
 
 std::string IsoTime(int64_t seconds) {
   std::time_t t = static_cast<std::time_t>(seconds);
-  std::tm tm{};
-#ifdef _WIN32
-  gmtime_s(&tm, &t);
-#else
-  gmtime_r(&t, &tm);
-#endif
+  const std::tm tm = UtcTime(t);
   char buf[32];
   std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
   return buf;

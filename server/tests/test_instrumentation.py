@@ -14,12 +14,11 @@ cursor_close_time when it let the result go (the Warp SDK has no delivery callba
 these are not the moments the client received the bytes). The invariants 1.x asserts hold.
 """
 
-import signal
 import time
 
 import pytest
 
-from conftest import run_unit_tests
+from conftest import STOP_SIGNAL, run_unit_tests
 
 CLUSTER_ID = "12345678-1234-5678-1234-567812345678"
 
@@ -165,7 +164,7 @@ def test_sigterm_closes_records(launcher, tmp_path):
     session = server.admin()
     for i in range(3):
         session.scalar(sql=f"SELECT {i}")
-    server.process.send_signal(signal.SIGTERM)
+    server.process.send_signal(STOP_SIGNAL)
     assert server.process.wait(timeout=20) == 0
     path = tmp_path / "hardcharger_instrumentation.db"
     rows = read_file(launcher, path, "SELECT (SELECT count(*) FROM {I}.instances WHERE status = 'running') AS running, "
@@ -190,7 +189,7 @@ def test_stale_instance_cleanup(launcher, tmp_path):
     threading.Thread(target=long_query, daemon=True).start()
     eventually(session, "SELECT count(*) FROM _hardcharger_instr.sql_executions WHERE status = 'executing'", lambda n: n >= 1)
     first_instance = session.scalar(sql="SELECT HARDCHARGER_CURRENT_INSTANCE()")
-    first.process.send_signal(signal.SIGKILL)
+    first.process.kill()
     first.process.wait(timeout=10)
     second = start(launcher=launcher, args=["--database", database])
     rows = second.admin().rows(

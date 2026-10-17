@@ -1,0 +1,283 @@
+# The Hardcharger server on Windows (x64 and arm64, MSVC): builds the dependencies, the
+# server and the Warp SQL reference server, runs the unit tests, the server suites and
+# the Warp SQL conformance suite (against both servers), and packages
+# hardcharger-windows-{amd64,arm64}.zip and an MSI of each. Kept apart from server.yml
+# while it is developed; its jobs move into server.yml's release once it lands.
+name: windows
+
+on:
+  push:
+    branches: [feature/windows]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: build and test (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-amd64
+            runner: windows-latest
+            arch: x64
+          - name: windows-arm64
+            runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      # OpenSSL from vcpkg: static libraries on the DLL C runtime (/MD), as everything
+      # else here is built.
+      VCPKG_TRIPLET: ${{ matrix.arch }}-windows-static-md
+      # cl.exe for every CMake project, never a MinGW gcc a runner image puts on PATH.
+      CC: cl
+      CXX: cl
+    steps:
+      - uses: actions/checkout@v7
+      # The warp-sql submodule is private: fetch it with its read-only deploy key.
+      - name: Fetch the warp-sql submodule
+        env:
+          DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
+        run: |
+          key="$(cygpath -u "$RUNNER_TEMP")/warp_sql_key"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          chmod 600 "$key"
+          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+            git submodule update --init --depth 1
+          rm -f "$key"
+
+      # Passes the architecture to vcvarsall (arm64 on the arm64 runner selects the native
+      # ARM64-hosted toolchain). Its environment reaches the bash steps too.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+
+      # Every cache below is keyed on the exact MSVC toolset: cached CMake trees record
+      # the compiler's absolute path, so a runner image with another toolset must build
+      # cold rather than fail at configure.
+      - name: Toolchain
+        id: msvc
+        run: |
+          [ -n "$VCToolsVersion" ] || { echo "VCToolsVersion is not set: did msvc-dev-cmd run?"; exit 1; }
+          echo "version=$VCToolsVersion" >> "$GITHUB_OUTPUT"
+          echo "MSVC $VCToolsVersion ($VCToolsInstallDir)"
+          # vcvarsall points VCPKG_ROOT at Visual Studio's own copy; use the runner's.
+          echo "VCPKG_ROOT=C:\\vcpkg" >> "$GITHUB_ENV"
+          cmake --version | head -1
+          ninja --version
+
+      - name: OpenSSL cache key
+        id: openssl
+        run: echo "key=openssl-${VCPKG_TRIPLET}-msvc${{ steps.msvc.outputs.version }}-$(git -C /c/vcpkg rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v6
+        id: openssl-cache
+        with:
+          path: C:\vcpkg\installed
+          key: ${{ steps.openssl.outputs.key }}
+      - name: Build OpenSSL (vcpkg)
+        if: steps.openssl-cache.outputs.cache-hit != 'true'
+        run: /c/vcpkg/vcpkg.exe install "openssl:$VCPKG_TRIPLET" --clean-after-build
+      - uses: actions/cache/save@v6
+        if: steps.openssl-cache.outputs.cache-hit != 'true'
+        with:
+          path: C:\vcpkg\installed
+          key: ${{ steps.openssl.outputs.key }}
+
+      # DuckDB and Arrow, by their pins (the same scripts as server.yml's builds).
+      - name: Dependency cache key
+        id: deps
+        run: |
+          pins=$(cat third_party/warp-sql/cpp/scripts/build-duckdb.sh third_party/warp-sql/cpp/scripts/build-arrow.sh \
+                     server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake | sha256sum | cut -c1-16)
+          echo "key=deps-${{ matrix.name }}-msvc${{ steps.msvc.outputs.version }}-$pins" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v6
+        id: deps-cache
+        with:
+          path: |
+            server/.deps/duckdb-install
+            server/.deps/arrow-install
+          key: ${{ steps.deps.outputs.key }}
+      - name: Build DuckDB and Arrow
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: |
+          start=$SECONDS
+          server/scripts/build-deps.sh
+          echo "dependencies built in $(( (SECONDS - start) / 60 )) min"
+      # Saved now, so a later failure doesn't throw the build away.
+      - uses: actions/cache/save@v6
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            server/.deps/duckdb-install
+            server/.deps/arrow-install
+          key: ${{ steps.deps.outputs.key }}
+
+      - name: Build the server
+        run: |
+          start=$SECONDS
+          openssl="/c/vcpkg/installed/$VCPKG_TRIPLET"
+          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE
+          cmake --build server/build
+          server/build/hardcharger-server.exe --version
+          server/build/hardcharger-server.exe --print-duckdb-version
+          echo "server built in $(( SECONDS - start )) s"
+      # The Warp SQL reference server (warp-sql has no CI of its own), on the same deps.
+      - name: Build warp-duckdb
+        run: |
+          openssl="/c/vcpkg/installed/$VCPKG_TRIPLET"
+          deps="$(cygpath -m "$PWD/server/.deps")"
+          cmake -S third_party/warp-sql/cpp -B build-warp -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE \
+                -DWARPSQL_ARROW_PREFIX="$deps/arrow-install" -DWARPSQL_DUCKDB_PREFIX="$deps/duckdb-install"
+          cmake --build build-warp --target warp-duckdb
+
+      - name: Unit tests
+        run: server/build/hardcharger-unit-tests.exe --gtest_brief=1
+
+      # PostgreSQL for the access-control grant store (the tests fail without it). The
+      # x64 image ships PostgreSQL; elsewhere EnterpriseDB's x64 binaries (emulated on arm64).
+      - name: Start PostgreSQL
+        run: |
+          pgbin=""
+          for dir in "${PGBIN:-}" /c/Program\ Files/PostgreSQL/*/bin; do
+            if [ -n "$dir" ] && [ -x "$dir/initdb.exe" ]; then pgbin="$dir"; fi
+          done
+          if [ -z "$pgbin" ]; then
+            curl -sSfL -o "$RUNNER_TEMP/pg.zip" https://get.enterprisedb.com/postgresql/postgresql-17.6-1-windows-x64-binaries.zip
+            pwsh -NoProfile -Command "Expand-Archive -Path '$RUNNER_TEMP/pg.zip' -DestinationPath '$RUNNER_TEMP/pg-bin'"
+            pgbin="$(cygpath -u "$RUNNER_TEMP")/pg-bin/pgsql/bin"
+          fi
+          echo "PostgreSQL from $pgbin"
+          tmp="$(cygpath -u "$RUNNER_TEMP")"
+          # Passwords are checked, as in the Linux jobs' container.
+          printf 'hardcharger\n' > "$tmp/pgpass"
+          "$pgbin/initdb.exe" -D "$tmp/pg" -U hardcharger --auth=scram-sha-256 --pwfile="$tmp/pgpass" -E UTF8
+          "$pgbin/pg_ctl.exe" -D "$tmp/pg" -o "-p 55433" -l "$tmp/pg.log" -w start
+          PGPASSWORD=hardcharger "$pgbin/createdb.exe" -h 127.0.0.1 -p 55433 -U hardcharger hardcharger
+
+      - uses: astral-sh/setup-uv@v10.3.0
+      # Everything, access control included, on the one build, the one that ships. The
+      # DuckLake suites need Docker's PostgreSQL and S3 containers, which Windows runners
+      # can't run: they are deselected by marker, visibly, as on macOS.
+      - name: Hardcharger tests
+        working-directory: server/tests
+        run: |
+          uv venv .venv --python 3.14
+          uv pip install --python .venv/Scripts/python.exe -r pyproject.toml
+          .venv/Scripts/python.exe -m pytest -q -rfE -m "not services"
+      - name: Warp SQL conformance suite (Hardcharger)
+        working-directory: third_party/warp-sql/conformance
+        env:
+          WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+          WARP_SQL_TEST_SERVER_USERNAME: warp
+          HARDCHARGER_ADMIN_USERNAME: warp
+          HARDCHARGER_PRINT_QUERIES: "false"
+        run: |
+          uv venv .venv --python 3.14
+          uv pip install --python .venv/Scripts/python.exe -e .
+          WARP_SQL_TEST_SERVER_BINARY="$(cygpath -m "$GITHUB_WORKSPACE/server/build/hardcharger-server.exe")" \
+            .venv/Scripts/python.exe -m pytest -q -rfE
+      - name: Warp SQL conformance suite (warp-duckdb)
+        working-directory: third_party/warp-sql/conformance
+        run: |
+          WARP_SQL_TEST_SERVER_BINARY="$(cygpath -m "$GITHUB_WORKSPACE/build-warp/warp-duckdb.exe")" \
+            .venv/Scripts/python.exe -m pytest -q -rfE
+
+      # The same layout as the other platforms' tarballs: bin/ (the server and, beside it,
+      # the Visual C++ runtime it needs, from this toolset's redistributable folder, whose
+      # name changes with the toolset), LICENSE and CHANGELOG.md.
+      - name: Package
+        run: |
+          stage="dist/hardcharger-${{ matrix.name }}"
+          cmake --install server/build --prefix "$stage"
+          # Only the server ships, never the unit tests.
+          test "$(ls "$stage/bin")" = "hardcharger-server.exe"
+          redist="$(cygpath -u "$VCToolsRedistDir")/${{ matrix.arch }}"
+          crt=$(ls -d "$redist"/Microsoft.VC*.CRT | sort | tail -1)
+          [ -d "$crt" ] || { echo "no Microsoft.VC*.CRT under $redist"; exit 1; }
+          echo "Visual C++ runtime from $crt"
+          for dll in vcruntime140.dll vcruntime140_1.dll msvcp140.dll; do
+            if [ -f "$crt/$dll" ]; then cp "$crt/$dll" "$stage/bin/"; fi
+          done
+          test -f "$stage/bin/vcruntime140.dll" && test -f "$stage/bin/msvcp140.dll"
+          cp LICENSE CHANGELOG.md "$stage/"
+          "$stage/bin/hardcharger-server.exe" --version
+          ls -R "$stage"
+          (cd dist && 7z a -tzip "hardcharger-${{ matrix.name }}.zip" "hardcharger-${{ matrix.name }}" > /dev/null)
+          # What the zip runs with: nothing but itself and Windows' own DLLs.
+          dumpbin -nologo -dependents "$stage/bin/hardcharger-server.exe" | grep -i "\.dll"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hardcharger-${{ matrix.name }}
+          path: dist/hardcharger-${{ matrix.name }}.zip
+          if-no-files-found: error
+      - name: PostgreSQL log
+        if: failure()
+        run: tail -100 "$(cygpath -u "$RUNNER_TEMP")/pg.log" || true
+
+  # An MSI of each zip (WiX 6). Unsigned: the code-signing certificate is a follow-up.
+  msi:
+    name: msi (${{ matrix.name }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-amd64
+            wix_arch: x64
+          - name: windows-arm64
+            wix_arch: arm64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-${{ matrix.name }}
+          path: artifacts
+      - name: Install WiX
+        run: |
+          dotnet tool install --global wix --version 6.0.2
+          wix extension add --global WixToolset.UI.wixext/6.0.2
+      - name: Build the MSI
+        run: |
+          7z x -o"stage" artifacts/hardcharger-${{ matrix.name }}.zip > /dev/null
+          version=$(sed -n 's/^project(hardcharger VERSION \([0-9.]*\).*/\1/p' server/CMakeLists.txt)
+          [ -n "$version" ] || { echo "no version in server/CMakeLists.txt"; exit 1; }
+          # The license page shows LICENSE as plain text in RTF.
+          { printf '{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Consolas;}}\\f0\\fs16 '
+            sed -e 's/\\/\\\\/g' -e 's/{/\\{/g' -e 's/}/\\}/g' -e 's/$/\\par/' LICENSE
+            printf '}'; } > installer/license.rtf
+          wix build installer/Hardcharger.wxs -arch ${{ matrix.wix_arch }} -d Version="$version" \
+            -bindpath "Stage=$(cygpath -w "$PWD/stage/hardcharger-${{ matrix.name }}")" \
+            -bindpath "$(cygpath -w "$PWD/installer")" \
+            -ext WixToolset.UI.wixext -o "Hardcharger-${{ matrix.name }}.msi"
+          ls -la "Hardcharger-${{ matrix.name }}.msi"
+      # Installs it (only the x64 one runs on this runner), checks what landed and that
+      # the installed server starts, then removes it.
+      - name: Install, run and uninstall
+        if: matrix.wix_arch == 'x64'
+        shell: pwsh
+        run: |
+          $msi = "Hardcharger-${{ matrix.name }}.msi"
+          $p = Start-Process msiexec.exe -ArgumentList "/i", $msi, "/qn", "/l*v", "install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 50; throw "install failed: $($p.ExitCode)" }
+          $exe = "$env:ProgramFiles\Hardcharger\bin\hardcharger-server.exe"
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "the installed server did not run" }
+          $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+          if ($machinePath -notlike "*Hardcharger\bin*") { throw "bin is not on the system PATH" }
+          $p = Start-Process msiexec.exe -ArgumentList "/x", $msi, "/qn" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstall failed: $($p.ExitCode)" }
+          if (Test-Path $exe) { throw "uninstall left $exe" }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Hardcharger-${{ matrix.name }}-msi
+          path: Hardcharger-${{ matrix.name }}.msi
+          if-no-files-found: error

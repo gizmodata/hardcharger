@@ -3,8 +3,6 @@
 #include <jwt-cpp/jwt.h>
 #include <jwt-cpp/traits/boost-json/traits.h>
 #include <openssl/hmac.h>
-#include <sys/socket.h>
-#include <sys/time.h>
 
 #include <atomic>
 #include <boost/asio/ip/tcp.hpp>
@@ -21,6 +19,7 @@
 #include "http_client.hpp"
 #include "logging.hpp"
 #include "patterns.hpp"
+#include "platform.hpp"
 #include "tokens.hpp"
 
 namespace hardcharger {
@@ -104,7 +103,7 @@ bool IsUuid(std::string_view text) {
 class OAuthServer::Listener {
  public:
   Listener(OAuthServer& owner, const Options& options)
-      : owner_(owner), acceptor_(io_, tcp::endpoint(asio::ip::make_address(options.host), options.port)) {
+      : owner_(owner), acceptor_(io_, tcp::endpoint(asio::ip::make_address(options.host), options.port), kListenerReusesAddress) {
     if (!options.tls_cert.empty()) {
       tls_.emplace(ssl::context::tls_server);
       tls_->set_options(ssl::context::default_workarounds | ssl::context::no_sslv2 | ssl::context::no_sslv3 |
@@ -146,9 +145,7 @@ class OAuthServer::Listener {
   }
 
   void Serve(tcp::socket socket) {
-    const timeval timeout{kReadTimeoutSeconds, 0};
-    setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(socket.native_handle(), SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    SetSocketTimeouts(socket, kReadTimeoutSeconds);
     boost::system::error_code ec;
     if (!tls_) {
       Answer(socket, ec);

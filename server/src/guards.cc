@@ -1,16 +1,14 @@
 #include "guards.hpp"
 
-#include <fnmatch.h>
-#include <pwd.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <set>
 
 #include "duckdb_sql.hpp"
+#include "platform.hpp"
 #include "warpsql/errors.hpp"
 
 namespace hardcharger {
@@ -28,6 +26,11 @@ constexpr const char* kUserCredentials = "user credential store";
 constexpr const char* kDuckDBSecrets = "DuckDB persistent secrets";
 constexpr const char* kServerCredentials = "Hardcharger server credentials";
 constexpr const char* kOperatorPath = "operator-protected path";
+#ifdef _WIN32
+constexpr const char* kWindowsCredentials = "Windows credential and key store";
+constexpr const char* kDevices = "Windows device namespace";
+constexpr const char* kAdminShares = "Windows administrative share";
+#endif
 
 std::string Lower(std::string_view text) {
   std::string out(text);
@@ -52,27 +55,65 @@ bool IsProvenRemote(std::string_view path) {
   return false;
 }
 
+// The path DuckDB opens for a file: URL (its FileSystem::ExpandPath): file:/x, file:///x
+// and file://localhost/x name /x, and on Windows the '/' before a drive goes too
+// (file:///C:/x is C:/x). Any other file://host/x is compared as host/x.
 std::string StripFileScheme(const std::string& path) {
-  if (!StartsWithIgnoringCase(path, "file://")) return path;
-  std::string rest = path.substr(7);
-  if (StartsWithIgnoringCase(rest, "localhost/")) rest = rest.substr(9);
-  return rest;
+  if (!StartsWithIgnoringCase(path, "file:/")) return path;
+#ifdef _WIN32
+  constexpr std::size_t kDriveSlash = 1;
+#else
+  constexpr std::size_t kDriveSlash = 0;
+#endif
+  if (path.size() < 7 || path[6] != '/') return path.substr(5 + kDriveSlash);  // file:/x
+  if (path.size() >= 8 && path[7] == '/') return path.substr(7 + kDriveSlash);  // file:///x
+  if (StartsWithIgnoringCase(path.substr(7), "localhost/")) return path.substr(16 + kDriveSlash);
+  return path.substr(7);
 }
 
-// Case-insensitive file systems (macOS) open /ETC/PASSWD as /etc/passwd, so keys are
-// case-folded there.
+#ifdef _WIN32
+// Windows spells one file many ways: '\' or '/', \\?\C:\x and \\.\C:\x for C:\x,
+// \\?\UNC\host\share for \\host\share, and it drops a component's trailing dots and
+// spaces and opens x::$DATA (a stream) as x. This brings them to one ('/' separators;
+// each component cut at a stream's ':'), before std::filesystem sees the path.
+std::string WindowsSpelling(std::string path) {
+  std::replace(path.begin(), path.end(), '\\', '/');
+  if (StartsWithIgnoringCase(path, "//?/unc/")) {
+    path = "//" + path.substr(8);
+  } else if ((path.starts_with("//?/") || path.starts_with("//./")) && path.size() >= 6 &&
+             std::isalpha(static_cast<unsigned char>(path[4])) && path[5] == ':') {
+    path = path.substr(4);
+  }
+  std::string out;
+  std::size_t start = 0;
+  // The drive ("C:") and a UNC or device prefix ("//") stay as they are.
+  if (path.size() >= 2 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':') {
+    out = path.substr(0, 2);
+    start = 2;
+  }
+  while (start < path.size()) {
+    const auto end = std::min(path.find('/', start), path.size());
+    std::string part = path.substr(start, end - start);
+    if (part != "." && part != "..") {
+      if (const auto colon = part.find(':'); colon != std::string::npos) part.resize(colon);
+      while (!part.empty() && (part.back() == '.' || part.back() == ' ')) part.pop_back();
+    }
+    out += part;
+    if (end < path.size()) out += '/';
+    start = end + 1;
+  }
+  return out;
+}
+#endif
+
+// Case-insensitive file systems (macOS, Windows) open /ETC/PASSWD as /etc/passwd, so
+// keys are case-folded there.
 std::string ComparisonKey(std::string s) {
   while (s.size() > 1 && s.back() == '/') s.pop_back();
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(_WIN32)
   s = Lower(s);
 #endif
   return s;
-}
-
-std::string DefaultHome() {
-  if (const char* home = std::getenv("HOME"); home && *home) return home;
-  if (const passwd* pw = getpwuid(getuid()); pw && pw->pw_dir) return pw->pw_dir;
-  return {};
 }
 
 // Every spelling of `raw` to compare: absolute and lexically normal, and with
@@ -80,17 +121,24 @@ std::string DefaultHome() {
 std::vector<std::string> Keys(std::string raw, const std::string& home, bool resolve) {
   std::vector<std::string> keys;
   if (raw.empty()) return keys;
+#ifdef _WIN32
+  raw = WindowsSpelling(std::move(raw));
+#endif
   if (raw == "~" || raw.starts_with("~/")) raw = home + raw.substr(1);
   std::error_code ec;
-  fs::path path(raw);
+  fs::path path = PathFromUtf8(raw);
   fs::path absolute = path.is_absolute() ? path : fs::absolute(path, ec);
   if (ec) absolute = path;
   absolute = absolute.lexically_normal();
-  keys.push_back(ComparisonKey(absolute.generic_string()));
+  keys.push_back(ComparisonKey(Utf8Path(absolute)));
   if (resolve) {
     fs::path resolved = fs::weakly_canonical(absolute, ec);
     if (!ec) {
-      auto key = ComparisonKey(resolved.generic_string());
+      std::string text = Utf8Path(resolved);
+#ifdef _WIN32
+      text = WindowsSpelling(std::move(text));  // canonical paths come back as \\?\C:\...
+#endif
+      auto key = ComparisonKey(std::move(text));
       if (key != keys.front()) keys.push_back(std::move(key));
     }
   }
@@ -396,7 +444,10 @@ std::string GatedMessage(const std::string& category) {
 
 SensitivePaths::SensitivePaths(bool enabled, const std::vector<std::string>& operator_paths,
                                const std::vector<std::string>& server_files, std::string home)
-    : enabled_(enabled), home_(home.empty() ? DefaultHome() : std::move(home)) {
+    : enabled_(enabled), home_(home.empty() ? HomeDirectory() : std::move(home)) {
+#ifdef _WIN32
+  AddWindowsDefaults();
+#else
   for (const char* path : {"/etc/passwd", "/etc/shadow", "/etc/gshadow", "/etc/master.passwd", "/etc/sudoers",
                            "/etc/sudoers.d"}) {
     Add(path, kSystemAccounts);
@@ -408,6 +459,7 @@ SensitivePaths::SensitivePaths(bool enabled, const std::vector<std::string>& ope
   Add("/dev/fd", kProcFs);
   Add("/var/run/secrets", kContainerSecrets);
   Add("/run/secrets", kContainerSecrets);
+#endif
   if (!home_.empty()) {
     for (const char* rel : {".ssh", ".aws", ".azure", ".config/gcloud", ".kube", ".docker/config.json", ".netrc",
                             ".pgpass", ".git-credentials", ".gnupg"}) {
@@ -422,6 +474,52 @@ SensitivePaths::SensitivePaths(bool enabled, const std::vector<std::string>& ope
     if (!path.empty()) Add(path, kOperatorPath);
   }
 }
+
+#ifdef _WIN32
+// Windows' own: the account database and the credential and key stores (SAM and the
+// registry hives, DPAPI master keys, Credential Manager, the vaults, private keys), the
+// installer answer files that can hold an administrator's password, the device and pipe
+// namespace (\\.\, \\?\GLOBALROOT, the /proc of Windows), and Kubernetes' secret mounts,
+// which Windows pods get at C:\var\run\secrets.
+void SensitivePaths::AddWindowsDefaults() {
+  const std::string windows = EnvUtf8("SystemRoot").value_or("C:\\Windows");
+  for (const char* rel : {"System32/config", "repair", "NTDS", "Panther", "System32/Sysprep"}) {
+    Add(windows + "/" + rel, kSystemAccounts);
+  }
+  for (const char* rel : {"System32/Microsoft/Protect", "ServiceProfiles"}) {
+    Add(windows + "/" + rel, kWindowsCredentials);
+  }
+  const std::string program_data = EnvUtf8("ProgramData").value_or("C:\\ProgramData");
+  Add(program_data + "/Microsoft/Crypto", kWindowsCredentials);
+  Add(program_data + "/Microsoft/Vault", kWindowsCredentials);
+  Add("//./", kDevices);
+  Add("//?/", kDevices);
+  const std::string drive = EnvUtf8("SystemDrive").value_or("C:");
+  Add(drive + "/var/run/secrets", kContainerSecrets);
+  Add(drive + "/run/secrets", kContainerSecrets);
+  Add("/var/run/secrets", kContainerSecrets);  // on the working directory's drive
+  if (home_.empty()) return;
+  std::vector<std::string> roaming = {home_ + "/AppData/Roaming"};
+  std::vector<std::string> local = {home_ + "/AppData/Local"};
+  if (auto dir = EnvUtf8("APPDATA")) roaming.push_back(*dir);
+  if (auto dir = EnvUtf8("LOCALAPPDATA")) local.push_back(*dir);
+  for (const auto& dir : roaming) {
+    for (const char* rel : {"Microsoft/Credentials", "Microsoft/Protect", "Microsoft/Crypto",
+                            "Microsoft/SystemCertificates", "Microsoft/Vault"}) {
+      Add(dir + "/" + rel, kWindowsCredentials);
+    }
+    for (const char* rel : {"gcloud", "postgresql", "gnupg"}) {
+      Add(dir + "/" + rel, kUserCredentials);
+    }
+  }
+  for (const auto& dir : local) {
+    for (const char* rel : {"Microsoft/Credentials", "Microsoft/Vault"}) {
+      Add(dir + "/" + rel, kWindowsCredentials);
+    }
+  }
+  Add(home_ + "/_netrc", kUserCredentials);
+}
+#endif
 
 void SensitivePaths::Add(const std::string& path, const std::string& category) {
   for (auto& key : Keys(StripFileScheme(path), home_, true)) {
@@ -441,7 +539,17 @@ std::optional<std::string> SensitivePaths::Check(const std::string& path) const 
       (path.find("://") != std::string::npos && !StartsWithIgnoringCase(path, "file://"))) {
     return std::nullopt;
   }
+#ifdef _WIN32
+  const std::string local = WindowsSpelling(StripFileScheme(path));
+  // \\host\C$, \\host\ADMIN$, ...: a drive or system folder of some host, this one
+  // included, over SMB, past every local spelling above.
+  if (local.starts_with("//")) {
+    const auto share = Segments(local.substr(2));
+    if (share.size() >= 2 && share[1].ends_with('$')) return kAdminShares;
+  }
+#else
   const std::string local = StripFileScheme(path);
+#endif
   // A pattern (glob('/home/*/.ssh/*'), read_csv('dir/*.csv')) is refused when it can
   // match a protected path or something inside one: the entries a glob lists can't be
   // filtered without a hook in DuckDB's file system, so they are never listed instead.
@@ -460,7 +568,7 @@ std::optional<std::string> SensitivePaths::Check(const std::string& path) const 
         if (inside.size() > pattern.size()) continue;  // it can only list a parent directory
         bool matches = true;
         for (std::size_t i = 0; i < inside.size() && matches; i++) {
-          matches = fnmatch(pattern[i].c_str(), inside[i].c_str(), 0) == 0;
+          matches = GlobSegmentMatches(pattern[i], inside[i]);
         }
         if (matches) return entry.category;
       }

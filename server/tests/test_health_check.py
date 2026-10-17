@@ -14,7 +14,7 @@ import time
 
 import httpx
 
-from conftest import free_port
+from conftest import STOP_SIGNAL, free_port
 
 
 def health(server, health_port: int | None = None) -> httpx.Response:
@@ -74,7 +74,7 @@ def test_stops_within_ten_seconds_with_a_hung_check(launcher):
     server = start(launcher=launcher, query="SELECT sleep_ms(30000)")
     eventually(server=server, status=503)
     started = time.monotonic()
-    server.process.terminate()
+    server.process.send_signal(STOP_SIGNAL)
     server.process.wait(timeout=15)
     assert time.monotonic() - started < 10
 

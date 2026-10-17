@@ -16,6 +16,8 @@
 #include <fstream>
 #include <stdexcept>
 
+#include "platform.hpp"
+
 namespace hardcharger {
 
 namespace asio = boost::asio;
@@ -116,7 +118,7 @@ HttpResponse Once(const std::string& url, http::verb method, const std::string& 
     if (auto bundle = FindSystemCaCertFile()) {
       tls->load_verify_file(*bundle);
     } else {
-      tls->set_default_verify_paths();
+      AddSystemTrustStore(tls->native_handle());  // OpenSSL's default paths; Windows' store
     }
     tls->set_verify_mode(ssl::verify_peer);
   }
@@ -159,6 +161,7 @@ std::optional<std::string> FindSystemCaCertFile() {
   if (const char* env = std::getenv("SSL_CERT_FILE"); env != nullptr && *env != '\0' && Readable(env)) {
     return std::string(env);
   }
+#ifndef _WIN32  // Windows has no bundle file: its certificate store is read instead
   static constexpr const char* kBundles[] = {
       "/etc/ssl/certs/ca-certificates.crt",    // Debian, Ubuntu, Alpine
       "/etc/pki/tls/certs/ca-bundle.crt",      // RHEL, CentOS, Fedora, Amazon Linux
@@ -171,6 +174,7 @@ std::optional<std::string> FindSystemCaCertFile() {
   for (const char* path : kBundles) {
     if (Readable(path)) return std::string(path);
   }
+#endif
   return std::nullopt;
 }
 

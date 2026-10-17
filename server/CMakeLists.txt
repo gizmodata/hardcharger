@@ -7,6 +7,15 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
 
+# Warnings, as each compiler spells them.
+if(MSVC)
+  set(HARDCHARGER_WARNINGS /W3)
+  set(HARDCHARGER_AUTHZ_WARNINGS /W3)
+else()
+  set(HARDCHARGER_WARNINGS -Wall -Wextra)
+  set(HARDCHARGER_AUTHZ_WARNINGS -Wall -Wextra -Wno-unused-parameter)
+endif()
+
 # DuckDB 2.0 and Arrow C++ (IPC only), built by scripts/build-deps.sh.
 set(HARDCHARGER_DEPS "${CMAKE_CURRENT_SOURCE_DIR}/.deps" CACHE PATH "Pinned dependency builds")
 set(WARPSQL_ARROW_PREFIX "${HARDCHARGER_DEPS}/arrow-install" CACHE PATH "" FORCE)
@@ -80,6 +89,7 @@ set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
 set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(YAML_MSVC_SHARED_RT ON CACHE BOOL "" FORCE)  # the DLL C runtime, as everything else
 FetchContent_Declare(
   yaml-cpp
   URL https://github.com/jbeder/yaml-cpp/archive/refs/tags/yaml-cpp-0.9.0.tar.gz
@@ -115,7 +125,7 @@ target_include_directories(hardcharger_authz PRIVATE src)
 target_include_directories(hardcharger_authz SYSTEM PRIVATE
                            "${WARPSQL_DUCKDB_PREFIX}/include/duckdb_third_party")
 target_link_libraries(hardcharger_authz PUBLIC warpsql_duckdb OpenSSL::Crypto)
-target_compile_options(hardcharger_authz PRIVATE -Wall -Wextra -Wno-unused-parameter)
+target_compile_options(hardcharger_authz PRIVATE ${HARDCHARGER_AUTHZ_WARNINGS})
 
 # Everything but main(), shared by the server and the unit tests.
 add_library(hardcharger_core STATIC
@@ -134,6 +144,7 @@ add_library(hardcharger_core STATIC
   src/metrics.cc
   src/oauth.cc
   src/patterns.cc
+  src/platform.cc
   src/sessions.cc
   src/settings.cc
   src/sql_functions.cc
@@ -142,7 +153,10 @@ add_library(hardcharger_core STATIC
 target_include_directories(hardcharger_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_sources(hardcharger_core PRIVATE $<TARGET_OBJECTS:hardcharger_authz>)
 target_link_libraries(hardcharger_core PUBLIC warpsql_duckdb OpenSSL::Crypto jwt-cpp::jwt-cpp yaml-cpp::yaml-cpp)
-target_compile_options(hardcharger_core PRIVATE -Wall -Wextra)
+target_compile_options(hardcharger_core PRIVATE ${HARDCHARGER_WARNINGS})
+if(WIN32)
+  target_link_libraries(hardcharger_core PUBLIC crypt32)  # the certificate store
+endif()
 
 function(hardcharger_rpath target)
   if(HARDCHARGER_STATIC)
@@ -157,14 +171,19 @@ function(hardcharger_rpath target)
 endfunction()
 
 add_executable(hardcharger-server src/main.cc)
+if(WIN32)
+  configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc" @ONLY)
+  target_sources(hardcharger-server PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc")
+endif()
 target_link_libraries(hardcharger-server PRIVATE hardcharger_core)
-target_compile_options(hardcharger-server PRIVATE -Wall -Wextra)
+target_compile_options(hardcharger-server PRIVATE ${HARDCHARGER_WARNINGS})
 hardcharger_rpath(hardcharger-server)
 
 # Unit tests of components that have no SQL surface of their own (googletest 1.18.0).
 # server/tests runs them through the per-file wrappers.
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)  # MSVC: the DLL C runtime, as everything else
 FetchContent_Declare(
   googletest
   URL https://github.com/google/googletest/archive/refs/tags/v1.18.0.tar.gz

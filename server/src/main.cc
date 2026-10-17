@@ -1,15 +1,9 @@
 // hardcharger-server: the server. See `hardcharger-server --help` for configuration.
 
-#include <csignal>
 #include <cmath>
 #include <fstream>
 #include <iostream>
 #include <thread>
-
-#if defined(__APPLE__)
-#include <mach/mach.h>
-#endif
-#include <unistd.h>
 
 #include "audit.hpp"
 #include "auth.hpp"
@@ -21,10 +15,12 @@
 #include "jwks.hpp"
 #include "logging.hpp"
 #include "oauth.hpp"
+#include "platform.hpp"
 #include "runtime.hpp"
 #include "tokens.hpp"
 #include "version.hpp"
 #include "warpsql/server.hpp"
+#include "warpsql/stop_signals.hpp"
 
 namespace hc = hardcharger;
 
@@ -149,22 +145,6 @@ double ParseBytes(const std::string& text) {
   return it == kUnits.end() ? NAN : number * it->second;
 }
 
-double ResidentBytes() {
-#if defined(__APPLE__)
-  mach_task_basic_info info{};
-  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
-  if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) {
-    return static_cast<double>(info.resident_size);
-  }
-  return NAN;
-#else
-  std::ifstream statm("/proc/self/statm");
-  long pages = 0, resident = 0;
-  if (statm >> pages >> resident) return static_cast<double>(resident) * static_cast<double>(sysconf(_SC_PAGESIZE));
-  return NAN;
-#endif
-}
-
 // Whether the last run of this database's server ended without a clean stop: a marker
 // beside the database file says "running" while a server runs and "clean" after it
 // stops. Only the process that can write the database (DuckDB lets one) keeps it; a
@@ -236,7 +216,7 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMar
     out.push_back({"hardcharger_queue_depth", {{"state", "queued"}}, static_cast<double>(runtime.admission.QueuedCount())});
     out.push_back({"hardcharger_draining", {}, runtime.draining ? 1.0 : 0.0});
     out.push_back({"hardcharger_health_check_status", {}, runtime.health && runtime.health->Healthy() ? 1.0 : 0.0});
-    out.push_back({"process_resident_memory_bytes", {}, ResidentBytes()});
+    out.push_back({"process_resident_memory_bytes", {}, hc::ResidentMemoryBytes()});
     out.push_back({"hardcharger_last_exit_unclean", {}, marker.last_unclean()});
     out.push_back({"hardcharger_unclean_exits_total", {}, marker.unclean_exits()});
     bool ok = true;
@@ -302,7 +282,13 @@ int main(int argc, char** argv) {
     }
     case hc::Action::kVerifyTls: {
       const auto bundle = hc::FindSystemCaCertFile();
-      std::cout << "verify-tls: CA bundle " << bundle.value_or("(none found; set SSL_CERT_FILE)") << "\n";
+      std::cout << "verify-tls: CA bundle " << bundle.value_or(
+#ifdef _WIN32
+                                                     "(the Windows certificate store; or set SSL_CERT_FILE)"
+#else
+                                                     "(none found; set SSL_CERT_FILE)"
+#endif
+                                                     ) << "\n";
       try {
         const hc::HttpResponse response = hc::HttpGet(loaded.verify_tls_url);
         std::cout << "verify-tls: OK " << loaded.verify_tls_url << " -> HTTP " << response.status << "\n";
@@ -317,12 +303,9 @@ int main(int argc, char** argv) {
   }
   const hc::Config& config = loaded.config;
 
-  // Block the stop signals before any thread starts, so only sigwait() below sees them.
-  sigset_t stop_signals;
-  sigemptyset(&stop_signals);
-  sigaddset(&stop_signals, SIGINT);
-  sigaddset(&stop_signals, SIGTERM);
-  pthread_sigmask(SIG_BLOCK, &stop_signals, nullptr);
+  // Before any thread starts, so only stop_signals.Wait() below sees the stop requests
+  // (SIGINT/SIGTERM; on Windows, the console's Ctrl+C/Ctrl+Break/close/shutdown events).
+  warpsql::StopSignals stop_signals;
 
   try {
     hc::ConfigureLogging(config.log_level, config.log_format, config.log_file);
@@ -433,8 +416,7 @@ int main(int argc, char** argv) {
     std::atomic<bool> exiting = false;
     std::thread watcher;
     std::thread signals([&] {
-      int signal = 0;
-      sigwait(&stop_signals, &signal);
+      stop_signals.Wait();
       if (exiting) return;
       if (!runtime.graceful_shutdown) {
         hc::Log(hc::LogLevel::kInfo, "stopping (graceful_shutdown is off)");
@@ -457,7 +439,7 @@ int main(int argc, char** argv) {
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
       });
-      sigwait(&stop_signals, &signal);
+      stop_signals.Wait();
       if (exiting) return;
       hc::Log(hc::LogLevel::kInfo, "stopping now");
       server.Stop();
@@ -466,7 +448,7 @@ int main(int argc, char** argv) {
     server.Wait();
     // Wake the signal thread (it may still wait for a signal) so nothing outlives the server.
     exiting = true;
-    kill(getpid(), SIGTERM);
+    stop_signals.Wake();
     signals.join();
     if (watcher.joinable()) watcher.join();
     if (access) access->Shutdown();  // the store poller, before the engine and DuckDB go

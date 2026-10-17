@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Hardcharger MSI (WiX 6), built by .github/workflows/windows.yml from the same
+  staged tree as the zip:
+
+    wix build installer/Hardcharger.wxs -arch x64|arm64 -d Version=X.Y.Z
+      -bindpath Stage=<the unpacked hardcharger-windows-*> -bindpath installer
+      -ext WixToolset.UI.wixext -o Hardcharger-<arch>.msi
+
+  It installs bin\ (hardcharger-server.exe and the Visual C++ runtime DLLs beside it), LICENSE
+  and CHANGELOG.md under Program Files\Hardcharger, and puts bin\ on the system PATH.
+  The UpgradeCode and the GUIDs below are permanent: changing the UpgradeCode orphans
+  existing installs.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="Hardcharger"
+           Manufacturer="GizmoData LLC"
+           Version="$(var.Version)"
+           UpgradeCode="{F678E976-9C49-4914-BE7C-294CA8571933}"
+           Scope="perMachine">
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Hardcharger is already installed." />
+    <Media Id="1" Cabinet="hardcharger.cab" EmbedCab="yes" />
+
+    <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+
+    <Feature Id="ProductFeature" Title="Hardcharger" Level="1">
+      <ComponentGroupRef Id="ProgramFiles" />
+      <ComponentGroupRef Id="PathEntry" />
+    </Feature>
+
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Hardcharger">
+        <Directory Id="BINFOLDER" Name="bin" />
+      </Directory>
+    </StandardDirectory>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="ProgramFiles">
+      <Files Directory="BINFOLDER" Include="!(bindpath.Stage)\bin\**" />
+      <Component Directory="INSTALLFOLDER" Guid="{C596126D-117A-4A3B-A2C7-29558489EC8C}">
+        <File Source="!(bindpath.Stage)\LICENSE" KeyPath="yes" />
+        <File Source="!(bindpath.Stage)\CHANGELOG.md" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="PathEntry">
+      <Component Directory="BINFOLDER" Guid="{55D1C17D-B663-4309-B32B-735F705CF798}">
+        <Environment Id="PATH" Name="PATH" Value="[BINFOLDER]" Permanent="no"
+                     Part="last" Action="set" System="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

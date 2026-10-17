@@ -8,6 +8,7 @@
 #include "duckdb_sql.hpp"
 #include "duckdb_v2.hpp"
 #include "logging.hpp"
+#include "platform.hpp"
 #include "runtime.hpp"
 
 namespace {
@@ -30,7 +31,7 @@ std::string Query(Db& db, const std::string& sql) { return warpduckdb::QueryText
 }  // namespace
 
 TEST(CatalogLogTest, LinesLandInTheirColumns) {
-  const auto file = std::filesystem::temp_directory_path() / ("hc_logs_" + std::to_string(::getpid()) + ".db");
+  const auto file = std::filesystem::temp_directory_path() / ("hc_logs_" + std::to_string(hardcharger::ProcessId()) + ".db");
   std::filesystem::remove(file);
   hardcharger::Config config;
   config.admin_password = "x";
