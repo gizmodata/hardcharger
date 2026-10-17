@@ -12,10 +12,10 @@ def test_server_starts_and_system_catalog_is_queryable(launcher, tmp_path):
                                  "HARDCHARGER_INIT_SQL_COMMANDS": "CREATE TABLE sentinel (n INTEGER); "
                                                                   "INSERT INTO sentinel VALUES (1);"})
     writer.stop()
-    server = launcher.start(args=["--database-filename", str(database), "-O"])
+    server = launcher.start(args=["--database", str(database), "--read-only"])
     session = server.admin()
     assert session.scalar(sql="SELECT n FROM sentinel") == 1
-    session.query(sql="SELECT * FROM _gizmosql_system.main.gizmosql_index_info LIMIT 1")
-    session.query(sql="SELECT * FROM _gizmosql_system.main.gizmosql_view_definition LIMIT 1")
+    session.query(sql="SELECT * FROM _hardcharger_system.main.hardcharger_index_info LIMIT 1")
+    session.query(sql="SELECT * FROM _hardcharger_system.main.hardcharger_view_definition LIMIT 1")
     problem = session.error(sql="INSERT INTO sentinel VALUES (2)")
     assert "read-only" in problem["detail"].lower() or "read only" in problem["detail"].lower(), problem

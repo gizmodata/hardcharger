@@ -39,9 +39,9 @@ duckdb_v2_connection_handle Connection() {
 std::optional<std::string> ClassifyGatedCommand(const std::string& sql) {
   for (const auto& piece : hardcharger::SplitStatements(Connection(), sql)) {
     if (hardcharger::ParseSettingCommand(piece)) {
-      // SET [GLOBAL] gizmosql.*: GLOBAL needs an admin (the settings registry refuses it).
+      // SET [GLOBAL] hardcharger.*: GLOBAL needs an admin (the settings registry refuses it).
       if (hardcharger::ParseSettingCommand(piece)->scope == hardcharger::SettingCommand::Scope::kGlobal) {
-        return "SET GLOBAL gizmosql." + hardcharger::ParseSettingCommand(piece)->name;
+        return "SET GLOBAL hardcharger." + hardcharger::ParseSettingCommand(piece)->name;
       }
       continue;
     }
@@ -194,7 +194,7 @@ TEST(AdminCommandGuard, SetGlobalIsGated) {
   EXPECT_TRUE(Gated("SET GLOBAL memory_limit = '10GB'"));
   EXPECT_TRUE(Gated("SET GLOBAL search_path = 'x'"));  // any setting under explicit GLOBAL
   EXPECT_TRUE(Gated("RESET GLOBAL memory_limit"));
-  EXPECT_TRUE(Gated("SET GLOBAL gizmosql.query_log_level = 'DEBUG'"));
+  EXPECT_TRUE(Gated("SET GLOBAL hardcharger.query_log_level = 'DEBUG'"));
 }
 
 TEST(AdminCommandGuard, BareSetOfDangerousGlobalSettingIsGated) {
@@ -212,7 +212,7 @@ TEST(AdminCommandGuard, HarmlessSessionSetIsAllowed) {
   EXPECT_FALSE(Gated("SET search_path = 'main'"));          // bare, harmless setting
   EXPECT_FALSE(Gated("SET TimeZone = 'UTC'"));
   EXPECT_FALSE(Gated("SET timezone = 'UTC'"));
-  EXPECT_FALSE(Gated("SET gizmosql.query_log_level = 'DEBUG'"));  // bare session-scoped
+  EXPECT_FALSE(Gated("SET hardcharger.query_log_level = 'DEBUG'"));  // bare session-scoped
 }
 
 // =============================================================================
@@ -395,7 +395,7 @@ TEST(AdminCommandGuard, RemoteReplacementScanIsAllowed) {
 
 TEST(AdminCommandGuard, QuackFunctionsAreGated) {
   // DuckDB's Quack remote protocol: quack_serve() would open a network server
-  // inside GizmoSQL. CALL, table-function and scalar forms are all gated.
+  // inside Hardcharger. CALL, table-function and scalar forms are all gated.
   EXPECT_EQ(Category("CALL quack_serve('quack:localhost:9494')"), "quack_serve()");
   EXPECT_EQ(Category("SELECT * FROM quack_query('quack:host', 'SELECT 1')"),
             "quack_query()");

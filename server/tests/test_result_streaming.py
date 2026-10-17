@@ -22,7 +22,7 @@ INIT_SQL = ("CREATE TABLE stream_rows AS SELECT i AS id, 'row-' || i AS label, "
 
 @pytest.fixture(scope="module")
 def session(module_launcher):
-    return module_launcher.start(env={"INIT_SQL_COMMANDS": INIT_SQL}).admin()
+    return module_launcher.start(env={"HARDCHARGER_INIT_SQL_COMMANDS": INIT_SQL}).admin()
 
 
 def stats(batches: list[pa.RecordBatch]) -> dict:

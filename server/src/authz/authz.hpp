@@ -1,4 +1,4 @@
-// Role-based access control (Enterprise): users, roles and grants in SQL (CREATE USER,
+// Role-based access control: users, roles and grants in SQL (CREATE USER,
 // GRANT, REVOKE, SHOW GRANTS, ...), kept in a PostgreSQL store shared by every replica,
 // and checked inside DuckDB against each statement's own plan.
 //
@@ -54,13 +54,11 @@ struct Options {
   std::chrono::milliseconds policy_service_timeout{2000};
   // How often to look for changes other replicas made.
   std::chrono::milliseconds poll_interval{1000};
-  // No store: only sign-in tokens' catalog_access rules restrict sessions (license
-  // feature catalog_permissions, GizmoSQL 1.x's per-catalog permissions). Users, roles
-  // and grants don't exist; access-control statements are refused.
+  // No store: sign-in tokens' catalog_access rules restrict sessions (per-catalog
+  // permissions), and every principal but the administrator is held to a
+  // non-administrator's limits. Users, roles and grants don't exist; access-control
+  // statements are refused.
   bool catalog_rules_only = false;
-  // Whether the rules apply (license feature catalog_permissions); without it a
-  // token's catalog_access rules are ignored, as in GizmoSQL 1.x.
-  bool catalog_rules_licensed = false;
 };
 
 // One catalog_access rule of a sign-in token: a catalog name or glob ('*', '?') and
@@ -151,7 +149,6 @@ class AccessControl {
 
   std::shared_ptr<RbacEngine> engine_;
   bool catalog_rules_only_ = false;
-  bool catalog_rules_licensed_ = false;
   std::vector<std::string> hidden_catalogs_;
   ScopedTokenSigner signer_;
   std::mutex sessions_mutex_;

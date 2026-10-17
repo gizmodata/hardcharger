@@ -1,9 +1,8 @@
-// Catalog logging (Enterprise feature instrumentation): every log line the server writes
-// also lands in a `logs` table, under GizmoSQL 1.x's name and columns, so logs can be
-// queried with SQL next to the instrumentation tables.
+// Catalog logging: every log line the server writes also lands in a `logs` table, so
+// logs can be queried with SQL next to the instrumentation tables.
 //
 // By default the table lives in its own DuckDB file (log_catalog_db_path, next to the
-// database), attached as _gizmosql_logs. log_catalog names a catalog the init SQL
+// database), attached as _hardcharger_logs. log_catalog names a catalog the init SQL
 // attaches instead (DuckLake or PostgreSQL), which several servers may share. Clients
 // can read the catalog (admins only) but never change it.
 //
@@ -30,7 +29,7 @@ namespace hardcharger {
 struct Runtime;
 
 // The default name of the log catalog.
-inline constexpr const char* kLogCatalog = "_gizmosql_logs";
+inline constexpr const char* kLogCatalog = "_hardcharger_logs";
 
 class CatalogLog {
  public:

@@ -97,13 +97,13 @@ TEST_F(SqlText, UnterminatedQuoteRunsToTheEnd) {
 }
 
 TEST_F(SqlText, SettingCommands) {
-  auto set = Setting("SET gizmosql.query_timeout = 5");
+  auto set = Setting("SET hardcharger.query_timeout = 5");
   ASSERT_TRUE(set);
   EXPECT_EQ(set->name, "query_timeout");
   EXPECT_EQ(set->value, "5");
   EXPECT_EQ(set->scope, SettingCommand::Scope::kAutomatic);
 
-  set = Setting("set global GizmoSQL.Query_Log_Level to 'DEBUG'");
+  set = Setting("set global HardCharger.Query_Log_Level to 'DEBUG'");
   ASSERT_TRUE(set);
   EXPECT_EQ(set->name, "query_log_level");
   EXPECT_EQ(set->value, "DEBUG");
@@ -114,12 +114,12 @@ TEST_F(SqlText, SettingCommands) {
   EXPECT_EQ(set->value, "{\"a\": 1}");
   EXPECT_EQ(set->scope, SettingCommand::Scope::kSession);
 
-  set = Setting("RESET gizmosql.query_timeout");
+  set = Setting("RESET hardcharger.query_timeout");
   ASSERT_TRUE(set);
   EXPECT_TRUE(set->reset);
 
   EXPECT_FALSE(Setting("SET memory_limit = '1GB'"));
-  EXPECT_FALSE(Setting("SET search_path = 'gizmosql.main'"));
+  EXPECT_FALSE(Setting("SET search_path = 'hardcharger.main'"));
 }
 
 TEST_F(SqlText, KillSessionCommands) {

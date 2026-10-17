@@ -32,9 +32,9 @@ def ipc_bytes(table: pa.Table) -> bytes:
 
 
 def mint_server_token(secret_key: str, subject: str = "admin", role: str = "admin",
-                      issuer: str = "gizmosql", lifetime_s: int = 3600, **claims) -> str:
-    """An access token in the server's own format (HS256 over secret_key), as GizmoSQL
-    1.x tooling mints them; 1.x's tests used these to act as non-admin principals."""
+                      issuer: str = "hardcharger", lifetime_s: int = 3600, **claims) -> str:
+    """An access token in the server's own format (HS256 over secret_key); the tests use
+    these to act as non-admin principals."""
     now = datetime.datetime.now(tz=datetime.UTC)
     payload = {"iss": issuer, "sub": subject, "role": role, "auth_method": "Basic",
                "iat": now, "exp": now + datetime.timedelta(seconds=lifetime_s), **claims}

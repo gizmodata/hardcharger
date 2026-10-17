@@ -20,10 +20,8 @@ using Traits = jwt::traits::boost_json;
 using warpsql::Error;
 using warpsql::ErrorCode;
 
-// Issuers whose server-signed tokens Hardcharger accepts: its own, and GizmoSQL 1.x's
-// (1.x tooling mints server tokens with iss=gizmosql).
+// The issuer of the tokens this server signs; it accepts no other.
 constexpr std::string_view kIssuer = "hardcharger";
-constexpr std::string_view kLegacyIssuer = "gizmosql";
 
 std::string Hex(const unsigned char* data, std::size_t size) {
   static constexpr char kHex[] = "0123456789abcdef";
@@ -79,7 +77,7 @@ warpsql::TokenService::Issued JwtTokenService::Issue(const warpsql::Principal& p
                    .set_payload_claim("role", jwt::basic_claim<Traits>(principal.role))
                    .set_payload_claim("auth_method", jwt::basic_claim<Traits>(principal.auth_method))
                    .set_payload_claim("instance_id", jwt::basic_claim<Traits>(instance_id_));
-  // Claims access control reads (as GizmoSQL 1.x names them): the password fingerprint
+  // Claims access control reads: the password fingerprint
   // a store user signed in with, a scoped token's record, the identity provider's groups.
   for (const char* claim : {"catalog_access", "credential", "scope_id", "idp"}) {
     if (const auto* value = principal.claims.if_contains(claim)) {
@@ -130,7 +128,7 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
   }();
   try {
     const std::string issuer = decoded.has_issuer() ? decoded.get_issuer() : "";
-    if (issuer != kIssuer && issuer != kLegacyIssuer) {
+    if (issuer != kIssuer) {
       throw invalid("a valid access token is required");
     }
     jwt::verify<Traits>()

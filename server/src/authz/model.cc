@@ -240,7 +240,7 @@ bool Snapshot::GrantCovers(const ObjectGrantRecord& grant, const AccessRequest& 
 
 namespace {
 
-// GizmoSQL 1.x's catalog pattern match: '*' any run (also empty), '?' one character.
+// The catalog pattern match: '*' any run (also empty), '?' one character.
 bool GlobMatches(std::string_view pattern, std::string_view text) {
   std::size_t p = 0, t = 0, star = std::string_view::npos, mark = 0;
   while (t < text.size()) {
@@ -264,7 +264,7 @@ bool GlobMatches(std::string_view pattern, std::string_view text) {
 }  // namespace
 
 CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const std::string& catalog) {
-  if (IdentifiersEqual(catalog, "system") || IdentifiersEqual(catalog, "_gizmosql_system")) {
+  if (IdentifiersEqual(catalog, "system") || IdentifiersEqual(catalog, "_hardcharger_system")) {
     return CatalogAccessLevel::kRead;
   }
   for (const auto& rule : rules) {

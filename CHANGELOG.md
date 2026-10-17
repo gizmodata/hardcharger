@@ -16,9 +16,8 @@ test battery, plus two security reviews of the result (see Fixed).
 
 ### Added
 
-- Role-based access control (Enterprise, license feature `rbac`), lifted from GizmoSQL
-  1.x's RBAC: `CREATE USER/ROLE`, `GRANT`/`REVOKE` (roles, table, view, column, schema and
-  catalog privileges, `WITH GRANT OPTION`, `WITH ADMIN OPTION`, cascading revokes),
+- Role-based access control, lifted from GizmoSQL 1.x's RBAC: `CREATE USER/ROLE`,
+  `GRANT`/`REVOKE` (roles, table, view, column, schema and catalog privileges, `WITH GRANT OPTION`, `WITH ADMIN OPTION`, cascading revokes),
   `SHOW GRANTS`, ownership (`ALTER ... OWNER TO`), views that read with their owner's
   rights, system privileges (`READ FILESYSTEM`, `MANAGE CATALOGS`, ...), row and masking
   policies, tenants, `SET ROLE`, identity-provider group mappings, scoped tokens and an
@@ -26,8 +25,7 @@ test battery, plus two security reviews of the result (see Fixed).
   plan, when it is bound and again before it is optimized; anything the check cannot
   classify is refused. Turned on by `rbac_store_uri` (a PostgreSQL database every replica
   shares, reached through DuckDB's `postgres` extension); `rbac_opa_url`,
-  `rbac_opa_timeout_ms` and `token_groups_claim` too, with GizmoSQL 1.x's environment
-  names.
+  `rbac_opa_timeout_ms` and `token_groups_claim` too.
 - Store users sign in with their password; their access tokens are checked against the
   store on every request, so dropping or disabling a user, changing their password or
   revoking a scoped token ends their sessions and tokens at once, on every replica, and a
@@ -41,25 +39,23 @@ test battery, plus two security reviews of the result (see Fixed).
 - A tenant's user is told about another tenant's objects exactly what it is told about
   missing ones, in errors, metadata, `DESCRIBE`, `CREATE VIEW` and session options.
 - Access-control audit records form a tamper-evident hash chain (HMAC-SHA256 with
-  `audit_chain_key`, SHA-256 without), as in GizmoSQL 1.x; `hardcharger
+  `audit_chain_key`, SHA-256 without); `hardcharger
   --verify-audit-log FILE` checks a JSON log.
 - DuckDB is built with a small binder patch (`server/scripts/patch-duckdb.cmake`) that
   lets access control see which part of a plan came from which view.
 - Tests for access control (`server/tests/test_rbac_*.py`, 262), including two replicas on
-  one store and a gate that access control costs no concurrency. They need PostgreSQL and
-  a test-license build (`-DHARDCHARGER_TRUST_TEST_LICENSES=ON`).
-- SQL functions for the session's context, as `HARDCHARGER_*` and GizmoSQL 1.x's
-  `GIZMOSQL_*` names: `USER()`, `ROLE()`, `VERSION()`, `EDITION()`, `CURRENT_SESSION()`
-  (a UUID), `CURRENT_INSTANCE()`, `CURRENT_CLUSTER()`, `INSTRUMENTATION_ENABLED()`,
-  `INSTRUMENTATION_CATALOG()`, `INSTRUMENTATION_SCHEMA()`; table functions
-  `gizmosql_settings()`, `gizmosql_sessions()` and `gizmosql_metrics()` (and
-  `hardcharger_*`).
-- Server settings in SQL: `SET [SESSION|GLOBAL] gizmosql.<name>` (or `hardcharger.<name>`)
-  and `RESET`, with 1.x's scopes: `query_timeout`, `query_log_level`, `graceful_shutdown`,
+  one store and a gate that access control costs no concurrency. They need PostgreSQL.
+- SQL functions for the session's context: `HARDCHARGER_USER()`, `_ROLE()`, `_VERSION()`,
+  `_CURRENT_SESSION()` (a UUID), `_CURRENT_INSTANCE()`, `_CURRENT_CLUSTER()`,
+  `_INSTRUMENTATION_ENABLED()`, `_INSTRUMENTATION_CATALOG()`, `_INSTRUMENTATION_SCHEMA()`;
+  table functions `hardcharger_settings()`, `hardcharger_sessions()` and
+  `hardcharger_metrics()`.
+- Server settings in SQL: `SET [SESSION|GLOBAL] hardcharger.<name>` and `RESET`, with
+  1.x's scopes: `query_timeout`, `query_log_level`, `graceful_shutdown`,
   `shutdown_grace_period_seconds`, the statement queue's limits, `bypass_queue`, the
   session and query tags; startup settings say where to change them. `SET GLOBAL` needs
-  an admin; Enterprise settings need their license feature.
-- `KILL SESSION '<uuid>'` (license feature `kill_session`): ends another session at once,
+  an admin.
+- `KILL SESSION '<uuid>'`: ends another session at once,
   frees its `max_sessions` place, and its next request gets `session_ended`.
 - `max_sessions` (admins are never capped; `too_many_sessions`), `session_idle_timeout`.
 - The admin command guard (servers without access control): users without the admin role can't ATTACH/DETACH, INSTALL or
@@ -67,16 +63,15 @@ test battery, plus two security reviews of the result (see Fixed).
   read local files (`read_csv('/x')`, `FROM 'x.csv'`), EXPORT/IMPORT DATABASE, CONNECT,
   manage secrets, or use `quack_*()`; only literal remote URLs pass where a path decides.
 - The sensitive path guard (`block_sensitive_paths`, `sensitive_paths`): no statement may
-  name credential or system files (`~/.ssh`, `/etc/shadow`, the server's TLS key and
-  license, ...), however spelled; `secret_directory` can't change after startup. And
+  name credential or system files (`~/.ssh`, `/etc/shadow`, the server's TLS key, ...), however spelled; `secret_directory` can't change after startup. And
   `allow_unredacted_secrets` can't be turned on (`block_unredacted_secrets`); SQL with a
   NUL byte is refused.
-- `_gizmosql_system`, a read-only catalog with `gizmosql_index_info` and
-  `gizmosql_view_definition`.
-- The statement queue (license feature `statement_queue`): `max_concurrent_statements`,
-  `max_queued_statements`, `max_queue_wait`, `admin_bypass_queue_default`.
-- Metrics (license feature `metrics`): `enable_metrics`, `GET /metrics` on `metrics_port`
-  under 1.x's metric names, `gizmosql_metrics()`, the unclean-exit marker.
+- `_hardcharger_system`, a read-only catalog with `hardcharger_index_info` and
+  `hardcharger_view_definition`.
+- The statement queue: `max_concurrent_statements`, `max_queued_statements`,
+  `max_queue_wait`, `admin_bypass_queue_default`.
+- Metrics: `enable_metrics`, `GET /metrics` on `metrics_port` (`hardcharger_*` metrics),
+  `hardcharger_metrics()`, the unclean-exit marker.
 - The health check runs `health_check_query` in the background every
   `health_check_interval_seconds`; a probe answers from the last outcome, which goes stale
   after `health_check_staleness_seconds`.
@@ -87,48 +82,43 @@ test battery, plus two security reviews of the result (see Fixed).
 - `auth_log_level`, `query_log_level`, `session_log_level`, `log_file`; a bearer token's
   first use logs at INFO, its repeats at DEBUG; JSON lines carry `instance_id` and
   `cluster_id`.
-- `cluster_id`, `max_header_bytes` (1.x's `--max-metadata-size`), `result_batch_rows`
-  (default 2048, as 1.x streamed), and GizmoSQL 1.x's flags as aliases (`--readonly`,
-  `-D`, `--tls CERT KEY`, `--query-timeout`, ...).
-- Instrumentation (license feature `instrumentation`): `enable_instrumentation` records
-  instances, sessions, statements and executions (with their queue wait, fetch timeline
-  and status) in `_gizmosql_instr`, under 1.x's tables, views and columns, in a DuckDB
+- `cluster_id`, `max_header_bytes` (what 1.x's `--max-metadata-size` capped),
+  `result_batch_rows` (default 2048, as 1.x streamed).
+- Instrumentation: `enable_instrumentation` records instances, sessions, statements and
+  executions (with their queue wait, fetch timeline and status) in `_hardcharger_instr`,
+  with 1.x's tables, views and columns (the version column is `hardcharger_version`), in a DuckDB
   file next to the database (`instrumentation_db_path`) or in a DuckLake or PostgreSQL
   catalog the init SQL attaches (`instrumentation_catalog`, `instrumentation_schema`). A
-  killed server's open rows are closed at the next start; a legacy schema with naive
-  timestamps is migrated. Queued statements show as `queued` while they wait.
-- `instance_tag`, `SET gizmosql.session_tag` and `SET gizmosql.query_tag`, recorded with
+  killed server's open rows are closed at the next start. Queued statements show as `queued` while they wait.
+- `instance_tag`, `SET hardcharger.session_tag` and `SET hardcharger.query_tag`, recorded with
   the instance, the session and each statement; `capture_query_profile` (`off`,
   `standard`, `detailed`; also `SET [GLOBAL]`) stores DuckDB's JSON query profile with
   each execution.
-- Catalog logging (license feature `instrumentation`): `enable_catalog_logging` also
-  writes every log line to `_gizmosql_logs.logs` (1.x's columns), in its own file
+- Catalog logging: `enable_catalog_logging` also writes every log line to
+  `_hardcharger_logs.logs` (1.x's columns), in its own file
   (`log_catalog_db_path`) or a DuckLake or PostgreSQL catalog (`log_catalog`,
   `log_schema`), in batches from a background writer.
 - The instrumentation and log catalogs are the server's: admins may read them, nobody may
   write, detach or `USE` them, and non-admins don't see them in metadata.
-- Identity provider sign-in (license feature `external_auth`): ID tokens verified with the
+- Identity provider sign-in: ID tokens verified with the
   provider's JWKS (`token_jwks_uri`, or the one `token_allowed_issuer`'s OpenID
   configuration names), RS256/384/512 and ES256/384/512, through `token_exchange` or as
   the password of user `token`.
-- Browser sign-in (license feature `external_auth`): `oauth_client_id` runs GizmoSQL 1.x's
-  OAuth server on `oauth_port` (default 31339) with its routes (`/oauth/initiate`,
+- Browser sign-in: `oauth_client_id` runs GizmoSQL 1.x's OAuth server on `oauth_port`
+  (default 31339) with its routes (`/oauth/initiate`,
   `/oauth/start`, `/oauth/callback`, `/oauth/token/<uuid>`), as a confidential client
   (`oauth_client_secret`, `oauth_scopes`, `oauth_base_url`, `oauth_redirect_uri`,
   `oauth_instance_id` for a shared callback proxy, `oauth_disable_tls` behind a TLS proxy).
 - `--verify-tls URL`: fetches a URL with the system's CA bundle (`SSL_CERT_FILE`, else the
   first well-known bundle), as outbound HTTPS does, and exits 0 or 1.
-- GizmoSQL 1.x's OpenTelemetry options stop the server when set, rather than being
-  ignored (this version has no OpenTelemetry export).
 - The GizmoSQL 1.x test battery, ported (`server/tests`, scoreboard in
-  `server/tests/BATTERY.md`), with C++ unit tests (`server/unit`, googletest 1.18.0). The
-  Enterprise tests run on the test-license build, with a license each test signs for
-  exactly the features it names.
-- Per-catalog permissions (license feature `catalog_permissions`): a sign-in token's
+  `server/tests/BATTERY.md`), with C++ unit tests (`server/unit`, googletest 1.18.0), on
+  the one build that ships.
+- Per-catalog permissions: a sign-in token's
   `catalog_access` rules (`read`, `write`, `none` per catalog name or glob, first match
   wins, no match is no access) are enforced on every statement's plan by access control,
   without a store: reads and writes per catalog (temp included), and what the user sees
-  in SHOW DATABASES, `information_schema`, `duckdb_*()`, the `_gizmosql_system` views and
+  in SHOW DATABASES, `information_schema`, `duckdb_*()`, the `_hardcharger_system` views and
   the metadata requests; refusals read as in GizmoSQL 1.x ("Access denied: You do not have
   write access to catalog ..."). Under RBAC the rules grant nothing.
 - The instrumentation and log catalogs are now also left out of SQL's own catalog
@@ -139,7 +129,7 @@ test battery, plus two security reviews of the result (see Fixed).
   read-only principals.
 - Access control and the battery's features work together: store users never see or
   write the instrumentation and log catalogs (admins read them, nobody writes them), may
-  call the server's SQL functions (`gizmosql_settings()`, ...), and are refused files,
+  call the server's SQL functions (`hardcharger_settings()`, ...), and are refused files,
   URLs, ATTACH and the like by access control's system privileges rather than by the
   admin command guard, which stays for servers without access control. Access-control
   statements are counted, logged and recorded like other statements
@@ -147,14 +137,34 @@ test battery, plus two security reviews of the result (see Fixed).
 
 ### Changed
 
+- No license: every feature that was Enterprise in GizmoSQL 1.x is available to everyone,
+  each turned on by its own option. The license options (`license_key`,
+  `license_key_file`) and their environment variables are gone: a license flag is an
+  unknown option like any other. There is one build, and it has everything: no
+  test-license build, no Enterprise/Core build switch, no edition (`EDITION()`, the
+  `edition` setting, server-info and metrics label, and the instances table's
+  `gizmosql_edition` column are gone).
+- Hardcharger takes no GizmoSQL 1.x names: no `GIZMOSQL_*` environment variables, no 1.x
+  flags (`--readonly`, `-D`, `--tls CERT KEY`, ...) or unprefixed environment names
+  (`TLS_CERT`, `SECRET_KEY`, `INIT_SQL_COMMANDS`, ...), no `SET gizmosql.*`, no
+  `GIZMOSQL_*()` or `gizmosql_*()` functions, no `_gizmosql_*` catalogs, no `gizmosql_*`
+  metrics, no `gizmosql_rbac` store schema, no `GIZMOSQL:COLUMN_DEFAULT` metadata key,
+  and no server tokens with `iss=gizmosql`. Every option is its `--flag`, its
+  `HARDCHARGER_*` variable or its YAML key; leftover GizmoSQL variables are not read. The
+  1.x-only options `backend` and `reject_unknown_sessions` are gone. See
+  `docs/migrating-from-gizmosql.md` for the name mapping.
+- The administrator's credentials are `--admin-username` / `--admin-password`
+  (`HARDCHARGER_ADMIN_USERNAME` / `HARDCHARGER_ADMIN_PASSWORD`, YAML `admin_username` /
+  `admin_password`); 0.1.x's `--username` / `--password` and `HARDCHARGER_USERNAME` /
+  `HARDCHARGER_PASSWORD` are no longer read.
 - Release images also go to Docker Hub (`gizmodata/hardcharger`), with the same tags as
   ghcr; the release refuses to push if that repository is not private.
 
 - `drain_seconds` is now `shutdown_grace_period_seconds` (default 300, as in 1.x).
 - Table schemas from `metadata/tables?include_schema=true` carry nullability, column
-  comments, auto-increment and defaults (`GIZMOSQL:COLUMN_DEFAULT`).
-- `reject_unknown_sessions` is accepted only as true (setting it false stops the
-  server): Warp SQL never recreates a session implicitly.
+  comments, auto-increment and defaults (`WARP:SQL:COLUMN_DEFAULT`).
+- Warp SQL never recreates a session implicitly: an unknown session id is
+  `session_not_found`.
 
 ### Fixed
 
@@ -179,7 +189,7 @@ test battery, plus two security reviews of the result (see Fixed).
   raw-word backstop. DuckDB parse errors that echo such a statement are dropped, ATTACH
   connection strings and credential-setting values are masked (idempotently, the 1.x key
   list plus `x-amz-*` and `user:***@` URLs), and all of it reaches the log output,
-  `_gizmosql_instr` (`sql_text`, `prepare_error`, `error_message`), the `_gizmosql_logs`
+  `_hardcharger_instr` (`sql_text`, `prepare_error`, `error_message`), the `_hardcharger_logs`
   catalog and the access-control audit records, which are redacted before they are sealed
   so the hash chain still verifies.
 - Statement logs, instrumentation's `sql_statements` and the catalog logs no longer keep
@@ -198,20 +208,20 @@ test battery, plus two security reviews of the result (see Fixed).
   encoded parameters bind; listing catalogs no longer opens every attached catalog; a
   stop with a request in flight no longer crashes.
 - Table schemas from metadata give PRECISION in decimal digits for every numeric type,
-  column comments (REMARKS) and defaults (`WARP:SQL:COLUMN_DEFAULT`; Hardcharger reports
-  them as `GIZMOSQL:COLUMN_DEFAULT`, the key GizmoSQL 1.x used).
+  column comments (REMARKS) and defaults (`WARP:SQL:COLUMN_DEFAULT`).
 - (Warp SQL SDK) A server stopped with a request in flight no longer crashes;
   dictionary-encoded parameters bind; ingest turns null-typed columns into VARCHAR,
   converts day_time intervals and refuses types DuckDB can't store; parameter schemas
   carry DuckDB's own Arrow types (VARIANT, GEOMETRY and UUID extensions); listing
   catalogs no longer opens every attached catalog.
-- The `gizmosql_*()` table functions no longer destroy a column type DuckDB only lent them.
+- The `hardcharger_*()` table functions no longer destroy a column type DuckDB only lent them.
+- (Warp SQL SDK) Cancelling a statement just after submitting it no longer leaves it running:
+  an interrupt that reached DuckDB before its query began was forgotten, so the cancel is
+  now repeated until the statement ends.
 
 ### Known gaps
 
-- Not yet ported from GizmoSQL 1.x: OpenTelemetry. A server asked to export it
-  (`--otel-enabled`, `GIZMOSQL_OTEL_ENABLED=true`) refuses to start rather than run
-  without it.
+- Not yet ported from GizmoSQL 1.x: OpenTelemetry export.
 - Browser sign-in has only 1.x's routes on `oauth_port`; Warp SQL's `oauth_browser` flow
   (`/warp/v1/auth/oauth/flows`) needs the Warp SQL SDK to offer it.
 - Instrumentation's fetch times are when the server took each batch from DuckDB, not when

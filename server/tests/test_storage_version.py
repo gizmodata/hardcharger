@@ -1,6 +1,6 @@
 """Port of GizmoSQL 1.x tests/integration/test_storage_version.cpp (3 cases).
 
-storage_version (--storage-version, GIZMOSQL_STORAGE_VERSION) stamps new database files:
+storage_version (--storage-version, HARDCHARGER_STORAGE_VERSION) stamps new database files:
 duckdb_databases().tags['storage_version'] is DuckDB 2.0's own version when unset and
 v1.0.0+ when pinned to v1.0.0. All three apply; on DuckDB 2.0 the "latest" and "unset"
 cases are the same assertion from two configurations.
@@ -26,4 +26,4 @@ def test_tag_reflects_latest_storage_version(launcher, tmp_path):
 
 
 def test_tag_reflects_pinned_older_storage_version(launcher, tmp_path):
-    assert tag(launcher=launcher, tmp_path=tmp_path, env={"GIZMOSQL_STORAGE_VERSION": "v1.0.0"}) == "v1.0.0+"
+    assert tag(launcher=launcher, tmp_path=tmp_path, env={"HARDCHARGER_STORAGE_VERSION": "v1.0.0"}) == "v1.0.0+"

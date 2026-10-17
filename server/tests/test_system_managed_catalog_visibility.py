@@ -1,24 +1,24 @@
 """Port of GizmoSQL 1.x tests/integration/test_system_managed_catalog_visibility.cpp (2 cases).
 
 An admin sees the instrumentation catalog everywhere (catalogs metadata,
-duckdb_databases(), tables metadata, gizmosql_settings()). A non-admin sees it nowhere
+duckdb_databases(), tables metadata, hardcharger_settings()). A non-admin sees it nowhere
 and can't read it ("Only administrators").
 
 For non-admins: the catalogs, db-schemas and tables metadata requests (Warp SQL §10;
 1.x: GetCatalogs, GetDbSchemas, GetTables), the instrumentation rows of
-gizmosql_settings(), refusing any statement that names the catalog, and SQL's own catalog
+hardcharger_settings(), refusing any statement that names the catalog, and SQL's own catalog
 functions (duckdb_databases(), duckdb_schemas(), duckdb_tables(), information_schema,
 SHOW DATABASES, SHOW ALL TABLES), whose rows access control's plan rewrite filters.
 """
 
 import pytest
 
-CATALOG = "_gizmosql_instr"
+CATALOG = "_hardcharger_instr"
 
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
-    return module_launcher.start(features=["instrumentation"], args=["--enable-instrumentation"])
+    return module_launcher.start(args=["--enable-instrumentation"])
 
 
 @pytest.fixture(scope="module")
@@ -33,8 +33,8 @@ def test_admin_sees_instrumentation_catalog(server):
     assert CATALOG in admin.query(sql="SELECT database_name FROM duckdb_databases()").column(0).to_pylist()
     tables = admin.metadata(kind="tables", catalog=CATALOG).column("table_name").to_pylist()
     assert {"instances", "sessions", "sql_statements", "sql_executions"} <= set(tables), tables
-    assert admin.scalar(sql="SELECT value FROM gizmosql_settings() WHERE name = 'gizmosql.instrumentation_catalog'") == CATALOG
-    assert admin.scalar(sql="SELECT value FROM gizmosql_settings() WHERE name = 'gizmosql.enable_instrumentation'") == "true"
+    assert admin.scalar(sql="SELECT value FROM hardcharger_settings() WHERE name = 'hardcharger.instrumentation_catalog'") == CATALOG
+    assert admin.scalar(sql="SELECT value FROM hardcharger_settings() WHERE name = 'hardcharger.enable_instrumentation'") == "true"
 
 
 def test_non_admin_metadata_never_shows_it(user):
@@ -42,8 +42,8 @@ def test_non_admin_metadata_never_shows_it(user):
     assert catalogs and CATALOG not in catalogs, catalogs
     assert CATALOG not in user.metadata(kind="db-schemas").column("catalog_name").to_pylist()
     assert CATALOG not in user.metadata(kind="tables").column("catalog_name").to_pylist()
-    hidden = user.query(sql="SELECT name FROM gizmosql_settings() WHERE name LIKE 'gizmosql.%instrumentation%' "
-                            "OR name LIKE 'gizmosql.log_%'")
+    hidden = user.query(sql="SELECT name FROM hardcharger_settings() WHERE name LIKE 'hardcharger.%instrumentation%' "
+                            "OR name LIKE 'hardcharger.log_%'")
     assert hidden.num_rows == 0, hidden.to_pylist()
     assert "Only administrators" in user.error(sql=f"SELECT * FROM {CATALOG}.main.sessions LIMIT 1")["detail"]
 

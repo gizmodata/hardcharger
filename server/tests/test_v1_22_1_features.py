@@ -1,8 +1,8 @@
 """Port of GizmoSQL 1.x tests/test_v1_22_1_features.py (2 cases).
 
-PRIMARY KEY and UNIQUE constraints appear in gizmosql_index_info with NON_UNIQUE false
+PRIMARY KEY and UNIQUE constraints appear in hardcharger_index_info with NON_UNIQUE false
 (beside a CREATE INDEX), and a table's schema carries nullability, REMARKS,
-IS_AUTO_INCREMENT and GIZMOSQL:COLUMN_DEFAULT (1.x read it through ADBC's
+IS_AUTO_INCREMENT and WARP:SQL:COLUMN_DEFAULT (1.x's GIZMOSQL:COLUMN_DEFAULT; 1.x read it through ADBC's
 adbc_get_table_schema; here through Warp SQL's metadata/tables?include_schema=true). Both apply.
 """
 
@@ -19,7 +19,7 @@ def session(module_launcher):
 def test_constraint_backed_indexes_are_listed(session):
     session.execute(sql="CREATE TABLE v1221_t (id INT PRIMARY KEY, code VARCHAR UNIQUE, label VARCHAR)")
     session.execute(sql="CREATE INDEX v1221_t_label_idx ON v1221_t(label)")
-    rows = session.rows(sql='SELECT "INDEX_NAME", "NON_UNIQUE", "COLUMN_NAME" FROM _gizmosql_system.main.gizmosql_index_info '
+    rows = session.rows(sql='SELECT "INDEX_NAME", "NON_UNIQUE", "COLUMN_NAME" FROM _hardcharger_system.main.hardcharger_index_info '
                             "WHERE \"TABLE_NAME\" = 'v1221_t'")
     by_column = {r["COLUMN_NAME"]: r for r in rows}
     assert by_column["id"]["NON_UNIQUE"] is False, rows    # the PRIMARY KEY's index
@@ -37,4 +37,5 @@ def test_table_schema_carries_column_metadata(session):
     assert schema.field("id").nullable is False
     assert schema.field("name").metadata[b"ARROW:FLIGHT:SQL:REMARKS"] == b"employee name"
     assert schema.field("id").metadata[b"ARROW:FLIGHT:SQL:IS_AUTO_INCREMENT"] == b"1"
-    assert schema.field("note").metadata[b"GIZMOSQL:COLUMN_DEFAULT"] == b"'n/a'"
+    assert schema.field("note").metadata[b"WARP:SQL:COLUMN_DEFAULT"] == b"'n/a'"
+    assert b"GIZMOSQL:COLUMN_DEFAULT" not in schema.field("note").metadata

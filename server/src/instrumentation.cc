@@ -22,12 +22,12 @@ namespace hardcharger {
 
 namespace {
 
-// GizmoSQL 1.x's instrumentation schema, column for column. No keys or CHECK
+// The instrumentation schema. No keys or CHECK
 // constraints: DuckLake can't enforce them, and one schema serves every backend.
 constexpr const char* kSchemaSql = R"SQL(
 CREATE TABLE IF NOT EXISTS {P}.instances (
-    instance_id UUID NOT NULL, cluster_id UUID, gizmosql_version VARCHAR NOT NULL,
-    gizmosql_edition VARCHAR NOT NULL, duckdb_version VARCHAR NOT NULL, arrow_version VARCHAR NOT NULL,
+    instance_id UUID NOT NULL, cluster_id UUID, hardcharger_version VARCHAR NOT NULL,
+    duckdb_version VARCHAR NOT NULL, arrow_version VARCHAR NOT NULL,
     hostname VARCHAR, hostname_arg VARCHAR, server_ip VARCHAR, port INTEGER, database_path VARCHAR,
     tls_enabled BOOLEAN NOT NULL, tls_cert_path VARCHAR, tls_key_path VARCHAR, mtls_required BOOLEAN NOT NULL,
     mtls_ca_cert_path VARCHAR, readonly BOOLEAN NOT NULL, os_platform VARCHAR, os_name VARCHAR,
@@ -50,18 +50,8 @@ CREATE TABLE IF NOT EXISTS {P}.sql_executions (
     fetch_end_time TIMESTAMP WITH TIME ZONE, cursor_close_time TIMESTAMP WITH TIME ZONE, rows_fetched BIGINT,
     status VARCHAR NOT NULL, error_message VARCHAR, duration_ms BIGINT, total_duration_ms BIGINT,
     query_profile JSON);
-ALTER TABLE {P}.instances ADD COLUMN IF NOT EXISTS instance_tag JSON;
-ALTER TABLE {P}.instances ADD COLUMN IF NOT EXISTS cluster_id UUID;
-ALTER TABLE {P}.sessions ADD COLUMN IF NOT EXISTS session_tag JSON;
-ALTER TABLE {P}.sql_statements ADD COLUMN IF NOT EXISTS query_tag JSON;
-ALTER TABLE {P}.sql_executions ADD COLUMN IF NOT EXISTS enqueue_time TIMESTAMP WITH TIME ZONE;
-ALTER TABLE {P}.sql_executions ADD COLUMN IF NOT EXISTS query_profile JSON;
-ALTER TABLE {P}.sql_executions ADD COLUMN IF NOT EXISTS fetch_start_time TIMESTAMP WITH TIME ZONE;
-ALTER TABLE {P}.sql_executions ADD COLUMN IF NOT EXISTS fetch_end_time TIMESTAMP WITH TIME ZONE;
-ALTER TABLE {P}.sql_executions ADD COLUMN IF NOT EXISTS cursor_close_time TIMESTAMP WITH TIME ZONE;
-ALTER TABLE {P}.sql_executions ADD COLUMN IF NOT EXISTS total_duration_ms BIGINT;
 CREATE OR REPLACE VIEW {P}.session_activity AS
-SELECT i.instance_id, i.gizmosql_version, i.gizmosql_edition, i.duckdb_version, i.arrow_version, i.hostname,
+SELECT i.instance_id, i.hardcharger_version, i.duckdb_version, i.arrow_version, i.hostname,
        i.hostname_arg, i.server_ip, i.port, i.database_path, i.start_time AS instance_start_time,
        i.stop_time AS instance_stop_time, i.status AS instance_status, i.stop_reason AS instance_stop_reason,
        i.instance_tag, s.session_id, s.username, s.role, s.auth_method, s.peer, s.start_time AS session_start_time,
@@ -115,7 +105,7 @@ JOIN {P}.sessions s ON st.session_id = s.session_id;
 constexpr const char* kPostgresSchemaSql = R"SQL(
 CREATE SCHEMA IF NOT EXISTS {S};
 CREATE TABLE IF NOT EXISTS {S}.instances (
-    instance_id UUID PRIMARY KEY, cluster_id UUID, gizmosql_version VARCHAR NOT NULL, gizmosql_edition VARCHAR NOT NULL,
+    instance_id UUID PRIMARY KEY, cluster_id UUID, hardcharger_version VARCHAR NOT NULL,
     duckdb_version VARCHAR NOT NULL, arrow_version VARCHAR NOT NULL, hostname VARCHAR, hostname_arg VARCHAR,
     server_ip VARCHAR, port INTEGER, database_path VARCHAR, tls_enabled BOOLEAN NOT NULL, tls_cert_path VARCHAR,
     tls_key_path VARCHAR, mtls_required BOOLEAN NOT NULL, mtls_ca_cert_path VARCHAR, readonly BOOLEAN NOT NULL,
@@ -146,7 +136,7 @@ CREATE INDEX IF NOT EXISTS sql_statements_created_time ON {S}.sql_statements(cre
 CREATE INDEX IF NOT EXISTS sql_executions_statement_id ON {S}.sql_executions(statement_id);
 CREATE INDEX IF NOT EXISTS sql_executions_start_time ON {S}.sql_executions(execution_start_time);
 CREATE OR REPLACE VIEW {S}.session_activity AS
-SELECT i.instance_id, i.gizmosql_version, i.gizmosql_edition, i.duckdb_version, i.arrow_version, i.hostname,
+SELECT i.instance_id, i.hardcharger_version, i.duckdb_version, i.arrow_version, i.hostname,
        i.hostname_arg, i.server_ip, i.port, i.database_path, i.start_time AS instance_start_time,
        i.stop_time AS instance_stop_time, i.status AS instance_status, i.stop_reason AS instance_stop_reason,
        i.instance_tag, s.session_id, s.username, s.role, s.auth_method, s.peer, s.start_time AS session_start_time,
@@ -240,7 +230,7 @@ Instrumentation::Instrumentation(Runtime& runtime, duckdb_v2_instance_handle ins
       catalog_(external_ ? runtime.config.instrumentation_catalog : kInstrumentationCatalog),
       schema_(runtime.config.instrumentation_schema.empty() ? "main" : runtime.config.instrumentation_schema) {
   warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance_, connection_.out(), err); });
-  // Times are written as UTC literals; UTC also reads legacy naive timestamps as UTC.
+  // Times are written as UTC literals.
   warpduckdb::RunSql(connection_.get(), "SET TimeZone = 'UTC'");
 }
 
@@ -257,8 +247,8 @@ void Instrumentation::Attach() {
     // Next to the database file; in the working directory for an in-memory database.
     const auto& database = runtime_.config.database;
     const bool file = !database.empty() && database != ":memory:";
-    path = (file ? std::filesystem::path(database).parent_path() / "gizmosql_instrumentation.db"
-                 : std::filesystem::path("gizmosql_instrumentation.db"))
+    path = (file ? std::filesystem::path(database).parent_path() / "hardcharger_instrumentation.db"
+                 : std::filesystem::path("hardcharger_instrumentation.db"))
                .string();
   }
   // READ_WRITE: an instance opened read-only would otherwise open it read-only too.
@@ -288,28 +278,6 @@ void Instrumentation::Start() {
     }
     warpduckdb::RunSql(connection_.get(), Replace(kSchemaSql, "{P}", prefix));
   }
-  // A legacy schema kept its timing columns as naive TIMESTAMPs: make them TIMESTAMPTZ
-  // (UTC), keeping the rows.
-  static const std::vector<std::pair<std::string, std::string>> kTimeColumns = {
-      {"instances", "start_time"}, {"instances", "stop_time"}, {"sessions", "start_time"}, {"sessions", "stop_time"},
-      {"sql_statements", "created_time"}, {"sql_executions", "execution_start_time"},
-      {"sql_executions", "execution_end_time"}};
-  for (const auto& [table, column] : kTimeColumns) {
-    const std::string type = warpduckdb::QueryText(
-        connection_.get(), "SELECT data_type FROM duckdb_columns() WHERE database_name = " + Literal(catalog_) +
-                               " AND schema_name = " + Literal(schema_) + " AND table_name = " + Literal(table) +
-                               " AND column_name = " + Literal(column));
-    if (type == "TIMESTAMP") {
-      // Rewritten through a new column: DuckLake takes no USING clause, and a plain type
-      // change there would reread the naive values in each reader's time zone.
-      const std::string tmp = Quoted(column + "_tz");
-      warpduckdb::RunSql(connection_.get(),
-                         "ALTER TABLE " + Table(table) + " ADD COLUMN " + tmp + " TIMESTAMP WITH TIME ZONE;"
-                         "UPDATE " + Table(table) + " SET " + tmp + " = timezone('UTC', " + Quoted(column) + ");"
-                         "ALTER TABLE " + Table(table) + " DROP COLUMN " + Quoted(column) + ";"
-                         "ALTER TABLE " + Table(table) + " RENAME COLUMN " + tmp + " TO " + Quoted(column) + ";");
-    }
-  }
   // Rows a previous run left open (it was killed). Only in our own file: a shared
   // catalog's open rows may belong to live peers.
   if (!external_) {
@@ -332,12 +300,12 @@ void Instrumentation::Start() {
   uname(&host);
   const bool tls = !config.tls_cert.empty();
   Run("INSERT INTO " + Table("instances") +
-      " (instance_id, cluster_id, gizmosql_version, gizmosql_edition, duckdb_version, arrow_version, hostname, "
+      " (instance_id, cluster_id, hardcharger_version, duckdb_version, arrow_version, hostname, "
       "hostname_arg, server_ip, port, database_path, tls_enabled, tls_cert_path, tls_key_path, mtls_required, "
       "mtls_ca_cert_path, readonly, os_platform, os_name, os_version, cpu_arch, cpu_model, cpu_count, "
       "memory_total_bytes, start_time, status, instance_tag) VALUES (" +
       Literal(runtime_.instance_id) + ", " + Nullable(config.cluster_id) + ", " + Literal(std::string("v") + kVersion) +
-      ", " + Literal(runtime_.license.Edition()) + ", " + Literal(duckdb_version_) + ", " +
+      ", " + Literal(duckdb_version_) + ", " +
       Literal(arrow::GetBuildInfo().version_string) + ", " + Nullable(Hostname()) + ", " + Nullable(config.host) +
       ", NULL, " + std::to_string(config.port) + ", " + Nullable(config.database) + ", " + (tls ? "true" : "false") +
       ", " + Nullable(config.tls_cert) + ", " + Nullable(config.tls_key) + ", " +

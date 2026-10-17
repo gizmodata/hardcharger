@@ -71,8 +71,7 @@ const std::unordered_set<std::string>& AllowedTableFunctions() {
       "warp_upload",
       // The server's own, which read only what the session may see (its own sessions,
       // the settings rows that aren't admin-only).
-      "gizmosql_settings", "hardcharger_settings", "gizmosql_sessions", "hardcharger_sessions",
-      "gizmosql_metrics", "hardcharger_metrics"};
+      "hardcharger_settings", "hardcharger_sessions", "hardcharger_metrics"};
   return kNames;
 }
 
@@ -669,7 +668,6 @@ class PlanChecker {
     return compat::Str(dd::DatabaseManager::GetDefaultDatabase(context_));
   }
 
-  // GizmoSQL 1.x's words for a catalog_access refusal, which its clients match.
   [[noreturn]] void DenyByCatalogAccess(const std::string& catalog, CatalogAccessLevel needed) {
     throw dd::PermissionException(CatalogAccessDenied(catalog, needed, principal_.user_name));
   }
@@ -686,7 +684,7 @@ class PlanChecker {
         Deny(principal_, "the view " + owned_view_ + " cannot read a temporary " + TypeWord(type) +
                              " of this session");
       }
-      // catalog_access rules govern temp too (as in GizmoSQL 1.x): a read-only token
+      // catalog_access rules govern temp too: a read-only token
       // creates no temporary tables.
       if (!principal_.catalog_rules) return;
     }

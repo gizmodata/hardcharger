@@ -21,7 +21,7 @@ import pytest
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
-    return module_launcher.start(env={"GIZMOSQL_LOG_FORMAT": "json", "PRINT_QUERIES": "true"},
+    return module_launcher.start(env={"HARDCHARGER_LOG_FORMAT": "json", "HARDCHARGER_PRINT_QUERIES": "true"},
                                  args=["--database", "bulk_ingest_tester.duckdb"])
 
 

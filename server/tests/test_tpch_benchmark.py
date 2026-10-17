@@ -19,7 +19,7 @@ QUERIES = range(1, 23)
 
 @pytest.fixture(scope="module")
 def server(module_launcher, tmp_path_factory):
-    server = module_launcher.start(env={"PRINT_QUERIES": "false"})
+    server = module_launcher.start(env={"HARDCHARGER_PRINT_QUERIES": "false"})
     admin = server.admin()
     admin.execute(sql="INSTALL tpch; LOAD tpch;")
     admin.execute(sql="CALL dbgen(sf = 1)")

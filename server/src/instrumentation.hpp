@@ -1,11 +1,10 @@
-// Instrumentation (Enterprise feature instrumentation): the server records its own
-// lifecycle, its sessions, their statements and every execution in SQL tables, under
-// GizmoSQL 1.x's names and columns so existing queries, dashboards and retention jobs
-// keep working: instances, sessions, sql_statements, sql_executions, and the views
-// session_activity, active_sessions, session_stats and execution_details.
+// Instrumentation: the server records its own lifecycle, its sessions, their
+// statements and every execution in SQL tables: instances, sessions, sql_statements,
+// sql_executions, and the views session_activity, active_sessions, session_stats and
+// execution_details.
 //
 // By default the tables live in their own DuckDB file (instrumentation_db_path, next to
-// the database), attached as _gizmosql_instr. instrumentation_catalog names a catalog
+// the database), attached as _hardcharger_instr. instrumentation_catalog names a catalog
 // the init SQL attaches instead (DuckLake or PostgreSQL), which several servers may share.
 //
 // Writes go through one background thread in order, on their own connection, so a
@@ -32,7 +31,7 @@ struct Config;
 struct Runtime;
 
 // The default name of the instrumentation catalog.
-inline constexpr const char* kInstrumentationCatalog = "_gizmosql_instr";
+inline constexpr const char* kInstrumentationCatalog = "_hardcharger_instr";
 
 using WallTime = std::chrono::system_clock::time_point;
 

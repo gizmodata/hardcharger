@@ -28,7 +28,7 @@ SESSION_FREE_WITHIN = 30
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
-    return module_launcher.start(env={"PRINT_QUERIES": "true"})
+    return module_launcher.start(env={"HARDCHARGER_PRINT_QUERIES": "true"})
 
 
 def session_frees_within(session, seconds: float) -> float:

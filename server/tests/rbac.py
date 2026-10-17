@@ -1,22 +1,16 @@
-"""Helpers for the access-control (RBAC) tests: a PostgreSQL grant store per server, a
-test license, and a small Warp SQL client with the methods the tests use.
+"""Helpers for the access-control (RBAC) tests: a PostgreSQL grant store per server and a
+small Warp SQL client with the methods the tests use.
 
 The store comes from HARDCHARGER_TEST_RBAC_STORE_URI (default: the PostgreSQL the README
 starts on 127.0.0.1:55433); each server gets its own fresh database on it. An unreachable
 PostgreSQL fails the tests, never skips them.
-
-The license comes from HARDCHARGER_TEST_LICENSE_KEY (a GizmoData license with the rbac
-feature) or, by default, is signed with the tests' key, which only a server built with
--DHARDCHARGER_TRUST_TEST_LICENSES=ON accepts.
 """
 
 import dataclasses
 import datetime
 import io
 import os
-import pathlib
 import secrets
-import subprocess
 import time
 import urllib.parse
 
@@ -27,18 +21,16 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 
-from conftest import BINARY
 
 STORE_URI = os.environ.get("HARDCHARGER_TEST_RBAC_STORE_URI",
                            "postgresql://hardcharger:hardcharger@127.0.0.1:55433/hardcharger")
 SECRET_KEY = "hardcharger-rbac-tests-secret-key-0123456789"
 ADMIN = "admin"
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
-LICENSE_DIR = pathlib.Path(__file__).resolve().parent / "license"
 BLOCKED = "Hardcharger blocked"
 
 
-# ---- Store and license ----
+# ---- Store ----
 
 class Store:
     """Fresh PostgreSQL databases on the test server, one per Hardcharger server (or per
@@ -74,30 +66,13 @@ def redact(uri: str) -> str:
     return urllib.parse.urlunsplit(parts)
 
 
-def license_key(features: list[str] | None = None) -> str:
-    """A license key with `features` (default: rbac)."""
-    if given := os.environ.get("HARDCHARGER_TEST_LICENSE_KEY"):
-        return given
-    version = subprocess.run(args=[str(BINARY), "--version"], capture_output=True, text=True).stdout
-    if "test-license build" not in version:
-        pytest.fail(reason="the RBAC tests need a test-license build "
-                           "(-DHARDCHARGER_TRUST_TEST_LICENSES=ON) or HARDCHARGER_TEST_LICENSE_KEY")
-    now = datetime.datetime.now(tz=datetime.UTC)
-    return jwt.encode(payload={"jti": "rbac-tests", "iss": "GizmoData LLC", "sub": "tests@example.com",
-                               "aud": "Hardcharger tests", "iat": now,
-                               "exp": now + datetime.timedelta(days=1),
-                               "features": ["rbac"] if features is None else features},
-                      key=(LICENSE_DIR / "test-license-private.pem").read_text(), algorithm="RS256")
-
-
 def rbac_env(store_uri: str, **extra: str) -> dict[str, str]:
-    return {"HARDCHARGER_RBAC_STORE_URI": store_uri, "HARDCHARGER_LICENSE_KEY": license_key(),
-            "HARDCHARGER_SECRET_KEY": SECRET_KEY, "HARDCHARGER_ALLOW_CROSS_INSTANCE_TOKENS": "true",
+    return {"HARDCHARGER_RBAC_STORE_URI": store_uri, "HARDCHARGER_SECRET_KEY": SECRET_KEY, "HARDCHARGER_ALLOW_CROSS_INSTANCE_TOKENS": "true",
             **extra}
 
 
 def mint(user: str, role: str = "user", **claims) -> str:
-    """An access token this server's secret key signs, as GizmoSQL 1.x tooling mints them."""
+    """An access token this server's secret key signs."""
     now = datetime.datetime.now(tz=datetime.UTC)
     return jwt.encode(payload={"iss": "hardcharger", "sub": user, "role": role, "iat": now,
                                "exp": now + datetime.timedelta(hours=1), **claims},

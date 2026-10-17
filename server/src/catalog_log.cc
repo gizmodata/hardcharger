@@ -16,7 +16,7 @@ namespace hardcharger {
 
 namespace {
 
-// GizmoSQL 1.x's log table, column for column: the fields people filter on are columns,
+// The log table: the fields people filter on are columns,
 // the rest of a line's fields ride along in `fields`. No key: the table is append-only.
 // {J} is the JSON type (VARCHAR on PostgreSQL, where DuckDB writes the text as is).
 constexpr const char* kTableSql =
@@ -137,8 +137,8 @@ void CatalogLog::Attach() {
     // Next to the database file; in the working directory for an in-memory database.
     const auto& database = runtime_.config.database;
     const bool file = !database.empty() && database != ":memory:";
-    path = (file ? std::filesystem::path(database).parent_path() / "gizmosql_logs.db"
-                 : std::filesystem::path("gizmosql_logs.db"))
+    path = (file ? std::filesystem::path(database).parent_path() / "hardcharger_logs.db"
+                 : std::filesystem::path("hardcharger_logs.db"))
                .string();
   }
   // READ_WRITE: an instance opened read-only would otherwise open it read-only too.

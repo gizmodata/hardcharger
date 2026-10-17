@@ -47,7 +47,7 @@ TEST(Redaction, CredentialSettings) {
   EXPECT_TRUE(Redacted(LoggableSql("SET s3_secret_access_key='shh'")));
   EXPECT_TRUE(Redacted(LoggableSql("PRAGMA http_proxy_password = 'shh'")));
   // Ordinary settings are kept.
-  EXPECT_EQ(LoggableSql("SET gizmosql.query_tag = '{\"t\":1}'"), "SET gizmosql.query_tag = '{\"t\":1}'");
+  EXPECT_EQ(LoggableSql("SET hardcharger.query_tag = '{\"t\":1}'"), "SET hardcharger.query_tag = '{\"t\":1}'");
   EXPECT_EQ(LoggableSql("SET threads = 4"), "SET threads = 4");
 }
 

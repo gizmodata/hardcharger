@@ -20,7 +20,7 @@ namespace {
 namespace dd = duckdb;
 namespace compat = hardcharger::authz::ddb;
 
-constexpr const char* kSchema = "rbac_store.gizmosql_rbac";
+constexpr const char* kSchema = "rbac_store.hardcharger_rbac";
 
 std::string T(const char* table) { return std::string(kSchema) + "." + table; }
 
@@ -49,7 +49,7 @@ dd::Value OptText(const std::optional<std::string>& s) {
 }
 dd::Value Bool(bool b) { return dd::Value::BOOLEAN(b); }
 
-// String lists are stored as JSON arrays (["a","b"]), as GizmoSQL 1.x stores them.
+// String lists are stored as JSON arrays (["a","b"]).
 std::string ToJson(const std::vector<std::string>& values) {
   boost::json::array array;
   for (const auto& value : values) array.emplace_back(value);

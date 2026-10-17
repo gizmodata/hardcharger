@@ -1,13 +1,13 @@
 """Port of GizmoSQL 1.x tests/integration/test_oauth_server.cpp (9 cases: 8, and a
 non-Enterprise stub).
 
-Browser sign-in (license feature external_auth; --oauth-client-id and friends, the
-GIZMOSQL_OAUTH_* variables) against a mock OpenID Connect provider (mock_idp.py), on
+Browser sign-in (--oauth-client-id and friends, the
+HARDCHARGER_OAUTH_* variables) against a mock OpenID Connect provider (mock_idp.py), on
 1.x's routes: /oauth/initiate, /oauth/start, /oauth/callback, /oauth/token/<uuid>. The
 ID token the flow yields signs in through token_exchange (and as the password of user
 "token"), verified with the provider's JWKS. Not applicable: the stub, which only
-skipped on builds without Enterprise code (Hardcharger has one build; the license
-decides, see test_requires_external_auth).
+skipped on builds without Enterprise code (Hardcharger has one build, with no license:
+see test_needs_no_license).
 
 Strengthened: a completed flow's token is handed out once; the provider's error text is
 escaped in the page (1.x put it in the HTML as is); the oauth_instance_id state prefix;
@@ -49,7 +49,7 @@ def oauth_args(idp, port: int, *extra: str) -> list[str]:
 @pytest.fixture(scope="module")
 def server(module_launcher, idp):
     port = free_port()
-    running = module_launcher.start(features=["external_auth"], args=oauth_args(idp, port))
+    running = module_launcher.start(args=oauth_args(idp, port))
     running.oauth = httpx.Client(base_url=f"http://127.0.0.1:{port}", follow_redirects=False, timeout=30)
     return running
 
@@ -94,7 +94,7 @@ def test_successful_oauth_flow(server, idp):
         assert response.status_code == 200, response.text
         session = Client(base_url=server.base_url, token=response.json()["access_token"]).new_session()
         assert session.scalar(sql="SELECT 1 AS result") == 1
-        assert session.scalar(sql="SELECT GIZMOSQL_USER()") == "testuser@gizmodata.com"
+        assert session.scalar(sql="SELECT HARDCHARGER_USER()") == "testuser@gizmodata.com"
 
 
 def test_initiate_endpoint_returns_valid_json(server):
@@ -184,8 +184,7 @@ def test_provider_error_is_escaped(server):
 
 def test_instance_id_prefixes_the_state(launcher, idp):
     port = free_port()
-    server = launcher.start(features=["external_auth"],
-                            args=oauth_args(idp, port, "--oauth-instance-id", "replica-7",
+    server = launcher.start(args=oauth_args(idp, port, "--oauth-instance-id", "replica-7",
                                             "--oauth-base-url", "https://sign-in.example.test"))
     oauth = httpx.Client(base_url=f"http://127.0.0.1:{port}", follow_redirects=False)
     flow = oauth.get(url="/oauth/initiate").json()
@@ -198,11 +197,12 @@ def test_instance_id_prefixes_the_state(launcher, idp):
     assert oauth.get(url=f"/oauth/token/{flow['session_uuid']}").json()["status"] == "complete"
 
 
-def test_requires_external_auth(launcher, idp):
-    server = launcher.start(features=["instrumentation"], args=oauth_args(idp, free_port()), expect_up=False)
-    assert server.process.wait(timeout=20) != 0
-    assert "Server-side OAuth sign-in (oauth_client_id)" in server.log() and "external_auth" in server.log(), \
-        server.log()
+def test_needs_no_license(launcher, idp):
+    # 1.x refused the OAuth server without its license feature; Hardcharger has no license.
+    port = free_port()
+    server = launcher.start(args=oauth_args(idp, port))
+    response = httpx.get(url=f"http://127.0.0.1:{port}/oauth/initiate")
+    assert response.status_code == 200 and "session_uuid" in response.json(), server.log()
 
 
 def exchange(server, token: str) -> httpx.Response:
@@ -235,22 +235,20 @@ def test_jwks_verifies_provider_tokens(server, idp):
 def test_jwks_with_ec_keys(launcher):
     provider = MockIdP(audience=AUDIENCE, algorithm="ES256")
     try:
-        server = launcher.start(features=["external_auth"],
-                                args=["--token-allowed-issuer", provider.issuer, "--token-allowed-audience", AUDIENCE,
+        server = launcher.start(args=["--token-allowed-issuer", provider.issuer, "--token-allowed-audience", AUDIENCE,
                                       "--token-default-role", "user"])
         response = exchange(server=server, token=provider.id_token(email="ec@gizmodata.com"))
         assert response.status_code == 200, response.text
         session = Client(base_url=server.base_url, token=response.json()["access_token"]).new_session()
-        assert session.scalar(sql="SELECT GIZMOSQL_ROLE()") == "user"
+        assert session.scalar(sql="SELECT HARDCHARGER_ROLE()") == "user"
     finally:
         provider.stop()
 
 
-def test_jwks_sign_in_needs_external_auth(launcher, idp):
-    # token_jwks_uri set explicitly; without the feature the server starts, and refuses the
-    # tokens with the reason (as 1.x did).
-    server = launcher.start(features=["instrumentation"],
-                            args=["--token-allowed-issuer", idp.issuer, "--token-allowed-audience", AUDIENCE,
+def test_jwks_sign_in_needs_no_license(launcher, idp):
+    # token_jwks_uri set explicitly. 1.x refused these tokens without its license feature;
+    # Hardcharger accepts them.
+    server = launcher.start(args=["--token-allowed-issuer", idp.issuer, "--token-allowed-audience", AUDIENCE,
                                   "--token-default-role", "admin", "--token-jwks-uri", f"{idp.issuer}/jwks"])
     response = exchange(server=server, token=idp.id_token(email="a@gizmodata.com"))
-    assert response.status_code == 401 and "external_auth" in response.json()["detail"], response.text
+    assert response.status_code == 200, response.text

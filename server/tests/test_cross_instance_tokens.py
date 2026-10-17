@@ -2,9 +2,9 @@
 
 Access tokens are JWTs signed with the shared secret_key and carry the issuing
 instance's id. By default (strict) a token another instance issued is refused; with
-allow_cross_instance_tokens (GIZMOSQL_ALLOW_CROSS_INSTANCE_TOKENS) it is accepted, as a
+allow_cross_instance_tokens (HARDCHARGER_ALLOW_CROSS_INSTANCE_TOKENS) it is accepted, as a
 multi-replica cluster needs. The tokens are minted the way 1.x's tests minted them
-(iss=gizmosql, sub, role, auth_method, instance_id, session_id).
+(iss=hardcharger, sub, role, auth_method, instance_id, session_id).
 
 Strengthened: 1.x accepted any of three phrases for the strict refusal and asserted no
 reason for the wrong-secret case; here both assert 401 invalid_token, and the strict one
@@ -24,12 +24,12 @@ SECRET = "cross-instance-test-secret-0123456789abcdef"
 
 @pytest.fixture(scope="module")
 def strict(module_launcher):
-    return module_launcher.start(env={"SECRET_KEY": SECRET})
+    return module_launcher.start(env={"HARDCHARGER_SECRET_KEY": SECRET})
 
 
 @pytest.fixture(scope="module")
 def relaxed(module_launcher):
-    return module_launcher.start(env={"SECRET_KEY": SECRET, "GIZMOSQL_ALLOW_CROSS_INSTANCE_TOKENS": "true"})
+    return module_launcher.start(env={"HARDCHARGER_SECRET_KEY": SECRET, "HARDCHARGER_ALLOW_CROSS_INSTANCE_TOKENS": "true"})
 
 
 def foreign_token(secret: str = SECRET) -> str:

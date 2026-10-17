@@ -130,7 +130,7 @@ class GuardedPrepared : public warpsql::PreparedStatement {
   std::vector<PendingOwnership> ownership_;
 };
 
-// A prepared access-control statement: it runs when executed, as 1.x runs it when
+// A prepared access-control statement: it runs when executed, as it runs when
 // prepared would run it twice for clients that prepare and then execute.
 class PreparedAccessControl : public warpsql::PreparedStatement {
  public:
@@ -229,7 +229,7 @@ bool LooksLikeAccessControlStatement(std::string_view sql) { return LooksLikeRba
 // ---- AccessControl ----
 
 AccessControl::AccessControl(const Options& options)
-    : catalog_rules_only_(options.catalog_rules_only), catalog_rules_licensed_(options.catalog_rules_licensed) {
+    : catalog_rules_only_(options.catalog_rules_only) {
   RbacEngine::Options engine_options;
   // Rules only: an empty store of the process's own, which no statement can change.
   engine_options.store_uri = catalog_rules_only_ ? "memory" : options.store_uri;
@@ -303,13 +303,11 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
   // Rules only: a session without rules is the administrator, or another user who
   // reaches every catalog but the server's own, with a non-administrator's limits
   // (every plan checked: no files, secrets, extensions, ...).
-  if (catalog_rules_only_ && !catalog_rules_licensed_) who.catalog_access.reset();
   if (catalog_rules_only_ && !who.catalog_access && !who.superuser) {
     who.catalog_access = std::vector<CatalogAccessRule>{{"*", "write"}};
   }
   if (catalog_rules_only_ ? !who.catalog_access : who.superuser) {
-    // Without rules a token restricts nothing (as in GizmoSQL 1.x); under RBAC the
-    // administrator is allowed everything.
+    // The administrator without rules (rules-only), or under RBAC, is allowed everything.
     principal = Principal::Superuser(who.user_name);
   } else if (catalog_rules_only_) {
     // The rules restrict even the administrator, who alone sees the server's catalogs.
@@ -605,7 +603,7 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
     named_table = [&](const std::vector<std::string>& parts) {
       auto hidden = [&](const std::string& catalog) {
         if (snapshot->CatalogVisible(principal, catalog)) return false;
-        // A catalog_access refusal says so, in GizmoSQL 1.x's words; only the server's
+        // A catalog_access refusal says so; only the server's
         // own catalogs read as missing.
         const bool servers = std::any_of(principal.hidden_catalogs.begin(), principal.hidden_catalogs.end(),
                                          [&](const std::string& c) { return IdentifiersEqual(c, catalog); });

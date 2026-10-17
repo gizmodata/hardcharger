@@ -142,11 +142,8 @@ std::optional<SettingCommand> ParseSettingCommand(const Piece& piece) {
     name += "." + t[i + 1].Value();
     i += 2;
   }
-  std::string prefix;
-  for (const char* known : {"gizmosql.", "hardcharger."}) {
-    if (name.starts_with(known)) prefix = known;
-  }
-  if (prefix.empty() || name.size() == prefix.size()) return std::nullopt;
+  const std::string prefix = "hardcharger.";
+  if (!name.starts_with(prefix) || name.size() == prefix.size()) return std::nullopt;
   command.name = name.substr(prefix.size());
   if (command.reset) {
     if (i != t.size()) return std::nullopt;

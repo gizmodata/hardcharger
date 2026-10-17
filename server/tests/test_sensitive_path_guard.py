@@ -1,8 +1,8 @@
 """Port of GizmoSQL 1.x tests/integration/test_sensitive_path_guard.cpp (10 cases: 5 unit, 5 server).
 
-block_sensitive_paths (default on, GIZMOSQL_BLOCK_SENSITIVE_PATHS) keeps credential and
+block_sensitive_paths (default on, HARDCHARGER_BLOCK_SENSITIVE_PATHS) keeps credential and
 system files out of SQL's reach for every user, admins included; sensitive_paths
-(GIZMOSQL_SENSITIVE_PATHS) adds the operator's own (GizmoData Cloud passes its secret
+(HARDCHARGER_SENSITIVE_PATHS) adds the operator's own (GizmoData Cloud passes its secret
 mounts). The 5 policy cases are C++ unit tests (server/unit/sensitive_paths_test.cc),
 run here; the 5 server cases run below. All 10 apply.
 
@@ -45,7 +45,7 @@ def guard_dir(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def admin(module_launcher, guard_dir):
-    server = module_launcher.start(env={"GIZMOSQL_SENSITIVE_PATHS": str(guard_dir / "protected")})
+    server = module_launcher.start(env={"HARDCHARGER_SENSITIVE_PATHS": str(guard_dir / "protected")})
     return server.admin()
 
 
@@ -85,7 +85,7 @@ def test_secret_directory_cannot_be_changed(admin):
 
 
 def test_guard_off_allows_access(launcher, guard_dir):
-    server = launcher.start(env={"GIZMOSQL_SENSITIVE_PATHS": str(guard_dir / "protected"),
-                                 "GIZMOSQL_BLOCK_SENSITIVE_PATHS": "false"})
+    server = launcher.start(env={"HARDCHARGER_SENSITIVE_PATHS": str(guard_dir / "protected"),
+                                 "HARDCHARGER_BLOCK_SENSITIVE_PATHS": "false"})
     token = guard_dir / "protected" / "token.txt"
     assert server.admin().scalar(sql=f"SELECT content FROM read_text('{token}')") == "do-not-read"

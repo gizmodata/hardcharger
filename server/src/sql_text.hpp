@@ -1,6 +1,6 @@
 // SQL text as DuckDB's tokenizer sees it (v2 C API): statements split at their
 // terminators, and the commands Hardcharger handles itself before DuckDB parses
-// anything (DuckDB 2.0's grammar rejects `SET gizmosql.x` and `KILL SESSION`).
+// anything (DuckDB 2.0's grammar rejects `SET hardcharger.x` and `KILL SESSION`).
 #pragma once
 
 #include <duckdb_v2.h>
@@ -39,7 +39,7 @@ std::vector<Token> Tokenize(duckdb_v2_connection_handle connection, std::string_
 // whitespace are dropped. An unterminated quote runs to the end.
 std::vector<Piece> SplitStatements(duckdb_v2_connection_handle connection, std::string_view sql);
 
-// `SET [SESSION|GLOBAL|LOCAL] gizmosql.<name> = <value>` (or hardcharger.<name>),
+// `SET [SESSION|GLOBAL|LOCAL] hardcharger.<name> = <value>`,
 // and `RESET ...` of one.
 struct SettingCommand {
   enum class Scope { kAutomatic, kSession, kGlobal };

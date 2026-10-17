@@ -1,5 +1,5 @@
 // The server's view of its client sessions, beside the Warp SDK's own session table:
-// GizmoSQL-style session ids (UUIDs, as GIZMOSQL_CURRENT_SESSION() returns them), the
+// session ids (UUIDs, as HARDCHARGER_CURRENT_SESSION() returns them), the
 // max-sessions cap and KILL SESSION.
 #pragma once
 

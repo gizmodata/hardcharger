@@ -91,32 +91,31 @@ std::string_view ClassifyStatementError(std::string_view message) {
 
 FamilyInfo Family(std::string_view name) {
   static const std::map<std::string_view, FamilyInfo> kFamilies = {
-      {"gizmosql_statements_total", {"counter", "Client statements finished, by status."}},
-      {"gizmosql_statement_errors_total", {"counter", "Failed client statements, by error class."}},
-      {"gizmosql_statement_duration_seconds", {"histogram", "Client statement run time, by kind."}},
-      {"gizmosql_sessions_opened_total", {"counter", "Client sessions opened."}},
-      {"gizmosql_sessions_reaped_total", {"counter", "Client sessions ended for being idle or killed."}},
-      {"gizmosql_queue_rejected_total", {"counter", "Statements the queue refused or timed out."}},
-      {"gizmosql_queue_admin_bypass_total", {"counter", "Statements that skipped the queue."}},
-      {"gizmosql_queue_wait_seconds", {"histogram", "Time statements waited in the queue."}},
-      {"gizmosql_build_info", {"gauge", "Server build: version, edition, DuckDB version."}},
-      {"gizmosql_up_seconds", {"gauge", "Seconds since the server started."}},
-      {"gizmosql_sessions", {"gauge", "Open client sessions, by state."}},
-      {"gizmosql_session_limit", {"gauge", "max_sessions (0: unlimited)."}},
-      {"gizmosql_statements_active", {"gauge", "Statements running now."}},
-      {"gizmosql_concurrency_limit", {"gauge", "max_concurrent_statements (0: no queue)."}},
-      {"gizmosql_queue_depth", {"gauge", "Statements holding or waiting for a queue slot."}},
-      {"gizmosql_draining", {"gauge", "1 while the server shuts down."}},
-      {"gizmosql_health_check_status", {"gauge", "1 when the health check passes."}},
-      {"gizmosql_license_expiry_seconds", {"gauge", "Seconds until the license expires (NaN: none)."}},
-      {"gizmosql_metrics_collection_success", {"gauge", "1 when the last collection succeeded."}},
-      {"gizmosql_metrics_last_collection_success_seconds",
+      {"hardcharger_statements_total", {"counter", "Client statements finished, by status."}},
+      {"hardcharger_statement_errors_total", {"counter", "Failed client statements, by error class."}},
+      {"hardcharger_statement_duration_seconds", {"histogram", "Client statement run time, by kind."}},
+      {"hardcharger_sessions_opened_total", {"counter", "Client sessions opened."}},
+      {"hardcharger_sessions_reaped_total", {"counter", "Client sessions ended for being idle or killed."}},
+      {"hardcharger_queue_rejected_total", {"counter", "Statements the queue refused or timed out."}},
+      {"hardcharger_queue_admin_bypass_total", {"counter", "Statements that skipped the queue."}},
+      {"hardcharger_queue_wait_seconds", {"histogram", "Time statements waited in the queue."}},
+      {"hardcharger_build_info", {"gauge", "Server build: version, edition, DuckDB version."}},
+      {"hardcharger_up_seconds", {"gauge", "Seconds since the server started."}},
+      {"hardcharger_sessions", {"gauge", "Open client sessions, by state."}},
+      {"hardcharger_session_limit", {"gauge", "max_sessions (0: unlimited)."}},
+      {"hardcharger_statements_active", {"gauge", "Statements running now."}},
+      {"hardcharger_concurrency_limit", {"gauge", "max_concurrent_statements (0: no queue)."}},
+      {"hardcharger_queue_depth", {"gauge", "Statements holding or waiting for a queue slot."}},
+      {"hardcharger_draining", {"gauge", "1 while the server shuts down."}},
+      {"hardcharger_health_check_status", {"gauge", "1 when the health check passes."}},
+      {"hardcharger_metrics_collection_success", {"gauge", "1 when the last collection succeeded."}},
+      {"hardcharger_metrics_last_collection_success_seconds",
        {"gauge", "Unix time of the last successful collection."}},
-      {"gizmosql_duckdb_memory_limit_bytes", {"gauge", "DuckDB memory_limit in bytes."}},
-      {"gizmosql_duckdb_memory_usage_bytes", {"gauge", "Memory DuckDB's buffer manager holds."}},
+      {"hardcharger_duckdb_memory_limit_bytes", {"gauge", "DuckDB memory_limit in bytes."}},
+      {"hardcharger_duckdb_memory_usage_bytes", {"gauge", "Memory DuckDB's buffer manager holds."}},
       {"process_resident_memory_bytes", {"gauge", "Resident memory of the server process."}},
-      {"gizmosql_last_exit_unclean", {"gauge", "1 if the last run on this database did not stop cleanly (NaN: unknown)."}},
-      {"gizmosql_unclean_exits_total", {"counter", "Runs on this database that did not stop cleanly."}},
+      {"hardcharger_last_exit_unclean", {"gauge", "1 if the last run on this database did not stop cleanly (NaN: unknown)."}},
+      {"hardcharger_unclean_exits_total", {"counter", "Runs on this database that did not stop cleanly."}},
   };
   auto it = kFamilies.find(name);
   return it == kFamilies.end() ? FamilyInfo{"gauge", ""} : it->second;
@@ -137,9 +136,9 @@ void Metrics::RecordStatement(StatementKind kind, std::string_view status, std::
                               double seconds) {
   if (!enabled_) return;
   std::lock_guard lock(mutex_);
-  counters_[{"gizmosql_statements_total", {{"status", std::string(status)}}}] += 1;
+  counters_[{"hardcharger_statements_total", {{"status", std::string(status)}}}] += 1;
   if (status == "error") {
-    counters_[{"gizmosql_statement_errors_total", {{"class", std::string(error_class)}}}] += 1;
+    counters_[{"hardcharger_statement_errors_total", {{"class", std::string(error_class)}}}] += 1;
   }
   auto& histogram = durations_[{{"kind", std::string(StatementKindName(kind))}}];
   if (histogram.bounds.empty()) histogram.bounds = DurationBounds();
@@ -149,25 +148,25 @@ void Metrics::RecordStatement(StatementKind kind, std::string_view status, std::
 void Metrics::CountSessionOpened() {
   if (!enabled_) return;
   std::lock_guard lock(mutex_);
-  counters_[{"gizmosql_sessions_opened_total", {}}] += 1;
+  counters_[{"hardcharger_sessions_opened_total", {}}] += 1;
 }
 
 void Metrics::CountSessionReaped() {
   if (!enabled_) return;
   std::lock_guard lock(mutex_);
-  counters_[{"gizmosql_sessions_reaped_total", {}}] += 1;
+  counters_[{"hardcharger_sessions_reaped_total", {}}] += 1;
 }
 
 void Metrics::CountQueueRejected() {
   if (!enabled_) return;
   std::lock_guard lock(mutex_);
-  counters_[{"gizmosql_queue_rejected_total", {}}] += 1;
+  counters_[{"hardcharger_queue_rejected_total", {}}] += 1;
 }
 
 void Metrics::CountQueueBypass() {
   if (!enabled_) return;
   std::lock_guard lock(mutex_);
-  counters_[{"gizmosql_queue_admin_bypass_total", {}}] += 1;
+  counters_[{"hardcharger_queue_admin_bypass_total", {}}] += 1;
 }
 
 void Metrics::ObserveQueueWait(double seconds) {
@@ -188,15 +187,15 @@ std::vector<Sample> Metrics::Snapshot() const {
     std::lock_guard lock(mutex_);
     // Families that start at zero, so a scrape shows them before the first event.
     for (const char* status : {"ok", "error", "cancelled"}) {
-      auto key = std::make_pair(std::string("gizmosql_statements_total"), Labels{{"status", status}});
+      auto key = std::make_pair(std::string("hardcharger_statements_total"), Labels{{"status", status}});
       samples.push_back({key.first, key.second, counters_.contains(key) ? counters_.at(key) : 0});
     }
     for (const auto& [key, value] : counters_) {
-      if (key.first == "gizmosql_statements_total") continue;
+      if (key.first == "hardcharger_statements_total") continue;
       samples.push_back({key.first, key.second, value});
     }
-    for (const char* name : {"gizmosql_sessions_opened_total", "gizmosql_sessions_reaped_total",
-                             "gizmosql_queue_rejected_total", "gizmosql_queue_admin_bypass_total"}) {
+    for (const char* name : {"hardcharger_sessions_opened_total", "hardcharger_sessions_reaped_total",
+                             "hardcharger_queue_rejected_total", "hardcharger_queue_admin_bypass_total"}) {
       if (!counters_.contains({name, {}})) samples.push_back({name, {}, 0});
     }
     auto histogram = [&](const std::string& name, const Labels& labels, const Histogram& h) {
@@ -210,8 +209,8 @@ std::vector<Sample> Metrics::Snapshot() const {
       samples.push_back({name + "_sum", labels, h.sum});
       samples.push_back({name + "_count", labels, static_cast<double>(h.count)});
     };
-    for (const auto& [labels, h] : durations_) histogram("gizmosql_statement_duration_seconds", labels, h);
-    histogram("gizmosql_queue_wait_seconds", {}, queue_wait_);
+    for (const auto& [labels, h] : durations_) histogram("hardcharger_statement_duration_seconds", labels, h);
+    histogram("hardcharger_queue_wait_seconds", {}, queue_wait_);
     collectors = collectors_;
   }
   for (const auto& collect : collectors) collect(samples);

@@ -10,5 +10,5 @@ def test_disabled_by_default(launcher):
 
 
 def test_enabled_via_config(launcher):
-    server = launcher.start(env={"GIZMOSQL_ALLOW_UNSIGNED_EXTENSIONS": "true"})
+    server = launcher.start(env={"HARDCHARGER_ALLOW_UNSIGNED_EXTENSIONS": "true"})
     assert server.admin().scalar(sql="SELECT current_setting('allow_unsigned_extensions')") is True

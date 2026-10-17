@@ -1,6 +1,5 @@
 // Access tokens Hardcharger issues: JWTs signed with the server's secret key (HS256),
 // so they survive a restart and, with a shared key, work on every replica of a cluster.
-// The claims are GizmoSQL 1.x's, so 1.x tooling that mints its own tokens keeps working.
 #pragma once
 
 #include <chrono>

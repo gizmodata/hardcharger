@@ -36,14 +36,14 @@ def run_in_background(session, sql: str) -> dict:
 def wait_running(session, timeout: float = 10) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if session.scalar(sql="SELECT count(*) FROM gizmosql_sessions() WHERE running AND NOT is_current") > 0:
+        if session.scalar(sql="SELECT count(*) FROM hardcharger_sessions() WHERE running AND NOT is_current") > 0:
             return
         time.sleep(0.05)
     raise AssertionError("the slow statement never started")
 
 
 def test_drains_in_flight_and_rejects_new_work(launcher):
-    server = launcher.start(env={"GIZMOSQL_GRACEFUL_SHUTDOWN": "true", "GIZMOSQL_SHUTDOWN_GRACE_PERIOD_SECONDS": "30"})
+    server = launcher.start(env={"HARDCHARGER_GRACEFUL_SHUTDOWN": "true", "HARDCHARGER_SHUTDOWN_GRACE_PERIOD_SECONDS": "30"})
     slow = server.admin()
     probe = server.admin()
     outcome = run_in_background(session=slow, sql="SELECT sleep_ms(4000) AS slept")
@@ -61,7 +61,7 @@ def test_drains_in_flight_and_rejects_new_work(launcher):
 
 
 def test_stops_promptly_when_idle(launcher):
-    server = launcher.start(env={"GIZMOSQL_SHUTDOWN_GRACE_PERIOD_SECONDS": "300"})
+    server = launcher.start(env={"HARDCHARGER_SHUTDOWN_GRACE_PERIOD_SECONDS": "300"})
     assert server.admin().scalar(sql="SELECT 1") == 1
     started = time.monotonic()
     server.process.send_signal(signal.SIGTERM)
@@ -84,7 +84,7 @@ def test_real_signal_drives_drain(launcher):
 
 
 def test_grace_period_elapsed_forces_stop(launcher):
-    server = launcher.start(env={"GIZMOSQL_SHUTDOWN_GRACE_PERIOD_SECONDS": "2"})
+    server = launcher.start(env={"HARDCHARGER_SHUTDOWN_GRACE_PERIOD_SECONDS": "2"})
     slow = server.admin()
     outcome = run_in_background(session=slow, sql=LONG)
     wait_running(session=server.admin())
@@ -98,7 +98,7 @@ def test_grace_period_elapsed_forces_stop(launcher):
 
 
 def test_second_signal_forces_stop(launcher):
-    server = launcher.start(env={"GIZMOSQL_SHUTDOWN_GRACE_PERIOD_SECONDS": "300"})
+    server = launcher.start(env={"HARDCHARGER_SHUTDOWN_GRACE_PERIOD_SECONDS": "300"})
     slow = server.admin()
     outcome = run_in_background(session=slow, sql=LONG)
     wait_running(session=server.admin())
@@ -113,7 +113,7 @@ def test_second_signal_forces_stop(launcher):
 
 
 def test_without_graceful_shutdown_the_first_signal_stops(launcher):
-    server = launcher.start(env={"GIZMOSQL_GRACEFUL_SHUTDOWN": "false"})
+    server = launcher.start(env={"HARDCHARGER_GRACEFUL_SHUTDOWN": "false"})
     slow = server.admin()
     outcome = run_in_background(session=slow, sql=LONG)
     wait_running(session=server.admin())

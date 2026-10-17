@@ -37,7 +37,7 @@ FetchContent_MakeAvailable(yaml-cpp)
 
 configure_file(src/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.hpp" @ONLY)
 
-# Access control (role-based, Enterprise). The one part of Hardcharger that uses DuckDB's
+# Access control (role-based). The one part of Hardcharger that uses DuckDB's
 # internal C++ headers (the plan check reads DuckDB's logical plans); the rest of the
 # server includes only src/authz/authz.hpp. It must be compiled exactly as libduckdb was
 # (Release, no DuckDB debug or safety switches): its symbols are mangled with DuckDB's
@@ -66,10 +66,6 @@ target_include_directories(hardcharger_authz SYSTEM PRIVATE
 target_link_libraries(hardcharger_authz PUBLIC warpsql_duckdb OpenSSL::Crypto)
 target_compile_options(hardcharger_authz PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
-# Test builds trust a license key whose private half is in server/tests/license, so the
-# Enterprise tests can run without a GizmoData license. Never for a release.
-option(HARDCHARGER_TRUST_TEST_LICENSES "Trust the tests' license signing key (tests only)" OFF)
-
 # Everything but main(), shared by the server and the unit tests.
 add_library(hardcharger_core STATIC
   src/admission.cc
@@ -83,7 +79,6 @@ add_library(hardcharger_core STATIC
   src/http_client.cc
   src/instrumentation.cc
   src/jwks.cc
-  src/license.cc
   src/logging.cc
   src/metrics.cc
   src/oauth.cc
@@ -97,13 +92,6 @@ target_include_directories(hardcharger_core PUBLIC src "${CMAKE_CURRENT_BINARY_D
 target_sources(hardcharger_core PRIVATE $<TARGET_OBJECTS:hardcharger_authz>)
 target_link_libraries(hardcharger_core PUBLIC warpsql_duckdb OpenSSL::Crypto jwt-cpp::jwt-cpp yaml-cpp::yaml-cpp)
 target_compile_options(hardcharger_core PRIVATE -Wall -Wextra)
-if(HARDCHARGER_TRUST_TEST_LICENSES)
-  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/tests/license/test-license-public.pem" TEST_LICENSE_KEY)
-  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/test_license.hpp"
-       "// Generated: the tests' license key (HARDCHARGER_TRUST_TEST_LICENSES).\n"
-       "#define HARDCHARGER_TEST_LICENSE_PUBLIC_KEY R\"(${TEST_LICENSE_KEY})\"\n")
-  target_compile_definitions(hardcharger_core PRIVATE HARDCHARGER_TRUST_TEST_LICENSES=1)
-endif()
 
 function(hardcharger_rpath target)
   if(APPLE)

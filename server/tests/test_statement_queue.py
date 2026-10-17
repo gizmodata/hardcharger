@@ -1,8 +1,8 @@
 """Port of GizmoSQL 1.x tests/integration/test_statement_queue.cpp (8 cases).
 
-The statement queue (license feature statement_queue): max_concurrent_statements
+The statement queue: max_concurrent_statements
 (--max-concurrent-statements) statements run at once, the rest wait their turn; admins
-skip it unless they SET SESSION gizmosql.bypass_queue = false. A queued statement can
+skip it unless they SET SESSION hardcharger.bypass_queue = false. A queued statement can
 be killed (KILL SESSION) or time out (Warp-Statement-Timeout, 1.x: a gRPC deadline),
 and then never runs once a slot frees.
 
@@ -19,14 +19,13 @@ import pytest
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
-    return module_launcher.start(features=["statement_queue", "kill_session", "metrics", "instrumentation"],
-                                 args=["--max-concurrent-statements", "2", "--enable-metrics", "--metrics-port", "0",
+    return module_launcher.start(args=["--max-concurrent-statements", "2", "--enable-metrics", "--metrics-port", "0",
                                        "--enable-instrumentation"])
 
 
 def queued_session(server):
     session = server.admin()
-    session.execute(sql="SET SESSION gizmosql.bypass_queue = false")
+    session.execute(sql="SET SESSION hardcharger.bypass_queue = false")
     return session
 
 
@@ -50,23 +49,23 @@ def wait_until(predicate, timeout: float = 10) -> bool:
 
 
 def active(server) -> float:
-    return server.admin().scalar(sql="SELECT value FROM gizmosql_metrics() WHERE name = 'gizmosql_queue_depth' "
+    return server.admin().scalar(sql="SELECT value FROM hardcharger_metrics() WHERE name = 'hardcharger_queue_depth' "
                                      "AND labels['state'] = 'active'")
 
 
 def test_admin_can_toggle_bypass_queue(server):
     session = server.admin()
     for value in ("true", "false", "1"):
-        session.execute(sql=f"SET SESSION gizmosql.bypass_queue = {value}")
+        session.execute(sql=f"SET SESSION hardcharger.bypass_queue = {value}")
 
 
 def test_bypass_queue_rejects_invalid_value(server):
-    assert "bypass_queue" in server.admin().error(sql="SET SESSION gizmosql.bypass_queue = 'maybe'")["detail"]
+    assert "bypass_queue" in server.admin().error(sql="SET SESSION hardcharger.bypass_queue = 'maybe'")["detail"]
 
 
 def test_non_admins_cannot_lift_their_own_queueing(server):
     user = server.as_role(role="user", subject="queued-user")
-    problem = user.error(sql="SET SESSION gizmosql.bypass_queue = true")
+    problem = user.error(sql="SET SESSION hardcharger.bypass_queue = true")
     assert problem["code"] == "permission_denied" and "Only admin users" in problem["detail"], problem
 
 
@@ -76,8 +75,8 @@ def test_queries_execute_through_the_queue(server):
     assert session.query(sql="SELECT * FROM range(10)").num_rows == 10
 
 
-def test_gizmosql_settings_is_composable(server):
-    table = server.admin().query(sql="SELECT name, value, settable FROM gizmosql_settings() WHERE name LIKE 'gizmosql.max%'")
+def test_settings_table_is_composable(server):
+    table = server.admin().query(sql="SELECT name, value, settable FROM hardcharger_settings() WHERE name LIKE 'hardcharger.max%'")
     assert table.num_rows == 5 and table.num_columns == 3, table.to_pylist()
 
 
@@ -106,7 +105,7 @@ def recorded(server, sql: str, timeout: float = 10):
 
 
 def test_queued_execution_records_enqueue_time(server):
-    metric = "SELECT value FROM gizmosql_metrics() WHERE name = 'gizmosql_queue_wait_seconds_sum'"
+    metric = "SELECT value FROM hardcharger_metrics() WHERE name = 'hardcharger_queue_wait_seconds_sum'"
     before = server.admin().scalar(sql=metric)
     holders = hold_slots(server=server, count=2, ms=1500)
     assert wait_until(lambda: active(server) == 2)
@@ -116,14 +115,14 @@ def test_queued_execution_records_enqueue_time(server):
     worker.start()
     # While it waits, a monitor sees it queued. (Spelled in two parts, so the
     # monitor's own statement doesn't match.)
-    waiting = recorded(server=server, sql="SELECT status FROM _gizmosql_instr.execution_details "
+    waiting = recorded(server=server, sql="SELECT status FROM _hardcharger_instr.execution_details "
                                           "WHERE sql_text LIKE '%qpr' || 'obe%' AND status = 'queued'")
     assert waiting == {"status": "queued"}
     worker.join(timeout=10)
     assert outcome == {"value": 4242}
     for thread in holders:
         thread.join()
-    row = recorded(server=server, sql="SELECT queue_wait_ms, status FROM _gizmosql_instr.execution_details "
+    row = recorded(server=server, sql="SELECT queue_wait_ms, status FROM _hardcharger_instr.execution_details "
                                       "WHERE sql_text LIKE '%qpr' || 'obe%' AND status = 'success' "
                                       "AND queue_wait_ms IS NOT NULL")
     assert row["queue_wait_ms"] >= 500, row
@@ -134,7 +133,7 @@ def test_killed_while_queued_records_cancelled(server):
     holders = hold_slots(server=server, count=2, ms=3000)
     assert wait_until(lambda: active(server) == 2)
     victim = queued_session(server=server)
-    victim_id = server.admin().scalar(sql="SELECT session_id FROM gizmosql_sessions() WHERE NOT is_current "
+    victim_id = server.admin().scalar(sql="SELECT session_id FROM hardcharger_sessions() WHERE NOT is_current "
                                           "ORDER BY start_time DESC LIMIT 1")
     outcome = {}
     worker = threading.Thread(target=lambda: outcome.setdefault("problem", victim.error(sql="SELECT 'never' AS v")))
@@ -147,7 +146,7 @@ def test_killed_while_queued_records_cancelled(server):
     assert outcome["problem"]["code"] == "session_ended", outcome
     for thread in holders:
         thread.join()
-    row = recorded(server=server, sql="SELECT status, error_message FROM _gizmosql_instr.execution_details "
+    row = recorded(server=server, sql="SELECT status, error_message FROM _hardcharger_instr.execution_details "
                                       "WHERE sql_text LIKE '%''nev' || 'er'' AS v%'")
     assert row == {"status": "cancelled", "error_message": "cancelled while queued"}, row
 

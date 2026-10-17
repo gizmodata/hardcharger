@@ -22,23 +22,23 @@ def use_token_three_times(server) -> None:
 
 
 def test_repeat_bearer_token_logs_suppressed_at_info_threshold(launcher):
-    server = launcher.start(env={"GIZMOSQL_LOG_LEVEL": "debug", "GIZMOSQL_LOG_FORMAT": "json",
-                                 "GIZMOSQL_AUTH_LOG_LEVEL": "info"})
+    server = launcher.start(env={"HARDCHARGER_LOG_LEVEL": "debug", "HARDCHARGER_LOG_FORMAT": "json",
+                                 "HARDCHARGER_AUTH_LOG_LEVEL": "info"})
     use_token_three_times(server=server)
     lines = bearer_lines(server=server)
     assert [line["level"] for line in lines] == ["info"], lines
 
 
 def test_first_seen_bearer_token_logged_at_info_threshold(launcher):
-    server = launcher.start(env={"GIZMOSQL_LOG_FORMAT": "json"})
+    server = launcher.start(env={"HARDCHARGER_LOG_FORMAT": "json"})
     use_token_three_times(server=server)
     lines = bearer_lines(server=server)
     assert len(lines) == 1 and lines[0]["level"] == "info" and lines[0]["first_use"] == "true", lines
 
 
 def test_repeats_appear_at_debug_when_auth_log_level_is_debug(launcher):
-    server = launcher.start(env={"GIZMOSQL_LOG_LEVEL": "debug", "GIZMOSQL_LOG_FORMAT": "json",
-                                 "GIZMOSQL_AUTH_LOG_LEVEL": "debug"})
+    server = launcher.start(env={"HARDCHARGER_LOG_LEVEL": "debug", "HARDCHARGER_LOG_FORMAT": "json",
+                                 "HARDCHARGER_AUTH_LOG_LEVEL": "debug"})
     use_token_three_times(server=server)
     levels = [line["level"] for line in bearer_lines(server=server)]
     assert levels[0] == "info" and len(levels) >= 3 and set(levels[1:]) == {"debug"}, levels

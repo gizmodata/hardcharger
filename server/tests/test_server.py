@@ -1,8 +1,7 @@
 """Hardcharger behaviour beyond the Warp SQL conformance suite: configuration, tokens,
-sign-in, roles, init SQL, licensing and operations."""
+sign-in, roles, init SQL and operations."""
 
 import datetime
-import pathlib
 import subprocess
 import time
 
@@ -14,8 +13,6 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from conftest import BINARY
-
-LICENSE_DIR = pathlib.Path(__file__).resolve().parent / "license"
 
 
 def problem(response: httpx.Response, status: int, code: str) -> dict:
@@ -38,12 +35,12 @@ def test_version_and_duckdb_version():
 def test_missing_password_stops_the_server():
     out = subprocess.run(args=[str(BINARY)], capture_output=True, text=True, env={"PATH": "/usr/bin"})
     assert out.returncode == 2
-    assert "password is required" in out.stderr
+    assert "an administrator password is required: set HARDCHARGER_ADMIN_PASSWORD" in out.stderr
 
 
 def test_unknown_flag_is_an_error():
     out = subprocess.run(args=[str(BINARY), "--no-such-option", "1"], capture_output=True, text=True,
-                         env={"PATH": "/usr/bin", "HARDCHARGER_PASSWORD": "x"})
+                         env={"PATH": "/usr/bin", "HARDCHARGER_ADMIN_PASSWORD": "x"})
     assert out.returncode == 2
     assert "unknown option --no-such-option" in out.stderr
 
@@ -66,18 +63,56 @@ def test_unknown_yaml_key_is_an_error(tmp_path):
     config = tmp_path / "bad.yaml"
     config.write_text("no_such_option: 1\n")
     out = subprocess.run(args=[str(BINARY), "--config", str(config)], capture_output=True, text=True,
-                         env={"PATH": "/usr/bin", "HARDCHARGER_PASSWORD": "x"})
+                         env={"PATH": "/usr/bin", "HARDCHARGER_ADMIN_PASSWORD": "x"})
     assert out.returncode == 2
     assert "unknown option 'no_such_option'" in out.stderr
 
 
-def test_gizmosql_environment_names_work(launcher):
-    server = launcher.start(env={"INIT_SQL_COMMANDS": "CREATE TABLE legacy AS SELECT 42 AS v",
-                                 "PRINT_QUERIES": "0"})
-    token = server.token()
-    session = server.session(token=token)
-    assert server.run(token=token, session_id=session, sql="SELECT v FROM legacy").status_code in (200, 201)
-    assert "using INIT_SQL_COMMANDS (GizmoSQL name)" in server.log()
+def test_admin_credentials_by_flag_environment_and_yaml(launcher, tmp_path):
+    # --admin-username / --admin-password, HARDCHARGER_ADMIN_*, YAML admin_*.
+    by_flag = launcher.start(args=["--admin-username", "chief", "--admin-password", "flag-Pass-1"],
+                             username="chief", password="flag-Pass-1", env={"HARDCHARGER_ADMIN_PASSWORD": ""})
+    assert by_flag.client(token=by_flag.token(username="chief", password="flag-Pass-1")).new_session().scalar(
+        sql="SELECT HARDCHARGER_USER()") == "chief"
+    by_env = launcher.start(username="boss", password="env-Pass-1")  # the launcher sets HARDCHARGER_ADMIN_*
+    assert by_env.token(username="boss", password="env-Pass-1")
+    config = tmp_path / "admin.yaml"
+    config.write_text(yaml.safe_dump({"admin_username": "yamladmin", "admin_password": "yaml-Pass-1"}))
+    by_yaml = launcher.start(args=["--config", str(config)], username="yamladmin", password="yaml-Pass-1",
+                             env={"HARDCHARGER_ADMIN_USERNAME": "", "HARDCHARGER_ADMIN_PASSWORD": ""})
+    assert by_yaml.token(username="yamladmin", password="yaml-Pass-1")
+
+
+@pytest.mark.parametrize("flag", ["--username", "--password", "--hostname", "--database-filename", "--readonly",
+                                  "-D", "-O", "--max-metadata-size", "--license-key-file", "--license-key",
+                                  "--otel-enabled", "--reject-unknown-sessions", "--backend", "--tls"])
+def test_old_and_gizmosql_flags_are_unknown_options(flag):
+    # Hardcharger takes only its own names: a GizmoSQL 1.x flag, a license flag or a
+    # 0.1.x name is an unknown option like any typo.
+    out = subprocess.run(args=[str(BINARY), flag, "x"], capture_output=True, text=True,
+                         env={"PATH": "/usr/bin", "HARDCHARGER_ADMIN_PASSWORD": "x"})
+    assert out.returncode == 2, out.stderr
+    assert f"unknown option {flag}" in out.stderr, out.stderr
+
+
+def test_old_and_gizmosql_environment_names_are_not_read(launcher):
+    # Neither GizmoSQL 1.x's names nor Hardcharger 0.1.x's admin names are read, and
+    # nothing is logged about them.
+    server = launcher.start(env={"GIZMOSQL_INIT_SQL_COMMANDS": "CREATE TABLE from_gizmosql AS SELECT 1 AS v",
+                                 "INIT_SQL_COMMANDS": "CREATE TABLE from_bare AS SELECT 1 AS v",
+                                 "GIZMOSQL_LICENSE_KEY": "x", "HARDCHARGER_LICENSE_KEY": "x",
+                                 "HARDCHARGER_USERNAME": "old-admin", "HARDCHARGER_PASSWORD": "old-Pass-1"})
+    session = server.admin()
+    for table in ("from_gizmosql", "from_bare"):
+        assert "does not exist" in session.error(sql=f"SELECT * FROM {table}")["detail"]
+    assert "GIZMOSQL" not in server.log() and "license" not in server.log().lower(), server.log()
+    response = httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
+                          json={"grant_type": "password", "username": "old-admin", "password": "old-Pass-1"})
+    assert response.status_code == 401, response.text
+    # HARDCHARGER_PASSWORD alone is no administrator password.
+    out = subprocess.run(args=[str(BINARY)], capture_output=True, text=True,
+                         env={"PATH": "/usr/bin", "HARDCHARGER_PASSWORD": "x", "GIZMOSQL_PASSWORD": "x"})
+    assert out.returncode == 2 and "administrator password is required" in out.stderr, out.stderr
 
 
 # ---- Init SQL ----
@@ -132,15 +167,18 @@ def test_tokens_signed_with_another_key_are_refused(launcher):
     problem(response=response, status=401, code="invalid_token")
 
 
-def test_gizmosql_issued_tokens_are_accepted(launcher):
-    # GizmoSQL 1.x tooling mints server tokens itself (iss=gizmosql, HS256 over the secret).
-    server = launcher.start(env={"SECRET_KEY": "the-cluster-secret"})
+def test_tokens_of_another_issuer_are_refused(launcher):
+    # Only tokens this server signs (iss=hardcharger) are its own; GizmoSQL 1.x's
+    # server tokens (iss=gizmosql) over the same secret are refused.
+    server = launcher.start(env={"HARDCHARGER_SECRET_KEY": "the-cluster-secret"})
     now = datetime.datetime.now(tz=datetime.UTC)
-    token = jwt.encode(payload={"iss": "gizmosql", "sub": "reporting", "role": "user",
-                                "jti": "gizmosql-server-1", "iat": now,
-                                "exp": now + datetime.timedelta(hours=1)},
-                       key="the-cluster-secret", algorithm="HS256")
-    assert server.session(token=token)
+    for issuer, accepted in (("gizmosql", False), ("hardcharger", True)):
+        token = jwt.encode(payload={"iss": issuer, "sub": "reporting", "role": "user", "jti": f"{issuer}-1",
+                                    "iat": now, "exp": now + datetime.timedelta(hours=1)},
+                           key="the-cluster-secret", algorithm="HS256")
+        response = httpx.post(url=f"{server.base_url}/warp/v1/sessions", headers={"Authorization": f"Bearer {token}"},
+                              json={})
+        assert (response.status_code == 201) == accepted, (issuer, response.text)
 
 
 def test_expired_tokens_are_refused(launcher):
@@ -172,8 +210,8 @@ def issuer(tmp_path):
 
 
 def start_with_issuer(launcher, issuer):
-    return launcher.start(env={"TOKEN_SIGNATURE_VERIFY_CERT_PATH": issuer["pem"],
-                               "TOKEN_ALLOWED_ISSUER": "nexus", "TOKEN_ALLOWED_AUDIENCE": "cluster-1"})
+    return launcher.start(env={"HARDCHARGER_TOKEN_SIGNATURE_VERIFY_CERT_PATH": issuer["pem"],
+                               "HARDCHARGER_TOKEN_ALLOWED_ISSUER": "nexus", "HARDCHARGER_TOKEN_ALLOWED_AUDIENCE": "cluster-1"})
 
 
 def exchange(server, subject_token: str) -> httpx.Response:
@@ -192,7 +230,7 @@ def test_token_exchange_signs_users_in(launcher, issuer):
     assert "token_exchange" in httpx.get(url=f"{server.base_url}/warp").json()["auth"]["grant_types"]
 
 
-def test_gizmosql_style_token_as_password(launcher, issuer):
+def test_sign_in_token_as_password(launcher, issuer):
     server = start_with_issuer(launcher=launcher, issuer=issuer)
     assert server.token(username="token", password=issuer["mint"](sub="bob@example.com", role="admin"))
 
@@ -209,13 +247,11 @@ def test_untrusted_sign_in_tokens_are_refused(launcher, issuer, claims):
             code="invalid_credentials")
 
 
-def test_catalog_access_needs_a_license(launcher, issuer):
+def test_catalog_access_needs_no_license(launcher, issuer):
     server = start_with_issuer(launcher=launcher, issuer=issuer)
     token = issuer["mint"](sub="x@example.com", role="user",
                            catalog_access=[{"catalog": "*", "access": "read"}])
-    body = problem(response=exchange(server=server, subject_token=token), status=401,
-                   code="invalid_credentials")
-    assert "enterprise" in body["detail"].lower()
+    assert exchange(server=server, subject_token=token).status_code == 200
 
 
 # ---- Roles ----
@@ -236,22 +272,16 @@ def test_readonly_role_cannot_modify(launcher, issuer):
         assert body["sqlstate"] == "42501"
 
 
-# ---- Licensing ----
+# ---- Server info ----
 
-def test_invalid_license_stops_the_server(launcher):
-    server = launcher.start(env={"HARDCHARGER_LICENSE_KEY": "not-a-license"}, expect_up=False)
-    assert server.process.wait(timeout=20) == 1
-    assert "License Error" in server.log()
-
-
-def test_core_edition_without_a_key(launcher):
+def test_server_info(launcher):
     server = launcher.start()
     token = server.token()
     session = server.session(token=token)
     info = httpx.get(url=f"{server.base_url}/warp/v1/sessions/{session}/metadata/server-info",
                      headers={"Authorization": f"Bearer {token}"}).json()
-    assert info["edition"] == "Core"
     assert info["server_name"] == "Hardcharger"
+    assert "edition" not in info  # no license, no editions
 
 
 # ---- Operations ----
@@ -268,7 +298,7 @@ def test_health_port_serves_only_health(launcher):
 
 
 def test_default_query_timeout(launcher):
-    server = launcher.start(env={"QUERY_TIMEOUT": "1"})
+    server = launcher.start(env={"HARDCHARGER_QUERY_TIMEOUT_SECONDS": "1"})
     token = server.token()
     session = server.session(token=token)
     response = httpx.post(url=f"{server.base_url}/warp/v1/sessions/{session}/statements",
@@ -313,23 +343,13 @@ def test_read_only_database(launcher, tmp_path):
     assert "read-only" in response.text.lower() or "read only" in response.text.lower()
 
 
-def test_only_test_builds_trust_the_tests_license_key(launcher):
-    # A key signed with server/tests/license/test-license-private.pem (public on purpose):
-    # a release build refuses it as it refuses any forged key; a test build says it is one.
-    version = subprocess.run(args=[str(BINARY), "--version"], capture_output=True, text=True, check=True).stdout
-    now = datetime.datetime.now(tz=datetime.UTC)
-    key = jwt.encode(payload={"jti": "t", "iss": "GizmoData LLC", "sub": "s", "aud": "a", "iat": now,
-                              "exp": now + datetime.timedelta(hours=1), "features": ["rbac"]},
-                     key=(LICENSE_DIR / "test-license-private.pem").read_text(),
-                     algorithm="RS256")
-    server = launcher.start(env={"HARDCHARGER_LICENSE_KEY": key}, expect_up="test-license" in version)
-    if "test-license" in version:
-        token = server.token()
-        session = server.session(token=token)
-        info = httpx.get(url=f"{server.base_url}/warp/v1/sessions/{session}/metadata/server-info",
-                         headers={"Authorization": f"Bearer {token}"}).json()
-        assert info["edition"] == "Enterprise (test license)"
-        assert "test-license build" in server.log()
-    else:
-        assert server.process.wait(timeout=20) == 1
-        assert "License Error" in server.log()
+def test_every_setting_names_a_real_option(launcher):
+    # hardcharger_settings() says where a startup setting is set: each flag and variable
+    # it names must be one the server takes.
+    usage = subprocess.run(args=[str(BINARY), "--help"], capture_output=True, text=True, check=True).stdout
+    rows = launcher.start().admin().rows(sql="SELECT name, cli_flag, env_var FROM hardcharger_settings()")
+    assert rows and all(row["name"].startswith("hardcharger.") for row in rows), rows
+    for row in rows:
+        for column in ("cli_flag", "env_var"):
+            if row[column] is not None:
+                assert f"{row[column]}\n" in usage or f"[{row[column]}]" in usage, (row, column)

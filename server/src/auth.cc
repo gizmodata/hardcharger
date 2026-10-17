@@ -22,7 +22,7 @@ using Traits = jwt::traits::boost_json;
 using warpsql::Error;
 using warpsql::ErrorCode;
 
-// User name under which GizmoSQL 1.x clients send a sign-in token as the password.
+// User name under which a client sends a sign-in token as the password.
 constexpr std::string_view kTokenUser = "token";
 
 std::array<unsigned char, 32> Digest(std::string_view text) {
@@ -95,12 +95,12 @@ authz::Identity IdentityOf(const warpsql::Principal& principal) {
   return who;
 }
 
-Authenticator::Authenticator(const Config& config, const License& license,
+Authenticator::Authenticator(const Config& config,
                              std::shared_ptr<authz::AccessControl> access,
                              std::function<warpsql::Principal(std::string_view)> server_tokens,
                              std::shared_ptr<Jwks> jwks)
-    : username_(config.username),
-      password_(config.password),
+    : username_(config.admin_username),
+      password_(config.admin_password),
       jwks_(std::move(jwks)),
       allowed_issuer_(config.token_allowed_issuer),
       allowed_audience_(config.token_allowed_audience),
@@ -108,7 +108,6 @@ Authenticator::Authenticator(const Config& config, const License& license,
       groups_claim_(config.token_groups_claim),
       authorized_emails_(config.token_authorized_emails),
       log_level_(ParseLogLevel(config.auth_log_level)),
-      license_(license),
       access_(std::move(access)),
       server_tokens_(std::move(server_tokens)) {
   if (!config.token_signature_verify_cert_path.empty()) {
@@ -124,7 +123,7 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
                                                        std::string_view password) {
   if (username == kTokenUser) {
     // A scoped token this server (or its cluster, sharing the secret key) handed out,
-    // sent as a password the way GizmoSQL 1.x clients send it.
+    // sent as the password of the user "token".
     if (access_ && server_tokens_) {
       std::optional<warpsql::Principal> scoped;
       try {
@@ -211,10 +210,6 @@ warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) 
     throw Error(ErrorCode::kInvalidCredentials, "unknown role '" + principal.role + "'");
   }
   if (decoded.has_payload_claim("catalog_access")) {
-    if (!license_.Has("catalog_permissions")) {
-      throw Error(ErrorCode::kInvalidCredentials,
-                  LicenseRequired("catalog_permissions", "Per-catalog permissions (catalog_access claim)"));
-    }
     principal.claims["catalog_access"] = decoded.get_payload_claim("catalog_access").to_json();
   }
   // The identity provider's groups (CREATE GROUP MAPPING turns them into roles): a list,
@@ -250,10 +245,6 @@ void Authenticator::AllowSigningKey(const Decoded& decoded, Verifier& verifier) 
   if (jwks_ == nullptr) {
     verifier.allow_algorithm(jwt::algorithm::rs256(verify_key_pem_, "", "", ""));
     return;
-  }
-  if (!license_.Has("external_auth")) {
-    throw Error(ErrorCode::kInvalidCredentials,
-                LicenseRequired("external_auth", "Sign-in with an identity provider's tokens (JWKS)"));
   }
   // The provider says which of its keys signed the token; its JWK may fix the algorithm.
   if (!decoded.has_header_claim("kid")) {

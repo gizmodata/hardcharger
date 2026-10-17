@@ -34,13 +34,13 @@ TEST(MetricsRegistryTest, UpdatesAreAtomicUnderContention) {
     });
   }
   for (auto& thread : threads) thread.join();
-  EXPECT_EQ(Value(metrics, "gizmosql_statements_total", {{"status", "ok"}}), 20000);
+  EXPECT_EQ(Value(metrics, "hardcharger_statements_total", {{"status", "ok"}}), 20000);
 }
 
 TEST(MetricsRegistryTest, NothingIsCountedWhileDisabled) {
   Metrics metrics;
   metrics.RecordStatement(StatementKind::kRead, "ok", "", 0.001);
-  EXPECT_EQ(Value(metrics, "gizmosql_statements_total", {{"status", "ok"}}), 0);
+  EXPECT_EQ(Value(metrics, "hardcharger_statements_total", {{"status", "ok"}}), 0);
 }
 
 TEST(MetricsRegistryTest, HistogramsAreCumulativeAndCountEveryOutcome) {
@@ -51,18 +51,18 @@ TEST(MetricsRegistryTest, HistogramsAreCumulativeAndCountEveryOutcome) {
   metrics.RecordStatement(StatementKind::kRead, "cancelled", "cancelled", 0.2);
   double last = 0;
   for (const auto& sample : metrics.Snapshot()) {
-    if (sample.name == "gizmosql_statement_duration_seconds_bucket" && sample.labels.at("kind") == "read") {
+    if (sample.name == "hardcharger_statement_duration_seconds_bucket" && sample.labels.at("kind") == "read") {
       EXPECT_GE(sample.value, last);
       last = sample.value;
       if (sample.labels.at("le") == "0.005") EXPECT_EQ(sample.value, 1);
       if (sample.labels.at("le") == "+Inf") EXPECT_EQ(sample.value, 3);
     }
   }
-  EXPECT_EQ(Value(metrics, "gizmosql_statement_duration_seconds_count", {{"kind", "read"}}), 3);
-  EXPECT_EQ(Value(metrics, "gizmosql_statements_total", {{"status", "ok"}}), 1);
-  EXPECT_EQ(Value(metrics, "gizmosql_statements_total", {{"status", "error"}}), 1);
-  EXPECT_EQ(Value(metrics, "gizmosql_statements_total", {{"status", "cancelled"}}), 1);
-  EXPECT_EQ(Value(metrics, "gizmosql_statement_errors_total", {{"class", "out_of_memory"}}), 1);
+  EXPECT_EQ(Value(metrics, "hardcharger_statement_duration_seconds_count", {{"kind", "read"}}), 3);
+  EXPECT_EQ(Value(metrics, "hardcharger_statements_total", {{"status", "ok"}}), 1);
+  EXPECT_EQ(Value(metrics, "hardcharger_statements_total", {{"status", "error"}}), 1);
+  EXPECT_EQ(Value(metrics, "hardcharger_statements_total", {{"status", "cancelled"}}), 1);
+  EXPECT_EQ(Value(metrics, "hardcharger_statement_errors_total", {{"class", "out_of_memory"}}), 1);
 }
 
 TEST(MetricsRegistryTest, SerializationEscapesLabelsAndHasOneTypePerFamily) {
@@ -71,11 +71,11 @@ TEST(MetricsRegistryTest, SerializationEscapesLabelsAndHasOneTypePerFamily) {
   metrics.RecordStatement(StatementKind::kRead, "ok", "", 0.001);
   metrics.RecordStatement(StatementKind::kWrite, "ok", "", 0.001);
   metrics.AddCollector([](std::vector<Sample>& out) {
-    out.push_back({"gizmosql_test_info", {{"version", "quote\"slash\\newline\n"}}, 1});
+    out.push_back({"hardcharger_test_info", {{"version", "quote\"slash\\newline\n"}}, 1});
   });
   const std::string text = metrics.Render();
   EXPECT_NE(text.find("version=\"quote\\\"slash\\\\newline\\n\""), text.npos) << text;
-  const std::string type = "# TYPE gizmosql_statement_duration_seconds histogram\n";
+  const std::string type = "# TYPE hardcharger_statement_duration_seconds histogram\n";
   const auto first = text.find(type);
   ASSERT_NE(first, text.npos) << text;
   EXPECT_EQ(text.find(type, first + 1), text.npos) << "two TYPE lines for one family";

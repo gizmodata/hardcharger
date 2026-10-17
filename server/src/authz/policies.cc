@@ -95,8 +95,7 @@ std::optional<std::string> ConstantStringArgument(const dd::FunctionExpression& 
 
 // Context functions: names a policy may call, all resolved by Hardcharger.
 bool IsUserFunction(const std::string& n) {
-  // gizmosql_user: policies written for GizmoSQL 1.x, from a shared store.
-  return n == "hardcharger_user" || n == "gizmosql_user" || n == "current_user" ||
+  return n == "hardcharger_user" || n == "current_user" ||
          n == "session_user" || n == "user";
 }
 bool IsContextFunction(const std::string& n) {
@@ -108,7 +107,7 @@ bool IsContextFunction(const std::string& n) {
 bool IsForbiddenFunction(const std::string& n) {
   static const std::unordered_set<std::string> kNames = {
       "getvariable",   "current_setting",  "query",   "query_table", "current_role",
-      "gizmosql_role", "hardcharger_role", "nextval", "currval",     "setseed"};
+      "hardcharger_role", "nextval", "currval", "setseed"};
   return kNames.count(n) > 0;
 }
 

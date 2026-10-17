@@ -1,6 +1,6 @@
 """Port of GizmoSQL 1.x tests/integration/test_health_check.cpp (8 cases: 5 server, 3 unit).
 
-The health check runs health_check_query (GIZMOSQL_HEALTH_CHECK_QUERY, default SELECT 1)
+The health check runs health_check_query (HARDCHARGER_HEALTH_CHECK_QUERY, default SELECT 1)
 every health_check_interval_seconds on a background thread; a probe (GET
 /warp/v1/health, and /health on the plaintext health_port that GizmoData Cloud's kubelet
 probes) answers from the last outcome, so it never waits on the database. An outcome
@@ -33,16 +33,16 @@ def eventually(server, status: int, timeout: float = 15, health_port: int | None
 
 
 def start(launcher, query: str | None = None, interval: int = 1, staleness: int = 3, **kwargs):
-    env = {"GIZMOSQL_HEALTH_CHECK_INTERVAL_SECONDS": str(interval),
-           "GIZMOSQL_HEALTH_CHECK_STALENESS_SECONDS": str(staleness), **kwargs.pop("env", {})}
+    env = {"HARDCHARGER_HEALTH_CHECK_INTERVAL_SECONDS": str(interval),
+           "HARDCHARGER_HEALTH_CHECK_STALENESS_SECONDS": str(staleness), **kwargs.pop("env", {})}
     if query is not None:
-        env["GIZMOSQL_HEALTH_CHECK_QUERY"] = query
+        env["HARDCHARGER_HEALTH_CHECK_QUERY"] = query
     return launcher.start(env=env, **kwargs)
 
 
 def test_serving_with_default_query(launcher):
     port = free_port()
-    server = start(launcher=launcher, env={"HEALTH_PORT": str(port)})
+    server = start(launcher=launcher, env={"HARDCHARGER_HEALTH_PORT": str(port)})
     eventually(server=server, status=200)
     response = health(server=server)
     assert response.status_code == 200 and response.json() == {"status": "serving"}, response.text
@@ -56,7 +56,7 @@ def test_serving_with_custom_query(launcher):
 
 def test_hung_query_reports_not_serving(launcher):
     port = free_port()
-    server = start(launcher=launcher, query="SELECT sleep_ms(10000)", env={"HEALTH_PORT": str(port)},
+    server = start(launcher=launcher, query="SELECT sleep_ms(10000)", env={"HARDCHARGER_HEALTH_PORT": str(port)},
                    wait_for="/warp")
     assert eventually(server=server, status=503, health_port=port) < 15
     body = health(server=server).json()

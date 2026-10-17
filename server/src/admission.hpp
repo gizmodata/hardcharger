@@ -1,4 +1,4 @@
-// The statement queue (Enterprise feature statement_queue): caps how many statements
+// The statement queue: caps how many statements
 // run at once; the rest wait their turn, first come first served.
 //
 // Waiters are admitted in strict arrival order, and a new statement never overtakes one

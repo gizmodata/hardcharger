@@ -1,5 +1,5 @@
 """Access control at the server: who connects as what, sign-in, sessions and tokens
-ending when a user is disabled, the license and store requirements, and two servers
+ending when a user is disabled, the store requirements, and two servers
 (replicas) on one store."""
 
 import time
@@ -7,7 +7,7 @@ import time
 import httpx
 import pytest
 
-from rbac import (ADMIN, WarpError, expect_allowed, license_key, mint, rbac_env, redact,
+from rbac import (ADMIN, WarpError, expect_allowed, mint, rbac_env, redact,
                   start_rbac_server)
 
 
@@ -157,18 +157,6 @@ def test_access_control_statements_need_the_store(launcher):
     assert response.status_code == 401
 
 
-def test_access_control_needs_the_license_feature(launcher, store):
-    uri = store.new_database()
-    for features in [[], ["catalog_permissions"]]:
-        running = launcher.start(env={**rbac_env(store_uri=uri), "HARDCHARGER_LICENSE_KEY": license_key(features=features)},
-                                 expect_up=False)
-        assert running.process.wait(timeout=20) == 1
-        assert "license feature 'rbac'" in running.log(), running.log()
-    no_key = launcher.start(env={**rbac_env(store_uri=uri), "HARDCHARGER_LICENSE_KEY": ""}, expect_up=False)
-    assert no_key.process.wait(timeout=20) == 1
-    assert "commercially licensed enterprise feature" in no_key.log()
-
-
 def test_an_unreachable_store_stops_the_server_without_leaking_its_password(launcher):
     uri = "postgresql://hardcharger:very-secret-pw@127.0.0.1:1/nowhere"
     running = launcher.start(env=rbac_env(store_uri=uri), expect_up=False)
@@ -188,7 +176,7 @@ def test_the_in_memory_store_is_for_tests_only(launcher):
 def test_server_info_says_access_control_is_on(server, admin):
     info = admin.http.get(url=f"{admin.url}/metadata/server-info", headers=admin.headers()).json()
     assert info["access_control"] is True
-    assert info["edition"].startswith("Enterprise")
+    assert "edition" not in info
 
 
 # ---- Two replicas on one store ----

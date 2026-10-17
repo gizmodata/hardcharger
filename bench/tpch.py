@@ -90,7 +90,7 @@ def start(kind: str, db: pathlib.Path) -> tuple[subprocess.Popen, int]:
     port = free_port()
     log = open(WORK / f"{kind}.log", "w")
     if kind == "hardcharger":
-        env = {"PATH": os.environ["PATH"], "HARDCHARGER_PASSWORD": PASSWORD, "HARDCHARGER_USERNAME": "bench",
+        env = {"PATH": os.environ["PATH"], "HARDCHARGER_ADMIN_PASSWORD": PASSWORD, "HARDCHARGER_ADMIN_USERNAME": "bench",
                "HARDCHARGER_PRINT_QUERIES": "false", "HARDCHARGER_DATABASE": str(db),
                "HARDCHARGER_INIT_SQL_COMMANDS": load_sql(db), "HARDCHARGER_HOST": "127.0.0.1",
                "HARDCHARGER_PORT": str(port)}

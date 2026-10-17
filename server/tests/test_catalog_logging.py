@@ -1,16 +1,16 @@
 """Port of GizmoSQL 1.x tests/integration/test_catalog_logging.cpp (3 cases).
 
-Catalog logging (license feature instrumentation; --enable-catalog-logging,
-GIZMOSQL_ENABLE_CATALOG_LOGGING): every log line also lands in _gizmosql_logs.logs, a
-DuckDB file next to the database (gizmosql_logs.db, or --log-catalog-db-path /
-GIZMOSQL_LOG_DB_PATH), with 1.x's columns. The catalog is read-only to every client and
+Catalog logging (--enable-catalog-logging,
+HARDCHARGER_ENABLE_CATALOG_LOGGING): every log line also lands in _hardcharger_logs.logs, a
+DuckDB file next to the database (hardcharger_logs.db, or --log-catalog-db-path /
+HARDCHARGER_LOG_CATALOG_DB_PATH), with 1.x's columns. The catalog is read-only to every client and
 readable by admins only. The PostgreSQL and DuckLake backends are in
 test_instrumentation_ducklake.py, as in 1.x.
 
 Strengthened: 1.x checked that some rows carry an instance id; here every row carries
 this server's own instance id, the session's own lines carry its session id and user,
-non-admins can neither read nor list the catalog, it can't be made current, the license
-gate and the file's location are checked, and the writer's column mapping is a C++ unit
+non-admins can neither read nor list the catalog, it can't be made current, it needs no
+license (1.x's gate is not applicable), the file's location is checked, and the writer's column mapping is a C++ unit
 test (CatalogLogTest).
 """
 
@@ -26,8 +26,7 @@ LEVELS = "('DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL')"
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
-    return module_launcher.start(features=["instrumentation"],
-                                 args=["--enable-catalog-logging", "--cluster-id", CLUSTER_ID,
+    return module_launcher.start(args=["--enable-catalog-logging", "--cluster-id", CLUSTER_ID,
                                        "--log-catalog-db-path", "catalog_log_test_logs.db"])
 
 
@@ -54,83 +53,77 @@ def generate_logs(session) -> None:
 
 def test_logs_forked_to_catalog(admin):
     generate_logs(session=admin)
-    sid = admin.scalar(sql="SELECT GIZMOSQL_CURRENT_SESSION()")
-    instance = admin.scalar(sql="SELECT GIZMOSQL_CURRENT_INSTANCE()")
+    sid = admin.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
+    instance = admin.scalar(sql="SELECT HARDCHARGER_CURRENT_INSTANCE()")
     # The session's own "session opened" line, with its id and user in their columns.
-    eventually(admin, f"SELECT count(*) FROM _gizmosql_logs.logs WHERE session_id = '{sid}' "
+    eventually(admin, f"SELECT count(*) FROM _hardcharger_logs.logs WHERE session_id = '{sid}' "
                       "AND username = 'admin' AND message = 'session opened'", lambda n: n == 1)
     # One statement, one snapshot: every query adds lines of its own.
     row = admin.rows(sql=f"SELECT count(*) AS total, "
                          f"count(*) FILTER (WHERE log_time IS NOT NULL AND level IN {LEVELS}) AS well_formed, "
                          f"count(*) FILTER (WHERE instance_id::VARCHAR = '{instance}') AS ours "
-                         f"FROM _gizmosql_logs.logs")[0]
+                         f"FROM _hardcharger_logs.logs")[0]
     assert row["total"] > 0 and row["well_formed"] == row["total"] and row["ours"] == row["total"], row
 
 
 def test_cluster_id_in_logs_and_function(admin):
-    assert admin.scalar(sql="SELECT GIZMOSQL_CURRENT_CLUSTER() AS c") == CLUSTER_ID
+    assert admin.scalar(sql="SELECT HARDCHARGER_CURRENT_CLUSTER() AS c") == CLUSTER_ID
     generate_logs(session=admin)
-    eventually(admin, "SELECT count(*) FROM _gizmosql_logs.logs", lambda n: n > 0)
+    eventually(admin, "SELECT count(*) FROM _hardcharger_logs.logs", lambda n: n > 0)
     row = admin.rows(sql=f"SELECT count(*) AS total, count(*) FILTER "
-                         f"(WHERE CAST(cluster_id AS VARCHAR) = '{CLUSTER_ID}') AS clustered FROM _gizmosql_logs.logs")[0]
+                         f"(WHERE CAST(cluster_id AS VARCHAR) = '{CLUSTER_ID}') AS clustered FROM _hardcharger_logs.logs")[0]
     assert row["clustered"] == row["total"] > 0, row
 
 
 def test_log_catalog_is_read_only_to_clients(server, admin):
-    admin.query(sql="SELECT * FROM _gizmosql_logs.logs LIMIT 1")
-    detail = admin.error(sql="DELETE FROM _gizmosql_logs.logs")["detail"]
+    admin.query(sql="SELECT * FROM _hardcharger_logs.logs LIMIT 1")
+    detail = admin.error(sql="DELETE FROM _hardcharger_logs.logs")["detail"]
     assert "read-only" in detail and "log catalog" in detail, detail
-    detail = admin.error(sql="DETACH _gizmosql_logs")["detail"]
+    detail = admin.error(sql="DETACH _hardcharger_logs")["detail"]
     assert "Cannot DETACH" in detail, detail
-    assert "read-only" in admin.error(sql="USE _gizmosql_logs")["detail"]
+    assert "read-only" in admin.error(sql="USE _hardcharger_logs")["detail"]
     # Non-admins: no reads, and the catalog isn't listed.
     user = server.as_role(role="user", subject="reader")
-    problem = user.error(sql="SELECT count(*) FROM _gizmosql_logs.logs")
+    problem = user.error(sql="SELECT count(*) FROM _hardcharger_logs.logs")
     assert problem["code"] == "permission_denied", problem
-    assert "Only administrators can read the log catalog '_gizmosql_logs'" in problem["detail"], problem
+    assert "Only administrators can read the log catalog '_hardcharger_logs'" in problem["detail"], problem
     catalogs = user.metadata(kind="catalogs").column(0).to_pylist()
-    assert "_gizmosql_logs" not in catalogs and catalogs, catalogs
-    assert "_gizmosql_logs" in admin.metadata(kind="catalogs").column(0).to_pylist()
+    assert "_hardcharger_logs" not in catalogs and catalogs, catalogs
+    assert "_hardcharger_logs" in admin.metadata(kind="catalogs").column(0).to_pylist()
 
 
 def test_settings_report_the_log_catalog(admin):
     rows = {r["name"]: r["value"] for r in admin.rows(
-        sql="SELECT name, value FROM gizmosql_settings() WHERE name IN ('gizmosql.enable_catalog_logging', "
-            "'gizmosql.log_catalog', 'gizmosql.log_schema')")}
-    assert rows == {"gizmosql.enable_catalog_logging": "true", "gizmosql.log_catalog": "_gizmosql_logs",
-                    "gizmosql.log_schema": "main"}, rows
+        sql="SELECT name, value FROM hardcharger_settings() WHERE name IN ('hardcharger.enable_catalog_logging', "
+            "'hardcharger.log_catalog', 'hardcharger.log_schema')")}
+    assert rows == {"hardcharger.enable_catalog_logging": "true", "hardcharger.log_catalog": "_hardcharger_logs",
+                    "hardcharger.log_schema": "main"}, rows
 
 
 def test_log_file_location(launcher, tmp_path):
-    # Default: gizmosql_logs.db next to the database file.
+    # Default: hardcharger_logs.db next to the database file.
     (tmp_path / "data").mkdir()
-    server = launcher.start(features=["instrumentation"],
-                            args=["--enable-catalog-logging", "--database-filename", "data/app.duckdb"])
-    eventually(server.admin(), "SELECT count(*) FROM _gizmosql_logs.logs", lambda n: n > 0)
-    assert (tmp_path / "data" / "gizmosql_logs.db").exists()
+    server = launcher.start(args=["--enable-catalog-logging", "--database", "data/app.duckdb"])
+    eventually(server.admin(), "SELECT count(*) FROM _hardcharger_logs.logs", lambda n: n > 0)
+    assert (tmp_path / "data" / "hardcharger_logs.db").exists()
     server.stop()
-    # GIZMOSQL_LOG_DB_PATH, with a read-only database: the log file is still written.
-    server = launcher.start(features=["instrumentation"],
-                            args=["--database-filename", "data/app.duckdb", "--readonly"],
-                            env={"GIZMOSQL_ENABLE_CATALOG_LOGGING": "true",
-                                 "GIZMOSQL_LOG_DB_PATH": str(tmp_path / "elsewhere.db")})
-    eventually(server.admin(), "SELECT count(*) FROM _gizmosql_logs.logs WHERE message = 'session opened'",
+    # HARDCHARGER_LOG_CATALOG_DB_PATH, with a read-only database: the log file is still written.
+    server = launcher.start(args=["--database", "data/app.duckdb", "--read-only"],
+                            env={"HARDCHARGER_ENABLE_CATALOG_LOGGING": "true",
+                                 "HARDCHARGER_LOG_CATALOG_DB_PATH": str(tmp_path / "elsewhere.db")})
+    eventually(server.admin(), "SELECT count(*) FROM _hardcharger_logs.logs WHERE message = 'session opened'",
                lambda n: n > 0)
     assert (tmp_path / "elsewhere.db").exists()
 
 
-def test_requires_a_license(launcher):
-    server = launcher.start(features=["metrics"], args=["--enable-catalog-logging"], expect_up=False)
-    assert server.process.wait(timeout=20) != 0
-    assert "Catalog logging (--enable-catalog-logging)" in server.log(), server.log()
-    server = launcher.start(args=["--enable-catalog-logging"], expect_up=False)
-    assert server.process.wait(timeout=20) != 0
-    assert "Catalog logging (--enable-catalog-logging)" in server.log(), server.log()
+def test_needs_no_license(launcher):
+    # 1.x refused catalog logging without its license feature; Hardcharger has no license.
+    server = launcher.start(args=["--enable-catalog-logging"])
+    assert server.admin().scalar(sql="SELECT count(*) > 0 FROM _hardcharger_logs.main.logs") is True
 
 
 def test_unattached_log_catalog_stops_the_server(launcher):
-    server = launcher.start(features=["instrumentation"],
-                            args=["--enable-catalog-logging", "--log-catalog", "no_such_catalog"], expect_up=False)
+    server = launcher.start(args=["--enable-catalog-logging", "--log-catalog", "no_such_catalog"], expect_up=False)
     assert server.process.wait(timeout=20) != 0
     assert "log_catalog 'no_such_catalog' is not attached" in server.log(), server.log()
 

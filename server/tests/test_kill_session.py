@@ -1,7 +1,7 @@
 """Port of GizmoSQL 1.x tests/integration/test_kill_session.cpp (4 cases).
 
-KILL SESSION '<uuid>' (also "uuid" and bare, any case, trailing ;) ends another session
-(license feature kill_session): what it runs stops, and its next request fails with 401
+KILL SESSION '<uuid>' (also "uuid" and bare, any case, trailing ;) ends another session:
+what it runs stops, and its next request fails with 401
 session_ended ("session has been killed ... re-authenticate", Warp SQL §5.6). An admin
 can't kill its own session; an unknown id is "not found"; non-admins may not kill.
 
@@ -23,11 +23,11 @@ UNKNOWN = "12345678-1234-1234-1234-123456789012"
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
-    return module_launcher.start(features=["kill_session"])
+    return module_launcher.start()
 
 
 def test_non_admin_cannot_kill_session(server):
-    victim_id = server.admin().scalar(sql="SELECT GIZMOSQL_CURRENT_SESSION()")
+    victim_id = server.admin().scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
     user = server.client(token=mint_server_token(secret_key=server.secret_key, subject="u", role="user")).new_session()
     problem = user.error(sql=f"KILL SESSION '{victim_id}'")
     assert problem["code"] == "permission_denied" and "Only admin users can execute KILL SESSION" in problem["detail"], problem
@@ -35,7 +35,7 @@ def test_non_admin_cannot_kill_session(server):
 
 def test_admin_cannot_kill_own_session(server):
     session = server.admin()
-    own = session.scalar(sql="SELECT GIZMOSQL_CURRENT_SESSION()")
+    own = session.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
     assert len(own) == 36 and own.count("-") == 4
     assert "Cannot kill your own session" in session.error(sql=f"KILL SESSION '{own}'")["detail"]
 
@@ -54,7 +54,7 @@ def test_kill_session_syntax(server, sql):
 
 def test_killed_session_must_reauthenticate(server):
     victim = server.client().new_session()
-    victim_id = victim.scalar(sql="SELECT GIZMOSQL_CURRENT_SESSION()")
+    victim_id = victim.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
     server.admin().execute(sql=f"KILL SESSION '{victim_id.upper()}'")
     problem = victim.error(sql="SELECT 1")
     assert problem["status"] == 401 and problem["code"] == "session_ended", problem
@@ -65,7 +65,7 @@ def test_killed_session_must_reauthenticate(server):
 
 def test_kill_interrupts_a_running_statement(server):
     victim = server.client().new_session()
-    victim_id = victim.scalar(sql="SELECT GIZMOSQL_CURRENT_SESSION()")
+    victim_id = victim.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
     outcome = {}
 
     def run():

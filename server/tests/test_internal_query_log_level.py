@@ -12,7 +12,7 @@ def internal_lines(server) -> list[dict]:
 
 
 def test_metadata_sql_not_logged_at_info_threshold(launcher):
-    server = launcher.start(env={"GIZMOSQL_LOG_FORMAT": "json", "PRINT_QUERIES": "true"})
+    server = launcher.start(env={"HARDCHARGER_LOG_FORMAT": "json", "HARDCHARGER_PRINT_QUERIES": "true"})
     session = server.admin()
     session.execute(sql="CREATE TABLE log_test_table (id INT)")
     tables = session.metadata(kind="tables").column("table_name").to_pylist()
@@ -21,8 +21,8 @@ def test_metadata_sql_not_logged_at_info_threshold(launcher):
 
 
 def test_eager_insert_logs_success_once_regardless_of_logger_threshold(launcher):
-    server = launcher.start(env={"GIZMOSQL_LOG_FORMAT": "json", "PRINT_QUERIES": "true", "GIZMOSQL_LOG_LEVEL": "warning",
-                                 "GIZMOSQL_QUERY_LOG_LEVEL": "info"})
+    server = launcher.start(env={"HARDCHARGER_LOG_FORMAT": "json", "HARDCHARGER_PRINT_QUERIES": "true", "HARDCHARGER_LOG_LEVEL": "warning",
+                                 "HARDCHARGER_QUERY_LOG_LEVEL": "info"})
     session = server.admin()
     session.execute(sql="CREATE TABLE eager_log_contract (n INT)")
     doc = session.execute(sql="INSERT INTO eager_log_contract VALUES (1)")
@@ -37,8 +37,8 @@ def test_eager_insert_logs_success_once_regardless_of_logger_threshold(launcher)
 
 
 def test_metadata_sql_logged_at_debug_threshold(launcher):
-    server = launcher.start(env={"GIZMOSQL_LOG_FORMAT": "json", "PRINT_QUERIES": "true",
-                                 "GIZMOSQL_QUERY_LOG_LEVEL": "debug"})
+    server = launcher.start(env={"HARDCHARGER_LOG_FORMAT": "json", "HARDCHARGER_PRINT_QUERIES": "true",
+                                 "HARDCHARGER_QUERY_LOG_LEVEL": "debug"})
     session = server.admin()
     session.execute(sql="CREATE TABLE log_test_table (id INT)")
     assert "log_test_table" in session.metadata(kind="tables").column("table_name").to_pylist()

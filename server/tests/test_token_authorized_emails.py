@@ -1,6 +1,6 @@
 """Port of GizmoSQL 1.x tests/integration/test_token_authorized_emails.cpp (7 cases).
 
-token_authorized_emails (--token-authorized-emails, GIZMOSQL_TOKEN_AUTHORIZED_EMAILS):
+token_authorized_emails (--token-authorized-emails, HARDCHARGER_TOKEN_AUTHORIZED_EMAILS):
 which users a trusted issuer's sign-in token may name, as a comma list of
 case-insensitive globs. A token naming anyone else is refused with 401
 invalid_credentials and "User '<email>' is not authorized. Contact your administrator."
@@ -32,8 +32,8 @@ def signing_key(tmp_path_factory):
 
 
 def start(module_launcher, signing_key, emails: str):
-    return module_launcher.start(env={"TOKEN_SIGNATURE_VERIFY_CERT_PATH": signing_key[1], "TOKEN_ALLOWED_ISSUER": ISSUER,
-                                      "TOKEN_ALLOWED_AUDIENCE": AUDIENCE, "GIZMOSQL_TOKEN_AUTHORIZED_EMAILS": emails})
+    return module_launcher.start(env={"HARDCHARGER_TOKEN_SIGNATURE_VERIFY_CERT_PATH": signing_key[1], "HARDCHARGER_TOKEN_ALLOWED_ISSUER": ISSUER,
+                                      "HARDCHARGER_TOKEN_ALLOWED_AUDIENCE": AUDIENCE, "HARDCHARGER_TOKEN_AUTHORIZED_EMAILS": emails})
 
 
 @pytest.fixture(scope="module")
@@ -59,7 +59,7 @@ def accepted(server, signing_key, email: str) -> None:
     response = exchange(server=server, signing_key=signing_key, email=email)
     assert response.status_code == 200, response.text
     session = server.client(token=response.json()["access_token"]).new_session()
-    assert session.scalar(sql="SELECT GIZMOSQL_USER()") == email
+    assert session.scalar(sql="SELECT HARDCHARGER_USER()") == email
 
 
 def rejected(server, signing_key, email: str) -> None:

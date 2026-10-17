@@ -16,7 +16,7 @@ SUMS = ("SELECT count(*) AS n, sum(l_quantity)::DOUBLE AS quantity, sum(l_extend
 
 @pytest.fixture(scope="module")
 def session(module_launcher):
-    session = module_launcher.start(env={"PRINT_QUERIES": "false"}).admin()
+    session = module_launcher.start(env={"HARDCHARGER_PRINT_QUERIES": "false"}).admin()
     session.execute(sql="INSTALL tpch; LOAD tpch;")
     session.execute(sql="CALL dbgen(sf = 0.01)")
     return session

@@ -109,7 +109,7 @@ def test_the_store_lives_in_its_own_schema_and_no_session_can_reach_it(launcher,
     expect_allowed(client=server.admin(), sql="CREATE USER probe")
     with psycopg.connect(conninfo=uri) as connection:
         tables = {row[0] for row in connection.execute(
-            query="SELECT table_name FROM information_schema.tables WHERE table_schema = 'gizmosql_rbac'")}
+            query="SELECT table_name FROM information_schema.tables WHERE table_schema = 'hardcharger_rbac'")}
     assert {"users", "roles", "memberships", "object_grants", "owners", "meta"} <= tables, tables
     # The store is attached on a private DuckDB instance: the server's sessions, even
     # the administrator's, have no catalog for it.

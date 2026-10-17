@@ -1,5 +1,4 @@
-// Runtime metrics (Enterprise feature metrics), under GizmoSQL 1.x's names so
-// existing dashboards keep working: counters and a duration histogram that the
+// Runtime metrics (hardcharger_*): counters and a duration histogram that the
 // statement path updates, and gauges read when a scrape or a collection asks.
 #pragma once
 
@@ -85,7 +84,7 @@ FamilyInfo Family(std::string_view name);
 
 namespace hardcharger {
 
-// GET /metrics on its own plaintext port, as GizmoSQL 1.x serves it (Prometheus
+// GET /metrics on its own plaintext port (Prometheus
 // scrapers and the GizmoData Cloud console read it there). Everything else is 404.
 class MetricsEndpoint {
  public:

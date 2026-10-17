@@ -1,4 +1,4 @@
-// Wildcard patterns as GizmoSQL 1.x matches catalog names and authorized e-mail
+// Wildcard patterns for catalog names and authorized e-mail
 // addresses: only `*` (any run, also empty) and `?` (exactly one character) are
 // special; everything else, `.` and `-` included, matches itself.
 #pragma once

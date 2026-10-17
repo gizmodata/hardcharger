@@ -201,7 +201,7 @@ def test_passwords_are_stored_hashed(world, store):
     import psycopg
     expect_allowed(client=world.admin, sql="CREATE USER joe WITH PASSWORD 'correct horse'")
     with psycopg.connect(conninfo=world.server.store_uri) as connection:
-        stored = connection.execute(query="SELECT password_hash FROM gizmosql_rbac.users WHERE name = 'joe'").fetchone()[0]
+        stored = connection.execute(query="SELECT password_hash FROM hardcharger_rbac.users WHERE name = 'joe'").fetchone()[0]
     assert "correct horse" not in stored
     assert stored.startswith("pbkdf2-sha256$")
 

@@ -10,7 +10,7 @@ from conftest import Launcher
 def linked_version() -> str:
     import pathlib
     import tempfile
-    launcher = Launcher(tmp_path=pathlib.Path(tempfile.mkdtemp()), signer_factory=lambda: None)
+    launcher = Launcher(tmp_path=pathlib.Path(tempfile.mkdtemp()))
     try:
         server = launcher.start()
         return server.admin().scalar(sql="SELECT version()")

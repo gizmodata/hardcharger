@@ -1,4 +1,4 @@
-// Keys of an OpenID Connect identity provider (license feature external_auth): its
+// Keys of an OpenID Connect identity provider: its
 // discovery document, and the JSON Web Key Set that verifies the ID tokens it signs.
 #pragma once
 

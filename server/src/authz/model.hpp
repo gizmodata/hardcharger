@@ -169,8 +169,8 @@ struct OwnerRecord {
   std::string definition_hash;
 };
 
-// A catalog_access rule from a sign-in token (GizmoSQL 1.x's per-catalog
-// permissions, license feature catalog_permissions): the first rule whose pattern
+// A catalog_access rule from a sign-in token (per-catalog permissions): the first rule
+// whose pattern
 // matches a catalog decides; no match is no access.
 enum class CatalogAccessLevel { kNone, kRead, kWrite };
 struct CatalogRule {
@@ -178,9 +178,9 @@ struct CatalogRule {
   CatalogAccessLevel level = CatalogAccessLevel::kNone;
 };
 // The level the rules give `catalog`. DuckDB's system catalog (which holds
-// information_schema) and Hardcharger's _gizmosql_system are read for all.
+// information_schema) and Hardcharger's _hardcharger_system are read for all.
 CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const std::string& catalog);
-// GizmoSQL 1.x's words for a catalog_access refusal, which its clients match.
+// The words of a catalog_access refusal.
 std::string CatalogAccessDenied(const std::string& catalog, CatalogAccessLevel needed, const std::string& user);
 
 // Who is asking. The administrator (a superuser) is never looked up in the
@@ -203,8 +203,8 @@ struct Principal {
   std::optional<TokenScope> scope;
   // Without a store (rules-only access control): the token's catalog_access rules
   // decide alone, by catalog. Such a principal holds no system privilege (no files,
-  // URLs, secrets, extensions, ATTACH, server-wide or credential settings), as a
-  // GizmoSQL 1.x non-administrator, unless it is the administrator with rules.
+  // URLs, secrets, extensions, ATTACH, server-wide or credential settings), unless it
+  // is the administrator with rules.
   std::optional<std::vector<CatalogRule>> catalog_rules;
   bool rules_administrator = false;
   // Catalogs the server keeps for itself (instrumentation, logs), which no one but

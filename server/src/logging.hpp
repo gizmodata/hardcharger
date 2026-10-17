@@ -3,7 +3,7 @@
 // Components (statements, sign-in, sessions) have their own thresholds on top of the
 // logger's. A message is written only when its own level reaches the component's
 // threshold, and always at its own level: a component threshold of DEBUG makes debug
-// messages appear, it never turns them into info messages (GizmoSQL 1.x issue #136).
+// messages appear, it never turns them into info messages.
 #pragma once
 
 #include <chrono>
@@ -35,7 +35,7 @@ void Log(LogLevel level, std::string_view message, const LogFields& fields = {})
 
 // Writes `message` if `level` reaches `threshold` (a component's) and, unless
 // `ignore_logger_threshold`, the logger's threshold too. A session that asked for
-// more detail (SET gizmosql.query_log_level = DEBUG) gets it whatever the logger's
+// more detail (SET hardcharger.query_log_level = DEBUG) gets it whatever the logger's
 // threshold, so its own threshold decides alone.
 void LogAt(LogLevel threshold, LogLevel level, std::string_view message, const LogFields& fields = {},
            bool ignore_logger_threshold = false);

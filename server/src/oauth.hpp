@@ -1,6 +1,5 @@
-// Browser sign-in through an identity provider (license feature external_auth), on its
-// own port (oauth_port, default 31339) with GizmoSQL 1.x's routes, which 1.x drivers and
-// GizmoData Cloud's shared callback proxy use:
+// Browser sign-in through an identity provider, on its own port (oauth_port, default
+// 31339), with the routes drivers and GizmoData Cloud's shared callback proxy use:
 //
 //   GET /oauth/initiate           -> {"session_uuid", "auth_url"}: the client opens auth_url
 //   GET /oauth/start?session=H    -> 302 to the provider, for a client that made its own
@@ -61,7 +60,7 @@ class OAuthServer {
   // Answers one request (`target`: path and query); public for tests.
   Reply Handle(const std::string& target);
 
-  // HMAC-SHA256(key, data) in lower-case hex, as 1.x computes session hashes.
+  // HMAC-SHA256(key, data) in lower-case hex: the session hash.
   static std::string Hmac(const std::string& key, const std::string& data);
 
  private:

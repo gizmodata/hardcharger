@@ -1,5 +1,5 @@
 // Hardcharger's engine: Warp SQL's DuckDB backend, with Hardcharger's statement path
-// around it (guards, the gizmosql.* settings, KILL SESSION, the statement queue,
+// around it (guards, the hardcharger.* settings, KILL SESSION, the statement queue,
 // metrics and statement logging) and the server's SQL functions.
 #pragma once
 
@@ -18,15 +18,14 @@
 #include "health.hpp"
 #include "catalog_log.hpp"
 #include "instrumentation.hpp"
-#include "license.hpp"
 #include "logging.hpp"
 #include "runtime.hpp"
 #include "sql_text.hpp"
 
 namespace hardcharger {
 
-// The catalog with the server's own read-only views (gizmosql_index_info, ...).
-inline constexpr const char* kSystemCatalog = "_gizmosql_system";
+// The catalog with the server's own read-only views (hardcharger_index_info, ...).
+inline constexpr const char* kSystemCatalog = "_hardcharger_system";
 
 class Backend : public warpduckdb::DuckDBBackend {
  public:
@@ -105,7 +104,7 @@ class Session : public warpduckdb::DuckDBSession {
   void Kill();
   bool killed() const { return killed_; }
 
-  // Settings chosen with SET [SESSION] gizmosql.*; unset ones follow the server's.
+  // Settings chosen with SET [SESSION] hardcharger.*; unset ones follow the server's.
   struct Settings {
     std::optional<int64_t> query_timeout;
     std::optional<LogLevel> query_log_level;
@@ -121,12 +120,6 @@ class Session : public warpduckdb::DuckDBSession {
   void LogQuery(LogLevel level, std::string_view message, const LogFields& fields) const;
   // A tracked execution ended (its Execution calls it).
   void FinishRunning();
-
- protected:
-  // Warp SQL's key, and the one GizmoSQL 1.x clients read.
-  std::vector<std::string> ColumnDefaultMetadataKeys() const override {
-    return {"WARP:SQL:COLUMN_DEFAULT", "GIZMOSQL:COLUMN_DEFAULT"};
-  }
 
  private:
   // Throws once the session was killed or, under access control, unless it is bound

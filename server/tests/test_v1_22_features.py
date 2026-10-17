@@ -17,7 +17,7 @@ def test_index_info(session):
     session.execute(sql="CREATE INDEX v122_ix_ab ON v122_ix(a, b)")
     session.execute(sql="CREATE UNIQUE INDEX v122_ix_c ON v122_ix(c)")
     rows = session.query(sql='SELECT "TABLE_NAME", "NON_UNIQUE", "INDEX_NAME", "ORDINAL_POSITION", "COLUMN_NAME", '
-                             '"ASC_OR_DESC", "TYPE" FROM _gizmosql_system.main.gizmosql_index_info '
+                             '"ASC_OR_DESC", "TYPE" FROM _hardcharger_system.main.hardcharger_index_info '
                              "WHERE \"TABLE_NAME\" = 'v122_ix' ORDER BY \"INDEX_NAME\", \"ORDINAL_POSITION\"").to_pylist()
     assert len(rows) == 3, rows
     ab = [r for r in rows if r["INDEX_NAME"] == "v122_ix_ab"]
@@ -32,7 +32,7 @@ def test_index_info(session):
 def test_view_definition(session):
     session.execute(sql="CREATE TABLE v122_vt(x INT)")
     session.execute(sql="CREATE OR REPLACE VIEW v122_vv AS SELECT x + 1 AS x1 FROM v122_vt")
-    rows = session.rows(sql='SELECT "VIEW_DEFINITION" FROM _gizmosql_system.main.gizmosql_view_definition '
+    rows = session.rows(sql='SELECT "VIEW_DEFINITION" FROM _hardcharger_system.main.hardcharger_view_definition '
                             "WHERE \"TABLE_NAME\" = 'v122_vv'")
     assert len(rows) == 1
     ddl = rows[0]["VIEW_DEFINITION"]

@@ -19,7 +19,6 @@
 #include "engine.hpp"
 #include "http_client.hpp"
 #include "jwks.hpp"
-#include "license.hpp"
 #include "logging.hpp"
 #include "oauth.hpp"
 #include "runtime.hpp"
@@ -46,7 +45,7 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
                                      ? std::chrono::seconds(config.session_idle_timeout)
                                      : std::chrono::seconds(std::chrono::hours(24 * 365 * 10));
   // The engine supplies each session's default timeout (query_timeout_seconds, which
-  // SET [GLOBAL] gizmosql.query_timeout changes).
+  // SET [GLOBAL] hardcharger.query_timeout changes).
   options.default_statement_timeout = std::chrono::milliseconds(0);
   options.cors_allowed_origins = config.cors_origins;
   return options;
@@ -61,25 +60,6 @@ std::string RedactUrl(const std::string& url) {
     return url;
   }
   return url.substr(0, scheme_end + 3) + "***@" + url.substr(at + 1);
-}
-
-// Options that need a license feature: setting one without it stops the server rather
-// than running without what the deployment asked for.
-void CheckLicensedOptions(const hc::Loaded& loaded, const hc::License& license) {
-  const auto& c = loaded.config;
-  auto require = [&](bool used, const std::string& feature, const std::string& what) {
-    if (used && !license.Has(feature)) throw std::runtime_error(hc::LicenseRequired(feature, what));
-  };
-  require(c.enable_metrics, "metrics", "Cannot enable metrics: enable_metrics");
-  require(c.enable_instrumentation, "instrumentation", "Instrumentation (enable_instrumentation)");
-  require(c.enable_catalog_logging, "instrumentation", "Catalog logging (--enable-catalog-logging)");
-  require(c.capture_query_profile != "off", "instrumentation", "Query profile capture (capture_query_profile)");
-  require(!c.instance_tag.empty(), "instrumentation", "The instance tag (instance_tag)");
-  require(!c.oauth_client_id.empty(), "external_auth", "Server-side OAuth sign-in (oauth_client_id)");
-  for (const char* option : {"max_concurrent_statements", "max_queued_statements", "max_queue_wait",
-                             "admin_bypass_queue_default"}) {
-    require(loaded.sources.contains(option), "statement_queue", std::string("The statement queue (") + option + ")");
-  }
 }
 
 // The identity provider's keys and endpoints. Its JWKS verifies ID tokens when named
@@ -100,7 +80,7 @@ IdentityProvider DiscoverIdentityProvider(const hc::Config& c) {
     try {
       provider.endpoints = hc::DiscoverOidc(c.token_allowed_issuer);
     } catch (const std::exception& e) {
-      // Without OAuth this only costs JWKS sign-in, as in GizmoSQL 1.x; OAuth can't run.
+      // Without OAuth this only costs JWKS sign-in; OAuth can't run.
       if (oauth) throw std::runtime_error(std::string("OAuth sign-in needs the issuer's OpenID configuration: ") + e.what());
       hc::Log(hc::LogLevel::kWarning, "OpenID discovery failed; identity provider tokens won't be accepted",
               {{"issuer", c.token_allowed_issuer}, {"error", e.what()}});
@@ -192,7 +172,7 @@ class ExitMarker {
  public:
   explicit ExitMarker(const hc::Config& config) {
     if (config.read_only || config.database.empty() || config.database == ":memory:") return;
-    path_ = config.database + ".gizmosql-metrics-state";
+    path_ = config.database + ".hardcharger-metrics-state";
     std::ifstream in(path_);
     std::string line;
     bool was_running = false;
@@ -226,11 +206,11 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMar
   auto mutex = std::make_shared<std::mutex>();
   runtime.metrics.AddCollector([&runtime, &backend, &marker, connection, mutex](std::vector<hc::Sample>& out) {
     const auto now = std::chrono::system_clock::now();
-    out.push_back({"gizmosql_build_info",
-                   {{"version", std::string("v") + hc::kVersion}, {"edition", runtime.license.Edition()},
+    out.push_back({"hardcharger_build_info",
+                   {{"version", std::string("v") + hc::kVersion},
                     {"duckdb_version", backend.duckdb_version()}, {"server", "hardcharger"}},
                    1});
-    out.push_back({"gizmosql_up_seconds", {}, std::chrono::duration<double>(now - runtime.started_at).count()});
+    out.push_back({"hardcharger_up_seconds", {}, std::chrono::duration<double>(now - runtime.started_at).count()});
     int64_t running = 0, idle = 0, in_transaction = 0, aborted = 0;
     runtime.sessions.ForEach([&](hc::Session& s) {
       if (s.killed()) return;
@@ -244,22 +224,20 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMar
         idle++;
       }
     });
-    out.push_back({"gizmosql_sessions", {{"state", "active"}}, static_cast<double>(running)});
-    out.push_back({"gizmosql_sessions", {{"state", "idle"}}, static_cast<double>(idle)});
-    out.push_back({"gizmosql_sessions", {{"state", "idle_in_transaction"}}, static_cast<double>(in_transaction)});
-    out.push_back({"gizmosql_sessions", {{"state", "idle_in_transaction_aborted"}}, static_cast<double>(aborted)});
-    out.push_back({"gizmosql_session_limit", {}, static_cast<double>(runtime.config.max_sessions)});
-    out.push_back({"gizmosql_statements_active", {}, static_cast<double>(running)});
-    out.push_back({"gizmosql_concurrency_limit", {}, static_cast<double>(runtime.admission.Limit())});
-    out.push_back({"gizmosql_queue_depth", {{"state", "active"}}, static_cast<double>(runtime.admission.ActiveCount())});
-    out.push_back({"gizmosql_queue_depth", {{"state", "queued"}}, static_cast<double>(runtime.admission.QueuedCount())});
-    out.push_back({"gizmosql_draining", {}, runtime.draining ? 1.0 : 0.0});
-    out.push_back({"gizmosql_health_check_status", {}, runtime.health && runtime.health->Healthy() ? 1.0 : 0.0});
-    out.push_back({"gizmosql_license_expiry_seconds", {},
-                   runtime.license.enterprise ? std::chrono::duration<double>(runtime.license.expires - now).count() : NAN});
+    out.push_back({"hardcharger_sessions", {{"state", "active"}}, static_cast<double>(running)});
+    out.push_back({"hardcharger_sessions", {{"state", "idle"}}, static_cast<double>(idle)});
+    out.push_back({"hardcharger_sessions", {{"state", "idle_in_transaction"}}, static_cast<double>(in_transaction)});
+    out.push_back({"hardcharger_sessions", {{"state", "idle_in_transaction_aborted"}}, static_cast<double>(aborted)});
+    out.push_back({"hardcharger_session_limit", {}, static_cast<double>(runtime.config.max_sessions)});
+    out.push_back({"hardcharger_statements_active", {}, static_cast<double>(running)});
+    out.push_back({"hardcharger_concurrency_limit", {}, static_cast<double>(runtime.admission.Limit())});
+    out.push_back({"hardcharger_queue_depth", {{"state", "active"}}, static_cast<double>(runtime.admission.ActiveCount())});
+    out.push_back({"hardcharger_queue_depth", {{"state", "queued"}}, static_cast<double>(runtime.admission.QueuedCount())});
+    out.push_back({"hardcharger_draining", {}, runtime.draining ? 1.0 : 0.0});
+    out.push_back({"hardcharger_health_check_status", {}, runtime.health && runtime.health->Healthy() ? 1.0 : 0.0});
     out.push_back({"process_resident_memory_bytes", {}, ResidentBytes()});
-    out.push_back({"gizmosql_last_exit_unclean", {}, marker.last_unclean()});
-    out.push_back({"gizmosql_unclean_exits_total", {}, marker.unclean_exits()});
+    out.push_back({"hardcharger_last_exit_unclean", {}, marker.last_unclean()});
+    out.push_back({"hardcharger_unclean_exits_total", {}, marker.unclean_exits()});
     bool ok = true;
     double limit = NAN;
     double usage = NAN;
@@ -271,10 +249,10 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMar
     } catch (const std::exception&) {
       ok = false;
     }
-    out.push_back({"gizmosql_duckdb_memory_limit_bytes", {}, limit});
-    out.push_back({"gizmosql_duckdb_memory_usage_bytes", {}, usage});
-    out.push_back({"gizmosql_metrics_collection_success", {}, ok ? 1.0 : 0.0});
-    out.push_back({"gizmosql_metrics_last_collection_success_seconds", {},
+    out.push_back({"hardcharger_duckdb_memory_limit_bytes", {}, limit});
+    out.push_back({"hardcharger_duckdb_memory_usage_bytes", {}, usage});
+    out.push_back({"hardcharger_metrics_collection_success", {}, ok ? 1.0 : 0.0});
+    out.push_back({"hardcharger_metrics_last_collection_success_seconds", {},
                    ok ? std::chrono::duration<double>(now.time_since_epoch()).count() : NAN});
   });
 }
@@ -295,9 +273,7 @@ int main(int argc, char** argv) {
       std::cout << hc::Usage();
       return 0;
     case hc::Action::kVersion:
-      std::cout << "Hardcharger " << hc::kVersion
-                << (hc::TrustsTestLicenses() ? " (test-license build: not for production)" : "")
-                << "\n";
+      std::cout << "Hardcharger " << hc::kVersion << "\n";
       return 0;
     case hc::Action::kPrintDuckDBVersion: {
       duckdb_v2_str version{};
@@ -353,27 +329,13 @@ int main(int argc, char** argv) {
     for (const auto& note : loaded.notes) {
       hc::Log(hc::LogLevel::kInfo, note);
     }
-    if (hc::TrustsTestLicenses()) {
-      hc::Log(hc::LogLevel::kWarning,
-              "this is a test-license build: it trusts license keys anyone can sign, so it "
-              "must never serve real data");
-    }
-    const hc::License license =
-        hc::LoadLicense(hc::ReadLicenseKey(config.license_key, config.license_key_file,
-                                           loaded.sources.contains("license_key")));
-    CheckLicensedOptions(loaded, license);
-
     // Role-based access control: the store is opened (and must be reachable) before
-    // anything else, and refuses to start without the license feature.
+    // anything else.
     std::shared_ptr<hc::authz::AccessControl> access;
     if (!config.rbac_store_uri.empty()) {
-      if (!license.Has("rbac")) {
-        throw std::runtime_error(
-            hc::LicenseRequired("rbac", "Role-based access control (rbac_store_uri)"));
-      }
       hc::authz::Options options;
       options.store_uri = config.rbac_store_uri;
-      options.administrator_name = config.username;
+      options.administrator_name = config.admin_username;
       options.policy_service_url = config.rbac_opa_url;
       options.policy_service_timeout = std::chrono::milliseconds(config.rbac_opa_timeout_ms);
       // Access-control audit records form a hash chain from here on.
@@ -393,12 +355,11 @@ int main(int argc, char** argv) {
       // Without a store, the same plan check holds every principal but the
       // administrator to a non-administrator's limits, checked on each statement's own
       // plan (nested SQL included), enforces sign-in tokens' catalog_access rules
-      // (GizmoSQL 1.x's per-catalog permissions) and keeps the server's own catalogs
+      // (per-catalog permissions) and keeps the server's own catalogs
       // (instrumentation, logs) out of non-administrators' sight.
       hc::authz::Options options;
-      options.administrator_name = config.username;
+      options.administrator_name = config.admin_username;
       options.catalog_rules_only = true;
-      options.catalog_rules_licensed = license.Has("catalog_permissions");
       access = std::make_shared<hc::authz::AccessControl>(options);
     }
 
@@ -408,7 +369,7 @@ int main(int argc, char** argv) {
       hc::Log(hc::LogLevel::kWarning,
               "no secret_key: access tokens are valid on this process only, until it restarts");
     }
-    hc::Runtime runtime(config, license, instance_id);
+    hc::Runtime runtime(config, instance_id);
     if (config.enable_metrics) runtime.metrics.Enable();
     // Sign-in and tokens deal with the store's users; rules-only access control has none.
     const auto store_access = access && !access->catalog_rules_only() ? access : nullptr;
@@ -425,7 +386,7 @@ int main(int argc, char** argv) {
     auto backend = std::make_shared<hc::Backend>(runtime, access);
     const IdentityProvider provider = DiscoverIdentityProvider(config);
     auto authenticator = std::make_shared<hc::Authenticator>(
-        config, license, store_access, [tokens](std::string_view token) { return tokens->Validate(token); },
+        config, store_access, [tokens](std::string_view token) { return tokens->Validate(token); },
         provider.jwks);
     auto oauth = MakeOAuthServer(config, provider, secret_key);
     backend->StartHealthCheck();
@@ -448,9 +409,6 @@ int main(int argc, char** argv) {
     hc::Log(hc::LogLevel::kInfo, "Hardcharger is ready",
             {{"version", hc::kVersion},
              {"duckdb", backend->duckdb_version()},
-             {"edition", license.Edition()},
-             {"license_id", license.id},
-             {"licensee", license.licensee},
              {"url", std::string(config.tls_cert.empty() ? "http" : "https") + "://" +
                          config.host + ":" + std::to_string(server.port()) + "/warp"},
              {"metrics_port", metrics_endpoint ? std::to_string(metrics_endpoint->port()) : ""},

@@ -1,8 +1,9 @@
-"""Port of GizmoSQL 1.x tests/integration/test_reject_unknown_sessions.cpp (6 cases; 4 apply).
+"""Port of GizmoSQL 1.x tests/integration/test_reject_unknown_sessions.cpp (6 cases; 3 apply).
 
 Warp SQL never recreates a session implicitly: a closed, idle-ended or unknown session
-id answers 404 session_not_found (§5.6), and --reject-unknown-sessions is accepted only
-for 1.x configurations (setting it false is refused at startup).
+id answers 404 session_not_found (§5.6). There is no --reject-unknown-sessions option:
+it is always so (1.x's option to turn it on, and its refusal of turning it off, are
+not applicable: Hardcharger takes only its own names).
 
 Not applicable: ClosedSessionIsRecreatedByDefault and OtherInstancesSessionIsCreatedByDefault,
 1.x's default of silently starting a fresh session for an unknown one; that is the one
@@ -23,9 +24,8 @@ from conftest import problem
 def server(module_launcher):
     # As in 1.x's fixture, cross-instance tokens are on, so the only question left for
     # another replica's session is the session itself.
-    return module_launcher.start(args=["--reject-unknown-sessions"],
-                                 env={"GIZMOSQL_SESSION_IDLE_TIMEOUT": "2",
-                                      "GIZMOSQL_ALLOW_CROSS_INSTANCE_TOKENS": "true"})
+    return module_launcher.start(env={"HARDCHARGER_SESSION_IDLE_TIMEOUT": "2",
+                                      "HARDCHARGER_ALLOW_CROSS_INSTANCE_TOKENS": "true"})
 
 
 def gone(session) -> None:
@@ -51,14 +51,9 @@ def test_idle_evicted_session_is_refused(server):
 
 def test_other_instances_session_is_refused(server, module_launcher):
     other = module_launcher.start(env={"HARDCHARGER_SECRET_KEY": server.secret_key,
-                                       "GIZMOSQL_ALLOW_CROSS_INSTANCE_TOKENS": "true"}, password=server.password)
+                                       "HARDCHARGER_ALLOW_CROSS_INSTANCE_TOKENS": "true"}, password=server.password)
     foreign = other.admin()
     from warp_client import Session
     here = Session(client=server.client(token=foreign.client.token), session_id=foreign.id)
     gone(session=here)
 
-
-def test_turning_it_off_is_refused_at_startup(launcher):
-    server = launcher.start(env={"GIZMOSQL_REJECT_UNKNOWN_SESSIONS": "false"}, expect_up=False)
-    assert server.process.wait(timeout=20) == 2
-    assert "reject_unknown_sessions cannot be turned off" in server.log()

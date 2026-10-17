@@ -105,7 +105,7 @@ def test_forged_bearer_token_rejected(server):
 
 def test_random_jwt_rejected(server):
     now = datetime.datetime.now(tz=datetime.UTC)
-    unsigned = jwt.encode(payload={"iss": "gizmosql", "sub": USERNAME, "role": "admin", "iat": now,
+    unsigned = jwt.encode(payload={"iss": "hardcharger", "sub": USERNAME, "role": "admin", "iat": now,
                                    "exp": now + datetime.timedelta(hours=1)}, key="not-the-server-key-at-all-0123456789",
                           algorithm="HS256")
     token_refused(server=server, authorization=f"Bearer {unsigned}")

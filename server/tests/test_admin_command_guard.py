@@ -50,7 +50,7 @@ def test_unit_case(unit_results, case):
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
-    return module_launcher.start(env={"GIZMOSQL_ALLOW_CROSS_INSTANCE_TOKENS": "true"})
+    return module_launcher.start(env={"HARDCHARGER_ALLOW_CROSS_INSTANCE_TOKENS": "true"})
 
 
 @pytest.fixture(scope="module")
@@ -98,7 +98,7 @@ def test_sql_with_nul_byte_is_rejected(server):
 
 
 def test_set_true_reaches_duckdb_when_the_block_is_off(launcher):
-    admin = launcher.start(env={"GIZMOSQL_BLOCK_UNREDACTED_SECRETS": "false"}).admin()
+    admin = launcher.start(env={"HARDCHARGER_BLOCK_UNREDACTED_SECRETS": "false"}).admin()
     problem = admin.error(sql="SET allow_unredacted_secrets = true")
     assert "disabled on this server" not in problem["detail"], problem
     assert "allow_unredacted_secrets" in problem["detail"], problem  # DuckDB's own refusal

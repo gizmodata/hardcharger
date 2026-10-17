@@ -1,4 +1,4 @@
-// Shared vocabulary for Hardcharger role-based access control (Enterprise):
+// Shared vocabulary for Hardcharger role-based access control:
 // privileges, object names and the case-folding rule every RBAC component uses.
 
 #pragma once

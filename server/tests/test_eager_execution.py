@@ -134,9 +134,9 @@ def test_one_prepared_insert_can_bind_and_execute_many_times(session):
 
 
 def test_metrics_enablement_is_discoverable_and_startup_only(session):
-    row = session.rows(sql="SELECT value, settable, cli_flag FROM gizmosql_settings() WHERE name = 'gizmosql.enable_metrics'")
+    row = session.rows(sql="SELECT value, settable, cli_flag FROM hardcharger_settings() WHERE name = 'hardcharger.enable_metrics'")
     assert row == [{"value": "false", "settable": False, "cli_flag": "--enable-metrics"}], row
-    assert "--enable-metrics" in session.error(sql="SET gizmosql.enable_metrics = true")["detail"]
+    assert "--enable-metrics" in session.error(sql="SET hardcharger.enable_metrics = true")["detail"]
 
 
 def test_eager_ddl_and_merge_complete_without_fetching(session):

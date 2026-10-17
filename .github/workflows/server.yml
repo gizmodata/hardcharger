@@ -80,16 +80,6 @@ jobs:
           cmake --build server/build
           server/build/hardcharger --version
           server/build/hardcharger --print-duckdb-version
-          # The release binary never trusts the tests' license key.
-          if server/build/hardcharger --version | grep -q "test-license"; then exit 1; fi
-      # The access-control tests run on a build that trusts the tests' license key
-      # (there is no GizmoData license in CI); it is never packaged.
-      - name: Build the test-license server
-        run: |
-          cmake -S server -B server/build-test -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                -DHARDCHARGER_TRUST_TEST_LICENSES=ON
-          cmake --build server/build-test
-          server/build-test/hardcharger --version | grep -q "test-license"
 
       # PostgreSQL for the access-control grant store (the tests fail without it).
       - name: Start PostgreSQL (Linux)
@@ -122,22 +112,19 @@ jobs:
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -r pyproject.toml
-          # Everything, access control included, on the test-license build (the DuckLake
-          # suites need Docker, which only the Linux runners have; macOS deselects them by
-          # marker, visibly)...
+          # Everything, access control included, on the one build, the one that ships (the
+          # DuckLake suites need Docker, which only the Linux runners have; macOS deselects
+          # them by marker, visibly).
           markers=()
           if [ "$RUNNER_OS" != "Linux" ]; then markers=(-m "not services"); fi
-          HARDCHARGER_TEST_BINARY=../build-test/hardcharger HARDCHARGER_TEST_UNIT_BINARY=../build-test/hardcharger-unit-tests \
-            .venv/bin/python -m pytest -q "${markers[@]}"
-          # ...and the suites that need no license on the binary that ships.
-          .venv/bin/python -m pytest -q test_server.py
+          .venv/bin/python -m pytest -q "${markers[@]}"
       - name: Warp SQL conformance suite
         working-directory: third_party/warp-sql/conformance
         env:
           WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build/hardcharger
-          WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_PASSWORD
+          WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
           WARP_SQL_TEST_SERVER_USERNAME: warp
-          HARDCHARGER_USERNAME: warp
+          HARDCHARGER_ADMIN_USERNAME: warp
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
           uv venv .venv --python 3.14
@@ -148,10 +135,8 @@ jobs:
         run: |
           stage="dist/hardcharger-${{ matrix.name }}"
           cmake --install server/build --prefix "$stage"
-          # Only the release server ships: never the unit tests, and never a build that
-          # trusts the tests' license key.
+          # Only the server ships, never the unit tests.
           test "$(ls "$stage/bin")" = "hardcharger"
-          if "$stage/bin/hardcharger" --version | grep -q "test-license"; then exit 1; fi
           mkdir -p "$stage/lib"
           cp -P server/.deps/duckdb-install/lib/libduckdb.* "$stage/lib/"
           cp LICENSE CHANGELOG.md "$stage/"
@@ -202,11 +187,9 @@ jobs:
       - name: Build DuckDB and Arrow
         if: steps.cache.outputs.cache-hit != 'true'
         run: server/scripts/build-deps.sh
-      # A test-license build, so the access-control suites run under the sanitizer too.
       - name: Build the server with AddressSanitizer
         run: |
           cmake -S server -B server/build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DHARDCHARGER_TRUST_TEST_LICENSES=ON \
             -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
           cmake --build server/build-asan
@@ -228,18 +211,16 @@ jobs:
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -r pyproject.toml
-          # The release build (which this job doesn't build) is checked in the build job.
-          .venv/bin/python -m pytest -q \
-            --deselect test_inline_license_key.py::test_shipped_binary_refuses_test_signed_keys
+          .venv/bin/python -m pytest -q
       - name: Warp SQL conformance suite (ASan)
         working-directory: third_party/warp-sql/conformance
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
           WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger
-          WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_PASSWORD
+          WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
           WARP_SQL_TEST_SERVER_USERNAME: warp
           WARP_SQL_TEST_SERVER_LOG: ${{ runner.temp }}/conformance-server.log
-          HARDCHARGER_USERNAME: warp
+          HARDCHARGER_ADMIN_USERNAME: warp
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
           uv venv .venv --python 3.14
@@ -314,7 +295,7 @@ jobs:
         run: |
           docker buildx build --platform linux/amd64 --file docker/Dockerfile --tag hc-smoke --load .
           docker run --rm hc-smoke --version
-          docker run -d --name hc -e HARDCHARGER_PASSWORD=smoke -p 31337:31337 -p 31338:31338 hc-smoke
+          docker run -d --name hc -e HARDCHARGER_ADMIN_PASSWORD=smoke -p 31337:31337 -p 31338:31338 hc-smoke
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
           curl -sf http://127.0.0.1:31337/warp
           docker logs hc

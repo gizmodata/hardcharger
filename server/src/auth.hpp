@@ -2,8 +2,8 @@
 //  - password: the configured administrator;
 //  - token_exchange: a signed sign-in token from a trusted issuer: RS256 against a
 //    configured key (the tokens GizmoData Cloud mints for its users), or an identity
-//    provider's ID token verified with its JWKS (license feature external_auth). As in
-//    GizmoSQL 1.x, the same token is also accepted as the password of the user "token".
+//    provider's ID token verified with its JWKS. The same token is also accepted as
+//    the password of the user "token", for clients that only send a password.
 //  - with access control on, also the store's users with a password, and the scoped
 //    tokens CREATE SCOPED TOKEN hands out (as the password of user "token" too).
 #pragma once
@@ -15,7 +15,6 @@
 #include "authz/authz.hpp"
 #include "config.hpp"
 #include "jwks.hpp"
-#include "license.hpp"
 #include "logging.hpp"
 #include "warpsql/backend.hpp"
 
@@ -29,7 +28,7 @@ class Authenticator : public warpsql::Authenticator {
   // `access`: access control, or null. `server_tokens` validates this server's own
   // access tokens (for scoped tokens sent as a password). `jwks`: the identity
   // provider's keys, or null to verify with the configured key only.
-  Authenticator(const Config& config, const License& license,
+  explicit Authenticator(const Config& config,
                 std::shared_ptr<authz::AccessControl> access = nullptr,
                 std::function<warpsql::Principal(std::string_view)> server_tokens = nullptr,
                 std::shared_ptr<Jwks> jwks = nullptr);
@@ -55,7 +54,6 @@ class Authenticator : public warpsql::Authenticator {
   std::string groups_claim_;
   std::vector<std::string> authorized_emails_;
   LogLevel log_level_;
-  const License& license_;
   std::shared_ptr<authz::AccessControl> access_;
   std::function<warpsql::Principal(std::string_view)> server_tokens_;
 };

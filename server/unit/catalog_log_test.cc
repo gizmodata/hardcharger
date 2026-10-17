@@ -33,11 +33,10 @@ TEST(CatalogLogTest, LinesLandInTheirColumns) {
   const auto file = std::filesystem::temp_directory_path() / ("hc_logs_" + std::to_string(::getpid()) + ".db");
   std::filesystem::remove(file);
   hardcharger::Config config;
-  config.password = "x";
+  config.admin_password = "x";
   config.enable_catalog_logging = true;
   config.log_catalog_db_path = file.string();
-  hardcharger::License license;
-  hardcharger::Runtime runtime(config, license, "00000000-0000-0000-0000-0000000000aa");
+  hardcharger::Runtime runtime(config, "00000000-0000-0000-0000-0000000000aa");
   hardcharger::ConfigureLogging("debug", "text", "-");
   hardcharger::SetDefaultLogFields({{"instance_id", "00000000-0000-0000-0000-0000000000aa"}});
   Db db;
@@ -59,16 +58,16 @@ TEST(CatalogLogTest, LinesLandInTheirColumns) {
   const std::string row =
       Query(db, "SELECT concat_ws('|', level, instance_id, session_id, username, role, fields->>'kind', "
                 "pid IS NOT NULL, tid IS NOT NULL, log_time > now() - INTERVAL 1 MINUTE) "
-                "FROM _gizmosql_logs.main.logs WHERE message = 'it''s a probe'");
+                "FROM _hardcharger_logs.main.logs WHERE message = 'it''s a probe'");
   EXPECT_EQ(row,
             "WARN|00000000-0000-0000-0000-0000000000aa|11111111-2222-3333-4444-555555555555|alice|admin|sql|true|true|"
             "true");
   EXPECT_EQ(Query(db, "SELECT concat_ws('|', level, session_id IS NULL, fields->>'session_id') "
-                      "FROM _gizmosql_logs.main.logs WHERE message = 'odd id probe'"),
+                      "FROM _hardcharger_logs.main.logs WHERE message = 'odd id probe'"),
             "DEBUG|true|nope");
   // Nothing logged after Stop reaches the table.
   hardcharger::Log(hardcharger::LogLevel::kInfo, "after stop");
-  EXPECT_EQ(Query(db, "SELECT count(*) FROM _gizmosql_logs.main.logs WHERE message = 'after stop'"), "0");
-  warpduckdb::RunSql(db.connection.get(), "DETACH _gizmosql_logs");
+  EXPECT_EQ(Query(db, "SELECT count(*) FROM _hardcharger_logs.main.logs WHERE message = 'after stop'"), "0");
+  warpduckdb::RunSql(db.connection.get(), "DETACH _hardcharger_logs");
   std::filesystem::remove(file);
 }

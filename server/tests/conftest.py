@@ -1,19 +1,12 @@
 """Starts Hardcharger servers for the tests.
 
-HARDCHARGER_TEST_BINARY names the server binary (default: ../build/hardcharger). A
-missing binary or a server that doesn't come up fails the run; nothing is skipped.
-
-Enterprise features need a license. With HARDCHARGER_TEST_LICENSE_KEY_FILE set (a real
-GizmoData key with every feature), licensed tests use it. Without it they need a
-test-license build (-DHARDCHARGER_TRUST_TEST_LICENSES=ON), which also trusts the key in
-server/tests/license; this run signs licenses with it, each with the features its test
-names. That build is never installed or shipped. HARDCHARGER_TEST_RELEASE_BINARY names
-the build that ships (default: ../build/hardcharger), for the tests that check it refuses
-test-signed keys.
+HARDCHARGER_TEST_BINARY names the server binary (default: ../build/hardcharger), the
+one build that ships. A missing binary or a server that doesn't come up fails the run;
+nothing is skipped. Every feature is on whenever its own option says so: there is no
+license.
 """
 
 import dataclasses
-import datetime
 import json
 import os
 import pathlib
@@ -22,32 +15,16 @@ import signal
 import socket
 import subprocess
 import time
-import uuid
 
 import httpx
-import jwt
 import pytest
-from cryptography.hazmat.primitives import serialization
 
 from warp_client import Client, mint_server_token
 
 BUILD = pathlib.Path(__file__).resolve().parent.parent / "build"
 # Absolute (a relative name is the caller's, but servers run in their own directories).
 BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_BINARY", BUILD / "hardcharger")).resolve()
-RELEASE_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_RELEASE_BINARY", BUILD / "hardcharger")).resolve()
-LICENSE_DIR = pathlib.Path(__file__).resolve().parent / "license"
 UNIT_TEST_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_UNIT_BINARY", BUILD / "hardcharger-unit-tests")).resolve()
-REAL_LICENSE_FILE = os.environ.get("HARDCHARGER_TEST_LICENSE_KEY_FILE", "")
-
-ALL_FEATURES = ["instrumentation", "kill_session", "catalog_permissions", "external_auth", "statement_queue",
-                "metrics", "rbac"]
-
-# GizmoSQL 1.x's unprefixed environment names, which Hardcharger reads too: a value this
-# shell exports (for a real server) must never reach a test server.
-LEGACY_ENV = {"SECRET_KEY", "INIT_SQL_COMMANDS", "INIT_SQL_COMMANDS_FILE", "TOKEN_ALLOWED_ISSUER",
-              "TOKEN_ALLOWED_AUDIENCE", "TOKEN_SIGNATURE_VERIFY_CERT_PATH", "DATABASE_FILENAME", "DATABASE_BACKEND",
-              "TLS_ENABLED", "TLS_CERT", "TLS_KEY", "READONLY", "QUERY_TIMEOUT", "PRINT_QUERIES",
-              "MTLS_CA_CERT_FILENAME", "HEALTH_PORT"}
 
 
 def free_port() -> int:
@@ -75,54 +52,10 @@ _HOME = None
 
 
 def clean_environment() -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("HARDCHARGER_", "GIZMOSQL_")) and k not in LEGACY_ENV}
+    # A value this shell exports (for a real server) must never reach a test server.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HARDCHARGER_")}
     env["HOME"] = str(_test_home())
     return env
-
-
-def is_test_license_build(binary: pathlib.Path) -> bool:
-    if binary not in _BUILD_KIND:
-        if not binary.exists():
-            pytest.fail(reason=f"{binary} is missing: build the server first")
-        version = subprocess.run(args=[str(binary), "--version"], capture_output=True, text=True, check=True).stdout
-        _BUILD_KIND[binary] = "test-license build" in version
-    return _BUILD_KIND[binary]
-
-
-_BUILD_KIND: dict[pathlib.Path, bool] = {}
-
-
-def require_test_license_build(binary: pathlib.Path) -> None:
-    if not is_test_license_build(binary=binary):
-        pytest.fail(reason=f"{binary} is not a test-license build: build with -DHARDCHARGER_TRUST_TEST_LICENSES=ON "
-                           f"(or set HARDCHARGER_TEST_LICENSE_KEY_FILE to a real license)")
-
-
-# What GIZMOSQL_EDITION() and server-info say for a licensed server of this run.
-ENTERPRISE = "Enterprise" if REAL_LICENSE_FILE else "Enterprise (test license)"
-
-
-class LicenseSigner:
-    """Signs license keys in GizmoData's format with the tests' key (server/tests/license),
-    which only a test-license build trusts."""
-
-    def __init__(self):
-        self.key = serialization.load_pem_private_key(
-            data=(LICENSE_DIR / "test-license-private.pem").read_bytes(), password=None)
-
-    def sign(self, features: list[str], lifetime: datetime.timedelta = datetime.timedelta(days=1), **overrides) -> str:
-        now = datetime.datetime.now(tz=datetime.UTC)
-        payload = {"jti": str(uuid.uuid4()), "iss": "GizmoData LLC", "sub": "tests@gizmodata.com",
-                   "aud": "Hardcharger tests", "iat": now, "nbf": now - datetime.timedelta(minutes=1),
-                   "exp": now + lifetime, "features": features, **overrides}
-        payload = {k: v for k, v in payload.items() if v is not None}
-        return jwt.encode(payload=payload, key=self.key, algorithm="RS256")
-
-
-@pytest.fixture(scope="session")
-def license_signer() -> LicenseSigner:
-    return LicenseSigner()
 
 
 @dataclasses.dataclass
@@ -195,40 +128,31 @@ class Running:
 
 
 class Launcher:
-    def __init__(self, tmp_path: pathlib.Path, signer_factory):
+    def __init__(self, tmp_path: pathlib.Path):
         self.tmp_path = tmp_path
         self.started: list[Running] = []
-        self._signer_factory = signer_factory
 
     def start(self, args: list[str] | None = None, env: dict[str, str] | None = None,
-              password: str | None = None, expect_up: bool = True, features: list[str] | None = None,
-              license_key: str | None = None, username: str = "admin", secret_key: str | None = None,
-              binary: pathlib.Path | None = None, wait_for: str = "/warp", startup_seconds: float = 30) -> Running:
-        """Starts a server. `features`: run it licensed with those Enterprise features
-        (see the module docstring); `license_key`: a key this run signed itself."""
+              password: str | None = None, expect_up: bool = True, username: str = "admin",
+              secret_key: str | None = None, binary: pathlib.Path | None = None, wait_for: str = "/warp",
+              startup_seconds: float = 30) -> Running:
+        """Starts a server (the administrator `username` with `password`, by default a
+        random one)."""
         binary = binary or BINARY
         env = dict(env or {})
-        if features is not None or license_key is not None:
-            if REAL_LICENSE_FILE and license_key is None:
-                env.setdefault("HARDCHARGER_LICENSE_KEY_FILE", REAL_LICENSE_FILE)
-            else:
-                require_test_license_build(binary=binary)
-                env.setdefault("HARDCHARGER_LICENSE_KEY",
-                               license_key or self._signer_factory().sign(
-                                   features=features if features is not None else ALL_FEATURES))
         if not binary.exists():
             pytest.fail(reason=f"{binary} is missing: build the server first")
         port = free_port()
         password = password or secrets.token_urlsafe(nbytes=12) + ":p@ss"
-        given = next((env[name] for name in ("HARDCHARGER_SECRET_KEY", "SECRET_KEY", "GIZMOSQL_SECRET_KEY")
-                      if name in env), None)
+        given = env.get("HARDCHARGER_SECRET_KEY")
         secret_key = secret_key or given or secrets.token_hex(nbytes=32)
         if given is None:
             env["HARDCHARGER_SECRET_KEY"] = secret_key
         log_path = self.tmp_path / f"server-{port}.log"
         process = subprocess.Popen(
             args=[str(binary), "--host", "127.0.0.1", "--port", str(port), *(args or [])],
-            env={**clean_environment(), "HARDCHARGER_PASSWORD": password, "HARDCHARGER_USERNAME": username, **env},
+            env={**clean_environment(), "HARDCHARGER_ADMIN_PASSWORD": password, "HARDCHARGER_ADMIN_USERNAME": username,
+                 **env},
             stdout=subprocess.DEVNULL, stderr=log_path.open("w"), cwd=self.tmp_path)
         running = Running(base_url=f"http://127.0.0.1:{port}", username=username, password=password,
                           secret_key=secret_key, process=process, log_path=log_path, port=port)
@@ -261,8 +185,8 @@ class Launcher:
 
 
 @pytest.fixture
-def launcher(tmp_path, request):
-    launch = Launcher(tmp_path=tmp_path, signer_factory=lambda: request.getfixturevalue("license_signer"))
+def launcher(tmp_path):
+    launch = Launcher(tmp_path=tmp_path)
     yield launch
     launch.stop_all()
 
@@ -285,10 +209,9 @@ def run_unit_tests(gtest_filter: str) -> dict[str, bool]:
 
 
 @pytest.fixture(scope="module")
-def module_launcher(tmp_path_factory, request):
+def module_launcher(tmp_path_factory):
     """A launcher whose servers live for the whole test module."""
-    launch = Launcher(tmp_path=tmp_path_factory.mktemp("module"),
-                      signer_factory=lambda: request.getfixturevalue("license_signer"))
+    launch = Launcher(tmp_path=tmp_path_factory.mktemp("module"))
     yield launch
     launch.stop_all()
 

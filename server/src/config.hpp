@@ -1,7 +1,6 @@
 // Hardcharger's configuration: every option has one canonical name, used as the YAML
 // key, the command-line flag (--name-with-dashes) and the environment variable
-// (HARDCHARGER_NAME). GizmoSQL 1.x's flags and environment names are read too, so a
-// 1.x deployment (GizmoData Cloud sets them) runs unchanged.
+// (HARDCHARGER_NAME), and no other names.
 //
 // Precedence: flag, then environment, then the YAML file, then the default.
 #pragma once
@@ -26,7 +25,6 @@ struct Config {
   std::string mtls_ca_cert;  // PEM CA; when set, clients must present a certificate
 
   // Database
-  std::string backend = "duckdb";  // 1.x's --backend; DuckDB is the only one
   std::string database = ":memory:";
   bool read_only = false;
   std::string memory_limit;     // DuckDB memory_limit, e.g. "8GB"
@@ -37,8 +35,8 @@ struct Config {
   int64_t result_batch_rows = 2048;    // rows per Arrow batch in results
 
   // Authentication
-  std::string username = "hardcharger";
-  std::string password;      // required
+  std::string admin_username = "hardcharger";
+  std::string admin_password;  // required
   std::string secret_key;    // signs access tokens; random (per process) if unset
   int64_t token_lifetime_seconds = 86400;
   bool allow_cross_instance_tokens = false;  // tokens from other replicas of this cluster
@@ -48,11 +46,11 @@ struct Config {
   std::string token_default_role;  // for sign-in tokens without a role claim
   std::string token_groups_claim = "groups";  // sign-in token claim with the user's groups
   std::vector<std::string> token_authorized_emails = {"*"};  // globs, case-insensitive
-  // An identity provider's keys (Enterprise: external_auth): this JWKS, else the one
+  // An identity provider's keys: this JWKS, else the one
   // token_allowed_issuer's OpenID configuration names (with an audience and no PEM key).
   std::string token_jwks_uri;
 
-  // Browser sign-in (Enterprise: external_auth), GizmoSQL 1.x's OAuth server.
+  // Browser sign-in through the identity provider.
   std::string oauth_client_id;  // set: the OAuth server runs
   std::string oauth_client_secret;
   std::string oauth_scopes = "openid profile email";
@@ -65,12 +63,11 @@ struct Config {
   // Sessions
   int64_t max_sessions = 0;  // non-admin sessions at once; 0 = unlimited
   int64_t session_idle_timeout = 900;  // seconds; 0 = never
-  bool reject_unknown_sessions = true;  // always true in Warp SQL; kept for 1.x configs
 
   // Statements
   int64_t query_timeout_seconds = 0;  // 0 = none
   bool print_queries = true;
-  int64_t max_concurrent_statements = 0;  // 0 = no queue (Enterprise: statement_queue)
+  int64_t max_concurrent_statements = 0;  // 0 = no queue
   int64_t max_queued_statements = -1;     // -1 = 8 x concurrency; 0 = unbounded
   int64_t max_queue_wait = -1;            // seconds; -1 = 300; 0 = forever
   bool admin_bypass_queue_default = true;
@@ -80,15 +77,11 @@ struct Config {
   std::vector<std::string> sensitive_paths;  // operator-protected paths, on top of the built-ins
   bool block_unredacted_secrets = true;
 
-  // Role-based access control (Enterprise, license feature "rbac"). A store turns it on.
+  // Role-based access control. A store turns it on.
   std::string rbac_store_uri;       // PostgreSQL connection string or URI of the grant store
   std::string rbac_opa_url;         // Open Policy Agent decision URL also asked; empty: none
   int64_t rbac_opa_timeout_ms = 2000;
   std::string audit_chain_key;      // seals access-control audit records (HMAC-SHA256)
-
-  // License (GizmoData Enterprise keys)
-  std::string license_key;
-  std::string license_key_file;
 
   // Identity of this deployment
   std::string cluster_id;  // a UUID shared by a cluster's replicas; empty if unset
@@ -107,22 +100,22 @@ struct Config {
   int64_t health_check_staleness_seconds = 0;  // 0 = 3 x interval
   std::vector<std::string> cors_origins;
 
-  // Instrumentation (Enterprise: instrumentation)
+  // Instrumentation 
   bool enable_instrumentation = false;
-  std::string instrumentation_db_path;  // empty: gizmosql_instrumentation.db next to the database
+  std::string instrumentation_db_path;  // empty: hardcharger_instrumentation.db next to the database
   std::string instrumentation_catalog;  // a catalog the init SQL attaches, instead of the file
   std::string instrumentation_schema = "main";
 
-  // Catalog logging (Enterprise: instrumentation): every log line also goes to a
+  // Catalog logging : every log line also goes to a
   // `logs` table, in its own DuckDB file or in a catalog the init SQL attaches.
   bool enable_catalog_logging = false;
-  std::string log_catalog_db_path;  // empty: gizmosql_logs.db next to the database
+  std::string log_catalog_db_path;  // empty: hardcharger_logs.db next to the database
   std::string log_catalog;          // an attached catalog (DuckLake, PostgreSQL) instead
   std::string log_schema = "main";
   std::string instance_tag;  // JSON object recorded with this instance
   std::string capture_query_profile = "off";  // off, standard or detailed
 
-  // Metrics (Enterprise: metrics)
+  // Metrics 
   bool enable_metrics = false;
   int64_t metrics_port = 9091;  // 0 = no HTTP endpoint
   std::string metrics_bind_address = "0.0.0.0";
@@ -137,7 +130,7 @@ struct Loaded {
   Config config;
   Action action = Action::kServe;
   std::string verify_tls_url;  // kVerifyTls: the URL to fetch
-  std::vector<std::string> notes;  // e.g. legacy environment names in use
+  std::vector<std::string> notes;  // logged at startup
   std::string audit_log;           // kVerifyAuditLog: the log file to check
   bool audit_log_partial = false;  // ... which may begin inside a chain (a rotated log)
   // Where each option that was set came from: "flag", "env HARDCHARGER_X", "file", ...

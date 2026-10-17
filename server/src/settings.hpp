@@ -1,10 +1,9 @@
-// The server's own settings, in SQL: `SET [SESSION|GLOBAL] gizmosql.<name> = <value>`
-// (or hardcharger.<name>), `RESET ...`, and the gizmosql_settings() /
-// hardcharger_settings() table functions that list them.
+// The server's own settings, in SQL: `SET [SESSION|GLOBAL] hardcharger.<name> = <value>`,
+// `RESET ...`, and the hardcharger_settings() table function that lists them.
 //
 // Each setting has a scope: SESSION, GLOBAL (admins only, applies to every session at
 // once), SESSION_OR_GLOBAL, or STARTUP (fixed by the configuration; SET says where to
-// change it). Enterprise settings need their license feature.
+// change it).
 #pragma once
 
 #include <arrow/record_batch.h>
@@ -28,11 +27,8 @@ struct Setting {
   SettingScope scope;
   std::string input_type;     // VARCHAR, INTEGER or BOOLEAN
   std::string option;         // Hardcharger's configuration option, if any ("query_timeout_seconds")
-  std::string legacy_flag;    // GizmoSQL 1.x's flag ("--query-timeout")
-  std::string legacy_env;     // GizmoSQL 1.x's environment variable
   std::string default_value;
   std::string description;
-  std::string feature;  // license feature needed to SET it ("" for none)
   bool admin_only = false;  // listed only to admins
   std::function<std::optional<std::string>(const Session&)> get_session;
   std::function<std::optional<std::string>(const Runtime&)> get_global;
@@ -46,9 +42,7 @@ const std::vector<Setting>& Settings();
 // Applies a SET or RESET; throws warpsql::Error when it may not or the value is bad.
 void ApplySetting(Session& session, const SettingCommand& command);
 
-// The settings `session` may see, as gizmosql_settings() (prefix "gizmosql.", GizmoSQL
-// 1.x flags and environment names) or hardcharger_settings() (prefix "hardcharger.",
-// Hardcharger's) return them.
-std::shared_ptr<arrow::RecordBatch> SettingsTable(const Session& session, bool gizmosql_names);
+// The settings `session` may see, as hardcharger_settings() returns them.
+std::shared_ptr<arrow::RecordBatch> SettingsTable(const Session& session);
 
 }  // namespace hardcharger

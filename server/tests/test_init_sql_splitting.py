@@ -30,6 +30,6 @@ def test_init_sql_with_semicolons_inside_runs_intact(launcher):
                 "/* seed; one row */ INSERT INTO \"semi;colon\" VALUES ('a;b');\n"
                 "CREATE MACRO semi_text() AS $$x;y$$;\n"
                 "-- done;\n")
-    server = launcher.start(env={"INIT_SQL_COMMANDS": init_sql})
+    server = launcher.start(env={"HARDCHARGER_INIT_SQL_COMMANDS": init_sql})
     rows = server.admin().rows(sql='SELECT note, semi_text() AS m FROM "semi;colon"')
     assert rows == [{"note": "a;b", "m": "x;y"}]

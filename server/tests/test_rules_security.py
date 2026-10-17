@@ -9,7 +9,7 @@ statement's plan is checked, so nested SQL is caught where it runs, not by scann
 text. Each refusal has a twin that shows the administrator (or the user, in an allowed
 catalog) can.
 
-Setup as in the review: licensed catalog_permissions + instrumentation; the
+Setup as in the review: a server with instrumentation; the
 administrator attaches secretdb (table t holding 42 and 'top-secret-value', sequence
 seq), creates a temporary S3 secret and sets s3_secret_access_key globally; mallory
 (role user) has catalog_access [{maindb: read}, {pubdb: write}, {*: none}].
@@ -45,8 +45,7 @@ def setup(admin, directory):
 
 @pytest.fixture(scope="module")
 def server(module_launcher, tmp_path_factory):
-    running = module_launcher.start(features=["catalog_permissions", "instrumentation"],
-                                    args=["--enable-instrumentation"])
+    running = module_launcher.start(args=["--enable-instrumentation"])
     setup(admin=running.admin(), directory=tmp_path_factory.mktemp("dbs"))
     return running
 
@@ -153,7 +152,7 @@ def test_the_user_keeps_its_rights(mallory):
     refused(mallory, "SELECT * FROM secretdb.main.t", "read access to catalog 'secretdb'")
     assert mallory.query(sql="PIVOT (SELECT * FROM (VALUES ('a', 1), ('b', 2)) v(k, x)) ON k USING sum(x)").num_rows == 1
     assert {"maindb", "pubdb"} <= set(mallory.metadata(kind="catalogs").column(0).to_pylist())
-    assert mallory.scalar(sql="SELECT GIZMOSQL_USER()") == "mallory"
+    assert mallory.scalar(sql="SELECT HARDCHARGER_USER()") == "mallory"
     assert mallory.scalar(sql="SELECT count(*) FROM range(3)") == 3
 
 

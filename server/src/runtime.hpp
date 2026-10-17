@@ -1,6 +1,6 @@
-// What every session of one server shares: its configuration and license, its identity,
+// What every session of one server shares: its configuration, its identity,
 // the session table, the statement queue, metrics, and the settings an admin can change
-// while it runs (SET GLOBAL gizmosql.*).
+// while it runs (SET GLOBAL hardcharger.*).
 #pragma once
 
 #include <atomic>
@@ -10,7 +10,6 @@
 
 #include "admission.hpp"
 #include "config.hpp"
-#include "license.hpp"
 #include "logging.hpp"
 #include "metrics.hpp"
 #include "sessions.hpp"
@@ -22,9 +21,8 @@ class HealthChecker;
 class Instrumentation;
 
 struct Runtime {
-  Runtime(const Config& config, const License& license, std::string instance_id)
+  Runtime(const Config& config, std::string instance_id)
       : config(config),
-        license(license),
         instance_id(std::move(instance_id)),
         sessions(config.max_sessions),
         query_timeout_seconds(config.query_timeout_seconds),
@@ -44,7 +42,6 @@ struct Runtime {
   }
 
   const Config& config;
-  const License& license;
   const std::string instance_id;  // a UUID, new for every process
 
   SessionRegistry sessions;
@@ -62,7 +59,7 @@ struct Runtime {
   std::atomic<bool> graceful_shutdown;
   std::atomic<int64_t> shutdown_grace_period_seconds;
   std::atomic<bool> draining = false;
-  // 0 off, 1 standard, 2 detailed (SET GLOBAL gizmosql.capture_query_profile).
+  // 0 off, 1 standard, 2 detailed (SET GLOBAL hardcharger.capture_query_profile).
   std::atomic<int> capture_query_profile;
   std::string scratch_dir;  // the server's private directory (query profiles)
 

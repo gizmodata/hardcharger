@@ -77,9 +77,9 @@ Error KilledError() {
                "session to re-authenticate.");
 }
 
-// The JDBC-style metadata views 1.x drivers query (getIndexInfo, view DDL).
+// JDBC-style metadata views (getIndexInfo, view DDL).
 constexpr const char* kSystemViews = R"SQL(
-CREATE VIEW {catalog}.main.gizmosql_index_info AS
+CREATE VIEW {catalog}.main.hardcharger_index_info AS
 WITH idx_src AS (
   SELECT di.database_name, di.schema_name, di.table_name, di.is_unique, di.index_name,
          -- DuckDB renders the indexed expressions as a list, quoting names that need it
@@ -102,7 +102,7 @@ SELECT database_name AS "TABLE_CAT", schema_name AS "TABLE_SCHEM", table_name AS
        CAST('A' AS VARCHAR) AS "ASC_OR_DESC", CAST(NULL AS BIGINT) AS "CARDINALITY",
        CAST(NULL AS BIGINT) AS "PAGES", CAST(NULL AS VARCHAR) AS "FILTER_CONDITION"
 FROM all_src, generate_series(1, len(cols)) AS t(idx);
-CREATE VIEW {catalog}.main.gizmosql_view_definition AS
+CREATE VIEW {catalog}.main.hardcharger_view_definition AS
 SELECT database_name AS "TABLE_CAT", schema_name AS "TABLE_SCHEM", view_name AS "TABLE_NAME",
        sql AS "VIEW_DEFINITION"
 FROM duckdb_views();
@@ -146,8 +146,7 @@ void RefuseAccessControlStatement(std::string_view sql) {
   if (auto kind = authz::AccessControlStatementKind(sql)) {
     throw Error(ErrorCode::kSqlError,
                 "Hardcharger access control is not enabled on this server, so " + *kind +
-                    " is not available. (Server operators: set rbac_store_uri, with a GizmoData "
-                    "Enterprise license that includes the rbac feature)");
+                    " is not available. (Server operators: set rbac_store_uri to turn it on)");
   }
 }
 
@@ -287,7 +286,7 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
       access_(std::move(access)),
       sensitive_paths_(runtime.config.block_sensitive_paths, runtime.config.sensitive_paths,
                        {runtime.config.tls_key, runtime.config.tls_cert, runtime.config.mtls_ca_cert,
-                        runtime.config.license_key_file, runtime.config.init_sql_commands_file,
+                        runtime.config.init_sql_commands_file,
                         runtime.config.config_file}) {
   // Before anything else runs on the instance: from here on every plan of a bound
   // session is checked. (The server's own connections below, and those of
@@ -420,7 +419,6 @@ warpsql::ServerIdentity Backend::Identity() {
 
 json::object Backend::ServerInfo() {
   json::object info = DuckDBBackend::ServerInfo();
-  info["edition"] = runtime_.license.Edition();
   info["instance_id"] = runtime_.instance_id;
   info["access_control"] = access_ != nullptr && !access_->catalog_rules_only();
   return info;
@@ -546,7 +544,7 @@ void Session::UpdateSettings(const std::function<void(Settings&)>& update) {
 }
 
 void Session::LogQuery(LogLevel level, std::string_view message, const LogFields& fields) const {
-  // The statement log level (SET [GLOBAL] gizmosql.query_log_level) decides alone, so a
+  // The statement log level (SET [GLOBAL] hardcharger.query_log_level) decides alone, so a
   // session that asks for DEBUG gets it whatever the logger's own level.
   LogAt(QueryLogLevel(), level, message, fields, true);
 }
@@ -584,7 +582,7 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   // What runs decides what is a write (EXPLAIN ANALYZE INSERT ... inserts).
   const DUCKDB_V2_STATEMENT_TYPE executed = ExecutedType(connection(), piece, type);
   for (const auto& managed : ManagedCatalogs()) GuardManagedCatalog(piece, executed, managed);
-  // catalog_access rules (license feature catalog_permissions) are access control's to
+  // catalog_access rules (per-catalog permissions) are access control's to
   // enforce, on each plan (rules-only access control, or under RBAC, where they grant
   // nothing).
   // PIVOT without an IN list runs as a group (a temporary enum of the values, then the
@@ -655,9 +653,6 @@ warpsql::StatementOutcome Session::RunCommand(const Piece& piece) {
     return {};
   }
   const std::string target = ParseKillSession(piece).value_or("");
-  if (!runtime_.license.Has("kill_session")) {
-    throw Error(ErrorCode::kPermissionDenied, LicenseRequired("kill_session", "KILL SESSION"));
-  }
   if (!admin()) {
     throw Error(ErrorCode::kPermissionDenied, "Only admin users can execute KILL SESSION", "42501");
   }
@@ -885,7 +880,7 @@ std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sq
     const bool access_control = rbac_ && authz::LooksLikeAccessControlStatement(sql);
     if (pieces.size() == 1 && !access_control) {
       if (ParseSettingCommand(pieces[0]) || ParseKillSession(pieces[0])) {
-        throw Error(ErrorCode::kSqlError, "SET gizmosql.* and KILL SESSION can't be prepared; run them directly");
+        throw Error(ErrorCode::kSqlError, "SET hardcharger.* and KILL SESSION can't be prepared; run them directly");
       }
       Authorize(pieces[0]);
     }

@@ -23,7 +23,7 @@ pytestmark = pytest.mark.services
 @pytest.fixture(scope="module")
 def server(module_launcher):
     require(port=PG_PORT, what="PostgreSQL")
-    return module_launcher.start(features=["instrumentation"], args=["--enable-instrumentation"])
+    return module_launcher.start(args=["--enable-instrumentation"])
 
 
 def setup(session, data_path: str, metadata_schema: str, alias: str) -> None:
@@ -63,10 +63,10 @@ def test_ducklake_setup_and_query(server, tmp_path):
     assert session.scalar(sql="SELECT current_database()") == "my_ducklake"
     # Instrumentation recorded them: CREATE, INSERT and both SELECTs, each executed and
     # succeeded (the instrumentation catalog is named in full: the session uses the lake).
-    sid = session.scalar(sql="SELECT GIZMOSQL_CURRENT_SESSION()")
+    sid = session.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
     query = (f"SELECT count(DISTINCT s.statement_id) AS statements, count(e.execution_id) AS executions, "
              f"count(*) FILTER (WHERE e.status = 'success') AS succeeded "
-             f"FROM _gizmosql_instr.main.sql_statements s JOIN _gizmosql_instr.main.sql_executions e USING (statement_id) "
+             f"FROM _hardcharger_instr.main.sql_statements s JOIN _hardcharger_instr.main.sql_executions e USING (statement_id) "
              f"WHERE s.session_id = '{sid}' AND s.sql_text LIKE '%test' || '_cities%' AND NOT s.is_internal "
              f"AND e.cursor_close_time IS NOT NULL")
     deadline = time.monotonic() + 10

@@ -3,8 +3,8 @@ logs. A security review found that comments, DuckDB parse errors, ATTACH connect
 strings and credential settings all got clear text past the redactor.
 
 Each case plants a unique marker and asserts it appears in none of the durable sinks:
-the server's log output, _gizmosql_instr.sql_statements / .sql_executions, the
-_gizmosql_logs catalog, and (for a store user) the access-control audit record. Each has
+the server's log output, _hardcharger_instr.sql_statements / .sql_executions, the
+_hardcharger_logs catalog, and (for a store user) the access-control audit record. Each has
 a positive twin: an ordinary statement is still logged in full.
 """
 
@@ -17,7 +17,6 @@ import pytest
 @pytest.fixture(scope="module")
 def server(module_launcher):
     return module_launcher.start(
-        features=["instrumentation"],
         args=["--enable-instrumentation", "--enable-catalog-logging", "--print-queries", "true",
               "--log-format", "json"])
 
@@ -35,7 +34,7 @@ def drain(admin) -> None:
     # Let the instrumentation and catalog-log writer threads flush.
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
-        if admin.scalar(sql="SELECT count(*) FROM _gizmosql_instr.sql_statements") >= 0:
+        if admin.scalar(sql="SELECT count(*) FROM _hardcharger_instr.sql_statements") >= 0:
             time.sleep(0.4)
             return
 
@@ -43,9 +42,9 @@ def drain(admin) -> None:
 def sinks(server, admin) -> str:
     """Everything a marker must not appear in."""
     drain(admin=admin)
-    rows = admin.query(sql="SELECT sql_text, prepare_error FROM _gizmosql_instr.sql_statements").to_pylist()
-    execs = admin.query(sql="SELECT error_message FROM _gizmosql_instr.sql_executions").to_pylist()
-    logs = admin.query(sql="SELECT message, fields::VARCHAR AS f FROM _gizmosql_logs.main.logs").to_pylist()
+    rows = admin.query(sql="SELECT sql_text, prepare_error FROM _hardcharger_instr.sql_statements").to_pylist()
+    execs = admin.query(sql="SELECT error_message FROM _hardcharger_instr.sql_executions").to_pylist()
+    logs = admin.query(sql="SELECT message, fields::VARCHAR AS f FROM _hardcharger_logs.main.logs").to_pylist()
     return server.log() + repr(rows) + repr(execs) + repr(logs)
 
 
@@ -104,8 +103,7 @@ def test_parse_errors_of_credential_ddl_are_redacted(server, admin, sql_template
 
 
 def test_parse_error_under_access_control(launcher):
-    running = launcher.start(features=["instrumentation", "catalog_permissions"],
-                             args=["--enable-instrumentation", "--enable-catalog-logging",
+    running = launcher.start(args=["--enable-instrumentation", "--enable-catalog-logging",
                                    "--print-queries", "true", "--log-format", "json"])
     admin = running.admin()
     user = running.as_role(role="user", subject="bob", catalog_access=[{"catalog": "*", "access": "write"}])

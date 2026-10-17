@@ -296,10 +296,8 @@ std::shared_ptr<arrow::RecordBatch> SessionsTable(Runtime& runtime, const Sessio
 }
 
 std::shared_ptr<arrow::RecordBatch> MetricsTable(Runtime& runtime) {
-  if (!runtime.license.Has("metrics") || !runtime.metrics.enabled()) {
-    throw Error(ErrorCode::kSqlError,
-                "gizmosql_metrics() is disabled: start the server with enable_metrics and a license with the "
-                "'metrics' feature");
+  if (!runtime.metrics.enabled()) {
+    throw Error(ErrorCode::kSqlError, "hardcharger_metrics() is disabled: start the server with enable_metrics");
   }
   auto map_type = arrow::map(arrow::utf8(), arrow::utf8());
   arrow::StringBuilder name;
@@ -344,8 +342,6 @@ void RegisterSqlFunctions(duckdb_v2_connection_handle connection, Runtime& runti
        })},
       {"VERSION", "VARCHAR",
        text([](Runtime&, const Session*) -> std::optional<std::string> { return std::string("v") + kVersion; })},
-      {"EDITION", "VARCHAR",
-       text([](Runtime& r, const Session*) -> std::optional<std::string> { return r.license.Edition(); })},
       {"CURRENT_SESSION", "VARCHAR", text([](Runtime&, const Session* s) -> std::optional<std::string> {
          return s ? std::optional(s->id()) : std::nullopt;
        })},
@@ -364,24 +360,17 @@ void RegisterSqlFunctions(duckdb_v2_connection_handle connection, Runtime& runti
        })},
   };
   for (const auto& [suffix, type, value] : scalars) {
-    for (const char* prefix : {"HARDCHARGER_", "GIZMOSQL_"}) {
-      RegisterScalar(connection, factory, runtime, std::string(prefix) + suffix, type, value);
-    }
+    RegisterScalar(connection, factory, runtime, "HARDCHARGER_" + std::string(suffix), type, value);
   }
 
-  for (const char* prefix : {"hardcharger", "gizmosql"}) {
-    const bool gizmosql_names = std::string_view(prefix) == "gizmosql";
-    RegisterTable(connection, factory, runtime, std::string(prefix) + "_settings",
-                  [gizmosql_names, prefix](Runtime&, const Session* s) {
-                    return SettingsTable(RequireSession(s, std::string(prefix) + "_settings"), gizmosql_names);
-                  });
-    RegisterTable(connection, factory, runtime, std::string(prefix) + "_sessions",
-                  [prefix](Runtime& r, const Session* s) {
-                    return SessionsTable(r, RequireSession(s, std::string(prefix) + "_sessions"));
-                  });
-    RegisterTable(connection, factory, runtime, std::string(prefix) + "_metrics",
-                  [](Runtime& r, const Session*) { return MetricsTable(r); });
-  }
+  RegisterTable(connection, factory, runtime, "hardcharger_settings", [](Runtime&, const Session* s) {
+    return SettingsTable(RequireSession(s, "hardcharger_settings"));
+  });
+  RegisterTable(connection, factory, runtime, "hardcharger_sessions", [](Runtime& r, const Session* s) {
+    return SessionsTable(r, RequireSession(s, "hardcharger_sessions"));
+  });
+  RegisterTable(connection, factory, runtime, "hardcharger_metrics",
+                [](Runtime& r, const Session*) { return MetricsTable(r); });
 }
 
 }  // namespace hardcharger

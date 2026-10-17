@@ -1,4 +1,4 @@
-// Tamper-evident access-control audit records (as GizmoSQL 1.x writes them).
+// Tamper-evident access-control audit records.
 //
 // Every audit record joins a hash chain: it carries the chain's id, its sequence
 // number, the previous record's digest and its own digest over its fields and message.

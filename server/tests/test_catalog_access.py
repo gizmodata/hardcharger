@@ -1,12 +1,13 @@
 """Port of GizmoSQL 1.x tests/integration/test_catalog_access.cpp (42 cases).
 
-catalog_access rules in a sign-in token (license feature catalog_permissions): a list of
+catalog_access rules in a sign-in token: a list of
 {"catalog": pattern, "access": "read" | "write" | "none"}, first match wins, no match is
 no access; '*' and '?' are globs. Access control's plan check enforces them on every
 statement (reads and writes per catalog, temp included) and filters what the token's
-user sees (SHOW DATABASES, information_schema, duckdb_*(), the _gizmosql_system views,
+user sees (SHOW DATABASES, information_schema, duckdb_*(), the _hardcharger_system views,
 the metadata requests); the server's own catalogs (instrumentation) stay the
-administrator's whatever the rules say. Without the feature the rules are ignored.
+administrator's whatever the rules say. 1.x ignored the rules without its license
+feature; Hardcharger has no license and enforces them on every server.
 DuckDB 2.0's SHOW DATABASES and catalogs metadata leave out system and temp for everyone,
 so the "always sees system and temp" checks read duckdb_databases().
 
@@ -20,13 +21,12 @@ import pytest
 
 
 DEFAULT = "catalog_access_test"
-VISIBLE_ALWAYS = {"system", "temp", "_gizmosql_system"}
+VISIBLE_ALWAYS = {"system", "temp", "_hardcharger_system"}
 
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
-    return module_launcher.start(features=["catalog_permissions", "instrumentation"],
-                                 args=["--database-filename", f"{DEFAULT}.db", "--enable-instrumentation"])
+    return module_launcher.start(args=["--database", f"{DEFAULT}.db", "--enable-instrumentation"])
 
 
 @pytest.fixture(scope="module")
@@ -72,11 +72,11 @@ def test_system_user_has_full_access(admin):
 
 
 def test_system_user_can_read_instrumentation(admin):
-    admin.query(sql="SELECT * FROM _gizmosql_instr.sessions LIMIT 1")
+    admin.query(sql="SELECT * FROM _hardcharger_instr.sessions LIMIT 1")
 
 
 def test_system_user_cannot_write_instrumentation(admin):
-    assert "read-only" in admin.error(sql="DELETE FROM _gizmosql_instr.sessions WHERE 1=0")["detail"]
+    assert "read-only" in admin.error(sql="DELETE FROM _hardcharger_instr.sessions WHERE 1=0")["detail"]
 
 
 def test_token_without_catalog_access_has_full_access(server, admin):
@@ -136,23 +136,23 @@ def test_first_match_wins_wildcard_denies_specific_after(server, admin):
 
 def test_non_admin_cannot_read_instrumentation(server, admin):
     session = user(server=server, name="non_admin_user", rules=[{"catalog": "*", "access": "write"}])
-    denied(session=session, sql="SELECT * FROM _gizmosql_instr.sessions LIMIT 1")
+    denied(session=session, sql="SELECT * FROM _hardcharger_instr.sessions LIMIT 1")
 
 
 def test_admin_can_read_instrumentation_with_token(server, admin):
     session = user(server=server, name="admin_user", role="admin", rules=[{"catalog": "*", "access": "write"}])
-    session.query(sql="SELECT * FROM _gizmosql_instr.sessions LIMIT 1")
+    session.query(sql="SELECT * FROM _hardcharger_instr.sessions LIMIT 1")
 
 
 def test_admin_cannot_write_instrumentation_with_token(server, admin):
     session = user(server=server, name="admin_writer", role="admin", rules=[{"catalog": "*", "access": "write"}])
-    denied(session=session, sql="DELETE FROM _gizmosql_instr.sessions WHERE 1=0")
+    denied(session=session, sql="DELETE FROM _hardcharger_instr.sessions WHERE 1=0")
 
 
 def test_instrumentation_protection_ignores_token_rules(server, admin):
-    session = user(server=server, name="instr_hacker", rules=[{"catalog": "_gizmosql_instr", "access": "write"}])
-    denied(session=session, sql="SELECT * FROM _gizmosql_instr.sessions LIMIT 1")
-    denied(session=session, sql="DELETE FROM _gizmosql_instr.sessions WHERE 1=0")
+    session = user(server=server, name="instr_hacker", rules=[{"catalog": "_hardcharger_instr", "access": "write"}])
+    denied(session=session, sql="SELECT * FROM _hardcharger_instr.sessions LIMIT 1")
+    denied(session=session, sql="DELETE FROM _hardcharger_instr.sessions WHERE 1=0")
 
 
 # ---- What the user sees ----
@@ -161,7 +161,7 @@ def test_show_databases_filters_unauthorized_catalogs(server, admin):
     session = user(server=server, name="visibility_user", rules=read_only_default())
     names = catalogs_of(session=session, sql="SHOW DATABASES")
     assert DEFAULT in names, names
-    assert not names & {"prod_alpha", "staging_beta", "hidden_meta_cat", "other_cat", "_gizmosql_instr"}, names
+    assert not names & {"prod_alpha", "staging_beta", "hidden_meta_cat", "other_cat", "_hardcharger_instr"}, names
     # DuckDB 2.0's SHOW DATABASES leaves out system and temp for everyone; they stay listed
     # where DuckDB lists them.
     assert {"system", "temp"} <= catalogs_of(session=session, sql="SELECT database_name FROM duckdb_databases()")
@@ -175,7 +175,7 @@ def test_show_schemas_filters_unauthorized_catalogs(server, admin):
 
 def test_use_unauthorized_catalog_is_denied(server, admin):
     session = user(server=server, name="use_denied_user", rules=read_only_default())
-    denied(session=session, sql="USE _gizmosql_instr")
+    denied(session=session, sql="USE _hardcharger_instr")
 
 
 def test_use_unauthorized_regular_catalog_is_denied(server, admin):
@@ -213,13 +213,13 @@ def test_set_session_options_unauthorized_catalog_is_denied(server, admin):
     'SELECT table_catalog, table_name FROM "system"."information_schema"."tables"',
     'SELECT DISTINCT table_catalog FROM "system"."information_schema"."tables" ORDER BY 1',
     "SELECT database_name, table_name FROM duckdb_tables()",
-    'SELECT "TABLE_CAT" FROM _gizmosql_system.main.gizmosql_index_info',
-    'SELECT "TABLE_CAT" FROM _gizmosql_system.main.gizmosql_view_definition',
+    'SELECT "TABLE_CAT" FROM _hardcharger_system.main.hardcharger_index_info',
+    'SELECT "TABLE_CAT" FROM _hardcharger_system.main.hardcharger_view_definition',
 ], ids=["information_schema", "catalog_qualified", "quoted", "quoted_order_by", "quoted_catalog_qualified",
-        "quoted_catalog_qualified_order_by", "duckdb_tables", "gizmosql_index_info", "gizmosql_view_definition"])
+        "quoted_catalog_qualified_order_by", "duckdb_tables", "hardcharger_index_info", "hardcharger_view_definition"])
 def test_catalog_functions_filter_unauthorized_catalogs(server, admin, sql):
     """1.x's seven information_schema / duckdb_tables cases and the two
-    _gizmosql_system view cases."""
+    _hardcharger_system view cases."""
     admin.execute(sql="CREATE OR REPLACE VIEW other_cat.main.v AS SELECT 1 AS x")
     admin.execute(sql="CREATE TABLE IF NOT EXISTS other_cat.main.t (id INTEGER PRIMARY KEY)")
     session = user(server=server, name="visibility_user2", rules=read_only_default())
@@ -240,7 +240,7 @@ def test_wildcard_read_shows_all_catalogs(server, admin):
     session = user(server=server, name="read_all_user", rules=[{"catalog": "*", "access": "read"}])
     names = catalogs_of(session=session, sql="SHOW DATABASES")
     assert {DEFAULT, "prod_alpha"} <= names, names
-    assert "_gizmosql_instr" not in names, names  # the server's own, whatever the rules
+    assert "_hardcharger_instr" not in names, names  # the server's own, whatever the rules
 
 
 def test_no_catalog_access_means_no_filtering(server, admin):
@@ -248,14 +248,16 @@ def test_no_catalog_access_means_no_filtering(server, admin):
     assert {DEFAULT, "prod_alpha", "other_cat"} <= catalogs_of(session=session, sql="SHOW DATABASES")
 
 
-def test_catalog_access_rules_ignored_without_enterprise_license(server, admin, launcher):
-    licensed = user(server=server, name="core_user", rules=[{"catalog": "*", "access": "none"}])
-    assert DEFAULT not in catalogs_of(session=licensed, sql="SHOW DATABASES")
-    core = launcher.start(features=["instrumentation"],
-                          args=["--database-filename", "core.db", "--enable-instrumentation"])
-    session = user(server=core, name="core_user", rules=[{"catalog": "*", "access": "none"}])
-    names = catalogs_of(session=session, sql="SHOW DATABASES")
-    assert "core" in names and "_gizmosql_instr" not in names, names
+def test_catalog_access_rules_apply_on_every_server(server, admin, launcher):
+    # 1.x ignored the rules without its license feature; Hardcharger enforces them on any
+    # server, here one started with no options but its database.
+    restricted = user(server=server, name="core_user", rules=[{"catalog": "*", "access": "none"}])
+    assert DEFAULT not in catalogs_of(session=restricted, sql="SHOW DATABASES")
+    plain = launcher.start(args=["--database", "core.db"])
+    session = user(server=plain, name="core_user", rules=[{"catalog": "*", "access": "none"}])
+    assert "core" not in catalogs_of(session=session, sql="SHOW DATABASES")
+    open_user = user(server=plain, name="open_user")
+    assert "core" in catalogs_of(session=open_user, sql="SHOW DATABASES")
 
 
 def test_db_schemas_and_tables_requests_respect_filtering(server, admin):
