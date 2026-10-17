@@ -26,6 +26,18 @@ own changelog in `python/CHANGELOG.md`.
   (pexpect), TLS, mutual TLS, browser sign-in and session-recovery cases.
 - replxx (release-0.0.4), the client's line editor, built by `scripts/build-deps.sh` and
   cached with DuckDB and Arrow.
+- Results split into partitions that a client reads at once over separate connections
+  (Warp SQL §6.10, capability `result_partitions`): `max_result_partitions` (default 32,
+  1 never splits) caps the split. With Warp SQL's drivers' `result_partitions` option,
+  one large result uses several network flows and client cores.
+
+### Changed
+
+- Data transfer, from the Warp SQL SDK: TLS result streams encrypt whole gathered writes
+  and overlap encrypting, encoding and producing (a TLS stream went from about a third
+  of plaintext to the same speed on one AWS connection); uploads are read in 1 MiB pieces (plaintext
+  ingest was slower than TLS); bulk ingest inserts on many DuckDB threads in one
+  transaction, keeping the upload's row order. See docs/benchmarks.md.
 
 ## [0.2.0] - 2026-10-17
 

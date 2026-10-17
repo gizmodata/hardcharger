@@ -173,7 +173,11 @@ def test_side_effect_statements_execute_without_fetching(session):
 
 
 def test_rebind_while_streaming_waits_its_turn(session):
-    session.execute(sql="CREATE OR REPLACE TABLE busy_stream AS SELECT range AS v FROM range(2000000)")
+    # 20 million rows (160 MB): more than the server buffers ahead of a reader that has
+    # stopped (32 MB plus the encoding window), so the first statement is still producing
+    # when the second arrives. A result that fits the buffer finishes at once and frees
+    # the session for the next statement.
+    session.execute(sql="CREATE OR REPLACE TABLE busy_stream AS SELECT range AS v FROM range(20000000)")
     prepared = session.prepare(sql="SELECT v FROM busy_stream WHERE v >= ?")
     url = f"{session.url}/prepared/{prepared['prepared_id']}/execute"
     headers = session.headers(**{"Accept": ARROW_STREAM})
@@ -188,7 +192,7 @@ def test_rebind_while_streaming_waits_its_turn(session):
             def run_second():
                 with httpx.Client(timeout=120) as c:
                     second["response"] = c.post(url=f"{session.client.base_url}{url}", headers=headers,
-                                                json={"parameters": [1999997]})
+                                                json={"parameters": [19999997]})
 
             worker = threading.Thread(target=run_second)
             worker.start()
@@ -198,7 +202,7 @@ def test_rebind_while_streaming_waits_its_turn(session):
                 body += chunk
         rows_first = read_table(content=body).num_rows
     worker.join(timeout=60)
-    assert rows_first == 2000000
+    assert rows_first == 20000000
     assert second["response"].status_code == 200, second["response"].text
     assert read_table(content=second["response"].content).num_rows == 3
 

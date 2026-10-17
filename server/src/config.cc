@@ -88,6 +88,9 @@ const std::vector<Option>& Options() {
        "plaintext port serving only /health (0: none)", NUMBER(health_port)},
       {"max_header_bytes", Kind::kInt,
        "largest request header block accepted, in bytes (0: 16384)", NUMBER(max_header_bytes)},
+      {"max_result_partitions", Kind::kInt,
+       "most partitions a result is split into for a client that reads them at once (1: never split)",
+       NUMBER(max_result_partitions)},
       // TLS
       {"tls_cert", Kind::kString, "TLS certificate chain (PEM)",
        TEXT(tls_cert)},
@@ -367,6 +370,9 @@ void Validate(Loaded& loaded) {
   }
   if (c.max_header_bytes == 0) c.max_header_bytes = 16 * 1024;
   if (c.max_header_bytes < 1024) throw std::invalid_argument("max_header_bytes must be at least 1024");
+  if (c.max_result_partitions < 1 || c.max_result_partitions > 256) {
+    throw std::invalid_argument("max_result_partitions must be from 1 to 256");
+  }
   if (c.result_batch_rows < 1) throw std::invalid_argument("result_batch_rows must be positive");
   if (c.max_sessions < 0 || c.session_idle_timeout < 0 || c.shutdown_grace_period_seconds < 0 ||
       c.max_concurrent_statements < 0) {

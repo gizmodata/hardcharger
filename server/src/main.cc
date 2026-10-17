@@ -39,6 +39,7 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
     options.tls = warpsql::TlsOptions{config.tls_cert, config.tls_key, config.mtls_ca_cert};
   }
   options.max_header_bytes = static_cast<std::size_t>(config.max_header_bytes);
+  options.max_result_partitions = static_cast<std::size_t>(config.max_result_partitions);
   options.token_lifetime = std::chrono::seconds(config.token_lifetime_seconds);
   // 0 means "never": a session then lives until it is closed.
   options.session_idle_timeout = config.session_idle_timeout > 0
