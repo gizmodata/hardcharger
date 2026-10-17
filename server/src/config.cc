@@ -299,8 +299,11 @@ Loaded LoadConfig(int argc, char** argv) {
   if (!c.rbac_opa_url.empty() && c.rbac_store_uri.empty()) {
     throw std::invalid_argument("rbac_opa_url needs rbac_store_uri (access control)");
   }
-  if (c.rbac_opa_timeout_ms <= 0) {
-    throw std::invalid_argument("rbac_opa_timeout_ms must be positive");
+  if (c.rbac_opa_timeout_ms < 0) {
+    throw std::invalid_argument("rbac_opa_timeout_ms must not be negative");
+  }
+  if (c.rbac_opa_timeout_ms == 0) {
+    loaded.config.rbac_opa_timeout_ms = 2000;  // 0: the default, as in GizmoSQL 1.x
   }
   if (c.log_format != "text" && c.log_format != "json") {
     throw std::invalid_argument("log_format must be text or json");
