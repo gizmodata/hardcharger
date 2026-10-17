@@ -796,7 +796,11 @@ std::shared_ptr<arrow::RecordBatchReader> SessionGuard::Metadata(
   {
     RbacSessionState::BypassScope internal(ContextOf(connection_));
     rows = run(filter);
-    if (tenant_id_.empty() || kind == warpsql::MetadataKind::kTableTypes) return rows;
+    // Table types and data types name no catalog: everyone sees all of them.
+    if (tenant_id_.empty() || kind == warpsql::MetadataKind::kTableTypes ||
+        kind == warpsql::MetadataKind::kTypeInfo) {
+      return rows;
+    }
     const Principal principal = state->principal();
     auto snapshot = owner_.engine_->snapshot();
     std::vector<int> catalog_columns = {0};
