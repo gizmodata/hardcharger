@@ -284,8 +284,10 @@ class RbacServer:
         return self.running.log()
 
     def password_token(self, user: str, password: str) -> str:
+        # The clients' own timeout (httpx's 5 s default is less than a sanitizer build's
+        # password check takes on a loaded runner).
         response = httpx.post(url=f"{self.base_url}/warp/v1/auth/token",
-                              json={"grant_type": "password", "username": user, "password": password})
+                              json={"grant_type": "password", "username": user, "password": password}, timeout=120)
         if response.status_code != 200:
             raise_problem(response=response)
         return response.json()["access_token"]

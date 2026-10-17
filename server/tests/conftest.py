@@ -124,13 +124,14 @@ class Running:
         response = httpx.post(url=f"{self.base_url}/warp/v1/auth/token",
                               json={"grant_type": "password",
                                     "username": self.username if username is None else username,
-                                    "password": self.password if password is None else password})
+                                    "password": self.password if password is None else password},
+                              timeout=120)  # as the clients' (httpx's 5 s is short for sanitizer builds)
         assert response.status_code == 200, response.text
         return response.json()["access_token"]
 
     def session(self, token: str) -> str:
         response = httpx.post(url=f"{self.base_url}/warp/v1/sessions",
-                              headers={"Authorization": f"Bearer {token}"}, json={})
+                              headers={"Authorization": f"Bearer {token}"}, json={}, timeout=120)
         assert response.status_code == 201, response.text
         return response.json()["session_id"]
 
