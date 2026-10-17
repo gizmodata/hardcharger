@@ -37,13 +37,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The Linux servers are built in manylinux_2_28 (AlmaLinux 8, glibc 2.28), so the
+          # tarballs run on any distribution with glibc 2.28 or newer, not only on the
+          # runner image. Pinned by digest: a new image is a deliberate bump (and a cold
+          # dependency build), never a surprise.
           - name: linux-amd64
             runner: ubuntu-24.04
+            manylinux: quay.io/pypa/manylinux_2_28_x86_64:2026.10.10-1@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae
           - name: linux-arm64
             runner: ubuntu-24.04-arm
+            manylinux: quay.io/pypa/manylinux_2_28_aarch64:2026.10.10-1@sha256:abd1230aa9e4058a74b89d27cd14ba18c0db036d7bfe6e6f219a29ea63c24eb6
           - name: macos-arm64
             runner: macos-15
     runs-on: ${{ matrix.runner }}
+    env:
+      HARDCHARGER_MANYLINUX_IMAGE: ${{ matrix.manylinux }}
     steps:
       - uses: actions/checkout@v7
       # The warp-sql submodule is private: fetch it with its read-only deploy key (the
@@ -59,34 +67,38 @@ jobs:
             git submodule update --init --depth 1
           rm -f "$key"
 
-      - name: Install build tools (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build libssl-dev
+      # (The Linux build tools are in the manylinux image; the build installs the rest.)
       - name: Install build tools (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install ninja openssl@3
           echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
-      # DuckDB and Arrow take a while to build; cache them by their recipes and by the
-      # exact toolchain (server/scripts/ci-deps-key.sh), so a runner image's compiler
-      # change rebuilds instead of breaking. Restored here and saved right after
-      # build-deps.sh, so a later test failure never throws a fresh build away.
+      # DuckDB and Arrow (and on Linux a static OpenSSL 3) take a while to build; cache
+      # them by their recipes and by the exact toolchain (server/scripts/ci-deps-key.sh):
+      # on Linux the manylinux image's tag and digest, on macOS the Xcode and clang
+      # builds. Restored here and saved right after they are built, so a later test
+      # failure never throws a fresh build away.
       - name: Dependency cache key
         id: deps
         run: |
+          extra=()
           if [ "$RUNNER_OS" = macOS ]; then
             clang=$(clang --version | head -1 | sed -nE 's/.*\((clang-[0-9.]+)\).*/\1/p')
             [ -n "$clang" ] || { echo "no clang build in: $(clang --version)"; exit 1; }
             toolchain="$(xcodebuild -version | tr '\n' ' ') $clang"
           else
-            toolchain=$(c++ --version | head -1)
+            image="${HARDCHARGER_MANYLINUX_IMAGE##*/}"
+            digest="${image##*@sha256:}"
+            [ -n "$image" ] && [ "$digest" != "$image" ] || { echo "no pinned manylinux image: '$image'"; exit 1; }
+            toolchain="${image%%@*} ${digest:0:12}"
+            extra=(server/scripts/build-portable-linux.sh)
           fi
-          key=$(server/scripts/ci-deps-key.sh "${{ matrix.name }}" "$toolchain")
+          key=$(server/scripts/ci-deps-key.sh "${{ matrix.name }}" "$toolchain" "${extra[@]}")
           echo "$key"
           echo "key=$key" >> "$GITHUB_OUTPUT"
+          # The DuckDB build's peak memory is what limits its parallelism on 2-CPU runners.
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=$(getconf _NPROCESSORS_ONLN)" >> "$GITHUB_ENV"
       - uses: actions/cache/restore@v6
         id: cache
         with:
@@ -94,10 +106,16 @@ jobs:
             server/.deps/duckdb-install
             server/.deps/arrow-install
             server/.deps/replxx-install
+            server/.deps/openssl-install
           key: ${{ steps.deps.outputs.key }}
       - name: Build DuckDB and Arrow
         if: steps.cache.outputs.cache-hit != 'true'
-        run: server/scripts/build-deps.sh
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            server/scripts/in-manylinux.sh deps
+          else
+            server/scripts/build-deps.sh
+          fi
       # A tag's caches can't be restored by any other ref, so only branch runs save.
       - name: Save the dependency cache
         if: steps.cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
@@ -107,14 +125,24 @@ jobs:
             server/.deps/duckdb-install
             server/.deps/arrow-install
             server/.deps/replxx-install
+            server/.deps/openssl-install
           key: ${{ steps.deps.outputs.key }}
 
       - uses: mozilla-actions/sccache-action@v0.0.11
+      # On Linux, in the manylinux image (server/scripts/build-portable-linux.sh, which
+      # also checks the glibc baseline); the tests then run the binaries on the runner.
       - name: Build the server
         run: |
-          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-          cmake --build server/build
+          # (warpsql-client-tests, the Warp SQL client library's tests, builds on request.)
+          if [ "$RUNNER_OS" = Linux ]; then
+            server/scripts/in-manylinux.sh server server/build
+            server/scripts/in-manylinux.sh build server/build --target warpsql-client-tests
+          else
+            cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                  -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+            cmake --build server/build
+            cmake --build server/build --target warpsql-client-tests
+          fi
           server/build/hardcharger-server --version
           server/build/hardcharger-server --print-duckdb-version
           server/build/hardcharger --version
@@ -165,9 +193,7 @@ jobs:
         run: bash server/tests/test_client_shell.sh
       # The Warp SQL client library's own tests (unit, and live against warp-duckdb).
       - name: Warp SQL client library tests
-        run: |
-          cmake --build server/build --target warpsql-client-tests
-          server/build/warp-sql/warpsql-client-tests
+        run: server/build/warp-sql/warpsql-client-tests
       - name: Warp SQL conformance suite
         working-directory: third_party/warp-sql/conformance
         env:
@@ -194,6 +220,18 @@ jobs:
           "$stage/bin/hardcharger-server" --version
           "$stage/bin/hardcharger" --version
           tar -C dist -czf "dist/hardcharger-${{ matrix.name }}.tar.gz" "hardcharger-${{ matrix.name }}"
+      # Every shipped executable and library needs glibc 2.28 at most. The check is first
+      # shown to fail on a file that needs more (the runner's own libc), so a check that
+      # can no longer see symbol versions can't pass by accident.
+      - name: Check the glibc baseline (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          libc="/lib/$(uname -m)-linux-gnu/libc.so.6"
+          if server/scripts/check-glibc-baseline.sh "$libc" >/dev/null 2>&1; then
+            echo "the baseline check passed $libc, which needs a newer glibc"; exit 1
+          fi
+          stage="dist/hardcharger-${{ matrix.name }}"
+          server/scripts/check-glibc-baseline.sh "$stage"/bin/* "$stage"/lib/*
       - name: sccache statistics
         if: always()
         run: sccache --show-stats || true
@@ -201,6 +239,35 @@ jobs:
         with:
           name: hardcharger-${{ matrix.name }}
           path: dist/hardcharger-${{ matrix.name }}.tar.gz
+
+  # The Linux tarballs on the oldest glibc they claim (2.28): installed on Oracle Linux 8,
+  # each starts, verifies TLS against the system's CA bundle and answers a query through
+  # the health and Warp SQL endpoints (server/scripts/smoke-tarball.sh).
+  portable:
+    name: install on glibc 2.28 (${{ matrix.name }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: server/scripts
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-${{ matrix.name }}
+          path: dist
+      - name: Install and run on Oracle Linux 8
+        run: |
+          cp server/scripts/smoke-tarball.sh dist/
+          docker run --rm -v "$PWD/dist:/dist:ro" oraclelinux:8 \
+            bash /dist/smoke-tarball.sh "/dist/hardcharger-${{ matrix.name }}.tar.gz"
 
   # The server and the Warp SQL conformance suite again, on an AddressSanitizer build: a
   # use-after-free that only crashed now and then (borrowed DuckDB handles destroyed) fails
@@ -306,7 +373,7 @@ jobs:
         run: sccache --show-stats || true
 
   image:
-    needs: [build, sanitize]
+    needs: [build, portable, sanitize]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -381,7 +448,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, sanitize, image]
+    needs: [build, portable, sanitize, image]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

@@ -1,5 +1,7 @@
 #include "authz/opa.hpp"
 
+#include "http_client.hpp"
+
 #include <openssl/ssl.h>
 
 #include <boost/asio/co_spawn.hpp>
@@ -71,7 +73,14 @@ PolicyService::Decision PolicyService::Decide(const boost::json::object& input) 
       tcp::resolver resolver(io);
       const auto endpoints = co_await resolver.async_resolve(host_, port_, net::use_awaitable);
       if (tls_) {
-        ssl.set_default_verify_paths();
+        // The system's CA bundle, as for the server's other outbound calls: a portable
+        // build's OpenSSL is static, and its compiled-in certificate directory is a
+        // build-time path that doesn't exist where the server runs.
+        if (auto bundle = FindSystemCaCertFile()) {
+          ssl.load_verify_file(*bundle);
+        } else {
+          ssl.set_default_verify_paths();
+        }
         ssl.set_verify_mode(net::ssl::verify_peer);
         beast::ssl_stream<beast::tcp_stream> stream(io, ssl);
         if (!SSL_set_tlsext_host_name(stream.native_handle(), host_.c_str())) co_return;

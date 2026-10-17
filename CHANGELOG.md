@@ -58,6 +58,18 @@ own changelog in `python/CHANGELOG.md`.
   of plaintext to the same speed on one AWS connection); uploads are read in 1 MiB pieces (plaintext
   ingest was slower than TLS); bulk ingest inserts on many DuckDB threads in one
   transaction, keeping the upload's row order. See docs/benchmarks.md.
+- The Linux release tarballs (and the container image made from them) are built in
+  manylinux_2_28 for a glibc 2.28 baseline, with OpenSSL 3 linked in statically: they run
+  on any Linux distribution with glibc 2.28 or newer (Oracle/RHEL/Rocky/Alma Linux 8,
+  Debian 10+, Ubuntu 20.04+, Amazon Linux 2023), not only on Ubuntu 24.04. CI checks the
+  highest glibc symbol version of every shipped file and runs each tarball on Oracle
+  Linux 8.
+
+### Fixed
+
+- The access-control Open Policy Agent client verifies HTTPS against the system's CA
+  bundle, as the server's other outbound calls do, rather than OpenSSL's compiled-in
+  certificate directory (a build-time path in a portable build).
 
 ### Fixed
 
