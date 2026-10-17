@@ -220,7 +220,15 @@ std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(warpsql::MetadataKin
 
 warpsql::OptionErrors Session::SetOptions(const json::object& options) {
   RequireLive();
-  return DuckDBSession::SetOptions(options);
+  auto errors = DuckDBSession::SetOptions(options);
+  if (guard_) {
+    // {"catalog": "other_tenants_db"} says no more than a missing catalog would.
+    for (auto& [name, error] : errors) {
+      const Error hidden = guard_->ForTenant(error);
+      error = Error(ErrorCode::kInvalidOptionValue, hidden.what(), hidden.sqlstate());
+    }
+  }
+  return errors;
 }
 
 json::object Session::Options() {

@@ -127,8 +127,12 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
   }
   // A user of the access-control store (never under the administrator's name). The
   // token carries a fingerprint of the password, so changing it ends the token.
-  if (access_ && !user_ok) {
-    if (auto store_user = access_->AuthenticatePassword(username, password)) {
+  if (access_) {
+    // Also for the administrator's name with a wrong password (no store user may take
+    // it, so this always refuses): every refusal then costs the same password check,
+    // and timing does not say which name is the administrator's.
+    auto store_user = access_->AuthenticatePassword(username, password);
+    if (store_user && !user_ok) {
       return warpsql::Principal{store_user->user_name, "user", "password",
                                 {{"credential", store_user->credential}}};
     }

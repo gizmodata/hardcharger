@@ -4,7 +4,7 @@ exactly like something that does not exist."""
 
 import pytest
 
-from rbac import WarpError, expect_allowed, start_rbac_server
+from rbac import WarpError, expect_allowed, mint, start_rbac_server
 
 
 @pytest.fixture(scope="module")
@@ -229,3 +229,17 @@ def test_changing_a_tenants_catalogs_ends_its_sessions(server, admin):
     databases = expect_allowed(client=fresh, sql="SELECT database_name FROM duckdb_databases() WHERE NOT internal")
     assert column(table=databases) == {"acme_db", "acme_extra"}
     expect_allowed(client=admin, sql="ALTER CATALOG acme_extra UNSET TENANT")
+
+
+def test_session_options_say_no_more_than_a_missing_catalog(server):
+    def refusal(catalog: str):
+        with pytest.raises(WarpError) as raised:
+            server.client(token=mint(user="acme/joe"), options={"catalog": catalog})
+        return raised.value.code, raised.value.detail
+
+    missing = refusal(catalog="no_such_db")
+    assert missing[0] == "invalid_option_value" and "Hardcharger blocked" in missing[1], missing
+    assert refusal(catalog="beta_db") == missing
+    assert refusal(catalog="rbac_tenants") == missing
+    # Positive twin.
+    server.client(token=mint(user="acme/joe"), options={"catalog": "acme_db"})

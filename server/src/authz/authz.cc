@@ -499,9 +499,11 @@ Error SessionGuard::ForTenant(const Error& error) const {
   // suggestions and candidate lists can).
   if (tenant_id_.empty()) return error;
   const std::string message = error.what();
-  bool hide = message.find("does not exist") != std::string::npos ||
-              message.find("cannot see") != std::string::npos ||
-              message.find("access to catalog") != std::string::npos;
+  bool hide = false;
+  for (const char* missing : {"does not exist", "cannot see", "access to catalog", "not found",
+                              "No catalog", "No schema"}) {
+    hide = hide || message.find(missing) != std::string::npos;
+  }
   if (!hide) {
     try {
       std::lock_guard lock(mutex_);

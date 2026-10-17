@@ -166,6 +166,10 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
       const std::function<std::shared_ptr<arrow::RecordBatchReader>(const warpsql::MetadataFilter&)>&
           run);
 
+  // An error as this session's user may see it: for a tenant's user, one that names
+  // another tenant's objects reads exactly like one about something that does not exist.
+  warpsql::Error ForTenant(const warpsql::Error& error) const;
+
   // The session's connection is going away; nothing may touch it after this.
   void Detach();
 
@@ -182,7 +186,6 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   void End(const std::string& reason);
   void InterruptRunning();
   void CheckBeforeBind(std::string_view sql);
-  warpsql::Error ForTenant(const warpsql::Error& error) const;
   warpsql::StatementOutcome RunCommand(const ParsedCommand& command);
   std::shared_ptr<arrow::RecordBatchReader> Track(std::shared_ptr<arrow::RecordBatchReader> rows,
                                                   std::shared_ptr<void> busy);
