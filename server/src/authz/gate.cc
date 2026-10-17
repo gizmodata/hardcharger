@@ -71,7 +71,7 @@ bool AlwaysGated(const std::string& name) {
 
 // DuckDB's remote-query protocol functions open network connections from inside the
 // server (and quack_serve() a listener).
-bool IsQuackFunction(const std::string& name) { return name.rfind("quack_", 0) == 0; }
+bool IsRemoteQueryFunction(const std::string& name) { return name.rfind("quack_", 0) == 0; }
 
 // Settings that change the whole instance even when SET without GLOBAL: resource
 // limits, external access and extensions, secrets and the filesystem.
@@ -258,7 +258,7 @@ class Walker {
     if (violation) return;
     if (expression.GetExpressionClass() == dd::ExpressionClass::FUNCTION) {
       const std::string name = Lower(Str(expression.Cast<dd::FunctionExpression>().FunctionName()));
-      if (IsQuackFunction(name)) {
+      if (IsRemoteQueryFunction(name)) {
         Flag(name + "()");
         return;
       }
@@ -280,7 +280,7 @@ class Walker {
     }
     const std::string name =
         Lower(Str(ref.function->Cast<dd::FunctionExpression>().FunctionName()));
-    if (AlwaysGated(name) || IsQuackFunction(name) || name == "query" || name == "query_table") {
+    if (AlwaysGated(name) || IsRemoteQueryFunction(name) || name == "query" || name == "query_table") {
       Flag(name + "()");
     } else if (ddb::IsFileReadingTableFunction(name)) {
       Flag(name + "() (files and URLs)");
@@ -381,7 +381,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
         const std::string name =
             Lower(Str(call.function->Cast<dd::FunctionExpression>().FunctionName()));
         if (name == "checkpoint" || name == "force_checkpoint") return gate("CHECKPOINT");
-        if (IsQuackFunction(name) || AlwaysGated(name) || name == "query" ||
+        if (IsRemoteQueryFunction(name) || AlwaysGated(name) || name == "query" ||
             name == "query_table") {
           return gate(name + "()");
         }
