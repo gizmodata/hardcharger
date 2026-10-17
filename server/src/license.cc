@@ -1,5 +1,9 @@
 #include "license.hpp"
 
+#ifdef HARDCHARGER_TRUST_TEST_LICENSES
+#include "test_license.hpp"
+#endif
+
 #include <jwt-cpp/jwt.h>
 #include <jwt-cpp/traits/boost-json/traits.h>
 
@@ -70,11 +74,23 @@ License LoadLicense(const std::string& key) {
       Fail(std::string("License missing required claim: ") + claim);
     }
   }
-  try {
+  auto verify = [&](const char* public_key) {
     jwt::verify<Traits>()
-        .allow_algorithm(jwt::algorithm::rs256(kGizmoDataPublicKey, "", "", ""))
+        .allow_algorithm(jwt::algorithm::rs256(public_key, "", "", ""))
         .with_issuer(kIssuer)
         .verify(decoded);
+  };
+  try {
+#ifdef HARDCHARGER_TEST_LICENSE_PUBLIC_KEY
+    try {
+      verify(kGizmoDataPublicKey);
+    } catch (const jwt::error::signature_verification_exception&) {
+      verify(HARDCHARGER_TEST_LICENSE_PUBLIC_KEY);
+      license.test_key = true;
+    }
+#else
+    verify(kGizmoDataPublicKey);
+#endif
   } catch (const jwt::error::token_verification_exception& e) {
     if (e.code() == jwt::error::token_verification_error::token_expired) {
       Fail("License has expired. Please contact sales@gizmodata.com to renew.");
@@ -96,6 +112,14 @@ License LoadLicense(const std::string& key) {
     }
   }
   return license;
+}
+
+bool TrustsTestLicenses() {
+#ifdef HARDCHARGER_TEST_LICENSE_PUBLIC_KEY
+  return true;
+#else
+  return false;
+#endif
 }
 
 std::string LicenseRequired(const std::string& feature, const std::string& what) {

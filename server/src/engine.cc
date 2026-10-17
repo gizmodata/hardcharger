@@ -3,6 +3,7 @@
 #include <fstream>
 #include <sstream>
 
+#include "auth.hpp"
 #include "duckdb_sql.hpp"
 #include "logging.hpp"
 #include "version.hpp"
@@ -44,8 +45,16 @@ std::string Abbreviate(std::string_view sql) {
 
 }  // namespace
 
-Backend::Backend(const Config& config, const License& license)
-    : DuckDBBackend(EngineOptions(config)), config_(config), license_(license) {
+Backend::Backend(const Config& config, const License& license,
+                 std::shared_ptr<authz::AccessControl> access)
+    : DuckDBBackend(EngineOptions(config)),
+      config_(config),
+      license_(license),
+      access_(std::move(access)) {
+  // Before anything else runs on the instance: from here on every plan of a bound
+  // session is checked. (The backend's health connection and the init SQL below are
+  // Hardcharger's own; they carry no principal, so the check leaves them alone.)
+  if (access_) access_->InstallEnforcement(instance());
   RunInitSql(config);
 }
 
@@ -82,16 +91,43 @@ warpsql::ServerIdentity Backend::Identity() {
 json::object Backend::ServerInfo() {
   json::object info = DuckDBBackend::ServerInfo();
   info["edition"] = license_.Edition();
+  info["access_control"] = access_ != nullptr;
   return info;
 }
 
 std::unique_ptr<warpsql::EngineSession> Backend::NewSession(const warpsql::Principal& principal) {
-  return std::make_unique<Session>(instance(), principal, config_.print_queries);
+  return std::make_unique<Session>(instance(), principal, config_.print_queries, access_.get());
 }
 
+// User connections are created in exactly one place, the DuckDBSession constructor, and
+// bound here right after it, before any statement runs on them.
 Session::Session(duckdb_v2_instance_handle instance, warpsql::Principal principal,
-                 bool print_queries)
-    : DuckDBSession(instance), principal_(std::move(principal)), print_queries_(print_queries) {}
+                 bool print_queries, authz::AccessControl* access)
+    : DuckDBSession(instance),
+      principal_(std::move(principal)),
+      print_queries_(print_queries),
+      access_controlled_(access != nullptr) {
+  if (access_controlled_) {
+    guard_ = access->Bind(connection(), IdentityOf(principal_));
+  }
+}
+
+Session::~Session() {
+  // The guard may outlive this session briefly (the store's listener holds it while it
+  // walks the sessions); it must not reach the connection once the base class closes it.
+  if (guard_) guard_->Detach();
+}
+
+void Session::RequireLive() const {
+  if (!access_controlled_) return;
+  if (!guard_) {
+    // Fail closed: under access control, a session without a guard runs nothing.
+    throw Error(ErrorCode::kPermissionDenied,
+                "Hardcharger blocked this request: the session is not bound to access control",
+                "42501");
+  }
+  guard_->RequireLive();
+}
 
 void Session::Authorize(std::string_view sql) {
   if (principal_.role != "readonly") {
@@ -113,16 +149,40 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
   if (print_queries_) {
     Log(LogLevel::kInfo, "statement", {{"user", principal_.name}, {"sql", Abbreviate(sql)}});
   }
-  Authorize(sql);
-  return DuckDBSession::Execute(sql, parameters);
+  RequireLive();
+  if (!access_controlled_) {
+    Authorize(sql);
+    return DuckDBSession::Execute(sql, parameters);
+  }
+  return guard_->Execute(sql, !parameters.is_null(), [&] {
+    Authorize(sql);
+    return DuckDBSession::Execute(sql, parameters);
+  });
 }
 
 std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sql) {
   if (print_queries_) {
     Log(LogLevel::kInfo, "prepare", {{"user", principal_.name}, {"sql", Abbreviate(sql)}});
   }
-  Authorize(sql);
-  return DuckDBSession::Prepare(sql);
+  RequireLive();
+  if (!access_controlled_) {
+    Authorize(sql);
+    return DuckDBSession::Prepare(sql);
+  }
+  return guard_->Prepare(sql, [&] {
+    Authorize(sql);
+    return DuckDBSession::Prepare(sql);
+  });
+}
+
+warpsql::StatementOutcome Session::ExecutePrepared(warpsql::PreparedStatement& statement,
+                                                   const warpsql::Parameters& parameters) {
+  RequireLive();
+  if (!access_controlled_) return DuckDBSession::ExecutePrepared(statement, parameters);
+  const bool has_parameters = parameters.rows != nullptr || !parameters.json.is_null();
+  return guard_->ExecutePrepared(statement, has_parameters, [&](warpsql::PreparedStatement& inner) {
+    return DuckDBSession::ExecutePrepared(inner, parameters);
+  });
 }
 
 int64_t Session::Ingest(const warpsql::IngestTarget& target,
@@ -135,7 +195,39 @@ int64_t Session::Ingest(const warpsql::IngestTarget& target,
   if (print_queries_) {
     Log(LogLevel::kInfo, "ingest", {{"user", principal_.name}, {"table", target.table}});
   }
-  return DuckDBSession::Ingest(target, std::move(rows));
+  RequireLive();
+  if (!access_controlled_) return DuckDBSession::Ingest(target, std::move(rows));
+  // One INSERT or CREATE TABLE AS on this session's connection, checked like any other.
+  return guard_->Ingest(target, [&] { return DuckDBSession::Ingest(target, std::move(rows)); });
+}
+
+std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(warpsql::MetadataKind kind,
+                                                            const warpsql::MetadataFilter& filter) {
+  RequireLive();
+  if (!access_controlled_) return DuckDBSession::Metadata(kind, filter);
+  return guard_->Metadata(kind, filter, [&](const warpsql::MetadataFilter& narrowed) {
+    return DuckDBSession::Metadata(kind, narrowed);
+  });
+}
+
+warpsql::OptionErrors Session::SetOptions(const json::object& options) {
+  RequireLive();
+  return DuckDBSession::SetOptions(options);
+}
+
+json::object Session::Options() {
+  RequireLive();
+  return DuckDBSession::Options();
+}
+
+void Session::Commit() {
+  RequireLive();
+  DuckDBSession::Commit();
+}
+
+void Session::Rollback() {
+  RequireLive();
+  DuckDBSession::Rollback();
 }
 
 }  // namespace hardcharger

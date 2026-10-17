@@ -15,9 +15,13 @@ struct License {
   std::string organization;  // aud (customer name)
   std::chrono::system_clock::time_point expires;
   std::set<std::string> features;
+  // Signed with the tests' key, which only a test build trusts (never shipped).
+  bool test_key = false;
 
   bool Has(const std::string& feature) const { return enterprise && features.contains(feature); }
-  std::string Edition() const { return enterprise ? "Enterprise" : "Core"; }
+  std::string Edition() const {
+    return enterprise ? (test_key ? "Enterprise (test license)" : "Enterprise") : "Core";
+  }
 };
 
 // Verifies `key` (empty: Core edition). Throws std::runtime_error("License Error: ...")
@@ -27,6 +31,9 @@ License LoadLicense(const std::string& key);
 
 // The key from config: the inline key wins over the file (as in 1.x).
 std::string ReadLicenseKey(const std::string& inline_key, const std::string& key_file);
+
+// Does this build trust test licenses (HARDCHARGER_TRUST_TEST_LICENSES)?
+bool TrustsTestLicenses();
 
 // The message for an option that needs a feature the license doesn't grant.
 std::string LicenseRequired(const std::string& feature, const std::string& what);

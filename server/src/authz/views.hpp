@@ -1,0 +1,76 @@
+// Views under access control read with their owner's rights.
+//
+// DuckDB inlines a view into the statement that reads it, so the plan the
+// access check sees no longer says which tables were named by the caller and
+// which by a view. A small patch to DuckDB's binder (third_party/
+// patch_duckdb.cmake) calls a hook with the plan of every view as it is bound;
+// for an access-controlled session the hook wraps that plan in a ViewMarker.
+// The check reads the markers (who may read the view, and with whose rights
+// its body is checked) and then removes them, before DuckDB optimizes the
+// plan. A marker that is somehow left in place refuses to run.
+//
+// DuckDB 1.4 (the LTS channel) has no such hook: no markers are made, and a
+// view's body is checked with the caller's rights.
+
+#pragma once
+
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <duckdb.hpp>
+#include <duckdb/planner/column_binding_map.hpp>
+#include <duckdb/planner/operator/logical_extension_operator.hpp>
+
+#include "authz/types.hpp"
+
+namespace hardcharger::authz {
+
+class ViewMarker : public duckdb::LogicalExtensionOperator {
+ public:
+  ViewMarker(ObjectPath view, bool temporary, std::string definition_hash,
+             std::vector<std::string> column_names,
+             duckdb::unique_ptr<duckdb::LogicalOperator> plan);
+
+  ObjectPath view;
+  bool temporary;
+  std::string definition_hash;
+  // The view's output column names, by position (empty if unknown).
+  std::vector<std::string> column_names;
+
+  duckdb::vector<duckdb::ColumnBinding> GetColumnBindings() override;
+  duckdb::TableIndex GetRootIndex() override;
+  duckdb::vector<duckdb::TableIndex> GetTableIndex() const override;
+  duckdb::PhysicalOperator& CreatePlan(duckdb::ClientContext& context,
+                                       duckdb::PhysicalPlanGenerator& planner) override;
+  std::string GetExtensionName() const override { return "hardcharger_view"; }
+  std::string GetName() const override { return "HARDCHARGER_VIEW"; }
+
+ protected:
+  void ResolveTypes() override;
+};
+
+// Point DuckDB's view-binding hook at access control (once, at startup).
+// Returns false when the linked DuckDB has no hook (DuckDB 1.4).
+bool InstallViewHook();
+
+// For each view marker in the plan: the view's columns the rest of the
+// statement uses. All of them when that cannot be told apart.
+std::unordered_map<const ViewMarker*, std::vector<std::string>> ViewColumnsUsed(
+    duckdb::LogicalOperator& plan);
+
+// Does the operator take its children's columns by position (set operations,
+// INSERT, CREATE TABLE AS, ...) rather than through expressions or by passing
+// them on unchanged (filters, joins, projections)?
+bool UsesChildColumnsByPosition(const duckdb::LogicalOperator& op);
+
+// The columns a statement returns: its root's, looking through PREPARE,
+// EXECUTE and EXPLAIN. Empty when the root returns no columns of the plan
+// below it (CREATE TABLE AS, INSERT, ...: they use their child by position,
+// which UsesChildColumnsByPosition covers).
+duckdb::vector<duckdb::ColumnBinding> ResultColumns(duckdb::LogicalOperator& plan);
+
+// Replace every view marker in the plan with the view's own plan.
+void RemoveViewMarkers(duckdb::unique_ptr<duckdb::LogicalOperator>& plan);
+
+}  // namespace hardcharger::authz

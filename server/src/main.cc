@@ -5,6 +5,7 @@
 #include <thread>
 
 #include "auth.hpp"
+#include "authz/authz.hpp"
 #include "config.hpp"
 #include "engine.hpp"
 #include "license.hpp"
@@ -31,6 +32,17 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   return options;
 }
 
+// A URL for the log: never its credentials (scheme://user:password@host/...).
+std::string RedactUrl(const std::string& url) {
+  const auto scheme_end = url.find("://");
+  const auto at = url.find('@');
+  if (scheme_end == std::string::npos || at == std::string::npos ||
+      at > url.find('/', scheme_end + 3)) {
+    return url;
+  }
+  return url.substr(0, scheme_end + 3) + "***@" + url.substr(at + 1);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -46,7 +58,9 @@ int main(int argc, char** argv) {
       std::cout << hc::Usage();
       return 0;
     case hc::Action::kVersion:
-      std::cout << "Hardcharger " << hc::kVersion << "\n";
+      std::cout << "Hardcharger " << hc::kVersion
+                << (hc::TrustsTestLicenses() ? " (test-license build: not for production)" : "")
+                << "\n";
       return 0;
     case hc::Action::kPrintDuckDBVersion: {
       duckdb_v2_str version{};
@@ -71,8 +85,39 @@ int main(int argc, char** argv) {
     for (const auto& note : loaded.notes) {
       hc::Log(hc::LogLevel::kInfo, note);
     }
+    if (hc::TrustsTestLicenses()) {
+      hc::Log(hc::LogLevel::kWarning,
+              "this is a test-license build: it trusts license keys anyone can sign, so it "
+              "must never serve real data");
+    }
     const hc::License license =
         hc::LoadLicense(hc::ReadLicenseKey(config.license_key, config.license_key_file));
+
+    // Role-based access control: the store is opened (and must be reachable) before
+    // anything else, and refuses to start without the license feature.
+    std::shared_ptr<hc::authz::AccessControl> access;
+    if (!config.rbac_store_uri.empty()) {
+      if (!license.Has("rbac")) {
+        throw std::runtime_error(
+            hc::LicenseRequired("rbac", "Role-based access control (rbac_store_uri)"));
+      }
+      hc::authz::Options options;
+      options.store_uri = config.rbac_store_uri;
+      options.administrator_name = config.username;
+      options.policy_service_url = config.rbac_opa_url;
+      options.policy_service_timeout = std::chrono::milliseconds(config.rbac_opa_timeout_ms);
+      access = std::make_shared<hc::authz::AccessControl>(options);
+      hc::Log(hc::LogLevel::kInfo,
+              "role-based access control is on: users, roles and grants come from the store; "
+              "sign-in token roles other than admin, and catalog_access claims, grant nothing",
+              {{"store", access->store_description()}});
+      if (!config.rbac_opa_url.empty()) {
+        hc::Log(hc::LogLevel::kInfo,
+                "access control also asks the policy service (statements are refused when it "
+                "does not answer)",
+                {{"url", RedactUrl(config.rbac_opa_url)}});
+      }
+    }
 
     std::string secret_key = config.secret_key;
     if (secret_key.empty()) {
@@ -83,9 +128,18 @@ int main(int argc, char** argv) {
     const std::string instance_id = hc::RandomUuid();
     auto tokens = std::make_shared<hc::JwtTokenService>(
         secret_key, std::chrono::seconds(config.token_lifetime_seconds), instance_id,
-        config.allow_cross_instance_tokens);
-    auto backend = std::make_shared<hc::Backend>(config, license);
-    auto authenticator = std::make_shared<hc::Authenticator>(config, license);
+        config.allow_cross_instance_tokens, access);
+    if (access) {
+      // CREATE SCOPED TOKEN signs with the server's key.
+      access->SetScopedTokenSigner(
+          [tokens](const std::string& user, const std::string& scope_id, int64_t expires_at) {
+            return tokens->IssueScoped(user, scope_id, expires_at);
+          });
+    }
+    auto backend = std::make_shared<hc::Backend>(config, license, access);
+    auto authenticator = std::make_shared<hc::Authenticator>(
+        config, license, access,
+        [tokens](std::string_view token) { return tokens->Validate(token); });
 
     warpsql::Server server(ServerOptionsFrom(config), backend, authenticator, tokens);
     server.Start();

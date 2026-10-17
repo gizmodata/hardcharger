@@ -7,6 +7,7 @@
 
 #include <array>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 
@@ -58,13 +59,41 @@ Error TokenRefused() {
 
 }  // namespace
 
-Authenticator::Authenticator(const Config& config, const License& license)
+authz::Identity IdentityOf(const warpsql::Principal& principal) {
+  authz::Identity who;
+  who.user_name = principal.name;
+  who.superuser = principal.role == "admin";
+  auto text = [&](const char* claim) -> std::string {
+    const auto* value = principal.claims.if_contains(claim);
+    return value && value->is_string() ? std::string(value->as_string()) : std::string();
+  };
+  who.credential = text("credential");
+  who.scope_id = text("scope_id");
+  if (const auto* idp = principal.claims.if_contains("idp"); idp && idp->is_object()) {
+    if (const auto* issuer = idp->as_object().if_contains("iss"); issuer && issuer->is_string()) {
+      who.idp_issuer = std::string(issuer->as_string());
+    }
+    if (const auto* groups = idp->as_object().if_contains("groups"); groups && groups->is_array()) {
+      for (const auto& group : groups->as_array()) {
+        if (group.is_string()) who.idp_groups.emplace_back(group.as_string());
+      }
+    }
+  }
+  return who;
+}
+
+Authenticator::Authenticator(const Config& config, const License& license,
+                             std::shared_ptr<authz::AccessControl> access,
+                             std::function<warpsql::Principal(std::string_view)> server_tokens)
     : username_(config.username),
       password_(config.password),
       allowed_issuer_(config.token_allowed_issuer),
       allowed_audience_(config.token_allowed_audience),
       default_role_(config.token_default_role),
-      license_(license) {
+      groups_claim_(config.token_groups_claim),
+      license_(license),
+      access_(std::move(access)),
+      server_tokens_(std::move(server_tokens)) {
   if (!config.token_signature_verify_cert_path.empty()) {
     std::string pem = ReadFile(config.token_signature_verify_cert_path);
     // A certificate or a bare public key both work.
@@ -76,16 +105,36 @@ Authenticator::Authenticator(const Config& config, const License& license)
 
 warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username,
                                                        std::string_view password) {
-  if (username == kTokenUser && !verify_key_pem_.empty()) {
-    return ExchangeToken(password);
+  if (username == kTokenUser) {
+    // A scoped token this server (or its cluster, sharing the secret key) handed out,
+    // sent as a password the way GizmoSQL 1.x clients send it.
+    if (access_ && server_tokens_) {
+      std::optional<warpsql::Principal> scoped;
+      try {
+        auto principal = server_tokens_(password);
+        if (principal.claims.contains("scope_id")) scoped = std::move(principal);
+      } catch (const Error&) {
+        // not one of this server's tokens: the sign-in token path decides
+      }
+      if (scoped) return *scoped;
+    }
+    if (!verify_key_pem_.empty()) return ExchangeToken(password);
   }
   const bool user_ok = SameSecret(username, username_);
   const bool password_ok = SameSecret(password, password_);
-  if (!user_ok || !password_ok) {
-    Log(LogLevel::kInfo, "sign-in refused", {{"user", std::string(username)}, {"method", "password"}});
-    throw Refused();
+  if (user_ok && password_ok) {
+    return warpsql::Principal{std::string(username), "admin", "password", {}};
   }
-  return warpsql::Principal{std::string(username), "admin", "password", {}};
+  // A user of the access-control store (never under the administrator's name). The
+  // token carries a fingerprint of the password, so changing it ends the token.
+  if (access_ && !user_ok) {
+    if (auto store_user = access_->AuthenticatePassword(username, password)) {
+      return warpsql::Principal{store_user->user_name, "user", "password",
+                                {{"credential", store_user->credential}}};
+    }
+  }
+  Log(LogLevel::kInfo, "sign-in refused", {{"user", std::string(username)}, {"method", "password"}});
+  throw Refused();
 }
 
 warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) {
@@ -135,6 +184,29 @@ warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) 
                   LicenseRequired("catalog_permissions", "Per-catalog permissions (catalog_access claim)"));
     }
     principal.claims["catalog_access"] = decoded.get_payload_claim("catalog_access").to_json();
+  }
+  // The identity provider's groups (CREATE GROUP MAPPING turns them into roles): a list,
+  // or one group as a plain string.
+  if (decoded.has_payload_claim(groups_claim_)) {
+    const auto value = decoded.get_payload_claim(groups_claim_).to_json();
+    boost::json::array groups;
+    if (value.is_array()) {
+      for (const auto& group : value.as_array()) {
+        if (group.is_string()) groups.push_back(group);
+      }
+    } else if (value.is_string()) {
+      groups.push_back(value);
+    }
+    if (!groups.empty()) {
+      principal.claims["idp"] = boost::json::object{
+          {"iss", decoded.has_issuer() ? decoded.get_issuer() : std::string()},
+          {"groups", std::move(groups)}};
+    }
+  }
+  // Under access control a sign-in token signs in one of the store's users (the
+  // administrator role aside); an administrator creates them with CREATE USER.
+  if (access_ && principal.role != "admin") {
+    access_->RequireStoreUser(principal.name);
   }
   return principal;
 }

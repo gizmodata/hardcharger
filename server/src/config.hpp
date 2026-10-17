@@ -42,10 +42,16 @@ struct Config {
   std::string token_allowed_issuer;
   std::string token_allowed_audience;
   std::string token_default_role;  // for sign-in tokens without a role claim
+  std::string token_groups_claim = "groups";  // sign-in token claim with the user's groups
 
   // Statements
   int64_t query_timeout_seconds = 0;  // 0 = none
   bool print_queries = true;
+
+  // Role-based access control (Enterprise, license feature "rbac"). A store turns it on.
+  std::string rbac_store_uri;       // PostgreSQL connection string or URI of the grant store
+  std::string rbac_opa_url;         // Open Policy Agent decision URL also asked; empty: none
+  int64_t rbac_opa_timeout_ms = 2000;
 
   // License (GizmoData Enterprise keys)
   std::string license_key;

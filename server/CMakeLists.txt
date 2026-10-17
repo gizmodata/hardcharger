@@ -37,6 +37,36 @@ FetchContent_MakeAvailable(yaml-cpp)
 
 configure_file(src/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.hpp" @ONLY)
 
+# Access control (role-based, Enterprise). The one part of Hardcharger that uses DuckDB's
+# internal C++ headers (the plan check reads DuckDB's logical plans); the rest of the
+# server includes only src/authz/authz.hpp. It must be compiled exactly as libduckdb was
+# (Release, no DuckDB debug or safety switches): its symbols are mangled with DuckDB's
+# template arguments, so a mismatch is undefined behaviour, not a link error.
+find_package(OpenSSL 3 REQUIRED)
+add_library(hardcharger_authz STATIC
+  src/authz/authz.cc
+  src/authz/ddl.cc
+  src/authz/enforcement.cc
+  src/authz/engine.cc
+  src/authz/gate.cc
+  src/authz/model.cc
+  src/authz/opa.cc
+  src/authz/password.cc
+  src/authz/policies.cc
+  src/authz/resolver.cc
+  src/authz/store.cc
+  src/authz/types.cc
+  src/authz/views.cc)
+target_include_directories(hardcharger_authz PRIVATE src)
+target_include_directories(hardcharger_authz SYSTEM PRIVATE
+                           "${WARPSQL_DUCKDB_PREFIX}/include/duckdb_third_party")
+target_link_libraries(hardcharger_authz PUBLIC warpsql_duckdb OpenSSL::Crypto)
+target_compile_options(hardcharger_authz PRIVATE -Wall -Wextra -Wno-unused-parameter)
+
+# Test builds trust a license key whose private half is in server/tests/license, so the
+# access-control tests can run without a GizmoData license. Never for a release.
+option(HARDCHARGER_TRUST_TEST_LICENSES "Trust the tests' license signing key (tests only)" OFF)
+
 add_executable(hardcharger
   src/auth.cc
   src/config.cc
@@ -46,7 +76,15 @@ add_executable(hardcharger
   src/main.cc
   src/tokens.cc)
 target_include_directories(hardcharger PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(hardcharger PRIVATE warpsql_duckdb jwt-cpp::jwt-cpp yaml-cpp::yaml-cpp)
+target_link_libraries(hardcharger PRIVATE hardcharger_authz warpsql_duckdb jwt-cpp::jwt-cpp
+                                          yaml-cpp::yaml-cpp)
+if(HARDCHARGER_TRUST_TEST_LICENSES)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/tests/license/test-license-public.pem" TEST_LICENSE_KEY)
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/test_license.hpp"
+       "// Generated: the tests' license key (HARDCHARGER_TRUST_TEST_LICENSES).\n"
+       "#define HARDCHARGER_TEST_LICENSE_PUBLIC_KEY R\"(${TEST_LICENSE_KEY})\"\n")
+  target_compile_definitions(hardcharger PRIVATE HARDCHARGER_TRUST_TEST_LICENSES=1)
+endif()
 target_compile_options(hardcharger PRIVATE -Wall -Wextra)
 if(APPLE)
   set_target_properties(hardcharger PROPERTIES BUILD_RPATH "${WARPSQL_DUCKDB_PREFIX}/lib"

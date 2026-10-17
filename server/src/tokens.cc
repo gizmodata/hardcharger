@@ -8,6 +8,9 @@
 #include <format>
 #include <stdexcept>
 
+#include "auth.hpp"
+#include "authz/authz.hpp"
+
 namespace hardcharger {
 
 namespace {
@@ -54,11 +57,13 @@ std::string RandomUuid() {
 }
 
 JwtTokenService::JwtTokenService(std::string secret_key, std::chrono::seconds lifetime,
-                                 std::string instance_id, bool allow_cross_instance)
+                                 std::string instance_id, bool allow_cross_instance,
+                                 std::shared_ptr<authz::AccessControl> access)
     : secret_key_(std::move(secret_key)),
       lifetime_(lifetime),
       instance_id_(std::move(instance_id)),
-      allow_cross_instance_(allow_cross_instance) {}
+      allow_cross_instance_(allow_cross_instance),
+      access_(std::move(access)) {}
 
 warpsql::TokenService::Issued JwtTokenService::Issue(const warpsql::Principal& principal) {
   const auto now = std::chrono::system_clock::now();
@@ -72,10 +77,39 @@ warpsql::TokenService::Issued JwtTokenService::Issue(const warpsql::Principal& p
                    .set_payload_claim("role", jwt::basic_claim<Traits>(principal.role))
                    .set_payload_claim("auth_method", jwt::basic_claim<Traits>(principal.auth_method))
                    .set_payload_claim("instance_id", jwt::basic_claim<Traits>(instance_id_));
-  if (const auto* access = principal.claims.if_contains("catalog_access")) {
-    token.set_payload_claim("catalog_access", jwt::basic_claim<Traits>(*access));
+  // Claims access control reads (as GizmoSQL 1.x names them): the password fingerprint
+  // a store user signed in with, a scoped token's record, the identity provider's groups.
+  for (const char* claim : {"catalog_access", "credential", "scope_id", "idp"}) {
+    if (const auto* value = principal.claims.if_contains(claim)) {
+      token.set_payload_claim(claim, jwt::basic_claim<Traits>(*value));
+    }
   }
-  return {token.sign(jwt::algorithm::hs256{secret_key_}), lifetime_};
+  // A token never outlives the scoped token it was exchanged for.
+  auto lifetime = lifetime_;
+  if (const auto* expires = principal.claims.if_contains("expires_at"); expires && expires->is_int64()) {
+    const auto until = std::chrono::system_clock::time_point(std::chrono::seconds(expires->as_int64()));
+    if (until < now + lifetime_) {
+      lifetime = std::chrono::duration_cast<std::chrono::seconds>(until - now);
+      token.set_expires_at(until);
+    }
+  }
+  return {token.sign(jwt::algorithm::hs256{secret_key_}), lifetime};
+}
+
+std::string JwtTokenService::IssueScoped(const std::string& user_name, const std::string& scope_id,
+                                         int64_t expires_at) {
+  return jwt::create<Traits>()
+      .set_type("JWT")
+      .set_issuer(std::string(kIssuer))
+      .set_id("hardcharger-scoped-" + RandomUuid())
+      .set_subject(user_name)
+      .set_issued_at(std::chrono::system_clock::now())
+      .set_expires_at(std::chrono::system_clock::time_point(std::chrono::seconds(expires_at)))
+      .set_payload_claim("role", jwt::basic_claim<Traits>(std::string("user")))
+      .set_payload_claim("auth_method", jwt::basic_claim<Traits>(std::string("scoped_token")))
+      .set_payload_claim("instance_id", jwt::basic_claim<Traits>(instance_id_))
+      .set_payload_claim("scope_id", jwt::basic_claim<Traits>(scope_id))
+      .sign(jwt::algorithm::hs256{secret_key_});
 }
 
 warpsql::Principal JwtTokenService::Validate(std::string_view token) {
@@ -120,12 +154,28 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
   if (decoded.has_payload_claim("auth_method")) {
     principal.auth_method = decoded.get_payload_claim("auth_method").as_string();
   }
-  if (decoded.has_payload_claim("catalog_access")) {
-    principal.claims["catalog_access"] = decoded.get_payload_claim("catalog_access").to_json();
+  for (const char* claim : {"catalog_access", "credential", "scope_id", "idp"}) {
+    if (decoded.has_payload_claim(claim)) {
+      principal.claims[claim] = decoded.get_payload_claim(claim).to_json();
+    }
   }
   if (principal.name.empty()) {
     throw invalid("a valid access token is required");
   }
+  if (!access_) {
+    // Without access control nothing could hold a scoped token to its scope.
+    if (principal.claims.contains("scope_id")) {
+      throw invalid("this server does not run access control, so it accepts no scoped tokens");
+    }
+    return principal;
+  }
+  if (const auto* scope = principal.claims.if_contains("scope_id")) {
+    principal.claims["expires_at"] = std::chrono::duration_cast<std::chrono::seconds>(
+                                         decoded.get_expires_at().time_since_epoch())
+                                         .count();
+    if (!scope->is_string()) throw invalid("a valid access token is required");
+  }
+  access_->CheckToken(IdentityOf(principal));
   return principal;
 }
 

@@ -117,10 +117,24 @@ const std::vector<Option>& Options() {
        "required audience of sign-in tokens", TEXT(token_allowed_audience)},
       {"token_default_role", Kind::kString, {"GIZMOSQL_TOKEN_DEFAULT_ROLE"},
        "role for sign-in tokens without one", TEXT(token_default_role)},
+      {"token_groups_claim", Kind::kString, {"GIZMOSQL_TOKEN_GROUPS_CLAIM"},
+       "sign-in token claim listing the user's identity-provider groups",
+       TEXT(token_groups_claim)},
       {"query_timeout_seconds", Kind::kInt, {"QUERY_TIMEOUT", "GIZMOSQL_QUERY_TIMEOUT"},
        "default statement timeout (0: none)", NUMBER(query_timeout_seconds)},
       {"print_queries", Kind::kBool, {"PRINT_QUERIES", "GIZMOSQL_PRINT_QUERIES"},
        "log every statement", FLAG(print_queries)},
+      {"rbac_store_uri", Kind::kString, {"GIZMOSQL_RBAC_STORE_URI"},
+       "[Enterprise] turn on role-based access control, with users, roles and grants kept in "
+       "this PostgreSQL database (postgresql://user:password@host/db or 'host=... dbname=...'); "
+       "every replica of a cluster names the same one",
+       TEXT(rbac_store_uri)},
+      {"rbac_opa_url", Kind::kString, {"GIZMOSQL_RBAC_OPA_URL"},
+       "[Enterprise] also ask this Open Policy Agent decision URL about every store user's "
+       "session and statement; only {\"result\": true} lets them run",
+       TEXT(rbac_opa_url)},
+      {"rbac_opa_timeout_ms", Kind::kInt, {"GIZMOSQL_RBAC_OPA_TIMEOUT_MS"},
+       "how long to wait for the policy service (no answer refuses)", NUMBER(rbac_opa_timeout_ms)},
       {"license_key", Kind::kString, {"GIZMOSQL_LICENSE_KEY"}, "GizmoData license key (JWT)",
        TEXT(license_key)},
       {"license_key_file", Kind::kString, {"GIZMOSQL_LICENSE_KEY_FILE"},
@@ -261,6 +275,15 @@ Loaded LoadConfig(int argc, char** argv) {
   }
   if (c.port < 0 || c.port > 65535 || c.health_port < 0 || c.health_port > 65535) {
     throw std::invalid_argument("ports must be between 0 and 65535");
+  }
+  if (c.rbac_store_uri == "memory") {
+    throw std::invalid_argument("rbac_store_uri must be a PostgreSQL connection string");
+  }
+  if (!c.rbac_opa_url.empty() && c.rbac_store_uri.empty()) {
+    throw std::invalid_argument("rbac_opa_url needs rbac_store_uri (access control)");
+  }
+  if (c.rbac_opa_timeout_ms <= 0) {
+    throw std::invalid_argument("rbac_opa_timeout_ms must be positive");
   }
   if (c.log_format != "text" && c.log_format != "json") {
     throw std::invalid_argument("log_format must be text or json");

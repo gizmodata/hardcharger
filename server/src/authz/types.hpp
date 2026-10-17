@@ -1,0 +1,84 @@
+// Shared vocabulary for Hardcharger role-based access control (Enterprise):
+// privileges, object names and the case-folding rule every RBAC component uses.
+
+#pragma once
+
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace hardcharger::authz {
+
+// Privileges are keyword phrases ("CREATE TABLE"), never underscored names, and
+// are printed exactly as they are written in GRANT.
+enum class Privilege {
+  kSelect,
+  kInsert,
+  kUpdate,
+  kDelete,
+  kCreateTable,
+  kCreateView,
+  kCreateSchema,
+  kDropTable,
+  kDropView,
+  kDropSchema,
+  kAlterTable,
+  kAlterView,
+  kAll,  // every object privilege that applies to the target
+};
+
+// "SELECT", "CREATE TABLE", ...
+std::string PrivilegeName(Privilege privilege);
+
+// The object privileges ALL stands for on a table or view.
+const std::vector<Privilege>& TableLevelPrivileges();
+
+// Server-wide capabilities, granted to roles with no ON clause
+// (GRANT READ FILESYSTEM TO etl). Each opens one family of statements that the
+// admin command gate otherwise keeps for the administrator.
+enum class SystemPrivilege {
+  kManageCatalogs,    // ATTACH, DETACH
+  kManageExtensions,  // INSTALL, LOAD, extension repositories
+  kManageSecrets,     // CREATE / DROP SECRET, duckdb_secrets()
+  kManageConfig,      // SET GLOBAL, instance-wide settings
+  kReadFilesystem,  // read_csv / read_parquet / ..., FROM 'file', COPY FROM: local and remote
+  kWriteFilesystem,  // COPY ... TO a file or URL
+  kExportDatabase,   // EXPORT DATABASE
+  kImportDatabase,   // IMPORT DATABASE
+  kCheckpoint,       // CHECKPOINT, FORCE CHECKPOINT
+};
+
+// "MANAGE CATALOGS", "READ FILESYSTEM", ...
+std::string SystemPrivilegeName(SystemPrivilege privilege);
+const std::vector<SystemPrivilege>& AllSystemPrivileges();
+std::optional<SystemPrivilege> SystemPrivilegeFromName(const std::string& name);
+
+// What a tenant's user is told about a catalog, schema, table or view it
+// cannot see: exactly what it is told about one that does not exist.
+std::string HiddenObjectMessage(const std::string& user_name);
+
+// What a GRANT is attached to. kObject is one table or view; kSchema and
+// kCatalog grant on every present and future object in the container.
+enum class GrantScope { kObject, kSchema, kCatalog };
+
+// One identifier, compared case-insensitively (DuckDB's rule for both quoted
+// and unquoted identifiers) and stored as the user spelled it.
+std::string FoldIdentifier(const std::string& identifier);
+bool IdentifiersEqual(const std::string& a, const std::string& b);
+
+// A catalog object: catalog, schema path (one element on DuckDB 1.x; nested
+// schemas on 2.x) and object name. Empty schema_path / object_name mean "every"
+// for schema- and catalog-scope grants.
+struct ObjectPath {
+  std::string catalog;
+  std::vector<std::string> schema_path;
+  std::string object_name;
+
+  // `cat.sch.obj`, each part quoted when needed.
+  std::string ToString() const;
+};
+
+// Quote an identifier for display only when it needs it.
+std::string QuoteIdentifierIfNeeded(const std::string& identifier);
+
+}  // namespace hardcharger::authz

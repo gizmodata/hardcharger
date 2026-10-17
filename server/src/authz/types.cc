@@ -1,0 +1,130 @@
+#include "authz/types.hpp"
+
+#include <cctype>
+
+namespace hardcharger::authz {
+
+std::string PrivilegeName(Privilege privilege) {
+  switch (privilege) {
+    case Privilege::kSelect:
+      return "SELECT";
+    case Privilege::kInsert:
+      return "INSERT";
+    case Privilege::kUpdate:
+      return "UPDATE";
+    case Privilege::kDelete:
+      return "DELETE";
+    case Privilege::kCreateTable:
+      return "CREATE TABLE";
+    case Privilege::kCreateView:
+      return "CREATE VIEW";
+    case Privilege::kCreateSchema:
+      return "CREATE SCHEMA";
+    case Privilege::kDropTable:
+      return "DROP TABLE";
+    case Privilege::kDropView:
+      return "DROP VIEW";
+    case Privilege::kDropSchema:
+      return "DROP SCHEMA";
+    case Privilege::kAlterTable:
+      return "ALTER TABLE";
+    case Privilege::kAlterView:
+      return "ALTER VIEW";
+    case Privilege::kAll:
+      return "ALL";
+  }
+  return "UNKNOWN";
+}
+
+const std::vector<Privilege>& TableLevelPrivileges() {
+  static const std::vector<Privilege> kPrivileges = {
+      Privilege::kSelect, Privilege::kInsert, Privilege::kUpdate, Privilege::kDelete};
+  return kPrivileges;
+}
+
+// DuckDB compares identifiers case-insensitively by ASCII lowercasing, whether
+// or not they were quoted; anything outside ASCII compares byte for byte.
+std::string FoldIdentifier(const std::string& identifier) {
+  std::string folded = identifier;
+  for (auto& c : folded) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  }
+  return folded;
+}
+
+bool IdentifiersEqual(const std::string& a, const std::string& b) {
+  return FoldIdentifier(a) == FoldIdentifier(b);
+}
+
+std::string QuoteIdentifierIfNeeded(const std::string& identifier) {
+  bool plain =
+      !identifier.empty() &&
+      (std::isalpha(static_cast<unsigned char>(identifier[0])) || identifier[0] == '_');
+  for (char c : identifier) {
+    if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) plain = false;
+  }
+  if (plain) return identifier;
+  std::string quoted = "\"";
+  for (char c : identifier) {
+    if (c == '"') quoted += '"';
+    quoted += c;
+  }
+  return quoted + "\"";
+}
+
+std::string ObjectPath::ToString() const {
+  std::string out = QuoteIdentifierIfNeeded(catalog);
+  for (const auto& part : schema_path) out += "." + QuoteIdentifierIfNeeded(part);
+  if (!object_name.empty()) out += "." + QuoteIdentifierIfNeeded(object_name);
+  return out;
+}
+
+std::string SystemPrivilegeName(SystemPrivilege privilege) {
+  switch (privilege) {
+    case SystemPrivilege::kManageCatalogs:
+      return "MANAGE CATALOGS";
+    case SystemPrivilege::kManageExtensions:
+      return "MANAGE EXTENSIONS";
+    case SystemPrivilege::kManageSecrets:
+      return "MANAGE SECRETS";
+    case SystemPrivilege::kManageConfig:
+      return "MANAGE CONFIG";
+    case SystemPrivilege::kReadFilesystem:
+      return "READ FILESYSTEM";
+    case SystemPrivilege::kWriteFilesystem:
+      return "WRITE FILESYSTEM";
+    case SystemPrivilege::kExportDatabase:
+      return "EXPORT DATABASE";
+    case SystemPrivilege::kImportDatabase:
+      return "IMPORT DATABASE";
+    case SystemPrivilege::kCheckpoint:
+      return "CHECKPOINT";
+  }
+  return "UNKNOWN";
+}
+
+const std::vector<SystemPrivilege>& AllSystemPrivileges() {
+  static const std::vector<SystemPrivilege> kAll = {
+      SystemPrivilege::kManageCatalogs, SystemPrivilege::kManageExtensions,
+      SystemPrivilege::kManageSecrets,  SystemPrivilege::kManageConfig,
+      SystemPrivilege::kReadFilesystem, SystemPrivilege::kWriteFilesystem,
+      SystemPrivilege::kExportDatabase, SystemPrivilege::kImportDatabase,
+      SystemPrivilege::kCheckpoint};
+  return kAll;
+}
+
+std::optional<SystemPrivilege> SystemPrivilegeFromName(const std::string& name) {
+  for (auto p : AllSystemPrivileges()) {
+    if (SystemPrivilegeName(p) == name) return p;
+  }
+  return std::nullopt;
+}
+
+std::string HiddenObjectMessage(const std::string& user_name) {
+  return "Hardcharger blocked this statement: it names a catalog, schema, table or view "
+         "that does not "
+         "exist, or that user " +
+         user_name + " cannot see";
+}
+
+}  // namespace hardcharger::authz
