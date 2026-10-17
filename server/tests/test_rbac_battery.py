@@ -79,7 +79,9 @@ def test_store_users_cannot_write_or_detach_them(joe):
         assert raised.value.code == "permission_denied", f"{sql}: {raised.value}"
 
 
-def test_the_administrator_reads_them_and_cannot_write_them(admin):
+def test_the_administrator_reads_them_and_cannot_write_them(admin, joe):
+    # joe's own session and statement, so this holds run alone (or first on a worker).
+    expect_allowed(client=joe, sql="SELECT 1")
     eventually(admin, "SELECT count(*) AS n FROM _hardcharger_instr.main.sessions WHERE username = 'joe'",
                lambda rows: rows[0]["n"] >= 1)
     eventually(admin, "SELECT count(*) AS n FROM _hardcharger_logs.main.logs WHERE username = 'joe'",
