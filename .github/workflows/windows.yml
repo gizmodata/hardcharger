@@ -93,56 +93,63 @@ jobs:
           path: C:\vcpkg\installed
           key: ${{ steps.openssl.outputs.key }}
 
-      # Arrow and DuckDB, each cached by its own recipe, so a change to one doesn't
-      # rebuild the other (DuckDB takes 40-50 minutes cold).
+      # Arrow, replxx (the client's line editor) and DuckDB: one cache each, keyed on its
+      # own recipe (its pin is in it) and the toolset, restored and saved separately, so a
+      # change to one never rebuilds another (DuckDB takes 35-50 minutes cold).
       - name: Dependency cache keys
         id: deps
         run: |
           toolset="${{ matrix.name }}-msvc${{ steps.msvc.outputs.version }}"
-          arrow=$(sha256sum third_party/warp-sql/cpp/scripts/build-arrow.sh | cut -c1-16)
-          duckdb=$(cat third_party/warp-sql/cpp/scripts/build-duckdb.sh server/scripts/build-deps.sh \
-                       server/scripts/patch-duckdb.cmake server/scripts/build-replxx.sh | sha256sum | cut -c1-16)
-          echo "arrow=deps-arrow-$toolset-$arrow" >> "$GITHUB_OUTPUT"
-          echo "duckdb=deps-duckdb-$toolset-$duckdb" >> "$GITHUB_OUTPUT"
+          hash() { cat "$@" | sha256sum | cut -c1-16; }
+          echo "arrow=deps-arrow-$toolset-$(hash third_party/warp-sql/cpp/scripts/build-arrow.sh)" >> "$GITHUB_OUTPUT"
+          echo "replxx=deps-replxx-$toolset-$(hash server/scripts/build-replxx.sh)" >> "$GITHUB_OUTPUT"
+          echo "duckdb=deps-duckdb-$toolset-$(hash third_party/warp-sql/cpp/scripts/build-duckdb.sh \
+                server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v6
         id: arrow-cache
         with:
           path: server/.deps/arrow-install
           key: ${{ steps.deps.outputs.arrow }}
-      - uses: actions/cache/restore@v6
-        id: duckdb-cache
-        with:
-          path: |
-            server/.deps/duckdb-install
-            server/.deps/replxx-install
-          key: ${{ steps.deps.outputs.duckdb }}
       - name: Build Arrow
         if: steps.arrow-cache.outputs.cache-hit != 'true'
         run: |
           start=$SECONDS
-          WARPSQL_DEPS_DIR="$(cygpath -m "$GITHUB_WORKSPACE/server/.deps")" third_party/warp-sql/cpp/scripts/build-arrow.sh
+          server/scripts/build-deps.sh arrow
           echo "Arrow built in $(( (SECONDS - start) / 60 )) min"
-      # Saved at once, so a later failure doesn't throw the build away.
+      # Each saved as soon as it is built, so a later failure doesn't throw it away.
       - uses: actions/cache/save@v6
         if: steps.arrow-cache.outputs.cache-hit != 'true'
         with:
           path: server/.deps/arrow-install
           key: ${{ steps.deps.outputs.arrow }}
-      # DuckDB, and replxx (the client's line editor), both built by build-deps.sh.
-      - name: Build DuckDB and replxx
+      - uses: actions/cache/restore@v6
+        id: replxx-cache
+        with:
+          path: server/.deps/replxx-install
+          key: ${{ steps.deps.outputs.replxx }}
+      - name: Build replxx
+        if: steps.replxx-cache.outputs.cache-hit != 'true'
+        run: server/scripts/build-deps.sh replxx
+      - uses: actions/cache/save@v6
+        if: steps.replxx-cache.outputs.cache-hit != 'true'
+        with:
+          path: server/.deps/replxx-install
+          key: ${{ steps.deps.outputs.replxx }}
+      - uses: actions/cache/restore@v6
+        id: duckdb-cache
+        with:
+          path: server/.deps/duckdb-install
+          key: ${{ steps.deps.outputs.duckdb }}
+      - name: Build DuckDB
         if: steps.duckdb-cache.outputs.cache-hit != 'true'
-        env:
-          HARDCHARGER_DEPS_SKIP_ARROW: "1"
         run: |
           start=$SECONDS
-          server/scripts/build-deps.sh
-          echo "DuckDB and replxx built in $(( (SECONDS - start) / 60 )) min"
+          server/scripts/build-deps.sh duckdb
+          echo "DuckDB built in $(( (SECONDS - start) / 60 )) min"
       - uses: actions/cache/save@v6
         if: steps.duckdb-cache.outputs.cache-hit != 'true'
         with:
-          path: |
-            server/.deps/duckdb-install
-            server/.deps/replxx-install
+          path: server/.deps/duckdb-install
           key: ${{ steps.deps.outputs.duckdb }}
 
       - name: Build the server
