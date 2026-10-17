@@ -19,7 +19,7 @@ export BENCH_PASSWORD=${BENCH_PASSWORD:-bench-password-not-secret}
 
 # Match the server processes exactly (pgrep -x on the name, or an anchored command line),
 # never a pattern that a shell command naming the same path would also match.
-PATTERN="^($B/gizmosql/gizmosql_server|$B/hardcharger-linux-arm64/bin/hardcharger|$HOME/venv/bin/python $B/serve_quack.py)"
+PATTERN="^($B/gizmosql/gizmosql_server|$B/hardcharger-linux-arm64/bin/hardcharger-server|$HOME/venv/bin/python $B/serve_quack.py)"
 stop() {
   pkill -f "$PATTERN" || true
   for _ in $(seq 1 60); do
@@ -42,7 +42,7 @@ case "$SYSTEM" in
     ;;
   hardcharger)
     HC=$(ls -d "$B"/hardcharger-linux-arm64)
-    HARDCHARGER_ADMIN_PASSWORD="$BENCH_PASSWORD" nohup "$HC/bin/hardcharger" \
+    HARDCHARGER_ADMIN_PASSWORD="$BENCH_PASSWORD" nohup "$HC/bin/hardcharger-server" \
       --database "$DB" --admin-username bench --port 31337 \
       $([ "$TLS" = 1 ] && echo --tls-cert "$B/tls.crt" --tls-key "$B/tls.key") --memory-limit "$MEMORY_LIMIT" \
       --init-sql-commands "SET threads=$THREADS;" ${HC_EXTRA:-} >"$LOG" 2>&1 </dev/null &

@@ -81,7 +81,7 @@ Linux (x86-64 and arm64) and macOS (Apple silicon) builds are attached to every
 
 ```bash
 tar -xzf hardcharger-macos-arm64.tar.gz
-HARDCHARGER_ADMIN_PASSWORD='change-me' ./hardcharger-macos-arm64/bin/hardcharger --database my.duckdb
+HARDCHARGER_ADMIN_PASSWORD='change-me' ./hardcharger-macos-arm64/bin/hardcharger-server --database my.duckdb
 ```
 
 ## 🔌 Connect
@@ -152,7 +152,7 @@ stream in that same response.
 
 Every option is a flag (`--read-only`), an environment variable (`HARDCHARGER_READ_ONLY`)
 or a key in a YAML file passed with `--config` (`read_only: true`). Flags win over
-environment variables, which win over the file. `hardcharger --help` lists them all.
+environment variables, which win over the file. `hardcharger-server --help` lists them all.
 
 ```yaml
 # hardcharger.yaml
@@ -231,7 +231,7 @@ The Warp SQL conformance suite runs against the same build:
 ```bash
 cd third_party/warp-sql/conformance
 uv venv .venv && uv pip install --python .venv/bin/python -e .
-WARP_SQL_TEST_SERVER_BINARY=../../../server/build/hardcharger \
+WARP_SQL_TEST_SERVER_BINARY=../../../server/build/hardcharger-server \
 WARP_SQL_TEST_SERVER_PASSWORD_ENV=HARDCHARGER_ADMIN_PASSWORD \
 WARP_SQL_TEST_SERVER_USERNAME=warp HARDCHARGER_ADMIN_USERNAME=warp \
   .venv/bin/python -m pytest -q

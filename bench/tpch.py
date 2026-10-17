@@ -28,7 +28,7 @@ QUERIES = {int(k): v for k, v in json.loads((HERE / "queries.json").read_text())
 TABLES = ["customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"]
 RUNS = 5
 PASSWORD = "bench-pw"
-HARDCHARGER = pathlib.Path(os.environ.get("HARDCHARGER_BENCH_HARDCHARGER", HERE.parent / "server/build/hardcharger"))
+HARDCHARGER = pathlib.Path(os.environ.get("HARDCHARGER_BENCH_HARDCHARGER", HERE.parent / "server/build/hardcharger-server"))
 GIZMOSQL = pathlib.Path(os.environ.get("HARDCHARGER_BENCH_GIZMOSQL", "gizmosql_server"))
 
 

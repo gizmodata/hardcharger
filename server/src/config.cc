@@ -486,7 +486,7 @@ Loaded LoadConfig(int argc, char** argv) {
 
 std::string Usage() {
   std::ostringstream out;
-  out << "usage: hardcharger [--config FILE] [options]\n\n"
+  out << "usage: hardcharger-server [--config FILE] [options]\n\n"
       << "Every option can also be set as an environment variable (HARDCHARGER_<NAME>) or\n"
       << "as a key in the YAML config file. Precedence: flag, environment, file, default.\n\n";
   for (const auto& option : Options()) {

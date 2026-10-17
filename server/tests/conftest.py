@@ -1,6 +1,6 @@
 """Starts Hardcharger servers for the tests.
 
-HARDCHARGER_TEST_BINARY names the server binary (default: ../build/hardcharger), the
+HARDCHARGER_TEST_BINARY names the server binary (default: ../build/hardcharger-server), the
 one build that ships. A missing binary or a server that doesn't come up fails the run;
 nothing is skipped. Every feature is on whenever its own option says so: there is no
 license.
@@ -23,7 +23,7 @@ from warp_client import Client, mint_server_token
 
 BUILD = pathlib.Path(__file__).resolve().parent.parent / "build"
 # Absolute (a relative name is the caller's, but servers run in their own directories).
-BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_BINARY", BUILD / "hardcharger")).resolve()
+BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_BINARY", BUILD / "hardcharger-server")).resolve()
 UNIT_TEST_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_UNIT_BINARY", BUILD / "hardcharger-unit-tests")).resolve()
 
 

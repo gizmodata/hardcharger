@@ -1,4 +1,4 @@
-// hardcharger: the server. See `hardcharger --help` for configuration.
+// hardcharger-server: the server. See `hardcharger-server --help` for configuration.
 
 #include <csignal>
 #include <cmath>
@@ -265,7 +265,7 @@ int main(int argc, char** argv) {
   try {
     loaded = hc::LoadConfig(argc, argv);
   } catch (const std::exception& e) {
-    std::cerr << "hardcharger: " << e.what() << "\n\n" << hc::Usage();
+    std::cerr << "hardcharger-server: " << e.what() << "\n\n" << hc::Usage();
     return 2;
   }
   switch (loaded.action) {

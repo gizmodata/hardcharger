@@ -137,6 +137,8 @@ test battery, plus two security reviews of the result (see Fixed).
 
 ### Changed
 
+- The server's executable is `hardcharger-server` (the Docker image's entrypoint too); the
+  plain `hardcharger` name is kept for a command-line client.
 - No license: every feature that was Enterprise in GizmoSQL 1.x is available to everyone,
   each turned on by its own option. The license options (`license_key`,
   `license_key_file`) and their environment variables are gone: a license flag is an

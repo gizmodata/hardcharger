@@ -9,7 +9,7 @@ RUN apt-get update \
  && useradd --system --create-home --home-dir /var/lib/hardcharger hardcharger
 
 COPY dist/hardcharger-linux-${TARGETARCH}/ /opt/hardcharger/
-RUN ln -s /opt/hardcharger/bin/hardcharger /usr/local/bin/hardcharger
+RUN ln -s /opt/hardcharger/bin/hardcharger-server /usr/local/bin/hardcharger-server
 
 USER hardcharger
 WORKDIR /var/lib/hardcharger
@@ -17,4 +17,4 @@ ENV HARDCHARGER_HOST=0.0.0.0 \
     HARDCHARGER_PORT=31337 \
     HARDCHARGER_HEALTH_PORT=31338
 EXPOSE 31337 31338
-ENTRYPOINT ["hardcharger"]
+ENTRYPOINT ["hardcharger-server"]

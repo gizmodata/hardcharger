@@ -78,8 +78,8 @@ jobs:
         run: |
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build server/build
-          server/build/hardcharger --version
-          server/build/hardcharger --print-duckdb-version
+          server/build/hardcharger-server --version
+          server/build/hardcharger-server --print-duckdb-version
 
       # PostgreSQL for the access-control grant store (the tests fail without it).
       - name: Start PostgreSQL (Linux)
@@ -121,7 +121,7 @@ jobs:
       - name: Warp SQL conformance suite
         working-directory: third_party/warp-sql/conformance
         env:
-          WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build/hardcharger
+          WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build/hardcharger-server
           WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
           WARP_SQL_TEST_SERVER_USERNAME: warp
           HARDCHARGER_ADMIN_USERNAME: warp
@@ -136,11 +136,11 @@ jobs:
           stage="dist/hardcharger-${{ matrix.name }}"
           cmake --install server/build --prefix "$stage"
           # Only the server ships, never the unit tests.
-          test "$(ls "$stage/bin")" = "hardcharger"
+          test "$(ls "$stage/bin")" = "hardcharger-server"
           mkdir -p "$stage/lib"
           cp -P server/.deps/duckdb-install/lib/libduckdb.* "$stage/lib/"
           cp LICENSE CHANGELOG.md "$stage/"
-          "$stage/bin/hardcharger" --version
+          "$stage/bin/hardcharger-server" --version
           tar -C dist -czf "dist/hardcharger-${{ matrix.name }}.tar.gz" "hardcharger-${{ matrix.name }}"
       - uses: actions/upload-artifact@v7
         with:
@@ -206,7 +206,7 @@ jobs:
         working-directory: server/tests
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
-          HARDCHARGER_TEST_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger
+          HARDCHARGER_TEST_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-server
           HARDCHARGER_TEST_UNIT_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-unit-tests
         run: |
           uv venv .venv --python 3.14
@@ -216,7 +216,7 @@ jobs:
         working-directory: third_party/warp-sql/conformance
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
-          WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger
+          WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-server
           WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
           WARP_SQL_TEST_SERVER_USERNAME: warp
           WARP_SQL_TEST_SERVER_LOG: ${{ runner.temp }}/conformance-server.log

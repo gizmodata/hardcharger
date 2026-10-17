@@ -1,5 +1,5 @@
 """The access-control audit records' hash chain: a server's own log verifies, and every
-kind of edit to it is reported by `hardcharger --verify-audit-log`."""
+kind of edit to it is reported by `hardcharger-server --verify-audit-log`."""
 
 import subprocess
 import threading

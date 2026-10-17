@@ -103,10 +103,10 @@ function(hardcharger_rpath target)
   endif()
 endfunction()
 
-add_executable(hardcharger src/main.cc)
-target_link_libraries(hardcharger PRIVATE hardcharger_core)
-target_compile_options(hardcharger PRIVATE -Wall -Wextra)
-hardcharger_rpath(hardcharger)
+add_executable(hardcharger-server src/main.cc)
+target_link_libraries(hardcharger-server PRIVATE hardcharger_core)
+target_compile_options(hardcharger-server PRIVATE -Wall -Wextra)
+hardcharger_rpath(hardcharger-server)
 
 # Unit tests of components that have no SQL surface of their own (googletest 1.18.0).
 # server/tests runs them through the per-file wrappers.
@@ -133,4 +133,4 @@ add_executable(hardcharger-unit-tests
 target_link_libraries(hardcharger-unit-tests PRIVATE hardcharger_core GTest::gtest_main)
 hardcharger_rpath(hardcharger-unit-tests)
 
-install(TARGETS hardcharger RUNTIME DESTINATION bin)
+install(TARGETS hardcharger-server RUNTIME DESTINATION bin)
