@@ -243,3 +243,20 @@ def test_session_options_say_no_more_than_a_missing_catalog(server):
     assert refusal(catalog="rbac_tenants") == missing
     # Positive twin.
     server.client(token=mint(user="acme/joe"), options={"catalog": "acme_db"})
+
+
+def test_a_users_bare_set_of_a_server_wide_setting_never_reaches_other_sessions(joe, admin, bea):
+    # A bare SET (DuckDB's AUTOMATIC scope) of a setting that only exists server-wide
+    # would change it for everyone; for a store user it must stay theirs or be refused.
+    before = admin.run(sql="SELECT current_setting('http_proxy') AS v").column("v").to_pylist()
+    outcome(client=joe, sql="SET http_proxy = 'evil.example:8080'")
+    outcome(client=joe, sql="SET checkpoint_threshold = '1GB'")
+    for other in (admin, bea):
+        assert other.run(sql="SELECT current_setting('http_proxy') AS v").column("v").to_pylist() == before
+    assert admin.run(sql="SELECT current_setting('checkpoint_threshold') AS v").column("v").to_pylist() != ["1.0 GiB"]
+
+
+def test_a_tenants_user_may_create_temporary_tables_and_views(joe):
+    expect_allowed(client=joe, sql="CREATE TEMP TABLE joe_scratch AS SELECT 1 AS x")
+    expect_allowed(client=joe, sql="CREATE TEMP VIEW joe_scratch_view AS SELECT x FROM joe_scratch")
+    assert column(table=expect_allowed(client=joe, sql="SELECT x FROM joe_scratch_view")) == {1}
