@@ -7,6 +7,13 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-17
+
+Role-based access control and GizmoSQL 1.x's server features (instrumentation, catalog
+logging, catalog access rules, statement queue, metrics, KILL SESSION, the OAuth server,
+JWKS tokens and more), checked against 404 of the 423 server-side cases of GizmoSQL's
+test battery, plus two security reviews of the result (see Fixed).
+
 ### Added
 
 - Role-based access control (Enterprise, license feature `rbac`), lifted from GizmoSQL
@@ -162,7 +169,7 @@ own changelog in `python/CHANGELOG.md`.
   `currval`) need write (currval: read) access to their catalog. `DESCRIBE` of a catalog
   the user may not see is refused. A plain server (no store) now routes every non-admin
   token principal through the same plan check.
-- Credential redaction, in the shared logging code (also on main): SQL comments
+- Credential redaction: SQL comments
   (`CREATE /* */ SECRET`), string literals and dollar-quoting no longer hide the keyword,
   so `CREATE [OR REPLACE] [PERSISTENT|TEMP] SECRET`, `CREATE`/`ALTER USER` and
   `SET`/`PRAGMA` of a credential setting are redacted wherever they appear, with a
@@ -199,7 +206,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Known gaps
 
-- Not yet ported from GizmoSQL 1.x: OpenTelemetry.
+- Not yet ported from GizmoSQL 1.x: OpenTelemetry. A server asked to export it
+  (`--otel-enabled`, `GIZMOSQL_OTEL_ENABLED=true`) refuses to start rather than run
+  without it.
 - Browser sign-in has only 1.x's routes on `oauth_port`; Warp SQL's `oauth_browser` flow
   (`/warp/v1/auth/oauth/flows`) needs the Warp SQL SDK to offer it.
 - Instrumentation's fetch times are when the server took each batch from DuckDB, not when
