@@ -137,13 +137,17 @@ void RegisterScalar(duckdb_v2_connection_handle connection, duckdb_v2_factory_ha
   Call([&](auto* e) { return duckdb_v2_connection_register_scalar_function(connection, function.get(), e); });
 }
 
-// ---- Table functions over Arrow batches built at bind time ----
+// ---- Table functions over Arrow batches, built for each execution ----
 
 using TableProvider = std::function<std::shared_ptr<arrow::RecordBatch>(Runtime&, const Session*)>;
 
 struct TableSpec {
   Runtime* runtime;
   TableProvider rows;
+};
+
+struct TableBinding {
+  Session* session;  // the session that bound the statement (null outside a client session)
 };
 
 struct TableScan {
@@ -156,6 +160,34 @@ struct TableScan {
   }
 };
 
+// Opens a scan of `batch`: an Arrow stream over it and the importer that turns it into chunks.
+std::unique_ptr<TableScan> OpenScan(const std::shared_ptr<arrow::RecordBatch>& batch,
+                                    duckdb_v2_context_handle context) {
+  auto reader = arrow::RecordBatchReader::Make({batch}, batch->schema());
+  if (!reader.ok()) throw Error(ErrorCode::kExecutionError, reader.status().message());
+  auto scan = std::make_unique<TableScan>();
+  if (auto status = arrow::ExportRecordBatchReader(*reader, &scan->stream); !status.ok()) {
+    throw Error(ErrorCode::kExecutionError, status.message());
+  }
+  ArrowSchema schema{};
+  if (int code = scan->stream.get_schema(&scan->stream, &schema); code != 0) {
+    throw Error(ErrorCode::kExecutionError, "cannot read the table's schema");
+  }
+  try {
+    Call([&](auto* e) {
+      return duckdb_v2_arrow_importer_create(context, &schema, kChunkRows, scan->importer.out(), e);
+    });
+  } catch (...) {
+    schema.release(&schema);
+    throw;
+  }
+  schema.release(&schema);
+  return scan;
+}
+
+// Bind only names the columns. The rows are read again for every execution (TableInit): a
+// prepared statement is bound once and may run many times, and each run must see the rows
+// as they are then, from the start.
 void TableBind(duckdb_v2_function_bind_info_handle info, duckdb_v2_table_function_bind_info_handle result,
                duckdb_v2_context_handle context, duckdb_v2_error_info_handle* err) {
   Guarded(err, [&] {
@@ -163,25 +195,7 @@ void TableBind(duckdb_v2_function_bind_info_handle info, duckdb_v2_table_functio
     Call([&](auto* e) { return duckdb_v2_function_bind_get_user_data(info, &user, e); });
     const auto& spec = *static_cast<TableSpec*>(user);
     auto batch = spec.rows(*spec.runtime, CurrentSession());
-    auto reader = arrow::RecordBatchReader::Make({batch}, batch->schema());
-    if (!reader.ok()) throw Error(ErrorCode::kExecutionError, reader.status().message());
-    auto scan = std::make_unique<TableScan>();
-    if (auto status = arrow::ExportRecordBatchReader(*reader, &scan->stream); !status.ok()) {
-      throw Error(ErrorCode::kExecutionError, status.message());
-    }
-    ArrowSchema schema{};
-    if (int code = scan->stream.get_schema(&scan->stream, &schema); code != 0) {
-      throw Error(ErrorCode::kExecutionError, "cannot read the table's schema");
-    }
-    try {
-      Call([&](auto* e) {
-        return duckdb_v2_arrow_importer_create(context, &schema, kChunkRows, scan->importer.out(), e);
-      });
-    } catch (...) {
-      schema.release(&schema);
-      throw;
-    }
-    schema.release(&schema);
+    auto scan = OpenScan(batch, context);
     Schema columns;
     Call([&](auto* e) { return duckdb_v2_arrow_importer_get_schema(scan->importer.get(), columns.out(), e); });
     idx_t count = 0;
@@ -192,8 +206,26 @@ void TableBind(duckdb_v2_function_bind_info_handle info, duckdb_v2_table_functio
       Call([&](auto* e) { return duckdb_v2_schema_get_field(columns.get(), i, &name, &type, e); });
       Call([&](auto* e) { return duckdb_v2_table_function_bind_add_result_column(result, &name, type, e); });
     }
-    duckdb_v2_opaque data{scan.release(), [](void* p) { delete static_cast<TableScan*>(p); }, nullptr};
+    // Execution runs outside the session's scope (results stream after the engine call
+    // returns, on DuckDB's threads): it reads the rows for the session that bound it, which
+    // outlives its statements.
+    duckdb_v2_opaque data{new TableBinding{CurrentSession()}, [](void* p) { delete static_cast<TableBinding*>(p); },
+                          nullptr};
     Call([&](auto* e) { return duckdb_v2_function_bind_set_bind_data(info, &data, e); });
+  });
+}
+
+void TableInit(duckdb_v2_table_function_init_global_info_handle info, duckdb_v2_context_handle context,
+               duckdb_v2_error_info_handle* err) {
+  Guarded(err, [&] {
+    void* user = nullptr;
+    Call([&](auto* e) { return duckdb_v2_table_function_init_global_get_user_data(info, &user, e); });
+    const auto& spec = *static_cast<TableSpec*>(user);
+    void* bound = nullptr;
+    Call([&](auto* e) { return duckdb_v2_table_function_init_global_get_bind_data(info, &bound, e); });
+    auto scan = OpenScan(spec.rows(*spec.runtime, static_cast<TableBinding*>(bound)->session), context);
+    duckdb_v2_opaque state{scan.release(), [](void* p) { delete static_cast<TableScan*>(p); }, nullptr};
+    Call([&](auto* e) { return duckdb_v2_table_function_init_global_set_global_state(info, &state, e); });
   });
 }
 
@@ -201,7 +233,7 @@ void TableExec(duckdb_v2_table_function_exec_info_handle info, duckdb_v2_context
                duckdb_v2_error_info_handle* err) {
   Guarded(err, [&] {
     void* data = nullptr;
-    Call([&](auto* e) { return duckdb_v2_table_function_exec_get_bind_data(info, &data, e); });
+    Call([&](auto* e) { return duckdb_v2_table_function_exec_get_global_state(info, &data, e); });
     auto& scan = *static_cast<TableScan*>(data);
     duckdb_v2_data_chunk_handle output = nullptr;
     Call([&](auto* e) { return duckdb_v2_table_function_exec_get_output_chunk(info, &output, e); });
@@ -254,6 +286,7 @@ void RegisterTable(duckdb_v2_connection_handle connection, duckdb_v2_factory_han
   duckdb_v2_opaque user{spec.release(), [](void* p) { delete static_cast<TableSpec*>(p); }, nullptr};
   Call([&](auto* e) { return duckdb_v2_table_function_set_user_data(function.get(), &user, e); });
   Call([&](auto* e) { return duckdb_v2_table_function_set_bind_callback(function.get(), TableBind, e); });
+  Call([&](auto* e) { return duckdb_v2_table_function_set_init_global_callback(function.get(), TableInit, e); });
   Call([&](auto* e) { return duckdb_v2_table_function_set_exec_callback(function.get(), TableExec, e); });
   Call([&](auto* e) { return duckdb_v2_connection_register_table_function(connection, function.get(), e); });
 }

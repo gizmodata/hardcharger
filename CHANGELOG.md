@@ -45,6 +45,13 @@ own changelog in `python/CHANGELOG.md`.
   ingest was slower than TLS); bulk ingest inserts on many DuckDB threads in one
   transaction, keeping the upload's row order. See docs/benchmarks.md.
 
+### Fixed
+
+- The server's table functions (`hardcharger_settings()`, `hardcharger_sessions()`, ...) in a
+  prepared statement returned no rows from the second execution on, and every execution showed
+  the rows of the moment it was prepared: the rows were built when the statement was bound.
+  They are now read again for each execution.
+
 ### Documentation
 
 - README: the client examples use the Hardcharger drivers, `adbc-driver-hardcharger`
