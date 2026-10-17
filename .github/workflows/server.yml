@@ -1,0 +1,185 @@
+# The Hardcharger server: builds and tests on every push and pull request; on a v* tag,
+# also publishes the container image (ghcr.io, private) and the GitHub Release. The
+# tests run on the tagged commit itself, in this workflow, before anything is published.
+name: server
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore: ["python/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and test (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+          - name: macos-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          ssh-key: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
+
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build libssl-dev
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja openssl@3
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
+      # DuckDB and Arrow take a while to build; cache them by their pins and by the
+      # compiler, so a runner image's toolchain change rebuilds instead of breaking.
+      - name: Dependency cache key
+        id: deps
+        run: |
+          pins=$(cat third_party/warp-sql/cpp/scripts/build-duckdb.sh third_party/warp-sql/cpp/scripts/build-arrow.sh | shasum -a 256 | cut -c1-16)
+          compiler=$(c++ --version | head -1 | shasum -a 256 | cut -c1-12)
+          echo "key=deps-${{ matrix.name }}-$pins-$compiler" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        id: cache
+        with:
+          path: |
+            server/.deps/duckdb-install
+            server/.deps/arrow-install
+          key: ${{ steps.deps.outputs.key }}
+      - name: Build DuckDB and Arrow
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: server/scripts/build-deps.sh
+
+      - name: Build the server
+        run: |
+          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build server/build
+          server/build/hardcharger --version
+          server/build/hardcharger --print-duckdb-version
+
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Hardcharger tests
+        working-directory: server/tests
+        run: |
+          uv venv .venv --python 3.14
+          uv pip install --python .venv/bin/python -r pyproject.toml
+          .venv/bin/python -m pytest -q
+      - name: Warp SQL conformance suite
+        working-directory: third_party/warp-sql/conformance
+        env:
+          WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build/hardcharger
+          WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_PASSWORD
+          WARP_SQL_TEST_SERVER_USERNAME: warp
+          HARDCHARGER_USERNAME: warp
+          HARDCHARGER_PRINT_QUERIES: "false"
+        run: |
+          uv venv .venv --python 3.14
+          uv pip install --python .venv/bin/python -e .
+          .venv/bin/python -m pytest -q
+
+      - name: Package
+        run: |
+          stage="dist/hardcharger-${{ matrix.name }}"
+          cmake --install server/build --prefix "$stage"
+          mkdir -p "$stage/lib"
+          cp -P server/.deps/duckdb-install/lib/libduckdb.* "$stage/lib/"
+          cp LICENSE CHANGELOG.md "$stage/"
+          "$stage/bin/hardcharger" --version
+          tar -C dist -czf "dist/hardcharger-${{ matrix.name }}.tar.gz" "hardcharger-${{ matrix.name }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hardcharger-${{ matrix.name }}
+          path: dist/hardcharger-${{ matrix.name }}.tar.gz
+
+  image:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: hardcharger-linux-*
+          path: artifacts
+          merge-multiple: true
+      - name: Unpack
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            tar -C dist -xzf "artifacts/hardcharger-linux-$arch.tar.gz"
+          done
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (and on a tag, push) the image
+        run: |
+          tags="--tag ghcr.io/gizmodata/hardcharger:dev"
+          push=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            tags="--tag ghcr.io/gizmodata/hardcharger:$version --tag ghcr.io/gizmodata/hardcharger:latest"
+            push="--push"
+          fi
+          docker buildx build --platform linux/amd64,linux/arm64 --file docker/Dockerfile $tags $push .
+      - name: Smoke-test the image
+        run: |
+          docker buildx build --platform linux/amd64 --file docker/Dockerfile --tag hc-smoke --load .
+          docker run --rm hc-smoke --version
+          docker run -d --name hc -e HARDCHARGER_PASSWORD=smoke -p 31337:31337 -p 31338:31338 hc-smoke
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:31337/warp
+          docker logs hc
+          docker rm -f hc
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: hardcharger-*
+          path: dist
+          merge-multiple: true
+      - name: Check the tag matches the server version
+        run: |
+          version=$(sed -n 's/^project(hardcharger VERSION \([0-9.]*\).*/\1/p' server/CMakeLists.txt)
+          [ -n "$version" ] || { echo "no version in server/CMakeLists.txt"; exit 1; }
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != v$version"; exit 1; }
+      - name: Extract this version's CHANGELOG section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          [ -s release-notes.md ] || { echo "no CHANGELOG section for $version"; exit 1; }
+      - uses: softprops/action-gh-release@v3
+        with:
+          body_path: release-notes.md
+          files: dist/*
