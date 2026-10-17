@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Builds Hardcharger's pinned dependencies (DuckDB 2.0 and Arrow C++, IPC only) into
-# server/.deps, with the warp-sql scripts, and replxx (the client's line editor). DuckDB gets one patch first: the binder hook
-# access control needs to check views with their owner's rights (patch-duckdb.cmake).
+# server/.deps, with the warp-sql scripts, and replxx (the client's line editor). DuckDB
+# is patched first, with every scripts/patch-duckdb*.cmake in name order
+# (patch-duckdb.cmake: the binder hook access control needs to check views with their
+# owner's rights), and built with the extensions in scripts/duckdb-extensions.cmake, whose
+# libraries build-extension-deps.sh builds.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WARP="$HERE/../third_party/warp-sql/cpp/scripts"
@@ -20,8 +23,24 @@ if [ ! -d "$SRC/.git" ]; then
 fi
 git -C "$SRC" fetch --quiet --tags origin
 git -C "$SRC" checkout --quiet "$COMMIT"
-cmake -DDUCKDB_SOURCE_DIR="$SRC" -P "$HERE/scripts/patch-duckdb.cmake"
-"$WARP/build-duckdb.sh"
+patches=("$HERE"/scripts/patch-duckdb*.cmake)
+[ -f "${patches[0]}" ] || { echo "no scripts/patch-duckdb*.cmake" >&2; exit 1; }
+for patch in "${patches[@]}"; do
+  cmake -DDUCKDB_SOURCE_DIR="$SRC" -P "$patch"
+done
+
+# The out-of-tree extensions are pinned where DuckDB's own build of this commit pins them.
+EXTENSIONS="$HERE/scripts/duckdb-extensions.cmake"
+for name in httpfs ducklake postgres_scanner; do
+  ours=$(awk -v n="$name" '$0 ~ "duckdb_extension_load\\(" n "$" {f = 1} f && /GIT_TAG/ {print $2; exit}' "$EXTENSIONS")
+  theirs=$(awk '/GIT_TAG/ {print $2; exit}' "$SRC/.github/config/extensions/$name.cmake")
+  [ -n "$ours" ] && [ "$ours" = "$theirs" ] \
+    || { echo "$name: duckdb-extensions.cmake pins '$ours', DuckDB $COMMIT pins '$theirs'" >&2; exit 1; }
+done
+"$HERE/scripts/build-extension-deps.sh"
+# (The environment variable is ':'-separated, like PATH.)
+export CMAKE_PREFIX_PATH="$WARPSQL_DEPS_DIR/roaring-install:$WARPSQL_DEPS_DIR/libpq-install:$WARPSQL_DEPS_DIR/curl-install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+WARPSQL_DUCKDB_EXTENSION_CONFIGS="$EXTENSIONS" "$WARP/build-duckdb.sh"
 # DuckDB's internal headers, which the access-control module compiles against, include
 # a few of DuckDB's vendored libraries' headers that its install leaves out.
 THIRD_PARTY="$WARPSQL_DEPS_DIR/duckdb-install/include/duckdb_third_party"

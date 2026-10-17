@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Prints the CI cache key for server/.deps (the DuckDB, Arrow and replxx installs build-deps.sh
 # makes): the platform, the exact toolchain that compiled them, and a hash of every
-# recipe they come from. A runner image that moves to a new compiler, or any change to
+# recipe they come from (the build scripts, every DuckDB patch, and the built-in
+# extensions' list and pins). A runner image that moves to a new compiler, or any change to
 # a recipe, gets a new key and a cold build instead of a cache whose objects or pins no
 # longer match.
 #
@@ -22,7 +23,9 @@ recipes=(
   third_party/warp-sql/cpp/scripts/build-duckdb.sh
   server/scripts/build-deps.sh
   server/scripts/build-replxx.sh
-  server/scripts/patch-duckdb.cmake
+  server/scripts/build-extension-deps.sh
+  server/scripts/duckdb-extensions.cmake
+  server/scripts/patch-duckdb*.cmake
   server/scripts/ci-deps-key.sh
   "$@"
 )

@@ -45,6 +45,13 @@ own changelog in `python/CHANGELOG.md`.
 - `session_ended` errors carry their `reason` (Warp SQL §5.6): `killed` (KILL SESSION),
   `principal_dropped` (the user was dropped or disabled), `token_expired` (a scoped token
   revoked or expired), `credentials_changed` (anything else access control revoked).
+- DuckDB's httpfs, ducklake, postgres scanner, autocomplete and tpch extensions are built
+  into the server, next to parquet, json and icu, at the commits DuckDB's own build of
+  the pinned DuckDB uses. They work offline and in air-gapped deployments, with no
+  extension repository (the pinned DuckDB is a pre-release, which the repository may not
+  serve), and their libraries (libcurl, libpq, CRoaring) are linked in statically. `LOAD`
+  of a built-in extension is a no-op; `INSTALL` is DuckDB's download, so offline it fails
+  and is not needed.
 
 ### Changed
 
@@ -58,6 +65,9 @@ own changelog in `python/CHANGELOG.md`.
   of plaintext to the same speed on one AWS connection); uploads are read in 1 MiB pieces (plaintext
   ingest was slower than TLS); bulk ingest inserts on many DuckDB threads in one
   transaction, keeping the upload's row order. See docs/benchmarks.md.
+- The server no longer installs or loads DuckDB extensions by itself
+  (`autoinstall_known_extensions` and `autoload_known_extensions` are off): the ones it
+  needs are built in, and any other takes an explicit `INSTALL` and `LOAD`.
 - The Linux release tarballs (and the container image made from them) are built in
   manylinux_2_28 for a glibc 2.28 baseline, with OpenSSL 3 linked in statically: they run
   on any Linux distribution with glibc 2.28 or newer (Oracle/RHEL/Rocky/Alma Linux 8,

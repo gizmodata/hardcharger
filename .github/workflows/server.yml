@@ -287,10 +287,11 @@ jobs:
           GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
             git submodule update --init --depth 1
           rm -f "$key"
+      # flex and bison: the libpq built into DuckDB's postgres scanner.
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build libssl-dev
+          sudo apt-get install -y --no-install-recommends ninja-build libssl-dev flex bison
       # The same dependency cache as the linux-amd64 build (same key).
       - name: Dependency cache key
         id: deps

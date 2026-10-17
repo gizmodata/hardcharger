@@ -48,6 +48,11 @@ warpduckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
   if (config.allow_unsigned_extensions) {
     options.instance_options.emplace_back("allow_unsigned_extensions", "true");
   }
+  // The extensions the server needs are built in (scripts/duckdb-extensions.cmake) and
+  // loaded at startup. Nothing else is downloaded or loaded behind a statement's back:
+  // another extension takes an explicit INSTALL and LOAD.
+  options.instance_options.emplace_back("autoinstall_known_extensions", "false");
+  options.instance_options.emplace_back("autoload_known_extensions", "false");
   if (!config.storage_version.empty()) {
     options.attach_options.emplace_back("STORAGE_VERSION", config.storage_version);
   }

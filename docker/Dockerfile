@@ -1,8 +1,9 @@
 # The Hardcharger server image, with the command-line client (`hardcharger`) on PATH too.
 # Built by .github/workflows/server.yml from the release tarballs (one per architecture),
 # so the image runs exactly the tested binaries. The tarballs are built for glibc 2.28
-# with OpenSSL linked in statically, so the image needs no libraries beyond glibc and
-# libstdc++, only the CA certificates and time zones.
+# with OpenSSL (and the built-in DuckDB extensions' libraries) linked in statically, so
+# the image needs no libraries beyond glibc and libstdc++, only the CA certificates and
+# time zones.
 FROM ubuntu:24.04
 
 ARG TARGETARCH

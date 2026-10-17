@@ -42,9 +42,10 @@ give_back() {
 }
 trap give_back EXIT
 
-# Build tools only: nothing here becomes a runtime dependency.
+# Build tools only (flex and bison for PostgreSQL's libpq): nothing here becomes a
+# runtime dependency.
 dnf install -y -q --setopt=install_weak_deps=False \
-  ninja-build perl-IPC-Cmd perl-Pod-Html perl-Time-Piece >/dev/null
+  ninja-build perl-IPC-Cmd perl-Pod-Html perl-Time-Piece flex bison >/dev/null
 
 build_deps() {
   if [ ! -f "$OPENSSL_PREFIX/.openssl-$OPENSSL_VERSION.stamp" ]; then
@@ -65,7 +66,9 @@ build_deps() {
   # (uriparser, lz4, zstd) is built with _GNU_SOURCE, as g++ builds all C++ anyway;
   # build-deps.sh then finds Arrow built and goes on to DuckDB, whose C is untouched.
   CFLAGS="${CFLAGS:-} -D_GNU_SOURCE" WARPSQL_DEPS_DIR="$DEPS" third_party/warp-sql/cpp/scripts/build-arrow.sh
-  server/scripts/build-deps.sh
+  # The extensions' libraries (libcurl for httpfs, libpq for the postgres scanner) link
+  # the static OpenSSL too.
+  OPENSSL_ROOT_DIR="$OPENSSL_PREFIX" server/scripts/build-deps.sh
   # CMake installs libraries into lib64 on RPM-based systems; the server's CMake, its
   # packaging and the Debian/macOS builds all use lib.
   local prefix

@@ -118,13 +118,11 @@ def test_the_store_lives_in_its_own_schema_and_no_session_can_reach_it(launcher,
     assert "rbac_store" not in catalogs, catalogs
 
 
-def test_the_store_extension_installs_on_a_fresh_host(launcher, store, tmp_path):
-    # A host that never ran DuckDB: the private store instance must find the published
-    # postgres extension for this DuckDB's version string (a source build would ask
-    # for a -dev version nobody publishes).
+def test_the_store_needs_no_extension_download_on_a_fresh_host(launcher, store, tmp_path):
+    # A host that never ran DuckDB: the private store instance uses the postgres scanner
+    # built into the server, so it works offline and downloads nothing.
     home = tmp_path / "fresh-home"
     home.mkdir()
     server = start_rbac_server(launcher=launcher, store_uri=store.new_database(), env={"HOME": str(home)})
     expect_allowed(client=server.admin(), sql="CREATE ROLE installed")
-    assert list(home.glob(".duckdb/extensions/v2.0.0-alpha*/*/postgres_scanner.duckdb_extension")), \
-        list(home.rglob("*"))[:20]
+    assert not list(home.rglob("*.duckdb_extension*")), list(home.rglob("*"))[:20]
