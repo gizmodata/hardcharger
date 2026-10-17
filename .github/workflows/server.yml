@@ -474,6 +474,8 @@ jobs:
             log_path=${{ github.workspace }}/tsan-reports/tsan
           HARDCHARGER_TEST_BINARY: ${{ github.workspace }}/server/build-tsan/hardcharger-server
           HARDCHARGER_TEST_UNIT_BINARY: ${{ github.workspace }}/server/build-tsan/hardcharger-unit-tests
+          HARDCHARGER_TEST_CLIENT_BINARY: ${{ github.workspace }}/server/build-tsan/hardcharger
+          HARDCHARGER_TEST_CLIENT_TESTS_BINARY: ${{ github.workspace }}/server/build-tsan/hardcharger-client-tests
         run: |
           mkdir -p "$TSAN_REPORTS"
           uv venv .venv --python 3.14
