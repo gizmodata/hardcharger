@@ -606,9 +606,35 @@ jobs:
           docker logs hc
           docker rm -f hc
 
+  # SHA256SUMS for the release tarballs (and any zip), in `sha256sum -c` format: made and
+  # checked on every run, so the release (and the one-line installer, which verifies
+  # downloads against it) never meets it for the first time on a tag.
+  checksums:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: hardcharger-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          assets=(*.tar.gz *.zip)
+          [ ${#assets[@]} -ge 3 ] || { echo "expected the release tarballs, found: ${assets[*]}"; exit 1; }
+          sha256sum "${assets[@]}" > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hardcharger-SHA256SUMS
+          path: dist/SHA256SUMS
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, portable, sanitize, tsan, image]
+    needs: [build, portable, sanitize, tsan, image, checksums]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -633,7 +659,31 @@ jobs:
             found { print }
           ' CHANGELOG.md > release-notes.md
           [ -s release-notes.md ] || { echo "no CHANGELOG section for $version"; exit 1; }
+      # The checksums cover exactly the assets that are about to be published.
+      - name: Check SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum -c SHA256SUMS
+          shopt -s nullglob
+          for asset in *.tar.gz *.zip; do
+            grep -q "  $asset\$" SHA256SUMS || { echo "$asset is not in SHA256SUMS"; exit 1; }
+          done
       - uses: softprops/action-gh-release@v3
         with:
           body_path: release-notes.md
           files: dist/*
+      # The installer's repository runs its end-to-end install tests against each release.
+      # Separate and last: a failed dispatch shows on the run but never undoes the release.
+      # HARDCHARGER_INSTALL_DISPATCH_TOKEN: a fine-grained token for
+      # gizmodata/hardcharger-install only, with Contents: read and write (what
+      # repository_dispatch requires).
+      - name: Tell hardcharger-install about the release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.HARDCHARGER_INSTALL_DISPATCH_TOKEN }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::HARDCHARGER_INSTALL_DISPATCH_TOKEN is not set"; exit 1; }
+          version="${GITHUB_REF_NAME#v}"
+          gh api --method POST repos/gizmodata/hardcharger-install/dispatches \
+            -f event_type=hardcharger-released -f "client_payload[version]=$version"
+          echo "hardcharger-released $version sent to gizmodata/hardcharger-install"
