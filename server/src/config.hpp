@@ -125,7 +125,8 @@ struct Config {
 };
 
 // What the command line asked for besides configuration.
-enum class Action { kServe, kHelp, kVersion, kPrintDuckDBVersion, kVerifyAuditLog, kVerifyTls };
+enum class Action { kServe, kHelp, kVersion, kPrintDuckDBVersion, kVerifyAuditLog, kVerifyTls,
+                    kPrintOptionsJson };
 
 struct Loaded {
   Config config;
@@ -143,5 +144,9 @@ struct Loaded {
 Loaded LoadConfig(int argc, char** argv);
 
 std::string Usage();
+
+// Every option as JSON (name, group, flag, env, yaml_key, type, default, description), for
+// generated documentation: --print-options-json.
+std::string OptionsJson();
 
 }  // namespace hardcharger

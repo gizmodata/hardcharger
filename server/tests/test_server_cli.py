@@ -30,3 +30,34 @@ def test_version_flag_prints_server_version():
     assert out.stdout.startswith("Hardcharger "), out.stdout
     version = out.stdout.split()[1]
     assert version.count(".") == 2 and version.split(".")[0].isdigit(), out.stdout
+
+
+def test_print_options_json_lists_every_option_of_help():
+    """The documentation's configuration reference is generated from this output."""
+    import json
+    import re
+
+    out = run("--print-options-json")
+    assert out.returncode == 0, out.stderr
+    document = json.loads(out.stdout)
+    options = document["options"]
+    assert document["config_file"] == {"flag": "--config", "env": "HARDCHARGER_CONFIG"}
+    assert document["precedence"] == ["flag", "env", "file", "default"]
+
+    help_text = run("--help").stdout
+    help_flags = re.findall(r"^  (--[a-z0-9-]+)\n      .*\[(HARDCHARGER_[A-Z0-9_]+)\]$", help_text, flags=re.M)
+    assert [(o["flag"], o["env"]) for o in options] == help_flags
+
+    for option in options:
+        assert option["group"], option
+        assert option["description"], option
+        assert option["type"] in {"string", "integer", "boolean", "list"}, option
+        assert option["yaml_key"] == option["name"], option
+        assert option["flag"] == "--" + option["name"].replace("_", "-"), option
+        assert option["env"] == "HARDCHARGER_" + option["name"].upper(), option
+    by_name = {o["name"]: o for o in options}
+    assert by_name["port"]["default"] == "31337"
+    assert by_name["read_only"]["default"] == "false"
+    assert by_name["token_authorized_emails"]["default"] == "*"
+    assert by_name["admin_username"]["default"] == "hardcharger"
+    assert by_name["admin_password"]["default"] == ""

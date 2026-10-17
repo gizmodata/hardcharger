@@ -23,6 +23,7 @@ struct Option {
   Kind kind;
   std::string help;
   std::function<void(Config&, const std::string&)> set;
+  std::function<std::string(const Config&)> get;  // the value as a flag would spell it
 };
 
 std::string Flag(const std::string& name) {
@@ -59,6 +60,12 @@ int64_t ParseInt(const std::string& name, const std::string& value) {
   throw std::invalid_argument(name + " must be a whole number, not '" + value + "'");
 }
 
+std::string JoinList(const std::vector<std::string>& items) {
+  std::string out;
+  for (const auto& item : items) out += (out.empty() ? "" : ",") + item;
+  return out;
+}
+
 std::vector<std::string> SplitList(const std::string& value) {
   std::vector<std::string> out;
   std::stringstream stream(value);
@@ -72,10 +79,15 @@ std::vector<std::string> SplitList(const std::string& value) {
 }
 
 // clang-format off
-#define TEXT(field) [](Config& c, const std::string& v) { c.field = v; }
-#define NUMBER(field) [](Config& c, const std::string& v) { c.field = ParseInt(#field, v); }
-#define FLAG(field) [](Config& c, const std::string& v) { c.field = ParseBool(#field, v); }
-#define LIST(field) [](Config& c, const std::string& v) { c.field = SplitList(v); }
+// Each expands to the option's setter and its getter.
+#define TEXT(field) [](Config& c, const std::string& v) { c.field = v; }, \
+                    [](const Config& c) { return c.field; }
+#define NUMBER(field) [](Config& c, const std::string& v) { c.field = ParseInt(#field, v); }, \
+                      [](const Config& c) { return std::to_string(c.field); }
+#define FLAG(field) [](Config& c, const std::string& v) { c.field = ParseBool(#field, v); }, \
+                    [](const Config& c) { return std::string(c.field ? "true" : "false"); }
+#define LIST(field) [](Config& c, const std::string& v) { c.field = SplitList(v); }, \
+                    [](const Config& c) { return JoinList(c.field); }
 // clang-format on
 
 const std::vector<Option>& Options() {
@@ -264,6 +276,29 @@ const std::vector<Option>& Options() {
   return options;
 }
 
+// The reference's sections: each group starts at the named option and runs until the next
+// group's first option, in Options()' order.
+const std::vector<std::pair<std::string, std::string>>& Groups() {
+  static const std::vector<std::pair<std::string, std::string>> groups = {
+      {"host", "Listener"},
+      {"tls_cert", "TLS"},
+      {"database", "Database"},
+      {"admin_username", "Authentication"},
+      {"oauth_client_id", "Browser sign-in"},
+      {"max_sessions", "Sessions"},
+      {"query_timeout_seconds", "Statements"},
+      {"rbac_store_uri", "Access control"},
+      {"max_concurrent_statements", "Statement queue"},
+      {"block_sensitive_paths", "Guards"},
+      {"cluster_id", "Cluster"},
+      {"log_level", "Operations"},
+      {"enable_instrumentation", "Instrumentation"},
+      {"enable_catalog_logging", "Catalog logging"},
+      {"enable_metrics", "Metrics"},
+  };
+  return groups;
+}
+
 #undef TEXT
 #undef NUMBER
 #undef FLAG
@@ -410,6 +445,7 @@ Loaded LoadConfig(int argc, char** argv) {
     if (arg == "--help" || arg == "-h") { loaded.action = Action::kHelp; return loaded; }
     if (arg == "--version") { loaded.action = Action::kVersion; return loaded; }
     if (arg == "--print-duckdb-version") { loaded.action = Action::kPrintDuckDBVersion; return loaded; }
+    if (arg == "--print-options-json") { loaded.action = Action::kPrintOptionsJson; return loaded; }
     // A self-check of outbound HTTPS (the trust store a container really has).
     if (arg == "--verify-tls" || arg.starts_with("--verify-tls=")) {
       loaded.action = Action::kVerifyTls;
@@ -501,8 +537,38 @@ std::string Usage() {
   out << "\n  --verify-tls URL  (fetch URL over HTTPS with the system's CA bundle, then exit)\n"
       << "  --verify-audit-log FILE [--verify-audit-log-partial]\n"
       << "      check the access-control audit records in a JSON log and exit (0: intact)\n"
+      << "  --print-options-json  (every option, with its flag, variable, YAML key and default, as JSON)\n"
       << "  --version, --print-duckdb-version, --help\n";
   return out.str();
+}
+
+std::string OptionsJson() {
+  static const std::map<Kind, std::string> kTypes = {
+      {Kind::kString, "string"}, {Kind::kInt, "integer"}, {Kind::kBool, "boolean"}, {Kind::kList, "list"}};
+  const Config defaults;
+  boost::json::array options;
+  std::string group;
+  for (const auto& option : Options()) {
+    for (const auto& [first, name] : Groups()) {
+      if (first == option.name) group = name;
+    }
+    options.push_back(boost::json::object{
+        {"name", option.name},
+        {"group", group},
+        {"flag", Flag(option.name)},
+        {"env", EnvName(option.name)},
+        {"yaml_key", option.name},
+        {"type", kTypes.at(option.kind)},
+        {"default", option.get(defaults)},
+        {"description", option.help},
+    });
+  }
+  boost::json::object out{
+      {"config_file", boost::json::object{{"flag", "--config"}, {"env", "HARDCHARGER_CONFIG"}}},
+      {"precedence", boost::json::array{"flag", "env", "file", "default"}},
+      {"options", options},
+  };
+  return boost::json::serialize(out) + "\n";
 }
 
 }  // namespace hardcharger
