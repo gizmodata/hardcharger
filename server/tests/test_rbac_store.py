@@ -9,6 +9,7 @@ import urllib.parse
 
 import pytest
 
+from conftest import home_env
 from rbac import WarpError, expect_allowed, rbac_env, start_rbac_server
 
 
@@ -125,7 +126,7 @@ def test_the_store_needs_no_extension_download_on_a_fresh_host(launcher, store, 
     # built into the server, so it works offline and downloads nothing.
     home = tmp_path / "fresh-home"
     home.mkdir()
-    server = start_rbac_server(launcher=launcher, store_uri=store.new_database(), env={"HOME": str(home)})
+    server = start_rbac_server(launcher=launcher, store_uri=store.new_database(), env=home_env(home=home))
     expect_allowed(client=server.admin(), sql="CREATE ROLE installed")
     assert not list(home.rglob("*.duckdb_extension*")), list(home.rglob("*"))[:20]
 

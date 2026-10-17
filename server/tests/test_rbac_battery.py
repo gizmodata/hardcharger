@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+from conftest import protected_system_file
 from rbac import BLOCKED, WarpError, expect_allowed, expect_blocked, start_rbac_server
 
 MANAGED = ("_hardcharger_instr", "_hardcharger_logs")
@@ -144,5 +145,5 @@ def test_system_privileges_decide_for_store_users_not_the_admin_guard(server, ad
     assert BLOCKED not in raised.value.detail and "No files found" in raised.value.detail, raised.value
     # The sensitive path guard holds for everyone, privilege or not.
     with pytest.raises(WarpError) as raised:
-        reader.run(sql="SELECT * FROM read_csv('/etc/shadow')")
+        reader.run(sql=f"SELECT * FROM read_csv('{protected_system_file(posix='/etc/shadow')}')")
     assert "blocked access to" in raised.value.detail, raised.value

@@ -16,12 +16,11 @@ file is never listed, and passes either way. A path an admin computes at run tim
 admin command guard fails closed).
 """
 
-import os
 import sys
 
 import pytest
 
-from conftest import run_unit_tests
+from conftest import protected_system_file, run_unit_tests
 
 # The 5 1.x cases, plus each platform's own: Windows has no /proc (its device namespace,
 # credential stores and path spellings instead); elsewhere every file: URL form.
@@ -56,9 +55,7 @@ def admin(module_launcher, guard_dir):
     return server.admin()
 
 
-# A system file every host has that the guard always protects.
-SYSTEM_ACCOUNTS_FILE = (f"{os.environ.get('SystemRoot', 'C:/Windows')}/System32/config/SAM"
-                        if sys.platform == "win32" else "/etc/passwd")
+SYSTEM_ACCOUNTS_FILE = protected_system_file(posix="/etc/passwd")
 
 
 def blocked(problem: dict) -> None:

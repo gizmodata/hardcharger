@@ -52,6 +52,23 @@ else:
     POPEN_FLAGS = {}
 
 
+def protected_system_file(posix: str) -> str:
+    """A system file the sensitive-path guard always protects: `posix` there, the
+    account database (SAM) on Windows."""
+    if sys.platform == "win32":
+        return f"{os.environ.get('SystemRoot', 'C:/Windows')}/System32/config/SAM"
+    return posix
+
+
+def home_env(home: pathlib.Path) -> dict[str, str]:
+    """The environment that makes `home` a server's home directory ('~', DuckDB's
+    extensions and secrets): HOME, and on Windows USERPROFILE, which DuckDB reads there."""
+    env = {"HOME": str(home)}
+    if sys.platform == "win32":
+        env["USERPROFILE"] = str(home)
+    return env
+
+
 # Ports for the servers the tests start. The OS's "any free port" (bind to 0) is free only
 # until the socket closes, and the server binds it a moment later: under pytest-xdist
 # another worker's bind to 0 can be handed the same port in between. So each worker
