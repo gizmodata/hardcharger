@@ -610,8 +610,11 @@ jobs:
           done
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
+      # ghcr.io: on a tag, and on a push to main (the development image, `:main` and
+      # `:sha-<short>`, which the drivers' live tests pull; never Docker Hub, never
+      # `latest` or a version tag).
       - uses: docker/login-action@v4
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -631,10 +634,12 @@ jobs:
         run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' https://hub.docker.com/v2/repositories/gizmodata/hardcharger/)
           [ "$code" = 404 ] || { echo "docker.io/gizmodata/hardcharger answers $code without credentials: it is public"; exit 1; }
-      - name: Build (and on a tag, push) the image
+      - name: Build (and on a tag or a push to main, push) the image
         run: |
           args=(--tag ghcr.io/gizmodata/hardcharger:dev)
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
+            args=(--tag ghcr.io/gizmodata/hardcharger:main --tag "ghcr.io/gizmodata/hardcharger:sha-${GITHUB_SHA::7}" --push)
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF_NAME#v}"
             args=()
             for repo in ghcr.io/gizmodata/hardcharger docker.io/gizmodata/hardcharger; do

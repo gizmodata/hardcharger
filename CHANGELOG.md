@@ -54,6 +54,8 @@ own changelog in `python/CHANGELOG.md`.
   and is not needed.
 - Each GitHub Release carries a `SHA256SUMS` file (`sha256sum -c` format) for its
   tarballs.
+- `ghcr.io/gizmodata/hardcharger:main` and `:sha-<commit>`: the development image, pushed
+  for each commit on `main` that passes every CI gate (ghcr.io only).
 
 ### Changed
 

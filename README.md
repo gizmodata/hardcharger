@@ -125,6 +125,10 @@ Images are multi-architecture (`linux/amd64`, `linux/arm64`) and published to bo
 `ghcr.io/gizmodata/hardcharger` and `docker.io/gizmodata/hardcharger`. Port 31337 speaks
 Warp SQL; 31338 answers `/health`.
 
+`ghcr.io/gizmodata/hardcharger:main` (and `:sha-<commit>`) is the development build: the
+newest commit on `main` that passed every CI gate, built exactly as a release. Use
+`:latest` or a version tag for anything else.
+
 ### Python
 
 ```bash
