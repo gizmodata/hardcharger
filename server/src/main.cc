@@ -269,6 +269,7 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMar
 }  // namespace
 
 int main(int argc, char** argv) {
+  warpsql::InitializeProcess();  // first: before anything uses OpenSSL
   hc::Loaded loaded;
   try {
     loaded = hc::LoadConfig(argc, argv);

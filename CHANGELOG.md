@@ -95,14 +95,22 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
-- (Warp SQL SDK) A server stopped with a request in flight no longer crashes; a client
-  that leaves before an unretained streamed result's first batch now cancels it; a
-  long-poll on a finished statement answers at once; dictionary-encoded parameters bind;
-  ingest turns null-typed columns into VARCHAR, converts day_time intervals and refuses
-  types DuckDB can't store; listing catalogs no longer opens every attached catalog;
-  parameter types and the ingest scan no longer destroy (or keep using) a type DuckDB
-  only lent them, which freed it twice and made `SELECT ?::VARIANT` advertise a null
-  parameter in release builds.
+- The server could crash while stopping: a thread finishing after OpenSSL's exit cleanup
+  touched freed state. OpenSSL no longer frees its global state at exit.
+- A NULL bound through an Arrow parameter keeps its Arrow column's type when DuckDB can't
+  infer the parameter's (`SELECT ? + 1`); LIST and interval Arrow parameters bind (an
+  interval with sub-microsecond precision is refused, not truncated); prepared
+  statements describe DECIMAL, UUID, LIST and INTERVAL parameters.
+- Opening a session with an unknown option says `unknown_option`.
+- Table schemas from metadata give PRECISION in decimal digits for every numeric type,
+  column comments (REMARKS) and defaults (`WARP:SQL:COLUMN_DEFAULT`; Hardcharger reports
+  them as `GIZMOSQL:COLUMN_DEFAULT`, the key GizmoSQL 1.x used).
+- (Warp SQL SDK) A server stopped with a request in flight no longer crashes;
+  dictionary-encoded parameters bind; ingest turns null-typed columns into VARCHAR,
+  converts day_time intervals and refuses types DuckDB can't store; parameter schemas
+  carry DuckDB's own Arrow types (VARIANT, GEOMETRY and UUID extensions); listing
+  catalogs no longer opens every attached catalog.
+- The `gizmosql_*()` table functions no longer destroy a column type DuckDB only lent them.
 
 ### Known gaps
 
@@ -121,6 +129,45 @@ own changelog in `python/CHANGELOG.md`.
 - VARIANT (and other struct or extension) Arrow parameters can't be bound yet.
 - `glob()` over a directory holding a protected file is refused, not filtered; a path an
   admin computes at run time is not checked (no file-system hook in the v2 C API).
+
+## [0.1.2] - 2026-10-17
+
+0.1.1 was tagged but never released: its release gate failed on a race in deleting a
+running write (fixed here). 0.1.2 carries everything listed for it.
+
+### Fixed
+
+- A use-after-free: prepared statements kept parameter types that DuckDB had lent
+  them, so closing a prepared statement or ending its session could crash the server or
+  corrupt its heap (found by the JDBC driver's tests). Bulk ingest freed borrowed column
+  types the same way. Both are fixed, and CI now runs the server tests and the
+  conformance suite on an AddressSanitizer build that gates every release.
+- Deleting a statement before the engine had said whether it writes could cancel a
+  write; such a delete is now settled once it does (a write finishes, a read stops).
+- A long poll on a finished statement answered only after its whole wait; it answers at
+  once.
+- A streamed query sent its Arrow schema only with its first batch, so an aggregate's
+  response stayed silent until the query ended and proxies' idle timeouts could cut it;
+  the schema now goes first.
+- A client that hung up while a query's stream waited for its next batch went unnoticed
+  until the query ended; the query is cancelled within a second. A statement that
+  changes data (`INSERT … RETURNING`) is never undone because its reader left or deleted
+  it: it runs to the end.
+- Finished statements stayed in their session forever; they are forgotten 10 minutes
+  after they finish (once any retained result has expired), or beyond 1,000 a session.
+- Prepared statements describe their result (`result_schema`, `result_kind`) without
+  running; executing a query for zero parameter rows returns no rows instead of a count.
+- Table schemas from metadata report nullability, precision and scale; the session
+  document follows SQL `USE`; a missing or existing table is SQLSTATE 42P01 / 42P07.
+
+### Added
+
+- `POST /warp/v1/sessions/{id}/cancel` stops whatever the session is running.
+- Primary and imported keys of every table in one metadata request.
+
+## [0.1.1] - 2026-10-17 [not released]
+
+See 0.1.2.
 
 ## [0.1.0] - 2026-10-17
 

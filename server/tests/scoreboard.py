@@ -125,7 +125,7 @@ updated. Nothing is skipped; a missing dependency fails its test.
   - server-side cases (all but the {client} that test the `gizmosql_client` binary): {server_cases}, of which
     {t[1]} pass ({100 * t[1] / server_cases:.0f}%) and {t[2]} fail.
 - **Scripts and driver suites ({len(scripts)} files, {s[0]} cases or checks):** {s[1]} passing, {s[2]} failing, {s[3]} not applicable, {s[4]} not yet.
-- Hardcharger's own tests (`test_server.py`, 27) and the Warp SQL conformance suite (76) pass too.
+- Hardcharger's own tests (`test_server.py`, 27) and the Warp SQL conformance suite (96) pass too.
 
 Ported files keep the 1.x file name (`test_x.cpp` → `test_x.py`); each docstring cites
 the 1.x file and lists what doesn't apply and why. 1.x cases that unit-tested an internal

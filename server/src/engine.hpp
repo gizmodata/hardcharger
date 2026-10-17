@@ -117,8 +117,10 @@ class Session : public warpduckdb::DuckDBSession {
   void FinishRunning();
 
  protected:
-  // GizmoSQL 1.x drivers read a column's default from this key.
-  std::string ColumnDefaultMetadataKey() const override { return "GIZMOSQL:COLUMN_DEFAULT"; }
+  // Warp SQL's key, and the one GizmoSQL 1.x clients read.
+  std::vector<std::string> ColumnDefaultMetadataKeys() const override {
+    return {"WARP:SQL:COLUMN_DEFAULT", "GIZMOSQL:COLUMN_DEFAULT"};
+  }
 
  private:
   void CheckAlive() const;
