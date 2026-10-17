@@ -190,6 +190,21 @@ with no gRPC, Netty or protobuf: `jdbc:hardcharger://host[:port]` (port 31337 by
 the [Warp SQL JDBC driver](https://github.com/gizmodata/warp-sql-jdbc). Its README shows how
 to add it to DBeaver and other BI tools.
 
+### JavaScript
+
+```js
+import { connect } from "@gizmodata/warp-sql";
+
+const conn = await connect({ url: "warp://localhost:31337?tls=false", username: "hardcharger", password: "change-me" });
+const table = await conn.query("SELECT 42 AS answer, ? AS greeting", ["hello"]);
+console.log(table.toArray().map((row) => row.toJSON()));
+await conn.close();
+```
+
+[`@gizmodata/warp-sql`](https://github.com/gizmodata/warp-sql-js) speaks Warp SQL over plain `fetch`
+and returns Arrow JS Tables or streams of record batches, in Node, browsers (allow the page's
+origin with `--cors-origins`), Deno, Bun and Cloudflare Workers. No native code, no gRPC.
+
 ### Plain HTTP
 
 Warp SQL is plain HTTP, so `curl` works:
