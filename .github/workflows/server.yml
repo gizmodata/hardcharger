@@ -290,8 +290,9 @@ jobs:
           DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
         run: |
           set -euo pipefail
-          token=$(jq -n --arg u "$DOCKERHUB_USERNAME" --arg p "$DOCKERHUB_PASSWORD" '{username: $u, password: $p}' |
-            curl -sf -H 'Content-Type: application/json' -d @- https://hub.docker.com/v2/users/login | jq -r .token)
+          # /v2/auth/token takes a personal or an organization access token.
+          token=$(jq -n --arg u "$DOCKERHUB_USERNAME" --arg p "$DOCKERHUB_PASSWORD" '{identifier: $u, secret: $p}' |
+            curl -sf -H 'Content-Type: application/json' -d @- https://hub.docker.com/v2/auth/token | jq -r .access_token)
           [ -n "$token" ] && [ "$token" != null ] || { echo "Docker Hub sign-in failed"; exit 1; }
           echo "::add-mask::$token"
           private=$(curl -sf -H "Authorization: Bearer $token" \
