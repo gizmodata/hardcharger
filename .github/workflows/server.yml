@@ -235,6 +235,7 @@ jobs:
           # Two self-contained binaries (HARDCHARGER_STATIC: DuckDB and every other
           # dependency linked in, as GizmoSQL's), the licence and the changelog; nothing
           # else, never the tests.
+          export LC_ALL=C  # the checks below compare sorted globs
           stage="dist/hardcharger-${{ matrix.name }}"
           mkdir -p "$stage/bin"
           install -m 755 server/build/hardcharger-server server/build/hardcharger "$stage/bin/"
