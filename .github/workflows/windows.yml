@@ -198,8 +198,14 @@ jobs:
           "$pgbin/pg_ctl.exe" -D "$tmp/pg" -o "-p 55433" -l "$tmp/pg.log" -w start
           PGPASSWORD=hardcharger "$pgbin/createdb.exe" -h 127.0.0.1 -p 55433 -U hardcharger hardcharger
 
+      # Its cache key from the two test projects only: scanning the whole workspace for
+      # lock files once failed on a file in a build tree (EPERM).
       - uses: astral-sh/setup-uv@v10.3.0
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
+        with:
+          cache-dependency-glob: |
+            server/tests/pyproject.toml
+            third_party/warp-sql/conformance/pyproject.toml
       # Everything, access control and the client included, on the one build, the one that
       # ships. Deselected by marker, visibly: the DuckLake suites (Docker's PostgreSQL and
       # S3 containers, which Windows runners can't run; as on macOS) and the client's
