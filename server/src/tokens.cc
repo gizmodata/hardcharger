@@ -170,10 +170,11 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
     return principal;
   }
   if (const auto* scope = principal.claims.if_contains("scope_id")) {
+    if (!scope->is_string()) throw invalid("a valid access token is required");
+    // (After this insertion `scope` may dangle: it is not used again.)
     principal.claims["expires_at"] = std::chrono::duration_cast<std::chrono::seconds>(
                                          decoded.get_expires_at().time_since_epoch())
                                          .count();
-    if (!scope->is_string()) throw invalid("a valid access token is required");
   }
   access_->CheckToken(IdentityOf(principal));
   return principal;
