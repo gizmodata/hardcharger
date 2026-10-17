@@ -114,8 +114,8 @@ try (Connection connection = DriverManager.getConnection("jdbc:warp://localhost:
 }
 ```
 
-The [Warp SQL JDBC driver](https://github.com/gizmodata/warp-sql-jdbc) is pure Java (17+), with no
-native code and no gRPC.
+The [Warp SQL JDBC driver](https://github.com/gizmodata/warp-sql-jdbc) is a single jar for Java 17+,
+with no gRPC, Netty or protobuf.
 
 ### Plain HTTP
 
