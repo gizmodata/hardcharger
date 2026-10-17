@@ -1191,6 +1191,10 @@ void RbacSessionState::QueryEnd(dd::ClientContext&, dd::optional_ptr<dd::ErrorDa
   if (auto engine = engine_.lock()) ApplyOwnership(*engine, principal_, pending);
 }
 
+bool IsAllowedTableFunction(const std::string& name_lower) {
+  return AllowedTableFunctions().contains(name_lower);
+}
+
 void ApplyOwnership(RbacEngine& engine, const Principal& principal,
                     const std::vector<PendingOwnership>& changes) {
   for (const auto& p : changes) {

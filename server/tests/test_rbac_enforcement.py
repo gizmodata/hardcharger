@@ -232,8 +232,13 @@ def test_table_functions_are_allow_listed(joe):
     expect_blocked(client=joe, sql="COPY (SELECT * FROM orders) TO 's3://bucket/out.parquet'",
                    why="files and URLs")
     expect_blocked(client=joe, sql="SELECT * FROM duckdb_secrets()", why="duckdb_secrets()")
+    # Refused before DuckDB binds them: binding a table function runs it (a remote
+    # database's scan connects; an unknown name autoloads an extension).
     expect_blocked(client=joe, sql="SELECT * FROM test_vector_types(NULL::INT)",
-                   why="is not available under access control")
+                   why="the table function test_vector_types")
+    expect_blocked(client=joe, sql="SELECT * FROM sqlite_scan('/etc/hosts', 't')",
+                   why="the table function sqlite_scan")
+    expect_blocked(client=joe, sql="CALL pragma_metadata_info()", why="the table function pragma_metadata_info")
     expect_allowed(client=joe, sql="SELECT * FROM generate_series(1, 3)")
     expect_allowed(client=joe, sql="SELECT * FROM duckdb_tables()")
 
@@ -466,3 +471,12 @@ def test_a_concurrent_grant_reaches_a_session_at_once(server, admin):
     expect_allowed(client=gus, sql="SELECT * FROM secrets")
     expect_allowed(client=admin, sql="REVOKE secret_reader FROM gus")
     expect_blocked(client=gus, sql="SELECT * FROM secrets", why=SECRET)
+
+
+def test_table_macros_are_checked_as_what_they_read(server, admin, joe):
+    # A table macro is no table function of its own: DuckDB expands it, and the check
+    # sees what it reads, with the caller's rights.
+    expect_allowed(client=admin, sql="CREATE OR REPLACE MACRO orders_since(n) AS TABLE SELECT * FROM orders WHERE id >= n")
+    expect_allowed(client=admin, sql="CREATE OR REPLACE MACRO all_secrets() AS TABLE SELECT * FROM secrets")
+    assert expect_allowed(client=joe, sql="SELECT * FROM orders_since(2)").num_rows >= 1
+    expect_blocked(client=joe, sql="SELECT * FROM all_secrets()", why=SECRET)

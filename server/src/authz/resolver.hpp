@@ -29,6 +29,9 @@ class SessionObjectResolver : public ObjectResolver {
   arrow::Status CheckMaskBinding(const ResolvedObject& table, const std::string& column,
                                  const MaskingPolicyRecord& policy) override;
 
+  // Does `name` (as a FROM clause names it) find a table macro, as DuckDB would?
+  bool IsTableMacro(const QualifiedName& name);
+
  private:
   duckdb::Connection& connection_;
 };

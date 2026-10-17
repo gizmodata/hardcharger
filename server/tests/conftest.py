@@ -72,7 +72,7 @@ class Launcher:
         self.started: list[Running] = []
 
     def start(self, args: list[str] | None = None, env: dict[str, str] | None = None,
-              password: str | None = None, expect_up: bool = True) -> Running:
+              password: str | None = None, expect_up: bool = True, startup_seconds: float = 20) -> Running:
         if not BINARY.exists():
             pytest.fail(reason=f"{BINARY} is missing: build the server first")
         port = free_port()
@@ -89,7 +89,7 @@ class Launcher:
                           process=process, log_path=log_path)
         self.started.append(running)
         if expect_up:
-            deadline = time.monotonic() + 20
+            deadline = time.monotonic() + startup_seconds
             while time.monotonic() < deadline:
                 if process.poll() is not None:
                     pytest.fail(reason=f"server exited: {running.log()}")

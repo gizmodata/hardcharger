@@ -69,8 +69,8 @@ def test_grants_apply_to_postgres_tables(server, store):
     expect_blocked(client=user, sql="SELECT s FROM pgc.public.rbac_pg_t", why="no SELECT on column(s) s")
     # The pass-through functions run SQL in PostgreSQL directly: refused.
     expect_blocked(client=user, sql="SELECT * FROM postgres_query('pgc', 'SELECT s FROM public.rbac_pg_t')",
-                   why="postgres_query is not available under access control")
+                   why="the table function postgres_query")
     expect_blocked(client=user, sql="CALL postgres_execute('pgc', 'DROP TABLE public.rbac_pg_t')",
-                   why="postgres_execute is not available under access control")
+                   why="the table function postgres_execute")
     expect_allowed(client=admin, sql="SELECT * FROM pgc.public.rbac_pg_t")  # still there
     expect_allowed(client=admin, sql="DETACH pgc")

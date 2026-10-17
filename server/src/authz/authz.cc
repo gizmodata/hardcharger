@@ -585,6 +585,12 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
       }
     };
   }
+  // Table functions are bound (run, in effect) before the plan check sees them: refuse
+  // the ones it would refuse first. A table macro is expanded and checked as what it is.
+  SessionObjectResolver functions(*dd::capiv2::Convert(connection_));
+  const TableFunctionCallback table_function_allowed = [&](const std::vector<std::string>& parts) {
+    return IsAllowedTableFunction(parts.back()) || functions.IsTableMacro(QualifiedName{parts});
+  };
   for (auto& handle : statements) {
     auto& statement = *dd::capiv2::Convert(handle.get());
     // SHOW GRANTS parses as a SELECT and RESET ROLE as a SET: in a batch they would
@@ -594,7 +600,7 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
                   "Hardcharger access control: access-control statements run on their own, "
                   "not in a batch with other statements");
     }
-    if (auto category = GatedCategory(statement, permitted, named_table)) {
+    if (auto category = GatedCategory(statement, permitted, named_table, table_function_allowed)) {
       if (auto privilege = SystemPrivilegeForGatedCategory(*category)) {
         throw Error(ErrorCode::kPermissionDenied,
                     "Hardcharger blocked " + *category + ", which needs the " +

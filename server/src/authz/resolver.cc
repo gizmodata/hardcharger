@@ -97,6 +97,21 @@ arrow::Result<ResolvedObject> SessionObjectResolver::ResolveObject(const Qualifi
   return resolved;
 }
 
+bool SessionObjectResolver::IsTableMacro(const QualifiedName& name) {
+  bool found = false;
+  auto status = InTransaction(connection_, [&]() -> arrow::Status {
+    dd::vector<dd::Identifier> path;
+    for (const auto& part : name.parts) path.emplace_back(part);
+    auto entry = dd::Catalog::GetEntry(
+        *connection_.context,
+        dd::EntryLookupInfo(dd::CatalogType::TABLE_MACRO_ENTRY, dd::QualifiedName::FromPath(path)),
+        dd::OnEntryNotFound::RETURN_NULL);
+    found = entry && entry->type == dd::CatalogType::TABLE_MACRO_ENTRY;
+    return arrow::Status::OK();
+  });
+  return status.ok() && found;
+}
+
 arrow::Result<ObjectPath> SessionObjectResolver::ResolveSchema(const QualifiedName& name) {
   ObjectPath resolved;
   bool found = false;

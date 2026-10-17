@@ -138,8 +138,10 @@ bool LooksLikePath(const std::string& name) {
 class Walker {
  public:
   Walker(const std::function<bool(const std::string&)>& permitted,
-         const NamedTableCallback& named_table)
-      : permitted_(permitted), named_table_(named_table) {}
+         const NamedTableCallback& named_table, const TableFunctionCallback& table_function_allowed)
+      : permitted_(permitted),
+        named_table_(named_table),
+        table_function_allowed_(table_function_allowed) {}
 
   void NamedTable(const dd::QualifiedName& name) {
     if (!named_table_ || name.Path().empty()) return;
@@ -282,17 +284,23 @@ class Walker {
       Flag(name + "()");
     } else if (ddb::IsFileReadingTableFunction(name)) {
       Flag(name + "() (files and URLs)");
+    } else if (name == "checkpoint" || name == "force_checkpoint") {
+      Flag("CHECKPOINT");
+    } else if (table_function_allowed_ && !table_function_allowed_({name})) {
+      Flag("the table function " + name);
     }
   }
 
   const std::function<bool(const std::string&)>& permitted_;
   const NamedTableCallback& named_table_;
+  const TableFunctionCallback& table_function_allowed_;
 };
 
 std::optional<std::string> Classify(dd::SQLStatement& statement,
                                     const std::function<bool(const std::string&)>& permitted,
-                                    const NamedTableCallback& named_table) {
-  Walker walker(permitted, named_table);
+                                    const NamedTableCallback& named_table,
+                                    const TableFunctionCallback& table_function_allowed) {
+  Walker walker(permitted, named_table, table_function_allowed);
   auto gate = [&](std::string category) -> std::optional<std::string> {
     if (permitted && permitted(category)) return std::nullopt;
     return category;
@@ -300,13 +308,13 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
   switch (statement.type) {
     case dd::StatementType::PREPARE_STATEMENT: {
       auto& prepare = statement.Cast<dd::PrepareStatement>();
-      return prepare.statement ? Classify(*prepare.statement, permitted, named_table)
+      return prepare.statement ? Classify(*prepare.statement, permitted, named_table, table_function_allowed)
                                : std::nullopt;
     }
     case dd::StatementType::EXPLAIN_STATEMENT: {
       // EXPLAIN ANALYZE runs what it wraps.
       auto& explain = statement.Cast<dd::ExplainStatement>();
-      return explain.stmt ? Classify(*explain.stmt, permitted, named_table) : std::nullopt;
+      return explain.stmt ? Classify(*explain.stmt, permitted, named_table, table_function_allowed) : std::nullopt;
     }
     case dd::StatementType::ATTACH_STATEMENT:
       return gate("ATTACH");
@@ -378,6 +386,9 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
           return gate(name + "()");
         }
         if (ddb::IsFileReadingTableFunction(name)) return gate(name + "() (files and URLs)");
+        if (table_function_allowed && !table_function_allowed({name})) {
+          return gate("the table function " + name);
+        }
       }
       return std::nullopt;
     }
@@ -436,8 +447,9 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
 
 std::optional<std::string> GatedCategory(dd::SQLStatement& statement,
                                          const std::function<bool(const std::string&)>& permitted,
-                                         const NamedTableCallback& named_table) {
-  return Classify(statement, permitted, named_table);
+                                         const NamedTableCallback& named_table,
+                                         const TableFunctionCallback& table_function_allowed) {
+  return Classify(statement, permitted, named_table, table_function_allowed);
 }
 
 }  // namespace hardcharger::authz

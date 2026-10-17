@@ -308,5 +308,8 @@ class RbacServer:
 
 def start_rbac_server(launcher, store_uri: str, env: dict[str, str] | None = None,
                       args: list[str] | None = None) -> RbacServer:
-    running = launcher.start(args=args, env={**rbac_env(store_uri=store_uri), **(env or {})})
+    # Opening the store (PostgreSQL, the postgres extension) comes first: allow for a
+    # busy machine.
+    running = launcher.start(args=args, env={**rbac_env(store_uri=store_uri), **(env or {})},
+                             startup_seconds=60)
     return RbacServer(running=running, store_uri=store_uri)

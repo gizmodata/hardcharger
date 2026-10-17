@@ -135,6 +135,10 @@ class RbacSessionState : public duckdb::ClientContextState {
 // the administrator's.
 std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(const std::string& category);
 
+// Is the table function one anyone may call under access control (it reads no table
+// and no file)? `name_lower`: the function's name, lower case.
+bool IsAllowedTableFunction(const std::string& name_lower);
+
 // Record what a statement that ran successfully created or dropped.
 void ApplyOwnership(RbacEngine& engine, const Principal& principal,
                     const std::vector<PendingOwnership>& changes);

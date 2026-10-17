@@ -28,9 +28,16 @@ namespace hardcharger::authz {
 // `named_table`, if set, is called with the name parts of every table or view the
 // statement names (including those DuckDB binds only to describe them, as DESCRIBE and
 // CREATE VIEW do, whose plans the plan check never sees); it may throw to refuse.
+//
+// `table_function_allowed`, if set, says whether a table function that is not one of
+// the families above may be called (by its name parts); binding one already runs it
+// (a remote database's scan connects, an unknown name autoloads an extension), so one
+// that is not allowed is refused here.
 using NamedTableCallback = std::function<void(const std::vector<std::string>&)>;
+using TableFunctionCallback = std::function<bool(const std::vector<std::string>&)>;
 std::optional<std::string> GatedCategory(duckdb::SQLStatement& statement,
                                          const std::function<bool(const std::string&)>& permitted,
-                                         const NamedTableCallback& named_table = nullptr);
+                                         const NamedTableCallback& named_table = nullptr,
+                                         const TableFunctionCallback& table_function_allowed = nullptr);
 
 }  // namespace hardcharger::authz
