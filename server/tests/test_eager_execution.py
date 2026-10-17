@@ -172,6 +172,11 @@ def test_side_effect_statements_execute_without_fetching(session):
     assert session.scalar(sql="SELECT current_setting('search_path')") != "eager_side_effects"
 
 
+# Serial: it streams 20 million rows while a second execution waits behind them, and on
+# a runner shared with other tests' servers (2 CPUs, six pytest-xdist workers) the wait
+# outlasted the server's synchronous answer, so the second came back as a statement
+# document instead of a stream.
+@pytest.mark.serial
 def test_rebind_while_streaming_waits_its_turn(session):
     # 20 million rows (160 MB): more than the server buffers ahead of a reader that has
     # stopped (32 MB plus the encoding window), so the first statement is still producing
