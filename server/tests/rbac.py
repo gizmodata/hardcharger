@@ -87,6 +87,7 @@ class WarpError(Exception):
     code: str
     detail: str
     sqlstate: str | None = None
+    reason: str | None = None  # session_ended's (Warp SQL §5.6)
 
     def __str__(self) -> str:
         return f"{self.status} {self.code}: {self.detail}"
@@ -98,7 +99,7 @@ def raise_problem(response: httpx.Response) -> None:
     except ValueError:
         raise WarpError(status=response.status_code, code="?", detail=response.text) from None
     raise WarpError(status=response.status_code, code=body.get("code", "?"),
-                    detail=body.get("detail", ""), sqlstate=body.get("sqlstate"))
+                    detail=body.get("detail", ""), sqlstate=body.get("sqlstate"), reason=body.get("reason"))
 
 
 def arrow_bytes(table: pa.Table) -> bytes:
@@ -207,6 +208,29 @@ class Client:
         response = self.http.post(url=f"{self.url}/ingest", params={"table": table, "mode": mode, **params},
                                   content=arrow_bytes(table=rows),
                                   headers=self.headers(**{"Content-Type": ARROW_STREAM}))
+        if response.status_code >= 400:
+            raise_problem(response=response)
+        return response.json()["rows_ingested"]
+
+    def open_ingest(self, table: str, mode: str = "create_append") -> str:
+        """Opens a partitioned ingest (Warp SQL §8.3) and returns its URL."""
+        response = self.http.post(url=f"{self.url}/ingests", json={"table": table, "mode": mode},
+                                  headers=self.headers())
+        if response.status_code >= 400:
+            raise_problem(response=response)
+        return f"{self.url}/ingests/{response.json()['ingest_id']}"
+
+    def ingest_in_parts(self, table: str, rows: pa.Table, mode: str = "create_append", parts: int = 2) -> int:
+        """A partitioned ingest: the rows split into `parts` parts, sent one after another."""
+        url = self.open_ingest(table=table, mode=mode)
+        size = -(-rows.num_rows // parts)
+        for part in range(parts):
+            response = self.http.post(url=f"{url}/parts/{part}",
+                                      content=arrow_bytes(table=rows.slice(offset=part * size, length=size)),
+                                      headers=self.headers(**{"Content-Type": ARROW_STREAM}))
+            if response.status_code >= 400:
+                raise_problem(response=response)
+        response = self.http.post(url=f"{url}/commit", json={"parts": parts}, headers=self.headers())
         if response.status_code >= 400:
             raise_problem(response=response)
         return response.json()["rows_ingested"]

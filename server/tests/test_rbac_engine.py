@@ -167,6 +167,8 @@ def test_disabled_and_dropped_users_lose_everything(world):
     with pytest.raises(WarpError) as ended:
         joe.run(sql="SELECT 1")
     assert ended.value.code in ("invalid_token", "session_ended"), str(ended.value)
+    if ended.value.code == "session_ended":
+        assert ended.value.reason == "principal_dropped", ended.value  # Warp SQL §5.6
     with pytest.raises(WarpError) as refused:
         world.server.password_token(user="joe", password="pw")
     assert refused.value.code == "invalid_credentials"

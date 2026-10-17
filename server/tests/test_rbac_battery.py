@@ -119,7 +119,7 @@ def test_the_admin_kills_a_store_users_session(server, admin, joe):
     expect_allowed(client=admin, sql=f"KILL SESSION '{session_id}'")
     with pytest.raises(WarpError) as raised:
         joe.run(sql="SELECT 1")
-    assert raised.value.code == "session_ended", raised.value
+    assert raised.value.code == "session_ended" and raised.value.reason == "killed", raised.value
     other = server.user(name="joe", password="joe-Secret-1")
     with pytest.raises(WarpError) as raised:
         other.run(sql=f"KILL SESSION '{admin.run(sql='SELECT HARDCHARGER_CURRENT_SESSION() AS s').to_pylist()[0]['s']}'")

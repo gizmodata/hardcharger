@@ -366,7 +366,7 @@ def test_a_killed_session_is_reported_and_reopened(server, tmp_path):
     result = run(server, "--csv", "--no-header", "--command", script)
     stderr = strip_ansi(result.stderr)
     assert result.stdout == "before\nreopened\n", (result.stdout, stderr)
-    assert "Warning: the server ended this session; a new session is open." in stderr, stderr
+    assert "Warning: the server ended this session (killed); a new session is open." in stderr, stderr
     assert "Error: This session has been killed by an administrator" in stderr, stderr
     assert result.returncode == 1  # the statement the kill caught failed
 
@@ -676,9 +676,10 @@ def test_external_auth_signs_in_through_the_browser(launcher, idp, tmp_path):
 
 
 def test_result_partitions_read_a_large_result_in_order(server):
-    # Over four connections at once, the rows come out exactly as over one.
+    # Over four connections at once (or the default eight), the rows come out exactly as over
+    # one.
     sql = "SELECT i, 'row ' || i AS label FROM range(1000000) t(i) ORDER BY i DESC"
-    one = run(server, "--csv", "--no-header", "--command", sql)
+    one = run(server, "--csv", "--no-header", "--result-partitions", "1", "--command", sql)
     split = run(server, "--csv", "--no-header", "--result-partitions", "4", "--command", sql)
     assert one.returncode == 0 and split.returncode == 0, (one.stderr, split.stderr)
     lines = split.stdout.splitlines()
@@ -687,6 +688,8 @@ def test_result_partitions_read_a_large_result_in_order(server):
     env = client_env(server=server, HARDCHARGER_RESULT_PARTITIONS="3")
     from_env = run(server, "--csv", "--no-header", "--command", sql, env=env)
     assert from_env.returncode == 0 and from_env.stdout == one.stdout, from_env.stderr
+    default = run(server, "--csv", "--no-header", "--command", sql)
+    assert default.returncode == 0 and default.stdout == one.stdout, default.stderr
 
 
 def test_result_partitions_report_a_failure(server):

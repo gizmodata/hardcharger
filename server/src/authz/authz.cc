@@ -475,10 +475,16 @@ void SessionGuard::Detach() {
 void SessionGuard::RequireLive() const {
   std::lock_guard lock(mutex_);
   if (ended_) {
-    throw Error(ErrorCode::kSessionEnded,
-                "Hardcharger access control ended this session (" + *ended_ + ")");
+    // Spec §5.6's reason for what access control saw.
+    namespace why = warpsql::session_ended_reason;
+    const char* reason = why::kCredentialsChanged;  // password changed, the tenant's catalogs changed
+    if (*ended_ == "user dropped" || *ended_ == "user disabled") reason = why::kPrincipalDropped;
+    if (*ended_ == "scoped token revoked or expired") reason = why::kTokenExpired;
+    throw Error::SessionEnded(reason, "Hardcharger access control ended this session (" + *ended_ + ")");
   }
-  if (connection_ == nullptr) throw Error(ErrorCode::kSessionEnded, "the session has ended");
+  if (connection_ == nullptr) {
+    throw Error::SessionEnded(warpsql::session_ended_reason::kKilled, "the session has ended");
+  }
 }
 
 void SessionGuard::End(const std::string& reason) {

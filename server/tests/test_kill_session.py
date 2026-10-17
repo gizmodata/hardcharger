@@ -59,6 +59,7 @@ def test_killed_session_must_reauthenticate(server):
     problem = victim.error(sql="SELECT 1")
     assert problem["status"] == 401 and problem["code"] == "session_ended", problem
     assert "session has been killed" in problem["detail"] and "re-authenticate" in problem["detail"], problem
+    assert problem["reason"] == "killed", problem  # Warp SQL §5.6
     # Killing it again: it is gone.
     assert "not found" in server.admin().error(sql=f"KILL SESSION '{victim_id}'")["detail"]
 

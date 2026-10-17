@@ -72,9 +72,9 @@ int64_t NowMicros() {
 }
 
 Error KilledError() {
-  return Error(ErrorCode::kSessionEnded,
-               "This session has been killed by an administrator (reason: killed). Sign in again and open a new "
-               "session to re-authenticate.");
+  return Error::SessionEnded(warpsql::session_ended_reason::kKilled,
+                             "This session has been killed by an administrator (reason: killed). Sign in again "
+                             "and open a new session to re-authenticate.");
 }
 
 // JDBC-style metadata views (getIndexInfo, view DDL).
