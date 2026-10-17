@@ -12,6 +12,52 @@ set(HARDCHARGER_DEPS "${CMAKE_CURRENT_SOURCE_DIR}/.deps" CACHE PATH "Pinned depe
 set(WARPSQL_ARROW_PREFIX "${HARDCHARGER_DEPS}/arrow-install" CACHE PATH "" FORCE)
 set(WARPSQL_DUCKDB_PREFIX "${HARDCHARGER_DEPS}/duckdb-install" CACHE PATH "" FORCE)
 
+# HARDCHARGER_STATIC (the release builds): DuckDB, with its built-in extensions, links in
+# statically, as Arrow, Boost, yaml-cpp, replxx and (with OPENSSL_USE_STATIC_LIBS) OpenSSL
+# always do. The binaries then need only the C/C++ runtime and, on macOS, OS frameworks.
+# Otherwise they link libduckdb's shared library (the sanitizer and developer builds).
+option(HARDCHARGER_STATIC "Link DuckDB statically (release builds)" OFF)
+if(HARDCHARGER_STATIC)
+  # DuckDB's archives: the extensions first, then its vendored libraries and the engine,
+  # with the libraries the extensions link (scripts/build-extension-deps.sh; deps-duckdb.sh
+  # keeps copies in the install's lib/static-deps). The engine
+  # and the extensions refer to each other, so GNU ld scans the group until it settles.
+  # DuckDB's generated loader registers every built-in extension before main() (in a
+  # shared libduckdb, the library does that itself); as an interface source, it is
+  # compiled into every program that links DuckDB.
+  set(_duckdb_lib "${WARPSQL_DUCKDB_PREFIX}/lib")
+  file(GLOB _duckdb_extensions "${_duckdb_lib}/lib*_extension.a")
+  file(GLOB _duckdb_vendored "${_duckdb_lib}/libduckdb_*.a")
+  list(REMOVE_ITEM _duckdb_vendored "${_duckdb_lib}/libduckdb_static.a")
+  set(_duckdb_archives ${_duckdb_extensions} ${_duckdb_vendored} "${_duckdb_lib}/libduckdb_static.a"
+      "${_duckdb_lib}/static-deps/libpq.a" "${_duckdb_lib}/static-deps/libroaring.a")
+  if(NOT APPLE)
+    list(APPEND _duckdb_archives "${_duckdb_lib}/static-deps/libcurl.a")
+  endif()
+  foreach(_archive IN LISTS _duckdb_archives)
+    if(NOT EXISTS "${_archive}")
+      message(FATAL_ERROR "HARDCHARGER_STATIC: ${_archive} is missing (scripts/build-deps.sh duckdb)")
+    endif()
+  endforeach()
+  find_package(OpenSSL 3 REQUIRED)
+  find_package(Threads REQUIRED)
+  add_library(hardcharger_duckdb INTERFACE)
+  target_sources(hardcharger_duckdb INTERFACE
+                 "${WARPSQL_DUCKDB_PREFIX}/share/duckdb-static/duckdb_static_extension_loader.c"
+                 "${WARPSQL_DUCKDB_PREFIX}/share/duckdb-static/static_extension_autoregister.cpp")
+  target_include_directories(hardcharger_duckdb INTERFACE "${WARPSQL_DUCKDB_PREFIX}/include")
+  if(APPLE)
+    # ld64 resolves archives in any order. libcurl, CoreFoundation and Security are the OS's.
+    target_link_libraries(hardcharger_duckdb INTERFACE ${_duckdb_archives} OpenSSL::SSL OpenSSL::Crypto
+                          curl "-framework CoreFoundation" "-framework Security" Threads::Threads)
+  else()
+    target_link_libraries(hardcharger_duckdb INTERFACE "$<LINK_GROUP:RESCAN,${_duckdb_archives}>"
+                          OpenSSL::SSL OpenSSL::Crypto Threads::Threads ${CMAKE_DL_LIBS})
+  endif()
+  # warp-sql links DuckDB through DUCKDB_LIBRARY; find_library leaves a set value alone.
+  set(DUCKDB_LIBRARY hardcharger_duckdb CACHE STRING "DuckDB, statically" FORCE)
+endif()
+
 # The Warp SQL server SDK and its DuckDB backend, and its client library (for the
 # command-line client). Its own tests (warpsql-client-tests) build on request only.
 set(WARPSQL_BUILD_TESTS ON)
@@ -96,7 +142,9 @@ target_link_libraries(hardcharger_core PUBLIC warpsql_duckdb OpenSSL::Crypto jwt
 target_compile_options(hardcharger_core PRIVATE -Wall -Wextra)
 
 function(hardcharger_rpath target)
-  if(APPLE)
+  if(HARDCHARGER_STATIC)
+    return()  # nothing to find at run time
+  elseif(APPLE)
     set_target_properties(${target} PROPERTIES BUILD_RPATH "${WARPSQL_DUCKDB_PREFIX}/lib"
                                                INSTALL_RPATH "@executable_path/../lib")
   else()

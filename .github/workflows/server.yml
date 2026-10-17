@@ -147,10 +147,11 @@ jobs:
         run: |
           # (warpsql-client-tests, the Warp SQL client library's tests, builds on request.)
           if [ "$RUNNER_OS" = Linux ]; then
-            server/scripts/in-manylinux.sh server server/build
+            server/scripts/in-manylinux.sh server server/build -DHARDCHARGER_STATIC=ON
             server/scripts/in-manylinux.sh build server/build --target warpsql-client-tests
           else
             cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                  -DHARDCHARGER_STATIC=ON \
                   -DOPENSSL_ROOT_DIR="$PWD/server/.deps/openssl-install" -DOPENSSL_USE_STATIC_LIBS=TRUE \
                   -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
             cmake --build server/build
@@ -231,13 +232,15 @@ jobs:
 
       - name: Package
         run: |
+          # Two self-contained binaries (HARDCHARGER_STATIC: DuckDB and every other
+          # dependency linked in, as GizmoSQL's), the licence and the changelog; nothing
+          # else, never the tests.
           stage="dist/hardcharger-${{ matrix.name }}"
-          cmake --install server/build --prefix "$stage"
-          # Only the server and the client ship, never the tests.
-          test "$(cd "$stage/bin" && printf '%s ' *)" = "hardcharger hardcharger-server "
-          mkdir -p "$stage/lib"
-          cp -P server/.deps/duckdb-install/lib/libduckdb.* "$stage/lib/"
+          mkdir -p "$stage/bin"
+          install -m 755 server/build/hardcharger-server server/build/hardcharger "$stage/bin/"
           cp LICENSE CHANGELOG.md "$stage/"
+          test "$(cd "$stage" && printf '%s ' *)" = "CHANGELOG.md LICENSE bin "
+          test "$(cd "$stage/bin" && printf '%s ' *)" = "hardcharger hardcharger-server "
           "$stage/bin/hardcharger-server" --version
           "$stage/bin/hardcharger" --version
           tar -C dist -czf "dist/hardcharger-${{ matrix.name }}.tar.gz" "hardcharger-${{ matrix.name }}"
@@ -252,10 +255,10 @@ jobs:
             echo "the baseline check passed $libc, which needs a newer glibc"; exit 1
           fi
           stage="dist/hardcharger-${{ matrix.name }}"
-          server/scripts/check-glibc-baseline.sh "$stage"/bin/* "$stage"/lib/*
+          server/scripts/check-glibc-baseline.sh "$stage"/bin/*
       # Nothing shipped may link a library a user's machine may not have: on Linux only
-      # glibc's own, the GCC runtime and the tarball's libduckdb (readelf NEEDED); on
-      # macOS only /usr/lib, /System and the tarball's own lib/ (otool -L), never Homebrew.
+      # glibc's own and the GCC runtime (readelf NEEDED), no RPATH/RUNPATH; on macOS only
+      # the OS's /usr/lib and /System/Library/Frameworks (otool -L), no LC_RPATH.
       # The check is first shown to fail on a runner binary that links more (Linux: curl,
       # libcurl; macOS: Homebrew's psql, its libpq and OpenSSL).
       - name: Check the shipped libraries
@@ -265,7 +268,7 @@ jobs:
             echo "the library check passed $probe, which links more than the system's"; exit 1
           fi
           stage="dist/hardcharger-${{ matrix.name }}"
-          server/scripts/check-shipped-libs.sh "$stage"/bin/* "$stage"/lib/*
+          server/scripts/check-shipped-libs.sh "$stage"/bin/*
       # The macOS tarball on the runner (the Linux ones go to Oracle Linux 8 in `portable`):
       # it starts, verifies TLS with the system's CA bundle, reads HTTPS inside DuckDB and
       # answers a query through the Warp SQL endpoints and its client.

@@ -48,6 +48,21 @@ THIRD_PARTY="$WARPSQL_DEPS_DIR/duckdb-install/include/duckdb_third_party"
 rm -rf "$THIRD_PARTY" && mkdir -p "$THIRD_PARTY"
 cp -R "$SRC/third_party/fmt/include/fmt" "$SRC/third_party/re2/re2" \
   "$SRC/third_party/fast_float/fast_float" "$THIRD_PARTY/"
+# For a static link (the release builds, server/CMakeLists.txt HARDCHARGER_STATIC):
+# DuckDB's generated loader, which registers every built-in extension through its
+# describe function, the file that calls it before main(), and the one archive the
+# install leaves out.
+BUILD="$WARPSQL_DEPS_DIR/duckdb-build"
+LOADER="$WARPSQL_DEPS_DIR/duckdb-install/share/duckdb-static"
+mkdir -p "$LOADER"
+cp "$BUILD/src/duckdb_static_extension_loader.c" "$SRC/extension/loader/static_extension_autoregister.cpp" "$LOADER/"
+cp "$BUILD/src/main/extension/local_extension_repository/libduckdb_local_extension_repository.a" \
+  "$WARPSQL_DEPS_DIR/duckdb-install/lib/"
+# The static libraries the extensions link, kept with the install (it is what CI caches).
+STATIC_DEPS="$WARPSQL_DEPS_DIR/duckdb-install/lib/static-deps"
+rm -rf "$STATIC_DEPS" && mkdir -p "$STATIC_DEPS"
+cp "$WARPSQL_DEPS_DIR/libpq-install/lib/libpq.a" "$WARPSQL_DEPS_DIR/roaring-install/lib/libroaring.a" "$STATIC_DEPS/"
+if [ -f "$WARPSQL_DEPS_DIR/curl-install/lib/libcurl.a" ]; then cp "$WARPSQL_DEPS_DIR/curl-install/lib/libcurl.a" "$STATIC_DEPS/"; fi
 grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_basetableref.cpp" \
   || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
 # CMake installs libraries into lib64 on RPM-based systems; the server's CMake uses lib.

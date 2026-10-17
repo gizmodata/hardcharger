@@ -67,8 +67,7 @@ build_server() {
   cmake --build "$build_dir"
   # The stats, and the server stopped so its pending writes reach the cache directory.
   if command -v sccache >/dev/null 2>&1; then sccache --show-stats || true; sccache --stop-server >/dev/null || true; fi
-  server/scripts/check-glibc-baseline.sh "$build_dir/hardcharger-server" "$build_dir/hardcharger" \
-    "$DEPS"/duckdb-install/lib/libduckdb.so
+  server/scripts/check-glibc-baseline.sh "$build_dir/hardcharger-server" "$build_dir/hardcharger"
 }
 
 case "$MODE" in
