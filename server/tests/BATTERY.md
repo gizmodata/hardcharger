@@ -8,7 +8,7 @@ updated. Nothing is skipped; a missing dependency fails its test.
 ## Totals
 
 - **59 C++ test files, 565 gtest cases:** 360 passing, 5 failing, 16 not applicable, 184 not yet.
-  - by file: 46 ported & passing, 3 ported & partly failing, 2 not applicable, 4 not yet, 4 passing except their not-applicable cases.
+  - by file: 46 ported & passing, 3 passing except their not-applicable cases, 1 partly ported (the rest not yet), 3 ported & partly failing, 2 not applicable, 4 not yet.
   - server-side cases (all but the 142 that test the `gizmosql_client` binary): 423, of which
     360 pass (85%) and 5 fail.
 - **Scripts and driver suites (12 files, 134 cases or checks):** 22 passing, 0 failing, 17 not applicable, 95 not yet.

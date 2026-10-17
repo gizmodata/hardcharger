@@ -107,6 +107,8 @@ files = len(rows)
 by = lambda entries, pred: sum(1 for e in entries if pred(e))
 f_pass = by(rows, lambda e: e[1] and e[2] == e[1]); f_fail = by(rows, lambda e: e[3] > 0)
 f_na = by(rows, lambda e: e[4] == e[1]); f_ny = by(rows, lambda e: e[5] == e[1] and e[1])
+f_pna = by(rows, lambda e: e[2] and e[3] == 0 and e[5] == 0 and e[4] and e[2] + e[4] == e[1])
+f_part = by(rows, lambda e: e[2] and e[3] == 0 and e[5] and e[5] < e[1])
 client = 115 + 18 + 5 + 4  # + the 4 CLI cases of test_instance_session_query_tags.cpp
 server_cases = t[0] - client
 doc = f"""# The GizmoSQL 1.x test battery on Hardcharger
@@ -119,7 +121,7 @@ updated. Nothing is skipped; a missing dependency fails its test.
 ## Totals
 
 - **59 C++ test files, {t[0]} gtest cases:** {t[1]} passing, {t[2]} failing, {t[3]} not applicable, {t[4]} not yet.
-  - by file: {f_pass} ported & passing, {f_fail} ported & partly failing, {f_na} not applicable, {f_ny} not yet{'' if f_pass + f_fail + f_na + f_ny == files else ', ' + str(files - f_pass - f_fail - f_na - f_ny) + ' passing except their not-applicable cases'}.
+  - by file: {f_pass} ported & passing, {f_pna} passing except their not-applicable cases, {f_part} partly ported (the rest not yet), {f_fail} ported & partly failing, {f_na} not applicable, {f_ny} not yet.
   - server-side cases (all but the {client} that test the `gizmosql_client` binary): {server_cases}, of which
     {t[1]} pass ({100 * t[1] / server_cases:.0f}%) and {t[2]} fail.
 - **Scripts and driver suites ({len(scripts)} files, {s[0]} cases or checks):** {s[1]} passing, {s[2]} failing, {s[3]} not applicable, {s[4]} not yet.
