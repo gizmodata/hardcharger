@@ -69,7 +69,7 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
 
   const std::string origin = std::string(config.use_tls ? "https://" : "http://") + config.host + ":" +
                              std::to_string(config.port);
-  const bool auth_attempted = config.auth_type_external || !config.username.empty();
+  const bool auth_attempted = config.auth_type_external || config.auth_type_mtls || !config.username.empty();
   // Turns the library's errors into what a person at the prompt can act on.
   auto friendly = [&](const wc::Error& e) -> arrow::Status {
     if (e.code() == "connection_failed") {
@@ -86,6 +86,9 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
         e.code() + (e.detail().empty() || e.detail() == e.code() ? std::string() : " (" + e.detail() + ")");
     if (e.code() == "invalid_credentials" || (e.status() == 401 && auth_attempted)) {
       return arrow::Status::IOError("Authentication failed for " + origin + ": " + refusal);
+    }
+    if (config.auth_type_mtls && e.status() == 401) {
+      return arrow::Status::IOError("Certificate sign-in to " + origin + " failed: " + e.detail());
     }
     if (e.status() == 401) {
       return arrow::Status::IOError("Connection to " + origin + " failed: " + refusal +
@@ -112,6 +115,8 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
       auto id_token = oauth.Authenticate(base);
       if (!id_token.ok()) return id_token.status();
       client->SignInWithToken(*id_token);
+    } else if (config.auth_type_mtls) {
+      client->SignInWithClientCertificate();
     } else if (!config.username.empty()) {
       client->SignInWithPassword(config.username, config.password);
     }
@@ -134,7 +139,9 @@ bool WarpConnection::Reopen(const wc::Error& error) {
   const bool ended = error.code() == "session_ended";
   if ((!lost && !ended) || !client_) return false;
   try {
-    if (ended && !config_.auth_type_external && !config_.username.empty()) {
+    if (ended && config_.auth_type_mtls) {
+      client_->SignInWithClientCertificate();
+    } else if (ended && !config_.auth_type_external && !config_.username.empty()) {
       client_->SignInWithPassword(config_.username, config_.password);
     }
     auto session = client_->CreateSession();

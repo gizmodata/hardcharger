@@ -9,6 +9,25 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Client certificates as identity (Warp SQL §4.4): with `mtls_ca_cert`, the
+  `client_certificate` grant signs a client in with its verified certificate and no
+  password. `mtls_identity_source` (`san_email`, the default; `san_uri`; `subject_cn`) says
+  where the identity comes from; a certificate with none or several values is refused.
+  `mtls_admin_identities` sign in as the administrator; under access control any other
+  identity must be an enabled store user (`CREATE USER "joe@example.com"`, no password
+  needed), and grants decide what it may do; without access control nothing else signs in.
+  The tokens carry RFC 8705's `cnf` (`x5t#S256`) and work only on connections presenting the
+  same certificate. `mtls_crl_file` refuses revoked certificates at the handshake, is reloaded
+  when the file changes (looked at every 5 s), and reaches open connections at their next
+  request. `mtls_require_client_cert` (default true) and `mtls_require_identity_match`
+  (default false: a password or token sign-in over a certificate must be for its identity).
+  Certificate sign-ins, allowed and refused, are audit records (`kind: authentication`,
+  `method: client_certificate`, the identity, subject, issuer, serial and thumbprint).
+  `hardcharger_sessions()` shows `client_certificate` as the auth method. Tests:
+  `test_mtls_identity.py` (18), and the conformance suite's `test_mtls.py`.
+- The `hardcharger` client: `--auth-type mtls` (or `authType=mtls` in a URI) signs in with
+  the `--mtls-cert` certificate, and signs in again with it when the server ends the session.
+
 - `hardcharger`, the command-line SQL client: GizmoSQL 1.x's `gizmosql_client` on Warp
   SQL, with the same options (in Hardcharger's names: `HARDCHARGER_HOST`, `_PORT`, `_USER`,
   `_PASSWORD`, `_TLS`, `_TLS_ROOTS`, `_OAUTH_PORT`, `_SESSION_TAG`, `_QUERY_TAG`;
@@ -87,6 +106,10 @@ own changelog in `python/CHANGELOG.md`.
 
 - `hardcharger` reads large results over up to 8 connections by default (was 1);
   `--result-partitions 1` reads over one.
+- `mtls_ca_cert` without `tls_cert` and `tls_key` is refused at startup; it used to be
+  ignored, so a server that seemed to require client certificates took plain HTTP. The other
+  `mtls_*` options need `mtls_ca_cert`.
+
 - `result_batch_rows` defaults to 122,880 (one DuckDB row group) instead of 2,048:
   SF10 lineitem over TLS 4.6 s -> 3.5 s, with zstd 26.4 s -> 6.3 s; small results are
   unchanged (one batch), a full scan's first batch takes 21 ms instead of 2 ms.

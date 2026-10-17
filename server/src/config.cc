@@ -110,6 +110,21 @@ const std::vector<Option>& Options() {
        TEXT(tls_key)},
       {"mtls_ca_cert", Kind::kString, "CA (PEM) client certificates must chain to",
        TEXT(mtls_ca_cert)},
+      {"mtls_require_client_cert", Kind::kBool,
+       "refuse connections without a client certificate (false: they sign in another way)",
+       FLAG(mtls_require_client_cert)},
+      {"mtls_crl_file", Kind::kString,
+       "certificate revocation lists (PEM) for client certificates; reloaded when the file changes",
+       TEXT(mtls_crl_file)},
+      {"mtls_identity_source", Kind::kString,
+       "where certificate sign-in takes the identity from: san_email, san_uri or subject_cn",
+       TEXT(mtls_identity_source)},
+      {"mtls_admin_identities", Kind::kList,
+       "client certificate identities that sign in as the administrator",
+       LIST(mtls_admin_identities)},
+      {"mtls_require_identity_match", Kind::kBool,
+       "a password or token sign-in over a client certificate must be for its identity",
+       FLAG(mtls_require_identity_match)},
       // Database
       {"database", Kind::kString, "DuckDB database file, or :memory:", TEXT(database)},
       {"read_only", Kind::kBool,
@@ -367,6 +382,23 @@ void Validate(Loaded& loaded) {
   }
   if (c.tls_cert.empty() != c.tls_key.empty()) {
     throw std::invalid_argument("tls_cert and tls_key go together");
+  }
+  if (!c.mtls_ca_cert.empty() && c.tls_cert.empty()) {
+    throw std::invalid_argument("mtls_ca_cert needs tls_cert and tls_key");
+  }
+  if (c.mtls_ca_cert.empty()) {
+    for (const auto& [name, set] :
+         {std::pair{"mtls_crl_file", !c.mtls_crl_file.empty()},
+          {"mtls_admin_identities", !c.mtls_admin_identities.empty()},
+          {"mtls_require_identity_match", c.mtls_require_identity_match},
+          {"mtls_require_client_cert", !c.mtls_require_client_cert}}) {
+      if (set) throw std::invalid_argument(std::string(name) + " needs mtls_ca_cert (mutual TLS)");
+    }
+  }
+  if (c.mtls_identity_source != "san_email" && c.mtls_identity_source != "san_uri" &&
+      c.mtls_identity_source != "subject_cn") {
+    throw std::invalid_argument("mtls_identity_source must be san_email, san_uri or subject_cn, not '" +
+                                c.mtls_identity_source + "'");
   }
   if (c.port < 0 || c.port > 65535 || c.health_port < 0 || c.health_port > 65535 ||
       c.metrics_port < 0 || c.metrics_port > 65535) {

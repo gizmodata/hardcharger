@@ -11,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "audit.hpp"
 #include "logging.hpp"
 #include "patterns.hpp"
 
@@ -47,6 +48,16 @@ std::string ReadFile(const std::string& path) {
   std::stringstream contents;
   contents << in.rdbuf();
   return contents.str();
+}
+
+// Exact, ignoring ASCII case only (never a glob: an identity is a name, not a pattern).
+bool IgnoringCaseEquals(std::string_view a, std::string_view b) {
+  if (a.size() != b.size()) return false;
+  auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+  for (std::size_t i = 0; i < a.size(); i++) {
+    if (lower(a[i]) != lower(b[i])) return false;
+  }
+  return true;
 }
 
 // One answer for every wrong credential, so a refusal never says which part was wrong.
@@ -111,7 +122,9 @@ Authenticator::Authenticator(const Config& config,
       authorized_emails_(config.token_authorized_emails),
       log_level_(ParseLogLevel(config.auth_log_level)),
       access_(std::move(access)),
-      server_tokens_(std::move(server_tokens)) {
+      server_tokens_(std::move(server_tokens)),
+      mutual_tls_(!config.tls_cert.empty() && !config.mtls_ca_cert.empty()),
+      certificate_admins_(config.mtls_admin_identities) {
   if (!config.token_signature_verify_cert_path.empty()) {
     std::string pem = ReadFile(config.token_signature_verify_cert_path);
     // A certificate or a bare public key both work.
@@ -142,7 +155,7 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
   const bool password_ok = SameSecret(password, password_);
   if (user_ok && password_ok) {
     LogAt(log_level_, LogLevel::kInfo, "signed in", {{"user", std::string(username)}, {"method", "password"}});
-    return warpsql::Principal{std::string(username), "admin", "password", {}};
+    return warpsql::Principal{std::string(username), "admin", "password", {}, {}};
   }
   // A user of the access-control store (never under the administrator's name). The
   // token carries a fingerprint of the password, so changing it ends the token.
@@ -155,7 +168,7 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
       LogAt(log_level_, LogLevel::kInfo, "signed in",
             {{"user", store_user->user_name}, {"method", "password"}, {"role", "user"}});
       return warpsql::Principal{store_user->user_name, "user", "password",
-                                {{"credential", store_user->credential}}};
+                                {{"credential", store_user->credential}}, {}};
     }
   }
   LogAt(log_level_, LogLevel::kInfo, "sign-in refused", {{"user", std::string(username)}, {"method", "password"}});
@@ -272,10 +285,56 @@ void Authenticator::AllowSigningKey(const Decoded& decoded, Verifier& verifier) 
   }
 }
 
+warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view identity,
+                                                          const warpsql::ClientCertificate& certificate) {
+  const std::string name(identity);
+  LogFields audit{{"kind", "authentication"},
+                  {"method", "client_certificate"},
+                  {"certificate_identity", name},
+                  {"certificate_subject", certificate.subject},
+                  {"certificate_issuer", certificate.issuer},
+                  {"certificate_serial", certificate.serial},
+                  {"certificate_thumbprint", certificate.thumbprint}};
+  auto signed_in = [&](const warpsql::Principal& principal) {
+    LogAt(log_level_, LogLevel::kInfo, "signed in",
+          {{"user", principal.name}, {"method", "client_certificate"}, {"role", principal.role},
+           {"certificate_identity", name}});
+    audit.emplace_back("status", "allowed");
+    audit.emplace_back("user", principal.name);
+    audit.emplace_back("role", principal.role);
+    Audit(LogLevel::kInfo, "signed in with a client certificate", audit);
+    return principal;
+  };
+  // The administrator's certificate identities (compared ignoring ASCII case, as user
+  // names are), with or without access control.
+  for (const auto& admin : certificate_admins_) {
+    if (IgnoringCaseEquals(admin, name)) {
+      return signed_in(warpsql::Principal{admin, "admin", "client_certificate", {}, {}});
+    }
+  }
+  // Under access control, one of the store's enabled users (a password is not needed).
+  if (access_) {
+    if (auto user = access_->CertificateUser(name)) {
+      return signed_in(warpsql::Principal{*user, "user", "client_certificate", {}, {}});
+    }
+  }
+  LogAt(log_level_, LogLevel::kInfo, "sign-in refused",
+        {{"method", "client_certificate"}, {"certificate_identity", name}});
+  audit.emplace_back("status", "denied");
+  Audit(LogLevel::kWarning, "client certificate sign-in refused", audit);
+  throw Error(ErrorCode::kUnknownCertificateIdentity,
+              "the client certificate's identity '" + name + "' is not a user of this server" +
+                  (access_ ? ". An administrator creates it with CREATE USER" : ""));
+}
+
 boost::json::array Authenticator::GrantTypes() {
   boost::json::array grants{"password"};
   if (AcceptsTokens()) {
     grants.push_back("token_exchange");
+  }
+  // Certificate sign-in, when some identity could use it.
+  if (mutual_tls_ && (!certificate_admins_.empty() || access_)) {
+    grants.push_back("client_certificate");
   }
   return grants;
 }

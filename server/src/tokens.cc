@@ -84,6 +84,13 @@ warpsql::TokenService::Issued JwtTokenService::Issue(const warpsql::Principal& p
       token.set_payload_claim(claim, jwt::basic_claim<Traits>(*value));
     }
   }
+  // Bound to a client certificate (RFC 8705 §3): the SDK checks every request's
+  // connection presents it.
+  if (!principal.certificate_thumbprint.empty()) {
+    token.set_payload_claim(
+        "cnf", jwt::basic_claim<Traits>(boost::json::value(
+                   boost::json::object{{"x5t#S256", principal.certificate_thumbprint}})));
+  }
   // A token never outlives the scoped token it was exchanged for.
   auto lifetime = lifetime_;
   if (const auto* expires = principal.claims.if_contains("expires_at"); expires && expires->is_int64()) {
@@ -158,6 +165,15 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
     if (decoded.has_payload_claim(claim)) {
       principal.claims[claim] = decoded.get_payload_claim(claim).to_json();
     }
+  }
+  if (decoded.has_payload_claim("cnf")) {
+    // A cnf this server can't read binds the token to nothing it can check: refused.
+    const auto cnf = decoded.get_payload_claim("cnf").to_json();
+    const auto* thumbprint = cnf.is_object() ? cnf.as_object().if_contains("x5t#S256") : nullptr;
+    if (thumbprint == nullptr || !thumbprint->is_string() || thumbprint->as_string().empty()) {
+      throw invalid("a valid access token is required");
+    }
+    principal.certificate_thumbprint = std::string(thumbprint->as_string());
   }
   if (principal.name.empty()) {
     throw invalid("a valid access token is required");

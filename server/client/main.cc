@@ -73,7 +73,9 @@ int main(int argc, char** argv) {
   cl.Value("mtls-cert", 0, "FILE", "mTLS client certificate (PEM)", &config.mtls_cert);
   cl.Value("mtls-key", 0, "FILE", "mTLS client private key (PEM)", &config.mtls_key);
   cl.Section("Sign-in");
-  cl.Value("auth-type", 0, "TYPE", "'password' (default) or 'external' (the server's browser sign-in, OAuth/SSO)",
+  cl.Value("auth-type", 0, "TYPE",
+           "'password' (default), 'external' (the server's browser sign-in, OAuth/SSO) or 'mtls' (the "
+           "--mtls-cert client certificate is the credential; no password)",
            &auth_type);
   cl.Int("oauth-port", 0, "PORT", "The server's browser sign-in port (default: 31339; env: HARDCHARGER_OAUTH_PORT)",
          &config.oauth_port);
@@ -132,8 +134,11 @@ int main(int argc, char** argv) {
   // Resolve auth type
   if (auth_type == "external") {
     config.auth_type_external = true;
+  } else if (auth_type == "mtls" || auth_type == "client_certificate") {
+    config.auth_type_mtls = true;
   } else if (auth_type != "password") {
-    std::cerr << "Error: unknown auth-type '" << auth_type << "'. Use 'password' or 'external'." << std::endl;
+    std::cerr << "Error: unknown auth-type '" << auth_type << "'. Use 'password', 'external' or 'mtls'."
+              << std::endl;
     return 1;
   }
 
@@ -182,9 +187,25 @@ int main(int argc, char** argv) {
   if (cl.Given("output")) config.output_file = output;
   if (cl.Given("init")) config.init_file = init;
 
+  // Certificate sign-in: the client certificate is the credential, over TLS.
+  if (config.auth_type_mtls) {
+    if (config.mtls_cert.empty() || config.mtls_key.empty()) {
+      std::cerr << "Error: --auth-type mtls needs --mtls-cert and --mtls-key" << std::endl;
+      return 1;
+    }
+    if (!config.use_tls) {
+      std::cerr << "Error: --auth-type mtls needs --tls" << std::endl;
+      return 1;
+    }
+    if (password_prompt) {
+      std::cerr << "Error: --auth-type mtls takes no password" << std::endl;
+      return 1;
+    }
+  }
+
   // Password resolution (only for password auth). Like psql, --password/-W only forces
   // the interactive prompt; the sources are HARDCHARGER_PASSWORD or the prompt.
-  if (!config.auth_type_external) {
+  if (!config.auth_type_external && !config.auth_type_mtls) {
     if (password_prompt) {
       if (IsTerminal()) {
         config.password = PromptPassword();
@@ -232,7 +253,8 @@ int main(int argc, char** argv) {
   };
   bool host_explicit = cl.Given("host") || env_set("HARDCHARGER_HOST");
   bool user_explicit = cl.Given("username") || env_set("HARDCHARGER_USER") || env_set("HARDCHARGER_ADMIN_USERNAME");
-  bool has_connection_params = host_explicit || user_explicit || config.auth_type_external || uri_provided;
+  bool has_connection_params =
+      host_explicit || user_explicit || config.auth_type_external || config.auth_type_mtls || uri_provided;
 
   WarpConnection conn;
 

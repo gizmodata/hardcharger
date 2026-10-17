@@ -32,7 +32,18 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   options.port = static_cast<uint16_t>(config.port);
   options.health_port = static_cast<uint16_t>(config.health_port);
   if (!config.tls_cert.empty()) {
-    options.tls = warpsql::TlsOptions{config.tls_cert, config.tls_key, config.mtls_ca_cert};
+    warpsql::TlsOptions tls;
+    tls.certificate_chain_file = config.tls_cert;
+    tls.private_key_file = config.tls_key;
+    tls.client_ca_file = config.mtls_ca_cert;
+    tls.require_client_certificate = config.mtls_require_client_cert;
+    tls.client_crl_file = config.mtls_crl_file;
+    tls.client_identity_source = warpsql::ParseClientIdentitySource(config.mtls_identity_source);
+    tls.require_identity_match = config.mtls_require_identity_match;
+    tls.on_crl_reload = [](bool ok, const std::string& message) {
+      hc::Log(ok ? hc::LogLevel::kInfo : hc::LogLevel::kError, message, {{"component", "tls"}});
+    };
+    options.tls = std::move(tls);
   }
   options.max_header_bytes = static_cast<std::size_t>(config.max_header_bytes);
   options.max_result_partitions = static_cast<std::size_t>(config.max_result_partitions);

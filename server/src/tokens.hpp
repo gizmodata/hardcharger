@@ -30,6 +30,9 @@ class JwtTokenService : public warpsql::TokenService {
 
   Issued Issue(const warpsql::Principal& principal) override;
   warpsql::Principal Validate(std::string_view token) override;
+  // A certificate-bound token (spec §4.4) carries RFC 8705's cnf claim,
+  // {"x5t#S256": thumbprint}, signed with the rest; Validate() returns it.
+  bool BindsCertificates() const override { return true; }
 
   // A scoped token (CREATE SCOPED TOKEN) for `user_name`: an access token limited by the
   // store's record `scope_id`, valid until `expires_at` (seconds since the epoch).

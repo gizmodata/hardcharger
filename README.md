@@ -363,6 +363,36 @@ Each statement is checked inside DuckDB against its own plan, after binding and 
 before optimizing, so nested SQL, views and macros can't route around a grant. Anything the
 check can't classify is refused. Changes reach every replica within about a second.
 
+## 🔏 Client certificates as identity
+
+With mutual TLS (`mtls_ca_cert`), a client can sign in with its certificate and no
+password: Warp SQL's `client_certificate` grant, `--auth-type mtls` in the `hardcharger`
+client. The certificate proves who the user is; grants decide what they may do.
+
+```yaml
+tls_cert: /etc/hardcharger/server.pem
+tls_key: /etc/hardcharger/server.key
+mtls_ca_cert: /etc/hardcharger/client-ca.pem      # client certificates are verified against it
+mtls_identity_source: san_email                   # or san_uri (SPIFFE IDs), subject_cn
+mtls_admin_identities: [ops@example.com]          # sign in as the administrator
+mtls_crl_file: /etc/hardcharger/client-ca.crl     # revocation, reloaded when it changes
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `mtls_require_client_cert` | `true` | Refuse connections without a certificate at the handshake; `false` lets them connect and sign in another way |
+| `mtls_identity_source` | `san_email` | Which part of the certificate is the identity. A certificate with none, or several, values of that kind is refused |
+| `mtls_admin_identities` | none | Identities that sign in as the administrator. Under access control, any other identity must be a user of the store (`CREATE USER "joe@example.com"`, a password optional); without it, no other identity signs in |
+| `mtls_crl_file` | none | PEM CRLs, one for each CA that issues client certificates; a revoked certificate is refused at the handshake. The file is looked at every 5 seconds and reloaded when it changes, and open connections are checked again at their next request |
+| `mtls_require_identity_match` | `false` | A password or token sign-in over a client certificate must be for the certificate's identity |
+
+Tokens from a certificate sign-in are bound to it (RFC 8705's `cnf` claim): they work only on
+connections presenting the same certificate, so a copied token is no use without the private
+key. TLS has to end at Hardcharger (a TCP or TLS-passthrough load balancer) for this; a
+proxy that ends TLS takes the certificate with it. Sign-ins with a certificate are written to
+the audit log (`kind: authentication`, `method: client_certificate`, the identity and the
+certificate's thumbprint).
+
 ## 🏗️ Architecture
 
 ```mermaid

@@ -233,6 +233,7 @@ bool ParseConnectionURI(const std::string& uri, ClientConfig& config) {
     }
     if (params.count("authType")) {
       config.auth_type_external = (params["authType"] == "external");
+      config.auth_type_mtls = params["authType"] == "mtls" || params["authType"] == "client_certificate";
     }
   }
 
@@ -263,6 +264,9 @@ std::string BuildConnectionURI(const ClientConfig& config) {
   }
   if (config.auth_type_external) {
     addParam("authType", "external");
+  }
+  if (config.auth_type_mtls) {
+    addParam("authType", "mtls");
   }
 
   return uri.str();

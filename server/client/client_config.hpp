@@ -46,6 +46,8 @@ struct ClientConfig {
 
   // OAuth/External Auth (the server's browser sign-in, --oauth-port)
   bool auth_type_external = false;
+  // Sign in with the mTLS client certificate (the client_certificate grant), no password.
+  bool auth_type_mtls = false;
   int oauth_port = 31339;
   std::string oauth_base_url;  // default: http(s)://host:oauth_port
 

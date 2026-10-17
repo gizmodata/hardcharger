@@ -23,7 +23,18 @@ struct Config {
   // TLS
   std::string tls_cert;   // PEM certificate chain; with tls_key, turns TLS on
   std::string tls_key;    // PEM private key
-  std::string mtls_ca_cert;  // PEM CA; when set, clients must present a certificate
+  std::string mtls_ca_cert;  // PEM CA client certificates are verified against (mutual TLS)
+  bool mtls_require_client_cert = true;  // false: clients without a certificate may connect
+  std::string mtls_crl_file;  // PEM CRLs, checked at the handshake; reloaded when it changes
+  // Where the client_certificate grant takes a certificate's identity from: san_email,
+  // san_uri (e.g. SPIFFE IDs) or subject_cn.
+  std::string mtls_identity_source = "san_email";
+  // Certificate identities that sign in as the administrator (with or without access
+  // control); case-insensitive. Under access control, any other identity must be a store
+  // user (CREATE USER, a password optional).
+  std::vector<std::string> mtls_admin_identities;
+  // A password or token sign-in over a client certificate must be for its identity.
+  bool mtls_require_identity_match = false;
 
   // Database
   std::string database = ":memory:";

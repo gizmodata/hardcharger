@@ -112,8 +112,9 @@ def arrow_bytes(table: pa.Table) -> bytes:
 class Client:
     """One Warp SQL session for one user."""
 
-    def __init__(self, base_url: str, token: str, options: dict | None = None):
-        self.http = httpx.Client(base_url=base_url, timeout=120)
+    def __init__(self, base_url: str, token: str, options: dict | None = None, verify=True):
+        """`verify`: httpx's TLS setting (an ssl.SSLContext, for mutual TLS)."""
+        self.http = httpx.Client(base_url=base_url, timeout=120, verify=verify)
         self.token = token
         response = self.http.post(url="/warp/v1/sessions", headers=self.headers(),
                                   json={"options": options or {}})

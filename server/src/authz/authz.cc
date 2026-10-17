@@ -279,6 +279,14 @@ void AccessControl::RequireStoreUser(const std::string& user_name) const {
   if (!principal.ok()) throw Error(ErrorCode::kInvalidCredentials, principal.status().message());
 }
 
+std::optional<std::string> AccessControl::CertificateUser(const std::string& identity) const {
+  if (catalog_rules_only_) return std::nullopt;
+  const auto snapshot = engine_->snapshot();  // keeps `user` alive
+  const UserRecord* user = snapshot->FindUserByName(identity);
+  if (user == nullptr || !user->enabled) return std::nullopt;
+  return user->name;
+}
+
 void AccessControl::CheckToken(const Identity& who) const {
   if (who.superuser || catalog_rules_only_) return;
   auto snapshot = engine_->snapshot();

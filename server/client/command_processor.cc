@@ -1103,7 +1103,8 @@ CommandResult CommandProcessor::HandleConnect(
         << "  disableCertificateVerification=true|false\n"
         << "                             Skip TLS cert verification\n"
         << "  tlsRoots=PATH              Path to CA certificate (PEM)\n"
-        << "  authType=password|external Auth type (default: password)\n"
+        << "  authType=password|external|mtls\n"
+        << "                             Auth type (default: password; mtls: the client certificate)\n"
         << ErrorStyleReset() << std::endl;
     return CommandResult::ERROR;
   }
@@ -1117,7 +1118,7 @@ CommandResult CommandProcessor::HandleConnect(
     }
 
     // Prompt for password if needed (non-external auth)
-    if (!new_config.auth_type_external && !new_config.username.empty()) {
+    if (!new_config.auth_type_external && !new_config.auth_type_mtls && !new_config.username.empty()) {
       if (IsTerminal()) {
         new_config.password = PromptPassword();
         new_config.password_provided = true;
@@ -1164,6 +1165,7 @@ CommandResult CommandProcessor::HandleConnect(
   config_.tls_skip_verify = new_config.tls_skip_verify;
   config_.tls_roots = new_config.tls_roots;
   config_.auth_type_external = new_config.auth_type_external;
+  config_.auth_type_mtls = new_config.auth_type_mtls;
   config_.mtls_cert = new_config.mtls_cert;
   config_.mtls_key = new_config.mtls_key;
 

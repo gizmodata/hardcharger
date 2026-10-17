@@ -5,7 +5,11 @@
 //    provider's ID token verified with its JWKS. The same token is also accepted as
 //    the password of the user "token", for clients that only send a password.
 //  - with access control on, also the store's users with a password, and the scoped
-//    tokens CREATE SCOPED TOKEN hands out (as the password of user "token" too).
+//    tokens CREATE SCOPED TOKEN hands out (as the password of user "token" too);
+//  - client_certificate (mutual TLS): the connection's verified client certificate. Its
+//    identity (mtls_identity_source) signs in as the administrator when it is one of
+//    mtls_admin_identities, else, with access control on, as the store user of that name.
+//    The certificate proves who the user is; grants decide what they may do.
 #pragma once
 
 #include <functional>
@@ -36,6 +40,8 @@ class Authenticator : public warpsql::Authenticator {
   warpsql::Principal AuthenticatePassword(std::string_view username,
                                           std::string_view password) override;
   warpsql::Principal ExchangeToken(std::string_view subject_token) override;
+  warpsql::Principal AuthenticateCertificate(std::string_view identity,
+                                             const warpsql::ClientCertificate& certificate) override;
   boost::json::array GrantTypes() override;
 
  private:
@@ -56,6 +62,8 @@ class Authenticator : public warpsql::Authenticator {
   LogLevel log_level_;
   std::shared_ptr<authz::AccessControl> access_;
   std::function<warpsql::Principal(std::string_view)> server_tokens_;
+  bool mutual_tls_ = false;  // client certificates are verified (mtls_ca_cert)
+  std::vector<std::string> certificate_admins_;
 };
 
 }  // namespace hardcharger

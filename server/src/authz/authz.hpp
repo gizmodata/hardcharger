@@ -135,6 +135,11 @@ class AccessControl {
   // Throws warpsql::Error(kInvalidCredentials).
   void RequireStoreUser(const std::string& user_name) const;
 
+  // A client certificate's identity (spec §4.4): the store's name of the enabled user it
+  // names (compared as user names are, ignoring ASCII case), or nullopt. A user signs in
+  // this way with or without a password (CREATE USER name).
+  std::optional<std::string> CertificateUser(const std::string& identity) const;
+
   // Throws warpsql::Error(kInvalidToken) when an access token for `who` no longer
   // stands: the user was dropped or disabled, the password it was issued against was
   // changed, or its scoped token was revoked or expired. Cheap: called on every request.
