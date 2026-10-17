@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-17
+
 ### Fixed
 
 - A long poll on a finished statement answered only after its whole wait; it answers at
