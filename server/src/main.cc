@@ -273,6 +273,9 @@ int main(int argc, char** argv) {
     case hc::Action::kHelp:
       std::cout << hc::Usage();
       return 0;
+    case hc::Action::kPrintOptionsJson:
+      std::cout << hc::OptionsJson();
+      return 0;
     case hc::Action::kVersion:
       std::cout << "Hardcharger " << hc::kVersion << "\n";
       return 0;
