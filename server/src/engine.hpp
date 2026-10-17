@@ -100,6 +100,10 @@ class Session : public warpduckdb::DuckDBSession {
   void UpdateSettings(const std::function<void(Settings&)>& update);
   LogLevel QueryLogLevel() const;
 
+ protected:
+  // GizmoSQL 1.x drivers read a column's default from this key.
+  std::string ColumnDefaultMetadataKey() const override { return "GIZMOSQL:COLUMN_DEFAULT"; }
+
  private:
   void CheckAlive() const;
   // Refuses what the principal may not run; returns the statement's type.

@@ -80,7 +80,10 @@ constexpr const char* kSystemViews = R"SQL(
 CREATE VIEW {catalog}.main.gizmosql_index_info AS
 WITH idx_src AS (
   SELECT di.database_name, di.schema_name, di.table_name, di.is_unique, di.index_name,
-         str_split(trim(BOTH '[]' FROM di.expressions), ', ') AS cols
+         -- DuckDB renders the indexed expressions as a list, quoting names that need it
+         -- (['"label"'] for a keyword); the view returns plain column names.
+         list_transform(str_split(trim(BOTH '[]' FROM di.expressions), ', '),
+                        lambda x: regexp_replace(regexp_replace(trim(x), '^''(.*)''$', '\1'), '^"(.*)"$', '\1')) AS cols
   FROM duckdb_indexes() di
 ), constraint_src AS (
   SELECT dc.database_name, dc.schema_name, dc.table_name, TRUE AS is_unique,

@@ -96,6 +96,7 @@ FetchContent_MakeAvailable(googletest)
 add_executable(hardcharger-unit-tests
   unit/admission_test.cc
   unit/guards_test.cc
+  unit/ingest_test.cc
   unit/log_level_test.cc
   unit/patterns_test.cc
   unit/sensitive_paths_test.cc
