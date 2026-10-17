@@ -20,6 +20,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
+# Every server compile goes through sccache with the GitHub Actions cache as its store
+# (mozilla-actions/sccache-action puts sccache on PATH and exports the cache service's
+# URL and token; this switch makes sccache use them instead of a local disk cache that
+# dies with the runner).
+env:
+  SCCACHE_GHA_ENABLED: "true"
+
 jobs:
   build:
     name: build and test (${{ matrix.name }})
@@ -82,9 +89,11 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: server/scripts/build-deps.sh
 
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - name: Build the server
         run: |
-          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           cmake --build server/build
           server/build/hardcharger-server --version
           server/build/hardcharger-server --print-duckdb-version
@@ -161,6 +170,9 @@ jobs:
           "$stage/bin/hardcharger-server" --version
           "$stage/bin/hardcharger" --version
           tar -C dist -czf "dist/hardcharger-${{ matrix.name }}.tar.gz" "hardcharger-${{ matrix.name }}"
+      - name: sccache statistics
+        if: always()
+        run: sccache --show-stats || true
       - uses: actions/upload-artifact@v7
         with:
           name: hardcharger-${{ matrix.name }}
@@ -208,9 +220,11 @@ jobs:
       - name: Build DuckDB and Arrow
         if: steps.cache.outputs.cache-hit != 'true'
         run: server/scripts/build-deps.sh
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - name: Build the server with AddressSanitizer
         run: |
           cmake -S server -B server/build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
           cmake --build server/build-asan
@@ -253,6 +267,9 @@ jobs:
       - name: Server log
         if: failure()
         run: tail -200 "$RUNNER_TEMP/conformance-server.log" || true
+      - name: sccache statistics
+        if: always()
+        run: sccache --show-stats || true
 
   image:
     needs: [build, sanitize]
@@ -299,17 +316,16 @@ jobs:
           [ "$code" = 404 ] || { echo "docker.io/gizmodata/hardcharger answers $code without credentials: it is public"; exit 1; }
       - name: Build (and on a tag, push) the image
         run: |
-          tags="--tag ghcr.io/gizmodata/hardcharger:dev"
-          push=""
+          args=(--tag ghcr.io/gizmodata/hardcharger:dev)
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF_NAME#v}"
-            tags=""
+            args=()
             for repo in ghcr.io/gizmodata/hardcharger docker.io/gizmodata/hardcharger; do
-              tags="$tags --tag $repo:$version --tag $repo:latest"
+              args+=(--tag "$repo:$version" --tag "$repo:latest")
             done
-            push="--push"
+            args+=(--push)
           fi
-          docker buildx build --platform linux/amd64,linux/arm64 --file docker/Dockerfile $tags $push .
+          docker buildx build --platform linux/amd64,linux/arm64 --file docker/Dockerfile "${args[@]}" .
       - name: Check the pushed Docker Hub repository is still not public
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -321,7 +337,7 @@ jobs:
           docker run --rm hc-smoke --version
           docker run --rm --entrypoint hardcharger hc-smoke --version
           docker run -d --name hc -e HARDCHARGER_ADMIN_PASSWORD=smoke -p 31337:31337 -p 31338:31338 hc-smoke
-          for i in $(seq 1 30); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
+          for _ in $(seq 1 30); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
           curl -sf http://127.0.0.1:31337/warp
           # The client in the image reaches the server it runs beside.
           docker exec -e HARDCHARGER_PASSWORD=smoke hc hardcharger --host 127.0.0.1 --username hardcharger \
