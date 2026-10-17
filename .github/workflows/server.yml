@@ -67,17 +67,24 @@ jobs:
           brew install ninja openssl@3
           echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
-      # DuckDB and Arrow take a while to build; cache them by their pins and by the
-      # compiler, so a runner image's toolchain change rebuilds instead of breaking.
+      # DuckDB and Arrow take a while to build; cache them by their recipes and by the
+      # exact toolchain (server/scripts/ci-deps-key.sh), so a runner image's compiler
+      # change rebuilds instead of breaking. Restored here and saved right after
+      # build-deps.sh, so a later test failure never throws a fresh build away.
       - name: Dependency cache key
         id: deps
         run: |
-          pins=$(cat third_party/warp-sql/cpp/scripts/build-duckdb.sh third_party/warp-sql/cpp/scripts/build-arrow.sh \
-                     server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake server/scripts/build-replxx.sh \
-                     | shasum -a 256 | cut -c1-16)
-          compiler=$(c++ --version | head -1 | shasum -a 256 | cut -c1-12)
-          echo "key=deps-${{ matrix.name }}-$pins-$compiler" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v6
+          if [ "$RUNNER_OS" = macOS ]; then
+            clang=$(clang --version | head -1 | sed -nE 's/.*\((clang-[0-9.]+)\).*/\1/p')
+            [ -n "$clang" ] || { echo "no clang build in: $(clang --version)"; exit 1; }
+            toolchain="$(xcodebuild -version | tr '\n' ' ') $clang"
+          else
+            toolchain=$(c++ --version | head -1)
+          fi
+          key=$(server/scripts/ci-deps-key.sh "${{ matrix.name }}" "$toolchain")
+          echo "$key"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v6
         id: cache
         with:
           path: |
@@ -88,6 +95,16 @@ jobs:
       - name: Build DuckDB and Arrow
         if: steps.cache.outputs.cache-hit != 'true'
         run: server/scripts/build-deps.sh
+      # A tag's caches can't be restored by any other ref, so only branch runs save.
+      - name: Save the dependency cache
+        if: steps.cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            server/.deps/duckdb-install
+            server/.deps/arrow-install
+            server/.deps/replxx-install
+          key: ${{ steps.deps.outputs.key }}
 
       - uses: mozilla-actions/sccache-action@v0.0.11
       - name: Build the server
@@ -163,7 +180,7 @@ jobs:
           stage="dist/hardcharger-${{ matrix.name }}"
           cmake --install server/build --prefix "$stage"
           # Only the server and the client ship, never the tests.
-          test "$(ls "$stage/bin" | tr '\n' ' ')" = "hardcharger hardcharger-server "
+          test "$(cd "$stage/bin" && printf '%s ' *)" = "hardcharger hardcharger-server "
           mkdir -p "$stage/lib"
           cp -P server/.deps/duckdb-install/lib/libduckdb.* "$stage/lib/"
           cp LICENSE CHANGELOG.md "$stage/"
@@ -204,12 +221,10 @@ jobs:
       - name: Dependency cache key
         id: deps
         run: |
-          pins=$(cat third_party/warp-sql/cpp/scripts/build-duckdb.sh third_party/warp-sql/cpp/scripts/build-arrow.sh \
-                     server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake server/scripts/build-replxx.sh \
-                     | shasum -a 256 | cut -c1-16)
-          compiler=$(c++ --version | head -1 | shasum -a 256 | cut -c1-12)
-          echo "key=deps-linux-amd64-$pins-$compiler" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v6
+          key=$(server/scripts/ci-deps-key.sh linux-amd64 "$(c++ --version | head -1)")
+          echo "$key"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v6
         id: cache
         with:
           path: |
@@ -220,6 +235,15 @@ jobs:
       - name: Build DuckDB and Arrow
         if: steps.cache.outputs.cache-hit != 'true'
         run: server/scripts/build-deps.sh
+      - name: Save the dependency cache
+        if: steps.cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            server/.deps/duckdb-install
+            server/.deps/arrow-install
+            server/.deps/replxx-install
+          key: ${{ steps.deps.outputs.key }}
       - uses: mozilla-actions/sccache-action@v0.0.11
       - name: Build the server with AddressSanitizer
         run: |
