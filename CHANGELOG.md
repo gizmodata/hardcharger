@@ -53,7 +53,7 @@ own changelog in `python/CHANGELOG.md`.
   of a built-in extension is a no-op; `INSTALL` is DuckDB's download, so offline it fails
   and is not needed.
 - Each GitHub Release carries a `SHA256SUMS` file (`sha256sum -c` format) for its
-  tarballs, and tells gizmodata/hardcharger-install about the new version.
+  tarballs.
 
 ### Changed
 
