@@ -2,6 +2,7 @@
 sign-in, roles, init SQL, licensing and operations."""
 
 import datetime
+import pathlib
 import subprocess
 import time
 
@@ -13,6 +14,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from conftest import BINARY
+
+LICENSE_DIR = pathlib.Path(__file__).resolve().parent / "license"
 
 
 def problem(response: httpx.Response, status: int, code: str) -> dict:
@@ -307,3 +310,25 @@ def test_read_only_database(launcher, tmp_path):
     response = server.run(token=token, session_id=session, sql="INSERT INTO t VALUES (2)")
     assert response.status_code >= 400
     assert "read-only" in response.text.lower() or "read only" in response.text.lower()
+
+
+def test_only_test_builds_trust_the_tests_license_key(launcher):
+    # A key signed with server/tests/license/test-license-private.pem (public on purpose):
+    # a release build refuses it as it refuses any forged key; a test build says it is one.
+    version = subprocess.run(args=[str(BINARY), "--version"], capture_output=True, text=True, check=True).stdout
+    now = datetime.datetime.now(tz=datetime.UTC)
+    key = jwt.encode(payload={"jti": "t", "iss": "GizmoData LLC", "sub": "s", "aud": "a", "iat": now,
+                              "exp": now + datetime.timedelta(hours=1), "features": ["rbac"]},
+                     key=(LICENSE_DIR / "test-license-private.pem").read_text(),
+                     algorithm="RS256")
+    server = launcher.start(env={"HARDCHARGER_LICENSE_KEY": key}, expect_up="test-license" in version)
+    if "test-license" in version:
+        token = server.token()
+        session = server.session(token=token)
+        info = httpx.get(url=f"{server.base_url}/warp/v1/sessions/{session}/metadata/server-info",
+                         headers={"Authorization": f"Bearer {token}"}).json()
+        assert info["edition"] == "Enterprise (test license)"
+        assert "test-license build" in server.log()
+    else:
+        assert server.process.wait(timeout=20) == 1
+        assert "License Error" in server.log()

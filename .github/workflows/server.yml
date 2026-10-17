@@ -59,7 +59,8 @@ jobs:
       - name: Dependency cache key
         id: deps
         run: |
-          pins=$(cat third_party/warp-sql/cpp/scripts/build-duckdb.sh third_party/warp-sql/cpp/scripts/build-arrow.sh | shasum -a 256 | cut -c1-16)
+          pins=$(cat third_party/warp-sql/cpp/scripts/build-duckdb.sh third_party/warp-sql/cpp/scripts/build-arrow.sh \
+                     server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake | shasum -a 256 | cut -c1-16)
           compiler=$(c++ --version | head -1 | shasum -a 256 | cut -c1-12)
           echo "key=deps-${{ matrix.name }}-$pins-$compiler" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
@@ -79,6 +80,33 @@ jobs:
           cmake --build server/build
           server/build/hardcharger --version
           server/build/hardcharger --print-duckdb-version
+          # The release binary never trusts the tests' license key.
+          if server/build/hardcharger --version | grep -q "test-license"; then exit 1; fi
+      # The access-control tests run on a build that trusts the tests' license key
+      # (there is no GizmoData license in CI); it is never packaged.
+      - name: Build the test-license server
+        run: |
+          cmake -S server -B server/build-test -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DHARDCHARGER_TRUST_TEST_LICENSES=ON
+          cmake --build server/build-test
+          server/build-test/hardcharger --version | grep -q "test-license"
+
+      # PostgreSQL for the access-control grant store (the tests fail without it).
+      - name: Start PostgreSQL (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          docker run -d --name hardcharger-test-pg -e POSTGRES_USER=hardcharger \
+            -e POSTGRES_PASSWORD=hardcharger -e POSTGRES_DB=hardcharger \
+            -p 127.0.0.1:55433:5432 postgres:17-alpine
+          for _ in $(seq 1 30); do docker exec hardcharger-test-pg pg_isready -U hardcharger && break; sleep 1; done
+      - name: Start PostgreSQL (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install postgresql@17
+          pg="$(brew --prefix postgresql@17)/bin"
+          "$pg/initdb" -D "$RUNNER_TEMP/pg" -U hardcharger --auth=trust
+          "$pg/pg_ctl" -D "$RUNNER_TEMP/pg" -o "-p 55433 -k $RUNNER_TEMP" -l "$RUNNER_TEMP/pg.log" -w start
+          "$pg/createdb" -h 127.0.0.1 -p 55433 -U hardcharger hardcharger
 
       - uses: astral-sh/setup-uv@v10.3.0
       - name: Hardcharger tests
@@ -86,7 +114,10 @@ jobs:
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -r pyproject.toml
-          .venv/bin/python -m pytest -q
+          # Everything, access control included, on the test-license build...
+          HARDCHARGER_TEST_BINARY=../build-test/hardcharger .venv/bin/python -m pytest -q
+          # ...and the suites that need no license on the binary that ships.
+          .venv/bin/python -m pytest -q test_server.py
       - name: Warp SQL conformance suite
         working-directory: third_party/warp-sql/conformance
         env:

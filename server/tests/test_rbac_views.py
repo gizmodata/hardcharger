@@ -235,3 +235,26 @@ def test_a_refusal_is_always_recorded(server, ann, dan):
     assert lines and "user=ann" in lines[-1], lines
     assert "SELECT on view rbac_views.curated.nested_v (id)" in lines[-1], lines[-1]
     assert "as the owner of view rbac_views.curated.nested_v" in lines[-1], lines[-1]
+
+
+def test_an_owner_record_applies_only_to_the_definition_it_was_recorded_for(launcher, store, tmp_path):
+    # The administrator's view is owned by the administrator (the record carries a hash
+    # of its definition). Replaced outside access control (here: by init SQL on a
+    # restart), the record no longer applies, and the view reads with the caller's rights.
+    database = tmp_path / "rbac_hash.duckdb"
+    uri = store.new_database()
+    first = start_rbac_server(launcher=launcher, store_uri=uri, args=["--database", str(database)])
+    admin = first.admin()
+    for sql in ["CREATE TABLE secret AS SELECT 'TOP' AS s", "CREATE VIEW v AS SELECT s FROM secret",
+                "CREATE ROLE r", "CREATE USER joe", "GRANT r TO joe", "GRANT SELECT ON v TO r"]:
+        expect_allowed(client=admin, sql=sql)
+    assert first.user(name="joe").run(sql="SELECT * FROM v").to_pylist() == [{"s": "TOP"}]
+    first.running.stop()
+    replaced = start_rbac_server(launcher=launcher, store_uri=uri, args=["--database", str(database)],
+                                 env={"HARDCHARGER_INIT_SQL_COMMANDS":
+                                      "CREATE OR REPLACE VIEW v AS SELECT s || '!' AS s FROM secret"})
+    expect_blocked(client=replaced.user(name="joe"), sql="SELECT * FROM v",
+                   why="which has no owner, so it reads with your rights")
+    # Recording an owner again (as the administrator) restores it.
+    expect_allowed(client=replaced.admin(), sql="ALTER VIEW v OWNER TO admin")
+    assert replaced.user(name="joe").run(sql="SELECT * FROM v").to_pylist() == [{"s": "TOP!"}]

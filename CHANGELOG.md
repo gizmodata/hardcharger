@@ -7,6 +7,38 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Role-based access control (Enterprise, license feature `rbac`), lifted from GizmoSQL
+  1.x's RBAC: `CREATE USER/ROLE`, `GRANT`/`REVOKE` (roles, table, view, column, schema and
+  catalog privileges, `WITH GRANT OPTION`, `WITH ADMIN OPTION`, cascading revokes),
+  `SHOW GRANTS`, ownership (`ALTER ... OWNER TO`), views that read with their owner's
+  rights, system privileges (`READ FILESYSTEM`, `MANAGE CATALOGS`, ...), row and masking
+  policies, tenants, `SET ROLE`, identity-provider group mappings, scoped tokens and an
+  Open Policy Agent service. Every statement is checked inside DuckDB against its own
+  plan, when it is bound and again before it is optimized; anything the check cannot
+  classify is refused. Turned on by `rbac_store_uri` (a PostgreSQL database every replica
+  shares, reached through DuckDB's `postgres` extension); `rbac_opa_url`,
+  `rbac_opa_timeout_ms` and `token_groups_claim` too, with GizmoSQL 1.x's environment
+  names.
+- Store users sign in with their password; their access tokens are checked against the
+  store on every request, so dropping or disabling a user, changing their password or
+  revoking a scoped token ends their sessions and tokens at once, on every replica, and a
+  revoke stops a statement that is running.
+- Statements that reach outside the database (files and URLs, `ATTACH`, extensions,
+  secrets, instance-wide settings, `query()`) are refused for store users before DuckDB
+  binds them, unless they hold the system privilege that opens them.
+- DuckDB is built with a small binder patch (`server/scripts/patch-duckdb.cmake`) that
+  lets access control see which part of a plan came from which view.
+- Tests for access control (`server/tests/test_rbac_*.py`, 252), including two replicas on
+  one store and a gate that access control costs no concurrency. They need PostgreSQL and
+  a test-license build (`-DHARDCHARGER_TRUST_TEST_LICENSES=ON`).
+
+### Fixed
+
+- Statement logs no longer show `CREATE SECRET` or `CREATE`/`ALTER USER` text, which can
+  carry credentials.
+
 ## [0.1.0] - 2026-10-17
 
 ### Added
