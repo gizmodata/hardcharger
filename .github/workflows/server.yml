@@ -102,26 +102,30 @@ jobs:
           echo "duckdb_extra=$duckdb_extra" >> "$GITHUB_OUTPUT"
           # The DuckDB build's peak memory is what limits its parallelism on 2-CPU runners.
           echo "CMAKE_BUILD_PARALLEL_LEVEL=$(getconf _NPROCESSORS_ONLN)" >> "$GITHUB_ENV"
-      - if: runner.os == 'Linux'
+      - name: OpenSSL, static (cached)
+        if: runner.os == 'Linux'
         uses: ./.github/actions/dep-cache
         with:
           dependency: openssl
           platform: ${{ matrix.name }}
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: ${{ steps.toolchain.outputs.build }}
-      - uses: ./.github/actions/dep-cache
+      - name: Arrow (cached)
+        uses: ./.github/actions/dep-cache
         with:
           dependency: arrow
           platform: ${{ matrix.name }}
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: ${{ steps.toolchain.outputs.build }}
-      - uses: ./.github/actions/dep-cache
+      - name: replxx (cached)
+        uses: ./.github/actions/dep-cache
         with:
           dependency: replxx
           platform: ${{ matrix.name }}
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: ${{ steps.toolchain.outputs.build }}
-      - uses: ./.github/actions/dep-cache
+      - name: DuckDB (cached)
+        uses: ./.github/actions/dep-cache
         with:
           dependency: duckdb
           platform: ${{ matrix.name }}
@@ -301,19 +305,22 @@ jobs:
       - name: Toolchain
         id: toolchain
         run: echo "toolchain=$(c++ --version | head -1)" | tee -a "$GITHUB_OUTPUT"
-      - uses: ./.github/actions/dep-cache
+      - name: Arrow (cached)
+        uses: ./.github/actions/dep-cache
         with:
           dependency: arrow
           platform: linux-amd64
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: server/scripts/build-deps.sh
-      - uses: ./.github/actions/dep-cache
+      - name: replxx (cached)
+        uses: ./.github/actions/dep-cache
         with:
           dependency: replxx
           platform: linux-amd64
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: server/scripts/build-deps.sh
-      - uses: ./.github/actions/dep-cache
+      - name: DuckDB (cached)
+        uses: ./.github/actions/dep-cache
         with:
           dependency: duckdb
           platform: linux-amd64
@@ -420,19 +427,22 @@ jobs:
       - name: Toolchain
         id: toolchain
         run: echo "toolchain=$(clang --version | head -1)" | tee -a "$GITHUB_OUTPUT"
-      - uses: ./.github/actions/dep-cache
+      - name: Arrow (cached)
+        uses: ./.github/actions/dep-cache
         with:
           dependency: arrow
           platform: linux-amd64-tsan
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: server/scripts/build-deps.sh
-      - uses: ./.github/actions/dep-cache
+      - name: replxx (cached)
+        uses: ./.github/actions/dep-cache
         with:
           dependency: replxx
           platform: linux-amd64-tsan
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: server/scripts/build-deps.sh
-      - uses: ./.github/actions/dep-cache
+      - name: DuckDB (cached)
+        uses: ./.github/actions/dep-cache
         with:
           dependency: duckdb
           platform: linux-amd64-tsan
