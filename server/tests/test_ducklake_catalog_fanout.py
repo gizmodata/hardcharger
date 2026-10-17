@@ -13,16 +13,16 @@ qualified SELECT stay within bounds (the catalogs list now comes from duckdb_dat
 them: those three steps run as strict expected failures (see LISTING_GAP).
 """
 
+import secrets
 import time
 
+import psycopg
 import pytest
 
 from services import PG_PORT, S3_PORT, pg_conninfo, require
 
-# Needs server/tests/docker-compose.yml; CI starts it where Docker runs (Linux). Serial:
-# it counts every PostgreSQL session of the shared DuckLake database, so any other
-# DuckLake test running at the same time would count too.
-pytestmark = [pytest.mark.services, pytest.mark.serial]
+# Needs server/tests/docker-compose.yml; CI starts it where Docker runs (Linux).
+pytestmark = pytest.mark.services
 
 
 CATALOGS = 10
@@ -50,8 +50,20 @@ def drain(session) -> None:
 
 @pytest.fixture(scope="module", params=["local", "s3"])
 def lake(request, module_launcher, tmp_path_factory):
-    """A server with 10 DuckLake catalogs attached, data local or on S3."""
+    """A server with 10 DuckLake catalogs attached, data local or on S3, their metadata in
+    a PostgreSQL database of their own: the steps count that database's sessions, which
+    no other test (or pytest-xdist worker) touches."""
     require(port=PG_PORT, what="PostgreSQL")
+    database = f"fanout_{request.param}_{secrets.token_hex(nbytes=4)}"
+    with psycopg.connect(conninfo=pg_conninfo(), autocommit=True) as connection:
+        connection.execute(query=f'CREATE DATABASE "{database}"')
+    yield from attach_lakes(request=request, module_launcher=module_launcher, tmp_path_factory=tmp_path_factory,
+                            database=database)
+    with psycopg.connect(conninfo=pg_conninfo(), autocommit=True) as connection:
+        connection.execute(query=f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+
+
+def attach_lakes(request, module_launcher, tmp_path_factory, database: str):
     session = module_launcher.start().admin()
     for sql in ["INSTALL ducklake", "INSTALL postgres", "LOAD ducklake", "LOAD postgres",
                 "SET pg_pool_idle_timeout_millis = 500", "SET pg_pool_max_lifetime_millis = 500",
@@ -62,18 +74,18 @@ def lake(request, module_launcher, tmp_path_factory):
         session.execute(sql="INSTALL httpfs; LOAD httpfs;")
         session.execute(sql=f"CREATE OR REPLACE SECRET s3_fanout (TYPE s3, KEY_ID 'minioadmin', SECRET 'minioadmin', "
                             f"ENDPOINT '127.0.0.1:{S3_PORT}', USE_SSL false, URL_STYLE 'path', REGION 'us-east-1')")
-        data_root = "s3://ducklake/"
+        data_root = f"s3://ducklake/{database}/"
     else:
         data_root = f"{tmp_path_factory.mktemp('lake')}/"
-    session.execute(sql=f"ATTACH '{pg_conninfo()}' AS pgmon (TYPE postgres)")
+    conninfo = pg_conninfo(dbname=database)
+    session.execute(sql=f"ATTACH '{conninfo}' AS pgmon (TYPE postgres)")
     prefix = f"fanout_{request.param}"
     for i in range(CATALOGS):
         name = f"{prefix}_{i}"
-        session.execute(sql=f"CALL postgres_execute('pgmon', 'DROP SCHEMA IF EXISTS {name} CASCADE')")
-        session.execute(sql=f"ATTACH 'ducklake:postgres:{pg_conninfo()}' AS {name} "
+        session.execute(sql=f"ATTACH 'ducklake:postgres:{conninfo}' AS {name} "
                             f"(DATA_PATH '{data_root}{name}/', METADATA_SCHEMA '{name}')")
         session.execute(sql=f"CREATE TABLE {name}.main.t0 AS SELECT {i} AS x")
-    return session, f"{prefix}_{CATALOGS // 2}"
+    yield session, f"{prefix}_{CATALOGS // 2}"
 
 
 def opened(session, step) -> None:

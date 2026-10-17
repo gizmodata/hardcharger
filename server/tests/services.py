@@ -23,5 +23,5 @@ def require(port: int, what: str) -> None:
             pytest.fail(reason=f"{what} is not reachable on 127.0.0.1:{port}; {START}")
 
 
-def pg_conninfo() -> str:
-    return f"host={PG_HOST} port={PG_PORT} dbname={PG_DATABASE} user={PG_USER} password={PG_PASSWORD}"
+def pg_conninfo(dbname: str = PG_DATABASE) -> str:
+    return f"host={PG_HOST} port={PG_PORT} dbname={dbname} user={PG_USER} password={PG_PASSWORD}"

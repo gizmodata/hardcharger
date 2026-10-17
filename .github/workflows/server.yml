@@ -28,7 +28,7 @@ env:
   SCCACHE_GHA_ENABLED: "true"
   # pytest-xdist workers for the server tests. The tests mostly wait on servers they
   # start, so more workers than CPUs pays (measured; see the commit that set it).
-  HARDCHARGER_TEST_XDIST_WORKERS: "4"
+  HARDCHARGER_TEST_XDIST_WORKERS: "6"
 
 jobs:
   build:

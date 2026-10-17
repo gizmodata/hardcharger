@@ -211,8 +211,10 @@ def exchange(server, token: str) -> httpx.Response:
 
 
 def test_jwks_verifies_provider_tokens(server, idp):
-    assert idp.jwks_requests > 0, "the server never read the provider's JWKS"
+    # (Exchange first: run alone, or first of its module on a pytest-xdist worker, this
+    # test may be the server's first use of the provider.)
     assert exchange(server=server, token=idp.id_token(email="a@gizmodata.com")).status_code == 200
+    assert idp.jwks_requests > 0, "the server never read the provider's JWKS"
     # Signed by a key the provider doesn't publish, under its kid or another.
     from cryptography.hazmat.primitives.asymmetric import rsa
     stranger = rsa.generate_private_key(public_exponent=65537, key_size=2048)
