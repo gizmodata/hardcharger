@@ -350,6 +350,25 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
       }
     }
   }
+  // catalog_access rules (license feature catalog_permissions): without the plan's
+  // catalogs (the v2 C API doesn't expose them) only the sound part is enforced here: a
+  // principal no rule grants write access to any catalog may not modify state.
+  if (!ReadOnlyStatement(type) && runtime_.license.Has("catalog_permissions")) {
+    if (const auto* rules = principal_.claims.if_contains("catalog_access"); rules && rules->is_array()) {
+      bool may_write = false;
+      for (const auto& rule : rules->as_array()) {
+        const auto* access = rule.is_object() ? rule.as_object().if_contains("access") : nullptr;
+        if (access && access->is_string() && access->as_string() == "write") may_write = true;
+      }
+      if (!may_write) {
+        throw Error(ErrorCode::kPermissionDenied,
+                    "Access denied: user '" + principal_.name +
+                        "' does not have write access to any catalog (catalog_access) and cannot run "
+                        "statements that modify state.",
+                    "42501");
+      }
+    }
+  }
   if (principal_.role == "readonly" && !ReadOnlyStatement(type)) {
     throw Error(ErrorCode::kPermissionDenied,
                 "User '" + principal_.name + "' has a readonly session and cannot run statements that modify state.",

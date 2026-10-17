@@ -53,9 +53,29 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
+def _test_home() -> pathlib.Path:
+    """A HOME of the run's own for every server, so none of them sees this machine's
+    ~/.duckdb persistent secrets (a server loads every one of them at startup). Only the
+    extension cache is shared, so extensions download once."""
+    global _HOME
+    if _HOME is None:
+        import tempfile
+        _HOME = pathlib.Path(tempfile.mkdtemp(prefix="hardcharger-test-home-"))
+        real = pathlib.Path.home() / ".duckdb" / "extensions"
+        real.mkdir(parents=True, exist_ok=True)
+        (_HOME / ".duckdb").mkdir()
+        (_HOME / ".duckdb" / "extensions").symlink_to(real)
+    return _HOME
+
+
+_HOME = None
+
+
 def clean_environment() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items()
-            if not k.startswith(("HARDCHARGER_", "GIZMOSQL_")) and k not in LEGACY_ENV}
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("HARDCHARGER_", "GIZMOSQL_")) and k not in LEGACY_ENV}
+    env["HOME"] = str(_test_home())
+    return env
 
 
 class LicenseSigner:

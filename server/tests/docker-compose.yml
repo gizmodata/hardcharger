@@ -1,0 +1,49 @@
+# Services the DuckLake tests need: PostgreSQL for DuckLake metadata and an S3 gateway
+# for its data. Ports are bound to 127.0.0.1 and chosen away from the defaults so they
+# never meet a developer's own database:
+#
+#   docker compose -f server/tests/docker-compose.yml up -d --wait
+#
+# The tests read HARDCHARGER_TEST_PG_PORT / HARDCHARGER_TEST_S3_PORT (defaults below)
+# and fail, never skip, when the services are not there.
+name: hardcharger-tests
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: testpassword
+      POSTGRES_DB: ducklake_catalog
+    ports:
+      - "127.0.0.1:55440:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  s3:
+    image: versity/versitygw:v1.8.0
+    environment:
+      ROOT_ACCESS_KEY: minioadmin
+      ROOT_SECRET_KEY: minioadmin
+    ports:
+      - "127.0.0.1:59000:9000"
+    command: --port :9000 --health /health posix /data
+    tmpfs:
+      - /data  # nothing outlives the containers
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9000/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  s3-setup:
+    image: curlimages/curl:8.16.0
+    depends_on:
+      s3:
+        condition: service_healthy
+    command: >
+      -sS --aws-sigv4 aws:amz:us-east-1:s3 --user minioadmin:minioadmin
+      -X PUT http://s3:9000/ducklake
