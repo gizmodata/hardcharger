@@ -95,8 +95,10 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 add_executable(hardcharger-unit-tests
   unit/admission_test.cc
+  unit/guards_test.cc
   unit/log_level_test.cc
   unit/patterns_test.cc
+  unit/sensitive_paths_test.cc
   unit/sql_text_test.cc
   src/license.cc)
 target_link_libraries(hardcharger-unit-tests PRIVATE hardcharger_core GTest::gtest_main)

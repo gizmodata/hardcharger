@@ -1,5 +1,6 @@
 #include "guards.hpp"
 
+#include <fnmatch.h>
 #include <pwd.h>
 #include <unistd.h>
 
@@ -94,6 +95,19 @@ std::vector<std::string> Keys(std::string raw, const std::string& home, bool res
     }
   }
   return keys;
+}
+
+std::vector<std::string> Segments(const std::string& path) {
+  std::vector<std::string> out;
+  std::size_t start = 0;
+  while (start <= path.size()) {
+    const auto end = path.find('/', start);
+    const std::string part = path.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    if (!part.empty()) out.push_back(part);
+    if (end == std::string::npos) break;
+    start = end + 1;
+  }
+  return out;
 }
 
 bool KeyCovers(const std::string& entry, const std::string& candidate) {
@@ -343,18 +357,24 @@ std::optional<Piece> Wrapped(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type) 
   return std::nullopt;
 }
 
+// COPY ... TO|FROM '<path>' anywhere in the statement: DuckDB 2.0 also takes COPY inside
+// a CTE (WITH c AS (COPY (...) TO 'x.csv') SELECT 1). The direction is the first TO or
+// FROM at the COPY's own depth; only a literal remote URL there is allowed.
 std::optional<std::string> LocalCopy(const Piece& piece) {
   const auto& t = piece.tokens;
-  int depth = 0;
-  for (std::size_t i = 1; i < t.size(); i++) {
-    depth += DepthChange(t[i]);
-    if (depth != 0 || !(t[i].IsWord("TO") || t[i].IsWord("FROM"))) continue;
-    const std::string direction = t[i].IsWord("TO") ? "COPY TO" : "COPY FROM";
-    if (i + 1 < t.size() && t[i + 1].Is(DUCKDB_V2_TOKEN_TYPE_STRING_LITERAL) &&
-        IsProvenRemote(t[i + 1].Value())) {
-      return std::nullopt;
+  for (std::size_t start = 0; start < t.size(); start++) {
+    if (!t[start].IsWord("COPY")) continue;
+    if (start + 2 < t.size() && t[start + 1].IsWord("FROM") && t[start + 2].IsWord("DATABASE")) continue;
+    int depth = 0;
+    for (std::size_t i = start + 1; i < t.size(); i++) {
+      depth += DepthChange(t[i]);
+      if (depth < 0) break;  // the COPY's enclosing parenthesis closed
+      if (depth != 0 || !(t[i].IsWord("TO") || t[i].IsWord("FROM"))) continue;
+      if (i + 1 < t.size() && t[i + 1].Is(DUCKDB_V2_TOKEN_TYPE_STRING_LITERAL) && IsProvenRemote(t[i + 1].Value())) {
+        break;
+      }
+      return std::string(t[i].IsWord("TO") ? "COPY TO" : "COPY FROM") + " (local filesystem)";
     }
-    return direction + " (local filesystem)";
   }
   return std::nullopt;
 }
@@ -422,6 +442,31 @@ std::optional<std::string> SensitivePaths::Check(const std::string& path) const 
     return std::nullopt;
   }
   const std::string local = StripFileScheme(path);
+  // A pattern (glob('/home/*/.ssh/*'), read_csv('dir/*.csv')) is refused when it can
+  // match a protected path or something inside one: the entries a glob lists can't be
+  // filtered without a hook in DuckDB's file system, so they are never listed instead.
+  if (const auto wildcard = local.find_first_of("*?[{"); wildcard != std::string::npos) {
+    const auto slash = local.find_last_of('/', wildcard);
+    const std::string prefix = slash == std::string::npos ? "." : local.substr(0, slash == 0 ? 1 : slash);
+    const std::vector<std::string> pattern = Segments(ComparisonKey(local.substr(slash == std::string::npos ? 0 : slash + 1)));
+    const bool recursive = local.find("**") != std::string::npos || local.find('{') != std::string::npos;
+    std::lock_guard lock(mutex_);
+    for (const auto& key : Keys(prefix, home_, true)) {
+      for (const auto& entry : entries_) {
+        if (KeyCovers(entry.key, key)) return entry.category;  // the pattern starts inside it
+        if (!KeyCovers(key, entry.key)) continue;
+        if (recursive) return entry.category;
+        const auto inside = Segments(entry.key.substr(key.size() == 1 ? 1 : key.size() + 1));
+        if (inside.size() > pattern.size()) continue;  // it can only list a parent directory
+        bool matches = true;
+        for (std::size_t i = 0; i < inside.size() && matches; i++) {
+          matches = fnmatch(pattern[i].c_str(), inside[i].c_str(), 0) == 0;
+        }
+        if (matches) return entry.category;
+      }
+    }
+    return std::nullopt;
+  }
   // Resolving symlinks costs a stat per component, so only for text that can name a
   // directory; a bare word is still compared as a path relative to the working directory.
   const bool resolve = local.find('/') != std::string::npos || local.starts_with('~') || local.starts_with('.');
@@ -478,12 +523,10 @@ std::optional<std::string> ClassifyGatedCommand(duckdb_v2_connection_handle conn
     case DUCKDB_V2_STATEMENT_TYPE_EXPORT: return "EXPORT DATABASE";
     case DUCKDB_V2_STATEMENT_TYPE_LOAD:
       return t[0].IsWord("LOAD") ? "LOAD extension" : "INSTALL extension";
-    case DUCKDB_V2_STATEMENT_TYPE_COPY:
-      if (auto local = LocalCopy(piece)) return local;
-      break;
     default:
       break;
   }
+  if (auto local = LocalCopy(piece)) return local;
   if (t[0].IsWord("IMPORT")) return "IMPORT DATABASE";
   if (t[0].IsWord("CHECKPOINT") || (t[0].IsWord("FORCE") && t.size() > 1 && t[1].IsWord("CHECKPOINT"))) {
     return "CHECKPOINT";
@@ -517,6 +560,12 @@ void CheckStatement(const GuardContext& context, const Piece& piece, DUCKDB_V2_S
       }
     }
   }
+  // For non-admins the admin guard speaks first: its answer says what the role allows.
+  if (!context.admin) {
+    if (auto category = ClassifyGatedCommand(context.connection, piece, type)) {
+      Deny(GatedMessage(*category));
+    }
+  }
   if (context.sensitive_paths != nullptr && context.sensitive_paths->enabled()) {
     if (!SetsOf(piece, "secret_directory").empty()) {
       Deny("Permission denied: Hardcharger blocked changing secret_directory after startup; DuckDB's "
@@ -532,11 +581,6 @@ void CheckStatement(const GuardContext& context, const Piece& piece, DUCKDB_V2_S
              "). Hardcharger keeps credential and system files on the server host out of reach of SQL, "
              "whatever the role.");
       }
-    }
-  }
-  if (!context.admin) {
-    if (auto category = ClassifyGatedCommand(context.connection, piece, type)) {
-      Deny(GatedMessage(*category));
     }
   }
 }
