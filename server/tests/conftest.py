@@ -1,7 +1,8 @@
 """Starts Hardcharger servers for the tests.
 
 HARDCHARGER_TEST_BINARY names the server binary (default: ../build/hardcharger-server), the
-one build that ships. A missing binary or a server that doesn't come up fails the run;
+one build that ships; HARDCHARGER_TEST_CLIENT_BINARY the command-line client (default:
+../build/hardcharger) and HARDCHARGER_TEST_CLIENT_TESTS_BINARY its ported C++ tests. A missing binary or a server that doesn't come up fails the run;
 nothing is skipped. Every feature is on whenever its own option says so: there is no
 license.
 """
@@ -25,6 +26,9 @@ BUILD = pathlib.Path(__file__).resolve().parent.parent / "build"
 # Absolute (a relative name is the caller's, but servers run in their own directories).
 BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_BINARY", BUILD / "hardcharger-server")).resolve()
 UNIT_TEST_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_UNIT_BINARY", BUILD / "hardcharger-unit-tests")).resolve()
+CLIENT_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_CLIENT_BINARY", BUILD / "hardcharger")).resolve()
+CLIENT_TESTS_BINARY = pathlib.Path(
+    os.environ.get("HARDCHARGER_TEST_CLIENT_TESTS_BINARY", BUILD / "hardcharger-client-tests")).resolve()
 
 
 def free_port() -> int:
@@ -206,6 +210,33 @@ def run_unit_tests(gtest_filter: str) -> dict[str, bool]:
     assert results, f"no unit test matched {gtest_filter}:\n{out.stdout}\n{out.stderr}"
     assert out.returncode == 0 or not all(results.values()), out.stdout + out.stderr
     return results
+
+
+def run_client_tests(gtest_filter: str, env: dict[str, str] | None = None, timeout: float = 600) -> dict[str, bool]:
+    """Runs the client's ported C++ tests matching `gtest_filter` (with `env` added to a
+    clean environment); returns pass/fail by test name. Fails (never skips) when the
+    binary is missing or no test matched."""
+    if not CLIENT_TESTS_BINARY.exists():
+        pytest.fail(reason=f"{CLIENT_TESTS_BINARY} is missing: build the server first")
+    out = subprocess.run(args=[str(CLIENT_TESTS_BINARY), f"--gtest_filter={gtest_filter}", "--gtest_brief=0"],
+                         capture_output=True, text=True, timeout=timeout, env={**clean_environment(), **(env or {})})
+    results = {}
+    for line in out.stdout.splitlines():
+        for marker, passed in (("[       OK ] ", True), ("[  FAILED  ] ", False)):
+            if line.startswith(marker) and "(" in line:
+                results[line[len(marker):].split(" (")[0]] = passed
+    assert results, f"no client test matched {gtest_filter}:\n{out.stdout}\n{out.stderr}"
+    if not all(results.values()):
+        print(out.stdout[-20000:], out.stderr[-5000:])
+    assert out.returncode == 0 or not all(results.values()), out.stdout + out.stderr
+    return results
+
+
+def gtest_cases(source: pathlib.Path) -> list[str]:
+    """The Suite.Name of every TEST/TEST_F in a C++ test file, in order."""
+    import re
+    return [f"{suite}.{name}" for suite, name in
+            re.findall(pattern=r"^TEST(?:_F)?\((\w+),\s*(\w+)\)", string=source.read_text(), flags=re.M)]
 
 
 @pytest.fixture(scope="module")

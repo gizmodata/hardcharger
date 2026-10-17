@@ -4,13 +4,18 @@ Tags: --instance-tag (HARDCHARGER_INSTANCE_TAG) is
 recorded with the instance; SET hardcharger.session_tag and SET hardcharger.query_tag (JSON
 objects; '' clears; anything else fails with "Invalid JSON") land in the sessions and
 sql_statements tables and the views, and a query tag sticks to every later statement.
-Writes are asynchronous, so the checks poll briefly. Not yet: the 4 client cases
-(--session-tag, --query-tag and their HARDCHARGER_* variables) need a Warp SQL client binary.
+Writes are asynchronous, so the checks poll briefly. The 4 client cases run the `hardcharger`
+client with --session-tag and --query-tag and their variables, HARDCHARGER_SESSION_TAG and
+HARDCHARGER_QUERY_TAG (1.x: GIZMOSQL_*), then look the tag up with the client too. Added: a
+tag that isn't JSON is refused with a warning, and the client goes on (as 1.x).
 """
 
+import subprocess
 import time
 
 import pytest
+
+from conftest import CLIENT_BINARY, clean_environment
 
 INSTANCE_TAG = '{"env":"test","region":"us-east-1"}'
 
@@ -127,3 +132,75 @@ def test_instance_tag_needs_no_license(launcher):
     # 1.x refused an instance tag without its license feature; Hardcharger has no license.
     server = launcher.start(args=["--enable-instrumentation", "--instance-tag", INSTANCE_TAG])
     assert server.admin().scalar(sql="SELECT instance_tag::VARCHAR FROM _hardcharger_instr.instances") is not None
+
+
+# ---- The client's tag options (1.x: ClientSessionTagFlag, ClientQueryTagFlag,
+# ClientSessionTagEnvVar, ClientQueryTagEnvVar) ----
+
+
+def run_client(server, *args: str, **env: str) -> subprocess.CompletedProcess:
+    if not CLIENT_BINARY.exists():
+        pytest.fail(reason=f"{CLIENT_BINARY} is missing: build the server first")
+    return subprocess.run(args=[str(CLIENT_BINARY), "--host", "127.0.0.1", "--port", str(server.port),
+                                "--username", server.username, "--csv", "--no-header", *args],
+                          env={**clean_environment(), "HARDCHARGER_PASSWORD": server.password, **env},
+                          capture_output=True, text=True, timeout=60)
+
+
+def run_client_until(server, sql: str, needle: str, timeout: float = 30) -> subprocess.CompletedProcess:
+    """Repeats a lookup until its output has `needle` (instrumentation writes are asynchronous)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        result = run_client(server, "-c", sql)
+        if (result.returncode == 0 and needle in result.stdout) or time.monotonic() > deadline:
+            return result
+        time.sleep(0.2)
+
+
+def test_client_session_tag_flag(server):
+    first = run_client(server, "--session-tag", '{"client_flag":"test"}', "-c", "SELECT 1")
+    assert first.returncode == 0, first.stderr
+    lookup = run_client_until(server, "SELECT session_tag::VARCHAR FROM _hardcharger_instr.sessions "
+                                      "WHERE session_tag->>'client_flag' = 'test' LIMIT 1", "client_flag")
+    assert lookup.returncode == 0, lookup.stderr
+    assert "client_flag" in lookup.stdout, lookup.stdout
+
+
+def test_client_query_tag_flag(server):
+    first = run_client(server, "--query-tag", '{"pipeline":"client-test"}', "-c", "SELECT 1 AS client_tag_probe")
+    assert first.returncode == 0, first.stderr
+    lookup = run_client_until(server, "SELECT query_tag::VARCHAR FROM _hardcharger_instr.sql_statements "
+                                      "WHERE sql_text LIKE '%client_tag_probe%' AND sql_text NOT LIKE '%sql_statements%' "
+                                      "ORDER BY created_time DESC LIMIT 1", "client-test")
+    assert lookup.returncode == 0, lookup.stderr
+    assert "client-test" in lookup.stdout, lookup.stdout
+
+
+def test_client_session_tag_env_var(server):
+    first = run_client(server, "-c", "SELECT 1", HARDCHARGER_SESSION_TAG='{"env_var":"session_test"}')
+    assert first.returncode == 0, first.stderr
+    lookup = run_client_until(server, "SELECT session_tag::VARCHAR FROM _hardcharger_instr.sessions "
+                                      "WHERE session_tag->>'env_var' = 'session_test' LIMIT 1", "env_var")
+    assert lookup.returncode == 0, lookup.stderr
+    assert "session_test" in lookup.stdout, lookup.stdout
+
+
+def test_client_query_tag_env_var(server):
+    first = run_client(server, "-c", "SELECT 1 AS env_query_tag_probe", HARDCHARGER_QUERY_TAG='{"env_var":"query_test"}')
+    assert first.returncode == 0, first.stderr
+    lookup = run_client_until(server, "SELECT query_tag::VARCHAR FROM _hardcharger_instr.sql_statements "
+                                      "WHERE sql_text LIKE '%env_query_tag_probe%' AND sql_text NOT LIKE '%sql_statements%' "
+                                      "ORDER BY created_time DESC LIMIT 1", "query_test")
+    assert lookup.returncode == 0, lookup.stderr
+    assert "query_test" in lookup.stdout, lookup.stdout
+
+
+def test_client_invalid_tag_is_a_warning(server):
+    result = run_client(server, "--query-tag", "not-json", "-c", "SELECT 'went on'")
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.startswith("Warning: failed to set query_tag: "), result.stderr
+    assert "Invalid JSON" in result.stderr, result.stderr
+    assert result.stdout.strip() == "went on"
+    # A GizmoSQL 1.x variable does nothing.
+    ignored = run_client(server, "-c", "SELECT 1 AS gizmo_env_probe", GIZMOSQL_QUERY_TAG='{"from":"gizmosql"}')
+    assert ignored.returncode == 0 and ignored.stderr == "", ignored.stderr

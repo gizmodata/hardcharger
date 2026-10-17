@@ -7,11 +7,13 @@ updated. Nothing is skipped; a missing dependency fails its test.
 
 ## Totals
 
-- **59 C++ test files, 565 gtest cases:** 383 passing, 3 failing, 37 not applicable, 142 not yet.
-  - by file: 43 ported & passing, 6 passing except their not-applicable cases, 1 partly ported (the rest not yet), 2 ported & partly failing, 4 not applicable, 3 not yet.
-  - server-side cases (all but the 142 that test the `gizmosql_client` binary): 423, of which
+- **59 C++ test files, 565 gtest cases:** 525 passing, 3 failing, 37 not applicable, 0 not yet.
+  - by file: 47 ported & passing, 6 passing except their not-applicable cases, 0 partly ported (the rest not yet), 2 ported & partly failing, 4 not applicable, 0 not yet.
+  - server-side cases (all but the 142 that test the client): 423, of which
     383 pass (91%) and 3 fail.
-- **Scripts and driver suites (12 files, 134 cases or checks):** 17 passing, 0 failing, 22 not applicable, 95 not yet.
+  - client cases (1.x's `gizmosql_client`, now `hardcharger`, against a real
+    hardcharger-server): 142, of which 142 pass.
+- **Scripts and driver suites (12 files, 131 cases or checks):** 81 passing, 0 failing, 22 not applicable, 28 not yet.
 - Hardcharger's own tests (`test_server.py`, `test_no_license.py`, the security and
   redaction suites) and the Warp SQL conformance suite pass too.
 - **Access control** (the RBAC port, `test_rbac_*.py`, 18 files, 271 tests): all pass,
@@ -38,7 +40,9 @@ license (every 1.x licensing case is not applicable), and it takes only its own 
 not accepted, so a 1.x name-compatibility case is not applicable; a case that tested a
 feature through a 1.x name runs with Hardcharger's name). 1.x cases that unit-tested an internal
 component run as C++ googletest cases (`server/unit/`, binary `hardcharger-unit-tests`)
-through the same-named pytest file.
+through the same-named pytest file; 1.x's client tests, which test the client's classes,
+run the same way against the `hardcharger` client's (`server/client/tests/`, binary
+`hardcharger-client-tests`).
 
 ## C++ integration tests (`tests/integration/`)
 
@@ -79,7 +83,7 @@ through the same-named pytest file.
 | `integration/test_log_level_filtering.cpp` | 14 | 14 | 0 | 0 | 0 | `test_log_level_filtering.py` | ported & passing; C++ unit tests |
 | `integration/test_query_profile_capture.cpp` | 6 | 6 | 0 | 0 | 0 | `test_query_profile_capture.py` | ported & passing; DuckDB's profiler output file |
 | `integration/test_enterprise_gating.cpp` | 7 | 0 | 0 | 7 | 0 | — | not applicable; N/A: Hardcharger has no license; every feature is available (test_no_license.py) |
-| `integration/test_instance_session_query_tags.cpp` | 15 | 11 | 0 | 0 | 4 | `test_instance_session_query_tags.py` | mixed; not yet: the 4 client cases (needs a Warp SQL client binary); +1 |
+| `integration/test_instance_session_query_tags.cpp` | 15 | 15 | 0 | 0 | 0 | `test_instance_session_query_tags.py` | ported & passing; the 4 client cases run the hardcharger client; +2 |
 | `integration/test_metrics.cpp` | 11 | 10 | 0 | 1 | 0 | `test_metrics.py` | mixed; unit cases in C++; N/A: the license-feature case (no license) |
 | `integration/test_admission_controller.cpp` | 14 | 14 | 0 | 0 | 0 | `test_admission_controller.py` | ported & passing; C++ unit tests |
 | `integration/test_statement_queue.cpp` | 8 | 8 | 0 | 0 | 0 | `test_statement_queue.py` | ported & passing; +1 |
@@ -100,9 +104,9 @@ through the same-named pytest file.
 | `integration/test_memory_limit.cpp` | 2 | 2 | 0 | 0 | 0 | `test_memory_limit.py` | ported & passing |
 | `integration/test_init_sql_splitting.cpp` | 7 | 7 | 0 | 0 | 0 | `test_init_sql_splitting.py` | ported & passing; splitter cases as C++ unit tests |
 | `integration/test_inline_license_key.cpp` | 10 | 0 | 0 | 10 | 0 | — | not applicable; N/A: Hardcharger has no license (a license flag is an unknown option) |
-| `integration/test_interactive_client.cpp` | 115 | 0 | 0 | 0 | 115 | — | not yet; not yet: needs a Warp SQL client binary |
-| `integration/test_client_cli.cpp` | 18 | 0 | 0 | 0 | 18 | — | not yet; not yet: needs a Warp SQL client binary |
-| `integration/test_client_config.cpp` | 5 | 0 | 0 | 0 | 5 | — | not yet; not yet: needs a Warp SQL client binary |
+| `integration/test_interactive_client.cpp` | 115 | 115 | 0 | 0 | 0 | `test_interactive_client.py` | ported & passing; C++ against the client's classes (client/tests/interactive_client_test.cc); 2 re-expressed: --tls-skip-verify with mTLS is allowed (Warp SQL sends the certificate), .show has no edition |
+| `integration/test_client_cli.cpp` | 18 | 18 | 0 | 0 | 0 | `test_client_cli.py` | ported & passing; the hardcharger binary; +21: the shell at a terminal (pexpect: prompt, history, completion, pager, password prompt, Ctrl-C), Ctrl-C in scripts, TLS, mutual TLS, browser sign-in, session recovery, .once/.read, option errors |
+| `integration/test_client_config.cpp` | 5 | 5 | 0 | 0 | 0 | `test_client_config.py` | ported & passing; HARDCHARGER_* names (C++, client/tests/client_config_test.cc); +2 |
 
 ## Scripts and driver suites (`tests/`)
 
@@ -113,7 +117,7 @@ through the same-named pytest file.
 | `test_geoarrow.py` | 1 | 1 | 0 | 0 | 0 | `test_geoarrow.py` | ported & passing |
 | `test_v1_22_features.py` | 2 | 2 | 0 | 0 | 0 | `test_v1_22_features.py` | ported & passing |
 | `test_v1_22_1_features.py` | 2 | 2 | 0 | 0 | 0 | `test_v1_22_1_features.py` | ported & passing |
-| `test_client_shell.sh` | 67 | 0 | 0 | 0 | 67 | — | not yet; not yet: needs a Warp SQL client binary (67 assertions) |
+| `test_client_shell.sh` | 64 | 64 | 0 | 0 | 0 | `test_client_shell.py` | ported & passing; ported as a script (test_client_shell.sh, also its own CI step), one case per assertion; 64 assertions (once miscounted as 67) |
 | `drivers/test_metrics_configuration.py` | 13 | 8 | 0 | 5 | 0 | `test_metrics_configuration.py` | mixed; 1.x never ran it in CI; N/A: the 5 license cases (no license) |
 | `drivers/test_eager_adbc.py` | 16 | 0 | 0 | 8 | 8 | — | mixed; N/A: the Flight SQL driver leg; not yet: the Warp SQL ADBC driver leg |
 | `drivers/EagerJdbc.java` | 20 | 0 | 0 | 0 | 20 | — | not yet; not yet: needs a Warp SQL JDBC driver (~20 checks) |

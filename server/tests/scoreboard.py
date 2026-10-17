@@ -43,7 +43,7 @@ rows = [
  ("integration/test_log_level_filtering.cpp", 14, 14, 0, 0, 0, "test_log_level_filtering.py", "C++ unit tests"),
  ("integration/test_query_profile_capture.cpp", 6, 6, 0, 0, 0, "test_query_profile_capture.py", "DuckDB's profiler output file"),
  ("integration/test_enterprise_gating.cpp", 7, 0, 0, 7, 0, "", "N/A: Hardcharger has no license; every feature is available (test_no_license.py)"),
- ("integration/test_instance_session_query_tags.cpp", 15, 11, 0, 0, 4, "test_instance_session_query_tags.py", "not yet: the 4 client cases (needs a Warp SQL client binary); +1"),
+ ("integration/test_instance_session_query_tags.cpp", 15, 15, 0, 0, 0, "test_instance_session_query_tags.py", "the 4 client cases run the hardcharger client; +2"),
  ("integration/test_metrics.cpp", 11, 10, 0, 1, 0, "test_metrics.py", "unit cases in C++; N/A: the license-feature case (no license)"),
  # Admission control
  ("integration/test_admission_controller.cpp", 14, 14, 0, 0, 0, "test_admission_controller.py", "C++ unit tests"),
@@ -70,9 +70,9 @@ rows = [
  ("integration/test_init_sql_splitting.cpp", 7, 7, 0, 0, 0, "test_init_sql_splitting.py", "splitter cases as C++ unit tests"),
  ("integration/test_inline_license_key.cpp", 10, 0, 0, 10, 0, "", "N/A: Hardcharger has no license (a license flag is an unknown option)"),
  # Client binary
- ("integration/test_interactive_client.cpp", 115, 0, 0, 0, 115, "", "not yet: needs a Warp SQL client binary"),
- ("integration/test_client_cli.cpp", 18, 0, 0, 0, 18, "", "not yet: needs a Warp SQL client binary"),
- ("integration/test_client_config.cpp", 5, 0, 0, 0, 5, "", "not yet: needs a Warp SQL client binary"),
+ ("integration/test_interactive_client.cpp", 115, 115, 0, 0, 0, "test_interactive_client.py", "C++ against the client's classes (client/tests/interactive_client_test.cc); 2 re-expressed: --tls-skip-verify with mTLS is allowed (Warp SQL sends the certificate), .show has no edition"),
+ ("integration/test_client_cli.cpp", 18, 18, 0, 0, 0, "test_client_cli.py", "the hardcharger binary; +21: the shell at a terminal (pexpect: prompt, history, completion, pager, password prompt, Ctrl-C), Ctrl-C in scripts, TLS, mutual TLS, browser sign-in, session recovery, .once/.read, option errors"),
+ ("integration/test_client_config.cpp", 5, 5, 0, 0, 0, "test_client_config.py", "HARDCHARGER_* names (C++, client/tests/client_config_test.cc); +2"),
 ]
 scripts = [
  ("test_autocommit_false.py", 3, 3, 0, 0, 0, "test_autocommit_false.py", ""),
@@ -80,7 +80,7 @@ scripts = [
  ("test_geoarrow.py", 1, 1, 0, 0, 0, "test_geoarrow.py", ""),
  ("test_v1_22_features.py", 2, 2, 0, 0, 0, "test_v1_22_features.py", ""),
  ("test_v1_22_1_features.py", 2, 2, 0, 0, 0, "test_v1_22_1_features.py", ""),
- ("test_client_shell.sh", 67, 0, 0, 0, 67, "", "not yet: needs a Warp SQL client binary (67 assertions)"),
+ ("test_client_shell.sh", 64, 64, 0, 0, 0, "test_client_shell.py", "ported as a script (test_client_shell.sh, also its own CI step), one case per assertion; 64 assertions (once miscounted as 67)"),
  ("drivers/test_metrics_configuration.py", 13, 8, 0, 5, 0, "test_metrics_configuration.py", "1.x never ran it in CI; N/A: the 5 license cases (no license)"),
  ("drivers/test_eager_adbc.py", 16, 0, 0, 8, 8, "", "N/A: the Flight SQL driver leg; not yet: the Warp SQL ADBC driver leg"),
  ("drivers/EagerJdbc.java", 20, 0, 0, 0, 20, "", "not yet: needs a Warp SQL JDBC driver (~20 checks)"),
@@ -131,7 +131,9 @@ f_na = by(rows, lambda e: e[4] == e[1]); f_ny = by(rows, lambda e: e[5] == e[1] 
 f_pna = by(rows, lambda e: e[2] and e[3] == 0 and e[5] == 0 and e[4] and e[2] + e[4] == e[1])
 f_part = by(rows, lambda e: e[2] and e[3] == 0 and e[5] and e[5] < e[1])
 client = 115 + 18 + 5 + 4  # + the 4 CLI cases of test_instance_session_query_tags.cpp
+client_pass = 115 + 18 + 5 + 4  # every client case passes
 server_cases = t[0] - client
+server_pass = t[1] - client_pass
 doc = f"""# The GizmoSQL 1.x test battery on Hardcharger
 
 Every GizmoSQL 1.x test file (gizmosql `main` at v1.42.0), what became of it here, and
@@ -143,8 +145,10 @@ updated. Nothing is skipped; a missing dependency fails its test.
 
 - **59 C++ test files, {t[0]} gtest cases:** {t[1]} passing, {t[2]} failing, {t[3]} not applicable, {t[4]} not yet.
   - by file: {f_pass} ported & passing, {f_pna} passing except their not-applicable cases, {f_part} partly ported (the rest not yet), {f_fail} ported & partly failing, {f_na} not applicable, {f_ny} not yet.
-  - server-side cases (all but the {client} that test the `gizmosql_client` binary): {server_cases}, of which
-    {t[1]} pass ({100 * t[1] / server_cases:.0f}%) and {t[2]} fail.
+  - server-side cases (all but the {client} that test the client): {server_cases}, of which
+    {server_pass} pass ({100 * server_pass / server_cases:.0f}%) and {t[2]} fail.
+  - client cases (1.x's `gizmosql_client`, now `hardcharger`, against a real
+    hardcharger-server): {client}, of which {client_pass} pass.
 - **Scripts and driver suites ({len(scripts)} files, {s[0]} cases or checks):** {s[1]} passing, {s[2]} failing, {s[3]} not applicable, {s[4]} not yet.
 - Hardcharger's own tests (`test_server.py`, `test_no_license.py`, the security and
   redaction suites) and the Warp SQL conformance suite pass too.
@@ -172,7 +176,9 @@ license (every 1.x licensing case is not applicable), and it takes only its own 
 not accepted, so a 1.x name-compatibility case is not applicable; a case that tested a
 feature through a 1.x name runs with Hardcharger's name). 1.x cases that unit-tested an internal
 component run as C++ googletest cases (`server/unit/`, binary `hardcharger-unit-tests`)
-through the same-named pytest file.
+through the same-named pytest file; 1.x's client tests, which test the client's classes,
+run the same way against the `hardcharger` client's (`server/client/tests/`, binary
+`hardcharger-client-tests`).
 
 ## C++ integration tests (`tests/integration/`)
 
@@ -197,4 +203,4 @@ There is no license and one build: the suite runs on the build that ships.
 """
 import pathlib, sys
 pathlib.Path(sys.argv[1]).write_text(doc)
-print(f"{sys.argv[1]}: {t[1]} of {server_cases} server-side cases pass")
+print(f"{sys.argv[1]}: {server_pass} of {server_cases} server-side cases and {client_pass} of {client} client cases pass")

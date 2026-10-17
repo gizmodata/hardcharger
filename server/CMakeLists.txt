@@ -12,7 +12,9 @@ set(HARDCHARGER_DEPS "${CMAKE_CURRENT_SOURCE_DIR}/.deps" CACHE PATH "Pinned depe
 set(WARPSQL_ARROW_PREFIX "${HARDCHARGER_DEPS}/arrow-install" CACHE PATH "" FORCE)
 set(WARPSQL_DUCKDB_PREFIX "${HARDCHARGER_DEPS}/duckdb-install" CACHE PATH "" FORCE)
 
-# The Warp SQL server SDK and its DuckDB backend.
+# The Warp SQL server SDK and its DuckDB backend, and its client library (for the
+# command-line client). Its own tests (warpsql-client-tests) build on request only.
+set(WARPSQL_BUILD_TESTS ON)
 add_subdirectory(../third_party/warp-sql/cpp warp-sql EXCLUDE_FROM_ALL)
 
 # jwt-cpp 0.7.2 (header-only; Boost.JSON traits).
@@ -133,4 +135,41 @@ add_executable(hardcharger-unit-tests
 target_link_libraries(hardcharger-unit-tests PRIVATE hardcharger_core GTest::gtest_main)
 hardcharger_rpath(hardcharger-unit-tests)
 
-install(TARGETS hardcharger-server RUNTIME DESTINATION bin)
+# The command-line client, `hardcharger` (client/), on the Warp SQL client library, with
+# replxx for line editing (built by scripts/build-replxx.sh at its pinned release).
+set(HARDCHARGER_REPLXX_PREFIX "${HARDCHARGER_DEPS}/replxx-install" CACHE PATH "replxx install prefix")
+find_package(Threads REQUIRED)  # replxx's config names Threads::Threads
+find_package(replxx CONFIG REQUIRED PATHS "${HARDCHARGER_REPLXX_PREFIX}" NO_DEFAULT_PATH)
+add_library(hardcharger_client STATIC
+  client/client_config.cc
+  client/command_processor.cc
+  client/oauth_flow.cc
+  client/output_renderer.cc
+  client/pager.cc
+  client/password_prompt.cc
+  client/platform.cc
+  client/shell_completer.cc
+  client/shell_loop.cc
+  client/sql_processor.cc
+  client/syntax_highlighter.cc
+  client/warp_connection.cc)
+target_include_directories(hardcharger_client PUBLIC client "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(hardcharger_client PUBLIC warpsql_client replxx::replxx)
+target_compile_options(hardcharger_client PRIVATE -Wall -Wextra)
+add_executable(hardcharger-client client/main.cc)
+set_target_properties(hardcharger-client PROPERTIES OUTPUT_NAME hardcharger)
+target_link_libraries(hardcharger-client PRIVATE hardcharger_client)
+target_compile_options(hardcharger-client PRIVATE -Wall -Wextra)
+
+# The client's tests: GizmoSQL 1.x's client test files, ported (client/tests/). They run
+# against a real hardcharger-server, which server/tests starts and names in
+# HARDCHARGER_TEST_CLIENT_* variables (test_interactive_client.py and friends).
+add_executable(hardcharger-client-tests
+  client/tests/client_config_test.cc
+  client/tests/interactive_client_test.cc)
+target_link_libraries(hardcharger-client-tests PRIVATE hardcharger_client GTest::gtest_main)
+target_compile_definitions(hardcharger-client-tests PRIVATE
+                           HARDCHARGER_CLIENT_BINARY="$<TARGET_FILE:hardcharger-client>")
+add_dependencies(hardcharger-client-tests hardcharger-client)
+
+install(TARGETS hardcharger-server hardcharger-client RUNTIME DESTINATION bin)

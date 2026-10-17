@@ -60,7 +60,8 @@ jobs:
         id: deps
         run: |
           pins=$(cat third_party/warp-sql/cpp/scripts/build-duckdb.sh third_party/warp-sql/cpp/scripts/build-arrow.sh \
-                     server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake | shasum -a 256 | cut -c1-16)
+                     server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake server/scripts/build-replxx.sh \
+                     | shasum -a 256 | cut -c1-16)
           compiler=$(c++ --version | head -1 | shasum -a 256 | cut -c1-12)
           echo "key=deps-${{ matrix.name }}-$pins-$compiler" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
@@ -69,6 +70,7 @@ jobs:
           path: |
             server/.deps/duckdb-install
             server/.deps/arrow-install
+            server/.deps/replxx-install
           key: ${{ steps.deps.outputs.key }}
       - name: Build DuckDB and Arrow
         if: steps.cache.outputs.cache-hit != 'true'
@@ -80,6 +82,7 @@ jobs:
           cmake --build server/build
           server/build/hardcharger-server --version
           server/build/hardcharger-server --print-duckdb-version
+          server/build/hardcharger --version
 
       # PostgreSQL for the access-control grant store (the tests fail without it).
       - name: Start PostgreSQL (Linux)
@@ -118,6 +121,14 @@ jobs:
           markers=()
           if [ "$RUNNER_OS" != "Linux" ]; then markers=(-m "not services"); fi
           .venv/bin/python -m pytest -q "${markers[@]}"
+      # The 1.x client shell script, ported (test_client_shell.py runs it too, case by case).
+      - name: Client shell tests
+        run: bash server/tests/test_client_shell.sh
+      # The Warp SQL client library's own tests (unit, and live against warp-duckdb).
+      - name: Warp SQL client library tests
+        run: |
+          cmake --build server/build --target warpsql-client-tests
+          server/build/warp-sql/warpsql-client-tests
       - name: Warp SQL conformance suite
         working-directory: third_party/warp-sql/conformance
         env:
@@ -135,12 +146,13 @@ jobs:
         run: |
           stage="dist/hardcharger-${{ matrix.name }}"
           cmake --install server/build --prefix "$stage"
-          # Only the server ships, never the unit tests.
-          test "$(ls "$stage/bin")" = "hardcharger-server"
+          # Only the server and the client ship, never the tests.
+          test "$(ls "$stage/bin" | tr '\n' ' ')" = "hardcharger hardcharger-server "
           mkdir -p "$stage/lib"
           cp -P server/.deps/duckdb-install/lib/libduckdb.* "$stage/lib/"
           cp LICENSE CHANGELOG.md "$stage/"
           "$stage/bin/hardcharger-server" --version
+          "$stage/bin/hardcharger" --version
           tar -C dist -czf "dist/hardcharger-${{ matrix.name }}.tar.gz" "hardcharger-${{ matrix.name }}"
       - uses: actions/upload-artifact@v7
         with:
@@ -174,7 +186,8 @@ jobs:
         id: deps
         run: |
           pins=$(cat third_party/warp-sql/cpp/scripts/build-duckdb.sh third_party/warp-sql/cpp/scripts/build-arrow.sh \
-                     server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake | shasum -a 256 | cut -c1-16)
+                     server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake server/scripts/build-replxx.sh \
+                     | shasum -a 256 | cut -c1-16)
           compiler=$(c++ --version | head -1 | shasum -a 256 | cut -c1-12)
           echo "key=deps-linux-amd64-$pins-$compiler" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
@@ -183,6 +196,7 @@ jobs:
           path: |
             server/.deps/duckdb-install
             server/.deps/arrow-install
+            server/.deps/replxx-install
           key: ${{ steps.deps.outputs.key }}
       - name: Build DuckDB and Arrow
         if: steps.cache.outputs.cache-hit != 'true'
@@ -208,6 +222,8 @@ jobs:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
           HARDCHARGER_TEST_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-server
           HARDCHARGER_TEST_UNIT_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-unit-tests
+          HARDCHARGER_TEST_CLIENT_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger
+          HARDCHARGER_TEST_CLIENT_TESTS_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-client-tests
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -r pyproject.toml
@@ -295,9 +311,13 @@ jobs:
         run: |
           docker buildx build --platform linux/amd64 --file docker/Dockerfile --tag hc-smoke --load .
           docker run --rm hc-smoke --version
+          docker run --rm --entrypoint hardcharger hc-smoke --version
           docker run -d --name hc -e HARDCHARGER_ADMIN_PASSWORD=smoke -p 31337:31337 -p 31338:31338 hc-smoke
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
           curl -sf http://127.0.0.1:31337/warp
+          # The client in the image reaches the server it runs beside.
+          docker exec -e HARDCHARGER_PASSWORD=smoke hc hardcharger --host 127.0.0.1 --username hardcharger \
+            --csv --no-header -c "SELECT 'image client'" | grep -qx 'image client'
           docker logs hc
           docker rm -f hc
 

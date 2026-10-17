@@ -105,6 +105,63 @@ Every option also has a YAML key: the flag without its leading `--`, with `_` fo
 Hardcharger 0.1.x's own `--username` / `--password` (`HARDCHARGER_USERNAME` /
 `HARDCHARGER_PASSWORD`) are `--admin-username` / `--admin-password` from 0.2.0.
 
+## The command-line client
+
+GizmoSQL 1.x's `gizmosql_client` is `hardcharger`. It speaks Warp SQL (HTTP), so it
+connects to `hardcharger-server` (or any Warp SQL server), not to a GizmoSQL 1.x server.
+Its options mean what they meant in 1.x; only the names of the environment variables,
+files and URI scheme change. It reads no `GIZMOSQL_*` variable.
+
+| gizmosql_client | hardcharger | Environment variable |
+|---|---|---|
+| `--host`, `-h` | `--host`, `-h` | `GIZMOSQL_HOST` → `HARDCHARGER_HOST` |
+| `--port`, `-p` | `--port`, `-p` (default 31337) | `GIZMOSQL_PORT` → `HARDCHARGER_PORT` |
+| `--username`, `-u` | `--username`, `-u` | `GIZMOSQL_USER` → `HARDCHARGER_USER`; the fallback `GIZMOSQL_USERNAME` (the server's) → `HARDCHARGER_ADMIN_USERNAME` |
+| `--password`, `-W` (forces the prompt) | `--password`, `-W` | `GIZMOSQL_PASSWORD` → `HARDCHARGER_PASSWORD` (the user's own password; never falls back to the server's `HARDCHARGER_ADMIN_PASSWORD`) |
+| `--tls` | `--tls` (HTTPS) | `GIZMOSQL_TLS` → `HARDCHARGER_TLS` |
+| `--tls-roots` | `--tls-roots` | `GIZMOSQL_TLS_ROOTS` → `HARDCHARGER_TLS_ROOTS` |
+| `--tls-skip-verify` | `--tls-skip-verify` | |
+| `--mtls-cert`, `--mtls-key` | `--mtls-cert`, `--mtls-key` (also with `--tls-skip-verify`, which 1.x refused: Arrow Flight dropped the certificate then) | |
+| `--auth-type password\|external` | `--auth-type password\|external` (the server's browser sign-in, `--oauth-port` routes) | |
+| `--oauth-port` | `--oauth-port` (default 31339) | `GIZMOSQL_OAUTH_PORT` → `HARDCHARGER_OAUTH_PORT` |
+| (discovered over Flight) | `--oauth-base-url` (default `http(s)://HOST:OAUTH_PORT`) | `HARDCHARGER_OAUTH_BASE_URL` (the server's variable of the same meaning) |
+| `--command`, `-c`; `--file`, `-f`; `--output`, `-o` | the same | |
+| `--init` (default `~/.gizmosqlrc`), `--no-init` | `--init` (default `~/.hardchargerrc`), `--no-init` | |
+| `--session-tag`, `--query-tag` | the same (sent as `SET hardcharger.session_tag` / `query_tag`) | `GIZMOSQL_SESSION_TAG`, `GIZMOSQL_QUERY_TAG` → `HARDCHARGER_SESSION_TAG`, `HARDCHARGER_QUERY_TAG` |
+| `--csv`, `--json`, `--table`, `--box`, `--markdown`, `--no-header` | the same | |
+| `--quiet`, `-q`; `--echo`, `-e`; `--bail`; `--null` | the same | |
+| `--help`, `-?`; `--version`, `-v` | the same | |
+| `--uri`, or the positional URI: `gizmosql://HOST:PORT?username=…&useEncryption=…&disableCertificateVerification=…&tlsRoots=…&authType=…` | `hardcharger://HOST:PORT?…` with the same parameters | |
+| (none) | the browser `HARDCHARGER_BROWSER` opens for `--auth-type external` (default: `open`, `xdg-open`) | `HARDCHARGER_BROWSER` |
+
+Files: `~/.gizmosql_history` is `~/.hardcharger_history`, `~/.gizmosqlrc` is
+`~/.hardchargerrc`, and `.export_last`'s default `~/.gizmosql_last_result.arrow` is
+`~/.hardcharger_last_result.arrow`. The prompt is `hardcharger>` until connected, then the
+current `catalog.schema`, as in 1.x.
+
+The dot commands and output modes are 1.x's. What behaves differently, and why:
+
+- **Statements with rows show them.** Warp SQL answers rows or a statement document, so
+  the server decides, not the statement's first word: `INSERT … RETURNING` shows its rows
+  (1.x printed `OK`).
+- **No row-count line in machine-readable output.** 1.x printed `N rows (M columns)` after
+  CSV, JSON and the other non-box modes even into files and pipes, which broke them
+  (`--json | jq`). It is printed only at an interactive terminal now; box and table
+  modes keep theirs inside the box.
+- **`.once FILE`** redirects only the next result (1.x kept redirecting, like `.output`),
+  and **`.read FILE`** runs the file (1.x answered that it was "handled by the shell loop").
+- **A dot command that fails** (unknown, or `.read` of a missing file) makes a script exit
+  with status 1, as a failed statement does.
+- **Ctrl-C** cancels the running statement through Warp SQL's cancel, and the shell (or
+  the script) goes on, as in 1.x. In a script that isn't running a statement, Ctrl-C stops
+  the client (status 130); 1.x ignored it there.
+- **A lost session is reopened.** When the server no longer has the session (idle too
+  long, restarted) or ended it (`KILL SESSION`), the client opens a new one, says so, and
+  goes on; a statement that never ran is run in it. Temporary tables and session settings
+  don't survive this, as the warning says.
+- **`.show`** reads the engine and Arrow versions from Warp SQL's server-info document and
+  has no `edition` line (Hardcharger has no editions).
+
 ## SQL
 
 | GizmoSQL 1.x | Hardcharger |

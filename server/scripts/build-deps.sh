@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Builds Hardcharger's pinned dependencies (DuckDB 2.0 and Arrow C++, IPC only) into
-# server/.deps, with the warp-sql scripts. DuckDB gets one patch first: the binder hook
+# server/.deps, with the warp-sql scripts, and replxx (the client's line editor). DuckDB gets one patch first: the binder hook
 # access control needs to check views with their owner's rights (patch-duckdb.cmake).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WARP="$HERE/../third_party/warp-sql/cpp/scripts"
 export WARPSQL_DEPS_DIR="$HERE/.deps"
 "$WARP/build-arrow.sh"
+HARDCHARGER_DEPS_DIR="$HERE/.deps" "$HERE/scripts/build-replxx.sh"
 
 # Check out the commit build-duckdb.sh pins and patch it; build-duckdb.sh then checks
 # out the same commit again, which keeps the patched file, and builds.

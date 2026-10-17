@@ -7,6 +7,26 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- `hardcharger`, the command-line SQL client: GizmoSQL 1.x's `gizmosql_client` on Warp
+  SQL, with the same options (in Hardcharger's names: `HARDCHARGER_HOST`, `_PORT`, `_USER`,
+  `_PASSWORD`, `_TLS`, `_TLS_ROOTS`, `_OAUTH_PORT`, `_SESSION_TAG`, `_QUERY_TAG`;
+  `hardcharger://` URIs; `~/.hardchargerrc`, `~/.hardcharger_history`), dot commands, output
+  modes, heredoc/pipe/`-c`/`-f` scripting and exit codes, the pager, history, completion,
+  syntax highlighting, query and session tags, TLS and mutual TLS, and the server's
+  browser sign-in (`--auth-type external`). Ctrl-C cancels the running statement through
+  Warp SQL's cancel and the shell goes on. It ships in the tarballs' `bin/` next to
+  `hardcharger-server`, and the image has both on `PATH` (the entrypoint stays the server).
+  docs/migrating-from-gizmosql.md maps the names and lists what behaves differently.
+- GizmoSQL 1.x's client tests, ported: `test_interactive_client.cpp` (115 cases, as C++
+  against the client's classes), `test_client_cli.cpp` (18), `test_client_config.cpp` (5),
+  the 4 client cases of `test_instance_session_query_tags.cpp`, and `test_client_shell.sh`
+  (64 assertions), all against a real hardcharger-server; plus the shell at a terminal
+  (pexpect), TLS, mutual TLS, browser sign-in and session-recovery cases.
+- replxx (release-0.0.4), the client's line editor, built by `scripts/build-deps.sh` and
+  cached with DuckDB and Arrow.
+
 ## [0.2.0] - 2026-10-17
 
 Role-based access control and GizmoSQL 1.x's server features (instrumentation, catalog

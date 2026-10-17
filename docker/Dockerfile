@@ -1,5 +1,6 @@
-# The Hardcharger server image. Built by .github/workflows/server.yml from the release
-# tarballs (one per architecture), so the image runs exactly the tested binary.
+# The Hardcharger server image, with the command-line client (`hardcharger`) on PATH too.
+# Built by .github/workflows/server.yml from the release tarballs (one per architecture),
+# so the image runs exactly the tested binaries.
 FROM ubuntu:24.04
 
 ARG TARGETARCH
@@ -9,7 +10,8 @@ RUN apt-get update \
  && useradd --system --create-home --home-dir /var/lib/hardcharger hardcharger
 
 COPY dist/hardcharger-linux-${TARGETARCH}/ /opt/hardcharger/
-RUN ln -s /opt/hardcharger/bin/hardcharger-server /usr/local/bin/hardcharger-server
+RUN ln -s /opt/hardcharger/bin/hardcharger-server /usr/local/bin/hardcharger-server \
+ && ln -s /opt/hardcharger/bin/hardcharger /usr/local/bin/hardcharger
 
 USER hardcharger
 WORKDIR /var/lib/hardcharger

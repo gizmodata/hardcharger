@@ -86,6 +86,33 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' ./hardcharger-macos-arm64/bin/hardcharger
 
 ## 🔌 Connect
 
+### Command line
+
+`hardcharger`, the command-line client, ships beside `hardcharger-server` in every tarball
+and in the image:
+
+```bash
+HARDCHARGER_PASSWORD='change-me' hardcharger --host localhost --username hardcharger \
+  --command "SELECT 42 AS answer"
+```
+
+```text
+┌─────────┐
+│ answer  │
+│ integer │
+├─────────┤
+│      42 │
+├─────────┤
+│ 1 row   │
+└─────────┘
+```
+
+Without `--command` (or `--file`, or a pipe) it is an interactive shell: history, tab
+completion, syntax highlighting, a pager, dot commands (`.help`), and Ctrl-C cancels the
+running statement. Output modes: `--csv`, `--json`, `--markdown`, `--table`, or `.mode` for
+the rest. It is GizmoSQL's `gizmosql_client`, on Warp SQL
+([migrating](docs/migrating-from-gizmosql.md#the-command-line-client)).
+
 ### Python (ADBC)
 
 ```python
@@ -209,7 +236,7 @@ flowchart LR
 ```bash
 git clone --recurse-submodules https://github.com/gizmodata/hardcharger.git
 cd hardcharger/server
-./scripts/build-deps.sh                      # DuckDB 2.0 and Arrow C++, pinned
+./scripts/build-deps.sh                      # DuckDB 2.0, Arrow C++ and replxx, pinned
 OPENSSL_ROOT_DIR=$(brew --prefix openssl@3) cmake -S . -B build -G Ninja
 cmake --build build
 ```
@@ -237,6 +264,7 @@ WARP_SQL_TEST_SERVER_USERNAME=warp HARDCHARGER_ADMIN_USERNAME=warp \
   .venv/bin/python -m pytest -q
 ```
 
+The client's 1.x shell script runs on its own too (`bash server/tests/test_client_shell.sh`).
 Suites that need PostgreSQL or the S3 gateway fail, never skip, when those aren't there.
 [BATTERY.md](server/tests/BATTERY.md) tracks GizmoSQL's test battery as ported, file by file.
 
