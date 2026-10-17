@@ -42,6 +42,10 @@ done
 # (The environment variable is ':'-separated, like PATH.)
 export CMAKE_PREFIX_PATH="$WARPSQL_DEPS_DIR/roaring-install:$WARPSQL_DEPS_DIR/libpq-install:$WARPSQL_DEPS_DIR/curl-install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 WARPSQL_DUCKDB_EXTENSION_CONFIGS="$EXTENSIONS" "$WARP/build-duckdb.sh"
+# CMake installs libraries into lib64 on RPM-based systems; the server's CMake uses lib.
+if [ -d "$WARPSQL_DEPS_DIR/duckdb-install/lib64" ] && [ ! -e "$WARPSQL_DEPS_DIR/duckdb-install/lib" ]; then
+  ln -s lib64 "$WARPSQL_DEPS_DIR/duckdb-install/lib"
+fi
 # DuckDB's internal headers, which the access-control module compiles against, include
 # a few of DuckDB's vendored libraries' headers that its install leaves out.
 THIRD_PARTY="$WARPSQL_DEPS_DIR/duckdb-install/include/duckdb_third_party"
@@ -65,7 +69,3 @@ cp "$WARPSQL_DEPS_DIR/libpq-install/lib/libpq.a" "$WARPSQL_DEPS_DIR/roaring-inst
 if [ -f "$WARPSQL_DEPS_DIR/curl-install/lib/libcurl.a" ]; then cp "$WARPSQL_DEPS_DIR/curl-install/lib/libcurl.a" "$STATIC_DEPS/"; fi
 grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_basetableref.cpp" \
   || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
-# CMake installs libraries into lib64 on RPM-based systems; the server's CMake uses lib.
-if [ -d "$WARPSQL_DEPS_DIR/duckdb-install/lib64" ] && [ ! -e "$WARPSQL_DEPS_DIR/duckdb-install/lib" ]; then
-  ln -s lib64 "$WARPSQL_DEPS_DIR/duckdb-install/lib"
-fi
