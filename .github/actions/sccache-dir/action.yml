@@ -1,0 +1,57 @@
+# sccache's local cache directory, carried between runs as ONE actions/cache entry per job
+# (sccache's own GitHub Actions backend stores one cache entry per object file: about
+# 1,300 after a day of this workflow, growing by hundreds with every commit that touches a
+# widely included header, against the repository's entry limit). `restore` takes the
+# newest entry for this job and toolchain (a restore prefix); `save` stores a new one only
+# when the build added objects to the directory, so warm runs add nothing.
+name: sccache directory
+description: Restore or save the sccache directory for one job and toolchain
+inputs:
+  mode:
+    description: restore or save
+    required: true
+  name:
+    description: the job's part of the key (e.g. linux-amd64, linux-amd64-tsan)
+    required: true
+  toolchain:
+    description: the exact toolchain (objects from another compiler are useless)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: sccache key
+      id: key
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+        TOOLCHAIN: ${{ inputs.toolchain }}
+      run: |
+        tool=$(printf '%s' "$TOOLCHAIN" | tr -cs 'A-Za-z0-9.' '-' | sed 's/^-//; s/-$//')
+        echo "prefix=sccache-v1-$NAME-$tool-" >> "$GITHUB_OUTPUT"
+        mkdir -p "$SCCACHE_DIR"
+    - if: inputs.mode == 'restore'
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ env.SCCACHE_DIR }}
+        key: ${{ steps.key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+    - if: inputs.mode == 'restore'
+      shell: bash
+      run: echo "SCCACHE_FILES_BEFORE=$(find "$SCCACHE_DIR" -type f | wc -l)" >> "$GITHUB_ENV"
+    - if: inputs.mode == 'save'
+      id: grew
+      shell: bash
+      run: |
+        # The stats of a build on this host (a container's print in its own log), then the
+        # server stopped, so its pending writes reach the directory first.
+        sccache --show-stats 2>/dev/null || true
+        sccache --stop-server >/dev/null 2>&1 || true
+        after=$(find "$SCCACHE_DIR" -type f | wc -l)
+        echo "sccache directory: ${SCCACHE_FILES_BEFORE:-0} files restored, $after now"
+        echo "grew=$([ "$after" -gt "${SCCACHE_FILES_BEFORE:-0}" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+    # A tag's caches can't be restored by any other ref, so only branch runs save.
+    - if: inputs.mode == 'save' && steps.grew.outputs.grew == 'true' && !startsWith(github.ref, 'refs/tags/')
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ env.SCCACHE_DIR }}
+        key: ${{ steps.key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}

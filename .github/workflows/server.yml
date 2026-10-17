@@ -20,12 +20,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
-# Every server compile goes through sccache with the GitHub Actions cache as its store
-# (mozilla-actions/sccache-action puts sccache on PATH and exports the cache service's
-# URL and token; this switch makes sccache use them instead of a local disk cache that
-# dies with the runner).
+# Every server compile goes through sccache (mozilla-actions/sccache-action puts it on
+# PATH), with a local cache directory that .github/actions/sccache-dir carries between
+# runs as one actions/cache entry per job, rather than sccache's GitHub Actions backend,
+# which stores one cache entry per object file.
 env:
-  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_DIR: ${{ github.workspace }}/.sccache
+  SCCACHE_CACHE_SIZE: 2G
   # pytest-xdist workers for the server tests. The tests mostly wait on servers they
   # start, so more workers than CPUs pays: on the 2-CPU Linux runners the parallel pass
   # took 230-250 s with 4 workers and 208-217 s with 6 (the sanitizer jobs use fewer).
@@ -134,6 +135,12 @@ jobs:
           build: ${{ steps.toolchain.outputs.build }}
 
       - uses: mozilla-actions/sccache-action@v0.0.11
+      - name: sccache directory (restore)
+        uses: ./.github/actions/sccache-dir
+        with:
+          mode: restore
+          name: ${{ matrix.name }}
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
       # On Linux, in the manylinux image (server/scripts/build-portable-linux.sh, which
       # also checks the glibc baseline); the tests then run the binaries on the runner.
       - name: Build the server
@@ -151,6 +158,14 @@ jobs:
           server/build/hardcharger-server --version
           server/build/hardcharger-server --print-duckdb-version
           server/build/hardcharger --version
+
+      - name: sccache directory (save)
+        if: always()
+        uses: ./.github/actions/sccache-dir
+        with:
+          mode: save
+          name: ${{ matrix.name }}
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
 
       # PostgreSQL for the access-control grant store (the tests fail without it).
       - name: Start PostgreSQL (Linux)
@@ -237,9 +252,6 @@ jobs:
           fi
           stage="dist/hardcharger-${{ matrix.name }}"
           server/scripts/check-glibc-baseline.sh "$stage"/bin/* "$stage"/lib/*
-      - name: sccache statistics
-        if: always()
-        run: sccache --show-stats || true
       - uses: actions/upload-artifact@v7
         with:
           name: hardcharger-${{ matrix.name }}
@@ -327,6 +339,12 @@ jobs:
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: server/scripts/build-deps.sh
       - uses: mozilla-actions/sccache-action@v0.0.11
+      - name: sccache directory (restore)
+        uses: ./.github/actions/sccache-dir
+        with:
+          mode: restore
+          name: linux-amd64-asan
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
       - name: Build the server with AddressSanitizer
         run: |
           cmake -S server -B server/build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -334,6 +352,13 @@ jobs:
             -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
           cmake --build server/build-asan
+      - name: sccache directory (save)
+        if: always()
+        uses: ./.github/actions/sccache-dir
+        with:
+          mode: save
+          name: linux-amd64-asan
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
       - name: Start PostgreSQL
         run: |
           docker run -d --name hardcharger-test-pg -e POSTGRES_USER=hardcharger \
@@ -376,9 +401,6 @@ jobs:
       - name: Server log
         if: failure()
         run: tail -200 "$RUNNER_TEMP/conformance-server.log" || true
-      - name: sccache statistics
-        if: always()
-        run: sccache --show-stats || true
 
   # ThreadSanitizer: everything instrumented, built with clang (DuckDB with its patches
   # and built-in extensions, Arrow, the extensions' libraries, the server and its unit
@@ -449,11 +471,24 @@ jobs:
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: server/scripts/build-deps.sh
       - uses: mozilla-actions/sccache-action@v0.0.11
+      - name: sccache directory (restore)
+        uses: ./.github/actions/sccache-dir
+        with:
+          mode: restore
+          name: linux-amd64-tsan
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
       - name: Build the server with ThreadSanitizer
         run: |
           cmake -S server -B server/build-tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           cmake --build server/build-tsan
+      - name: sccache directory (save)
+        if: always()
+        uses: ./.github/actions/sccache-dir
+        with:
+          mode: save
+          name: linux-amd64-tsan
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
       - name: Start PostgreSQL
         run: |
           docker run -d --name hardcharger-test-pg -e POSTGRES_USER=hardcharger \
@@ -528,9 +563,6 @@ jobs:
           name: tsan-reports
           path: tsan-reports/
           if-no-files-found: ignore
-      - name: sccache statistics
-        if: always()
-        run: sccache --show-stats || true
 
   image:
     needs: [build, portable, sanitize, tsan]

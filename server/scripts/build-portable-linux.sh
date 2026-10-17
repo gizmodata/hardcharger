@@ -36,7 +36,8 @@ git config --global --add safe.directory '*'
 # passes HOST_UID/HOST_GID), so the host's later steps can use and cache it.
 give_back() {
   if [ -n "${HOST_UID:-}" ]; then
-    chown -R "$HOST_UID:${HOST_GID:-$HOST_UID}" "$DEPS" ${BUILD_DIR:+"$BUILD_DIR"} 2>/dev/null || true
+    chown -R "$HOST_UID:${HOST_GID:-$HOST_UID}" "$DEPS" ${BUILD_DIR:+"$BUILD_DIR"} ${SCCACHE_DIR:+"$SCCACHE_DIR"} \
+      2>/dev/null || true
   fi
 }
 trap give_back EXIT
@@ -64,7 +65,8 @@ build_server() {
     -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX" -DOPENSSL_USE_STATIC_LIBS=TRUE \
     "${launcher[@]}" "$@"
   cmake --build "$build_dir"
-  if command -v sccache >/dev/null 2>&1; then sccache --show-stats || true; fi
+  # The stats, and the server stopped so its pending writes reach the cache directory.
+  if command -v sccache >/dev/null 2>&1; then sccache --show-stats || true; sccache --stop-server >/dev/null || true; fi
   server/scripts/check-glibc-baseline.sh "$build_dir/hardcharger-server" "$build_dir/hardcharger" \
     "$DEPS"/duckdb-install/lib/libduckdb.so
 }
