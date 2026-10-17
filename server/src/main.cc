@@ -48,6 +48,7 @@ std::string RedactUrl(const std::string& url) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  warpsql::InitializeProcess();  // first: before anything uses OpenSSL
   hc::Loaded loaded;
   try {
     loaded = hc::LoadConfig(argc, argv);

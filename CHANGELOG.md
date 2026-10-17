@@ -46,6 +46,15 @@ own changelog in `python/CHANGELOG.md`.
 
 - Statement logs no longer show `CREATE SECRET` or `CREATE`/`ALTER USER` text, which can
   carry credentials.
+- The server could crash while stopping: a thread finishing after OpenSSL's exit cleanup
+  touched freed state. OpenSSL no longer frees its global state at exit.
+- A NULL bound through an Arrow parameter keeps its Arrow column's type when DuckDB can't
+  infer the parameter's (`SELECT ? + 1`); LIST and interval Arrow parameters bind (an
+  interval with sub-microsecond precision is refused, not truncated); prepared
+  statements describe DECIMAL, UUID, LIST and INTERVAL parameters.
+- Opening a session with an unknown option says `unknown_option`.
+- Table schemas from metadata give PRECISION in decimal digits for every numeric type,
+  column comments (REMARKS) and defaults (`WARP:SQL:COLUMN_DEFAULT`).
 
 ## [0.1.2] - 2026-10-17
 
