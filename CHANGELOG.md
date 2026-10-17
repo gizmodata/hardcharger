@@ -148,7 +148,8 @@ test battery, plus two security reviews of the result (see Fixed).
 ### Changed
 
 - Release images also go to Docker Hub (`gizmodata/hardcharger`), with the same tags as
-  ghcr; the release refuses to push if that repository is not private.
+  ghcr, signed in by OIDC (no stored token); the release refuses to push to, and fails
+  after pushing to, a repository anyone can pull.
 
 - `drain_seconds` is now `shutdown_grace_period_seconds` (default 300, as in 1.x).
 - Table schemas from `metadata/tables?include_schema=true` carry nullability, column
