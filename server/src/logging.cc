@@ -53,6 +53,8 @@ void ConfigureLogging(std::string_view level, std::string_view format) {
   json_format = format == "json";
 }
 
+bool LogEnabled(LogLevel level) { return level >= min_level; }
+
 void Log(LogLevel level, std::string_view message, const LogFields& fields) {
   if (level < min_level) {
     return;

@@ -68,6 +68,7 @@ target_compile_options(hardcharger_authz PRIVATE -Wall -Wextra -Wno-unused-param
 option(HARDCHARGER_TRUST_TEST_LICENSES "Trust the tests' license signing key (tests only)" OFF)
 
 add_executable(hardcharger
+  src/audit.cc
   src/auth.cc
   src/config.cc
   src/engine.cc

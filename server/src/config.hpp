@@ -52,6 +52,7 @@ struct Config {
   std::string rbac_store_uri;       // PostgreSQL connection string or URI of the grant store
   std::string rbac_opa_url;         // Open Policy Agent decision URL also asked; empty: none
   int64_t rbac_opa_timeout_ms = 2000;
+  std::string audit_chain_key;      // seals access-control audit records (HMAC-SHA256)
 
   // License (GizmoData Enterprise keys)
   std::string license_key;
@@ -67,12 +68,14 @@ struct Config {
 };
 
 // What the command line asked for besides configuration.
-enum class Action { kServe, kHelp, kVersion, kPrintDuckDBVersion };
+enum class Action { kServe, kHelp, kVersion, kPrintDuckDBVersion, kVerifyAuditLog };
 
 struct Loaded {
   Config config;
   Action action = Action::kServe;
   std::vector<std::string> notes;  // e.g. legacy environment names in use
+  std::string audit_log;           // kVerifyAuditLog: the log file to check
+  bool audit_log_partial = false;  // ... which may begin inside a chain (a rotated log)
 };
 
 // Reads flags, environment and the YAML file named by --config / HARDCHARGER_CONFIG.

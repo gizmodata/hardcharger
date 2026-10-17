@@ -16,6 +16,7 @@
 #include "authz/gate.hpp"
 #include "authz/resolver.hpp"
 #include "duckdb_sql.hpp"
+#include "audit.hpp"
 #include "logging.hpp"
 
 namespace hardcharger::authz {
@@ -399,8 +400,8 @@ void AccessControl::OnSnapshot(const Snapshot& snapshot) {
     }();
     if (state && snapshot.LostRightsSince(*previous, state->principal())) {
       guard->InterruptRunning();
-      Log(LogLevel::kInfo, "stopped a running statement after its user lost access",
-          {{"user", guard->identity_.user_name}, {"reason", "rights revoked"}});
+      Audit(LogLevel::kInfo, "stopped a running statement after its user lost access",
+          {{"kind", "access_control"}, {"user", guard->identity_.user_name}, {"reason", "rights revoked"}});
     }
   }
 }
@@ -450,8 +451,8 @@ void SessionGuard::End(const std::string& reason) {
     ended_ = reason;
     if (connection_) duckdb_v2_connection_interrupt(connection_, nullptr);
   }
-  Log(LogLevel::kInfo, "ended a session after an access-control change",
-      {{"user", identity_.user_name}, {"reason", reason}});
+  Audit(LogLevel::kInfo, "ended a session after an access-control change",
+      {{"kind", "access_control"}, {"user", identity_.user_name}, {"reason", reason}});
 }
 
 void SessionGuard::InterruptRunning() {
@@ -479,16 +480,16 @@ void SessionGuard::AuditAllowed() {
   if (accesses.empty()) return;
   std::string objects;
   for (const auto& access : accesses) objects += (objects.empty() ? "" : "; ") + access;
-  Log(LogLevel::kInfo, "access control allowed a statement",
-      {{"user", identity_.user_name}, {"objects", objects},
+  Audit(LogLevel::kInfo, "access control allowed a statement",
+      {{"kind", "access_control"}, {"status", "allowed"}, {"user", identity_.user_name}, {"objects", objects},
        {"active_role", state->active_role_name()}});
 }
 
 void SessionGuard::AuditDenied(const Error& error, std::string_view sql) {
   if (std::string_view(error.what()).find("Hardcharger blocked") == std::string_view::npos) return;
   auto state = StateOf(connection_);
-  Log(LogLevel::kWarning, "access control refused a statement",
-      {{"user", identity_.user_name}, {"error", error.what()}, {"sql", LoggableSql(sql)},
+  Audit(LogLevel::kWarning, "access control refused a statement",
+      {{"kind", "access_control"}, {"status", "denied"}, {"user", identity_.user_name}, {"error", error.what()}, {"sql", LoggableSql(sql)},
        {"active_role", state ? state->active_role_name() : ""}});
 }
 
@@ -610,8 +611,8 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
   SessionObjectResolver resolver(*dd::capiv2::Convert(connection_));
   auto executed = engine->Execute(parsed.command, actor, resolver);
   if (!executed.ok()) {
-    Log(LogLevel::kWarning, "access-control statement refused",
-        {{"user", identity_.user_name}, {"statement", parsed.kind},
+    Audit(LogLevel::kWarning, "access-control statement refused",
+        {{"kind", "access_control"}, {"status", "rejected"}, {"user", identity_.user_name}, {"statement", parsed.kind},
          {"error", executed.status().message()}});
     throw ForTenant(FromStatus(executed.status()));
   }
@@ -634,8 +635,8 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
   for (const auto& user_id : result.terminate_user_ids) {
     owner_.EndSessionsOf(user_id, parsed.kind == "DROP USER" ? "user dropped" : "user disabled");
   }
-  Log(LogLevel::kInfo, "access-control statement",
-      {{"user", identity_.user_name}, {"statement", parsed.kind}, {"status", "success"}});
+  Audit(LogLevel::kInfo, "access-control statement",
+      {{"kind", "access_control"}, {"user", identity_.user_name}, {"statement", parsed.kind}, {"status", "success"}});
   warpsql::StatementOutcome outcome;
   outcome.rows = Rows(result);
   return outcome;

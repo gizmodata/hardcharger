@@ -135,6 +135,10 @@ const std::vector<Option>& Options() {
        TEXT(rbac_opa_url)},
       {"rbac_opa_timeout_ms", Kind::kInt, {"GIZMOSQL_RBAC_OPA_TIMEOUT_MS"},
        "how long to wait for the policy service (no answer refuses)", NUMBER(rbac_opa_timeout_ms)},
+      {"audit_chain_key", Kind::kString, {"GIZMOSQL_AUDIT_CHAIN_KEY"},
+       "key that seals access-control audit records into a tamper-evident chain "
+       "(HMAC-SHA256; unset: SHA-256); --verify-audit-log FILE checks a JSON log",
+       TEXT(audit_chain_key)},
       {"license_key", Kind::kString, {"GIZMOSQL_LICENSE_KEY"}, "GizmoData license key (JWT)",
        TEXT(license_key)},
       {"license_key_file", Kind::kString, {"GIZMOSQL_LICENSE_KEY_FILE"},
@@ -215,6 +219,16 @@ Loaded LoadConfig(int argc, char** argv) {
       inline_value = arg.substr(eq + 1);
       arg = arg.substr(0, eq);
     }
+    if (arg == "--verify-audit-log") {
+      if (!inline_value && i + 1 >= argc) throw std::invalid_argument("--verify-audit-log needs a file");
+      loaded.action = Action::kVerifyAuditLog;
+      loaded.audit_log = inline_value ? *inline_value : argv[++i];
+      continue;
+    }
+    if (arg == "--verify-audit-log-partial") {
+      loaded.audit_log_partial = true;
+      continue;
+    }
     if (arg == "--config") {
       if (!inline_value && i + 1 >= argc) throw std::invalid_argument("--config needs a file");
       loaded.config.config_file = inline_value ? *inline_value : argv[++i];
@@ -267,6 +281,9 @@ Loaded LoadConfig(int argc, char** argv) {
   }
 
   const Config& c = loaded.config;
+  if (loaded.action == Action::kVerifyAuditLog) {
+    return loaded;  // checks a log file; nothing to serve
+  }
   if (c.password.empty()) {
     throw std::invalid_argument("a password is required: set HARDCHARGER_PASSWORD");
   }
@@ -301,7 +318,9 @@ std::string Usage() {
     for (const auto& legacy : option.legacy_env) out << ", " << legacy;
     out << "]\n";
   }
-  out << "\n  --version, --print-duckdb-version, --help\n";
+  out << "\n  --verify-audit-log FILE [--verify-audit-log-partial]\n"
+      << "      check the access-control audit records in a JSON log and exit (0: intact)\n"
+      << "  --version, --print-duckdb-version, --help\n";
   return out.str();
 }
 

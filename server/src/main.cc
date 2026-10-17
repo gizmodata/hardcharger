@@ -1,9 +1,11 @@
 // hardcharger: the server. See `hardcharger --help` for configuration.
 
 #include <csignal>
+#include <fstream>
 #include <iostream>
 #include <thread>
 
+#include "audit.hpp"
 #include "auth.hpp"
 #include "authz/authz.hpp"
 #include "config.hpp"
@@ -68,6 +70,21 @@ int main(int argc, char** argv) {
       std::cout << std::string(version.ptr, version.len) << "\n";
       return 0;
     }
+    case hc::Action::kVerifyAuditLog: {
+      std::ifstream in(loaded.audit_log);
+      if (!in) {
+        std::cerr << "cannot read " << loaded.audit_log << "\n";
+        return 1;
+      }
+      const auto report =
+          hc::VerifyAuditLog(in, loaded.config.audit_chain_key, loaded.audit_log_partial);
+      for (const auto& chain : report.chains) std::cout << "chain " << chain << "\n";
+      for (const auto& problem : report.problems) std::cout << "PROBLEM: " << problem << "\n";
+      if (report.records == 0) std::cout << "PROBLEM: no access-control audit records found\n";
+      std::cout << report.records << " audit records, " << (report.ok() ? "intact" : "NOT intact")
+                << "\n";
+      return report.ok() ? 0 : 1;
+    }
     case hc::Action::kServe:
       break;
   }
@@ -106,6 +123,8 @@ int main(int argc, char** argv) {
       options.administrator_name = config.username;
       options.policy_service_url = config.rbac_opa_url;
       options.policy_service_timeout = std::chrono::milliseconds(config.rbac_opa_timeout_ms);
+      // Access-control audit records form a hash chain from here on.
+      hc::StartAuditChain(config.audit_chain_key);
       access = std::make_shared<hc::authz::AccessControl>(options);
       hc::Log(hc::LogLevel::kInfo,
               "role-based access control is on: users, roles and grants come from the store; "
