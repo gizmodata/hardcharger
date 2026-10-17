@@ -26,11 +26,19 @@ own changelog in `python/CHANGELOG.md`.
   revoking a scoped token ends their sessions and tokens at once, on every replica, and a
   revoke stops a statement that is running.
 - Statements that reach outside the database (files and URLs, `ATTACH`, extensions,
-  secrets, instance-wide settings, `query()`) are refused for store users before DuckDB
-  binds them, unless they hold the system privilege that opens them.
+  secrets, instance-wide settings, `query()`, table functions not on the allow-list) are
+  refused for store users before DuckDB binds them, unless they hold the system privilege
+  that opens them. Settings that write files (`log_query_path`, `profiling_output`) need
+  WRITE FILESYSTEM, and settings that hold credentials (`http_proxy_password`, ...) need
+  MANAGE CONFIG to read.
+- A tenant's user is told about another tenant's objects exactly what it is told about
+  missing ones, in errors, metadata, `DESCRIBE`, `CREATE VIEW` and session options.
+- Access-control audit records form a tamper-evident hash chain (HMAC-SHA256 with
+  `audit_chain_key`, SHA-256 without), as in GizmoSQL 1.x; `hardcharger
+  --verify-audit-log FILE` checks a JSON log.
 - DuckDB is built with a small binder patch (`server/scripts/patch-duckdb.cmake`) that
   lets access control see which part of a plan came from which view.
-- Tests for access control (`server/tests/test_rbac_*.py`, 252), including two replicas on
+- Tests for access control (`server/tests/test_rbac_*.py`, 262), including two replicas on
   one store and a gate that access control costs no concurrency. They need PostgreSQL and
   a test-license build (`-DHARDCHARGER_TRUST_TEST_LICENSES=ON`).
 
