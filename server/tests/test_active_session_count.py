@@ -6,6 +6,8 @@ session). Before anyone opens a session the count is 0 (read through the first o
 opened, which then counts itself); after a second session it is 2; closing one drops it.
 """
 
+import time
+
 
 def test_session_count_starts_at_zero(launcher):
     server = launcher.start()
@@ -21,4 +23,10 @@ def test_session_count_after_query(launcher):
     assert second.scalar(sql="SELECT 1") == 1
     assert first.scalar(sql="SELECT count(*) FROM hardcharger_sessions()") == 2
     second.close()
-    assert first.scalar(sql="SELECT count(*) FROM hardcharger_sessions()") == 1
+    # The SDK ends a closed session when its last reference goes, which can be just after
+    # the DELETE answers (seen under a loaded runner): it must be gone within moments.
+    deadline = time.monotonic() + 5
+    while (count := first.scalar(sql="SELECT count(*) FROM hardcharger_sessions()")) != 1 and \
+            time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert count == 1
