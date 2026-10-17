@@ -45,6 +45,13 @@ own changelog in `python/CHANGELOG.md`.
   ingest was slower than TLS); bulk ingest inserts on many DuckDB threads in one
   transaction, keeping the upload's row order. See docs/benchmarks.md.
 
+### Documentation
+
+- README: the client examples use the Hardcharger drivers, `adbc-driver-hardcharger`
+  (`from adbc_driver_hardcharger import dbapi as hardcharger`, `hardcharger://` URIs) and
+  `hardcharger-jdbc` (`jdbc:hardcharger://`); a Python quick start with `pip install hardcharger`
+  (the server) beside `pip install adbc-driver-hardcharger` (the client); badges for both.
+
 ## [0.2.0] - 2026-10-17
 
 Role-based access control and GizmoSQL 1.x's server features (instrumentation, catalog

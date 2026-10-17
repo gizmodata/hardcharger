@@ -20,11 +20,6 @@ on:
 permissions:
   contents: read
 
-# Superseded runs on a branch are cancelled; a run on a tag never is.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
-
 defaults:
   run:
     working-directory: python

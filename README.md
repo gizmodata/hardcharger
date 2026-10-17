@@ -12,9 +12,10 @@
   <a href="https://duckdb.org"><img src="https://img.shields.io/badge/engine-DuckDB%202.0-fff000.svg?logo=duckdb&logoColor=black" alt="DuckDB 2.0"></a>
   <a href="https://arrow.apache.org"><img src="https://img.shields.io/badge/wire%20format-Apache%20Arrow-f15a24.svg" alt="Apache Arrow"></a>
   <br>
-  <a href="https://github.com/gizmodata/warp-sql-adbc"><img src="https://img.shields.io/badge/ADBC%20driver-Go%20%7C%20Python-blue.svg?logo=Go" alt="ADBC driver"></a>
-  <a href="https://github.com/gizmodata/warp-sql-jdbc"><img src="https://img.shields.io/badge/JDBC%20driver-Java-red.svg?logo=openjdk" alt="JDBC driver"></a>
-  <a href="https://pypi.org/project/hardcharger/"><img src="https://img.shields.io/badge/PyPI-hardcharger-blue.svg?logo=PyPI" alt="PyPI"></a>
+  <a href="https://pypi.org/project/hardcharger/"><img src="https://img.shields.io/badge/PyPI%20server-hardcharger-blue.svg?logo=PyPI" alt="PyPI: hardcharger (server)"></a>
+  <a href="https://pypi.org/project/adbc-driver-hardcharger/"><img src="https://img.shields.io/badge/PyPI%20client-adbc--driver--hardcharger-blue.svg?logo=PyPI" alt="PyPI: adbc-driver-hardcharger (client)"></a>
+  <a href="https://github.com/gizmodata/hardcharger-adbc"><img src="https://img.shields.io/badge/ADBC%20driver-hardcharger--adbc-blue.svg?logo=Python" alt="ADBC driver"></a>
+  <a href="https://github.com/gizmodata/hardcharger-jdbc"><img src="https://img.shields.io/badge/JDBC%20driver-hardcharger--jdbc-red.svg?logo=openjdk" alt="JDBC driver"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-brightgreen.svg" alt="Apache 2.0 license"></a>
   <a href="https://join.slack.com/t/gizmodatacommunity/shared_invite/zt-42jk7kdti-SJp7qk7d6XYCIKfBG~4HrA"><img src="https://img.shields.io/badge/Slack-GizmoData%20Community-4A154B?logo=slack" alt="Slack community"></a>
   <a href="https://gizmodata.com"><img src="https://img.shields.io/badge/by-GizmoData-f15a24.svg" alt="GizmoData"></a>
@@ -79,6 +80,24 @@ Images are multi-architecture (`linux/amd64`, `linux/arm64`) and published to bo
 `ghcr.io/gizmodata/hardcharger` and `docker.io/gizmodata/hardcharger`. Port 31337 speaks
 Warp SQL; 31338 answers `/health`.
 
+### Python
+
+```bash
+pip install hardcharger
+```
+
+```python
+import hardcharger
+
+with hardcharger.Server(password="change-me") as server:
+    print(server.uri)  # hardcharger://127.0.0.1:<port>?tls=false
+```
+
+The `hardcharger` package is the **server**: it downloads `hardcharger-server` for your
+platform on first use and runs it. The **client** is `adbc-driver-hardcharger` (below);
+`pip install "hardcharger[adbc]"` installs both, and `server.connect()` then returns a
+connection. See [python/README.md](python/README.md).
+
 ### Binaries
 
 Linux (x86-64 and arm64) and macOS (Apple silicon) builds are attached to every
@@ -93,17 +112,24 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' ./hardcharger-macos-arm64/bin/hardcharger
 
 ### Python (ADBC)
 
-```python
-from adbc_driver_warpsql import dbapi
+```bash
+pip install adbc-driver-hardcharger
+```
 
-with dbapi.connect(uri="warp://localhost:31337?tls=false", username="hardcharger", password="change-me") as conn:
+```python
+from adbc_driver_hardcharger import dbapi as hardcharger
+
+with hardcharger.connect(uri="hardcharger://localhost?tls=false", username="hardcharger", password="change-me") as conn:
     with conn.cursor() as cur:
         cur.execute(operation="SELECT 42 AS answer, ? AS greeting", parameters=["hello"])
         print(cur.fetch_arrow_table())
 ```
 
-The [Warp SQL ADBC driver](https://github.com/gizmodata/warp-sql-adbc) is written in Go and
-also loads into any ADBC driver manager (C/C++, R, Rust, ...).
+`hardcharger://host` is HTTPS on port 31337; `?tls=false` is plain HTTP for local
+development. [adbc-driver-hardcharger](https://github.com/gizmodata/hardcharger-adbc) adds
+query and session tags, `hardcharger.*` settings and browser sign-in to the
+[Warp SQL ADBC driver](https://github.com/gizmodata/warp-sql-adbc), which is written in Go
+and also loads into any ADBC driver manager (C/C++, R, Rust, ...) as `driver = "hardcharger"`.
 
 ### Java (JDBC)
 
@@ -112,15 +138,17 @@ Properties properties = new Properties();
 properties.setProperty("user", "hardcharger");
 properties.setProperty("password", "change-me");
 properties.setProperty("useEncryption", "false"); // plain HTTP on localhost
-try (Connection connection = DriverManager.getConnection("jdbc:warp://localhost:31337", properties);
+try (Connection connection = DriverManager.getConnection("jdbc:hardcharger://localhost", properties);
      ResultSet rows = connection.createStatement().executeQuery("SELECT 42 AS answer")) {
   rows.next();
   System.out.println(rows.getInt("answer"));
 }
 ```
 
-The [Warp SQL JDBC driver](https://github.com/gizmodata/warp-sql-jdbc) is a single jar for Java 17+,
-with no gRPC, Netty or protobuf.
+[hardcharger-jdbc](https://github.com/gizmodata/hardcharger-jdbc) is a single jar for Java 17+,
+with no gRPC, Netty or protobuf: `jdbc:hardcharger://host[:port]` (port 31337 by default) on
+the [Warp SQL JDBC driver](https://github.com/gizmodata/warp-sql-jdbc). Its README shows how
+to add it to DBeaver and other BI tools.
 
 ### Plain HTTP
 
