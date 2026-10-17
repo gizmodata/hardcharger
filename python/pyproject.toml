@@ -4,20 +4,58 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hardcharger"
-version = "0.0.1"
-description = "Hardcharger, the analytics server from GizmoData (coming soon)"
+version = "0.1.0"
+description = "Run Hardcharger, GizmoData's DuckDB 2.0 server, from Python: downloads hardcharger-server on first use"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
-authors = [{ name = "GizmoData LLC" }]
+authors = [{ name = "GizmoData LLC", email = "info@gizmodata.com" }]
+keywords = ["hardcharger", "duckdb", "sql", "server", "warp-sql", "arrow", "test-fixture"]
 classifiers = [
-  "Development Status :: 1 - Planning",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Database",
+  "Topic :: Database :: Database Engines/Servers",
 ]
+# None: the package runs a subprocess and downloads it with the standard library.
+dependencies = []
+
+[project.optional-dependencies]
+# The client, so Server.connect() returns a connection.
+adbc = ["adbc-driver-hardcharger>=0.1.0"]
+
+[project.scripts]
+hardcharger-server = "hardcharger.__main__:server_main"
 
 [project.urls]
 Homepage = "https://gizmodata.com"
+Source = "https://github.com/gizmodata/hardcharger"
+Releases = "https://github.com/gizmodata/hardcharger/releases"
+Issues = "https://github.com/gizmodata/hardcharger/issues"
 
 [dependency-groups]
-dev = ["pytest>=9.1.1"]
+dev = ["pytest>=9.1.1", "ruff>=0.17.1", "cryptography>=50.0.2"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hardcharger"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "integration: runs the real hardcharger-server (HARDCHARGER_PY_TEST_SERVER_BINARY); fails without it",
+  "download: downloads a real release from GitHub (HARDCHARGER_PY_TEST_TOKEN or gh auth token); fails without access",
+  "client: needs adbc-driver-hardcharger installed; fails without it",
+]
