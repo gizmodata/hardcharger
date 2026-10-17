@@ -670,3 +670,28 @@ def test_external_auth_signs_in_through_the_browser(launcher, idp, tmp_path):
     refused = subprocess.run(args=args, env=env, capture_output=True, text=True, timeout=60)
     assert refused.returncode == 1
     assert "Error: OAuth login failed:" in refused.stderr, refused.stderr
+
+
+# ---- Split results (Warp SQL §6.10) ----
+
+
+def test_result_partitions_read_a_large_result_in_order(server):
+    # Over four connections at once, the rows come out exactly as over one.
+    sql = "SELECT i, 'row ' || i AS label FROM range(1000000) t(i) ORDER BY i DESC"
+    one = run(server, "--csv", "--no-header", "--command", sql)
+    split = run(server, "--csv", "--no-header", "--result-partitions", "4", "--command", sql)
+    assert one.returncode == 0 and split.returncode == 0, (one.stderr, split.stderr)
+    lines = split.stdout.splitlines()
+    assert len(lines) == 1_000_000 and lines[0] == "999999,row 999999" and lines[-1] == "0,row 0"
+    assert split.stdout == one.stdout
+    env = client_env(server=server, HARDCHARGER_RESULT_PARTITIONS="3")
+    from_env = run(server, "--csv", "--no-header", "--command", sql, env=env)
+    assert from_env.returncode == 0 and from_env.stdout == one.stdout, from_env.stderr
+
+
+def test_result_partitions_report_a_failure(server):
+    result = run(server, "--csv", "--result-partitions", "4", "--command",
+                 "SELECT CASE WHEN i < 30000000 THEN i ELSE error('boom in a split') END AS v "
+                 "FROM range(100000000) t(i)")
+    assert result.returncode != 0
+    assert "boom in a split" in result.stderr + result.stdout

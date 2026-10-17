@@ -78,6 +78,10 @@ struct ClientConfig {
   std::string session_tag;
   std::string query_tag;
 
+  // Large results read in up to this many partitions at once, one connection each
+  // (Warp SQL §6.10); 0: not set (HARDCHARGER_RESULT_PARTITIONS, else 1, one stream).
+  int result_partitions = 0;
+
   // Dynamic prompt (show catalog.schema)
   bool dynamic_prompt = true;
 
@@ -95,8 +99,8 @@ struct ClientConfig {
 // Fills the options not set on the command line from the environment: HARDCHARGER_HOST,
 // HARDCHARGER_PORT, HARDCHARGER_USER (falling back to HARDCHARGER_ADMIN_USERNAME, the
 // server's), HARDCHARGER_PASSWORD, HARDCHARGER_TLS, HARDCHARGER_TLS_ROOTS,
-// HARDCHARGER_OAUTH_PORT, HARDCHARGER_OAUTH_BASE_URL, HARDCHARGER_SESSION_TAG and
-// HARDCHARGER_QUERY_TAG. No GIZMOSQL_* variable is read.
+// HARDCHARGER_OAUTH_PORT, HARDCHARGER_OAUTH_BASE_URL, HARDCHARGER_SESSION_TAG,
+// HARDCHARGER_QUERY_TAG and HARDCHARGER_RESULT_PARTITIONS. No GIZMOSQL_* variable is read.
 void ResolveEnvironmentVariables(ClientConfig& config);
 
 /// Parse a hardcharger://HOST:PORT[?params] URI into config fields.

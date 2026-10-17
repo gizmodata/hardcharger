@@ -141,6 +141,17 @@ void ResolveEnvironmentVariables(ClientConfig& config) {
       config.query_tag = val;
     }
   }
+
+  if (config.result_partitions == 0) {
+    if (const char* val = get_env("HARDCHARGER_RESULT_PARTITIONS")) {
+      try {
+        config.result_partitions = std::stoi(val);
+      } catch (const std::exception&) {
+        config.result_partitions = 0;
+      }
+    }
+  }
+  config.result_partitions = std::clamp(config.result_partitions, 1, 256);
 }
 
 std::string HomeDirectory() {

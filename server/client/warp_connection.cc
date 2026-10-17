@@ -184,7 +184,9 @@ arrow::Result<QueryResult> WarpConnection::ExecuteQuery(const std::string& sql, 
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
   Executing executing(executing_);
   try {
-    auto result = WithSession([&] { return session_->Execute(sql); });
+    wc::StatementOptions options;
+    options.result_partitions = config_.result_partitions;  // in order: rows show as the server sent them
+    auto result = WithSession([&] { return session_->Execute(sql, options); });
     QueryResult out;
     if (!result.HasRows()) {
       out.update = true;

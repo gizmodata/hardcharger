@@ -31,6 +31,9 @@ own changelog in `python/CHANGELOG.md`.
   1 never splits) caps the split. With Warp SQL's drivers' `result_partitions` option,
   one large result uses several network flows and client cores.
 
+- `hardcharger --result-partitions N` (`HARDCHARGER_RESULT_PARTITIONS`): the command-line
+  client reads a large result over up to N connections at once, in the same order.
+
 ### Changed
 
 - `result_batch_rows` defaults to 122,880 (one DuckDB row group) instead of 2,048:
