@@ -543,6 +543,10 @@ std::optional<std::string> SensitivePaths::Check(const std::string& path) const 
   const std::string local = WindowsSpelling(StripFileScheme(path));
   // \\host\C$, \\host\ADMIN$, ...: a drive or system folder of some host, this one
   // included, over SMB, past every local spelling above.
+  // \\?\GLOBALROOT\..., \\.\pipe\..., \\?\Volume{...}\...: devices, pipes and raw volumes
+  // (\\?\C:\ and \\?\UNC\ were respelled above). Before the pattern check: '?' here is
+  // no wildcard.
+  if (local.starts_with("//?/") || local.starts_with("//./")) return kDevices;
   if (local.starts_with("//")) {
     const auto share = Segments(local.substr(2));
     if (share.size() >= 2 && share[1].ends_with('$')) return kAdminShares;

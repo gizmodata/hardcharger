@@ -149,12 +149,23 @@ connection. See [python/README.md](python/README.md).
 
 ### Binaries
 
-Linux (x86-64 and arm64) and macOS (Apple silicon) builds are attached to every
-[release](https://github.com/gizmodata/hardcharger/releases/latest):
+Linux (x86-64 and arm64), macOS (Apple silicon) and Windows (x64 and arm64) builds are
+attached to every [release](https://github.com/gizmodata/hardcharger/releases/latest):
 
 ```bash
 tar -xzf hardcharger-macos-arm64.tar.gz
 HARDCHARGER_ADMIN_PASSWORD='change-me' ./hardcharger-macos-arm64/bin/hardcharger-server --database my.duckdb
+```
+
+On Windows (PowerShell), unzip `hardcharger-windows-amd64.zip` or `-arm64.zip`, or run
+`Hardcharger-windows-amd64.msi` / `-arm64.msi`, which installs under Program Files and
+puts `hardcharger-server.exe` on the PATH. Ctrl+C or Ctrl+Break stops the server as
+SIGINT or SIGTERM does elsewhere.
+
+```powershell
+Expand-Archive hardcharger-windows-amd64.zip -DestinationPath .
+$env:HARDCHARGER_ADMIN_PASSWORD = 'change-me'
+.\hardcharger-windows-amd64\bin\hardcharger-server.exe --database my.duckdb
 ```
 
 ## 🔌 Connect
