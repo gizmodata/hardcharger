@@ -280,7 +280,8 @@ class Walker {
     }
     const std::string name =
         Lower(Str(ref.function->Cast<dd::FunctionExpression>().FunctionName()));
-    if (AlwaysGated(name) || IsRemoteQueryFunction(name) || name == "query" || name == "query_table") {
+    if (AlwaysGated(name) || IsRemoteQueryFunction(name) || name == "query" ||
+        name == "query_table") {
       Flag(name + "()");
     } else if (ddb::IsFileReadingTableFunction(name)) {
       Flag(name + "() (files and URLs)");
@@ -308,13 +309,15 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
   switch (statement.type) {
     case dd::StatementType::PREPARE_STATEMENT: {
       auto& prepare = statement.Cast<dd::PrepareStatement>();
-      return prepare.statement ? Classify(*prepare.statement, permitted, named_table, table_function_allowed)
-                               : std::nullopt;
+      return prepare.statement
+                 ? Classify(*prepare.statement, permitted, named_table, table_function_allowed)
+                 : std::nullopt;
     }
     case dd::StatementType::EXPLAIN_STATEMENT: {
       // EXPLAIN ANALYZE runs what it wraps.
       auto& explain = statement.Cast<dd::ExplainStatement>();
-      return explain.stmt ? Classify(*explain.stmt, permitted, named_table, table_function_allowed) : std::nullopt;
+      return explain.stmt ? Classify(*explain.stmt, permitted, named_table, table_function_allowed)
+                          : std::nullopt;
     }
     case dd::StatementType::ATTACH_STATEMENT:
       return gate("ATTACH");

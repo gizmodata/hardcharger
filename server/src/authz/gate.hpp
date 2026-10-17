@@ -35,9 +35,9 @@ namespace hardcharger::authz {
 // that is not allowed is refused here.
 using NamedTableCallback = std::function<void(const std::vector<std::string>&)>;
 using TableFunctionCallback = std::function<bool(const std::vector<std::string>&)>;
-std::optional<std::string> GatedCategory(duckdb::SQLStatement& statement,
-                                         const std::function<bool(const std::string&)>& permitted,
-                                         const NamedTableCallback& named_table = nullptr,
-                                         const TableFunctionCallback& table_function_allowed = nullptr);
+std::optional<std::string> GatedCategory(
+    duckdb::SQLStatement& statement, const std::function<bool(const std::string&)>& permitted,
+    const NamedTableCallback& named_table = nullptr,
+    const TableFunctionCallback& table_function_allowed = nullptr);
 
 }  // namespace hardcharger::authz
