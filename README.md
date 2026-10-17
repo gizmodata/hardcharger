@@ -251,8 +251,9 @@ my.main> .quit
 
 History, tab completion, syntax highlighting, a pager for long results, dot commands
 (`.help`, `.tables`, `.mode`, ...), and Ctrl-C cancels the running statement while the
-shell goes on. `--result-partitions N` (or `HARDCHARGER_RESULT_PARTITIONS`) reads a large
-result over up to N connections at once, in the same order.
+shell goes on. A large result is read over up to 8 connections at once, in the same order;
+`--result-partitions N` (or `HARDCHARGER_RESULT_PARTITIONS`) changes that, and `1` reads every
+result over one connection.
 
 One statement with `--command` (`-c`), in any output mode (`--csv`, `--json`,
 `--markdown`, `--table`, or `.mode` for the rest):

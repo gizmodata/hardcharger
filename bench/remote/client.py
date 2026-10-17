@@ -144,6 +144,7 @@ class AdbcSystem:
         tls: bool,
         partitions: int = 1,
         order: str = "preserve",
+        ingest_parts: int = 1,
     ):
         if system == "gizmosql":
             from adbc_driver_gizmosql import dbapi
@@ -164,12 +165,15 @@ class AdbcSystem:
         else:
             from adbc_driver_warpsql import dbapi
 
-            db_kwargs = {"adbc.warp.ipc_compression": compression}
-            if partitions > 1:
-                # Parallel partitioned results: the server may split a result into this many
-                # partitions, which the driver fetches over separate connections.
-                db_kwargs["adbc.warp.statement.result_partitions"] = str(partitions)
-                db_kwargs["adbc.warp.statement.result_order"] = order
+            # Set both explicitly (the driver's defaults are 8 each): result partitions, which
+            # the driver fetches at once over separate connections (Warp SQL §6.10), and
+            # ingest parts, uploaded at once and committed as one (§8.3). 1: one stream.
+            db_kwargs = {
+                "adbc.warp.ipc_compression": compression,
+                "adbc.warp.statement.result_partitions": str(partitions),
+                "adbc.warp.statement.result_order": order,
+                "adbc.warp.ingest.parts": str(ingest_parts),
+            }
             # The driver refuses TLS options on a plaintext URI.
             tls_kwargs = {"tls_root_certs": cert} if tls else {}
             self.conn = dbapi.connect(
@@ -299,6 +303,7 @@ def main() -> None:
     parser.add_argument("--tls", default="true", choices=["true", "false"])
     parser.add_argument("--partitions", type=int, default=1, help="Hardcharger: result partitions")
     parser.add_argument("--order", default="preserve", choices=["preserve", "any"])
+    parser.add_argument("--ingest-parts", type=int, default=1, help="Hardcharger: ingest parts")
     parser.add_argument("--cert", default=os.path.expanduser("~/bench/tls.crt"))
     parser.add_argument("--data-dir", default=os.path.expanduser("~/bench/data"))
     parser.add_argument("--network", default="lan")
@@ -325,6 +330,7 @@ def main() -> None:
             compression=args.compression,
             partitions=args.partitions,
             order=args.order,
+            ingest_parts=args.ingest_parts,
             tls=args.tls == "true",
         )
 
@@ -341,6 +347,7 @@ def main() -> None:
         "tls": args.tls == "true",
         "partitions": args.partitions if args.system == "hardcharger" else 1,
         "order": args.order if args.system == "hardcharger" and args.partitions > 1 else None,
+        "ingest_parts": args.ingest_parts if args.system == "hardcharger" else 1,
     }
 
     if args.workload == "fetch":

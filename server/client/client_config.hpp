@@ -79,7 +79,7 @@ struct ClientConfig {
   std::string query_tag;
 
   // Large results read in up to this many partitions at once, one connection each
-  // (Warp SQL §6.10); 0: not set (HARDCHARGER_RESULT_PARTITIONS, else 1, one stream).
+  // (Warp SQL §6.10); 0: not set (HARDCHARGER_RESULT_PARTITIONS, else 8). 1: one stream.
   int result_partitions = 0;
 
   // Dynamic prompt (show catalog.schema)

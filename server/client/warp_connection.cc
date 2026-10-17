@@ -292,6 +292,7 @@ arrow::Status WarpConnection::UploadLastResult(const std::shared_ptr<arrow::Tabl
     wc::IngestOptions options;
     options.mode = "replace";
     options.temporary = true;
+    options.parts = 1;  // one stream: the table keeps the result's row order
     session_->Ingest(table_name, reader, options);
     return arrow::Status::OK();
   } catch (const wc::Error& e) {

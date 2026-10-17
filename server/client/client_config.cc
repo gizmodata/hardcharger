@@ -151,6 +151,7 @@ void ResolveEnvironmentVariables(ClientConfig& config) {
       }
     }
   }
+  if (config.result_partitions == 0) config.result_partitions = 8;  // the default: split large results
   config.result_partitions = std::clamp(config.result_partitions, 1, 256);
 }
 

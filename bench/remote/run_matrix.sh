@@ -42,18 +42,23 @@ for system in "${SYSTEMS[@]}"; do
     gizmosql) variants=("") ;;
     quack) variants=("--preserve-order true" "--preserve-order false") ;;
     # One stream (with and without zstd), then results split into partitions read at
-    # once (Warp SQL §6.10). PARTITIONS lists the counts; ingest is one upload either way.
+    # once (Warp SQL §6.10; PARTITIONS lists the counts), then ingests sent in parts at
+    # once (§8.3; INGEST_PARTS lists the counts).
     hardcharger)
       variants=("--compression none" "--compression zstd")
       for p in ${PARTITIONS:-8 16}; do
         variants+=("--compression none --partitions $p --order any" "--compression none --partitions $p --order preserve")
       done
+      for p in ${INGEST_PARTS:-8 16}; do
+        variants+=("--compression none --ingest-parts $p")
+      done
       ;;
   esac
   for v in "${variants[@]}"; do
     for d in $FETCH; do
-      # preserve_insertion_order changes only how Quack plans inserts; fetch once.
-      [[ "$v" == "--preserve-order false" ]] && continue
+      # preserve_insertion_order changes only how Quack plans inserts, and ingest parts
+      # only how uploads go; fetch once.
+      [[ "$v" == "--preserve-order false" || "$v" == *--ingest-parts* ]] && continue
       run --system "$system" --workload fetch --dataset "$d" $v
     done
     # Partitions change only how results come back; ingest once per compression.

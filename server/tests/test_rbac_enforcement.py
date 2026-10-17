@@ -9,7 +9,8 @@ import time
 import pyarrow as pa
 import pytest
 
-from rbac import WarpError, expect_allowed, expect_blocked, expect_error, start_rbac_server
+from rbac import (ARROW_STREAM, WarpError, arrow_bytes, expect_allowed, expect_blocked, expect_error,
+                  start_rbac_server)
 
 SECRET = "no SELECT privilege on table"
 
@@ -295,6 +296,31 @@ def test_bulk_ingest_is_checked_like_insert(server, admin, wanda, joe, bob):
     expect_blocked(client=joe, sql="SELECT * FROM warp_upload()", code="sql_error",
                    why="only reads the rows of a bulk ingest")
     expect_allowed(client=bob, sql="DROP TABLE bob_ingested")
+
+
+def test_partitioned_ingest_is_checked_like_insert(server, admin, wanda, joe, bob):
+    # A partitioned ingest (Warp SQL §8.3) is one ingest: checked like one, all or nothing.
+    rows = pa.table({"id": pa.array([41, 42, 43, 44], type=pa.int32()),
+                     "amount": pa.array([4, 4, 4, 4], type=pa.int32()), "customer": ["p1", "p2", "p3", "p4"]})
+    before = expect_allowed(client=admin, sql="SELECT count(*) AS n FROM orders").column("n")[0].as_py()
+    assert wanda.ingest_in_parts(table="orders", rows=rows, mode="append") == 4
+    error = expect_error(call=lambda: joe.ingest_in_parts(table="orders", rows=rows, mode="append"),
+                         code="permission_denied", why="no INSERT privilege on table")
+    assert error.sqlstate == "42501"
+    expect_error(call=lambda: joe.ingest_in_parts(table="joes_parts", rows=rows, mode="create"),
+                 code="permission_denied", why="no CREATE TABLE privilege")
+    after = expect_allowed(client=admin, sql="SELECT count(*) AS n FROM orders").column("n")[0].as_py()
+    assert after == before + 4  # wanda's four rows, none of joe's
+    # A part is bound to its session: joe cannot add rows to wanda's open ingest.
+    url = wanda.open_ingest(table="orders", mode="append")
+    stolen = joe.http.post(url=url.replace(wanda.session_id, joe.session_id) + "/parts/0",
+                           content=arrow_bytes(table=rows), headers=joe.headers(**{"Content-Type": ARROW_STREAM}))
+    assert stolen.status_code == 404 and stolen.json()["code"] == "ingest_not_found", stolen.text
+    forged = joe.http.post(url=url + "/parts/0", content=arrow_bytes(table=rows),
+                           headers=joe.headers(**{"Content-Type": ARROW_STREAM}))
+    assert forged.status_code in (403, 404), forged.text
+    assert wanda.http.delete(url=url, headers=wanda.headers()).status_code == 204
+    expect_allowed(client=admin, sql="DELETE FROM orders WHERE customer LIKE 'p_'")
 
 
 # ---- DDL and ownership ----

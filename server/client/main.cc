@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
   cl.Value("query-tag", 0, "JSON", "Query tag sent after connecting (env: HARDCHARGER_QUERY_TAG)", &config.query_tag);
   cl.Int("result-partitions", 0, "N",
          "Read large results in up to N partitions at once, over N connections (env: "
-         "HARDCHARGER_RESULT_PARTITIONS; default 1)",
+         "HARDCHARGER_RESULT_PARTITIONS; default 8; 1: one stream)",
          &config.result_partitions);
   cl.Section("Output modes");
   cl.Flag("csv", 0, "Set output mode to CSV", &csv);

@@ -33,9 +33,18 @@ own changelog in `python/CHANGELOG.md`.
 
 - `hardcharger --result-partitions N` (`HARDCHARGER_RESULT_PARTITIONS`): the command-line
   client reads a large result over up to N connections at once, in the same order.
+- Partitioned ingest (Warp SQL §8.3, capability `partitioned_ingest`): one bulk load sent
+  over several connections at once and inserted from all of them in parallel, in one
+  transaction, all or nothing. Access control checks it like any ingest, and every part is
+  bound to its session. Warp SQL's drivers use it for large uploads by default.
+- `session_ended` errors carry their `reason` (Warp SQL §5.6): `killed` (KILL SESSION),
+  `principal_dropped` (the user was dropped or disabled), `token_expired` (a scoped token
+  revoked or expired), `credentials_changed` (anything else access control revoked).
 
 ### Changed
 
+- `hardcharger` reads large results over up to 8 connections by default (was 1);
+  `--result-partitions 1` reads over one.
 - `result_batch_rows` defaults to 122,880 (one DuckDB row group) instead of 2,048:
   SF10 lineitem over TLS 4.6 s -> 3.5 s, with zstd 26.4 s -> 6.3 s; small results are
   unchanged (one batch), a full scan's first batch takes 21 ms instead of 2 ms.
