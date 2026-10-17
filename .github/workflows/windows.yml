@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+# A newer run on the same branch cancels the older one (never on a tag): Windows minutes
+# are the dearest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 defaults:
   run:
     shell: bash
@@ -106,7 +112,7 @@ jobs:
           hash() { cat "$@" | sha256sum | cut -c1-16; }
           crt=.github/cmake/msvc-static-crt.cmake
           echo "arrow=deps-arrow-$toolset-$(hash third_party/warp-sql/cpp/scripts/build-arrow.sh $crt)" >> "$GITHUB_OUTPUT"
-          echo "replxx=deps-replxx-$toolset-$(hash server/scripts/build-replxx.sh $crt)" >> "$GITHUB_OUTPUT"
+          echo "replxx=deps-replxx-$toolset-policy3.15-$(hash server/scripts/build-replxx.sh $crt)" >> "$GITHUB_OUTPUT"
           echo "duckdb=deps-duckdb-$toolset-$(hash third_party/warp-sql/cpp/scripts/build-duckdb.sh \
                 server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v6
@@ -129,21 +135,6 @@ jobs:
           path: server/.deps/arrow-install
           key: ${{ steps.deps.outputs.arrow }}
       - uses: actions/cache/restore@v6
-        id: replxx-cache
-        with:
-          path: server/.deps/replxx-install
-          key: ${{ steps.deps.outputs.replxx }}
-      - name: Build replxx
-        if: steps.replxx-cache.outputs.cache-hit != 'true'
-        env:
-          CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/.github/cmake/msvc-static-crt.cmake
-        run: HARDCHARGER_DEPS_DIR="$PWD/server/.deps" server/scripts/build-replxx.sh
-      - uses: actions/cache/save@v6
-        if: steps.replxx-cache.outputs.cache-hit != 'true'
-        with:
-          path: server/.deps/replxx-install
-          key: ${{ steps.deps.outputs.replxx }}
-      - uses: actions/cache/restore@v6
         id: duckdb-cache
         with:
           path: server/.deps/duckdb-install
@@ -164,6 +155,28 @@ jobs:
           path: server/.deps/duckdb-install
           key: ${{ steps.deps.outputs.duckdb }}
 
+      # After DuckDB's step, which builds a replxx of its own (build-deps.sh) that this
+      # one replaces.
+      - uses: actions/cache/restore@v6
+        id: replxx-cache
+        with:
+          path: server/.deps/replxx-install
+          key: ${{ steps.deps.outputs.replxx }}
+      - name: Build replxx
+        if: steps.replxx-cache.outputs.cache-hit != 'true'
+        env:
+          CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/.github/cmake/msvc-static-crt.cmake
+          # replxx asks for CMake 3.5, whose policies ignore CMAKE_MSVC_RUNTIME_LIBRARY
+          # (CMP0091 is 3.15's): this makes it take the toolchain file's /MT.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.15"
+        run: |
+          rm -rf server/.deps/replxx-install server/.deps/replxx-build
+          HARDCHARGER_DEPS_DIR="$PWD/server/.deps" server/scripts/build-replxx.sh
+      - uses: actions/cache/save@v6
+        if: steps.replxx-cache.outputs.cache-hit != 'true'
+        with:
+          path: server/.deps/replxx-install
+          key: ${{ steps.deps.outputs.replxx }}
       - name: Build the server
         id: server
         run: |
