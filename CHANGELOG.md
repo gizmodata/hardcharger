@@ -7,10 +7,20 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-10-17
+## [0.1.2] - 2026-10-17
+
+0.1.1 was tagged but never released: its release gate failed on a race in deleting a
+running write (fixed here). 0.1.2 carries everything listed for it.
 
 ### Fixed
 
+- A use-after-free: prepared statements kept parameter types that DuckDB had lent
+  them, so closing a prepared statement or ending its session could crash the server or
+  corrupt its heap (found by the JDBC driver's tests). Bulk ingest freed borrowed column
+  types the same way. Both are fixed, and CI now runs the server tests and the
+  conformance suite on an AddressSanitizer build that gates every release.
+- Deleting a statement before the engine had said whether it writes could cancel a
+  write; such a delete is now settled once it does (a write finishes, a read stops).
 - A long poll on a finished statement answered only after its whole wait; it answers at
   once.
 - A streamed query sent its Arrow schema only with its first batch, so an aggregate's
@@ -31,6 +41,10 @@ own changelog in `python/CHANGELOG.md`.
 
 - `POST /warp/v1/sessions/{id}/cancel` stops whatever the session is running.
 - Primary and imported keys of every table in one metadata request.
+
+## [0.1.1] - 2026-10-17 [not released]
+
+See 0.1.2.
 
 ## [0.1.0] - 2026-10-17
 
