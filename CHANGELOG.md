@@ -53,6 +53,12 @@ own changelog in `python/CHANGELOG.md`.
   interval with sub-microsecond precision is refused, not truncated); prepared
   statements describe DECIMAL, UUID, LIST and INTERVAL parameters.
 - Opening a session with an unknown option says `unknown_option`.
+- Metadata `type-info` (JDBC `getTypeInfo`, Flight SQL `GetXdbcTypeInfo`) answered 404; it
+  lists DuckDB's types, and a tenant's users see all of them.
+- Bulk ingest of a column with no values (Arrow null type) creates a VARCHAR column;
+  half floats and nested day-time intervals are refused with the reason; dictionary-
+  encoded parameters bind; listing catalogs no longer opens every attached catalog; a
+  stop with a request in flight no longer crashes.
 - Table schemas from metadata give PRECISION in decimal digits for every numeric type,
   column comments (REMARKS) and defaults (`WARP:SQL:COLUMN_DEFAULT`).
 

@@ -260,3 +260,9 @@ def test_a_tenants_user_may_create_temporary_tables_and_views(joe):
     expect_allowed(client=joe, sql="CREATE TEMP TABLE joe_scratch AS SELECT 1 AS x")
     expect_allowed(client=joe, sql="CREATE TEMP VIEW joe_scratch_view AS SELECT x FROM joe_scratch")
     assert column(table=expect_allowed(client=joe, sql="SELECT x FROM joe_scratch_view")) == {1}
+
+
+def test_a_tenants_user_sees_every_data_type(joe):
+    # type-info names no catalog, so the tenant filter must not apply to it.
+    names = set(joe.metadata(kind="type-info").column("type_name").to_pylist())
+    assert {"integer", "varchar", "boolean"} <= names
