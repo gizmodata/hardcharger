@@ -7,6 +7,8 @@
 #include <duckdb/main/capi_v2/capi_v2_internal.hpp>
 #include <duckdb/main/client_context.hpp>
 #include <duckdb/main/config.hpp>
+#include <duckdb/main/database_manager.hpp>
+#include <duckdb/main/attached_database.hpp>
 
 #include "authz/ddl.hpp"
 #include "authz/enforcement.hpp"
@@ -182,6 +184,26 @@ std::shared_ptr<arrow::RecordBatchReader> FilterRows(
   auto reader = arrow::RecordBatchReader::Make(std::move(kept), schema);
   if (!reader.ok()) throw Error(ErrorCode::kExecutionError, reader.status().message());
   return *reader;
+}
+
+// Does `text` contain `word` as a whole word (identifier characters around it don't
+// count), ignoring case?
+bool ContainsWord(const std::string& text, const std::string& word) {
+  if (word.empty()) return false;
+  auto lower = [](std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+  };
+  const std::string haystack = lower(text), needle = lower(word);
+  auto identifier = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+  for (auto at = haystack.find(needle); at != std::string::npos; at = haystack.find(needle, at + 1)) {
+    const auto end = at + needle.size();
+    if ((at == 0 || !identifier(haystack[at - 1])) &&
+        (end >= haystack.size() || !identifier(haystack[end]))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::string TextAt(const arrow::RecordBatch& batch, int column, int64_t row) {
@@ -461,6 +483,40 @@ void SessionGuard::AuditDenied(const Error& error, std::string_view sql) {
        {"active_role", state ? state->active_role_name() : ""}});
 }
 
+Error SessionGuard::ForTenant(const Error& error) const {
+  // A tenant's user learns nothing about what other tenants have: an error about a
+  // catalog, schema, table or view it cannot see reads exactly like one about one that
+  // does not exist, and so does any error that names a catalog it cannot see (DuckDB's
+  // suggestions and candidate lists can).
+  if (tenant_id_.empty()) return error;
+  const std::string message = error.what();
+  bool hide = message.find("does not exist") != std::string::npos ||
+              message.find("cannot see") != std::string::npos ||
+              message.find("access to catalog") != std::string::npos;
+  if (!hide) {
+    try {
+      std::lock_guard lock(mutex_);
+      if (connection_ == nullptr) return error;
+      auto& context = ContextOf(connection_);
+      auto state = StateOf(connection_);
+      if (!state) return error;
+      const Principal principal = state->principal();
+      auto snapshot = owner_.engine_->snapshot();
+      for (const auto& database : dd::DatabaseManager::Get(context).GetDatabases()) {
+        const std::string name = database->GetName().GetIdentifierName();
+        if (!snapshot->CatalogVisible(principal, name) && ContainsWord(message, name)) {
+          hide = true;
+          break;
+        }
+      }
+    } catch (...) {
+      hide = true;  // cannot tell: say nothing
+    }
+  }
+  if (!hide) return error;
+  return Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name), "42501");
+}
+
 void SessionGuard::CheckBeforeBind(std::string_view sql) {
   std::vector<warpduckdb::SqlStatement> statements;
   try {
@@ -481,6 +537,30 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
     auto privilege = SystemPrivilegeForGatedCategory(category);
     return privilege && snapshot->HasSystemPrivilege(principal, *privilege);
   };
+  // A tenant's user may not even name what another tenant has: DuckDB binds some
+  // statements without planning them (DESCRIBE, CREATE VIEW), so whether they bind
+  // would say whether the name exists.
+  NamedTableCallback named_table;
+  std::optional<SessionObjectResolver> resolver;
+  if (!tenant_id_.empty()) {
+    resolver.emplace(*dd::capiv2::Convert(connection_));
+    named_table = [&](const std::vector<std::string>& parts) {
+      auto hidden = [&](const std::string& catalog) {
+        return !snapshot->CatalogVisible(principal, catalog);
+      };
+      // A leading part that names an attached catalog counts as one, whatever DuckDB
+      // makes of the rest (it reads beta.t as beta.main.t when there is no schema beta).
+      if (parts.size() >= 2) {
+        if (auto catalog = resolver->ResolveCatalog(parts[0]); catalog.ok() && hidden(*catalog)) {
+          throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name), "42501");
+        }
+      }
+      auto resolved = resolver->ResolveObject(QualifiedName{parts});
+      if (resolved.ok() && hidden(resolved->path.catalog)) {
+        throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name), "42501");
+      }
+    };
+  }
   for (auto& handle : statements) {
     auto& statement = *dd::capiv2::Convert(handle.get());
     // SHOW GRANTS parses as a SELECT and RESET ROLE as a SET: in a batch they would
@@ -490,7 +570,7 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
                   "Hardcharger access control: access-control statements run on their own, "
                   "not in a batch with other statements");
     }
-    if (auto category = GatedCategory(statement, permitted)) {
+    if (auto category = GatedCategory(statement, permitted, named_table)) {
       if (auto privilege = SystemPrivilegeForGatedCategory(*category)) {
         throw Error(ErrorCode::kPermissionDenied,
                     "Hardcharger blocked " + *category + ", which needs the " +
@@ -522,7 +602,7 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
     Log(LogLevel::kWarning, "access-control statement refused",
         {{"user", identity_.user_name}, {"statement", parsed.kind},
          {"error", executed.status().message()}});
-    throw FromStatus(executed.status());
+    throw ForTenant(FromStatus(executed.status()));
   }
   CommandResult result = std::move(*executed);
   if (result.minted) {
@@ -583,7 +663,7 @@ warpsql::StatementOutcome SessionGuard::Execute(
     return outcome;
   } catch (const Error& error) {
     AuditDenied(error, sql);
-    throw;
+    throw ForTenant(error);
   }
 }
 
@@ -606,7 +686,7 @@ std::unique_ptr<warpsql::PreparedStatement> SessionGuard::Prepare(
     return std::make_unique<GuardedPrepared>(std::move(inner), std::move(ownership));
   } catch (const Error& error) {
     AuditDenied(error, sql);
-    throw;
+    throw ForTenant(error);
   }
 }
 
@@ -642,7 +722,7 @@ warpsql::StatementOutcome SessionGuard::ExecutePrepared(
     return outcome;
   } catch (const Error& error) {
     AuditDenied(error, "(prepared statement)");
-    throw;
+    throw ForTenant(error);
   }
 }
 
@@ -656,7 +736,7 @@ int64_t SessionGuard::Ingest(const warpsql::IngestTarget& target,
     return rows;
   } catch (const Error& error) {
     AuditDenied(error, "(bulk ingest into " + target.table + ")");
-    throw;
+    throw ForTenant(error);
   }
 }
 

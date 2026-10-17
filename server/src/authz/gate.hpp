@@ -13,6 +13,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace duckdb {
 class SQLStatement;
@@ -23,7 +24,13 @@ namespace hardcharger::authz {
 // The gated family the statement belongs to ("ATTACH", "read_csv() (files and URLs)",
 // "COPY TO (files and URLs)", ...), or nullopt. `permitted(category)` says whether the
 // session holds the system privilege for a category; such categories are not reported.
-std::optional<std::string> GatedCategory(
-    duckdb::SQLStatement& statement, const std::function<bool(const std::string&)>& permitted);
+//
+// `named_table`, if set, is called with the name parts of every table or view the
+// statement names (including those DuckDB binds only to describe them, as DESCRIBE and
+// CREATE VIEW do, whose plans the plan check never sees); it may throw to refuse.
+using NamedTableCallback = std::function<void(const std::vector<std::string>&)>;
+std::optional<std::string> GatedCategory(duckdb::SQLStatement& statement,
+                                         const std::function<bool(const std::string&)>& permitted,
+                                         const NamedTableCallback& named_table = nullptr);
 
 }  // namespace hardcharger::authz

@@ -177,6 +177,7 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   void End(const std::string& reason);
   void InterruptRunning();
   void CheckBeforeBind(std::string_view sql);
+  warpsql::Error ForTenant(const warpsql::Error& error) const;
   warpsql::StatementOutcome RunCommand(const ParsedCommand& command);
   std::shared_ptr<arrow::RecordBatchReader> Track(std::shared_ptr<arrow::RecordBatchReader> rows,
                                                   std::shared_ptr<void> busy);

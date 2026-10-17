@@ -8,6 +8,7 @@
 #include <duckdb/parser/expression/function_expression.hpp>
 #include <duckdb/parser/expression/subquery_expression.hpp>
 #include <duckdb/parser/parsed_data/create_table_info.hpp>
+#include <duckdb/parser/parsed_data/create_view_info.hpp>
 #include <duckdb/parser/parsed_data/drop_info.hpp>
 #include <duckdb/parser/parsed_expression_iterator.hpp>
 #include <duckdb/parser/query_node/copy_query_node.hpp>
@@ -32,6 +33,7 @@
 #include <duckdb/parser/statement/set_statement.hpp>
 #include <duckdb/parser/statement/update_statement.hpp>
 #include <duckdb/parser/tableref/basetableref.hpp>
+#include <duckdb/parser/tableref/showref.hpp>
 #include <duckdb/parser/tableref/subqueryref.hpp>
 #include <duckdb/parser/tableref/table_function_ref.hpp>
 
@@ -119,8 +121,17 @@ bool LooksLikePath(const std::string& name) {
 
 class Walker {
  public:
-  explicit Walker(const std::function<bool(const std::string&)>& permitted)
-      : permitted_(permitted) {}
+  Walker(const std::function<bool(const std::string&)>& permitted, const NamedTableCallback& named_table)
+      : permitted_(permitted), named_table_(named_table) {}
+
+  void NamedTable(const dd::QualifiedName& name) {
+    if (!named_table_ || name.Path().empty()) return;
+    std::vector<std::string> parts;
+    for (const auto& part : name.Path()) {
+      if (!Str(part).empty()) parts.push_back(Str(part));
+    }
+    if (!parts.empty()) named_table_(parts);
+  }
 
   std::optional<std::string> violation;
 
@@ -199,6 +210,16 @@ class Walker {
       const auto& name = ref.Cast<dd::BaseTableRef>().GetQualifiedName();
       if (name.Path().size() == 1 && LooksLikePath(Str(name.Name()))) {
         Flag("reading files and URLs via FROM '" + Str(name.Name()) + "'");
+        return;
+      }
+      NamedTable(name);
+    } else if (ref.type == dd::TableReferenceType::SHOW_REF) {
+      // DESCRIBE / SHOW / SUMMARIZE: of a query, or of a table by name.
+      auto& show = ref.Cast<dd::ShowRef>();
+      if (show.query) WalkNode(*show.query);
+      if (!show.GetTableName().GetIdentifierName().empty() &&
+          show.show_type != dd::ShowType::SHOW_SPECIAL && show.show_type != dd::ShowType::SHOW_FROM) {
+        NamedTable(show.qualified_name);
       }
     } else if (ref.type == dd::TableReferenceType::SUBQUERY) {
       auto& subquery = ref.Cast<dd::SubqueryRef>();
@@ -240,11 +261,13 @@ class Walker {
   }
 
   const std::function<bool(const std::string&)>& permitted_;
+  const NamedTableCallback& named_table_;
 };
 
 std::optional<std::string> Classify(dd::SQLStatement& statement,
-                                    const std::function<bool(const std::string&)>& permitted) {
-  Walker walker(permitted);
+                                    const std::function<bool(const std::string&)>& permitted,
+                                    const NamedTableCallback& named_table) {
+  Walker walker(permitted, named_table);
   auto gate = [&](std::string category) -> std::optional<std::string> {
     if (permitted && permitted(category)) return std::nullopt;
     return category;
@@ -252,12 +275,12 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
   switch (statement.type) {
     case dd::StatementType::PREPARE_STATEMENT: {
       auto& prepare = statement.Cast<dd::PrepareStatement>();
-      return prepare.statement ? Classify(*prepare.statement, permitted) : std::nullopt;
+      return prepare.statement ? Classify(*prepare.statement, permitted, named_table) : std::nullopt;
     }
     case dd::StatementType::EXPLAIN_STATEMENT: {
       // EXPLAIN ANALYZE runs what it wraps.
       auto& explain = statement.Cast<dd::ExplainStatement>();
-      return explain.stmt ? Classify(*explain.stmt, permitted) : std::nullopt;
+      return explain.stmt ? Classify(*explain.stmt, permitted, named_table) : std::nullopt;
     }
     case dd::StatementType::ATTACH_STATEMENT:
       return gate("ATTACH");
@@ -281,6 +304,11 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       if (create.info && create.info->type == dd::CatalogType::TABLE_ENTRY) {
         auto& table = create.info->Cast<dd::CreateTableInfo>();
         if (table.query && table.query->node) walker.WalkNode(*table.query->node);
+      }
+      // A view's query is bound when it is created (and checked when it is read).
+      if (create.info && create.info->type == dd::CatalogType::VIEW_ENTRY) {
+        auto& view = create.info->Cast<dd::CreateViewInfo>();
+        if (view.query && view.query->node) walker.WalkNode(*view.query->node);
       }
       return walker.violation;
     }
@@ -381,8 +409,9 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
 }  // namespace
 
 std::optional<std::string> GatedCategory(dd::SQLStatement& statement,
-                                         const std::function<bool(const std::string&)>& permitted) {
-  return Classify(statement, permitted);
+                                         const std::function<bool(const std::string&)>& permitted,
+                                         const NamedTableCallback& named_table) {
+  return Classify(statement, permitted, named_table);
 }
 
 }  // namespace hardcharger::authz

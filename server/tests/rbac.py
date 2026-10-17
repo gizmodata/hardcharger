@@ -168,12 +168,28 @@ class Client:
             return self._outcome(response=result)
         return pa.table({"rows_affected": [doc["result"].get("rows_affected")]})
 
+    def _send(self, url: str, **request) -> pa.Table:
+        """POSTs a statement and reads its outcome. A statement that fails while its rows
+        stream ends the body early (spec: no end-of-stream marker); its statement
+        document then says why."""
+        with self.http.stream(method="POST", url=url, **request) as response:
+            try:
+                response.read()
+            except httpx.RemoteProtocolError:
+                statement_id = response.headers.get("Warp-Statement-Id")
+                if statement_id is None:
+                    raise
+                doc = self.wait(statement_id=statement_id)
+                error = doc.get("error", {})
+                raise WarpError(status=error.get("status", 0), code=error.get("code", doc["state"]),
+                                detail=error.get("detail", ""), sqlstate=error.get("sqlstate")) from None
+        return self._outcome(response=response)
+
     def run(self, sql: str, parameters=None) -> pa.Table:
         body: dict = {"sql": sql}
         if parameters is not None:
             body["parameters"] = parameters
-        return self._outcome(response=self.http.post(url=f"{self.url}/statements", json=body,
-                                                     headers=self.headers(Accept=ARROW_STREAM)))
+        return self._send(url=f"{self.url}/statements", json=body, headers=self.headers(Accept=ARROW_STREAM))
 
     def submit(self, sql: str) -> str:
         """Starts a statement without waiting; returns its id."""
@@ -203,12 +219,10 @@ class Client:
     def execute_prepared(self, prepared_id: str, parameters=None, rows: pa.Table | None = None) -> pa.Table:
         url = f"{self.url}/prepared/{prepared_id}/execute"
         if rows is not None:
-            return self._outcome(response=self.http.post(
-                url=url, content=arrow_bytes(table=rows),
-                headers=self.headers(Accept=ARROW_STREAM, **{"Content-Type": ARROW_STREAM})))
+            return self._send(url=url, content=arrow_bytes(table=rows),
+                              headers=self.headers(Accept=ARROW_STREAM, **{"Content-Type": ARROW_STREAM}))
         body = {} if parameters is None else {"parameters": parameters}
-        return self._outcome(response=self.http.post(url=url, json=body,
-                                                     headers=self.headers(Accept=ARROW_STREAM)))
+        return self._send(url=url, json=body, headers=self.headers(Accept=ARROW_STREAM))
 
     def metadata(self, kind: str, **params) -> pa.Table:
         response = self.http.get(url=f"{self.url}/metadata/{kind}", params=params, headers=self.headers())
