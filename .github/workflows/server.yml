@@ -27,7 +27,8 @@ concurrency:
 env:
   SCCACHE_GHA_ENABLED: "true"
   # pytest-xdist workers for the server tests. The tests mostly wait on servers they
-  # start, so more workers than CPUs pays (measured; see the commit that set it).
+  # start, so more workers than CPUs pays: on the 2-CPU Linux runners the parallel pass
+  # took 230-250 s with 4 workers and 208-217 s with 6 (the sanitizer jobs use fewer).
   HARDCHARGER_TEST_XDIST_WORKERS: "6"
 
 jobs:
@@ -275,6 +276,10 @@ jobs:
   sanitize:
     name: address sanitizer (linux-amd64)
     runs-on: ubuntu-24.04
+    env:
+      # Six workers starve the instrumented servers on 2 CPUs (password sign-ins time
+      # out); four pass.
+      HARDCHARGER_TEST_XDIST_WORKERS: "4"
     steps:
       - uses: actions/checkout@v7
       - name: Fetch the warp-sql submodule
