@@ -1,0 +1,7 @@
+#pragma once
+
+namespace hardcharger {
+
+inline constexpr const char* kVersion = "@PROJECT_VERSION@";
+
+}  // namespace hardcharger

@@ -1,6 +1,53 @@
 # Hardcharger
 
-Hardcharger is an analytics server from [GizmoData](https://gizmodata.com). This
-package will hold its Python client and tools.
+Hardcharger is GizmoData's analytics server: DuckDB 2.0 behind the
+[Warp SQL protocol](https://github.com/gizmodata/warp-sql) (HTTP + Arrow, no gRPC). It is the
+successor to GizmoSQL.
 
-Nothing is released here yet.
+| Path | What |
+|---|---|
+| `server/` | The server (C++20) and its tests |
+| `third_party/warp-sql` | The Warp SQL spec, server SDK, DuckDB backend and conformance suite (submodule) |
+| `python/` | The `hardcharger` Python package (placeholder) |
+
+## Build
+
+```bash
+git submodule update --init
+cd server
+./scripts/build-deps.sh                      # DuckDB 2.0 and Arrow C++ (pinned)
+OPENSSL_ROOT_DIR=$(brew --prefix openssl@3) cmake -S . -B build -G Ninja
+cmake --build build
+```
+
+## Run
+
+```bash
+HARDCHARGER_PASSWORD='…' ./server/build/hardcharger --database my.duckdb
+```
+
+Every option is a flag (`--read-only`), an environment variable (`HARDCHARGER_READ_ONLY`)
+or a key in a YAML file passed with `--config` (`read_only: true`); `hardcharger --help`
+lists them. GizmoSQL 1.x's environment variable names work too.
+
+```yaml
+# hardcharger.yaml
+database: /data/analytics.duckdb
+port: 31337
+health_port: 31338
+log_level: info
+print_queries: true
+init_sql_commands_file: /etc/hardcharger/init.sql
+```
+
+## Test
+
+```bash
+cd server/tests && uv venv .venv && uv pip install --python .venv/bin/python -r pyproject.toml
+.venv/bin/python -m pytest -q                       # Hardcharger's own tests
+cd ../../third_party/warp-sql/conformance           # the Warp SQL conformance suite
+WARP_SQL_TEST_SERVER_BINARY=../../../server/build/hardcharger \
+WARP_SQL_TEST_SERVER_PASSWORD_ENV=HARDCHARGER_PASSWORD \
+WARP_SQL_TEST_SERVER_USERNAME=warp HARDCHARGER_USERNAME=warp \
+  .venv/bin/python -m pytest -q
+```

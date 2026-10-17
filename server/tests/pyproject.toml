@@ -1,0 +1,16 @@
+[project]
+name = "hardcharger-server-tests"
+version = "0.1.0"
+description = "Tests for the Hardcharger server"
+requires-python = ">=3.12"
+dependencies = [
+  "cryptography>=50.0.2",
+  "httpx>=0.28.1",
+  "pyarrow>=26.0.0",
+  "pyjwt>=2.15.1",
+  "pytest>=9.1.1",
+  "pyyaml>=6.0.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
