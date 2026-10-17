@@ -104,9 +104,12 @@ jobs:
         run: |
           brew install postgresql@17
           pg="$(brew --prefix postgresql@17)/bin"
-          "$pg/initdb" -D "$RUNNER_TEMP/pg" -U hardcharger --auth=trust
+          # Passwords are checked, as in the Linux jobs' container: a test signs in with a
+          # wrong one and expects to be refused.
+          printf 'hardcharger\n' > "$RUNNER_TEMP/pgpass"
+          "$pg/initdb" -D "$RUNNER_TEMP/pg" -U hardcharger --auth=scram-sha-256 --pwfile="$RUNNER_TEMP/pgpass"
           "$pg/pg_ctl" -D "$RUNNER_TEMP/pg" -o "-p 55433 -k $RUNNER_TEMP" -l "$RUNNER_TEMP/pg.log" -w start
-          "$pg/createdb" -h 127.0.0.1 -p 55433 -U hardcharger hardcharger
+          PGPASSWORD=hardcharger "$pg/createdb" -h 127.0.0.1 -p 55433 -U hardcharger hardcharger
 
       - uses: astral-sh/setup-uv@v10.3.0
       - name: Hardcharger tests
