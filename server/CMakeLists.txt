@@ -98,6 +98,7 @@ add_executable(hardcharger-unit-tests
   unit/guards_test.cc
   unit/ingest_test.cc
   unit/log_level_test.cc
+  unit/metrics_test.cc
   unit/patterns_test.cc
   unit/sensitive_paths_test.cc
   unit/sql_text_test.cc

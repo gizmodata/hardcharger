@@ -95,20 +95,70 @@ double ResidentBytes() {
 #endif
 }
 
-void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend) {
+// Whether the last run of this database's server ended without a clean stop: a marker
+// beside the database file says "running" while a server runs and "clean" after it
+// stops. Only the process that can write the database (DuckDB lets one) keeps it; a
+// read-only or in-memory server reports NaN.
+class ExitMarker {
+ public:
+  explicit ExitMarker(const hc::Config& config) {
+    if (config.read_only || config.database.empty() || config.database == ":memory:") return;
+    path_ = config.database + ".gizmosql-metrics-state";
+    std::ifstream in(path_);
+    std::string line;
+    bool was_running = false;
+    while (std::getline(in, line)) {
+      if (line == "state=running") was_running = true;
+      if (line.starts_with("unclean_exits=")) unclean_exits_ = std::atoll(line.c_str() + 14);
+    }
+    if (was_running) unclean_exits_++;
+    last_unclean_ = was_running ? 1.0 : 0.0;
+    Write("running");
+  }
+  void Clean() {
+    if (!path_.empty()) Write("clean");
+  }
+  double last_unclean() const { return last_unclean_; }
+  double unclean_exits() const { return path_.empty() ? NAN : static_cast<double>(unclean_exits_); }
+
+ private:
+  void Write(const char* state) {
+    std::ofstream out(path_, std::ios::trunc);
+    out << "state=" << state << "\nunclean_exits=" << unclean_exits_ << "\n";
+  }
+  std::string path_;
+  int64_t unclean_exits_ = 0;
+  double last_unclean_ = NAN;
+};
+
+void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMarker& marker) {
   auto connection = std::make_shared<warpduckdb::Connection>();
   warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(backend.instance(), connection->out(), err); });
   auto mutex = std::make_shared<std::mutex>();
-  runtime.metrics.AddCollector([&runtime, &backend, connection, mutex](std::vector<hc::Sample>& out) {
+  runtime.metrics.AddCollector([&runtime, &backend, &marker, connection, mutex](std::vector<hc::Sample>& out) {
     const auto now = std::chrono::system_clock::now();
     out.push_back({"gizmosql_build_info",
                    {{"version", std::string("v") + hc::kVersion}, {"edition", runtime.license.Edition()},
                     {"duckdb_version", backend.duckdb_version()}, {"server", "hardcharger"}},
                    1});
     out.push_back({"gizmosql_up_seconds", {}, std::chrono::duration<double>(now - runtime.started_at).count()});
-    int64_t running = 0;
-    runtime.sessions.ForEach([&](hc::Session& s) { running += s.running() ? 1 : 0; });
-    out.push_back({"gizmosql_sessions", {{"state", "open"}}, static_cast<double>(runtime.sessions.size())});
+    int64_t running = 0, idle = 0, in_transaction = 0, aborted = 0;
+    runtime.sessions.ForEach([&](hc::Session& s) {
+      if (s.killed()) return;
+      if (s.running()) {
+        running++;
+      } else if (s.transaction() == hc::Session::Transaction::kOpen) {
+        in_transaction++;
+      } else if (s.transaction() == hc::Session::Transaction::kAborted) {
+        aborted++;
+      } else {
+        idle++;
+      }
+    });
+    out.push_back({"gizmosql_sessions", {{"state", "active"}}, static_cast<double>(running)});
+    out.push_back({"gizmosql_sessions", {{"state", "idle"}}, static_cast<double>(idle)});
+    out.push_back({"gizmosql_sessions", {{"state", "idle_in_transaction"}}, static_cast<double>(in_transaction)});
+    out.push_back({"gizmosql_sessions", {{"state", "idle_in_transaction_aborted"}}, static_cast<double>(aborted)});
     out.push_back({"gizmosql_session_limit", {}, static_cast<double>(runtime.config.max_sessions)});
     out.push_back({"gizmosql_statements_active", {}, static_cast<double>(running)});
     out.push_back({"gizmosql_concurrency_limit", {}, static_cast<double>(runtime.admission.Limit())});
@@ -119,6 +169,8 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend) {
     out.push_back({"gizmosql_license_expiry_seconds", {},
                    runtime.license.enterprise ? std::chrono::duration<double>(runtime.license.expires - now).count() : NAN});
     out.push_back({"process_resident_memory_bytes", {}, ResidentBytes()});
+    out.push_back({"gizmosql_last_exit_unclean", {}, marker.last_unclean()});
+    out.push_back({"gizmosql_unclean_exits_total", {}, marker.unclean_exits()});
     bool ok = true;
     double limit = NAN;
     double usage = NAN;
@@ -203,8 +255,10 @@ int main(int argc, char** argv) {
     backend->StartHealthCheck();
 
     std::unique_ptr<hc::MetricsEndpoint> metrics_endpoint;
+    std::unique_ptr<ExitMarker> exit_marker;
     if (config.enable_metrics) {
-      InstallCollectors(runtime, *backend);
+      exit_marker = std::make_unique<ExitMarker>(config);
+      InstallCollectors(runtime, *backend, *exit_marker);
       if (config.metrics_port != 0) {
         metrics_endpoint = std::make_unique<hc::MetricsEndpoint>(runtime.metrics, config.metrics_bind_address,
                                                                  static_cast<uint16_t>(config.metrics_port));
@@ -268,6 +322,7 @@ int main(int argc, char** argv) {
     signals.join();
     if (watcher.joinable()) watcher.join();
     if (metrics_endpoint) metrics_endpoint->Stop();
+    if (exit_marker) exit_marker->Clean();
     backend->StopHealthCheck();
     hc::Log(hc::LogLevel::kInfo, "stopped");
   } catch (const std::exception& e) {

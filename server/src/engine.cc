@@ -352,6 +352,16 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   return type;
 }
 
+void Session::NoteTransaction(const Piece& piece) {
+  const auto& t = piece.tokens;
+  if (t.empty()) return;
+  if (t[0].IsWord("BEGIN") || t[0].IsWord("START")) {
+    transaction_ = Transaction::kOpen;
+  } else if (t[0].IsWord("COMMIT") || t[0].IsWord("END") || t[0].IsWord("ROLLBACK") || t[0].IsWord("ABORT")) {
+    transaction_ = manual_commit_ ? Transaction::kOpen : Transaction::kNone;
+  }
+}
+
 warpsql::StatementOutcome Session::RunCommand(const Piece& piece) {
   if (auto setting = ParseSettingCommand(piece)) {
     ApplySetting(*this, *setting);
@@ -419,6 +429,8 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
   } catch (const Error& error) {
     const std::string_view error_class = ClassifyStatementError(error.what());
     done(error.code() == ErrorCode::kStatementCancelled ? "cancelled" : "error", error_class);
+    // A failed statement inside a transaction leaves it aborted until a ROLLBACK.
+    if (transaction_ == Transaction::kOpen) transaction_ = Transaction::kAborted;
     LogAt(QueryLogLevel(), LogLevel::kInfo, "statement failed",
           {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"status", "error"},
            {"error", error.what()}, {"sql", Abbreviate(sql)}});
@@ -458,11 +470,17 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
     bool command = false;
   };
   std::vector<Step> steps;
-  for (const Piece& piece : pieces) {
-    Step step{&piece};
-    step.command = ParseSettingCommand(piece).has_value() || ParseKillSession(piece).has_value();
-    if (!step.command) step.type = Authorize(piece);
-    steps.push_back(step);
+  try {
+    for (const Piece& piece : pieces) {
+      Step step{&piece};
+      step.command = ParseSettingCommand(piece).has_value() || ParseKillSession(piece).has_value();
+      if (!step.command) step.type = Authorize(piece);
+      steps.push_back(step);
+    }
+  } catch (const Error& error) {
+    // Refused or unparseable: a failed statement all the same, for metrics.
+    runtime_.metrics.RecordStatement(StatementKind::kOther, "error", ClassifyStatementError(error.what()), 0);
+    throw;
   }
   if (runtime_.config.print_queries) {
     LogAt(QueryLogLevel(), LogLevel::kInfo, "statement",
@@ -471,7 +489,9 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
   }
 
   if (steps.size() == 1 && !steps[0].command) {
-    return Track(ClassifyStatement(steps[0].type), sql, [&] { return DuckDBSession::Execute(sql, parameters); });
+    auto outcome = Track(ClassifyStatement(steps[0].type), sql, [&] { return DuckDBSession::Execute(sql, parameters); });
+    if (steps[0].type == DUCKDB_V2_STATEMENT_TYPE_TRANSACTION) NoteTransaction(pieces[0]);
+    return outcome;
   }
   if (!parameters.is_null() && steps.size() > 1) {
     throw Error(ErrorCode::kSqlError, "bind parameters need a single SQL statement");
@@ -481,6 +501,10 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
     const Step& step = steps[i];
     if (step.command) {
       outcome = RunCommand(*step.piece);
+    } else if (step.type == DUCKDB_V2_STATEMENT_TYPE_TRANSACTION) {
+      outcome = Track(StatementKind::kOther, step.piece->text,
+                      [&] { return DuckDBSession::Execute(step.piece->text, parameters); });
+      NoteTransaction(*step.piece);
     } else {
       outcome = Track(ClassifyStatement(step.type), step.piece->text,
                       [&] { return DuckDBSession::Execute(step.piece->text, parameters); });
@@ -574,17 +598,25 @@ std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(warpsql::MetadataKin
 warpsql::OptionErrors Session::SetOptions(const json::object& options) {
   CheckAlive();
   SessionScope scope(this);
-  return DuckDBSession::SetOptions(options);
+  auto errors = DuckDBSession::SetOptions(options);
+  if (const auto* autocommit = options.if_contains("autocommit");
+      autocommit != nullptr && autocommit->is_bool() && !errors.contains("autocommit")) {
+    manual_commit_ = !autocommit->as_bool();
+    transaction_ = manual_commit_ ? Transaction::kOpen : Transaction::kNone;
+  }
+  return errors;
 }
 
 void Session::Commit() {
   CheckAlive();
   DuckDBSession::Commit();
+  transaction_ = manual_commit_ ? Transaction::kOpen : Transaction::kNone;
 }
 
 void Session::Rollback() {
   CheckAlive();
   DuckDBSession::Rollback();
+  transaction_ = manual_commit_ ? Transaction::kOpen : Transaction::kNone;
 }
 
 }  // namespace hardcharger

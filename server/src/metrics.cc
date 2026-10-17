@@ -115,6 +115,8 @@ FamilyInfo Family(std::string_view name) {
       {"gizmosql_duckdb_memory_limit_bytes", {"gauge", "DuckDB memory_limit in bytes."}},
       {"gizmosql_duckdb_memory_usage_bytes", {"gauge", "Memory DuckDB's buffer manager holds."}},
       {"process_resident_memory_bytes", {"gauge", "Resident memory of the server process."}},
+      {"gizmosql_last_exit_unclean", {"gauge", "1 if the last run on this database did not stop cleanly (NaN: unknown)."}},
+      {"gizmosql_unclean_exits_total", {"counter", "Runs on this database that did not stop cleanly."}},
   };
   auto it = kFamilies.find(name);
   return it == kFamilies.end() ? FamilyInfo{"gauge", ""} : it->second;
