@@ -2,17 +2,18 @@
 # Installs a Linux release tarball and checks it runs: --version, outbound TLS against
 # the system's CA bundle (--verify-tls), then a server whose health endpoint answers and
 # which runs a query through the Warp SQL endpoints (sign-in, session, statement, Arrow
-# result) and through the tarball's command-line client. Meant for a clean old-glibc container (CI: oraclelinux:8, glibc 2.28):
+# result), an HTTPS read inside DuckDB (httpfs), and the tarball's command-line client. Meant for a clean old-glibc container (CI: oraclelinux:8, glibc 2.28):
 #
 #   docker run --rm -v "$PWD/dist:/dist:ro" oraclelinux:8 \
 #     bash /dist/smoke-tarball.sh /dist/hardcharger-linux-amd64.tar.gz
 #
 # Needs only bash, tar, curl and a Python 3 for reading JSON (EL8's platform-python).
+# (The server listens on 31337, health 31338.)
 set -euo pipefail
 tarball="${1:?tarball}"
 prefix=$(mktemp -d)
 tar -C "$prefix" -xzf "$tarball"
-bin=$(echo "$prefix"/hardcharger-linux-*/bin/hardcharger-server)
+bin=$(echo "$prefix"/hardcharger-*/bin/hardcharger-server)
 python=$(command -v python3 || echo /usr/libexec/platform-python)
 json() { "$python" -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
 
@@ -42,6 +43,15 @@ id=$(echo "$statement" | json statement_id)
 curl -sf "$base/sessions/$session/statements/$id/result" "${auth[@]}" \
   -H 'Accept: application/vnd.apache.arrow.stream' -o result.arrows
 grep -aq 'portable-42' result.arrows || { echo "the result has no portable-42"; exit 1; }
+# Outbound HTTPS from inside DuckDB (the built-in httpfs, with the static OpenSSL and the
+# system's CA bundle), through the same endpoints.
+statement=$(curl -sf -X POST "$base/sessions/$session/statements" "${auth[@]}" -H 'Accept: application/json' \
+              -H 'Prefer: wait=60' -d "{\"sql\": \"SELECT 'https-' || (length(content) > 100)::VARCHAR FROM read_text('https://token.actions.githubusercontent.com/.well-known/openid-configuration')\"}")
+[ "$(echo "$statement" | json state)" = succeeded ] || { echo "the httpfs read failed: $statement"; exit 1; }
+id=$(echo "$statement" | json statement_id)
+curl -sf "$base/sessions/$session/statements/$id/result" "${auth[@]}" \
+  -H 'Accept: application/vnd.apache.arrow.stream' -o https.arrows
+grep -aq 'https-true' https.arrows || { echo "the httpfs read returned no https-true"; exit 1; }
 # The command-line client from the same tarball, against the same server.
 client="$(dirname "$bin")/hardcharger"
 "$client" --version

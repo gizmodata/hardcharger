@@ -72,9 +72,7 @@ jobs:
       # (The Linux build tools are in the manylinux image; the build installs the rest.)
       - name: Install build tools (macOS)
         if: runner.os == 'macOS'
-        run: |
-          brew install ninja openssl@3
-          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+        run: brew install ninja
 
       # Each dependency is cached on its own (.github/actions/dep-cache), keyed on its own
       # recipes and the exact toolchain: on Linux the manylinux image's tag and digest, on
@@ -88,7 +86,8 @@ jobs:
             [ -n "$clang" ] || { echo "no clang build in: $(clang --version)"; exit 1; }
             toolchain="$(xcodebuild -version | tr '\n' ' ') $clang"
             build="server/scripts/build-deps.sh"
-            duckdb_extra=""
+            # DuckDB's extensions link the static OpenSSL.
+            duckdb_extra="server/scripts/deps-openssl.sh"
           else
             image="${HARDCHARGER_MANYLINUX_IMAGE##*/}"
             digest="${image##*@sha256:}"
@@ -103,8 +102,9 @@ jobs:
           echo "duckdb_extra=$duckdb_extra" >> "$GITHUB_OUTPUT"
           # The DuckDB build's peak memory is what limits its parallelism on 2-CPU runners.
           echo "CMAKE_BUILD_PARALLEL_LEVEL=$(getconf _NPROCESSORS_ONLN)" >> "$GITHUB_ENV"
+      # OpenSSL 3, static: linked into everything the release ships, so no user needs an
+      # OpenSSL 3 of their own (EL8 has 1.1; a Mac has none outside Homebrew).
       - name: OpenSSL, static (cached)
-        if: runner.os == 'Linux'
         uses: ./.github/actions/dep-cache
         with:
           dependency: openssl
@@ -151,6 +151,7 @@ jobs:
             server/scripts/in-manylinux.sh build server/build --target warpsql-client-tests
           else
             cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                  -DOPENSSL_ROOT_DIR="$PWD/server/.deps/openssl-install" -DOPENSSL_USE_STATIC_LIBS=TRUE \
                   -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
             cmake --build server/build
             cmake --build server/build --target warpsql-client-tests
@@ -252,6 +253,25 @@ jobs:
           fi
           stage="dist/hardcharger-${{ matrix.name }}"
           server/scripts/check-glibc-baseline.sh "$stage"/bin/* "$stage"/lib/*
+      # Nothing shipped may link a library a user's machine may not have: on Linux only
+      # glibc's own, the GCC runtime and the tarball's libduckdb (readelf NEEDED); on
+      # macOS only /usr/lib, /System and the tarball's own lib/ (otool -L), never Homebrew.
+      # The check is first shown to fail on a runner binary that links more (Linux: curl,
+      # libcurl; macOS: Homebrew's psql, its libpq and OpenSSL).
+      - name: Check the shipped libraries
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then probe=/usr/bin/curl; else probe="$(brew --prefix postgresql@17)/bin/psql"; fi
+          if server/scripts/check-shipped-libs.sh "$probe" >/dev/null 2>&1; then
+            echo "the library check passed $probe, which links more than the system's"; exit 1
+          fi
+          stage="dist/hardcharger-${{ matrix.name }}"
+          server/scripts/check-shipped-libs.sh "$stage"/bin/* "$stage"/lib/*
+      # The macOS tarball on the runner (the Linux ones go to Oracle Linux 8 in `portable`):
+      # it starts, verifies TLS with the system's CA bundle, reads HTTPS inside DuckDB and
+      # answers a query through the Warp SQL endpoints and its client.
+      - name: Smoke-test the tarball (macOS)
+        if: runner.os == 'macOS'
+        run: env -i HOME="$RUNNER_TEMP" PATH=/usr/bin:/bin bash server/scripts/smoke-tarball.sh "$PWD/dist/hardcharger-${{ matrix.name }}.tar.gz"
       - uses: actions/upload-artifact@v7
         with:
           name: hardcharger-${{ matrix.name }}
@@ -654,7 +674,7 @@ jobs:
         working-directory: dist
         run: |
           shopt -s nullglob
-          assets=(*.tar.gz *.zip)
+          assets=(hardcharger-*.tar.gz hardcharger-*.zip)
           [ ${#assets[@]} -ge 3 ] || { echo "expected the release tarballs, found: ${assets[*]}"; exit 1; }
           sha256sum "${assets[@]}" > SHA256SUMS
           cat SHA256SUMS
@@ -697,7 +717,7 @@ jobs:
         run: |
           sha256sum -c SHA256SUMS
           shopt -s nullglob
-          for asset in *.tar.gz *.zip; do
+          for asset in hardcharger-*.tar.gz hardcharger-*.zip; do
             grep -q "  $asset\$" SHA256SUMS || { echo "$asset is not in SHA256SUMS"; exit 1; }
           done
       - uses: softprops/action-gh-release@v3
@@ -705,17 +725,39 @@ jobs:
           body_path: release-notes.md
           files: dist/*
       # The installer's repository runs its end-to-end install tests against each release.
-      # Separate and last: a failed dispatch shows on the run but never undoes the release.
-      # HARDCHARGER_INSTALL_DISPATCH_TOKEN: a fine-grained token for
-      # gizmodata/hardcharger-install only, with Contents: read and write (what
-      # repository_dispatch requires).
+      # Last, and continue-on-error: a failed dispatch shows on the run but never undoes the
+      # release. The token comes from the HARDCHARGER_CI GitHub App's installation on
+      # gizmodata/hardcharger-install (secrets HARDCHARGER_CI_APP_ID and
+      # HARDCHARGER_CI_APP_PRIVATE_KEY); until those exist, the dispatch is skipped, visibly.
+      - name: Check for the HARDCHARGER_CI app
+        id: app
+        env:
+          APP_ID: ${{ secrets.HARDCHARGER_CI_APP_ID }}
+          APP_KEY: ${{ secrets.HARDCHARGER_CI_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$APP_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::hardcharger-install not told about this release: secrets HARDCHARGER_CI_APP_ID and HARDCHARGER_CI_APP_PRIVATE_KEY are not set"
+          fi
+      - uses: actions/create-github-app-token@v3
+        id: token
+        if: steps.app.outputs.present == 'true'
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.HARDCHARGER_CI_APP_ID }}
+          private-key: ${{ secrets.HARDCHARGER_CI_APP_PRIVATE_KEY }}
+          owner: gizmodata
+          repositories: hardcharger-install
+          permission-contents: write  # what repository_dispatch needs
       - name: Tell hardcharger-install about the release
+        if: steps.app.outputs.present == 'true'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.HARDCHARGER_INSTALL_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
-          [ -n "$GH_TOKEN" ] || { echo "::error::HARDCHARGER_INSTALL_DISPATCH_TOKEN is not set"; exit 1; }
-          version="${GITHUB_REF_NAME#v}"
-          gh api --method POST repos/gizmodata/hardcharger-install/dispatches \
-            -f event_type=hardcharger-released -f "client_payload[version]=$version"
-          echo "hardcharger-released $version sent to gizmodata/hardcharger-install"
+          [ -n "$GH_TOKEN" ] || { echo "::error::no installation token for gizmodata/hardcharger-install"; exit 1; }
+          gh api repos/gizmodata/hardcharger-install/dispatches -f event_type=hardcharger-released \
+            -f 'client_payload[version]'="${GITHUB_REF_NAME#v}"
+          echo "hardcharger-released ${GITHUB_REF_NAME#v} sent to gizmodata/hardcharger-install"

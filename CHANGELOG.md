@@ -79,6 +79,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- The macOS tarball no longer needs Homebrew: OpenSSL 3 is linked in statically (0.2.0's
+  server linked Homebrew's openssl@3), as on Linux, where nothing beyond glibc and the
+  GCC runtime is needed any more (0.2.0's needed the system's libssl.so.3). CI fails a
+  build that links anything else, and runs each tarball on a clean system.
 - The access-control Open Policy Agent client verifies HTTPS against the system's CA
   bundle, as the server's other outbound calls do, rather than OpenSSL's compiled-in
   certificate directory (a build-time path in a portable build).
