@@ -140,6 +140,7 @@ void CatalogLog::Attach() {
                  : std::filesystem::path("hardcharger_logs.db"))
                .string();
   }
+  file_ = path;
   // READ_WRITE: an instance opened read-only would otherwise open it read-only too.
   warpduckdb::RunSql(connection_.get(),
                      "ATTACH " + SqlLiteral(path) + " AS " + SqlIdentifier(catalog_) + " (READ_WRITE)");

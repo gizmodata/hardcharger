@@ -368,8 +368,27 @@ def problem(response: httpx.Response, status: int, code: str) -> dict:
 
 @pytest.fixture(scope="session")
 def store():
-    """The PostgreSQL the access-control tests keep their grant stores on."""
-    from rbac import Store
-    databases = Store()
+    """The stores the access-control tests keep their grants in: PostgreSQL databases, or
+    DuckDB files with HARDCHARGER_TEST_RBAC_STORE=duckdb (rbac.py)."""
+    from rbac import STORE_KIND, Store
+    databases = Store(kind=STORE_KIND)
     yield databases
     databases.drop_all()
+
+
+@pytest.fixture(scope="session")
+def pg_store():
+    """PostgreSQL databases, whatever HARDCHARGER_TEST_RBAC_STORE says: for several replicas
+    on one store, and for tests that look into the store or attach PostgreSQL."""
+    from rbac import Store
+    databases = Store(kind="postgres")
+    yield databases
+    databases.drop_all()
+
+
+def pytest_collection_modifyitems(config, items):
+    # The tests that run on whichever store `store` hands out: CI runs them once more on
+    # the DuckDB store (-m rbac_store, HARDCHARGER_TEST_RBAC_STORE=duckdb).
+    for item in items:
+        if "store" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.rbac_store)

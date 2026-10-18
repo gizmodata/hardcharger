@@ -6,12 +6,20 @@
 #include <boost/json.hpp>
 #include <chrono>
 #include <duckdb.hpp>
+#include <duckdb/common/file_open_flags.hpp>
+#include <duckdb/common/local_file_system.hpp>
+#include <duckdb/common/virtual_file_system.hpp>
 #include <filesystem>
 #include <random>
 #include <regex>
 #include <thread>
 
+#include "authz/authz.hpp"
 #include "authz/duckdb_internal.hpp"
+
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 namespace hardcharger::authz {
 
@@ -168,13 +176,112 @@ bool LooksLikePostgres(const std::string& uri) {
          uri.find("dbname=") != std::string::npos || uri.find("host=") != std::string::npos;
 }
 
+std::string Quote(const std::string& text) {
+  std::string quoted = "'";
+  for (char c : text) {
+    if (c == '\'') quoted += '\'';
+    quoted += c;
+  }
+  return quoted + "'";
+}
+
+// A DuckDB store's files (the database, its WAL, and the WAL's checkpoint and recovery
+// copies) hold password hashes, so whatever the store's own instance creates is created
+// 0600, whatever the process's umask. (DuckDB's private flag refuses an existing file,
+// so it is asked for only when the file is new.)
+class PrivateLocalFileSystem : public dd::LocalFileSystem {
+ public:
+  dd::unique_ptr<dd::FileHandle> OpenFile(const std::string& path, dd::FileOpenFlags flags,
+                                          dd::optional_ptr<dd::FileOpener> opener) override {
+    if ((flags.CreateFileIfNotExists() || flags.OverwriteExistingFile()) && !FileExists(path, opener)) {
+      try {
+        return dd::LocalFileSystem::OpenFile(path, flags | dd::FileFlags::FILE_FLAGS_PRIVATE, opener);
+      } catch (const std::exception&) {
+        if (!FileExists(path, opener)) throw;  // not a race with another open
+      }
+    }
+    return dd::LocalFileSystem::OpenFile(path, flags, opener);
+  }
+};
+
+#ifndef _WIN32
+// The store's file holds password hashes and grants: no one but the server's user may
+// read it, and anyone else who could write it could grant themselves anything.
+arrow::Status CheckPrivate(const std::filesystem::path& file) {
+  struct stat st {};
+  if (::stat(file.c_str(), &st) != 0) return arrow::Status::OK();  // not there (yet)
+  if (!S_ISREG(st.st_mode)) {
+    return arrow::Status::Invalid("Hardcharger access control: the DuckDB store ", file.string(),
+                                  " is not a regular file");
+  }
+  if ((st.st_mode & (S_IRWXG | S_IRWXO)) != 0) {
+    char mode[8];
+    std::snprintf(mode, sizeof(mode), "%04o", static_cast<unsigned>(st.st_mode & 07777));
+    return arrow::Status::Invalid(
+        "Hardcharger access control: the DuckDB store ", file.string(), " has mode ", mode,
+        ", so other users of this host can read or change it; it holds password hashes and "
+        "grants. Restrict it to the server's user (chmod 600 '",
+        file.string(), "') and start again");
+  }
+  return arrow::Status::OK();
+}
+#endif
+
+// The DuckDB store's file: absolute, its directory there, and (POSIX) private if it
+// exists already.
+arrow::Result<std::string> PrepareStoreFile(const std::string& given) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  fs::path file = fs::absolute(fs::path(given), ec);
+  if (ec) return arrow::Status::Invalid("Hardcharger access control: no DuckDB store file '", given, "'");
+  file = file.lexically_normal();
+  if (!fs::is_directory(file.parent_path(), ec)) {
+    return arrow::Status::Invalid("Hardcharger access control: the DuckDB store's directory ",
+                                  file.parent_path().string(), " does not exist");
+  }
+#ifndef _WIN32
+  for (const char* suffix : {"", ".wal", ".wal.checkpoint", ".wal.recovery"}) {
+    ARROW_RETURN_NOT_OK(CheckPrivate(fs::path(file.string() + suffix)));
+  }
+#endif
+  return file.string();
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
 
+std::string DuckDBStoreFile(const std::string& store_uri) { return RbacStore::DuckDBFile(store_uri); }
+
+std::string RbacStore::DuckDBFile(const std::string& uri) {
+  if (uri.rfind("duckdb:", 0) == 0) return uri.substr(7);
+  std::string lower = uri;
+  std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+  const std::string suffix = ".duckdb";
+  if (lower.size() > suffix.size() && lower.compare(lower.size() - suffix.size(), suffix.size(), suffix) == 0 &&
+      !LooksLikePostgres(uri)) {
+    return uri;
+  }
+  return {};
+}
+
 arrow::Result<std::unique_ptr<RbacStore>> RbacStore::Open(const std::string& uri) {
   std::unique_ptr<RbacStore> store(new RbacStore());
+  const bool duckdb_file = uri.rfind("duckdb:", 0) == 0 || !DuckDBFile(uri).empty();
+  if (duckdb_file) {
+    const std::string file = DuckDBFile(uri);
+    if (file.empty()) {
+      return arrow::Status::Invalid("Hardcharger access control: duckdb: needs a file (duckdb:/path/to/rbac.duckdb)");
+    }
+    ARROW_ASSIGN_OR_RAISE(store->file_path_, PrepareStoreFile(file));
+  }
   dd::DBConfig config;
+  if (duckdb_file) {
+    config.file_system = dd::make_uniq<dd::VirtualFileSystem>(dd::make_uniq<PrivateLocalFileSystem>());
+  }
+  // The store is small: nothing spills to a temporary directory (by default a .tmp in
+  // the working directory, which the serving instance can read).
+  config.SetOptionByName("temp_directory", dd::Value(""));
   // The private instance must not pick up secrets from the host's DuckDB
   // profile (a default PostgreSQL secret there would change where the store
   // connects), so it gets an empty secret directory of its own.
@@ -199,6 +306,22 @@ arrow::Result<std::unique_ptr<RbacStore>> RbacStore::Open(const std::string& uri
   if (uri == "memory") {
     store->description_ = "in-memory (tests only)";
     ARROW_RETURN_NOT_OK(Exec(conn, "ATTACH ':memory:' AS rbac_store"));
+  } else if (duckdb_file) {
+    store->description_ = "DuckDB file " + store->file_path_ + " (one server only)";
+    auto attach = conn.Query("ATTACH " + Quote(store->file_path_) + " AS rbac_store");
+    if (attach->HasError()) {
+      std::string error = attach->GetError();
+      if (auto nl = error.find('\n'); nl != std::string::npos) error.resize(nl);
+      // DuckDB's file lock (Windows: the file's sharing mode): another process has it open.
+      if (error.find("Could not set lock") != std::string::npos ||
+          error.find("being used by another process") != std::string::npos) {
+        return StoreError("the DuckDB store " + store->file_path_ + " is in use by another process",
+                          error +
+                              ". A DuckDB store serves a single server; for several replicas, use a "
+                              "PostgreSQL store (rbac_store_uri: postgresql://...)");
+      }
+      return StoreError("could not open the DuckDB store " + store->file_path_, error);
+    }
   } else if (LooksLikePostgres(uri)) {
     store->description_ = "PostgreSQL";
     auto load = conn.Query("LOAD postgres");
@@ -206,14 +329,8 @@ arrow::Result<std::unique_ptr<RbacStore>> RbacStore::Open(const std::string& uri
       ARROW_RETURN_NOT_OK(Exec(conn, "INSTALL postgres"));
       ARROW_RETURN_NOT_OK(Exec(conn, "LOAD postgres"));
     }
-    // The connection string carries credentials: bind it, never log it.
-    std::string quoted = "'";
-    for (char c : uri) {
-      if (c == '\'') quoted += '\'';
-      quoted += c;
-    }
-    quoted += "'";
-    auto attach = conn.Query("ATTACH " + quoted + " AS rbac_store (TYPE postgres)");
+    // The connection string carries credentials: never log it.
+    auto attach = conn.Query("ATTACH " + Quote(uri) + " AS rbac_store (TYPE postgres)");
     if (attach->HasError()) {
       return StoreError("could not connect to the PostgreSQL store",
                         RedactConnectionString(attach->GetError(), uri));
@@ -221,7 +338,8 @@ arrow::Result<std::unique_ptr<RbacStore>> RbacStore::Open(const std::string& uri
   } else {
     return arrow::Status::Invalid(
         "Hardcharger access control: the store must be a PostgreSQL connection string "
-        "(postgresql://user@host/db or 'host=... dbname=...')");
+        "(postgresql://user@host/db or 'host=... dbname=...') or a DuckDB file "
+        "(duckdb:/path/to/rbac.duckdb)");
   }
 
   // Two replicas starting at once can race on CREATE ... IF NOT EXISTS.

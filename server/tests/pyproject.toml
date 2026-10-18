@@ -21,6 +21,7 @@ markers = [
   "performance: throughput gates (slow)",
   "services: needs the containers in docker-compose.yml (PostgreSQL, S3); fails, never skips, without them",
   "serial: runs alone, after the parallel (pytest-xdist) pass: timing gates, and counts over a whole shared database",
+  "rbac_store: takes the `store` fixture, so it runs on the store HARDCHARGER_TEST_RBAC_STORE picks (CI: PostgreSQL, then the DuckDB file)",
   "pty: drives the client at a terminal through pexpect.spawn, which needs a pty: Windows has none, and its CI deselects these by marker",
   "web_ui: needs a build that embeds the web UI (-DHARDCHARGER_WEB_UI=<hardcharger-ui tarball>); fails, never skips, without it",
 ]

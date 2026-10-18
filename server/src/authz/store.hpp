@@ -1,9 +1,13 @@
 // Persistent store for users, roles, memberships, grants and owners.
 //
 // The store lives in PostgreSQL, so every replica of a cluster reads the same
-// grants. It is reached through a PRIVATE in-process DuckDB instance (separate
-// from the one serving clients) that attaches the store database: no client
-// session can see, query or ATTACH it. Unit tests use an in-memory store.
+// grants, or, for development and a server that will only ever run as one replica,
+// in a DuckDB file. It is reached through a PRIVATE in-process DuckDB instance
+// (separate from the one serving clients) that attaches the store database: no client
+// session can see or query it. A DuckDB file is also kept out of reach of the serving
+// instance's SQL (file_path(); see PrivateFiles in guards.hpp), as DuckDB's file lock
+// does not stop the same process from opening it a second time. Unit tests use an
+// in-memory store.
 //
 // Every mutation runs in one store transaction that first bumps a data version
 // row, which serializes writers across replicas; readers poll that version to
@@ -35,9 +39,12 @@ class StoreTransaction;
 class RbacStore {
  public:
   // `uri`: a PostgreSQL connection string or URI ("postgresql://...",
-  // "postgres://...", or libpq "host=... dbname=..."), or "memory" for an
-  // in-process store (tests).
+  // "postgres://...", or libpq "host=... dbname=..."), a DuckDB file ("duckdb:<path>",
+  // or a path ending in .duckdb), or "memory" for an in-process store (tests).
   static arrow::Result<std::unique_ptr<RbacStore>> Open(const std::string& uri);
+
+  // The file a DuckDB store URI names, as given (empty: not a DuckDB store).
+  static std::string DuckDBFile(const std::string& uri);
   ~RbacStore();
 
   // Read everything into a snapshot.
@@ -54,6 +61,8 @@ class RbacStore {
   arrow::Status Mutate(const std::function<arrow::Status(StoreTransaction&, const Snapshot&)>& fn);
 
   const std::string& description() const { return description_; }
+  // A DuckDB store's file, absolute; empty for any other store.
+  const std::string& file_path() const { return file_path_; }
 
  private:
   RbacStore() = default;
@@ -65,6 +74,7 @@ class RbacStore {
   std::mutex mutex_;
   std::string description_;  // for logs; never contains credentials
   std::string secret_dir_;   // the private instance's (empty) secret directory
+  std::string file_path_;    // a DuckDB store's file
 
   friend class StoreTransaction;
 };

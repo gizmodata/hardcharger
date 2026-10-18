@@ -46,6 +46,8 @@ class CatalogLog {
   void Stop();
 
   const std::string& catalog() const { return catalog_; }
+  // The file Attach() attached, as it spelled it (empty: an external catalog).
+  const std::string& file() const { return file_; }
   const std::string& schema() const { return schema_; }
 
   // The INSERT for `records` (one row each), into `table`.
@@ -60,6 +62,7 @@ class CatalogLog {
   duckdb_v2_instance_handle instance_;
   const bool external_;  // a catalog the init SQL attached
   std::string catalog_;
+  std::string file_;
   std::string schema_;
   std::string table_;
   warpduckdb::Connection connection_;

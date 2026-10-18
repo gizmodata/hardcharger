@@ -55,6 +55,9 @@ class Backend : public warpduckdb::DuckDBBackend {
   Runtime& runtime_;
   std::shared_ptr<authz::AccessControl> access_;
   SensitivePaths sensitive_paths_;
+  // The server's own files, which no SQL opens (guards.hpp): shared with the file
+  // system guard in the instance.
+  std::shared_ptr<PrivateFiles> private_files_;
   std::string system_catalog_dir_;
   std::unique_ptr<HealthChecker> health_;
   std::unique_ptr<Instrumentation> instrumentation_;
@@ -65,8 +68,9 @@ class Session : public warpduckdb::DuckDBSession {
  public:
   // With `access`, the session's connection is bound to `principal` before anything
   // runs on it; a session that cannot be bound is refused (the constructor throws).
-  Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb_v2_instance_handle instance,
-          warpsql::Principal principal, bool capped, authz::AccessControl* access);
+  Session(Runtime& runtime, const SensitivePaths& sensitive_paths, const PrivateFiles& private_files,
+          duckdb_v2_instance_handle instance, warpsql::Principal principal, bool capped,
+          authz::AccessControl* access);
   ~Session() override;
 
   warpsql::StatementOutcome Execute(std::string_view sql,
@@ -154,6 +158,7 @@ class Session : public warpduckdb::DuckDBSession {
 
   Runtime& runtime_;
   const SensitivePaths& sensitive_paths_;
+  const PrivateFiles& private_files_;
   const warpsql::Principal principal_;
   const bool access_controlled_;  // bound to access control (RBAC, or catalog_access rules only)
   const bool rbac_;               // ... with a store: users, roles, grants, access-control statements

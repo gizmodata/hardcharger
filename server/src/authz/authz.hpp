@@ -101,6 +101,23 @@ std::optional<std::string> AccessControlStatementKind(std::string_view sql);
 // guard runs itself (GRANT, CREATE USER, SHOW GRANTS, ...), which DuckDB can't parse.
 bool LooksLikeAccessControlStatement(std::string_view sql);
 
+}  // namespace hardcharger::authz
+
+namespace hardcharger {
+class PrivateFiles;
+}
+
+namespace hardcharger::authz {
+
+// The file a DuckDB store URI names ("duckdb:<path>", or a path ending in .duckdb), as
+// given; empty for any other store.
+std::string DuckDBStoreFile(const std::string& store_uri);
+
+// Puts the guard of the server's own files (PrivateFiles, guards.hpp) into `instance`'s
+// file system: no statement opens, lists, moves or removes them, whatever path it
+// computes (file_guard.cc). Files added to `files` later are guarded from then on.
+void InstallPrivateFileGuard(duckdb_v2_instance_handle instance, std::shared_ptr<const PrivateFiles> files);
+
 class AccessControl {
  public:
   // Opens the store and loads it. Throws std::runtime_error (never quoting the store's
@@ -159,6 +176,8 @@ class AccessControl {
   std::shared_ptr<SessionGuard> Bind(duckdb_v2_connection_handle connection, Identity who);
 
   const std::string& store_description() const;
+  // A DuckDB store's file (absolute), which SQL must never reach; empty for PostgreSQL.
+  const std::string& store_file() const;
 
  private:
   void OnSnapshot(const Snapshot& snapshot);
