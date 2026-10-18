@@ -25,14 +25,16 @@ runs:
     - name: ${{ inputs.dependency }} cache key
       id: key
       shell: bash
+      # (Prefixed names: on Windows a Developer shell's Platform would shadow PLATFORM,
+      # environment names there ignoring case.)
       env:
-        DEP: ${{ inputs.dependency }}
-        PLATFORM: ${{ inputs.platform }}
-        TOOLCHAIN: ${{ inputs.toolchain }}
-        EXTRA: ${{ inputs.extra-recipes }}
+        DEPCACHE_DEP: ${{ inputs.dependency }}
+        DEPCACHE_PLATFORM: ${{ inputs.platform }}
+        DEPCACHE_TOOLCHAIN: ${{ inputs.toolchain }}
+        DEPCACHE_EXTRA: ${{ inputs.extra-recipes }}
       run: |
-        read -r -a extra <<< "$EXTRA"
-        key=$(server/scripts/ci-deps-key.sh "$DEP" "$PLATFORM" "$TOOLCHAIN" "${extra[@]}")
+        read -r -a extra <<< "$DEPCACHE_EXTRA"
+        key=$(server/scripts/ci-deps-key.sh "$DEPCACHE_DEP" "$DEPCACHE_PLATFORM" "$DEPCACHE_TOOLCHAIN" "${extra[@]}")
         echo "$key"
         echo "key=$key" >> "$GITHUB_OUTPUT"
     - uses: actions/cache/restore@v6
@@ -44,11 +46,11 @@ runs:
       if: steps.restore.outputs.cache-hit != 'true'
       shell: bash
       env:
-        DEP: ${{ inputs.dependency }}
-        BUILD: ${{ inputs.build }}
+        DEPCACHE_DEP: ${{ inputs.dependency }}
+        DEPCACHE_BUILD: ${{ inputs.build }}
       run: |
-        read -r -a build <<< "$BUILD"
-        "${build[@]}" "$DEP"
+        read -r -a build <<< "$DEPCACHE_BUILD"
+        "${build[@]}" "$DEPCACHE_DEP"
     # A tag's caches can't be restored by any other ref, so only branch runs save.
     - if: steps.restore.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
       uses: actions/cache/save@v6
