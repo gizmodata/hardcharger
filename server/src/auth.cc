@@ -5,6 +5,7 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <optional>
@@ -318,6 +319,20 @@ warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view ident
                         "store; an administrator drops the user or removes the identity");
       }
       return signed_in(warpsql::Principal{admin, "admin", "client_certificate", {}, {}});
+    }
+  }
+  // A URI identity differing from an administrator identity only in case is another
+  // identity (URI paths are case-sensitive): refused, saying so.
+  if (warpsql::IsUriIdentity(name)) {
+    for (const auto& admin : certificate_admins_) {
+      if (admin.size() == name.size() &&
+          std::equal(admin.begin(), admin.end(), name.begin(), [](char a, char b) {
+            return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+          })) {
+        throw Error(ErrorCode::kUnknownCertificateIdentity,
+                    "the client certificate's URI identity '" + name + "' differs from '" + admin +
+                        "' only in case; URI identities must match exactly");
+      }
     }
   }
   // Under access control, one of the store's enabled users (a password is not needed).
