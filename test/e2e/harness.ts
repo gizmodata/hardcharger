@@ -59,6 +59,10 @@ export interface Harness {
   stop: () => Promise<void>;
 }
 
+// HARDCHARGER_UI_TEST_EMBEDDED=1: the server serves the UI itself (its web_ui option, in a
+// build that embeds a hardcharger-ui tarball) instead of scripts/serve.mjs serving dist/.
+const embedded = process.env["HARDCHARGER_UI_TEST_EMBEDDED"] === "1";
+
 export async function startHarness(): Promise<Harness> {
   const binary = process.env["HARDCHARGER_UI_TEST_SERVER_BINARY"];
   if (!binary) {
@@ -69,8 +73,9 @@ export async function startHarness(): Promise<Harness> {
   }
   if (!existsSync(binary)) throw new Error(`HARDCHARGER_UI_TEST_SERVER_BINARY=${binary} does not exist`);
   const dist = path.resolve(import.meta.dirname, "../../dist");
-  if (!existsSync(path.join(dist, "index.html")))
+  if (!embedded && !existsSync(path.join(dist, "index.html"))) {
     throw new Error("dist/index.html is missing: run npm run build first");
+  }
   const storeUri =
     process.env["HARDCHARGER_UI_TEST_RBAC_STORE_URI"] ??
     "postgresql://hardcharger:hardcharger@127.0.0.1:55460/hardcharger";
@@ -96,6 +101,7 @@ export async function startHarness(): Promise<Harness> {
     "false",
     "--print-queries",
     "false",
+    ...(embedded ? ["--web-ui"] : []),
   ];
   const child: ChildProcess = spawn(binary, args, {
     env: { ...cleanEnvironment(), HARDCHARGER_ADMIN_PASSWORD: adminPassword },
@@ -155,16 +161,18 @@ export async function startHarness(): Promise<Harness> {
   const catalog = String((await admin.query("SELECT current_database() AS c")).get(0)!.toJSON()["c"]);
   await admin.close();
 
-  const ui: Server = createUiServer({ dist, upstream: serverUrl });
-  const uiPort = await new Promise<number>((resolve) =>
-    ui.listen(0, "127.0.0.1", () => resolve((ui.address() as net.AddressInfo).port)),
-  );
+  const ui: Server | undefined = embedded ? undefined : createUiServer({ dist, upstream: serverUrl });
+  const uiUrl = ui
+    ? `http://127.0.0.1:${await new Promise<number>((resolve) =>
+        ui.listen(0, "127.0.0.1", () => resolve((ui.address() as net.AddressInfo).port)),
+      )}`
+    : serverUrl;
 
   // Access-control changes reach the server's sessions within about a second (it polls).
   await new Promise((r) => setTimeout(r, 1500));
 
   const state: HarnessState = {
-    url: `http://127.0.0.1:${uiPort}`,
+    url: uiUrl,
     serverUrl,
     admin: { username: "admin", password: adminPassword },
     user,
@@ -191,7 +199,7 @@ export async function startHarness(): Promise<Harness> {
       } catch {
         // the store keeps a few names; they don't collide with the next run's
       }
-      await new Promise<void>((resolve) => ui.close(() => resolve()));
+      if (ui) await new Promise<void>((resolve) => ui.close(() => resolve()));
       if (!exited) {
         child.kill("SIGTERM");
         const t = setTimeout(() => child.kill("SIGKILL"), 5000);

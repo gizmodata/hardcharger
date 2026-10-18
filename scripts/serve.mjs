@@ -37,6 +37,11 @@ export function createUiServer({ dist, upstream }) {
         (upstreamRes) => {
           res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
           upstreamRes.pipe(res);
+          // A body the server cut short (a result stream ending without its last chunk, Warp
+          // SQL §6.6) must reach the browser cut short too, never as a complete one.
+          upstreamRes.on("close", () => {
+            if (!upstreamRes.complete) res.destroy();
+          });
         },
       );
       upstreamReq.on("error", () => {

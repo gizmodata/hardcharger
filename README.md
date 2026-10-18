@@ -55,9 +55,14 @@ server with [`@gizmodata/warp-sql`](https://github.com/gizmodata/warp-sql-js).
 
 ## 🚀 Using it
 
-Hardcharger serves the UI when it is started with the web UI turned on (a flag, environment
-variable or YAML key of its own; see the server's `--help`). Then open `/ui` on the server's
-address and sign in with a Hardcharger user.
+A Hardcharger build that embeds the UI serves it with `--web-ui` (`HARDCHARGER_WEB_UI=true`,
+or `web_ui: true` in its YAML file); open `/ui/` on the server's address and sign in with a
+Hardcharger user. (The embedding is on Hardcharger's `feat/ui` branch, not yet merged.)
+
+```bash
+HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --database demo.duckdb
+# open http://127.0.0.1:31337/ui/ and sign in as hardcharger / change-me
+```
 
 Without a server build that embeds it, serve a build of this repository next to any
 Hardcharger server. `scripts/serve.mjs` serves `dist/` at `/ui/` exactly as the server does
@@ -168,7 +173,9 @@ npx playwright install chromium webkit
 npm run build && npm run test:e2e
 ```
 
-A Linux server binary is in the image: `docker cp $(docker create
+With `HARDCHARGER_UI_TEST_EMBEDDED=1` the tests run against the UI a server build embeds
+(`hardcharger-server --web-ui`) instead of `dist/` served by `scripts/serve.mjs`. A Linux
+server binary is in the image: `docker cp $(docker create
 ghcr.io/gizmodata/hardcharger:main):/opt/hardcharger .`. The tests read only
 `HARDCHARGER_UI_TEST_*` variables, and the server they start gets none of the shell's
 `HARDCHARGER_*` settings.

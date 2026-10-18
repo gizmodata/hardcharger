@@ -42,9 +42,24 @@ test("a lazily loaded page that is gone: reloads with backoff, then a 'new versi
   await page.getByRole("button", { name: "Query" }).click();
   await expect(notice).toBeVisible();
 
-  // The "new version" is deployed: Reload brings the page back.
+  // The upgrade finishes: the server now has a new build, whose files have new names, so the
+  // reloaded page asks for new URLs (here the same files under new URLs: WebKit may keep a
+  // module that failed to load as failed for its URL, as it would in Safari). Reload brings
+  // the page back.
   await page.unroute(missing);
+  await page.route(`${harness.url}/ui/`, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.text()).replace(/(\/ui\/assets\/index-[\w-]+\.js)/, "$1?build=2");
+    await route.fulfill({ response, body });
+  });
+  await page.route(/\/ui\/assets\/index-[\w-]+\.js\?build=2$/, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.text()).replaceAll(/(QueryPage-[\w-]+\.js)/g, "$1?build=2");
+    await route.fulfill({ response, body });
+  });
   await page.getByRole("button", { name: "Reload" }).click();
   await expect(page.locator(".editor-slot .monaco-editor")).toBeVisible();
   await expect(page.getByTestId("stale-build")).toHaveCount(0);
+  // Reload reloaded (WebKit sometimes needs one automatic retry more before the new files load).
+  expect(documents).toBeGreaterThanOrEqual(5);
 });

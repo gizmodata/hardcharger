@@ -38,4 +38,5 @@ All notable changes to this project are documented here. The format follows
   content SHA-256 that server builds pin.
 - Tests: unit tests (vitest), and Playwright e2e tests in Chromium and WebKit against a real
   `hardcharger-server` with access control on, failing on any console error, CSP violation or
-  unexpected HTTP error. CI on every push; releases on `v*` tags, gated on the full CI.
+  unexpected HTTP error; `HARDCHARGER_UI_TEST_EMBEDDED=1` runs them against the UI a server
+  build embeds (`--web-ui`). CI on every push; releases on `v*` tags, gated on the full CI.
