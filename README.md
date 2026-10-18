@@ -399,7 +399,9 @@ unknown identity) is a security warning in the log and an audit record, with the
 token's id, the certificate presented and the client's address. They are rate-limited per source (ten a minute
 in full, then one summary that counts the rest), a connection is closed after five failed
 sign-ins, and certificates the TLS handshake refuses (revoked, expired, untrusted) are
-recorded too. Under access control a SPIFFE ID is a user name like any other:
+recorded too. Identities match user names as user names compare (ignoring ASCII case), except URI identities such as
+SPIFFE IDs, whose paths are case-sensitive: they must match exactly, case included. Under access
+control a SPIFFE ID is a user name like any other:
 `CREATE USER "spiffe://example.org/ns/etl/sa/loader"` (always system scope, never a tenant's).
 Of several CRLs from one CA the newest is used; delta CRLs are refused. TLS has to end at Hardcharger (a TCP or TLS-passthrough load balancer) for this; a
 proxy that ends TLS takes the certificate with it. Sign-ins with a certificate are written to

@@ -142,8 +142,9 @@ class AccessControl {
   void RequireStoreUser(const std::string& user_name) const;
 
   // A client certificate's identity (spec §4.4): the store's name of the enabled user it
-  // names (compared as user names are, ignoring ASCII case), or nullopt. A user signs in
-  // this way with or without a password (CREATE USER name).
+  // names, or nullopt. An e-mail or CN identity compares as user names do (ignoring ASCII
+  // case); a URI identity must match exactly (Error(kUnknownCertificateIdentity) when it
+  // differs only in case). A user signs in this way with or without a password.
   std::optional<std::string> CertificateUser(const std::string& identity) const;
 
   // Throws warpsql::Error(kInvalidToken) when an access token for `who` no longer

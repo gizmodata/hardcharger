@@ -285,6 +285,13 @@ std::optional<std::string> AccessControl::CertificateUser(const std::string& ide
   const auto snapshot = engine_->snapshot();  // keeps `user` alive
   const UserRecord* user = snapshot->FindUserByName(identity);
   if (user == nullptr || !user->enabled) return std::nullopt;
+  // User names compare ignoring ASCII case, but a URI identity (a SPIFFE ID, whose path is
+  // case-sensitive) names that user only when it is spelled exactly the same.
+  if (!warpsql::CertificateIdentitiesMatch(user->name, identity)) {
+    throw Error(ErrorCode::kUnknownCertificateIdentity,
+                "the client certificate's URI identity '" + identity + "' differs from user '" + user->name +
+                    "' only in case; URI identities must match a user name exactly");
+  }
   return user->name;
 }
 

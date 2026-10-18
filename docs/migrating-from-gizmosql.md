@@ -27,7 +27,7 @@ Every option also has a YAML key: the flag without its leading `--`, with `_` fo
 | `TLS_CERT`, `GIZMOSQL_TLS_CERT` | `--tls-cert` | `HARDCHARGER_TLS_CERT` |
 | `TLS_KEY`, `GIZMOSQL_TLS_KEY` | `--tls-key` | `HARDCHARGER_TLS_KEY` |
 | `--mtls-ca-cert-filename`, `-M`, `MTLS_CA_CERT_FILENAME`, `GIZMOSQL_MTLS_CA_CERT_FILENAME` | `--mtls-ca-cert` (it needs `--tls-cert` and `--tls-key`; without them Hardcharger refuses to start) | `HARDCHARGER_MTLS_CA_CERT` |
-| (none: in 1.x a client certificate only let a connection in, and every user still needed a password) | `--mtls-identity-source`, `--mtls-admin-identities`, `--mtls-require-client-cert`, `--mtls-crl-file`, `--mtls-require-identity-match`: the certificate signs the user in (README, "Client certificates as identity") | `HARDCHARGER_MTLS_*` |
+| (none: in 1.x a client certificate only let a connection in, and every user still needed a password) | `--mtls-certificate-sign-in` (off by default: without it a certificate only admits the connection, as in 1.x), then `--mtls-identity-source`, `--mtls-admin-identities`, `--mtls-require-client-cert`, `--mtls-crl-file`, `--mtls-crl-allow-missing-ca-crls`, `--mtls-require-identity-match`: the certificate signs the user in (README, "Client certificates as identity") | `HARDCHARGER_MTLS_*` |
 | `-B`, `DATABASE_BACKEND`, `GIZMOSQL_BACKEND` | (none: DuckDB is the only engine) | (none) |
 | `--database-filename`, `-D`, `DATABASE_FILENAME`, `GIZMOSQL_DATABASE_FILENAME` | `--database` | `HARDCHARGER_DATABASE` |
 | `--readonly`, `-O`, `READONLY`, `GIZMOSQL_READONLY` | `--read-only` | `HARDCHARGER_READ_ONLY` |

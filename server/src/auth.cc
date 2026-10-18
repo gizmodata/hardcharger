@@ -50,14 +50,11 @@ std::string ReadFile(const std::string& path) {
   return contents.str();
 }
 
-// Exact, ignoring ASCII case only (never a glob: an identity is a name, not a pattern).
-bool IgnoringCaseEquals(std::string_view a, std::string_view b) {
-  if (a.size() != b.size()) return false;
-  auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
-  for (std::size_t i = 0; i < a.size(); i++) {
-    if (lower(a[i]) != lower(b[i])) return false;
-  }
-  return true;
+// A user name a client sent, for the log: cut at 256 bytes (it may be 64 MiB).
+std::string LoggableName(std::string_view name) {
+  constexpr std::size_t kMax = 256;
+  if (name.size() <= kMax) return std::string(name);
+  return std::string(name.substr(0, kMax)) + "... (" + std::to_string(name.size()) + " bytes)";
 }
 
 // One answer for every wrong credential, so a refusal never says which part was wrong.
@@ -155,7 +152,7 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
   const bool user_ok = SameSecret(username, username_);
   const bool password_ok = SameSecret(password, password_);
   if (user_ok && password_ok) {
-    LogAt(log_level_, LogLevel::kInfo, "signed in", {{"user", std::string(username)}, {"method", "password"}});
+    LogAt(log_level_, LogLevel::kInfo, "signed in", {{"user", LoggableName(username)}, {"method", "password"}});
     return warpsql::Principal{std::string(username), "admin", "password", {}, {}};
   }
   // A user of the access-control store (never under the administrator's name). The
@@ -172,7 +169,8 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
                                 {{"credential", store_user->credential}}, {}};
     }
   }
-  LogAt(log_level_, LogLevel::kInfo, "sign-in refused", {{"user", std::string(username)}, {"method", "password"}});
+  // The name is the client's, unauthenticated: cut, so a refusal can't fill the log.
+  LogAt(log_level_, LogLevel::kInfo, "sign-in refused", {{"user", LoggableName(username)}, {"method", "password"}});
   throw Refused();
 }
 
@@ -309,7 +307,8 @@ warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view ident
   // The administrator's certificate identities (compared ignoring ASCII case, as user
   // names are), with or without access control.
   for (const auto& admin : certificate_admins_) {
-    if (IgnoringCaseEquals(admin, name)) {
+    // URI identities exactly, e-mail and CN ignoring ASCII case.
+    if (warpsql::CertificateIdentitiesMatch(admin, name)) {
       // A store user of the same name would share the administrator's sessions (handles
       // belong to a principal by name): neither sign-in may be ambiguous.
       if (access_ && access_->CertificateUser(name)) {

@@ -9,7 +9,10 @@ import datetime
 import hashlib
 import ipaddress
 import json
+import os
+import socket
 import ssl
+import stat
 import subprocess
 import time
 
@@ -664,3 +667,267 @@ def test_a_flood_of_refusals_is_bounded_and_still_counted(launcher, pki):
     bob_records = [r for r in server.running.log_records()
                    if r.get("code") == "unknown_certificate_identity" and "audit_hash" in r]
     assert len(bob_records) == 1 and bob_records[0]["user"] == "bob@example.com"
+
+# ---- Third review (from the reviewer's probes) ----
+
+HANDSHAKE_MESSAGE = "the TLS handshake refused a client certificate"
+
+
+def handshake_records(server) -> list[dict]:
+    return [r for r in server.running.log_records() if r.get("message") == HANDSHAKE_MESSAGE]
+
+
+def self_signed(directory, key, index: int, subject_attributes: int = 1):
+    """A self-signed client certificate (no CA the server trusts), reusing `key`: minting
+    a new thumbprint costs the client nothing but a serial number."""
+    attributes = [x509.NameAttribute(oid=NameOID.COMMON_NAME, value=f"flood-{index}")]
+    attributes += [x509.NameAttribute(oid=NameOID.ORGANIZATIONAL_UNIT_NAME, value="u" * 60)
+                   for _ in range(subject_attributes - 1)]
+    name = x509.Name(attributes)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(NOW - datetime.timedelta(minutes=5)).not_valid_after(NOW + datetime.timedelta(days=1))
+            .add_extension(extval=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
+            .sign(private_key=key, algorithm=hashes.SHA256()))
+    cert_path, key_path = directory / f"flood-{index}.pem", directory / "flood.key"
+    cert_path.write_bytes(cert.public_bytes(encoding=serialization.Encoding.PEM))
+    if not key_path.exists():
+        key_path.write_bytes(key.private_bytes(encoding=serialization.Encoding.PEM,
+                                               format=serialization.PrivateFormat.PKCS8,
+                                               encryption_algorithm=serialization.NoEncryption()))
+    return cert_path, key_path
+
+
+def try_handshake(port: int, ca_path, cert_path, key_path) -> None:
+    context = ssl.create_default_context(cafile=str(ca_path))
+    context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as raw:
+            with context.wrap_socket(raw, server_hostname="127.0.0.1") as tls:
+                tls.sendall(b"GET /warp HTTP/1.1\r\nHost: x\r\n\r\n")
+                tls.recv(1)  # TLS 1.3: the server's refusal arrives after the client's Finished
+    except (ssl.SSLError, OSError):
+        pass
+
+
+# ---- Finding: handshake refusals are rate-limited by a thumbprint the client chooses ----
+
+def test_handshake_refusals_from_one_address_are_rate_limited(launcher, pki, tmp_path):
+    """One address presenting 60 untrusted certificates (one key, new serials) must not get
+    60 full audit records: the spec (§4.4) asks for refusal records rate-limited per source."""
+    ops = pki.issue(name="ops@example.com")
+    server = start(launcher=launcher, pki=pki, probe=ops, env={"HARDCHARGER_AUDIT_CHAIN_KEY": AUDIT_KEY})
+    key = ec.generate_private_key(curve=ec.SECP256R1())
+    attempts = 60
+    for index in range(attempts):
+        cert_path, key_path = self_signed(directory=tmp_path, key=key, index=index)
+        try_handshake(port=server.running.port, ca_path=pki.ca_path, cert_path=cert_path, key_path=key_path)
+    time.sleep(1)
+    records = handshake_records(server)
+    thumbprints = {r["certificate_thumbprint"] for r in records}
+    print(f"{len(records)} full handshake-refusal records for {attempts} attempts, {len(thumbprints)} sources")
+    assert len(records) <= 20, f"{len(records)} records in full for {attempts} refusals from one address"
+
+
+def test_one_handshake_refusal_record_has_a_bounded_size(launcher, pki, tmp_path):
+    """A refused, unverified certificate's subject goes into the log and the audit in full:
+    its size is the attacker's choice (up to OpenSSL's 100 KiB certificate-list limit)."""
+    ops = pki.issue(name="ops@example.com")
+    server = start(launcher=launcher, pki=pki, probe=ops, env={"HARDCHARGER_AUDIT_CHAIN_KEY": AUDIT_KEY})
+    key = ec.generate_private_key(curve=ec.SECP256R1())
+    before = len(server.running.log())
+    cert_path, key_path = self_signed(directory=tmp_path, key=key, index=0, subject_attributes=600)
+    print("certificate PEM bytes:", cert_path.stat().st_size)
+    try_handshake(port=server.running.port, ca_path=pki.ca_path, cert_path=cert_path, key_path=key_path)
+    time.sleep(1)
+    grown = len(server.running.log()) - before
+    print("log bytes written for one refused handshake:", grown)
+    assert grown < 8 * 1024, f"one refused handshake wrote {grown} bytes to the log"
+
+
+# ---- Finding: a failed CRL reload is not retried ----
+
+def test_a_crl_reload_that_failed_is_retried(launcher, pki, tmp_path):
+    """Write a CRL revoking dave while the reload can't succeed (the server key unreadable
+    for a moment); once it can, the revocation must take effect without touching the CRL."""
+    ops, dave = pki.issue(name="ops@example.com"), pki.issue(name="dave@example.com")
+
+    def crl(revoked: list) -> bytes:
+        builder = (x509.CertificateRevocationListBuilder().issuer_name(pki.ca.subject)
+                   .last_update(NOW - datetime.timedelta(minutes=5)).next_update(NOW + datetime.timedelta(days=1)))
+        for serial in revoked:
+            builder = builder.add_revoked_certificate(
+                x509.RevokedCertificateBuilder().serial_number(serial)
+                .revocation_date(NOW - datetime.timedelta(minutes=1)).build())
+        return builder.sign(private_key=pki.ca_key, algorithm=hashes.SHA256()).public_bytes(
+            encoding=serialization.Encoding.PEM)
+
+    path = tmp_path / "ca.crl"
+    path.write_bytes(crl(revoked=[]))
+    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-crl-file", str(path)])
+    with server.http(identity=dave) as http:
+        assert http.get(url="/warp").status_code == 200
+    key_file = pki.server[1]
+    mode = key_file.stat().st_mode
+    os.chmod(key_file, 0)
+    try:
+        path.write_bytes(crl(revoked=[dave[2].serial_number]))
+        time.sleep(7)  # one look at the file (every 5 s): the reload fails
+        with server.http(identity=ops) as http:  # a new connection makes it look
+            http.get(url="/warp")
+        time.sleep(1)
+    finally:
+        os.chmod(key_file, stat.S_IMODE(mode))
+    failed = [r for r in server.running.log_records() if r.get("component") == "tls" and r.get("level") in ("error", "ERROR")]
+    assert any("reloading the client CRL file" in r.get("message", "") and "tried again" in r.get("message", "")
+               for r in failed), [r.get("message") for r in failed]
+    time.sleep(7)
+    with server.http(identity=ops) as http:
+        http.get(url="/warp")
+    time.sleep(1)
+    refused = False
+    try:
+        with server.http(identity=dave) as http:
+            http.get(url="/warp")
+    except (httpx.HTTPError, ssl.SSLError):
+        refused = True
+    assert refused, "dave's revocation never took effect: the failed reload was not retried"
+
+
+# ---- Finding (low): a bound scoped token is exchanged without its certificate ----
+
+def test_a_bound_scoped_token_cannot_be_exchanged_over_another_certificate(rbac, pki):
+    carol = pki.issue(name="carol@example.com")
+    mallory = pki.issue(name="mallory@example.com")  # any certificate the CA issued
+    expect_allowed(client=rbac.admin(identity=rbac.ops), sql='CREATE USER "carol@example.com"')
+    session = rbac.client(identity=carol, token=rbac.certificate_token(identity=carol))
+    scoped = session.run(sql="CREATE SCOPED TOKEN job ALLOW SELECT").to_pylist()[0]["token"]
+    with rbac.http(identity=mallory) as http:
+        response = http.post(url="/warp/v1/auth/token",
+                             json={"grant_type": "password", "username": "token", "password": scoped})
+    print("exchange over another certificate:", response.status_code, response.text[:200])
+    if response.status_code == 200:
+        claims = jwt.decode(jwt=response.json()["access_token"], options={"verify_signature": False})
+        print("issued token cnf:", claims.get("cnf"), "expected:", thumbprint_of(identity=carol))
+    problem(response=response, status=401, code="certificate_mismatch")
+
+
+# ---- Probes the third review found already holding ----
+
+def test_the_admin_username_as_a_san_is_not_the_administrator(launcher, pki):
+    ops = pki.issue(name="ops@example.com")
+    admin_san = pki.issue(name="admin")  # the bootstrap administrator's user name ("admin")
+    server = start(launcher=launcher, pki=pki, probe=ops,
+                   args=["--mtls-certificate-sign-in", "--mtls-admin-identities", "ops@example.com"])
+    problem(response=server.certificate_grant(identity=admin_san), status=401, code="unknown_certificate_identity")
+    cn_only = pki.issue(name="cn-only", sans=[x509.DNSName("ops.example.com")])
+    problem(response=server.certificate_grant(identity=cn_only), status=401, code="unknown_certificate_identity")
+
+
+def test_subject_email_attribute_is_not_a_san_email(launcher, pki, tmp_path):
+    ops = pki.issue(name="ops@example.com")
+    server = start(launcher=launcher, pki=pki, probe=ops,
+                   args=["--mtls-certificate-sign-in", "--mtls-admin-identities", "ops@example.com"])
+    key = ec.generate_private_key(curve=ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(oid=NameOID.COMMON_NAME, value="x"),
+                      x509.NameAttribute(oid=NameOID.EMAIL_ADDRESS, value="ops@example.com")])
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(pki.ca.subject).public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(NOW - datetime.timedelta(minutes=5)).not_valid_after(NOW + datetime.timedelta(days=1))
+            .add_extension(extval=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
+            .sign(private_key=pki.ca_key, algorithm=hashes.SHA256()))
+    cert_path, key_path = tmp_path / "dn-email.pem", tmp_path / "dn-email.key"
+    cert_path.write_bytes(cert.public_bytes(encoding=serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(encoding=serialization.Encoding.PEM,
+                                           format=serialization.PrivateFormat.PKCS8,
+                                           encryption_algorithm=serialization.NoEncryption()))
+    problem(response=server.certificate_grant(identity=(cert_path, key_path, cert)), status=401,
+            code="unknown_certificate_identity")
+
+
+def test_an_email_san_with_an_embedded_nul_is_refused(launcher, pki):
+    ops = pki.issue(name="ops@example.com")
+    server = start(launcher=launcher, pki=pki, probe=ops,
+                   args=["--mtls-certificate-sign-in", "--mtls-admin-identities", "ops@example.com"])
+    nul = pki.issue(name="nul", sans=[x509.RFC822Name("ops@example.com\x00.evil.example")])
+    body = problem(response=server.certificate_grant(identity=nul), status=401, code="unknown_certificate_identity")
+    assert "\\x00" in body["detail"], body
+
+
+def test_a_cert_sign_in_off_server_authenticates_no_one_with_a_certificate(launcher, pki):
+    ops = pki.issue(name="ops@example.com")
+    # A client certificate whose SAN is the admin's name, on a server with sign-in off.
+    admin_san = pki.issue(name="admin")
+    server = start(launcher=launcher, pki=pki, probe=ops)
+    for who in (ops, admin_san):
+        problem(response=server.certificate_grant(identity=who), status=400, code="unsupported_grant_type")
+    # The handshake still requires a valid certificate.
+    with pytest.raises((httpx.HTTPError, ssl.SSLError)):
+        with server.http(identity=None) as http:
+            http.get(url="/warp")
+
+
+def test_an_identity_mismatch_refusal_record_has_a_bounded_size(launcher, pki):
+    """With identity match on, the refusal's detail and user name carry the client's
+    `username` in full (the JSON body may be 64 MiB)."""
+    ops = pki.issue(name="ops@example.com")
+    server = start(launcher=launcher, pki=pki, probe=ops,
+                   args=["--mtls-require-identity-match"], env={"HARDCHARGER_AUDIT_CHAIN_KEY": AUDIT_KEY})
+    before = len(server.running.log())
+    with server.http(identity=ops) as http:
+        response = http.post(url="/warp/v1/auth/token",
+                             json={"grant_type": "password", "username": "x" * 1_000_000, "password": "y"})
+    problem(response=response, status=401, code="certificate_identity_mismatch")
+    time.sleep(0.5)
+    grown = len(server.running.log()) - before
+    print("log bytes for one identity-mismatch refusal:", grown)
+    assert grown < 64 * 1024, f"one refusal wrote {grown} bytes"
+
+
+def test_handshake_refusal_log_volume_from_one_address(launcher, pki, tmp_path):
+    """Measures (and bounds) what 100 refused handshakes with large unverified subjects
+    write: the per-source limit should hold it to ~10 records."""
+    ops = pki.issue(name="ops@example.com")
+    server = start(launcher=launcher, pki=pki, probe=ops, env={"HARDCHARGER_AUDIT_CHAIN_KEY": AUDIT_KEY})
+    key = ec.generate_private_key(curve=ec.SECP256R1())
+    certs = [self_signed(directory=tmp_path, key=key, index=i, subject_attributes=600) for i in range(100)]
+    before = len(server.running.log())
+    started = time.monotonic()
+    for cert_path, key_path in certs:
+        try_handshake(port=server.running.port, ca_path=pki.ca_path, cert_path=cert_path, key_path=key_path)
+    elapsed = time.monotonic() - started
+    time.sleep(1)
+    grown = len(server.running.log()) - before
+    print(f"100 refused handshakes in {elapsed:.2f}s wrote {grown} log bytes ({grown / elapsed / 1e6:.1f} MB/s)")
+    assert grown < 2 * 1024 * 1024, f"{grown} bytes"
+
+
+def test_a_refused_password_sign_in_logs_a_bounded_user_name(launcher, pki):
+    # The name a refused password sign-in logs is the client's, unauthenticated.
+    ops = pki.issue(name="ops@example.com")
+    server = start(launcher=launcher, pki=pki, probe=ops)
+    before = len(server.running.log())
+    with server.http(identity=ops) as http:
+        response = http.post(url="/warp/v1/auth/token",
+                             json={"grant_type": "password", "username": "x" * 1_000_000, "password": "y"})
+    problem(response=response, status=401, code="invalid_credentials")
+    time.sleep(0.5)
+    refused = [r for r in server.running.log_records() if r.get("message") == "sign-in refused"]
+    assert refused and refused[-1]["user"].endswith("(1000000 bytes)"), refused[-1:]
+    assert len(server.running.log()) - before < 8 * 1024
+
+
+def test_a_spiffe_id_must_match_its_user_name_exactly(launcher, store, pki):
+    # URI identities are case-sensitive (SPIFFE paths are); e-mail ones are not (twin below).
+    server = spiffe_rbac(launcher=launcher, store=store, pki=pki)
+    expect_allowed(client=server.admin(identity=server.ops), sql=f'CREATE USER "{SPIFFE_ID}"')
+    shouty = pki.issue(name="loader-case", sans=[x509.UniformResourceIdentifier(SPIFFE_ID.replace("loader", "Loader"))])
+    body = problem(response=server.certificate_grant(identity=shouty), status=401, code="unknown_certificate_identity")
+    assert "only in case" in body["detail"] and "must match a user name exactly" in body["detail"], body
+    loader = pki.issue(name="loader", sans=[x509.UniformResourceIdentifier(SPIFFE_ID)])
+    server.certificate_token(identity=loader)
+
+
+def test_an_email_identity_matches_its_user_ignoring_case(rbac, pki):
+    expect_allowed(client=rbac.admin(identity=rbac.ops), sql='CREATE USER "gina@example.com"')
+    rbac.certificate_token(identity=pki.issue(name="GINA@Example.com"))

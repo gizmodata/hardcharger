@@ -26,7 +26,7 @@ own changelog in `python/CHANGELOG.md`.
   A session opened with a bound token is used only with tokens bound to the same certificate,
   and a scoped token (`CREATE SCOPED TOKEN`) minted over a bound token carries its `cnf` too.
   `hardcharger_sessions()` shows `client_certificate` as the auth method. Tests:
-  `test_mtls_identity.py` (18), and the conformance suite's `test_mtls.py`.
+  `test_mtls_identity.py` (42), and the conformance suite's `test_mtls.py` (41).
 - From the security review: certificate sign-in is opt-in (`mtls_certificate_sign_in`,
   default false; `mtls_admin_identities` needs it), so `mtls_ca_cert` alone keeps mTLS a
   transport check. CRLs cover every certificate of the chain, and a CA without one is refused
@@ -42,6 +42,13 @@ own changelog in `python/CHANGELOG.md`.
   `suppressed`), and nothing else logs them per request; the handshake refusing a client
   certificate is an audit record (`the TLS handshake refused a client certificate`). CRL
   files: the newest CRL per CA, a CA's CRL must be signed by it, no delta CRLs (the SDK).
+- Third review: handshake refusals are rate-limited by the client's address (IPv6 /64), not
+  by the unverified certificate, and every client-supplied field of a refusal record is cut
+  at 512 bytes; a refused password sign-in logs at most 256 bytes of the user name. A failed
+  CRL reload is retried. A scoped token bound to a certificate can't be exchanged (as user
+  `token`'s password) over another one. URI identities (SPIFFE IDs) must match a user name
+  exactly, case included; e-mail and CN identities still ignore ASCII case. CI runs
+  `warpsql-sdk-tests` (the limiter's unit tests), under TSan too.
 - The `hardcharger` client: `--auth-type mtls` (or `authType=mtls` in a URI) signs in with
   the `--mtls-cert` certificate, and signs in again with it when the server ends the session.
 

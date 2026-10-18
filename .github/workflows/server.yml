@@ -145,17 +145,17 @@ jobs:
       # also checks the glibc baseline); the tests then run the binaries on the runner.
       - name: Build the server
         run: |
-          # (warpsql-client-tests, the Warp SQL client library's tests, builds on request.)
+          # (warpsql-client-tests and warpsql-sdk-tests, Warp SQL's own tests, build on request.)
           if [ "$RUNNER_OS" = Linux ]; then
             server/scripts/in-manylinux.sh server server/build -DHARDCHARGER_STATIC=ON
-            server/scripts/in-manylinux.sh build server/build --target warpsql-client-tests
+            server/scripts/in-manylinux.sh build server/build --target warpsql-client-tests warpsql-sdk-tests
           else
             cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
                   -DHARDCHARGER_STATIC=ON \
                   -DOPENSSL_ROOT_DIR="$PWD/server/.deps/openssl-install" -DOPENSSL_USE_STATIC_LIBS=TRUE \
                   -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
             cmake --build server/build
-            cmake --build server/build --target warpsql-client-tests
+            cmake --build server/build --target warpsql-client-tests warpsql-sdk-tests
           fi
           server/build/hardcharger-server --version
           server/build/hardcharger-server --print-duckdb-version
@@ -216,6 +216,8 @@ jobs:
       # The Warp SQL client library's own tests (unit, and live against warp-duckdb).
       - name: Warp SQL client library tests
         run: server/build/warp-sql/warpsql-client-tests
+      - name: Warp SQL SDK unit tests
+        run: server/build/warp-sql/warpsql-sdk-tests
       - name: Warp SQL conformance suite
         working-directory: third_party/warp-sql/conformance
         env:
@@ -514,6 +516,7 @@ jobs:
           cmake -S server -B server/build-tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           cmake --build server/build-tsan
+          cmake --build server/build-tsan --target warpsql-sdk-tests
       - name: sccache directory (save)
         if: always()
         uses: ./.github/actions/sccache-dir
@@ -533,6 +536,16 @@ jobs:
       # exitcode=66 marks a process that printed an unsuppressed report; halt_on_error=0
       # keeps going so one run collects every race; log_path gives each process its own
       # report file, which the step after the suites checks.
+      # The SDK's unit tests, the security-event limiter's concurrent Admit/Flush among them.
+      - name: Warp SQL SDK unit tests (TSan)
+        env:
+          TSAN_OPTIONS: >-
+            halt_on_error=0 exitcode=66 second_deadlock_stack=1
+            suppressions=${{ github.workspace }}/server/tests/tsan.supp
+            log_path=${{ github.workspace }}/tsan-reports/tsan
+        run: |
+          mkdir -p "$TSAN_REPORTS"
+          server/build-tsan/warp-sql/warpsql-sdk-tests
       - name: Hardcharger tests (TSan)
         working-directory: server/tests
         env:
