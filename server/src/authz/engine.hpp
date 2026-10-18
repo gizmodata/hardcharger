@@ -94,6 +94,12 @@ class RbacEngine {
   static arrow::Result<std::shared_ptr<RbacEngine>> Create(const Options& options);
   ~RbacEngine();
 
+  // Stops the store poller and joins it (idempotent; the destructor calls it too). The
+  // server calls it on its way out, before DuckDB goes away: something may still hold the
+  // engine then (a session's connection state), and a poll running past main() would
+  // query a DuckDB whose statics the process has freed.
+  void Stop();
+
   RbacEngine(const RbacEngine&) = delete;
   RbacEngine& operator=(const RbacEngine&) = delete;
 
@@ -153,7 +159,8 @@ class RbacEngine {
 
   std::mutex poll_mutex_;
   std::condition_variable poll_cv_;
-  bool stopping_ = false;
+  bool stopping_ = false;  // guarded by poll_mutex_
+  std::mutex stop_mutex_;  // serializes Stop()'s join
   std::thread poller_;
 };
 

@@ -336,6 +336,14 @@ int main(int argc, char** argv) {
     // Role-based access control: the store is opened (and must be reachable) before
     // anything else.
     std::shared_ptr<hc::authz::AccessControl> access;
+    // Access control's background work stops on every way out of this block, exceptions
+    // included, before anything it uses is torn down (the normal path stops it earlier).
+    struct StopAccessControl {
+      std::shared_ptr<hc::authz::AccessControl>& access;
+      ~StopAccessControl() {
+        if (access) access->Shutdown();
+      }
+    } stop_access_control{access};
     if (!config.rbac_store_uri.empty()) {
       hc::authz::Options options;
       options.store_uri = config.rbac_store_uri;
@@ -461,6 +469,7 @@ int main(int argc, char** argv) {
     kill(getpid(), SIGTERM);
     signals.join();
     if (watcher.joinable()) watcher.join();
+    if (access) access->Shutdown();  // the store poller, before the engine and DuckDB go
     if (metrics_endpoint) metrics_endpoint->Stop();
     if (oauth) oauth->Stop();
     if (exit_marker) exit_marker->Clean();

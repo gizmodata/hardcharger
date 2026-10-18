@@ -101,6 +101,10 @@ class AccessControl {
   // credentials) when it cannot.
   explicit AccessControl(const Options& options);
   ~AccessControl();
+
+  // Stops access control's background work (the store poller) and waits for it. Call on
+  // every way out of the server, before the DuckDB instances are torn down.
+  void Shutdown();
   AccessControl(const AccessControl&) = delete;
   AccessControl& operator=(const AccessControl&) = delete;
 

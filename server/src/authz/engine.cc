@@ -137,13 +137,16 @@ arrow::Result<std::shared_ptr<RbacEngine>> RbacEngine::Create(const Options& opt
   return engine;
 }
 
-RbacEngine::~RbacEngine() {
+RbacEngine::~RbacEngine() { Stop(); }
+
+void RbacEngine::Stop() {
+  std::lock_guard<std::mutex> stop(stop_mutex_);
   {
     std::lock_guard<std::mutex> lock(poll_mutex_);
     stopping_ = true;
   }
-  poll_cv_.notify_all();
-  if (poller_.joinable()) poller_.join();
+  poll_cv_.notify_all();  // a poller waiting out its interval wakes at once
+  if (poller_.joinable() && poller_.get_id() != std::this_thread::get_id()) poller_.join();
 }
 
 void RbacEngine::PollLoop() {

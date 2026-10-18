@@ -246,6 +246,11 @@ AccessControl::AccessControl(const Options& options)
 
 AccessControl::~AccessControl() {
   if (engine_) engine_->SetSnapshotListener(nullptr);
+  Shutdown();
+}
+
+void AccessControl::Shutdown() {
+  if (engine_) engine_->Stop();
 }
 
 const std::string& AccessControl::store_description() const { return engine_->store_description(); }
