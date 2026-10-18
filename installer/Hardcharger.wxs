@@ -45,14 +45,14 @@
   <Fragment>
     <ComponentGroup Id="ProgramFiles">
       <Files Directory="BINFOLDER" Include="!(bindpath.Stage)\bin\**" />
-      <Component Directory="INSTALLFOLDER" Guid="{C596126D-117A-4A3B-A2C7-29558489EC8C}">
+      <Component Id="Documents" Directory="INSTALLFOLDER" Guid="{C596126D-117A-4A3B-A2C7-29558489EC8C}">
         <File Source="!(bindpath.Stage)\LICENSE" KeyPath="yes" />
         <File Source="!(bindpath.Stage)\CHANGELOG.md" />
       </Component>
     </ComponentGroup>
 
     <ComponentGroup Id="PathEntry">
-      <Component Directory="BINFOLDER" Guid="{55D1C17D-B663-4309-B32B-735F705CF798}">
+      <Component Id="PathVariable" Directory="BINFOLDER" Guid="{55D1C17D-B663-4309-B32B-735F705CF798}">
         <Environment Id="PATH" Name="PATH" Value="[BINFOLDER]" Permanent="no"
                      Part="last" Action="set" System="yes" />
       </Component>
