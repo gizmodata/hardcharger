@@ -77,7 +77,7 @@ def assets(server) -> dict[str, httpx.Response]:
             continue
         found[name] = get(server=server, path=f"/ui/{name}")
         if name.endswith((".js", ".css")):
-            for ref in re.findall(pattern=r'["\'`/(]([\w.-]+-[\w-]{8}\.(?:js|css|wasm|ttf|png))\b', string=found[name].text):
+            for ref in re.findall(pattern=r'["\'`/(]([\w.-]+-[\w-]{8}\.(?:js|css|wasm|ttf|woff2|png))\b', string=found[name].text):
                 queue.append(f"assets/{ref}")
     return found
 
@@ -94,7 +94,7 @@ def test_index_html_and_the_apps_own_routes(server):
     assert index.headers["content-type"] == "text/html; charset=utf-8"
     assert index.headers["cache-control"] == "no-cache"
     assert_ui_headers(response=index)
-    assert '<div id="root"></div>' in index.text and "<title>Hardcharger</title>" in index.text
+    assert '<div id="root"></div>' in index.text and "<title>Hardcharger™</title>" in index.text
     for route in ["/ui/sessions", "/ui/query/", "/ui/some/deeper/route"]:
         response = get(server=server, path=route)
         assert response.status_code == 200 and response.text == index.text, route
@@ -113,9 +113,9 @@ def test_index_html_runs_no_inline_code(server):
 def test_every_file_the_ui_loads_is_served_with_its_type_and_cached_for_good(server):
     files = assets(server=server)
     types = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".wasm": "application/wasm",
-             ".ttf": "font/ttf", ".png": "image/png"}
+             ".ttf": "font/ttf", ".woff2": "font/woff2", ".png": "image/png"}
     kinds = {name.rsplit(".", 1)[1] for name in files}
-    assert {"js", "css", "wasm", "ttf"} <= kinds, sorted(files)
+    assert {"js", "css", "wasm", "ttf", "woff2"} <= kinds, sorted(files)
     for name, response in files.items():
         assert response.status_code == 200, name
         assert response.headers["content-type"] == types["." + name.rsplit(".", 1)[1]], name
@@ -124,6 +124,10 @@ def test_every_file_the_ui_loads_is_served_with_its_type_and_cached_for_good(ser
     favicon = get(server=server, path="/ui/favicon.png")
     assert favicon.status_code == 200 and favicon.headers["content-type"] == "image/png"
     assert favicon.headers["cache-control"] == "no-cache"
+    # The embedded font's license travels with it.
+    license = get(server=server, path="/ui/fonts/Inter-LICENSE.txt")
+    assert license.status_code == 200 and "SIL Open Font License" in license.text
+    assert license.headers["content-type"] == "text/plain; charset=utf-8"
 
 
 def test_a_missing_file_is_404_and_never_cached(server):
