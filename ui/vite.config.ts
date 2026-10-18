@@ -1,10 +1,11 @@
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-const { version } = JSON.parse(readFileSync(new URL("package.json", import.meta.url), "utf8")) as { version: string };
+import { uiVersion } from "./scripts/version.mjs";
+
+const version = uiVersion();
 
 // The UI is served by hardcharger-server at /ui on the same listener as Warp SQL, so every
 // asset path starts with /ui/ and the app talks to /warp on its own origin.

@@ -4,7 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+The web UI now lives in gizmodata/hardcharger under `ui/`, and its changes are recorded in the
+[server's changelog](../CHANGELOG.md). This file is its history from before the move, when it
+was the separate hardcharger-ui repository (never released).
+
+## [Unreleased] (before the move)
 
 ### Added
 

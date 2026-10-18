@@ -3,8 +3,8 @@
 //
 // The tarball holds one directory, hardcharger-ui/, with the built files and MANIFEST: a
 // line "<sha256>  <path>" per file, sorted by path. The SHA-256 of MANIFEST (printed, and in
-// release/CONTENT_SHA256) names the build's content whatever the compression: it is what
-// hardcharger-server's build pins and checks when it embeds the UI. The tar itself is
+// release/hardcharger-ui-<version>.CONTENT_SHA256) names the build's content whatever the
+// compression; hardcharger-server's build logs it when it embeds the UI. The tar itself is
 // deterministic too (sorted entries, fixed times and owners).
 
 import { createHash } from "node:crypto";
@@ -12,11 +12,12 @@ import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "n
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 
+import { uiVersion } from "./version.mjs";
+
 const root = path.resolve(import.meta.dirname, "..");
 const dist = path.join(root, "dist");
 const out = path.join(root, "release");
-const { version } = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-if (!version) throw new Error("no version in package.json");
+const version = uiVersion();
 
 function walk(dir, prefix = "") {
   const files = [];
@@ -89,7 +90,7 @@ const name = `hardcharger-ui-${version}.tar.gz`;
 writeFileSync(path.join(out, name), tarball);
 writeFileSync(path.join(out, "SHA256SUMS"), `${sha256(tarball)}  ${name}\n`);
 const content = sha256(manifest);
-writeFileSync(path.join(out, "CONTENT_SHA256"), `${content}\n`);
+writeFileSync(path.join(out, `hardcharger-ui-${version}.CONTENT_SHA256`), `${content}\n`);
 console.log(`release/${name}: ${files.length} files, ${(tarball.length / 1048576).toFixed(1)} MiB`);
 console.log(`tarball sha256 ${sha256(tarball)}`);
 console.log(`content sha256 ${content} (the SHA-256 of hardcharger-ui/MANIFEST)`);

@@ -1,4 +1,4 @@
-"""The web UI (gizmodata/hardcharger-ui), embedded in the server and served at /ui when
+"""The web UI (ui/), embedded in the server and served at /ui when
 web_ui is on: on the server's own port, origin and TLS certificate, with
 hardcharger-ui's serving rules (its scripts/ui-contract.mjs) and nothing at all when off.
 

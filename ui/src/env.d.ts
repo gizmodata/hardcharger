@@ -1,2 +1,2 @@
-/** The web UI's version (package.json), set by vite.config.ts. */
+/** The web UI's version (the server's, from server/CMakeLists.txt), set by vite.config.ts. */
 declare const __UI_VERSION__: string;

@@ -1,37 +1,20 @@
 <p align="center">
   <a href="https://gizmodata.com">
-    <img src="docs/assets/hardcharger-ui-banner.svg" alt="Hardcharger UI: SQL in your browser, served by Hardcharger itself. By GizmoData." width="100%">
+    <img src="../docs/assets/hardcharger-banner.svg" alt="Hardcharger by GizmoData" width="100%">
   </a>
 </p>
 
+# Hardcharger's web UI
+
+The browser UI that [Hardcharger](../README.md#️-built-in-web-ui) serves at `/ui` when started
+with `--web-ui`: a static single-page app (React 19, Vite, TypeScript) compiled into
+`hardcharger-server`, on the server's own port, origin and TLS certificate. There is no Node
+backend and no cross-origin access: the browser speaks [Warp SQL](https://github.com/gizmodata/warp-sql)
+(plain HTTP and Apache Arrow) to the server with [`@gizmodata/warp-sql`](https://github.com/gizmodata/warp-sql-js).
+
 <p align="center">
-  <a href="https://github.com/gizmodata/hardcharger-ui/actions/workflows/ci.yml"><img src="https://github.com/gizmodata/hardcharger-ui/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/gizmodata/hardcharger"><img src="https://img.shields.io/badge/served%20by-Hardcharger-f15a24.svg" alt="Served by Hardcharger"></a>
-  <a href="https://github.com/gizmodata/warp-sql"><img src="https://img.shields.io/badge/protocol-Warp%20SQL-31a8db.svg" alt="Warp SQL protocol"></a>
-  <a href="https://arrow.apache.org"><img src="https://img.shields.io/badge/results-Apache%20Arrow-f15a24.svg" alt="Apache Arrow results"></a>
-  <img src="https://img.shields.io/badge/React%2019%20%2B%20Vite-TypeScript-3178C6.svg?logo=typescript&logoColor=white" alt="React 19, Vite, TypeScript">
-  <img src="https://img.shields.io/badge/tested%20in-Chromium%20%7C%20WebKit-lightgrey.svg" alt="Tested in Chromium and WebKit">
-  <br>
-  <img src="https://img.shields.io/badge/CSP-strict-brightgreen.svg" alt="Strict Content-Security-Policy">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-brightgreen.svg" alt="Apache 2.0 license"></a>
-  <a href="https://join.slack.com/t/gizmodatacommunity/shared_invite/zt-42jk7kdti-SJp7qk7d6XYCIKfBG~4HrA"><img src="https://img.shields.io/badge/Slack-GizmoData%20Community-4A154B?logo=slack" alt="Slack community"></a>
-  <a href="https://gizmodata.com"><img src="https://img.shields.io/badge/by-GizmoData-f15a24.svg" alt="GizmoData"></a>
+  <img src="../docs/assets/web-ui-query-light.png" alt="The web UI: the schema browser, the SQL editor and a result" width="80%">
 </p>
-
-<h3 align="center">Start the server, open <code>https://host:31337/ui</code>, write SQL.</h3>
-
----
-
-## 🖥️ What is it?
-
-**Hardcharger UI** is the web UI for [Hardcharger](https://github.com/gizmodata/hardcharger),
-GizmoData's DuckDB 2.0 server. It is a static single-page app that the server itself serves at
-`/ui`, on the same listener, origin and TLS certificate as its
-[Warp SQL](https://github.com/gizmodata/warp-sql) endpoint. There is no Node backend and no
-cross-origin access: the browser talks Warp SQL (plain HTTP and Apache Arrow) straight to the
-server with [`@gizmodata/warp-sql`](https://github.com/gizmodata/warp-sql-js).
-
-![Hardcharger UI: the schema browser, the SQL editor and a result](docs/assets/screenshot.png)
 
 - ✍️ **SQL editor** (Monaco): Ctrl/⌘+Enter runs the statement under the cursor, or the
   selection; several tabs, each with its own server session, so one tab's long query never
@@ -41,58 +24,26 @@ server with [`@gizmodata/warp-sql`](https://github.com/gizmodata/warp-sql-js).
   Select cells, rows or columns and copy with Ctrl/⌘+C (Safari included), or copy everything.
 - 🛑 **Cancel** stops the statement on the server, not just the wait for it.
 - 🗂️ **Schema browser**: catalogs, schemas, tables, views and columns with their types, from the
-  Warp SQL metadata calls; preview a table in a new tab; double-click to insert a name.
+  Warp SQL metadata calls, filtered by the server's access control; preview a table in a new
+  tab; double-click to insert a name.
 - 💾 **Exports**: CSV, TSV, JSON (exact numbers) and Parquet (every Arrow type, written in the
   browser by parquet-wasm).
 - 👥 **Sessions**: an administrator sees every session on the server and can end one
   (`KILL SESSION`); everyone else sees their own.
 - 🔐 **Hardcharger's own sign-in and access control.** The password goes once to
   `POST /warp/v1/auth/token`; the browser keeps only the short-lived access token, in memory
-  and this tab's `sessionStorage`, never in `localStorage` or a cookie. A user sees exactly what
-  the server's role-based access control lets them see.
-- 🛡️ **A strict Content-Security-Policy**: no inline scripts, no `eval`, nothing from another
-  origin (see [below](#-serving-it)).
-
-## 🚀 Using it
-
-A Hardcharger build that embeds the UI serves it with `--web-ui` (`HARDCHARGER_WEB_UI=true`,
-or `web_ui: true` in its YAML file); open `/ui/` on the server's address and sign in with a
-Hardcharger user. (The embedding is on Hardcharger's `feat/ui` branch, not yet merged.)
-
-```bash
-HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --database demo.duckdb
-# open http://127.0.0.1:31337/ui/ and sign in as hardcharger / change-me
-```
-
-Under mutual TLS (`--mtls-ca-cert`) the browser must present a client certificate the server
-accepts before it can load `/ui` at all: install the certificate (and its key) in the browser
-or the system's keychain, and the browser offers it when the page opens. With certificate
-sign-in on (`--mtls-certificate-sign-in`), the sign-in page also shows **Sign in with my
-certificate**, which signs in with that certificate and no password; the token is bound to
-it, and every request the page makes carries it (the UI uses fetch's default credentials mode,
-never `omit`, which would leave the certificate off). With `--mtls-require-client-cert=false`
-the page loads without one and password sign-in works as usual. The e2e suite runs all of this
-in Chromium and WebKit (`test/e2e/mtls.embedded.spec.ts`).
-
-Without a server build that embeds it, serve a build of this repository next to any
-Hardcharger server. `scripts/serve.mjs` serves `dist/` at `/ui/` exactly as the server does
-(same headers, same CSP) and passes `/warp/…` through, so the page and the protocol share an
-origin:
-
-```bash
-npm ci
-npm run build
-HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --admin-username admin --database demo.duckdb &
-node scripts/serve.mjs --upstream http://127.0.0.1:31337
-# Hardcharger UI on http://127.0.0.1:5180/ui/ (Warp SQL: http://127.0.0.1:31337)
-```
-
-Then open <http://127.0.0.1:5180/ui/> and sign in as `admin` / `change-me`.
+  and this tab's `sessionStorage`, never in `localStorage` or a cookie. Under mutual TLS, the
+  browser presents its client certificate to load `/ui` at all, and with
+  `--mtls-certificate-sign-in` the page offers **Sign in with my certificate** (the UI uses
+  fetch's default credentials mode, never `omit`, which would leave the certificate off).
+- 🎨 GizmoData's look: the README banner's orange and Warp blue, light and dark themes (the
+  system's choice until you pick one), Inter embedded in the build (SIL Open Font License 1.1,
+  served as `/ui/fonts/Inter-LICENSE.txt`).
 
 ## 🛡️ Serving it
 
-`npm run build` writes a self-contained directory, `dist/`: `index.html`, `favicon.png`, and
-`assets/` with content-hashed file names. The server embeds it and serves it with these rules
+`npm run build` writes a self-contained directory, `dist/`: `index.html`, `favicon.png`,
+`fonts/Inter-LICENSE.txt`, and `assets/` with content-hashed file names. The server embeds it and serves it with these rules
 (written down once in [`scripts/ui-contract.mjs`](scripts/ui-contract.mjs), which
 `scripts/serve.mjs` and the e2e tests use):
 
@@ -105,7 +56,10 @@ Then open <http://127.0.0.1:5180/ui/> and sign in as `admin` / `change-me`.
 | anything else outside `/ui` and `/warp`                             | not the UI's: the server's own `404`                            |
 
 `/ui/assets/*` is `Cache-Control: public, max-age=31536000, immutable`; everything else
-(`index.html` above all) is `no-cache`, so a new build is picked up at once. Every `/ui`
+(`index.html` above all) is `no-cache`, so a new build is picked up at once. The server sends
+a file gzip makes smaller as `Content-Encoding: gzip` (with `Vary: Accept-Encoding`) to a client
+that accepts it and plain otherwise, each with its own `ETag`, and answers `If-None-Match` with
+`304`. Every `/ui`
 response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
 `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy: same-origin`,
 `Cross-Origin-Resource-Policy: same-origin` and this Content-Security-Policy:
@@ -133,19 +87,22 @@ The page then reloads after 0, 3 and 10 seconds (long enough for a rolling resta
 that says that a new version is available. The header and the schema browser stay usable
 throughout: the pages sit inside an error boundary of their own, inside the layout.
 
-## 📦 Releases
+## 📦 How the server embeds it
 
-A release is `hardcharger-ui-<version>.tar.gz`: one directory, `hardcharger-ui/`, with the built
-files and `MANIFEST` (a `<sha256>  <path>` line per file). The SHA-256 of `MANIFEST`, the
-_content SHA-256_, names the build whatever the compression; a server build pins it when it
-embeds the UI. `npm run package` writes the tarball, `SHA256SUMS` and `CONTENT_SHA256` to
-`release/`; the build is reproducible, so the same commit gives the same content SHA-256 on any
-machine.
+`npm run build` writes `dist/`; `npm run package` packs it as
+`release/hardcharger-ui-<version>.tar.gz` (the version is the server's, from
+`server/CMakeLists.txt`): one directory, `hardcharger-ui/`, with the built files and `MANIFEST`
+(a `<sha256>  <path>` line per file). The SHA-256 of `MANIFEST`, the _content SHA-256_, names
+the build whatever the compression, and the build is reproducible: the same commit gives the
+same content SHA-256 on any machine. `npm run package` also writes `SHA256SUMS` and
+`hardcharger-ui-<version>.CONTENT_SHA256`.
 
-Releases are tags: update `CHANGELOG.md` and the version in `package.json`, commit, and push
-`main` and `vX.Y.Z` together. [`release.yml`](.github/workflows/release.yml) runs the whole CI
-on the tagged commit, e2e tests included, and only then makes the GitHub Release with the
-tarball, `SHA256SUMS`, `CONTENT_SHA256` and the tag's CHANGELOG section.
+CI builds the UI once per run, from this directory, and every server build in that run embeds
+that tarball (`-DHARDCHARGER_WEB_UI=…`; [`server/cmake/web_ui.cmake`](../server/cmake/web_ui.cmake)
+checks every file against `MANIFEST`, gzips each one and logs the content SHA-256). The server
+answers a client that accepts gzip with the embedded bytes as they are, and inflates them for one
+that doesn't. A release attaches the same tarball and its content SHA-256 next to the server's,
+for serving the UI some other way (`scripts/serve.mjs` below).
 
 ## 🛠️ Developing
 
@@ -158,7 +115,7 @@ npm run lint        # eslint (typed rules, React hooks) and prettier
 npm run typecheck   # the app, the unit tests, the e2e tests and the configs (a planted error fails it)
 npm test            # unit tests (vitest)
 npm run build       # dist/, then checks it: no inline code, hashed assets, nothing missing
-npm run package     # release/hardcharger-ui-<version>.tar.gz, SHA256SUMS, CONTENT_SHA256
+npm run package     # release/hardcharger-ui-<version>.tar.gz, SHA256SUMS, its CONTENT_SHA256
 ```
 
 The JavaScript client, `@gizmodata/warp-sql`, is not on npm. `vendor/` holds the package
@@ -184,11 +141,10 @@ npm run build && npm run test:e2e
 ```
 
 With `HARDCHARGER_UI_TEST_EMBEDDED=1` the tests run against the UI a server build embeds
-(`hardcharger-server --web-ui`) instead of `dist/` served by `scripts/serve.mjs`, and include
-`*.embedded.spec.ts`: mutual TLS, with its own server and certificates, which can't run through
-a proxy (the server binds tokens to the certificate presented to it). A Linux
-server binary is in the image: `docker cp $(docker create
-ghcr.io/gizmodata/hardcharger:main):/opt/hardcharger .`. The tests read only
+(`hardcharger-server --web-ui`, built as in the [main README](../README.md#️-build-from-source))
+instead of `dist/` served by `scripts/serve.mjs`, and include `*.embedded.spec.ts`: mutual TLS,
+with its own server and certificates, which can't run through a proxy (the server binds tokens
+to the certificate presented to it). CI runs them this way. The tests read only
 `HARDCHARGER_UI_TEST_*` variables, and the server they start gets none of the shell's
 `HARDCHARGER_*` settings.
 
@@ -200,18 +156,12 @@ copying in both browsers (read back by pasting, the way a person would), every e
 read back), a stale build's recovery (a page module answered with 404), and a non-admin user who
 sees only their tenant's catalog and is signed out when an administrator ends their sessions.
 
-CI runs all of it against `ghcr.io/gizmodata/hardcharger:main`
-([`ci.yml`](.github/workflows/ci.yml)). The image's package must grant this repository read
-access (package settings, "Manage Actions access"), and the `DEPLOY_KEY_WARP_SQL_JS` secret holds
-a read-only deploy key of gizmodata/warp-sql-js for the client's provenance check.
+CI ([`server.yml`](../.github/workflows/server.yml)) runs the lint, typecheck and unit tests, the
+client's provenance check, and the e2e tests in both browsers against the Linux x86-64 server
+built in the same run, whenever `ui/`, the server's web UI code or the warp-sql submodule
+changes, and always on `main` and on tags; a release waits for them. The provenance check
+clones gizmodata/warp-sql-js with a read-only deploy key, the `DEPLOY_KEY_WARP_SQL_JS` secret.
 
 ## 📄 License
 
-[Apache License 2.0](LICENSE).
-
----
-
-<p align="center">
-  <a href="https://gizmodata.com"><img src="docs/assets/gizmodata-logo.png" alt="GizmoData" width="56"></a><br>
-  <sub>Built by <a href="https://gizmodata.com">GizmoData</a></sub>
-</p>
+[Apache License 2.0](../LICENSE). Inter: [SIL Open Font License 1.1](public/fonts/Inter-LICENSE.txt).
