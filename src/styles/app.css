@@ -126,6 +126,14 @@ select {
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
 }
+.btn-secondary {
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: var(--hover);
+}
 .btn-danger {
   background: var(--danger);
   color: #fff;

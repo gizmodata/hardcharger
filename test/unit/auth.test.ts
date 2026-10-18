@@ -37,7 +37,8 @@ describe("signIn", () => {
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toMatch(/\/warp\/v1\/auth\/token$/);
     expect(JSON.parse(init.body as string)).toEqual({ grant_type: "password", username: "joe", password: "p:a@ss" });
-    expect(init.credentials).toBe("omit");
+    // Default credentials mode: under mutual TLS the browser presents its client certificate.
+    expect(init.credentials).toBeUndefined();
   });
 
   it("reports the server's problem detail", async () => {
@@ -61,5 +62,16 @@ describe("signIn", () => {
       throw new TypeError("Failed to fetch");
     });
     await expect(signIn("joe", "x")).rejects.toMatchObject({ code: "transport_error" });
+  });
+});
+
+describe("signInWithCertificate", () => {
+  it("asks for the client_certificate grant with no other credential", async () => {
+    const fetch = vi.fn(async () => Response.json({ access_token: "bound", token_type: "Bearer", expires_in: 60 }));
+    vi.stubGlobal("fetch", fetch);
+    const { signInWithCertificate } = await import("../../src/lib/auth");
+    expect((await signInWithCertificate()).token).toBe("bound");
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ grant_type: "client_certificate" });
   });
 });

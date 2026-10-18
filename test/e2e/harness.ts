@@ -33,7 +33,7 @@ export function harnessState(): HarnessState {
   return JSON.parse(raw) as HarnessState;
 }
 
-async function freePort(): Promise<number> {
+export async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const s = net.createServer();
     s.once("error", reject);
@@ -46,7 +46,7 @@ async function freePort(): Promise<number> {
 
 // The server reads HARDCHARGER_* (and GizmoSQL 1.x's GIZMOSQL_*) settings from its
 // environment; the developer's shell must not leak into the test server.
-function cleanEnvironment(): NodeJS.ProcessEnv {
+export function cleanEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (!k.startsWith("HARDCHARGER_") && !k.startsWith("GIZMOSQL_")) env[k] = v;

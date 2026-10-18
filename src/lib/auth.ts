@@ -1,7 +1,12 @@
-// Signing in with Hardcharger's own password flow (Warp SQL §4.1): the password goes to
-// POST /warp/v1/auth/token once and is then forgotten. The browser keeps only the
-// short-lived access token, in memory and in this tab's sessionStorage (so a reload stays
-// signed in), never in localStorage or a cookie.
+// Signing in with Hardcharger's own flows (Warp SQL §4.1, §4.4): a user name and password,
+// sent to POST /warp/v1/auth/token once and then forgotten, or the client certificate the
+// browser presents (the client_certificate grant, on a server with mutual TLS that offers
+// it). The browser keeps only the short-lived access token, in memory and in this tab's
+// sessionStorage (so a reload stays signed in), never in localStorage or a cookie.
+//
+// Requests use fetch's default credentials mode (same-origin), never "omit": under mutual
+// TLS the browser must present its client certificate on every connection to the server,
+// and an uncredentialed request goes without it. The server reads no cookies (§4.2).
 
 import { warpBase } from "./warp";
 
@@ -82,13 +87,21 @@ interface Problem {
 
 /** Exchanges a user name and password for an access token. */
 export async function signIn(username: string, password: string, signal?: AbortSignal): Promise<SignedIn> {
+  return requestToken({ grant_type: "password", username, password }, username, signal);
+}
+
+/** Signs in with the client certificate this connection presented (§4.4). */
+export async function signInWithCertificate(signal?: AbortSignal): Promise<SignedIn> {
+  return requestToken({ grant_type: "client_certificate" }, "", signal);
+}
+
+async function requestToken(grant: Record<string, string>, username: string, signal?: AbortSignal): Promise<SignedIn> {
   let resp: Response;
   try {
     resp = await fetch(`${warpBase()}/v1/auth/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ grant_type: "password", username, password }),
-      credentials: "omit",
+      body: JSON.stringify(grant),
       cache: "no-store",
       signal: signal ?? null,
     });

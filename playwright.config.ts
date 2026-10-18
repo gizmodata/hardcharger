@@ -6,7 +6,10 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "test/e2e",
-  testMatch: "*.spec.ts",
+  // *.embedded.spec.ts need the UI served by the server itself (HARDCHARGER_UI_TEST_EMBEDDED=1,
+  // a server build that embeds it): mutual TLS can't be proxied, since a client certificate
+  // is presented to the server that binds tokens to it.
+  testMatch: process.env["HARDCHARGER_UI_TEST_EMBEDDED"] === "1" ? "*.spec.ts" : "!(*.embedded).spec.ts",
   globalSetup: "./test/e2e/global-setup.ts",
   timeout: 60_000,
   expect: { timeout: 10_000 },

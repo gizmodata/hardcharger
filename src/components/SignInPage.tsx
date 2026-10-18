@@ -1,9 +1,9 @@
 import type { DiscoveryDocument } from "@gizmodata/warp-sql";
-import { LogIn, Moon, Sun } from "lucide-react";
+import { BadgeCheck, LogIn, Moon, Sun } from "lucide-react";
 import { type SyntheticEvent, useRef, useState } from "react";
 
 import logo from "../assets/gizmodata-logo.png";
-import { type SignedIn, SignInError, lastUsername, signIn } from "../lib/auth";
+import { type SignedIn, SignInError, lastUsername, signIn, signInWithCertificate } from "../lib/auth";
 import type { Theme } from "../lib/theme";
 
 interface Props {
@@ -21,24 +21,37 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
   const [error, setError] = useState<string | undefined>();
   const [working, setWorking] = useState(false);
   const passwordRef = useRef<HTMLInputElement>(null);
-  const passwordGrant = server?.auth?.grant_types?.includes("password") ?? true;
+  const grants = server?.auth?.grant_types;
+  const passwordGrant = grants?.includes("password") ?? true;
+  // Offered by a server with mutual TLS and certificate sign-in on (Warp SQL §4.4): the
+  // browser has already presented its certificate to load this page.
+  const certificateGrant = grants?.includes("client_certificate") ?? false;
 
-  const submit = async (e: SyntheticEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const run = async (attempt: () => Promise<SignedIn>, afterFailure?: () => void) => {
     if (working) return;
     setWorking(true);
     setError(undefined);
     try {
-      const auth = await signIn(username.trim(), password);
+      const auth = await attempt();
       setPassword("");
       onSignedIn(auth);
     } catch (err) {
       setError(err instanceof SignInError ? err.message : String(err));
-      setPassword("");
-      passwordRef.current?.focus();
+      afterFailure?.();
     } finally {
       setWorking(false);
     }
+  };
+
+  const submit = (e: SyntheticEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    void run(
+      () => signIn(username.trim(), password),
+      () => {
+        setPassword("");
+        passwordRef.current?.focus();
+      },
+    );
   };
 
   return (
@@ -52,7 +65,7 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
       >
         {theme.name === "light" ? <Moon size={16} /> : <Sun size={16} />}
       </button>
-      <form className="signin-card" onSubmit={(e) => void submit(e)} aria-label="Sign in">
+      <form className="signin-card" onSubmit={submit} aria-label="Sign in">
         <div className="signin-brand">
           <img src={logo} alt="GizmoData" width={40} height={43} />
           <div>
@@ -77,51 +90,69 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
             {serverError}
           </p>
         )}
-        {!passwordGrant && (
+        {server && !passwordGrant && !certificateGrant && (
           <p className="signin-error" role="alert">
-            This server does not accept password sign-in.
+            This server accepts no sign-in this page can offer.
           </p>
         )}
-        <label className="field">
-          <span>User name</span>
-          <input
-            name="username"
-            autoComplete="username"
-            autoFocus={!username}
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-            disabled={busy}
-          />
-        </label>
-        <label className="field">
-          <span>Password</span>
-          <input
-            ref={passwordRef}
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            autoFocus={!!username}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            disabled={busy}
-          />
-        </label>
+        {passwordGrant && (
+          <>
+            <label className="field">
+              <span>User name</span>
+              <input
+                name="username"
+                autoComplete="username"
+                autoFocus={!username}
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                disabled={busy}
+              />
+            </label>
+            <label className="field">
+              <span>Password</span>
+              <input
+                ref={passwordRef}
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                autoFocus={!!username}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                disabled={busy}
+              />
+            </label>
+          </>
+        )}
         {error && (
           <p className="signin-error" role="alert" data-testid="signin-error">
             {error}
           </p>
         )}
-        <button
-          type="submit"
-          className="btn btn-primary signin-submit"
-          disabled={busy || working || !username.trim() || !password}
-        >
-          <LogIn size={16} /> {busy || working ? "Signing in…" : "Sign in"}
-        </button>
+        {passwordGrant && (
+          <button
+            type="submit"
+            className="btn btn-primary signin-submit"
+            disabled={busy || working || !username.trim() || !password}
+          >
+            <LogIn size={16} /> {busy || working ? "Signing in…" : "Sign in"}
+          </button>
+        )}
+        {certificateGrant && (
+          <button
+            type="button"
+            className={`btn ${passwordGrant ? "btn-secondary" : "btn-primary"} signin-submit`}
+            disabled={busy || working}
+            onClick={() => void run(() => signInWithCertificate())}
+          >
+            <BadgeCheck size={16} /> Sign in with my certificate
+          </button>
+        )}
         <p className="signin-foot">
-          Your password goes to this server only, once; the page keeps a short-lived token for this tab.
+          {passwordGrant
+            ? "Your password goes to this server only, once; the page keeps a short-lived token for this tab."
+            : "The page keeps a short-lived token for this tab, usable only with your certificate."}
         </p>
       </form>
       <a className="signin-by" href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">

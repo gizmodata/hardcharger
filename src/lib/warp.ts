@@ -13,7 +13,6 @@ export function warpBase(): string {
 export async function discover(signal?: AbortSignal): Promise<DiscoveryDocument> {
   const resp = await fetch(warpBase(), {
     headers: { Accept: "application/json" },
-    credentials: "omit",
     cache: "no-store",
     signal: signal ?? null,
   });

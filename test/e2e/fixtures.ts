@@ -48,38 +48,50 @@ function allowedConsole(rules: Tracked[], text: string, url: string): boolean {
   return rule !== undefined;
 }
 
-export const test = base.extend<{ harness: HarnessState }>({
-  harness: async ({}, use) => use(harnessState()),
-  baseURL: async ({}, use) => use(harnessState().url),
-  page: async ({ page }, use) => {
-    const rules: Tracked[] = [];
-    expectations.set(page, rules);
-    const problems: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() !== "error") return;
-      if (!allowedConsole(rules, msg.text(), msg.location().url)) problems.push(`console error: ${msg.text()}`);
+/**
+ * Watches a page for anything unexpected (see above); the returned function asserts there
+ * was nothing, and that every declared problem happened. The `page` fixture does this for
+ * every test; a test that makes pages of its own calls it for them.
+ */
+export async function watchPage(page: Page): Promise<() => void> {
+  const rules: Tracked[] = [];
+  expectations.set(page, rules);
+  const problems: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() !== "error") return;
+    if (!allowedConsole(rules, msg.text(), msg.location().url)) problems.push(`console error: ${msg.text()}`);
+  });
+  page.on("pageerror", (err) => {
+    if (!allowedConsole(rules, err.message, "")) problems.push(`uncaught: ${err.message}`);
+  });
+  page.on("response", (resp) => {
+    if (resp.status() < 400) return;
+    if (!allowedHttp(rules, resp.status(), resp.url())) {
+      problems.push(`HTTP ${resp.status()} for ${resp.request().method()} ${resp.url()}`);
+    }
+  });
+  await page.addInitScript(() => {
+    document.addEventListener("securitypolicyviolation", (e) => {
+      console.error(`CSP violation: ${e.violatedDirective} blocked ${e.blockedURI || "inline code"}`);
     });
-    page.on("pageerror", (err) => {
-      if (!allowedConsole(rules, err.message, "")) problems.push(`uncaught: ${err.message}`);
-    });
-    page.on("response", (resp) => {
-      if (resp.status() < 400) return;
-      if (!allowedHttp(rules, resp.status(), resp.url())) {
-        problems.push(`HTTP ${resp.status()} for ${resp.request().method()} ${resp.url()}`);
-      }
-    });
-    await page.addInitScript(() => {
-      document.addEventListener("securitypolicyviolation", (e) => {
-        console.error(`CSP violation: ${e.violatedDirective} blocked ${e.blockedURI || "inline code"}`);
-      });
-    });
-    await use(page);
+  });
+  return () => {
     expect(problems, "unexpected errors on the page").toEqual([]);
     const missing = rules.filter((r) => r.required && r.seen === 0 && (r.status !== undefined || r.console));
     expect(
       missing.map((r) => `${r.status ?? ""} ${r.url ?? ""} ${r.console ?? ""}`.trim()),
       "expected errors that never happened",
     ).toEqual([]);
+  };
+}
+
+export const test = base.extend<{ harness: HarnessState }>({
+  harness: async ({}, use) => use(harnessState()),
+  baseURL: async ({}, use) => use(harnessState().url),
+  page: async ({ page }, use) => {
+    const check = await watchPage(page);
+    await use(page);
+    check();
   },
 });
 

@@ -64,6 +64,16 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --database de
 # open http://127.0.0.1:31337/ui/ and sign in as hardcharger / change-me
 ```
 
+Under mutual TLS (`--mtls-ca-cert`) the browser must present a client certificate the server
+accepts before it can load `/ui` at all: install the certificate (and its key) in the browser
+or the system's keychain, and the browser offers it when the page opens. With certificate
+sign-in on (`--mtls-certificate-sign-in`), the sign-in page also shows **Sign in with my
+certificate**, which signs in with that certificate and no password; the token is bound to
+it, and every request the page makes carries it (the UI uses fetch's default credentials mode,
+never `omit`, which would leave the certificate off). With `--mtls-require-client-cert=false`
+the page loads without one and password sign-in works as usual. The e2e suite runs all of this
+in Chromium and WebKit (`test/e2e/mtls.embedded.spec.ts`).
+
 Without a server build that embeds it, serve a build of this repository next to any
 Hardcharger server. `scripts/serve.mjs` serves `dist/` at `/ui/` exactly as the server does
 (same headers, same CSP) and passes `/warp/…` through, so the page and the protocol share an
@@ -174,7 +184,9 @@ npm run build && npm run test:e2e
 ```
 
 With `HARDCHARGER_UI_TEST_EMBEDDED=1` the tests run against the UI a server build embeds
-(`hardcharger-server --web-ui`) instead of `dist/` served by `scripts/serve.mjs`. A Linux
+(`hardcharger-server --web-ui`) instead of `dist/` served by `scripts/serve.mjs`, and include
+`*.embedded.spec.ts`: mutual TLS, with its own server and certificates, which can't run through
+a proxy (the server binds tokens to the certificate presented to it). A Linux
 server binary is in the image: `docker cp $(docker create
 ghcr.io/gizmodata/hardcharger:main):/opt/hardcharger .`. The tests read only
 `HARDCHARGER_UI_TEST_*` variables, and the server they start gets none of the shell's

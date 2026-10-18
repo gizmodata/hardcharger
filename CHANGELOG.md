@@ -27,6 +27,10 @@ All notable changes to this project are documented here. The format follows
 - Sessions page (`hardcharger_sessions()`): administrators see and end (`KILL SESSION`) every
   session; other users see their own.
 - About dialog with the server, protocol, capabilities, session and sign-in expiry.
+- Mutual TLS: "Sign in with my certificate" on servers that offer the `client_certificate`
+  grant, and every request in fetch's default credentials mode so the browser presents its
+  client certificate on all of them. E2E in Chromium and WebKit against an embedded server
+  with required client certificates (`mtls.embedded.spec.ts`).
 - GizmoData look, light and dark.
 - Recovery from a stale build: a missing lazily loaded file reloads the page after 0, 3 and
   10 seconds, then shows a "new version available" notice; error boundaries at the root and
