@@ -147,9 +147,11 @@ class AccessControl {
   // differs only in case). A user signs in this way with or without a password.
   std::optional<std::string> CertificateUser(const std::string& identity) const;
 
-  // Throws warpsql::Error(kInvalidToken) when an access token for `who` no longer
-  // stands: the user was dropped or disabled, the password it was issued against was
-  // changed, or its scoped token was revoked or expired. Cheap: called on every request.
+  // Throws warpsql::Error(kInvalidToken), with Warp SQL §4.2's reason, when an access
+  // token for `who` no longer stands: the user was dropped or disabled
+  // (principal_dropped), the password it was issued against was changed
+  // (credentials_changed), or its scoped token was revoked (token_revoked) or expired
+  // (token_expired). Only for a token this server signed. Cheap: called on every request.
   void CheckToken(const Identity& who) const;
 
   // Binds a new session's connection to `who`. Throws warpsql::Error when the session
@@ -252,6 +254,7 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   const std::string user_id_;  // empty for the administrator
   std::string credential_;     // the user's password hash when the session started
   std::string tenant_id_;
+  int64_t scope_expires_at_ = 0;  // a scoped token's session: when the scope ends (Unix s)
   std::string tenant_catalogs_;
 
   mutable std::mutex mutex_;  // guards connection_ and ended_ against the store's listener

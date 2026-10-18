@@ -44,7 +44,7 @@ Every option also has a YAML key: the flag without its leading `--`, with `_` fo
 | `TOKEN_ALLOWED_ISSUER`, `GIZMOSQL_TOKEN_ALLOWED_ISSUER` | `--token-allowed-issuer` | `HARDCHARGER_TOKEN_ALLOWED_ISSUER` |
 | `TOKEN_ALLOWED_AUDIENCE`, `GIZMOSQL_TOKEN_ALLOWED_AUDIENCE` | `--token-allowed-audience` | `HARDCHARGER_TOKEN_ALLOWED_AUDIENCE` |
 | `GIZMOSQL_TOKEN_DEFAULT_ROLE` | `--token-default-role` | `HARDCHARGER_TOKEN_DEFAULT_ROLE` |
-| `GIZMOSQL_TOKEN_GROUPS_CLAIM` | `--token-groups-claim` | `HARDCHARGER_TOKEN_GROUPS_CLAIM` |
+| (none: access control is new in Hardcharger) | `--token-groups-claim` | `HARDCHARGER_TOKEN_GROUPS_CLAIM` |
 | `GIZMOSQL_TOKEN_AUTHORIZED_EMAILS` | `--token-authorized-emails` | `HARDCHARGER_TOKEN_AUTHORIZED_EMAILS` |
 | `GIZMOSQL_TOKEN_JWKS_URI` | `--token-jwks-uri` | `HARDCHARGER_TOKEN_JWKS_URI` |
 | `GIZMOSQL_OAUTH_CLIENT_ID` | `--oauth-client-id` | `HARDCHARGER_OAUTH_CLIENT_ID` |
@@ -60,10 +60,10 @@ Every option also has a YAML key: the flag without its leading `--`, with `_` fo
 | `GIZMOSQL_REJECT_UNKNOWN_SESSIONS` | (none: always so) | (none) |
 | `--query-timeout`, `QUERY_TIMEOUT`, `GIZMOSQL_QUERY_TIMEOUT` | `--query-timeout-seconds` | `HARDCHARGER_QUERY_TIMEOUT_SECONDS` |
 | `-Q`, `PRINT_QUERIES`, `GIZMOSQL_PRINT_QUERIES` | `--print-queries` | `HARDCHARGER_PRINT_QUERIES` |
-| `GIZMOSQL_RBAC_STORE_URI` | `--rbac-store-uri` | `HARDCHARGER_RBAC_STORE_URI` |
-| `GIZMOSQL_RBAC_OPA_URL` | `--rbac-opa-url` | `HARDCHARGER_RBAC_OPA_URL` |
-| `GIZMOSQL_RBAC_OPA_TIMEOUT_MS` | `--rbac-opa-timeout-ms` | `HARDCHARGER_RBAC_OPA_TIMEOUT_MS` |
-| `GIZMOSQL_AUDIT_CHAIN_KEY` | `--audit-chain-key` | `HARDCHARGER_AUDIT_CHAIN_KEY` |
+| (none: access control is new in Hardcharger) | `--rbac-store-uri` | `HARDCHARGER_RBAC_STORE_URI` |
+| (none: access control is new in Hardcharger) | `--rbac-opa-url` | `HARDCHARGER_RBAC_OPA_URL` |
+| (none: access control is new in Hardcharger) | `--rbac-opa-timeout-ms` | `HARDCHARGER_RBAC_OPA_TIMEOUT_MS` |
+| (none: the tamper-evident audit log is new in Hardcharger) | `--audit-chain-key` | `HARDCHARGER_AUDIT_CHAIN_KEY` |
 | `GIZMOSQL_MAX_CONCURRENT_STATEMENTS` | `--max-concurrent-statements` | `HARDCHARGER_MAX_CONCURRENT_STATEMENTS` |
 | `GIZMOSQL_MAX_QUEUED_STATEMENTS` | `--max-queued-statements` | `HARDCHARGER_MAX_QUEUED_STATEMENTS` |
 | `GIZMOSQL_MAX_QUEUE_WAIT` | `--max-queue-wait` | `HARDCHARGER_MAX_QUEUE_WAIT` |
@@ -187,7 +187,7 @@ GizmoSQL 1.x server created.
 
 | GizmoSQL 1.x | Hardcharger |
 |---|---|
-| RBAC store schema `gizmosql_rbac` | `hardcharger_rbac` (a new store; 1.x's is not read) |
+| (none: 1.x has no users, roles or grants) | the access-control store, schema `hardcharger_rbac` |
 | table metadata key `GIZMOSQL:COLUMN_DEFAULT` | `WARP:SQL:COLUMN_DEFAULT` (Warp SQL's key) |
 | `gizmosql_*` Prometheus metrics (`gizmosql_statements_total`, ...) | `hardcharger_*` (`hardcharger_statements_total`, ...); `gizmosql_license_expiry_seconds` is gone |
 | server tokens with `iss=gizmosql` | only tokens this server signs (`iss=hardcharger`) |
@@ -196,11 +196,10 @@ GizmoSQL 1.x server created.
 
 ### Metadata under access control
 
-GizmoSQL 1.x's RBAC (the `feature/rbac` branch) filters metadata by catalog only: a
-tenant's user doesn't see other tenants' catalogs, a `catalog_access` principal sees only
-the catalogs its rules allow, and inside a catalog it may see, every user sees every
-schema, table, view and column. Hardcharger filters each object by the rules SELECT
-follows (Warp SQL §9.4):
+GizmoSQL 1.x has no users, roles or grants: its `catalog_access` rules decide which
+catalogs a token sees, and inside a catalog it may see, every schema, table, view and
+column is listed. Under Hardcharger's access control, metadata follows each object's
+privileges, by the rules SELECT follows (Warp SQL §9.4):
 
 | Listing | Hardcharger, for a non-administrator |
 |---|---|
@@ -209,7 +208,7 @@ follows (Warp SQL §9.4):
 | schemas (metadata `db-schemas`, `duckdb_schemas()`, `information_schema.schemata`) | those it holds a grant on or in, or owns something in |
 | keys and constraints (metadata `primary-keys`, `imported-keys`, `exported-keys`, `cross-reference`, `duckdb_constraints()`, `duckdb_indexes()`) | those whose tables (and columns) are listed |
 | `DESCRIBE t`, `DESCRIBE SELECT ...`, `SHOW t` | refused for a table it holds no privilege on, or may read only some columns of |
-| catalogs | as before: tenants' and `catalog_access` rules' catalogs |
+| catalogs | its tenant's, and for a `catalog_access` principal those its rules allow (as in 1.x) |
 
 A `catalog_access` principal reads whole catalogs, so it sees everything in the catalogs
 its rules let it read, as in 1.x. One thing still names what a user can't read, without
@@ -218,11 +217,11 @@ user may read some columns of.
 
 ### Creating a view needs SELECT on what it reads
 
-In GizmoSQL 1.x's RBAC, `CREATE VIEW` needs only CREATE VIEW on the schema: a user can
-create a view over a table it can't read, and the view fails only when someone reads it.
-Since metadata follows privileges, that view's owner could list its columns, and so the
-column names of a table it holds nothing on. Hardcharger checks a view's query when the
-view is created, as the creator's own `SELECT` of that query would be checked: SELECT on
+Under access control, CREATE VIEW on the schema is not enough to create a view: a view over
+a table its creator can't read would fail only when read, but its creator owns it, and since
+metadata follows privileges it could list the view's columns, and so the column names of a
+table it holds nothing on. Hardcharger checks a view's query when the view is created, as
+the creator's own `SELECT` of that query would be checked: SELECT on
 every table and view it reads and on each column it reads of them (in the select list,
 `WHERE`, `ORDER BY`, joins, window functions; `count(*)` needs SELECT on any column, as in
 Postgres), through CTEs, subqueries, set operations and table macros, views it reads
@@ -242,7 +241,10 @@ unchanged. (DuckDB has no `ALTER VIEW` that changes a view's query.)
 Both arrive as Arrow decimal128(38, 0), as from DuckDB's own Arrow export. A value that
 decimal128(38, 0) can't hold (10^38 or more in magnitude, which includes UHUGEINT's upper
 half) fails the statement with a conversion error rather than arriving wrong; CAST it to
-VARCHAR, or set the session option `arrow_lossless_conversion` (DuckDB's 16-byte types).
+VARCHAR, or run `SET SESSION arrow_lossless_conversion = true` (DuckDB's 16-byte types;
+Warp SQL's session option of the same name does the same). A plain `SET` of that setting is
+DuckDB's `SET GLOBAL`: only an administrator may run it, and it changes the default of every
+session that has no value of its own, for HUGEINT, UUID and JSON results alike.
 
 ### `catalog_access` rules on an administrator's token
 
@@ -264,5 +266,5 @@ SESSION and every session in `hardcharger_sessions()`. Hardcharger differs on pu
 | CREATE MACRO / TYPE | allowed | refused (as for every non-superuser under the plan check) |
 | table functions such as `pragma_storage_info('c.t')` | allowed | only those any rules principal gets |
 | `nextval()` / `currval()` on a sequence | any | by the rules of the sequence's catalog |
-| access-control statements under RBAC (CREATE USER, GRANT, ...) | allowed (1.x drops the rules under RBAC) | refused, and the rules hold under RBAC |
+| access-control statements (CREATE USER, GRANT, ...) on a server with access control | (none: 1.x has no access control statements) | refused, and the rules still hold |
 | a claim that isn't a non-empty list (`[]`, a string, an object, `null`) | no rules: unrestricted | grants nothing |

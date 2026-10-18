@@ -264,7 +264,8 @@ def test_disabling_or_dropping_the_user_ends_certificate_sign_in(rbac, pki):
         try:
             session.run(sql="SELECT 1")
         except WarpError as error:
-            assert error.code in ("invalid_token", "session_ended"), str(error)
+            # Warp SQL §4.2: the token's refusal says why.
+            assert error.code == "invalid_token" and error.reason == "principal_dropped", str(error)
             break
         assert time.monotonic() < deadline, "a disabled user's bound token kept working"
         time.sleep(0.2)
@@ -444,6 +445,36 @@ def test_the_client_signs_in_with_its_certificate(launcher, pki):
     missing = run_client(server, "--auth-type", "mtls", "-c", "SELECT 1")
     assert missing.returncode != 0
     assert "--auth-type mtls needs --mtls-cert and --mtls-key" in missing.stderr, missing.stderr
+
+
+def test_the_client_says_why_the_handshake_refused_its_certificate(launcher, pki, tmp_path):
+    ops, dave = pki.issue(name="ops@example.com"), pki.issue(name="dave@example.com")
+    crl = (x509.CertificateRevocationListBuilder().issuer_name(pki.ca.subject)
+           .last_update(NOW - datetime.timedelta(minutes=5)).next_update(NOW + datetime.timedelta(days=1))
+           .add_revoked_certificate(x509.RevokedCertificateBuilder().serial_number(dave[2].serial_number)
+                                    .revocation_date(NOW - datetime.timedelta(minutes=1)).build())
+           .sign(private_key=pki.ca_key, algorithm=hashes.SHA256()))
+    path = tmp_path / "revoked.crl"
+    path.write_bytes(crl.public_bytes(encoding=serialization.Encoding.PEM))
+    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-crl-file", str(path)])
+    origin = f"https://127.0.0.1:{server.running.port}"
+    revoked = run_client(server, "--mtls-cert", str(dave[0]), "--mtls-key", str(dave[1]), "-c", "SELECT 1")
+    assert revoked.returncode == 1
+    assert revoked.stderr.startswith(f"Error: The server at {origin} refused the client certificate: "
+                                     "certificate revoked"), revoked.stderr
+    assert "is the server running" not in revoked.stderr, revoked.stderr
+    # No certificate at all, where the server requires one.
+    none = run_client(server, "-c", "SELECT 1")
+    assert none.returncode == 1
+    assert none.stderr.startswith(f"Error: The server at {origin} refused the connection: it requires a client "
+                                  "certificate (--mtls-cert and --mtls-key)"), none.stderr
+    # The twin: with a certificate the handshake accepts, the administrator signs in.
+    ok = subprocess.run(args=[str(CLIENT_BINARY), "--host", "127.0.0.1", "--port", str(server.running.port), "--tls",
+                              "--tls-roots", str(pki.ca_path), "--mtls-cert", str(ops[0]), "--mtls-key", str(ops[1]),
+                              "--username", "admin", "--csv", "--no-header", "-c", "SELECT 1"],
+                        capture_output=True, text=True, timeout=60,
+                        env={**clean_environment(), "HARDCHARGER_PASSWORD": server.running.password})
+    assert ok.returncode == 0 and ok.stdout.strip() == "1", ok.stderr
 
 
 # ---- Review fixes ----

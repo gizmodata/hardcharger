@@ -5,10 +5,13 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
 #include <utility>
 
 #include <arrow/array.h>
+#include <arrow/extension_type.h>
+#include <boost/json.hpp>
 #include <arrow/scalar.h>
 #include <arrow/type.h>
 #include <arrow/type_traits.h>
@@ -41,6 +44,115 @@ int GetTerminalWidth() {
   return 80;  // default
 }
 
+namespace {
+
+// Arrow's canonical arrow.opaque extension type: a value of another system's type, kept
+// as its storage, with the type's name and the system's ("vendor") in its metadata
+// ({"type_name": ..., "vendor_name": ...}). The metadata goes back out as it came in.
+class OpaqueType : public arrow::ExtensionType {
+ public:
+  OpaqueType(std::shared_ptr<arrow::DataType> storage, std::string metadata, std::string type_name,
+             std::string vendor_name)
+      : arrow::ExtensionType(std::move(storage)),
+        metadata_(std::move(metadata)),
+        type_name_(std::move(type_name)),
+        vendor_name_(std::move(vendor_name)) {}
+
+  std::string extension_name() const override { return "arrow.opaque"; }
+  const std::string& type_name() const { return type_name_; }
+  const std::string& vendor_name() const { return vendor_name_; }
+
+  bool ExtensionEquals(const arrow::ExtensionType& other) const override {
+    const auto* opaque = dynamic_cast<const OpaqueType*>(&other);
+    return opaque != nullptr && opaque->type_name_ == type_name_ && opaque->vendor_name_ == vendor_name_ &&
+           storage_type()->Equals(*other.storage_type());
+  }
+  std::shared_ptr<arrow::Array> MakeArray(std::shared_ptr<arrow::ArrayData> data) const override {
+    return std::make_shared<arrow::ExtensionArray>(std::move(data));
+  }
+  arrow::Result<std::shared_ptr<arrow::DataType>> Deserialize(std::shared_ptr<arrow::DataType> storage,
+                                                              const std::string& metadata) const override {
+    std::string type_name, vendor_name;
+    boost::system::error_code ec;
+    const boost::json::value parsed = boost::json::parse(metadata, ec);
+    if (!ec && parsed.is_object()) {
+      const auto& object = parsed.as_object();
+      if (const auto* value = object.if_contains("type_name"); value && value->is_string()) {
+        type_name = std::string(value->as_string());
+      }
+      if (const auto* value = object.if_contains("vendor_name"); value && value->is_string()) {
+        vendor_name = std::string(value->as_string());
+      }
+    }
+    return std::make_shared<OpaqueType>(std::move(storage), metadata, std::move(type_name), std::move(vendor_name));
+  }
+  std::string Serialize() const override { return metadata_; }
+
+ private:
+  std::string metadata_;
+  std::string type_name_;
+  std::string vendor_name_;
+};
+
+// DuckDB's HUGEINT or UHUGEINT as its lossless Arrow type (the session option
+// arrow_lossless_conversion): arrow.opaque over 16 little-endian bytes. Sets `is_signed`.
+bool IsDuckDBWideInteger(const arrow::DataType& type, bool* is_signed) {
+  if (type.id() != arrow::Type::EXTENSION) return false;
+  const auto* opaque = dynamic_cast<const OpaqueType*>(&type);
+  if (opaque == nullptr || opaque->vendor_name() != "DuckDB") return false;
+  const auto& storage = *opaque->storage_type();
+  if (storage.id() != arrow::Type::FIXED_SIZE_BINARY ||
+      static_cast<const arrow::FixedSizeBinaryType&>(storage).byte_width() != 16) {
+    return false;
+  }
+  if (opaque->type_name() != "hugeint" && opaque->type_name() != "uhugeint") return false;
+  *is_signed = opaque->type_name() == "hugeint";
+  return true;
+}
+
+// The exact decimal text of a 128-bit integer stored as 16 little-endian bytes (two's
+// complement when signed). Portable: MSVC has no 128-bit integer type.
+std::string WideIntegerText(const uint8_t* bytes, bool is_signed) {
+  uint32_t limbs[4];  // least significant first
+  for (int i = 0; i < 4; ++i) {
+    limbs[i] = static_cast<uint32_t>(bytes[4 * i]) | static_cast<uint32_t>(bytes[4 * i + 1]) << 8 |
+               static_cast<uint32_t>(bytes[4 * i + 2]) << 16 | static_cast<uint32_t>(bytes[4 * i + 3]) << 24;
+  }
+  const bool negative = is_signed && (limbs[3] & 0x80000000u) != 0;
+  if (negative) {  // two's complement: invert and add one
+    uint64_t carry = 1;
+    for (auto& limb : limbs) {
+      const uint64_t sum = static_cast<uint64_t>(~limb) + carry;
+      limb = static_cast<uint32_t>(sum);
+      carry = sum >> 32;
+    }
+  }
+  std::string digits;
+  while (limbs[0] != 0 || limbs[1] != 0 || limbs[2] != 0 || limbs[3] != 0) {
+    uint64_t remainder = 0;
+    for (int i = 3; i >= 0; --i) {
+      const uint64_t current = remainder << 32 | limbs[i];
+      limbs[i] = static_cast<uint32_t>(current / 10);
+      remainder = current % 10;
+    }
+    digits.push_back(static_cast<char>('0' + remainder));
+  }
+  if (digits.empty()) digits = "0";
+  if (negative) digits.push_back('-');
+  return std::string(digits.rbegin(), digits.rend());
+}
+
+}  // namespace
+
+void RegisterArrowExtensionTypes() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    if (arrow::GetExtensionType("arrow.opaque") == nullptr) {
+      (void)arrow::RegisterExtensionType(std::make_shared<OpaqueType>(arrow::null(), "", "", ""));
+    }
+  });
+}
+
 std::string GetCellValue(const std::shared_ptr<arrow::ChunkedArray>& column,
                          int64_t row_index, const std::string& null_value) {
   // Find the right chunk and index within it
@@ -49,6 +161,12 @@ std::string GetCellValue(const std::shared_ptr<arrow::ChunkedArray>& column,
     if (offset < chunk->length()) {
       if (chunk->IsNull(offset)) {
         return null_value;
+      }
+      bool is_signed = false;
+      if (IsDuckDBWideInteger(*chunk->type(), &is_signed)) {
+        const auto& storage =
+            static_cast<const arrow::FixedSizeBinaryArray&>(*static_cast<const arrow::ExtensionArray&>(*chunk).storage());
+        return WideIntegerText(storage.GetValue(offset), is_signed);
       }
       auto scalar_result = chunk->GetScalar(offset);
       if (scalar_result.ok()) {
@@ -123,6 +241,11 @@ std::string FriendlyTypeName(const std::shared_ptr<arrow::DataType>& type) {
     case arrow::Type::STRUCT:
     case arrow::Type::MAP:
       return type->ToString();
+    case arrow::Type::EXTENSION: {
+      bool is_signed = false;
+      if (IsDuckDBWideInteger(*type, &is_signed)) return is_signed ? "hugeint" : "uhugeint";
+      return type->ToString();
+    }
     default:
       return type->ToString();
   }
@@ -331,6 +454,10 @@ bool IsNumericType(const std::shared_ptr<arrow::DataType>& type) {
     case arrow::Type::DECIMAL128:
     case arrow::Type::DECIMAL256:
       return true;
+    case arrow::Type::EXTENSION: {
+      bool is_signed = false;
+      return IsDuckDBWideInteger(*type, &is_signed);  // printed as exact integers
+    }
     default:
       return false;
   }

@@ -291,6 +291,11 @@ class Snapshot {
   // own, unexpired, and every token it was minted under still there).
   std::optional<TokenScope> ValidScope(const std::string& token_id, const std::string& user_id,
                                        int64_t now) const;
+  // Why a scoped token no longer stands for `user_id` at `now` (Warp SQL's reason):
+  // "token_revoked" when it or a token it was minted under is gone (revoked, or not the
+  // user's), "token_expired" when one of them expired; nullopt when it stands.
+  std::optional<std::string> ScopeRefusal(const std::string& token_id, const std::string& user_id,
+                                          int64_t now) const;
   const TenantRecord* FindTenantByName(const std::string& name) const;
   const TenantRecord* FindTenantById(const std::string& id) const;
   // "" for a system-scope user, role or catalog.

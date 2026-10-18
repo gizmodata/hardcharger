@@ -348,21 +348,27 @@ std::optional<std::string> AccessControl::CertificateUser(const std::string& ide
 
 void AccessControl::CheckToken(const Identity& who) const {
   if (who.superuser || catalog_rules_only_) return;
+  // Only for a token this server signed and verified (JwtTokenService::Validate), so each
+  // refusal says why (Warp SQL §4.2's reason): only the token's holder learns it.
+  namespace why = warpsql::reason;
   auto snapshot = engine_->snapshot();
   const UserRecord* user = snapshot->FindUserByName(who.user_name);
   if (user == nullptr || !user->enabled) {
     // "is not defined on this server" / "is disabled", as at sign-in.
     auto refused = engine_->PrincipalForUser(who.user_name);
-    throw Error(ErrorCode::kInvalidToken, refused.ok() ? "user " + who.user_name + " is disabled"
-                                                       : refused.status().message());
+    throw Error::InvalidToken(why::kPrincipalDropped, refused.ok() ? "user " + who.user_name + " is disabled"
+                                                                   : refused.status().message());
   }
   if (!who.credential.empty() && Fingerprint(user->password_hash) != who.credential) {
-    throw Error(ErrorCode::kInvalidToken, "the password of user " + user->name +
-                                              " changed since this access token was issued; "
-                                              "sign in again");
+    throw Error::InvalidToken(why::kCredentialsChanged, "the password of user " + user->name +
+                                                            " changed since this access token was issued; "
+                                                            "sign in again");
   }
-  if (!who.scope_id.empty() && !snapshot->ValidScope(who.scope_id, user->id, NowSeconds())) {
-    throw Error(ErrorCode::kInvalidToken, "this scoped token was revoked or has expired");
+  if (!who.scope_id.empty()) {
+    if (auto refusal = snapshot->ScopeRefusal(who.scope_id, user->id, NowSeconds())) {
+      throw Error::InvalidToken(*refusal, *refusal == why::kTokenRevoked ? "this scoped token was revoked"
+                                                                         : "this scoped token has expired");
+    }
   }
 }
 
@@ -379,8 +385,8 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
     who.catalog_access = std::vector<CatalogAccessRule>{{"*", "write"}};
   }
   // A token's catalog_access rules only ever narrow: they restrict an administrator's
-  // token (as in GizmoSQL 1.x, whatever the role), and under RBAC they grant a store
-  // user nothing (its grants decide).
+  // token (whatever the role, as GizmoSQL 1.x applies them), and under access control
+  // they grant a store user nothing (its grants decide).
   const bool rules_principal = who.catalog_access && (catalog_rules_only_ || who.superuser);
   if (who.superuser && !who.catalog_access) {
     // The administrator without rules is allowed everything.
@@ -413,7 +419,10 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
     if (!who.scope_id.empty()) {
       principal.scope = snapshot->ValidScope(who.scope_id, principal.user_id, NowSeconds());
       if (!principal.scope) {
-        throw Error(ErrorCode::kInvalidToken, "this scoped token was revoked or has expired");
+        const auto refusal =
+            snapshot->ScopeRefusal(who.scope_id, principal.user_id, NowSeconds()).value_or(warpsql::reason::kTokenRevoked);
+        throw Error::InvalidToken(refusal, refusal == warpsql::reason::kTokenRevoked ? "this scoped token was revoked"
+                                                                                    : "this scoped token has expired");
       }
     }
     principal.idp_issuer = who.idp_issuer;
@@ -444,6 +453,7 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
   guard->unrestricted_ = principal.superuser;
   guard->credential_ = credential;
   guard->tenant_id_ = tenant;
+  if (principal.scope) guard->scope_expires_at_ = principal.scope->expires_at;
   if (!tenant.empty()) {
     guard->tenant_catalogs_ = TenantCatalogsKey(*snapshot, tenant);
     // A tenant's sessions start in the tenant's default catalog.
@@ -482,9 +492,10 @@ void AccessControl::OnSnapshot(const Snapshot& snapshot) {
         !guard->tenant_id_.empty() &&
         (!snapshot.FindTenantById(guard->tenant_id_) ||
          TenantCatalogsKey(snapshot, guard->tenant_id_) != guard->tenant_catalogs_);
-    const bool scope_gone =
-        !guard->identity_.scope_id.empty() &&
-        !snapshot.ValidScope(guard->identity_.scope_id, guard->user_id_, NowSeconds());
+    const auto scope_refusal =
+        guard->identity_.scope_id.empty()
+            ? std::nullopt
+            : snapshot.ScopeRefusal(guard->identity_.scope_id, guard->user_id_, NowSeconds());
     std::string reason;
     if (!user) {
       reason = "user dropped";
@@ -494,8 +505,8 @@ void AccessControl::OnSnapshot(const Snapshot& snapshot) {
       reason = "password changed";
     } else if (tenant_changed) {
       reason = "tenant's catalogs changed";
-    } else if (scope_gone) {
-      reason = "scoped token revoked or expired";
+    } else if (scope_refusal) {
+      reason = *scope_refusal == warpsql::reason::kTokenRevoked ? "scoped token revoked" : "scoped token expired";
     }
     if (!reason.empty()) {
       guard->End(reason);
@@ -557,14 +568,21 @@ void SessionGuard::RequireLive() const {
   std::lock_guard lock(mutex_);
   if (ended_) {
     // Spec §5.6's reason for what access control saw.
-    namespace why = warpsql::session_ended_reason;
+    namespace why = warpsql::reason;
     const char* reason = why::kCredentialsChanged;  // password changed, the tenant's catalogs changed
     if (*ended_ == "user dropped" || *ended_ == "user disabled") reason = why::kPrincipalDropped;
-    if (*ended_ == "scoped token revoked or expired") reason = why::kTokenExpired;
+    if (*ended_ == "scoped token revoked") reason = why::kTokenRevoked;
+    if (*ended_ == "scoped token expired") reason = why::kTokenExpired;
     throw Error::SessionEnded(reason, "Hardcharger access control ended this session (" + *ended_ + ")");
   }
   if (connection_ == nullptr) {
-    throw Error::SessionEnded(warpsql::session_ended_reason::kKilled, "the session has ended");
+    throw Error::SessionEnded(warpsql::reason::kKilled, "the session has ended");
+  }
+  // A session opened with a scoped token ends with the scope: nothing could run in it any
+  // more, whatever token a request on it carries.
+  if (scope_expires_at_ != 0 && scope_expires_at_ <= NowSeconds()) {
+    throw Error::SessionEnded(warpsql::reason::kTokenExpired,
+                              "Hardcharger access control ended this session (scoped token expired)");
   }
 }
 

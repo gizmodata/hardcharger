@@ -168,16 +168,26 @@ const ScopedTokenRecord* Snapshot::FindScopedToken(const std::string& id) const 
   return nullptr;
 }
 
-std::optional<TokenScope> Snapshot::ValidScope(const std::string& token_id,
-                                               const std::string& user_id, int64_t now) const {
+std::optional<std::string> Snapshot::ScopeRefusal(const std::string& token_id, const std::string& user_id,
+                                                  int64_t now) const {
   const ScopedTokenRecord* token = FindScopedToken(token_id);
-  if (!token || token->user_id != user_id || token->expires_at <= now) return std::nullopt;
+  if (!token || token->user_id != user_id) return "token_revoked";
+  bool expired = token->expires_at <= now;
   // Every token it was minted under must still be there (a bounded walk).
   const ScopedTokenRecord* up = token;
   for (int depth = 0; !up->parent_id.empty(); ++depth) {
     up = FindScopedToken(up->parent_id);
-    if (!up || depth > 64 || up->expires_at <= now) return std::nullopt;
+    if (!up || depth > 64) return "token_revoked";
+    expired = expired || up->expires_at <= now;
   }
+  if (expired) return "token_expired";
+  return std::nullopt;
+}
+
+std::optional<TokenScope> Snapshot::ValidScope(const std::string& token_id,
+                                               const std::string& user_id, int64_t now) const {
+  if (ScopeRefusal(token_id, user_id, now)) return std::nullopt;
+  const ScopedTokenRecord* token = FindScopedToken(token_id);
   TokenScope scope{token->id, token->name, {}, token->catalogs, token->expires_at};
   scope.privileges.insert(token->privileges.begin(), token->privileges.end());
   return scope;

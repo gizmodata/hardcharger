@@ -6,8 +6,7 @@ reads of each, through CTEs, subqueries, set operations and table macros, under 
 session's SET ROLE (and scoped token: the same check). Before this, CREATE VIEW checked only CREATE VIEW on
 the schema; the body was checked when the view was read, and since metadata follows
 privileges the creator (who owns the view) could list the view's columns, and so the
-column names of a table it can't read. GizmoSQL 1.x's RBAC branch allows such a view
-(test_rbac_views.py records the changed expectation)."""
+column names of a table it can't read (test_rbac_views.py covers the owner's side)."""
 
 import pytest
 

@@ -50,7 +50,7 @@ string(CONCAT CONVERTER
   "\t[[noreturn]] static void Refuse(const string &type, const string &value) {\n"
   "\t\tthrow ConversionException(\"Hardcharger cannot send the \" + type + \" value \" + value +\n"
   "\t\t                          \" as Arrow decimal128(38, 0), which holds at most 38 digits. CAST it to \"\n"
-  "\t\t                          \"VARCHAR, or set the session option arrow_lossless_conversion to true \"\n"
+  "\t\t                          \"VARCHAR, or run SET SESSION arrow_lossless_conversion = true \"\n"
   "\t\t                          \"(DuckDB's 16-byte \" + type + \" Arrow type, which holds every value)\");\n"
   "\t}\n"
   "\tstatic hugeint_t Check(hugeint_t input) {\n"

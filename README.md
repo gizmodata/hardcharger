@@ -295,7 +295,7 @@ $ hardcharger --host localhost --username hardcharger --quiet <<'SQL'
 INSERT INTO trips VALUES (3, 'Austin', 8.5);
 SELECT count(*) AS trips, sum(miles) AS miles FROM trips;
 SQL
-OK, 1 rows affected
+OK, 1 row affected
 ┌────────┬───────────────┐
 │ trips  │     miles     │
 │ bigint │ decimal(38,1) │
@@ -342,6 +342,11 @@ log_level: info
 print_queries: true
 init_sql_commands_file: /etc/hardcharger/init.sql
 ```
+
+In SQL, `SET SESSION name = value` changes a DuckDB setting for your session only. A plain
+`SET name = value` takes the setting's own default scope, which for about half of DuckDB's
+settings (`arrow_lossless_conversion` among them) is `GLOBAL`: then only an administrator
+may run it, and it changes the default of every session that has no value of its own.
 
 ## 👥 Access control
 

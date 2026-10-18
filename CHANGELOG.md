@@ -7,18 +7,28 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
-### Fixed
-
-- The answer to an ingest part or one-request upload sent again (same `Idempotency-Key`)
-  reaches the client on Linux and macOS: the server answers it from the first upload without
-  reading the body, and then reset the connection with the body unread, so the client saw a
-  broken pipe or a reset and sent it again (warp-sql-adbc's `TestIntegrationIngestPartAnswerLost`
-  counted a part sent three times). The connection now closes lingering, reading and dropping
-  what the client still sends (up to 2 s, 256 MiB), as it already did on Windows. No row was
-  ever written twice. From warp-sql `2dbcd84`; its conformance tests
-  `test_the_answer_to_a_part_sent_again_arrives` and `test_the_answer_to_an_upload_sent_again_arrives`.
-
 ### Added
+
+- A refused token says why (Warp SQL §4.2): after `ALTER USER ... WITH PASSWORD`, `ALTER
+  USER ... DISABLE`, `DROP USER` or `DROP SCOPED TOKEN`, the session's own token gets `401
+  invalid_token` with a `reason` (`credentials_changed`, `principal_dropped`,
+  `token_revoked`), and an expired token `token_expired`. Before, only a token from a new
+  sign-in, used on the old session, learned the reason (from `session_ended`). Only a
+  token this server signed and that nobody altered gets a reason; one signed with another
+  key or with a changed signature gets none, whatever user it names. A session opened with
+  a scoped token now ends when the scope expires (`session_ended`, `token_expired`)
+  instead of refusing each statement. `test_token_refusal_reasons.py` (8 tests), and the
+  conformance suite's expired-token case.
+
+- `hardcharger`: when the server refuses the sign-in's token it says why, from the reason,
+  e.g. "The server no longer accepts this sign-in: the user's password or credentials
+  changed (credentials_changed). Sign in again (.connect)."; a session the server ended
+  reads "the server ended this session: an administrator ended it (killed)".
+
+- `hardcharger`: HUGEINT and UHUGEINT print as exact integers with
+  `arrow_lossless_conversion` on (DuckDB's lossless form, Arrow's opaque 16-byte type), in
+  every output mode (unquoted numbers in JSON, right-aligned in boxes, type
+  `hugeint`/`uhugeint`); they printed as raw bytes.
 
 - Allowed CORS origins (`cors_origins`) get `Access-Control-Allow-Credentials: true`, preflights
   included (Warp SQL §9.5), so a page on another origin can sign in with the user's client
@@ -104,8 +114,9 @@ own changelog in `python/CHANGELOG.md`.
   transaction, all or nothing. Access control checks it like any ingest, and every part is
   bound to its session. Warp SQL's drivers use it for large uploads by default.
 - `session_ended` errors carry their `reason` (Warp SQL §5.6): `killed` (KILL SESSION),
-  `principal_dropped` (the user was dropped or disabled), `token_expired` (a scoped token
-  revoked or expired), `credentials_changed` (anything else access control revoked).
+  `principal_dropped` (the user was dropped or disabled), `token_revoked` (a scoped token
+  revoked), `token_expired` (a scoped token expired), `credentials_changed` (anything else
+  access control revoked).
 - DuckDB's httpfs, ducklake, postgres scanner, autocomplete and tpch extensions are built
   into the server, next to parquet, json and icu, at the commits DuckDB's own build of
   the pinned DuckDB uses. They work offline and in air-gapped deployments, with no
@@ -146,6 +157,14 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- The refusal of a HUGEINT or UHUGEINT value decimal128(38, 0) can't hold says to run `SET
+  SESSION arrow_lossless_conversion = true` (was "set the session option
+  arrow_lossless_conversion to true"): a plain `SET` of that setting is DuckDB's `SET
+  GLOBAL`, which only an administrator may run and which changes every session without a
+  value of its own. The README and docs/migrating-from-gizmosql.md say so;
+  `test_wide_integers.py` checks both scopes. (`scripts/patch-duckdb-arrow-hugeint.cmake`
+  changed, so DuckDB is rebuilt.)
+
 - `hardcharger` reads large results over up to 8 connections by default (was 1);
   `--result-partitions 1` reads over one.
 - `mtls_ca_cert` without `tls_cert` and `tls_key` is refused at startup; it used to be
@@ -171,6 +190,28 @@ own changelog in `python/CHANGELOG.md`.
   Linux 8.
 
 ### Fixed
+
+- `hardcharger`: a client certificate the server's handshake refused (revoked, or none
+  sent where one is required) was reported as "Could not connect to ... is the server
+  running?". It now says "The server at https://... refused the client certificate:
+  certificate revoked", or that the server requires a client certificate (from warp-sql's
+  client library, which reports these TLS alerts as Warp SQL §4.4's `certificate_revoked`
+  and `client_certificate_required`).
+
+- `hardcharger`: "OK, 1 rows affected" is "OK, 1 row affected".
+
+- The session option `arrow_lossless_conversion` reported `false` after SQL had turned it
+  on (`SET SESSION arrow_lossless_conversion = true`, or an administrator's plain `SET`);
+  it reports what the session's results use (from the Warp SQL SDK).
+
+- The answer to an ingest part or one-request upload sent again (same `Idempotency-Key`)
+  reaches the client on Linux and macOS: the server answers it from the first upload without
+  reading the body, and then reset the connection with the body unread, so the client saw a
+  broken pipe or a reset and sent it again (warp-sql-adbc's `TestIntegrationIngestPartAnswerLost`
+  counted a part sent three times). The connection now closes lingering, reading and dropping
+  what the client still sends (up to 2 s, 256 MiB), as it already did on Windows. No row was
+  ever written twice. From warp-sql `2dbcd84`; its conformance tests
+  `test_the_answer_to_a_part_sent_again_arrives` and `test_the_answer_to_an_upload_sent_again_arrives`.
 
 - A query that failed within about 5 s, after it had produced some rows, could be answered
   `200` with a `failed` statement document instead of its error (warp-sql: the SDK did so
@@ -209,8 +250,6 @@ own changelog in `python/CHANGELOG.md`.
   `graceful_shutdown` on and off, and all of them at once over TLS with a client
   certificate.
 
-### Fixed
-
 - Security: `CREATE VIEW` (and `CREATE OR REPLACE VIEW`, temporary views, views created
   `WITH (defer_binding = true)`) needed only CREATE VIEW on the schema, so a user could
   create a view over a table or columns it can't read; the view failed only when read, but
@@ -225,8 +264,8 @@ own changelog in `python/CHANGELOG.md`.
   user bob has no SELECT privilege on table c.main.secrets"), so it tells no more than that
   SELECT would. Views still read with their owner's rights, so one granted to others keeps
   working, and a later REVOKE still closes it. Administrators, and servers without access
-  control, are unchanged. This changes one expectation of GizmoSQL 1.x's RBAC branch
-  (`test_rbac_views.py`; see BATTERY.md and docs/migrating-from-gizmosql.md).
+  control, are unchanged. `test_rbac_views.py` expects the refusal (see BATTERY.md and
+  docs/migrating-from-gizmosql.md).
   `test_rbac_view_creation.py`, and a `catalog_access` case in `test_catalog_access_admin.py`.
 - A view created by a `catalog_access` principal (a token on a rules-only server, or an
   administrator's token with rules under access control) could not be read by anyone, its
@@ -239,8 +278,7 @@ own changelog in `python/CHANGELOG.md`.
 - Security: metadata follows authorization object by object (Warp SQL §9.4). Inside a
   catalog a user could see, the metadata calls and SQL's catalog listings showed every
   schema, table, view (with its definition) and column, whatever the user's privileges;
-  only other tenants' catalogs were hidden (GizmoSQL 1.x's RBAC branch filters by
-  catalog only too). Now the db-schemas, tables (and their `table_schema`), primary-keys,
+  only other tenants' catalogs were hidden. Now the db-schemas, tables (and their `table_schema`), primary-keys,
   imported-/exported-keys and cross-reference calls, and `duckdb_tables()`,
   `duckdb_views()`, `duckdb_columns()`, `duckdb_schemas()`, `duckdb_constraints()`,
   `duckdb_indexes()`, `information_schema`, `SHOW TABLES`, `SHOW ALL TABLES`,
@@ -344,7 +382,6 @@ own changelog in `python/CHANGELOG.md`.
 - The sensitive-path guard missed `file:/path` (one slash), which DuckDB opens as `/path`:
   `read_text('file:/etc/passwd')` read the file. Every file URL form DuckDB accepts is now
   checked as the path it opens.
-
 - warp-sql 3aefd27: a request that reached a session just as the idle sweep closed it no
   longer runs in the closed session (its streamed result was cut mid-body: a Windows
   conformance run's `incomplete chunked read`). The request now keeps the session or gets
@@ -372,6 +409,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Documentation
 
+- Access control is described as Hardcharger's own (GizmoSQL 1.x has none);
+  docs/migrating-from-gizmosql.md maps no 1.x option to `--rbac-*`, `--token-groups-claim`
+  or `--audit-chain-key`.
 - README: hardcharger-adbc is a native Go driver whose library every ADBC driver manager loads
   as `driver = "hardcharger"` with `hardcharger://` URIs.
 - README: the client examples use the Hardcharger drivers, `adbc-driver-hardcharger`
@@ -388,7 +428,7 @@ test battery, plus two security reviews of the result (see Fixed).
 
 ### Added
 
-- Role-based access control, lifted from GizmoSQL 1.x's RBAC: `CREATE USER/ROLE`,
+- Role-based access control: `CREATE USER/ROLE`,
   `GRANT`/`REVOKE` (roles, table, view, column, schema and catalog privileges, `WITH GRANT OPTION`, `WITH ADMIN OPTION`, cascading revokes),
   `SHOW GRANTS`, ownership (`ALTER ... OWNER TO`), views that read with their owner's
   rights, system privileges (`READ FILESYSTEM`, `MANAGE CATALOGS`, ...), row and masking
@@ -522,7 +562,7 @@ test battery, plus two security reviews of the result (see Fixed).
   flags (`--readonly`, `-D`, `--tls CERT KEY`, ...) or unprefixed environment names
   (`TLS_CERT`, `SECRET_KEY`, `INIT_SQL_COMMANDS`, ...), no `SET gizmosql.*`, no
   `GIZMOSQL_*()` or `gizmosql_*()` functions, no `_gizmosql_*` catalogs, no `gizmosql_*`
-  metrics, no `gizmosql_rbac` store schema, no `GIZMOSQL:COLUMN_DEFAULT` metadata key,
+  metrics, no `GIZMOSQL:COLUMN_DEFAULT` metadata key,
   and no server tokens with `iss=gizmosql`. Every option is its `--flag`, its
   `HARDCHARGER_*` variable or its YAML key; leftover GizmoSQL variables are not read. The
   1.x-only options `backend` and `reject_unknown_sessions` are gone. See
@@ -678,5 +718,6 @@ See 0.1.2.
 
 - The `readonly` role allows only SELECT and EXPLAIN until the authorization module
   brings DuckDB's own read-only analysis.
-- Not yet ported from GizmoSQL 1.x: RBAC, instrumentation, metrics, the statement queue,
-  KILL SESSION, OAuth sign-in, the admin and sensitive-path guards.
+- Not yet: access control (users, roles, grants). Not yet ported from GizmoSQL 1.x:
+  instrumentation, metrics, the statement queue, KILL SESSION, OAuth sign-in, the admin
+  and sensitive-path guards.

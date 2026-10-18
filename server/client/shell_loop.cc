@@ -185,7 +185,8 @@ bool ExecuteStatement(WarpConnection& conn, ClientConfig& config,
   if (query_result.update) {
     *config.output_stream << "OK";
     if (query_result.rows_affected && *query_result.rows_affected > 0) {
-      *config.output_stream << ", " << *query_result.rows_affected << " rows affected";
+      *config.output_stream << ", " << *query_result.rows_affected
+                            << (*query_result.rows_affected == 1 ? " row affected" : " rows affected");
     }
     *config.output_stream << std::endl;
   } else {

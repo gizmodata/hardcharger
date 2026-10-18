@@ -7,11 +7,27 @@
 #include <arrow/table.h>
 
 #include "oauth_flow.hpp"
+#include "output_renderer.hpp"
 #include "sql_quoting.hpp"
 
 namespace hardcharger::client {
 
 namespace wc = warpsql::client;
+
+namespace {
+
+// What a Warp SQL reason means, for a person: why the server refused a token it issued
+// (§4.2) or ended a session (§5.6).
+std::string DescribeReason(const std::string& reason) {
+  if (reason == "killed") return "an administrator ended it";
+  if (reason == "credentials_changed") return "the user's password or credentials changed";
+  if (reason == "principal_dropped") return "the user was dropped or disabled";
+  if (reason == "token_revoked") return "its access token was revoked";
+  if (reason == "token_expired") return "its access token expired";
+  return reason;
+}
+
+}  // namespace
 
 WarpConnection::WarpConnection(WarpConnection&& other) noexcept
     : client_(std::move(other.client_)),
@@ -22,6 +38,11 @@ WarpConnection::WarpConnection(WarpConnection&& other) noexcept
 arrow::Status WarpConnection::ToStatus(const wc::Error& error) const {
   if (error.IsCancelled() || cancel_requested_.load(std::memory_order_relaxed)) {
     return arrow::Status::Cancelled("Query cancelled");
+  }
+  // The server refused the sign-in's token and said why: its reason, not its wording.
+  if (error.code() == "invalid_token" && !error.reason().empty()) {
+    return arrow::Status::IOError("The server no longer accepts this sign-in: " + DescribeReason(error.reason()) +
+                                  " (" + error.reason() + "). Sign in again (.connect).");
   }
   return arrow::Status::IOError(error.what());
 }
@@ -46,6 +67,7 @@ std::string WarpConnection::session_id() const { return session_ ? session_->id(
 
 arrow::Status WarpConnection::Connect(const ClientConfig& config) {
   Disconnect();
+  RegisterArrowExtensionTypes();  // before any result is read
 
   if (!config.mtls_cert.empty() && config.mtls_key.empty()) {
     return arrow::Status::Invalid("mTLS private key must be provided with mTLS certificate");
@@ -72,6 +94,16 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
   const bool auth_attempted = config.auth_type_external || config.auth_type_mtls || !config.username.empty();
   // Turns the library's errors into what a person at the prompt can act on.
   auto friendly = [&](const wc::Error& e) -> arrow::Status {
+    // A TLS alert (or problem) refusing the client certificate (Warp SQL §4.4): the server
+    // is running, and said why.
+    if (e.code() == "certificate_revoked") {
+      return arrow::Status::IOError("The server at " + origin + " refused the client certificate: certificate revoked");
+    }
+    if (e.code() == "client_certificate_required") {
+      return arrow::Status::IOError("The server at " + origin +
+                                    " refused the connection: it requires a client certificate (--mtls-cert and "
+                                    "--mtls-key)");
+    }
     if (e.code() == "connection_failed") {
       const std::string what = e.what();
       if (what.find("could not resolve host") != std::string::npos) {
@@ -150,13 +182,15 @@ bool WarpConnection::Reopen(const wc::Error& error) {
       session_ = std::move(session);
     }
   } catch (const wc::Error& e) {
-    std::cerr << "Warning: the server " << (lost ? "no longer has this session" : "ended this session")
-              << " and a new one could not be opened: " << e.what() << std::endl;
+    std::cerr << "Warning: the server "
+              << (lost ? std::string("no longer has this session")
+                       : "ended this session: " + DescribeReason(error.reason()) + " (" + error.reason() + ")")
+              << ", and a new one could not be opened: " << ToStatus(e).message() << std::endl;
     return false;
   }
   std::cerr << "Warning: the server "
             << (lost ? std::string("no longer had this session (idle too long, or restarted)")
-                     : "ended this session" + (error.reason().empty() ? std::string() : " (" + error.reason() + ")"))
+                     : "ended this session: " + DescribeReason(error.reason()) + " (" + error.reason() + ")")
             << "; a new session is open. Temporary tables and session settings are gone." << std::endl;
   for (const auto& [name, value] : {std::pair{"session_tag", config_.session_tag},
                                     std::pair{"query_tag", config_.query_tag}}) {

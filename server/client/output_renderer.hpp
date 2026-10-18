@@ -44,4 +44,10 @@ int GetTerminalWidth();
 // Map Arrow type to DuckDB-friendly display name (e.g., "varchar", "bigint")
 std::string FriendlyTypeName(const std::shared_ptr<arrow::DataType>& type);
 
+// Registers Arrow's canonical arrow.opaque extension type (the Arrow build the client
+// links has no JSON support, so Arrow doesn't), so a result's DuckDB HUGEINT and UHUGEINT
+// in their lossless form (arrow_lossless_conversion) can be printed as exact integers.
+// Idempotent; WarpConnection::Connect calls it.
+void RegisterArrowExtensionTypes();
+
 }  // namespace hardcharger::client

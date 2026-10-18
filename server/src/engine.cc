@@ -78,7 +78,7 @@ int64_t NowMicros() {
 }
 
 Error KilledError() {
-  return Error::SessionEnded(warpsql::session_ended_reason::kKilled,
+  return Error::SessionEnded(warpsql::reason::kKilled,
                              "This session has been killed by an administrator (reason: killed). Sign in again "
                              "and open a new session to re-authenticate.");
 }

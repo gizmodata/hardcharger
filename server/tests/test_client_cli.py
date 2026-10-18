@@ -201,7 +201,7 @@ def test_doc_multiple_statements(server):
                                       "INSERT INTO doc_test VALUES (42); SELECT * FROM doc_test;")
     assert result.returncode == 0, result.stderr
     output = strip_ansi(result.stdout)
-    assert output.startswith("OK\nOK, 1 rows affected\n"), output
+    assert output.startswith("OK\nOK, 1 row affected\n"), output
     assert "42" in output
     assert run(server, "--command", "DROP TABLE IF EXISTS doc_test").returncode == 0
 
@@ -388,9 +388,74 @@ def test_a_killed_session_is_reported_and_reopened(server, tmp_path):
     result = run(server, "--csv", "--no-header", "--command", script)
     stderr = strip_ansi(result.stderr)
     assert result.stdout == "before\nreopened\n", (result.stdout, stderr)
-    assert "Warning: the server ended this session (killed); a new session is open." in stderr, stderr
+    assert ("Warning: the server ended this session: an administrator ended it (killed); a new session is open."
+            in stderr), stderr
     assert "Error: This session has been killed by an administrator" in stderr, stderr
     assert result.returncode == 1  # the statement the kill caught failed
+
+
+def test_a_password_change_is_reported_with_its_reason(launcher, store, tmp_path):
+    # Another session changes this user's password mid-script: the server refuses the
+    # session's token and says why (Warp SQL §4.2's reason), and the client says that, not
+    # the server's wording.
+    from rbac import start_rbac_server
+    rbac = start_rbac_server(launcher=launcher, store_uri=store.new_database())
+    admin = rbac.admin()
+    admin.run(sql="CREATE USER pat WITH PASSWORD 'pw-1'")
+    changer = tmp_path / "change.py"
+    changer.write_text(
+        "import os, subprocess, sys, time\n"
+        f"client = [{binary()!r}, '--host', 'localhost', '--port', '{rbac.running.port}', '--username', 'admin']\n"
+        f"env = {{**os.environ, 'HARDCHARGER_PASSWORD': {rbac.running.password!r}}}\n"
+        "subprocess.run(client + ['-c', \"ALTER USER pat WITH PASSWORD 'pw-2'\"], env=env, check=True,\n"
+        "               capture_output=True)\n"
+        f"time.sleep({2 * TIMEOUT_SCALE})  # access control sees the change within about a second\n")
+    script = f"SELECT 'before';\n.shell {sys.executable} -I {changer}\nSELECT 'after';"
+    result = subprocess.run(args=[binary(), "--host", "localhost", "--port", str(rbac.running.port), "--username", "pat",
+                                  "--csv", "--no-header", "--command", script],
+                            env=client_env(HARDCHARGER_PASSWORD="pw-1"), capture_output=True, text=True, timeout=120)
+    stderr = strip_ansi(result.stderr)
+    assert result.stdout == "before\n", (result.stdout, stderr)
+    assert stderr == ("Error: The server no longer accepts this sign-in: the user's password or credentials changed "
+                      "(credentials_changed). Sign in again (.connect).\n"), stderr
+    assert result.returncode == 1
+    # The twin: with the new password the user signs in and runs it.
+    again = subprocess.run(args=[binary(), "--host", "localhost", "--port", str(rbac.running.port), "--username", "pat",
+                                 "--csv", "--no-header", "--command", "SELECT 'after'"],
+                           env=client_env(HARDCHARGER_PASSWORD="pw-2"), capture_output=True, text=True, timeout=120)
+    assert again.returncode == 0 and again.stdout == "after\n", again.stderr
+
+
+def test_rows_affected_counts_one_row_and_many(server):
+    result = run(server, "--command", "CREATE TEMPORARY TABLE counted (x INTEGER); INSERT INTO counted VALUES (1); "
+                                      "INSERT INTO counted VALUES (2), (3), (4); UPDATE counted SET x = 0 WHERE x > 9;")
+    assert result.returncode == 0, result.stderr
+    assert strip_ansi(result.stdout) == "OK\nOK, 1 row affected\nOK, 3 rows affected\nOK\n", result.stdout
+
+
+def test_lossless_wide_integers_print_as_exact_integers(server):
+    # With arrow_lossless_conversion DuckDB sends HUGEINT and UHUGEINT as Arrow's opaque
+    # 16-byte type; the client prints them as the integers they are, extremes included.
+    values = ["170141183460469231731687303715884105727", "-170141183460469231731687303715884105728",
+              "340282366920938463463374607431768211455", "0", "-1"]
+    select = ("SELECT CAST('{}' AS HUGEINT) AS hmax, CAST('{}' AS HUGEINT) AS hmin, CAST('{}' AS UHUGEINT) AS umax, "
+              "CAST('{}' AS UHUGEINT) AS z, CAST('{}' AS HUGEINT) AS m1, NULL::HUGEINT AS n").format(*values)
+    lossless = "SET SESSION arrow_lossless_conversion = true; "
+    csv = run(server, "--csv", "--no-header", "--command", lossless + select)
+    assert csv.returncode == 0, csv.stderr
+    assert csv.stdout == "OK\n" + ",".join(values) + ",NULL\n", csv.stdout
+    as_json = run(server, "--json", "--command", lossless + select)
+    assert as_json.returncode == 0, as_json.stderr
+    assert ('"hmax": 170141183460469231731687303715884105727, "hmin": -170141183460469231731687303715884105728, '
+            '"umax": 340282366920938463463374607431768211455, "z": 0, "m1": -1, "n": null') in as_json.stdout, as_json.stdout
+    box = run(server, "--box", "--command", lossless + select)
+    assert box.returncode == 0, box.stderr
+    type_row = strip_ansi(box.stdout).splitlines()[3]
+    assert [cell.strip() for cell in type_row.strip("│").split("│")] == [
+        "hugeint", "hugeint", "uhugeint", "uhugeint", "hugeint", "hugeint"], box.stdout
+    # The twin: without the option the same values that fit decimal128(38, 0) print the same.
+    plain = run(server, "--csv", "--no-header", "--command", "SELECT CAST('-1' AS HUGEINT), CAST('0' AS UHUGEINT)")
+    assert plain.returncode == 0 and plain.stdout == "-1,0\n", plain.stdout
 
 
 # ---- Added: comments, color, .help and sign-in errors ----

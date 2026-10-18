@@ -166,9 +166,9 @@ def test_disabled_and_dropped_users_lose_everything(world):
     # The live session ends, and the token and the password stop working.
     with pytest.raises(WarpError) as ended:
         joe.run(sql="SELECT 1")
-    assert ended.value.code in ("invalid_token", "session_ended"), str(ended.value)
-    if ended.value.code == "session_ended":
-        assert ended.value.reason == "principal_dropped", ended.value  # Warp SQL §5.6
+    # The session's own token is refused first, saying why (Warp SQL §4.2).
+    assert ended.value.code == "invalid_token" and ended.value.reason == "principal_dropped", ended.value
+    assert ended.value.detail == "Hardcharger access control: user joe is disabled", ended.value
     with pytest.raises(WarpError) as refused:
         world.server.password_token(user="joe", password="pw")
     assert refused.value.code == "invalid_credentials"

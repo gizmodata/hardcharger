@@ -119,7 +119,9 @@ def test_a_child_token_is_narrower_and_dies_with_its_parent(server, wes):
         assert error(client=client, sql="SELECT 1") != "", "a revoked token still works"
     with pytest.raises(WarpError) as raised:
         agent(server=server, token=child_token)
-    assert raised.value.code == "invalid_token" and "revoked or has expired" in raised.value.detail
+    # Warp SQL §4.2: the refusal says why (its parent was revoked).
+    assert raised.value.code == "invalid_token" and raised.value.reason == "token_revoked", raised.value
+    assert raised.value.detail == "this scoped token was revoked", raised.value
 
 
 def test_expiry_and_bookkeeping(server, admin, wes):

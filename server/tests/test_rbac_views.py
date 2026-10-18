@@ -132,9 +132,8 @@ def test_a_direct_reference_beside_a_view_is_checked_against_the_caller(ann):
 def test_a_view_cannot_reach_what_its_owner_cannot(admin, ann, bob):
     # bob may create views in main and read two columns of raw_orders.
     expect_allowed(client=bob, sql="CREATE VIEW main.bob_ok AS SELECT id, amount FROM raw_orders")
-    # Changed from GizmoSQL 1.x's RBAC branch, which creates these two and refuses them only
-    # when read: Hardcharger refuses a view over what its creator can't SELECT when it is
-    # created, because the creator (its owner) could otherwise list its columns, and so the
+    # A view over what its creator can't SELECT is refused when it is created, not only
+    # when read: the creator (its owner) could otherwise list its columns, and so the
     # column names of a table it can't read (test_rbac_view_creation.py).
     expect_blocked(client=bob, sql="CREATE VIEW main.bob_ssn AS SELECT id, ssn FROM raw_orders",
                    why="may create a view only over what it can SELECT itself")

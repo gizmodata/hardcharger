@@ -18,7 +18,7 @@ rows = [
  ("integration/test_session_idle.cpp", 5, 5, 0, 0, 0, "test_session_idle.py", "against servers, not a unit"),
  ("integration/test_max_sessions.cpp", 4, 4, 0, 0, 0, "test_max_sessions.py", ""),
  ("integration/test_reject_unknown_sessions.cpp", 6, 4, 0, 2, 0, "test_reject_unknown_sessions.py", "N/A: the two implicit-recreation cases (Warp never recreates); no option, it is always so"),
- ("integration/test_kill_session.cpp", 4, 4, 0, 0, 0, "test_kill_session.py", "a real non-admin case; +2 cases"),
+ ("integration/test_kill_session.cpp", 4, 4, 0, 0, 0, "test_kill_session.py", "a real non-admin case; +4 cases (session_ended's reason on every request, GET of the session included)"),
  ("integration/test_graceful_shutdown.cpp", 5, 5, 0, 0, 0, "test_graceful_shutdown.py", "real SIGTERM every case; +1"),
  ("integration/test_health_check.cpp", 8, 8, 0, 0, 0, "test_health_check.py", ""),
  ("integration/test_server_cli.cpp", 2, 2, 0, 0, 0, "test_server_cli.py", ""),
@@ -96,17 +96,18 @@ rbac = [
  ("test_rbac_concurrency.py", 1),
  ("test_rbac_ddl.py", 53),
  ("test_rbac_delegation.py", 14),
- ("test_rbac_enforcement.py", 30),
+ ("test_rbac_enforcement.py", 31),
  ("test_rbac_engine.py", 15),
  ("test_rbac_group_mapping.py", 7),
  ("test_rbac_opa.py", 8),
  ("test_rbac_policies.py", 39),
  ("test_rbac_scoped_tokens.py", 7),
- ("test_rbac_server.py", 15),
+ ("test_rbac_server.py", 14),
  ("test_rbac_set_role.py", 7),
- ("test_rbac_store.py", 6),
+ ("test_rbac_store.py", 7),
  ("test_rbac_system_privileges.py", 13),
- ("test_rbac_tenants.py", 27),
+ ("test_rbac_tenants.py", 28),
+ ("test_rbac_view_creation.py", 23),
  ("test_rbac_views.py", 14),
 ]
 
@@ -151,11 +152,21 @@ updated. Nothing is skipped; a missing dependency fails its test.
     hardcharger-server): {client}, of which {client_pass} pass.
 - **Scripts and driver suites ({len(scripts)} files, {s[0]} cases or checks):** {s[1]} passing, {s[2]} failing, {s[3]} not applicable, {s[4]} not yet.
 - Hardcharger's own tests (`test_server.py`, `test_no_license.py`, the security and
-  redaction suites) and the Warp SQL conformance suite pass too.
-- **Access control** (the RBAC port, `test_rbac_*.py`, {len(rbac)} files, {sum(n for _, n in rbac)} tests): all pass,
-  on the same build, including `test_rbac_battery.py`, which checks the battery's
-  features under access control (the server's own catalogs, SQL functions, settings,
-  KILL SESSION, system privileges, credentials kept out of logs and instrumentation).
+  redaction suites, `test_metadata_privileges.py`, `test_wide_integers.py`,
+  `test_token_refusal_reasons.py`) and the Warp SQL conformance suite pass too.
+- **Access control** (Hardcharger's own; GizmoSQL 1.x has none: `test_rbac_*.py`, {len(rbac)}
+  files, {sum(n for _, n in rbac)} tests): all pass, on the same build, including `test_rbac_battery.py`,
+  which checks the battery's features under access control (the server's own catalogs, SQL
+  functions, settings, KILL SESSION, system privileges, credentials kept out of logs and
+  instrumentation).
+  - **Creating a view needs SELECT on what it reads:** `test_rbac_views.py`
+    (`test_a_view_cannot_reach_what_its_owner_cannot`) refuses at `CREATE VIEW` a view
+    over a column or a table its creator can't read (a view's query is checked as its
+    creator's own SELECT of it), because metadata follows privileges and the creator,
+    owning the view, could otherwise list its columns, and so the column names of a table
+    it can't read. It keeps the read-time check through a REVOKE after the view was
+    created; `test_rbac_enforcement.py` covers a temporary view over a protected table the
+    same way, and `test_rbac_view_creation.py` (23 tests) covers the rule.
 - **Security regression suites** (from two security reviews, all pass):
   `test_rules_security.py` — rules-only access control and plain-server non-admin token
   principals hold no system privilege: no file/URL reads (also through `query()`,

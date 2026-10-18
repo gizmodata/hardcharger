@@ -15,21 +15,21 @@ updated. Nothing is skipped; a missing dependency fails its test.
     hardcharger-server): 142, of which 142 pass.
 - **Scripts and driver suites (12 files, 131 cases or checks):** 81 passing, 0 failing, 22 not applicable, 28 not yet.
 - Hardcharger's own tests (`test_server.py`, `test_no_license.py`, the security and
-  redaction suites, `test_metadata_privileges.py`, `test_wide_integers.py`) and the Warp
-  SQL conformance suite pass too.
-- **Access control** (the RBAC port, `test_rbac_*.py`, 19 files, 296 tests): all pass,
-  on the same build, including `test_rbac_battery.py`, which checks the battery's
-  features under access control (the server's own catalogs, SQL functions, settings,
-  KILL SESSION, system privileges, credentials kept out of logs and instrumentation).
-  - **One expectation changed on purpose:** the RBAC branch's `test_rbac_views.py`
-    (`test_a_view_cannot_reach_what_its_owner_cannot`) creates views over a column and a
-    table their creator can't read and expects them to fail only when read. Hardcharger
-    refuses them at `CREATE VIEW` (a view's query is checked as its creator's own SELECT
-    of it), because metadata follows privileges here and the creator, owning the view,
-    could otherwise list its columns, and so the column names of a table it can't read.
-    The case now expects the refusal, and keeps the read-time check through a REVOKE after
-    the view was created; `test_rbac_enforcement.py`'s temporary view over a protected
-    table changed the same way. `test_rbac_view_creation.py` (23 tests) covers the rule.
+  redaction suites, `test_metadata_privileges.py`, `test_wide_integers.py`,
+  `test_token_refusal_reasons.py`) and the Warp SQL conformance suite pass too.
+- **Access control** (Hardcharger's own; GizmoSQL 1.x has none: `test_rbac_*.py`, 19
+  files, 296 tests): all pass, on the same build, including `test_rbac_battery.py`,
+  which checks the battery's features under access control (the server's own catalogs, SQL
+  functions, settings, KILL SESSION, system privileges, credentials kept out of logs and
+  instrumentation).
+  - **Creating a view needs SELECT on what it reads:** `test_rbac_views.py`
+    (`test_a_view_cannot_reach_what_its_owner_cannot`) refuses at `CREATE VIEW` a view
+    over a column or a table its creator can't read (a view's query is checked as its
+    creator's own SELECT of it), because metadata follows privileges and the creator,
+    owning the view, could otherwise list its columns, and so the column names of a table
+    it can't read. It keeps the read-time check through a REVOKE after the view was
+    created; `test_rbac_enforcement.py` covers a temporary view over a protected table the
+    same way, and `test_rbac_view_creation.py` (23 tests) covers the rule.
 - **Security regression suites** (from two security reviews, all pass):
   `test_rules_security.py` — rules-only access control and plain-server non-admin token
   principals hold no system privilege: no file/URL reads (also through `query()`,

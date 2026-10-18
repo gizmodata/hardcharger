@@ -6,8 +6,8 @@ they are, so before this a UHUGEINT of 2^127 or more arrived as a negative numbe
 (UHUGEINT's maximum as -1) and any value of 10^38 or more as a decimal128(38, 0) that isn't
 one. Now (server/scripts/patch-duckdb-arrow-hugeint.cmake) such a value fails the
 statement with a conversion error naming the value and the two ways around it: CAST to
-VARCHAR, or arrow_lossless_conversion (DuckDB's 16-byte Arrow types, which hold every
-value). Every value that fits is sent exactly as before.
+VARCHAR, or SET SESSION arrow_lossless_conversion = true (DuckDB's 16-byte Arrow types,
+which hold every value; a plain SET of it is global). Every value that fits is sent exactly as before.
 
 Bind parameters: a JSON integer outside the 64-bit range used to be read as a double and
 bound rounded (10^38 - 1 became 1e38); it now binds exactly, as HUGEINT or UHUGEINT (as
@@ -37,7 +37,8 @@ def lit(value: int, type_name: str) -> str:
 
 def refusal(type_name: str, value: int) -> str:
     return (f"Hardcharger cannot send the {type_name} value {value} as Arrow decimal128(38, 0), which holds at most "
-            f"38 digits. CAST it to VARCHAR, or set the session option arrow_lossless_conversion to true")
+            f"38 digits. CAST it to VARCHAR, or run SET SESSION arrow_lossless_conversion = true (DuckDB's 16-byte "
+            f"{type_name} Arrow type, which holds every value)")
 
 
 @pytest.fixture(scope="module")
@@ -207,3 +208,52 @@ def test_arrow_lossless_conversion_is_one_sessions_own(server):
     # Switching it back is the session's own too.
     assert user.set_options(options={"arrow_lossless_conversion": False}).status_code == 200
     assert user.query(sql="SELECT 1::HUGEINT AS x").schema.field("x").type == pa.decimal128(38, 0)
+
+
+def lossless_in(session) -> bool:
+    """Whether `session`'s results carry DuckDB's lossless HUGEINT (else decimal128(38, 0))."""
+    field_type = session.query(sql="SELECT 1::HUGEINT AS x").schema.field("x").type
+    assert field_type in (pa.decimal128(38, 0),) or field_type.extension_name == "arrow.opaque", field_type
+    return field_type != pa.decimal128(38, 0)
+
+
+def reported(session) -> bool:
+    """The session document's arrow_lossless_conversion, read again (an empty PATCH)."""
+    response = session.set_options(options={})
+    assert response.status_code == 200, response.text
+    return response.json()["options"]["arrow_lossless_conversion"]
+
+
+def test_set_session_is_the_sessions_own_and_a_plain_set_is_global(launcher):
+    """What the refusal's advice and the settings reference say: SET SESSION changes one
+    session; a plain SET of arrow_lossless_conversion is DuckDB's SET GLOBAL (the option's
+    default scope), which only an administrator may run, and it reaches every session that
+    has no value of its own. The session option reports the value the session's results
+    use, also after SQL changed it."""
+    server = launcher.start()
+    one, other = server.admin(), server.admin()
+    user = server.as_role(role="user", subject="plain-set-user")
+    # SET SESSION in SQL: this session only, and its option says so.
+    one.execute(sql="SET SESSION arrow_lossless_conversion = true")
+    assert lossless_in(session=one) and one.options()["arrow_lossless_conversion"] is True
+    for session in (other, user):
+        assert not lossless_in(session=session) and session.options()["arrow_lossless_conversion"] is False
+    # A non-administrator's plain SET is a global one, and refused.
+    refused = user.error(sql="SET arrow_lossless_conversion = true")
+    assert refused["detail"].startswith("Permission Error: Hardcharger blocked this statement: SET GLOBAL needs the "
+                                        "MANAGE CONFIG privilege, which user plain-set-user does not hold"), refused
+    assert not lossless_in(session=other)
+    # An administrator's plain SET changes the instance's default: every session without a
+    # value of its own (one open before, one opened after).
+    other.execute(sql="SET arrow_lossless_conversion = true")
+    later = server.admin()
+    for session in (user, later, other):
+        assert lossless_in(session=session) and reported(session=session) is True
+    # A session's own value still wins over the default.
+    assert user.set_options(options={"arrow_lossless_conversion": False}).status_code == 200
+    assert not lossless_in(session=user) and user.options()["arrow_lossless_conversion"] is False
+    one.execute(sql="SET SESSION arrow_lossless_conversion = false")
+    assert not lossless_in(session=one) and one.options()["arrow_lossless_conversion"] is False
+    # RESET GLOBAL brings back the default (false) for those without their own.
+    other.execute(sql="RESET GLOBAL arrow_lossless_conversion")
+    assert not lossless_in(session=later) and reported(session=later) is False

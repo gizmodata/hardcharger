@@ -142,14 +142,22 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
     if (issuer != kIssuer) {
       throw invalid("a valid access token is required");
     }
+    std::error_code failed;
     jwt::verify<Traits>()
         .allow_algorithm(jwt::algorithm::hs256{secret_key_})
         .with_issuer(issuer)
-        .verify(decoded);
+        .verify(decoded, failed);
+    // jwt-cpp checks the signature before any claim, so an expired token is one this
+    // server signed and nobody altered: its holder may know why it no longer works
+    // (Warp SQL §4.2's reason).
+    if (failed == jwt::error::token_verification_error::token_expired) {
+      throw Error::InvalidToken(warpsql::reason::kTokenExpired, "the access token has expired; sign in again");
+    }
+    if (failed) throw invalid("a valid access token is required");
   } catch (const Error&) {
     throw;
   } catch (const std::exception&) {
-    // Forged, tampered, expired or signed with another key: one answer for all.
+    // Forged, tampered or signed with another key: one answer for all, with no reason.
     throw invalid("a valid access token is required");
   }
 

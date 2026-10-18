@@ -87,7 +87,7 @@ class WarpError(Exception):
     code: str
     detail: str
     sqlstate: str | None = None
-    reason: str | None = None  # session_ended's (Warp SQL §5.6)
+    reason: str | None = None  # session_ended's (Warp SQL §5.6), or invalid_token's (§4.2)
 
     def __str__(self) -> str:
         return f"{self.status} {self.code}: {self.detail}"
