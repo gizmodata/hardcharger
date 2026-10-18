@@ -149,6 +149,7 @@ jobs:
       # On Linux, in the manylinux image (server/scripts/build-portable-linux.sh, which
       # also checks the glibc baseline); the tests then run the binaries on the runner.
       - name: Build the server
+        id: build
         run: |
           # (warpsql-client-tests and warpsql-sdk-tests, Warp SQL's own tests, build on request.)
           if [ "$RUNNER_OS" = Linux ]; then
@@ -243,7 +244,7 @@ jobs:
       # each server. The only acceptable answers are the error response or an incomplete
       # stream, with the statement's own error.
       - name: Failed-statement answers, 200 times
-        if: ${{ !cancelled() && inputs.failure_repro == true }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && inputs.failure_repro == true }}
         working-directory: third_party/warp-sql/conformance
         env:
           HARDCHARGER_ADMIN_USERNAME: warp
