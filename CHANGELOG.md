@@ -171,9 +171,11 @@ own changelog in `python/CHANGELOG.md`.
   refused before it runs. Each change is checkpointed into the file at once: DuckDB skips a
   WAL it can't read, and every change in it (a REVOKE would come undone), so nothing is
   left to depend on the WAL. An extension with file I/O of its own (`sqlite_scanner`) goes
-  past the file-system guard: for it only a path written in the statement is refused (a
-  computed one finds no SQLite database there). Every access-control test file runs on both
-  stores in CI.
+  past the file-system guard: for the store only a path written in the statement is refused (a
+  computed one finds no SQLite database there), and the database, instrumentation and log
+  files, which keep DuckDB's usual checkpoints, can lose their changes since the last one after
+  a crash if the administrator writes a SQLite database where their WAL goes (README, Access
+  control). Every access-control test file runs on both stores in CI.
   Tests: `test_rbac_duckdb_store.py` (124 on macOS, 134 on Windows with its 8.3 names,
   114 on Linux, which has no case-insensitive spelling to try).
 

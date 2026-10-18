@@ -387,10 +387,14 @@ stores: moving to PostgreSQL later means creating the users, roles and grants th
 
 One limit: the guard sits in DuckDB's file system, and an extension with file I/O of its own
 (`sqlite_scanner`, which only an administrator or a user granted `MANAGE EXTENSIONS` can
-load) goes past it. For such an extension only a path written out in
-the statement is refused; a computed one reaches the file, where SQLite finds no database it
-can read (`file is not a database`), and a file it creates beside the store, as the WAL, costs
-no change, as every change is already in the store file.
+load) goes past it. For the store, a path written out in the statement is refused, and a
+computed one reaches a file where SQLite finds no database it can read (`file is not a
+database`): it fails closed, and a file it creates where the store's WAL goes undoes nothing,
+as every change is already in the store file. The database, instrumentation and log files
+keep DuckDB's usual checkpoints, so a SQLite database written where one of their WALs goes
+(which takes the administrator, or a role that may create tables in the catalog it attaches)
+loses that file's changes since its last checkpoint if the server then stops without one.
+Keep `MANAGE EXTENSIONS` for roles you would trust with the server's files.
 
 ## 🔏 Client certificates as identity
 
