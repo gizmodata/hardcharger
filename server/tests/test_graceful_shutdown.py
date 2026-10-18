@@ -242,12 +242,10 @@ class InFlight:
         """A prepared statement executing, and another one prepared and left open."""
         session = self.server.admin()
         session.prepare(sql="SELECT ? AS left_open")
-        # The row count is the parameter: preparing describes a query by running it with
-        # NULL parameters, and range(NULL) is empty, so only the execution is long.
-        # (Described with LONG itself, the prepare now and then ran the whole query.)
-        running = session.prepare(sql="SELECT count(*) FROM range(?) a, range(100000) b")
-        self._start(target=lambda: session.execute_prepared(prepared_id=running["prepared_id"],
-                                                            parameters=[10_000_000_000]))
+        # Preparing LONG runs nothing (warp-sql's prepare describes it by binding), so
+        # only the execution is long.
+        running = session.prepare(sql=LONG)
+        self._start(target=lambda: session.execute_prepared(prepared_id=running["prepared_id"]))
         wait_running(session=self.server.admin())
 
     def join(self) -> None:

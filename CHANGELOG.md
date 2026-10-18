@@ -199,6 +199,8 @@ own changelog in `python/CHANGELOG.md`.
   so store users' prepares still describe their results. Tests:
   `test_a_prepare_describes_its_result_without_running_it` (enforcement) and
   `test_a_masked_columns_described_type_is_the_one_sent` (policies).
+  `test_graceful_shutdown.py`'s in-flight prepared statement prepares the long query itself
+  again (it passed the row count as a parameter so that the prepare stayed short).
 - A prepared `INSERT`/`UPDATE`/`DELETE`/`MERGE` with `RETURNING` describes its rows'
   schema too (warp-sql 088d03e: bound and converted, the write never executed); it
   answered rows with no schema.
