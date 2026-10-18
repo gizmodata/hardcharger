@@ -212,10 +212,30 @@ follows (Warp SQL §9.4):
 | catalogs | as before: tenants' and `catalog_access` rules' catalogs |
 
 A `catalog_access` principal reads whole catalogs, so it sees everything in the catalogs
-its rules let it read, as in 1.x. Two things still name what a user can't read, without
+its rules let it read, as in 1.x. One thing still names what a user can't read, without
 any data: `duckdb_tables().sql` and `column_count` describe every column of a table the
-user may read some columns of, and a user allowed to CREATE VIEW can create a view over
-a table it can't read (the view fails when read) and list that view's columns.
+user may read some columns of.
+
+### Creating a view needs SELECT on what it reads
+
+In GizmoSQL 1.x's RBAC, `CREATE VIEW` needs only CREATE VIEW on the schema: a user can
+create a view over a table it can't read, and the view fails only when someone reads it.
+Since metadata follows privileges, that view's owner could list its columns, and so the
+column names of a table it holds nothing on. Hardcharger checks a view's query when the
+view is created, as the creator's own `SELECT` of that query would be checked: SELECT on
+every table and view it reads and on each column it reads of them (in the select list,
+`WHERE`, `ORDER BY`, joins, window functions; `count(*)` needs SELECT on any column, as in
+Postgres), through CTEs, subqueries, set operations and table macros, views it reads
+with their owners' rights, under the session's SET ROLE and scoped token, and for a
+`catalog_access` principal the catalogs its rules let it read (also through the views it
+reads). This covers `CREATE OR REPLACE VIEW`, temporary views and views created
+`WITH (defer_binding = true)` (bound and checked anyway, so one over a table that doesn't
+exist yet fails as its SELECT does). The refusal gives the reason that SELECT would:
+"user bob may create a view only over what it can SELECT itself, and the query of view
+c.main.v reads more: user bob has no SELECT privilege on table c.main.secrets". A view's
+owner still reads it with the owner's rights at query time, so a REVOKE after the view was
+created still closes it. Administrators, and servers without access control, are
+unchanged. (DuckDB has no `ALTER VIEW` that changes a view's query.)
 
 ### HUGEINT and UHUGEINT results
 

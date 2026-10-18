@@ -132,10 +132,20 @@ def test_a_direct_reference_beside_a_view_is_checked_against_the_caller(ann):
 def test_a_view_cannot_reach_what_its_owner_cannot(admin, ann, bob):
     # bob may create views in main and read two columns of raw_orders.
     expect_allowed(client=bob, sql="CREATE VIEW main.bob_ok AS SELECT id, amount FROM raw_orders")
-    expect_allowed(client=bob, sql="CREATE VIEW main.bob_ssn AS SELECT id, ssn FROM raw_orders")
-    expect_allowed(client=bob, sql="CREATE VIEW main.bob_secret AS SELECT * FROM secrets")
+    # Changed from GizmoSQL 1.x's RBAC branch, which creates these two and refuses them only
+    # when read: Hardcharger refuses a view over what its creator can't SELECT when it is
+    # created, because the creator (its owner) could otherwise list its columns, and so the
+    # column names of a table it can't read (test_rbac_view_creation.py).
+    expect_blocked(client=bob, sql="CREATE VIEW main.bob_ssn AS SELECT id, ssn FROM raw_orders",
+                   why="may create a view only over what it can SELECT itself")
+    expect_blocked(client=bob, sql="CREATE VIEW main.bob_secret AS SELECT * FROM secrets",
+                   why="may create a view only over what it can SELECT itself")
     assert expect_allowed(client=bob, sql="SELECT * FROM main.bob_ok").num_rows == 3  # he owns it
-    expect_blocked(client=bob, sql="SELECT * FROM main.bob_ssn", why=OWNER_LACKS)
+    # What the owner could read when it created the view, and can't any more: the view
+    # fails when read, without naming what it reads.
+    expect_allowed(client=admin, sql="GRANT SELECT ON secrets TO builder")
+    expect_allowed(client=bob, sql="CREATE VIEW main.bob_secret AS SELECT * FROM secrets")
+    expect_allowed(client=admin, sql="REVOKE SELECT ON secrets FROM builder")
     error = expect_blocked(client=bob, sql="SELECT * FROM main.bob_secret", why=OWNER_LACKS)
     assert "secrets" not in error.detail, f"the refusal named what the view reads: {error.detail}"
     # Granting the view does not lend the reader more than the owner has.

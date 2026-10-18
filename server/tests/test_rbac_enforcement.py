@@ -130,9 +130,10 @@ def test_wrapping_a_statement_does_not_hide_it(joe):
     error = expect_error(call=lambda: joe.prepare(sql="SELECT * FROM secrets WHERE id = ?"),
                          code="permission_denied", why=SECRET)
     assert error.sqlstate == "42501"
-    # Session-local wrappers inline the protected table: still checked.
-    expect_allowed(client=joe, sql="CREATE TEMP VIEW tv AS SELECT * FROM secrets")
-    expect_blocked(client=joe, sql="SELECT * FROM tv", why=SECRET)
+    # A session-local wrapper doesn't hide the protected table: a temporary view's query is
+    # checked as joe's own SELECT when he creates it (test_rbac_view_creation.py).
+    expect_blocked(client=joe, sql="CREATE TEMP VIEW tv AS SELECT * FROM secrets", why=SECRET)
+    expect_blocked(client=joe, sql="SELECT * FROM tv", code="sql_error", why="Table with name tv does not exist")
     # A session's macro would be found before the catalog's functions, inside a view
     # too, so users may not create even temporary ones.
     expect_blocked(client=joe, sql="CREATE TEMP MACRO tm() AS TABLE SELECT * FROM secrets",

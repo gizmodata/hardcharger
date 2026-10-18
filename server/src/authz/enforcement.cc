@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <chrono>
 #include <duckdb/catalog/catalog.hpp>
+#include <duckdb/catalog/catalog_entry_retriever.hpp>
+#include <duckdb/catalog/catalog_search_path.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/execution/expression_executor.hpp>
@@ -21,6 +23,7 @@
 #include <duckdb/parser/parsed_data/drop_info.hpp>
 #include <duckdb/parser/qualified_name.hpp>
 #include <duckdb/parser/statement/select_statement.hpp>
+#include <duckdb/planner/binder.hpp>
 #include <duckdb/planner/expression/bound_function_expression.hpp>
 #include <duckdb/planner/expression_iterator.hpp>
 #include <duckdb/planner/logical_operator_visitor.hpp>
@@ -309,9 +312,10 @@ class PlanChecker {
       case OpType::LOGICAL_CREATE_VIEW: {
         auto& create = op.Cast<dd::LogicalCreate>();
         const size_t before = ownership_.size();
-        CheckCreate(*create.info, ObjectType::kView, Privilege::kCreateView);
+        if (!CheckCreate(*create.info, ObjectType::kView, Privilege::kCreateView)) return;
         if (ownership_.size() > before)
           ownership_.back().definition_hash = DefinitionHashOf(*create.info);
+        CheckViewQuery(create);
         return;
       }
       case OpType::LOGICAL_CREATE_SCHEMA: {
@@ -684,7 +688,19 @@ class PlanChecker {
   }
 
   [[noreturn]] void DenyByCatalogAccess(const std::string& catalog, CatalogAccessLevel needed) {
-    throw dd::PermissionException(CatalogAccessDenied(catalog, needed, principal_.user_name));
+    std::string message = CatalogAccessDenied(catalog, needed, principal_.user_name);
+    if (!creating_view_.empty()) message += ", which the query of view " + creating_view_ + " reads";
+    throw dd::PermissionException(message);
+  }
+
+  // Every refusal goes through here (it hides the namespace's Deny inside the class), so
+  // a refusal of a CREATE VIEW's query says that it is the view's query that reads it.
+  [[noreturn]] void Deny(const Principal& who, const std::string& what) {
+    if (creating_view_.empty()) ::hardcharger::authz::Deny(who, what);
+    ::hardcharger::authz::Deny(who, "user " + who.user_name +
+                                        " may create a view only over what it can SELECT itself, "
+                                        "and the query of view " +
+                                        creating_view_ + " reads more: " + what);
   }
 
   void RequireObject(const ObjectPath& path, ObjectType type, Privilege privilege,
@@ -856,11 +872,13 @@ class PlanChecker {
   // CREATE needs the privilege on the container; CREATE OR REPLACE of an
   // existing object also needs the right to drop it; IF NOT EXISTS on an
   // existing object changes nothing and never takes its ownership.
-  void CheckCreate(dd::CreateInfo& info, ObjectType type, Privilege privilege) {
+  //
+  // Returns false when the statement creates nothing (IF NOT EXISTS of an existing object).
+  bool CheckCreate(dd::CreateInfo& info, ObjectType type, Privilege privilege) {
     auto parts = PartsOf(info);
     if (info.temporary || (!parts.empty() && IsTempCatalog(parts[0]))) {
       if (principal_.catalog_rules) RequireRuleWrite(TEMP_CATALOG);
-      return;
+      return true;
     }
     ObjectPath target;
     dd::optional_ptr<dd::CatalogEntry> existing;
@@ -875,7 +893,7 @@ class PlanChecker {
       target.object_name = parts.back();
       existing = LookUp(context_, dd::CatalogType::TABLE_ENTRY, parts);
     }
-    if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return;
+    if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return false;
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       CheckDropOf(*existing);
     }
@@ -889,6 +907,56 @@ class PlanChecker {
                                                         : "schema " + ContainerOf(target)));
     }
     ownership_.push_back({PendingOwnership::Kind::kCreate, target, type});
+    return true;
+  }
+
+  // A view's creator may create it only over what it could SELECT itself: the view's
+  // query is bound as DuckDB binds it when it creates the view (in the view's schema)
+  // and checked as the creator's own SELECT of it would be (every table and view it
+  // reads, the columns it reads of each, views read with their owners' rights, table
+  // macros expanded). Without this, the creator could list the columns of the view (it
+  // owns it), and so of tables it holds no privilege on. A view DuckDB would create
+  // without binding it (WITH (defer_binding = true)) is bound here all the same: one whose
+  // query names what doesn't exist yet fails as that SELECT would.
+  void CheckViewQuery(dd::LogicalCreate& create) {
+    auto& info = create.info->Cast<dd::CreateViewInfo>();
+    if (!info.query) Deny(principal_, "the new view's query could not be read");
+    // IF NOT EXISTS of an existing view (temporary ones included) creates nothing.
+    if (info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT &&
+        LookUp(context_, dd::CatalogType::TABLE_ENTRY, PartsOf(info))) {
+      return;
+    }
+    if (!create.schema) Deny(principal_, "the new view's schema could not be determined");
+    auto& schema = *create.schema;
+    auto& catalog = schema.ParentCatalog();
+    auto binder = dd::Binder::CreateBinder(context_);
+    binder->SetCanContainNulls(true);
+    // Binder::GetSearchPath(catalog, schema, true), as Binder::BindView sets it.
+    dd::vector<dd::CatalogSearchEntry> search_path;
+    search_path.emplace_back(catalog.GetName(), schema.name);
+    search_path.emplace_back(catalog.GetName(), dd::Identifier(INVALID_SCHEMA), true);
+    binder->EntryRetriever().SetSearchPath(std::move(search_path));
+    auto copy = info.query->Copy();
+    auto bound = binder->Bind(*copy);
+    if (!bound.plan) Deny(principal_, "the new view's query could not be checked");
+
+    ObjectPath view;
+    const auto parts = PartsOf(info);
+    if (info.temporary || parts.size() < 3) {
+      view.catalog = compat::Str(catalog.GetName());
+      view.schema_path = {compat::Str(schema.name)};
+      view.object_name = compat::Str(info.GetViewName());
+    } else {
+      view.catalog = parts[0];
+      view.schema_path.assign(parts.begin() + 1, parts.end() - 1);
+      view.object_name = parts.back();
+    }
+    const auto view_columns = ViewColumnsUsed(*bound.plan);
+    PlanChecker body(context_, snapshot_, principal_, view_columns);
+    body.creating_view_ = view.ToString();
+    body.Visit(*bound.plan);
+    for (auto& access : body.accesses_) accesses_.insert(access);
+    for (auto& object : body.objects_) objects_.push_back(std::move(object));
   }
 
   static std::string ContainerOf(const ObjectPath& object) {
@@ -1004,6 +1072,7 @@ class PlanChecker {
   bool in_owned_view_ = false;
   std::string owned_view_;    // the innermost view read with its owner's rights
   std::string unowned_view_;  // the innermost view read with the caller's rights
+  std::string creating_view_;  // checking this new view's query (CheckViewQuery)
   std::vector<PendingOwnership> ownership_;
   std::set<std::string> accesses_;
   boost::json::array objects_;

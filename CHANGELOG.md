@@ -211,6 +211,23 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Security: `CREATE VIEW` (and `CREATE OR REPLACE VIEW`, temporary views, views created
+  `WITH (defer_binding = true)`) needed only CREATE VIEW on the schema, so a user could
+  create a view over a table or columns it can't read; the view failed only when read, but
+  its creator owns it, and since metadata follows privileges it could list the view's
+  columns, and so the column names of a table it holds nothing on. A view's query is now
+  checked when the view is created, as the creator's own SELECT of it would be: SELECT on
+  every table and view it reads and on each column it reads of them, through CTEs,
+  subqueries, set operations and table macros, views it reads with their owners' rights,
+  under SET ROLE, scoped tokens and `catalog_access` rules (also through a view over a
+  denied catalog). The refusal says why with the SELECT's own reason ("user bob may create
+  a view only over what it can SELECT itself, and the query of view c.main.v reads more:
+  user bob has no SELECT privilege on table c.main.secrets"), so it tells no more than that
+  SELECT would. Views still read with their owner's rights, so one granted to others keeps
+  working, and a later REVOKE still closes it. Administrators, and servers without access
+  control, are unchanged. This changes one expectation of GizmoSQL 1.x's RBAC branch
+  (`test_rbac_views.py`; see BATTERY.md and docs/migrating-from-gizmosql.md).
+  `test_rbac_view_creation.py`, and a `catalog_access` case in `test_catalog_access_admin.py`.
 - Security: metadata follows authorization object by object (Warp SQL §9.4). Inside a
   catalog a user could see, the metadata calls and SQL's catalog listings showed every
   schema, table, view (with its definition) and column, whatever the user's privileges;

@@ -303,6 +303,24 @@ def test_a_restricted_admin_cannot_reach_around_its_rules(server, tmp_path):
 
 
 @pytest.mark.parametrize("role", ["admin", "user"])
+def test_a_view_over_a_view_reaching_a_denied_catalog_is_refused_when_created(server, role):
+    # The statement names only catalog X, which the rules let it write; the view it reads
+    # reads Y. A view's query is checked as a SELECT of it would be, when it is created
+    # (Hardcharger; 1.x checks only the catalogs the statement names).
+    admin = server.admin()
+    admin.execute(sql=f"CREATE OR REPLACE VIEW {X}.main.v_over_y AS SELECT * FROM {Y}.main.t")
+    session = server.as_role(role=role, subject=f"{role}_view_over_y",
+                             catalog_access=[{"catalog": X, "access": "write"}, {"catalog": "*", "access": "none"}])
+    detail = denied(session=session, sql=f"CREATE VIEW {X}.main.leak_{role} AS SELECT * FROM {X}.main.v_over_y",
+                    why=read_denied(catalog=Y))
+    assert f"which the query of view {X}.main.leak_{role} reads" in detail, detail
+    assert admin.scalar(sql=f"SELECT count(*) FROM duckdb_views() WHERE view_name = 'leak_{role}'") == 0
+    # The positive twin: a view over what the rules let it read.
+    session.execute(sql=f"CREATE OR REPLACE VIEW {X}.main.fine_{role} AS SELECT * FROM {X}.main.t")
+    assert admin.scalar(sql=f"SELECT count(*) FROM duckdb_views() WHERE view_name = 'fine_{role}'") == 1
+
+
+@pytest.mark.parametrize("role", ["admin", "user"])
 @pytest.mark.parametrize("claim", ["not-a-list", [], {"catalog": "*", "access": "write"}, None])
 def test_a_malformed_claim_grants_nothing(server, claim, role):
     # Present but not a list of rules (or an empty list): fail closed, whatever the role.
