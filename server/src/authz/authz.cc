@@ -307,6 +307,8 @@ void AccessControl::Shutdown() {
 
 const std::string& AccessControl::store_description() const { return engine_->store_description(); }
 
+const std::string& AccessControl::store_file() const { return engine_->store_file(); }
+
 void AccessControl::InstallEnforcement(duckdb_v2_instance_handle instance) {
   // DuckDB 2.0 lets optimizer and planner extensions register on an open instance.
   auto& database = *dd::capiv2::Convert(instance)->GetDatabase().instance;

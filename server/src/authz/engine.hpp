@@ -136,6 +136,7 @@ class RbacEngine {
   arrow::Status ForgetOwner(const ObjectPath& object);
 
   const std::string& store_description() const { return store_->description(); }
+  const std::string& store_file() const { return store_->file_path(); }
 
   // Called (outside any engine lock) whenever a newer snapshot replaces the
   // current one: after a local change or when the version poll sees another

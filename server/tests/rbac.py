@@ -1,16 +1,28 @@
-"""Helpers for the access-control (RBAC) tests: a PostgreSQL grant store per server and a
-small Warp SQL client with the methods the tests use.
+"""Helpers for the access-control (RBAC) tests: a grant store per server and a small Warp
+SQL client with the methods the tests use.
 
-The store comes from HARDCHARGER_TEST_RBAC_STORE_URI (default: the PostgreSQL the README
-starts on 127.0.0.1:55433); each server gets its own fresh database on it. An unreachable
-PostgreSQL fails the tests, never skips them.
+HARDCHARGER_TEST_RBAC_STORE picks the store the `store` fixture hands out:
+
+  postgres (default)  a fresh database per server on the PostgreSQL that
+                      HARDCHARGER_TEST_RBAC_STORE_URI names (default: the one the README
+                      starts on 127.0.0.1:55433). An unreachable PostgreSQL fails the
+                      tests, never skips them.
+  duckdb              a DuckDB file per server (duckdb:<dir>/rbac.duckdb), each in a
+                      private directory of its own.
+
+Tests that need PostgreSQL itself (several replicas on one store, or a look into it)
+take the `pg_store` fixture, which is always PostgreSQL. CI runs every test that takes
+`store` (marker rbac_store) once more with the DuckDB store.
 """
 
 import dataclasses
 import datetime
 import io
 import os
+import pathlib
 import secrets
+import shutil
+import tempfile
 import time
 import urllib.parse
 
@@ -24,6 +36,7 @@ import pytest
 
 STORE_URI = os.environ.get("HARDCHARGER_TEST_RBAC_STORE_URI",
                            "postgresql://hardcharger:hardcharger@127.0.0.1:55433/hardcharger")
+STORE_KIND = os.environ.get("HARDCHARGER_TEST_RBAC_STORE", "postgres")
 SECRET_KEY = "hardcharger-rbac-tests-secret-key-0123456789"
 ADMIN = "admin"
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
@@ -33,11 +46,17 @@ BLOCKED = "Hardcharger blocked"
 # ---- Store ----
 
 class Store:
-    """Fresh PostgreSQL databases on the test server, one per Hardcharger server (or per
-    cluster of them), dropped at the end."""
+    """Fresh stores, one per Hardcharger server (or, on PostgreSQL, per cluster of them),
+    dropped at the end: PostgreSQL databases on the test server, or DuckDB files."""
 
-    def __init__(self):
+    def __init__(self, kind: str = "postgres"):
+        if kind not in ("postgres", "duckdb"):
+            pytest.fail(reason=f"HARDCHARGER_TEST_RBAC_STORE must be postgres or duckdb, not {kind!r}")
+        self.kind = kind
         self.created: list[str] = []
+        if kind == "duckdb":
+            self.root = pathlib.Path(tempfile.mkdtemp(prefix="hardcharger-rbac-stores-"))
+            return
         try:
             with psycopg.connect(conninfo=STORE_URI, autocommit=True, connect_timeout=5):
                 pass
@@ -47,6 +66,10 @@ class Store:
 
     def new_database(self) -> str:
         name = "hc_rbac_" + secrets.token_hex(nbytes=6)
+        if self.kind == "duckdb":
+            directory = self.root / name
+            directory.mkdir(mode=0o700)
+            return f"duckdb:{directory / 'rbac.duckdb'}"
         with psycopg.connect(conninfo=STORE_URI, autocommit=True) as connection:
             connection.execute(query=f'CREATE DATABASE "{name}"')
         self.created.append(name)
@@ -54,6 +77,9 @@ class Store:
         return urllib.parse.urlunsplit(parts._replace(path="/" + name))
 
     def drop_all(self) -> None:
+        if self.kind == "duckdb":
+            shutil.rmtree(path=self.root, ignore_errors=True)
+            return
         with psycopg.connect(conninfo=STORE_URI, autocommit=True) as connection:
             for name in self.created:
                 connection.execute(query=f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')

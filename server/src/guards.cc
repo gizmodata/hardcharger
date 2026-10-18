@@ -11,6 +11,10 @@
 #include "platform.hpp"
 #include "warpsql/errors.hpp"
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+
 namespace hardcharger {
 
 namespace {
@@ -597,6 +601,147 @@ std::optional<std::string> SensitivePaths::Check(const std::string& path) const 
   return std::nullopt;
 }
 
+// ---- PrivateFiles ----
+
+namespace {
+
+// The files DuckDB keeps beside a database file (storage_manager.cpp, config.cpp).
+constexpr std::array<const char*, 5> kBeside = {"", ".wal", ".wal.checkpoint", ".wal.recovery", ".tmp"};
+
+bool IsLocalPath(const std::string& path) {
+  return !path.empty() && !IsProvenRemote(path) &&
+         (path.find("://") == std::string::npos || StartsWithIgnoringCase(path, "file://"));
+}
+
+std::string LocalSpelling(const std::string& path, const std::string& home) {
+#ifdef _WIN32
+  std::string local = WindowsSpelling(StripFileScheme(path));
+#else
+  std::string local = StripFileScheme(path);
+#endif
+  if (local == "~" || local.starts_with("~/")) local = home + local.substr(1);
+  return local;
+}
+
+}  // namespace
+
+PrivateFiles::PrivateFiles(std::string home) : home_(home.empty() ? HomeDirectory() : std::move(home)) {}
+
+void PrivateFiles::Add(const std::string& path, const std::string& category, bool attached) {
+  if (path.empty()) return;
+  Keyed keyed{{path, category, attached}, {}, {}};
+  const fs::path file = PathFromUtf8(LocalSpelling(path, home_));
+  for (const char* suffix : kBeside) {
+    for (auto& key : Keys(LocalSpelling(path, home_) + suffix, home_, true)) keyed.keys.push_back(std::move(key));
+    const fs::path twin = file.parent_path() / PathFromUtf8("tmp_" + Utf8Path(file.filename()) + suffix);
+    for (auto& key : Keys(Utf8Path(twin), home_, true)) keyed.twins.push_back(std::move(key));
+    keyed.names.push_back(ComparisonKey(Utf8Path(file.filename()) + suffix));
+    keyed.names.push_back(ComparisonKey("tmp_" + Utf8Path(file.filename()) + suffix));
+  }
+  std::lock_guard lock(mutex_);
+  entries_.push_back(std::move(keyed));
+}
+
+bool PrivateFiles::empty() const {
+  std::lock_guard lock(mutex_);
+  return entries_.empty();
+}
+
+// Every key `path` is compared by: its spellings (absolute, lexical, symlinks resolved as
+// far as the path exists), and those of the files a dangling symlink at its end points to
+// (a WAL that doesn't exist yet).
+std::vector<std::string> PrivateFiles::CandidateKeys(const std::string& path, bool resolve) const {
+  if (!IsLocalPath(path) || path.size() > 4096) return {};
+  const std::string local = LocalSpelling(path, home_);
+  std::vector<std::string> keys = Keys(local, home_, resolve);
+  if (!resolve) return keys;
+  std::error_code ec;
+  fs::path at = PathFromUtf8(local);
+  for (int hop = 0; hop < 8; hop++) {
+    if (!fs::is_symlink(fs::symlink_status(at, ec)) || fs::exists(at, ec)) break;
+    const fs::path target = fs::read_symlink(at, ec);
+    if (ec) break;
+    at = target.is_absolute() ? target : at.parent_path() / target;
+    for (auto& key : Keys(Utf8Path(at), home_, true)) keys.push_back(std::move(key));
+  }
+  return keys;
+}
+
+bool PrivateFiles::MayName(const std::string& path) const {
+  if (!IsLocalPath(path)) return false;
+  const std::string local = LocalSpelling(path, home_);
+  {
+    std::lock_guard lock(mutex_);
+    if (entries_.empty()) return false;
+    for (const auto& part : Segments(ComparisonKey(local))) {
+      for (const auto& keyed : entries_) {
+        if (std::find(keyed.names.begin(), keyed.names.end(), part) != keyed.names.end()) return true;
+      }
+    }
+  }
+#ifdef _WIN32
+  std::error_code ec;
+  const fs::path file = PathFromUtf8(local);
+  const auto status = fs::symlink_status(file, ec);
+  if (ec || !fs::exists(status)) return false;  // not there: by another name, it is no private file
+  if (fs::is_symlink(status)) return true;
+  return fs::is_regular_file(status) && fs::hard_link_count(file, ec) > 1 && !ec;
+#else
+  if (local.starts_with("/dev/") || local.starts_with("/proc/")) return true;
+  struct stat st {};
+  if (::lstat(local.c_str(), &st) != 0) return false;  // not there: by another name, it is no private file
+  return S_ISLNK(st.st_mode) || (S_ISREG(st.st_mode) && st.st_nlink > 1);
+#endif
+}
+
+bool PrivateFiles::HasUnattached() const {
+  std::lock_guard lock(mutex_);
+  return std::any_of(entries_.begin(), entries_.end(), [](const Keyed& k) { return !k.entry.attached; });
+}
+
+std::optional<PrivateFiles::Entry> PrivateFiles::Find(const std::string& path, bool thorough) const {
+  const bool path_like = path.find('/') != std::string::npos || path.find('\\') != std::string::npos ||
+                         path.starts_with('~') || path.starts_with('.');
+  const auto candidates = CandidateKeys(path, thorough || path_like);
+  if (candidates.empty()) return std::nullopt;
+  std::lock_guard lock(mutex_);
+  for (const auto& keyed : entries_) {
+    for (const auto& candidate : candidates) {
+      for (const auto& key : keyed.keys) {
+        if (KeyCovers(key, candidate)) return keyed.entry;
+      }
+    }
+  }
+  if (!thorough) return std::nullopt;
+  // The same file under a name no spelling shows: a hard link, /dev/fd/N.
+  std::error_code ec;
+  const fs::path file = PathFromUtf8(LocalSpelling(path, home_));
+  if (!fs::exists(file, ec) || fs::is_directory(file, ec)) return std::nullopt;
+  for (const auto& keyed : entries_) {
+    for (const char* suffix : {"", ".wal"}) {
+      const fs::path mine = PathFromUtf8(LocalSpelling(keyed.entry.path, home_) + suffix);
+      if (fs::equivalent(file, mine, ec) && !ec) return keyed.entry;
+    }
+  }
+  return std::nullopt;
+}
+
+bool PrivateFiles::IsCopyTwin(const std::string& path) const {
+  const auto candidates = CandidateKeys(path, true);
+  std::lock_guard lock(mutex_);
+  for (const auto& keyed : entries_) {
+    for (const auto& candidate : candidates) {
+      if (std::find(keyed.twins.begin(), keyed.twins.end(), candidate) != keyed.twins.end()) return true;
+    }
+  }
+  return false;
+}
+
+std::string PrivateFileMessage(const std::string& path, const std::string& category) {
+  return "Permission denied: Hardcharger blocked access to '" + path + "' (" + category +
+         "). It is one of the server's own files, which no SQL may open, read or write, whatever the role.";
+}
+
 // ---- Statements ----
 
 DUCKDB_V2_STATEMENT_TYPE StatementType(duckdb_v2_connection_handle connection, std::string_view sql) {
@@ -680,6 +825,20 @@ void CheckStatement(const GuardContext& context, const Piece& piece, DUCKDB_V2_S
       if (!set.reset && !ValueIsFalse(rest, set.value_from)) {
         Deny("Permission denied: SET allow_unredacted_secrets is disabled on this server, for every user: it "
              "would show secrets' credentials in clear (block_unredacted_secrets).");
+      }
+    }
+  }
+  // The server's own private files, for everyone. (The files it keeps attached are
+  // read through their catalogs; their guard is in the file system alone, as a
+  // statement may well name the database's path, say in duckdb_databases().)
+  if (context.private_files != nullptr && context.private_files->HasUnattached()) {
+    for (const Token& token : t) {
+      const bool path_like = token.Is(DUCKDB_V2_TOKEN_TYPE_STRING_LITERAL) ||
+                             (token.Is(DUCKDB_V2_TOKEN_TYPE_IDENTIFIER) && token.text.starts_with('"'));
+      if (!path_like) continue;
+      const std::string path = Unquote(token.text);
+      if (auto entry = context.private_files->Find(path, /*thorough=*/false); entry && !entry->attached) {
+        Deny(PrivateFileMessage(path, entry->category));
       }
     }
   }

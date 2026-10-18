@@ -218,6 +218,17 @@ jobs:
           echo "CPUs: $(getconf _NPROCESSORS_ONLN); pytest-xdist workers: $HARDCHARGER_TEST_XDIST_WORKERS"
           .venv/bin/python -m pytest -q -n "$HARDCHARGER_TEST_XDIST_WORKERS" -m "not serial$only" --durations=10
           .venv/bin/python -m pytest -q -m "serial$only" --durations=5
+      # Every test that takes the `store` fixture (marker rbac_store: all the access-control
+      # suites) once more, on the DuckDB file store instead of PostgreSQL. One job is enough:
+      # the DuckDB store's own tests (test_rbac_duckdb_store.py) run in every job above.
+      - name: Access-control tests on the DuckDB store
+        if: matrix.name == 'linux-amd64'
+        working-directory: server/tests
+        env:
+          HARDCHARGER_TEST_RBAC_STORE: duckdb
+        run: |
+          .venv/bin/python -m pytest -q -n "$HARDCHARGER_TEST_XDIST_WORKERS" -m "rbac_store and not serial" --durations=5
+          .venv/bin/python -m pytest -q -m "rbac_store and serial" --durations=5
       # The 1.x client shell script, ported (test_client_shell.py runs it too, case by case).
       - name: Client shell tests
         run: bash server/tests/test_client_shell.sh

@@ -230,6 +230,7 @@ void Instrumentation::Attach() {
                  : std::filesystem::path("hardcharger_instrumentation.db"))
                .string();
   }
+  file_ = path;
   // READ_WRITE: an instance opened read-only would otherwise open it read-only too.
   warpduckdb::RunSql(connection_.get(), "ATTACH " + Literal(path) + " AS " + Quoted(catalog_) + " (READ_WRITE)");
 }

@@ -293,14 +293,35 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
       sensitive_paths_(runtime.config.block_sensitive_paths, runtime.config.sensitive_paths,
                        {runtime.config.tls_key, runtime.config.tls_cert, runtime.config.mtls_ca_cert,
                         runtime.config.init_sql_commands_file,
-                        runtime.config.config_file}) {
+                        runtime.config.config_file}),
+      private_files_(std::make_shared<PrivateFiles>()) {
   // Before anything else runs on the instance: from here on every plan of a bound
   // session is checked. (The server's own connections below, and those of
   // instrumentation, catalog logging and the health check, carry no principal, so the
   // check leaves them alone.)
   if (access_) access_->InstallEnforcement(instance());
+  // And no statement opens the server's own files: a DuckDB access-control store, and
+  // the files this instance attaches (each added once it is attached, below).
+  if (access_) private_files_->Add(access_->store_file(), "the access-control store", /*attached=*/false);
+  authz::InstallPrivateFileGuard(instance(), private_files_);
   warpduckdb::Connection connection;
   warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), connection.out(), err); });
+  // An attached file is registered under the path DuckDB recorded for it, which its
+  // storage opens it (and its WAL) by: DuckDB makes a relative one absolute.
+  const auto add_attached = [&](const std::string& catalog_sql, const std::string& given, const char* category) {
+    std::string path;
+    try {
+      path = warpduckdb::QueryText(connection.get(),
+                                   "SELECT path FROM duckdb_databases() WHERE database_name = " + catalog_sql);
+    } catch (const std::exception&) {
+    }
+    private_files_->Add(path.empty() ? given : path, category, /*attached=*/true);
+    if (!path.empty() && path != given) private_files_->Add(given, category, /*attached=*/true);
+  };
+  const auto& database = runtime_.config.database;
+  if (!database.empty() && database != ":memory:") {
+    add_attached("current_database()", database, "the server's database");
+  }
   RegisterSqlFunctions(connection.get(), runtime_);
   AttachSystemCatalog();
   if (runtime_.config.enable_instrumentation) {
@@ -310,6 +331,12 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
   if (runtime_.config.enable_catalog_logging) {
     catalog_log_ = std::make_unique<CatalogLog>(runtime_, instance());
     catalog_log_->Attach();
+  }
+  if (instrumentation_ && !instrumentation_->file().empty()) {
+    add_attached(SqlLiteral(instrumentation_->catalog()), instrumentation_->file(), "the instrumentation database");
+  }
+  if (catalog_log_ && !catalog_log_->file().empty()) {
+    add_attached(SqlLiteral(catalog_log_->catalog()), catalog_log_->file(), "the log database");
   }
   RunInitSql();
   // Both after the init SQL, which may attach their catalogs.
@@ -437,7 +464,8 @@ json::object Backend::ServerInfo() {
 std::unique_ptr<warpsql::EngineSession> Backend::NewSession(const warpsql::Principal& principal) {
   const bool capped = runtime_.sessions.Admit(principal);
   try {
-    return std::make_unique<Session>(runtime_, sensitive_paths_, instance(), principal, capped, access_.get());
+    return std::make_unique<Session>(runtime_, sensitive_paths_, *private_files_, instance(), principal, capped,
+                                     access_.get());
   } catch (...) {
     runtime_.sessions.Unadmit(capped);
     throw;
@@ -446,11 +474,13 @@ std::unique_ptr<warpsql::EngineSession> Backend::NewSession(const warpsql::Princ
 
 // ---- Session ----
 
-Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb_v2_instance_handle instance,
-                 warpsql::Principal principal, bool capped, authz::AccessControl* access)
+Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, const PrivateFiles& private_files,
+                 duckdb_v2_instance_handle instance, warpsql::Principal principal, bool capped,
+                 authz::AccessControl* access)
     : DuckDBSession(instance, static_cast<std::size_t>(runtime.config.result_batch_rows)),
       runtime_(runtime),
       sensitive_paths_(sensitive_paths),
+      private_files_(private_files),
       principal_(std::move(principal)),
       // A rules-only administrator without catalog_access rules is unchecked and runs no
       // access-control statements, so it needs no guard: binding it would only add the
@@ -587,7 +617,7 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   // Under access control, what a store user may reach outside the database (files, URLs,
   // ATTACH, ...) is the access-control gate's to decide, by its system privileges; the
   // rest of the statement guard (secrets, sensitive paths) holds for everyone.
-  CheckStatement({connection(), admin() || rbac_, config.block_unredacted_secrets, &sensitive_paths_},
+  CheckStatement({connection(), admin() || rbac_, config.block_unredacted_secrets, &sensitive_paths_, &private_files_},
                  piece, type);
   if (type == DUCKDB_V2_STATEMENT_TYPE_DETACH) {
     for (const Token& token : piece.tokens) {

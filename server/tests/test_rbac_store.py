@@ -1,5 +1,6 @@
-"""The PostgreSQL grant store: replicas writing at once, a restart, and connection
-errors that never echo the connection string."""
+"""The grant store: replicas writing at once on PostgreSQL, a restart, and connection
+errors that never echo the connection string. (The DuckDB file store's own tests are in
+test_rbac_duckdb_store.py.)"""
 
 import subprocess
 import threading
@@ -12,8 +13,8 @@ from conftest import STOP_SIGNAL, home_env
 from rbac import WarpError, expect_allowed, rbac_env, start_rbac_server
 
 
-def test_concurrent_writers_on_two_replicas_serialize(launcher, store):
-    uri = store.new_database()
+def test_concurrent_writers_on_two_replicas_serialize(launcher, pg_store):
+    uri = pg_store.new_database()
     first, second = (start_rbac_server(launcher=launcher, store_uri=uri) for _ in range(2))
     failures: list[str] = []
 
@@ -41,8 +42,8 @@ def test_concurrent_writers_on_two_replicas_serialize(launcher, store):
             assert "already exists" in raised.value.detail
 
 
-def test_the_same_name_raced_from_two_replicas_is_created_once(launcher, store):
-    uri = store.new_database()
+def test_the_same_name_raced_from_two_replicas_is_created_once(launcher, pg_store):
+    uri = pg_store.new_database()
     first, second = (start_rbac_server(launcher=launcher, store_uri=uri) for _ in range(2))
     admins = [first.admin(), second.admin()]
     for round_ in range(10):
@@ -79,9 +80,9 @@ def test_data_survives_a_restart(launcher, store):
     assert [(row["granted_to"], row["privilege"], row["columns"]) for row in grants] == [("Data Team", "SELECT", "id")]
 
 
-def test_connection_errors_never_echo_the_connection_string(launcher, store):
+def test_connection_errors_never_echo_the_connection_string(launcher, pg_store):
     secret = "not-the-password-8c1f"
-    parts = urllib.parse.urlsplit(store.new_database())
+    parts = urllib.parse.urlsplit(pg_store.new_database())
     wrong_password = urllib.parse.urlunsplit(parts._replace(
         netloc=f"{parts.username}:{secret}@{parts.hostname}:{parts.port}"))
     running = launcher.start(env=rbac_env(store_uri=wrong_password), expect_up=False)
@@ -104,9 +105,9 @@ def test_connection_errors_never_echo_the_connection_string(launcher, store):
     assert "could not connect to the PostgreSQL store" in running.log()
 
 
-def test_the_store_lives_in_its_own_schema_and_no_session_can_reach_it(launcher, store):
+def test_the_store_lives_in_its_own_schema_and_no_session_can_reach_it(launcher, pg_store):
     import psycopg
-    uri = store.new_database()
+    uri = pg_store.new_database()
     server = start_rbac_server(launcher=launcher, store_uri=uri)
     expect_allowed(client=server.admin(), sql="CREATE USER probe")
     with psycopg.connect(conninfo=uri) as connection:

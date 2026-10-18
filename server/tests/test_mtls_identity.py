@@ -292,6 +292,8 @@ def test_an_admin_identity_is_no_store_user_name(rbac, pki, launcher, store):
     # replica configured otherwise) makes the certificate sign-in refuse.
     nina = pki.issue(name="nina@example.com")
     rbac.certificate_token(identity=nina)  # a store user, as such
+    if store.kind == "duckdb":
+        rbac.running.stop()  # one server per DuckDB store: a restart, configured otherwise
     other = start(launcher=launcher, pki=pki, probe=nina, args=["--mtls-certificate-sign-in", "--mtls-admin-identities", "nina@example.com"],
                   env={**rbac_env(store_uri=rbac.store_uri)})
     body = problem(response=other.certificate_grant(identity=nina), status=401, code="unknown_certificate_identity")
@@ -491,6 +493,8 @@ def test_certificate_sign_in_is_off_unless_enabled(launcher, store, pki):
         assert "client_certificate" not in http.get(url="/warp").json()["auth"]["grant_types"]
     problem(response=server.certificate_grant(identity=alice), status=400, code="unsupported_grant_type")
     # The twin: the same store, with certificate sign-in turned on.
+    if store.kind == "duckdb":
+        server.running.stop()  # one server per DuckDB store
     enabled = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-certificate-sign-in"],
                     env=rbac_env(store_uri=store_uri))
     enabled.certificate_token(identity=alice)

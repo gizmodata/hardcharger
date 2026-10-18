@@ -371,6 +371,19 @@ Each statement is checked inside DuckDB against its own plan, after binding and 
 before optimizing, so nested SQL, views and macros can't route around a grant. Anything the
 check can't classify is refused. Changes reach every replica within about a second.
 
+Use PostgreSQL in production, and for any cluster of more than one replica. For
+development, or a server that will only ever run one replica, the store can be a DuckDB
+file instead:
+
+```yaml
+rbac_store_uri: duckdb:/var/lib/hardcharger/rbac.duckdb   # or any path ending in .duckdb
+```
+
+The file is created `0600` (one that other users can read or write is refused), only one
+server may open it (a second one on the same file stops at startup), and no SQL statement
+reaches it, the administrator's included. There is no migration between the two stores:
+moving to PostgreSQL later means creating the users, roles and grants there again.
+
 ## 🔏 Client certificates as identity
 
 With mutual TLS (`mtls_ca_cert`), a client can sign in with its certificate and no
@@ -477,6 +490,8 @@ WARP_SQL_TEST_SERVER_USERNAME=warp HARDCHARGER_ADMIN_USERNAME=warp \
   .venv/bin/python -m pytest -q
 ```
 
+The access-control suites run on PostgreSQL by default; `HARDCHARGER_TEST_RBAC_STORE=duckdb
+.venv/bin/python -m pytest -q -m rbac_store` runs them again on the DuckDB file store, as CI does.
 The client's 1.x shell script runs on its own too (`bash server/tests/test_client_shell.sh`).
 Suites that need PostgreSQL or the S3 gateway fail, never skip, when those aren't there.
 [BATTERY.md](server/tests/BATTERY.md) tracks GizmoSQL's test battery as ported, file by file.

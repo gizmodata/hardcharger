@@ -56,9 +56,9 @@ def test_grants_apply_to_ducklake_tables(server, tmp_path):
     assert user.run(sql="SELECT count(*) AS n FROM lake.main.governed WHERE email = 'a@x'").column("n").to_pylist() == [0]
 
 
-def test_grants_apply_to_postgres_tables(server, store):
+def test_grants_apply_to_postgres_tables(server, pg_store):
     admin = server.admin()
-    target = store.new_database()
+    target = pg_store.new_database()
     for sql in ["LOAD postgres", f"ATTACH '{target}' AS pgc (TYPE postgres)",
                 "CREATE TABLE pgc.public.rbac_pg_t AS SELECT 1 AS id, 'pg-secret' AS s",
                 "CREATE ROLE lake_reader", "CREATE USER lake_user", "GRANT lake_reader TO lake_user",

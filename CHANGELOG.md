@@ -154,6 +154,23 @@ own changelog in `python/CHANGELOG.md`.
   administrative shares (`\\host\C$`) and Kubernetes' `C:\var\run\secrets`, across
   Windows' spellings of a path (either separator, any case, `\\?\C:\`, trailing dots and
   spaces, `::$DATA` streams, 8.3 names, `file:` URLs).
+- A DuckDB file as the access-control store, for development or a server that will only
+  ever run one replica: `rbac_store_uri: duckdb:/path/to/rbac.duckdb` (or any path ending in
+  `.duckdb`). PostgreSQL stays the store for production and for several replicas. The
+  file (and its WAL) is created `0600`; an existing one other users can read or write is
+  refused at startup (`chmod 600`), as is a store file that is also the database, the
+  instrumentation or the log file. One server per file: a second one on the same file stops
+  at startup, saying the DuckDB store serves a single server and to use PostgreSQL for
+  several replicas. The file holds password hashes and grants, so no SQL reaches it, the
+  administrator's included, however the path is written or computed (`'…/rb' || 'ac.duckdb'`,
+  globs, `..`, relative, symlinks, hard links, `file:` URLs, case, `file_search_path`, `~`
+  under another `home_directory`), its WAL included, through any reader (`read_blob`,
+  `read_csv`, `read_json`, `read_duckdb`, ...), `ATTACH`, `COPY` (also its `tmp_` file renamed
+  onto the target) and `EXPORT DATABASE`: a guard in the serving instance's DuckDB file
+  system refuses every open, listing, move and removal of it, and a statement naming it is
+  refused before it runs. Every access-control test file runs on both stores in CI.
+  Tests: `test_rbac_duckdb_store.py` (121 on macOS and Windows, 111 on Linux, which has no
+  case-insensitive spelling to try).
 
 ### Changed
 
@@ -308,6 +325,15 @@ own changelog in `python/CHANGELOG.md`.
   object of that name left; dropping an object clears it too): its views read with each
   reader's own rights, the creator's rules included, and are refused when those don't reach
   what the view reads. `test_catalog_access_admin.py` (5 cases).
+- Security: the server's own DuckDB files were readable and writable through SQL. An
+  administrator, and under access control any user with `READ FILESYSTEM`, could read the
+  instrumentation file (every user's statement text), the log file and the database file
+  itself (every table, whatever the grants) with `read_blob()` and the other readers, and
+  with `WRITE FILESYSTEM` (or as the administrator) write their `.wal`, which DuckDB replays
+  into them at the next start. The instrumentation and log catalogs stay the only way in
+  (administrators only, read-only), and the database is read through its catalog, under
+  grants: the same file-system guard as the DuckDB store's lets only the instance's own
+  storage open these files, under the path it attached them by.
 - Security: metadata follows authorization object by object (Warp SQL §9.4). Inside a
   catalog a user could see, the metadata calls and SQL's catalog listings showed every
   schema, table, view (with its definition) and column, whatever the user's privileges;

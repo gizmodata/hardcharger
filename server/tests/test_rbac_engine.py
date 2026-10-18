@@ -199,10 +199,12 @@ def test_password_sign_in_failures_look_alike(world):
     assert world.server.password_token(user="joe", password="battery staple")
 
 
-def test_passwords_are_stored_hashed(world, store):
+def test_passwords_are_stored_hashed(launcher, pg_store):
+    # (The DuckDB store's twin: test_rbac_duckdb_store.py.)
     import psycopg
-    expect_allowed(client=world.admin, sql="CREATE USER joe WITH PASSWORD 'correct horse'")
-    with psycopg.connect(conninfo=world.server.store_uri) as connection:
+    server = start_rbac_server(launcher=launcher, store_uri=pg_store.new_database())
+    expect_allowed(client=server.admin(), sql="CREATE USER joe WITH PASSWORD 'correct horse'")
+    with psycopg.connect(conninfo=server.store_uri) as connection:
         stored = connection.execute(query="SELECT password_hash FROM hardcharger_rbac.users WHERE name = 'joe'").fetchone()[0]
     assert "correct horse" not in stored
     assert stored.startswith("pbkdf2-sha256$")

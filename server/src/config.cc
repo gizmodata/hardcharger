@@ -5,12 +5,15 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <optional>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+
+#include "authz/authz.hpp"
 
 namespace hardcharger {
 
@@ -203,8 +206,10 @@ const std::vector<Option>& Options() {
        "log every statement", FLAG(print_queries)},
       {"rbac_store_uri", Kind::kString,
        "turn on role-based access control, with users, roles and grants kept in "
-       "this PostgreSQL database (postgresql://user:password@host/db or 'host=... dbname=...'); "
-       "every replica of a cluster names the same one",
+       "this PostgreSQL database (postgresql://user:password@host/db or 'host=... dbname=...'), "
+       "which every replica of a cluster names; or, for development or a server that will only "
+       "ever run one replica, in a DuckDB file of its own (duckdb:/path/to/rbac.duckdb, or a path "
+       "ending in .duckdb), which one server alone may open. Use PostgreSQL in production",
        TEXT(rbac_store_uri)},
       {"rbac_opa_url", Kind::kString,
        "also ask this Open Policy Agent decision URL about every store user's "
@@ -381,6 +386,48 @@ bool IsLevel(const std::string& level) {
   return v == "debug" || v == "info" || v == "warning" || v == "warn" || v == "error";
 }
 
+// Two names of one file: the same file when both exist, else the same absolute path
+// (ignoring case where the file system does).
+bool SameFile(const std::string& a, const std::string& b) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  if (fs::exists(a, ec) && fs::exists(b, ec)) return fs::equivalent(a, b, ec) && !ec;
+  auto key = [](const std::string& path) {
+    std::error_code e;
+    std::string text = fs::weakly_canonical(fs::absolute(path, e), e).lexically_normal().generic_string();
+#if defined(__APPLE__) || defined(_WIN32)
+    text = Lower(text);
+#endif
+    return text;
+  };
+  return key(a) == key(b);
+}
+
+// A DuckDB access-control store is a file of its own: the serving instance opens the
+// database, instrumentation and log files, and a second open of the store's file in this
+// process would go unnoticed by DuckDB's lock.
+void CheckStoreFileIsItsOwn(const Config& c) {
+  const std::string store = authz::DuckDBStoreFile(c.rbac_store_uri);
+  if (store.empty()) return;
+  const bool file_database = !c.database.empty() && c.database != ":memory:";
+  const std::filesystem::path beside =
+      file_database ? std::filesystem::path(c.database).parent_path() : std::filesystem::path();
+  const std::vector<std::pair<std::string, std::string>> others = {
+      {"database", file_database ? c.database : ""},
+      {"instrumentation_db_path", !c.instrumentation_db_path.empty()
+                                      ? c.instrumentation_db_path
+                                      : (beside / "hardcharger_instrumentation.db").string()},
+      {"log_catalog_db_path",
+       !c.log_catalog_db_path.empty() ? c.log_catalog_db_path : (beside / "hardcharger_logs.db").string()},
+  };
+  for (const auto& [name, path] : others) {
+    if (!path.empty() && SameFile(store, path)) {
+      throw std::invalid_argument("rbac_store_uri names the same file as " + name + " (" + path +
+                                  "): the access-control store needs a DuckDB file of its own");
+    }
+  }
+}
+
 void Validate(Loaded& loaded) {
   Config& c = loaded.config;
   if (c.admin_password.empty()) {
@@ -419,8 +466,10 @@ void Validate(Loaded& loaded) {
     throw std::invalid_argument("log_format must be text or json");
   }
   if (c.rbac_store_uri == "memory") {
-    throw std::invalid_argument("rbac_store_uri must be a PostgreSQL connection string");
+    throw std::invalid_argument(
+        "rbac_store_uri must be a PostgreSQL connection string or a DuckDB file (memory is for tests only)");
   }
+  CheckStoreFileIsItsOwn(c);
   if (!c.rbac_opa_url.empty() && c.rbac_store_uri.empty()) {
     throw std::invalid_argument("rbac_opa_url needs rbac_store_uri (access control)");
   }

@@ -182,8 +182,8 @@ def test_server_info_says_access_control_is_on(server, admin):
 # ---- Two replicas on one store ----
 
 @pytest.fixture
-def cluster(launcher, store):
-    uri = store.new_database()
+def cluster(launcher, pg_store):
+    uri = pg_store.new_database()
     first = start_rbac_server(launcher=launcher, store_uri=uri)
     second = start_rbac_server(launcher=launcher, store_uri=uri)
     return first, second
