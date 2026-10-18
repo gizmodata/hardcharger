@@ -164,6 +164,21 @@ own changelog in `python/CHANGELOG.md`.
 - The access-control Open Policy Agent client verifies HTTPS against the system's CA
   bundle, as the server's other outbound calls do, rather than OpenSSL's compiled-in
   certificate directory (a build-time path in a portable build).
+- A forced stop (a second stop signal during a drain) now and then aborted the server
+  (SIGABRT) instead of exiting 0: the grace-period watcher read the drain's start time by
+  reference from the signal thread's stack, after that thread had stopped the server and
+  returned. AddressSanitizer caught it as a read of the freed stack frame (CI's ASan job,
+  intermittently); a release build read whatever was left there. The watcher keeps its own
+  copy.
+- A stop (a forced one, or the first signal with `graceful_shutdown` off) during a bulk
+  ingest whose body was still arriving never finished: the server waited for the engine
+  thread, which waited for bytes from the connection the stop had already shut. Closing a
+  session (a stop closes them all) now aborts its uploads, and the load rolls back.
+- The graceful-shutdown tests show the end of the server's log when it exits non-zero or
+  hangs, and cover a forced stop with a stalled result stream, an ingest upload (one
+  request, or a part of a partitioned one), and prepared statements in flight, with
+  `graceful_shutdown` on and off, and all of them at once over TLS with a client
+  certificate.
 
 ### Fixed
 

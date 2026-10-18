@@ -464,7 +464,13 @@ int main(int argc, char** argv) {
               {{"shutdown_grace_period_seconds", std::to_string(runtime.shutdown_grace_period_seconds.load())}});
       server.Drain(std::chrono::hours(24 * 365));
       const auto started = std::chrono::steady_clock::now();
-      watcher = std::thread([&] {
+      // The watcher outlives this thread (a second signal stops the server here and this
+      // thread returns, while the watcher runs until main() sets `exiting`), so it takes
+      // nothing from this frame by reference: `started` is copied, and the rest are
+      // main()'s, which joins both threads before they go. Reading `started` by reference
+      // after this thread had gone aborted the server under AddressSanitizer
+      // (stack-use-after-return) now and then on a forced stop.
+      watcher = std::thread([&exiting, &runtime, &server, started] {
         while (!exiting) {
           const int64_t grace = runtime.shutdown_grace_period_seconds.load();
           if (grace > 0 && std::chrono::steady_clock::now() - started >= std::chrono::seconds(grace)) {
