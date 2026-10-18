@@ -88,14 +88,21 @@ def client_env(server=None, home: pathlib.Path | None = None, **extra: str) -> d
     return env
 
 
-def conn_args(server) -> list[str]:
-    return ["--host", "localhost", "--port", str(server.port), "--username", server.username]
+def conn_args(server, tls: bool = False) -> list[str]:
+    """The flags for the server: --tls=false for the plain-HTTP test servers (TLS is the
+    client's default), nothing for a TLS one."""
+    return ["--host", "localhost", "--port", str(server.port), *([] if tls else ["--tls=false"]),
+            "--username", server.username]
 
 
 def run(server, *args: str, env: dict[str, str] | None = None, input: str | None = None,
-        timeout: float = 120) -> subprocess.CompletedProcess:
-    return subprocess.run(args=[binary(), *conn_args(server), *args], env=env or client_env(server=server),
+        timeout: float = 120, tls: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(args=[binary(), *conn_args(server, tls=tls), *args], env=env or client_env(server=server),
                           input=input, capture_output=True, text=True, timeout=timeout)
+
+
+def run_tls(server, *args: str, **kwargs) -> subprocess.CompletedProcess:
+    return run(server, *args, tls=True, **kwargs)
 
 
 def run_bash(script: str, env: dict[str, str]) -> subprocess.CompletedProcess:
@@ -240,7 +247,7 @@ def test_doc_heredoc_style(server):
 
 
 def test_connect_without_username_fails(server):
-    result = subprocess.run(args=[binary(), "--host", "localhost", "--port", str(server.port), "--command", "SELECT 1"],
+    result = subprocess.run(args=[binary(), "--host", "localhost", "--port", str(server.port), "--tls=false", "--command", "SELECT 1"],
                             env=client_env(), capture_output=True, text=True, timeout=60)
     assert result.returncode == 1, result.stdout
     stderr = strip_ansi(result.stderr)
@@ -271,11 +278,11 @@ def test_uri_cannot_be_combined_with_connection_flags(server):
     # A URI names the host, the port and TLS; those flags beside it are refused. The user and
     # the other TLS settings come from their own flags, as with the ADBC driver's options.
     uri = f"hardcharger://localhost:{server.port}?tls=false"
-    for flag in (["--host", "localhost"], ["--port", str(server.port)], ["--tls"]):
+    for flag in (["--host", "localhost"], ["--port", str(server.port)], ["--tls"], ["--tls=false"]):
         result = subprocess.run(args=[binary(), uri, *flag, "--username", server.username, "-c", "SELECT 1"],
                                 env=client_env(server=server), capture_output=True, text=True)
         assert result.returncode == 1
-        assert result.stderr.strip() == f"Error: --uri cannot be combined with {flag[0]}", result.stderr
+        assert result.stderr.strip() == f"Error: --uri cannot be combined with {flag[0].split('=')[0]}", result.stderr
     ok = subprocess.run(args=[binary(), uri, "--username", server.username, "--csv", "--no-header", "-c", "SELECT 'uri'"],
                         env=client_env(server=server), capture_output=True, text=True)
     assert ok.returncode == 0 and ok.stdout.strip() == "uri", ok.stderr
@@ -428,13 +435,13 @@ def test_a_password_change_is_reported_with_its_reason(launcher, store, tmp_path
     changer = tmp_path / "change.py"
     changer.write_text(
         "import os, subprocess, sys, time\n"
-        f"client = [{binary()!r}, '--host', 'localhost', '--port', '{rbac.running.port}', '--username', 'admin']\n"
+        f"client = [{binary()!r}, '--host', 'localhost', '--port', '{rbac.running.port}', '--tls=false', '--username', 'admin']\n"
         f"env = {{**os.environ, 'HARDCHARGER_PASSWORD': {rbac.running.password!r}}}\n"
         "subprocess.run(client + ['-c', \"ALTER USER pat WITH PASSWORD 'pw-2'\"], env=env, check=True,\n"
         "               capture_output=True)\n"
         f"time.sleep({2 * TIMEOUT_SCALE})  # access control sees the change within about a second\n")
     script = f"SELECT 'before';\n.shell {sys.executable} -I {changer}\nSELECT 'after';"
-    result = subprocess.run(args=[binary(), "--host", "localhost", "--port", str(rbac.running.port), "--username", "pat",
+    result = subprocess.run(args=[binary(), "--host", "localhost", "--port", str(rbac.running.port), "--tls=false", "--username", "pat",
                                   "--csv", "--no-header", "--command", script],
                             env=client_env(HARDCHARGER_PASSWORD="pw-1"), capture_output=True, text=True, timeout=120)
     stderr = strip_ansi(result.stderr)
@@ -443,7 +450,7 @@ def test_a_password_change_is_reported_with_its_reason(launcher, store, tmp_path
                       "(credentials_changed). Sign in again (.connect).\n"), stderr
     assert result.returncode == 1
     # The twin: with the new password the user signs in and runs it.
-    again = subprocess.run(args=[binary(), "--host", "localhost", "--port", str(rbac.running.port), "--username", "pat",
+    again = subprocess.run(args=[binary(), "--host", "localhost", "--port", str(rbac.running.port), "--tls=false", "--username", "pat",
                                  "--csv", "--no-header", "--command", "SELECT 'after'"],
                            env=client_env(HARDCHARGER_PASSWORD="pw-2"), capture_output=True, text=True, timeout=120)
     assert again.returncode == 0 and again.stdout == "after\n", again.stderr
@@ -829,7 +836,7 @@ def start_tls(launcher, certs, mutual: bool = False):
 def wait_tls(server, extra: list[str]):
     deadline = time.monotonic() + 30
     while True:
-        result = run(server, "--tls", *extra, "--csv", "--no-header", "-c", "SELECT 1")
+        result = run_tls(server, *extra, "--csv", "--no-header", "-c", "SELECT 1")
         if result.returncode == 0 or time.monotonic() > deadline or "Could not connect" not in result.stderr:
             return result
         time.sleep(0.2)
@@ -840,10 +847,10 @@ def test_tls_verifies_the_server(launcher, tmp_path):
     server = start_tls(launcher=launcher, certs=certs)
     ok = wait_tls(server, extra=["--tls-roots", str(certs["ca"])])
     assert ok.returncode == 0 and ok.stdout.strip() == "1", ok.stderr
-    wrong = run(server, "--tls", "--tls-roots", str(certs["other_ca"]), "-c", "SELECT 1")
+    wrong = run_tls(server, "--tls-roots", str(certs["other_ca"]), "-c", "SELECT 1")
     assert wrong.returncode == 1
     assert "certificate verify failed" in wrong.stderr, wrong.stderr
-    skipped = run(server, "--tls", "--tls-skip-verify", "--csv", "--no-header", "-c", "SELECT 2")
+    skipped = run_tls(server, "--tls-skip-verify", "--csv", "--no-header", "-c", "SELECT 2")
     assert skipped.returncode == 0 and skipped.stdout.strip() == "2", skipped.stderr
     # Plain HTTP to a TLS port is no Warp SQL server.
     plain = run(server, "-c", "SELECT 1")
@@ -854,7 +861,7 @@ def test_tls_checks_the_host_name(launcher, tmp_path):
     certs = make_certificates(directory=tmp_path, names=[x509.DNSName("db.example.com")])
     server = start_tls(launcher=launcher, certs=certs)
     assert wait_tls(server, extra=["--tls-skip-verify"]).returncode == 0
-    mismatch = run(server, "--tls", "--tls-roots", str(certs["ca"]), "-c", "SELECT 1")
+    mismatch = run_tls(server, "--tls-roots", str(certs["ca"]), "-c", "SELECT 1")
     assert mismatch.returncode == 1
     assert "certificate verify failed" in mismatch.stderr, mismatch.stderr
 
@@ -865,13 +872,13 @@ def test_mutual_tls(launcher, tmp_path):
     mtls = ["--mtls-cert", str(certs["client_cert"]), "--mtls-key", str(certs["client_key"])]
     ok = wait_tls(server, extra=["--tls-roots", str(certs["ca"]), *mtls])
     assert ok.returncode == 0 and ok.stdout.strip() == "1", ok.stderr
-    without = run(server, "--tls", "--tls-roots", str(certs["ca"]), "-c", "SELECT 1")
+    without = run_tls(server, "--tls-roots", str(certs["ca"]), "-c", "SELECT 1")
     assert without.returncode == 1 and without.stderr.startswith("Error: "), without.stderr
     # --tls-skip-verify with a client certificate (1.x refused the pair: Arrow Flight
     # dropped the certificate): the certificate is sent, and the server lets it in.
-    skipping = run(server, "--tls", "--tls-skip-verify", *mtls, "--csv", "--no-header", "-c", "SELECT 3")
+    skipping = run_tls(server, "--tls-skip-verify", *mtls, "--csv", "--no-header", "-c", "SELECT 3")
     assert skipping.returncode == 0 and skipping.stdout.strip() == "3", skipping.stderr
-    half = run(server, "--tls", "--tls-skip-verify", "--mtls-cert", str(certs["client_cert"]), "-c", "SELECT 1")
+    half = run_tls(server, "--tls-skip-verify", "--mtls-cert", str(certs["client_cert"]), "-c", "SELECT 1")
     assert half.returncode == 1
     assert "Error: mTLS private key must be provided with mTLS certificate" in half.stderr, half.stderr
 
@@ -953,7 +960,8 @@ def test_uri_against_plain_and_tls_servers(launcher, server, tmp_path):
     # Without ?tls=false the URI is HTTPS, which a plain-HTTP server can't answer.
     tls_to_plain = subprocess.run(args=[binary(), plain, "--username", server.username, "-c", "SELECT 1"],
                                   env=client_env(server=server), capture_output=True, text=True, timeout=60)
-    assert tls_to_plain.returncode == 1 and tls_to_plain.stderr.startswith("Error: "), tls_to_plain.stderr
+    assert tls_to_plain.returncode == 1
+    assert tls_to_plain.stderr == plain_http_hint(host="localhost", port=server.port), tls_to_plain.stderr
 
     certs = make_certificates(directory=tmp_path, names=LOCAL_NAMES)
     tls_server = start_tls(launcher=launcher, certs=certs)
@@ -985,6 +993,137 @@ def test_dot_connect_takes_a_uri_then_the_user_and_password(server):
                          input=f".connect hardcharger://localhost:{server.port}?username={server.username}\n")
     assert "unknown parameter(s) username (username: --username)" in old.stderr, old.stderr
     assert "Connected to" not in old.stdout
+
+
+# ---- Added: TLS is the default, with or without a URI (1.x's client was plaintext) ----
+
+
+def plain_http_hint(host: str, port: int) -> str:
+    return (f"Error: The server at {host}:{port} speaks plain HTTP, not TLS. Add --tls=false (or ?tls=false in a "
+            "hardcharger:// URI) to connect without encryption.\n")
+
+
+class RecordingProxy:
+    """Forwards 127.0.0.1:<port> to a server and keeps every byte the client sends."""
+
+    def __init__(self, target_port: int):
+        import socket
+        import threading
+        self.target_port = target_port
+        self.sent: list[bytes] = []  # per client connection, everything it sent
+        self.lock = threading.Lock()
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(16)
+        self.port = self.sock.getsockname()[1]
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self):
+        import socket
+        import threading
+        while True:
+            try:
+                client, _ = self.sock.accept()
+            except OSError:
+                return
+            upstream = socket.create_connection(("127.0.0.1", self.target_port))
+            with self.lock:
+                index = len(self.sent)
+                self.sent.append(b"")
+
+            def pump(src, dst, record):
+                try:
+                    while data := src.recv(65536):
+                        if record:
+                            with self.lock:
+                                self.sent[index] += data
+                        dst.sendall(data)
+                except OSError:
+                    pass
+                finally:
+                    for end in (src, dst):
+                        try:
+                            end.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
+
+            threading.Thread(target=pump, args=(client, upstream, True), daemon=True).start()
+            threading.Thread(target=pump, args=(upstream, client, False), daemon=True).start()
+
+    def close(self):
+        self.sock.close()
+
+
+@pytest.fixture
+def proxy(server):
+    recording = RecordingProxy(target_port=server.port)
+    yield recording
+    recording.close()
+
+
+def test_the_default_sends_a_client_hello(first_bytes):
+    result = subprocess.run(args=[binary(), "--host", "127.0.0.1", "--port", str(first_bytes.port), "--username", "joe",
+                                  "-c", "SELECT 1"], env=client_env(HARDCHARGER_PASSWORD="never-sent-in-plaintext"),
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1, result.stdout
+    assert first_bytes.received, "the client never connected"
+    for data in first_bytes.received:
+        assert data[:1] == b"\x16", f"not a TLS handshake: {data[:40]!r}"
+        assert b"HTTP/" not in data and b"never-sent-in-plaintext" not in data, data[:200]
+
+
+@pytest.mark.parametrize("form", ["flags", "uri"])
+def test_the_default_against_a_plain_server_says_so_and_never_sends_the_password(server, proxy, form):
+    target = (["--host", "127.0.0.1", "--port", str(proxy.port)] if form == "flags"
+              else [f"hardcharger://127.0.0.1:{proxy.port}"])
+    result = subprocess.run(args=[binary(), *target, "--username", server.username, "-c", "SELECT 1"],
+                            env=client_env(server=server), capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1, result.stdout
+    assert result.stderr == plain_http_hint(host="127.0.0.1", port=proxy.port), result.stderr
+    # On the wire: TLS ClientHellos only (the handshake, then the probe that tells HTTP from
+    # other TLS failures). No HTTP request, no password, no fallback to plaintext.
+    assert proxy.sent, "the client never connected"
+    for data in proxy.sent:
+        assert data[:1] == b"\x16", f"not a TLS handshake: {data[:40]!r}"
+        assert b"HTTP/" not in data, data[:200]
+        assert server.password.encode() not in data
+
+
+def test_tls_false_is_plain_http(server, proxy):
+    result = subprocess.run(args=[binary(), "--host", "127.0.0.1", "--port", str(proxy.port), "--tls=false",
+                                  "--username", server.username, "--csv", "--no-header", "-c", "SELECT 'plain'"],
+                            env=client_env(server=server), capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0 and result.stdout.strip() == "plain", result.stderr
+    assert proxy.sent and proxy.sent[0].startswith(b"GET /warp HTTP/1.1\r\n"), proxy.sent[:1]
+
+
+def test_hardcharger_tls_false_in_the_environment(server, first_bytes):
+    env = client_env(server=server, HARDCHARGER_TLS="false")
+    ok = subprocess.run(args=[binary(), "--host", "localhost", "--port", str(server.port), "--username",
+                              server.username, "--csv", "--no-header", "-c", "SELECT 'env'"],
+                        env=env, capture_output=True, text=True, timeout=60)
+    assert ok.returncode == 0 and ok.stdout.strip() == "env", ok.stderr
+    # --tls on the command line wins over the variable: a ClientHello, never plaintext.
+    flag = subprocess.run(args=[binary(), "--host", "127.0.0.1", "--port", str(first_bytes.port), "--tls",
+                                "--username", "joe", "-c", "SELECT 1"], env=env, capture_output=True, text=True,
+                          timeout=60)
+    assert flag.returncode == 1
+    assert first_bytes.received and first_bytes.received[0][:1] == b"\x16", first_bytes.received[:1]
+
+
+def test_tls_takes_true_or_false():
+    result = subprocess.run(args=[binary(), "--tls=maybe", "-c", "SELECT 1"], env=client_env(), capture_output=True,
+                            text=True)
+    assert result.returncode == 1
+    assert result.stderr.startswith(
+        "Error: the argument ('maybe') for option '--tls' is invalid: want true or false\n"), result.stderr
+
+
+def test_help_says_tls_is_the_default():
+    result = subprocess.run(args=[binary(), "--help"], env=client_env(), capture_output=True, text=True)
+    assert result.returncode == 0
+    help_text = " ".join(result.stdout.split())
+    assert "--tls[=BOOL] TLS (HTTPS), on by default; --tls=false for plain HTTP" in help_text, result.stdout
 
 
 def test_the_environment_never_changes_a_uri(server):
@@ -1036,7 +1175,7 @@ def test_external_auth_signs_in_through_the_browser(launcher, idp, tmp_path):
                                   "--oauth-client-id", idp.client_id, "--oauth-client-secret", idp.client_secret,
                                   "--oauth-port", str(oauth_port)])
     idp.valid_code = "browser-code-1"
-    args = [binary(), "--host", "localhost", "--port", str(server.port), "--auth-type", "external",
+    args = [binary(), "--host", "localhost", "--port", str(server.port), "--tls=false", "--auth-type", "external",
             "--oauth-port", str(oauth_port), "--csv", "--no-header", "-c", "SELECT HARDCHARGER_USER()"]
     env = client_env(HARDCHARGER_BROWSER=str(fake_browser(tmp_path=tmp_path, code="browser-code-1")))
     result = subprocess.run(args=args, env=env, capture_output=True, text=True, timeout=60)

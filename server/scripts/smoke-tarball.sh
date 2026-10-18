@@ -55,7 +55,7 @@ grep -aq 'https-true' https.arrows || { echo "the httpfs read returned no https-
 # The command-line client from the same tarball, against the same server.
 client="$(dirname "$bin")/hardcharger"
 "$client" --version
-answer=$(HARDCHARGER_PASSWORD=smoke-password "$client" --host 127.0.0.1 --port 31337 --username smoke \
+answer=$(HARDCHARGER_PASSWORD=smoke-password "$client" --host 127.0.0.1 --port 31337 --tls=false --username smoke \
            --csv --no-header -c "SELECT 'client-' || (40 + 2)")
 [ "$answer" = client-42 ] || { echo "the client answered '$answer'"; exit 1; }
 echo "smoke test passed: $("$bin" --version | head -1)"

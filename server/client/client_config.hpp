@@ -40,7 +40,8 @@ struct ClientConfig {
   bool password_provided = false;
 
   // TLS
-  bool use_tls = false;
+  bool use_tls = true;     // TLS unless --tls=false, HARDCHARGER_TLS=false or a URI's ?tls=false
+  bool tls_given = false;  // --tls on the command line (the environment doesn't override it)
   std::string tls_roots;
   bool tls_skip_verify = false;
   std::string mtls_cert;
@@ -102,7 +103,8 @@ struct ClientConfig {
 
 // Fills the options not set on the command line from the environment: HARDCHARGER_HOST,
 // HARDCHARGER_PORT, HARDCHARGER_USER (falling back to HARDCHARGER_ADMIN_USERNAME, the
-// server's), HARDCHARGER_PASSWORD, HARDCHARGER_TLS, HARDCHARGER_TLS_ROOTS,
+// server's), HARDCHARGER_PASSWORD, HARDCHARGER_TLS (true/false: TLS is on unless it, --tls=false
+// or a URI says false), HARDCHARGER_TLS_ROOTS,
 // HARDCHARGER_OAUTH_PORT, HARDCHARGER_OAUTH_BASE_URL, HARDCHARGER_SESSION_TAG,
 // HARDCHARGER_QUERY_TAG and HARDCHARGER_RESULT_PARTITIONS. No GIZMOSQL_* variable is read.
 void ResolveEnvironmentVariables(ClientConfig& config);

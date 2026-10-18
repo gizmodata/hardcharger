@@ -350,4 +350,40 @@ TEST(ClientConnectionUriTest, TheEnvironmentNeverChangesAUri) {
   EXPECT_TRUE(flags.use_tls);
 }
 
+// TLS is on by default, with or without a URI (1.x's client was plaintext unless --tls).
+// HARDCHARGER_TLS=false turns it off for --host/--port; --tls on the command line and a URI
+// win over the variable; a value that isn't true or false keeps TLS on.
+TEST(ClientTlsDefaultTest, OnByDefaultAndOffOnlyWhenAsked) {
+  ScopedEnv tls("HARDCHARGER_TLS");
+  ClientConfig defaults;
+  ResolveEnvironmentVariables(defaults);
+  EXPECT_TRUE(defaults.use_tls);
+
+  for (const std::string off : {"false", "FALSE", "0"}) {
+    tls.Set(off);
+    ClientConfig config;
+    ResolveEnvironmentVariables(config);
+    EXPECT_FALSE(config.use_tls) << off;
+  }
+  for (const std::string on : {"true", "1", "yes", "off", ""}) {
+    tls.Set(on);
+    ClientConfig config;
+    std::ostringstream captured;
+    auto* old = std::cerr.rdbuf(captured.rdbuf());
+    ResolveEnvironmentVariables(config);
+    std::cerr.rdbuf(old);
+    EXPECT_TRUE(config.use_tls) << on;
+  }
+
+  tls.Set("false");
+  ClientConfig flag;  // --tls (or --tls=true) given
+  flag.tls_given = true;
+  ResolveEnvironmentVariables(flag);
+  EXPECT_TRUE(flag.use_tls);
+  ClientConfig uri;
+  ASSERT_TRUE(ParseConnectionURI("hardcharger://h", uri));
+  ResolveEnvironmentVariables(uri);
+  EXPECT_TRUE(uri.use_tls);
+}
+
 }  // namespace hardcharger::client

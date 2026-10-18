@@ -1,9 +1,11 @@
 // The client's command-line parser: long options (--name VALUE, --name=VALUE), short
-// ones (-x VALUE, -xVALUE), switches, and one positional argument. Like
+// ones (-x VALUE, -xVALUE), switches, booleans (--name, --name=true|false), and one
+// positional argument. Like
 // Boost.ProgramOptions (which GizmoSQL 1.x used), an unknown option, a missing or
 // malformed value, or an option given twice is an error.
 #pragma once
 
+#include <cctype>
 #include <iostream>
 #include <optional>
 #include <set>
@@ -25,6 +27,11 @@ class CommandLine {
     entries_.push_back({Kind::kFlag, std::move(name), short_name, "", std::move(help), {nullptr, nullptr, target}});
   }
 
+  // A boolean: --name is true, --name=VALUE takes true/false/1/0 (any case). A value after a
+  // space is not taken (it would read as the positional argument).
+  void Bool(std::string name, char short_name, std::string help, bool* target) {
+    entries_.push_back({Kind::kBool, std::move(name), short_name, "[=BOOL]", std::move(help), {nullptr, nullptr, target}});
+  }
   // Parses argv; returns an error message, or nullopt. The positional argument (at most
   // one) goes to *positional.
   std::optional<std::string> Parse(int argc, char** argv, std::string* positional) {
@@ -53,7 +60,7 @@ class CommandLine {
         shown = arg.substr(0, 2);
         if (entry == nullptr) return "unrecognised option '" + shown + "'";
         if (arg.size() > 2) {
-          if (entry->kind == Kind::kFlag) return "option '" + shown + "' takes no value";
+          if (entry->kind == Kind::kFlag || entry->kind == Kind::kBool) return "option '" + shown + "' takes no value";
           inline_value = arg.substr(2);
         }
       } else {
@@ -66,6 +73,23 @@ class CommandLine {
       if (entry->kind == Kind::kFlag) {
         if (inline_value) return "option '--" + entry->name + "' takes no value";
         *entry->target.flag = true;
+        continue;
+      }
+      if (entry->kind == Kind::kBool) {
+        if (!inline_value) {
+          *entry->target.flag = true;
+          continue;
+        }
+        std::string lower = *inline_value;
+        for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (lower == "true" || lower == "1") {
+          *entry->target.flag = true;
+        } else if (lower == "false" || lower == "0") {
+          *entry->target.flag = false;
+        } else {
+          return "the argument ('" + *inline_value + "') for option '--" + entry->name +
+                 "' is invalid: want true or false";
+        }
         continue;
       }
       std::string value;
@@ -103,7 +127,7 @@ class CommandLine {
       std::string left = "  ";
       left += entry.short_name != 0 ? std::string("-") + entry.short_name + ", " : "    ";
       left += "--" + entry.name;
-      if (!entry.metavar.empty()) left += " " + entry.metavar;
+      if (!entry.metavar.empty()) left += (entry.kind == Kind::kBool ? "" : " ") + entry.metavar;
       constexpr size_t kColumn = 32;
       if (left.size() + 2 > kColumn) {
         out << left << "\n" << std::string(kColumn, ' ');
@@ -115,7 +139,7 @@ class CommandLine {
   }
 
  private:
-  enum class Kind { kSection, kValue, kInt, kFlag };
+  enum class Kind { kSection, kValue, kInt, kFlag, kBool };
   struct Target {
     std::string* text;
     int* number;

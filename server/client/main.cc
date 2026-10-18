@@ -67,7 +67,9 @@ int main(int argc, char** argv) {
            "argument; not with --host, --port or --tls)",
            &uri_flag);
   cl.Section("TLS");
-  cl.Flag("tls", 0, "Use TLS (HTTPS) with --host and --port (env: HARDCHARGER_TLS; a URI is HTTPS unless ?tls=false)",
+  cl.Bool("tls", 0,
+          "TLS (HTTPS), on by default; --tls=false for plain HTTP to a server without TLS (env: "
+          "HARDCHARGER_TLS=false; in a URI, ?tls=false)",
           &config.use_tls);
   cl.Value("tls-roots", 0, "FILE", "Trusted root certificates (PEM; default: the system's) (env: HARDCHARGER_TLS_ROOTS)",
            &config.tls_roots);
@@ -120,6 +122,7 @@ int main(int argc, char** argv) {
     std::cerr << "Try '" << argv[0] << " --help' for more information." << std::endl;
     return 1;
   }
+  config.tls_given = cl.Given("tls");
 
   if (help) {
     std::cout << "Usage: hardcharger [OPTIONS] [URI]" << std::endl << std::endl;
@@ -198,7 +201,7 @@ int main(int argc, char** argv) {
     }
     if (!config.use_tls) {
       std::cerr << (uri_provided ? "Error: --auth-type mtls needs TLS: drop ?tls=false from the URI"
-                                 : "Error: --auth-type mtls needs --tls")
+                                 : "Error: --auth-type mtls needs TLS: drop --tls=false (or HARDCHARGER_TLS=false)")
                 << std::endl;
       return 1;
     }

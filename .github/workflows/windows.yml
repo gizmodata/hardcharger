@@ -360,7 +360,7 @@ jobs:
             -ContentType application/json -Body '{"grant_type":"password","username":"hardcharger","password":"change-me"}').access_token
           # The client in the zip, against it.
           $env:HARDCHARGER_PASSWORD = 'change-me'
-          $answer = & ".\hardcharger-${{ matrix.name }}\bin\hardcharger.exe" -h 127.0.0.1 -u hardcharger --csv --no-header -c "SELECT 6 * 7"
+          $answer = & ".\hardcharger-${{ matrix.name }}\bin\hardcharger.exe" -h 127.0.0.1 --tls=false -u hardcharger --csv --no-header -c "SELECT 6 * 7"
           Write-Host "client: $answer"
           Stop-Process -Id $server.Id
           Get-Content server.log -Tail 20

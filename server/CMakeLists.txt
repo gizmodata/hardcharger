@@ -245,6 +245,7 @@ add_library(hardcharger_client STATIC
   client/pager.cc
   client/password_prompt.cc
   client/platform.cc
+  client/plain_http_probe.cc
   client/shell_completer.cc
   client/shell_loop.cc
   client/sql_processor.cc

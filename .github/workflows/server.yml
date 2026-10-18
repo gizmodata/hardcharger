@@ -913,7 +913,7 @@ jobs:
           for _ in $(seq 1 30); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
           curl -sf http://127.0.0.1:31337/warp
           # The client in the image reaches the server it runs beside.
-          docker exec -e HARDCHARGER_PASSWORD=smoke hc hardcharger --host 127.0.0.1 --username hardcharger \
+          docker exec -e HARDCHARGER_PASSWORD=smoke hc hardcharger --host 127.0.0.1 --tls=false --username hardcharger \
             --csv --no-header -c "SELECT 'image client'" | grep -qx 'image client'
           docker logs hc
           docker rm -f hc

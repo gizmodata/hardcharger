@@ -12,14 +12,6 @@
 
 namespace hardcharger::client {
 
-namespace {
-bool ParseBoolValue(const std::string& val) {
-  std::string lower = val;
-  std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-  return lower == "true" || lower == "1";
-}
-}  // namespace
-
 std::string OutputModeToString(OutputMode mode) {
   switch (mode) {
     case OutputMode::TABLE:     return "table";
@@ -105,9 +97,19 @@ void ResolveEnvironmentVariables(ClientConfig& config) {
     }
   }
 
-  if (!config.use_tls && !config.uri_given) {
+  if (!config.tls_given && !config.uri_given) {
     if (const char* val = get_env("HARDCHARGER_TLS")) {
-      config.use_tls = ParseBoolValue(val);
+      std::string lower = val;
+      std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+      if (lower == "true" || lower == "1") {
+        config.use_tls = true;
+      } else if (lower == "false" || lower == "0") {
+        config.use_tls = false;
+      } else {
+        // An unreadable value keeps TLS on: it never turns encryption off by accident.
+        std::cerr << "Warning: HARDCHARGER_TLS='" << val << "' is not true or false; TLS stays on" << std::endl;
+        config.use_tls = true;
+      }
     }
   }
 

@@ -8,6 +8,8 @@
 //     (test_client_cli.py proves it end to end against an mTLS server).
 //   - DotShow: no "edition:" line (Hardcharger has no editions); engine and arrow come
 //     from Warp SQL's server-info document.
+//   - Every connection to the test server sets use_tls = false: TLS is the client's default
+//     (1.x's was plaintext); the server under test is plain HTTP.
 //   - URI cases (ParseConnectionURI*, BuildConnectionURI*): re-expressed. The scheme is
 //     hardcharger://, with the Hardcharger ADBC driver's rules: HTTPS unless ?tls=false, port
 //     31337, and tls the only parameter (1.x took username, useEncryption, ...; they are
@@ -86,6 +88,7 @@ class InteractiveClientFixture : public ::testing::Test {
     ClientConfig config;
     config.host = "localhost";
     config.port = GetPort();
+    config.use_tls = false;  // the test server is plain HTTP; TLS is the default
     config.username = GetUsername();
     config.password = GetPassword();
     config.password_provided = true;
@@ -224,6 +227,7 @@ TEST_F(InteractiveClientFixture, ConnectWithInvalidCredentials) {
   ClientConfig config;
   config.host = "localhost";
   config.port = GetPort();
+  config.use_tls = false;  // the test server is plain HTTP; TLS is the default
   config.username = "wronguser";
   config.password = "wrongpass";
   config.password_provided = true;
@@ -1385,9 +1389,10 @@ TEST_F(InteractiveClientFixture, BuildConnectionURIBasic) {
   config.port = 31337;
   config.username = "admin";
 
-  // Re-expressed: no credentials in the URI; plain HTTP says ?tls=false.
-  std::string uri = BuildConnectionURI(config);
-  EXPECT_EQ(uri, "hardcharger://localhost:31337?tls=false");
+  // Re-expressed: no credentials in the URI; TLS is the default, and plain HTTP says ?tls=false.
+  EXPECT_EQ(BuildConnectionURI(config), "hardcharger://localhost:31337");
+  config.use_tls = false;
+  EXPECT_EQ(BuildConnectionURI(config), "hardcharger://localhost:31337?tls=false");
 }
 
 TEST_F(InteractiveClientFixture, BuildConnectionURIWithTLS) {

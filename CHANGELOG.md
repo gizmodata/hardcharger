@@ -180,6 +180,20 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- `hardcharger` (the client) uses TLS by default, with a URI or without, as the drivers do
+  (1.x's client, and Hardcharger's until now, were plaintext unless `--tls`). `--tls` is a
+  boolean: `--tls=false` (or `HARDCHARGER_TLS=false`, or a URI's `?tls=false`) is plain HTTP;
+  `--tls` on the command line wins over the variable, and a variable that isn't `true` or
+  `false` keeps TLS on. A TLS handshake that meets a plain-HTTP server fails with "The server
+  at HOST:PORT speaks plain HTTP, not TLS. Add --tls=false (or ?tls=false in a hardcharger://
+  URI) to connect without encryption.": the client tells it from other TLS failures by sending
+  one more ClientHello and seeing `HTTP/` where a ServerHello belongs, and never falls back to
+  plaintext. The README, the migration guide, `--help`, the tarball smoke test and the image
+  and Windows checks pass `--tls=false` to their plain-HTTP servers. Tests:
+  `ClientTlsDefaultTest`; `test_client_cli.py` checks on the wire that the default sends a
+  ClientHello, that against a plain server the client prints exactly that hint and sends only
+  ClientHellos (no HTTP request, no password), and that `--tls=false`, `HARDCHARGER_TLS=false`
+  and `?tls=false` connect.
 - The refusal of a HUGEINT or UHUGEINT value decimal128(38, 0) can't hold says to run `SET
   SESSION arrow_lossless_conversion = true` (was "set the session option
   arrow_lossless_conversion to true"): a plain `SET` of that setting is DuckDB's `SET
@@ -230,7 +244,7 @@ own changelog in `python/CHANGELOG.md`.
   and `--tls` conflict with it, and `HARDCHARGER_HOST`, `HARDCHARGER_PORT` and `HARDCHARGER_TLS`
   no longer change what a URI names (`HARDCHARGER_HOST` replaced `hardcharger://localhost`'s
   host). `.connect URI [USERNAME [PASSWORD]]` takes the same URIs, and `.show` prints one.
-  Without a URI nothing changes (`--host`/`--port` are plain HTTP unless `--tls`). Tests: every
+  Tests: every
   form, in `client_config_test.cc` (`ClientConnectionUriTest`, 7 cases); end to end in
   `test_client_cli.py`, including that `?tls=true` (or no `tls` at all) to a listener puts a TLS
   ClientHello on the wire and never an HTTP request or the password, which the old client did.

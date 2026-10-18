@@ -45,6 +45,9 @@ USERNAME="shelltester"
 PASSWORD="shellpass123"
 DB_FILE="$WORK/shell_test_client.db"
 export HARDCHARGER_PASSWORD="$PASSWORD"
+# The test server is plain HTTP, and the client's default is TLS (1.x's was plaintext): every
+# connection here is told so, through the variable (test_client_cli.py covers --tls=false).
+export HARDCHARGER_TLS=false
 
 # Cleanup function
 cleanup() {

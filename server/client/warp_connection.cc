@@ -1,5 +1,7 @@
 #include "warp_connection.hpp"
 
+#include "plain_http_probe.hpp"
+
 #include <iostream>
 #include <utility>
 
@@ -112,6 +114,16 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
       }
       return arrow::Status::IOError("Could not connect to " + origin + " — is the server running?" +
                                     (what.find("timed out") != std::string::npos ? " (timed out)" : ""));
+    }
+    // A TLS handshake that met a plain-HTTP server: say so, and how to connect without TLS. Never
+    // fall back to plaintext by itself.
+    if (e.code() == "tls_failed" && config.use_tls && std::string(e.what()).find("TLS handshake") != std::string::npos &&
+        AnswersTlsWithHttp(config.host, config.port)) {
+      const bool v6 = config.host.find(':') != std::string::npos;
+      return arrow::Status::IOError("The server at " + (v6 ? "[" + config.host + "]" : config.host) + ":" +
+                                    std::to_string(config.port) +
+                                    " speaks plain HTTP, not TLS. Add --tls=false (or ?tls=false in a "
+                                    "hardcharger:// URI) to connect without encryption.");
     }
     // What the server said: its problem code, and its detail when it sent one. Nothing
     // else (the request, the credentials) goes into the message.

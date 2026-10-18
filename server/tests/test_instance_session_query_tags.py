@@ -141,7 +141,7 @@ def test_instance_tag_needs_no_license(launcher):
 def run_client(server, *args: str, **env: str) -> subprocess.CompletedProcess:
     if not CLIENT_BINARY.exists():
         pytest.fail(reason=f"{CLIENT_BINARY} is missing: build the server first")
-    return subprocess.run(args=[str(CLIENT_BINARY), "--host", "127.0.0.1", "--port", str(server.port),
+    return subprocess.run(args=[str(CLIENT_BINARY), "--host", "127.0.0.1", "--port", str(server.port), "--tls=false",
                                 "--username", server.username, "--csv", "--no-header", *args],
                           env={**clean_environment(), "HARDCHARGER_PASSWORD": server.password, **env},
                           capture_output=True, text=True, timeout=60)

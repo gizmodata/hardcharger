@@ -6,6 +6,8 @@ Hardcharger's names) and run here: one case per assertion, so a failure names it
 apply. The two URI cases give the user with --username and plain HTTP with ?tls=false:
 Hardcharger's URIs follow the ADBC driver's (HTTPS unless ?tls=false, tls the only parameter),
 where 1.x's carried ?username= and were plain HTTP by default.
+The script exports HARDCHARGER_TLS=false: the client's default is TLS (1.x's was plaintext),
+and the test server is plain HTTP.
 """
 
 import pathlib
