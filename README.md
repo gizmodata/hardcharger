@@ -49,6 +49,38 @@ Enterprise in GizmoSQL is in every Hardcharger build.
 - 🌐 **Ready to scale out.** Results are already described as partitions with locations,
   so distributed query execution can arrive without a protocol change.
 
+## 🖥️ Built-in web UI
+
+<p align="center">
+  <img src="docs/assets/web-ui-query-light.png" alt="Hardcharger's web UI, light theme: the schema browser, the SQL editor and a result" width="49%">
+  <img src="docs/assets/web-ui-query-dark.png" alt="Hardcharger's web UI, dark theme" width="49%">
+</p>
+
+Hardcharger has a web UI compiled into the server binary: nothing extra to install, and it is
+served on the server's own port and TLS certificate. It is off by default; `--web-ui` turns it on
+(or `HARDCHARGER_WEB_UI=true`, or `web_ui: true` in the YAML file).
+
+```bash
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 -subj /CN=localhost -addext subjectAltName=DNS:localhost -keyout server.key -out server.pem
+HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert server.pem --tls-key server.key --database demo.duckdb
+# open https://localhost:31337/ui and sign in as hardcharger / change-me (the certificate is self-signed)
+```
+
+- ✍️ **SQL editor**: Ctrl/⌘+Enter runs the statement under the cursor or the selection;
+  tabs, each with its own session; Cancel stops the statement on the server.
+- 📊 **Results grid** for up to a million rows, in DuckDB's own formatting; Ctrl/⌘+C copies
+  cells in every browser, Safari included.
+- 🗂️ **Schema browser** that follows access control: each user sees only the catalogs,
+  schemas, tables and columns their roles allow.
+- 💾 **Exports** to CSV, TSV, JSON and Parquet, made in the browser.
+- 🔏 **Certificate sign-in** under mutual TLS: the browser presents its client certificate to
+  load `/ui` at all, and with `--mtls-certificate-sign-in` the page offers **Sign in with my
+  certificate**, no password needed.
+- 🛡️ The server's own sign-in, a short-lived token kept only in the tab, and a strict
+  Content-Security-Policy: nothing loads from another origin.
+
+The UI's source is in [`ui/`](ui/README.md), built and tested with the server in the same CI run.
+
 ## 🚀 Performance
 
 Measured on one machine (Apple M5 Max) against GizmoSQL 1.41 with the same data
@@ -315,34 +347,12 @@ is plain HTTP to a local server. It is GizmoSQL's
 [docs/migrating-from-gizmosql.md](docs/migrating-from-gizmosql.md#the-command-line-client)
 maps its options and lists what changed.
 
-## 🖥️ Web UI
-
-`--web-ui` (`HARDCHARGER_WEB_UI`, `web_ui: true`) serves
-[Hardcharger UI](https://github.com/gizmodata/hardcharger-ui) at `/ui`, on the server's own
-port, origin and TLS certificate: a SQL editor, results grid, schema browser, exports and
-the session list, in the browser, with the server's own sign-in and access control.
-
-```bash
-HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --database demo.duckdb
-# open http://127.0.0.1:31337/ui/ and sign in as hardcharger / change-me
-```
-
-The UI is a static app built into the binary (`-DHARDCHARGER_WEB_UI=<hardcharger-ui
-tarball>`, which the release builds set; [server/cmake/web_ui.cmake](server/cmake/web_ui.cmake)
-pins its version and checks every file). It is off unless asked for, and a build without it
-refuses `--web-ui`. Its answers carry a strict Content-Security-Policy, hashed files are
-cached for good, and `index.html` is revalidated, so an upgrade reaches open tabs.
-
-Under mutual TLS (`--mtls-ca-cert`) the browser must present an accepted client certificate to
-load `/ui` at all, as for any client (with `--mtls-require-client-cert=false` it loads without
-one). With `--mtls-certificate-sign-in`, the sign-in page offers **Sign in with my certificate**;
-the page's every request carries the certificate, so the bound token works throughout.
-
 ## 📦 Everything included
 
 | | |
 |---|---|
 | 🦆 DuckDB 2.0, DuckLake and DuckDB's extensions | ✅ |
+| 🖥️ Built-in web UI: SQL editor, results grid, schema browser, exports (`--web-ui`) | ✅ |
 | ⚡ Warp SQL: streamed and resumable results, bind parameters, prepared statements, bulk ingest, zstd | ✅ |
 | 🔐 TLS and mTLS, password and token sign-in, SSO via OIDC/JWKS, browser sign-in, authorized e-mail filters | ✅ |
 | 👥 Role-based access control: users, roles, grants, ownership, system privileges | ✅ |
@@ -477,9 +487,18 @@ OPENSSL_ROOT_DIR=$(brew --prefix openssl@3) cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
-To embed the web UI, add `-DHARDCHARGER_WEB_UI=/path/to/hardcharger-ui-<version>.tar.gz` (a
-hardcharger-ui release, or `npm run build && npm run package` in a checkout of the pinned
-commit); its content SHA-256 must be the one `server/cmake/web_ui.cmake` pins.
+To embed the web UI, build it first (Node 24 or later) and point the server's build at the
+tarball it makes:
+
+```bash
+(cd ../ui && npm ci && npm run build && npm run package)   # ui/release/hardcharger-ui-<version>.tar.gz
+cmake -S . -B build -G Ninja -DHARDCHARGER_WEB_UI="$(ls "$PWD"/../ui/release/hardcharger-ui-*.tar.gz)"
+cmake --build build
+```
+
+CMake checks every file against the tarball's `MANIFEST`, gzips each one into the binary and
+logs the build's content SHA-256. [ui/README.md](ui/README.md) covers the UI's own checks and
+its browser tests.
 
 ## 🧪 Test
 
@@ -504,6 +523,9 @@ WARP_SQL_TEST_SERVER_PASSWORD_ENV=HARDCHARGER_ADMIN_PASSWORD \
 WARP_SQL_TEST_SERVER_USERNAME=warp HARDCHARGER_ADMIN_USERNAME=warp \
   .venv/bin/python -m pytest -q
 ```
+
+The web UI's lint, typecheck, unit and browser tests (Chromium and WebKit, against a server
+build that embeds it) are in [ui/README.md](ui/README.md#end-to-end-tests).
 
 The client's 1.x shell script runs on its own too (`bash server/tests/test_client_shell.sh`).
 Suites that need PostgreSQL or the S3 gateway fail, never skip, when those aren't there.
