@@ -84,11 +84,11 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
     // else (the request, the credentials) goes into the message.
     const std::string refusal =
         e.code() + (e.detail().empty() || e.detail() == e.code() ? std::string() : " (" + e.detail() + ")");
+    if (config.auth_type_mtls && e.status() == 401) {
+      return arrow::Status::IOError("Certificate sign-in to " + origin + " failed: " + refusal);
+    }
     if (e.code() == "invalid_credentials" || (e.status() == 401 && auth_attempted)) {
       return arrow::Status::IOError("Authentication failed for " + origin + ": " + refusal);
-    }
-    if (config.auth_type_mtls && e.status() == 401) {
-      return arrow::Status::IOError("Certificate sign-in to " + origin + " failed: " + e.detail());
     }
     if (e.status() == 401) {
       return arrow::Status::IOError("Connection to " + origin + " failed: " + refusal +
