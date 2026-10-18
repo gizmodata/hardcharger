@@ -156,10 +156,16 @@ def test_the_user_keeps_its_rights(mallory):
     assert mallory.scalar(sql="SELECT count(*) FROM range(3)") == 3
 
 
-def test_admin_with_rules_keeps_its_privileges(server, secret_file):
+def test_admin_with_rules_keeps_only_the_administration_that_reaches_no_data(server, secret_file):
+    # An administrator's token with rules keeps MANAGE CONFIG (instance settings, the
+    # credential ones included) and CHECKPOINT, but not files: the database files are
+    # files, and reading them would reach data around the rules (test_catalog_access_admin.py).
     boss = server.as_role(role="admin", subject="boss", catalog_access=[{"catalog": "*", "access": "write"}])
-    assert boss.scalar(sql=f"SELECT * FROM read_csv('{secret_file}')") == "file-secret-word"
     assert boss.scalar(sql="SELECT current_setting('s3_secret_access_key')") == "global-shh"
+    refused(boss, f"SELECT * FROM read_csv('{secret_file}')",
+            "which an administrator token with catalog_access rules does not hold")
+    # The twin: the administrator without rules reads it.
+    assert server.admin().scalar(sql=f"SELECT * FROM read_csv('{secret_file}')") == "file-secret-word"
 
 
 # ---- plain servers: no store, no license ----

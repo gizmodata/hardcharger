@@ -496,7 +496,7 @@ class PlanChecker {
   // principal they need write (read) access to the sequence's catalog. DuckDB binds
   // the sequence when it binds the call (its name must be a constant).
   void CheckSequenceUse(const dd::BoundFunctionExpression& call) {
-    if (!principal_.catalog_rules || principal_.rules_administrator) return;
+    if (!principal_.catalog_rules) return;
     const std::string name = Lower(compat::Str(call.Function().GetName()));
     if (name != "nextval" && name != "currval" && name != "setval") return;
     const auto& info = call.BindInfo();
@@ -563,9 +563,10 @@ class PlanChecker {
         RequireSystem(SystemPrivilege::kManageSecrets, "duckdb_secrets()");
         return;
       }
-      // The administrator with catalog_access rules may call any; everyone else only
-      // the ones that read no table and no file.
-      if (!AllowedTableFunctions().count(name) && !principal_.rules_administrator) {
+      // Only the ones that read no table and no file, the administrator with
+      // catalog_access rules included: others (pragma_storage_info('c.t'), ...) read a
+      // catalog around its rules.
+      if (!AllowedTableFunctions().count(name)) {
         Deny(principal_, "the table function " + name + " is not available under access control");
       }
       if ((name == "pragma_table_info" || name == "pragma_show") && !get.parameters.empty()) {
@@ -753,6 +754,7 @@ class PlanChecker {
                              " cannot be read, because its owner lacks a privilege on an object "
                              "the view reads");
       }
+      if (rights.principal.rules_administrator) Deny(principal_, RulesAdministratorRefusal(what, privilege));
       Deny(principal_, what + " needs the " + SystemPrivilegeName(privilege) +
                            " privilege, which user " + principal_.user_name + " does not hold");
     }

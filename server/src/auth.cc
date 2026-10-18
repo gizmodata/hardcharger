@@ -69,10 +69,12 @@ authz::Identity IdentityOf(const warpsql::Principal& principal) {
     return value && value->is_string() ? std::string(value->as_string()) : std::string();
   };
   who.credential = text("credential");
-  // [{"catalog": "prod_*", "access": "read"}, ...]; a malformed rule grants nothing.
-  if (const auto* rules = principal.claims.if_contains("catalog_access"); rules && rules->is_array()) {
+  // [{"catalog": "prod_*", "access": "read"}, ...]; a malformed rule grants nothing, and
+  // so does a claim that is there but isn't a list (null, a string, one object): rules
+  // with no rule in them, never no rules (which, for an administrator, is no limit).
+  if (const auto* rules = principal.claims.if_contains("catalog_access")) {
     std::vector<authz::CatalogAccessRule> parsed;
-    for (const auto& rule : rules->as_array()) {
+    for (const auto& rule : rules->is_array() ? rules->as_array() : boost::json::array{}) {
       const auto* object = rule.if_object();
       const auto* catalog = object ? object->if_contains("catalog") : nullptr;
       const auto* access = object ? object->if_contains("access") : nullptr;

@@ -94,6 +94,25 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Security: an administrator's token (`role: admin`) that carries `catalog_access` rules was
+  not restricted by them; GizmoSQL 1.x applies a token's rules whatever its role. It now is,
+  without and with RBAC: reads and writes per catalog (temp included) and what it sees
+  (SHOW DATABASES, `information_schema`, `duckdb_*()`, the `_hardcharger_system` views,
+  metadata requests), with 1.x's refusals ("Access denied: You do not have write access to
+  catalog ..."). An administrator without rules (the password administrator, or a token
+  without the claim) is unrestricted, as before. Like 1.x, a restricted administrator still
+  reads the instrumentation and log catalogs (never writes them) and keeps SET GLOBAL,
+  CHECKPOINT, KILL SESSION and every session in `hardcharger_sessions()`. Unlike 1.x, on
+  purpose, it holds no privilege that reaches data around its rules: no ATTACH/DETACH (it
+  could detach a denied catalog and attach its file under a name the rules allow), file
+  reads and writes, INSTALL/LOAD, secrets or EXPORT/IMPORT DATABASE; no macros or types;
+  only the table functions other rules principals get; sequences by the rules; and under
+  RBAC it runs no access-control statements (CREATE USER, GRANT, ...). docs/migrating-from-gizmosql.md
+  lists the differences.
+- Security: a `catalog_access` claim that is present but isn't a list (a string, an object,
+  `null`) was ignored, so the token kept full access (non-administrators: everything but the
+  server's own catalogs). It now grants nothing, as an empty list does (1.x treats both as
+  no rules).
 - `hardcharger` (the client): a script whose last line is a comment after the final statement
   failed with "no SQL statement given" (exit 1). Comments after a statement, on lines of their
   own and before a statement (`--` and `/* */`) are no-ops in `-c`, `-f`, a pipe and a heredoc,

@@ -447,12 +447,14 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb
       runtime_(runtime),
       sensitive_paths_(sensitive_paths),
       principal_(std::move(principal)),
-      // A rules-only administrator is unchecked and runs no access-control statements,
-      // so it needs no guard: binding it would only add the plan check's per-statement
-      // work to an unrestricted session. An RBAC administrator keeps its guard (it runs
-      // GRANT, CREATE USER, ...).
+      // A rules-only administrator without catalog_access rules is unchecked and runs no
+      // access-control statements, so it needs no guard: binding it would only add the
+      // plan check's per-statement work to an unrestricted session. One whose token
+      // carries rules is held to them (as GizmoSQL 1.x does, whatever the role), so it is
+      // bound. An RBAC administrator keeps its guard (it runs GRANT, CREATE USER, ...).
       access_controlled_(access != nullptr &&
-                         !(access->catalog_rules_only() && principal_.role == "admin")),
+                         !(access->catalog_rules_only() && principal_.role == "admin" &&
+                           !IdentityOf(principal_).catalog_access)),
       rbac_(access != nullptr && !access->catalog_rules_only()),
       id_(RandomUuid()),
       started_at_us_(NowMicros()) {

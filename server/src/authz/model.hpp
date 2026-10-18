@@ -176,10 +176,18 @@ enum class CatalogAccessLevel { kNone, kRead, kWrite };
 struct CatalogRule {
   std::string pattern;  // '*' any run, '?' one character; case-sensitive
   CatalogAccessLevel level = CatalogAccessLevel::kNone;
+  // A catalog's own name, matched as DuckDB names catalogs (no globs): the server's
+  // catalogs that an administrator reads whatever its token's rules say.
+  bool exact = false;
 };
 // The level the rules give `catalog`. DuckDB's system catalog (which holds
 // information_schema) and Hardcharger's _hardcharger_system are read for all.
 CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const std::string& catalog);
+// The system privileges an administrator's token with catalog_access rules holds:
+// MANAGE CONFIG and CHECKPOINT (the ones that reach no data).
+bool IsRulesAdministratorPrivilege(SystemPrivilege privilege);
+// The words of a refusal of one of the others to it.
+std::string RulesAdministratorRefusal(const std::string& what, SystemPrivilege privilege);
 // The words of a catalog_access refusal.
 std::string CatalogAccessDenied(const std::string& catalog, CatalogAccessLevel needed, const std::string& user);
 
@@ -201,10 +209,10 @@ struct Principal {
   std::vector<std::string> idp_groups;
   // Logged in with a scoped token: never more than this.
   std::optional<TokenScope> scope;
-  // Without a store (rules-only access control): the token's catalog_access rules
-  // decide alone, by catalog. Such a principal holds no system privilege (no files,
-  // URLs, secrets, extensions, ATTACH, server-wide or credential settings), unless it
-  // is the administrator with rules.
+  // The token's catalog_access rules decide alone, by catalog: without a store
+  // (rules-only access control), and for an administrator's token under RBAC too. Such
+  // a principal holds no system privilege (no files, URLs, secrets, extensions, ATTACH,
+  // server-wide or credential settings), unless it is the administrator with rules.
   std::optional<std::vector<CatalogRule>> catalog_rules;
   bool rules_administrator = false;
   // Catalogs the server keeps for itself (instrumentation, logs), which no one but

@@ -311,13 +311,24 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
   if (catalog_rules_only_ && !who.catalog_access && !who.superuser) {
     who.catalog_access = std::vector<CatalogAccessRule>{{"*", "write"}};
   }
-  if (catalog_rules_only_ ? !who.catalog_access : who.superuser) {
-    // The administrator without rules (rules-only), or under RBAC, is allowed everything.
+  // A token's catalog_access rules only ever narrow: they restrict an administrator's
+  // token (as in GizmoSQL 1.x, whatever the role), and under RBAC they grant a store
+  // user nothing (its grants decide).
+  const bool rules_principal = who.catalog_access && (catalog_rules_only_ || who.superuser);
+  if (who.superuser && !who.catalog_access) {
+    // The administrator without rules is allowed everything.
     principal = Principal::Superuser(who.user_name);
-  } else if (catalog_rules_only_) {
-    // The rules restrict even the administrator, who alone sees the server's catalogs.
+  } else if (rules_principal) {
+    // The rules restrict even the administrator. It alone reads the server's own
+    // catalogs (instrumentation, logs), whatever its rules say, as in 1.x (never
+    // writes them: the statement guard keeps them read-only for everyone).
     principal.user_name = who.user_name;
     std::vector<CatalogRule> rules;
+    if (who.superuser) {
+      for (const auto& managed : hidden_catalogs_) {
+        rules.push_back(CatalogRule{managed, CatalogAccessLevel::kRead, /*exact=*/true});
+      }
+    }
     for (const auto& rule : *who.catalog_access) {
       const auto level = rule.access == "write"  ? CatalogAccessLevel::kWrite
                          : rule.access == "read" ? CatalogAccessLevel::kRead
@@ -366,6 +377,7 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
   // Nothing has run on the connection yet.
   AttachRbacSession(ContextOf(connection), engine_, principal);
   std::shared_ptr<SessionGuard> guard(new SessionGuard(*this, connection, who, principal.user_id));
+  guard->unrestricted_ = principal.superuser;
   guard->credential_ = credential;
   guard->tenant_id_ = tenant;
   if (!tenant.empty()) {
@@ -521,7 +533,7 @@ std::shared_ptr<arrow::RecordBatchReader> SessionGuard::Track(
 }
 
 void SessionGuard::AuditAllowed() {
-  if (identity_.superuser) return;
+  if (unrestricted_) return;
   auto state = StateOf(connection_);
   if (!state) return;
   const auto accesses = state->TakeAccesses();
@@ -656,6 +668,10 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
     }
     if (auto category = GatedCategory(statement, permitted, named_table, table_function_allowed)) {
       if (auto privilege = SystemPrivilegeForGatedCategory(*category)) {
+        if (principal.rules_administrator) {
+          throw Error(ErrorCode::kPermissionDenied,
+                      "Hardcharger blocked " + RulesAdministratorRefusal(*category, *privilege), "42501");
+        }
         throw Error(ErrorCode::kPermissionDenied,
                     "Hardcharger blocked " + *category + ", which needs the " +
                         SystemPrivilegeName(*privilege) + " system privilege. User " +
@@ -678,8 +694,15 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
                 "Hardcharger blocked " + parsed.kind + ": the session has no access-control state",
                 "42501");
   }
-  const Principal actor =
-      identity_.superuser ? Principal::Superuser(identity_.user_name) : state->principal();
+  // An administrator's token with catalog_access rules manages no users, roles or grants:
+  // it could make itself a sign-in its rules don't hold.
+  if (identity_.superuser && !unrestricted_) {
+    throw Error(ErrorCode::kPermissionDenied,
+                "Hardcharger blocked " + parsed.kind +
+                    ": an administrator token with catalog_access rules cannot run access-control statements",
+                "42501");
+  }
+  const Principal actor = unrestricted_ ? Principal::Superuser(identity_.user_name) : state->principal();
   SessionObjectResolver resolver(*dd::capiv2::Convert(connection_));
   auto executed = engine->Execute(parsed.command, actor, resolver);
   if (!executed.ok()) {
@@ -748,7 +771,7 @@ warpsql::StatementOutcome SessionGuard::Execute(
   }
   auto busy = MarkBusy();
   try {
-    if (!identity_.superuser) CheckBeforeBind(sql);
+    if (!unrestricted_) CheckBeforeBind(sql);
     auto outcome = run();
     AuditAllowed();
     if (outcome.rows) outcome.rows = Track(std::move(outcome.rows), std::move(busy));
@@ -770,7 +793,7 @@ std::unique_ptr<warpsql::PreparedStatement> SessionGuard::Prepare(
   }
   auto busy = MarkBusy();
   try {
-    if (!identity_.superuser) CheckBeforeBind(sql);
+    if (!unrestricted_) CheckBeforeBind(sql);
     auto inner = prepare();
     // What the statement creates or drops is recorded once it has run successfully.
     auto state = StateOf(connection_);

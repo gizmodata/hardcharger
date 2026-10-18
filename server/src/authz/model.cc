@@ -268,9 +268,19 @@ CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const
     return CatalogAccessLevel::kRead;
   }
   for (const auto& rule : rules) {
-    if (GlobMatches(rule.pattern, catalog)) return rule.level;
+    if (rule.exact ? IdentifiersEqual(rule.pattern, catalog) : GlobMatches(rule.pattern, catalog)) return rule.level;
   }
   return CatalogAccessLevel::kNone;
+}
+
+bool IsRulesAdministratorPrivilege(SystemPrivilege privilege) {
+  return privilege == SystemPrivilege::kManageConfig || privilege == SystemPrivilege::kCheckpoint;
+}
+
+std::string RulesAdministratorRefusal(const std::string& what, SystemPrivilege privilege) {
+  return what + " needs the " + SystemPrivilegeName(privilege) +
+         " privilege, which an administrator token with catalog_access rules does not hold (it could reach "
+         "data its rules don't allow)";
 }
 
 std::string CatalogAccessDenied(const std::string& catalog, CatalogAccessLevel needed, const std::string& user) {
@@ -458,7 +468,11 @@ bool Snapshot::LostRightsSince(const Snapshot& before, const Principal& principa
 
 bool Snapshot::HasSystemPrivilege(const Principal& principal, SystemPrivilege privilege) const {
   if (principal.superuser) return true;
-  if (principal.catalog_rules) return principal.rules_administrator;
+  // An administrator's token with catalog_access rules keeps the administration that
+  // reaches no data (instance settings, checkpoints). The rest reaches data by a path
+  // the rules don't name: DETACH a denied catalog and ATTACH its file under a name they
+  // allow, read the database file, an extension's scanner, a secret's remote storage.
+  if (principal.catalog_rules) return principal.rules_administrator && IsRulesAdministratorPrivilege(privilege);
   if (principal.scope) return false;  // a scoped token holds none
   const auto roles = RolesOf(principal);
   for (const auto& r : system_privileges_) {

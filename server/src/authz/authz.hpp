@@ -209,7 +209,7 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   void Detach();
 
   const std::string& user_name() const { return identity_.user_name; }
-  bool superuser() const { return identity_.superuser; }
+  bool superuser() const { return identity_.superuser; }  // the token's role is admin (rules or not)
 
  private:
   SessionGuard(AccessControl& owner, duckdb_v2_connection_handle connection, Identity identity,
@@ -229,6 +229,7 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
 
   AccessControl& owner_;
   const Identity identity_;
+  bool unrestricted_ = false;  // the superuser: an administrator without catalog_access rules
   const std::string user_id_;  // empty for the administrator
   std::string credential_;     // the user's password hash when the session started
   std::string tenant_id_;

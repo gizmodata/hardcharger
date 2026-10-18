@@ -192,3 +192,24 @@ GizmoSQL 1.x server created.
 | server tokens with `iss=gizmosql` | only tokens this server signs (`iss=hardcharger`) |
 | the `.gizmosql-metrics-state` exit marker | `.hardcharger-metrics-state` |
 | license keys (`GIZMOSQL_LICENSE_KEY`, `--license-key-file`) | (none: no license) |
+
+### `catalog_access` rules on an administrator's token
+
+Both apply a token's `catalog_access` rules whatever its role: an `admin` token with rules
+reads and writes only where they allow (temp included) and sees only those catalogs; an
+administrator without rules (the password administrator, or a token without the claim) is
+unrestricted. Both let a restricted administrator read, never write, the server's own
+catalogs (instrumentation, logs) whatever its rules, and keep SET GLOBAL, CHECKPOINT, KILL
+SESSION and every session in `hardcharger_sessions()`. Hardcharger differs on purpose where
+1.x's administrator rights reached data around the rules:
+
+| A restricted administrator (`role: admin` with `catalog_access`) | GizmoSQL 1.x | Hardcharger |
+|---|---|---|
+| ATTACH / DETACH | allowed | refused (DETACH a denied catalog, ATTACH its file under a name the rules allow, read it) |
+| files: `read_csv()`, `read_blob()`, `COPY ... FROM/TO` a file, `FROM 'file'` | allowed | refused (the database files themselves are files) |
+| INSTALL / LOAD, CREATE / DROP SECRET, EXPORT / IMPORT DATABASE | allowed | refused |
+| CREATE MACRO / TYPE | allowed | refused (as for every non-superuser under the plan check) |
+| table functions such as `pragma_storage_info('c.t')` | allowed | only those any rules principal gets |
+| `nextval()` / `currval()` on a sequence | any | by the rules of the sequence's catalog |
+| access-control statements under RBAC (CREATE USER, GRANT, ...) | allowed (1.x drops the rules under RBAC) | refused, and the rules hold under RBAC |
+| a claim that isn't a non-empty list (`[]`, a string, an object, `null`) | no rules: unrestricted | grants nothing |
