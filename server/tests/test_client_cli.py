@@ -32,7 +32,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from conftest import BASH, CLIENT_BINARY, clean_environment, free_port, home_env, interrupt, interruptible
+from conftest import BASH, CLIENT_BINARY, TIMEOUT_SCALE, clean_environment, free_port, home_env, interrupt, interruptible
 
 pytestmark = pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
 
@@ -310,8 +310,15 @@ def test_ctrl_c_cancels_the_running_statement_and_the_script_goes_on(server):
                                      f"{SLOW_SQL}; SELECT 'after the cancel';"],
                                env=client_env(server=server), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                **interruptible())
-    time.sleep(1.5)
-    assert process.poll() is None, process.communicate()
+    # Interrupt only once the statement runs: a Ctrl+C before that (the client still
+    # starting or signing in) exits at once with 130 and says nothing, as it should. A
+    # fixed sleep lost that race on a loaded Windows runner (stderr empty).
+    admin = server.admin()
+    deadline = time.monotonic() + 30 * TIMEOUT_SCALE
+    while admin.scalar(sql="SELECT count(*) FROM hardcharger_sessions() WHERE running AND NOT is_current") == 0:
+        assert process.poll() is None, process.communicate()
+        assert time.monotonic() < deadline, "the slow statement never started"
+        time.sleep(0.05)
     started = time.monotonic()
     interrupt(process=process)
     stdout, stderr = process.communicate(timeout=30)
