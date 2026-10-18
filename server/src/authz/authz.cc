@@ -319,16 +319,13 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
     // The administrator without rules is allowed everything.
     principal = Principal::Superuser(who.user_name);
   } else if (rules_principal) {
-    // The rules restrict even the administrator. It alone reads the server's own
-    // catalogs (instrumentation, logs), whatever its rules say, as in 1.x (never
-    // writes them: the statement guard keeps them read-only for everyone).
+    // The rules restrict even the administrator. Unlike GizmoSQL 1.x, a restricted
+    // administrator does not read the server's own catalogs (instrumentation, logs): a
+    // read of them exposes every session's SQL text, with literals from catalogs its
+    // rules deny. They are hidden from it as from a non-administrator (hidden_catalogs
+    // below). An administrator without rules still reads them (the superuser path above).
     principal.user_name = who.user_name;
     std::vector<CatalogRule> rules;
-    if (who.superuser) {
-      for (const auto& managed : hidden_catalogs_) {
-        rules.push_back(CatalogRule{managed, CatalogAccessLevel::kRead, /*exact=*/true});
-      }
-    }
     for (const auto& rule : *who.catalog_access) {
       const auto level = rule.access == "write"  ? CatalogAccessLevel::kWrite
                          : rule.access == "read" ? CatalogAccessLevel::kRead
@@ -337,7 +334,7 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
     }
     principal.catalog_rules = std::move(rules);
     principal.rules_administrator = who.superuser;
-    principal.hidden_catalogs = who.superuser ? std::vector<std::string>{} : hidden_catalogs_;
+    principal.hidden_catalogs = hidden_catalogs_;  // the server's own catalogs, even from a restricted admin
   } else {
     auto found = engine_->PrincipalForUser(who.user_name);
     if (!found.ok()) throw Error(ErrorCode::kPermissionDenied, found.status().message(), "42501");

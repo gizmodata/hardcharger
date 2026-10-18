@@ -360,8 +360,10 @@ class PlanChecker {
       // ---- session statements --------------------------------------------
       case OpType::LOGICAL_SET: {
         const auto& set = op.Cast<dd::LogicalSet>();
-        // A variable's value is computed by a query (which would otherwise go
-        // unchecked here), and getvariable() hands it to any view that asks.
+        // A variable's value is computed by a query, and getvariable() hands it to any
+        // view that asks, which a view's owner's rights wouldn't account for: not under
+        // RBAC. A catalog_access principal reads no view with another's rights, so it may
+        // set one; its query is checked below with the rest of the plan.
         if (set.scope == dd::SetScope::VARIABLE && !principal_.catalog_rules) {
           Deny(principal_, "SET VARIABLE is not available under access control");
         }
@@ -381,6 +383,9 @@ class PlanChecker {
         if ((setting == "schema" || setting == "search_path") && !set.value.IsNull()) {
           RequireVisibleSearchPath(set.value.ToString());
         }
+        // SET VARIABLE's value is a query (SET VARIABLE v = (SELECT ... FROM c.t)), planned
+        // as this operator's child: what it reads is checked like any query's.
+        VisitChildren(op, nullptr);
         return;
       }
       case OpType::LOGICAL_RESET: {

@@ -208,6 +208,8 @@ SESSION and every session in `hardcharger_sessions()`. Hardcharger differs on pu
 | ATTACH / DETACH | allowed | refused (DETACH a denied catalog, ATTACH its file under a name the rules allow, read it) |
 | files: `read_csv()`, `read_blob()`, `COPY ... FROM/TO` a file, `FROM 'file'` | allowed | refused (the database files themselves are files) |
 | INSTALL / LOAD, CREATE / DROP SECRET, EXPORT / IMPORT DATABASE | allowed | refused |
+| read the instrumentation / log catalogs | allowed (read-only) | refused (a read exposes every session's SQL text, with denied-catalog literals); hidden, as for a non-administrator |
+| `hardcharger_sessions()`, `KILL SESSION` | every session | only its own session; KILL needs an administrator without rules |
 | CREATE MACRO / TYPE | allowed | refused (as for every non-superuser under the plan check) |
 | table functions such as `pragma_storage_info('c.t')` | allowed | only those any rules principal gets |
 | `nextval()` / `currval()` on a sequence | any | by the rules of the sequence's catalog |

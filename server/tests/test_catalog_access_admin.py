@@ -159,18 +159,78 @@ def test_the_password_admin_is_unaffected(server):
     admin.execute(sql=f"DELETE FROM {Y}.main.t WHERE id = 6")
 
 
-# ---- The server's own catalogs ----
+# ---- The server's own catalogs, sessions and KILL (adversarial review, finding 2) ----
 
-def test_a_restricted_admin_still_reads_and_never_writes_the_servers_catalogs(server):
-    # 1.x: the system-managed catalogs are read-only for administrators, whatever the
-    # rules (GetCatalogAccess checks them before the rules).
+def test_a_restricted_admin_cannot_read_the_servers_own_catalogs(server):
+    # Unlike 1.x, a restricted administrator does not read the instrumentation/log
+    # catalogs: a read exposes every session's SQL text, with literals from catalogs its
+    # rules deny. They are hidden from it, as from a non-administrator (it reads as
+    # missing). The unrestricted administrator still reads them (the twin below).
     session = admin_token(server=server, name="admin_instr", rules=[{"catalog": "*", "access": "none"}])
-    session.query(sql="SELECT * FROM _hardcharger_instr.sessions LIMIT 1")
-    assert "_hardcharger_instr" in databases(session=session)
-    denied(session=session, sql="DELETE FROM _hardcharger_instr.sessions WHERE 1=0", why="read-only")
-    # A rule that names it writable changes nothing.
+    assert "_hardcharger_instr" not in databases(session=session)
+    session.error(sql="SELECT * FROM _hardcharger_instr.sessions LIMIT 1")  # a missing-object error
+    session.error(sql="SELECT sql_text FROM _hardcharger_instr.sql_statements")
+    session.error(sql="DELETE FROM _hardcharger_instr.sessions WHERE 1=0")
     writer = admin_token(server=server, name="admin_instr_w", rules=[{"catalog": "_hardcharger_instr", "access": "write"}])
-    denied(session=writer, sql="DELETE FROM _hardcharger_instr.sessions WHERE 1=0", why="read-only")
+    writer.error(sql="SELECT * FROM _hardcharger_instr.sessions LIMIT 1")
+    # The twin: the unrestricted administrator reads it and the password admin writes nothing.
+    assert "_hardcharger_instr" in databases(session=server.admin())
+    server.admin().query(sql="SELECT * FROM _hardcharger_instr.sessions LIMIT 1")
+    denied(session=server.admin(), sql="DELETE FROM _hardcharger_instr.sessions WHERE 1=0", why="read-only")
+
+
+def test_a_restricted_admin_sees_only_its_own_session_and_cannot_kill(server):
+    # hardcharger_sessions() and KILL SESSION are for the unrestricted administrator.
+    other = server.as_role(role="user", subject="bystander")
+    other_id = other.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
+    session = admin_token(server=server, name="admin_sessions", rules=x_read_rest_none())
+    own = session.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
+    ids = set(session.query(sql="SELECT session_id FROM hardcharger_sessions()").column(0).to_pylist())
+    assert ids == {own}, ids
+    denied(session=session, sql=f"KILL SESSION '{other_id}'",
+           why="KILL SESSION needs an administrator without catalog_access rules")
+    # The twin: the unrestricted administrator sees both and could kill.
+    full = set(server.admin().query(sql="SELECT session_id FROM hardcharger_sessions()").column(0).to_pylist())
+    assert {own, other_id} <= full, full
+
+
+# ---- Embedded queries can't slip past the rules (adversarial review, finding 1) ----
+
+EMBEDDED = {
+    "set_variable": "SET VARIABLE v = (SELECT count(*) FROM {c}.main.t)",
+    "prepare": "PREPARE p AS SELECT * FROM {c}.main.t",
+    "create_table_as": "CREATE TABLE {x}.main.ctas AS SELECT * FROM {c}.main.t",
+    "insert_select": "INSERT INTO {x}.main.t SELECT * FROM {c}.main.t",
+    "cte": "WITH q AS (SELECT * FROM {c}.main.t) SELECT count(*) FROM q",
+    "scalar_subquery": "SELECT (SELECT count(*) FROM {c}.main.t) AS n",
+    "exists": "SELECT 1 WHERE EXISTS (SELECT 1 FROM {c}.main.t)",
+    "copy_select": "COPY (SELECT * FROM {c}.main.t) TO 'out.csv'",
+    "create_view": "CREATE VIEW {x}.main.leak_v AS SELECT * FROM {c}.main.t",
+    "delete_using": "DELETE FROM {x}.main.t WHERE id IN (SELECT id FROM {c}.main.t)",
+    "update_from": "UPDATE {x}.main.t SET id = (SELECT count(*) FROM {c}.main.t)",
+}
+
+
+@pytest.mark.parametrize("kind", list(EMBEDDED))
+def test_an_embedded_query_cannot_read_a_denied_catalog(server, kind):
+    session = admin_token(server=server, name=f"admin_embed_{kind}", rules=x_read_rest_none())
+    # COPY ... TO is refused for the write to the filesystem (a restricted-admin deviation)
+    # before its SELECT is reached; either refusal keeps the denied catalog unread.
+    why = RULES_ADMIN_REFUSAL if kind == "copy_select" else read_denied(catalog=Y)
+    denied(session=session, sql=EMBEDDED[kind].format(c=Y, x=X), why=why)
+    if kind == "set_variable":
+        # getvariable() never carries the secret out, because the SET was refused.
+        assert session.scalar(sql="SELECT getvariable('v')") is None
+
+
+def test_set_variable_without_a_denied_read_still_works(server):
+    # The positive twin: SET VARIABLE over an allowed catalog (or a constant) is fine, and
+    # getvariable() returns it.
+    session = admin_token(server=server, name="admin_setvar_ok", rules=x_read_rest_none())
+    session.execute(sql=f"SET VARIABLE n = (SELECT count(*) FROM {X}.main.t)")
+    assert session.scalar(sql="SELECT getvariable('n')") >= 1
+    session.execute(sql="SET VARIABLE k = 7")
+    assert session.scalar(sql="SELECT getvariable('k')") == 7
 
 
 # ---- What a restricted administrator can still do (1.x), and what it can't ----
@@ -183,10 +243,6 @@ def test_a_restricted_admin_keeps_the_administration_that_reaches_no_data(server
     session.execute(sql="SET GLOBAL hardcharger.query_timeout = 0")
     session.execute(sql="SET GLOBAL threads = 4")
     session.execute(sql=f"CHECKPOINT {X}")
-    assert session.scalar(sql="SELECT count(*) > 1 FROM hardcharger_sessions()") is True
-    victim = server.as_role(role="user", subject="victim")
-    victim_id = victim.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
-    session.execute(sql=f"KILL SESSION '{victim_id}'")
 
 
 def test_a_restricted_admin_holds_no_privilege_that_reaches_data(server, tmp_path):
@@ -280,6 +336,9 @@ def test_rbac_rules_narrow_an_admin_token(rbac_server):
     session.run(sql=f"SELECT * FROM {X}.main.t")
     assert write_denied(catalog=X) in rbac_error(client=session, sql=f"INSERT INTO {X}.main.t VALUES (1)")
     assert read_denied(catalog=Y) in rbac_error(client=session, sql=f"SELECT * FROM {Y}.main.t")
+    # Finding 1 under RBAC: an embedded query is checked too.
+    assert read_denied(catalog=Y) in rbac_error(client=session,
+                                                sql=f"SET VARIABLE v = (SELECT count(*) FROM {Y}.main.t)")
     # It can't step outside its rules by managing access control either.
     why = "an administrator token with catalog_access rules cannot run access-control statements"
     assert why in rbac_error(client=session, sql="CREATE USER escape_hatch")

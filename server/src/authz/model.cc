@@ -268,7 +268,7 @@ CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const
     return CatalogAccessLevel::kRead;
   }
   for (const auto& rule : rules) {
-    if (rule.exact ? IdentifiersEqual(rule.pattern, catalog) : GlobMatches(rule.pattern, catalog)) return rule.level;
+    if (GlobMatches(rule.pattern, catalog)) return rule.level;
   }
   return CatalogAccessLevel::kNone;
 }

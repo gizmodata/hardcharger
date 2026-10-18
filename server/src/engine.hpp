@@ -90,6 +90,10 @@ class Session : public warpduckdb::DuckDBSession {
   const std::string& id() const { return id_; }
   const warpsql::Principal& principal() const { return principal_; }
   bool admin() const { return principal_.role == "admin"; }
+  // An administrator whose token carries no catalog_access rules: the superuser, who
+  // sees and manages every session. A restricted administrator (admin token with rules)
+  // is not one, so it sees only its own session, like a non-administrator.
+  bool full_admin() const { return admin() && (!guard_ || guard_->unrestricted()); }
   Runtime& runtime() const { return runtime_; }
   int64_t started_at_us() const { return started_at_us_; }
   bool running() const { return running_ > 0; }

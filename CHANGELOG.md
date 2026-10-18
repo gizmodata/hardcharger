@@ -94,6 +94,22 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Security: a `SET VARIABLE v = (SELECT ... FROM c.t)` whose subquery read a catalog the
+  session's `catalog_access` rules deny was not checked, so `getvariable('v')` then handed
+  back the result. Any rules principal was affected: a rules-only user, a restricted
+  administrator, an RBAC administrator with rules. The value query is now plan-checked
+  against the rules like any read. (GizmoSQL 1.x was not affected: its `catalog_access`
+  check reads DuckDB's `StatementProperties.read_databases`, which already includes the
+  subquery's catalog.) The same plan check already covered the other embedded-query forms
+  (CTAS, INSERT ... SELECT, CTEs, scalar subqueries, EXISTS, COPY (SELECT ...), CREATE VIEW,
+  DELETE/UPDATE with a subquery); each has a regression test.
+- Security: a rules-restricted administrator could read the instrumentation and log
+  catalogs, exposing every session's `sql_text` (with literals from catalogs its rules
+  deny), and saw every session in `hardcharger_sessions()`. A restricted administrator now
+  does not read those catalogs at all (hidden, as for a non-administrator) and sees only its
+  own session; `KILL SESSION` needs an administrator without rules. An administrator without
+  rules is unchanged (reads the catalogs, sees and kills every session). This is stricter
+  than 1.x, where an administrator's token kept that access whatever its rules.
 - Security: an administrator's token (`role: admin`) that carries `catalog_access` rules was
   not restricted by them; GizmoSQL 1.x applies a token's rules whatever its role. It now is,
   without and with RBAC: reads and writes per catalog (temp included) and what it sees

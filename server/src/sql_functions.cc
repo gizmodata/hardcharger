@@ -303,8 +303,9 @@ std::shared_ptr<arrow::RecordBatch> SessionsTable(Runtime& runtime, const Sessio
   arrow::TimestampBuilder started(arrow::timestamp(arrow::TimeUnit::MICRO, "UTC"), arrow::default_memory_pool());
   arrow::BooleanBuilder running, current;
   for (const auto& s : runtime.sessions.List()) {
-    // Admins see every session (to KILL one); others only their own.
-    if (!session.admin() && s.session_id != session.id()) continue;
+    // Unrestricted admins see every session (to KILL one); everyone else, a restricted
+    // admin included, only their own.
+    if (!session.full_admin() && s.session_id != session.id()) continue;
     (void)id.Append(s.session_id);
     (void)user.Append(s.username);
     (void)role.Append(s.role);

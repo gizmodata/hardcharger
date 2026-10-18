@@ -663,6 +663,13 @@ warpsql::StatementOutcome Session::RunCommand(const Piece& piece) {
   if (!admin()) {
     throw Error(ErrorCode::kPermissionDenied, "Only admin users can execute KILL SESSION", "42501");
   }
+  // A restricted administrator (an admin token with catalog_access rules) sees only its
+  // own session, so it has no other session to name; killing is for the unrestricted
+  // administrator.
+  if (!full_admin()) {
+    throw Error(ErrorCode::kPermissionDenied,
+                "KILL SESSION needs an administrator without catalog_access rules", "42501");
+  }
   if (target.empty()) {
     throw Error(ErrorCode::kSqlError, "KILL SESSION needs a session id: KILL SESSION '<uuid>'", "42601");
   }

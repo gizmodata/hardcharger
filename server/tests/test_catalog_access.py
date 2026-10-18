@@ -139,14 +139,17 @@ def test_non_admin_cannot_read_instrumentation(server, admin):
     denied(session=session, sql="SELECT * FROM _hardcharger_instr.sessions LIMIT 1")
 
 
-def test_admin_can_read_instrumentation_with_token(server, admin):
-    session = user(server=server, name="admin_user", role="admin", rules=[{"catalog": "*", "access": "write"}])
+def test_an_unrestricted_admin_reads_instrumentation(server, admin):
+    # 1.x let an admin token with rules read it; Hardcharger does not (a restricted admin's
+    # read would leak every session's SQL, so it is hidden — see test_catalog_access_admin.py).
+    # An admin token without rules reads it, like the password administrator.
+    session = user(server=server, name="admin_norules", role="admin")
     session.query(sql="SELECT * FROM _hardcharger_instr.sessions LIMIT 1")
 
 
-def test_admin_cannot_write_instrumentation_with_token(server, admin):
-    session = user(server=server, name="admin_writer", role="admin", rules=[{"catalog": "*", "access": "write"}])
-    denied(session=session, sql="DELETE FROM _hardcharger_instr.sessions WHERE 1=0")
+def test_admin_without_rules_cannot_write_instrumentation(server, admin):
+    session = user(server=server, name="admin_writer", role="admin")
+    denied(session=session, sql="DELETE FROM _hardcharger_instr.sessions WHERE 1=0", why="read-only")
 
 
 def test_instrumentation_protection_ignores_token_rules(server, admin):
@@ -284,6 +287,22 @@ def test_catalogs_request_respects_filtering(server, admin):
     names = set(session.metadata(kind="catalogs").column(0).to_pylist())
     assert DEFAULT in names and names <= {DEFAULT} | VISIBLE_ALWAYS, names
     assert {"prod_alpha", "other_cat"} <= set(admin.metadata(kind="catalogs").column(0).to_pylist())
+
+
+# ---- Embedded queries (adversarial review, finding 1) ----
+
+def test_set_variable_subquery_cannot_read_a_denied_catalog(server, admin):
+    # A rules-only (non-admin) user: SET VARIABLE's value is a query, and getvariable()
+    # hands it to anything. It must be plan-checked against the rules, not skipped.
+    admin.execute(sql="CREATE OR REPLACE TABLE noaccess_test_secret AS SELECT 'leak-me' AS pw")
+    session = user(server=server, name="setvar_user", rules=[{"catalog": DEFAULT, "access": "none"}])
+    denied(session=session,
+           sql="SET VARIABLE stolen = (SELECT string_agg(pw, ',') FROM noaccess_test_secret)",
+           why="read access to catalog")
+    assert session.scalar(sql="SELECT getvariable('stolen')") is None
+    # The positive twin: a constant works, and getvariable() returns it.
+    session.execute(sql="SET VARIABLE ok = 5")
+    assert session.scalar(sql="SELECT getvariable('ok')") == 5
 
 
 # ---- Batches and read-only principals ----

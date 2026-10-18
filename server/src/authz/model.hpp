@@ -176,9 +176,6 @@ enum class CatalogAccessLevel { kNone, kRead, kWrite };
 struct CatalogRule {
   std::string pattern;  // '*' any run, '?' one character; case-sensitive
   CatalogAccessLevel level = CatalogAccessLevel::kNone;
-  // A catalog's own name, matched as DuckDB names catalogs (no globs): the server's
-  // catalogs that an administrator reads whatever its token's rules say.
-  bool exact = false;
 };
 // The level the rules give `catalog`. DuckDB's system catalog (which holds
 // information_schema) and Hardcharger's _hardcharger_system are read for all.
