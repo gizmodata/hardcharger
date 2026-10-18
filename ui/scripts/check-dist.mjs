@@ -41,6 +41,16 @@ for (const f of files) {
     problems.push(`assets/${f} loads a data: script`);
   }
 }
+// Inter is embedded under the SIL Open Font License, which travels with it.
+if (files.some((f) => f.endsWith(".woff2"))) {
+  try {
+    if (!/SIL Open Font License/.test(readFileSync(path.join(dist, "fonts", "Inter-LICENSE.txt"), "utf8"))) {
+      problems.push("fonts/Inter-LICENSE.txt is not the font's license");
+    }
+  } catch {
+    problems.push("a font is embedded without fonts/Inter-LICENSE.txt");
+  }
+}
 if (problems.length) {
   for (const p of problems) console.error(`check-dist: ${p}`);
   process.exit(1);

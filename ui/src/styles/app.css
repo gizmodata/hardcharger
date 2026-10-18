@@ -1,50 +1,98 @@
-/* Hardcharger UI: GizmoData's look (the README banners and the docs): orange #f15a24 is the
-   accent, blue #31a8db the links, and dark mode uses the banners' card background. */
+/* Hardcharger UI, in the README banner's brand (docs/assets/hardcharger-banner.svg): orange
+   #f15a24 and Warp blue #31a8db (the gradient pair), dark surfaces #0b1416 / #101f26, light
+   text #f5f8f7 and muted #c9d6d4. The light theme takes the same hues, darkened where text
+   needs WCAG AA contrast (4.5:1) on its surface: orange #b93d0e, blue #1a6f96. The gradient
+   is kept to the sign-in page and the header's accent, never the data. */
+
+/* Inter (SIL Open Font License 1.1, fonts/Inter-LICENSE.txt), its Latin subset only, from
+   the bundle: the server's policy allows no font from another origin. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("../../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+    U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
 
 :root {
   --hc-orange: #f15a24;
   --hc-blue: #31a8db;
   --hc-gradient: linear-gradient(90deg, #f15a24, #31a8db);
-  --font: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --hc-night: #0b1416;
+  --hc-night-2: #101f26;
+  --font: Inter, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
   --bg: #ffffff;
-  --panel: #f6f9f8;
-  --panel-2: #eef3f2;
-  --hover: #e4ecea;
+  --panel: #f5f8f7;
+  --panel-2: #eaf0ef;
+  --hover: #e1eae8;
   --border: #c9d6d4;
-  --border-soft: #e4ecea;
+  --border-soft: #e1eae8;
   --text: #0b1416;
-  --muted: #4c5f5c;
-  --faint: #859996;
-  --accent: #c8410f;
-  --accent-hover: #a83409;
-  --accent-soft: #ffe2d6;
-  --link: #1477a3;
-  --danger: #c62828;
+  --muted: #43524f;
+  --faint: #566966;
+  --accent: #b93d0e;
+  --accent-hover: #9c330b;
+  --accent-soft: #fde8df;
+  --on-accent: #ffffff;
+  --link: #1a6f96;
+  --danger: #b42318;
   --danger-soft: #fdecea;
+  --on-danger: #ffffff;
   --select: rgba(49, 168, 219, 0.18);
   --select-strong: rgba(49, 168, 219, 0.32);
   --shadow: 0 10px 30px rgba(11, 20, 22, 0.18);
   color-scheme: light;
 }
 
+/* Dark: the system's choice until the user picks a theme (the app sets data-theme). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b1416;
+    --panel: #101f26;
+    --panel-2: #142830;
+    --hover: #1a3039;
+    --border: #24414c;
+    --border-soft: #17292f;
+    --text: #f5f8f7;
+    --muted: #c9d6d4;
+    --faint: #8fa3a0;
+    --accent: #f15a24;
+    --accent-hover: #ff7445;
+    --accent-soft: #3a1a0e;
+    --on-accent: #0b1416;
+    --link: #31a8db;
+    --danger: #ff6b6b;
+    --danger-soft: #3a1414;
+    --on-danger: #0b1416;
+    --select: rgba(49, 168, 219, 0.2);
+    --select-strong: rgba(49, 168, 219, 0.38);
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}
 :root[data-theme="dark"] {
   --bg: #0b1416;
   --panel: #101f26;
-  --panel-2: #142328;
-  --hover: #1b2f36;
-  --border: #1f3a44;
+  --panel-2: #142830;
+  --hover: #1a3039;
+  --border: #24414c;
   --border-soft: #17292f;
   --text: #f5f8f7;
-  --muted: #95a9a6;
-  --faint: #5b6f6c;
+  --muted: #c9d6d4;
+  --faint: #8fa3a0;
   --accent: #f15a24;
   --accent-hover: #ff7445;
   --accent-soft: #3a1a0e;
-  --link: #5cc0ec;
+  --on-accent: #0b1416;
+  --link: #31a8db;
   --danger: #ff6b6b;
   --danger-soft: #3a1414;
+  --on-danger: #0b1416;
   --select: rgba(49, 168, 219, 0.2);
   --select-strong: rgba(49, 168, 219, 0.38);
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
@@ -87,10 +135,68 @@ select {
   display: none !important;
 }
 
-.brand-rule {
-  height: 2px;
+/* Brand marks (components/Brand.tsx) */
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  text-decoration: none;
+}
+.wordmark-text {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.wordmark-name {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.wordmark-bar {
+  height: 3px;
+  border-radius: 2px;
   background: var(--hc-gradient);
-  flex: none;
+}
+.wordmark-header .wordmark-name {
+  font-size: 17px;
+}
+.wordmark-signin {
+  gap: 14px;
+}
+.wordmark-signin .wordmark-name {
+  font-size: 30px;
+}
+.wordmark-signin .wordmark-bar {
+  height: 5px;
+  border-radius: 3px;
+}
+/* The README's "by GizmoData" badge. */
+.by-badge {
+  display: inline-flex;
+  border-radius: 4px;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  text-decoration: none;
+}
+.by-badge-by {
+  padding: 0 6px;
+  background: #555555;
+  color: #ffffff;
+}
+.by-badge-name {
+  padding: 0 7px;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.by-badge:hover .by-badge-name {
+  background: var(--accent-hover);
+}
+.by-badge:focus-visible {
+  outline: 2px solid var(--hc-blue);
+  outline-offset: 2px;
 }
 
 /* Buttons */
@@ -121,7 +227,7 @@ select {
 }
 .btn-primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
@@ -136,7 +242,7 @@ select {
 }
 .btn-danger {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 .btn-ghost {
   color: var(--muted);
@@ -191,10 +297,35 @@ select {
   justify-content: center;
   gap: 18px;
   padding: 16px;
+  position: relative;
+  isolation: isolate;
+  /* The banner's card: a blue glow on the surface, and the orange-to-blue streaks. */
   background:
-    radial-gradient(circle at 22% 40%, rgba(49, 168, 219, 0.14), transparent 45%),
-    radial-gradient(circle at 80% 70%, rgba(241, 90, 36, 0.1), transparent 45%), var(--bg);
+    radial-gradient(circle at 22% 50%, rgba(49, 168, 219, 0.16), transparent 45%),
+    linear-gradient(135deg, var(--bg), var(--panel));
   overflow: auto;
+}
+.signin::before,
+.signin::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  right: -40px;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(241, 90, 36, 0), rgba(241, 90, 36, 0.55) 70%, rgba(49, 168, 219, 0.9));
+  transform: skewX(-24deg);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.signin::before {
+  top: 14%;
+  width: 55%;
+}
+.signin::after {
+  bottom: 18%;
+  width: 45%;
+  height: 4px;
 }
 .signin-theme {
   position: absolute;
@@ -213,19 +344,18 @@ select {
   box-shadow: var(--shadow);
 }
 .signin-brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  margin: 0 0 2px;
+  font-size: inherit;
 }
-.signin-brand h1 {
+.signin-tagline {
   margin: 0;
-  font-size: 24px;
-  font-weight: 800;
-  letter-spacing: -0.5px;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 500;
 }
 .signin-server {
-  margin: 2px 0 0;
-  color: var(--muted);
+  margin: -8px 0 4px;
+  color: var(--faint);
   font-size: 12px;
 }
 .signin-submit {
@@ -251,11 +381,6 @@ select {
   color: var(--faint);
   font-size: 11.5px;
   line-height: 1.4;
-}
-.signin-by {
-  color: var(--faint);
-  font-size: 12px;
-  text-decoration: none;
 }
 .field {
   display: flex;
@@ -294,6 +419,7 @@ select {
   gap: 12px;
   padding: 0 12px;
   background: var(--panel);
+  border-bottom: 1px solid var(--border);
 }
 .header-left,
 .header-right {
@@ -302,14 +428,10 @@ select {
   gap: 8px;
   min-width: 0;
 }
-.header-logo {
+.header-brand {
   display: flex;
-}
-.header-title {
-  font-size: 16px;
-  font-weight: 800;
-  letter-spacing: -0.3px;
-  margin-right: 10px;
+  margin-right: 14px;
+  text-decoration: none;
 }
 .header-nav {
   display: flex;
@@ -349,6 +471,11 @@ select {
   min-height: 0;
   border-right: 1px solid var(--border);
   background: var(--panel);
+}
+.sidebar-foot {
+  flex: none;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-soft);
 }
 .sidebar-resizer {
   position: absolute;
@@ -527,6 +654,7 @@ select {
   align-items: center;
   gap: 10px;
   padding: 12px 12px 10px 16px;
+  border-bottom: 1px solid var(--border-soft);
 }
 .dialog-head h2 {
   flex: 1;

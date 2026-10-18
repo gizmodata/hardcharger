@@ -1,12 +1,12 @@
 import { Database, Info, LogOut, Moon, Sun, Users } from "lucide-react";
 import { Suspense, lazy, useCallback, useState } from "react";
 
-import logo from "../assets/gizmodata-logo.png";
 import type { Page } from "../lib/route";
 import { loadModule } from "../lib/stale";
 import type { Theme } from "../lib/theme";
 import { useSession } from "../session";
 import { AboutDialog } from "./AboutDialog";
+import { ByGizmoData, Wordmark } from "./Brand";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { SchemaBrowser } from "./SchemaBrowser";
 
@@ -63,10 +63,9 @@ export function Layout({ theme, page, go }: Props) {
     <div className="app">
       <header className="app-header">
         <div className="header-left">
-          <a href="https://gizmodata.com" target="_blank" rel="noopener noreferrer" className="header-logo">
-            <img src={logo} alt="GizmoData" width={26} height={28} />
+          <a href="https://gizmodata.com" target="_blank" rel="noopener noreferrer" className="header-brand">
+            <Wordmark size="header" />
           </a>
-          <span className="header-title">Hardcharger</span>
           <nav className="header-nav" aria-label="Pages">
             {nav("query", "Query", <Database size={15} />)}
             {nav("sessions", "Sessions", <Users size={15} />)}
@@ -103,10 +102,12 @@ export function Layout({ theme, page, go }: Props) {
           </button>
         </div>
       </header>
-      <div className="brand-rule" />
       <div className="app-body">
         <aside className="sidebar" style={{ width: sidebarWidth }} aria-label="Schema browser">
           <SchemaBrowser />
+          <div className="sidebar-foot">
+            <ByGizmoData />
+          </div>
           <div
             className="sidebar-resizer"
             role="separator"

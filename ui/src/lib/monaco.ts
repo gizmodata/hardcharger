@@ -39,27 +39,27 @@ monaco.editor.defineTheme("hardcharger-light", {
   base: "vs",
   inherit: true,
   rules: [
-    { token: "keyword", foreground: "c8410f", fontStyle: "bold" },
-    { token: "string", foreground: "1477a3" },
+    { token: "keyword", foreground: "b93d0e", fontStyle: "bold" },
+    { token: "string", foreground: "1a6f96" },
     { token: "number", foreground: "7a3e9d" },
-    { token: "comment", foreground: "859996", fontStyle: "italic" },
+    { token: "comment", foreground: "566966", fontStyle: "italic" },
   ],
-  colors: { "editor.background": "#ffffff", "editorLineNumber.foreground": "#95a9a6" },
+  colors: { "editor.background": "#ffffff", "editorLineNumber.foreground": "#566966" },
 });
 
 monaco.editor.defineTheme("hardcharger-dark", {
   base: "vs-dark",
   inherit: true,
   rules: [
-    { token: "keyword", foreground: "f58a5f", fontStyle: "bold" },
-    { token: "string", foreground: "5cc0ec" },
+    { token: "keyword", foreground: "f15a24", fontStyle: "bold" },
+    { token: "string", foreground: "31a8db" },
     { token: "number", foreground: "c9a3e6" },
-    { token: "comment", foreground: "5b6f6c", fontStyle: "italic" },
+    { token: "comment", foreground: "8fa3a0", fontStyle: "italic" },
   ],
   colors: {
-    "editor.background": "#0f1c21",
-    "editorLineNumber.foreground": "#5b6f6c",
-    "editor.lineHighlightBackground": "#142328",
+    "editor.background": "#0b1416",
+    "editorLineNumber.foreground": "#8fa3a0",
+    "editor.lineHighlightBackground": "#101f26",
   },
 });
 

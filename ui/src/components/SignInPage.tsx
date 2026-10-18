@@ -2,9 +2,9 @@ import type { DiscoveryDocument } from "@gizmodata/warp-sql";
 import { BadgeCheck, LogIn, Moon, Sun } from "lucide-react";
 import { type SyntheticEvent, useRef, useState } from "react";
 
-import logo from "../assets/gizmodata-logo.png";
 import { type SignedIn, SignInError, lastUsername, signIn, signInWithCertificate } from "../lib/auth";
 import type { Theme } from "../lib/theme";
+import { ByGizmoData, Wordmark } from "./Brand";
 
 interface Props {
   server: DiscoveryDocument | undefined;
@@ -66,20 +66,17 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
         {theme.name === "light" ? <Moon size={16} /> : <Sun size={16} />}
       </button>
       <form className="signin-card" onSubmit={submit} aria-label="Sign in">
-        <div className="signin-brand">
-          <img src={logo} alt="GizmoData" width={40} height={43} />
-          <div>
-            <h1>Hardcharger</h1>
-            <p className="signin-server" data-testid="server-version">
-              {server
-                ? `${server.server?.name ?? "Warp SQL server"} ${server.server?.version ?? ""}`.trim()
-                : serverError
-                  ? "Server not reachable"
-                  : "Connecting…"}
-            </p>
-          </div>
-        </div>
-        <div className="brand-rule" />
+        <h1 className="signin-brand">
+          <Wordmark size="signin" />
+        </h1>
+        <p className="signin-tagline">Fast, secure, remote DuckDB</p>
+        <p className="signin-server" data-testid="server-version">
+          {server
+            ? `${server.server?.name ?? "Warp SQL server"} ${server.server?.version ?? ""}`.trim()
+            : serverError
+              ? "Server not reachable"
+              : "Connecting…"}
+        </p>
         {notice && (
           <p className="signin-notice" role="status" data-testid="signin-notice">
             {notice}
@@ -155,9 +152,7 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
             : "The page keeps a short-lived token for this tab, usable only with your certificate."}
         </p>
       </form>
-      <a className="signin-by" href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">
-        Built by GizmoData
-      </a>
+      <ByGizmoData />
     </div>
   );
 }

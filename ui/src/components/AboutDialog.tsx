@@ -46,7 +46,6 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
           <X size={16} />
         </button>
       </div>
-      <div className="brand-rule" />
       <table className="kv" data-testid="about-table">
         <tbody>
           {rows.map(([k, v]) => (

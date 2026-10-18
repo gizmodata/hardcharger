@@ -6,7 +6,10 @@ test("screenshots of the main views", async ({ page, harness }, testInfo) => {
   const shot = (name: string) => page.screenshot({ path: testInfo.outputPath(`${name}.png`) });
   await page.goto("/ui/");
   await expect(page.getByTestId("server-version")).toContainText("Hardcharger");
-  await shot("sign-in");
+  await shot("sign-in-light");
+  await page.getByRole("button", { name: "Dark theme" }).click();
+  await shot("sign-in-dark");
+  await page.getByRole("button", { name: "Light theme" }).click();
 
   await signIn(page, harness.admin);
   const catalog = page.getByRole("treeitem", { name: harness.catalog, exact: true });
@@ -27,6 +30,8 @@ test("screenshots of the main views", async ({ page, harness }, testInfo) => {
     .getByRole("gridcell")
     .nth(10)
     .click({ modifiers: ["Shift"] });
+  // The selection stays; the grid's focus ring doesn't belong in a picture.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await shot("query-light");
 
   await page.getByRole("button", { name: "Dark theme" }).click();
