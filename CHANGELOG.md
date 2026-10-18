@@ -199,6 +199,9 @@ own changelog in `python/CHANGELOG.md`.
   so store users' prepares still describe their results. Tests:
   `test_a_prepare_describes_its_result_without_running_it` (enforcement) and
   `test_a_masked_columns_described_type_is_the_one_sent` (policies).
+- A prepared `INSERT`/`UPDATE`/`DELETE`/`MERGE` with `RETURNING` describes its rows'
+  schema too (warp-sql 088d03e: bound and converted, the write never executed); it
+  answered rows with no schema.
 - `hardcharger`: a client certificate the server's handshake refused (revoked, or none
   sent where one is required) was reported as "Could not connect to ... is the server
   running?". It now says "The server at https://... refused the client certificate:
