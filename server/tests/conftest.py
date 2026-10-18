@@ -270,7 +270,8 @@ class Launcher:
                           secret_key=secret_key, process=process, log_path=log_path, port=port)
         self.started.append(running)
         if expect_up:
-            deadline = time.monotonic() + startup_seconds
+            # A sanitizer build starts several times slower (a DuckLake attach under TSan took 30 s).
+            deadline = time.monotonic() + startup_seconds * TIMEOUT_SCALE
             while time.monotonic() < deadline:
                 if process.poll() is not None:
                     pytest.fail(reason=f"server exited: {running.log()}")
