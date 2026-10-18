@@ -4,9 +4,11 @@ Every negative test asserts why the statement failed (Hardcharger's refusal and 
 privilege it names), and has a positive twin showing the same user can do the
 legitimate version."""
 
+import base64
 import time
 
 import pyarrow as pa
+import pyarrow.ipc  # noqa: F401 (pa.ipc)
 import pytest
 
 from rbac import (ARROW_STREAM, WarpError, arrow_bytes, expect_allowed, expect_blocked, expect_error,
@@ -161,6 +163,29 @@ def test_prepared_statements_with_parameters_are_checked_when_prepared_and_run(j
     # Positive twin of that shape.
     open_ok = joe.prepare(sql="SELECT id FROM orders WHERE ? IS NOT NULL")
     assert joe.execute_prepared(prepared_id=open_ok, parameters=[1]).num_rows == 2
+
+
+def described_and_executed(client, sql: str, parameters=None) -> tuple[pa.Schema, pa.Schema]:
+    response = client.http.post(url=f"{client.url}/prepared", json={"sql": sql}, headers=client.headers())
+    assert response.status_code == 201, response.text
+    doc = response.json()
+    assert doc["result_kind"] == "rows" and doc["result_schema"], doc
+    described = pa.ipc.open_stream(source=base64.b64decode(doc["result_schema"])).schema
+    executed = client.execute_prepared(prepared_id=doc["prepared_id"], parameters=parameters).schema
+    return described, executed
+
+
+def test_a_prepare_describes_its_result_without_running_it(joe):
+    # The result schema comes from binding the statement and converting its columns
+    # with warp_result_schema() (bound, never run), which access control lets through:
+    # the same schema the execution then sends, for a user with grants.
+    described, executed = described_and_executed(client=joe, sql="SELECT *, uuid() AS u FROM orders WHERE id = ?",
+                                                 parameters=[1])
+    assert described.equals(executed, check_metadata=True), f"{described}\n!=\n{executed}"
+    assert described.names == ["id", "amount", "customer", "u"]
+    # Called directly, it describes nothing (positive twin above).
+    expect_blocked(client=joe, sql="SELECT * FROM warp_result_schema()", code="sql_error",
+                   why="only describes a prepared statement's result")
 
 
 def test_binding_a_statement_never_describes_a_denied_table(joe):

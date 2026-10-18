@@ -1,9 +1,11 @@
 """Row-level security and column masking: CREATE ROW POLICY and CREATE MASKING POLICY,
 applied to the plan of every store user's statement."""
 
+import base64
 import time
 
 import pyarrow as pa
+import pyarrow.ipc  # noqa: F401 (pa.ipc)
 import pytest
 
 from rbac import WarpError, expect_allowed, expect_blocked, start_rbac_server
@@ -136,6 +138,20 @@ def test_prepared_statements_with_parameters_are_filtered_and_masked(ann, hal):
     # Positive twin: the exempt user finds it.
     hal_ssn = hal.prepare(sql="SELECT count(*) FROM emp WHERE ssn = ?")
     assert hal.execute_prepared(prepared_id=hal_ssn, parameters=["111"]).column(0).to_pylist() == [1]
+
+
+def test_a_masked_columns_described_type_is_the_one_sent(ann):
+    # A prepare describes its result by binding it, before the policies rewrite the plan:
+    # a mask keeps its column's type, so the described schema is the executed one.
+    response = ann.http.post(url=f"{ann.url}/prepared", json={"sql": "SELECT id, ssn, email FROM emp"},
+                             headers=ann.headers())
+    assert response.status_code == 201, response.text
+    doc = response.json()
+    assert doc["result_kind"] == "rows" and doc["result_schema"], doc
+    described = pa.ipc.open_stream(source=base64.b64decode(doc["result_schema"])).schema
+    rows = ann.execute_prepared(prepared_id=doc["prepared_id"])
+    assert rows.column("ssn").to_pylist() == ["XXX", "XXX"]  # masked
+    assert described.equals(rows.schema, check_metadata=True), f"{described}\n!=\n{rows.schema}"
 
 
 def test_an_owners_view_does_not_lift_the_callers_policies(ann, bob):

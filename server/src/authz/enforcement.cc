@@ -72,6 +72,10 @@ const std::unordered_set<std::string>& AllowedTableFunctions() {
       // upload through it; it reads nothing
       // else (the SDK refuses any other call).
       "warp_upload",
+      // A prepare describes its result by binding it (never run); it converts
+      // the prepared statement's own columns, nothing else (the SDK refuses
+      // any other call).
+      "warp_result_schema",
       // The server's own, which read only what the session may see (its own sessions,
       // the settings rows that aren't admin-only).
       "hardcharger_settings", "hardcharger_sessions", "hardcharger_metrics"};

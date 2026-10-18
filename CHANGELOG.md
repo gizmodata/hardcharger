@@ -191,6 +191,14 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Preparing a query no longer runs it (warp-sql: the DuckDB backend learned a prepared
+  SELECT's result schema by executing it, and now and then the dropped execution waited for
+  the whole query: a JDBC, ADBC, JS or CLI prepare of an expensive query could hang for
+  minutes). The schema now comes from binding the statement; access control lets the
+  backend's `warp_result_schema()` through (it converts only the statement's own columns),
+  so store users' prepares still describe their results. Tests:
+  `test_a_prepare_describes_its_result_without_running_it` (enforcement) and
+  `test_a_masked_columns_described_type_is_the_one_sent` (policies).
 - `hardcharger`: a client certificate the server's handshake refused (revoked, or none
   sent where one is required) was reported as "Could not connect to ... is the server
   running?". It now says "The server at https://... refused the client certificate:
