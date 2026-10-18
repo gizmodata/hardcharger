@@ -10,6 +10,11 @@ on:
     paths-ignore: ["python/**"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      failure_repro:
+        description: Also run the failed-statement conformance cases 200 times against each server
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -237,6 +242,17 @@ jobs:
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -e .
           .venv/bin/python -m pytest -q
+      # On request (workflow_dispatch input failure_repro): every way a running statement
+      # can fail before or during its answer (streamed, split, prepared), 200 times against
+      # each server. The only acceptable answers are the error response or an incomplete
+      # stream, with the statement's own error.
+      - name: Failed-statement answers, 200 times
+        if: ${{ !cancelled() && inputs.failure_repro == true }}
+        working-directory: third_party/warp-sql/conformance
+        env:
+          HARDCHARGER_ADMIN_USERNAME: warp
+          HARDCHARGER_PRINT_QUERIES: "false"
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/failure-repro.sh" "$GITHUB_WORKSPACE/server/build/hardcharger-server" "$GITHUB_WORKSPACE/server/build/warp-sql/warp-duckdb" .venv/bin/python
 
       - name: Package
         run: |
@@ -705,6 +721,8 @@ jobs:
   windows:
     uses: ./.github/workflows/windows.yml
     secrets: inherit
+    with:
+      failure_repro: ${{ inputs.failure_repro == true }}
     permissions:
       contents: read
 

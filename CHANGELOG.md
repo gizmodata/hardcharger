@@ -172,6 +172,15 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- A query that failed within about 5 s, after it had produced some rows, could be answered
+  `200` with a `failed` statement document instead of its error (warp-sql: the SDK did so
+  for a statement with buffered rows, and a request for partitions, which every driver
+  sends by default, waits up to 5 s for the split decision). Every client shipped treats
+  such a document as an error (Go ADBC, JDBC, JS, the C++ client), so no failure was
+  reported as a success, but the answer was not the spec's. It is now the error response
+  (`500 execution_error`), on submission and on prepared execution.
+  `server.yml`'s `failure_repro` dispatch input runs those conformance cases 200 times
+  against both servers on every platform.
 - The release binaries are self-contained, as GizmoSQL's: DuckDB (with its built-in
   extensions), OpenSSL 3, Arrow, Boost, yaml-cpp and replxx are linked in statically, so
   the tarballs hold just `bin/hardcharger-server`, `bin/hardcharger`, the licence and the
