@@ -554,6 +554,7 @@ jobs:
           WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-tsan/hardcharger-server
           WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
           WARP_SQL_TEST_SERVER_USERNAME: warp
+          WARP_SQL_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
           HARDCHARGER_ADMIN_USERNAME: warp
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
