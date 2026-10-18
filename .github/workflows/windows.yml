@@ -272,6 +272,31 @@ jobs:
           WARP_SQL_TEST_SERVER_BINARY="$(cygpath -m "$GITHUB_WORKSPACE/build-warp/warp-duckdb.exe")" \
             .venv/Scripts/python.exe -m pytest -q -rfE
 
+      # An investigation, run when the head commit's message says [stream-repro]: the
+      # conformance case for a statement that fails mid-stream, 200 times against each
+      # server (a clean end there would hand over a truncated result as complete).
+      - name: Mid-stream failure, 200 times
+        if: ${{ !cancelled() && steps.warp.outcome == 'success' && contains(github.event.head_commit.message, '[stream-repro]') }}
+        working-directory: third_party/warp-sql/conformance
+        env:
+          PYTHONUTF8: "1"
+          HARDCHARGER_ADMIN_USERNAME: warp
+          HARDCHARGER_PRINT_QUERIES: "false"
+        run: |
+          uv pip install --python .venv/Scripts/python.exe pytest-repeat
+          case_id="tests/test_results.py::test_failure_mid_stream_leaves_the_stream_incomplete"
+          status=0
+          echo "== Hardcharger"
+          WARP_SQL_TEST_SERVER_BINARY="$(cygpath -m "$GITHUB_WORKSPACE/server/build/hardcharger-server.exe")" \
+          WARP_SQL_TEST_SERVER_PASSWORD_ENV=HARDCHARGER_ADMIN_PASSWORD WARP_SQL_TEST_SERVER_USERNAME=warp \
+          WARP_SQL_TEST_SERVER_LOG="$RUNNER_TEMP/repro-hardcharger.log" \
+            .venv/Scripts/python.exe -m pytest -q -rfE --count 200 "$case_id" || status=1
+          echo "== warp-duckdb"
+          WARP_SQL_TEST_SERVER_BINARY="$(cygpath -m "$GITHUB_WORKSPACE/build-warp/warp-duckdb.exe")" \
+          WARP_SQL_TEST_SERVER_LOG="$RUNNER_TEMP/repro-warp-duckdb.log" \
+            .venv/Scripts/python.exe -m pytest -q -rfE --count 200 "$case_id" || status=1
+          exit $status
+
       # The same layout as the other platforms' tarballs: bin/ (the server and the client,
       # single-file executables: every dependency and the C++ runtime linked in), LICENSE
       # and CHANGELOG.md. The import gate fails on any DLL but Windows' own.
