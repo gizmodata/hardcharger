@@ -179,15 +179,24 @@ def test_stale_instance_cleanup(launcher, tmp_path):
     first = start(launcher=launcher, args=["--database", database])
     session = first.admin()
     worker_session = first.admin()
+    worker = worker_session.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
+    long_sql = "SELECT count(*) FROM range(10000000000) a, range(1000) b"
     import threading
     def long_query():
         try:
-            worker_session.error(sql="SELECT count(*) FROM range(10000000000) a, range(1000) b")
+            worker_session.error(sql=long_sql)
         except Exception:  # the server is killed under it
             pass
 
     threading.Thread(target=long_query, daemon=True).start()
-    eventually(session, "SELECT count(*) FROM _hardcharger_instr.sql_executions WHERE status = 'executing'", lambda n: n >= 1)
+    # Wait for the long query's own execution row. Any 'executing' row won't do: the probe's
+    # own execution (and the worker's HARDCHARGER_CURRENT_SESSION() above) can still read
+    # 'executing' through the asynchronous writer, so the server could be killed before the
+    # long query started (Windows CI hit that: no row was left for the cleanup to fail).
+    eventually(session, "SELECT count(*) FROM _hardcharger_instr.sql_executions e "
+                        "JOIN _hardcharger_instr.sql_statements s USING (statement_id) "
+                        f"WHERE e.status = 'executing' AND s.session_id = '{worker}' AND s.sql_text = '{long_sql}'",
+               lambda n: n >= 1)
     first_instance = session.scalar(sql="SELECT HARDCHARGER_CURRENT_INSTANCE()")
     first.process.kill()
     first.process.wait(timeout=10)
