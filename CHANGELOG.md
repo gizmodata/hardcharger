@@ -27,6 +27,8 @@ All notable changes to this project are documented here. The format follows
 - Sessions page (`hardcharger_sessions()`): administrators see and end (`KILL SESSION`) every
   session; other users see their own.
 - About dialog with the server, protocol, capabilities, session and sign-in expiry.
+- A session an administrator ended, a changed password or a dropped user each bring back the
+  sign-in page with that reason, from the `session_ended` problem's `reason` (Warp SQL §5.6).
 - Mutual TLS: "Sign in with my certificate" on servers that offer the `client_certificate`
   grant, and every request in fetch's default credentials mode so the browser presents its
   client certificate on all of them. E2E in Chromium and WebKit against an embedded server

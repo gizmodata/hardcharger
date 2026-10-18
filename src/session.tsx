@@ -61,10 +61,7 @@ export function signInLost(err: unknown): string | undefined {
   if (!WarpSqlError.is(err)) return undefined;
   if (err.code === ErrorCode.invalidToken) return "Your sign-in has expired. Sign in again.";
   if (err.code === ErrorCode.sessionEnded) {
-    // §5.6 puts the reason in the problem document; Hardcharger 0.2 sends it for KILL SESSION
-    // only in the detail text ("... (reason: killed) ..."), so read it from there too.
-    const reason = err.reason ?? /\(reason: ([a-z_]+)\)/.exec(err.detail ?? "")?.[1];
-    switch (reason) {
+    switch (err.reason) {
       case "killed":
         return "An administrator ended your session. Sign in again.";
       case "credentials_changed":

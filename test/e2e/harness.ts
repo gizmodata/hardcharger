@@ -146,6 +146,7 @@ export async function startHarness(): Promise<Harness> {
     `ATTACH ':memory:' AS ${acme}`,
     `ATTACH ':memory:' AS ${beta}`,
     `CREATE TABLE ${acme}.main.orders AS SELECT range AS id, 'acme order ' || range AS note FROM range(5)`,
+    `CREATE TABLE ${acme}.main.payroll AS SELECT 1 AS id, 'not granted' AS note`,
     `CREATE TABLE ${beta}.main.secrets AS SELECT 1 AS id, 'beta-secret' AS hush`,
     `CREATE TENANT ${acme}`,
     `CREATE TENANT ${beta}`,

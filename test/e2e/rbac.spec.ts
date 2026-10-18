@@ -10,6 +10,8 @@ test("a non-admin user sees only what access control allows", async ({ page, har
   await expect(mine).toHaveAttribute("aria-expanded", "true");
   await mine.getByRole("button", { name: "main", exact: true }).click();
   await expect(mine.getByRole("treeitem", { name: "orders", exact: true })).toBeVisible();
+  // In their own catalog, only the tables they hold a privilege on are listed.
+  await expect(mine.getByRole("treeitem", { name: "payroll", exact: true })).toHaveCount(0);
   await expect(tree.getByRole("treeitem", { name: harness.hiddenCatalog })).toHaveCount(0);
   await expect(tree.getByRole("treeitem", { name: harness.catalog, exact: true })).toHaveCount(0);
 
