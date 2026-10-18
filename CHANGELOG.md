@@ -228,6 +228,14 @@ own changelog in `python/CHANGELOG.md`.
   control, are unchanged. This changes one expectation of GizmoSQL 1.x's RBAC branch
   (`test_rbac_views.py`; see BATTERY.md and docs/migrating-from-gizmosql.md).
   `test_rbac_view_creation.py`, and a `catalog_access` case in `test_catalog_access_admin.py`.
+- A view created by a `catalog_access` principal (a token on a rules-only server, or an
+  administrator's token with rules under access control) could not be read by anyone, its
+  creator included ("its owner is disabled or was dropped"): its owner was recorded as a
+  store user that doesn't exist. Such a principal's rights are its token's rules, for its
+  own sessions only, so what it creates now gets no owner (and clears any record an earlier
+  object of that name left; dropping an object clears it too): its views read with each
+  reader's own rights, the creator's rules included, and are refused when those don't reach
+  what the view reads. `test_catalog_access_admin.py` (5 cases).
 - Security: metadata follows authorization object by object (Warp SQL §9.4). Inside a
   catalog a user could see, the metadata calls and SQL's catalog listings showed every
   schema, table, view (with its definition) and column, whatever the user's privileges;

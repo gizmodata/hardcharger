@@ -971,6 +971,8 @@ class PlanChecker {
     if (principal_.catalog_rules) {
       RequireVisible(path.catalog);
       RequireRuleWrite(path.catalog);
+      // The object's owner record (if any) goes with it.
+      if (!IsTempCatalog(path.catalog)) ownership_.push_back({PendingOwnership::Kind::kDrop, path, ObjectTypeOf(entry)});
       return;
     }
     if (IsTempCatalog(path.catalog)) return;
@@ -1377,6 +1379,16 @@ bool IsAllowedTableFunction(const std::string& name_lower) {
 void ApplyOwnership(RbacEngine& engine, const Principal& principal,
                     const std::vector<PendingOwnership>& changes) {
   for (const auto& p : changes) {
+    // A catalog_access principal (rules only, or an administrator's token with rules) is
+    // no store user or role: its rights are its token's rules, for that session only, so
+    // nothing could read a view with them later. What it creates gets no owner (and loses
+    // any record left by an earlier object of that name): a view it creates reads with
+    // each reader's own rights, its creator's included, and fails when those don't reach
+    // what the view reads.
+    if (principal.catalog_rules && !principal.superuser) {
+      (void)engine.ForgetOwner(p.object);
+      continue;
+    }
     if (p.kind == PendingOwnership::Kind::kCreate) {
       (void)engine.RecordOwner(p.object, p.type, principal, p.definition_hash);
     } else {

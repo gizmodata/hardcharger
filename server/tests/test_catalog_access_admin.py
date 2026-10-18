@@ -315,9 +315,31 @@ def test_a_view_over_a_view_reaching_a_denied_catalog_is_refused_when_created(se
                     why=read_denied(catalog=Y))
     assert f"which the query of view {X}.main.leak_{role} reads" in detail, detail
     assert admin.scalar(sql=f"SELECT count(*) FROM duckdb_views() WHERE view_name = 'leak_{role}'") == 0
-    # The positive twin: a view over what the rules let it read.
+    # The positive twin: a view over what the rules let it read, which it reads back.
     session.execute(sql=f"CREATE OR REPLACE VIEW {X}.main.fine_{role} AS SELECT * FROM {X}.main.t")
-    assert admin.scalar(sql=f"SELECT count(*) FROM duckdb_views() WHERE view_name = 'fine_{role}'") == 1
+    assert session.scalar(sql=f"SELECT count(*) FROM {X}.main.fine_{role}") >= 1
+
+
+@pytest.mark.parametrize("role", ["admin", "user"])
+def test_a_rules_principals_view_reads_with_each_readers_rules(server, role):
+    # A catalog_access principal is no store user: its rights are its token's rules. A
+    # view it creates has no owner, so it reads with whoever reads it, its creator
+    # included, and closes when their rules don't reach what it reads.
+    rules_xy = [{"catalog": X, "access": "write"}, {"catalog": Y, "access": "read"}, {"catalog": "*", "access": "none"}]
+    creator = server.as_role(role=role, subject=f"{role}_owner", catalog_access=rules_xy)
+    creator.execute(sql=f"CREATE OR REPLACE VIEW {X}.main.y_rows_{role} AS SELECT id FROM {Y}.main.t")
+    assert creator.scalar(sql=f"SELECT count(*) FROM {X}.main.y_rows_{role}") >= 1
+    # The same principal with narrower rules: refused, as reading Y directly is.
+    narrowed = server.as_role(role=role, subject=f"{role}_owner",
+                              catalog_access=[{"catalog": X, "access": "write"}, {"catalog": "*", "access": "none"}])
+    denied(session=narrowed, sql=f"SELECT * FROM {X}.main.y_rows_{role}", why=read_denied(catalog=Y))
+    # Another principal reads it with its own rules: only if they reach Y too.
+    other = server.as_role(role=role, subject=f"{role}_other", catalog_access=x_read_rest_none())
+    denied(session=other, sql=f"SELECT * FROM {X}.main.y_rows_{role}", why=read_denied(catalog=Y))
+    reader = server.as_role(role=role, subject=f"{role}_reader",
+                            catalog_access=[{"catalog": X, "access": "read"}, {"catalog": Y, "access": "read"},
+                                            {"catalog": "*", "access": "none"}])
+    assert reader.scalar(sql=f"SELECT count(*) FROM {X}.main.y_rows_{role}") >= 1
 
 
 @pytest.mark.parametrize("role", ["admin", "user"])
@@ -368,6 +390,24 @@ def test_rbac_admin_without_rules_is_unrestricted(rbac_server):
         session.run(sql=f"INSERT INTO {X}.main.t VALUES (1)")
         session.run(sql=f"SELECT * FROM {Y}.main.t")
         session.run(sql=f"DELETE FROM {X}.main.t")
+
+
+def test_rbac_a_restricted_admins_view_has_no_owner(rbac_server):
+    # Under RBAC too: an administrator's token with rules creates a view that reads with
+    # each reader's rights (its own rules, or a store user's grants), never with an owner's.
+    rules = [{"catalog": X, "access": "write"}, {"catalog": Y, "access": "read"}, {"catalog": "*", "access": "none"}]
+    session = rbac_server.client(token=mint(user="admin", role="admin", catalog_access=rules))
+    session.run(sql=f"CREATE OR REPLACE VIEW {X}.main.restricted_v AS SELECT id FROM {Y}.main.t")
+    assert session.run(sql=f"SELECT * FROM {X}.main.restricted_v").num_rows >= 1
+    narrowed = rbac_server.client(token=mint(user="admin", role="admin", catalog_access=x_read_rest_none()))
+    assert read_denied(catalog=Y) in rbac_error(client=narrowed, sql=f"SELECT * FROM {X}.main.restricted_v")
+    admin = rbac_server.admin()
+    admin.run(sql="CREATE ROLE IF NOT EXISTS restricted_v_readers")
+    admin.run(sql=f"GRANT SELECT ON {X}.main.restricted_v TO restricted_v_readers")
+    admin.run(sql="GRANT restricted_v_readers TO rita")
+    detail = rbac_error(client=rbac_server.user(name="rita"), sql=f"SELECT * FROM {X}.main.restricted_v")
+    assert "has no SELECT privilege on table" in detail and "which has no owner, so it reads with your rights" in detail, \
+        detail
 
 
 def test_rbac_rules_never_widen_a_store_user(rbac_server):
