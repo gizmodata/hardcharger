@@ -1,6 +1,9 @@
 #include "authz/policies.hpp"
 
+#include <duckdb/catalog/catalog.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
+#include <duckdb/common/vector_operations/variadic_executor.hpp>
+#include <duckdb/function/scalar_function.hpp>
 #include <duckdb/main/attached_database.hpp>
 #include <duckdb/main/client_context.hpp>
 #include <duckdb/main/config.hpp>
@@ -15,6 +18,7 @@
 #include <duckdb/planner/column_binding_map.hpp>
 #include <duckdb/planner/expression/bound_cast_expression.hpp>
 #include <duckdb/planner/expression/bound_columnref_expression.hpp>
+#include <duckdb/planner/expression/bound_conjunction_expression.hpp>
 #include <duckdb/planner/expression/bound_constant_expression.hpp>
 #include <duckdb/planner/expression/bound_function_expression.hpp>
 #include <duckdb/planner/expression/bound_operator_expression.hpp>
@@ -28,6 +32,9 @@
 #include <duckdb/planner/operator/logical_merge_into.hpp>
 #include <duckdb/planner/operator/logical_update.hpp>
 #include <functional>
+#include <map>
+#include <mutex>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "authz/duckdb_internal.hpp"
@@ -256,12 +263,14 @@ std::vector<std::string> SensitiveSettingNames(dd::ClientContext& context) {
 
 class PolicyRewriter {
  public:
-  PolicyRewriter(dd::ClientContext& context, const Snapshot& snapshot, const Principal& principal)
+  PolicyRewriter(dd::ClientContext& context, std::shared_ptr<const Snapshot> snapshot,
+                 const Principal& principal)
       : context_(context),
-        snapshot_(snapshot),
+        snapshot_owner_(std::move(snapshot)),
+        snapshot_(*snapshot_owner_),
         principal_(principal),
-        policy_context_(PolicyContext::For(snapshot, principal)),
-        restricted_(snapshot.RestrictsCatalogs(principal)) {}
+        policy_context_(PolicyContext::For(snapshot_, principal)),
+        restricted_(snapshot_.RestrictsCatalogs(principal)) {}
 
   void Rewrite(dd::unique_ptr<dd::LogicalOperator>& plan) {
     Walk(plan);
@@ -320,45 +329,71 @@ class PolicyRewriter {
     }
   }
 
-  // The metadata table functions a restricted user may call list every attached
-  // catalog; keep the rows of the catalogs the user can see. This covers
-  // information_schema, SHOW and other views built on them, however the statement
-  // reaches them.
-  void RestrictMetadataRows(dd::unique_ptr<dd::LogicalOperator>& op) {
+  // ---- table functions that list the catalog ----------------------------------
+  //
+  // The table functions that describe the catalog list every object, whatever the user
+  // may access. Their rows are narrowed for the user here, which covers
+  // information_schema, SHOW, DESCRIBE and every other view built on them, however the
+  // statement reaches them:
+  //  - a restricted user (tenant, catalog_access rules, the server's hidden catalogs)
+  //    sees only the catalogs it may see;
+  //  - every store user sees only the schemas, tables, views and columns the snapshot's
+  //    listing rules show it (Warp SQL §9.4: the same rules as SQL, as the protocol's
+  //    metadata calls apply);
+  //  - without MANAGE CONFIG, duckdb_settings() leaves out the settings that hold
+  //    credentials (the HTTP proxy's password, ...).
+  // All of one function's conditions go into one filter right above it.
+  void RestrictTableFunctionRows(dd::unique_ptr<dd::LogicalOperator>& op) {
+    auto& get = op->Cast<dd::LogicalGet>();
+    const std::string function = Lower(compat::Str(get.function.GetName()));
+    const size_t original_columns = get.GetColumnIds().size();
+    dd::vector<dd::unique_ptr<dd::Expression>> conditions;
+
     static const std::unordered_set<std::string> kCatalogListing = {
         "duckdb_databases",   "duckdb_tables",    "duckdb_views",        "duckdb_columns",
         "duckdb_constraints", "duckdb_functions", "duckdb_indexes",      "duckdb_schemas",
         "duckdb_sequences",   "duckdb_types",     "pragma_database_size"};
-    auto& get = op->Cast<dd::LogicalGet>();
-    const std::string function = Lower(compat::Str(get.function.GetName()));
-    if (!kCatalogListing.count(function)) return;
-    std::vector<std::string> visible;
-    for (const auto& db : dd::DatabaseManager::Get(context_).GetDatabases()) {
-      const std::string name = compat::Str(db->GetName());
-      if (snapshot_.CatalogVisible(principal_, name)) visible.push_back(name);
+    if (restricted_ && kCatalogListing.count(function)) {
+      std::vector<std::string> visible;
+      for (const auto& db : dd::DatabaseManager::Get(context_).GetDatabases()) {
+        const std::string name = compat::Str(db->GetName());
+        if (snapshot_.CatalogVisible(principal_, name)) visible.push_back(name);
+      }
+      // The session's own temp catalog is not among the instance's databases.
+      if (snapshot_.CatalogVisible(principal_, TEMP_CATALOG)) visible.push_back(TEMP_CATALOG);
+      conditions.push_back(InList(get, function, "database_name", visible, /*keep_listed=*/true));
     }
-    // The session's own temp catalog is not among the instance's databases.
-    if (snapshot_.CatalogVisible(principal_, TEMP_CATALOG)) visible.push_back(TEMP_CATALOG);
-    FilterRows(op, function, "database_name", visible, /*keep_listed=*/true);
+    if (function == "duckdb_settings" &&
+        !snapshot_.HasSystemPrivilege(principal_, SystemPrivilege::kManageConfig)) {
+      const auto sensitive = SensitiveSettingNames(context_);
+      if (!sensitive.empty()) {
+        conditions.push_back(InList(get, function, "name", sensitive, /*keep_listed=*/false));
+      }
+    }
+    if (auto listed = ListedRows(get, function)) conditions.push_back(std::move(listed));
+    if (conditions.empty()) return;
+
+    auto predicate = std::move(conditions[0]);
+    for (size_t i = 1; i < conditions.size(); ++i) {
+      predicate = dd::make_uniq<dd::BoundConjunctionExpression>(
+          dd::ExpressionType::CONJUNCTION_AND, std::move(predicate), std::move(conditions[i]));
+    }
+    auto filter = dd::make_uniq<dd::LogicalFilter>(std::move(predicate));
+    if (get.GetColumnIds().size() > original_columns) {
+      // Columns the conditions needed but the statement did not: kept inside.
+      for (size_t i = 0; i < original_columns; ++i) {
+        filter->projection_map.push_back(dd::ProjectionIndex(i));
+      }
+    }
+    filter->children.push_back(std::move(op));
+    op = std::move(filter);
+    policy_filters_.insert(op.get());
   }
 
-  // duckdb_settings() lists every setting's value, the HTTP proxy's password among
-  // them: without MANAGE CONFIG, the settings that hold credentials are left out.
-  void HideSensitiveSettings(dd::unique_ptr<dd::LogicalOperator>& op) {
-    auto& get = op->Cast<dd::LogicalGet>();
-    const std::string function = Lower(compat::Str(get.function.GetName()));
-    if (function != "duckdb_settings") return;
-    if (snapshot_.HasSystemPrivilege(principal_, SystemPrivilege::kManageConfig)) return;
-    FilterRows(op, function, "name", SensitiveSettingNames(context_), /*keep_listed=*/false);
-  }
-
-  // A filter over a table function's rows on one of its text columns: keep the rows
-  // whose value is in `values` (or, with keep_listed false, those whose value is not).
-  void FilterRows(dd::unique_ptr<dd::LogicalOperator>& op, const std::string& function,
-                  const std::string& column_name, const std::vector<std::string>& values,
-                  bool keep_listed) {
-    if (!keep_listed && values.empty()) return;
-    auto& get = op->Cast<dd::LogicalGet>();
+  // A reference to one of the table function's text columns, read by the scan for the
+  // filter above it if the statement doesn't read it.
+  dd::unique_ptr<dd::Expression> ColumnOf(dd::LogicalGet& get, const std::string& function,
+                                          const std::string& column_name) {
     dd::idx_t column = dd::DConstants::INVALID_INDEX;
     for (dd::idx_t i = 0; i < get.names.size(); ++i) {
       if (IdentifiersEqual(compat::Str(get.names[i]), column_name)) column = i;
@@ -368,9 +403,8 @@ class PolicyRewriter {
              principal_.user_name);
     }
     auto& column_ids = get.GetMutableColumnIds();
-    const size_t original_columns = column_ids.size();
     std::optional<size_t> position;
-    for (size_t p = 0; p < original_columns; ++p) {
+    for (size_t p = 0; p < column_ids.size(); ++p) {
       if (!column_ids[p].IsRowIdColumn() && !column_ids[p].IsVirtualColumn() &&
           column_ids[p].GetPrimaryIndex() == column) {
         position = p;
@@ -381,38 +415,158 @@ class PolicyRewriter {
       position = column_ids.size() - 1;
     }
     const dd::ColumnBinding binding(get.table_index, dd::ProjectionIndex(*position));
+    return dd::make_uniq<dd::BoundColumnRefExpression>(get.returned_types[column], binding);
+  }
+
+  // The column's value is one of `values` (keep_listed), or none of them.
+  dd::unique_ptr<dd::Expression> InList(dd::LogicalGet& get, const std::string& function,
+                                        const std::string& column_name,
+                                        const std::vector<std::string>& values, bool keep_listed) {
+    if (values.empty()) return dd::make_uniq<dd::BoundConstantExpression>(dd::Value::BOOLEAN(!keep_listed));
     auto in = dd::make_uniq<dd::BoundOperatorExpression>(
         keep_listed ? dd::ExpressionType::COMPARE_IN : dd::ExpressionType::COMPARE_NOT_IN,
         dd::LogicalType::BOOLEAN);
     auto& in_children = in->GetChildrenMutable();
-    in_children.push_back(
-        dd::make_uniq<dd::BoundColumnRefExpression>(get.returned_types[column], binding));
+    in_children.push_back(ColumnOf(get, function, column_name));
     for (const auto& value : values) {
       in_children.push_back(dd::make_uniq<dd::BoundConstantExpression>(dd::Value(value)));
     }
-    dd::unique_ptr<dd::Expression> predicate;
-    if (in_children.size() == 1) {
-      predicate = dd::make_uniq<dd::BoundConstantExpression>(dd::Value::BOOLEAN(!keep_listed));
-    } else {
-      predicate = std::move(in);
+    return in;
+  }
+
+  // The listing rule for a catalog table function's rows (nullptr: it lists nothing the
+  // rules cover). Evaluated as the rows are produced, by a function of Hardcharger's own
+  // that no statement can name: it holds the snapshot and principal the statement was
+  // checked with (a prepared statement is checked again when the store changes).
+  dd::unique_ptr<dd::Expression> ListedRows(dd::LogicalGet& get, const std::string& function) {
+    if (principal_.superuser) return nullptr;
+    enum class Rule { kSchema, kObject, kColumn, kColumnOfArgument };
+    struct Listing {
+      Rule rule;
+      std::vector<std::string> columns;
+    };
+    static const std::map<std::string, Listing> kListings = {
+        {"duckdb_schemas", {Rule::kSchema, {"database_name", "schema_name"}}},
+        {"duckdb_tables", {Rule::kObject, {"database_name", "schema_name", "table_name"}}},
+        {"duckdb_views", {Rule::kObject, {"database_name", "schema_name", "view_name"}}},
+        {"duckdb_constraints", {Rule::kObject, {"database_name", "schema_name", "table_name"}}},
+        {"duckdb_indexes", {Rule::kObject, {"database_name", "schema_name", "table_name"}}},
+        {"duckdb_columns",
+         {Rule::kColumn, {"database_name", "schema_name", "table_name", "column_name"}}},
+        // The columns of the one table they describe (the plan check refuses one the
+        // user may not access at all).
+        {"pragma_table_info", {Rule::kColumnOfArgument, {"name"}}},
+        {"pragma_show", {Rule::kColumnOfArgument, {"column_name"}}},
+    };
+    auto listing = kListings.find(function);
+    if (listing == kListings.end()) return nullptr;
+    const Rule rule = listing->second.rule;
+
+    ObjectPath described;  // kColumnOfArgument: the table the argument names
+    if (rule == Rule::kColumnOfArgument) {
+      if (get.parameters.empty() || get.parameters[0].IsNull()) return nullptr;
+      auto entry = DescribedTable(get.parameters[0]);
+      if (!entry) return nullptr;  // DuckDB reports what it makes of it
+      described = PathOfEntry(*entry);
     }
-    auto filter = dd::make_uniq<dd::LogicalFilter>(std::move(predicate));
-    if (column_ids.size() > original_columns) {
-      for (size_t i = 0; i < original_columns; ++i) {
-        filter->projection_map.push_back(dd::ProjectionIndex(i));
+
+    dd::vector<dd::unique_ptr<dd::Expression>> arguments;
+    dd::vector<dd::LogicalType> types;
+    for (const auto& column : listing->second.columns) {
+      arguments.push_back(ColumnOf(get, function, column));
+      types.push_back(dd::LogicalType::VARCHAR);
+    }
+    // Answers by name: catalog listings repeat the same table on many rows.
+    struct Answers {
+      std::mutex mutex;
+      std::unordered_map<std::string, bool> known;
+    };
+    auto answers = std::make_shared<Answers>();
+    auto decide = [answers](
+                      const std::string& key, const std::function<bool()>& ask) {
+      {
+        std::lock_guard<std::mutex> lock(answers->mutex);
+        if (auto it = answers->known.find(key); it != answers->known.end()) return it->second;
       }
+      const bool listed = ask();
+      std::lock_guard<std::mutex> lock(answers->mutex);
+      answers->known.emplace(key, listed);
+      return listed;
+    };
+    const auto snapshot = snapshot_owner_;
+    const Principal principal = principal_;
+    dd::scalar_function_t body;
+    switch (rule) {
+      case Rule::kSchema:
+        body = [=](dd::DataChunk& args, dd::ExpressionState&, dd::Vector& result) {
+          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t>(
+              args, result, [&](dd::string_t catalog, dd::string_t schema) {
+                const ObjectPath path{catalog.GetString(), {schema.GetString()}, {}};
+                return decide(ObjectKey(path),
+                              [&] { return snapshot->SchemaListed(principal, path); });
+              });
+        };
+        break;
+      case Rule::kObject:
+        body = [=](dd::DataChunk& args, dd::ExpressionState&, dd::Vector& result) {
+          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t, dd::string_t>(
+              args, result, [&](dd::string_t catalog, dd::string_t schema, dd::string_t name) {
+                const ObjectPath path{catalog.GetString(), {schema.GetString()}, name.GetString()};
+                return decide(ObjectKey(path),
+                              [&] { return snapshot->ObjectListed(principal, path); });
+              });
+        };
+        break;
+      case Rule::kColumn:
+        body = [=](dd::DataChunk& args, dd::ExpressionState&, dd::Vector& result) {
+          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t, dd::string_t, dd::string_t>(
+              args, result,
+              [&](dd::string_t catalog, dd::string_t schema, dd::string_t name, dd::string_t column) {
+                const ObjectPath path{catalog.GetString(), {schema.GetString()}, name.GetString()};
+                const std::string column_name = column.GetString();
+                return decide(ObjectKey(path) + "\x1d" + FoldIdentifier(column_name),
+                              [&] { return snapshot->ColumnListed(principal, path, column_name); });
+              });
+        };
+        break;
+      case Rule::kColumnOfArgument:
+        body = [=](dd::DataChunk& args, dd::ExpressionState&, dd::Vector& result) {
+          dd::VariadicExecutor::Execute<bool, dd::string_t>(args, result, [&](dd::string_t column) {
+            const std::string column_name = column.GetString();
+            return decide(FoldIdentifier(column_name),
+                          [&] { return snapshot->ColumnListed(principal, described, column_name); });
+          });
+        };
+        break;
     }
-    filter->children.push_back(std::move(op));
-    op = std::move(filter);
-    policy_filters_.insert(op.get());
+    dd::ScalarFunction listed(dd::Identifier("hardcharger_listed"), std::move(types),
+                              dd::LogicalType::BOOLEAN, std::move(body));
+    return dd::make_uniq<dd::BoundFunctionExpression>(dd::BoundScalarFunction(listed),
+                                                      std::move(arguments), nullptr);
+  }
+
+  // The table pragma_table_info('...') / pragma_show('...') describes, as DuckDB finds it.
+  dd::optional_ptr<dd::CatalogEntry> DescribedTable(const dd::Value& argument) {
+    try {
+      dd::vector<dd::Identifier> path;
+      for (const auto& part : dd::QualifiedName::ParseComponents(argument.ToString())) {
+        path.emplace_back(compat::Str(part));
+      }
+      if (path.empty()) return nullptr;
+      return dd::Catalog::GetEntry(context_,
+                                   dd::EntryLookupInfo(dd::CatalogType::TABLE_ENTRY,
+                                                       dd::QualifiedName::FromPath(path)),
+                                   dd::OnEntryNotFound::RETURN_NULL);
+    } catch (...) {
+      return nullptr;
+    }
   }
 
   void RewriteGet(dd::unique_ptr<dd::LogicalOperator>& op) {
     auto& get = op->Cast<dd::LogicalGet>();
     auto table = get.GetTable();
     if (!table) {
-      if (restricted_) RestrictMetadataRows(op);
-      if (op->type == OpType::LOGICAL_GET) HideSensitiveSettings(op);
+      RestrictTableFunctionRows(op);
       return;
     }
     const ObjectPath path = PathOfEntry(*table);
@@ -557,6 +711,7 @@ class PolicyRewriter {
   }
 
   dd::ClientContext& context_;
+  const std::shared_ptr<const Snapshot> snapshot_owner_;  // for the listing filters, which run later
   const Snapshot& snapshot_;
   const Principal& principal_;
   PolicyContext policy_context_;
@@ -593,25 +748,29 @@ arrow::Result<dd::unique_ptr<dd::ParsedExpression>> PreparePolicyExpression(
   return parsed;
 }
 
-void ApplyPolicies(dd::ClientContext& context, const Snapshot& snapshot, const Principal& principal,
-                   dd::unique_ptr<dd::LogicalOperator>& plan) {
+void ApplyPolicies(dd::ClientContext& context, const std::shared_ptr<const Snapshot>& snapshot,
+                   const Principal& principal, dd::unique_ptr<dd::LogicalOperator>& plan) {
   if (!plan || principal.superuser) return;
-  // Most statements need no rewrite: no policies, no tenants, no catalog limits, no
-  // settings listing.
-  std::function<bool(const dd::LogicalOperator&)> lists_settings =
-      [&](const dd::LogicalOperator& op) {
-        if (op.type == OpType::LOGICAL_GET &&
-            Lower(compat::Str(op.Cast<dd::LogicalGet>().function.GetName())) == "duckdb_settings") {
-          return true;
-        }
-        for (const auto& child : op.children) {
-          if (child && lists_settings(*child)) return true;
-        }
-        return false;
-      };
-  if (snapshot.row_policies().empty() && snapshot.mask_bindings().empty() &&
-      snapshot.catalog_tenants().empty() && !snapshot.RestrictsCatalogs(principal) &&
-      !lists_settings(*plan)) {
+  // Most statements need no rewrite: no policies, no tenants, no catalog limits, and no
+  // table function that lists the catalog or the settings.
+  static const std::unordered_set<std::string> kListingFunctions = {
+      "duckdb_databases", "duckdb_tables",    "duckdb_views",         "duckdb_columns",
+      "duckdb_constraints", "duckdb_functions", "duckdb_indexes",     "duckdb_schemas",
+      "duckdb_sequences", "duckdb_types",     "pragma_database_size", "duckdb_settings",
+      "pragma_table_info", "pragma_show"};
+  std::function<bool(const dd::LogicalOperator&)> lists = [&](const dd::LogicalOperator& op) {
+    if (op.type == OpType::LOGICAL_GET &&
+        kListingFunctions.count(Lower(compat::Str(op.Cast<dd::LogicalGet>().function.GetName())))) {
+      return true;
+    }
+    for (const auto& child : op.children) {
+      if (child && lists(*child)) return true;
+    }
+    return false;
+  };
+  if (snapshot->row_policies().empty() && snapshot->mask_bindings().empty() &&
+      snapshot->catalog_tenants().empty() && !snapshot->RestrictsCatalogs(principal) &&
+      !lists(*plan)) {
     return;
   }
   PolicyRewriter(context, snapshot, principal).Rewrite(plan);

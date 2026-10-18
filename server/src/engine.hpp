@@ -83,6 +83,8 @@ class Session : public warpduckdb::DuckDBSession {
   void Commit() override;
   void Rollback() override;
   std::optional<std::chrono::milliseconds> DefaultStatementTimeout() override;
+  // Killed (KILL SESSION) or ended by access control: session_ended with its reason.
+  void CheckEnded() override;
   // Also stops a statement waiting in the statement queue.
   void Interrupt() override;
 

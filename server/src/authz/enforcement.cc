@@ -643,7 +643,16 @@ class PlanChecker {
       if (db) RequireVisible(compat::Str(db->GetName()));
     }
     if (auto entry = LookUp(context_, dd::CatalogType::TABLE_ENTRY, parts)) {
-      RequireVisible(PathOf(*entry).catalog);
+      const ObjectPath path = PathOf(*entry);
+      RequireVisible(path.catalog);
+      // Describing a table lists its columns: only one the user may access (Warp SQL
+      // §9.4), as its listings show it. Which columns, the plan rewrite narrows.
+      if (!snapshot_.ObjectListed(principal_, path)) {
+        if (principal_.catalog_rules) DenyByCatalogAccess(path.catalog, CatalogAccessLevel::kRead);
+        Deny(principal_, "user " + principal_.user_name + " holds no privilege on " +
+                             TypeWord(ObjectTypeOf(*entry)) + " " + path.ToString() +
+                             ", so it cannot describe it");
+      }
     }
   }
 
@@ -1121,7 +1130,7 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
     }
   }
   // Row and masking policies apply to what passed the check.
-  ApplyPolicies(context, *snapshot, principal, plan);
+  ApplyPolicies(context, snapshot, principal, plan);
   state->NoteChecked(snapshot->version(), checker.TakeOwnership(),
                      plan->type == OpType::LOGICAL_PREPARE, checker.TakeAccesses());
 }

@@ -1,6 +1,8 @@
 #include "authz/authz.hpp"
 
 #include <arrow/api.h>
+#include <arrow/io/memory.h>
+#include <arrow/ipc/api.h>
 #include <openssl/evp.h>
 
 #include <algorithm>
@@ -209,6 +211,55 @@ bool ContainsWord(const std::string& text, const std::string& word) {
 std::string TextAt(const arrow::RecordBatch& batch, int column, int64_t row) {
   auto scalar = batch.column(column)->GetScalar(row);
   return scalar.ok() && (*scalar)->is_valid ? (*scalar)->ToString() : std::string();
+}
+
+// Tables metadata with schemas (Warp SQL §10: table_schema, an Arrow schema as an IPC
+// message, in column 4): each table's schema with only the columns `listed` keeps.
+std::shared_ptr<arrow::RecordBatchReader> ListedColumnsOnly(
+    std::shared_ptr<arrow::RecordBatchReader> tables,
+    const std::function<bool(const ObjectPath&, const std::string&)>& listed) {
+  constexpr int kTableSchema = 4;
+  auto fail = [](const arrow::Status& status) { throw Error(ErrorCode::kExecutionError, status.message()); };
+  auto schema = tables->schema();
+  arrow::RecordBatchVector out;
+  for (;;) {
+    auto next = tables->Next();
+    if (!next.ok()) fail(next.status());
+    auto batch = std::move(next).ValueUnsafe();
+    if (batch == nullptr) break;
+    const auto& schemas = static_cast<const arrow::BinaryArray&>(*batch->column(kTableSchema));
+    arrow::BinaryBuilder rebuilt;
+    for (int64_t row = 0; row < batch->num_rows(); row++) {
+      const std::string_view bytes = schemas.GetView(row);
+      arrow::io::BufferReader reader(std::make_shared<arrow::Buffer>(
+          reinterpret_cast<const uint8_t*>(bytes.data()), static_cast<int64_t>(bytes.size())));
+      arrow::ipc::DictionaryMemo memo;
+      auto table_schema = arrow::ipc::ReadSchema(&reader, &memo);
+      if (!table_schema.ok()) fail(table_schema.status());
+      const ObjectPath table{TextAt(*batch, 0, row), {TextAt(*batch, 1, row)}, TextAt(*batch, 2, row)};
+      arrow::FieldVector kept;
+      for (const auto& field : (*table_schema)->fields()) {
+        if (listed(table, field->name())) kept.push_back(field);
+      }
+      arrow::Status appended;
+      if (kept.size() == static_cast<std::size_t>((*table_schema)->num_fields())) {
+        appended = rebuilt.Append(bytes);
+      } else {
+        auto serialized = arrow::ipc::SerializeSchema(*arrow::schema(kept, (*table_schema)->metadata()));
+        if (!serialized.ok()) fail(serialized.status());
+        appended = rebuilt.Append((*serialized)->data(), (*serialized)->size());
+      }
+      if (!appended.ok()) fail(appended);
+    }
+    std::shared_ptr<arrow::Array> column;
+    if (auto finished = rebuilt.Finish(&column); !finished.ok()) fail(finished);
+    auto replaced = batch->SetColumn(kTableSchema, schema->field(kTableSchema), column);
+    if (!replaced.ok()) fail(replaced.status());
+    out.push_back(*replaced);
+  }
+  auto reader = arrow::RecordBatchReader::Make(std::move(out), schema);
+  if (!reader.ok()) fail(reader.status());
+  return *reader;
 }
 
 }  // namespace
@@ -631,12 +682,15 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
   };
   // A tenant's user may not even name what another tenant has: DuckDB binds some
   // statements without planning them (DESCRIBE, CREATE VIEW), so whether they bind
-  // would say whether the name exists.
+  // would say whether the name exists. And DESCRIBE lists a table's columns, which only
+  // a user who may see them all may read that way (Warp SQL §9.4).
   NamedTableCallback named_table;
   std::optional<SessionObjectResolver> resolver;
-  if (snapshot->RestrictsCatalogs(principal)) {
+  const bool restricted = snapshot->RestrictsCatalogs(principal);
+  if (!principal.superuser) {
     resolver.emplace(*dd::capiv2::Convert(connection_));
-    named_table = [&](const std::vector<std::string>& parts) {
+    named_table = [&](const std::vector<std::string>& parts, bool described) {
+      if (!restricted && !described) return;
       auto hidden = [&](const std::string& catalog) {
         if (snapshot->CatalogVisible(principal, catalog)) return false;
         // A catalog_access refusal says so; only the server's
@@ -651,16 +705,36 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
       };
       // A leading part that names an attached catalog counts as one, whatever DuckDB
       // makes of the rest (it reads beta.t as beta.main.t when there is no schema beta).
-      if (parts.size() >= 2) {
+      if (restricted && parts.size() >= 2) {
         if (auto catalog = resolver->ResolveCatalog(parts[0]); catalog.ok() && hidden(*catalog)) {
           throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name),
                       "42501");
         }
       }
       auto resolved = resolver->ResolveObject(QualifiedName{parts});
-      if (resolved.ok() && hidden(resolved->path.catalog)) {
+      if (!resolved.ok()) return;  // DuckDB reports what it makes of the name
+      if (restricted && hidden(resolved->path.catalog)) {
         throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name),
                     "42501");
+      }
+      if (!described) return;
+      const std::string what = (resolved->type == ObjectType::kView ? "view " : "table ") +
+                               resolved->path.ToString();
+      if (!snapshot->ObjectListed(principal, resolved->path)) {
+        throw Error(ErrorCode::kPermissionDenied,
+                    "Hardcharger blocked this statement: user " + principal.user_name +
+                        " holds no privilege on " + what + ", so it cannot describe it",
+                    "42501");
+      }
+      for (const auto& column : resolved->columns) {
+        if (!snapshot->ColumnListed(principal, resolved->path, column)) {
+          throw Error(ErrorCode::kPermissionDenied,
+                      "Hardcharger blocked this statement: user " + principal.user_name +
+                          " may read only some columns of " + what +
+                          ", and DESCRIBE shows them all; pragma_table_info('" +
+                          resolved->path.ToString() + "') lists the ones it may read",
+                      "42501");
+        }
       }
     };
   }
@@ -887,7 +961,9 @@ int64_t SessionGuard::Ingest(const warpsql::IngestTarget& target,
 std::shared_ptr<arrow::RecordBatchReader> SessionGuard::Metadata(
     warpsql::MetadataKind kind, const warpsql::MetadataFilter& filter,
     const std::function<std::shared_ptr<arrow::RecordBatchReader>(const warpsql::MetadataFilter&)>&
-        run) {
+        run,
+    const std::function<std::shared_ptr<arrow::RecordBatchReader>(std::shared_ptr<arrow::RecordBatchReader>)>&
+        describe) {
   RequireLive();
   auto state = StateOf(connection_);
   if (!state) {
@@ -895,33 +971,60 @@ std::shared_ptr<arrow::RecordBatchReader> SessionGuard::Metadata(
                 "Hardcharger blocked this request: the session has no access-control state",
                 "42501");
   }
-  // Hardcharger's own lookup over DuckDB's catalog views. Names are not protected (as
-  // duckdb_tables() shows them), except to a tenant's users, who see only their
-  // tenant's catalogs.
-  std::shared_ptr<arrow::RecordBatchReader> rows;
-  {
-    RbacSessionState::BypassScope internal(ContextOf(connection_));
-    rows = run(filter);
-    const Principal principal = state->principal();
-    auto snapshot = owner_.engine_->snapshot();
-    // Table types and data types name no catalog: everyone sees all of them.
-    if (!snapshot->RestrictsCatalogs(principal) || kind == warpsql::MetadataKind::kTableTypes ||
-        kind == warpsql::MetadataKind::kTypeInfo) {
-      return rows;
-    }
-    std::vector<int> catalog_columns = {0};
-    if (kind == warpsql::MetadataKind::kImportedKeys ||
-        kind == warpsql::MetadataKind::kExportedKeys ||
-        kind == warpsql::MetadataKind::kCrossReference) {
-      catalog_columns = {0, 4};  // pk_catalog_name, fk_catalog_name
-    }
+  // Hardcharger's own lookup over DuckDB's catalog views, run unchecked; then only what
+  // the principal may access is kept (Warp SQL §9.4), by the snapshot's listing rules,
+  // which ask the same question SQL does.
+  using Kind = warpsql::MetadataKind;
+  RbacSessionState::BypassScope internal(ContextOf(connection_));
+  const Principal principal = state->principal();
+  auto snapshot = owner_.engine_->snapshot();
+  // Table types and data types name no object: everyone sees all of them.
+  if (principal.superuser || kind == Kind::kTableTypes || kind == Kind::kTypeInfo) {
+    return run(filter);
+  }
+  if (kind == Kind::kCatalogs) {
+    auto rows = run(filter);
+    if (!snapshot->RestrictsCatalogs(principal)) return rows;
     return FilterRows(std::move(rows), [&](const arrow::RecordBatch& batch, int64_t row) {
-      for (int column : catalog_columns) {
-        if (!snapshot->CatalogVisible(principal, TextAt(batch, column, row))) return false;
-      }
-      return true;
+      return snapshot->CatalogVisible(principal, TextAt(batch, 0, row));
     });
   }
+  // The object a row names from its catalog, schema and table columns.
+  auto object_at = [](const arrow::RecordBatch& batch, int64_t row, int first) {
+    return ObjectPath{TextAt(batch, first, row), {TextAt(batch, first + 1, row)}, TextAt(batch, first + 2, row)};
+  };
+  if (kind == Kind::kDbSchemas) {
+    return FilterRows(run(filter), [&](const arrow::RecordBatch& batch, int64_t row) {
+      return snapshot->SchemaListed(principal, ObjectPath{TextAt(batch, 0, row), {TextAt(batch, 1, row)}, {}});
+    });
+  }
+  if (kind == Kind::kTables) {
+    // Listed tables only, and only then their schemas: an unlisted table is never described.
+    warpsql::MetadataFilter names_only = filter;
+    names_only.include_schema = false;
+    auto rows = FilterRows(run(names_only), [&](const arrow::RecordBatch& batch, int64_t row) {
+      return snapshot->ObjectListed(principal, object_at(batch, row, 0));
+    });
+    if (!filter.include_schema) return rows;
+    return ListedColumnsOnly(describe(std::move(rows)), [&](const ObjectPath& table, const std::string& column) {
+      return snapshot->ColumnListed(principal, table, column);
+    });
+  }
+  // Keys: every table and column a row names must be listed (pk_*, then fk_* for foreign keys).
+  std::vector<std::pair<int, int>> sides = {{0, 3}};  // (catalog column, column-name column)
+  if (kind == Kind::kImportedKeys || kind == Kind::kExportedKeys || kind == Kind::kCrossReference) {
+    sides.emplace_back(4, 7);
+  }
+  return FilterRows(run(filter), [&](const arrow::RecordBatch& batch, int64_t row) {
+    for (const auto& [first, column] : sides) {
+      const ObjectPath table = object_at(batch, row, first);
+      if (!snapshot->ObjectListed(principal, table) ||
+          !snapshot->ColumnListed(principal, table, TextAt(batch, column, row))) {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 
 }  // namespace hardcharger::authz

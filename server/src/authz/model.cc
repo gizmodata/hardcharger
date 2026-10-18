@@ -375,6 +375,86 @@ AccessDecision Snapshot::Check(const Principal& principal, const AccessRequest& 
   return {false, "no " + PrivilegeName(request.privilege) + " privilege", ""};
 }
 
+namespace {
+
+// DuckDB's own views (catalog system) and the session's temporary objects (temp).
+bool EngineCatalog(const std::string& catalog) {
+  return IdentifiersEqual(catalog, "system") || IdentifiersEqual(catalog, "temp");
+}
+
+}  // namespace
+
+bool Snapshot::ObjectListed(const Principal& principal, const ObjectPath& object) const {
+  if (principal.superuser) return true;
+  if (!CatalogVisible(principal, object.catalog)) return false;
+  if (EngineCatalog(object.catalog)) return true;
+  // SELECT with no columns named: any column grant is enough, as for count(*).
+  for (const Privilege privilege : TableLevelPrivileges()) {
+    if (Check(principal, AccessRequest{object, ObjectType::kTable, privilege, {}}).allowed) return true;
+  }
+  return false;
+}
+
+bool Snapshot::ColumnListed(const Principal& principal, const ObjectPath& table, const std::string& column) const {
+  if (principal.superuser) return true;
+  if (!CatalogVisible(principal, table.catalog)) return false;
+  if (EngineCatalog(table.catalog)) return true;
+  for (const Privilege privilege : TableLevelPrivileges()) {
+    std::vector<std::string> columns;
+    if (privilege == Privilege::kSelect) columns.push_back(column);
+    if (Check(principal, AccessRequest{table, ObjectType::kTable, privilege, columns}).allowed) return true;
+  }
+  return false;
+}
+
+bool Snapshot::SchemaListed(const Principal& principal, const ObjectPath& schema) const {
+  if (principal.superuser) return true;
+  if (!CatalogVisible(principal, schema.catalog)) return false;
+  // catalog_access rules decide by catalog: a catalog they show, they let the principal read.
+  if (EngineCatalog(schema.catalog) || principal.catalog_rules) return true;
+  if (principal.scope && !principal.scope->catalogs.empty()) {
+    bool reachable = false;
+    for (const auto& c : principal.scope->catalogs) reachable = reachable || IdentifiersEqual(c, schema.catalog);
+    if (!reachable) return false;
+  }
+  const auto roles = RolesOf(principal);
+  if (roles.empty()) return false;
+  // On the schema or one it is in (it covers this one), on a schema in it, or on an object in it.
+  auto related = [&](const ObjectPath& target, GrantScope scope) {
+    if (!IdentifiersEqual(target.catalog, schema.catalog)) return false;
+    switch (scope) {
+      case GrantScope::kCatalog:
+        return true;
+      case GrantScope::kSchema:
+        return PathHasPrefix(schema.schema_path, target.schema_path) ||
+               PathHasPrefix(target.schema_path, schema.schema_path);
+      case GrantScope::kObject:
+        return PathHasPrefix(target.schema_path, schema.schema_path);
+    }
+    return false;
+  };
+  for (const auto& role_id : roles) {
+    auto it = grants_by_role_.find(role_id);
+    if (it == grants_by_role_.end()) continue;
+    for (const ObjectGrantRecord* grant : it->second) {
+      // A scoped token narrows grants to its privileges (ALL: any of them).
+      if (principal.scope && grant->privilege != Privilege::kAll &&
+          !principal.scope->privileges.count(grant->privilege)) {
+        continue;
+      }
+      if (principal.scope && grant->privilege == Privilege::kAll && principal.scope->privileges.empty()) continue;
+      if (related(grant->target, grant->scope)) return true;
+    }
+  }
+  for (const auto& owner : owners_) {
+    if (IdentifiersEqual(owner.object.catalog, schema.catalog) &&
+        PathHasPrefix(owner.object.schema_path, schema.schema_path) && IsOwner(principal, owner)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::set<std::string> Snapshot::RightsOf(const Principal& principal) const {
   std::set<std::string> rights;
   for (const auto& role_id : RolesOf(principal)) {

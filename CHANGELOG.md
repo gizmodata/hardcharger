@@ -167,6 +167,46 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Security: metadata follows authorization object by object (Warp SQL §9.4). Inside a
+  catalog a user could see, the metadata calls and SQL's catalog listings showed every
+  schema, table, view (with its definition) and column, whatever the user's privileges;
+  only other tenants' catalogs were hidden (GizmoSQL 1.x's RBAC branch filters by
+  catalog only too). Now the db-schemas, tables (and their `table_schema`), primary-keys,
+  imported-/exported-keys and cross-reference calls, and `duckdb_tables()`,
+  `duckdb_views()`, `duckdb_columns()`, `duckdb_schemas()`, `duckdb_constraints()`,
+  `duckdb_indexes()`, `information_schema`, `SHOW TABLES`, `SHOW ALL TABLES`,
+  `pragma_table_info()` and `pragma_show()` list a table or view only when the user holds
+  SELECT on it or on any of its columns, or INSERT, UPDATE or DELETE on it (owning it
+  holds them all); a column only when the user may SELECT it (or holds INSERT, UPDATE or
+  DELETE on its table); a schema only when the user holds a grant on or in it or owns
+  something in it; keys only when every table and column they name is listed. The rules
+  ask the same `Check()` a SELECT does, so scoped tokens, SET ROLE, tenants and
+  `catalog_access` rules (which grant whole catalogs) hold. `DESCRIBE`, `SHOW <table>`,
+  `pragma_table_info()` and `pragma_show()` of a table the user holds no privilege on are
+  refused ("user joe holds no privilege on table c.s.t, so it cannot describe it"), and
+  `DESCRIBE` of a table the user may read only some columns of is refused too (it shows
+  them all; `pragma_table_info()` lists the readable ones). DuckDB's own views (catalog
+  `system`) and the session's temporary objects stay listed. A grant or revoke applies to
+  the next listing, prepared ones included. `test_metadata_privileges.py`.
+- HUGEINT and UHUGEINT values that Arrow's decimal128(38, 0) can't hold were sent wrong:
+  DuckDB copies the 16 bytes as they are, so a UHUGEINT of 2^127 or more arrived negative
+  (its maximum as -1) and any value of 10^38 or more as an invalid decimal128(38, 0).
+  DuckDB is now patched (`scripts/patch-duckdb-arrow-hugeint.cmake`) to fail such a
+  statement with a conversion error naming the value and the two ways around it (CAST to
+  VARCHAR, or the `arrow_lossless_conversion` session option, DuckDB's 16-byte types,
+  which hold every value); every value that fits is sent exactly as before, nested ones
+  included. `test_wide_integers.py` round-trips every boundary value.
+- JSON bind parameters outside the 64-bit range were bound as rounded doubles
+  (10^38 - 1 as 1e38); they now bind exactly as HUGEINT or UHUGEINT, and wider ones are
+  refused (from the Warp SQL SDK; Warp SQL §6.1 now requires it).
+- The `arrow_lossless_conversion` session option changed the instance-wide default, so
+  any user switching it changed every other session's HUGEINT, UUID and JSON results; it
+  is now the session's own (from the Warp SQL SDK).
+- `GET /warp/v1/sessions/{id}` of a session that `KILL SESSION` or access control ended
+  answers `401` `session_ended` with its `reason` (Warp SQL §5.6), as every other request
+  for it does; it answered `200`, so a liveness probe saw the dead session as alive. (The
+  structured `reason` field itself is on main since after 0.2.0, which sent the reason
+  only in the detail text.)
 - Security: a `SET VARIABLE v = (SELECT ... FROM c.t)` whose subquery read a catalog the
   session's `catalog_access` rules deny was not checked, so `getvariable('v')` then handed
   back the result. Any rules principal was affected: a rules-only user, a restricted

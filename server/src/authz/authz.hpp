@@ -202,12 +202,16 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // A bulk ingest (one SQL statement inside `run`, under the plan check).
   int64_t Ingest(const warpsql::IngestTarget& target, const std::function<int64_t()>& run);
 
-  // Metadata: `run` looks it up as Hardcharger's own (unchecked) query; what a tenant's
-  // user may not see is left out.
+  // Metadata: `run` looks it up as Hardcharger's own (unchecked) query; only what the
+  // session's principal may access is kept (Warp SQL §9.4), by the rules SQL applies. For
+  // tables with schemas, `run` lists names only and `describe` adds the schemas of the
+  // tables that are kept, which keep only the columns the principal may see.
   std::shared_ptr<arrow::RecordBatchReader> Metadata(
       warpsql::MetadataKind kind, const warpsql::MetadataFilter& filter,
       const std::function<
-          std::shared_ptr<arrow::RecordBatchReader>(const warpsql::MetadataFilter&)>& run);
+          std::shared_ptr<arrow::RecordBatchReader>(const warpsql::MetadataFilter&)>& run,
+      const std::function<std::shared_ptr<arrow::RecordBatchReader>(
+          std::shared_ptr<arrow::RecordBatchReader>)>& describe);
 
   // An error as this session's user may see it: for a tenant's user, one that names
   // another tenant's objects reads exactly like one about something that does not exist.

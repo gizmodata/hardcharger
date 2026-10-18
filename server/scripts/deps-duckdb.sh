@@ -69,3 +69,5 @@ cp "$WARPSQL_DEPS_DIR/libpq-install/lib/libpq.a" "$WARPSQL_DEPS_DIR/roaring-inst
 if [ -f "$WARPSQL_DEPS_DIR/curl-install/lib/libcurl.a" ]; then cp "$WARPSQL_DEPS_DIR/curl-install/lib/libcurl.a" "$STATIC_DEPS/"; fi
 grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_basetableref.cpp" \
   || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
+grep -q HardchargerDecimal38Converter "$SRC/src/common/arrow/arrow_appender.cpp" \
+  || { echo "DuckDB lost the HUGEINT / UHUGEINT Arrow export patch" >&2; exit 1; }

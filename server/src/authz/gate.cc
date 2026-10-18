@@ -149,7 +149,7 @@ class Walker {
     for (const auto& part : name.Path()) {
       if (!Str(part).empty()) parts.push_back(Str(part));
     }
-    if (!parts.empty()) named_table_(parts);
+    if (!parts.empty()) named_table_(parts, describing_ > 0);
   }
 
   std::optional<std::string> violation;
@@ -235,6 +235,15 @@ class Walker {
     } else if (ref.type == dd::TableReferenceType::SHOW_REF) {
       // DESCRIBE / SHOW / SUMMARIZE: of a query, or of a table by name.
       auto& show = ref.Cast<dd::ShowRef>();
+      // DESCRIBE (and SHOW of a table) is bound without being planned: what it names,
+      // it describes. SUMMARIZE runs its query, which is planned and checked.
+      const int describes = show.show_type != dd::ShowType::SUMMARY ? 1 : 0;
+      describing_ += describes;
+      struct Undescribe {
+        int& depth;
+        int by;
+        ~Undescribe() { depth -= by; }
+      } undescribe{describing_, describes};
       if (show.query) WalkNode(*show.query);
       if (!show.GetTableName().GetIdentifierName().empty() &&
           show.show_type != dd::ShowType::SHOW_SPECIAL &&
@@ -295,6 +304,7 @@ class Walker {
   const std::function<bool(const std::string&)>& permitted_;
   const NamedTableCallback& named_table_;
   const TableFunctionCallback& table_function_allowed_;
+  int describing_ = 0;  // inside a DESCRIBE
 };
 
 std::optional<std::string> Classify(dd::SQLStatement& statement,

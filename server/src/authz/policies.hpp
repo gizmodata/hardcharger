@@ -16,6 +16,7 @@
 
 #include <duckdb.hpp>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 
@@ -49,9 +50,10 @@ arrow::Result<duckdb::unique_ptr<duckdb::ParsedExpression>> PreparePolicyExpress
     const duckdb::ParsedExpression* parameter_value = nullptr);
 
 // Rewrite a store user's checked plan for the row and masking policies that
-// apply to them. Throws a PermissionException for a statement it cannot
+// apply to them, and narrow the catalog table functions it calls (duckdb_tables(), ...)
+// to what the user may see. Throws a PermissionException for a statement it cannot
 // rewrite safely.
-void ApplyPolicies(duckdb::ClientContext& context, const Snapshot& snapshot,
+void ApplyPolicies(duckdb::ClientContext& context, const std::shared_ptr<const Snapshot>& snapshot,
                    const Principal& principal, duckdb::unique_ptr<duckdb::LogicalOperator>& plan);
 
 }  // namespace hardcharger::authz

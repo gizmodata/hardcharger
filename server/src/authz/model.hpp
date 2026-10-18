@@ -336,6 +336,19 @@ class Snapshot {
   // The question every statement asks. Superusers are always allowed.
   AccessDecision Check(const Principal& principal, const AccessRequest& request) const;
 
+  // ---- listings (Warp SQL §9.4: metadata shows only what the principal may access) ----
+  // Every listing asks Check() above, so it follows the same rules as SQL. DuckDB's own
+  // views (catalog system) and the session's temporary objects (temp) are listed for every
+  // principal that sees their catalog.
+  // A table or view is listed when the principal holds SELECT on it or on any of its
+  // columns, or INSERT, UPDATE or DELETE on it (owning it holds them all).
+  bool ObjectListed(const Principal& principal, const ObjectPath& object) const;
+  // A column, when the principal may SELECT it, or holds INSERT, UPDATE or DELETE on its table.
+  bool ColumnListed(const Principal& principal, const ObjectPath& table, const std::string& column) const;
+  // A schema, when the principal holds a grant on it, on a schema it is in or holds, or on
+  // an object in it, or owns it or an object in it.
+  bool SchemaListed(const Principal& principal, const ObjectPath& schema) const;
+
   // Is the principal the owner of the object (directly, or through a role)?
   bool IsOwner(const Principal& principal, const OwnerRecord& owner) const;
 

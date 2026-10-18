@@ -194,6 +194,36 @@ GizmoSQL 1.x server created.
 | the `.gizmosql-metrics-state` exit marker | `.hardcharger-metrics-state` |
 | license keys (`GIZMOSQL_LICENSE_KEY`, `--license-key-file`) | (none: no license) |
 
+### Metadata under access control
+
+GizmoSQL 1.x's RBAC (the `feature/rbac` branch) filters metadata by catalog only: a
+tenant's user doesn't see other tenants' catalogs, a `catalog_access` principal sees only
+the catalogs its rules allow, and inside a catalog it may see, every user sees every
+schema, table, view and column. Hardcharger filters each object by the rules SELECT
+follows (Warp SQL §9.4):
+
+| Listing | Hardcharger, for a non-administrator |
+|---|---|
+| tables and views (metadata `tables`, `duckdb_tables()`, `duckdb_views()`, `information_schema.tables`, `SHOW TABLES`, `SHOW ALL TABLES`) | those it holds SELECT on (any column), INSERT, UPDATE or DELETE on, or owns |
+| columns (`table_schema` of metadata `tables`, `duckdb_columns()`, `information_schema.columns`, `pragma_table_info()`, `pragma_show()`) | those it may SELECT; every column of a table it holds INSERT, UPDATE or DELETE on |
+| schemas (metadata `db-schemas`, `duckdb_schemas()`, `information_schema.schemata`) | those it holds a grant on or in, or owns something in |
+| keys and constraints (metadata `primary-keys`, `imported-keys`, `exported-keys`, `cross-reference`, `duckdb_constraints()`, `duckdb_indexes()`) | those whose tables (and columns) are listed |
+| `DESCRIBE t`, `DESCRIBE SELECT ...`, `SHOW t` | refused for a table it holds no privilege on, or may read only some columns of |
+| catalogs | as before: tenants' and `catalog_access` rules' catalogs |
+
+A `catalog_access` principal reads whole catalogs, so it sees everything in the catalogs
+its rules let it read, as in 1.x. Two things still name what a user can't read, without
+any data: `duckdb_tables().sql` and `column_count` describe every column of a table the
+user may read some columns of, and a user allowed to CREATE VIEW can create a view over
+a table it can't read (the view fails when read) and list that view's columns.
+
+### HUGEINT and UHUGEINT results
+
+Both arrive as Arrow decimal128(38, 0), as from DuckDB's own Arrow export. A value that
+decimal128(38, 0) can't hold (10^38 or more in magnitude, which includes UHUGEINT's upper
+half) fails the statement with a conversion error rather than arriving wrong; CAST it to
+VARCHAR, or set the session option `arrow_lossless_conversion` (DuckDB's 16-byte types).
+
 ### `catalog_access` rules on an administrator's token
 
 Both apply a token's `catalog_access` rules whatever its role: an `admin` token with rules

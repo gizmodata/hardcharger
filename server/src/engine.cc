@@ -495,6 +495,12 @@ void Session::CheckAlive() const {
   guard_->RequireLive();
 }
 
+void Session::CheckEnded() {
+  // Safe from any thread: killed_ is atomic, the guard is set once and locks its own state.
+  if (killed_) throw KilledError();
+  if (guard_) guard_->RequireLive();
+}
+
 warpsql::StatementOutcome Session::Guarded(std::string_view sql, bool has_parameters,
                                            const std::function<warpsql::StatementOutcome()>& run) {
   return guard_ ? guard_->Execute(sql, has_parameters, run) : run();
@@ -977,10 +983,12 @@ std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(warpsql::MetadataKin
              {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"is_internal", "true"},
               {"metadata", std::to_string(static_cast<int>(kind))}});
   }
-  auto rows = guard_ ? guard_->Metadata(kind, filter,
-                                        [&](const warpsql::MetadataFilter& narrowed) {
-                                          return DuckDBSession::Metadata(kind, narrowed);
-                                        })
+  auto rows = guard_ ? guard_->Metadata(
+                          kind, filter,
+                          [&](const warpsql::MetadataFilter& narrowed) { return DuckDBSession::Metadata(kind, narrowed); },
+                          [&](std::shared_ptr<arrow::RecordBatchReader> tables) {
+                            return TablesWithSchemas(std::move(tables));
+                          })
                      : DuckDBSession::Metadata(kind, filter);
   // The server's own catalogs are invisible to non-admins in the catalog, schema and
   // table lists (their first column is the catalog).

@@ -48,3 +48,5 @@ cp -R "$SRC/third_party/fmt/include/fmt" "$SRC/third_party/re2/re2" \
   "$SRC/third_party/fast_float/fast_float" "$THIRD_PARTY/"
 grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_basetableref.cpp" \
   || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
+grep -q HardchargerDecimal38Converter "$SRC/src/common/arrow/arrow_appender.cpp" \
+  || { echo "DuckDB lost the HUGEINT / UHUGEINT Arrow export patch" >&2; exit 1; }

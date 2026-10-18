@@ -15,7 +15,8 @@ updated. Nothing is skipped; a missing dependency fails its test.
     hardcharger-server): 142, of which 142 pass.
 - **Scripts and driver suites (12 files, 131 cases or checks):** 81 passing, 0 failing, 22 not applicable, 28 not yet.
 - Hardcharger's own tests (`test_server.py`, `test_no_license.py`, the security and
-  redaction suites) and the Warp SQL conformance suite pass too.
+  redaction suites, `test_metadata_privileges.py`, `test_wide_integers.py`) and the Warp
+  SQL conformance suite pass too.
 - **Access control** (the RBAC port, `test_rbac_*.py`, 18 files, 271 tests): all pass,
   on the same build, including `test_rbac_battery.py`, which checks the battery's
   features under access control (the server's own catalogs, SQL functions, settings,
@@ -60,7 +61,7 @@ run the same way against the `hardcharger` client's (`server/client/tests/`, bin
 | `integration/test_session_idle.cpp` | 5 | 5 | 0 | 0 | 0 | `test_session_idle.py` | ported & passing; against servers, not a unit |
 | `integration/test_max_sessions.cpp` | 4 | 4 | 0 | 0 | 0 | `test_max_sessions.py` | ported & passing |
 | `integration/test_reject_unknown_sessions.cpp` | 6 | 4 | 0 | 2 | 0 | `test_reject_unknown_sessions.py` | mixed; N/A: the two implicit-recreation cases (Warp never recreates); no option, it is always so |
-| `integration/test_kill_session.cpp` | 4 | 4 | 0 | 0 | 0 | `test_kill_session.py` | ported & passing; a real non-admin case; +2 cases |
+| `integration/test_kill_session.cpp` | 4 | 4 | 0 | 0 | 0 | `test_kill_session.py` | ported & passing; a real non-admin case; +4 cases (session_ended's reason on every request, GET of the session included) |
 | `integration/test_graceful_shutdown.cpp` | 5 | 5 | 0 | 0 | 0 | `test_graceful_shutdown.py` | ported & passing; real SIGTERM every case; +1 |
 | `integration/test_health_check.cpp` | 8 | 8 | 0 | 0 | 0 | `test_health_check.py` | ported & passing |
 | `integration/test_server_cli.cpp` | 2 | 2 | 0 | 0 | 0 | `test_server_cli.py` | ported & passing |
