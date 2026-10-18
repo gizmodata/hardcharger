@@ -170,7 +170,7 @@ jobs:
                 -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE \
                 -DWARPSQL_ARROW_PREFIX="$deps/arrow-install" -DWARPSQL_DUCKDB_PREFIX="$deps/duckdb-install" \
                 -DWARPSQL_BUILD_TESTS=ON
-          cmake --build build-warp --target warp-duckdb warpsql-client-tests
+          cmake --build build-warp --target warp-duckdb warpsql-client-tests warpsql-sdk-tests
 
       - name: Unit tests
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
@@ -179,6 +179,10 @@ jobs:
       - name: Client library tests
         if: ${{ !cancelled() && steps.warp.outcome == 'success' }}
         run: build-warp/warpsql-client-tests.exe --gtest_brief=1
+      # The SDK's own unit tests (the security-event limiter).
+      - name: SDK unit tests
+        if: ${{ !cancelled() && steps.warp.outcome == 'success' }}
+        run: build-warp/warpsql-sdk-tests.exe --gtest_brief=1
 
       # PostgreSQL for the access-control grant store (the tests fail without it). The
       # x64 image ships PostgreSQL; elsewhere EnterpriseDB's x64 binaries (emulated on arm64).
@@ -232,6 +236,8 @@ jobs:
           WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
           WARP_SQL_TEST_SERVER_USERNAME: warp
           WARP_SQL_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
+          # The flag naming the client CA in the mutual-TLS tests (test_mtls.py).
+          WARP_SQL_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
           HARDCHARGER_ADMIN_USERNAME: warp
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |

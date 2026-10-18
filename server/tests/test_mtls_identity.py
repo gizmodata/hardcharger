@@ -9,10 +9,8 @@ import datetime
 import hashlib
 import ipaddress
 import json
-import os
 import socket
 import ssl
-import stat
 import subprocess
 import time
 
@@ -748,7 +746,7 @@ def test_one_handshake_refusal_record_has_a_bounded_size(launcher, pki, tmp_path
 # ---- Finding: a failed CRL reload is not retried ----
 
 def test_a_crl_reload_that_failed_is_retried(launcher, pki, tmp_path):
-    """Write a CRL revoking dave while the reload can't succeed (the server key unreadable
+    """Write a CRL revoking dave while the reload can't succeed (the server key unusable
     for a moment); once it can, the revocation must take effect without touching the CRL."""
     ops, dave = pki.issue(name="ops@example.com"), pki.issue(name="dave@example.com")
 
@@ -767,9 +765,11 @@ def test_a_crl_reload_that_failed_is_retried(launcher, pki, tmp_path):
     server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-crl-file", str(path)])
     with server.http(identity=dave) as http:
         assert http.get(url="/warp").status_code == 200
+    # The server's key unusable for a moment, as mid-rotation (a garbage file, so this
+    # holds on Windows too, where a mode of 0 doesn't stop the server reading it).
     key_file = pki.server[1]
-    mode = key_file.stat().st_mode
-    os.chmod(key_file, 0)
+    real_key = key_file.read_bytes()
+    key_file.write_bytes(b"-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----\n")
     try:
         path.write_bytes(crl(revoked=[dave[2].serial_number]))
         time.sleep(7)  # one look at the file (every 5 s): the reload fails
@@ -777,7 +777,7 @@ def test_a_crl_reload_that_failed_is_retried(launcher, pki, tmp_path):
             http.get(url="/warp")
         time.sleep(1)
     finally:
-        os.chmod(key_file, stat.S_IMODE(mode))
+        key_file.write_bytes(real_key)
     failed = [r for r in server.running.log_records() if r.get("component") == "tls" and r.get("level") in ("error", "ERROR")]
     assert any("reloading the client CRL file" in r.get("message", "") and "tried again" in r.get("message", "")
                for r in failed), [r.get("message") for r in failed]
