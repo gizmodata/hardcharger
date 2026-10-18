@@ -268,14 +268,37 @@ def test_bad_port_value_is_an_error():
 
 
 def test_uri_cannot_be_combined_with_connection_flags(server):
-    uri = f"hardcharger://localhost:{server.port}?username={server.username}"
-    result = subprocess.run(args=[binary(), uri, "--host", "localhost", "-c", "SELECT 1"],
-                            env=client_env(server=server), capture_output=True, text=True)
-    assert result.returncode == 1
-    assert result.stderr.strip() == "Error: --uri cannot be combined with --host", result.stderr
-    ok = subprocess.run(args=[binary(), uri, "--csv", "--no-header", "-c", "SELECT 'uri'"],
+    # A URI names the host, the port and TLS; those flags beside it are refused. The user and
+    # the other TLS settings come from their own flags, as with the ADBC driver's options.
+    uri = f"hardcharger://localhost:{server.port}?tls=false"
+    for flag in (["--host", "localhost"], ["--port", str(server.port)], ["--tls"]):
+        result = subprocess.run(args=[binary(), uri, *flag, "--username", server.username, "-c", "SELECT 1"],
+                                env=client_env(server=server), capture_output=True, text=True)
+        assert result.returncode == 1
+        assert result.stderr.strip() == f"Error: --uri cannot be combined with {flag[0]}", result.stderr
+    ok = subprocess.run(args=[binary(), uri, "--username", server.username, "--csv", "--no-header", "-c", "SELECT 'uri'"],
                         env=client_env(server=server), capture_output=True, text=True)
     assert ok.returncode == 0 and ok.stdout.strip() == "uri", ok.stderr
+
+
+def test_uri_parameters_of_1x_are_refused_by_name(server):
+    uri = f"hardcharger://localhost:{server.port}?username={server.username}&useEncryption=false"
+    result = subprocess.run(args=[binary(), uri, "-c", "SELECT 1"], env=client_env(server=server),
+                            capture_output=True, text=True)
+    assert result.returncode == 1
+    assert result.stderr.strip() == (
+        f"Error: invalid uri {uri}: unknown parameter(s) useEncryption, username (useEncryption: TLS is on unless the "
+        "URI says ?tls=false; username: --username)"), result.stderr
+    assert "Connected" not in result.stdout
+
+
+def test_hardcharger_plus_http_is_refused():
+    result = subprocess.run(args=[binary(), "hardcharger+http://localhost:31337", "-c", "SELECT 1"],
+                            env=client_env(), capture_output=True, text=True)
+    assert result.returncode == 1
+    assert result.stderr.strip() == (
+        "Error: hardcharger+http:// is not a Hardcharger URI scheme: use hardcharger://host:port for HTTPS, or "
+        "hardcharger://host:port?tls=false for plain HTTP"), result.stderr
 
 
 def test_once_redirects_only_the_next_result(server, tmp_path):
@@ -851,6 +874,130 @@ def test_mutual_tls(launcher, tmp_path):
     half = run(server, "--tls", "--tls-skip-verify", "--mtls-cert", str(certs["client_cert"]), "-c", "SELECT 1")
     assert half.returncode == 1
     assert "Error: mTLS private key must be provided with mTLS certificate" in half.stderr, half.stderr
+
+
+# ---- Added: URIs, with the Hardcharger ADBC driver's rules (HTTPS unless ?tls=false) ----
+
+
+class FirstBytes:
+    """A TCP listener on 127.0.0.1 that keeps the first bytes each connection sends, then
+    closes it: what a client puts on the wire before any server answers."""
+
+    def __init__(self):
+        import socket
+        import threading
+        self.received: list[bytes] = []
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(8)
+        self.port = self.sock.getsockname()[1]
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            with conn:
+                conn.settimeout(5)
+                try:
+                    self.received.append(conn.recv(4096))
+                except OSError:
+                    self.received.append(b"")
+
+    def close(self):
+        self.sock.close()
+
+
+@pytest.fixture
+def first_bytes():
+    listener = FirstBytes()
+    yield listener
+    listener.close()
+
+
+def run_uri(uri: str, *args: str, password: str = "never-sent-in-plaintext") -> subprocess.CompletedProcess:
+    return subprocess.run(args=[binary(), uri, "--username", "joe", *args, "-c", "SELECT 1"],
+                          env=client_env(HARDCHARGER_PASSWORD=password), capture_output=True, text=True, timeout=60)
+
+
+@pytest.mark.parametrize("query", ["?tls=true", "", "?tls=1", "?tls=TRUE"])
+def test_uri_with_tls_never_sends_plaintext(first_bytes, query):
+    # The 1.x parser ignored tls= (and used plain HTTP unless useEncryption=true), so
+    # hardcharger://host?tls=true sent its sign-in, password included, in plaintext.
+    result = run_uri(f"hardcharger://127.0.0.1:{first_bytes.port}{query}")
+    assert result.returncode == 1, result.stdout
+    assert result.stderr.startswith("Error: "), result.stderr
+    assert first_bytes.received, "the client never connected"
+    for data in first_bytes.received:
+        assert data[:1] == b"\x16", f"not a TLS handshake: {data[:40]!r}"  # a TLS record: handshake
+        assert b"HTTP/" not in data and b"never-sent-in-plaintext" not in data, data[:200]
+
+
+def test_uri_with_tls_false_is_plain_http_to_its_base_path(first_bytes):
+    # The twin: ?tls=false is plain HTTP, to /warp, or to the URI's own path.
+    run_uri(f"hardcharger://127.0.0.1:{first_bytes.port}?tls=false")
+    run_uri(f"hardcharger://127.0.0.1:{first_bytes.port}/custom/prefix/?tls=false")
+    assert len(first_bytes.received) >= 2, first_bytes.received
+    assert first_bytes.received[0].startswith(b"GET /warp HTTP/1.1\r\n"), first_bytes.received[0][:80]
+    assert first_bytes.received[-1].startswith(b"GET /custom/prefix HTTP/1.1\r\n"), first_bytes.received[-1][:80]
+
+
+def test_uri_against_plain_and_tls_servers(launcher, server, tmp_path):
+    plain = f"hardcharger://localhost:{server.port}"
+    ok = subprocess.run(args=[binary(), f"{plain}?tls=false", "--username", server.username, "--csv", "--no-header",
+                              "-c", "SELECT 'plain'"], env=client_env(server=server), capture_output=True, text=True)
+    assert ok.returncode == 0 and ok.stdout.strip() == "plain", ok.stderr
+    # Without ?tls=false the URI is HTTPS, which a plain-HTTP server can't answer.
+    tls_to_plain = subprocess.run(args=[binary(), plain, "--username", server.username, "-c", "SELECT 1"],
+                                  env=client_env(server=server), capture_output=True, text=True, timeout=60)
+    assert tls_to_plain.returncode == 1 and tls_to_plain.stderr.startswith("Error: "), tls_to_plain.stderr
+
+    certs = make_certificates(directory=tmp_path, names=LOCAL_NAMES)
+    tls_server = start_tls(launcher=launcher, certs=certs)
+    assert wait_tls(tls_server, extra=["--tls-roots", str(certs["ca"])]).returncode == 0
+    uri = f"hardcharger://localhost:{tls_server.port}"
+    https = subprocess.run(args=[binary(), uri, "--username", tls_server.username, "--tls-roots", str(certs["ca"]),
+                                 "--csv", "--no-header", "-c", "SELECT 'https'"],
+                           env=client_env(server=tls_server), capture_output=True, text=True)
+    assert https.returncode == 0 and https.stdout.strip() == "https", https.stderr
+    # The same server, with the roots it isn't signed by: verification still applies.
+    wrong = subprocess.run(args=[binary(), uri, "--username", tls_server.username, "--tls-roots",
+                                 str(certs["other_ca"]), "-c", "SELECT 1"],
+                           env=client_env(server=tls_server), capture_output=True, text=True)
+    assert wrong.returncode == 1 and "certificate verify failed" in wrong.stderr, wrong.stderr
+    plain_to_tls = subprocess.run(args=[binary(), f"{uri}?tls=false", "--username", tls_server.username, "-c",
+                                        "SELECT 1"], env=client_env(server=tls_server), capture_output=True, text=True)
+    assert plain_to_tls.returncode == 1 and plain_to_tls.stderr.startswith("Error: "), plain_to_tls.stderr
+
+
+def test_dot_connect_takes_a_uri_then_the_user_and_password(server):
+    script = f".connect hardcharger://localhost:{server.port}?tls=false {server.username} {server.password}\n" \
+             "SELECT 'dot connect' AS val;\n"
+    ok = subprocess.run(args=[binary(), "-q", "--csv", "--no-header"], env=client_env(), input=script,
+                        capture_output=True, text=True, timeout=60)
+    assert ok.returncode == 0, ok.stderr
+    assert "Connected to localhost:" in ok.stdout and "dot connect" in ok.stdout, ok.stdout
+    # A URI with 1.x's parameters is refused, and nothing connects.
+    old = subprocess.run(args=[binary(), "-q"], env=client_env(), capture_output=True, text=True, timeout=60,
+                         input=f".connect hardcharger://localhost:{server.port}?username={server.username}\n")
+    assert "unknown parameter(s) username (username: --username)" in old.stderr, old.stderr
+    assert "Connected to" not in old.stdout
+
+
+def test_the_environment_never_changes_a_uri(server):
+    # HARDCHARGER_TLS=true and HARDCHARGER_HOST must not change what a URI names.
+    env = client_env(server=server, HARDCHARGER_TLS="true", HARDCHARGER_HOST="elsewhere.invalid", HARDCHARGER_PORT="9")
+    ok = subprocess.run(args=[binary(), f"hardcharger://localhost:{server.port}?tls=false", "--username",
+                              server.username, "--csv", "--no-header", "-c", "SELECT 'env'"],
+                        env=env, capture_output=True, text=True)
+    assert ok.returncode == 0 and ok.stdout.strip() == "env", ok.stderr
+    # Its twin: with flags, the environment applies (HARDCHARGER_HOST sends it elsewhere).
+    flags = subprocess.run(args=[binary(), "--username", server.username, "-c", "SELECT 1"], env=env,
+                           capture_output=True, text=True, timeout=60)
+    assert flags.returncode == 1 and "elsewhere.invalid" in flags.stderr, flags.stderr
 
 
 # ---- Added: the server's browser sign-in (--auth-type external) ----

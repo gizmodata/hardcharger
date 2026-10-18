@@ -6,7 +6,11 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <iostream>
+#include <sstream>
 #include <string>
+#include <tuple>
+#include <vector>
 
 #include "client_config.hpp"
 
@@ -176,6 +180,174 @@ TEST(ClientConfigEnvTest, PasswordDoesNotFallBackToTheAdministratorsPassword) {
   ResolveEnvironmentVariables(mine);
   EXPECT_TRUE(mine.password_provided);
   EXPECT_EQ(mine.password, "mine");
+}
+
+// ---- Connection URIs: the Hardcharger ADBC driver's rules (hardcharger-adbc ToWarpURI,
+// warp-sql-adbc parseURI), every form it accepts and refuses. ----
+
+namespace {
+
+struct Parsed {
+  bool ok;
+  ClientConfig config;
+  std::string error;  // what went to stderr
+};
+
+Parsed Parse(const std::string& uri) {
+  Parsed parsed{false, {}, {}};
+  std::ostringstream captured;
+  auto* old = std::cerr.rdbuf(captured.rdbuf());
+  parsed.ok = ParseConnectionURI(uri, parsed.config);
+  std::cerr.rdbuf(old);
+  parsed.error = captured.str();
+  return parsed;
+}
+
+}  // namespace
+
+TEST(ClientConnectionUriTest, AcceptedFormsAndWhatTheyMean) {
+  // uri, host, port, tls, base path
+  const std::vector<std::tuple<std::string, std::string, int, bool, std::string>> cases = {
+      {"hardcharger://db.example.com", "db.example.com", 31337, true, "/warp"},
+      {"hardcharger://db.example.com:8443", "db.example.com", 8443, true, "/warp"},
+      {"hardcharger://db.example.com:443", "db.example.com", 443, true, "/warp"},
+      {"hardcharger://localhost?tls=false", "localhost", 31337, false, "/warp"},
+      {"hardcharger://127.0.0.1:4000?tls=false", "127.0.0.1", 4000, false, "/warp"},
+      {"hardcharger://127.0.0.1:443?tls=false", "127.0.0.1", 443, false, "/warp"},
+      {"hardcharger://h?tls=0", "h", 31337, false, "/warp"},
+      {"hardcharger://h?tls=FALSE", "h", 31337, false, "/warp"},
+      {"hardcharger://h?tls=true", "h", 31337, true, "/warp"},
+      {"hardcharger://h?tls=1", "h", 31337, true, "/warp"},
+      {"hardcharger://h?tls=", "h", 31337, true, "/warp"},  // empty: the default, as in Go
+      {"hardcharger://h/", "h", 31337, true, "/warp"},
+      {"hardcharger://h:1/custom/prefix", "h", 1, true, "/custom/prefix"},
+      {"hardcharger://h/custom/prefix/?tls=false", "h", 31337, false, "/custom/prefix"},
+      {"HARDCHARGER://h", "h", 31337, true, "/warp"},
+      {"hardcharger://[::1]", "::1", 31337, true, "/warp"},
+      {"hardcharger://[::1]:4000?tls=false", "::1", 4000, false, "/warp"},
+      {"hardcharger://h#fragment", "h", 31337, true, "/warp"},
+      // The Warp SQL spellings, with their own default ports.
+      {"warp://h:31337", "h", 31337, true, "/warp"},
+      {"warp://h", "h", 443, true, "/warp"},
+      {"warp://h:31337?tls=false", "h", 31337, false, "/warp"},
+      {"https://h:31337", "h", 31337, true, "/warp"},
+      {"https://h", "h", 443, true, "/warp"},
+      {"http://h:31337/custom", "h", 31337, false, "/custom"},
+      {"http://h", "h", 80, false, "/warp"},
+  };
+  for (const auto& [uri, host, port, tls, base_path] : cases) {
+    const Parsed parsed = Parse(uri);
+    ASSERT_TRUE(parsed.ok) << uri << ": " << parsed.error;
+    EXPECT_EQ(parsed.config.host, host) << uri;
+    EXPECT_EQ(parsed.config.port, port) << uri;
+    EXPECT_EQ(parsed.config.use_tls, tls) << uri;
+    EXPECT_EQ(parsed.config.base_path, base_path) << uri;
+    EXPECT_TRUE(parsed.config.uri_given) << uri;
+    EXPECT_TRUE(parsed.error.empty()) << uri << ": " << parsed.error;
+  }
+}
+
+// A URI sets TLS both ways: ?tls=true is never plain HTTP, whatever the config held.
+TEST(ClientConnectionUriTest, TlsTrueIsNeverPlainHttp) {
+  for (const std::string uri : {"hardcharger://h?tls=true", "hardcharger://h", "warp://h:1?tls=1", "https://h:1"}) {
+    ClientConfig config;
+    config.use_tls = false;
+    ASSERT_TRUE(ParseConnectionURI(uri, config)) << uri;
+    EXPECT_TRUE(config.use_tls) << uri;
+  }
+  ClientConfig config;
+  config.use_tls = true;
+  ASSERT_TRUE(ParseConnectionURI("hardcharger://h?tls=false", config));
+  EXPECT_FALSE(config.use_tls);
+}
+
+TEST(ClientConnectionUriTest, RefusedFormsSayWhy) {
+  // uri, a part of the message
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"hardcharger+http://h", "hardcharger+http:// is not a Hardcharger URI scheme: use hardcharger://host:port for "
+                               "HTTPS, or hardcharger://host:port?tls=false for plain HTTP"},
+      {"HARDCHARGER+HTTPS://h", "is not a Hardcharger URI scheme"},
+      {"gizmosql://h:31337", "the scheme must be hardcharger://, warp://, https:// or http://"},
+      {"jdbc:hardcharger://h", "the scheme must be hardcharger://, warp://, https:// or http://"},
+      {"h:31337", "it needs a scheme, e.g. hardcharger://host:31337"},
+      {"", "it needs a scheme"},
+      {"hardcharger://", "no host"},
+      {"hardcharger://:31337", "no host"},
+      {"hardcharger://h:0", "invalid port \"0\""},
+      {"hardcharger://h:65536", "invalid port \"65536\""},
+      {"hardcharger://h:abc", "invalid port \"abc\""},
+      {"hardcharger://[::1", "unclosed [ in the host"},
+      {"hardcharger://h?tls=maybe", "invalid value \"maybe\" for uri parameter tls: want \"true\" or \"false\""},
+      {"https://h?tls=false", "unknown parameter(s) tls"},  // only hardcharger:// and warp:// take tls
+      {"http://h?tls=true", "unknown parameter(s) tls"},
+      {"hardcharger://h?catalog=x&b=1", "unknown parameter(s) b, catalog"},
+      // What 1.x's URIs took: refused, with the flag that does it now.
+      {"hardcharger://h?useEncryption=true", "unknown parameter(s) useEncryption (useEncryption: TLS is on unless the "
+                                             "URI says ?tls=false)"},
+      {"hardcharger://h?username=joe", "unknown parameter(s) username (username: --username)"},
+      {"hardcharger://h?tlsRoots=ca.pem&disableCertificateVerification=true&authType=mtls",
+       "unknown parameter(s) authType, disableCertificateVerification, tlsRoots (authType: --auth-type; "
+       "disableCertificateVerification: --tls-skip-verify; tlsRoots: --tls-roots)"},
+  };
+  for (const auto& [uri, message] : cases) {
+    const Parsed parsed = Parse(uri);
+    EXPECT_FALSE(parsed.ok) << uri;
+    EXPECT_NE(parsed.error.find(message), std::string::npos) << uri << ": " << parsed.error;
+    EXPECT_EQ(parsed.error.rfind("Error: ", 0), 0U) << uri << ": " << parsed.error;
+  }
+}
+
+TEST(ClientConnectionUriTest, CredentialsAreRefusedAndNotRepeated) {
+  const Parsed parsed = Parse("hardcharger://joe:s3cret-pw@db.example.com");
+  EXPECT_FALSE(parsed.ok);
+  EXPECT_EQ(parsed.error,
+            "Error: invalid uri hardcharger://***@db.example.com: credentials do not belong in the uri; use "
+            "--username and HARDCHARGER_PASSWORD (or -W)\n");
+  EXPECT_FALSE(Parse("hardcharger://joe@db.example.com").ok);
+}
+
+TEST(ClientConnectionUriTest, ARefusedUriChangesNothing) {
+  ClientConfig config;
+  config.host = "kept";
+  config.port = 1234;
+  EXPECT_FALSE(Parse("hardcharger://other:5?tls=maybe").ok);
+  EXPECT_FALSE(ParseConnectionURI("hardcharger://other:5?username=x", config));
+  EXPECT_EQ(config.host, "kept");
+  EXPECT_EQ(config.port, 1234);
+  EXPECT_FALSE(config.uri_given);
+}
+
+TEST(ClientConnectionUriTest, BuildRoundTrips) {
+  for (const std::string uri : {"hardcharger://h:31337", "hardcharger://h:4000?tls=false",
+                                "hardcharger://[::1]:5/custom/prefix?tls=false", "hardcharger://h:443/x"}) {
+    ClientConfig config;
+    ASSERT_TRUE(ParseConnectionURI(uri, config)) << uri;
+    EXPECT_EQ(BuildConnectionURI(config), uri);
+  }
+}
+
+// The URI is the whole address: HARDCHARGER_HOST, HARDCHARGER_PORT and HARDCHARGER_TLS
+// never change it (HARDCHARGER_TLS=true would otherwise put TLS on a ?tls=false URI, and
+// HARDCHARGER_HOST would replace hardcharger://localhost's host).
+TEST(ClientConnectionUriTest, TheEnvironmentNeverChangesAUri) {
+  ScopedEnv host("HARDCHARGER_HOST");
+  ScopedEnv port("HARDCHARGER_PORT");
+  ScopedEnv tls("HARDCHARGER_TLS");
+  host.Set("elsewhere.example.com");
+  port.Set("9");
+  tls.Set("true");
+  ClientConfig config;
+  ASSERT_TRUE(ParseConnectionURI("hardcharger://localhost:31337?tls=false", config));
+  ResolveEnvironmentVariables(config);
+  EXPECT_EQ(config.host, "localhost");
+  EXPECT_EQ(config.port, 31337);
+  EXPECT_FALSE(config.use_tls);
+  // Its twin: without a URI, the environment applies.
+  ClientConfig flags;
+  ResolveEnvironmentVariables(flags);
+  EXPECT_EQ(flags.host, "elsewhere.example.com");
+  EXPECT_EQ(flags.port, 9);
+  EXPECT_TRUE(flags.use_tls);
 }
 
 }  // namespace hardcharger::client

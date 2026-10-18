@@ -307,7 +307,10 @@ OK, 1 row affected
 ```
 
 TLS is `--tls` (with `--tls-roots`, or mutual TLS with `--mtls-cert` and `--mtls-key`), and
-`--auth-type external` signs in through the server's browser sign-in. It is GizmoSQL's
+`--auth-type external` signs in through the server's browser sign-in. A URI takes the place of
+`--host`, `--port` and `--tls`, with the Python driver's rules: `hardcharger://db.example.com` is
+HTTPS to port 31337, and `hardcharger 'hardcharger://localhost?tls=false' --username hardcharger`
+is plain HTTP to a local server. It is GizmoSQL's
 `gizmosql_client`, on Warp SQL:
 [docs/migrating-from-gizmosql.md](docs/migrating-from-gizmosql.md#the-command-line-client)
 maps its options and lists what changed.

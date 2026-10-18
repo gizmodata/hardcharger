@@ -62,11 +62,13 @@ int main(int argc, char** argv) {
            &config.username);
   cl.Flag("password", 'W', "Force a password prompt (else env: HARDCHARGER_PASSWORD, or a prompt)", &password_prompt);
   cl.Value("uri", 0, "URI",
-           "Connection URI: hardcharger://HOST:PORT[?params] (also the one positional argument; "
-           "cannot be combined with --host, --port, --username, --tls, etc.)",
+           "Connection URI: hardcharger://HOST[:PORT][/PREFIX][?tls=false], HTTPS unless it says "
+           "?tls=false, port 31337 by default; also warp://, https:// and http:// (also the one positional "
+           "argument; not with --host, --port or --tls)",
            &uri_flag);
   cl.Section("TLS");
-  cl.Flag("tls", 0, "Use TLS (HTTPS) for the connection (env: HARDCHARGER_TLS)", &config.use_tls);
+  cl.Flag("tls", 0, "Use TLS (HTTPS) with --host and --port (env: HARDCHARGER_TLS; a URI is HTTPS unless ?tls=false)",
+          &config.use_tls);
   cl.Value("tls-roots", 0, "FILE", "Trusted root certificates (PEM; default: the system's) (env: HARDCHARGER_TLS_ROOTS)",
            &config.tls_roots);
   cl.Flag("tls-skip-verify", 0, "Skip TLS server certificate verification (development only)", &config.tls_skip_verify);
@@ -150,9 +152,10 @@ int main(int argc, char** argv) {
   }
   const std::string uri = !positional_uri.empty() ? positional_uri : uri_flag;
   if (!uri.empty()) {
-    // --uri is mutually exclusive with individual connection flags
+    // A URI names the host, port, base path and TLS; the credentials and the other TLS
+    // settings come from their own flags, as with the ADBC driver's options.
     std::vector<std::string> conflicts;
-    for (const char* name : {"host", "port", "username", "password", "tls", "tls-roots", "tls-skip-verify", "auth-type"}) {
+    for (const char* name : {"host", "port", "tls"}) {
       if (cl.Given(name)) conflicts.push_back(std::string("--") + name);
     }
     if (!conflicts.empty()) {
@@ -194,7 +197,9 @@ int main(int argc, char** argv) {
       return 1;
     }
     if (!config.use_tls) {
-      std::cerr << "Error: --auth-type mtls needs --tls" << std::endl;
+      std::cerr << (uri_provided ? "Error: --auth-type mtls needs TLS: drop ?tls=false from the URI"
+                                 : "Error: --auth-type mtls needs --tls")
+                << std::endl;
       return 1;
     }
     if (password_prompt) {

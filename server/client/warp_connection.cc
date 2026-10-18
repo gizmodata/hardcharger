@@ -82,6 +82,7 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
   wc::ConnectOptions options;
   options.host = config.host;
   options.port = static_cast<uint16_t>(config.port);
+  options.base_path = config.base_path;
   options.user_agent = "hardcharger-client";
   options.tls.enabled = config.use_tls;
   options.tls.root_certs_file = config.tls_roots;

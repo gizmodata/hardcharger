@@ -1094,17 +1094,13 @@ CommandResult CommandProcessor::HandleConnect(
     const std::vector<std::string>& args) {
   if (args.size() < 2) {
     std::cerr << ErrorStyle()
-        << "Usage: .connect hardcharger://HOST:PORT[?params...]\n"
+        << "Usage: .connect URI [USERNAME [PASSWORD]]\n"
         << "       .connect HOST PORT USERNAME [PASSWORD]\n"
         << "\n"
-        << "URI parameters:\n"
-        << "  username=USER              Username for authentication\n"
-        << "  useEncryption=true|false   Enable TLS (default: false)\n"
-        << "  disableCertificateVerification=true|false\n"
-        << "                             Skip TLS cert verification\n"
-        << "  tlsRoots=PATH              Path to CA certificate (PEM)\n"
-        << "  authType=password|external|mtls\n"
-        << "                             Auth type (default: password; mtls: the client certificate)\n"
+        << "URI: hardcharger://HOST[:PORT][/PREFIX][?tls=false]\n"
+        << "     HTTPS unless ?tls=false; port 31337 by default; also warp://, https://, http://.\n"
+        << "     The user is USERNAME, or the current one; the TLS roots, the client certificate\n"
+        << "     and the sign-in type are the current ones (--tls-roots, --mtls-cert, --auth-type).\n"
         << ErrorStyleReset() << std::endl;
     return CommandResult::ERROR;
   }
@@ -1112,13 +1108,20 @@ CommandResult CommandProcessor::HandleConnect(
   ClientConfig new_config = config_;
 
   if (args[1].find("://") != std::string::npos) {
-    // URI format: hardcharger://HOST:PORT[?params...]
+    // URI format: .connect URI [USERNAME [PASSWORD]]
+    if (args.size() > 4) {
+      std::cerr << ErrorStyle() << "Usage: .connect URI [USERNAME [PASSWORD]]" << ErrorStyleReset() << std::endl;
+      return CommandResult::ERROR;
+    }
     if (!ParseConnectionURI(args[1], new_config)) {
       return CommandResult::ERROR;
     }
-
-    // Prompt for password if needed (non-external auth)
-    if (!new_config.auth_type_external && !new_config.auth_type_mtls && !new_config.username.empty()) {
+    if (args.size() >= 3) new_config.username = args[2];
+    if (args.size() >= 4) {
+      new_config.password = args[3];
+      new_config.password_provided = true;
+    } else if (!new_config.auth_type_external && !new_config.auth_type_mtls && !new_config.username.empty()) {
+      // Prompt for password if needed (password sign-in)
       if (IsTerminal()) {
         new_config.password = PromptPassword();
         new_config.password_provided = true;
@@ -1132,6 +1135,7 @@ CommandResult CommandProcessor::HandleConnect(
     }
 
     new_config.host = args[1];
+    new_config.base_path = "/warp";
     try {
       new_config.port = std::stoi(args[2]);
     } catch (...) {
@@ -1162,6 +1166,8 @@ CommandResult CommandProcessor::HandleConnect(
   config_.password = new_config.password;
   config_.password_provided = new_config.password_provided;
   config_.use_tls = new_config.use_tls;
+  config_.base_path = new_config.base_path;
+  config_.uri_given = new_config.uri_given;
   config_.tls_skip_verify = new_config.tls_skip_verify;
   config_.tls_roots = new_config.tls_roots;
   config_.auth_type_external = new_config.auth_type_external;

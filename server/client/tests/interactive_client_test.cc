@@ -8,7 +8,10 @@
 //     (test_client_cli.py proves it end to end against an mTLS server).
 //   - DotShow: no "edition:" line (Hardcharger has no editions); engine and arrow come
 //     from Warp SQL's server-info document.
-//   - URI cases: the scheme is hardcharger://.
+//   - URI cases (ParseConnectionURI*, BuildConnectionURI*): re-expressed. The scheme is
+//     hardcharger://, with the Hardcharger ADBC driver's rules: HTTPS unless ?tls=false, port
+//     31337, and tls the only parameter (1.x took username, useEncryption, ...; they are
+//     flags). client_config_test.cc covers every form.
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -1342,37 +1345,38 @@ TEST_F(InteractiveClientFixture, ParseConnectionURIBasic) {
   ASSERT_TRUE(ParseConnectionURI("hardcharger://myhost:12345", config));
   EXPECT_EQ(config.host, "myhost");
   EXPECT_EQ(config.port, 12345);
+  EXPECT_TRUE(config.use_tls);  // re-expressed: HTTPS unless ?tls=false (1.x: plaintext)
 }
 
+// Re-expressed: 1.x URIs carried username, useEncryption and authType; Hardcharger's take
+// only tls, as the ADBC driver's do, and refuse the rest by name.
 TEST_F(InteractiveClientFixture, ParseConnectionURIWithParams) {
   ClientConfig config;
-  ASSERT_TRUE(ParseConnectionURI(
-      "hardcharger://server.example.com:31337?username=admin&useEncryption=true&authType=external",
-      config));
+  EXPECT_FALSE(ParseConnectionURI(
+      "hardcharger://server.example.com:31337?username=admin&useEncryption=true&authType=external", config));
+  ASSERT_TRUE(ParseConnectionURI("hardcharger://server.example.com:31337?tls=false", config));
   EXPECT_EQ(config.host, "server.example.com");
   EXPECT_EQ(config.port, 31337);
-  EXPECT_EQ(config.username, "admin");
-  EXPECT_TRUE(config.use_tls);
-  EXPECT_TRUE(config.auth_type_external);
+  EXPECT_FALSE(config.use_tls);
 }
 
 TEST_F(InteractiveClientFixture, ParseConnectionURINoPort) {
   ClientConfig config;
-  config.port = 31337;
-  ASSERT_TRUE(ParseConnectionURI("hardcharger://myhost?username=test", config));
+  config.port = 1;
+  ASSERT_TRUE(ParseConnectionURI("hardcharger://myhost", config));
   EXPECT_EQ(config.host, "myhost");
-  EXPECT_EQ(config.port, 31337);  // default preserved
-  EXPECT_EQ(config.username, "test");
+  EXPECT_EQ(config.port, 31337);  // re-expressed: the scheme's default port, not the previous one
 }
 
+// Re-expressed: the TLS roots and verification are --tls-roots and --tls-skip-verify.
 TEST_F(InteractiveClientFixture, ParseConnectionURITLSParams) {
   ClientConfig config;
-  ASSERT_TRUE(ParseConnectionURI(
+  EXPECT_FALSE(ParseConnectionURI(
       "hardcharger://host:443?useEncryption=true&disableCertificateVerification=true&tlsRoots=/path/to/ca.pem",
       config));
+  ASSERT_TRUE(ParseConnectionURI("hardcharger://host:443?tls=true", config));
   EXPECT_TRUE(config.use_tls);
-  EXPECT_TRUE(config.tls_skip_verify);
-  EXPECT_EQ(config.tls_roots, "/path/to/ca.pem");
+  EXPECT_EQ(config.port, 443);
 }
 
 TEST_F(InteractiveClientFixture, BuildConnectionURIBasic) {
@@ -1381,8 +1385,9 @@ TEST_F(InteractiveClientFixture, BuildConnectionURIBasic) {
   config.port = 31337;
   config.username = "admin";
 
+  // Re-expressed: no credentials in the URI; plain HTTP says ?tls=false.
   std::string uri = BuildConnectionURI(config);
-  EXPECT_EQ(uri, "hardcharger://localhost:31337?username=admin");
+  EXPECT_EQ(uri, "hardcharger://localhost:31337?tls=false");
 }
 
 TEST_F(InteractiveClientFixture, BuildConnectionURIWithTLS) {
@@ -1394,9 +1399,11 @@ TEST_F(InteractiveClientFixture, BuildConnectionURIWithTLS) {
   config.auth_type_external = true;
 
   std::string uri = BuildConnectionURI(config);
-  EXPECT_NE(uri.find("useEncryption=true"), std::string::npos);
-  EXPECT_NE(uri.find("authType=external"), std::string::npos);
-  EXPECT_NE(uri.find("username=admin"), std::string::npos);
+  EXPECT_EQ(uri, "hardcharger://server.example.com:443");
+  ClientConfig back;
+  ASSERT_TRUE(ParseConnectionURI(uri, back));
+  EXPECT_TRUE(back.use_tls);
+  EXPECT_EQ(back.port, 443);
 }
 
 // ============================================================================

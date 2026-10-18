@@ -33,6 +33,8 @@ struct ClientConfig {
   // Connection
   std::string host = "localhost";
   int port = 31337;
+  std::string base_path = "/warp";  // where the server mounts Warp SQL (a URI's path)
+  bool uri_given = false;           // host, port, TLS and base path came from a URI
   std::string username;
   std::string password;
   bool password_provided = false;
@@ -105,12 +107,15 @@ struct ClientConfig {
 // HARDCHARGER_QUERY_TAG and HARDCHARGER_RESULT_PARTITIONS. No GIZMOSQL_* variable is read.
 void ResolveEnvironmentVariables(ClientConfig& config);
 
-/// Parse a hardcharger://HOST:PORT[?params] URI into config fields.
-/// Returns true on success, false on parse error (writes to stderr).
+/// Parse a connection URI into host, port, TLS and base path, with the Hardcharger ADBC
+/// driver's rules: hardcharger://HOST[:PORT][/PREFIX][?tls=false] (HTTPS unless ?tls=false,
+/// port 31337), warp:// (the same, port 443), https:// and http://. Only `tls` is a
+/// parameter; credentials, other parameters and hardcharger+http:// are refused.
+/// Returns true on success, false on a refused URI (the reason goes to stderr).
 bool ParseConnectionURI(const std::string& uri, ClientConfig& config);
 
-/// Build a hardcharger:// URI from the current config (for display in .show).
-/// Does not include password.
+/// The hardcharger:// URI of the current host, port, base path and TLS (for .show). No
+/// credentials.
 std::string BuildConnectionURI(const ClientConfig& config);
 
 /// The user's home directory ($HOME, or %USERPROFILE% on Windows), or "" if unknown.

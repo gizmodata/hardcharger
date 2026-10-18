@@ -132,7 +132,7 @@ files and URI scheme change. It reads no `GIZMOSQL_*` variable.
 | `--csv`, `--json`, `--table`, `--box`, `--markdown`, `--no-header` | the same | |
 | `--quiet`, `-q`; `--echo`, `-e`; `--bail`; `--null` | the same | |
 | `--help`, `-?`; `--version`, `-v` | the same | |
-| `--uri`, or the positional URI: `gizmosql://HOST:PORT?username=…&useEncryption=…&disableCertificateVerification=…&tlsRoots=…&authType=…` | `hardcharger://HOST:PORT?…` with the same parameters | |
+| `--uri`, or the positional URI: `gizmosql://HOST:PORT?username=…&useEncryption=…&disableCertificateVerification=…&tlsRoots=…&authType=…` | `hardcharger://HOST[:PORT][/PREFIX][?tls=false]`, the Hardcharger ADBC driver's URIs: HTTPS unless `?tls=false`, port 31337 by default. `tls` is the only parameter: the user and the TLS and sign-in settings are flags beside the URI (`--username`, `--tls-roots`, `--tls-skip-verify`, `--auth-type`), and 1.x's parameters are refused by name. 1.x's URIs were plain unless `useEncryption=true` | |
 | (none) | the browser `HARDCHARGER_BROWSER` opens for `--auth-type external` (default: `open`, `xdg-open`) | `HARDCHARGER_BROWSER` |
 
 Files: `~/.gizmosql_history` is `~/.hardcharger_history`, `~/.gizmosqlrc` is

@@ -70,7 +70,7 @@ rows = [
  ("integration/test_init_sql_splitting.cpp", 7, 7, 0, 0, 0, "test_init_sql_splitting.py", "splitter cases as C++ unit tests"),
  ("integration/test_inline_license_key.cpp", 10, 0, 0, 10, 0, "", "N/A: Hardcharger has no license (a license flag is an unknown option)"),
  # Client binary
- ("integration/test_interactive_client.cpp", 115, 115, 0, 0, 0, "test_interactive_client.py", "C++ against the client's classes (client/tests/interactive_client_test.cc); 2 re-expressed: --tls-skip-verify with mTLS is allowed (Warp SQL sends the certificate), .show has no edition"),
+ ("integration/test_interactive_client.cpp", 115, 115, 0, 0, 0, "test_interactive_client.py", "C++ against the client's classes (client/tests/interactive_client_test.cc); 8 re-expressed: --tls-skip-verify with mTLS is allowed (Warp SQL sends the certificate), .show has no edition, and the 6 URI cases follow the ADBC driver's URIs (HTTPS unless ?tls=false, only tls as a parameter)"),
  ("integration/test_client_cli.cpp", 18, 18, 0, 0, 0, "test_client_cli.py", "the hardcharger binary; +21: the shell at a terminal (pexpect: prompt, history, completion, pager, password prompt, Ctrl-C), Ctrl-C in scripts, TLS, mutual TLS, browser sign-in, session recovery, .once/.read, option errors"),
  ("integration/test_client_config.cpp", 5, 5, 0, 0, 0, "test_client_config.py", "HARDCHARGER_* names (C++, client/tests/client_config_test.cc); +2"),
 ]

@@ -3,7 +3,9 @@ counted 67, but v1.42.0's script runs 64, as running it shows).
 
 The script is ported as a script (test_client_shell.sh, the same 64 assertions with
 Hardcharger's names) and run here: one case per assertion, so a failure names it. All 64
-apply.
+apply. The two URI cases give the user with --username and plain HTTP with ?tls=false:
+Hardcharger's URIs follow the ADBC driver's (HTTPS unless ?tls=false, tls the only parameter),
+where 1.x's carried ?username= and were plain HTTP by default.
 """
 
 import pathlib

@@ -191,6 +191,26 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Security: `hardcharger` (the client) connected in plaintext to a URI that asked for TLS. Its
+  URI parser took 1.x's parameters (`useEncryption`, `username`, ...), ignored any other, and
+  used plain HTTP unless `useEncryption=true`, so `hardcharger://host?tls=true`, and every
+  `hardcharger://` URI without `useEncryption`, sent the sign-in (password included) as plain
+  HTTP. The client's URIs now follow the Hardcharger ADBC driver's exactly:
+  `hardcharger://HOST[:PORT][/PREFIX][?tls=false]` is HTTPS unless it says `?tls=false` (or
+  `tls=0`), to port 31337 unless it names one, under `/warp` unless it names a path; `warp://`
+  (port 443), `https://` and `http://` are accepted as the ADBC driver accepts them. `tls` is the
+  only parameter: `useEncryption`, `username`, `tlsRoots`, `disableCertificateVerification`,
+  `authType` and any other are refused by name (the message names the flag that does it now),
+  and so are credentials in the URI, `hardcharger+http://` and bad ports. With a URI, the user
+  and the other TLS and sign-in settings come from `--username`, `-W`, `--tls-roots`,
+  `--tls-skip-verify`, `--mtls-cert`, `--mtls-key` and `--auth-type`; only `--host`, `--port`
+  and `--tls` conflict with it, and `HARDCHARGER_HOST`, `HARDCHARGER_PORT` and `HARDCHARGER_TLS`
+  no longer change what a URI names (`HARDCHARGER_HOST` replaced `hardcharger://localhost`'s
+  host). `.connect URI [USERNAME [PASSWORD]]` takes the same URIs, and `.show` prints one.
+  Without a URI nothing changes (`--host`/`--port` are plain HTTP unless `--tls`). Tests: every
+  form, in `client_config_test.cc` (`ClientConnectionUriTest`, 7 cases); end to end in
+  `test_client_cli.py`, including that `?tls=true` (or no `tls` at all) to a listener puts a TLS
+  ClientHello on the wire and never an HTTP request or the password, which the old client did.
 - Preparing a query no longer runs it (warp-sql: the DuckDB backend learned a prepared
   SELECT's result schema by executing it, and now and then the dropped execution waited for
   the whole query: a JDBC, ADBC, JS or CLI prepare of an expensive query could hang for

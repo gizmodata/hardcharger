@@ -401,13 +401,14 @@ set -e
 run_test ".connect then query" "connect_test" "$OUTPUT"
 run_test ".connect success message" "Connected to localhost" "$OUTPUT"
 
-# URI connection from launch
-OUTPUT=$(HARDCHARGER_PASSWORD="$PASSWORD" "$CLIENT_BIN" "hardcharger://localhost:${SERVER_PORT}?username=${USERNAME}" -q -c "SELECT 'uri_test' AS val" 2>/dev/null)
+# URI connection from launch (plain HTTP says ?tls=false; the user is --username)
+OUTPUT=$(HARDCHARGER_PASSWORD="$PASSWORD" "$CLIENT_BIN" "hardcharger://localhost:${SERVER_PORT}?tls=false" --username "$USERNAME" -q -c "SELECT 'uri_test' AS val" 2>/dev/null)
 run_test "URI launch connection" "uri_test" "$OUTPUT"
 
 # URI connection with --uri flag
-OUTPUT=$(HARDCHARGER_PASSWORD="$PASSWORD" "$CLIENT_BIN" --uri "hardcharger://localhost:${SERVER_PORT}?username=${USERNAME}" -q -c "SELECT 'uri_flag_test' AS val" 2>/dev/null)
+OUTPUT=$(HARDCHARGER_PASSWORD="$PASSWORD" "$CLIENT_BIN" --uri "hardcharger://localhost:${SERVER_PORT}?tls=false" --username "$USERNAME" -q -c "SELECT 'uri_flag_test' AS val" 2>/dev/null)
 run_test "URI flag connection" "uri_flag_test" "$OUTPUT"
+
 
 echo ""
 
