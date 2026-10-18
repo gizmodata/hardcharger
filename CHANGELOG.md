@@ -168,9 +168,14 @@ own changelog in `python/CHANGELOG.md`.
   `read_csv`, `read_json`, `read_duckdb`, ...), `ATTACH`, `COPY` (also its `tmp_` file renamed
   onto the target) and `EXPORT DATABASE`: a guard in the serving instance's DuckDB file
   system refuses every open, listing, move and removal of it, and a statement naming it is
-  refused before it runs. Every access-control test file runs on both stores in CI.
-  Tests: `test_rbac_duckdb_store.py` (121 on macOS and Windows, 111 on Linux, which has no
-  case-insensitive spelling to try).
+  refused before it runs. Each change is checkpointed into the file at once: DuckDB skips a
+  WAL it can't read, and every change in it (a REVOKE would come undone), so nothing is
+  left to depend on the WAL. An extension with file I/O of its own (`sqlite_scanner`) goes
+  past the file-system guard: for it only a path written in the statement is refused (a
+  computed one finds no SQLite database there). Every access-control test file runs on both
+  stores in CI.
+  Tests: `test_rbac_duckdb_store.py` (124 on macOS, 134 on Windows with its 8.3 names,
+  114 on Linux, which has no case-insensitive spelling to try).
 
 ### Changed
 
