@@ -101,8 +101,20 @@ FetchContent_MakeAvailable(yaml-cpp)
 
 configure_file(src/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.hpp" @ONLY)
 
-# The web UI, embedded when HARDCHARGER_WEB_UI names a hardcharger-ui tarball (cmake/web_ui.cmake).
+# The web UI, embedded when HARDCHARGER_WEB_UI names a build of ui/ (cmake/web_ui.cmake).
 include(cmake/web_ui.cmake)
+
+# zlib 1.3.2 (static), which inflates the embedded UI for a client that doesn't take gzip.
+set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  zlib
+  URL https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  EXCLUDE_FROM_ALL)
+FetchContent_MakeAvailable(zlib)
 
 # Access control (role-based). The one part of Hardcharger that uses DuckDB's
 # internal C++ headers (the plan check reads DuckDB's logical plans); the rest of the
@@ -160,7 +172,8 @@ add_library(hardcharger_core STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/generated/web_ui_files.cc")
 target_include_directories(hardcharger_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_sources(hardcharger_core PRIVATE $<TARGET_OBJECTS:hardcharger_authz>)
-target_link_libraries(hardcharger_core PUBLIC warpsql_duckdb OpenSSL::Crypto jwt-cpp::jwt-cpp yaml-cpp::yaml-cpp)
+target_link_libraries(hardcharger_core PUBLIC warpsql_duckdb OpenSSL::Crypto jwt-cpp::jwt-cpp yaml-cpp::yaml-cpp
+                      PRIVATE ZLIB::ZLIBSTATIC)
 target_compile_options(hardcharger_core PRIVATE ${HARDCHARGER_WARNINGS})
 if(WIN32)
   target_link_libraries(hardcharger_core PUBLIC crypt32)  # the certificate store
@@ -210,7 +223,7 @@ add_executable(hardcharger-unit-tests
   unit/sensitive_paths_test.cc
   unit/sql_text_test.cc
   unit/web_ui_test.cc)
-target_link_libraries(hardcharger-unit-tests PRIVATE hardcharger_core GTest::gtest_main)
+target_link_libraries(hardcharger-unit-tests PRIVATE hardcharger_core GTest::gtest_main ZLIB::ZLIBSTATIC)
 hardcharger_rpath(hardcharger-unit-tests)
 if(MSVC)
   # A PDB with public symbols, so a crash dump of the unit tests names its functions; a

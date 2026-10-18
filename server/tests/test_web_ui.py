@@ -8,6 +8,8 @@ them with -m "not web_ui".
 """
 
 import datetime
+import gzip
+import hashlib
 import ipaddress
 import re
 import ssl
@@ -35,6 +37,23 @@ def server(module_launcher):
 
 def get(server, path: str, method: str = "GET") -> httpx.Response:
     return httpx.request(method=method, url=f"{server.base_url}{path}", timeout=30, follow_redirects=False)
+
+
+def raw(server, path: str, accept_encoding: str | None, method: str = "GET",
+        extra: dict[str, str] | None = None) -> tuple[httpx.Response, bytes]:
+    """The answer and its body exactly as sent (httpx would decode gzip; this doesn't). With
+    accept_encoding None, the request has no Accept-Encoding header at all."""
+    headers = dict(extra or {})
+    with httpx.Client(timeout=30, follow_redirects=False) as client:
+        request = client.build_request(method=method, url=f"{server.base_url}{path}", headers=headers)
+        if accept_encoding is None:
+            del request.headers["accept-encoding"]
+        else:
+            request.headers["accept-encoding"] = accept_encoding
+        response = client.send(request, stream=True)
+        body = b"".join(response.iter_raw())
+        response.close()
+    return response, body
 
 
 def assert_ui_headers(response: httpx.Response) -> None:
@@ -126,11 +145,50 @@ def test_no_path_leaves_the_ui(server):
 
 
 def test_head_is_get_without_the_body(server):
-    full = get(server=server, path="/ui/")
-    head = get(server=server, path="/ui/", method="HEAD")
-    assert head.status_code == 200 and head.content == b""
-    assert int(head.headers["content-length"]) == len(full.content)
-    assert head.headers["content-security-policy"] == CSP
+    for accept in ["gzip", None]:
+        full, full_body = raw(server=server, path="/ui/", accept_encoding=accept)
+        head, head_body = raw(server=server, path="/ui/", accept_encoding=accept, method="HEAD")
+        assert head.status_code == 200 and head_body == b"", accept
+        assert int(head.headers["content-length"]) == len(full_body), accept
+        assert head.headers.get("content-encoding") == full.headers.get("content-encoding"), accept
+        assert head.headers["etag"] == full.headers["etag"], accept
+        assert head.headers["content-security-policy"] == CSP
+
+
+def test_gzip_and_identity_answers_are_the_files_bytes(server):
+    """The UI is embedded gzipped: a client that takes gzip gets those bytes, any other the
+    inflated file. Both are the file the UI build made: its SHA-256 is the identity ETag."""
+    names = ["index.html", *assets(server=server)]
+    compressed = 0
+    for name in names:
+        gz, gz_body = raw(server=server, path=f"/ui/{name}", accept_encoding="gzip, deflate, br")
+        plain, plain_body = raw(server=server, path=f"/ui/{name}", accept_encoding="identity")
+        bare, bare_body = raw(server=server, path=f"/ui/{name}", accept_encoding=None)
+        refused, refused_body = raw(server=server, path=f"/ui/{name}", accept_encoding="gzip;q=0, *;q=1")
+        assert gz.status_code == plain.status_code == bare.status_code == refused.status_code == 200, name
+        tag = plain.headers["etag"].strip('"')
+        assert hashlib.sha256(plain_body).hexdigest().startswith(tag), name
+        assert bare_body == plain_body and refused_body == plain_body, name
+        assert "content-encoding" not in plain.headers and "content-encoding" not in bare.headers, name
+        if gz.headers.get("content-encoding") == "gzip":
+            compressed += 1
+            assert gzip.decompress(gz_body) == plain_body, name
+            assert len(gz_body) < len(plain_body), name
+            assert gz.headers["vary"] == plain.headers["vary"] == "Accept-Encoding", name
+            assert gz.headers["etag"] == f'"{tag}-gzip"', name
+        else:
+            assert gz_body == plain_body, name  # stored as is: gzip wouldn't shrink it
+    assert compressed >= len(names) - 2, f"{compressed} of {len(names)} files came gzipped"
+
+
+def test_a_matching_etag_answers_304(server):
+    full, _ = raw(server=server, path="/ui/", accept_encoding="gzip")
+    again, body = raw(server=server, path="/ui/", accept_encoding="gzip", extra={"If-None-Match": full.headers["etag"]})
+    assert again.status_code == 304 and body == b"" and again.headers["etag"] == full.headers["etag"]
+    # The gzip representation's tag doesn't validate the identity one.
+    other, other_body = raw(server=server, path="/ui/", accept_encoding=None,
+                            extra={"If-None-Match": full.headers["etag"]})
+    assert other.status_code == 200 and other_body.startswith(b"<!doctype html>")
 
 
 def test_only_get_and_head_and_only_under_ui(server):

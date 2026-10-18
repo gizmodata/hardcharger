@@ -1,26 +1,15 @@
-# The web UI (gizmodata/hardcharger-ui), embedded in hardcharger-server.
+# The web UI (ui/ in this repository), embedded in hardcharger-server.
 #
-# -DHARDCHARGER_WEB_UI=<path to hardcharger-ui-<version>.tar.gz> embeds it: the tarball is
-# extracted, every file is checked against its MANIFEST (a "<sha256>  <path>" line per
-# file, and no file that isn't listed), and the MANIFEST's own SHA-256 must be the pinned
-# content SHA-256 below. The files then become byte arrays in a generated source. Without
-# the option the server has no UI, and web_ui refuses to start.
-#
-# The pin: the hardcharger-ui commit CI builds the tarball from (its build is reproducible,
-# so the content SHA-256 is the same on every machine, and the same as that release's).
-set(HARDCHARGER_WEB_UI_PINNED_VERSION "0.1.0")
-set(HARDCHARGER_WEB_UI_PINNED_COMMIT "9548f4a2cc778e3b39acfd1e720487ee74c22466")
-set(HARDCHARGER_WEB_UI_PINNED_CONTENT_SHA256 "43aa1560781c93031bc4527d12db58583b32e8dea1d9c4ddd17e9876f1f954b5")
+# -DHARDCHARGER_WEB_UI=<hardcharger-ui-<version>.tar.gz> embeds a build of it: what
+# `npm run build && npm run package` in ui/ writes to ui/release/ (CI builds it from ui/ in
+# the same run). The tarball is extracted and every file checked against its MANIFEST (a
+# "<sha256>  <path>" line per file, and no file that isn't listed). Each file is then
+# gzipped here and embedded compressed, with its size and its SHA-256 (the ETag); the server
+# answers gzip as is and inflates for a client that doesn't take it. A file gzip doesn't make
+# smaller (an image) is embedded as is. Without the option the server has no UI, and
+# web_ui refuses to start.
 
-set(HARDCHARGER_WEB_UI "" CACHE FILEPATH "hardcharger-ui release tarball to embed (empty: no web UI)")
-# Empty: the pin. (Not a cache default equal to the pin: a cached copy would outlive a bump.)
-set(HARDCHARGER_WEB_UI_CONTENT_SHA256 "" CACHE STRING
-    "The content SHA-256 the embedded UI must have instead of the pinned one (empty: the pin)")
-if(HARDCHARGER_WEB_UI_CONTENT_SHA256 STREQUAL "")
-  set(_web_ui_expected_content "${HARDCHARGER_WEB_UI_PINNED_CONTENT_SHA256}")
-else()
-  set(_web_ui_expected_content "${HARDCHARGER_WEB_UI_CONTENT_SHA256}")
-endif()
+set(HARDCHARGER_WEB_UI "" CACHE FILEPATH "hardcharger-ui tarball to embed (ui/release/…; empty: no web UI)")
 
 set(_web_ui_source "${CMAKE_CURRENT_BINARY_DIR}/generated/web_ui_files.cc")
 
@@ -47,7 +36,7 @@ std::string_view EmbeddedWebUiVersion() { return \"\"; }
 
 }  // namespace hardcharger
 ")
-  message(STATUS "Web UI: not embedded (-DHARDCHARGER_WEB_UI=<hardcharger-ui tarball> embeds it)")
+  message(STATUS "Web UI: not embedded (-DHARDCHARGER_WEB_UI=<ui/release/hardcharger-ui-*.tar.gz> embeds it)")
   return()
 endif()
 
@@ -63,12 +52,7 @@ set(_web_ui_root "${_web_ui_dir}/hardcharger-ui")
 if(NOT EXISTS "${_web_ui_root}/MANIFEST")
   message(FATAL_ERROR "HARDCHARGER_WEB_UI: ${HARDCHARGER_WEB_UI} has no hardcharger-ui/MANIFEST")
 endif()
-
 file(SHA256 "${_web_ui_root}/MANIFEST" _web_ui_content)
-if(NOT _web_ui_content STREQUAL _web_ui_expected_content)
-  message(FATAL_ERROR "HARDCHARGER_WEB_UI: the UI's content SHA-256 is ${_web_ui_content}, "
-                      "not ${_web_ui_expected_content}")
-endif()
 
 # Every listed file has its hash, and nothing else is in the tarball.
 file(STRINGS "${_web_ui_root}/MANIFEST" _web_ui_lines)
@@ -103,28 +87,54 @@ if(NOT "index.html" IN_LIST _web_ui_listed)
   message(FATAL_ERROR "HARDCHARGER_WEB_UI: the UI has no index.html")
 endif()
 
-if(_web_ui_content STREQUAL HARDCHARGER_WEB_UI_PINNED_CONTENT_SHA256)
-  set(_web_ui_version "${HARDCHARGER_WEB_UI_PINNED_VERSION}")
+# The version: the tarball's name, hardcharger-ui-<version>.tar.gz.
+get_filename_component(_web_ui_name "${HARDCHARGER_WEB_UI}" NAME)
+if(_web_ui_name MATCHES "^hardcharger-ui-(.+)\\.tar\\.gz$")
+  set(_web_ui_version "${CMAKE_MATCH_1}")
 else()
-  string(SUBSTRING "${_web_ui_content}" 0 12 _short)
-  set(_web_ui_version "unpinned build ${_short}")
+  set(_web_ui_version "unknown")
 endif()
 
-# The files as byte arrays (32 bytes a line).
+# Each file gzipped (level 9), then as byte arrays (32 bytes a line).
+set(_web_ui_gz_dir "${_web_ui_dir}/gzip")
 set(_web_ui_arrays "")
 set(_web_ui_table "")
 set(_index 0)
+set(_raw_total 0)
+set(_embedded_total 0)
 foreach(_path IN LISTS _web_ui_expected)
-  file(READ "${_web_ui_root}/${_path}" _hex HEX)
-  file(SIZE "${_web_ui_root}/${_path}" _size)
+  set(_raw "${_web_ui_root}/${_path}")
+  set(_gz "${_web_ui_gz_dir}/${_path}.gz")
+  get_filename_component(_gz_parent "${_gz}" DIRECTORY)
+  file(MAKE_DIRECTORY "${_gz_parent}")
+  get_filename_component(_raw_dir "${_raw}" DIRECTORY)
+  get_filename_component(_raw_name "${_raw}" NAME)
+  file(ARCHIVE_CREATE OUTPUT "${_gz}" PATHS "${_raw_name}" FORMAT raw COMPRESSION GZip COMPRESSION_LEVEL 9
+       WORKING_DIRECTORY "${_raw_dir}")
+  file(SIZE "${_raw}" _raw_size)
+  file(SIZE "${_gz}" _gz_size)
+  if(_gz_size LESS _raw_size)
+    set(_embed "${_gz}")
+    set(_gzipped true)
+    set(_embedded_size ${_gz_size})
+  else()
+    set(_embed "${_raw}")
+    set(_gzipped false)
+    set(_embedded_size ${_raw_size})
+  endif()
+  file(SHA256 "${_raw}" _hash)
+  file(READ "${_embed}" _hex HEX)
   string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _bytes "${_hex}")
   string(REGEX REPLACE "((0x..,){32})" "\\1\n" _bytes "${_bytes}")
-  if(_size EQUAL 0)
+  if(_embedded_size EQUAL 0)
     set(_bytes "0x00,")
   endif()
   string(APPEND _web_ui_arrays "const unsigned char kFile${_index}[] = {\n${_bytes}};\n")
-  string(APPEND _web_ui_table "    {\"${_path}\", kFile${_index}, ${_size}},\n")
+  string(APPEND _web_ui_table
+         "    {\"${_path}\", kFile${_index}, ${_embedded_size}, ${_raw_size}, ${_gzipped}, \"${_hash}\"},\n")
   math(EXPR _index "${_index} + 1")
+  math(EXPR _raw_total "${_raw_total} + ${_raw_size}")
+  math(EXPR _embedded_total "${_embedded_total} + ${_embedded_size}")
 endforeach()
 
 _web_ui_write("${_web_ui_header}${_web_ui_arrays}
@@ -138,4 +148,5 @@ std::string_view EmbeddedWebUiVersion() { return \"${_web_ui_version}\"; }
 }  // namespace hardcharger
 ")
 list(LENGTH _web_ui_expected _count)
-message(STATUS "Web UI: embedded ${_count} files, version ${_web_ui_version} (content ${_web_ui_content})")
+message(STATUS "Web UI: embedded ${_count} files, version ${_web_ui_version}, content SHA-256 ${_web_ui_content} "
+               "(${_raw_total} bytes, ${_embedded_total} embedded with gzip)")

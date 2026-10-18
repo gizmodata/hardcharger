@@ -82,7 +82,7 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   };
   if (config.web_ui) {
     options.plain_handler = [](const warpsql::PlainRequest& request) {
-      return hc::ServeWebUi(hc::EmbeddedWebUiFiles(), request.path);
+      return hc::ServeWebUi(hc::EmbeddedWebUiFiles(), request);
     };
   }
   return options;
