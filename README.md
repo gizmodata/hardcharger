@@ -254,8 +254,8 @@ console.log(table.toArray().map((row) => row.toJSON()));
 await conn.close();
 ```
 
-[`@gizmodata/hardcharger`](https://github.com/gizmodata/hardcharger-js) takes the same
-`hardcharger://` URLs (port 31337 by default) and returns Arrow JS Tables or streams of record
+[`@gizmodata/hardcharger`](https://github.com/gizmodata/hardcharger-js), the Hardcharger™
+JavaScript client, takes the same `hardcharger://` URLs (port 31337 by default) and returns Arrow JS Tables or streams of record
 batches, in Node, browsers (allow the page's origin with `--cors-origins`), Deno, Bun and
 Cloudflare Workers. No native code, no gRPC. It is a thin layer on
 [`@gizmodata/warp-sql`](https://github.com/gizmodata/warp-sql-js), the generic JavaScript client
