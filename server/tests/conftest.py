@@ -75,6 +75,33 @@ def home_env(home: pathlib.Path) -> dict[str, str]:
     return env
 
 
+def interruptible() -> dict:
+    """Popen arguments for a process the test will interrupt with interrupt(): on Windows
+    a console of its own (hidden), as Ctrl+C reaches every process on a console."""
+    if sys.platform != "win32":
+        return {}
+    startup = subprocess.STARTUPINFO()
+    startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startup.wShowWindow = 0  # SW_HIDE
+    return {"creationflags": subprocess.CREATE_NEW_CONSOLE, "startupinfo": startup}
+
+
+def interrupt(process: subprocess.Popen) -> None:
+    """Ctrl+C, as a user at the terminal would press it: SIGINT on POSIX. On Windows a
+    helper attaches to the process's console (interruptible()) and raises Ctrl+C there."""
+    if sys.platform != "win32":
+        process.send_signal(signal.SIGINT)
+        return
+    helper = ("import ctypes, sys\n"
+              "k = ctypes.windll.kernel32\n"
+              "k.FreeConsole()\n"
+              "if not k.AttachConsole(int(sys.argv[1])): sys.exit(1)\n"
+              "k.SetConsoleCtrlHandler(None, True)\n"
+              "sys.exit(0 if k.GenerateConsoleCtrlEvent(0, 0) else 2)\n")
+    subprocess.run(args=[sys.executable, "-I", "-c", helper, str(process.pid)], check=True, timeout=30,
+                   creationflags=subprocess.CREATE_NO_WINDOW)
+
+
 # Ports for the servers the tests start. The OS's "any free port" (bind to 0) is free only
 # until the socket closes, and the server binds it a moment later: under pytest-xdist
 # another worker's bind to 0 can be handed the same port in between. So each worker
@@ -314,10 +341,12 @@ def run_client_tests(gtest_filter: str, env: dict[str, str] | None = None, timeo
 
 
 def gtest_cases(source: pathlib.Path) -> list[str]:
-    """The Suite.Name of every TEST/TEST_F in a C++ test file, in order."""
+    """The Suite.Name of every TEST/TEST_F in a C++ test file, in order; a case written once
+    per platform (#ifdef _WIN32 ... #else) counts once."""
     import re
-    return [f"{suite}.{name}" for suite, name in
-            re.findall(pattern=r"^TEST(?:_F)?\((\w+),\s*(\w+)\)", string=source.read_text(), flags=re.M)]
+    return list(dict.fromkeys(
+        f"{suite}.{name}" for suite, name in
+        re.findall(pattern=r"^TEST(?:_F)?\((\w+),\s*(\w+)\)", string=source.read_text(), flags=re.M)))
 
 
 @pytest.fixture(scope="module")

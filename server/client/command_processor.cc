@@ -712,6 +712,11 @@ CommandResult CommandProcessor::Process(const std::string& line) {
         if (i > 1) shell_cmd += " ";
         shell_cmd += args[i];
       }
+#ifdef _WIN32
+      // cmd.exe /c drops a command's first and last quote when it has more than two:
+      // quoting the whole command keeps the user's own quotes.
+      shell_cmd = "\"" + shell_cmd + "\"";
+#endif
       std::system(shell_cmd.c_str());
     }
     return CommandResult::OK;

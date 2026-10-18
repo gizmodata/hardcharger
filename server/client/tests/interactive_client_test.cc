@@ -46,6 +46,18 @@ TEST(ClientSignalWatcherTest, RepeatedShutdownJoinsTheWaiterAndRestoresTheMask) 
   ASSERT_EQ(pthread_sigmask(SIG_BLOCK, nullptr, &after), 0);
   EXPECT_EQ(sigismember(&before, SIGINT), sigismember(&after, SIGINT));
 }
+#else
+// Windows has no signal mask: the watcher's own thread must be joined, and nothing may
+// run the callback, however often a watcher comes and goes.
+TEST(ClientSignalWatcherTest, RepeatedShutdownJoinsTheWaiterAndRestoresTheMask) {
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    std::atomic<int> calls{0};
+    {
+      SignalWatcher watcher([&calls] { calls.fetch_add(1); });
+    }
+    EXPECT_EQ(calls.load(), 0) << "Shutdown must not cancel a query";
+  }
+}
 #endif
 
 // ============================================================================

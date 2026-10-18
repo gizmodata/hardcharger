@@ -21,7 +21,6 @@ import os
 import pathlib
 import re
 import shlex
-import signal
 import subprocess
 import sys
 import time
@@ -33,7 +32,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from conftest import BASH, CLIENT_BINARY, clean_environment, free_port, home_env
+from conftest import BASH, CLIENT_BINARY, clean_environment, free_port, home_env, interrupt, interruptible
 
 pytestmark = pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
 
@@ -309,11 +308,12 @@ def test_unknown_dot_command_fails_the_script(server):
 def test_ctrl_c_cancels_the_running_statement_and_the_script_goes_on(server):
     process = subprocess.Popen(args=[binary(), *conn_args(server), "--csv", "--no-header", "--command",
                                      f"{SLOW_SQL}; SELECT 'after the cancel';"],
-                               env=client_env(server=server), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                               env=client_env(server=server), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                               **interruptible())
     time.sleep(1.5)
     assert process.poll() is None, process.communicate()
     started = time.monotonic()
-    process.send_signal(signal.SIGINT)
+    interrupt(process=process)
     stdout, stderr = process.communicate(timeout=30)
     assert time.monotonic() - started < 15
     assert strip_ansi(stderr).strip() == "Query cancelled", stderr
@@ -326,11 +326,12 @@ def test_ctrl_c_cancels_the_running_statement_and_the_script_goes_on(server):
 
 def test_ctrl_c_stops_a_script_waiting_for_input(server):
     process = subprocess.Popen(args=[binary(), *conn_args(server), "--quiet"], env=client_env(server=server),
-                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                               **interruptible())
     process.stdin.write("SELECT 'before';\n")
     process.stdin.flush()
     time.sleep(1.5)
-    process.send_signal(signal.SIGINT)
+    interrupt(process=process)
     assert process.wait(timeout=10) == 130
     assert "before" in process.stdout.read()
 
@@ -354,15 +355,29 @@ def test_a_session_the_server_lost_is_reopened(launcher, server):
 def test_a_killed_session_is_reported_and_reopened(server, tmp_path):
     # Another session KILLs this one (session_ended, reason killed): the next statement
     # fails with that error, and the one after runs in a new session.
-    killer = tmp_path / "kill.sh"
-    killer.write_text(
-        "#!/bin/sh\n"
-        f"for id in $({shlex.quote(binary())} {shlex.join(conn_args(server))} --csv --no-header -c "
-        f"\"SELECT session_id FROM hardcharger_sessions() WHERE NOT is_current\"); do\n"
-        f"  {shlex.quote(binary())} {shlex.join(conn_args(server))} -c \"KILL SESSION '$id'\" >/dev/null\n"
-        "done\n")
-    killer.chmod(0o755)
-    script = f"SELECT 'before';\n.shell {killer}\nSELECT 'killed';\nSELECT 'reopened';"
+    if sys.platform == "win32":
+        # .shell runs its command with cmd.exe there: the killer is a Python script.
+        killer = tmp_path / "kill.py"
+        killer.write_text(
+            "import subprocess\n"
+            f"client = [{binary()!r}, *{conn_args(server)!r}]\n"
+            "ids = subprocess.run(client + ['--csv', '--no-header', '-c', "
+            "'SELECT session_id FROM hardcharger_sessions() WHERE NOT is_current'], "
+            "capture_output=True, text=True, check=True).stdout.split()\n"
+            "for id in ids:\n"
+            "    subprocess.run(client + ['-c', f\"KILL SESSION '{id}'\"], capture_output=True, check=True)\n")
+        command = f"{sys.executable} -I {killer}"
+    else:
+        killer = tmp_path / "kill.sh"
+        killer.write_text(
+            "#!/bin/sh\n"
+            f"for id in $({shlex.quote(binary())} {shlex.join(conn_args(server))} --csv --no-header -c "
+            f"\"SELECT session_id FROM hardcharger_sessions() WHERE NOT is_current\"); do\n"
+            f"  {shlex.quote(binary())} {shlex.join(conn_args(server))} -c \"KILL SESSION '$id'\" >/dev/null\n"
+            "done\n")
+        killer.chmod(0o755)
+        command = str(killer)
+    script = f"SELECT 'before';\n.shell {command}\nSELECT 'killed';\nSELECT 'reopened';"
     result = run(server, "--csv", "--no-header", "--command", script)
     stderr = strip_ansi(result.stderr)
     assert result.stdout == "before\nreopened\n", (result.stdout, stderr)
