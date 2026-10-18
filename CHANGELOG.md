@@ -479,6 +479,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Documentation
 
+- README: the JavaScript example uses `@gizmodata/hardcharger` (gizmodata/hardcharger-js:
+  `import { connect } from "@gizmodata/hardcharger"`, `hardcharger://` URLs), the Hardcharger
+  client on `@gizmodata/warp-sql`, as the Python example uses `adbc-driver-hardcharger`.
 - Access control is described as Hardcharger's own (GizmoSQL 1.x has none);
   docs/migrating-from-gizmosql.md maps no 1.x option to `--rbac-*`, `--token-groups-claim`
   or `--audit-chain-key`.

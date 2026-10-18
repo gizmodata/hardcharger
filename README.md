@@ -246,17 +246,20 @@ to add it to DBeaver and other BI tools.
 ### JavaScript
 
 ```js
-import { connect } from "@gizmodata/warp-sql";
+import { connect } from "@gizmodata/hardcharger";
 
-const conn = await connect({ url: "warp://localhost:31337?tls=false", username: "hardcharger", password: "change-me" });
+const conn = await connect({ url: "hardcharger://localhost?tls=false", username: "hardcharger", password: "change-me" });
 const table = await conn.query("SELECT 42 AS answer, ? AS greeting", ["hello"]);
 console.log(table.toArray().map((row) => row.toJSON()));
 await conn.close();
 ```
 
-[`@gizmodata/warp-sql`](https://github.com/gizmodata/warp-sql-js) speaks Warp SQL over plain `fetch`
-and returns Arrow JS Tables or streams of record batches, in Node, browsers (allow the page's
-origin with `--cors-origins`), Deno, Bun and Cloudflare Workers. No native code, no gRPC.
+[`@gizmodata/hardcharger`](https://github.com/gizmodata/hardcharger-js) takes the same
+`hardcharger://` URLs (port 31337 by default) and returns Arrow JS Tables or streams of record
+batches, in Node, browsers (allow the page's origin with `--cors-origins`), Deno, Bun and
+Cloudflare Workers. No native code, no gRPC. It is a thin layer on
+[`@gizmodata/warp-sql`](https://github.com/gizmodata/warp-sql-js), the generic JavaScript client
+for any Warp SQL server, which it re-exports.
 
 ### Plain HTTP
 
