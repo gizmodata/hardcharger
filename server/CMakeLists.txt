@@ -51,7 +51,10 @@ if(HARDCHARGER_STATIC)
     target_link_libraries(hardcharger_duckdb INTERFACE ${_duckdb_archives} OpenSSL::SSL OpenSSL::Crypto
                           curl "-framework CoreFoundation" "-framework Security" Threads::Threads)
   else()
-    target_link_libraries(hardcharger_duckdb INTERFACE "$<LINK_GROUP:RESCAN,${_duckdb_archives}>"
+    # OpenSSL inside the group too: libcurl and libpq call it, and CMake may place the
+    # OpenSSL targets other libraries name before the group.
+    target_link_libraries(hardcharger_duckdb INTERFACE
+                          "$<LINK_GROUP:RESCAN,${_duckdb_archives},${OPENSSL_SSL_LIBRARY},${OPENSSL_CRYPTO_LIBRARY}>"
                           OpenSSL::SSL OpenSSL::Crypto Threads::Threads ${CMAKE_DL_LIBS})
   endif()
   # warp-sql links DuckDB through DUCKDB_LIBRARY; find_library leaves a set value alone.
