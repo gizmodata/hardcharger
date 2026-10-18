@@ -103,6 +103,37 @@ def test_a_store_file_others_can_read_or_write_is_refused(launcher, tmp_path, mo
     start_rbac_server(launcher=launcher, store_uri=f"duckdb:{file}")
 
 
+@pytest.mark.parametrize("wal", ["replaced", "emptied", "removed"])
+def test_a_lost_or_forged_wal_undoes_nothing(launcher, tmp_path, wal):
+    # DuckDB skips a WAL it can't read, and every change in it: a REVOKE would come undone.
+    # So each change is checkpointed into the file at once, and a server killed right after
+    # one keeps it whatever happens to the WAL (an extension with its own file I/O, such as
+    # sqlite_scanner, is the one way SQL could write there: see the security model).
+    file = store_dir(tmp_path) / "rbac.duckdb"
+    data = ["--database", str(tmp_path / "data.duckdb")]
+    server = start_rbac_server(launcher=launcher, store_uri=f"duckdb:{file}", args=data)
+    admin = server.admin()
+    for sql in ["CREATE TABLE t AS SELECT 1 AS id", "CHECKPOINT", "CREATE ROLE r", "GRANT SELECT ON t TO r", "CREATE USER joe",
+                "GRANT r TO joe", "REVOKE SELECT ON t FROM r", "CREATE ROLE last_one"]:
+        expect_allowed(client=admin, sql=sql)
+    server.running.process.kill()  # no clean shutdown, no checkpoint at exit
+    server.running.process.wait()
+    log = file.with_name("rbac.duckdb.wal")
+    if wal == "replaced":
+        log.write_bytes(b"SQLite format 3\x00" + bytes(4080))
+    elif wal == "emptied":
+        log.write_bytes(b"")
+    else:
+        log.unlink(missing_ok=True)
+    if log.exists():
+        log.chmod(0o600)
+    restarted = start_rbac_server(launcher=launcher, store_uri=f"duckdb:{file}", args=data)
+    with pytest.raises(WarpError, match="already exists"):
+        restarted.admin().run(sql="CREATE ROLE last_one")
+    assert "no SELECT privilege" in str(pytest.raises(WarpError, restarted.user(name="joe").run,
+                                                      sql="SELECT * FROM t").value)
+
+
 def test_one_server_per_store_file(launcher, tmp_path):
     file = store_dir(tmp_path) / "rbac.duckdb"
     first = start_rbac_server(launcher=launcher, store_uri=f"duckdb:{file}")
@@ -196,8 +227,9 @@ def reset_decoy(server) -> None:
 READS = {
     "read_blob": "SELECT md5(content) AS v FROM read_blob({p})",
     "read_duckdb": "SELECT count(*) AS v FROM read_duckdb({p}, table_name = 't')",
-    "read_csv": "SELECT count(*) AS v FROM read_csv({p}, header = false, columns = {{'c': 'VARCHAR'}}, "
-                "ignore_errors = true)",
+    # (No sniffing: whether a binary file sniffs as CSV depends on its bytes.)
+    "read_csv": "SELECT count(*) AS v FROM read_csv({p}, auto_detect = false, header = false, delim = '|', "
+                "quote = '', escape = '', columns = {{'c': 'VARCHAR'}}, strict_mode = false, ignore_errors = true)",
     "read_json": "SELECT count(*) AS v FROM read_json_objects({p}, format = 'newline_delimited', "
                  "ignore_errors = true)",
     "ATTACH": "ATTACH {p} AS stolen (READ_ONLY)",

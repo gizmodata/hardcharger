@@ -350,7 +350,18 @@ arrow::Result<std::unique_ptr<RbacStore>> RbacStore::Open(const std::string& uri
     std::this_thread::sleep_for(std::chrono::milliseconds(100 * (attempt + 1)));
   }
   ARROW_RETURN_NOT_OK(init);
+  store->CheckpointFile();
   return store;
+}
+
+// A DuckDB store keeps nothing in its WAL past a write: each change is checkpointed into
+// the database file at once. A WAL lost or replaced (DuckDB skips one it can't read, and
+// with it every change since the last checkpoint: a REVOKE would come undone) then costs
+// nothing. Writes are rare (access-control statements), so this is cheap. A failed
+// checkpoint leaves the change in the WAL, committed: the next write tries again.
+void RbacStore::CheckpointFile() {
+  if (file_path_.empty()) return;
+  (void)conn_->Query("CHECKPOINT rbac_store");
 }
 
 RbacStore::~RbacStore() {
@@ -698,7 +709,10 @@ arrow::Status RbacStore::Mutate(
       return Exec(conn, "COMMIT");
     };
     last = body();
-    if (last.ok()) return last;
+    if (last.ok()) {
+      CheckpointFile();
+      return last;
+    }
     (void)conn.Query("ROLLBACK");
     if (!IsRetryableConflict(last.message())) return last;
     const int backoff_ms = std::min(10 * (attempt + 1), 200) + static_cast<int>(jitter() % 25);

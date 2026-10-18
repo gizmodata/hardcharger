@@ -420,8 +420,16 @@ rbac_store_uri: duckdb:/var/lib/hardcharger/rbac.duckdb   # or any path ending i
 
 The file is created `0600` (one that other users can read or write is refused), only one
 server may open it (a second one on the same file stops at startup), and no SQL statement
-reaches it, the administrator's included. There is no migration between the two stores:
-moving to PostgreSQL later means creating the users, roles and grants there again.
+reaches it, the administrator's included. Each change is checkpointed into the file at
+once, so nothing depends on its write-ahead log. There is no migration between the two
+stores: moving to PostgreSQL later means creating the users, roles and grants there again.
+
+One limit: the guard sits in DuckDB's file system, and an extension with file I/O of its own
+(`sqlite_scanner`, which only an administrator or a user granted `MANAGE EXTENSIONS` can
+load) goes past it. For such an extension only a path written out in
+the statement is refused; a computed one reaches the file, where SQLite finds no database it
+can read (`file is not a database`), and a file it creates beside the store, as the WAL, costs
+no change, as every change is already in the store file.
 
 ## 🔏 Client certificates as identity
 

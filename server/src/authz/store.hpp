@@ -67,6 +67,7 @@ class RbacStore {
  private:
   RbacStore() = default;
   arrow::Status InitializeSchema();
+  void CheckpointFile();
   arrow::Result<std::shared_ptr<const Snapshot>> LoadLocked();
 
   std::unique_ptr<duckdb::DuckDB> db_;
