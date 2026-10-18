@@ -29,3 +29,25 @@ race:duckdb::ColumnSegment::Append
 # DuckDB source says so beside the store ("threadsan reports this as a data race ...").
 # Seen in the TPC-H suites. GizmoSQL's tests/tsan.supp suppresses all of ScanStructure.
 race:duckdb::JoinHashTable::ScanStructure::NextRightSemiOrAntiJoin
+
+# libpq (PostgreSQL 18.6, built by server/scripts/build-extension-deps.sh, used by the
+# postgres scanner and DuckLake's PostgreSQL metadata): every connection's startup saves
+# client_encoding and standard_conforming_strings into the process-wide statics
+# static_client_encoding / static_std_strings (src/interfaces/libpq/fe-exec.c:1151 and
+# :1156, in pqSaveParameterStatus), so two threads connecting at once race on them. Only
+# the deprecated connection-less PQescapeString and PQescapeBytea read them (fe-exec.c:4229
+# and :4605; the source's comment: "at least in single-connection-using programs"); no
+# code in the server, warp-sql, DuckDB or its built-in extensions calls either, and every
+# connection keeps its own copy in its PGconn. Seen in TSan CI with two sessions' statements
+# opening pool connections to one DuckLake-on-PostgreSQL catalog at the same moment.
+race:pqSaveParameterStatus
+
+# Not suppressed: extensions downloaded from DuckDB's repository (INSTALL spatial) are
+# prebuilt without TSan and carry their own copy of DuckDB's code. Loading one while
+# another thread plans a query reports a race between ExtensionCallbackManager::Register
+# / ~ExtensionCallbackRegistry (in the extension's binary) and Optimizer::Optimize's read
+# of the registry it replaced (src/main/extension_callback_manager.cpp: copy-on-write
+# under atomic_load/atomic_store): the reference count that orders the free after the read
+# is decremented in uninstrumented code. Not a DuckDB bug; tests that need such an
+# extension load it in the init SQL, before the server runs anything else
+# (test_geoarrow.py), so nothing races it.

@@ -15,10 +15,14 @@ import pytest
 
 @pytest.fixture(scope="module")
 def session(module_launcher):
-    session = module_launcher.start().admin()
-    session.execute(sql="INSTALL spatial")
-    session.execute(sql="LOAD spatial")
-    return session
+    # Loaded by the init SQL, before the server runs anything else (its health check, a
+    # session): spatial is DuckDB's prebuilt download, not built with ThreadSanitizer, so
+    # under TSan its LOAD racing any other thread's planning is reported as a data race
+    # (it swaps DuckDB's extension-callback registry, and TSan can't see the uninstrumented
+    # reference count that orders the swap after the planner's read; TSan CI, twice). The
+    # download can take a while: the startup wait is a minute.
+    return module_launcher.start(args=["--init-sql-commands", "INSTALL spatial; LOAD spatial;"],
+                                 startup_seconds=60).admin()
 
 
 def extension_name(field: pa.Field) -> str:

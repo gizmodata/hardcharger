@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from conftest import free_port
+from conftest import TIMEOUT_SCALE, free_port
 from rbac import WarpError, expect_allowed, start_rbac_server
 
 
@@ -21,6 +21,7 @@ class FakeOpa:
         self.statements = 0
         self.last_statement: dict = {}
         self.lock = threading.Lock()
+        self.release = threading.Event()  # "slow" answers only once this is set
         opa = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -60,7 +61,7 @@ class FakeOpa:
         if self.mode == "not_a_bool":
             return {"result": "yes"}
         if self.mode == "slow":
-            time.sleep(3)
+            self.release.wait(timeout=120)  # far past any timeout, until the test lets go
             return {"result": True}
         allow = True
         user = input_.get("user", "")
@@ -82,10 +83,19 @@ def opa():
     service.stop()
 
 
+# The server's deadline for an answer. It was 800 ms, and a whole exchange with the
+# healthy service sometimes took longer on a busy runner: the session's connect check (or
+# its first statement's) got "no answer", and test_no_answer_means_no failed before its
+# service had been told to misbehave (TSan once; Windows amd64 twice in one run). Only the
+# "slow" case waits it out, so it can be generous; stretched on a sanitizer build.
+OPA_TIMEOUT_S = 5 * TIMEOUT_SCALE
+
+
 @pytest.fixture(scope="module")
 def server(module_launcher, store, opa):
     server = start_rbac_server(launcher=module_launcher, store_uri=store.new_database(),
-                               env={"HARDCHARGER_RBAC_OPA_URL": opa.url, "HARDCHARGER_RBAC_OPA_TIMEOUT_MS": "800"})
+                               env={"HARDCHARGER_RBAC_OPA_URL": opa.url,
+                                    "HARDCHARGER_RBAC_OPA_TIMEOUT_MS": str(int(OPA_TIMEOUT_S * 1000))})
     admin = server.admin()
     for sql in ["CREATE TABLE orders AS SELECT 1 AS id, 10 AS amount",
                 "CREATE TABLE payroll AS SELECT 1 AS id, 5000 AS salary", "CREATE TABLE secrets AS SELECT 1 AS id",
@@ -100,8 +110,10 @@ def server(module_launcher, store, opa):
 @pytest.fixture(autouse=True)
 def policy_mode(opa):
     opa.mode = "policy"
+    opa.release.clear()
     yield
     opa.mode = "policy"
+    opa.release.set()  # a "slow" answer still pending returns now
 
 
 def error(client, sql: str) -> str:
@@ -142,7 +154,8 @@ def test_no_answer_means_no(server, opa, mode):
     opa.mode = mode
     started = time.monotonic()
     assert "could not get an answer from the access policy service" in error(client=ann, sql="SELECT * FROM orders")
-    assert time.monotonic() - started < 2.5, "the timeout was not kept"
+    assert time.monotonic() - started < OPA_TIMEOUT_S + 1.7 * TIMEOUT_SCALE, "the timeout was not kept"
+    opa.release.set()
     # The administrator is not held up by the service (a way in when it is down).
     assert error(client=server.admin_client, sql="SELECT * FROM orders") == ""
     opa.mode = "policy"

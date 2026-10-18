@@ -345,6 +345,28 @@ own changelog in `python/CHANGELOG.md`.
   `read_text('file:/etc/passwd')` read the file. Every file URL form DuckDB accepts is now
   checked as the path it opens.
 
+- warp-sql 3aefd27: a request that reached a session just as the idle sweep closed it no
+  longer runs in the closed session (its streamed result was cut mid-body: a Windows
+  conformance run's `incomplete chunked read`). The request now keeps the session or gets
+  `404 session_not_found`.
+- Flaky tests, each named, counted and fixed rather than re-run (CI, 2026-10-16 to 10-18):
+  `test_queued_execution_records_enqueue_time` (2, TSan) and
+  `test_expired_queued_write_never_executes_after_slot_release` held the queue's slots for a
+  fixed 1.5 s / 2.5 s, which a slow build's setup could outlast (both holders never active
+  at once, or the probe never queued: "nothing recorded ... status = 'queued'"); the slots
+  are now held until the test releases them. `test_no_answer_means_no` (3: `[not_a_bool]` on TSan,
+  `[error500]` and `[not_a_bool]` on Windows amd64): a healthy exchange with the mock
+  policy service sometimes outlasted the test server's 800 ms deadline, so a session was
+  refused before the service misbehaved. The deadline is now 5 s (stretched on sanitizer
+  builds), and the "slow" service answers only when released. The TSan job's data race in
+  `ExtensionCallbackManager::Register` / `Optimizer::Optimize` (2) came from `LOAD spatial`
+  (a prebuilt, uninstrumented download) while another thread planned a query:
+  `test_geoarrow.py` now loads it in the init SQL, before anything else runs
+  (`server/tests/tsan.supp` explains why it is not suppressed). A TSan race in libpq's
+  `pqSaveParameterStatus` (two threads opening PostgreSQL connections at once write the
+  process-wide statics that only the deprecated `PQescapeString`/`PQescapeBytea` read,
+  which nothing here calls) is suppressed by that function name, with the source lines.
+
 ### Documentation
 
 - README: hardcharger-adbc is a native Go driver whose library every ADBC driver manager loads

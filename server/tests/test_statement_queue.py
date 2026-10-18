@@ -41,6 +41,27 @@ def hold_slots(server, count: int, ms: int) -> list[threading.Thread]:
     return threads
 
 
+class Holders:
+    """`count` statements that hold the queue's slots until release(), however slow the
+    build: a hold of fixed length can end before a slow (sanitizer) build has set up the
+    rest of the test (TSan CI: the first holder's 1.5 s ran out before the second had a
+    slot, and both were never seen active at once)."""
+
+    def __init__(self, server, count: int):
+        self.held = []
+        for _ in range(count):
+            session = queued_session(server=server)
+            doc = session.submit(sql="SELECT sleep_ms(600000)", headers={"Prefer": "respond-async"}).json()
+            self.held.append((session, doc["statement_id"]))
+
+    def release(self) -> None:
+        for session, statement_id in self.held:
+            response = session.http.post(url=f"{session.url}/statements/{statement_id}/cancel", headers=session.headers())
+            assert response.status_code in (200, 202), response.text
+        for session, statement_id in self.held:
+            assert session.wait_done(statement_id=statement_id, timeout=60 * TIMEOUT_SCALE)["state"] == "cancelled"
+
+
 def wait_until(predicate, timeout: float = 10) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -111,8 +132,8 @@ def recorded(server, sql: str, timeout: float = 10):
 def test_queued_execution_records_enqueue_time(server):
     metric = "SELECT value FROM hardcharger_metrics() WHERE name = 'hardcharger_queue_wait_seconds_sum'"
     before = server.admin().scalar(sql=metric)
-    holders = hold_slots(server=server, count=2, ms=1500)
-    assert wait_until(lambda: active(server) == 2)
+    holders = Holders(server=server, count=2)
+    assert wait_until(lambda: active(server) == 2, timeout=30 * TIMEOUT_SCALE)
     probe = queued_session(server=server)
     outcome = {}
     worker = threading.Thread(target=lambda: outcome.setdefault("value", probe.scalar(sql="SELECT 4242 AS qprobe")))
@@ -120,12 +141,13 @@ def test_queued_execution_records_enqueue_time(server):
     # While it waits, a monitor sees it queued. (Spelled in two parts, so the
     # monitor's own statement doesn't match.)
     waiting = recorded(server=server, sql="SELECT status FROM _hardcharger_instr.execution_details "
-                                          "WHERE sql_text LIKE '%qpr' || 'obe%' AND status = 'queued'")
+                                          "WHERE sql_text LIKE '%qpr' || 'obe%' AND status = 'queued'",
+                       timeout=30 * TIMEOUT_SCALE)
     assert waiting == {"status": "queued"}
-    worker.join(timeout=10)
+    time.sleep(0.6)  # it has waited at least this long when the slots free
+    holders.release()
+    worker.join(timeout=30 * TIMEOUT_SCALE)
     assert outcome == {"value": 4242}
-    for thread in holders:
-        thread.join()
     row = recorded(server=server, sql="SELECT queue_wait_ms, status FROM _hardcharger_instr.execution_details "
                                       "WHERE sql_text LIKE '%qpr' || 'obe%' AND status = 'success' "
                                       "AND queue_wait_ms IS NOT NULL")
@@ -160,14 +182,13 @@ def test_killed_while_queued_records_cancelled(server):
 def test_expired_queued_write_never_executes_after_slot_release(server):
     writer = queued_session(server=server)
     writer.execute(sql="CREATE OR REPLACE TABLE queue_expired (n INTEGER)")
-    holders = hold_slots(server=server, count=2, ms=2500)
-    assert wait_until(lambda: active(server) == 2)
+    holders = Holders(server=server, count=2)
+    assert wait_until(lambda: active(server) == 2, timeout=30 * TIMEOUT_SCALE)
     response = writer.submit(sql="INSERT INTO queue_expired VALUES (1)", headers={"Warp-Statement-Timeout": "500"})
     doc = response.json()
     if doc.get("state") not in ("failed", "cancelled", "succeeded"):
         doc = writer.wait_done(statement_id=doc["statement_id"])
     assert doc["state"] == "cancelled" and doc["cancel_reason"] == "timeout", doc
-    for thread in holders:
-        thread.join()
+    holders.release()
     time.sleep(0.5)
     assert writer.scalar(sql="SELECT count(*) FROM queue_expired") == 0, "the expired write ran after all"
