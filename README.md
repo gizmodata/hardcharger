@@ -389,6 +389,14 @@ mtls_crl_file: /etc/hardcharger/client-ca.crl     # revocation, reloaded when it
 | `mtls_crl_allow_missing_ca_crls` | `false` | Accept a CA above the leaf that has no CRL in the file |
 | `mtls_require_identity_match` | `false` | A password or token sign-in over a client certificate must be for the certificate's identity |
 
+A browser page on another origin (one of `cors_origins`) can sign in with the user's
+certificate too: allowed origins get `Access-Control-Allow-Credentials: true`, and the page
+calls with `credentials: "include"` (`@gizmodata/warp-sql` does with `authType:
+"client_certificate"`). The browser's CORS preflight carries no credentials and may come
+without a certificate, so for such pages set `mtls_require_client_cert: false`: the
+handshake then admits the preflight, and the sign-in still needs the certificate. Pages on
+the server's own origin (the embedded UI) send no preflight and need neither.
+
 Tokens from a certificate sign-in are bound to it (RFC 8705's `cnf` claim): they work only on
 connections presenting the same certificate, so a copied token is no use without the private
 key. A session opened with such a token, and any scoped token minted from it, stay bound to the

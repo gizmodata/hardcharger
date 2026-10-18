@@ -7,7 +7,25 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- The answer to an ingest part or one-request upload sent again (same `Idempotency-Key`)
+  reaches the client on Linux and macOS: the server answers it from the first upload without
+  reading the body, and then reset the connection with the body unread, so the client saw a
+  broken pipe or a reset and sent it again (warp-sql-adbc's `TestIntegrationIngestPartAnswerLost`
+  counted a part sent three times). The connection now closes lingering, reading and dropping
+  what the client still sends (up to 2 s, 256 MiB), as it already did on Windows. No row was
+  ever written twice. From warp-sql `2dbcd84`; its conformance tests
+  `test_the_answer_to_a_part_sent_again_arrives` and `test_the_answer_to_an_upload_sent_again_arrives`.
+
 ### Added
+
+- Allowed CORS origins (`cors_origins`) get `Access-Control-Allow-Credentials: true`, preflights
+  included (Warp SQL §9.5), so a page on another origin can sign in with the user's client
+  certificate (`credentials: "include"`). Other origins still get no CORS headers. The README's
+  mTLS section says such pages need `mtls_require_client_cert: false` (a preflight carries no
+  certificate). From warp-sql `ec318ff`; CI runs the conformance suite's credentials tests with
+  `WARP_SQL_TEST_SERVER_CORS_FLAG=--cors-origins`.
 
 - Client certificates as identity (Warp SQL §4.4): with `mtls_ca_cert`, the
   `client_certificate` grant signs a client in with its verified certificate and no
