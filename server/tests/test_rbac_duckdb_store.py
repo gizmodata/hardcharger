@@ -162,7 +162,17 @@ class Target:
         }
         if CASE_INSENSITIVE:
             out["case"] = f"'{self.dir}/RBAC.DuckDB'"
+        if sys.platform == "win32":
+            out["8.3 name"] = f"'{short_name(file)}'"
         return out
+
+
+def short_name(path: pathlib.Path) -> str:
+    """Windows' 8.3 spelling of `path` (the long one where the volume makes none)."""
+    import ctypes
+    buffer = ctypes.create_unicode_buffer(1024)
+    length = ctypes.windll.kernel32.GetShortPathNameW(str(path), buffer, 1024)
+    return buffer.value if 0 < length < 1024 else str(path)
 
 
 def make_links(target: Target) -> None:
@@ -238,7 +248,8 @@ def attack(guarded, who: str, sql_for) -> None:
 @pytest.mark.parametrize("who", ["admin", "fay"])
 @pytest.mark.parametrize("reader", list(READS))
 @pytest.mark.parametrize("spelling", ["literal", "computed", "dotdot", "relative", "file url", "symlink",
-                                      "hard link", *(["case"] if CASE_INSENSITIVE else [])])
+                                      "hard link", *(["case"] if CASE_INSENSITIVE else []),
+                                      *(["8.3 name"] if sys.platform == "win32" else [])])
 def test_no_reader_opens_the_store_in_any_spelling(guarded, who, reader, spelling):
     attack(guarded=guarded, who=who, sql_for=lambda t: READS[reader].format(p=t.spellings()[spelling]))
 
@@ -346,11 +357,14 @@ def attached(module_launcher, tmp_path_factory, store):
                 "GRANT READ FILESYSTEM TO fs", "GRANT WRITE FILESYSTEM TO fs", "GRANT MANAGE CATALOGS TO fs",
                 "CREATE USER fay", "GRANT fs TO fay"]:
         expect_allowed(client=admin, sql=sql)
-    # The decoys: copies with the same names, in a directory of their own.
+    # The decoys: DuckDB files with the same names, in a directory of their own (made by the
+    # server: Windows won't let a test copy the files the server has open).
     decoy = directory / "decoy"
     decoy.mkdir()
     for name in ("srv.duckdb", "hardcharger_instrumentation.db", "hardcharger_logs.db"):
-        shutil.copy(src=directory / name, dst=decoy / name)
+        for sql in [f"ATTACH '{decoy / name}' AS decoy", "CREATE TABLE decoy.t AS SELECT 'decoy' AS s",
+                    "DETACH decoy"]:
+            expect_allowed(client=admin, sql=sql)
     server.dir = directory
     server.principals = {"admin": admin, "fay": server.user(name="fay")}
     return server
