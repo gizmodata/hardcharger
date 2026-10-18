@@ -93,6 +93,9 @@ class SignalWatcher {
         lock.lock();
       }
     });
+    // A process can start with Ctrl+C ignored (the flag is inherited: CI runners, some
+    // launchers set it); the client takes Ctrl+C, so it turns normal processing back on.
+    SetConsoleCtrlHandler(nullptr, FALSE);
     SetConsoleCtrlHandler(&Handler, TRUE);
   }
 

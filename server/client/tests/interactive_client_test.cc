@@ -1709,9 +1709,6 @@ TEST_F(InteractiveClientFixture, BoxRendererSplitDisplayShowsDotRows) {
 }
 
 TEST_F(InteractiveClientFixture, BoxRendererInTableFooter) {
-#ifdef _WIN32
-  GTEST_SKIP() << "Box renderer merged border test has platform-specific differences on Windows";
-#endif
   ASSERT_TRUE(IsServerReady()) << "Server not ready";
   auto conn = ConnectClient();
 
