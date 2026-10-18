@@ -296,6 +296,52 @@ def test_an_admin_identity_is_no_store_user_name(rbac, pki, launcher, store):
     assert "both one of mtls_admin_identities and a user" in body["detail"], body
 
 
+def thumbprint_of(identity) -> str:
+    der = identity[2].public_bytes(encoding=serialization.Encoding.DER)
+    return base64.urlsafe_b64encode(hashlib.sha256(der).digest()).rstrip(b"=").decode()
+
+
+def test_a_certificate_session_refuses_the_same_users_password_token(rbac, pki):
+    carol = pki.issue(name="carol@example.com")
+    expect_allowed(client=rbac.admin(identity=rbac.ops), sql="CREATE USER \"carol@example.com\" PASSWORD 'pw:1'")
+    cert_session = rbac.client(identity=carol, token=rbac.certificate_token(identity=carol))
+    password_token = rbac.password_token(identity=carol, user="carol@example.com", password="pw:1")
+    with rbac.http(identity=carol) as http:
+        response = http.post(url=f"{cert_session.url}/statements", headers={"Authorization": f"Bearer {password_token}"},
+                             json={"sql": "SELECT 1"})
+    problem(response=response, status=401, code="certificate_mismatch")
+    expect_allowed(client=cert_session, sql="SELECT 1")  # its own token still works
+    # A session of the password token is unbound, as before.
+    expect_allowed(client=rbac.client(identity=carol, token=password_token), sql="SELECT 1")
+
+
+def test_scoped_tokens_inherit_the_minters_certificate_binding(rbac, pki):
+    carol = pki.issue(name="carol@example.com")
+    carol_again = pki.issue(name="carol-again", sans=[x509.RFC822Name("carol@example.com")])  # hers, another key
+    admin = rbac.admin(identity=rbac.ops)
+    expect_allowed(client=admin, sql="CREATE USER \"carol@example.com\" PASSWORD 'pw:1'")
+    cert_session = rbac.client(identity=carol, token=rbac.certificate_token(identity=carol))
+    scoped = cert_session.run(sql="CREATE SCOPED TOKEN job ALLOW SELECT").to_pylist()[0]["token"]
+    claims = jwt.decode(jwt=scoped, options={"verify_signature": False})
+    assert claims["cnf"] == {"x5t#S256": thumbprint_of(identity=carol)}
+    # Over the minter's certificate it works, as a bearer token and as user "token"'s password.
+    expect_allowed(client=rbac.client(identity=carol, token=scoped), sql="SELECT 1")
+    exchanged = rbac.password_token(identity=carol, user="token", password=scoped)
+    assert jwt.decode(jwt=exchanged, options={"verify_signature": False})["cnf"] == claims["cnf"]
+    expect_allowed(client=rbac.client(identity=carol, token=exchanged), sql="SELECT 1")
+    # Over another certificate (even one of hers) both are refused.
+    with rbac.http(identity=carol_again) as http:
+        for token in (scoped, exchanged):
+            response = http.post(url="/warp/v1/sessions", headers={"Authorization": f"Bearer {token}"}, json={})
+            problem(response=response, status=401, code="certificate_mismatch")
+    # The twin: a password-signed minter's scoped token is unbound, and works over any certificate.
+    password_session = rbac.client(identity=carol, token=rbac.password_token(identity=carol, user="carol@example.com",
+                                                                            password="pw:1"))
+    unbound = password_session.run(sql="CREATE SCOPED TOKEN job2 ALLOW SELECT").to_pylist()[0]["token"]
+    assert "cnf" not in jwt.decode(jwt=unbound, options={"verify_signature": False})
+    expect_allowed(client=rbac.client(identity=carol_again, token=unbound), sql="SELECT 1")
+
+
 def test_certificate_sign_ins_are_audited(rbac, pki, tmp_path):
     carol, stranger = pki.issue(name="carol@example.com"), pki.issue(name="stranger@example.com")
     expect_allowed(client=rbac.admin(identity=rbac.ops), sql='CREATE USER "carol@example.com"')

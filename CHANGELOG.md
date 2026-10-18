@@ -23,6 +23,8 @@ own changelog in `python/CHANGELOG.md`.
   (default false: a password or token sign-in over a certificate must be for its identity).
   Certificate sign-ins, allowed and refused, are audit records (`kind: authentication`,
   `method: client_certificate`, the identity, subject, issuer, serial and thumbprint).
+  A session opened with a bound token is used only with tokens bound to the same certificate,
+  and a scoped token (`CREATE SCOPED TOKEN`) minted over a bound token carries its `cnf` too.
   `hardcharger_sessions()` shows `client_certificate` as the auth method. Tests:
   `test_mtls_identity.py` (18), and the conformance suite's `test_mtls.py`.
 - The `hardcharger` client: `--auth-type mtls` (or `authType=mtls` in a URI) signs in with

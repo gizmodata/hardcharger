@@ -727,8 +727,10 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
       throw Error(ErrorCode::kExecutionError,
                   "Hardcharger access control: this server cannot sign scoped tokens");
     }
+    // A certificate-bound minter's tokens are bound to the same certificate (Warp SQL
+    // §4.4): a scoped token can't carry a session's rights away from its certificate.
     const std::string token = owner_.signer_(result.minted->user_name, result.minted->token_id,
-                                             result.minted->expires_at);
+                                             result.minted->expires_at, identity_.certificate_thumbprint);
     result.column_names.push_back("token");
     for (auto& row : result.rows) row.push_back(token);
   }

@@ -78,15 +78,19 @@ struct Identity {
   // tokens that did not come from a password sign-in.
   std::string credential;
   std::string scope_id;  // a scoped token's store record
+  // The client certificate the access token is bound to (x5t#S256), or empty. Scoped
+  // tokens this identity mints carry it too.
+  std::string certificate_thumbprint;
   std::string idp_issuer;
   std::vector<std::string> idp_groups;
   // The token's catalog_access rules (catalog_rules_only servers; ignored under RBAC).
   std::optional<std::vector<CatalogAccessRule>> catalog_access;
 };
 
-// Signs a scoped token for (user name, scope id, expiry in seconds since the epoch).
+// Signs a scoped token for (user name, scope id, expiry in seconds since the epoch, the
+// minter's certificate binding or empty).
 using ScopedTokenSigner =
-    std::function<std::string(const std::string&, const std::string&, int64_t)>;
+    std::function<std::string(const std::string&, const std::string&, int64_t, const std::string&)>;
 
 // On a server without access control: the kind of access-control statement `sql` is
 // ("CREATE ROLE", ...), so it can be refused with a clear error, or nullopt for SQL

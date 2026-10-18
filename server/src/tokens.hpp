@@ -36,8 +36,9 @@ class JwtTokenService : public warpsql::TokenService {
 
   // A scoped token (CREATE SCOPED TOKEN) for `user_name`: an access token limited by the
   // store's record `scope_id`, valid until `expires_at` (seconds since the epoch).
+  // Bound to `certificate_thumbprint` (the minter's binding) unless that is empty.
   std::string IssueScoped(const std::string& user_name, const std::string& scope_id,
-                          int64_t expires_at);
+                          int64_t expires_at, const std::string& certificate_thumbprint = {});
 
  private:
   std::string secret_key_;

@@ -388,7 +388,8 @@ mtls_crl_file: /etc/hardcharger/client-ca.crl     # revocation, reloaded when it
 
 Tokens from a certificate sign-in are bound to it (RFC 8705's `cnf` claim): they work only on
 connections presenting the same certificate, so a copied token is no use without the private
-key. TLS has to end at Hardcharger (a TCP or TLS-passthrough load balancer) for this; a
+key. A session opened with such a token, and any scoped token minted from it, stay bound to the
+same certificate. TLS has to end at Hardcharger (a TCP or TLS-passthrough load balancer) for this; a
 proxy that ends TLS takes the certificate with it. Sign-ins with a certificate are written to
 the audit log (`kind: authentication`, `method: client_certificate`, the identity and the
 certificate's thumbprint).

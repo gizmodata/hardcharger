@@ -386,8 +386,9 @@ int main(int argc, char** argv) {
     if (store_access) {
       // CREATE SCOPED TOKEN signs with the server's key.
       store_access->SetScopedTokenSigner(
-          [tokens](const std::string& user, const std::string& scope_id, int64_t expires_at) {
-            return tokens->IssueScoped(user, scope_id, expires_at);
+          [tokens](const std::string& user, const std::string& scope_id, int64_t expires_at,
+                   const std::string& certificate_thumbprint) {
+            return tokens->IssueScoped(user, scope_id, expires_at, certificate_thumbprint);
           });
     }
     auto backend = std::make_shared<hc::Backend>(runtime, access);

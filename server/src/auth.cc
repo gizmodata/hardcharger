@@ -95,6 +95,7 @@ authz::Identity IdentityOf(const warpsql::Principal& principal) {
     who.catalog_access = std::move(parsed);
   }
   who.scope_id = text("scope_id");
+  who.certificate_thumbprint = principal.certificate_thumbprint;
   if (const auto* idp = principal.claims.if_contains("idp"); idp && idp->is_object()) {
     if (const auto* issuer = idp->as_object().if_contains("iss"); issuer && issuer->is_string()) {
       who.idp_issuer = std::string(issuer->as_string());

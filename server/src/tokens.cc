@@ -104,8 +104,8 @@ warpsql::TokenService::Issued JwtTokenService::Issue(const warpsql::Principal& p
 }
 
 std::string JwtTokenService::IssueScoped(const std::string& user_name, const std::string& scope_id,
-                                         int64_t expires_at) {
-  return jwt::create<Traits>()
+                                         int64_t expires_at, const std::string& certificate_thumbprint) {
+  auto token = jwt::create<Traits>()
       .set_type("JWT")
       .set_issuer(std::string(kIssuer))
       .set_id("hardcharger-scoped-" + RandomUuid())
@@ -115,8 +115,12 @@ std::string JwtTokenService::IssueScoped(const std::string& user_name, const std
       .set_payload_claim("role", jwt::basic_claim<Traits>(std::string("user")))
       .set_payload_claim("auth_method", jwt::basic_claim<Traits>(std::string("scoped_token")))
       .set_payload_claim("instance_id", jwt::basic_claim<Traits>(instance_id_))
-      .set_payload_claim("scope_id", jwt::basic_claim<Traits>(scope_id))
-      .sign(jwt::algorithm::hs256{secret_key_});
+      .set_payload_claim("scope_id", jwt::basic_claim<Traits>(scope_id));
+  if (!certificate_thumbprint.empty()) {
+    token.set_payload_claim("cnf", jwt::basic_claim<Traits>(boost::json::value(
+                                       boost::json::object{{"x5t#S256", certificate_thumbprint}})));
+  }
+  return token.sign(jwt::algorithm::hs256{secret_key_});
 }
 
 warpsql::Principal JwtTokenService::Validate(std::string_view token) {
