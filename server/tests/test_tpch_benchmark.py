@@ -14,9 +14,14 @@ import time
 
 import pytest
 
+from conftest import PERF_SCALE
+
 # Serial: the 30 s limits are a performance check, which other tests on the same CPUs
-# would turn into a measure of the machine's load.
+# would turn into a measure of the machine's load. A sanitizer job stretches them
+# (HARDCHARGER_TEST_PERF_SCALE); every other build checks them as they are.
 pytestmark = pytest.mark.serial
+
+LIMIT = 30 * PERF_SCALE
 
 QUERIES = range(1, 23)
 
@@ -49,7 +54,7 @@ def test_single_client_runs_all_queries_with_correct_row_counts(server, expected
     for _ in range(3):
         assert run_all(session=session) == {n: expected_rows[n] for n in QUERIES}
     elapsed = time.monotonic() - started
-    assert elapsed < 30, f"3 x 22 queries took {elapsed:.1f}s"
+    assert elapsed < LIMIT, f"3 x 22 queries took {elapsed:.1f}s (limit {LIMIT:.0f}s)"
 
 
 def test_concurrent_clients_run_all_queries_without_failure(server, expected_rows):
@@ -62,4 +67,4 @@ def test_concurrent_clients_run_all_queries_without_failure(server, expected_row
     elapsed = time.monotonic() - started
     for result in results:
         assert result == {n: expected_rows[n] for n in QUERIES}
-    assert elapsed < 30, f"10 clients x 22 queries took {elapsed:.1f}s"
+    assert elapsed < LIMIT, f"10 clients x 22 queries took {elapsed:.1f}s (limit {LIMIT:.0f}s)"

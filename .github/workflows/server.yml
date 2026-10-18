@@ -446,6 +446,11 @@ jobs:
       # several times slower: the waits tests size by hand stretch five times.
       HARDCHARGER_TEST_XDIST_WORKERS: "3"
       HARDCHARGER_TEST_TIMEOUT_SCALE: "5"
+      # The serial suites run here for their races and results, not their speed: the
+      # TPC-H 30 s limits stretch 15 times (10 clients took 289 s instrumented), and the
+      # access-control concurrency test makes 3 passes per client, not 10 (it took 42 min).
+      HARDCHARGER_TEST_PERF_SCALE: "15"
+      HARDCHARGER_TEST_CONCURRENCY_ROUNDS: "3"
       TSAN_REPORTS: ${{ github.workspace }}/tsan-reports
     steps:
       - uses: actions/checkout@v7

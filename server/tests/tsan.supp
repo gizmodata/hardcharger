@@ -21,3 +21,11 @@ race:third_party/jemalloc
 # never used; TSan cannot see that invariant. Seen with the instrumentation writer
 # appending while a reader scans its table.
 race:duckdb::ColumnSegment::Append
+
+# DuckDB hash joins: right semi/anti joins mark build-side rows as matched from every
+# probing thread at once (ScanStructure::NextRightSemiOrAntiJoin and the
+# MarkChainsAsFoundLoop it calls: Load<bool>/Store<bool> on the row's match flag). The only
+# value ever written is `true`, and the flags are read after the probe phase finishes; the
+# DuckDB source says so beside the store ("threadsan reports this as a data race ...").
+# Seen in the TPC-H suites. GizmoSQL's tests/tsan.supp suppresses all of ScanStructure.
+race:duckdb::JoinHashTable::ScanStructure::NextRightSemiOrAntiJoin

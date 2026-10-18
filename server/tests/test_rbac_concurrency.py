@@ -6,7 +6,8 @@ control makes the concurrent run much slower, or scales worse with more clients,
 the baseline.
 
 HARDCHARGER_TEST_CONCURRENCY_SF sets the scale factor (default 0.1: small queries make
-any per-statement or shared-lock cost easier to see)."""
+any per-statement or shared-lock cost easier to see), and HARDCHARGER_TEST_CONCURRENCY_ROUNDS
+the passes per client (default 10; the TSan job, 5-15x slower, runs 3)."""
 
 import os
 import statistics
@@ -18,7 +19,8 @@ import pytest
 from rbac import Client, expect_allowed, mint, start_rbac_server
 
 CLIENTS = 10
-ROUNDS = 10  # passes over the 22 queries per client (long enough runs for stable ratios)
+# Passes over the 22 queries per client (long enough runs for stable ratios).
+ROUNDS = int(os.environ.get("HARDCHARGER_TEST_CONCURRENCY_ROUNDS", "10"))
 TRIALS = 3  # medians over this many measurements per mode
 SCALE_FACTOR = os.environ.get("HARDCHARGER_TEST_CONCURRENCY_SF", "0.1")
 

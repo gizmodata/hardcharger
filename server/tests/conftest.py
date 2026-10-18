@@ -28,6 +28,10 @@ BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_BINARY", BUILD / "hardcha
 # Sanitizer builds run several times slower: HARDCHARGER_TEST_TIMEOUT_SCALE stretches the
 # waits that tests size by hand (CI's TSan job sets it), never what they assert.
 TIMEOUT_SCALE = float(os.environ.get("HARDCHARGER_TEST_TIMEOUT_SCALE", "1"))
+# Wall-clock performance limits (the TPC-H suite's 30 s) times HARDCHARGER_TEST_PERF_SCALE.
+# Only the TSan job sets it: instrumented code runs 5-15x slower, and there the workload is
+# run for its races and its results; the build jobs keep 1 and are where the limits count.
+PERF_SCALE = float(os.environ.get("HARDCHARGER_TEST_PERF_SCALE", "1"))
 UNIT_TEST_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_UNIT_BINARY", BUILD / "hardcharger-unit-tests")).resolve()
 CLIENT_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_CLIENT_BINARY", BUILD / "hardcharger")).resolve()
 CLIENT_TESTS_BINARY = pathlib.Path(
