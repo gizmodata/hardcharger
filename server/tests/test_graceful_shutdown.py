@@ -122,3 +122,14 @@ def test_without_graceful_shutdown_the_first_signal_stops(launcher):
     assert server.process.wait(timeout=15) == 0
     assert time.monotonic() - started < 10
     outcome["thread"].join(timeout=30)
+
+
+def test_a_drain_ends_in_a_clean_exit_every_time(launcher):
+    # The drain's last step stops the server on a thread of its own, while main() returns
+    # from Wait() and destroys it: that thread must be finished (joined) before the server
+    # is torn down. Under ThreadSanitizer the race made the process exit 66, not 0.
+    for _ in range(5):
+        server = launcher.start(env={"HARDCHARGER_GRACEFUL_SHUTDOWN": "true"})
+        assert server.admin().scalar(sql="SELECT 1") == 1
+        server.process.send_signal(signal.SIGTERM)
+        assert server.process.wait(timeout=60) == 0, server.log()[-2000:]

@@ -13,6 +13,8 @@ options" map, which has no Warp SQL equivalent.
 
 import datetime
 import decimal
+import signal
+import threading
 import uuid
 
 import pyarrow as pa
@@ -156,3 +158,30 @@ def test_unsupported_arrow_type_is_refused_not_stored_as_varchar(session):
     single = pa.table({"h": pa.array([1.5], type=pa.float32())})
     assert ingested(session.ingest(table=single, name="float_ingest", mode="replace")) == 1
     assert column_types(session=session, table="float_ingest")["h"] == "FLOAT"
+
+
+def test_failing_ingests_answer_their_error_and_the_server_exits_cleanly(launcher):
+    # Many bulk loads failing in the engine at once (append to a table that doesn't exist):
+    # the engine thread hands each failure to the request's I/O thread, which builds the
+    # problem response from it. The error must be the request's own copy by then; under
+    # ThreadSanitizer, an error freed on the engine thread while the response was read
+    # from it made the server exit 66 (a report) instead of 0. (Stopped at once, not
+    # drained, so this exit tests the ingests alone.)
+    server = launcher.start(env={"HARDCHARGER_GRACEFUL_SHUTDOWN": "false"})
+    errors = []
+
+    def load(n: int) -> None:
+        session = server.admin()
+        for i in range(25):
+            response = session.ingest(table=SAMPLE, name=f"no_such_table_{n}_{i}", mode="append")
+            if response.status_code < 400 or "no_such_table" not in response.json().get("detail", ""):
+                errors.append(response.text)
+
+    threads = [threading.Thread(target=load, args=(n,)) for n in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == [], errors[:3]
+    server.process.send_signal(signal.SIGTERM)
+    assert server.process.wait(timeout=120) == 0, server.log()[-2000:]

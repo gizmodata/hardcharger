@@ -1,8 +1,10 @@
 """The PostgreSQL grant store: replicas writing at once, a restart, and connection
 errors that never echo the connection string."""
 
+import signal
 import subprocess
 import threading
+import time
 import urllib.parse
 
 import pytest
@@ -126,3 +128,15 @@ def test_the_store_needs_no_extension_download_on_a_fresh_host(launcher, store, 
     server = start_rbac_server(launcher=launcher, store_uri=store.new_database(), env={"HOME": str(home)})
     expect_allowed(client=server.admin(), sql="CREATE ROLE installed")
     assert not list(home.rglob("*.duckdb_extension*")), list(home.rglob("*"))[:20]
+
+
+def test_a_polling_server_exits_cleanly(launcher, store):
+    # The engine polls the store's version every second on a thread of its own. It must be
+    # stopped and joined before main() returns: a poll running while the process exits
+    # read DuckDB objects its static destructors had freed (ThreadSanitizer: exit 66).
+    for wait in (0.2, 1.1, 2.5):
+        server = start_rbac_server(launcher=launcher, store_uri=store.new_database())
+        expect_allowed(client=server.admin(), sql="CREATE ROLE poller")
+        time.sleep(wait)  # stop at different points of the poll cycle
+        server.running.process.send_signal(signal.SIGTERM)
+        assert server.running.process.wait(timeout=60) == 0, server.log()[-2000:]
