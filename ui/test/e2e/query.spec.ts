@@ -63,9 +63,11 @@ test("an error shows the server's message", async ({ page }) => {
 test("Cancel stops a running query on the server", async ({ page }) => {
   // The server ends the cancelled statement's result stream without its last chunk (Warp SQL
   // §6.6), and browsers log that cut as a failed load (Chromium: ERR_INCOMPLETE_CHUNKED_ENCODING;
-  // WebKit: "the network connection was lost"). The UI handles it; the test checks how.
+  // WebKit on macOS: "The network connection was lost", on Linux: "Connection terminated
+  // unexpectedly"). The UI handles it; the test checks how.
   expectProblem(page, {
-    console: /ERR_INCOMPLETE_CHUNKED_ENCODING|Failed to load resource: The network connection was lost/,
+    console:
+      /ERR_INCOMPLETE_CHUNKED_ENCODING|Failed to load resource: (The network connection was lost|Connection terminated unexpectedly)/,
     required: false,
   });
   await runSql(page, "SELECT sum(a.range * b.range) AS s FROM range(100000000) a, range(100000) b");
