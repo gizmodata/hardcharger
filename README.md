@@ -315,6 +315,29 @@ is plain HTTP to a local server. It is GizmoSQL's
 [docs/migrating-from-gizmosql.md](docs/migrating-from-gizmosql.md#the-command-line-client)
 maps its options and lists what changed.
 
+## 🖥️ Web UI
+
+`--web-ui` (`HARDCHARGER_WEB_UI`, `web_ui: true`) serves
+[Hardcharger UI](https://github.com/gizmodata/hardcharger-ui) at `/ui`, on the server's own
+port, origin and TLS certificate: a SQL editor, results grid, schema browser, exports and
+the session list, in the browser, with the server's own sign-in and access control.
+
+```bash
+HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --database demo.duckdb
+# open http://127.0.0.1:31337/ui/ and sign in as hardcharger / change-me
+```
+
+The UI is a static app built into the binary (`-DHARDCHARGER_WEB_UI=<hardcharger-ui
+tarball>`, which the release builds set; [server/cmake/web_ui.cmake](server/cmake/web_ui.cmake)
+pins its version and checks every file). It is off unless asked for, and a build without it
+refuses `--web-ui`. Its answers carry a strict Content-Security-Policy, hashed files are
+cached for good, and `index.html` is revalidated, so an upgrade reaches open tabs.
+
+Under mutual TLS (`--mtls-ca-cert`) the browser must present an accepted client certificate to
+load `/ui` at all, as for any client (with `--mtls-require-client-cert=false` it loads without
+one). With `--mtls-certificate-sign-in`, the sign-in page offers **Sign in with my certificate**;
+the page's every request carries the certificate, so the bound token works throughout.
+
 ## 📦 Everything included
 
 | | |
@@ -454,6 +477,10 @@ OPENSSL_ROOT_DIR=$(brew --prefix openssl@3) cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
+To embed the web UI, add `-DHARDCHARGER_WEB_UI=/path/to/hardcharger-ui-<version>.tar.gz` (a
+hardcharger-ui release, or `npm run build && npm run package` in a checkout of the pinned
+commit); its content SHA-256 must be the one `server/cmake/web_ui.cmake` pins.
+
 ## 🧪 Test
 
 ```bash
@@ -464,6 +491,7 @@ docker run -d --name hardcharger-test-pg -e POSTGRES_USER=hardcharger \
 cd server/tests
 uv venv .venv && uv pip install --python .venv/bin/python -r pyproject.toml
 .venv/bin/python -m pytest -q                                    # -m "not services" without Docker
+                                                                 # -m "not web_ui" on a build without the UI
 ```
 
 The Warp SQL conformance suite runs against the same build:

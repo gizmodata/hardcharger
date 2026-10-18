@@ -101,6 +101,9 @@ FetchContent_MakeAvailable(yaml-cpp)
 
 configure_file(src/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.hpp" @ONLY)
 
+# The web UI, embedded when HARDCHARGER_WEB_UI names a hardcharger-ui tarball (cmake/web_ui.cmake).
+include(cmake/web_ui.cmake)
+
 # Access control (role-based). The one part of Hardcharger that uses DuckDB's
 # internal C++ headers (the plan check reads DuckDB's logical plans); the rest of the
 # server includes only src/authz/authz.hpp. It must be compiled exactly as libduckdb was
@@ -152,7 +155,9 @@ add_library(hardcharger_core STATIC
   src/settings.cc
   src/sql_functions.cc
   src/sql_text.cc
-  src/tokens.cc)
+  src/tokens.cc
+  src/web_ui.cc
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/web_ui_files.cc")
 target_include_directories(hardcharger_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_sources(hardcharger_core PRIVATE $<TARGET_OBJECTS:hardcharger_authz>)
 target_link_libraries(hardcharger_core PUBLIC warpsql_duckdb OpenSSL::Crypto jwt-cpp::jwt-cpp yaml-cpp::yaml-cpp)
@@ -203,7 +208,8 @@ add_executable(hardcharger-unit-tests
   unit/patterns_test.cc
   unit/redaction_test.cc
   unit/sensitive_paths_test.cc
-  unit/sql_text_test.cc)
+  unit/sql_text_test.cc
+  unit/web_ui_test.cc)
 target_link_libraries(hardcharger-unit-tests PRIVATE hardcharger_core GTest::gtest_main)
 hardcharger_rpath(hardcharger-unit-tests)
 if(MSVC)

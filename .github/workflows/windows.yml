@@ -48,6 +48,11 @@ jobs:
       CXX: cl
     steps:
       - uses: actions/checkout@v7
+      # The web UI every build embeds (server.yml's web-ui job).
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-ui
+          path: server/.web-ui
       # The warp-sql submodule is private: fetch it with its read-only deploy key.
       - name: Fetch the warp-sql submodule
         env:
@@ -159,7 +164,8 @@ jobs:
           # extensions link, as DuckDB's own build did.
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_TOOLCHAIN_FILE="$(cygpath -m "$PWD/.github/cmake/windows-vcpkg.cmake")" \
-                -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE
+                -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE \
+                -DHARDCHARGER_WEB_UI="$(cygpath -m "$PWD/server/.web-ui/hardcharger-ui.tar.gz")"
           cmake --build server/build
           server/build/hardcharger-server.exe --version
           server/build/hardcharger-server.exe --print-duckdb-version

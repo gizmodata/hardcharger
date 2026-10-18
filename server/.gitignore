@@ -3,3 +3,4 @@ build/
 build-*/
 .cache/
 *.log
+.web-ui/

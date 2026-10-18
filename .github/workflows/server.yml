@@ -39,6 +39,51 @@ env:
   HARDCHARGER_TEST_XDIST_WORKERS: "6"
 
 jobs:
+  # The web UI (gizmodata/hardcharger-ui) every build embeds: built from the commit that
+  # server/cmake/web_ui.cmake pins, fetched with that repository's read-only deploy key. Its
+  # build is reproducible, and CMake checks the result against the pinned content SHA-256.
+  web-ui:
+    name: web UI (hardcharger-ui)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: server/cmake
+      - name: Fetch hardcharger-ui at the pinned commit
+        env:
+          DEPLOY_KEY: ${{ secrets.HARDCHARGER_UI_DEPLOY_KEY }}
+        run: |
+          commit=$(sed -nE 's/^set\(HARDCHARGER_WEB_UI_PINNED_COMMIT "([0-9a-f]{40})"\)$/\1/p' server/cmake/web_ui.cmake)
+          [ -n "$commit" ] || { echo "no pinned commit in server/cmake/web_ui.cmake"; exit 1; }
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error::the HARDCHARGER_UI_DEPLOY_KEY secret is not set: the private key of a read-only deploy key of gizmodata/hardcharger-ui"
+            exit 1
+          fi
+          key="$RUNNER_TEMP/ui_key"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          chmod 600 "$key"
+          git init -q ui
+          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+            git -C ui fetch -q --depth 1 git@github.com:gizmodata/hardcharger-ui.git "$commit"
+          rm -f "$key"
+          git -C ui checkout -q FETCH_HEAD
+          test "$(git -C ui rev-parse HEAD)" = "$commit"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Build and package the UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+          npm run package
+          cp release/hardcharger-ui-*.tar.gz ../hardcharger-ui.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-ui
+          path: hardcharger-ui.tar.gz
+          retention-days: 7
+
   build:
     name: build and test (${{ matrix.name }})
     strategy:
@@ -57,11 +102,17 @@ jobs:
             manylinux: quay.io/pypa/manylinux_2_28_aarch64:2026.10.10-1@sha256:abd1230aa9e4058a74b89d27cd14ba18c0db036d7bfe6e6f219a29ea63c24eb6
           - name: macos-arm64
             runner: macos-15
+    needs: web-ui
     runs-on: ${{ matrix.runner }}
     env:
       HARDCHARGER_MANYLINUX_IMAGE: ${{ matrix.manylinux }}
     steps:
       - uses: actions/checkout@v7
+      # Inside the checkout: the Linux build's container mounts only that.
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-ui
+          path: server/.web-ui
       # The warp-sql submodule is private: fetch it with its read-only deploy key (the
       # key reaches only that repository, so the main checkout uses the usual token).
       - name: Fetch the warp-sql submodule
@@ -154,12 +205,13 @@ jobs:
         run: |
           # (warpsql-client-tests and warpsql-sdk-tests, Warp SQL's own tests, build on request.)
           if [ "$RUNNER_OS" = Linux ]; then
-            server/scripts/in-manylinux.sh server server/build -DHARDCHARGER_STATIC=ON
+            server/scripts/in-manylinux.sh server server/build -DHARDCHARGER_STATIC=ON \
+              -DHARDCHARGER_WEB_UI="$PWD/server/.web-ui/hardcharger-ui.tar.gz"
             server/scripts/in-manylinux.sh build server/build --target warpsql-client-tests warpsql-sdk-tests
           else
             read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
             cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                  -DHARDCHARGER_STATIC=ON \
+                  -DHARDCHARGER_STATIC=ON -DHARDCHARGER_WEB_UI="$PWD/server/.web-ui/hardcharger-ui.tar.gz" \
                   -DOPENSSL_ROOT_DIR="$PWD/server/.deps/openssl-install" -DOPENSSL_USE_STATIC_LIBS=TRUE \
                   "${launcher[@]}"
             cmake --build server/build
@@ -340,6 +392,7 @@ jobs:
   # here every time. The suites fail when the server dies or exits non-zero.
   sanitize:
     name: address sanitizer (linux-amd64)
+    needs: web-ui
     runs-on: ubuntu-24.04
     env:
       # Six workers starve the instrumented servers on 2 CPUs (password sign-ins time
@@ -347,6 +400,10 @@ jobs:
       HARDCHARGER_TEST_XDIST_WORKERS: "4"
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-ui
+          path: server/.web-ui
       - name: Fetch the warp-sql submodule
         env:
           DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
@@ -398,6 +455,7 @@ jobs:
         run: |
           read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
           cmake -S server -B server/build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DHARDCHARGER_WEB_UI="$PWD/server/.web-ui/hardcharger-ui.tar.gz" \
             "${launcher[@]}" \
             -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
@@ -463,6 +521,7 @@ jobs:
   # justified third-party suppressions). OpenSSL and the C++ runtime are the system's.
   tsan:
     name: thread sanitizer (linux-amd64)
+    needs: web-ui
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
@@ -483,6 +542,10 @@ jobs:
       TSAN_REPORTS: ${{ github.workspace }}/tsan-reports
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-ui
+          path: server/.web-ui
       - name: Fetch the warp-sql submodule
         env:
           DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
@@ -539,6 +602,7 @@ jobs:
         run: |
           read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
           cmake -S server -B server/build-tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DHARDCHARGER_WEB_UI="$PWD/server/.web-ui/hardcharger-ui.tar.gz" \
             "${launcher[@]}"
           cmake --build server/build-tsan
           cmake --build server/build-tsan --target warpsql-sdk-tests
@@ -720,6 +784,7 @@ jobs:
   # Windows x64 and arm64 (windows.yml): its build and tests, and the zips and MSIs it
   # packages, which the checksums and the release take with the tarballs.
   windows:
+    needs: web-ui
     uses: ./.github/workflows/windows.yml
     secrets: inherit
     with:

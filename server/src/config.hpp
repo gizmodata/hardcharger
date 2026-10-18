@@ -19,6 +19,7 @@ struct Config {
   int64_t health_port = 0;  // plaintext /health listener; 0 = none
   int64_t max_header_bytes = 16 * 1024;  // larger request headers get 431
   int64_t max_result_partitions = 32;    // most partitions a client may have a result split into
+  bool web_ui = false;  // serve the embedded web UI at /ui on this listener
 
   // TLS
   std::string tls_cert;   // PEM certificate chain; with tls_key, turns TLS on

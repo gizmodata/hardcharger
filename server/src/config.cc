@@ -103,6 +103,8 @@ const std::vector<Option>& Options() {
       {"max_result_partitions", Kind::kInt,
        "most partitions a result is split into for a client that reads them at once (1: never split)",
        NUMBER(max_result_partitions)},
+      {"web_ui", Kind::kBool,
+       "serve the web UI at /ui on this port (a build that embeds it)", FLAG(web_ui)},
       // TLS
       {"tls_cert", Kind::kString, "TLS certificate chain (PEM)",
        TEXT(tls_cert)},

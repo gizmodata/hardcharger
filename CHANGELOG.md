@@ -79,6 +79,20 @@ own changelog in `python/CHANGELOG.md`.
   `warpsql-sdk-tests` (the limiter's unit tests), under TSan too.
 - The `hardcharger` client: `--auth-type mtls` (or `authType=mtls` in a URI) signs in with
   the `--mtls-cert` certificate, and signs in again with it when the server ends the session.
+- The web UI: `web_ui` (`--web-ui`, `HARDCHARGER_WEB_UI`) serves
+  [Hardcharger UI](https://github.com/gizmodata/hardcharger-ui) at `/ui` on the server's own
+  listener (same port, origin and TLS certificate as Warp SQL), off by default. The UI is
+  embedded at build time from a hardcharger-ui release tarball (`-DHARDCHARGER_WEB_UI`),
+  each file checked against its manifest and the manifest against the pinned content
+  SHA-256 (`server/cmake/web_ui.cmake`); CI builds it from the pinned commit. Answers follow
+  the UI's serving contract: `index.html` for the app's routes under `/ui/`, hashed assets
+  immutable, everything else revalidated, 404 (never cached) for missing files, and a strict
+  Content-Security-Policy and security headers on every answer; nothing at all when off.
+  A build without the UI refuses `web_ui`. The Warp SQL SDK gained `plain_handler`, through
+  which the server answers GET and HEAD outside `/warp`. Under mutual TLS the page needs a
+  client certificate like any client, and offers certificate sign-in when
+  `mtls_certificate_sign_in` is on (`test_web_ui.py` covers both, and optional certificates).
+  The Windows builds embed it too.
 
 - `hardcharger`, the command-line SQL client: GizmoSQL 1.x's `gizmosql_client` on Warp
   SQL, with the same options (in Hardcharger's names: `HARDCHARGER_HOST`, `_PORT`, `_USER`,

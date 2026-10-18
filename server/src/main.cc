@@ -21,6 +21,7 @@
 #include "version.hpp"
 #include "warpsql/server.hpp"
 #include "warpsql/stop_signals.hpp"
+#include "web_ui.hpp"
 
 namespace hc = hardcharger;
 
@@ -79,6 +80,11 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
                                    : "client certificate check refused a request",
               std::move(fields));
   };
+  if (config.web_ui) {
+    options.plain_handler = [](const warpsql::PlainRequest& request) {
+      return hc::ServeWebUi(hc::EmbeddedWebUiFiles(), request.path);
+    };
+  }
   return options;
 }
 
@@ -336,6 +342,11 @@ int main(int argc, char** argv) {
       break;
   }
   const hc::Config& config = loaded.config;
+  if (config.web_ui && hc::EmbeddedWebUiFiles().empty()) {
+    std::cerr << "hardcharger-server: web_ui is on, but this build has no web UI "
+                 "(build with -DHARDCHARGER_WEB_UI=<hardcharger-ui tarball>)\n";
+    return 2;
+  }
 
   // Before any thread starts, so only stop_signals.Wait() below sees the stop requests
   // (SIGINT/SIGTERM; on Windows, the console's Ctrl+C/Ctrl+Break/close/shutdown events).
@@ -445,6 +456,12 @@ int main(int argc, char** argv) {
              {"metrics_port", metrics_endpoint ? std::to_string(metrics_endpoint->port()) : ""},
              {"oauth_port", oauth ? std::to_string(oauth->port()) : ""},
              {"database", config.database}});
+    if (config.web_ui) {
+      hc::Log(hc::LogLevel::kInfo, "the web UI is on",
+              {{"url", std::string(config.tls_cert.empty() ? "http" : "https") + "://" + config.host + ":" +
+                           std::to_string(server.port()) + "/ui/"},
+               {"version", std::string(hc::EmbeddedWebUiVersion())}});
+    }
 
     // First signal: with graceful_shutdown, drain (finish running work, refuse new work)
     // for up to shutdown_grace_period_seconds, both live-adjustable with SET GLOBAL;
