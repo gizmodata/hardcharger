@@ -13,12 +13,13 @@ options" map, which has no Warp SQL equivalent.
 
 import datetime
 import decimal
-import signal
 import threading
 import uuid
 
 import pyarrow as pa
 import pytest
+
+from conftest import STOP_SIGNAL
 
 
 @pytest.fixture(scope="module")
@@ -183,5 +184,5 @@ def test_failing_ingests_answer_their_error_and_the_server_exits_cleanly(launche
     for thread in threads:
         thread.join()
     assert errors == [], errors[:3]
-    server.process.send_signal(signal.SIGTERM)
+    server.process.send_signal(STOP_SIGNAL)
     assert server.process.wait(timeout=120) == 0, server.log()[-2000:]

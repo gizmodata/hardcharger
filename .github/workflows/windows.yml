@@ -1,23 +1,16 @@
 # The Hardcharger server on Windows (x64 and arm64, MSVC): builds the dependencies, the
-# server and the Warp SQL reference server, runs the unit tests, the server suites and
-# the Warp SQL conformance suite (against both servers), and packages
-# hardcharger-windows-{amd64,arm64}.zip and an MSI of each. Kept apart from server.yml
-# while it is developed; its jobs move into server.yml's release once it lands.
+# server, the client and the Warp SQL reference server, runs the unit tests, the server
+# and client suites and the Warp SQL conformance suite (against both servers), and
+# packages hardcharger-windows-{amd64,arm64}.zip and an MSI of each. server.yml calls it
+# (its `windows` job), on the same events as its other builds; its concurrency is
+# server.yml's (a called workflow's own would share the caller's group and cancel it).
 name: windows
 
 on:
-  push:
-    branches: [feature/windows]
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
-
-# A newer run on the same branch cancels the older one (never on a tag): Windows minutes
-# are the dearest.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 defaults:
   run:
@@ -82,107 +75,73 @@ jobs:
           cmake --version | head -1
           ninja --version
 
-      - name: OpenSSL cache key
-        id: openssl
-        run: echo "key=openssl-${VCPKG_TRIPLET}-msvc${{ steps.msvc.outputs.version }}-$(git -C /c/vcpkg rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+      # The Windows libraries vcpkg builds (static, on the static C runtime), listed in
+      # .github/windows-vcpkg-packages.txt: OpenSSL for everything, and libpq, libcurl and
+      # CRoaring for DuckDB's built-in extensions (the postgres scanner, httpfs, ducklake).
+      - name: vcpkg libraries cache key
+        id: vcpkg
+        run: |
+          commit=$(git -C /c/vcpkg rev-parse --short=12 HEAD)
+          list=$(sha256sum .github/windows-vcpkg-packages.txt | cut -c1-12)
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "key=vcpkg-${VCPKG_TRIPLET}-msvc${{ steps.msvc.outputs.version }}-$commit-$list" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v6
-        id: openssl-cache
+        id: vcpkg-cache
         with:
           path: C:\vcpkg\installed
-          key: ${{ steps.openssl.outputs.key }}
-      - name: Build OpenSSL (vcpkg)
-        if: steps.openssl-cache.outputs.cache-hit != 'true'
-        run: /c/vcpkg/vcpkg.exe install "openssl:$VCPKG_TRIPLET" --clean-after-build
+          key: ${{ steps.vcpkg.outputs.key }}
+      - name: Build the vcpkg libraries
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        run: |
+          mapfile -t packages < .github/windows-vcpkg-packages.txt
+          /c/vcpkg/vcpkg.exe install "${packages[@]/%/:$VCPKG_TRIPLET}" --clean-after-build
       - uses: actions/cache/save@v6
-        if: steps.openssl-cache.outputs.cache-hit != 'true'
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
         with:
           path: C:\vcpkg\installed
-          key: ${{ steps.openssl.outputs.key }}
+          key: ${{ steps.vcpkg.outputs.key }}
 
-      # The recipes are the other platforms' own; the static C runtime (/MT) they need
-      # with MSVC comes from .github/cmake/msvc-static-crt.cmake.
-      # Arrow, replxx (the client's line editor) and DuckDB: one cache each, keyed on its
-      # own recipe (its pin is in it) and the toolset, restored and saved separately, so a
-      # change to one never rebuilds another (DuckDB takes 25-50 minutes cold). DuckDB's
-      # key has build-deps.sh, which patches it, but not the other two's recipes.
-      - name: Dependency cache keys
-        id: deps
-        run: |
-          toolset="${{ matrix.name }}-msvc${{ steps.msvc.outputs.version }}"
-          hash() { cat "$@" | sha256sum | cut -c1-16; }
-          crt=.github/cmake/msvc-static-crt.cmake
-          echo "arrow=deps-arrow-$toolset-$(hash third_party/warp-sql/cpp/scripts/build-arrow.sh $crt)" >> "$GITHUB_OUTPUT"
-          echo "replxx=deps-replxx-$toolset-policy3.15-$(hash server/scripts/build-replxx.sh $crt)" >> "$GITHUB_OUTPUT"
-          echo "duckdb=deps-duckdb-$toolset-$(hash third_party/warp-sql/cpp/scripts/build-duckdb.sh \
-                server/scripts/build-deps.sh server/scripts/patch-duckdb.cmake)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v6
-        id: arrow-cache
+      # Arrow, replxx and DuckDB: one cache each (.github/actions/dep-cache, as on the other
+      # platforms), keyed on the dependency's own recipes, server/scripts/windows-deps.sh's
+      # Windows part and the MSVC toolset (DuckDB's also on vcpkg's libraries), so a change
+      # to one never rebuilds another. DuckDB takes 35-70 minutes cold.
+      - name: Arrow (cached)
+        uses: ./.github/actions/dep-cache
         with:
-          path: server/.deps/arrow-install
-          key: ${{ steps.deps.outputs.arrow }}
-      - name: Build Arrow
-        if: steps.arrow-cache.outputs.cache-hit != 'true'
-        env:
-          CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/.github/cmake/msvc-static-crt.cmake
-        run: |
-          start=$SECONDS
-          WARPSQL_DEPS_DIR="$PWD/server/.deps" third_party/warp-sql/cpp/scripts/build-arrow.sh
-          echo "Arrow built in $(( (SECONDS - start) / 60 )) min"
-      # Each saved as soon as it is built, so a later failure doesn't throw it away.
-      - uses: actions/cache/save@v6
-        if: steps.arrow-cache.outputs.cache-hit != 'true'
+          dependency: arrow
+          platform: ${{ matrix.name }}
+          toolchain: MSVC ${{ steps.msvc.outputs.version }}
+          extra-recipes: server/scripts/windows-deps.sh .github/cmake/msvc-static-crt.cmake
+          build: server/scripts/windows-deps.sh
+      - name: replxx (cached)
+        uses: ./.github/actions/dep-cache
         with:
-          path: server/.deps/arrow-install
-          key: ${{ steps.deps.outputs.arrow }}
-      - uses: actions/cache/restore@v6
-        id: duckdb-cache
+          dependency: replxx
+          platform: ${{ matrix.name }}
+          toolchain: MSVC ${{ steps.msvc.outputs.version }}
+          extra-recipes: server/scripts/windows-deps.sh .github/cmake/msvc-static-crt.cmake
+          build: server/scripts/windows-deps.sh
+      - name: DuckDB (cached)
+        uses: ./.github/actions/dep-cache
         with:
-          path: server/.deps/duckdb-install
-          key: ${{ steps.deps.outputs.duckdb }}
-      # build-deps.sh builds Arrow and replxx too (about 12 minutes more, only when DuckDB
-      # itself must be rebuilt); what this step leaves of them isn't saved.
-      - name: Build DuckDB
-        if: steps.duckdb-cache.outputs.cache-hit != 'true'
-        env:
-          CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/.github/cmake/msvc-static-crt.cmake
-        run: |
-          start=$SECONDS
-          server/scripts/build-deps.sh
-          echo "DuckDB built in $(( (SECONDS - start) / 60 )) min"
-      - uses: actions/cache/save@v6
-        if: steps.duckdb-cache.outputs.cache-hit != 'true'
-        with:
-          path: server/.deps/duckdb-install
-          key: ${{ steps.deps.outputs.duckdb }}
+          dependency: duckdb
+          platform: ${{ matrix.name }}
+          toolchain: MSVC ${{ steps.msvc.outputs.version }} vcpkg ${{ steps.vcpkg.outputs.commit }}
+          extra-recipes: >-
+            server/scripts/windows-deps.sh server/scripts/deps-duckdb-windows.sh
+            .github/cmake/windows-vcpkg.cmake .github/cmake/msvc-static-crt.cmake
+            .github/windows-vcpkg-packages.txt
+          build: server/scripts/windows-deps.sh
 
-      # After DuckDB's step, which builds a replxx of its own (build-deps.sh) that this
-      # one replaces.
-      - uses: actions/cache/restore@v6
-        id: replxx-cache
-        with:
-          path: server/.deps/replxx-install
-          key: ${{ steps.deps.outputs.replxx }}
-      - name: Build replxx
-        if: steps.replxx-cache.outputs.cache-hit != 'true'
-        env:
-          CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/.github/cmake/msvc-static-crt.cmake
-          # replxx asks for CMake 3.5, whose policies ignore CMAKE_MSVC_RUNTIME_LIBRARY
-          # (CMP0091 is 3.15's): this makes it take the toolchain file's /MT.
-          CMAKE_POLICY_VERSION_MINIMUM: "3.15"
-        run: |
-          rm -rf server/.deps/replxx-install server/.deps/replxx-build
-          HARDCHARGER_DEPS_DIR="$PWD/server/.deps" server/scripts/build-replxx.sh
-      - uses: actions/cache/save@v6
-        if: steps.replxx-cache.outputs.cache-hit != 'true'
-        with:
-          path: server/.deps/replxx-install
-          key: ${{ steps.deps.outputs.replxx }}
       - name: Build the server
         id: server
         run: |
           start=$SECONDS
           openssl="/c/vcpkg/installed/$VCPKG_TRIPLET"
+          # vcpkg's toolchain (windows-vcpkg.cmake) finds the libraries DuckDB's built-in
+          # extensions link, as DuckDB's own build did.
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_TOOLCHAIN_FILE="$(cygpath -m "$PWD/.github/cmake/windows-vcpkg.cmake")" \
                 -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE
           cmake --build server/build
           server/build/hardcharger-server.exe --version
@@ -195,6 +154,7 @@ jobs:
           openssl="/c/vcpkg/installed/$VCPKG_TRIPLET"
           deps="$(cygpath -m "$PWD/server/.deps")"
           cmake -S third_party/warp-sql/cpp -B build-warp -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_TOOLCHAIN_FILE="$(cygpath -m "$PWD/.github/cmake/windows-vcpkg.cmake")" \
                 -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE \
                 -DWARPSQL_ARROW_PREFIX="$deps/arrow-install" -DWARPSQL_DUCKDB_PREFIX="$deps/duckdb-install" \
                 -DWARPSQL_BUILD_TESTS=ON
@@ -250,7 +210,9 @@ jobs:
         run: |
           uv venv .venv --python ${{ matrix.test_python }}
           uv pip install --python .venv/Scripts/python.exe -r pyproject.toml
-          .venv/Scripts/python.exe -m pytest -q -rfE -m "not services and not pty"
+          # In parallel (pytest-xdist, as server.yml), then the `serial` tests alone.
+          .venv/Scripts/python.exe -m pytest -q -rfE -n 4 -m "not serial and not services and not pty" --durations=10
+          .venv/Scripts/python.exe -m pytest -q -rfE -m "serial and not services and not pty" --durations=5
       - name: Warp SQL conformance suite (Hardcharger)
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         working-directory: third_party/warp-sql/conformance
@@ -426,6 +388,6 @@ jobs:
           if (Test-Path $exe) { throw "uninstall left $exe" }
       - uses: actions/upload-artifact@v7
         with:
-          name: Hardcharger-${{ matrix.name }}-msi
+          name: hardcharger-${{ matrix.name }}-msi
           path: Hardcharger-${{ matrix.name }}.msi
           if-no-files-found: error

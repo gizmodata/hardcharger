@@ -673,11 +673,19 @@ jobs:
           docker logs hc
           docker rm -f hc
 
+  # Windows x64 and arm64 (windows.yml): its build and tests, and the zips and MSIs it
+  # packages, which the checksums and the release take with the tarballs.
+  windows:
+    uses: ./.github/workflows/windows.yml
+    secrets: inherit
+    permissions:
+      contents: read
+
   # SHA256SUMS for the release tarballs (and any zip), in `sha256sum -c` format: made and
   # checked on every run, so the release (and the one-line installer, which verifies
   # downloads against it) never meets it for the first time on a tag.
   checksums:
-    needs: build
+    needs: [build, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
@@ -689,8 +697,9 @@ jobs:
         working-directory: dist
         run: |
           shopt -s nullglob
-          assets=(hardcharger-*.tar.gz hardcharger-*.zip)
-          [ ${#assets[@]} -ge 3 ] || { echo "expected the release tarballs, found: ${assets[*]}"; exit 1; }
+          assets=(hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi)
+          # Three tarballs (Linux amd64/arm64, macOS), two Windows zips and two MSIs.
+          [ ${#assets[@]} -ge 7 ] || { echo "expected the release tarballs, zips and MSIs, found: ${assets[*]}"; exit 1; }
           sha256sum "${assets[@]}" > SHA256SUMS
           cat SHA256SUMS
           sha256sum -c SHA256SUMS
@@ -701,7 +710,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, portable, sanitize, tsan, image, checksums]
+    needs: [build, portable, sanitize, tsan, image, windows, checksums]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -732,7 +741,7 @@ jobs:
         run: |
           sha256sum -c SHA256SUMS
           shopt -s nullglob
-          for asset in hardcharger-*.tar.gz hardcharger-*.zip; do
+          for asset in hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi; do
             grep -q "  $asset\$" SHA256SUMS || { echo "$asset is not in SHA256SUMS"; exit 1; }
           done
       - uses: softprops/action-gh-release@v3

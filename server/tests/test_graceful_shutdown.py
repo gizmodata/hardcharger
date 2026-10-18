@@ -130,5 +130,5 @@ def test_a_drain_ends_in_a_clean_exit_every_time(launcher):
     for _ in range(5):
         server = launcher.start(env={"HARDCHARGER_GRACEFUL_SHUTDOWN": "true"})
         assert server.admin().scalar(sql="SELECT 1") == 1
-        server.process.send_signal(signal.SIGTERM)
+        server.process.send_signal(STOP_SIGNAL)
         assert server.process.wait(timeout=60) == 0, server.log()[-2000:]

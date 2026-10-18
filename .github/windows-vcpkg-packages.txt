@@ -1,0 +1,4 @@
+openssl
+curl[core,openssl]
+libpq[core,openssl]
+roaring

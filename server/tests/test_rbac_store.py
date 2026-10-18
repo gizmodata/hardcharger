@@ -1,7 +1,6 @@
 """The PostgreSQL grant store: replicas writing at once, a restart, and connection
 errors that never echo the connection string."""
 
-import signal
 import subprocess
 import threading
 import time
@@ -9,7 +8,7 @@ import urllib.parse
 
 import pytest
 
-from conftest import home_env
+from conftest import STOP_SIGNAL, home_env
 from rbac import WarpError, expect_allowed, rbac_env, start_rbac_server
 
 
@@ -139,5 +138,5 @@ def test_a_polling_server_exits_cleanly(launcher, store):
         server = start_rbac_server(launcher=launcher, store_uri=store.new_database())
         expect_allowed(client=server.admin(), sql="CREATE ROLE poller")
         time.sleep(wait)  # stop at different points of the poll cycle
-        server.running.process.send_signal(signal.SIGTERM)
+        server.running.process.send_signal(STOP_SIGNAL)
         assert server.running.process.wait(timeout=60) == 0, server.log()[-2000:]
