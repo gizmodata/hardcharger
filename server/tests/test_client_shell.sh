@@ -68,7 +68,10 @@ run_test() {
 
     TEST_COUNT=$((TEST_COUNT + 1))
 
-    if echo "$actual" | grep -qF -- "$expected"; then
+    # A here-string, not `echo | grep -q`: grep -q exits at its first match, and under
+    # pipefail an echo still writing then dies of SIGPIPE and fails the pipeline (141),
+    # which read a match as no match.
+    if grep -qF -- "$expected" <<<"$actual"; then
         echo -e "  ${GREEN}PASS${NC}: $test_name"
         PASS_COUNT=$((PASS_COUNT + 1))
     else
@@ -87,7 +90,10 @@ run_test_not_contains() {
 
     TEST_COUNT=$((TEST_COUNT + 1))
 
-    if echo "$actual" | grep -qF -- "$not_expected"; then
+    # A here-string, not `echo | grep -q`: grep -q exits at its first match, and under
+    # pipefail an echo still writing then dies of SIGPIPE and fails the pipeline (141),
+    # which read a match as no match.
+    if grep -qF -- "$not_expected" <<<"$actual"; then
         echo -e "  ${RED}FAIL${NC}: $test_name"
         echo "    Should NOT contain: $not_expected"
         echo "    Actual output: $(echo "$actual" | head -5)"

@@ -476,6 +476,13 @@ own changelog in `python/CHANGELOG.md`.
   `pqSaveParameterStatus` (two threads opening PostgreSQL connections at once write the
   process-wide statics that only the deprecated `PQescapeString`/`PQescapeBytea` read,
   which nothing here calls) is suppressed by that function name, with the source lines.
+- `test_client_shell.py` (1, linux-arm64 on cadc02e): the script's `run_test` checked with
+  `echo "$actual" | grep -qF` under `set -o pipefail`. `grep -q` exits at its first match, and
+  an `echo` still writing then dies of SIGPIPE, so the pipeline returned 141 and a match read
+  as a failure ("Verify INSERT result", with `Frank` in the output it printed);
+  `run_test_not_contains` could pass in the same way. Both now use a here-string. Reproduced
+  with the same output: 1 in 20,000 under CPU load on Linux arm64, and nearly every time with
+  output beyond a pipe's buffer; never with the here-string.
 
 ### Documentation
 
