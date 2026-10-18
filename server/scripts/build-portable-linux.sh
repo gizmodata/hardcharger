@@ -42,10 +42,31 @@ give_back() {
 }
 trap give_back EXIT
 
-# Build tools only (flex and bison for PostgreSQL's libpq): nothing here becomes a
-# runtime dependency.
-dnf install -y -q --setopt=install_weak_deps=False \
-  ninja-build perl-IPC-Cmd perl-Pod-Html perl-Time-Piece flex bison >/dev/null
+# Build tools only (flex and bison for PostgreSQL's libpq, the perl modules for OpenSSL):
+# nothing here becomes a runtime dependency. The server modes need only ninja, which the
+# image lacks. Mirrors fail now and then (all of EPEL's, for one arm64 job on 2026-10-18),
+# so dnf retries, and ninja falls back to its PyPI package (another CDN).
+tools=(ninja-build)
+if [ "$MODE" = deps ]; then tools+=(perl-IPC-Cmd perl-Pod-Html perl-Time-Piece flex bison); fi
+installed=false
+for attempt in 1 2 3; do
+  if dnf install -y -q --setopt=install_weak_deps=False --setopt=retries=10 \
+       "${tools[@]}" >/dev/null; then
+    installed=true
+    break
+  fi
+  echo "dnf install failed (attempt $attempt of 3)" >&2
+  dnf clean metadata >/dev/null 2>&1 || true
+  sleep 20
+done
+if ! $installed; then
+  if [ "$MODE" = deps ]; then
+    echo "could not install the build tools: ${tools[*]}" >&2
+    exit 1
+  fi
+  /opt/python/cp312-cp312/bin/python -m pip install --quiet --retries 10 ninja
+  ln -sf /opt/python/cp312-cp312/bin/ninja /usr/local/bin/ninja
+fi
 
 # The dependencies build-deps.sh names (in CI: one per call, each cached on its own); the
 # static OpenSSL first, as DuckDB's extensions link it.
