@@ -71,8 +71,11 @@ def test_every_value_that_fits_arrives_exactly(session, type_name):
 @pytest.mark.parametrize("type_name, value", [("UHUGEINT", v) for v in TOO_WIDE_U] +
                          [("HUGEINT", v) for v in TOO_WIDE_H])
 def test_a_value_decimal128_cannot_hold_is_refused_never_sent_wrong(session, type_name, value):
+    # The statement's error response (Warp SQL §6.1: a statement that has failed by the time
+    # the server answers is its error, never a success status with a failed document).
     problem = session.error(sql=f"SELECT {lit(value, type_name)} AS x")
-    assert problem["state"] == "failed" and problem["code"] == "execution_error", problem
+    assert problem["status"] == 500 and problem["code"] == "execution_error", problem
+    assert "state" not in problem, problem  # an error response, not a statement document
     assert refusal(type_name=type_name, value=value) in problem["detail"], problem
     # The two ways around it, which carry the value exactly: VARCHAR,
     assert session.scalar(sql=f"SELECT {lit(value, type_name)}::VARCHAR") == str(value)

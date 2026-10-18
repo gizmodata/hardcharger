@@ -160,7 +160,9 @@ own changelog in `python/CHANGELOG.md`.
   sends by default, waits up to 5 s for the split decision). Every client shipped treats
   such a document as an error (Go ADBC, JDBC, JS, the C++ client), so no failure was
   reported as a success, but the answer was not the spec's. It is now the error response
-  (`500 execution_error`), on submission and on prepared execution.
+  (`500 execution_error`), on submission and on prepared execution. That includes a
+  HUGEINT/UHUGEINT value too wide for decimal128(38, 0), whose refusal came back as `201`
+  with a `failed` document (`test_wide_integers.py` now asserts the error response).
   `server.yml`'s `failure_repro` dispatch input runs those conformance cases 200 times
   against both servers on every platform.
 - The release binaries are self-contained, as GizmoSQL's: DuckDB (with its built-in
