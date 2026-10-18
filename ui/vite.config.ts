@@ -1,0 +1,44 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+
+const { version } = JSON.parse(readFileSync(new URL("package.json", import.meta.url), "utf8")) as { version: string };
+
+// The UI is served by hardcharger-server at /ui on the same listener as Warp SQL, so every
+// asset path starts with /ui/ and the app talks to /warp on its own origin.
+//
+// The build must work under the server's Content-Security-Policy (see README.md): no inline
+// scripts, no eval, no data: URIs, workers from files of their own.
+export default defineConfig({
+  base: "/ui/",
+  plugins: [react()],
+  resolve: {
+    // Monaco's package exports map only its .js files; its CSS is reached by path.
+    alias: [
+      {
+        find: /^monaco-editor-esm\/(.*)$/,
+        replacement: fileURLToPath(new URL("node_modules/monaco-editor/esm/vs/$1", import.meta.url)),
+      },
+    ],
+  },
+  define: { __UI_VERSION__: JSON.stringify(version) },
+  build: {
+    outDir: "dist",
+    assetsDir: "assets",
+    target: "es2023",
+    sourcemap: false,
+    // Everything as a file of its own: a data: URI would need img-src/font-src data:.
+    assetsInlineLimit: 0,
+    chunkSizeWarningLimit: 5000,
+    // The polyfill would be inline code in no file of its own; every supported browser has
+    // modulepreload.
+    modulePreload: { polyfill: false },
+  },
+  worker: { format: "es" },
+  server: {
+    // `npm run dev` against a local server: HARDCHARGER_UI_DEV_SERVER=http://127.0.0.1:31337
+    proxy: { "/warp": { target: process.env["HARDCHARGER_UI_DEV_SERVER"] ?? "http://127.0.0.1:31337" } },
+  },
+});
