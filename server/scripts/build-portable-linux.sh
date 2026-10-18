@@ -57,10 +57,9 @@ build_server() {
   local build_dir="${1:?build dir, e.g. server/build}"
   shift
   BUILD_DIR="$build_dir"
-  local launcher=()
-  if command -v sccache >/dev/null 2>&1; then
-    launcher=(-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache)
-  fi
+  # sccache's server started up front, or the launcher off when it won't answer.
+  local launcher
+  read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
   cmake -S server -B "$build_dir" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX" -DOPENSSL_USE_STATIC_LIBS=TRUE \
     "${launcher[@]}" "$@"
@@ -74,6 +73,16 @@ case "$MODE" in
   deps) build_deps "$@" ;;
   server) build_server "$@" ;;
   # More targets of a configured build dir: build <build dir> [cmake --build args...]
-  build) BUILD_DIR="${1:?build dir}"; cmake --build "$@" ;;
+  build)
+    BUILD_DIR="${1:?build dir}"
+    # A new container: start sccache's server again, or turn the launcher off.
+    if grep -q '^CMAKE_CXX_COMPILER_LAUNCHER:[A-Z]*=sccache$' "$BUILD_DIR/CMakeCache.txt" 2>/dev/null &&
+       ! off="$(server/scripts/sccache-launcher.sh)"; then
+      read -ra off_args <<< "$off"
+      cmake -B "$BUILD_DIR" "${off_args[@]}"
+    fi
+    cmake --build "$@"
+    if command -v sccache >/dev/null 2>&1; then sccache --stop-server >/dev/null 2>&1 || true; fi
+    ;;
   *) echo "unknown mode $MODE (deps <dependency...> | server <build dir> [cmake args...] | build <build dir> [args...])" >&2; exit 2 ;;
 esac

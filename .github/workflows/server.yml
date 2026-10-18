@@ -23,7 +23,8 @@ concurrency:
 # Every server compile goes through sccache (mozilla-actions/sccache-action puts it on
 # PATH), with a local cache directory that .github/actions/sccache-dir carries between
 # runs as one actions/cache entry per job, rather than sccache's GitHub Actions backend,
-# which stores one cache entry per object file.
+# which stores one cache entry per object file. server/scripts/sccache-launcher.sh starts
+# the server before each build and turns the cache off if it won't answer.
 env:
   SCCACHE_DIR: ${{ github.workspace }}/.sccache
   SCCACHE_CACHE_SIZE: 2G
@@ -150,10 +151,11 @@ jobs:
             server/scripts/in-manylinux.sh server server/build -DHARDCHARGER_STATIC=ON
             server/scripts/in-manylinux.sh build server/build --target warpsql-client-tests warpsql-sdk-tests
           else
+            read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
             cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
                   -DHARDCHARGER_STATIC=ON \
                   -DOPENSSL_ROOT_DIR="$PWD/server/.deps/openssl-install" -DOPENSSL_USE_STATIC_LIBS=TRUE \
-                  -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+                  "${launcher[@]}"
             cmake --build server/build
             cmake --build server/build --target warpsql-client-tests warpsql-sdk-tests
           fi
@@ -375,8 +377,9 @@ jobs:
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
       - name: Build the server with AddressSanitizer
         run: |
+          read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
           cmake -S server -B server/build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            "${launcher[@]}" \
             -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
           cmake --build server/build-asan
@@ -513,8 +516,9 @@ jobs:
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
       - name: Build the server with ThreadSanitizer
         run: |
+          read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
           cmake -S server -B server/build-tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+            "${launcher[@]}"
           cmake --build server/build-tsan
           cmake --build server/build-tsan --target warpsql-sdk-tests
       - name: sccache directory (save)
