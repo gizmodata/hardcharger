@@ -15,6 +15,7 @@ the code exchange sends the client credentials and redirect URI; the signed-in u
 the token's email.
 """
 
+import base64
 import hashlib
 import hmac
 import uuid as uuid_module
@@ -22,6 +23,7 @@ import uuid as uuid_module
 import httpx
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from conftest import free_port
 from mock_idp import MockIdP
@@ -243,6 +245,25 @@ def test_jwks_with_ec_keys(launcher):
         assert response.status_code == 200, response.text
         session = Client(base_url=server.base_url, token=response.json()["access_token"]).new_session()
         assert session.scalar(sql="SELECT HARDCHARGER_ROLE()") == "user"
+    finally:
+        provider.stop()
+
+
+@pytest.mark.parametrize("coordinate", ["x", "y"])
+def test_jwks_ec_key_with_a_leading_zero_coordinate(launcher, coordinate):
+    # About 2 P-256 keys in 256 have a coordinate whose first byte is zero. RFC 7518
+    # §6.2.1.2 says a JWK still carries it in full (32 bytes); the mock once wrote 31, and
+    # the server refused every token of such a key (test_jwks_with_ec_keys then failed
+    # now and then). The key is chosen to have the short coordinate, every time.
+    provider = MockIdP(audience=AUDIENCE, algorithm="ES256")
+    while getattr(provider.key.public_key().public_numbers(), coordinate).bit_length() > 248:
+        provider.key = ec.generate_private_key(curve=ec.SECP256R1())
+    try:
+        server = launcher.start(args=["--token-allowed-issuer", provider.issuer, "--token-allowed-audience", AUDIENCE,
+                                      "--token-default-role", "user"])
+        response = exchange(server=server, token=provider.id_token(email="ec@gizmodata.com"))
+        assert response.status_code == 200, response.text
+        assert len(base64.urlsafe_b64decode(provider.jwk()[coordinate] + "==")) == 32
     finally:
         provider.stop()
 

@@ -18,8 +18,11 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
 
 
-def b64url_uint(value: int) -> str:
-    raw = value.to_bytes(length=(value.bit_length() + 7) // 8, byteorder="big")
+def b64url_uint(value: int, length: int | None = None) -> str:
+    """`length`: the fixed size in bytes, which RFC 7518 §6.2.1.2 requires of an EC
+    coordinate (32 for P-256). Without it, a coordinate with a leading zero byte (2 keys
+    in 256) came out 31 bytes long and the server refused every token of that key."""
+    raw = value.to_bytes(length=length or (value.bit_length() + 7) // 8, byteorder="big")
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
@@ -96,7 +99,7 @@ class MockIdP:
         public = self.key.public_key().public_numbers()
         if self.algorithm.startswith("ES"):
             return {"kty": "EC", "kid": self.kid, "alg": self.algorithm, "use": "sig", "crv": "P-256",
-                    "x": b64url_uint(public.x), "y": b64url_uint(public.y)}
+                    "x": b64url_uint(public.x, length=32), "y": b64url_uint(public.y, length=32)}
         return {"kty": "RSA", "kid": self.kid, "alg": self.algorithm, "use": "sig",
                 "n": b64url_uint(public.n), "e": b64url_uint(public.e)}
 
