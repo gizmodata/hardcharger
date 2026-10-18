@@ -680,6 +680,8 @@ bool PrivateFiles::MayName(const std::string& path) const {
     }
   }
 #ifdef _WIN32
+  // An 8.3 short name (RBAC~1.DUC) shows none of the names.
+  if (local.find('~') != std::string::npos) return true;
   std::error_code ec;
   const fs::path file = PathFromUtf8(local);
   const auto status = fs::symlink_status(file, ec);

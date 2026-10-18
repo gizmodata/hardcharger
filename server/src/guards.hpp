@@ -98,8 +98,8 @@ class PrivateFiles {
   bool HasUnattached() const;
   // A cheap first look, for the file system's every lookup: false only when `path`
   // can't be one of the files (no component has one of their names, and it is no
-  // symlink, no second hard link of a file and nothing under /dev or /proc). One lstat
-  // at most.
+  // symlink, no second hard link of a file, nothing under /dev or /proc and, on Windows,
+  // no 8.3 short name). One lstat at most.
   bool MayName(const std::string& path) const;
   // Whether `path` is the tmp_<name> twin of one of the files: DuckDB renames it onto the
   // file when a COPY ... TO finishes.
