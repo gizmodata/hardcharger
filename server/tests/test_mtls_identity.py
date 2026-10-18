@@ -22,7 +22,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from conftest import BINARY, CLIENT_BINARY, clean_environment, problem
-from rbac import Client, WarpError, expect_allowed, expect_blocked, expect_error, rbac_env
+from rbac import Client, WarpError, expect_allowed, expect_blocked, expect_error, mint, rbac_env
 
 NOW = datetime.datetime.now(tz=datetime.UTC)
 AUDIT_KEY = "mtls-identity-audit-key"
@@ -535,3 +535,129 @@ def test_a_bound_admin_session_cannot_mint_for_another_user(rbac, pki):
     # The twin: from the password sign-in it works, and the token is unbound.
     rows = expect_allowed(client=admin, sql='CREATE SCOPED TOKEN ops FOR USER "ula@example.com" ALLOW SELECT').to_pylist()
     assert "cnf" not in jwt.decode(jwt=rows[0]["token"], options={"verify_signature": False})
+
+
+# ---- Second review ----
+
+SPIFFE_ID = "spiffe://example.org/ns/etl/sa/loader"
+
+
+def spiffe_rbac(launcher, store, pki):
+    ops = pki.issue(name="ops@example.com", sans=[x509.RFC822Name("ops@example.com"),
+                                                  x509.UniformResourceIdentifier("spiffe://example.org/ops")])
+    server = start(launcher=launcher, pki=pki, probe=ops,
+                   args=["--mtls-certificate-sign-in", "--mtls-identity-source", "san_uri"],
+                   env=rbac_env(store_uri=store.new_database()))
+    server.ops = ops
+    return server
+
+
+def test_a_spiffe_id_is_an_rbac_user(launcher, store, pki):
+    server = spiffe_rbac(launcher=launcher, store=store, pki=pki)
+    loader = pki.issue(name="loader", sans=[x509.UniformResourceIdentifier(SPIFFE_ID)])
+    problem(response=server.certificate_grant(identity=loader), status=401, code="unknown_certificate_identity")
+    admin = server.admin(identity=server.ops)
+    for sql in [f'CREATE USER "{SPIFFE_ID}"', "CREATE TABLE staged AS SELECT 1 AS id", "CREATE TABLE vault AS SELECT 2 AS id",
+                "CREATE ROLE loaders", "GRANT SELECT ON staged TO loaders", f'GRANT loaders TO "{SPIFFE_ID}"']:
+        expect_allowed(client=admin, sql=sql)
+    token = server.certificate_token(identity=loader)
+    assert jwt.decode(jwt=token, options={"verify_signature": False})["sub"] == SPIFFE_ID
+    session = server.client(identity=loader, token=token)
+    assert session.run(sql="SELECT id FROM staged").to_pylist() == [{"id": 1}]
+    expect_blocked(client=session, sql="SELECT id FROM vault")
+
+
+def test_a_uri_name_never_belongs_to_a_tenant(launcher, store, pki):
+    server = spiffe_rbac(launcher=launcher, store=store, pki=pki)
+    admin = server.admin(identity=server.ops)
+    for sql in ["CREATE TENANT acme", "CREATE USER acme/boss", "GRANT acme/tenant_admin TO acme/boss",
+                "CREATE ROLE acme/readers", f'CREATE USER "{SPIFFE_ID}"']:
+        expect_allowed(client=admin, sql=sql)
+    boss = server.client(identity=server.ops, token=mint(user="acme/boss"))
+    # A tenant admin manages its tenant's users; a URI-form user is system scope, so not theirs.
+    for sql in ['CREATE USER "spiffe://example.org/ns/acme/sa/escape"', 'CREATE USER "SPIFFE://example.org/x"',
+                'DROP USER "spiffe://example.org/ns/etl/sa/loader"']:
+        expect_error(call=lambda sql=sql: boss.run(sql=sql), code="permission_denied",
+                     why="only administrators manage users")
+    # Nor can a tenant name hide one: "acme/spiffe://..." is no valid tenant user name.
+    expect_error(call=lambda: admin.run(sql='CREATE USER "acme/spiffe://example.org/x"'), code="sql_error",
+                 why="a tenant's users and roles are named tenant/name")
+    # A tenant's role never reaches it, and a role can't be named like one.
+    expect_error(call=lambda: admin.run(sql=f'GRANT acme/readers TO "{SPIFFE_ID}"'), code="sql_error",
+                 why="roles never cross tenants")
+    expect_error(call=lambda: admin.run(sql='CREATE ROLE "spiffe://example.org/role"'), code="sql_error",
+                 why="a role name cannot be a URI")
+    # The twin: the tenant admin still manages its own tenant's users.
+    expect_allowed(client=boss, sql="CREATE USER acme/newhire")
+
+
+def test_the_handshake_refusing_a_certificate_is_audited(launcher, pki, tmp_path):
+    ops, dave = pki.issue(name="ops@example.com"), pki.issue(name="dave@example.com")
+    crl = (x509.CertificateRevocationListBuilder().issuer_name(pki.ca.subject)
+           .last_update(NOW - datetime.timedelta(minutes=5)).next_update(NOW + datetime.timedelta(days=1))
+           .add_revoked_certificate(x509.RevokedCertificateBuilder().serial_number(dave[2].serial_number)
+                                    .revocation_date(NOW - datetime.timedelta(minutes=1)).build())
+           .sign(private_key=pki.ca_key, algorithm=hashes.SHA256()))
+    path = tmp_path / "revoked.crl"
+    path.write_bytes(crl.public_bytes(encoding=serialization.Encoding.PEM))
+    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-crl-file", str(path)],
+                   env={"HARDCHARGER_AUDIT_CHAIN_KEY": AUDIT_KEY})
+    with pytest.raises((httpx.HTTPError, ssl.SSLError)):
+        with server.http(identity=dave) as http:
+            http.get(url="/warp")
+    time.sleep(0.5)
+    records = [r for r in server.running.log_records() if r.get("message") == "the TLS handshake refused a client certificate"]
+    assert len(records) == 1, server.running.log()
+    record = records[0]
+    assert record["code"] == "client_certificate_refused" and "revoked" in record["error"]
+    assert record["certificate_thumbprint"] == thumbprint_of(identity=dave)
+    assert "CN=dave@example.com" in record["certificate_subject"] and record["peer"].startswith("127.0.0.1:")
+    assert "audit_hash" in record
+    # The twin: a certificate the handshake accepts writes no such record.
+    with server.http(identity=ops) as http:
+        assert http.get(url="/warp").status_code == 200
+    time.sleep(0.3)
+    assert len([r for r in server.running.log_records()
+                if r.get("message") == "the TLS handshake refused a client certificate"]) == 1
+
+
+def test_a_flood_of_refusals_is_bounded_and_still_counted(launcher, pki):
+    import concurrent.futures
+    ops, bob = pki.issue(name="ops@example.com"), pki.issue(name="bob@example.com")
+    server = start(launcher=launcher, pki=pki, probe=ops,
+                   args=["--mtls-require-client-cert=false", "--mtls-certificate-sign-in",
+                         "--mtls-admin-identities", "ops@example.com"],
+                   env={"HARDCHARGER_AUDIT_CHAIN_KEY": AUDIT_KEY})
+    before = len(server.running.log())
+    total = 10_000
+
+    def flood(count: int) -> int:
+        refused = 0
+        with server.http(identity=None) as http:  # no certificate, no credentials
+            for _ in range(count):
+                response = http.post(url="/warp/v1/auth/token", json={"grant_type": "client_certificate"})
+                refused += response.status_code == 401
+        return refused
+
+    started_at = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        flooding = [pool.submit(flood, total // 8) for _ in range(8)]
+        # Someone else's refusal in the same window is still recorded in full.
+        problem(response=server.certificate_grant(identity=bob), status=401, code="unknown_certificate_identity")
+        assert sum(f.result() for f in flooding) == total
+    assert time.monotonic() - started_at < 55, "the flood took longer than one window"
+    flood_records = lambda: [r for r in server.running.log_records()
+                             if r.get("kind") == "authentication" and r.get("code") == "client_certificate_required"]
+    # The window ends, and one summary counts what wasn't written one by one.
+    deadline = time.monotonic() + 80
+    while not any("suppressed" in r for r in flood_records()) and time.monotonic() < deadline:
+        time.sleep(1)
+    records = flood_records()
+    full = [r for r in records if "suppressed" not in r and "audit_hash" in r]
+    summaries = [r for r in records if "suppressed" in r and "audit_hash" in r]
+    assert len(full) == 10, len(full)
+    assert len(summaries) == 1 and len(full) + int(summaries[0]["suppressed"]) == total, summaries
+    assert len(server.running.log()) - before < 64 * 1024, "the flood grew the log without bound"
+    bob_records = [r for r in server.running.log_records()
+                   if r.get("code") == "unknown_certificate_identity" and "audit_hash" in r]
+    assert len(bob_records) == 1 and bob_records[0]["user"] == "bob@example.com"

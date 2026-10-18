@@ -59,14 +59,25 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   options.cors_allowed_origins = config.cors_origins;
   // Certificate refusals (a replayed bound token, another identity's sign-in, a revoked
   // certificate, an unknown identity): a security warning and an audit record each.
+  // The SDK rate-limits them per source: a summary (suppressed > 0) stands for the
+  // refusals it didn't report one by one, so the audit stays truthful about volume.
   options.on_security_event = [](const warpsql::SecurityEvent& event) {
     hc::LogFields fields{{"kind", "authentication"}, {"status", "denied"},
                          {"code", event.code},       {"user", event.user},
                          {"token_id", event.token_id}, {"certificate_thumbprint", event.presented_thumbprint},
                          {"certificate_subject", event.certificate_subject}, {"peer", event.peer},
                          {"request_id", event.request_id}, {"error", event.detail}};
-    hc::Log(hc::LogLevel::kWarning, "security: refused " + event.code, fields);
-    hc::Audit(hc::LogLevel::kWarning, "client certificate check refused a request", std::move(fields));
+    if (event.suppressed > 0) fields.emplace_back("suppressed", std::to_string(event.suppressed));
+    const bool handshake = event.code == "client_certificate_refused";
+    hc::Log(hc::LogLevel::kWarning,
+            event.suppressed > 0 ? "security: refusals from one source, summarized"
+                                 : "security: refused " + event.code,
+            fields);
+    hc::Audit(hc::LogLevel::kWarning,
+              event.suppressed > 0 ? "client certificate refusals summarized"
+              : handshake          ? "the TLS handshake refused a client certificate"
+                                   : "client certificate check refused a request",
+              std::move(fields));
   };
   return options;
 }

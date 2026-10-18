@@ -396,7 +396,12 @@ same certificate (a session takes only tokens bound as its opener's was, and a b
 can't mint scoped tokens `FOR USER` someone else). Identities are printable ASCII. Every refusal
 (a bound token on the wrong connection, another identity's sign-in, a revoked certificate, an
 unknown identity) is a security warning in the log and an audit record, with the user, the
-token's id, the certificate presented and the client's address. TLS has to end at Hardcharger (a TCP or TLS-passthrough load balancer) for this; a
+token's id, the certificate presented and the client's address. They are rate-limited per source (ten a minute
+in full, then one summary that counts the rest), a connection is closed after five failed
+sign-ins, and certificates the TLS handshake refuses (revoked, expired, untrusted) are
+recorded too. Under access control a SPIFFE ID is a user name like any other:
+`CREATE USER "spiffe://example.org/ns/etl/sa/loader"` (always system scope, never a tenant's).
+Of several CRLs from one CA the newest is used; delta CRLs are refused. TLS has to end at Hardcharger (a TCP or TLS-passthrough load balancer) for this; a
 proxy that ends TLS takes the certificate with it. Sign-ins with a certificate are written to
 the audit log (`kind: authentication`, `method: client_certificate`, the identity and the
 certificate's thumbprint).

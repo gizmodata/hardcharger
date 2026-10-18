@@ -313,8 +313,6 @@ warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view ident
       // A store user of the same name would share the administrator's sessions (handles
       // belong to a principal by name): neither sign-in may be ambiguous.
       if (access_ && access_->CertificateUser(name)) {
-        LogAt(log_level_, LogLevel::kWarning, "sign-in refused: an administrator identity is also a store user",
-              {{"method", "client_certificate"}, {"certificate_identity", name}});
         throw Error(ErrorCode::kUnknownCertificateIdentity,
                     "the client certificate's identity '" + name +
                         "' is both one of mtls_admin_identities and a user of the access-control "
@@ -329,9 +327,8 @@ warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view ident
       return signed_in(warpsql::Principal{*user, "user", "client_certificate", {}, {}});
     }
   }
-  // The SDK reports the refusal as a security event (logged and audited once, in main.cc).
-  LogAt(log_level_, LogLevel::kInfo, "sign-in refused",
-        {{"method", "client_certificate"}, {"certificate_identity", name}});
+  // The SDK reports the refusal as a security event (logged and audited, rate-limited per
+  // source, in main.cc): nothing is logged here, so refusals can't fill the disk.
   throw Error(ErrorCode::kUnknownCertificateIdentity,
               "the client certificate's identity '" + name + "' is not a user of this server" +
                   (access_ ? ". An administrator creates it with CREATE USER" : ""));

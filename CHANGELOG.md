@@ -36,6 +36,12 @@ own changelog in `python/CHANGELOG.md`.
   and a bound session can't mint `FOR USER` another user. Certificate refusals are security
   warnings and audit records (user, token id, thumbprint, peer), and a token is logged as
   validated only after its certificate checks.
+- Second review: SPIFFE IDs (`spiffe://…`, any URI-form name) can be access-control users;
+  they are always system scope, a tenant admin can't create or drop one, and a role can't be
+  named like one. Certificate refusals are rate-limited per source by the SDK (summaries carry
+  `suppressed`), and nothing else logs them per request; the handshake refusing a client
+  certificate is an audit record (`the TLS handshake refused a client certificate`). CRL
+  files: the newest CRL per CA, a CA's CRL must be signed by it, no delta CRLs (the SDK).
 - The `hardcharger` client: `--auth-type mtls` (or `authType=mtls` in a URI) signs in with
   the `--mtls-cert` certificate, and signs in again with it when the server ends the session.
 

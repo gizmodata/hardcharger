@@ -1,6 +1,7 @@
 #include "authz/engine.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <ctime>
 #include <set>
 #include <sstream>
@@ -82,9 +83,27 @@ arrow::Status CheckNameFree(const Snapshot& snap, const std::string& name) {
   return arrow::Status::OK();
 }
 
+// A URI-form name ("spiffe://example.org/ns/etl/sa/loader"): a scheme (a letter, then
+// letters, digits, '+', '-', '.') followed by "://", right at the start. Such a name is a
+// system-scope user's, never a tenant's, whatever slashes follow.
+bool IsUriName(const std::string& name) {
+  const auto colon = name.find("://");
+  if (colon == std::string::npos || colon == 0 || !std::isalpha(static_cast<unsigned char>(name[0]))) return false;
+  for (std::size_t i = 1; i < colon; i++) {
+    const unsigned char c = static_cast<unsigned char>(name[i]);
+    if (!std::isalnum(c) && c != '+' && c != '-' && c != '.') return false;
+  }
+  return colon + 3 < name.size();
+}
+
 // The tenant a user or role name belongs to: "tenant/name" names a tenant's
-// principal, a plain name a system-scope one. "" for system scope.
-arrow::Result<std::string> TenantForName(const Snapshot& snap, const std::string& name) {
+// principal, a plain name or a URI-form one (a SPIFFE ID) a system-scope one. "" for
+// system scope. A URI-form name is a user's only (`for_user`).
+arrow::Result<std::string> TenantForName(const Snapshot& snap, const std::string& name, bool for_user = true) {
+  if (IsUriName(name)) {
+    if (!for_user) return AccessControlError("a role name cannot be a URI (" + name + ")");
+    return std::string();
+  }
   const auto slash = name.find('/');
   if (slash == std::string::npos) return std::string();
   const std::string tenant_name = name.substr(0, slash), rest = name.substr(slash + 1);
@@ -719,7 +738,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
         return arrow::Status::OK();
       }
       ARROW_RETURN_NOT_OK(CheckNameFree(snap, c->name));
-      ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name));
+      ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name, /*for_user=*/false));
       message = "Role " + c->name + " created";
       RoleRecord role{StoreTransaction::NewId(), c->name, false};
       ARROW_RETURN_NOT_OK(txn.InsertRole(role));
