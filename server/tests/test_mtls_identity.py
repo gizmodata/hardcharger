@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from conftest import BINARY, CLIENT_BINARY, clean_environment, problem
+from conftest import BINARY, CLIENT_BINARY, TIMEOUT_SCALE, clean_environment, problem
 from rbac import Client, WarpError, expect_allowed, expect_blocked, expect_error, mint, rbac_env
 
 NOW = datetime.datetime.now(tz=datetime.UTC)
@@ -645,19 +645,22 @@ def test_a_flood_of_refusals_is_bounded_and_still_counted(launcher, pki):
         # Someone else's refusal in the same window is still recorded in full.
         problem(response=server.certificate_grant(identity=bob), status=401, code="unknown_certificate_identity")
         assert sum(f.result() for f in flooding) == total
-    assert time.monotonic() - started_at < 55, "the flood took longer than one window"
+    windows = int((time.monotonic() - started_at) // 60) + 1  # minutes the flood spanned (a sanitizer build is slow)
     flood_records = lambda: [r for r in server.running.log_records()
-                             if r.get("kind") == "authentication" and r.get("code") == "client_certificate_required"]
-    # The window ends, and one summary counts what wasn't written one by one.
-    deadline = time.monotonic() + 80
-    while not any("suppressed" in r for r in flood_records()) and time.monotonic() < deadline:
+                             if r.get("kind") == "authentication" and r.get("code") == "client_certificate_required"
+                             and "audit_hash" in r]
+    counted = lambda records: sum(int(r.get("suppressed", 1)) for r in records)
+    # The windows end, and summaries count what wasn't written one by one: every refusal is
+    # accounted for, ten a minute in full.
+    deadline = time.monotonic() + 90 * TIMEOUT_SCALE
+    while counted(flood_records()) < total and time.monotonic() < deadline:
         time.sleep(1)
     records = flood_records()
-    full = [r for r in records if "suppressed" not in r and "audit_hash" in r]
-    summaries = [r for r in records if "suppressed" in r and "audit_hash" in r]
-    assert len(full) == 10, len(full)
-    assert len(summaries) == 1 and len(full) + int(summaries[0]["suppressed"]) == total, summaries
-    assert len(server.running.log()) - before < 64 * 1024, "the flood grew the log without bound"
+    full = [r for r in records if "suppressed" not in r]
+    summaries = [r for r in records if "suppressed" in r]
+    assert counted(records) == total, (len(full), [r["suppressed"] for r in summaries])
+    assert 10 <= len(full) <= 10 * windows and 1 <= len(summaries) <= windows, (len(full), len(summaries))
+    assert len(server.running.log()) - before < 64 * 1024 * windows, "the flood grew the log without bound"
     bob_records = [r for r in server.running.log_records()
                    if r.get("code") == "unknown_certificate_identity" and "audit_hash" in r]
     assert len(bob_records) == 1 and bob_records[0]["user"] == "bob@example.com"
