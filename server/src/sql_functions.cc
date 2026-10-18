@@ -374,7 +374,7 @@ void RegisterSqlFunctions(duckdb_v2_connection_handle connection, Runtime& runti
          return s ? std::optional(s->principal().role) : std::nullopt;
        })},
       {"VERSION", "VARCHAR",
-       text([](Runtime&, const Session*) -> std::optional<std::string> { return std::string("v") + kVersion; })},
+       text([](Runtime&, const Session*) -> std::optional<std::string> { return std::string(kVersion); })},
       {"CURRENT_SESSION", "VARCHAR", text([](Runtime&, const Session* s) -> std::optional<std::string> {
          return s ? std::optional(s->id()) : std::nullopt;
        })},

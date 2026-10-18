@@ -124,6 +124,14 @@ struct Config {
   std::string config_file;  // the YAML file the rest came from, if any
 };
 
+// What an option left at its automatic value resolves to. The runtime and
+// hardcharger_settings() both use these, so a reported default is the value in force.
+inline int64_t EffectiveMaxQueueWait(int64_t configured) { return configured < 0 ? 300 : configured; }
+inline int64_t EffectiveHealthCheckStaleness(const Config& config) {
+  return config.health_check_staleness_seconds == 0 ? 3 * config.health_check_interval_seconds
+                                                    : config.health_check_staleness_seconds;
+}
+
 // What the command line asked for besides configuration.
 enum class Action { kServe, kHelp, kVersion, kPrintDuckDBVersion, kVerifyAuditLog, kVerifyTls };
 

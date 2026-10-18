@@ -8,7 +8,7 @@ cells for the startup settings and that SET can't change them.
 
 Differences from 1.x, on purpose: session_idle_timeout defaults to 900 s (the Warp SDK's
 default; 1.x: 0, never), health_check_interval_seconds to 5 s (1.x: 0, on demand), and
-version is Hardcharger's ("v0.x.y").
+version is Hardcharger's ("0.x.y", as --version prints it).
 """
 
 import pytest

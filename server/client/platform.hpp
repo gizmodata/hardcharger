@@ -14,5 +14,16 @@ bool OpenBrowser(const std::string& url);
 
 // Whether standard output is a terminal.
 bool IsOutputTerminal();
+// Whether standard error is a terminal.
+bool IsErrorTerminal();
+
+// Whether the client may write ANSI color to standard output (errors: standard error):
+// only when it is a terminal, and never when NO_COLOR is set to a non-empty value
+// (https://no-color.org).
+bool ColorOnStdout();
+bool ColorOnStderr();
+// The style of an error message on standard error, and its reset; both empty without color.
+const char* ErrorStyle();
+const char* ErrorStyleReset();
 
 }  // namespace hardcharger::client

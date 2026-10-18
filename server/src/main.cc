@@ -208,7 +208,7 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMar
   runtime.metrics.AddCollector([&runtime, &backend, &marker, connection, mutex](std::vector<hc::Sample>& out) {
     const auto now = std::chrono::system_clock::now();
     out.push_back({"hardcharger_build_info",
-                   {{"version", std::string("v") + hc::kVersion},
+                   {{"version", hc::kVersion},
                     {"duckdb_version", backend.duckdb_version()}, {"server", "hardcharger"}},
                    1});
     out.push_back({"hardcharger_up_seconds", {}, std::chrono::duration<double>(now - runtime.started_at).count()});

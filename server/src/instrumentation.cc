@@ -304,7 +304,7 @@ void Instrumentation::Start() {
       "hostname_arg, server_ip, port, database_path, tls_enabled, tls_cert_path, tls_key_path, mtls_required, "
       "mtls_ca_cert_path, readonly, os_platform, os_name, os_version, cpu_arch, cpu_model, cpu_count, "
       "memory_total_bytes, start_time, status, instance_tag) VALUES (" +
-      Literal(runtime_.instance_id) + ", " + Nullable(config.cluster_id) + ", " + Literal(std::string("v") + kVersion) +
+      Literal(runtime_.instance_id) + ", " + Nullable(config.cluster_id) + ", " + Literal(kVersion) +
       ", " + Literal(duckdb_version_) + ", " +
       Literal(arrow::GetBuildInfo().version_string) + ", " + Nullable(Hostname()) + ", " + Nullable(config.host) +
       ", NULL, " + std::to_string(config.port) + ", " + Nullable(config.database) + ", " + (tls ? "true" : "false") +

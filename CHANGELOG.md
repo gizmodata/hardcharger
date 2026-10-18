@@ -56,6 +56,32 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- `hardcharger` (the client): a script whose last line is a comment after the final statement
+  failed with "no SQL statement given" (exit 1). Comments after a statement, on lines of their
+  own and before a statement (`--` and `/* */`) are no-ops in `-c`, `-f`, a pipe and a heredoc,
+  as is a statement of comments alone (`/* note */;`).
+- `hardcharger`: errors, the prompt and `.tables` were colored into pipes and files, and
+  `NO_COLOR` was ignored. Color goes only to a terminal, never with `NO_COLOR` set to a
+  non-empty value (https://no-color.org), line-editor hints and highlighting included.
+  (GizmoSQL's `gizmosql_client` had no `--color` option, so there is none here either.)
+- `hardcharger`: `.help` ran long command names into their descriptions
+  (`.connect URI | HOST PORT USERConnect ...`). The description column starts after the
+  longest command, and descriptions wrap at the terminal's width (80 into a pipe or file).
+- `hardcharger`: a refused sign-in showed a generic message. It shows the server's problem code
+  and detail, e.g. "Authentication failed for http://localhost:31337: invalid_credentials (the
+  user name or password is not correct)", and still exits 1.
+- `hardcharger_settings()` listed `max_queued_statements` with default `0`; the option's
+  default is `-1` (8 x `max_concurrent_statements`). Every setting's default now comes from
+  the configuration's own defaults, so on a server started without options each live value
+  is its reported default. `max_queued_statements` reports the value as set (`-1` included),
+  `SET GLOBAL` accepts `-1`, `-1` follows a later `SET GLOBAL max_concurrent_statements`, and
+  `RESET` returns it (and `max_queue_wait`) to the startup value instead of a fixed `0`/`300`.
+- `HARDCHARGER_VERSION()`, `hardcharger.version` in `hardcharger_settings()`, the
+  `hardcharger_build_info` metric's `version` label and the instrumentation `instances` table
+  said `v0.2.0` while `--version` printed `0.2.0`. All say `0.2.0` (the CHANGELOG's semantic
+  version); `/warp` discovery and `server-info` already did (`0.2.0 (DuckDB ...)`).
+- The `hardcharger_build_info` metric's help text still mentioned an edition. Hardcharger has
+  none; no other user-visible server string mentions editions or licenses.
 - The server's table functions (`hardcharger_settings()`, `hardcharger_sessions()`, ...) in a
   prepared statement returned no rows from the second execution on, and every execution showed
   the rows of the moment it was prepared: the rows were built when the statement was bound.

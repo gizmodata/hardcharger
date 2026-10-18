@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- CI (`.github/workflows/workflow.yml`) failed on every push to main: the `client` job installs
+  the `[adbc]` extra from PyPI, where `adbc-driver-hardcharger` isn't published yet. It runs on
+  `python-v*` tags only now, where it still gates the publish.
+
 ## [0.1.0] - 2026-10-17
 
 ### Added

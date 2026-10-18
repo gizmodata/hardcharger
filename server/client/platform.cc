@@ -64,4 +64,26 @@ bool IsOutputTerminal() {
 #endif
 }
 
+bool IsErrorTerminal() {
+#ifdef _WIN32
+  return _isatty(_fileno(stderr)) != 0;
+#else
+  return isatty(STDERR_FILENO) != 0;
+#endif
+}
+
+namespace {
+bool NoColorRequested() {
+  const char* value = std::getenv("NO_COLOR");
+  return value != nullptr && value[0] != '\0';
+}
+}  // namespace
+
+bool ColorOnStdout() { return !NoColorRequested() && IsOutputTerminal(); }
+bool ColorOnStderr() { return !NoColorRequested() && IsErrorTerminal(); }
+
+// Bold red, as DuckDB's shell shows errors.
+const char* ErrorStyle() { return ColorOnStderr() ? "\033[1;31m" : ""; }
+const char* ErrorStyleReset() { return ColorOnStderr() ? "\033[0m" : ""; }
+
 }  // namespace hardcharger::client

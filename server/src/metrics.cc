@@ -99,7 +99,7 @@ FamilyInfo Family(std::string_view name) {
       {"hardcharger_queue_rejected_total", {"counter", "Statements the queue refused or timed out."}},
       {"hardcharger_queue_admin_bypass_total", {"counter", "Statements that skipped the queue."}},
       {"hardcharger_queue_wait_seconds", {"histogram", "Time statements waited in the queue."}},
-      {"hardcharger_build_info", {"gauge", "Server build: version, edition, DuckDB version."}},
+      {"hardcharger_build_info", {"gauge", "Server build: version, DuckDB version."}},
       {"hardcharger_up_seconds", {"gauge", "Seconds since the server started."}},
       {"hardcharger_sessions", {"gauge", "Open client sessions, by state."}},
       {"hardcharger_session_limit", {"gauge", "max_sessions (0: unlimited)."}},

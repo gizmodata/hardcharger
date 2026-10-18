@@ -101,12 +101,17 @@ std::string FlagOf(const std::string& option) {
 std::vector<Setting> Build() {
   std::vector<Setting> s;
   using O = std::optional<std::string>;
+  // Every default comes from the configuration's own defaults (and, for an option whose
+  // default is "automatic", the same resolution the runtime applies), so the
+  // default_value column is the value a server started without options has.
+  static const Config kDefaults;
+  auto number = [](int64_t value) { return std::to_string(value); };
 
   s.push_back({.name = "query_timeout",
                .scope = SettingScope::kSessionOrGlobal,
                .input_type = "INTEGER",
                .option = "query_timeout_seconds",
-               .default_value = "0",
+               .default_value = number(kDefaults.query_timeout_seconds),
                .description = "Statement timeout in seconds (0: none). A request's Warp-Statement-Timeout wins.",
                .get_session = [](const Session& x) -> O {
                  auto v = x.settings().query_timeout;
@@ -125,7 +130,7 @@ std::vector<Setting> Build() {
                .scope = SettingScope::kSessionOrGlobal,
                .input_type = "VARCHAR",
                .option = "query_log_level",
-               .default_value = "INFO",
+               .default_value = Upper(kDefaults.query_log_level),
                .description = "Level of statement log lines (DEBUG, INFO, WARNING, ERROR).",
                .get_session = [](const Session& x) -> O {
                  auto v = x.settings().query_log_level;
@@ -144,7 +149,7 @@ std::vector<Setting> Build() {
                .scope = SettingScope::kSessionOrGlobal,
                .input_type = "VARCHAR",
                .option = "capture_query_profile",
-               .default_value = "off",
+               .default_value = kDefaults.capture_query_profile,
                .description = "Record DuckDB's query profile with each execution in instrumentation "
                               "(off, standard, detailed).",
                .get_session = [](const Session& x) -> O {
@@ -205,7 +210,7 @@ std::vector<Setting> Build() {
                .scope = SettingScope::kGlobal,
                .input_type = "INTEGER",
                .option = "max_concurrent_statements",
-               .default_value = "0",
+               .default_value = number(kDefaults.max_concurrent_statements),
                .description = "Statements that run at once; more wait in the queue (0: no queue).",
                .get_global = [](const Runtime& r) -> O { return std::to_string(r.admission.Limit()); },
                .set_global = [](Runtime& r, const O& v) {
@@ -215,17 +220,18 @@ std::vector<Setting> Build() {
                .scope = SettingScope::kGlobal,
                .input_type = "INTEGER",
                .option = "max_queued_statements",
-               .default_value = "0",
-               .description = "Statements that may wait for a slot (0: unbounded).",
+               .default_value = number(kDefaults.max_queued_statements),
+               .description = "Statements that may wait for a slot (-1: 8 x max_concurrent_statements; 0: unbounded).",
                .get_global = [](const Runtime& r) -> O { return std::to_string(r.admission.MaxQueued()); },
                .set_global = [](Runtime& r, const O& v) {
-                 r.admission.SetMaxQueued(v ? ParseSetInt(v, "max_queued_statements") : 0);
+                 r.admission.SetMaxQueued(v ? ParseSetInt(v, "max_queued_statements", -1)
+                                            : r.config.max_queued_statements);
                }});
   s.push_back({.name = "max_queue_wait",
                .scope = SettingScope::kSessionOrGlobal,
                .input_type = "INTEGER",
                .option = "max_queue_wait",
-               .default_value = "300",
+               .default_value = number(EffectiveMaxQueueWait(kDefaults.max_queue_wait)),
                .description = "Seconds a statement may wait in the queue (0: forever).",
                .get_session = [](const Session& x) -> O {
                  auto v = x.settings().max_queue_wait;
@@ -238,13 +244,14 @@ std::vector<Setting> Build() {
                  x.UpdateSettings([&](Session::Settings& s) { s.max_queue_wait = value; });
                },
                .set_global = [](Runtime& r, const O& v) {
-                 r.admission.SetDefaultMaxQueueWaitSeconds(v ? ParseSetInt(v, "max_queue_wait") : 300);
+                 r.admission.SetDefaultMaxQueueWaitSeconds(v ? ParseSetInt(v, "max_queue_wait")
+                                                             : EffectiveMaxQueueWait(r.config.max_queue_wait));
                }});
   s.push_back({.name = "graceful_shutdown",
                .scope = SettingScope::kGlobal,
                .input_type = "BOOLEAN",
                .option = "graceful_shutdown",
-               .default_value = "true",
+               .default_value = Bool(kDefaults.graceful_shutdown),
                .description = "On the first stop signal, let running statements finish (false: stop at once). "
                               "Takes effect at the next signal.",
                .get_global = [](const Runtime& r) -> O { return Bool(r.graceful_shutdown); },
@@ -255,7 +262,7 @@ std::vector<Setting> Build() {
                .scope = SettingScope::kGlobal,
                .input_type = "INTEGER",
                .option = "shutdown_grace_period_seconds",
-               .default_value = "300",
+               .default_value = number(kDefaults.shutdown_grace_period_seconds),
                .description = "How long a graceful shutdown waits for running statements (0: forever); "
                               "also during a shutdown.",
                .get_global = [](const Runtime& r) -> O { return std::to_string(r.shutdown_grace_period_seconds.load()); },
@@ -273,19 +280,21 @@ std::vector<Setting> Build() {
     return [getter](const Runtime& r) -> O { return getter(r); };
   };
   startup({.name = "max_sessions", .input_type = "INTEGER", .option = "max_sessions",
-           .default_value = "0",
+           .default_value = number(kDefaults.max_sessions),
            .description = "Most non-admin sessions at once; more get too_many_sessions (0: unlimited).",
            .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.max_sessions); })});
   startup({.name = "session_idle_timeout", .input_type = "INTEGER", .option = "session_idle_timeout",
-           .default_value = "900", .description = "Seconds an idle session lives (0: forever).",
+           .default_value = number(kDefaults.session_idle_timeout),
+           .description = "Seconds an idle session lives (0: forever).",
            .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.session_idle_timeout); })});
   startup({.name = "version", .input_type = "VARCHAR", .description = "Server version (as HARDCHARGER_VERSION()).",
-           .get_global = config_value([](const Runtime&) { return std::string("v") + kVersion; })});
-  startup({.name = "read_only", .input_type = "BOOLEAN", .option = "read_only", .default_value = "false",
+           .get_global = config_value([](const Runtime&) { return std::string(kVersion); })});
+  startup({.name = "read_only", .input_type = "BOOLEAN", .option = "read_only",
+           .default_value = Bool(kDefaults.read_only),
            .description = "Database opened read-only: every write is refused.",
            .get_global = config_value([](const Runtime& r) { return Bool(r.config.read_only); })});
   startup({.name = "max_header_bytes", .input_type = "INTEGER", .option = "max_header_bytes",
-           .default_value = "16384", .description = "Largest request header block accepted, in bytes.",
+           .default_value = number(kDefaults.max_header_bytes), .description = "Largest request header block accepted, in bytes.",
            .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.max_header_bytes); })});
   startup({.name = "memory_limit", .input_type = "VARCHAR", .option = "memory_limit",
            .description = "DuckDB memory_limit (empty: DuckDB's default).",
@@ -294,26 +303,28 @@ std::vector<Setting> Build() {
            .description = "DuckDB storage version for new databases (empty: DuckDB's default).",
            .get_global = config_value([](const Runtime& r) { return r.config.storage_version; })});
   startup({.name = "allow_unsigned_extensions", .input_type = "BOOLEAN", .option = "allow_unsigned_extensions",
-           .default_value = "false", .description = "DuckDB may load unsigned extensions.",
+           .default_value = Bool(kDefaults.allow_unsigned_extensions),
+           .description = "DuckDB may load unsigned extensions.",
            .get_global = config_value([](const Runtime& r) { return Bool(r.config.allow_unsigned_extensions); })});
   startup({.name = "admin_bypass_queue_default", .input_type = "BOOLEAN", .option = "admin_bypass_queue_default",
-           .default_value = "true", .description = "Admin sessions skip the statement queue by default.",
+           .default_value = Bool(kDefaults.admin_bypass_queue_default), .description = "Admin sessions skip the statement queue by default.",
            .get_global = config_value([](const Runtime& r) { return Bool(r.config.admin_bypass_queue_default); })});
   startup({.name = "health_check_interval_seconds", .input_type = "INTEGER", .option = "health_check_interval_seconds",
-           .default_value = "5", .description = "Seconds between background health checks.",
+           .default_value = number(kDefaults.health_check_interval_seconds), .description = "Seconds between background health checks.",
            .get_global = config_value(
                [](const Runtime& r) { return std::to_string(r.config.health_check_interval_seconds); })});
   startup({.name = "health_check_staleness_seconds", .input_type = "INTEGER",
-           .option = "health_check_staleness_seconds", .default_value = "15",
+           .option = "health_check_staleness_seconds",
+           .default_value = number(EffectiveHealthCheckStaleness(kDefaults)),
            .description = "Age at which the last health check no longer counts.",
            .get_global = config_value(
                [](const Runtime& r) { return std::to_string(r.config.health_check_staleness_seconds); })});
   startup({.name = "auth_log_level", .input_type = "VARCHAR", .option = "auth_log_level",
-           .default_value = "INFO",
+           .default_value = Upper(kDefaults.auth_log_level),
            .description = "Level of sign-in log lines.",
            .get_global = config_value([](const Runtime& r) { return Upper(r.config.auth_log_level); })});
   startup({.name = "session_log_level", .input_type = "VARCHAR", .option = "session_log_level",
-           .default_value = "INFO",
+           .default_value = Upper(kDefaults.session_log_level),
            .description = "Level of session log lines.",
            .get_global = config_value([](const Runtime& r) { return Upper(r.config.session_log_level); })});
   startup({.name = "instance_id", .input_type = "VARCHAR",
@@ -322,13 +333,13 @@ std::vector<Setting> Build() {
   startup({.name = "cluster_id", .input_type = "VARCHAR", .option = "cluster_id", .description = "UUID shared by the replicas of one cluster (empty when unset).",
            .get_global = config_value([](const Runtime& r) { return r.config.cluster_id; })});
   startup({.name = "enable_metrics", .input_type = "BOOLEAN", .option = "enable_metrics",
-           .default_value = "false",
+           .default_value = Bool(kDefaults.enable_metrics),
            .description = "Runtime metrics are collected and served (/metrics, hardcharger_metrics()).",
            .get_global = config_value([](const Runtime& r) { return Bool(r.config.enable_metrics); })});
   startup({.name = "instance_tag", .input_type = "VARCHAR", .option = "instance_tag", .description = "JSON object recorded with this instance.",
            .get_global = config_value([](const Runtime& r) { return r.config.instance_tag; })});
   startup({.name = "enable_instrumentation", .input_type = "BOOLEAN", .option = "enable_instrumentation",
-           .default_value = "false", .description = "Sessions, statements and executions are recorded.",
+           .default_value = Bool(kDefaults.enable_instrumentation), .description = "Sessions, statements and executions are recorded.",
            .admin_only = true,
            .get_global = config_value([](const Runtime& r) { return Bool(r.instrumentation != nullptr); })});
   startup({.name = "instrumentation_catalog", .input_type = "VARCHAR", .option = "instrumentation_catalog",
@@ -344,7 +355,7 @@ std::vector<Setting> Build() {
              return r.instrumentation ? r.instrumentation->schema() : std::string();
            })});
   startup({.name = "enable_catalog_logging", .input_type = "BOOLEAN", .option = "enable_catalog_logging",
-           .default_value = "false", .description = "Log lines are also written to a logs table.",
+           .default_value = Bool(kDefaults.enable_catalog_logging), .description = "Log lines are also written to a logs table.",
            .admin_only = true,
            .get_global = config_value([](const Runtime& r) { return Bool(r.catalog_log != nullptr); })});
   startup({.name = "log_catalog", .input_type = "VARCHAR", .option = "log_catalog", .description = "Catalog of the logs table (empty when catalog logging is off).",

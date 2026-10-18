@@ -16,6 +16,11 @@ class SqlProcessor {
   void Reset();
   bool IsAccumulating() const;
 
+  // Whether `text` holds nothing but whitespace and comments (-- to the end of a line,
+  // /* ... */, an unterminated one included): a script's trailing or standalone comment,
+  // which is never sent to the server as a statement.
+  static bool IsOnlyComments(const std::string& text);
+
   // Check if a SQL statement is a DML/DDL command that should use ExecuteUpdate.
   static bool IsUpdateStatement(const std::string& sql);
 

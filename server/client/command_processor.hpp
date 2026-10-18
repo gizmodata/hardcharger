@@ -20,6 +20,10 @@ namespace hardcharger::client {
 #undef ERROR
 #endif
 
+// The .help listing: each command, then its description in a column that starts after the
+// longest command, wrapped at `width` columns (continuation lines indented to that column).
+std::string FormatHelp(const std::vector<std::pair<std::string, std::string>>& entries, int width);
+
 enum class CommandResult {
   OK,
   EXIT,

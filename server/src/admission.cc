@@ -57,6 +57,13 @@ int64_t AdmissionController::MaxQueued() const {
   return max_queued_;
 }
 
+int64_t AdmissionController::QueueBound() const { return max_queued_ < 0 ? 8 * limit_ : max_queued_; }
+
+int64_t AdmissionController::EffectiveMaxQueued() const {
+  std::lock_guard lock(mutex_);
+  return QueueBound();
+}
+
 int64_t AdmissionController::DefaultMaxQueueWaitSeconds() const {
   std::lock_guard lock(mutex_);
   return default_wait_seconds_;
@@ -87,10 +94,10 @@ AdmissionSlot AdmissionController::Acquire(bool enforce, int64_t max_wait_second
     ++active_;
     return AdmissionSlot(this);
   }
-  if (max_queued_ > 0 && static_cast<int64_t>(waiters_.size()) >= max_queued_) {
+  if (const int64_t bound = QueueBound(); bound > 0 && static_cast<int64_t>(waiters_.size()) >= bound) {
     throw Refused{Refusal::kQueueFull, "the statement queue is full (max_concurrent_statements=" +
                                            std::to_string(limit_) + ", max_queued_statements=" +
-                                           std::to_string(max_queued_) + "); retry shortly"};
+                                           std::to_string(bound) + "); retry shortly"};
   }
 
   Waiter self;

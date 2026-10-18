@@ -61,7 +61,34 @@ bool SqlProcessor::AccumulateLine(const std::string& line) {
     }
   }
 
+  // Only comments so far (a standalone comment line, or what followed a statement's
+  // semicolon): nothing to run, so nothing is pending. An open block comment stays
+  // pending until it closes.
+  if (!in_block_comment_ && !in_single_quote_ && !in_double_quote_ && IsOnlyComments(buffer_)) {
+    buffer_.clear();
+  }
   return false;
+}
+
+bool SqlProcessor::IsOnlyComments(const std::string& text) {
+  size_t i = 0;
+  while (i < text.size()) {
+    const char c = text[i];
+    if (std::isspace(static_cast<unsigned char>(c))) {
+      ++i;
+    } else if (c == '-' && i + 1 < text.size() && text[i + 1] == '-') {
+      const size_t end = text.find('\n', i);
+      if (end == std::string::npos) return true;
+      i = end + 1;
+    } else if (c == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      const size_t end = text.find("*/", i + 2);
+      if (end == std::string::npos) return true;
+      i = end + 2;
+    } else {
+      return false;
+    }
+  }
+  return true;
 }
 
 std::string SqlProcessor::GetStatement() const {
@@ -73,9 +100,11 @@ std::string SqlProcessor::GetStatement() const {
     stmt = buffer_;
   }
   // Trim trailing whitespace
-  while (!stmt.empty() && std::isspace(stmt.back())) {
+  while (!stmt.empty() && std::isspace(static_cast<unsigned char>(stmt.back()))) {
     stmt.pop_back();
   }
+  // Comments alone ("/* note */;") are no statement.
+  if (IsOnlyComments(stmt)) return "";
   return stmt;
 }
 

@@ -52,13 +52,15 @@ class AdmissionController {
 
   // Statements running at once; 0 or less: unlimited (every waiter proceeds).
   void SetLimit(int64_t limit);
-  // Statements that may wait at once; 0 or less: unbounded.
+  // Statements that may wait at once; 0: unbounded; negative: 8 x the limit (kept as
+  // given, so it follows a later SetLimit), as the max_queued_statements option has it.
   void SetMaxQueued(int64_t max_queued);
   // The wait used when a statement has no limit of its own; 0 or less: forever.
   void SetDefaultMaxQueueWaitSeconds(int64_t seconds);
 
   int64_t Limit() const;
-  int64_t MaxQueued() const;
+  int64_t MaxQueued() const;           // as set (-1 for 8 x the limit)
+  int64_t EffectiveMaxQueued() const;  // the bound in force (0: unbounded)
   int64_t DefaultMaxQueueWaitSeconds() const;
   int64_t ActiveCount() const;
   int64_t QueuedCount() const;
@@ -84,6 +86,7 @@ class AdmissionController {
   };
 
   void Promote();  // mutex_ held
+  int64_t QueueBound() const;  // mutex_ held
   void ReleaseSlot();
 
   mutable std::mutex mutex_;

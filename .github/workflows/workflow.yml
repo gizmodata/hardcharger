@@ -4,9 +4,13 @@
 #
 # The publish needs every test job on the tagged commit itself: unit tests, the package
 # against the real server it downloads (Linux amd64/arm64, macOS arm64), and
-# Server.connect() through adbc-driver-hardcharger from PyPI (the `client` job: it fails
-# until adbc-driver-warpsql and adbc-driver-hardcharger are published, which is the order
-# they must be released in, since `hardcharger[adbc]` needs them).
+# Server.connect() through adbc-driver-hardcharger from PyPI (the `client` job).
+#
+# The `client` job runs on python-v* tags only. It installs the `[adbc]` extra from PyPI,
+# where adbc-driver-hardcharger (and adbc-driver-warpsql under it) are not published yet,
+# so on every main push and pull request it could only fail at the install, and main was
+# red for that alone. On a tag it still runs and still gates the publish: a python-v* tag
+# can't ship until those drivers are on PyPI, which is the order they must be released in.
 name: workflow
 
 on:
@@ -104,6 +108,8 @@ jobs:
 
   client:
     name: Server.connect() through adbc-driver-hardcharger
+    # The release gate only (see the top of this file): its driver isn't on PyPI yet.
+    if: startsWith(github.ref, 'refs/tags/python-v')
     runs-on: ubuntu-24.04
     env:
       HARDCHARGER_INSTALL_TOKEN: ${{ github.token }}

@@ -36,9 +36,8 @@ struct Runtime {
                                                                            : 0),
         started_at(std::chrono::system_clock::now()) {
     admission.SetLimit(config.max_concurrent_statements);
-    admission.SetMaxQueued(config.max_queued_statements < 0 ? 8 * config.max_concurrent_statements
-                                                            : config.max_queued_statements);
-    admission.SetDefaultMaxQueueWaitSeconds(config.max_queue_wait < 0 ? 300 : config.max_queue_wait);
+    admission.SetMaxQueued(config.max_queued_statements);  // -1: 8 x the limit, as it changes
+    admission.SetDefaultMaxQueueWaitSeconds(EffectiveMaxQueueWait(config.max_queue_wait));
   }
 
   const Config& config;

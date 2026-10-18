@@ -383,9 +383,7 @@ void Validate(Loaded& loaded) {
   if (c.health_check_interval_seconds < 1) {
     throw std::invalid_argument("health_check_interval_seconds must be at least 1");
   }
-  if (c.health_check_staleness_seconds == 0) {
-    c.health_check_staleness_seconds = 3 * c.health_check_interval_seconds;
-  }
+  c.health_check_staleness_seconds = EffectiveHealthCheckStaleness(c);
   if (c.capture_query_profile != "off" && c.capture_query_profile != "standard" &&
       c.capture_query_profile != "detailed") {
     throw std::invalid_argument("capture_query_profile must be off, standard or detailed, not '" +

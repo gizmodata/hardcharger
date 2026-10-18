@@ -371,6 +371,137 @@ def test_a_killed_session_is_reported_and_reopened(server, tmp_path):
     assert result.returncode == 1  # the statement the kill caught failed
 
 
+# ---- Added: comments, color, .help and sign-in errors ----
+
+
+def test_trailing_and_standalone_comments_are_no_ops(server, tmp_path):
+    # A script may end with a comment after its last statement, and hold comment-only lines
+    # anywhere; none of them is sent to the server as a statement (1.x and DuckDB's shell
+    # alike). Every input path: -c, -f, a pipe, a heredoc.
+    script = ("-- a header comment\n"
+              "SELECT 1 AS a; -- after the statement\n"
+              "/* a block\n   comment */\n"
+              "SELECT 2 AS b;\n"
+              "/* note */;\n"
+              "-- the last line is a comment")
+    expected = ["1", "2"]
+    sql_file = tmp_path / "commented.sql"
+    sql_file.write_text(script + "\n")
+    quoted = f"{shlex.quote(binary())} {shlex.join(conn_args(server))} --quiet --csv --no-header"
+    runs = {
+        "-c": run(server, "--csv", "--no-header", "--command", script),
+        "-f": run(server, "--csv", "--no-header", "--file", str(sql_file)),
+        "pipe": run_bash(script=f"cat {shlex.quote(str(sql_file))} | {quoted}", env=client_env(server=server)),
+        "heredoc": run_bash(script=f"{quoted} <<'SQLEOF'\n{script}\nSQLEOF\n", env=client_env(server=server)),
+    }
+    for how, result in runs.items():
+        assert (result.returncode, result.stderr) == (0, ""), (how, result.stderr)
+        assert result.stdout.splitlines() == expected, (how, result.stdout)
+    only = run(server, "--command", "-- nothing but a comment")
+    assert (only.returncode, only.stdout, only.stderr) == (0, "", ""), only
+    # The negative twin: a comment doesn't hide a real statement's error.
+    failing = run(server, "--command", "-- first\nSELECT * FROM no_such_table_after_a_comment; -- last")
+    assert failing.returncode == 1, failing.stderr
+    assert "no_such_table_after_a_comment does not exist" in failing.stderr, failing.stderr
+
+
+SGR = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def test_no_color_off_a_terminal(server):
+    # Errors are plain text when stderr is a pipe or a file: no escape codes in logs.
+    result = run(server, "--command", "SELECT * FROM no_such_table_for_color")
+    assert result.returncode == 1
+    assert result.stderr.startswith("Error: Catalog Error: Table with name no_such_table_for_color"), result.stderr
+    assert "\x1b" not in result.stderr, repr(result.stderr)
+    tables = run(server, "--command", ".tables")
+    assert tables.returncode == 0 and "employees" in tables.stdout, tables.stderr
+    assert "\x1b" not in tables.stdout, repr(tables.stdout)
+
+
+def test_no_color_is_honoured_at_a_terminal(server, home):
+    # At a terminal the prompt and errors are colored, unless NO_COLOR is set.
+    child = spawn(server, home)
+    child.expect(PROMPT)
+    assert SGR.search(child.after), repr(child.after)  # the positive twin: colored
+    enter(child, "SELECT * FROM no_such_table_for_color;")
+    child.expect(r"\x1b\[1;31mError: Catalog Error")
+    child.expect(PROMPT)
+    enter(child, ".quit")
+    child.expect(pexpect.EOF)
+
+    child = spawn(server, home, env=client_env(server=server, home=home, NO_COLOR="1"))
+    child.expect(PROMPT)
+    banner_and_prompt = child.before + child.after
+    assert not SGR.search(banner_and_prompt), repr(banner_and_prompt)
+    enter(child, "SELECT * FROM no_such_table_for_color;")
+    child.expect("Error: Catalog Error")
+    child.expect(PROMPT)
+    assert not SGR.search(child.before + child.after), repr(child.before + child.after)
+    enter(child, ".quit")
+    child.expect(pexpect.EOF)
+    # An empty NO_COLOR is unset, as the convention has it.
+    child = spawn(server, home, env=client_env(server=server, home=home, NO_COLOR=""))
+    child.expect(PROMPT)
+    assert SGR.search(child.after), repr(child.after)
+    enter(child, ".quit")
+    child.expect(pexpect.EOF)
+
+
+def help_rows(text: str) -> tuple[int, list[str]]:
+    """The description column of a .help listing and its lines (ANSI removed)."""
+    lines = strip_ansi(text).replace("\r", "").splitlines()
+    connect = next(line for line in lines if line.startswith(".connect "))
+    return connect.index("Connect to a"), lines
+
+
+def check_help(text: str, width: int) -> None:
+    column, lines = help_rows(text)
+    assert lines and all(len(line) <= width for line in lines), [line for line in lines if len(line) > width]
+    for line in lines:
+        if line.startswith("."):
+            # The command, at least two spaces, then the description at the column.
+            assert line[column - 2:column] == "  " and line[column] != " ", (column, line)
+        else:
+            assert line.startswith(" " * column) and line[column] != " ", (column, line)
+
+
+def test_help_aligns_its_columns_and_wraps_off_a_terminal(server):
+    result = run(server, "--command", ".help")
+    assert result.returncode == 0, result.stderr
+    check_help(text=result.stdout, width=80)
+    # The longest command, with its description beside it.
+    assert ".tables [PATTERN] [--flat]" in result.stdout
+    assert ".connect URI | HOST PORT USER  Connect to a Hardcharger server" in result.stdout
+
+
+def test_help_wraps_at_the_terminal_width(server, home):
+    child = pexpect.spawn(command=binary(), args=[*conn_args(server)], env=client_env(server=server, home=home),
+                          encoding="utf-8", dimensions=(60, 60), timeout=30)
+    child.expect(PROMPT)
+    enter(child, ".help")
+    child.expect(r"\.timer on\|off\s+Show query execution time\.\s+Default:\s+off\r\n")
+    text = child.before + child.after
+    text = text[text.index(".about"):]
+    check_help(text=text, width=60)
+    _, lines = help_rows(text)
+    assert any(line.startswith(" ") for line in lines), lines  # something did wrap
+    child.expect(PROMPT)
+    enter(child, ".quit")
+    child.expect(pexpect.EOF)
+
+
+def test_sign_in_errors_show_the_servers_refusal(server):
+    result = run(server, "--command", "SELECT 1",
+                 env=client_env(server=server, HARDCHARGER_PASSWORD="not-the-password"))
+    assert result.returncode == 1, result.stdout
+    assert result.stderr == (f"Error: Authentication failed for http://localhost:{server.port}: invalid_credentials "
+                             "(the user name or password is not correct)\n"), result.stderr
+    assert "not-the-password" not in result.stderr + result.stdout
+    # The positive twin: the right password signs in.
+    assert run(server, "--command", "SELECT 1").returncode == 0
+
+
 # ---- Added: the shell at a terminal ----
 
 
@@ -494,7 +625,8 @@ def test_interactive_password_prompt(server, home):
     child = spawn(server, home, env=env)
     child.expect("Password: ")
     enter(child, "not-the-password")
-    child.expect(f"Error: Authentication failed for http://localhost:{server.port} — check username and password")
+    child.expect(f"Error: Authentication failed for http://localhost:{server.port}: invalid_credentials "
+                 r"\(the user name or password is not correct\)")
     child.expect(pexpect.EOF)
     child.close()
     assert child.exitstatus == 1

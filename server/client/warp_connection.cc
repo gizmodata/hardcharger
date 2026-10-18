@@ -80,15 +80,17 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
       return arrow::Status::IOError("Could not connect to " + origin + " — is the server running?" +
                                     (what.find("timed out") != std::string::npos ? " (timed out)" : ""));
     }
-    if (e.code() == "invalid_credentials") {
-      return arrow::Status::IOError("Authentication failed for " + origin + " — check username and password");
+    // What the server said: its problem code, and its detail when it sent one. Nothing
+    // else (the request, the credentials) goes into the message.
+    const std::string refusal =
+        e.code() + (e.detail().empty() || e.detail() == e.code() ? std::string() : " (" + e.detail() + ")");
+    if (e.code() == "invalid_credentials" || (e.status() == 401 && auth_attempted)) {
+      return arrow::Status::IOError("Authentication failed for " + origin + ": " + refusal);
     }
     if (e.status() == 401) {
-      const std::string hint = auth_attempted
-                                   ? " — check your credentials"
-                                   : " — authentication required. Provide --username or set HARDCHARGER_USER "
-                                     "(or HARDCHARGER_ADMIN_USERNAME)";
-      return arrow::Status::IOError("Connection to " + origin + " failed" + hint);
+      return arrow::Status::IOError("Connection to " + origin + " failed: " + refusal +
+                                    " — authentication required. Provide --username or set HARDCHARGER_USER "
+                                    "(or HARDCHARGER_ADMIN_USERNAME)");
     }
     return arrow::Status::IOError(e.what());
   };

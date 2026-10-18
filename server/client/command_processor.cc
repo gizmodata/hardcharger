@@ -25,6 +25,7 @@
 #include <arrow/ipc/writer.h>
 
 #include "output_renderer.hpp"
+#include "platform.hpp"
 #include "password_prompt.hpp"
 #include "version.hpp"
 
@@ -32,9 +33,6 @@ namespace hardcharger::client {
 
 namespace {
 
-// ANSI red for error messages (matching DuckDB's error styling)
-constexpr const char* kErrRed = "\033[1;31m";
-constexpr const char* kErrReset = "\033[0m";
 
 std::vector<std::string> SplitArgs(const std::string& line) {
   std::vector<std::string> args;
@@ -90,9 +88,9 @@ CommandResult CommandProcessor::Process(const std::string& line) {
   // .tables [PATTERN] [--flat]
   if (cmd == ".tables") {
     if (!conn_.IsConnected()) {
-      std::cerr << kErrRed << "Error: not connected to a server. Use '.connect HOST PORT "
+      std::cerr << ErrorStyle() << "Error: not connected to a server. Use '.connect HOST PORT "
                    "USERNAME' to connect."
-                << kErrReset << std::endl;
+                << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     std::string pattern;
@@ -109,7 +107,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
     auto result = conn_.GetTables("", "", pattern.empty() ? "" : "%" + pattern + "%",
                                    !flat_mode);
     if (!result.ok()) {
-      std::cerr << kErrRed << "Error: " << result.status().message() << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Error: " << result.status().message() << ErrorStyleReset() << std::endl;
       return CommandResult::OK;
     }
 
@@ -228,12 +226,14 @@ CommandResult CommandProcessor::Process(const std::string& line) {
     int term_width = GetTerminalWidth();
     auto& out = *config_.output_stream;
 
-    // ANSI color codes matching DuckDB's shell palette
-    const char* kOrange = "\033[38;5;172m";     // DATABASE_NAME / catalog
-    const char* kBlue = "\033[38;5;39m";        // SCHEMA_NAME
-    const char* kBold = "\033[1m";              // TABLE_NAME
-    const char* kReset = "\033[0m";
-    const char* kGray = "\033[90m";             // LAYOUT, FOOTER, COLUMN_TYPE
+    // ANSI color codes matching DuckDB's shell palette: only on a terminal (never into a
+    // file or a pipe), and never with NO_COLOR.
+    const bool color = &out == &std::cout && ColorOnStdout();
+    const char* kOrange = color ? "\033[38;5;172m" : "";  // DATABASE_NAME / catalog
+    const char* kBlue = color ? "\033[38;5;39m" : "";     // SCHEMA_NAME
+    const char* kBold = color ? "\033[1m" : "";           // TABLE_NAME
+    const char* kReset = color ? "\033[0m" : "";
+    const char* kGray = color ? "\033[90m" : "";          // LAYOUT, FOOTER, COLUMN_TYPE
 
     // Render a centered catalog header:  ──── label ────  (orange)
     auto render_catalog_header = [&](const std::string& label) {
@@ -471,9 +471,9 @@ CommandResult CommandProcessor::Process(const std::string& line) {
   // .schema [PATTERN]
   if (cmd == ".schema") {
     if (!conn_.IsConnected()) {
-      std::cerr << kErrRed << "Error: not connected to a server. Use '.connect HOST PORT "
+      std::cerr << ErrorStyle() << "Error: not connected to a server. Use '.connect HOST PORT "
                    "USERNAME' to connect."
-                << kErrReset << std::endl;
+                << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     std::string pattern = args.size() > 1 ? args[1] : "";
@@ -481,7 +481,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
     if (result.ok()) {
       RenderTable(*result, config_);
     } else {
-      std::cerr << kErrRed << "Error: " << result.status().message() << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Error: " << result.status().message() << ErrorStyleReset() << std::endl;
     }
     return CommandResult::OK;
   }
@@ -489,16 +489,16 @@ CommandResult CommandProcessor::Process(const std::string& line) {
   // .catalogs
   if (cmd == ".catalogs") {
     if (!conn_.IsConnected()) {
-      std::cerr << kErrRed << "Error: not connected to a server. Use '.connect HOST PORT "
+      std::cerr << ErrorStyle() << "Error: not connected to a server. Use '.connect HOST PORT "
                    "USERNAME' to connect."
-                << kErrReset << std::endl;
+                << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     auto result = conn_.GetCatalogs();
     if (result.ok()) {
       RenderTable(*result, config_);
     } else {
-      std::cerr << kErrRed << "Error: " << result.status().message() << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Error: " << result.status().message() << ErrorStyleReset() << std::endl;
     }
     return CommandResult::OK;
   }
@@ -515,9 +515,9 @@ CommandResult CommandProcessor::Process(const std::string& line) {
     if (mode.has_value()) {
       config_.output_mode = *mode;
     } else {
-      std::cerr << kErrRed << "Error: unknown mode '" << args[1] << "'. Available modes:\n"
+      std::cerr << ErrorStyle() << "Error: unknown mode '" << args[1] << "'. Available modes:\n"
                 << "  table box csv tabs json jsonlines markdown line list\n"
-                << "  html latex insert quote ascii trash" << kErrReset << std::endl;
+                << "  html latex insert quote ascii trash" << ErrorStyleReset() << std::endl;
     }
     return CommandResult::OK;
   }
@@ -563,7 +563,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
       once_mode_ = false;
       output_file_ = new std::ofstream(args[1]);
       if (!output_file_->is_open()) {
-        std::cerr << kErrRed << "Error: cannot open file '" << args[1] << "'" << kErrReset << std::endl;
+        std::cerr << ErrorStyle() << "Error: cannot open file '" << args[1] << "'" << ErrorStyleReset() << std::endl;
         delete output_file_;
         output_file_ = nullptr;
       } else {
@@ -576,14 +576,14 @@ CommandResult CommandProcessor::Process(const std::string& line) {
   // .once FILE
   if (cmd == ".once") {
     if (args.size() < 2) {
-      std::cerr << kErrRed << "Usage: .once FILE" << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Usage: .once FILE" << ErrorStyleReset() << std::endl;
     } else {
       if (output_file_) {
         delete output_file_;
       }
       output_file_ = new std::ofstream(args[1]);
       if (!output_file_->is_open()) {
-        std::cerr << kErrRed << "Error: cannot open file '" << args[1] << "'" << kErrReset << std::endl;
+        std::cerr << ErrorStyle() << "Error: cannot open file '" << args[1] << "'" << ErrorStyleReset() << std::endl;
         delete output_file_;
         output_file_ = nullptr;
       } else {
@@ -657,7 +657,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
       try {
         config_.max_rows = std::stoi(args[1]);
       } catch (...) {
-        std::cerr << kErrRed << "Error: invalid number '" << args[1] << "'" << kErrReset << std::endl;
+        std::cerr << ErrorStyle() << "Error: invalid number '" << args[1] << "'" << ErrorStyleReset() << std::endl;
       }
     }
     return CommandResult::OK;
@@ -678,7 +678,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
           config_.auto_width = false;
         }
       } catch (...) {
-        std::cerr << kErrRed << "Error: invalid number '" << args[1] << "'" << kErrReset << std::endl;
+        std::cerr << ErrorStyle() << "Error: invalid number '" << args[1] << "'" << ErrorStyleReset() << std::endl;
       }
     }
     return CommandResult::OK;
@@ -687,16 +687,16 @@ CommandResult CommandProcessor::Process(const std::string& line) {
   // .read FILE
   if (cmd == ".read") {
     if (args.size() < 2) {
-      std::cerr << kErrRed << "Usage: .read FILE" << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Usage: .read FILE" << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     std::ifstream input(args[1]);
     if (!input.is_open()) {
-      std::cerr << kErrRed << "Error: cannot open file '" << args[1] << "'" << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Error: cannot open file '" << args[1] << "'" << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     if (!read_callback_) {
-      std::cerr << kErrRed << "Error: .read is not available here" << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Error: .read is not available here" << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     return read_callback_(input) == 0 ? CommandResult::OK : CommandResult::ERROR;
@@ -705,7 +705,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
   // .shell CMD...
   if (cmd == ".shell") {
     if (args.size() < 2) {
-      std::cerr << kErrRed << "Usage: .shell CMD..." << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Usage: .shell CMD..." << ErrorStyleReset() << std::endl;
     } else {
       std::string shell_cmd;
       for (size_t i = 1; i < args.size(); ++i) {
@@ -729,8 +729,8 @@ CommandResult CommandProcessor::Process(const std::string& line) {
       if (home) chdir(home);
     } else {
       if (chdir(args[1].c_str()) != 0) {
-        std::cerr << kErrRed << "Error: cannot change to directory '" << args[1] << "'"
-                  << kErrReset << std::endl;
+        std::cerr << ErrorStyle() << "Error: cannot change to directory '" << args[1] << "'"
+                  << ErrorStyleReset() << std::endl;
       }
     }
     return CommandResult::OK;
@@ -757,11 +757,11 @@ CommandResult CommandProcessor::Process(const std::string& line) {
   // .describe TABLE
   if (cmd == ".describe") {
     if (!conn_.IsConnected()) {
-      std::cerr << kErrRed << "Error: not connected to a server." << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Error: not connected to a server." << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     if (args.size() < 2) {
-      std::cerr << kErrRed << "Usage: .describe TABLE" << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Usage: .describe TABLE" << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     std::string sql = "DESCRIBE " + args[1];
@@ -769,7 +769,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
     if (result.ok()) {
       RenderTable(result->table, config_);
     } else {
-      std::cerr << kErrRed << "Error: " << result.status().message() << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Error: " << result.status().message() << ErrorStyleReset() << std::endl;
     }
     return CommandResult::OK;
   }
@@ -789,7 +789,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
   // .last — re-display cached last result
   if (cmd == ".last") {
     if (!last_result_ || !*last_result_) {
-      std::cerr << kErrRed << "No cached result. Run a SELECT query first." << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "No cached result. Run a SELECT query first." << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     RenderTable(*last_result_, config_);
@@ -799,7 +799,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
   // .export_last [FILE]
   if (cmd == ".export_last") {
     if (!last_result_ || !*last_result_) {
-      std::cerr << kErrRed << "No cached result. Run a SELECT query first." << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "No cached result. Run a SELECT query first." << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     std::string path;
@@ -817,13 +817,13 @@ CommandResult CommandProcessor::Process(const std::string& line) {
 
     auto out_file = arrow::io::FileOutputStream::Open(path);
     if (!out_file.ok()) {
-      std::cerr << kErrRed << "Error: " << out_file.status().message() << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Error: " << out_file.status().message() << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     auto writer = arrow::ipc::MakeFileWriter(out_file->get(),
                                               (*last_result_)->schema());
     if (!writer.ok()) {
-      std::cerr << kErrRed << "Error: " << writer.status().message() << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Error: " << writer.status().message() << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     auto table_reader = arrow::TableBatchReader(**last_result_);
@@ -831,19 +831,19 @@ CommandResult CommandProcessor::Process(const std::string& line) {
     while (true) {
       auto status = table_reader.ReadNext(&batch);
       if (!status.ok()) {
-        std::cerr << kErrRed << "Error: " << status.ToString() << kErrReset << std::endl;
+        std::cerr << ErrorStyle() << "Error: " << status.ToString() << ErrorStyleReset() << std::endl;
         break;
       }
       if (!batch) break;
       auto ws = (*writer)->WriteRecordBatch(*batch);
       if (!ws.ok()) {
-        std::cerr << kErrRed << "Error: " << ws.ToString() << kErrReset << std::endl;
+        std::cerr << ErrorStyle() << "Error: " << ws.ToString() << ErrorStyleReset() << std::endl;
         break;
       }
     }
     auto close_status = (*writer)->Close();
     if (!close_status.ok()) {
-      std::cerr << kErrRed << "Error: " << close_status.ToString() << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Error: " << close_status.ToString() << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     *config_.output_stream << "Exported " << (*last_result_)->num_rows()
@@ -865,7 +865,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
       try {
         config_.pager_threshold = std::stoi(args[1]);
       } catch (...) {
-        std::cerr << kErrRed << "Usage: .pager on|off|N" << kErrReset << std::endl;
+        std::cerr << ErrorStyle() << "Usage: .pager on|off|N" << ErrorStyleReset() << std::endl;
       }
     }
     return CommandResult::OK;
@@ -887,8 +887,8 @@ CommandResult CommandProcessor::Process(const std::string& line) {
     return CommandResult::OK;
   }
 
-  std::cerr << kErrRed << "Error: unknown command '" << cmd
-            << "'. Type '.help' for available commands." << kErrReset << std::endl;
+  std::cerr << ErrorStyle() << "Error: unknown command '" << cmd
+            << "'. Type '.help' for available commands." << ErrorStyleReset() << std::endl;
   return CommandResult::ERROR;
 }
 
@@ -919,13 +919,47 @@ void CommandProcessor::AfterStatement() {
   config_.output_stream = &std::cout;
 }
 
-void CommandProcessor::ShowHelp(const std::string& pattern) {
-  struct HelpEntry {
-    std::string command;
-    std::string description;
-  };
+std::string FormatHelp(const std::vector<std::pair<std::string, std::string>>& entries, int width) {
+  size_t column = 0;
+  for (const auto& [command, description] : entries) column = std::max(column, command.size());
+  column += 2;
+  // A description narrower than this goes on the lines below its command instead.
+  constexpr size_t kMinDescription = 24;
+  const size_t total = width > 0 ? static_cast<size_t>(width) : 80;
+  const bool below = total < column + kMinDescription;
+  const size_t indent = below ? 4 : column;
+  const size_t room = total > indent ? std::max(total - indent, kMinDescription) : kMinDescription;
 
-  std::vector<HelpEntry> entries = {
+  std::string out;
+  for (const auto& [command, description] : entries) {
+    out += command;
+    if (below) {
+      out += "\n" + std::string(indent, ' ');
+    } else {
+      out += std::string(column - command.size(), ' ');
+    }
+    std::istringstream words(description);
+    std::string word;
+    size_t used = 0;
+    while (words >> word) {
+      if (used > 0 && used + 1 + word.size() > room) {
+        out += "\n" + std::string(indent, ' ');
+        used = 0;
+      }
+      if (used > 0) {
+        out += ' ';
+        ++used;
+      }
+      out += word;
+      used += word.size();
+    }
+    out += "\n";
+  }
+  return out;
+}
+
+void CommandProcessor::ShowHelp(const std::string& pattern) {
+  std::vector<std::pair<std::string, std::string>> entries = {
       {".about", "Show version, copyright, and project info"},
       {".bail on|off", "Stop on error. Default: off"},
       {".catalogs", "List all catalogs"},
@@ -962,13 +996,16 @@ void CommandProcessor::ShowHelp(const std::string& pattern) {
   std::string filter = ToLower(pattern);
   auto& out = *config_.output_stream;
 
+  std::vector<std::pair<std::string, std::string>> shown;
   for (const auto& entry : entries) {
-    if (filter.empty() || entry.command.find(filter) != std::string::npos ||
-        entry.description.find(filter) != std::string::npos) {
-      out << std::left << std::setw(25) << entry.command << entry.description
-          << "\n";
+    if (filter.empty() || entry.first.find(filter) != std::string::npos ||
+        entry.second.find(filter) != std::string::npos) {
+      shown.push_back(entry);
     }
   }
+  // The terminal's width; 80 into a file or a pipe.
+  const int width = &out == &std::cout && IsOutputTerminal() ? GetTerminalWidth() : 80;
+  out << FormatHelp(shown, width);
 }
 
 void CommandProcessor::ShowSettings() {
@@ -1051,7 +1088,7 @@ void CommandProcessor::ShowSettings() {
 CommandResult CommandProcessor::HandleConnect(
     const std::vector<std::string>& args) {
   if (args.size() < 2) {
-    std::cerr << kErrRed
+    std::cerr << ErrorStyle()
         << "Usage: .connect hardcharger://HOST:PORT[?params...]\n"
         << "       .connect HOST PORT USERNAME [PASSWORD]\n"
         << "\n"
@@ -1062,7 +1099,7 @@ CommandResult CommandProcessor::HandleConnect(
         << "                             Skip TLS cert verification\n"
         << "  tlsRoots=PATH              Path to CA certificate (PEM)\n"
         << "  authType=password|external Auth type (default: password)\n"
-        << kErrReset << std::endl;
+        << ErrorStyleReset() << std::endl;
     return CommandResult::ERROR;
   }
 
@@ -1084,7 +1121,7 @@ CommandResult CommandProcessor::HandleConnect(
   } else {
     // Positional format: .connect HOST PORT USERNAME [PASSWORD]
     if (args.size() < 4) {
-      std::cerr << kErrRed << "Usage: .connect HOST PORT USERNAME [PASSWORD]" << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Usage: .connect HOST PORT USERNAME [PASSWORD]" << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
 
@@ -1092,7 +1129,7 @@ CommandResult CommandProcessor::HandleConnect(
     try {
       new_config.port = std::stoi(args[2]);
     } catch (...) {
-      std::cerr << kErrRed << "Error: invalid port '" << args[2] << "'" << kErrReset << std::endl;
+      std::cerr << ErrorStyle() << "Error: invalid port '" << args[2] << "'" << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
     new_config.username = args[3];
@@ -1108,7 +1145,7 @@ CommandResult CommandProcessor::HandleConnect(
 
   auto status = conn_.Connect(new_config);
   if (!status.ok()) {
-    std::cerr << kErrRed << "Error: " << status.message() << kErrReset << std::endl;
+    std::cerr << ErrorStyle() << "Error: " << status.message() << ErrorStyleReset() << std::endl;
     return CommandResult::ERROR;
   }
 

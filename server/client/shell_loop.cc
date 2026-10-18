@@ -11,6 +11,7 @@
 #include <replxx.hxx>
 
 #include "output_renderer.hpp"
+#include "platform.hpp"
 #include "pager.hpp"
 #include "shell_completer.hpp"
 #include "syntax_highlighter.hpp"
@@ -22,9 +23,6 @@ namespace {
 
 constexpr int kHistorySize = 1000;
 
-// ANSI red for error messages (matching DuckDB's error styling)
-constexpr const char* kRedBold = "\033[1;31m";
-constexpr const char* kReset = "\033[0m";
 
 std::string GetHistoryPath() {
   const std::string home = HomeDirectory();
@@ -133,9 +131,9 @@ bool ExecuteStatement(WarpConnection& conn, ClientConfig& config,
                       const std::string& sql,
                       std::shared_ptr<arrow::Table>* last_result = nullptr) {
   if (!conn.IsConnected()) {
-    std::cerr << kRedBold << "Error: not connected to a server. Use '.connect HOST PORT "
+    std::cerr << ErrorStyle() << "Error: not connected to a server. Use '.connect HOST PORT "
                  "USERNAME' to connect."
-              << kReset << std::endl;
+              << ErrorStyleReset() << std::endl;
     return false;
   }
 
@@ -144,7 +142,7 @@ bool ExecuteStatement(WarpConnection& conn, ClientConfig& config,
   if (last_result && *last_result && HasUnderscoreRef(sql)) {
     auto status = conn.UploadLastResult(*last_result);
     if (!status.ok()) {
-      std::cerr << kRedBold << "Error uploading last result: " << status.message() << kReset
+      std::cerr << ErrorStyle() << "Error uploading last result: " << status.message() << ErrorStyleReset()
                 << std::endl;
       return false;
     }
@@ -174,9 +172,9 @@ bool ExecuteStatement(WarpConnection& conn, ClientConfig& config,
   auto result = conn.ExecuteQuery(effective_sql, row_limit);
   if (!result.ok()) {
     if (result.status().IsCancelled()) {
-      std::cerr << kRedBold << "Query cancelled" << kReset << std::endl;
+      std::cerr << ErrorStyle() << "Query cancelled" << ErrorStyleReset() << std::endl;
     } else {
-      std::cerr << kRedBold << "Error: " << result.status().message() << kReset << std::endl;
+      std::cerr << ErrorStyle() << "Error: " << result.status().message() << ErrorStyleReset() << std::endl;
     }
     return false;
   }
@@ -327,10 +325,9 @@ void RefreshDynamicPrompt(WarpConnection& conn, ClientConfig& config) {
     std::string schema = GetCellValue(result->table->column(1), 0, "");
     std::string base = catalog + "." + schema;
 
-    // Colored prompt: bold dark orange catalog.schema (matching DuckDB's PROMPT color)
-    // Replxx natively handles ANSI escape sequences in prompts — no markers needed
-    config.main_prompt = std::string("\033[1m\033[38;5;208m") + base +
-                         std::string("\033[0m") + "> ";
+    // Colored prompt: bold dark orange catalog.schema (matching DuckDB's PROMPT color),
+    // on a terminal without NO_COLOR. Replxx handles ANSI escape sequences in prompts.
+    config.main_prompt = ColorOnStdout() ? std::string("\033[1m\033[38;5;208m") + base + "\033[0m> " : base + "> ";
 
     // Continuation prompt: spaces matching visible width + "-> "
     int visible_len = static_cast<int>(base.size()) + 2;  // "base> "
@@ -359,6 +356,8 @@ int RunShellLoop(WarpConnection& conn, CommandProcessor& cmd_proc,
   rx.set_double_tab_completion(false);
   rx.set_complete_on_empty(false);
   rx.set_max_hint_rows(4);
+  // No color from the line editor either (hints, highlighting) off a terminal or with NO_COLOR.
+  rx.set_no_color(!ColorOnStdout());
 
   rx.set_completion_callback(
       [&completer](const std::string& input, int& ctx) {
@@ -375,7 +374,7 @@ int RunShellLoop(WarpConnection& conn, CommandProcessor& cmd_proc,
   rx.set_highlighter_callback(
       [&highlighter, &config](const std::string& input,
                                replxx::Replxx::colors_t& colors) {
-        if (config.syntax_highlighting) {
+        if (config.syntax_highlighting && ColorOnStdout()) {
           highlighter.Highlight(input, colors);
         }
       });
@@ -516,7 +515,7 @@ int RunNonInteractive(WarpConnection& conn, CommandProcessor& cmd_proc,
   if (config.input_file.has_value()) {
     std::ifstream input(*config.input_file);
     if (!input.is_open()) {
-      std::cerr << kRedBold << "Error: cannot open file '" << *config.input_file << "'" << kReset
+      std::cerr << ErrorStyle() << "Error: cannot open file '" << *config.input_file << "'" << ErrorStyleReset()
                 << std::endl;
       return 1;
     }
