@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+from conftest import TIMEOUT_SCALE
 from rbac import WarpError, expect_allowed, start_rbac_server
 
 
@@ -122,10 +123,13 @@ def test_a_child_token_is_narrower_and_dies_with_its_parent(server, wes):
 
 
 def test_expiry_and_bookkeeping(server, admin, wes):
-    token = mint_scoped(client=wes, sql="CREATE SCOPED TOKEN brief ALLOW SELECT VALID FOR '2 seconds'")
+    # 2 s to sign in and run a statement, stretched on a sanitizer build (under TSan the
+    # sign-in alone can take longer); then twice that, so it has certainly expired.
+    valid = int(2 * TIMEOUT_SCALE)
+    token = mint_scoped(client=wes, sql=f"CREATE SCOPED TOKEN brief ALLOW SELECT VALID FOR '{valid} seconds'")
     bot = agent(server=server, token=token)
     expect_allowed(client=bot, sql="SELECT 1")
-    time.sleep(4)
+    time.sleep(2 * valid)
     with pytest.raises(WarpError):
         agent(server=server, token=token)  # an expired token does not start a session
     # A session that was open stops at the expiry too (its token carries the expiry).

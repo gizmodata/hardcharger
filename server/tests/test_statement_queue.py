@@ -134,7 +134,9 @@ def test_queued_execution_records_enqueue_time(server):
 
 
 def test_killed_while_queued_records_cancelled(server):
-    holders = hold_slots(server=server, count=2, ms=3000)
+    # The slots must stay held until after the kill: 3 s, stretched on a sanitizer build
+    # (under TSan the setup alone can outlast 3 s, and the victim then simply runs).
+    holders = hold_slots(server=server, count=2, ms=int(3000 * TIMEOUT_SCALE))
     assert wait_until(lambda: active(server) == 2)
     victim = queued_session(server=server)
     victim_id = server.admin().scalar(sql="SELECT session_id FROM hardcharger_sessions() WHERE NOT is_current "
