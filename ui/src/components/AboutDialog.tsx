@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import logo from "../assets/gizmodata-logo.png";
+import { TrademarkNotice } from "./Brand";
 import { errorMessage, useSession } from "../session";
 
 export function AboutDialog({ onClose }: { onClose: () => void }) {
@@ -57,13 +58,16 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
         </tbody>
       </table>
       {error && <p className="error-detail">{error}</p>}
-      <p className="dialog-foot">
-        Hardcharger and its web UI are built by{" "}
-        <a href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">
-          GizmoData
-        </a>
-        .
-      </p>
+      <div className="dialog-foot">
+        <p>
+          Hardcharger™ and its web UI are built by{" "}
+          <a href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">
+            GizmoData™
+          </a>
+          .
+        </p>
+        <TrademarkNotice />
+      </div>
     </dialog>
   );
 }

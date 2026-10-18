@@ -6,7 +6,7 @@ import { loadModule } from "../lib/stale";
 import type { Theme } from "../lib/theme";
 import { useSession } from "../session";
 import { AboutDialog } from "./AboutDialog";
-import { ByGizmoData, Wordmark } from "./Brand";
+import { ByGizmoData, TrademarkNotice, Wordmark } from "./Brand";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { SchemaBrowser } from "./SchemaBrowser";
 
@@ -105,9 +105,10 @@ export function Layout({ theme, page, go }: Props) {
       <div className="app-body">
         <aside className="sidebar" style={{ width: sidebarWidth }} aria-label="Schema browser">
           <SchemaBrowser />
-          <div className="sidebar-foot">
+          <footer className="sidebar-foot">
             <ByGizmoData />
-          </div>
+            <TrademarkNotice />
+          </footer>
           <div
             className="sidebar-resizer"
             role="separator"

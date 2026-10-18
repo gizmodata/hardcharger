@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://gizmodata.com">
-    <img src="docs/assets/hardcharger-banner.svg" alt="Hardcharger by GizmoData: the DuckDB 2.0 server that speaks Warp SQL" width="100%">
+    <img src="docs/assets/hardcharger-banner.svg" alt="Hardcharger™ by GizmoData™: the DuckDB 2.0 server that speaks Warp SQL" width="100%">
   </a>
 </p>
 
@@ -18,7 +18,7 @@
   <a href="https://github.com/gizmodata/hardcharger-jdbc"><img src="https://img.shields.io/badge/JDBC%20driver-hardcharger--jdbc-red.svg?logo=openjdk" alt="JDBC driver"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-brightgreen.svg" alt="Apache 2.0 license"></a>
   <a href="https://join.slack.com/t/gizmodatacommunity/shared_invite/zt-42jk7kdti-SJp7qk7d6XYCIKfBG~4HrA"><img src="https://img.shields.io/badge/Slack-GizmoData%20Community-4A154B?logo=slack" alt="Slack community"></a>
-  <a href="https://gizmodata.com"><img src="https://img.shields.io/badge/by-GizmoData-f15a24.svg" alt="GizmoData"></a>
+  <a href="https://gizmodata.com"><img src="https://img.shields.io/badge/by-GizmoData%E2%84%A2-f15a24.svg" alt="by GizmoData™"></a>
 </p>
 
 <h3 align="center">Fast, secure, remote DuckDB. Every feature included.</h3>
@@ -27,7 +27,7 @@
 
 ## 🏎️ What is Hardcharger?
 
-**Hardcharger** puts [DuckDB 2.0](https://duckdb.org) on the network. Clients connect over
+**Hardcharger™** puts [DuckDB 2.0](https://duckdb.org) on the network. Clients connect over
 [**Warp SQL**](https://github.com/gizmodata/warp-sql), an open HTTP protocol that moves
 [Apache Arrow](https://arrow.apache.org) record batches straight from DuckDB to your
 application: no gRPC, no Flight, no sidecars.
@@ -551,6 +551,7 @@ Apache License 2.0; see [LICENSE](LICENSE).
 ---
 
 <p align="center">
-  <a href="https://gizmodata.com"><img src="docs/assets/gizmodata-logo.png" alt="GizmoData" width="56"></a><br>
-  <sub>Built by <a href="https://gizmodata.com">GizmoData</a></sub>
+  <a href="https://gizmodata.com"><img src="docs/assets/gizmodata-logo.png" alt="GizmoData™" width="56"></a><br>
+  <sub>Built by <a href="https://gizmodata.com">GizmoData™</a></sub><br>
+  <sub>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</sub>
 </p>

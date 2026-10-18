@@ -85,7 +85,8 @@ own changelog in `python/CHANGELOG.md`.
   a schema browser that follows access control, CSV/TSV/JSON/Parquet exports, the session
   list, and sign-in with a password or, under mutual TLS, a client certificate. Its source is
   in `ui/` (folded in from the hardcharger-ui repository with its history), styled in
-  GizmoData's brand with Inter embedded (SIL Open Font License 1.1). CI builds it once per
+  GizmoData's brand with Inter embedded (SIL Open Font License 1.1), with Hardcharger™ and
+  GizmoData™ marked on the wordmark, the badge and a trademark notice in its footers. CI builds it once per
   run and every server build in that run embeds it (`-DHARDCHARGER_WEB_UI`): CMake checks each
   file against the tarball's manifest, embeds it gzipped and logs the content SHA-256. The
   server answers gzip to clients that accept it and inflates (zlib 1.3.2) for those that

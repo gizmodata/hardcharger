@@ -153,6 +153,13 @@ select {
   letter-spacing: -0.02em;
   line-height: 1;
 }
+.wordmark-name .tm {
+  margin-left: 0.06em;
+  font-size: 0.45em;
+  font-weight: 700;
+  vertical-align: 0.95em;
+  line-height: 0;
+}
 .wordmark-bar {
   height: 3px;
   border-radius: 2px;
@@ -167,9 +174,27 @@ select {
 .wordmark-signin .wordmark-name {
   font-size: 30px;
 }
-.wordmark-signin .wordmark-bar {
+.wordmark-signin .wordmark-name .tm {
+  margin-left: 0.06em;
+  font-size: 0.45em;
+  font-weight: 700;
+  vertical-align: 0.95em;
+  line-height: 0;
+}
+.wordmark-bar {
   height: 5px;
   border-radius: 3px;
+}
+.signin-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.tm-notice {
+  margin: 0;
+  color: var(--faint);
+  font-size: 11px;
 }
 /* The README's "by GizmoData" badge. */
 .by-badge {
@@ -474,8 +499,16 @@ select {
 }
 .sidebar-foot {
   flex: none;
-  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 12px 10px;
   border-top: 1px solid var(--border-soft);
+}
+.sidebar-foot .tm-notice {
+  font-size: 10.5px;
+  line-height: 1.35;
 }
 .sidebar-resizer {
   position: absolute;
@@ -668,6 +701,9 @@ select {
   padding: 10px 16px 14px;
   color: var(--faint);
   font-size: 12px;
+}
+.dialog-foot p {
+  margin: 0 0 4px;
 }
 .kv {
   width: 100%;

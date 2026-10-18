@@ -4,7 +4,7 @@ import { type SyntheticEvent, useRef, useState } from "react";
 
 import { type SignedIn, SignInError, lastUsername, signIn, signInWithCertificate } from "../lib/auth";
 import type { Theme } from "../lib/theme";
-import { ByGizmoData, Wordmark } from "./Brand";
+import { ByGizmoData, TrademarkNotice, Wordmark } from "./Brand";
 
 interface Props {
   server: DiscoveryDocument | undefined;
@@ -152,7 +152,10 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
             : "The page keeps a short-lived token for this tab, usable only with your certificate."}
         </p>
       </form>
-      <ByGizmoData />
+      <footer className="signin-footer">
+        <ByGizmoData />
+        <TrademarkNotice />
+      </footer>
     </div>
   );
 }
