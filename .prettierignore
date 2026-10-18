@@ -1,0 +1,11 @@
+dist/
+release/
+node_modules/
+coverage/
+test-results/
+playwright-report/
+package-lock.json
+CHANGELOG.md
+docs/assets/
+vendor/
+public/

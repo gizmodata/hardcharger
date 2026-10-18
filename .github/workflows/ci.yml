@@ -1,0 +1,176 @@
+name: hardcharger-ui-ci
+
+# Every check on every push and pull request, and the gate in front of a release (release.yml
+# calls this on the tagged commit):
+#   - checks: lint (eslint, prettier), a typecheck of every TypeScript project, unit tests, the
+#     build (with its CSP and caching checks) and the release tarball.
+#   - client: the vendored @gizmodata/warp-sql package is what its pinned commit builds to.
+#   - server + e2e: Playwright in Chromium and WebKit against hardcharger-server from
+#     Hardcharger's main branch (ghcr.io/gizmodata/hardcharger:main), with access control on
+#     (PostgreSQL), the UI served at /ui on the same origin as Warp SQL.
+#
+# Access while Hardcharger is internal, with no personal token:
+#   - ghcr.io/gizmodata/hardcharger is pulled with this workflow's GITHUB_TOKEN: the package must
+#     grant this repository read access (package settings, "Manage Actions access").
+#   - gizmodata/warp-sql-js is cloned with a read-only deploy key of that repository, kept here as
+#     the DEPLOY_KEY_WARP_SQL_JS secret.
+# Without either, the job that needs it fails; nothing is skipped.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# A newer run on the same branch makes an older one pointless: cancel it. Never on a tag:
+# a release run must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  # The server the e2e tests run against: Hardcharger's main branch, which its CI publishes on
+  # every green push. Pin a :sha-<short> tag to reproduce an old run.
+  HARDCHARGER_IMAGE: ghcr.io/gizmodata/hardcharger:main
+
+jobs:
+  checks:
+    name: lint, typecheck, unit tests, build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: The vendored client matches its pin
+        run: npm run vendor:verify
+      - name: Lint (eslint, prettier)
+        run: npm run lint
+      - name: Typecheck (the app, the unit tests, the e2e tests, the configs)
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build (fails on inline code, unhashed assets or missing files)
+        run: npm run build
+      - name: Release tarball and checksums
+        run: |
+          npm run package
+          cat release/SHA256SUMS release/CONTENT_SHA256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release
+          path: release
+          retention-days: 7
+
+  client:
+    name: vendored client = its pinned commit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Deploy key for gizmodata/warp-sql-js
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY_WARP_SQL_JS }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error::the DEPLOY_KEY_WARP_SQL_JS secret is not set: the private key of a read-only deploy key of gizmodata/warp-sql-js"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/warp_sql_js && chmod 600 ~/.ssh/warp_sql_js
+          printf 'Host github.com\n  IdentityFile ~/.ssh/warp_sql_js\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+      - name: Rebuild the pinned commit and compare
+        run: node scripts/vendor-warp-sql.mjs --verify --rebuild
+
+  server:
+    name: hardcharger-server (main)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull the image and take the server out
+        run: |
+          if ! docker pull "$HARDCHARGER_IMAGE"; then
+            echo "::error::Cannot pull $HARDCHARGER_IMAGE. Grant this repository read access in the hardcharger package's 'Manage Actions access' settings."
+            exit 1
+          fi
+          id=$(docker create "$HARDCHARGER_IMAGE")
+          docker cp "$id:/opt/hardcharger" hardcharger
+          docker rm "$id"
+          hardcharger/bin/hardcharger-server --version
+          tar -czf hardcharger.tar.gz hardcharger
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hardcharger-linux-amd64
+          path: hardcharger.tar.gz
+          retention-days: 3
+
+  e2e:
+    name: e2e (${{ matrix.browser }})
+    needs: [checks, server]
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: hardcharger
+          POSTGRES_PASSWORD: hardcharger
+          POSTGRES_DB: hardcharger
+        ports: ["127.0.0.1:55460:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hardcharger" --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      HARDCHARGER_UI_TEST_RBAC_STORE_URI: postgresql://hardcharger:hardcharger@127.0.0.1:55460/hardcharger
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-linux-amd64
+      - name: Unpack the server
+        run: |
+          tar -C "$RUNNER_TEMP" -xzf hardcharger.tar.gz
+          echo "HARDCHARGER_UI_TEST_SERVER_BINARY=$RUNNER_TEMP/hardcharger/bin/hardcharger-server" >> "$GITHUB_ENV"
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: End-to-end tests
+        run: npx playwright test --project ${{ matrix.browser }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: e2e-${{ matrix.browser }}
+          path: |
+            test-results
+            playwright-report
+          retention-days: 14

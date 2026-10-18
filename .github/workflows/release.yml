@@ -1,0 +1,66 @@
+name: hardcharger-ui-release
+
+# On a vX.Y.Z tag: the full CI (ci.yml: lint, typecheck, unit tests, build, the vendored
+# client's provenance, and the e2e tests in Chromium and WebKit against hardcharger-server)
+# runs on the tagged commit itself; only then does a GitHub Release get the built UI
+# (hardcharger-ui-<version>.tar.gz), its SHA256SUMS and CONTENT_SHA256 (what a server build
+# pins when it embeds the UI), with the tag's CHANGELOG section as its notes.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      packages: read
+    secrets: inherit
+
+  github-release:
+    needs: tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: The tag matches package.json
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          [ -n "$version" ] || { echo "no version in the tag"; exit 1; }
+          [ "$(node -p 'require("./package.json").version')" = "$version" ] || { echo "package.json is not $version"; exit 1; }
+      - run: npm ci
+      - run: npm run build
+      - run: npm run package
+      - name: Release notes from CHANGELOG
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          [ -s release_notes.md ] || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+          {
+            echo
+            echo "Content SHA-256 (the SHA-256 of hardcharger-ui/MANIFEST, pinned by server builds): \`$(cat release/CONTENT_SHA256)\`"
+          } >> release_notes.md
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            release/hardcharger-ui-*.tar.gz
+            release/SHA256SUMS
+            release/CONTENT_SHA256
+          body_path: release_notes.md

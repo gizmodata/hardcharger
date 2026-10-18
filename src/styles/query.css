@@ -1,0 +1,312 @@
+/* The query page: editor tabs, the editor, the toolbar and the results grid. */
+
+.query-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tabs {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 36px;
+  padding: 0 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.tab {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  max-width: 220px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 7px 7px 0 0;
+  color: var(--muted);
+}
+.tab:hover {
+  background: var(--hover);
+}
+.tab-active {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text);
+  margin-bottom: -1px;
+  height: 31px;
+}
+.tab-active::before {
+  content: "";
+  position: relative;
+}
+.tab-running .tab-title::after {
+  content: " ●";
+  color: var(--hc-blue);
+}
+.tab-title {
+  height: 100%;
+  padding: 0 4px 0 12px;
+  border: none;
+  background: transparent;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  font-weight: 550;
+}
+.tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+.tab-close:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.editor-area {
+  flex: none;
+  position: relative;
+  min-height: 100px;
+}
+.editor-slot,
+.editor-host {
+  position: absolute;
+  inset: 0;
+}
+.editor-running {
+  background: var(--select);
+}
+
+.toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.toolbar-hint {
+  color: var(--faint);
+  font-size: 12px;
+}
+.toolbar-spacer {
+  flex: 1;
+}
+.toolbar-limit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.toolbar-limit select {
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.split-resizer {
+  flex: none;
+  height: 5px;
+  cursor: row-resize;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.split-resizer:hover {
+  background: var(--select-strong);
+}
+
+.results {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.results-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.results-status {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.results-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.result-message {
+  padding: 16px;
+  color: var(--text);
+}
+.result-empty {
+  color: var(--faint);
+}
+
+.menu-wrap {
+  position: relative;
+}
+.menu {
+  position: absolute;
+  right: 0;
+  top: 30px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.menu button {
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.menu button:hover {
+  background: var(--hover);
+}
+
+/* The grid: rows are positioned absolutely (only those in view exist), the header sticks. */
+.grid {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: auto;
+  outline: none;
+  font-size: 12.5px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.grid:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--hc-blue);
+}
+.grid-canvas {
+  position: relative;
+  min-width: 100%;
+}
+.grid-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  height: 26px;
+}
+.grid-row-odd {
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+}
+.grid-header {
+  position: sticky;
+  z-index: 3;
+  background: var(--panel);
+  font-weight: 600;
+}
+.grid-cell {
+  flex: none;
+  height: 26px;
+  line-height: 25px;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-right: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+  font-family: var(--mono);
+  cursor: cell;
+}
+.grid-num {
+  text-align: right;
+}
+.grid-null {
+  color: var(--faint);
+  font-style: italic;
+}
+.grid-selected {
+  background: var(--select);
+}
+.grid-rownum {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--panel);
+  color: var(--faint);
+  text-align: right;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.grid-rownum.grid-selected {
+  background: var(--select-strong);
+  color: var(--text);
+}
+.grid-corner {
+  z-index: 4;
+  text-align: center;
+}
+.grid-head {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--font);
+  cursor: pointer;
+}
+.grid-head.grid-num {
+  justify-content: flex-end;
+}
+.grid-head-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.grid-head-type {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.grid-resize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+.grid-resize:hover {
+  background: var(--select-strong);
+}
+.grid-empty {
+  position: absolute;
+  top: 40px;
+  left: 16px;
+  color: var(--faint);
+}
