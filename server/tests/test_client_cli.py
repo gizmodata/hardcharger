@@ -434,6 +434,7 @@ def test_no_color_off_a_terminal(server):
     assert "\x1b" not in tables.stdout, repr(tables.stdout)
 
 
+@pytest.mark.pty
 def test_no_color_is_honoured_at_a_terminal(server, home):
     # At a terminal the prompt and errors are colored, unless NO_COLOR is set.
     child = spawn(server, home)
@@ -490,6 +491,7 @@ def test_help_aligns_its_columns_and_wraps_off_a_terminal(server):
     assert ".connect URI | HOST PORT USER  Connect to a Hardcharger server" in result.stdout
 
 
+@pytest.mark.pty
 def test_help_wraps_at_the_terminal_width(server, home):
     child = pexpect.spawn(command=binary(), args=[*conn_args(server)], env=client_env(server=server, home=home),
                           encoding="utf-8", dimensions=(60, 60), timeout=30)
