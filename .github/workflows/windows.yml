@@ -51,8 +51,14 @@ jobs:
       # The web UI every build embeds (server.yml's web-ui job).
       - uses: actions/download-artifact@v8
         with:
-          name: web-ui
+          name: hardcharger-ui
           path: server/.web-ui
+      - name: The web UI tarball
+        run: |
+          shopt -s nullglob
+          ui=("$PWD"/server/.web-ui/hardcharger-ui-*.tar.gz)
+          [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
+          echo "HARDCHARGER_UI_TARBALL=$(cygpath -m "${ui[0]}")" >> "$GITHUB_ENV"
       # The warp-sql submodule is private: fetch it with its read-only deploy key.
       - name: Fetch the warp-sql submodule
         env:
@@ -165,7 +171,7 @@ jobs:
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_TOOLCHAIN_FILE="$(cygpath -m "$PWD/.github/cmake/windows-vcpkg.cmake")" \
                 -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE \
-                -DHARDCHARGER_WEB_UI="$(cygpath -m "$PWD/server/.web-ui/hardcharger-ui.tar.gz")"
+                -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL"
           cmake --build server/build
           server/build/hardcharger-server.exe --version
           server/build/hardcharger-server.exe --print-duckdb-version

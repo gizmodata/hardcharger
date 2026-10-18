@@ -39,50 +39,166 @@ env:
   HARDCHARGER_TEST_XDIST_WORKERS: "6"
 
 jobs:
-  # The web UI (gizmodata/hardcharger-ui) every build embeds: built from the commit that
-  # server/cmake/web_ui.cmake pins, fetched with that repository's read-only deploy key. Its
-  # build is reproducible, and CMake checks the result against the pinned content SHA-256.
+  # The web UI (ui/) every server build in this run embeds, built once here from the same
+  # commit. Its build is reproducible (package-lock.json, npm ci); the content SHA-256 it
+  # prints is the one each server build logs when it embeds the tarball.
   web-ui:
-    name: web UI (hardcharger-ui)
+    name: web UI (build)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-        with:
-          sparse-checkout: server/cmake
-      - name: Fetch hardcharger-ui at the pinned commit
-        env:
-          DEPLOY_KEY: ${{ secrets.HARDCHARGER_UI_DEPLOY_KEY }}
-        run: |
-          commit=$(sed -nE 's/^set\(HARDCHARGER_WEB_UI_PINNED_COMMIT "([0-9a-f]{40})"\)$/\1/p' server/cmake/web_ui.cmake)
-          [ -n "$commit" ] || { echo "no pinned commit in server/cmake/web_ui.cmake"; exit 1; }
-          if [ -z "$DEPLOY_KEY" ]; then
-            echo "::error::the HARDCHARGER_UI_DEPLOY_KEY secret is not set: the private key of a read-only deploy key of gizmodata/hardcharger-ui"
-            exit 1
-          fi
-          key="$RUNNER_TEMP/ui_key"
-          printf '%s\n' "$DEPLOY_KEY" > "$key"
-          chmod 600 "$key"
-          git init -q ui
-          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-            git -C ui fetch -q --depth 1 git@github.com:gizmodata/hardcharger-ui.git "$commit"
-          rm -f "$key"
-          git -C ui checkout -q FETCH_HEAD
-          test "$(git -C ui rev-parse HEAD)" = "$commit"
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
       - name: Build and package the UI
         working-directory: ui
         run: |
           npm ci
+          npm run vendor:verify
           npm run build
           npm run package
-          cp release/hardcharger-ui-*.tar.gz ../hardcharger-ui.tar.gz
+          cat release/SHA256SUMS
+          echo "content SHA-256: $(cat release/hardcharger-ui-*.CONTENT_SHA256)"
       - uses: actions/upload-artifact@v7
         with:
-          name: web-ui
-          path: hardcharger-ui.tar.gz
-          retention-days: 7
+          name: hardcharger-ui
+          path: |
+            ui/release/hardcharger-ui-*.tar.gz
+            ui/release/hardcharger-ui-*.CONTENT_SHA256
+          if-no-files-found: error
+
+  # Whether this run touches the web UI: its own checks and browser tests (ui-checks,
+  # ui-e2e) run when ui/, the server's web UI code or the warp-sql submodule changed, and
+  # always on main, on tags and on a manual run.
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      ui: ${{ steps.diff.outputs.ui }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          paths=(ui server/src/web_ui.cc server/src/web_ui.hpp server/cmake/web_ui.cmake
+                 server/unit/web_ui_test.cc server/tests/test_web_ui.py third_party/warp-sql
+                 .github/workflows/server.yml)
+          base=$([ "$EVENT" = pull_request ] && echo "$PR_BASE" || echo "$BEFORE")
+          if [ "$GITHUB_REF" = refs/heads/main ] || [[ "$GITHUB_REF" == refs/tags/* ]] || [ "$EVENT" = workflow_dispatch ]; then
+            ui=true
+          elif [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            ui=true  # nothing to compare with (a new branch): run them
+          elif git diff --quiet "$base" HEAD -- "${paths[@]}"; then
+            ui=false
+          else
+            ui=true  # changed (or git failed: run them rather than guess)
+          fi
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          echo "web UI checks and browser tests: $ui"
+
+  # The UI's lint (eslint, prettier), typecheck (every TypeScript project), unit tests, and
+  # the vendored @gizmodata/warp-sql against the commit it pins (rebuilt from
+  # gizmodata/warp-sql-js with that repository's read-only deploy key).
+  ui-checks:
+    name: web UI (lint, typecheck, unit tests, client provenance)
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - name: Lint (eslint, prettier)
+        run: npm run lint
+      - name: Typecheck (the app, the unit tests, the e2e tests, the configs)
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Deploy key for gizmodata/warp-sql-js
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY_WARP_SQL_JS }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error::the DEPLOY_KEY_WARP_SQL_JS secret is not set: the private key of a read-only deploy key of gizmodata/warp-sql-js"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/warp_sql_js && chmod 600 ~/.ssh/warp_sql_js
+          printf 'Host github.com\n  IdentityFile ~/.ssh/warp_sql_js\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+      - name: The vendored client is what its pinned commit builds
+        run: node scripts/vendor-warp-sql.mjs --verify --rebuild
+
+  # The UI's browser tests, in Chromium and WebKit, against the Linux x86-64 server built in
+  # this run, which serves the UI it embeds (access control on, so PostgreSQL). They fail,
+  # never skip, when the server can't start.
+  ui-e2e:
+    name: web UI e2e (${{ matrix.browser }})
+    needs: [changes, build]
+    if: needs.changes.outputs.ui == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: hardcharger
+          POSTGRES_PASSWORD: hardcharger
+          POSTGRES_DB: hardcharger
+        ports: ["127.0.0.1:55460:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hardcharger" --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      HARDCHARGER_UI_TEST_EMBEDDED: "1"
+      HARDCHARGER_UI_TEST_RBAC_STORE_URI: postgresql://hardcharger:hardcharger@127.0.0.1:55460/hardcharger
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-linux-amd64
+          path: ${{ runner.temp }}/server
+      - name: Unpack the server
+        run: |
+          tar -C "$RUNNER_TEMP/server" -xzf "$RUNNER_TEMP/server/hardcharger-linux-amd64.tar.gz"
+          bin="$RUNNER_TEMP/server/hardcharger-linux-amd64/bin/hardcharger-server"
+          "$bin" --version
+          echo "HARDCHARGER_UI_TEST_SERVER_BINARY=$bin" >> "$GITHUB_ENV"
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: End-to-end tests
+        run: npx playwright test --project ${{ matrix.browser }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ui-e2e-${{ matrix.browser }}
+          path: |
+            ui/test-results
+            ui/playwright-report
+          retention-days: 14
 
   build:
     name: build and test (${{ matrix.name }})
@@ -111,8 +227,14 @@ jobs:
       # Inside the checkout: the Linux build's container mounts only that.
       - uses: actions/download-artifact@v8
         with:
-          name: web-ui
+          name: hardcharger-ui
           path: server/.web-ui
+      - name: The web UI tarball
+        run: |
+          shopt -s nullglob
+          ui=("$PWD"/server/.web-ui/hardcharger-ui-*.tar.gz)
+          [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
+          echo "HARDCHARGER_UI_TARBALL=${ui[0]}" >> "$GITHUB_ENV"
       # The warp-sql submodule is private: fetch it with its read-only deploy key (the
       # key reaches only that repository, so the main checkout uses the usual token).
       - name: Fetch the warp-sql submodule
@@ -206,12 +328,12 @@ jobs:
           # (warpsql-client-tests and warpsql-sdk-tests, Warp SQL's own tests, build on request.)
           if [ "$RUNNER_OS" = Linux ]; then
             server/scripts/in-manylinux.sh server server/build -DHARDCHARGER_STATIC=ON \
-              -DHARDCHARGER_WEB_UI="$PWD/server/.web-ui/hardcharger-ui.tar.gz"
+              -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL"
             server/scripts/in-manylinux.sh build server/build --target warpsql-client-tests warpsql-sdk-tests
           else
             read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
             cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                  -DHARDCHARGER_STATIC=ON -DHARDCHARGER_WEB_UI="$PWD/server/.web-ui/hardcharger-ui.tar.gz" \
+                  -DHARDCHARGER_STATIC=ON -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" \
                   -DOPENSSL_ROOT_DIR="$PWD/server/.deps/openssl-install" -DOPENSSL_USE_STATIC_LIBS=TRUE \
                   "${launcher[@]}"
             cmake --build server/build
@@ -402,8 +524,14 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: web-ui
+          name: hardcharger-ui
           path: server/.web-ui
+      - name: The web UI tarball
+        run: |
+          shopt -s nullglob
+          ui=("$PWD"/server/.web-ui/hardcharger-ui-*.tar.gz)
+          [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
+          echo "HARDCHARGER_UI_TARBALL=${ui[0]}" >> "$GITHUB_ENV"
       - name: Fetch the warp-sql submodule
         env:
           DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
@@ -455,7 +583,7 @@ jobs:
         run: |
           read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
           cmake -S server -B server/build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DHARDCHARGER_WEB_UI="$PWD/server/.web-ui/hardcharger-ui.tar.gz" \
+            -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" \
             "${launcher[@]}" \
             -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
@@ -544,8 +672,14 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: web-ui
+          name: hardcharger-ui
           path: server/.web-ui
+      - name: The web UI tarball
+        run: |
+          shopt -s nullglob
+          ui=("$PWD"/server/.web-ui/hardcharger-ui-*.tar.gz)
+          [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
+          echo "HARDCHARGER_UI_TARBALL=${ui[0]}" >> "$GITHUB_ENV"
       - name: Fetch the warp-sql submodule
         env:
           DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
@@ -602,7 +736,7 @@ jobs:
         run: |
           read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
           cmake -S server -B server/build-tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DHARDCHARGER_WEB_UI="$PWD/server/.web-ui/hardcharger-ui.tar.gz" \
+            -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" \
             "${launcher[@]}"
           cmake --build server/build-tsan
           cmake --build server/build-tsan --target warpsql-sdk-tests
@@ -703,7 +837,10 @@ jobs:
           if-no-files-found: ignore
 
   image:
-    needs: [build, portable, sanitize, tsan]
+    needs: [build, portable, sanitize, tsan, ui-checks, ui-e2e]
+    # The UI's jobs run on every main push and tag (the only runs that publish); elsewhere
+    # they may be skipped, which doesn't hold the image build up.
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -821,7 +958,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, portable, sanitize, tsan, image, windows, checksums]
+    needs: [build, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
