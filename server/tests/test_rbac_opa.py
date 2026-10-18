@@ -22,6 +22,9 @@ class FakeOpa:
         self.last_statement: dict = {}
         self.lock = threading.Lock()
         self.release = threading.Event()  # "slow" answers only once this is set
+        # The latest requests (arrival, action, mode, seconds to answer): an
+        # unexpected "no answer" then says whether the request arrived, and how it fared.
+        self.requests: list[dict] = []
         opa = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -29,8 +32,14 @@ class FakeOpa:
                 pass
 
             def do_POST(self):
+                arrived = time.monotonic()
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
+                entry = {"at": arrived, "action": body.get("input", {}).get("action", "?"), "mode": opa.mode,
+                         "took": None}
+                with opa.lock:
+                    opa.requests = [*opa.requests[-19:], entry]
                 decision = opa.decide(path=self.path, input_=body.get("input", {}))
+                entry["took"] = time.monotonic() - arrived
                 if decision is None:
                     self.send_response(500)
                     self.end_headers()
@@ -44,6 +53,8 @@ class FakeOpa:
                 self.wfile.write(payload)
 
         self.port = free_port()
+        # Bound and listening from here (before any server under test starts): a connect
+        # made before serve_forever runs waits in the backlog, it is not refused.
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -71,6 +82,13 @@ class FakeOpa:
             if obj.get("name") == "payroll" and user != "hr_bot":
                 allow = False
         return {"result": allow}
+
+    def recent(self) -> str:
+        now = time.monotonic()
+        with self.lock:
+            return "; ".join(f"{r['action']} in mode {r['mode']} {now - r['at']:.2f}s ago, " +
+                             ("not answered yet" if r["took"] is None else f"answered in {r['took'] * 1000:.0f} ms")
+                             for r in self.requests[-6:]) or "none arrived"
 
     def stop(self):
         self.server.shutdown()
@@ -149,7 +167,13 @@ def test_the_service_never_allows_what_grants_refuse(server, opa):
 
 @pytest.mark.parametrize("mode", ["error500", "not_a_bool", "slow"])
 def test_no_answer_means_no(server, opa, mode):
-    ann = server.user(name="ann")
+    started = time.monotonic()
+    try:
+        ann = server.user(name="ann")
+    except WarpError as raised:
+        raise AssertionError(f"a session was refused while the service was healthy, after "
+                             f"{time.monotonic() - started:.2f}s: {raised}; the service's latest requests: "
+                             f"{opa.recent()}") from raised
     assert error(client=ann, sql="SELECT * FROM orders") == ""
     opa.mode = mode
     started = time.monotonic()

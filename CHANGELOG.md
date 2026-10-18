@@ -358,7 +358,10 @@ own changelog in `python/CHANGELOG.md`.
   `[error500]` and `[not_a_bool]` on Windows amd64): a healthy exchange with the mock
   policy service sometimes outlasted the test server's 800 ms deadline, so a session was
   refused before the service misbehaved. The deadline is now 5 s (stretched on sanitizer
-  builds), and the "slow" service answers only when released. The TSan job's data race in
+  builds), and the "slow" service answers only when released. A CI run measured the
+  healthy exchange at under 150 ms on every platform (Windows p99 149 ms, TSan 95 ms), so
+  the failures were stalls, not steady latency: a refusal of a healthy service now reports
+  the service's latest requests (arrived or not, and how long each took). The TSan job's data race in
   `ExtensionCallbackManager::Register` / `Optimizer::Optimize` (2) came from `LOAD spatial`
   (a prebuilt, uninstrumented download) while another thread planned a query:
   `test_geoarrow.py` now loads it in the init SQL, before anything else runs
