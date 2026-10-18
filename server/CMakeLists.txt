@@ -206,6 +206,11 @@ add_executable(hardcharger-unit-tests
   unit/sql_text_test.cc)
 target_link_libraries(hardcharger-unit-tests PRIVATE hardcharger_core GTest::gtest_main)
 hardcharger_rpath(hardcharger-unit-tests)
+if(MSVC)
+  # A PDB with public symbols, so a crash dump of the unit tests names its functions; a
+  # link option only, so no object file (or compiler cache entry) changes.
+  target_link_options(hardcharger-unit-tests PRIVATE /DEBUG /OPT:REF /OPT:ICF)
+endif()
 
 # The command-line client, `hardcharger` (client/), on the Warp SQL client library, with
 # replxx for line editing (built by scripts/build-replxx.sh at its pinned release).

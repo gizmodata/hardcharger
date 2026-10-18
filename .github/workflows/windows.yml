@@ -177,6 +177,22 @@ jobs:
                 -DWARPSQL_BUILD_TESTS=ON
           cmake --build build-warp --target warp-duckdb warpsql-client-tests warpsql-sdk-tests
 
+      # Windows Error Reporting writes a minidump of any test program that crashes, uploaded
+      # below on failure: the unit tests once segfaulted at exit after every test passed
+      # (2026-10-18, 1 run in 30), with no stack to go on.
+      - name: Crash dumps on
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'crash-dumps'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          foreach ($exe in 'hardcharger-unit-tests.exe', 'warpsql-client-tests.exe', 'warpsql-sdk-tests.exe',
+                           'hardcharger-server.exe', 'warp-duckdb.exe', 'hardcharger.exe') {
+            $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$exe"
+            New-Item -Force -Path $key | Out-Null
+            Set-ItemProperty -Path $key -Name DumpFolder -Value $dir -Type ExpandString
+            Set-ItemProperty -Path $key -Name DumpType -Value 1 -Type DWord   # minidump
+            Set-ItemProperty -Path $key -Name DumpCount -Value 10 -Type DWord
+          }
       - name: Unit tests
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: server/build/hardcharger-unit-tests.exe --gtest_brief=1
@@ -345,6 +361,17 @@ jobs:
           name: hardcharger-${{ matrix.name }}
           path: dist/hardcharger-${{ matrix.name }}.zip
           if-no-files-found: error
+      - name: Crash dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crash-dumps-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/crash-dumps
+            server/build/*.exe
+            server/build/*.pdb
+          if-no-files-found: ignore
+          retention-days: 14
       - name: PostgreSQL log
         if: failure()
         run: tail -100 "$(cygpath -u "$RUNNER_TEMP")/pg.log" || true
