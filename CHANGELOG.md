@@ -154,6 +154,15 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- The answer to a bulk-ingest part or upload sent again with its `Idempotency-Key` is no
+  longer lost on Linux and macOS (warp-sql ce22b15). The server answers such a retry from
+  the first upload without reading the body, and then closed the connection with the body
+  unread, which resets it: a client still sending got a broken pipe or a reset instead of
+  the answer and had to send it again, with the same risk each time (warp-sql-adbc saw a
+  part sent three times). The Warp SQL SDK now closes as nginx's lingering close does on
+  every platform (stop sending, then read and drop what the client still sends, up to
+  2 s), as it already did on Windows; a 413 or an ingest error sent before the body was
+  read now reaches the client too. No row was ever written twice.
 - The release binaries are self-contained, as GizmoSQL's: DuckDB (with its built-in
   extensions), OpenSSL 3, Arrow, Boost, yaml-cpp and replxx are linked in statically, so
   the tarballs hold just `bin/hardcharger-server`, `bin/hardcharger`, the licence and the
