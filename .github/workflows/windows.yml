@@ -75,6 +75,17 @@ jobs:
           cmake --version | head -1
           ninja --version
 
+      # Git for Windows has sha256sum but no shasum, which server/scripts/ci-deps-key.sh
+      # (the dependency caches' keys) calls as `shasum -a 256`.
+      - name: shasum
+        run: |
+          bin="$(cygpath -u "$RUNNER_TEMP")/bin"
+          mkdir -p "$bin"
+          printf '#!/usr/bin/env bash\n[ "${1:-}" = -a ] && shift 2\nexec sha256sum "$@"\n' > "$bin/shasum"
+          chmod +x "$bin/shasum"
+          cygpath -w "$bin" >> "$GITHUB_PATH"
+          echo abc | "$bin/shasum" -a 256
+
       # The Windows libraries vcpkg builds (static, on the static C runtime), listed in
       # .github/windows-vcpkg-packages.txt: OpenSSL for everything, and libpq, libcurl and
       # CRoaring for DuckDB's built-in extensions (the postgres scanner, httpfs, ducklake).
