@@ -25,6 +25,11 @@ struct Config {
   std::string tls_key;    // PEM private key
   std::string mtls_ca_cert;  // PEM CA client certificates are verified against (mutual TLS)
   bool mtls_require_client_cert = true;  // false: clients without a certificate may connect
+  // Offer the client_certificate grant (sign in with the certificate, no password). Off:
+  // client certificates only admit connections.
+  bool mtls_certificate_sign_in = false;
+  // With mtls_crl_file every CA of a chain needs a CRL; true lets a CA above the leaf go without.
+  bool mtls_crl_allow_missing_ca_crls = false;
   std::string mtls_crl_file;  // PEM CRLs, checked at the handshake; reloaded when it changes
   // Where the client_certificate grant takes a certificate's identity from: san_email,
   // san_uri (e.g. SPIFFE IDs) or subject_cn.

@@ -113,6 +113,12 @@ const std::vector<Option>& Options() {
       {"mtls_require_client_cert", Kind::kBool,
        "refuse connections without a client certificate (false: they sign in another way)",
        FLAG(mtls_require_client_cert)},
+      {"mtls_certificate_sign_in", Kind::kBool,
+       "offer certificate sign-in (the client_certificate grant); off: certificates only admit connections",
+       FLAG(mtls_certificate_sign_in)},
+      {"mtls_crl_allow_missing_ca_crls", Kind::kBool,
+       "accept a CA above the leaf that has no CRL in mtls_crl_file (default: refuse it)",
+       FLAG(mtls_crl_allow_missing_ca_crls)},
       {"mtls_crl_file", Kind::kString,
        "certificate revocation lists (PEM) for client certificates; reloaded when the file changes",
        TEXT(mtls_crl_file)},
@@ -391,9 +397,14 @@ void Validate(Loaded& loaded) {
          {std::pair{"mtls_crl_file", !c.mtls_crl_file.empty()},
           {"mtls_admin_identities", !c.mtls_admin_identities.empty()},
           {"mtls_require_identity_match", c.mtls_require_identity_match},
+          {"mtls_certificate_sign_in", c.mtls_certificate_sign_in},
+          {"mtls_crl_allow_missing_ca_crls", c.mtls_crl_allow_missing_ca_crls},
           {"mtls_require_client_cert", !c.mtls_require_client_cert}}) {
       if (set) throw std::invalid_argument(std::string(name) + " needs mtls_ca_cert (mutual TLS)");
     }
+  }
+  if (!c.mtls_admin_identities.empty() && !c.mtls_certificate_sign_in) {
+    throw std::invalid_argument("mtls_admin_identities needs mtls_certificate_sign_in");
   }
   if (c.mtls_identity_source != "san_email" && c.mtls_identity_source != "san_uri" &&
       c.mtls_identity_source != "subject_cn") {

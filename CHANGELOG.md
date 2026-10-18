@@ -27,6 +27,15 @@ own changelog in `python/CHANGELOG.md`.
   and a scoped token (`CREATE SCOPED TOKEN`) minted over a bound token carries its `cnf` too.
   `hardcharger_sessions()` shows `client_certificate` as the auth method. Tests:
   `test_mtls_identity.py` (18), and the conformance suite's `test_mtls.py`.
+- From the security review: certificate sign-in is opt-in (`mtls_certificate_sign_in`,
+  default false; `mtls_admin_identities` needs it), so `mtls_ca_cert` alone keeps mTLS a
+  transport check. CRLs cover every certificate of the chain, and a CA without one is refused
+  unless `mtls_crl_allow_missing_ca_crls`; open connections are re-checked when a CRL passes
+  its nextUpdate. Identities are printable ASCII. A session takes only tokens bound as its
+  opener's was, so a scoped token always carries the binding of the request that minted it,
+  and a bound session can't mint `FOR USER` another user. Certificate refusals are security
+  warnings and audit records (user, token id, thumbprint, peer), and a token is logged as
+  validated only after its certificate checks.
 - The `hardcharger` client: `--auth-type mtls` (or `authType=mtls` in a URI) signs in with
   the `--mtls-cert` certificate, and signs in again with it when the server ends the session.
 

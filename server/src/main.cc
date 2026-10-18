@@ -38,6 +38,7 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
     tls.client_ca_file = config.mtls_ca_cert;
     tls.require_client_certificate = config.mtls_require_client_cert;
     tls.client_crl_file = config.mtls_crl_file;
+    tls.allow_missing_ca_crls = config.mtls_crl_allow_missing_ca_crls;
     tls.client_identity_source = warpsql::ParseClientIdentitySource(config.mtls_identity_source);
     tls.require_identity_match = config.mtls_require_identity_match;
     tls.on_crl_reload = [](bool ok, const std::string& message) {
@@ -56,6 +57,17 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   // SET [GLOBAL] hardcharger.query_timeout changes).
   options.default_statement_timeout = std::chrono::milliseconds(0);
   options.cors_allowed_origins = config.cors_origins;
+  // Certificate refusals (a replayed bound token, another identity's sign-in, a revoked
+  // certificate, an unknown identity): a security warning and an audit record each.
+  options.on_security_event = [](const warpsql::SecurityEvent& event) {
+    hc::LogFields fields{{"kind", "authentication"}, {"status", "denied"},
+                         {"code", event.code},       {"user", event.user},
+                         {"token_id", event.token_id}, {"certificate_thumbprint", event.presented_thumbprint},
+                         {"certificate_subject", event.certificate_subject}, {"peer", event.peer},
+                         {"request_id", event.request_id}, {"error", event.detail}};
+    hc::Log(hc::LogLevel::kWarning, "security: refused " + event.code, fields);
+    hc::Audit(hc::LogLevel::kWarning, "client certificate check refused a request", std::move(fields));
+  };
   return options;
 }
 

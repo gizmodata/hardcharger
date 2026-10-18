@@ -124,7 +124,7 @@ Authenticator::Authenticator(const Config& config,
       log_level_(ParseLogLevel(config.auth_log_level)),
       access_(std::move(access)),
       server_tokens_(std::move(server_tokens)),
-      mutual_tls_(!config.tls_cert.empty() && !config.mtls_ca_cert.empty()),
+      mutual_tls_(!config.tls_cert.empty() && !config.mtls_ca_cert.empty() && config.mtls_certificate_sign_in),
       certificate_admins_(config.mtls_admin_identities) {
   if (!config.token_signature_verify_cert_path.empty()) {
     std::string pem = ReadFile(config.token_signature_verify_cert_path);
@@ -315,9 +315,6 @@ warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view ident
       if (access_ && access_->CertificateUser(name)) {
         LogAt(log_level_, LogLevel::kWarning, "sign-in refused: an administrator identity is also a store user",
               {{"method", "client_certificate"}, {"certificate_identity", name}});
-        audit.emplace_back("status", "denied");
-        audit.emplace_back("reason", "the identity is both an administrator identity and a store user");
-        Audit(LogLevel::kWarning, "client certificate sign-in refused", audit);
         throw Error(ErrorCode::kUnknownCertificateIdentity,
                     "the client certificate's identity '" + name +
                         "' is both one of mtls_admin_identities and a user of the access-control "
@@ -332,10 +329,9 @@ warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view ident
       return signed_in(warpsql::Principal{*user, "user", "client_certificate", {}, {}});
     }
   }
+  // The SDK reports the refusal as a security event (logged and audited once, in main.cc).
   LogAt(log_level_, LogLevel::kInfo, "sign-in refused",
         {{"method", "client_certificate"}, {"certificate_identity", name}});
-  audit.emplace_back("status", "denied");
-  Audit(LogLevel::kWarning, "client certificate sign-in refused", audit);
   throw Error(ErrorCode::kUnknownCertificateIdentity,
               "the client certificate's identity '" + name + "' is not a user of this server" +
                   (access_ ? ". An administrator creates it with CREATE USER" : ""));

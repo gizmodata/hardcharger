@@ -373,6 +373,7 @@ client. The certificate proves who the user is; grants decide what they may do.
 tls_cert: /etc/hardcharger/server.pem
 tls_key: /etc/hardcharger/server.key
 mtls_ca_cert: /etc/hardcharger/client-ca.pem      # client certificates are verified against it
+mtls_certificate_sign_in: true                    # off by default: certificates only admit connections
 mtls_identity_source: san_email                   # or san_uri (SPIFFE IDs), subject_cn
 mtls_admin_identities: [ops@example.com]          # sign in as the administrator
 mtls_crl_file: /etc/hardcharger/client-ca.crl     # revocation, reloaded when it changes
@@ -380,16 +381,22 @@ mtls_crl_file: /etc/hardcharger/client-ca.crl     # revocation, reloaded when it
 
 | Option | Default | Meaning |
 |---|---|---|
+| `mtls_certificate_sign_in` | `false` | Offer certificate sign-in at all. Off, `mtls_ca_cert` only admits connections, and the grant is answered `unsupported_grant_type` |
 | `mtls_require_client_cert` | `true` | Refuse connections without a certificate at the handshake; `false` lets them connect and sign in another way |
 | `mtls_identity_source` | `san_email` | Which part of the certificate is the identity. A certificate with none, or several, values of that kind is refused |
 | `mtls_admin_identities` | none | Identities that sign in as the administrator. Under access control, any other identity must be a user of the store (`CREATE USER "joe@example.com"`, a password optional); without it, no other identity signs in |
-| `mtls_crl_file` | none | PEM CRLs, one for each CA that issues client certificates; a revoked certificate is refused at the handshake. The file is looked at every 5 seconds and reloaded when it changes, and open connections are checked again at their next request |
+| `mtls_crl_file` | none | PEM CRLs, one for every CA of a client's chain (the root's too): every certificate of the chain is checked, so a revoked intermediate revokes what it issued, and a CA without a CRL is refused. A revoked certificate is refused at the handshake. The file is looked at every 5 seconds and reloaded when it changes, and open connections are checked again then and when a CRL passes its nextUpdate (an expired CRL refuses everything) |
+| `mtls_crl_allow_missing_ca_crls` | `false` | Accept a CA above the leaf that has no CRL in the file |
 | `mtls_require_identity_match` | `false` | A password or token sign-in over a client certificate must be for the certificate's identity |
 
 Tokens from a certificate sign-in are bound to it (RFC 8705's `cnf` claim): they work only on
 connections presenting the same certificate, so a copied token is no use without the private
 key. A session opened with such a token, and any scoped token minted from it, stay bound to the
-same certificate. TLS has to end at Hardcharger (a TCP or TLS-passthrough load balancer) for this; a
+same certificate (a session takes only tokens bound as its opener's was, and a bound session
+can't mint scoped tokens `FOR USER` someone else). Identities are printable ASCII. Every refusal
+(a bound token on the wrong connection, another identity's sign-in, a revoked certificate, an
+unknown identity) is a security warning in the log and an audit record, with the user, the
+token's id, the certificate presented and the client's address. TLS has to end at Hardcharger (a TCP or TLS-passthrough load balancer) for this; a
 proxy that ends TLS takes the certificate with it. Sign-ins with a certificate are written to
 the audit log (`kind: authentication`, `method: client_certificate`, the identity and the
 certificate's thumbprint).

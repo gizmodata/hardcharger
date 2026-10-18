@@ -197,6 +197,14 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
     }
     access_->CheckToken(IdentityOf(principal));
   }
+  // For the SDK's security events; Issue() never copies it into a token.
+  if (decoded.has_id()) principal.claims["token_id"] = decoded.get_id();
+  return principal;
+}
+
+void JwtTokenService::Accepted(std::string_view token, const warpsql::Principal& principal) {
+  // Only now: the SDK calls this once the token also passed its certificate checks, so a
+  // replayed bound token is never logged as validated.
   bool first_use = false;
   {
     constexpr std::size_t kMaxSeen = 50000;
@@ -210,7 +218,6 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
   }
   LogAt(log_level_, first_use ? LogLevel::kInfo : LogLevel::kDebug, "Bearer Token was validated successfully",
         {{"user", principal.name}, {"role", principal.role}, {"first_use", first_use ? "true" : "false"}});
-  return principal;
 }
 
 }  // namespace hardcharger

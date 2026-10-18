@@ -708,6 +708,18 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
                     ": an administrator token with catalog_access rules cannot run access-control statements",
                 "42501");
   }
+  // A certificate-bound session's scoped tokens are bound to its certificate (Warp SQL §4.4),
+  // so one minted FOR USER someone else would be usable only over this certificate: refused,
+  // rather than handed to a user who can't use it (or who would then hold this key).
+  if (const auto* scoped = std::get_if<ScopedTokenCommand>(&parsed.command);
+      scoped && scoped->kind == ScopedTokenCommand::Kind::kCreate && scoped->for_user &&
+      !identity_.certificate_thumbprint.empty() && !IdentifiersEqual(*scoped->for_user, identity_.user_name)) {
+    throw Error(ErrorCode::kPermissionDenied,
+                "Hardcharger blocked CREATE SCOPED TOKEN FOR USER " + *scoped->for_user +
+                    ": this session signed in with a client certificate, and its scoped tokens are bound to "
+                    "that certificate; mint tokens for other users from a password or token sign-in",
+                "42501");
+  }
   const Principal actor = unrestricted_ ? Principal::Superuser(identity_.user_name) : state->principal();
   SessionObjectResolver resolver(*dd::capiv2::Convert(connection_));
   auto executed = engine->Execute(parsed.command, actor, resolver);

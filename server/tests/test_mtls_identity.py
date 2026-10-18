@@ -151,7 +151,7 @@ def audit_records(server: TlsServer) -> list[dict]:
 
 def test_an_admin_identity_signs_in_as_the_administrator(launcher, pki):
     ops = pki.issue(name="ops@example.com")
-    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-admin-identities", "OPS@example.com"])
+    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-certificate-sign-in", "--mtls-admin-identities", "OPS@example.com"])
     token = server.certificate_token(identity=ops)
     claims = jwt.decode(jwt=token, options={"verify_signature": False})
     # The configured spelling, the administrator's role, the method; bound to the certificate.
@@ -167,7 +167,7 @@ def test_an_admin_identity_signs_in_as_the_administrator(launcher, pki):
 
 def test_any_other_identity_is_refused_without_access_control(launcher, pki):
     ops, stranger = pki.issue(name="ops@example.com"), pki.issue(name="stranger@example.com")
-    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-admin-identities", "ops@example.com"])
+    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-certificate-sign-in", "--mtls-admin-identities", "ops@example.com"])
     body = problem(response=server.certificate_grant(identity=stranger), status=401,
                    code="unknown_certificate_identity")
     assert "stranger@example.com" in body["detail"]
@@ -176,14 +176,14 @@ def test_any_other_identity_is_refused_without_access_control(launcher, pki):
     with plain.http(identity=ops) as http:
         assert "client_certificate" not in http.get(url="/warp").json()["auth"]["grant_types"]
         problem(response=http.post(url="/warp/v1/auth/token", json={"grant_type": "client_certificate"}),
-                status=400, code="bad_request")
+                status=400, code="unsupported_grant_type")
     with server.http(identity=ops) as http:
         assert "client_certificate" in http.get(url="/warp").json()["auth"]["grant_types"]
 
 
 def test_an_admin_identity_is_a_name_not_a_pattern(launcher, pki):
     ops, other = pki.issue(name="ops@example.com"), pki.issue(name="eve@example.com")
-    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-admin-identities", "*@example.com"])
+    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-certificate-sign-in", "--mtls-admin-identities", "*@example.com"])
     problem(response=server.certificate_grant(identity=other), status=401, code="unknown_certificate_identity")
     problem(response=server.certificate_grant(identity=ops), status=401, code="unknown_certificate_identity")
 
@@ -192,7 +192,7 @@ def test_a_bound_token_minted_with_a_broken_cnf_is_refused(launcher, pki):
     # A token with the server's own signature (the tests know its key) whose cnf can't
     # be read binds to nothing the server can check: refused, never treated as unbound.
     ops = pki.issue(name="ops@example.com")
-    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-admin-identities", "ops@example.com"])
+    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-certificate-sign-in", "--mtls-admin-identities", "ops@example.com"])
     good = jwt.decode(jwt=server.certificate_token(identity=ops), options={"verify_signature": False})
     with server.http(identity=ops) as http:
         for cnf in [{"x5t#S256": ""}, {"x5t": good["cnf"]["x5t#S256"]}, "x", good["cnf"]]:
@@ -211,7 +211,7 @@ def rbac(launcher, store, pki):
     ops = pki.issue(name="ops@example.com")
     store_uri = store.new_database()
     server = start(launcher=launcher, pki=pki, probe=ops,
-                   args=["--mtls-admin-identities", "ops@example.com"],
+                   args=["--mtls-certificate-sign-in", "--mtls-admin-identities", "ops@example.com"],
                    env={**rbac_env(store_uri=store_uri), "HARDCHARGER_AUDIT_CHAIN_KEY": AUDIT_KEY})
     server.ops = ops
     server.store_uri = store_uri
@@ -290,7 +290,7 @@ def test_an_admin_identity_is_no_store_user_name(rbac, pki, launcher, store):
     # replica configured otherwise) makes the certificate sign-in refuse.
     nina = pki.issue(name="nina@example.com")
     rbac.certificate_token(identity=nina)  # a store user, as such
-    other = start(launcher=launcher, pki=pki, probe=nina, args=["--mtls-admin-identities", "nina@example.com"],
+    other = start(launcher=launcher, pki=pki, probe=nina, args=["--mtls-certificate-sign-in", "--mtls-admin-identities", "nina@example.com"],
                   env={**rbac_env(store_uri=rbac.store_uri)})
     body = problem(response=other.certificate_grant(identity=nina), status=401, code="unknown_certificate_identity")
     assert "both one of mtls_admin_identities and a user" in body["detail"], body
@@ -349,7 +349,7 @@ def test_certificate_sign_ins_are_audited(rbac, pki, tmp_path):
     problem(response=rbac.certificate_grant(identity=stranger), status=401, code="unknown_certificate_identity")
     records = audit_records(server=rbac)
     allowed = [r for r in records if r.get("status") == "allowed" and r.get("certificate_identity") == "carol@example.com"]
-    denied = [r for r in records if r.get("status") == "denied"]
+    denied = [r for r in records if r.get("status") == "denied" and "audit_hash" in r]
     assert len(allowed) == 1 and len(denied) == 1, records
     der = carol[2].public_bytes(encoding=serialization.Encoding.DER)
     assert allowed[0]["method"] == "client_certificate"
@@ -357,8 +357,9 @@ def test_certificate_sign_ins_are_audited(rbac, pki, tmp_path):
     assert allowed[0]["certificate_thumbprint"] == (
         base64.urlsafe_b64encode(hashlib.sha256(der).digest()).rstrip(b"=").decode())
     assert "CN=carol@example.com" in allowed[0]["certificate_subject"]
-    assert denied[0]["method"] == "client_certificate"
-    assert denied[0]["certificate_identity"] == "stranger@example.com"
+    assert denied[0]["code"] == "unknown_certificate_identity"
+    assert denied[0]["user"] == "stranger@example.com"
+    assert denied[0]["certificate_thumbprint"] == thumbprint_of(identity=stranger)
     # Both are links of the access-control audit chain, which verifies.
     assert all("audit_hash" in r for r in allowed + denied)
     log = tmp_path / "audit.log"
@@ -372,7 +373,7 @@ def test_rules_only_access_control_signs_in_no_one_but_the_admin_identities(laun
     # Without a store, sign-in tokens' catalog_access rules restrict sessions; a
     # certificate carries no rules, so only the administrator's identities may use it.
     ops, carol = pki.issue(name="ops@example.com"), pki.issue(name="carol@example.com")
-    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-admin-identities", "ops@example.com"])
+    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-certificate-sign-in", "--mtls-admin-identities", "ops@example.com"])
     problem(response=server.certificate_grant(identity=carol), status=401, code="unknown_certificate_identity")
     server.certificate_token(identity=ops)
 
@@ -430,7 +431,7 @@ def run_client(server: TlsServer, *args: str) -> subprocess.CompletedProcess:
 
 def test_the_client_signs_in_with_its_certificate(launcher, pki):
     ops, stranger = pki.issue(name="ops@example.com"), pki.issue(name="stranger@example.com")
-    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-admin-identities", "ops@example.com"])
+    server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-certificate-sign-in", "--mtls-admin-identities", "ops@example.com"])
     ok = run_client(server, "--mtls-cert", str(ops[0]), "--mtls-key", str(ops[1]), "--auth-type", "mtls",
                     "--csv", "--no-header", "-c", "SELECT auth_method FROM hardcharger_sessions() WHERE is_current")
     assert ok.returncode == 0, ok.stderr
@@ -442,3 +443,95 @@ def test_the_client_signs_in_with_its_certificate(launcher, pki):
     missing = run_client(server, "--auth-type", "mtls", "-c", "SELECT 1")
     assert missing.returncode != 0
     assert "--auth-type mtls needs --mtls-cert and --mtls-key" in missing.stderr, missing.stderr
+
+
+# ---- Review fixes ----
+
+def test_certificate_sign_in_is_off_unless_enabled(launcher, store, pki):
+    # A store user and a client CA are not enough: with mtls_ca_cert alone the certificate
+    # admits the connection and signs no one in.
+    ops, alice = pki.issue(name="ops@example.com"), pki.issue(name="alice@example.com")
+    store_uri = store.new_database()
+    server = start(launcher=launcher, pki=pki, probe=ops, env=rbac_env(store_uri=store_uri))
+    admin = server.admin(identity=ops)
+    expect_allowed(client=admin, sql="CREATE USER \"alice@example.com\" PASSWORD 'S3cret:pw'")
+    with server.http(identity=alice) as http:
+        assert "client_certificate" not in http.get(url="/warp").json()["auth"]["grant_types"]
+    problem(response=server.certificate_grant(identity=alice), status=400, code="unsupported_grant_type")
+    # The twin: the same store, with certificate sign-in turned on.
+    enabled = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-certificate-sign-in"],
+                    env=rbac_env(store_uri=store_uri))
+    enabled.certificate_token(identity=alice)
+    # Admin identities without it are a configuration error, not a silent no-op.
+    tls = ["--tls-cert", str(pki.server[0]), "--tls-key", str(pki.server[1]), "--mtls-ca-cert", str(pki.ca_path)]
+    running = launcher.start(args=[*tls, "--mtls-admin-identities", "ops@example.com"], expect_up=False)
+    assert running.process.wait(timeout=20) != 0
+    assert "mtls_admin_identities needs mtls_certificate_sign_in" in running.log(), running.log()
+
+
+def test_certificate_refusals_are_security_events_and_audited(rbac, pki, tmp_path):
+    carol = pki.issue(name="carol@example.com")
+    carol_again = pki.issue(name="carol-again", sans=[x509.RFC822Name("carol@example.com")])
+    stranger = pki.issue(name="stranger@example.com")
+    expect_allowed(client=rbac.admin(identity=rbac.ops), sql='CREATE USER "carol@example.com"')
+    token = rbac.certificate_token(identity=carol)
+    jti = jwt.decode(jwt=token, options={"verify_signature": False})["jti"]
+    with rbac.http(identity=carol_again) as http:  # a stolen token, replayed over another certificate
+        for _ in range(2):
+            problem(response=http.post(url="/warp/v1/sessions", headers={"Authorization": f"Bearer {token}"}, json={}),
+                    status=401, code="certificate_mismatch")
+    problem(response=rbac.certificate_grant(identity=stranger), status=401, code="unknown_certificate_identity")
+    time.sleep(0.5)
+    records = rbac.running.log_records()
+    warnings = [r for r in records if r.get("message") == "security: refused certificate_mismatch"]
+    assert len(warnings) == 2, records
+    for record in warnings:
+        assert record["level"] == "warning"
+        assert record["user"] == "carol@example.com" and record["token_id"] == jti
+        assert record["certificate_thumbprint"] == thumbprint_of(identity=carol_again)
+        assert record["peer"].startswith("127.0.0.1:")
+    audited = [r for r in records if r.get("message") == "client certificate check refused a request"]
+    assert {r["code"] for r in audited} == {"certificate_mismatch", "unknown_certificate_identity"}, audited
+    assert len(audited) == 3 and all("audit_hash" in r for r in audited)
+    assert [r for r in audited if r["code"] == "unknown_certificate_identity"][0]["user"] == "stranger@example.com"
+    # The refused uses were never logged as a validated token; the twin, a real use, is.
+    validated = [r for r in records if r.get("message") == "Bearer Token was validated successfully"
+                 and r.get("user") == "carol@example.com"]
+    assert validated == [], validated
+    rbac.client(identity=carol, token=token)
+    time.sleep(0.5)
+    assert any(r.get("message") == "Bearer Token was validated successfully" and r.get("user") == "carol@example.com"
+               for r in rbac.running.log_records())
+    log = tmp_path / "audit.log"
+    log.write_text(rbac.running.log())
+    out = subprocess.run(args=[str(BINARY), "--verify-audit-log", str(log)], capture_output=True, text=True,
+                         env={"PATH": "/usr/bin", "HARDCHARGER_AUDIT_CHAIN_KEY": AUDIT_KEY})
+    assert out.returncode == 0, out.stdout + out.stderr
+
+
+def test_a_bound_token_cannot_mint_in_an_unbound_session(rbac, pki):
+    # The probe's route to an unbound scoped token: a password session, a bound token on it.
+    carol = pki.issue(name="carol@example.com")
+    expect_allowed(client=rbac.admin(identity=rbac.ops), sql="CREATE USER \"carol@example.com\" PASSWORD 'pw:1'")
+    password_session = rbac.client(identity=carol, token=rbac.password_token(identity=carol, user="carol@example.com",
+                                                                            password="pw:1"))
+    bound = rbac.certificate_token(identity=carol)
+    with rbac.http(identity=carol) as http:
+        response = http.post(url=f"{password_session.url}/statements", headers={"Authorization": f"Bearer {bound}"},
+                             json={"sql": "CREATE SCOPED TOKEN viabound ALLOW SELECT"})
+    problem(response=response, status=401, code="certificate_mismatch")
+    # Minted under the bound token's own session, it carries the binding (the twin).
+    scoped = rbac.client(identity=carol, token=bound).run(sql="CREATE SCOPED TOKEN own ALLOW SELECT").to_pylist()[0]
+    assert jwt.decode(jwt=scoped["token"], options={"verify_signature": False})["cnf"] == {
+        "x5t#S256": thumbprint_of(identity=carol)}
+
+
+def test_a_bound_admin_session_cannot_mint_for_another_user(rbac, pki):
+    admin = rbac.admin(identity=rbac.ops)  # a password sign-in (over a certificate connection)
+    expect_allowed(client=admin, sql='CREATE USER "ula@example.com"')
+    bound_admin = rbac.client(identity=rbac.ops, token=rbac.certificate_token(identity=rbac.ops))
+    expect_blocked(client=bound_admin, sql='CREATE SCOPED TOKEN ops FOR USER "ula@example.com" ALLOW SELECT',
+                   why="its scoped tokens are bound to that certificate")
+    # The twin: from the password sign-in it works, and the token is unbound.
+    rows = expect_allowed(client=admin, sql='CREATE SCOPED TOKEN ops FOR USER "ula@example.com" ALLOW SELECT').to_pylist()
+    assert "cnf" not in jwt.decode(jwt=rows[0]["token"], options={"verify_signature": False})
