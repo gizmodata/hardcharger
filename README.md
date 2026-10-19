@@ -88,6 +88,11 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
 - 📐 A resizable editor and side panel (drag, keyboard, double-click to reset; kept in the
   browser), a short **How the editor works** help with the server's session idle timeout, and
   a layout for phone-sized screens.
+- 🧭 **API page**: the server's own Warp SQL API, from its OpenAPI description
+  (`/warp/v1/openapi.json`), in Swagger UI. **Try it out** sends requests to this server only,
+  signed in as you: the page adds your sign-in to each request as it leaves, so there is no
+  token to paste, and it never goes to another origin or into storage. Arrow results come back
+  as a file to download.
 - 🔏 **Certificate sign-in** under mutual TLS: the browser presents its client certificate to
   load `/ui` at all, and with `--mtls-certificate-sign-in` the page offers **Sign in with my
   certificate**, no password needed.
@@ -95,6 +100,11 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   **Sign in with <provider>** beside the user name and password, and comes back signed in.
 - 🛡️ The server's own sign-in, a short-lived token kept only in the tab, and a strict
   Content-Security-Policy: nothing loads from another origin.
+
+<p align="center">
+  <img src="docs/assets/web-ui-api-light.png" alt="The web UI's API page, light theme: the server's Warp SQL operations in Swagger UI" width="49%">
+  <img src="docs/assets/web-ui-api-dark.png" alt="The API page, dark theme: Try it out on Read a session, with the server's 200 answer" width="49%">
+</p>
 
 The UI's source is in [`ui/`](ui/README.md), built and tested with the server in the same CI run.
 
@@ -307,6 +317,14 @@ curl -s localhost:31337/warp/v1/sessions/$SESSION/statements -H "Authorization: 
 
 Ask for `Accept: application/vnd.apache.arrow.stream` and the rows arrive as an Arrow IPC
 stream in that same response.
+
+The server describes its API in OpenAPI 3.1 at `GET /warp/v1/openapi.json` (no sign-in
+needed; discovery, `GET /warp`, lists it as capability `openapi`), for API tools and client
+generators; the web UI's API page shows it:
+
+```bash
+curl -s localhost:31337/warp/v1/openapi.json | jq '{openapi, title: .info.title, paths: (.paths | length)}'
+```
 
 ## 💻 Command-line client
 

@@ -120,3 +120,64 @@ test("screenshots of the main views", async ({ page, harness }, testInfo) => {
   await expect(page.getByTestId("narrow-note")).toBeVisible();
   await shot("phone-light");
 });
+
+test("screenshots of the API page", async ({ page, harness }, testInfo) => {
+  const shot = (name: string) => page.screenshot({ path: testInfo.outputPath(`${name}.png`) });
+  await signIn(page, harness.admin);
+  await page.getByRole("button", { name: "API", exact: true }).click();
+  const ui = page.getByTestId("api-swagger");
+  await expect(ui.locator(".opblock").first()).toBeVisible();
+  await shot("api-light");
+  await page.getByRole("button", { name: "Dark theme" }).click();
+  await expect
+    .poll(() =>
+      ui
+        .locator(".opblock-tag")
+        .first()
+        .evaluate((el) => getComputedStyle(el).color),
+    )
+    .toBe("rgb(228, 230, 230)");
+  await shot("api-dark");
+
+  // Try it out: open a session, then read it back.
+  const block = (id: string) => ui.locator(`#operations-Sessions-${id}`);
+  const answer = (id: string) => block(id).locator(".live-responses-table tbody .response-col_status").first();
+  await block("createSession").locator(".opblock-summary-control").click();
+  await block("createSession").getByRole("button", { name: "Try it out" }).click();
+  await block("createSession").locator("textarea.body-param__text").fill('{"options": {"autocommit": true}}');
+  await block("createSession").getByRole("button", { name: "Execute" }).click();
+  await expect(answer("createSession")).toHaveText("201");
+  const created = await block("createSession")
+    .locator(".live-responses-table tbody .response-col_description .highlight-code pre")
+    .first()
+    .innerText();
+  const sessionId = (JSON.parse(created) as { session_id: string }).session_id;
+  await block("createSession").locator(".opblock-summary-control").click();
+  await block("getSession").locator(".opblock-summary-control").click();
+  await block("getSession").getByRole("button", { name: "Try it out" }).click();
+  await block("getSession").locator('tr[data-param-name="session_id"] input').fill(sessionId);
+  await block("getSession").getByRole("button", { name: "Execute" }).click();
+  await expect(answer("getSession")).toHaveText("200");
+  // The answer at the top of the view: Request URL, the server's response and its body.
+  await block("getSession")
+    .locator(".request-url")
+    .evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await shot("api-try-dark");
+  await page.getByRole("button", { name: "Light theme" }).click();
+  await expect
+    .poll(() =>
+      ui
+        .locator(".opblock-tag")
+        .first()
+        .evaluate((el) => getComputedStyle(el).color),
+    )
+    .toBe("rgb(59, 65, 81)");
+  await shot("api-try-light");
+
+  await block("getSession").locator(".opblock-summary-control").click();
+  await block("closeSession").locator(".opblock-summary-control").click();
+  await block("closeSession").getByRole("button", { name: "Try it out" }).click();
+  await block("closeSession").locator('tr[data-param-name="session_id"] input').fill(sessionId);
+  await block("closeSession").getByRole("button", { name: "Execute" }).click();
+  await expect(answer("closeSession")).toHaveText("204");
+});

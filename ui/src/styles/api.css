@@ -1,0 +1,60 @@
+/* The API page: Swagger UI's own look (its stylesheet, and its dark theme under
+   html.dark-mode), fitted into the app's page with a few overrides. Loaded with the page. */
+
+.api-page {
+  flex: 1;
+  overflow: auto;
+  padding: 18px 20px 40px;
+}
+.api-page .page-sub code {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.api-missing {
+  max-width: 640px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.api-missing p {
+  margin: 0 0 8px;
+}
+
+/* Swagger UI fills the page's width; the app's header already names the server. */
+.api-page .swagger-ui .wrapper {
+  max-width: none;
+  padding: 0;
+}
+.api-page .swagger-ui .information-container .info {
+  margin: 8px 0 20px;
+}
+/* What the server switcher and the Authorize button sat in: both are gone. */
+.api-page .swagger-ui .scheme-container {
+  display: none;
+}
+.api-page .swagger-ui .filter-container .operation-filter-input {
+  margin: 0 0 12px;
+  border-color: var(--border);
+}
+
+/* The dark theme on the app's own colours. */
+html.dark-mode .api-page .swagger-ui {
+  background: transparent;
+  color: var(--text);
+}
+html.dark-mode .api-page .swagger-ui .opblock .opblock-section-header {
+  background: var(--panel-2);
+}
+html.dark-mode .api-page .swagger-ui .model-box,
+html.dark-mode .api-page .swagger-ui section.models {
+  background: var(--panel);
+  border-color: var(--border);
+}
+html.dark-mode .api-page .swagger-ui input[type="text"],
+html.dark-mode .api-page .swagger-ui textarea,
+html.dark-mode .api-page .swagger-ui select {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border);
+}

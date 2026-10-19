@@ -9,6 +9,16 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Web UI, **API** page (`/ui/api`, next to Query and Sessions): the server's Warp SQL API in
+  Swagger UI (swagger-ui-dist 5.34.0, in the build, loaded only when the page is opened:
+  +1.7 MB, +435 KiB gzipped in the binary), from the OpenAPI 3.1 document the server now serves
+  at `GET /warp/v1/openapi.json` (no sign-in; discovery lists capability `openapi` and
+  `links.openapi`). Every request goes to the server's own origin (no server switcher, no
+  Authorize dialog); **Try it out** carries the signed-in user's token, added to each request
+  to this origin as it leaves and never to another origin, stored, or shown in the Curl box.
+  Arrow answers are offered as a download (`result.arrows`); the dark theme applies; a server
+  without the document gets a note. No change to the Content-Security-Policy. e2e:
+  `api.spec.ts` in Chromium and WebKit; unit: `apiDocs.test.ts`.
 - Web UI, the rest of the editor's behavior: **How the editor works** (the ? in the tab bar):
   sessions, with this server's idle timeout (the session document's `idle_timeout_s`),
   transactions, statements, results, and what stays in this browser; the Saved queries panel
