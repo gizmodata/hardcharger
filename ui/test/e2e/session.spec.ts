@@ -74,7 +74,9 @@ test("the session chip names the server's session and copies it; New session sta
   const tab = activeTab(page);
   const id = await value(page, "SELECT HARDCHARGER_CURRENT_SESSION()");
   const chip = tab.getByTestId("session-chip");
-  await expect(chip).toContainText(id.slice(0, 8));
+  // One id since the server took the Warp SQL session's (s_...): the chip shows it without "s_".
+  expect(id).toMatch(/^s_/);
+  await expect(chip).toContainText(id.replace(/^s_/, "").slice(0, 8));
   await chip.click();
   await expect(tab.getByTestId("tab-notice")).toHaveText("Session id copied.");
   expect(await pasted(page)).toBe(id);
