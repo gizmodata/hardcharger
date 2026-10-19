@@ -222,6 +222,7 @@ add_executable(hardcharger-unit-tests
   unit/log_level_test.cc
   unit/metrics_test.cc
   unit/patterns_test.cc
+  unit/platform_test.cc
   unit/redaction_test.cc
   unit/sensitive_paths_test.cc
   unit/sql_text_test.cc

@@ -27,7 +27,7 @@ import pyarrow as pa
 import pytest
 from cryptography.hazmat.primitives import serialization
 
-from conftest import BINARY, TIMEOUT_SCALE, clean_environment
+from conftest import BINARY, TIMEOUT_SCALE, clean_environment, run_unit_tests
 from rbac import expect_allowed, start_rbac_server
 from test_mtls_identity import Pki, start as start_tls, thumbprint_of
 from warp_client import ARROW_STREAM, ipc_bytes
@@ -665,7 +665,14 @@ def test_server_info_for_the_administrator_matches_the_instances_row(server):
                               f"WHERE instance_id = '{info['instance_id']}'")[0]
     instance["instance_id"] = str(instance["instance_id"])
     assert instance == {k: info[k] for k in shared}, (instance, info)
-    assert info["cpu_model"], info  # recorded now (it was NULL before)
+    assert info["cpu_model"], info  # recorded now (it was NULL before), on ARM Linux too
+
+
+def test_cpu_model_from_cpuinfo_names_arm_cores_by_their_part():
+    """Most ARM kernels (AWS Graviton, Azure Cobalt, GitHub's arm64 runners) name no model in
+    /proc/cpuinfo; the CPU implementer and part do (server/unit/platform_test.cc)."""
+    results = run_unit_tests(gtest_filter="CpuModelFromCpuinfo.*")
+    assert len(results) == 5 and all(results.values()), results
 
 
 def test_server_info_with_tls(launcher, tmp_path):

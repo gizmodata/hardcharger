@@ -99,7 +99,9 @@ own changelog in `python/CHANGELOG.md`.
   and mutual TLS, the server certificate's SHA-256 fingerprint, the web UI, the
   access-control store type and the session count for an administrator without
   `catalog_access` rules (NULL for everyone else). It and the instrumentation `instances`
-  row come from one collection at startup, which now also records the CPU model.
+  row come from one collection at startup, which now also records the CPU model (on ARM
+  Linux, whose /proc/cpuinfo names none, from the CPU implementer and part: "ARM
+  Neoverse-V1").
   Who sees and cancels what: an administrator without `catalog_access` rules, every
   session; anyone else, a restricted administrator included, its own principal's (the same
   user name and tenant), never a more privileged session. `hardcharger_sessions()` follows

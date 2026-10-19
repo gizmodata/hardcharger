@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 
 struct ssl_ctx_st;
 
@@ -48,8 +49,14 @@ struct OsInfo {
 };
 OsInfo Os();
 
-// The CPU's model name ("Apple M4 Max", "AMD EPYC 9R14"); empty when the system doesn't say.
+// The CPU's model name ("Apple M4 Max", "AMD EPYC 9R14", "ARM Neoverse-V1"); empty when
+// the system doesn't say.
 std::string CpuModel();
+// The model named by Linux's /proc/cpuinfo text: x86's "model name", a board's "Model"
+// (Raspberry Pi), else ARM's "CPU implementer" and "CPU part" (most ARM kernels, AWS
+// Graviton and Azure Cobalt among them, name no model): "ARM Neoverse-N2", or the raw ids
+// ("ARM implementer 0x41 part 0xd99") for a part not in the table. Empty when none is there.
+std::string CpuModelFromCpuinfo(std::string_view cpuinfo);
 
 int64_t PhysicalMemoryBytes();
 // The process's resident memory; NaN when unknown.
