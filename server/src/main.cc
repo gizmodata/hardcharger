@@ -50,6 +50,7 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   options.max_header_bytes = static_cast<std::size_t>(config.max_header_bytes);
   options.max_result_partitions = static_cast<std::size_t>(config.max_result_partitions);
   options.token_lifetime = std::chrono::seconds(config.token_lifetime_seconds);
+  options.result_ttl = std::chrono::seconds(config.result_retention_seconds);
   // 0 means "never": a session then lives until it is closed.
   options.session_idle_timeout = config.session_idle_timeout > 0
                                      ? std::chrono::seconds(config.session_idle_timeout)
@@ -446,6 +447,9 @@ int main(int argc, char** argv) {
     }
 
     warpsql::Server server(ServerOptionsFrom(config), backend, authenticator, tokens);
+    // For the SQL functions that see and cancel sessions; nothing calls them before Start(),
+    // and every engine thread has stopped before `server` goes.
+    runtime.server = &server;
     server.Start();
     if (oauth) oauth->Start();
     hc::Log(hc::LogLevel::kInfo, "Hardcharger is ready",

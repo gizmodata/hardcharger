@@ -3,11 +3,42 @@
 #include <algorithm>
 
 #include "engine.hpp"
+#include "runtime.hpp"
 
 namespace hardcharger {
 
 using warpsql::Error;
 using warpsql::ErrorCode;
+
+namespace {
+
+std::string Lowered(std::string text) {
+  std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return std::tolower(c); });
+  return text;
+}
+
+}  // namespace
+
+bool SeesSession(const Session& viewer, const Session& target) {
+  if (viewer.full_admin()) return true;
+  if (target.full_admin() || (target.admin() && !viewer.admin())) return false;
+  return target.principal().name == viewer.principal().name && target.tenant() == viewer.tenant();
+}
+
+std::optional<std::size_t> CancelSessionWork(Runtime& runtime, const std::string& id,
+                                             warpsql::SessionCancelReason reason) {
+  if (runtime.server == nullptr) return std::nullopt;
+  return runtime.server->CancelSession(id, reason);
+}
+
+SessionRegistry::Lookup SessionRegistry::Find(const std::string& id, const Session& viewer) const {
+  const std::string wanted = Lowered(id);
+  std::lock_guard lock(mutex_);
+  auto it = sessions_.find(wanted);
+  if (it == sessions_.end() || it->second.session->killed()) return Lookup::kNotFound;
+  if (it->second.session == &viewer) return Lookup::kOwnSession;
+  return SeesSession(viewer, *it->second.session) ? Lookup::kVisible : Lookup::kHidden;
+}
 
 bool SessionRegistry::Admit(const warpsql::Principal& principal) {
   if (principal.role == "admin" || max_sessions_ <= 0) return false;
@@ -41,8 +72,7 @@ void SessionRegistry::Remove(Session* session) {
 }
 
 SessionRegistry::KillResult SessionRegistry::Kill(const std::string& id, const Session& by) {
-  std::string wanted = id;
-  std::transform(wanted.begin(), wanted.end(), wanted.begin(), [](unsigned char c) { return std::tolower(c); });
+  const std::string wanted = Lowered(id);
   std::lock_guard lock(mutex_);
   auto it = sessions_.find(wanted);
   if (it == sessions_.end() || it->second.session->killed()) return KillResult::kNotFound;
@@ -56,12 +86,12 @@ SessionRegistry::KillResult SessionRegistry::Kill(const std::string& id, const S
   return KillResult::kKilled;
 }
 
-std::vector<SessionSummary> SessionRegistry::List() const {
+std::vector<SessionSummary> SessionRegistry::List(const Session& viewer) const {
   std::lock_guard lock(mutex_);
   std::vector<SessionSummary> out;
   for (const auto& [id, entry] : sessions_) {
     const Session& s = *entry.session;
-    if (s.killed()) continue;
+    if (s.killed() || !SeesSession(viewer, s)) continue;
     out.push_back({id, s.principal().name, s.principal().role, s.principal().auth_method, s.started_at_us(),
                    s.running()});
   }

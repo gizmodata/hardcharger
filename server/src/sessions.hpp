@@ -10,11 +10,31 @@
 #include <string>
 #include <vector>
 
+#include <optional>
+
 #include "warpsql/backend.hpp"
+#include "warpsql/server.hpp"
 
 namespace hardcharger {
 
 class Session;
+struct Runtime;
+
+// Whether `viewer` may see (and cancel) `target`: an administrator without catalog_access
+// rules sees every session; anyone else, a restricted administrator included, the sessions
+// of its own principal (the same user name and tenant), never a more privileged one's.
+// hardcharger_sessions(), hardcharger_active_connections() and hardcharger_cancel() all
+// decide by this.
+bool SeesSession(const Session& viewer, const Session& target);
+
+// Stops what session `id` runs, for `reason`, through Warp SQL's cancel: its statements
+// end cancelled with that cancel_reason (a queued one leaves the statement queue), result
+// readers get an incomplete stream, open partitioned ingests and ingest bodies still
+// arriving are aborted. The session lives on. The one implementation hardcharger_cancel()
+// and KILL SESSION share (KILL then ends the session). Returns how many statements and
+// ingests it stopped; nullopt when the server has no such session.
+std::optional<std::size_t> CancelSessionWork(Runtime& runtime, const std::string& id,
+                                             warpsql::SessionCancelReason reason);
 
 struct SessionSummary {
   std::string session_id;
@@ -40,12 +60,17 @@ class SessionRegistry {
   // Removes `session` and frees its place (unless a kill already did).
   void Remove(Session* session);
 
+  // Session `id` (any case) as `viewer` finds it.
+  enum class Lookup { kNotFound, kOwnSession, kHidden, kVisible };
+  Lookup Find(const std::string& id, const Session& viewer) const;
+
   enum class KillResult { kKilled, kNotFound, kOwnSession };
-  // Ends session `id` for `by`: interrupts what it runs, frees its place, and makes its
-  // next request fail with session_ended.
+  // Marks session `id` killed for `by`: frees its place, and makes its next request fail
+  // with session_ended. What it runs is stopped by CancelSessionWork() first.
   KillResult Kill(const std::string& id, const Session& by);
 
-  std::vector<SessionSummary> List() const;
+  // The live sessions `viewer` sees (SeesSession).
+  std::vector<SessionSummary> List(const Session& viewer) const;
   std::size_t size() const;
   std::size_t capped_in_use() const;
   int64_t max_sessions() const { return max_sessions_; }

@@ -19,6 +19,7 @@
 #include "sql_functions.hpp"
 #include "tokens.hpp"
 #include "version.hpp"
+#include "warpsql/server.hpp"
 
 namespace hardcharger {
 
@@ -240,6 +241,7 @@ class Execution {
     record_.fetch_end = now;
     record_.status = status == "ok" ? "success" : std::string(status);
     record_.error = std::string(error);
+    if (status == "cancelled") record_.cancel_reason = session_.cancel_reason();
     slot_.Release();
     session_.FinishRunning();
     Runtime& runtime = session_.runtime();
@@ -361,6 +363,8 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
   if (!database.empty() && database != ":memory:") {
     add_attached("current_database()", database, "the server's database");
   }
+  runtime_.instance_info =
+      CollectInstanceInfo(runtime_.config, runtime_.instance_id, duckdb_version(), runtime_.started_at);
   RegisterSqlFunctions(connection.get(), runtime_);
   AttachSystemCatalog();
   if (runtime_.config.enable_instrumentation) {
@@ -608,7 +612,13 @@ warpsql::StatementOutcome Session::Guarded(std::string_view sql, bool has_parame
   }
 }
 
-void Session::FinishRunning() { running_--; }
+void Session::FinishRunning() {
+  if (--running_ <= 0) {
+    std::lock_guard lock(activity_mutex_);
+    activity_.statement.clear();
+    activity_.statement_started_us = 0;
+  }
+}
 
 std::string Session::PrepareProfile(const std::string& execution_id) {
   const int mode = settings().capture_query_profile.value_or(runtime_.capture_query_profile.load());
@@ -639,9 +649,9 @@ std::string Session::PrepareProfile(const std::string& execution_id) {
 }
 
 void Session::Kill() {
+  // What it runs was stopped by the cancel KILL SESSION runs first (CancelSessionWork):
+  // this only marks the session ended, so its requests say so.
   killed_ = true;
-  interrupted_ = true;
-  DuckDBSession::Interrupt();
   runtime_.admission.WakeWaiters();
   runtime_.metrics.CountSessionReaped();
   Log(LogLevel::kInfo, "session killed", {{"session_id", id_}, {"user", principal_.name}});
@@ -652,6 +662,32 @@ void Session::Interrupt() {
   runtime_.admission.WakeWaiters();
   DuckDBSession::Interrupt();
 }
+
+void Session::Cancel(std::string_view reason) {
+  {
+    std::lock_guard lock(activity_mutex_);
+    if (activity_.cancel_reason.empty()) activity_.cancel_reason = std::string(reason);
+  }
+  Interrupt();
+}
+
+void Session::BeginStatement() {
+  interrupted_ = false;
+  std::lock_guard lock(activity_mutex_);
+  activity_.cancel_reason.clear();
+}
+
+std::string Session::cancel_reason() const {
+  std::lock_guard lock(activity_mutex_);
+  return activity_.cancel_reason;
+}
+
+Session::Activity Session::activity() const {
+  std::lock_guard lock(activity_mutex_);
+  return activity_;
+}
+
+std::string Session::tenant() const { return guard_ ? guard_->tenant_name() : std::string(); }
 
 Session::Settings Session::settings() const {
   std::lock_guard lock(settings_mutex_);
@@ -776,20 +812,31 @@ warpsql::StatementOutcome Session::RunCommand(const Piece& piece) {
   if (target.empty()) {
     throw Error(ErrorCode::kSqlError, "KILL SESSION needs a session id: KILL SESSION '<session id>' (HARDCHARGER_CURRENT_SESSION(), hardcharger_sessions())", "42601");
   }
-  switch (runtime_.sessions.Kill(target, *this)) {
-    case SessionRegistry::KillResult::kKilled:
-      Log(LogLevel::kInfo, "KILL SESSION", {{"target", target}, {"user", principal_.name}, {"session_id", id_}});
-      return {};
-    case SessionRegistry::KillResult::kOwnSession:
+  std::string wanted = target;
+  std::transform(wanted.begin(), wanted.end(), wanted.begin(), [](unsigned char c) { return std::tolower(c); });
+  switch (runtime_.sessions.Find(wanted, *this)) {
+    case SessionRegistry::Lookup::kOwnSession:
       throw Error(ErrorCode::kSqlError, "Cannot kill your own session", "42P01");
-    case SessionRegistry::KillResult::kNotFound:
+    case SessionRegistry::Lookup::kNotFound:
+    case SessionRegistry::Lookup::kHidden:  // (an unrestricted administrator sees every session)
+      throw Error(ErrorCode::kSqlError, "Session '" + target + "' not found", "42704");
+    case SessionRegistry::Lookup::kVisible:
       break;
   }
-  throw Error(ErrorCode::kSqlError, "Session '" + target + "' not found", "42704");
+  // Everything hardcharger_cancel() does (one implementation), then the end: the session's
+  // requests get session_ended (killed), and once its work has stopped it is torn down.
+  CancelSessionWork(runtime_, wanted, warpsql::SessionCancelReason::kKilled);
+  if (runtime_.sessions.Kill(wanted, *this) != SessionRegistry::KillResult::kKilled) {
+    throw Error(ErrorCode::kSqlError, "Session '" + target + "' not found", "42704");  // it closed meanwhile
+  }
+  if (runtime_.server != nullptr) runtime_.server->EndSession(wanted, KilledError());
+  Log(LogLevel::kInfo, "KILL SESSION", {{"target", wanted}, {"user", principal_.name}, {"session_id", id_}});
+  return {};
 }
 
 warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sql, const std::string& statement_id,
-                                         const std::function<warpsql::StatementOutcome()>& work) {
+                                         const std::function<warpsql::StatementOutcome()>& work,
+                                         std::string_view shown) {
   const auto started = std::chrono::steady_clock::now();
   Instrumentation* const instrumentation = statement_id.empty() ? nullptr : runtime_.instrumentation;
   ExecutionRecord record;
@@ -797,6 +844,10 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
     record.execution_id = RandomUuid();
     record.statement_id = statement_id;
   }
+  // What hardcharger_active_connections() shows, from the moment it waits in the queue.
+  // (The redaction runs once: the execution's log text is the same.)
+  std::string abbreviated = Abbreviate(sql);
+  std::string statement_text = shown.empty() ? abbreviated : std::string(shown);
   AdmissionSlot slot;
   AdmissionController& queue = runtime_.admission;
   if (queue.Limit() > 0) {
@@ -809,7 +860,21 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
       record.enqueue_time = record.start = std::chrono::system_clock::now();
       instrumentation->ExecutionQueued(record);
     }
+    if (!bypass) {
+      std::lock_guard lock(activity_mutex_);
+      activity_.queued_since_us = NowMicros();
+      activity_.statement = statement_text;
+    }
+    struct Unqueued {
+      Session& session;
+      ~Unqueued() {
+        std::lock_guard lock(session.activity_mutex_);
+        session.activity_.queued_since_us = 0;
+        if (session.running_ <= 0) session.activity_.statement.clear();
+      }
+    };
     try {
+      Unqueued unqueued{*this};
       slot = queue.Acquire(!bypass, mine.max_queue_wait.value_or(queue.DefaultMaxQueueWaitSeconds()),
                            [this] { return killed_.load() || interrupted_.load(); }, std::chrono::milliseconds(100));
     } catch (const AdmissionController::Refused& refused) {
@@ -819,6 +884,7 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
         record.end = record.cursor_close = std::chrono::system_clock::now();
         record.status = cancelled ? "cancelled" : "error";
         record.error = cancelled ? "cancelled while queued" : refused.message;
+        if (cancelled) record.cancel_reason = cancel_reason();
         instrumentation->ExecutionFinished(record);
       }
       if (killed_) throw KilledError();
@@ -833,11 +899,17 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
   }
 
   running_++;
+  {
+    std::lock_guard lock(activity_mutex_);
+    activity_.statement = std::move(statement_text);
+    activity_.statement_started_us = NowMicros();
+  }
   // The execution clock starts when it leaves the queue.
   if (instrumentation != nullptr) record.start = std::chrono::system_clock::now();
   std::string profile;
   if (!record.execution_id.empty()) profile = PrepareProfile(record.execution_id);
-  auto execution = std::make_shared<Execution>(*this, kind, Abbreviate(sql), std::move(slot), started, std::move(record),
+  auto execution = std::make_shared<Execution>(*this, kind, std::move(abbreviated), std::move(slot), started,
+                                               std::move(record),
                                                std::move(profile));
   warpsql::StatementOutcome outcome;
   try {
@@ -860,6 +932,11 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
       if (interrupted_ && ClassifyStatementError(status.message()) == "cancelled") {
         throw Error(ErrorCode::kStatementCancelled, status.message(), "57014");
       }
+      // A refusal raised while the rows are read (a function's, such as hardcharger_cancel()
+      // naming someone else's session) is the permission_denied it is, not an execution error.
+      if (status.message().starts_with("Permission Error: ")) {
+        throw Error(ErrorCode::kPermissionDenied, status.message(), "42501");
+      }
     });
   } else {
     execution->End("ok", "", "");
@@ -870,7 +947,7 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
 warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::value& parameters) {
   CheckAlive();
   SessionScope scope(this);
-  interrupted_ = false;
+  BeginStatement();
   if (sql.find('\0') != std::string_view::npos) {
     throw Error(ErrorCode::kSqlError, "SQL text must not contain a NUL byte", "22021");
   }
@@ -1009,6 +1086,7 @@ std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sq
     throw;
   }
   prepared_statement_ids_[prepared.get()] = record(true, "");
+  prepared_sql_[prepared.get()] = Abbreviate(sql);
   return prepared;
 }
 
@@ -1016,8 +1094,9 @@ warpsql::StatementOutcome Session::ExecutePrepared(warpsql::PreparedStatement& s
                                                    const warpsql::Parameters& parameters) {
   CheckAlive();
   SessionScope scope(this);
-  interrupted_ = false;
+  BeginStatement();
   const auto id = prepared_statement_ids_.find(&statement);
+  const auto text = prepared_sql_.find(&statement);
   return Track(StatementKind::kOther, "(prepared statement)",
                id == prepared_statement_ids_.end() ? std::string() : id->second, [&] {
                  if (!guard_) return DuckDBSession::ExecutePrepared(statement, parameters);
@@ -1025,7 +1104,8 @@ warpsql::StatementOutcome Session::ExecutePrepared(warpsql::PreparedStatement& s
                  return guard_->ExecutePrepared(statement, has_parameters, [&](warpsql::PreparedStatement& inner) {
                    return DuckDBSession::ExecutePrepared(inner, parameters);
                  });
-               });
+               },
+               text == prepared_sql_.end() ? std::string_view() : std::string_view(text->second));
 }
 
 int64_t Session::Ingest(const warpsql::IngestTarget& target, std::shared_ptr<arrow::RecordBatchReader> rows) {
@@ -1046,6 +1126,28 @@ int64_t Session::Ingest(const warpsql::IngestTarget& target, std::shared_ptr<arr
   if (runtime_.config.print_queries) {
     LogQuery(LogLevel::kInfo, "ingest", with({{"status", "attempt"}}));
   }
+  BeginStatement();
+  {
+    std::lock_guard lock(activity_mutex_);
+    std::string into;
+    for (const std::string* part : {&target.catalog, &target.schema}) {
+      if (!part->empty()) into += SqlIdentifier(*part) + ".";
+    }
+    activity_.statement = "(bulk ingest into " + into + SqlIdentifier(target.table) + ")";
+    activity_.statement_started_us = NowMicros();
+    activity_.ingesting = true;
+  }
+  struct Ingested {
+    Session& session;
+    ~Ingested() {
+      std::lock_guard lock(session.activity_mutex_);
+      session.activity_.ingesting = false;
+      if (session.running_ <= 0) {
+        session.activity_.statement.clear();
+        session.activity_.statement_started_us = 0;
+      }
+    }
+  } ingested_scope{*this};
   // Under access control: one INSERT or CREATE TABLE AS on this session's connection,
   // checked like any other.
   const int64_t ingested =
@@ -1104,6 +1206,10 @@ warpsql::OptionErrors Session::SetOptions(const json::object& options) {
     }
   }
   auto errors = DuckDBSession::SetOptions(options);
+  if (const auto* tag = options.if_contains("session_tag"); tag != nullptr && !errors.contains("session_tag")) {
+    std::lock_guard lock(activity_mutex_);
+    activity_.session_tag_option = tag->is_null() ? std::string() : json::serialize(*tag);
+  }
   if (guard_) {
     // A restricted user's {"catalog": "other_tenants_db"} says no more than a missing
     // catalog would: mask only an error that names a catalog it may not see, and keep

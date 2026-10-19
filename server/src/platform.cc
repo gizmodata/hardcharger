@@ -162,6 +162,19 @@ OsInfo Os() {
   return info;
 }
 
+std::string CpuModel() {
+  char name[256] = {};
+  DWORD size = sizeof(name);
+  if (RegGetValueA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+                   "ProcessorNameString", RRF_RT_REG_SZ, nullptr, name, &size) != ERROR_SUCCESS) {
+    return {};
+  }
+  std::string model(name);
+  const auto start = model.find_first_not_of(' ');
+  const auto end = model.find_last_not_of(' ');
+  return start == std::string::npos ? std::string() : model.substr(start, end - start + 1);
+}
+
 int64_t PhysicalMemoryBytes() {
   MEMORYSTATUSEX status{};
   status.dwLength = sizeof(status);
@@ -299,6 +312,27 @@ OsInfo Os() {
   utsname host{};
   uname(&host);
   return {host.sysname, host.nodename, host.release, host.machine};
+}
+
+std::string CpuModel() {
+#if defined(__APPLE__)
+  char name[256] = {};
+  std::size_t size = sizeof(name) - 1;
+  if (sysctlbyname("machdep.cpu.brand_string", name, &size, nullptr, 0) == 0) return std::string(name);
+  return {};
+#else
+  // x86 says "model name"; ARM kernels often name no model at all.
+  std::ifstream cpuinfo("/proc/cpuinfo");
+  std::string line;
+  while (std::getline(cpuinfo, line)) {
+    if (!line.starts_with("model name") && !line.starts_with("Model")) continue;
+    const auto colon = line.find(':');
+    if (colon == std::string::npos) continue;
+    const auto start = line.find_first_not_of(" \t", colon + 1);
+    if (start != std::string::npos) return line.substr(start);
+  }
+  return {};
+#endif
 }
 
 int64_t PhysicalMemoryBytes() {

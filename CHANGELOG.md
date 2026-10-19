@@ -51,6 +51,43 @@ own changelog in `python/CHANGELOG.md`.
   WebKit): `tabs.spec.ts`, `run.spec.ts`, `session.spec.ts`; unit tests for the tab store,
   the script runner and the session's loss handling.
 
+- Introspection without instrumentation or metrics (README, Introspection; warp-sql 64eb65c):
+  `hardcharger_active_connections()`, a row per open session from the server's own session
+  tables: session_id (the Warp SQL `s_...` id), instance_id, cluster_id, username, role,
+  tenant, auth_method; the latest request's client_address and client_info (User-Agent);
+  session_tags (`MAP(VARCHAR, VARCHAR)`, the Warp SQL `session_tag` option's keys, then
+  `SET hardcharger.session_tag`'s); tls, tls_version, certificate_identity,
+  certificate_thumbprint, token_certificate_bound; state (`idle`, `queued`, `running`,
+  `streaming`, `idle_in_transaction`, `idle_in_transaction_aborted`) and transaction; the
+  statement_id and statement (redacted by the statement log's own code), statement_started_at,
+  queued_since, session_started_at, last_activity_at; cancel_reason while a cancelled
+  statement unwinds; result_partitions, open_result_streams, open_ingest_parts,
+  retained_results, retained_rows; is_current. `hardcharger_cancel(session_id)` stops what a
+  session runs and keeps it: its statement ends cancelled (`cancel_reason` `cancelled`, also
+  in instrumentation), its result readers get an incomplete stream, partitioned results and
+  ingest uploads in flight are aborted, and its next statement works; it returns whether
+  there was anything to stop. `hardcharger_server_info()`: versions, instance and cluster
+  ids, the instance tag, start time and uptime for everyone; the host (hostname, OS, CPU
+  model and count, total and resident memory), database path, listen address and ports, TLS
+  and mutual TLS, the server certificate's SHA-256 fingerprint, the web UI, the
+  access-control store type and the session count for an administrator without
+  `catalog_access` rules (NULL for everyone else). It and the instrumentation `instances`
+  row come from one collection at startup, which now also records the CPU model.
+  Who sees and cancels what: an administrator without `catalog_access` rules, every
+  session; anyone else, a restricted administrator included, its own principal's (the same
+  user name and tenant), never a more privileged session. `hardcharger_sessions()` follows
+  the same rule (a user used to see only the calling session). `test_introspection.py`.
+
+- `result_retention_seconds` (default 3600, from 1 to 2592000): how long a retained
+  (resumable) result is kept after its statement ends; the statement document's
+  `expires_at` follows it. Flag, `HARDCHARGER_RESULT_RETENTION_SECONDS`, YAML, `--help` and
+  `--print-options-json`.
+
+- Instrumentation: `sql_executions.cancel_reason` (and in `execution_details` and
+  `session_activity`): why a cancelled execution stopped (`client`, `timeout`, `killed`,
+  `cancelled`, `session_closed`, `server_shutdown`). Tables from before get the column at
+  startup.
+
 - The session document says where the session's transaction stands (Warp SQL §5.2,
   warp-sql 6afe76d): `GET /warp/v1/sessions/{id}` and the session's creation answer carry
   `transaction`, `none`, `open` or `aborted`, as the engine has it, read after every
@@ -60,15 +97,28 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- `KILL SESSION` runs `hardcharger_cancel()`'s cancel first (one implementation), then ends
+  the session: what it runs stops (within milliseconds for a CPU-bound statement), its
+  statement ends cancelled with `cancel_reason` `killed` (it used to fail with
+  `session_ended`), its result streams are cut off, its partitioned ingests and uploads are
+  aborted, and then every request naming it, a statement's status or result included, gets
+  `session_ended` (`killed`); a DELETE of it answers 204. Ending alone never stopped the
+  work: tests fail with the cancel taken out of KILL's path.
+
+- An error a function raises while the rows are read, when it is DuckDB's `Permission
+  Error`, is `permission_denied` (403), not `execution_error`.
+
 - The transaction a session reports (the session document, and the
   `hardcharger_sessions` metric's `idle_in_transaction` and `idle_in_transaction_aborted`
   states) is the one DuckDB has: a syntax error inside a transaction leaves it open
   (DuckDB forgives it), where any failure used to count as aborted. The server's own
   tracking is gone; it reads the Warp SQL SDK's (`test_metrics.py` covers the syntax
   error).
+
 - With `autocommit` false, a SQL `COMMIT` or `ROLLBACK` starts the next transaction, as
   `POST .../commit` and `.../rollback` do (warp-sql §5.5); the session used to drop out of
   manual-commit mode after one.
+
 - Web UI: the vendored `@gizmodata/warp-sql` is warp-sql-js d2fb3b7 (was 2b96f0a), with
   `transactionState()` and the session document's `transaction`, plus the client's changes
   in between: an explicit port 443 kept on plain HTTP, exact wide integers in JSON

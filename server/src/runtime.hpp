@@ -10,9 +10,14 @@
 
 #include "admission.hpp"
 #include "config.hpp"
+#include "instance_info.hpp"
 #include "logging.hpp"
 #include "metrics.hpp"
 #include "sessions.hpp"
+
+namespace warpsql {
+class Server;
+}
 
 namespace hardcharger {
 
@@ -49,6 +54,11 @@ struct Runtime {
   HealthChecker* health = nullptr;  // set once the backend has started it
   Instrumentation* instrumentation = nullptr;  // set while instrumentation runs
   CatalogLog* catalog_log = nullptr;           // set while catalog logging runs
+  // The Warp SQL server, for the SQL functions that see and cancel its sessions (set before
+  // it starts; null in a process that serves nothing).
+  warpsql::Server* server = nullptr;
+  // What this instance is and runs on, collected at startup (the backend fills it).
+  InstanceInfo instance_info;
 
   // Live-adjustable with SET GLOBAL.
   std::atomic<int64_t> query_timeout_seconds;

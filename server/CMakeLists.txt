@@ -158,6 +158,7 @@ add_library(hardcharger_core STATIC
   src/guards.cc
   src/health.cc
   src/http_client.cc
+  src/instance_info.cc
   src/instrumentation.cc
   src/jwks.cc
   src/logging.cc

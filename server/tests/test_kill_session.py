@@ -108,14 +108,14 @@ def test_every_request_naming_a_killed_session_says_why(server):
                             headers={"Prefer": "respond-async"}).json()["statement_id"]
     time.sleep(0.5)
     server.admin().execute(sql=f"KILL SESSION '{victim_id}'")
-    # The statement it was running failed with the same error, reason included.
-    doc = victim.wait_done(statement_id=running)
-    assert doc["state"] == "failed" and doc["error"]["code"] == "session_ended", doc
-    assert doc["error"]["reason"] == "killed", doc
+    # The statement it was running was cancelled first (KILL does what hardcharger_cancel()
+    # does, then ends the session; test_introspection.py follows it), and its document is
+    # the session's like everything else: session_ended.
     # GET of the session answered 200 with its options before; it is the liveness probe.
     problem = assert_ended(victim.http.get(url=victim.url, headers=victim.headers()), reason="killed")
     assert "killed by an administrator" in problem["detail"], problem  # the text stays
     for method, path, body in [("POST", "/statements", {"sql": "SELECT 1"}),
+                               ("GET", f"/statements/{running}", None),
                                ("GET", f"/statements/{running}/result", None),
                                ("POST", "/prepared", {"sql": "SELECT 1"}),
                                ("POST", f"/prepared/{prepared}/execute", {}),

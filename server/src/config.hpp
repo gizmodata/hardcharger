@@ -81,6 +81,8 @@ struct Config {
   // Sessions
   int64_t max_sessions = 0;  // non-admin sessions at once; 0 = unlimited
   int64_t session_idle_timeout = 900;  // seconds; 0 = never
+  // How long a retained result (Warp SQL §6.5) can be read again, from its statement's end.
+  int64_t result_retention_seconds = 3600;
 
   // Statements
   int64_t query_timeout_seconds = 0;  // 0 = none

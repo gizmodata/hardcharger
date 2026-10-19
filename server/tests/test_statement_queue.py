@@ -171,12 +171,16 @@ def test_killed_while_queued_records_cancelled(server):
     server.admin().execute(sql=f"KILL SESSION '{victim_id}'")
     worker.join(timeout=10)
     assert time.monotonic() - started < 2.5, "the killed queued statement should end at once"
-    assert outcome["problem"]["code"] == "session_ended", outcome
+    # KILL cancels what the session runs first (cancel_reason killed, Warp SQL §6.2); its
+    # next request gets session_ended.
+    assert outcome["problem"]["code"] == "statement_cancelled", outcome
+    assert outcome["problem"]["detail"] == "the statement was cancelled (killed)", outcome
+    assert victim.error(sql="SELECT 1")["code"] == "session_ended"
     for thread in holders:
         thread.join()
-    row = recorded(server=server, sql="SELECT status, error_message FROM _hardcharger_instr.execution_details "
-                                      "WHERE sql_text LIKE '%''nev' || 'er'' AS v%'")
-    assert row == {"status": "cancelled", "error_message": "cancelled while queued"}, row
+    row = recorded(server=server, sql="SELECT status, error_message, cancel_reason FROM "
+                                      "_hardcharger_instr.execution_details WHERE sql_text LIKE '%''nev' || 'er'' AS v%'")
+    assert row == {"status": "cancelled", "error_message": "cancelled while queued", "cancel_reason": "killed"}, row
 
 
 def test_expired_queued_write_never_executes_after_slot_release(server):

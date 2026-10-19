@@ -460,6 +460,7 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
     guard->tenant_catalogs_ = TenantCatalogsKey(*snapshot, tenant);
     // A tenant's sessions start in the tenant's default catalog.
     const auto* record = snapshot->FindTenantById(tenant);
+    if (record) guard->tenant_name_ = record->name;
     if (record && !record->default_catalog.empty()) {
       RbacSessionState::BypassScope internal(ContextOf(connection));
       try {

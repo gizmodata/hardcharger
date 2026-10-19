@@ -383,7 +383,8 @@ maps its options and lists what changed.
 | 🧾 Tamper-evident audit log | ✅ |
 | 🔭 Session and statement instrumentation, catalog logging, query profiles | ✅ |
 | 📈 Prometheus `/metrics` and SQL metrics | ✅ |
-| 🚦 Statement queue, timeouts, `KILL SESSION`, graceful shutdown | ✅ |
+| 🚦 Statement queue, timeouts, `KILL SESSION`, `hardcharger_cancel()`, graceful shutdown | ✅ |
+| 🔍 `hardcharger_active_connections()`, `hardcharger_server_info()` (no instrumentation needed) | ✅ |
 | 💳 License key | Not needed |
 
 ## 🆚 Why Hardcharger instead of Quack?
@@ -477,6 +478,69 @@ In SQL, `SET SESSION name = value` changes a DuckDB setting for your session onl
 `SET name = value` takes the setting's own default scope, which for about half of DuckDB's
 settings (`arrow_lossless_conversion` among them) is `GLOBAL`: then only an administrator
 may run it, and it changes the default of every session that has no value of its own.
+
+## 🔍 Introspection
+
+Three SQL functions show what the server is doing, with no instrumentation or metrics
+turned on. `hardcharger_active_connections()` has a row per open session: who (user, role,
+tenant, how they signed in), from where (the latest request's address and User-Agent, TLS
+version, client certificate), what it runs (`state`: idle, queued, running, streaming,
+idle_in_transaction or idle_in_transaction_aborted; the statement, redacted as the log
+redacts it; since when), and its open result streams, partitions, uploads and retained
+results:
+
+```console
+$ hardcharger --command "SELECT session_id, username, client_info, state, statement FROM hardcharger_active_connections() WHERE NOT is_current"
+┌────────────────────────────────────┬─────────────┬────────────────────┬─────────┬──────────────────────────────────────────────────────────┐
+│             session_id             │  username   │    client_info     │  state  │                        statement                         │
+│              varchar               │   varchar   │      varchar       │ varchar │                         varchar                          │
+├────────────────────────────────────┼─────────────┼────────────────────┼─────────┼──────────────────────────────────────────────────────────┤
+│ s_dx7wohhsyptjqkqgukmrlp3ow5t2gtsa │ hardcharger │ hardcharger-client │ running │ SELECT count(*) FROM range(10000000000) a, range(1000) b │
+├────────────────────────────────────┴─────────────┴────────────────────┴─────────┴──────────────────────────────────────────────────────────┤
+│ 1 row  5 columns                                                                                                                           │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+`hardcharger_cancel(session_id)` stops what a session runs and keeps the session: its
+statement ends cancelled (`cancel_reason` `cancelled`), result streams are cut off, uploads
+in flight are aborted, and its next statement runs as usual. It returns whether there was
+anything to stop. `KILL SESSION` does the same, then ends the session (`killed`):
+
+```console
+$ hardcharger --command "SELECT hardcharger_cancel(session_id) AS cancelled FROM hardcharger_active_connections() WHERE state = 'running' AND NOT is_current"
+┌───────────┐
+│ cancelled │
+│  boolean  │
+├───────────┤
+│ true      │
+├───────────┤
+│ 1 row     │
+└───────────┘
+```
+
+`hardcharger_server_info()` is one row: the versions, the instance and cluster ids, the
+start time and the uptime for everyone; the host (hostname, OS, CPU model and count,
+memory), the listen addresses and ports, TLS and mutual TLS, the server certificate's
+SHA-256 fingerprint, the web UI, the access-control store and the session count for an
+administrator without `catalog_access` rules (NULL for everyone else):
+
+```console
+$ hardcharger --command "SELECT hardcharger_version, CAST(uptime AS VARCHAR) AS uptime, cpu_model, cpu_count, memory_total_bytes, session_count FROM hardcharger_server_info()"
+┌─────────────────────┬─────────────────┬──────────────┬───────────┬────────────────────┬───────────────┐
+│ hardcharger_version │     uptime      │  cpu_model   │ cpu_count │ memory_total_bytes │ session_count │
+│       varchar       │     varchar     │   varchar    │  integer  │       bigint       │    integer    │
+├─────────────────────┼─────────────────┼──────────────┼───────────┼────────────────────┼───────────────┤
+│ 0.3.0               │ 00:00:01.097479 │ Apple M5 Max │        18 │        68719476736 │             2 │
+├─────────────────────┴─────────────────┴──────────────┴───────────┴────────────────────┴───────────────┤
+│ 1 row  6 columns                                                                                      │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Who sees and cancels what: an administrator without `catalog_access` rules, every session;
+anyone else, a restricted administrator included, the sessions of their own principal (the
+same user and tenant), and `hardcharger_sessions()` follows the same rule. Retained
+(resumable) results are kept for `result_retention_seconds` (default 3600) after their
+statement ends; the statement document's `expires_at` says until when.
 
 ## 👥 Access control
 

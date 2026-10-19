@@ -202,6 +202,10 @@ const std::vector<Option>& Options() {
        "most non-admin sessions at once (0: unlimited)", NUMBER(max_sessions)},
       {"session_idle_timeout", Kind::kInt,
        "seconds an idle session lives (0: forever)", NUMBER(session_idle_timeout)},
+      {"result_retention_seconds", Kind::kInt,
+       "seconds a retained result (resumable, readable again) is kept after its statement ends, "
+       "from 1 to 2592000 (30 days); its statement document's expires_at says until when",
+       NUMBER(result_retention_seconds)},
       // Statements
       {"query_timeout_seconds", Kind::kInt, "default statement timeout (0: none)", NUMBER(query_timeout_seconds)},
       {"print_queries", Kind::kBool,
@@ -521,6 +525,10 @@ void Validate(Loaded& loaded) {
     throw std::invalid_argument(
         "max_sessions, session_idle_timeout, shutdown_grace_period_seconds and "
         "max_concurrent_statements cannot be negative");
+  }
+  if (c.result_retention_seconds < 1 || c.result_retention_seconds > 30 * 24 * 3600) {
+    throw std::invalid_argument("result_retention_seconds must be from 1 to 2592000 (30 days), not " +
+                                std::to_string(c.result_retention_seconds));
   }
   if (c.health_check_interval_seconds < 1) {
     throw std::invalid_argument("health_check_interval_seconds must be at least 1");
