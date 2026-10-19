@@ -33,7 +33,9 @@ own changelog in `python/CHANGELOG.md`.
 - README: "Why Hardcharger instead of Quack?", a feature comparison with DuckDB's Quack
   extension (`e7a9be3f8c`, the commit DuckDB 2.0 pins), and docs/hardcharger-vs-quack.md with
   the versions and the checks behind each row, run against live Quack and Hardcharger 0.3.0
-  servers. Features only, no throughput figures.
+  servers. Features only, no throughput figures. The doc also shows DuckDB attaching
+  Hardcharger through an ADBC extension (Columnar's `adbc` or Query.Farm's `adbc_scanner`) with
+  hardcharger-adbc's driver library, with examples run against Hardcharger 0.3.0.
 
 ## [0.3.0] - 2026-10-18
 

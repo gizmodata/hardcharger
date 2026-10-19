@@ -40,8 +40,9 @@ client.execute(query="ATTACH 'quack:localhost:9494' AS remote (TYPE quack, token
 
 ## What each row rests on
 
-**`ATTACH` and joins with local tables.** `SELECT l.name, r.s FROM local_names l JOIN remote.t r
-USING (i)` returns the joined rows. Hardcharger has no DuckDB-side `ATTACH`.
+**`ATTACH` and joins with local tables.** Through Quack, `SELECT l.name, r.s FROM local_names l
+JOIN remote.t r USING (i)` returns the joined rows. Hardcharger gets the same through an ADBC
+extension; see [DuckDB to Hardcharger through ADBC](#duckdb-to-hardcharger-through-adbc) below.
 
 **Drivers, result format.** Quack's messages (`src/include/quack_message.json`) carry DuckDB's
 own serialized data chunks, and DuckDB Labs ships no driver other than the extension. Hardcharger's
@@ -119,6 +120,63 @@ are still subject to change". Warp SQL has a written specification
 CI runs against every Hardcharger build.
 
 **Licenses.** Quack: MIT. Hardcharger: Apache 2.0.
+
+## DuckDB to Hardcharger through ADBC
+
+DuckDB reaches Hardcharger through either of two community extensions, each loading the
+[hardcharger-adbc](https://github.com/gizmodata/hardcharger-adbc) driver library
+(`libadbc_driver_hardcharger`, entrypoint `AdbcDriverHardchargerInit`, from a release tarball or
+`scripts/build_lib.sh`). Checked with hardcharger-adbc `9a087be` against Hardcharger 0.3.0:
+
+| | Columnar's `adbc` | Query.Farm's `adbc_scanner` |
+|---|---|---|
+| Checked on | DuckDB 1.5.6 (`INSTALL adbc FROM community`, `d4b19a7`); DuckDB 2.0 (`v2.0.0-alpha48624`, the extension built from its `main`, `b1b13c0`) | DuckDB 1.5.6 (`INSTALL adbc_scanner FROM community`, `9723c3c`) |
+| `ATTACH`, tables listed, join with local tables | yes | yes |
+| A filter on an attached table | DuckDB applies it; the server gets `SELECT "i", "s" FROM "main"."t"` | sent to the server: `SELECT * FROM "t" WHERE "i" = ?`, with the value bound |
+| SQL passed through | `read_adbc(profile, sql)`, no parameters | `adbc_scan(db, sql, params := row(…))` |
+| Writes | `CREATE TABLE hc.main.x AS …` | `INSERT INTO hc.main.x VALUES (?, ?)` (no `CREATE TABLE`) |
+
+Neither extension is in DuckDB's community repository for DuckDB 2.0 yet (both answer 404 for
+`v2.0.0-alpha48624` and `v2.0.0-alpha48730`); Query.Farm's has a `v2.0` branch, not tried here.
+
+Both find the driver by name through its manifest: fill in
+[hardcharger.toml.in](https://github.com/gizmodata/hardcharger-adbc/blob/main/packaging/hardcharger.toml.in)
+with the library's directory and install it as `hardcharger.toml` where the hardcharger-adbc README
+says (or in a directory on `ADBC_DRIVER_PATH`). With `adbc_scanner`:
+
+```sql
+INSTALL adbc_scanner FROM community;
+LOAD adbc_scanner;
+ATTACH 'hardcharger://localhost?tls=false' AS hc
+    (TYPE adbc, driver 'hardcharger', username 'hardcharger', password 'change-me');
+CREATE TABLE local_names AS SELECT * FROM (VALUES (1, 'one'), (2, 'two')) v(i, name);
+SELECT l.name, r.s FROM local_names l JOIN hc.main.t r USING (i) ORDER BY i;
+PREPARE q AS SELECT s FROM hc.main.t WHERE i = $1;
+EXECUTE q(3);                                              -- the filter runs on the server
+SELECT * FROM adbc_scan('hc', 'SELECT s FROM t WHERE i = ?', params := row(3));
+```
+
+Columnar's `adbc` takes an ADBC connection profile instead, `hc.toml` in the profiles directory its
+README names (or on `ADBC_PROFILE_PATH`):
+
+```toml
+profile_version = 1
+driver = "hardcharger"
+
+[Options]
+uri = "hardcharger://localhost?tls=false"
+username = "hardcharger"
+password = "change-me"
+```
+
+```sql
+INSTALL adbc FROM community;
+LOAD adbc;
+ATTACH 'profile://hc' AS hc (TYPE adbc);
+CREATE TABLE local_names AS SELECT * FROM (VALUES (1, 'one'), (2, 'two')) v(i, name);
+SELECT l.name, r.s FROM local_names l JOIN hc.main.t r USING (i) ORDER BY i;
+SELECT * FROM read_adbc('profile://hc', 'SELECT s FROM t WHERE i = 3');
+```
 
 DuckDB's Quack security page also says "The server does not use TLS itself". The extension's
 source and the running server above do use TLS, so the table follows them.

@@ -390,47 +390,55 @@ is an experimental extension, Hardcharger is 0.x); this is what each offers toda
 
 | | Hardcharger | Quack |
 |---|:---:|:---:|
-| `ATTACH` from DuckDB, joining remote tables with local ones | ❌ | ✅ |
-| Drivers that don't embed DuckDB: ADBC, JDBC, JavaScript, `curl` | ✅ | ❌ ¹ |
-| Browsers | ✅ | ✅ ² |
-| Bind parameters sent to the server | ✅ | ❌ ³ |
+| `ATTACH` from DuckDB, joining remote tables with local ones | ✅ ¹ | ✅ |
+| Drivers that don't embed DuckDB: ADBC, JDBC, JavaScript, `curl` | ✅ | ❌ ² |
+| Browsers | ✅ | ✅ ³ |
+| Bind parameters sent to the server | ✅ | ❌ ⁴ |
 | Bulk ingest, cancellation | ✅ | ✅ |
-| TLS | ✅ | ✅ ⁴ |
-| Users with passwords, tokens, SSO (OIDC/JWKS) | ✅ | partial ⁵ |
-| Client certificates (mTLS), as identity too | ✅ | ❌ ⁶ |
-| Roles and grants, checked against each statement's plan | ✅ | partial ⁷ |
+| TLS | ✅ | ✅ ⁵ |
+| Users with passwords, tokens, SSO (OIDC/JWKS) | ✅ | partial ⁶ |
+| Client certificates (mTLS), as identity too | ✅ | ❌ ⁷ |
+| Roles and grants, checked against each statement's plan | ✅ | partial ⁸ |
 | Row policies, column masking, tenants, Open Policy Agent | ✅ | ❌ |
 | Tamper-evident audit log | ✅ | ❌ |
-| Instrumentation tables, Prometheus `/metrics` | ✅ | partial ⁸ |
-| Statement queue, statement timeouts, `KILL SESSION` | ✅ | partial ⁹ |
-| Standalone server: binaries, Docker image, Windows MSI, YAML config | ✅ | ❌ ¹⁰ |
+| Instrumentation tables, Prometheus `/metrics` | ✅ | partial ⁹ |
+| Statement queue, statement timeouts, `KILL SESSION` | ✅ | partial ¹⁰ |
+| Standalone server: binaries, Docker image, Windows MSI, YAML config | ✅ | ❌ ¹¹ |
 | Built-in web UI | ✅ | ❌ |
-| Written, versioned protocol spec with a conformance suite | ✅ | partial ¹¹ |
+| Written, versioned protocol spec with a conformance suite | ✅ | partial ¹² |
 | License | Apache 2.0 | MIT |
 
-1. Quack's clients are DuckDB itself (the CLI, or a DuckDB library such as Python's or
+1. Through an ADBC extension for DuckDB and
+   [hardcharger-adbc](https://github.com/gizmodata/hardcharger-adbc)'s driver library: Columnar's
+   `adbc` or Query.Farm's `adbc_scanner`. Each attaches Hardcharger's tables, joins them with local
+   ones and writes to them (`CREATE TABLE … AS` through `adbc`, `INSERT` through `adbc_scanner`).
+   `adbc_scanner` sends filters to the server with bind parameters; `adbc` sends only the
+   columns, and DuckDB filters the rows. Neither is published for DuckDB 2.0
+   yet; both work on DuckDB 1.5.6, and `adbc` also on DuckDB 2.0 built from its source
+   ([setup](docs/hardcharger-vs-quack.md#duckdb-to-hardcharger-through-adbc)).
+2. Quack's clients are DuckDB itself (the CLI, or a DuckDB library such as Python's or
    DuckDB-Wasm) with the extension loaded. Results travel in DuckDB's own format, not Arrow.
-2. Through DuckDB-Wasm. The Quack endpoint allows every origin (`Access-Control-Allow-Origin: *`).
-3. Quack sends SQL text only. `SELECT … WHERE i = ?` on an attached table fails ("Values were not
+3. Through DuckDB-Wasm. The Quack endpoint allows every origin (`Access-Control-Allow-Origin: *`).
+4. Quack sends SQL text only. `SELECT … WHERE i = ?` on an attached table fails ("Values were not
    provided for the following parameters"), because the client sends `WHERE (i = $1)` to the
    server without the value. It runs with `SET disabled_optimizers = 'remote_pushdown'`, but then
    the client reads the whole table and filters it locally.
-4. The server can use its own certificate or a self-signed one it generates; clients check it
+5. The server can use its own certificate or a self-signed one it generates; clients check it
    against a CA or pin its SHA-256 fingerprint.
-5. One shared token by default. `quack_authentication_function` can point at your own SQL
+6. One shared token by default. `quack_authentication_function` can point at your own SQL
    function (per-user tokens from a table, say), but the server keeps no user for the session;
    DuckDB's docs suggest writing an extension to record one.
-6. The Quack server doesn't ask for a client certificate.
-7. A hook, `quack_authorization_function`, gets each statement's text and can allow, refuse or
+7. The Quack server doesn't ask for a client certificate.
+8. A hook, `quack_authorization_function`, gets each statement's text and can allow, refuse or
    rewrite it; by default it allows everything. DuckDB has no roles or grants.
-8. Every Quack message can go to DuckDB's log (`CALL enable_logging('Quack')`), and
+9. Every Quack message can go to DuckDB's log (`CALL enable_logging('Quack')`), and
    `quack_active_connections()` lists connections and their current SQL. We found no metrics
    endpoint.
-9. A connection limit (`quack_server_max_connections`) and `quack_cancel()`, which stops another
-   connection's query. We found no statement queue and no server-side statement timeout.
-10. Quack serves from inside any DuckDB process that runs `CALL quack_serve(...)`, and is set up
+10. A connection limit (`quack_server_max_connections`) and `quack_cancel()`, which stops another
+    connection's query. We found no statement queue and no server-side statement timeout.
+11. Quack serves from inside any DuckDB process that runs `CALL quack_serve(...)`, and is set up
     with DuckDB settings in SQL.
-11. Quack's protocol has a version that client and server agree on (version 3 in DuckDB 2.0),
+12. Quack's protocol has a version that client and server agree on (version 3 in DuckDB 2.0),
     and its messages are defined in the extension's source. We found no separate specification or
     conformance suite, and DuckDB's docs say the protocol may still change.
 
