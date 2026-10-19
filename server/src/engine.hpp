@@ -55,7 +55,8 @@ class Backend : public warpduckdb::DuckDBBackend {
 
   Runtime& runtime_;
   std::shared_ptr<authz::AccessControl> access_;
-  SensitivePaths sensitive_paths_;
+  // Shared with the instance's file system, which outlives this object's members.
+  std::shared_ptr<SensitivePaths> sensitive_paths_;
   // The server's own files, which no SQL opens (guards.hpp): shared with the file
   // system guard in the instance.
   std::shared_ptr<PrivateFiles> private_files_;
@@ -82,8 +83,8 @@ class Session : public warpduckdb::DuckDBSession {
   // `id` is the session's Warp SQL id (s_...), the one its client holds: the session's
   // only id, in HARDCHARGER_CURRENT_SESSION(), hardcharger_sessions(), KILL SESSION, the
   // logs and the instrumentation tables.
-  Session(Runtime& runtime, const SensitivePaths& sensitive_paths, const PrivateFiles& private_files,
-          duckdb_v2_instance_handle instance, warpsql::Principal principal, std::string id, bool capped,
+  Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb_v2_instance_handle instance,
+          warpsql::Principal principal, std::string id, bool capped,
           authz::AccessControl* access);
   ~Session() override;
 
@@ -210,7 +211,6 @@ class Session : public warpduckdb::DuckDBSession {
 
   Runtime& runtime_;
   const SensitivePaths& sensitive_paths_;
-  const PrivateFiles& private_files_;
   const warpsql::Principal principal_;
   const bool access_controlled_;  // bound to access control (RBAC, or catalog_access rules only)
   const bool rbac_;               // ... with a store: users, roles, grants, access-control statements

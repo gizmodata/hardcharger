@@ -96,7 +96,6 @@ TEST_F(SensitivePathPolicyTest, WindowsStoresAndSpellings) {
   EXPECT_EQ(Check("\\\\?\\UNC\\localhost\\c$\\x"), "Windows administrative share");
   EXPECT_EQ(Check("\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\x"), "Windows device namespace");
   EXPECT_FALSE(Check("\\\\fileserver.invalid\\data\\sales.csv").has_value());
-  EXPECT_TRUE(policy_->Check((home() / "*" / "KEY").string()).has_value());  // patterns ignore case
 }
 #else
 TEST_F(SensitivePathPolicyTest, OnlyOwnCgroupFileIsReadableInProc) {
@@ -140,9 +139,32 @@ TEST_F(SensitivePathPolicyTest, OtherSpellingsResolveToTheSamePath) {
   upper.replace(upper.find(".ssh"), 4, ".SSH");
   EXPECT_TRUE(policy_->Check(upper).has_value());
 #endif
-  // Hardcharger: ~ is the server user's home, and patterns that reach a protected path.
-  EXPECT_TRUE(policy_->Check((home() / "*" / "key").string()).has_value());
-  EXPECT_FALSE(policy_->Check((root_ / "data" / "*.csv").string()).has_value());
+  // Hardcharger: ~ is the server user's home.
+  EXPECT_EQ(policy_->Check("~/.ssh/key"), "user credential store");
+}
+
+// The same file under a name no spelling shows: a second hard link of a protected file.
+TEST_F(SensitivePathPolicyTest, HardLinksToProtectedFilesAreRefused) {
+  std::ofstream(home() / ".netrc") << "machine example.invalid password dummy";
+  std::error_code ec;
+  fs::create_hard_link(home() / ".netrc", root_ / "data" / "notes.txt", ec);
+  ASSERT_FALSE(ec) << ec.message();
+  EXPECT_EQ(Check(root_ / "data" / "notes.txt"), "user credential store");
+  // And of a file inside a protected directory, at any depth.
+  fs::create_directories(home() / ".aws" / "sso" / "cache");
+  std::ofstream(home() / ".aws" / "credentials") << "[default]\naws_secret_access_key = dummy";
+  std::ofstream(home() / ".aws" / "sso" / "cache" / "token.json") << "{\"accessToken\": \"dummy\"}";
+  fs::create_hard_link(home() / ".aws" / "credentials", root_ / "data" / "creds.txt", ec);
+  ASSERT_FALSE(ec) << ec.message();
+  fs::create_hard_link(home() / ".aws" / "sso" / "cache" / "token.json", root_ / "data" / "token.json", ec);
+  ASSERT_FALSE(ec) << ec.message();
+  EXPECT_EQ(Check(root_ / "data" / "creds.txt"), "user credential store");
+  EXPECT_EQ(Check(root_ / "data" / "token.json"), "user credential store");
+  // The positive twin: a file with one link, and a second link of an ordinary file.
+  EXPECT_FALSE(Check(root_ / "data" / "ok.csv").has_value());
+  fs::create_hard_link(root_ / "data" / "ok.csv", root_ / "data" / "ok-again.csv", ec);
+  ASSERT_FALSE(ec) << ec.message();
+  EXPECT_FALSE(Check(root_ / "data" / "ok-again.csv").has_value());
 }
 
 TEST_F(SensitivePathPolicyTest, SecretDirectoryAddedAfterStartup) {
@@ -152,14 +174,16 @@ TEST_F(SensitivePathPolicyTest, SecretDirectoryAddedAfterStartup) {
   EXPECT_EQ(Check(dir / "s.duckdb_secret"), "DuckDB persistent secrets");
 }
 
-// DuckDB's glob has no brace expansion (FileSystem::HasGlob: * ? [ only), so '{' makes no
-// pattern. A literal with a brace was taken for a pattern reaching anywhere below the
-// working directory, so a server whose working directory holds a protected path (the
-// image's: its home, with ~/.ssh) refused every JSON or regex literal.
+// The file system checks the paths DuckDB opens, never a statement's literals; still, a
+// string that only looks like a pattern, opened as a file of that name in the server's
+// home (the image's working directory, with ~/.ssh in it), is no protected path. DuckDB's
+// glob has no brace expansion (FileSystem::HasGlob: * ? [ only), so '{' is an ordinary
+// character too.
 TEST_F(SensitivePathPolicyTest, BracesAreOrdinaryCharacters) {
   fs::current_path(home());
   for (const char* literal : {"{\"a\": 1}", "{\"a\": {\"b\": [1, 2]}}", "{}", "{x}", "^[0-9]{3}$", "a{2,3}",
-                              "[0-9]{2,4}-[a-z]{1}", "\\d{3}-\\d{4}", "{}-{}", "{.ssh,.aws}", "{*}"}) {
+                              "[0-9]{2,4}-[a-z]{1}", "\\d{3}-\\d{4}", "{}-{}", "{.ssh,.aws}", "{*}", "*", ".*", "{:,}",
+                              "(\\d{2})", "[0-9a-f]{64}", "**", "?", "[.]ssh"}) {
     EXPECT_FALSE(policy_->Check(literal).has_value()) << literal;
   }
 #ifndef _WIN32
@@ -169,16 +193,20 @@ TEST_F(SensitivePathPolicyTest, BracesAreOrdinaryCharacters) {
   EXPECT_FALSE(Check(home() / "{.ssh,.aws}" / "key").has_value());
 }
 
-TEST_F(SensitivePathPolicyTest, BracedPathsReachingProtectedFilesAreRefused) {
+// A glob pattern is checked as the path it spells: refused when its fixed part is
+// protected. One reaching into a protected path from above is not (the file system drops
+// those matches instead, file_guard.cc).
+TEST_F(SensitivePathPolicyTest, PatternsAreCheckedByTheirFixedPart) {
   fs::current_path(home());
   EXPECT_EQ(Check(home() / ".ssh" / "{key,other}"), "user credential store");  // inside .ssh
   EXPECT_EQ(policy_->Check(".ssh/{key}"), "user credential store");           // relative to the working directory
-  EXPECT_EQ(Check(home() / ".ss?" / "{key}"), "user credential store");       // a real wildcard
-  EXPECT_EQ(Check(home() / "*" / "{key}"), "user credential store");
-  // Recursive: refused for the first protected path under the home (on Windows, its
-  // credential stores come before ~/.ssh).
-  EXPECT_TRUE(policy_->Check("**/{key}").has_value());
+  EXPECT_EQ(Check(home() / ".ssh" / "*"), "user credential store");
+  EXPECT_EQ(policy_->Check("~/.ssh/**/*"), "user credential store");
+  EXPECT_FALSE(Check(home() / "*" / "key").has_value());
+  EXPECT_FALSE(Check(home() / ".ss?" / "key").has_value());
+  EXPECT_FALSE(policy_->Check("**/key").has_value());
+  EXPECT_FALSE(Check(root_ / "data" / "*.csv").has_value());
 #ifndef _WIN32
-  EXPECT_EQ(Check("/etc/{passwd,hosts}/../passwd"), "system account files");
+  EXPECT_EQ(Check("/etc/{passwd,hosts}/../passwd"), "system account files");  // .. past a braced name
 #endif
 }

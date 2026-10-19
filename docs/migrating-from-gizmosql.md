@@ -107,6 +107,11 @@ Every option also has a YAML key: the flag without its leading `--`, with `_` fo
 Hardcharger's own administrator is set with `--admin-username` / `--admin-password`
 (`HARDCHARGER_ADMIN_USERNAME` / `HARDCHARGER_ADMIN_PASSWORD`).
 
+`--block-sensitive-paths` guards DuckDB's file system as GizmoSQL 1.x's does, with one
+difference: the operator's init SQL runs before the guard switches on, so it may read a
+protected file (a mounted credential, to create a secret from it), where 1.x checks init SQL
+too.
+
 ## The command-line client
 
 GizmoSQL 1.x's `gizmosql_client` is `hardcharger`. It speaks Warp SQL (HTTP), so it
