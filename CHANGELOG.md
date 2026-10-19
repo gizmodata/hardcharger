@@ -390,6 +390,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- From the warp-sql 1.0.0 release branch (`third_party/warp-sql` at `release/v1.0.0`): a
+  retained result is expired from its `expires_at` on (Warp SQL §6.5), where the SDK refused
+  new reads only after its next sweep, up to 5 seconds later; and an idempotent replay of a
+  submit or execute (§6.7) carries `Warp-Statement-Id`, as every statement response does.
 - The Windows zips no longer carry jwt-cpp's headers (`include/jwt-cpp/`) and CMake package
   files (`cmake/`): the package step took the whole `cmake --install` tree, which jwt-cpp's
   install rules add to; it now copies the two executables, and checks the zip's top level.
