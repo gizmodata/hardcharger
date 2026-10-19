@@ -161,6 +161,31 @@ def test_unsupported_arrow_type_is_refused_not_stored_as_varchar(session):
     assert column_types(session=session, table="float_ingest")["h"] == "FLOAT"
 
 
+@pytest.mark.parametrize("name", ["decimal256", "decimal256_76", "dense_union", "list_of_decimal256",
+                                  "struct_of_dense_union", "dictionary_of_decimal256"])
+def test_types_duckdb_cannot_keep_are_415_not_400(session, name):
+    """Arrow types DuckDB's Arrow scan doesn't read were a 400 sql_error from inside the
+    engine ("Not implemented Error: Unsupported Internal Arrow Type"); Warp SQL §8.1 wants
+    415 unsupported_arrow_type, with nothing created."""
+    columns = {
+        "decimal256": lambda: pa.array([decimal.Decimal("1.25")], type=pa.decimal256(10, 2)),
+        "decimal256_76": lambda: pa.array([decimal.Decimal("1" * 76)], type=pa.decimal256(76, 0)),
+        "dense_union": lambda: pa.UnionArray.from_dense(types=pa.array([0], type=pa.int8()),
+                                                        value_offsets=pa.array([0], type=pa.int32()),
+                                                        children=[pa.array([1], type=pa.int64())], field_names=["i"]),
+    }
+    columns["list_of_decimal256"] = lambda: pa.ListArray.from_arrays(offsets=pa.array([0, 1], type=pa.int32()),
+                                                                     values=columns["decimal256"]())
+    columns["struct_of_dense_union"] = lambda: pa.StructArray.from_arrays(arrays=[columns["dense_union"]()], names=["u"])
+    columns["dictionary_of_decimal256"] = lambda: pa.DictionaryArray.from_arrays(
+        indices=pa.array([0], type=pa.int32()), dictionary=columns["decimal256"]())
+    table = f"refused_{name}"
+    response = session.ingest(table=pa.table({"k": [1], "c": columns[name]()}), name=table, mode="create")
+    assert response.status_code == 415 and response.json()["code"] == "unsupported_arrow_type", response.text
+    assert "cannot be ingested" in response.json()["detail"], response.text
+    assert column_types(session=session, table=table) == {}
+
+
 def test_failing_ingests_answer_their_error_and_the_server_exits_cleanly(launcher):
     # Many bulk loads failing in the engine at once (append to a table that doesn't exist):
     # the engine thread hands each failure to the request's I/O thread, which builds the

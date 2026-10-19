@@ -98,6 +98,13 @@ own changelog in `python/CHANGELOG.md`.
   Hardcharger through an ADBC extension (Columnar's `adbc` or Query.Farm's `adbc_scanner`) with
   hardcharger-adbc's driver library, with examples run against Hardcharger 0.3.0.
 
+- Bulk ingest answers `415 unsupported_arrow_type` (Warp SQL §8.1) for an Arrow type
+  DuckDB can't keep, where `decimal256` (any precision) and dense unions, also nested in a
+  list, struct or dictionary, were a `400 sql_error` from inside DuckDB. warp-sql e354e97:
+  the DuckDB backend lets through only the types DuckDB's Arrow scan reads and refuses
+  any other before a table is touched. `test_bulk_ingest.py` and the conformance suite's
+  two new ingest tests cover it.
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file
