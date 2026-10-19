@@ -145,6 +145,7 @@ class AdbcSystem:
         partitions: int = 1,
         order: str = "preserve",
         ingest_parts: int = 1,
+        driver_defaults: bool = False,
     ):
         if system == "gizmosql":
             from adbc_driver_gizmosql import dbapi
@@ -174,6 +175,8 @@ class AdbcSystem:
                 "adbc.warp.statement.result_order": order,
                 "adbc.warp.ingest.parts": str(ingest_parts),
             }
+            if driver_defaults:
+                db_kwargs = {}  # what an application gets without setting anything
             # The driver refuses TLS options on a plaintext URI.
             tls_kwargs = {"tls_root_certs": cert} if tls else {}
             self.conn = dbapi.connect(
@@ -304,6 +307,8 @@ def main() -> None:
     parser.add_argument("--partitions", type=int, default=1, help="Hardcharger: result partitions")
     parser.add_argument("--order", default="preserve", choices=["preserve", "any"])
     parser.add_argument("--ingest-parts", type=int, default=1, help="Hardcharger: ingest parts")
+    parser.add_argument("--driver-defaults", action="store_true",
+                        help="Hardcharger: set no compression, partition or part option (the driver's defaults)")
     parser.add_argument("--cert", default=os.path.expanduser("~/bench/tls.crt"))
     parser.add_argument("--data-dir", default=os.path.expanduser("~/bench/data"))
     parser.add_argument("--network", default="lan")
@@ -331,6 +336,7 @@ def main() -> None:
             partitions=args.partitions,
             order=args.order,
             ingest_parts=args.ingest_parts,
+            driver_defaults=args.driver_defaults,
             tls=args.tls == "true",
         )
 
@@ -348,6 +354,7 @@ def main() -> None:
         "partitions": args.partitions if args.system == "hardcharger" else 1,
         "order": args.order if args.system == "hardcharger" and args.partitions > 1 else None,
         "ingest_parts": args.ingest_parts if args.system == "hardcharger" else 1,
+        "driver_defaults": args.driver_defaults and args.system == "hardcharger",
     }
 
     if args.workload == "fetch":

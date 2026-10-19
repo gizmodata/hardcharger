@@ -46,9 +46,11 @@ def name(r: dict) -> str:
             ", insertion order kept" if r["preserve_order"] == "true" else ", unordered"
         )
         return f"Quack ({r['quack_mode']}{order})"
+    if r.get("driver_defaults"):
+        return f"{HARDCHARGER} (Warp SQL, driver defaults)"
     extras = []
-    if r["compression"] == "zstd":
-        extras.append("zstd")
+    if r["compression"] in ("zstd", "lz4_frame", "auto"):
+        extras.append(r["compression"])
     if r.get("partitions", 1) > 1:
         extras.append(f"{r['partitions']} partitions" + (", any order" if r.get("order") == "any" else ", in order"))
     if r["workload"] == "ingest" and r.get("ingest_parts", 1) > 1:
