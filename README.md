@@ -446,6 +446,28 @@ Checked on running servers, with Quack `e7a9be3f8c` (the commit DuckDB 2.0 pins 
 repository serves) and Hardcharger 0.3.0; [docs/hardcharger-vs-quack.md](docs/hardcharger-vs-quack.md)
 shows how.
 
+### Where Hardcharger is faster
+
+Measured on 2026-10-19 on AWS c8gn.8xlarge machines: server and client in one placement group
+(LAN), or the client in another region, about 46 ms away (WAN). TLS on every server unless the
+row says plaintext; median of five runs. Hardcharger at `53ac8463` with the Warp SQL ADBC
+driver's default settings, Quack `e7a9be3f8c` attached from DuckDB 2.0, GizmoSQL 1.42 for
+reference. These are the shapes where Hardcharger came out ahead;
+[the full results](docs/benchmarks.md#lz4-selective-compression-and-result-sized-splits-2026-10-19-perfthroughput-2)
+include the shapes where Quack is faster.
+
+| Workload | Hardcharger | Quack | GizmoSQL 1.42 |
+|---|---:|---:|---:|
+| Fetch TPC-H SF1 lineitem (6M rows), WAN | **0.383 s** | 1.508 s | 12.972 s |
+| Load SF1 lineitem, WAN | **1.107 s** | 1.801 s † | 13.802 s |
+| Fetch SF1 lineitem, LAN | **0.126 s** | 0.164 s | 1.484 s |
+| Load SF1 lineitem, LAN | **0.538 s** | 0.600 s † | 1.607 s |
+| Fetch SF10 lineitem (60M rows), LAN, plaintext | **0.746 s** | 0.962 s | 13.216 s |
+
+† Quack with `preserve_insertion_order = false`. Hardcharger's driver loads in parallel parts,
+which keep no row order either. Quack keeping insertion order, its default, took 2.684 s (WAN)
+and 1.016 s (LAN).
+
 ## ⚙️ Configuration
 
 Every option is a flag (`--read-only`), an environment variable (`HARDCHARGER_READ_ONLY`)
