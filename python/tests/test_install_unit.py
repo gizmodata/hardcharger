@@ -102,6 +102,10 @@ def test_download_installs_the_release(fake_github, monkeypatch, tmp_path, capsy
     )
     assert binary.stat().st_mode & stat.S_IXUSR
     assert (binary.parent.parent / "LICENSE").read_text() == "Apache-2.0"
+    # The notices of the third-party software in the binary come with it.
+    notices = (binary.parent.parent / "THIRD_PARTY_NOTICES.md").read_text()
+    assert notices == "# Third-party software in Hardcharger\n"
+    assert (binary.parent.parent / "THIRD_PARTY_NOTICES-web-ui.txt").is_file()
     assert subprocess.run(args=[binary, "--version"], capture_output=True, text=True).stdout == (
         f"Hardcharger {SERVER_VERSION}\n"
     )

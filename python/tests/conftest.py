@@ -65,13 +65,15 @@ def make_tarball(
     platform_name: str, version: str = SERVER_VERSION, extra: dict[str, bytes] | None = None
 ) -> bytes:
     """A release tarball shaped like the real ones: hardcharger-<platform>/bin/...,
-    lib/, LICENSE."""
+    lib/, LICENSE and the third-party notices."""
     out = io.BytesIO()
     top = f"hardcharger-{platform_name}"
     files = {
         f"{top}/bin/hardcharger-server": fake_server_script(version=version),
         f"{top}/lib/libduckdb.so": b"not really a library",
         f"{top}/LICENSE": b"Apache-2.0",
+        f"{top}/THIRD_PARTY_NOTICES.md": b"# Third-party software in Hardcharger\n",
+        f"{top}/THIRD_PARTY_NOTICES-web-ui.txt": b"Hardcharger web UI: third-party notices\n",
         **(extra or {}),
     }
     with tarfile.open(fileobj=out, mode="w:gz") as tar:

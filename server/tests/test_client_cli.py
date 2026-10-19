@@ -268,6 +268,16 @@ def test_unknown_option_is_an_error():
     assert version.returncode == 0 and version.stdout.startswith("Hardcharger Client "), version.stdout
 
 
+def test_licenses_prints_the_third_party_notices():
+    """The client carries THIRD_PARTY_NOTICES.md too (the libraries it links are among them)."""
+    result = subprocess.run(args=[binary(), "--licenses"], env=client_env(), capture_output=True,
+                            timeout=30)
+    assert result.returncode == 0, result.stderr
+    notices = (pathlib.Path(__file__).resolve().parents[2] / "THIRD_PARTY_NOTICES.md").read_bytes()
+    assert result.stdout.replace(b"\r\n", b"\n") == notices
+    assert b"### replxx\n" in notices
+
+
 def test_bad_port_value_is_an_error():
     result = subprocess.run(args=[binary(), "--port", "abc"], env=client_env(), capture_output=True, text=True)
     assert result.returncode == 1

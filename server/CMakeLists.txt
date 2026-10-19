@@ -104,6 +104,9 @@ configure_file(src/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version
 # The web UI, embedded when HARDCHARGER_WEB_UI names a build of ui/ (cmake/web_ui.cmake).
 include(cmake/web_ui.cmake)
 
+# THIRD_PARTY_NOTICES.md, embedded in both binaries for --licenses (cmake/third_party_notices.cmake).
+include(cmake/third_party_notices.cmake)
+
 # zlib 1.3.2 (static), which inflates the embedded UI for a client that doesn't take gzip.
 set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
@@ -199,7 +202,7 @@ if(WIN32)
   configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc" @ONLY)
   target_sources(hardcharger-server PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc")
 endif()
-target_link_libraries(hardcharger-server PRIVATE hardcharger_core)
+target_link_libraries(hardcharger-server PRIVATE hardcharger_core hardcharger_notices)
 target_compile_options(hardcharger-server PRIVATE ${HARDCHARGER_WARNINGS})
 hardcharger_rpath(hardcharger-server)
 
@@ -263,7 +266,7 @@ if(WIN32)
 endif()
 add_executable(hardcharger-client client/main.cc)
 set_target_properties(hardcharger-client PROPERTIES OUTPUT_NAME hardcharger)
-target_link_libraries(hardcharger-client PRIVATE hardcharger_client)
+target_link_libraries(hardcharger-client PRIVATE hardcharger_client hardcharger_notices)
 target_compile_options(hardcharger-client PRIVATE ${HARDCHARGER_WARNINGS})
 
 # The client's tests: GizmoSQL 1.x's client test files, ported (client/tests/). They run

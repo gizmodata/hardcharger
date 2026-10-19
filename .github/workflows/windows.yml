@@ -351,19 +351,36 @@ jobs:
             "$(cygpath -m "$GITHUB_WORKSPACE/build-warp/warp-duckdb.exe")" .venv/Scripts/python.exe
 
       # The same layout as the other platforms' tarballs: bin/ (the server and the client,
-      # single-file executables: every dependency and the C++ runtime linked in), LICENSE
-      # and CHANGELOG.md. The import gate fails on any DLL but Windows' own.
+      # single-file executables: every dependency and the C++ runtime linked in), LICENSE,
+      # CHANGELOG.md and the third-party notices, THIRD_PARTY_NOTICES.md ending with the
+      # libraries this build links from vcpkg (.github/scripts/vcpkg-notices.sh: their
+      # versions and copyright files) and the embedded web UI's THIRD_PARTY_NOTICES-web-ui.txt.
+      # The import gate fails on any DLL but Windows' own.
       - name: Package
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: |
           stage="dist/hardcharger-${{ matrix.name }}"
-          cmake --install server/build --prefix "$stage"
+          # The two executables by hand, not `cmake --install`: jwt-cpp's install rules
+          # would add its headers (include/) and CMake package files (cmake/).
+          mkdir -p "$stage/bin"
+          cp server/build/hardcharger-server.exe server/build/hardcharger.exe "$stage/bin/"
           # The server and the client ship, nothing else (never the tests, never a DLL).
           test "$(ls "$stage/bin" | tr '\n' ' ')" = "hardcharger-server.exe hardcharger.exe "
           .github/scripts/check-windows-imports.sh "$stage/bin/hardcharger-server.exe" "$stage/bin/hardcharger.exe"
-          cp LICENSE CHANGELOG.md "$stage/"
+          cp LICENSE CHANGELOG.md THIRD_PARTY_NOTICES.md "$stage/"
+          .github/scripts/vcpkg-notices.sh /c/vcpkg "$VCPKG_TRIPLET" >> "$stage/THIRD_PARTY_NOTICES.md"
+          # (A POSIX path: GNU tar reads the C: of a Windows one as a remote host.)
+          tar -xzOf "$(cygpath -u "$HARDCHARGER_UI_TARBALL")" hardcharger-ui/third-party-notices.txt \
+            > "$stage/THIRD_PARTY_NOTICES-web-ui.txt"
+          test "$(export LC_ALL=C; cd "$stage" && printf '%s ' *)" = "CHANGELOG.md LICENSE THIRD_PARTY_NOTICES-web-ui.txt THIRD_PARTY_NOTICES.md bin "
+          grep -q "^## Windows: the libraries from vcpkg" "$stage/THIRD_PARTY_NOTICES.md"
+          grep -q "^Hardcharger web UI .*: third-party software notices" "$stage/THIRD_PARTY_NOTICES-web-ui.txt"
           "$stage/bin/hardcharger-server.exe" --version
           "$stage/bin/hardcharger.exe" --version
+          "$stage/bin/hardcharger-server.exe" --licenses > "$RUNNER_TEMP/licenses.txt"
+          tr -d '\r' < "$RUNNER_TEMP/licenses.txt" > "$RUNNER_TEMP/licenses-lf.txt"
+          grep -qx "# Third-party software in Hardcharger" "$RUNNER_TEMP/licenses-lf.txt"
+          grep -q "^Hardcharger web UI .*: third-party software notices" "$RUNNER_TEMP/licenses-lf.txt"
           ls -R "$stage"
           (cd dist && 7z a -tzip "hardcharger-${{ matrix.name }}.zip" "hardcharger-${{ matrix.name }}" > /dev/null)
       # The gate is proven to fail: an executable that imports duckdb.dll (linked against
@@ -485,6 +502,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "the installed server did not run" }
           $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
           if ($machinePath -notlike "*Hardcharger\bin*") { throw "bin is not on the system PATH" }
+          foreach ($doc in "LICENSE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES-web-ui.txt") {
+            if (-not (Test-Path "$env:ProgramFiles\Hardcharger\$doc")) { throw "the MSI did not install $doc" }
+          }
+          if (-not (Select-String -Quiet -Pattern "^## Windows: the libraries from vcpkg" -Path "$env:ProgramFiles\Hardcharger\THIRD_PARTY_NOTICES.md")) {
+            throw "the installed THIRD_PARTY_NOTICES.md has no vcpkg section"
+          }
           $p = Start-Process msiexec.exe -ArgumentList "/x", $msi, "/qn" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "uninstall failed: $($p.ExitCode)" }
           if (Test-Path $exe) { throw "uninstall left $exe" }

@@ -563,6 +563,7 @@ Loaded LoadConfig(int argc, char** argv) {
     if (arg == "--version") { loaded.action = Action::kVersion; return loaded; }
     if (arg == "--print-duckdb-version") { loaded.action = Action::kPrintDuckDBVersion; return loaded; }
     if (arg == "--print-options-json") { loaded.action = Action::kPrintOptionsJson; return loaded; }
+    if (arg == "--licenses") { loaded.action = Action::kLicenses; return loaded; }
     // A self-check of outbound HTTPS (the trust store a container really has).
     if (arg == "--verify-tls" || arg.starts_with("--verify-tls=")) {
       loaded.action = Action::kVerifyTls;
@@ -655,6 +656,7 @@ std::string Usage() {
       << "  --verify-audit-log FILE [--verify-audit-log-partial]\n"
       << "      check the access-control audit records in a JSON log and exit (0: intact)\n"
       << "  --print-options-json  (every option, with its flag, variable, YAML key and default, as JSON)\n"
+      << "  --licenses  (the third-party software in this binary and its embedded web UI, and their licences)\n"
       << "  --version, --print-duckdb-version, --help\n";
   return out.str();
 }

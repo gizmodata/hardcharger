@@ -272,3 +272,13 @@ clones gizmodata/warp-sql-js with a read-only deploy key, the `DEPLOY_KEY_WARP_S
 ## 📄 License
 
 [Apache License 2.0](../LICENSE). Inter: [SIL Open Font License 1.1](public/fonts/Inter-LICENSE.txt).
+
+The build writes `dist/third-party-notices.txt` (served at `/ui/third-party-notices.txt`, linked
+from **About** as **Open-source licences**): every npm package in the bundle, lazy chunks and the
+editor's worker included, with its version, licence and the licence and notice files its package
+ships ([`scripts/third-party-notices.mjs`](scripts/third-party-notices.mjs), a Vite plugin). The
+build fails when a bundled package declares no licence, ships no licence file, or has a licence
+outside the plugin's allow-list (MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0, 0BSD,
+BlueOak-1.0.0, CC0-1.0, Unlicense, Python-2.0, MPL-2.0; a named exception for Inter's OFL-1.1),
+and it lists any copyleft one in its warnings. The release archives ship the file as
+`THIRD_PARTY_NOTICES-web-ui.txt`, beside the server's `THIRD_PARTY_NOTICES.md`.

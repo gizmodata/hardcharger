@@ -9,6 +9,36 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Third-party notices in everything that ships. `THIRD_PARTY_NOTICES.md` lists the 49
+  third-party components the binaries link statically, each with its version, licence, the
+  binaries and platforms it is in, and its full licence and NOTICE texts: DuckDB, the 31
+  libraries and data sets it vendors (Mbed TLS, RE2, Thrift, the Unicode data, jemalloc on
+  Linux, the TPC-H generator, ...), the httpfs, DuckLake and PostgreSQL extensions, Arrow and
+  what it bundles (zstd, LZ4, uriparser, xsimd), Boost, OpenSSL, jwt-cpp, yaml-cpp, zlib,
+  replxx, CRoaring, libpq and libcurl. It is generated
+  (`server/scripts/third-party-notices.py`) from `server/third-party-notices/`: each
+  component's reviewed version and its texts, fetched from the source at that version. CI
+  (`--check`, in every build job) fails when a recipe pins another version than the one the
+  notices were made for, when the build declares a dependency (FetchContent, a DuckDB
+  extension, an extension library, a vcpkg package) no component covers, or when the file is
+  stale. The web UI's build writes `third-party-notices.txt` (served at
+  `/ui/third-party-notices.txt`, linked from **About** as **Open-source licences**) from the
+  packages actually in the bundle, lazy chunks and the editor's worker included (15 today:
+  React, Monaco, Swagger UI, Apache Arrow, parquet-wasm, ...), with every licence and notice
+  file each ships (Monaco's `ThirdPartyNotices.txt`, Swagger UI's NOTICE and its bundle's
+  `swagger-ui-es-bundle.js.LICENSE.txt`), and fails when a bundled package declares no
+  licence, has no licence file, or has a licence outside the allow-list (MIT, ISC, BSD-2/3,
+  Apache-2.0, 0BSD, BlueOak, CC0, Unlicense, Python-2.0, MPL-2.0; Inter's OFL-1.1 by name).
+  The tarballs, the Windows zips (whose `THIRD_PARTY_NOTICES.md` ends with the versions and
+  copyright files of the libraries the Windows build links from vcpkg), the MSIs (installed
+  under Program Files\Hardcharger) and the container image (`/opt/hardcharger/` and
+  `/usr/share/doc/hardcharger/`) carry `THIRD_PARTY_NOTICES.md` and
+  `THIRD_PARTY_NOTICES-web-ui.txt`, and `hardcharger-server --licenses` and
+  `hardcharger --licenses` print them from the binary itself (the server's followed by its
+  embedded UI's). Tests: `test_server_cli.py`, `test_client_cli.py`, the unit test of the UI
+  file reader, `third-party-notices.test.ts` (the allow-list, module-to-package mapping, the
+  file's contents and its failures), `about.spec.ts` (Chromium and WebKit), the tarball smoke
+  test and the image smoke test.
 - Web UI, **API** page (`/ui/api`, next to Query and Sessions): the server's Warp SQL API in
   Swagger UI (swagger-ui-dist 5.34.0, in the build, loaded only when the page is opened:
   +1.7 MB, +435 KiB gzipped in the binary), from the OpenAPI 3.1 document the server now serves
@@ -314,6 +344,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- The Windows zips no longer carry jwt-cpp's headers (`include/jwt-cpp/`) and CMake package
+  files (`cmake/`): the package step took the whole `cmake --install` tree, which jwt-cpp's
+  install rules add to; it now copies the two executables, and checks the zip's top level.
 - A retained result that expires (`result_retention_seconds`) while a client is reading it
   no longer cuts that read: the read gets every batch and the end of the stream, and only
   reads that start afterwards get `410 result_expired`. The expiry sweep (every 5 s)
