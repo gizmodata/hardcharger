@@ -131,6 +131,9 @@ own changelog in `python/CHANGELOG.md`.
   (lz4_frame near, zstd far), up to 32 result partitions and `auto` ingest parts, and
   uploads in 16,384-row slices.
 
+- Connections set TCP_NODELAY (warp-sql 58082fa): every small request (discovery, a status
+  poll, `SELECT 1`) waited ~40 ms on Linux for the client's delayed ACK.
+
 - `bench/remote/serve.sh` stops each server by the PID it recorded, never by pattern.
   New: `run_cases.sh` (a list of cases against one system), `build-from-source.sh` (build
   the server or driver on a benchmark VM), `midsize.py` (partition overhead on mid-sized
