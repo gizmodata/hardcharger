@@ -108,7 +108,7 @@ export async function signIn(page: Page, who: { username: string; password: stri
 
 /** Replaces the active editor's text (Monaco) and puts the cursor at the end. */
 export async function setSql(page: Page, sql: string): Promise<void> {
-  const editor = page.locator(".editor-slot:not([hidden]) .monaco-editor").first();
+  const editor = page.locator(".editor-tab:not([hidden]) .monaco-editor").first();
   await editor.click();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("Delete");
@@ -121,9 +121,28 @@ export async function runSql(page: Page, sql: string): Promise<void> {
   await page.keyboard.press("ControlOrMeta+Enter");
 }
 
+/** Runs the statement (or the keys' command) in the shown tab and waits until the run is over. */
+export async function runDone(page: Page, sql: string, keys = "ControlOrMeta+Enter"): Promise<void> {
+  const tab = activeTab(page);
+  const before = Number(await tab.getAttribute("data-runs"));
+  await setSql(page, sql);
+  await page.keyboard.press(keys);
+  await expect.poll(async () => Number(await tab.getAttribute("data-runs"))).toBeGreaterThan(before);
+}
+
+/** The editor tab on show (each tab keeps its own editor, toolbar and results). */
+export function activeTab(page: Page) {
+  return page.locator(".editor-tab:not([hidden])");
+}
+
+/** Waits until the cursor is in the shown tab's editor (each tab focuses its editor when shown). */
+export async function editorFocused(page: Page): Promise<void> {
+  await expect(activeTab(page).locator(".monaco-editor.focused")).toBeVisible();
+}
+
 /** The grid's text: header names, then each row's cells. */
 export async function gridRows(page: Page): Promise<string[][]> {
-  const grid = page.getByTestId("results-grid");
+  const grid = activeTab(page).getByTestId("results-grid");
   await expect(grid).toBeVisible();
   return grid.evaluate((el) =>
     [...el.querySelectorAll('[role="row"]')]
@@ -135,4 +154,23 @@ export async function gridRows(page: Page): Promise<string[][]> {
         }),
       ),
   );
+}
+
+// What the clipboard holds, read the way a person would: paste into a text box. (Granting
+// clipboard permissions would test a path Safari never takes.)
+export async function pasted(page: Page): Promise<string> {
+  await page.evaluate(() => {
+    document.getElementById("paste-target")?.remove();
+    const t = document.createElement("textarea");
+    t.id = "paste-target";
+    t.setAttribute("aria-label", "paste target");
+    document.body.appendChild(t);
+  });
+  const target = page.getByLabel("paste target");
+  await target.focus();
+  await page.keyboard.press("ControlOrMeta+V");
+  await expect(target).not.toHaveValue("");
+  const value = await target.inputValue();
+  await page.evaluate(() => document.getElementById("paste-target")?.remove());
+  return value;
 }

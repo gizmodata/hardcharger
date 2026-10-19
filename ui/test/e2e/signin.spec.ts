@@ -40,9 +40,9 @@ test("a returning visitor's reload keeps the session and the tabs, with no error
 
   await page.reload();
   await expect(page.getByTestId("header-user")).toContainText("admin");
-  await expect(page.locator(".editor-slot:not([hidden]) .view-lines")).toContainText("still here");
+  await expect(page.locator(".editor-tab:not([hidden]) .view-lines")).toContainText("still here");
   await page.keyboard.press("Escape");
-  await page.locator(".editor-slot:not([hidden]) .monaco-editor").click();
+  await page.locator(".editor-tab:not([hidden]) .monaco-editor").click();
   await page.keyboard.press("ControlOrMeta+Enter");
   expect((await gridRows(page))[1]).toEqual(["still here"]);
 

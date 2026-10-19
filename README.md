@@ -66,8 +66,11 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
 # open https://localhost:31337/ui and sign in as hardcharger / change-me (the certificate is self-signed)
 ```
 
-- ✍️ **SQL editor**: Ctrl/⌘+Enter runs the statement under the cursor or the selection;
-  tabs, each with its own session; Cancel stops the statement on the server.
+- ✍️ **SQL editor**: up to 20 tabs, each with its own session (its own transaction, temporary
+  tables and settings). Ctrl/⌘+Enter runs the statement at the cursor (a bar in the margin
+  marks it) or exactly the selection; ⇧ runs all, with a result tab per result set and
+  Messages. Cancel stops the statement on the server and says how far a script got. An open
+  or failed transaction shows as a badge, with Commit and Rollback, straight from the server.
 - 📊 **Results grid** for up to a million rows, in DuckDB's own formatting; Ctrl/⌘+C copies
   cells in every browser, Safari included.
 - 🗂️ **Schema browser** that follows access control: each user sees only the catalogs,

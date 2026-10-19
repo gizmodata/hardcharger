@@ -16,13 +16,31 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
   <img src="../docs/assets/web-ui-query-light.png" alt="The web UI: the schema browser, the SQL editor and a result" width="80%">
 </p>
 
-- ✍️ **SQL editor** (Monaco): Ctrl/⌘+Enter runs the statement under the cursor, or the
-  selection; several tabs, each with its own server session, so one tab's long query never
-  holds up another's.
+- ✍️ **SQL editor** (Monaco), in tabs: up to 20, each with its own Warp SQL session, so one
+  tab's long query or open transaction never touches another. New with **+** or Alt+N, close
+  with **×** or Alt+W (asking first when a transaction is open or text is unsaved),
+  double-click to rename, drag to reorder; a spinner, a red dot or an amber dot says a tab is
+  running, failed, or in a transaction. Tabs, their text, catalog, schema and row limit come
+  back after a reload (kept in this browser).
+- ▶️ **Run** (Ctrl/⌘+Enter, Ctrl+Enter on a Mac too) runs the statement at the cursor, marked
+  by a bar in the margin, or exactly the selected text. **Run all** (⇧+Ctrl/⌘+Enter) runs every
+  statement in order, stopping at the first error, with a result tab for each result set and
+  **Messages** listing each statement's rows and time; a script keeps at most 50 result sets
+  and 64 MiB of results in the browser (the rest still run). The **Catalog** and **Schema**
+  pickers set the session's (a `USE` moves them) and the **Row limit** is 100 to 1,000,000
+  (1,000 by default), with "truncated at … rows" when a result is cut.
+- 🔁 **Sessions and transactions**: `BEGIN` shows **In transaction** with Commit and
+  Rollback, and a failed statement **Transaction failed — Rollback to continue**, as the server
+  reports them (the session document's `transaction`, Warp SQL §5.2); the pickers lock while
+  one is open. The session chip shows the server's id for the session (its logs and
+  `KILL SESSION` use it) and copies it; **New session** starts afresh. When the server has lost
+  a tab's session (idle timeout, restart), the next run starts a new one and says so, unless a
+  transaction was open: then nothing runs, and the message says it was rolled back.
 - 📊 **Results grid** for up to a million rows (only the rows in view are drawn), with DuckDB's
   own formatting of decimals, dates, timestamps, intervals, lists, structs, maps and blobs.
   Select cells, rows or columns and copy with Ctrl/⌘+C (Safari included), or copy everything.
-- 🛑 **Cancel** stops the statement on the server, not just the wait for it.
+- 🛑 **Cancel** stops the statement on the server, not just the wait for it, and says how far
+  a script got and whether the transaction now needs a rollback.
 - 🗂️ **Schema browser**: catalogs, schemas, tables, views and columns with their types, from the
   Warp SQL metadata calls, filtered by the server's access control; preview a table in a new
   tab; double-click to insert a name.

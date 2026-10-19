@@ -22,11 +22,27 @@ export async function discover(signal?: AbortSignal): Promise<DiscoveryDocument>
   return doc;
 }
 
+export interface ConnectionOptions {
+  signal?: AbortSignal;
+  /** The session's catalog and schema (empty: the user's default). */
+  catalog?: string;
+  schema?: string;
+  /**
+   * false: a session the server lost fails with session_not_found instead of being replaced
+   * (an editor tab decides itself, since it knows whether a transaction was open).
+   */
+  reconnect?: boolean;
+}
+
 /** A connection (one server session) signed in with the tab's access token. */
-export function openConnection(auth: SignedIn, signal?: AbortSignal): Promise<Connection> {
+export function openConnection(auth: SignedIn, options: ConnectionOptions = {}): Promise<Connection> {
+  const { signal, catalog, schema, reconnect } = options;
   return connect({
     url: warpBase(),
     token: auth.token,
+    ...(catalog ? { catalog } : {}),
+    ...(schema ? { schema } : {}),
+    ...(reconnect === undefined ? {} : { reconnect }),
     // One stream per result: the UI reads at most the row limit, and the browser's six
     // connections per host are shared by every tab of the app.
     resultPartitions: 1,

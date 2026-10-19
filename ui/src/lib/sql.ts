@@ -155,3 +155,47 @@ export function quoteLiteral(value: string): string {
 export function exactLike(name: string): string {
   return name.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
+
+/** A statement's first word, upper-cased, after any leading comments ("" when there is none). */
+export function firstKeyword(text: string): string {
+  let rest = text.trimStart();
+  for (;;) {
+    if (rest.startsWith("--")) {
+      const nl = rest.indexOf("\n");
+      rest = nl < 0 ? "" : rest.slice(nl + 1).trimStart();
+    } else if (rest.startsWith("/*")) {
+      let depth = 1;
+      let i = 2;
+      while (i < rest.length && depth > 0) {
+        if (rest.startsWith("/*", i)) {
+          depth++;
+          i += 2;
+        } else if (rest.startsWith("*/", i)) {
+          depth--;
+          i += 2;
+        } else i++;
+      }
+      rest = rest.slice(i).trimStart();
+    } else break;
+  }
+  return /^[A-Za-z_]+/.exec(rest)?.[0].toUpperCase() ?? "";
+}
+
+const catalogChanging = new Set(["CREATE", "DROP", "ALTER", "ATTACH", "DETACH", "IMPORT", "COMMENT", "USE"]);
+const transactionWords = new Set(["BEGIN", "START", "COMMIT", "END", "ROLLBACK", "ABORT"]);
+
+/** Whether running `sql` may add, drop or rename a catalog, schema, table, view or column. */
+export function mayChangeCatalog(sql: string): boolean {
+  return splitStatements(sql).some((s) => catalogChanging.has(firstKeyword(s.text)));
+}
+
+/** Whether a statement begins or ends a transaction (BEGIN, COMMIT, ...). */
+export function isTransactionStatement(sql: string): boolean {
+  return transactionWords.has(firstKeyword(sql));
+}
+
+/** A statement's first line, squeezed and shortened, for a label. */
+export function statementPreview(sql: string, max = 40): string {
+  const line = sql.replace(/\s+/g, " ").trim();
+  return line.length > max ? `${line.slice(0, max)}…` : line;
+}

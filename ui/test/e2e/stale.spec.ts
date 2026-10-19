@@ -57,8 +57,8 @@ test("a lazily loaded page that is gone: reloads with backoff, then a 'new versi
     const body = (await response.text()).replaceAll(/(QueryPage-[\w-]+\.js)/g, "$1?build=2");
     await route.fulfill({ response, body });
   });
-  await page.getByRole("button", { name: "Reload" }).click();
-  await expect(page.locator(".editor-slot .monaco-editor")).toBeVisible();
+  await page.getByTestId("stale-build").getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(page.locator(".editor-tab .monaco-editor")).toBeVisible();
   await expect(page.getByTestId("stale-build")).toHaveCount(0);
   // Reload reloaded (WebKit sometimes needs one automatic retry more before the new files load).
   expect(documents).toBeGreaterThanOrEqual(5);

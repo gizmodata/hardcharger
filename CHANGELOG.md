@@ -9,6 +9,23 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Web UI, the SQL editor's tabs, runs and sessions:
+  up to 20 tabs (Alt+N, Alt+W asking first about an open transaction or unsaved text, rename,
+  drag to reorder, running/failed/transaction markers), each its own Warp SQL session; Run
+  runs the statement at the cursor (margin bar) or exactly the selection, and Run all
+  (⇧+Ctrl/⌘+Enter) every statement, stopping at the first error, with a result tab per result
+  set and Messages (at most 50 result sets and 64 MiB kept in the browser); Cancel notes how
+  far a script got and an aborted transaction; In transaction / Transaction failed badges with
+  Commit and Rollback, from the session document's `transaction`; Catalog and Schema pickers
+  (session options, locked in a transaction, following `USE`); row limits 100 to 1,000,000
+  (default 1,000) with "truncated at … rows"; the session chip (the server's session id, copied
+  on click); New session; a session the server lost is replaced with a note, or, with a
+  transaction open, nothing runs and the message says it was rolled back; leaving the page
+  with a transaction open asks first; a resizable editor (drag, keys, double-click, kept).
+  The editor's tab connections no longer replace a lost session silently. e2e (Chromium and
+  WebKit): `tabs.spec.ts`, `run.spec.ts`, `session.spec.ts`; unit tests for the tab store,
+  the script runner and the session's loss handling.
+
 - The session document says where the session's transaction stands (Warp SQL §5.2,
   warp-sql 6afe76d): `GET /warp/v1/sessions/{id}` and the session's creation answer carry
   `transaction`, `none`, `open` or `aborted`, as the engine has it, read after every

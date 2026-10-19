@@ -1,4 +1,4 @@
-import { expect, gridRows, signIn, test } from "./fixtures.ts";
+import { activeTab, expect, gridRows, signIn, test } from "./fixtures.ts";
 
 test("the schema browser lists catalogs, schemas, tables and columns; preview runs a query", async ({
   page,
@@ -21,11 +21,13 @@ test("the schema browser lists catalogs, schemas, tables and columns; preview ru
 
   await orders.getByRole("button", { name: "Preview orders" }).click();
   await expect(page.getByRole("tab", { selected: true })).toHaveText("orders");
-  await expect(page.getByTestId("results-status")).toContainText("100 rows in");
+  await expect(activeTab(page).getByTestId("results-status")).toContainText("100 rows in");
   const rows = await gridRows(page);
   expect(rows[0]).toEqual(["id", "customer", "amount", "ordered_on"]);
   expect(rows[1]).toEqual(["0", "customer 0", "0.00", "2026-01-01"]);
+  page.once("dialog", (d) => void d.accept());
   await page.getByRole("button", { name: "Close orders" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(1);
 });
 
 test("the filter narrows the tables shown", async ({ page, harness }) => {

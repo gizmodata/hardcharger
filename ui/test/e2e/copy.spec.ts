@@ -1,25 +1,4 @@
-import type { Page } from "@playwright/test";
-
-import { expect, gridRows, runSql, signIn, test } from "./fixtures.ts";
-
-// What the clipboard holds, read the way a person would: paste into a text box. (Granting
-// clipboard permissions would test a path Safari never takes.)
-async function pasted(page: Page): Promise<string> {
-  await page.evaluate(() => {
-    document.getElementById("paste-target")?.remove();
-    const t = document.createElement("textarea");
-    t.id = "paste-target";
-    t.setAttribute("aria-label", "paste target");
-    document.body.appendChild(t);
-  });
-  const target = page.getByLabel("paste target");
-  await target.focus();
-  await page.keyboard.press("ControlOrMeta+V");
-  await expect(target).not.toHaveValue("");
-  const value = await target.inputValue();
-  await page.evaluate(() => document.getElementById("paste-target")?.remove());
-  return value;
-}
+import { expect, gridRows, pasted, runSql, signIn, test } from "./fixtures.ts";
 
 test("Ctrl/⌘+C copies the selected cells as tab-separated text", async ({ page, harness }) => {
   await signIn(page, harness.admin);

@@ -6,7 +6,7 @@ import { SignInPage } from "./components/SignInPage";
 import { type SignedIn, clearSignIn, loadSignIn, saveSignIn } from "./lib/auth";
 import { useRoute } from "./lib/route";
 import { useTheme } from "./lib/theme";
-import { discover, openConnection } from "./lib/warp";
+import { type ConnectionOptions, discover, openConnection } from "./lib/warp";
 import {
   type AppSession,
   type Identity,
@@ -80,7 +80,7 @@ export function App() {
     void (async () => {
       let connection: Connection | undefined;
       try {
-        connection = await openConnection(auth, controller.signal);
+        connection = await openConnection(auth, { signal: controller.signal });
         const identity = await whoAmI(connection);
         if (controller.signal.aborted) {
           void connection.close();
@@ -105,8 +105,8 @@ export function App() {
     return () => window.clearTimeout(t);
   }, [phase, signOut]);
 
-  const openExtraConnection = useCallback(async (auth: SignedIn) => {
-    const c = await openConnection(auth);
+  const openExtraConnection = useCallback(async (auth: SignedIn, options?: ConnectionOptions) => {
+    const c = await openConnection(auth, options);
     extra.current.add(c);
     return c;
   }, []);
@@ -139,7 +139,7 @@ export function App() {
       connection,
       identity,
       isAdmin: identity.role === "admin",
-      openConnection: () => openExtraConnection(auth),
+      openConnection: (options) => openExtraConnection(auth, options),
       signOut,
       checkSignIn: (err) => {
         const why = signInLost(err);

@@ -16,7 +16,7 @@ test("Ctrl/⌘+Enter runs the statement under the cursor and shows its rows", as
   await expect(page.getByTestId("results-status")).toContainText("1 row in");
 
   // Now the first statement: the cursor goes to its line.
-  await page.locator(".editor-slot:not([hidden]) .view-line").first().click();
+  await page.locator(".editor-tab:not([hidden]) .view-line").first().click();
   await page.keyboard.press("ControlOrMeta+Enter");
   await expect.poll(async () => (await gridRows(page))[0]).toEqual(["first_one"]);
 });
@@ -75,7 +75,8 @@ test("Cancel stops a running query on the server", async ({ page }) => {
   await expect(page.getByTestId("results-status")).toContainText("Running");
   await page.waitForTimeout(500);
   await page.getByTestId("cancel-button").click();
-  await expect(page.getByTestId("query-message")).toContainText("Cancelled after", { timeout: 15_000 });
+  await expect(page.getByTestId("tab-notice")).toContainText("The query was cancelled", { timeout: 15_000 });
+  await expect(page.getByTestId("results-status")).toContainText("Cancelled after");
   // The tab's session runs one statement at a time: an answer within seconds means the server
   // stopped the long one (it would run for hours).
   const started = Date.now();
@@ -93,6 +94,8 @@ test("tabs keep their own SQL and results", async ({ page }) => {
   expect((await gridRows(page))[1]).toEqual(["two"]);
   await page.getByRole("tab", { name: "Query 1" }).click();
   expect((await gridRows(page))[1]).toEqual(["one"]);
+  // Its text isn't saved anywhere: closing it asks first.
+  page.once("dialog", (d) => void d.accept());
   await page.getByRole("button", { name: "Close Query 2" }).click();
   await expect(page.getByRole("tab")).toHaveCount(1);
 });
@@ -101,7 +104,7 @@ test("the row limit caps what is read and says so", async ({ page }) => {
   await page.getByLabel("Row limit").selectOption("1000");
   await runSql(page, "SELECT * FROM sales.orders ORDER BY id");
   await expect(page.getByTestId("results-status")).toContainText("1,000 rows in");
-  await expect(page.getByTestId("results-status")).toContainText("the first 1,000; more were not read");
+  await expect(page.getByTestId("truncated")).toHaveText("truncated at 1,000 rows");
   // The grid holds them all, drawing only the rows in view.
   const grid = page.getByTestId("results-grid");
   await grid.evaluate((el) => (el.scrollTop = el.scrollHeight));

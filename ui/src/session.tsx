@@ -6,6 +6,7 @@ import { type Connection, type DiscoveryDocument, ErrorCode, WarpSqlError } from
 import { createContext, use } from "react";
 
 import type { SignedIn } from "./lib/auth";
+import type { ConnectionOptions } from "./lib/warp";
 
 export interface Identity {
   user: string;
@@ -35,7 +36,7 @@ export interface AppSession {
   identity: Identity;
   isAdmin: boolean;
   /** Opens a new connection (one per editor tab, so one tab's query never waits for another's). */
-  openConnection: () => Promise<Connection>;
+  openConnection: (options?: ConnectionOptions) => Promise<Connection>;
   /** Ends the session and goes back to the sign-in page, saying why. */
   signOut: (why?: string) => void;
   /** Checks an error for an expired or ended sign-in; returns true when it handled it. */
