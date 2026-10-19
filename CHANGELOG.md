@@ -229,6 +229,12 @@ own changelog in `python/CHANGELOG.md`.
   in-memory database). The startup log says which, and warns when neither is writable.
   `test_extension_directory.py` covers both cases with `HOME` unset or unusable.
 
+- `hardcharger`: after a `KILL SESSION` (or another `session_ended`), the statement it caught
+  printed the server's "Sign in again and open a new session to re-authenticate" right below
+  the client's "a new session is open". The client has done both by then; it now says "The
+  statement did not complete: its session ended (killed). It was not run again; run it again
+  to run it in the new session." `test_client_cli.py` checks the whole message.
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file

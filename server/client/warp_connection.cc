@@ -222,8 +222,14 @@ auto WarpConnection::WithSession(Call&& call) -> decltype(call()) {
     return call();
   } catch (const wc::Error& e) {
     if (!Reopen(e)) throw;
-    if (e.code() != "session_not_found") throw;
-    return call();  // it never ran: the server had no session to run it in
+    if (e.code() == "session_not_found") return call();  // it never ran: the server had no session to run it in
+    // session_ended: the server stopped the statement with its session (a kill can come
+    // while it runs), so it isn't run again. The server's advice (sign in again, open a new
+    // session) is what Reopen just did: say what became of the statement instead.
+    throw wc::Error(e.status(), e.code(),
+                    "The statement did not complete: its session ended" +
+                        (e.reason().empty() ? std::string() : " (" + e.reason() + ")") +
+                        ". It was not run again; run it again to run it in the new session.");
   }
 }
 
