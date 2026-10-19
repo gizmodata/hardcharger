@@ -372,6 +372,11 @@ own changelog in `python/CHANGELOG.md`.
   `hardcharger.exe` carry the bull's head as their icon, and the MSI shows it in Installed apps
   and in its dialogs' banner and welcome panel.
 
+- `KILL SESSION` naming the session that runs it is still refused, now with SQLSTATE `55000`
+  (object not in prerequisite state; it was `42P01`, undefined table) and "A session can't
+  kill itself; disconnect (or close the connection) instead." (it was "Cannot kill your own
+  session"). `test_admin_cannot_kill_own_session` checks both, and that the session still works.
+
 ### Removed
 
 - **DuckLake as an instrumentation backend.** Instrumentation has two backends: the DuckDB

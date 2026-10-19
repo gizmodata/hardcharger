@@ -45,7 +45,10 @@ def test_admin_cannot_kill_own_session(server):
     session = server.admin()
     own = session.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
     assert own == session.id and own.startswith("s_")  # Hardcharger: the Warp SQL session id, not a UUID
-    assert "Cannot kill your own session" in session.error(sql=f"KILL SESSION '{own}'")["detail"]
+    problem = session.error(sql=f"KILL SESSION '{own}'")
+    assert problem["detail"] == "A session can't kill itself; disconnect (or close the connection) instead.", problem
+    assert problem["sqlstate"] == "55000", problem  # object not in prerequisite state (was 42P01)
+    assert session.scalar(sql="SELECT 1") == 1  # refused, not killed: the session still works
 
 
 def test_kill_nonexistent_session(server):

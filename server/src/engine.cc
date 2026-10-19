@@ -904,7 +904,10 @@ warpsql::StatementOutcome Session::RunCommand(const Piece& piece) {
   std::transform(wanted.begin(), wanted.end(), wanted.begin(), [](unsigned char c) { return std::tolower(c); });
   switch (runtime_.sessions.Find(wanted, *this)) {
     case SessionRegistry::Lookup::kOwnSession:
-      throw Error(ErrorCode::kSqlError, "Cannot kill your own session", "42P01");
+      // 55000 (object not in prerequisite state): the session exists, it just can't be the
+      // one asking. (It was 42P01, undefined table, which named the wrong problem.)
+      throw Error(ErrorCode::kSqlError, "A session can't kill itself; disconnect (or close the connection) instead.",
+                  "55000");
     case SessionRegistry::Lookup::kNotFound:
     case SessionRegistry::Lookup::kHidden:  // (an unrestricted administrator sees every session)
       throw Error(ErrorCode::kSqlError, "Session '" + target + "' not found", "42704");
