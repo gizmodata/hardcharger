@@ -57,9 +57,29 @@ own changelog in `python/CHANGELOG.md`.
   statement, ingest, option change, commit and rollback. `test_rbac_set_role.py` checks it
   for a store user through an allowed, a refused and a failed statement; the conformance
   suite's ten new session tests pass on this server.
+- Access-control introspection: table functions `hardcharger_grants()`,
+  `hardcharger_role_members()`, `hardcharger_roles()`, `hardcharger_users()`,
+  `hardcharger_policies()` and `hardcharger_effective_privileges([user_name])`, read from the
+  store snapshot the server holds (no store query per call), and the SQL standard's
+  `table_privileges`, `column_privileges`, `role_table_grants`, `applicable_roles` and
+  `enabled_roles` with the standard's columns, in
+  `_hardcharger_system.hardcharger_information_schema` (DuckDB's `information_schema` can't be
+  extended, and this name shadows nothing). The administrator sees everything; a store user
+  only grants to itself and the roles it holds, those memberships and roles, its own user
+  row and policies on tables it can see; an administrator token with `catalog_access` rules
+  only grants, ownerships and policies inside the catalogs its rules reach. Without an
+  access-control store, every function returns no rows. The store records no grant times, so
+  there is no `granted_at`. `test_rbac_introspection.py` (21 tests, PostgreSQL and DuckDB
+  stores) covers each visibility rule with its positive twin, counting and filtering for
+  another user's grants, and the standard views against the table functions.
 
 ### Changed
 
+- Store users (tenant users included) read the views in `_hardcharger_system`
+  (`hardcharger_index_info`, `hardcharger_view_definition` and the new ones) without a grant:
+  the catalog is read-only and its views read with the reader's rights, so each lists only
+  what that user may see. They used to be refused (no SELECT privilege on the view), while
+  `catalog_access` principals could already read them.
 - The transaction a session reports (the session document, and the
   `hardcharger_sessions` metric's `idle_in_transaction` and `idle_in_transaction_aborted`
   states) is the one DuckDB has: a syntax error inside a transaction leaves it open

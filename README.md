@@ -515,6 +515,75 @@ keep DuckDB's usual checkpoints, so a SQLite database written where one of their
 loses that file's changes since its last checkpoint if the server then stops without one.
 Keep `MANAGE EXTENSIONS` for roles you would trust with the server's files.
 
+### Who can do what
+
+`SHOW GRANTS` answers for one user or role. To query, join and filter grants, use the
+table functions below. They read the copy of the store the server already holds, and each
+one returns only the rows the caller may see:
+
+| Function | Rows |
+|---|---|
+| `hardcharger_grants()` | Object, column and system privileges, plus ownerships: grantee, privilege, object, grantor, grant option, tenant |
+| `hardcharger_role_members()` | Who holds each role: users, roles, and identity-provider groups (`CREATE GROUP MAPPING`) |
+| `hardcharger_roles()`, `hardcharger_users()` | Names and attributes that aren't secret (never a password hash or a token) |
+| `hardcharger_policies()` | Row policies and column masks, with their expressions and whether they apply to you |
+| `hardcharger_effective_privileges([user_name])` | What you hold after role inheritance, ownership, `SET ROLE` and a scoped token's limits, and the role each privilege comes from |
+
+```sql
+-- joe: what can I do, and which role gives it to me?
+SELECT privilege, object_type, schema_name, object_name, column_name, via
+FROM hardcharger_effective_privileges();
+```
+```text
+privilege | object_type | schema_name | object_name | column_name | via
+SELECT    | TABLE       | crm         | users       | email       | analyst
+SELECT    | TABLE       | crm         | users       | signup_ts   | analyst
+SELECT    | VIEW        | published   | daily       | NULL        | analyst
+SELECT    | SCHEMA      | analytics   | NULL        | NULL        | analyst
+```
+With a second role as well (`CREATE ROLE finance; GRANT SELECT ON crm.users TO finance;
+GRANT finance TO ann;`):
+
+```sql
+-- The administrator: who may read crm.users?
+SELECT grantee, privilege, column_name FROM hardcharger_grants()
+WHERE schema_name = 'crm' AND object_name = 'users';
+```
+```text
+grantee | privilege | column_name
+finance | SELECT    | NULL
+analyst | SELECT    | email
+analyst | SELECT    | signup_ts
+```
+
+The same query as joe returns only the two `analyst` rows. The administrator sees
+everything, and `hardcharger_effective_privileges('ann')` answers for any user. A user sees
+grants to the roles it holds (directly, inherited, or through its sign-in token's groups),
+the memberships that give it those roles, those roles, its own user row, and policies on
+tables it can see. It never sees another user's grants, whatever it filters or counts. An
+administrator token with `catalog_access` rules sees grants, ownerships and policies only
+on objects in the catalogs its rules reach, and no users or memberships. On a server without
+an access-control store, every function returns no rows.
+
+DuckDB's `information_schema` can't be extended, so the SQL standard's privilege views live
+in the server's read-only system catalog, under `_hardcharger_system.hardcharger_information_schema`:
+`table_privileges`, `column_privileges`, `role_table_grants`, `applicable_roles` and
+`enabled_roles`. They keep the standard's column names (`grantor`, `grantee`,
+`table_catalog`, `table_schema`, `table_name`, `privilege_type`, `is_grantable`, …), and a
+schema or catalog grant appears once for each table and view in it. A tool that reads
+`information_schema.table_privileges` reads the same columns under this qualified name.
+They follow the same visibility rules:
+
+```sql
+SELECT grantee, table_schema, table_name, privilege_type
+FROM _hardcharger_system.hardcharger_information_schema.table_privileges ORDER BY ALL;
+```
+```text
+grantee | table_schema | table_name | privilege_type
+analyst | analytics    | orders     | SELECT
+analyst | published    | daily      | SELECT
+```
+
 ## 🔏 Client certificates as identity
 
 With mutual TLS (`mtls_ca_cert`), a client can sign in with its certificate and no

@@ -274,7 +274,7 @@ bool GlobMatches(std::string_view pattern, std::string_view text) {
 }  // namespace
 
 CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const std::string& catalog) {
-  if (IdentifiersEqual(catalog, "system") || IdentifiersEqual(catalog, "_hardcharger_system")) {
+  if (IdentifiersEqual(catalog, "system") || IdentifiersEqual(catalog, kServerSystemCatalog)) {
     return CatalogAccessLevel::kRead;
   }
   for (const auto& rule : rules) {
@@ -300,6 +300,12 @@ std::string CatalogAccessDenied(const std::string& catalog, CatalogAccessLevel n
 
 AccessDecision Snapshot::Check(const Principal& principal, const AccessRequest& request) const {
   if (principal.superuser) return {true, "superuser", "superuser"};
+  // The server's system catalog holds only read-only views, which read with the
+  // reader's own rights (no owner): reading one needs no grant, and every table and
+  // table function its query reads is checked as the reader's.
+  if (request.privilege == Privilege::kSelect && IdentifiersEqual(request.object.catalog, kServerSystemCatalog)) {
+    return {true, "the server's system catalog", ""};
+  }
   if (principal.catalog_rules) {
     const auto level = CatalogRuleLevel(*principal.catalog_rules, request.object.catalog);
     const bool reading = request.privilege == Privilege::kSelect;
@@ -387,9 +393,11 @@ AccessDecision Snapshot::Check(const Principal& principal, const AccessRequest& 
 
 namespace {
 
-// DuckDB's own views (catalog system) and the session's temporary objects (temp).
+// DuckDB's own views (catalog system), Hardcharger's (_hardcharger_system) and the
+// session's temporary objects (temp).
 bool EngineCatalog(const std::string& catalog) {
-  return IdentifiersEqual(catalog, "system") || IdentifiersEqual(catalog, "temp");
+  return IdentifiersEqual(catalog, "system") || IdentifiersEqual(catalog, "temp") ||
+         IdentifiersEqual(catalog, kServerSystemCatalog);
 }
 
 }  // namespace
@@ -692,7 +700,8 @@ bool Snapshot::CatalogVisible(const Principal& principal, const std::string& cat
   }
   const std::string tenant = TenantOfPrincipal(principal);
   if (tenant.empty()) return true;
-  if (IdentifiersEqual(catalog, "temp") || IdentifiersEqual(catalog, "system")) {
+  if (IdentifiersEqual(catalog, "temp") || IdentifiersEqual(catalog, "system") ||
+      IdentifiersEqual(catalog, kServerSystemCatalog)) {
     return true;
   }
   return TenantOfCatalog(catalog) == tenant;

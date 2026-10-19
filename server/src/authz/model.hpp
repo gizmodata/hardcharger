@@ -17,6 +17,10 @@
 
 namespace hardcharger::authz {
 
+// Hardcharger's read-only catalog of views (hardcharger_index_info, the
+// hardcharger_information_schema views), which every principal may read.
+constexpr const char* kServerSystemCatalog = "_hardcharger_system";
+
 // Every user is implicitly a member of PUBLIC.
 constexpr const char* kPublicRoleId = "public";
 constexpr const char* kPublicRoleName = "PUBLIC";

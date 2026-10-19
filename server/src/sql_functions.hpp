@@ -4,7 +4,9 @@
 //   HARDCHARGER_USER(), _ROLE(), _VERSION(), _CURRENT_SESSION(), _CURRENT_INSTANCE(),
 //   _CURRENT_CLUSTER(), _INSTRUMENTATION_ENABLED(), _INSTRUMENTATION_CATALOG(),
 //   _INSTRUMENTATION_SCHEMA(); table functions hardcharger_settings(),
-//   hardcharger_sessions() and hardcharger_metrics().
+//   hardcharger_sessions(), hardcharger_metrics(), and access control's introspection
+//   (hardcharger_grants(), _role_members(), _roles(), _users(), _policies(),
+//   _effective_privileges([user_name]); authz/introspection.hpp).
 //
 // They answer for the session whose statement is being bound: DuckDB binds a statement
 // on the thread that runs it, and the engine marks that thread with its session.

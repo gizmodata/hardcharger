@@ -104,6 +104,10 @@ class Session : public warpduckdb::DuckDBSession {
   Runtime& runtime() const { return runtime_; }
   int64_t started_at_us() const { return started_at_us_; }
   bool running() const { return running_ > 0; }
+  // The rows of an access-control introspection table (hardcharger_grants(), ...) this
+  // session may see: none on a server without an access-control store.
+  std::shared_ptr<arrow::RecordBatch> AccessTableRows(authz::AccessTable table,
+                                                      const std::optional<std::string>& user_name) const;
 
   // Whether the session is inside a transaction (BEGIN, or autocommit off), and whether
   // that transaction failed and waits for a ROLLBACK: what Transaction() last said, for the

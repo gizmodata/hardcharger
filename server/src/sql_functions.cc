@@ -139,7 +139,9 @@ void RegisterScalar(duckdb_v2_connection_handle connection, duckdb_v2_factory_ha
 
 // ---- Table functions over Arrow batches, built for each execution ----
 
-using TableProvider = std::function<std::shared_ptr<arrow::RecordBatch>(Runtime&, const Session*)>;
+// A table function's arguments: its optional VARCHAR parameters, in order (nullopt: NULL).
+using TableArgs = std::vector<std::optional<std::string>>;
+using TableProvider = std::function<std::shared_ptr<arrow::RecordBatch>(Runtime&, const Session*, const TableArgs&)>;
 
 struct TableSpec {
   Runtime* runtime;
@@ -148,7 +150,29 @@ struct TableSpec {
 
 struct TableBinding {
   Session* session;  // the session that bound the statement (null outside a client session)
+  TableArgs args;
 };
+
+// The call's arguments, as the bind callback sees them.
+TableArgs ArgumentsOf(duckdb_v2_function_bind_info_handle info) {
+  idx_t count = 0;
+  Call([&](auto* e) { return duckdb_v2_function_bind_get_arg_count(info, &count, nullptr, nullptr, nullptr, e); });
+  TableArgs args;
+  for (idx_t i = 0; i < count; i++) {
+    warpduckdb::Value value;
+    Call([&](auto* e) { return duckdb_v2_function_bind_get_arg_value(info, i, value.out(), e); });
+    bool is_null = true;
+    Call([&](auto* e) { return duckdb_v2_value_is_null(value.get(), &is_null, e); });
+    if (is_null) {
+      args.emplace_back();
+      continue;
+    }
+    duckdb_v2_str text{};
+    Call([&](auto* e) { return duckdb_v2_value_get_varchar(value.get(), &text, e); });
+    args.emplace_back(warpduckdb::ToString(text));
+  }
+  return args;
+}
 
 struct TableScan {
   ArrowArrayStream stream{};
@@ -194,7 +218,8 @@ void TableBind(duckdb_v2_function_bind_info_handle info, duckdb_v2_table_functio
     void* user = nullptr;
     Call([&](auto* e) { return duckdb_v2_function_bind_get_user_data(info, &user, e); });
     const auto& spec = *static_cast<TableSpec*>(user);
-    auto batch = spec.rows(*spec.runtime, CurrentSession());
+    auto binding = std::make_unique<TableBinding>(TableBinding{CurrentSession(), ArgumentsOf(info)});
+    auto batch = spec.rows(*spec.runtime, binding->session, binding->args);
     auto scan = OpenScan(batch, context);
     Schema columns;
     Call([&](auto* e) { return duckdb_v2_arrow_importer_get_schema(scan->importer.get(), columns.out(), e); });
@@ -209,8 +234,7 @@ void TableBind(duckdb_v2_function_bind_info_handle info, duckdb_v2_table_functio
     // Execution runs outside the session's scope (results stream after the engine call
     // returns, on DuckDB's threads): it reads the rows for the session that bound it, which
     // outlives its statements.
-    duckdb_v2_opaque data{new TableBinding{CurrentSession()}, [](void* p) { delete static_cast<TableBinding*>(p); },
-                          nullptr};
+    duckdb_v2_opaque data{binding.release(), [](void* p) { delete static_cast<TableBinding*>(p); }, nullptr};
     Call([&](auto* e) { return duckdb_v2_function_bind_set_bind_data(info, &data, e); });
   });
 }
@@ -223,7 +247,8 @@ void TableInit(duckdb_v2_table_function_init_global_info_handle info, duckdb_v2_
     const auto& spec = *static_cast<TableSpec*>(user);
     void* bound = nullptr;
     Call([&](auto* e) { return duckdb_v2_table_function_init_global_get_bind_data(info, &bound, e); });
-    auto scan = OpenScan(spec.rows(*spec.runtime, static_cast<TableBinding*>(bound)->session), context);
+    const auto& binding = *static_cast<TableBinding*>(bound);
+    auto scan = OpenScan(spec.rows(*spec.runtime, binding.session, binding.args), context);
     duckdb_v2_opaque state{scan.release(), [](void* p) { delete static_cast<TableScan*>(p); }, nullptr};
     Call([&](auto* e) { return duckdb_v2_table_function_init_global_set_global_state(info, &state, e); });
   });
@@ -276,12 +301,27 @@ void TableExec(duckdb_v2_table_function_exec_info_handle info, duckdb_v2_context
   });
 }
 
+// `parameters`: optional VARCHAR parameters (default NULL), passed by position or name.
 void RegisterTable(duckdb_v2_connection_handle connection, duckdb_v2_factory_handle factory, Runtime& runtime,
-                   const std::string& name, TableProvider rows) {
+                   const std::string& name, TableProvider rows, const std::vector<std::string>& parameters = {}) {
   TableFunction function;
   Call([&](auto* e) { return duckdb_v2_table_function_create(factory, function.out(), e); });
   const duckdb_v2_str function_name = Str(name);
   Call([&](auto* e) { return duckdb_v2_table_function_set_name(function.get(), &function_name, e); });
+  if (!parameters.empty()) {
+    duckdb_v2_function_signature_handle signature = nullptr;
+    Call([&](auto* e) { return duckdb_v2_table_function_get_signature(function.get(), &signature, e); });
+    auto varchar = Type(factory, "VARCHAR");
+    for (const auto& parameter : parameters) {
+      warpduckdb::Value null;
+      Call([&](auto* e) { return duckdb_v2_value_create_null(factory, varchar.get(), null.out(), e); });
+      const duckdb_v2_identifier_t parameter_name = Str(parameter);
+      Call([&](auto* e) {
+        return duckdb_v2_function_signature_add_parameter(signature, &parameter_name, varchar.get(), null.get(),
+                                                          DUCKDB_V2_FUNCTION_PARAMETER_KIND_STANDARD, e);
+      });
+    }
+  }
   auto spec = std::make_unique<TableSpec>(TableSpec{&runtime, std::move(rows)});
   duckdb_v2_opaque user{spec.release(), [](void* p) { delete static_cast<TableSpec*>(p); }, nullptr};
   Call([&](auto* e) { return duckdb_v2_table_function_set_user_data(function.get(), &user, e); });
@@ -397,14 +437,30 @@ void RegisterSqlFunctions(duckdb_v2_connection_handle connection, Runtime& runti
     RegisterScalar(connection, factory, runtime, "HARDCHARGER_" + std::string(suffix), type, value);
   }
 
-  RegisterTable(connection, factory, runtime, "hardcharger_settings", [](Runtime&, const Session* s) {
+  RegisterTable(connection, factory, runtime, "hardcharger_settings", [](Runtime&, const Session* s, const TableArgs&) {
     return SettingsTable(RequireSession(s, "hardcharger_settings"));
   });
-  RegisterTable(connection, factory, runtime, "hardcharger_sessions", [](Runtime& r, const Session* s) {
+  RegisterTable(connection, factory, runtime, "hardcharger_sessions", [](Runtime& r, const Session* s, const TableArgs&) {
     return SessionsTable(r, RequireSession(s, "hardcharger_sessions"));
   });
   RegisterTable(connection, factory, runtime, "hardcharger_metrics",
-                [](Runtime& r, const Session*) { return MetricsTable(r); });
+                [](Runtime& r, const Session*, const TableArgs&) { return MetricsTable(r); });
+
+  // Access-control introspection: what the session may see of the store's grants, roles,
+  // users and policies. Outside a client session (the system catalog's views are created
+  // with them), no rows.
+  using authz::AccessTable;
+  for (const auto table : {AccessTable::kGrants, AccessTable::kRoleMembers, AccessTable::kRoles, AccessTable::kUsers,
+                           AccessTable::kPolicies, AccessTable::kEffectivePrivileges}) {
+    const bool takes_user = table == AccessTable::kEffectivePrivileges;
+    RegisterTable(
+        connection, factory, runtime, authz::AccessTableName(table),
+        [table](Runtime&, const Session* s, const TableArgs& args) {
+          if (s == nullptr) return authz::EmptyAccessTable(table);
+          return s->AccessTableRows(table, args.empty() ? std::nullopt : args[0]);
+        },
+        takes_user ? std::vector<std::string>{"user_name"} : std::vector<std::string>{});
+  }
 }
 
 }  // namespace hardcharger

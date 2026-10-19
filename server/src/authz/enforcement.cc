@@ -77,8 +77,10 @@ const std::unordered_set<std::string>& AllowedTableFunctions() {
       // any other call).
       "warp_result_schema",
       // The server's own, which read only what the session may see (its own sessions,
-      // the settings rows that aren't admin-only).
-      "hardcharger_settings", "hardcharger_sessions", "hardcharger_metrics"};
+      // the settings rows that aren't admin-only, its own grants).
+      "hardcharger_settings", "hardcharger_sessions", "hardcharger_metrics", "hardcharger_grants",
+      "hardcharger_role_members", "hardcharger_roles", "hardcharger_users", "hardcharger_policies",
+      "hardcharger_effective_privileges"};
   return kNames;
 }
 
