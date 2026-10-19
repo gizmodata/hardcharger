@@ -30,8 +30,6 @@ constexpr const char* kUserCredentials = "user credential store";
 constexpr const char* kDuckDBSecrets = "DuckDB persistent secrets";
 constexpr const char* kServerCredentials = "Hardcharger server credentials";
 constexpr const char* kOperatorPath = "operator-protected path";
-// The characters that make a path a pattern for DuckDB's glob (FileSystem::HasGlob).
-constexpr const char* kGlobCharacters = "*?[";
 #ifdef _WIN32
 constexpr const char* kWindowsCredentials = "Windows credential and key store";
 constexpr const char* kDevices = "Windows device namespace";
@@ -528,11 +526,17 @@ void SensitivePaths::AddWindowsDefaults() {
 #endif
 
 void SensitivePaths::Add(const std::string& path, const std::string& category) {
-  for (auto& key : Keys(StripFileScheme(path), home_, true)) {
+#ifdef _WIN32
+  std::string local = WindowsSpelling(StripFileScheme(path));
+#else
+  std::string local = StripFileScheme(path);
+#endif
+  if (local == "~" || local.starts_with("~/")) local = home_ + local.substr(1);
+  for (auto& key : Keys(local, home_, true)) {
     std::lock_guard lock(mutex_);
     const bool present =
         std::any_of(entries_.begin(), entries_.end(), [&](const Entry& e) { return e.key == key; });
-    if (!present) entries_.push_back({std::move(key), category});
+    if (!present) entries_.push_back({std::move(key), category, local});
   }
 }
 
@@ -540,71 +544,95 @@ void SensitivePaths::AddSecretDirectory(const std::string& path) {
   if (!path.empty()) Add(path, kDuckDBSecrets);
 }
 
-std::optional<std::string> SensitivePaths::Check(const std::string& path) const {
-  if (!enabled_ || path.empty() || path.size() > 4096 || IsProvenRemote(path) ||
+namespace {
+
+// The path DuckDB's local file system opens for `path`, '/'-separated on Windows; empty
+// when it is no local path (a remote URL, or another file system's scheme).
+std::string SensitiveLocalSpelling(const std::string& path) {
+  if (path.empty() || path.size() > 4096 || IsProvenRemote(path) ||
       (path.find("://") != std::string::npos && !StartsWithIgnoringCase(path, "file://"))) {
-    return std::nullopt;
+    return {};
   }
 #ifdef _WIN32
-  const std::string local = WindowsSpelling(StripFileScheme(path));
-  // \\host\C$, \\host\ADMIN$, ...: a drive or system folder of some host, this one
-  // included, over SMB, past every local spelling above.
-  // \\?\GLOBALROOT\..., \\.\pipe\..., \\?\Volume{...}\...: devices, pipes and raw volumes
-  // (\\?\C:\ and \\?\UNC\ were respelled above). Before the pattern check: '?' here is
-  // no wildcard.
+  return WindowsSpelling(StripFileScheme(path));
+#else
+  return StripFileScheme(path);
+#endif
+}
+
+#ifdef _WIN32
+// \\host\C$, \\host\ADMIN$, ...: a drive or system folder of some host, this one included,
+// over SMB, past every local spelling. \\?\GLOBALROOT\..., \\.\pipe\..., \\?\Volume{...}\...:
+// devices, pipes and raw volumes (\\?\C:\ and \\?\UNC\ were respelled already). '?' here is
+// no wildcard.
+std::optional<std::string> WindowsNamespace(const std::string& local) {
   if (local.starts_with("//?/") || local.starts_with("//./")) return kDevices;
   if (local.starts_with("//")) {
     const auto share = Segments(local.substr(2));
     if (share.size() >= 2 && share[1].ends_with('$')) return kAdminShares;
   }
-#else
-  const std::string local = StripFileScheme(path);
+  return std::nullopt;
+}
 #endif
-  // A pattern (glob('/home/*/.ssh/*'), read_csv('dir/*.csv')) is refused when it can
-  // match a protected path or something inside one: the entries a glob lists can't be
-  // filtered without a hook in DuckDB's file system, so they are never listed instead.
-  // The wildcards are exactly DuckDB's (FileSystem::HasGlob: * ? [). DuckDB's glob has no
-  // brace expansion, so '{' is an ordinary character: '/etc/{passwd,hosts}' names one
-  // file of that name, and a JSON or regex literal ('{"a": 1}', '^[0-9]{3}$') is no
-  // pattern reaching below the working directory.
-  if (const auto wildcard = local.find_first_of(kGlobCharacters); wildcard != std::string::npos) {
-    const auto slash = local.find_last_of('/', wildcard);
-    const std::string prefix = slash == std::string::npos ? "." : local.substr(0, slash == 0 ? 1 : slash);
-    const std::vector<std::string> pattern = Segments(ComparisonKey(local.substr(slash == std::string::npos ? 0 : slash + 1)));
-    const bool recursive = local.find("**") != std::string::npos;
+
+// Whether `path` is a regular file with more than one hard link: then a name no spelling
+// shows may be one of the protected files. One lstat.
+bool HasSecondLink(const std::string& path) {
+  std::error_code ec;
+  const fs::path file = PathFromUtf8(path);
+  const auto status = fs::symlink_status(file, ec);
+  if (ec || !fs::is_regular_file(status)) return false;
+  const auto links = fs::hard_link_count(file, ec);
+  return !ec && links > 1;
+}
+
+}  // namespace
+
+std::optional<std::string> SensitivePaths::Check(const std::string& path) const {
+  if (!enabled_) return std::nullopt;
+  std::string local = SensitiveLocalSpelling(path);
+  if (local.empty()) return std::nullopt;
+#ifdef _WIN32
+  if (auto category = WindowsNamespace(local)) return category;
+#endif
+  if (local == "~" || local.starts_with("~/")) local = home_ + local.substr(1);
+  // Every spelling: absolute and lexically normal (.., ., //), and with symlinks resolved
+  // as far as the path exists (a planted link, /etc -> /private/etc on macOS, 8.3 names).
+  const auto candidates = Keys(local, home_, /*resolve=*/true);
+  {
     std::lock_guard lock(mutex_);
-    for (const auto& key : Keys(prefix, home_, true)) {
-      for (const auto& entry : entries_) {
-        if (KeyCovers(entry.key, key)) return entry.category;  // the pattern starts inside it
-        if (!KeyCovers(key, entry.key)) continue;
-        if (recursive) return entry.category;
-        const auto inside = Segments(entry.key.substr(key.size() == 1 ? 1 : key.size() + 1));
-        if (inside.size() > pattern.size()) continue;  // it can only list a parent directory
-        bool matches = true;
-        for (std::size_t i = 0; i < inside.size() && matches; i++) {
-          matches = GlobSegmentMatches(pattern[i], inside[i]);
-        }
-        if (matches) return entry.category;
+    for (const auto& candidate : candidates) {
+      if (std::find(allowed_keys_.begin(), allowed_keys_.end(), candidate) != allowed_keys_.end()) {
+        return std::nullopt;
       }
     }
-    return std::nullopt;
-  }
-  // Resolving symlinks costs a stat per component, so only for text that can name a
-  // directory; a bare word is still compared as a path relative to the working directory.
-  const bool resolve = local.find('/') != std::string::npos || local.starts_with('~') || local.starts_with('.');
-  const auto candidates = Keys(local, home_, resolve);
-  std::lock_guard lock(mutex_);
-  for (const auto& candidate : candidates) {
-    if (std::find(allowed_keys_.begin(), allowed_keys_.end(), candidate) != allowed_keys_.end()) {
-      return std::nullopt;
+    for (const auto& candidate : candidates) {
+      for (const auto& entry : entries_) {
+        if (KeyCovers(entry.key, candidate)) return entry.category;
+      }
     }
   }
-  for (const auto& candidate : candidates) {
-    for (const auto& entry : entries_) {
-      if (KeyCovers(entry.key, candidate)) return entry.category;
-    }
+  // The same file under a name no spelling shows: a second hard link of a protected file.
+  if (!HasSecondLink(local)) return std::nullopt;
+  std::vector<Entry> entries;
+  {
+    std::lock_guard lock(mutex_);
+    entries = entries_;
+  }
+  std::error_code ec;
+  const fs::path file = PathFromUtf8(local);
+  for (const auto& entry : entries) {
+    const fs::path protected_path = PathFromUtf8(entry.path);
+    if (!fs::is_regular_file(protected_path, ec)) continue;
+    if (fs::equivalent(file, protected_path, ec) && !ec) return entry.category;
   }
   return std::nullopt;
+}
+
+std::string SensitivePathMessage(const std::string& path, const std::string& category) {
+  return "Permission denied: Hardcharger blocked access to '" + path + "' (" + category +
+         "). Hardcharger keeps credential and system files on the server host out of reach of SQL, "
+         "whatever the role.";
 }
 
 // ---- PrivateFiles ----
@@ -702,15 +730,8 @@ bool PrivateFiles::MayName(const std::string& path) const {
 #endif
 }
 
-bool PrivateFiles::HasUnattached() const {
-  std::lock_guard lock(mutex_);
-  return std::any_of(entries_.begin(), entries_.end(), [](const Keyed& k) { return !k.entry.attached; });
-}
-
-std::optional<PrivateFiles::Entry> PrivateFiles::Find(const std::string& path, bool thorough) const {
-  const bool path_like = path.find('/') != std::string::npos || path.find('\\') != std::string::npos ||
-                         path.starts_with('~') || path.starts_with('.');
-  const auto candidates = CandidateKeys(path, thorough || path_like);
+std::optional<PrivateFiles::Entry> PrivateFiles::Find(const std::string& path) const {
+  const auto candidates = CandidateKeys(path, /*resolve=*/true);
   if (candidates.empty()) return std::nullopt;
   std::lock_guard lock(mutex_);
   for (const auto& keyed : entries_) {
@@ -720,7 +741,6 @@ std::optional<PrivateFiles::Entry> PrivateFiles::Find(const std::string& path, b
       }
     }
   }
-  if (!thorough) return std::nullopt;
   // The same file under a name no spelling shows: a hard link, /dev/fd/N.
   std::error_code ec;
   const fs::path file = PathFromUtf8(LocalSpelling(path, home_));
@@ -825,7 +845,6 @@ std::optional<std::string> ClassifyGatedCommand(duckdb_v2_connection_handle conn
 }
 
 void CheckStatement(const GuardContext& context, const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type) {
-  const auto& t = piece.tokens;
   // allow_unredacted_secrets prints secrets in clear: refused for everyone, also inside
   // EXPLAIN or PREPARE, unless the value is provably false.
   if (context.block_unredacted_secrets) {
@@ -836,41 +855,20 @@ void CheckStatement(const GuardContext& context, const Piece& piece, DUCKDB_V2_S
       }
     }
   }
-  // The server's own private files, for everyone. (The files it keeps attached are
-  // read through their catalogs; their guard is in the file system alone, as a
-  // statement may well name the database's path, say in duckdb_databases().)
-  if (context.private_files != nullptr && context.private_files->HasUnattached()) {
-    for (const Token& token : t) {
-      const bool path_like = token.Is(DUCKDB_V2_TOKEN_TYPE_STRING_LITERAL) ||
-                             (token.Is(DUCKDB_V2_TOKEN_TYPE_IDENTIFIER) && token.text.starts_with('"'));
-      if (!path_like) continue;
-      const std::string path = Unquote(token.text);
-      if (auto entry = context.private_files->Find(path, /*thorough=*/false); entry && !entry->attached) {
-        Deny(PrivateFileMessage(path, entry->category));
-      }
-    }
-  }
   // For non-admins the admin guard speaks first: its answer says what the role allows.
   if (!context.admin) {
     if (auto category = ClassifyGatedCommand(context.connection, piece, type)) {
       Deny(GatedMessage(*category));
     }
   }
+  // The protected paths themselves are the file system's to guard (file_guard.cc), never
+  // the SQL text's: a statement's string literals are not checked. What the file system
+  // can't see is a move of DuckDB's secret directory, which its secret manager opens past
+  // the file system.
   if (context.sensitive_paths != nullptr && context.sensitive_paths->enabled()) {
     if (!SetsOf(piece, "secret_directory").empty()) {
       Deny("Permission denied: Hardcharger blocked changing secret_directory after startup; DuckDB's "
            "persistent secrets stay where the server put them.");
-    }
-    for (const Token& token : t) {
-      const bool path_like = token.Is(DUCKDB_V2_TOKEN_TYPE_STRING_LITERAL) ||
-                             (token.Is(DUCKDB_V2_TOKEN_TYPE_IDENTIFIER) && token.text.starts_with('"'));
-      if (!path_like) continue;
-      const std::string path = Unquote(token.text);
-      if (auto category = context.sensitive_paths->Check(path)) {
-        Deny("Permission denied: Hardcharger blocked access to '" + path + "' (" + *category +
-             "). Hardcharger keeps credential and system files on the server host out of reach of SQL, "
-             "whatever the role.");
-      }
     }
   }
 }

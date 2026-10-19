@@ -105,6 +105,7 @@ bool LooksLikeAccessControlStatement(std::string_view sql);
 
 namespace hardcharger {
 class PrivateFiles;
+class SensitivePaths;
 }
 
 namespace hardcharger::authz {
@@ -113,10 +114,12 @@ namespace hardcharger::authz {
 // given; empty for any other store.
 std::string DuckDBStoreFile(const std::string& store_uri);
 
-// Puts the guard of the server's own files (PrivateFiles, guards.hpp) into `instance`'s
-// file system: no statement opens, lists, moves or removes them, whatever path it
-// computes (file_guard.cc). Files added to `files` later are guarded from then on.
-void InstallPrivateFileGuard(duckdb_v2_instance_handle instance, std::shared_ptr<const PrivateFiles> files);
+// Puts the guard of the server's own files (PrivateFiles, guards.hpp) and of the
+// sensitive paths (SensitivePaths, once `sensitive` is enforcing) into `instance`'s file
+// system: no statement opens, lists, globs, stats, moves or removes them, whatever path
+// it computes (file_guard.cc). Paths added to either later are guarded from then on.
+void InstallFileGuard(duckdb_v2_instance_handle instance, std::shared_ptr<const PrivateFiles> files,
+                      std::shared_ptr<const SensitivePaths> sensitive);
 
 class AccessControl {
  public:

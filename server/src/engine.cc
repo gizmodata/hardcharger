@@ -290,10 +290,10 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
     : DuckDBBackend(EngineOptions(runtime.config)),
       runtime_(runtime),
       access_(std::move(access)),
-      sensitive_paths_(runtime.config.block_sensitive_paths, runtime.config.sensitive_paths,
-                       {runtime.config.tls_key, runtime.config.tls_cert, runtime.config.mtls_ca_cert,
-                        runtime.config.init_sql_commands_file,
-                        runtime.config.config_file}),
+      sensitive_paths_(std::make_shared<SensitivePaths>(
+          runtime.config.block_sensitive_paths, runtime.config.sensitive_paths,
+          std::vector<std::string>{runtime.config.tls_key, runtime.config.tls_cert, runtime.config.mtls_ca_cert,
+                                   runtime.config.init_sql_commands_file, runtime.config.config_file})),
       private_files_(std::make_shared<PrivateFiles>()) {
   // Before anything else runs on the instance: from here on every plan of a bound
   // session is checked. (The server's own connections below, and those of
@@ -301,9 +301,10 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
   // check leaves them alone.)
   if (access_) access_->InstallEnforcement(instance());
   // And no statement opens the server's own files: a DuckDB access-control store, and
-  // the files this instance attaches (each added once it is attached, below).
+  // the files this instance attaches (each added once it is attached, below); nor, once
+  // startup is over (below), a sensitive path.
   if (access_) private_files_->Add(access_->store_file(), "the access-control store", /*attached=*/false);
-  authz::InstallPrivateFileGuard(instance(), private_files_);
+  authz::InstallFileGuard(instance(), private_files_, sensitive_paths_);
   warpduckdb::Connection connection;
   warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), connection.out(), err); });
   // An attached file is registered under the path DuckDB recorded for it, which its
@@ -356,8 +357,12 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
     access_->SetHiddenCatalogs(std::move(hidden));
   }
   // Init SQL may move DuckDB's secret directory; wherever it ends up is protected.
-  sensitive_paths_.AddSecretDirectory(
+  sensitive_paths_->AddSecretDirectory(
       warpduckdb::QueryText(connection.get(), "SELECT current_setting('secret_directory')"));
+  // From here on the file system refuses the sensitive paths to every statement. The
+  // startup above (the server's own attaches and the operator's init SQL) is the
+  // operator's configuration, as it always was: an init SQL may read a mounted secret.
+  sensitive_paths_->Activate();
 }
 
 Backend::~Backend() {
@@ -464,7 +469,7 @@ json::object Backend::ServerInfo() {
 std::unique_ptr<warpsql::EngineSession> Backend::NewSession(const warpsql::Principal& principal) {
   const bool capped = runtime_.sessions.Admit(principal);
   try {
-    return std::make_unique<Session>(runtime_, sensitive_paths_, *private_files_, instance(), principal, capped,
+    return std::make_unique<Session>(runtime_, *sensitive_paths_, instance(), principal, capped,
                                      access_.get());
   } catch (...) {
     runtime_.sessions.Unadmit(capped);
@@ -474,13 +479,12 @@ std::unique_ptr<warpsql::EngineSession> Backend::NewSession(const warpsql::Princ
 
 // ---- Session ----
 
-Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, const PrivateFiles& private_files,
+Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths,
                  duckdb_v2_instance_handle instance, warpsql::Principal principal, bool capped,
                  authz::AccessControl* access)
     : DuckDBSession(instance, static_cast<std::size_t>(runtime.config.result_batch_rows)),
       runtime_(runtime),
       sensitive_paths_(sensitive_paths),
-      private_files_(private_files),
       principal_(std::move(principal)),
       // A rules-only administrator without catalog_access rules is unchecked and runs no
       // access-control statements, so it needs no guard: binding it would only add the
@@ -617,8 +621,7 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   // Under access control, what a store user may reach outside the database (files, URLs,
   // ATTACH, ...) is the access-control gate's to decide, by its system privileges; the
   // rest of the statement guard (secrets, sensitive paths) holds for everyone.
-  CheckStatement({connection(), admin() || rbac_, config.block_unredacted_secrets, &sensitive_paths_, &private_files_},
-                 piece, type);
+  CheckStatement({connection(), admin() || rbac_, config.block_unredacted_secrets, &sensitive_paths_}, piece, type);
   if (type == DUCKDB_V2_STATEMENT_TYPE_DETACH) {
     for (const Token& token : piece.tokens) {
       if (token.Value() == kSystemCatalog) {

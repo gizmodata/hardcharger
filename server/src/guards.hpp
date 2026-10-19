@@ -7,23 +7,27 @@
 //    a path decides, only a literal remote URL (s3://, https://, ...) is allowed; a
 //    computed path is refused (fail closed);
 //  - allow_unredacted_secrets can't be turned on, by anyone;
-//  - the sensitive path guard: no statement, an admin's included, may name a
-//    credential or system file (~/.ssh, /etc/shadow, the server's own TLS key, ...),
-//    however it is spelled (.., symlinks, file://, ~, relative to the working
-//    directory).
+//  - secret_directory can't be moved after startup while the sensitive path guard is on.
 //
-// What the tokens can't show: a path computed at run time ('/etc/' || 'passwd') by an
-// admin, and the entries glob() lists. Closing those needs a hook in DuckDB's file
-// system, which the v2 C API does not offer.
+// The files no statement may reach are guarded where DuckDB opens them, not in the SQL
+// text: access control, the one part of the server on DuckDB's C++ API, puts a guard into
+// the serving instance's file system (authz::InstallFileGuard, file_guard.cc). It sees
+// every open, glob, listing and stat DuckDB performs, by the path DuckDB resolved,
+// however the statement computed it (a concatenation, query('...'), a macro, a view, a
+// prepared statement's parameter, file_search_path, ~ under another home_directory):
 //
-// The server's own files (PrivateFiles below) do get that hook: access control, the one
-// part of the server on DuckDB's C++ API, puts a guard into the serving instance's file
-// system (authz::InstallPrivateFileGuard), so no statement opens them however it
-// computes the path.
+//  - the sensitive path guard (SensitivePaths): credential and system files on the
+//    server host (~/.ssh, ~/.aws, /etc/shadow, /proc, the server's own TLS key, ...),
+//    for every principal, admins included, when block_sensitive_paths is on;
+//  - the server's own files (PrivateFiles), always.
+//
+// So no string literal is ever refused for looking like a path: only what DuckDB is
+// about to open, list or stat decides.
 #pragma once
 
 #include <duckdb_v2.h>
 
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -33,6 +37,12 @@
 
 namespace hardcharger {
 
+// The credential and system files no statement may open, list or stat: the built-in
+// categories, DuckDB's secret directory, the server's own credential files and the
+// operator's `sensitive_paths`. A path is compared by every spelling of it (absolute and
+// lexically normal, symlinks resolved, case-folded where the file system is, Windows'
+// spellings and 8.3 names) and, for a file with a second hard link, by identity with the
+// protected files.
 class SensitivePaths {
  public:
   // `home`: the server user's home directory (empty: $HOME).
@@ -40,7 +50,15 @@ class SensitivePaths {
                  const std::vector<std::string>& server_files, std::string home = {});
 
   bool enabled() const { return enabled_; }
-  // The category of the protected path `path` falls under, if any.
+  // Whether the file system's guard enforces it now: enabled, and the server's startup
+  // (its own attaches and the operator's init SQL) is over.
+  bool enforcing() const { return enabled_ && active_.load(std::memory_order_acquire); }
+  void Activate() { active_.store(true, std::memory_order_release); }
+
+  // The category of the protected path `path` falls under, if any: `path` names one, or
+  // something inside one. `path` is a concrete path: '*' in it is an ordinary character, so a
+  // glob pattern is refused here only when its fixed part (~/.ssh/*) is protected; the file
+  // system drops a glob's protected matches (/home/*/.ssh/*) one by one.
   std::optional<std::string> Check(const std::string& path) const;
   // Adds DuckDB's secret directory (it can change at startup through init SQL).
   void AddSecretDirectory(const std::string& path);
@@ -49,6 +67,7 @@ class SensitivePaths {
   struct Entry {
     std::string key;
     std::string category;
+    std::string path;  // as added, for comparing file identity
   };
   void Add(const std::string& path, const std::string& category);
 #ifdef _WIN32
@@ -56,11 +75,15 @@ class SensitivePaths {
 #endif
 
   bool enabled_;
+  std::atomic<bool> active_{false};
   std::string home_;
   mutable std::mutex mutex_;
   std::vector<Entry> entries_;
   std::vector<std::string> allowed_keys_;
 };
+
+// The refusal of `path` (a protected path in `category`).
+std::string SensitivePathMessage(const std::string& path, const std::string& category);
 
 // Files of the server's own that no statement may open, an admin's included, however it
 // spells or computes the path (.., symlinks, case, file://, ~, relative, glob):
@@ -88,14 +111,9 @@ class PrivateFiles {
   explicit PrivateFiles(std::string home = {});
 
   void Add(const std::string& path, const std::string& category, bool attached);
-  // The entry `path` is (or is a file beside), if any. `thorough` (the file system's
-  // guard) also resolves symlinks in any path and compares file identity (a hard link);
-  // a statement's literals (thorough = false) resolve only what looks like a path, so a
-  // statement full of string literals costs no system calls for them.
-  std::optional<Entry> Find(const std::string& path, bool thorough = true) const;
-  // Whether some entry is not attached (a store file): the only ones a statement's
-  // literals are checked against.
-  bool HasUnattached() const;
+  // The entry `path` is (or is a file beside), if any: by every spelling (symlinks
+  // resolved) and by file identity (a hard link).
+  std::optional<Entry> Find(const std::string& path) const;
   // A cheap first look, for the file system's every lookup: false only when `path`
   // can't be one of the files (no component has one of their names, and it is no
   // symlink, no second hard link of a file, nothing under /dev or /proc and, on Windows,
@@ -128,8 +146,6 @@ struct GuardContext {
   bool admin;
   bool block_unredacted_secrets;
   const SensitivePaths* sensitive_paths;
-  // The server's own files (always checked, whatever block_sensitive_paths says).
-  const PrivateFiles* private_files = nullptr;
 };
 
 // The category of command a non-admin may not run, if `piece` is one (e.g. "ATTACH",

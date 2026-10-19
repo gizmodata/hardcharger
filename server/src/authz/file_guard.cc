@@ -1,12 +1,21 @@
-// The serving instance's guard of the server's own files (PrivateFiles, guards.hpp): a
-// sub-file-system of DuckDB's virtual file system that takes every path naming one of
-// them, so whatever a statement computes (a concatenated path, a glob's matches,
-// file_search_path, a symlink, ~ under another home_directory), opening, listing,
-// moving or removing it ends here.
+// The serving instance's guard of the files no statement may reach: a sub-file-system of
+// DuckDB's virtual file system that takes the paths it guards, so whatever a statement
+// computes (a concatenated path, query('...'), a macro or view, a prepared statement's
+// parameter, a glob's matches, file_search_path, a symlink, ~ under another
+// home_directory), opening, listing, globbing, stat-ing, moving or removing it ends here.
 //
-// An attached file (the database, the instrumentation and log files) is opened only by
-// the instance's own storage, through the database's file opener (no client context),
-// under the spelling it was attached with; a store file by nothing at all.
+//  - The server's own files (PrivateFiles, guards.hpp), always. An attached file (the
+//    database, the instrumentation and log files) is opened only by the instance's own
+//    storage, through the database's file opener (no client context), under the spelling
+//    it was attached with; a store file by nothing at all.
+//  - The sensitive paths (SensitivePaths: credential and system files), when
+//    block_sensitive_paths is on, once the server's startup is over: then every local path
+//    comes here, so each is checked by the path DuckDB resolved, whoever runs the
+//    statement (the store's admin and DuckDB's own storage included). A glob whose fixed
+//    part lies in a protected path is refused; one that reaches into a protected path from
+//    above (/home/*/.ssh/*) lists its other matches only, as does a directory listing.
+//    DuckDB's secret manager reads its persistent secrets past this file system (its
+//    LocalDatabaseFileSystem), so they still load.
 
 #include <duckdb.hpp>
 #include <duckdb/common/exception.hpp>
@@ -34,23 +43,31 @@ namespace {
 
 namespace dd = duckdb;
 
-class PrivateFileGuard : public dd::FileSystem {
+class ServerFileGuard : public dd::FileSystem {
  public:
-  PrivateFileGuard(dd::VirtualFileSystem& vfs, std::shared_ptr<const PrivateFiles> files)
-      : vfs_(vfs), files_(std::move(files)) {}
+  ServerFileGuard(dd::VirtualFileSystem& vfs, std::shared_ptr<const PrivateFiles> files,
+                  std::shared_ptr<const SensitivePaths> sensitive)
+      : vfs_(vfs),
+        local_name_(vfs.GetDefaultFileSystem().GetName()),
+        files_(std::move(files)),
+        sensitive_(std::move(sensitive)) {}
 
+  // (The name the private-file guard always had: a disabled_filesystems list may name it.)
   std::string GetName() const override { return "HardchargerPrivateFiles"; }
   bool IsManuallySet() override { return true; }
 
   bool CanHandleFile(const std::string& path) override {
     if (path.empty() || (path.find("://") != std::string::npos && !StartsWithFile(path))) return false;
+    // With the local file system disabled, nothing local opens at all.
+    if (vfs_.SubSystemIsDisabled(local_name_)) return false;
+    // Every local path, checked by each operation (which knows the opener, and so ~).
+    if (Sensitive()) return true;
     // ~ is the instance's home_directory, which only the opener knows: every such path
     // comes here, and Check expands it.
     if (path[0] == '~') return true;
     if (!files_->MayName(path)) return false;  // the usual case, at the cost of one lstat
     return files_->Find(path).has_value() || files_->IsCopyTwin(path);
   }
-
   // ---- Paths ----
 
   dd::unique_ptr<dd::FileHandle> OpenFileExtended(const dd::OpenFileInfo& file, dd::FileOpenFlags flags,
@@ -103,14 +120,33 @@ class PrivateFileGuard : public dd::FileSystem {
   bool ListFilesExtended(const std::string& directory, const std::function<void(dd::OpenFileInfo& info)>& callback,
                          dd::optional_ptr<dd::FileOpener> opener) override {
     Check(directory, opener);
-    return Local().ListFiles(directory, callback, opener);
+    if (!Sensitive()) return Local().ListFiles(directory, callback, opener);
+    // A listing names no protected path (a home directory's .ssh, .aws, ...).
+    const std::string base = Expanded(directory, opener);
+    return Local().ListFiles(
+        directory,
+        [&](dd::OpenFileInfo& info) {
+          if (!sensitive_->Check(Local().JoinPath(base, info.path))) callback(info);
+        },
+        opener);
   }
   bool SupportsListFilesExtended() const override { return true; }
 
   dd::unique_ptr<dd::MultiFileList> GlobFilesExtended(const std::string& path, const dd::FileGlobInput& input,
                                                       dd::optional_ptr<dd::FileOpener> opener) override {
+    // A pattern is checked as the path it spells ('*' an ordinary character): one whose
+    // fixed part lies in a protected path (~/.ssh/*) is refused.
     Check(path, opener);
-    return Local().Glob(path, input, opener);
+    auto matches = Local().Glob(path, input, opener);
+    if (!Sensitive() || !matches) return matches;
+    // One that reaches into a protected path from above (/home/*/.ssh/*, **/id_rsa, or
+    // a relative pattern under file_search_path) lists its other matches only. (Reading a
+    // match is checked again when it is opened.)
+    dd::vector<dd::OpenFileInfo> allowed;
+    for (auto& file : matches->GetAllFiles()) {
+      if (!sensitive_->Check(file.path)) allowed.push_back(std::move(file));
+    }
+    return dd::make_uniq<dd::SimpleMultiFileList>(std::move(allowed));
   }
   bool SupportsGlobExtended() const override { return true; }
 
@@ -162,19 +198,36 @@ class PrivateFileGuard : public dd::FileSystem {
   // disabled it).
   dd::FileSystem& Local() { return vfs_.GetDefaultFileSystem(); }
 
+  bool Sensitive() const { return sensitive_ && sensitive_->enforcing(); }
+
+  // ~ is the instance's home_directory (DuckDB's rule, as its local file system applies it).
+  static std::string Expanded(const std::string& path, dd::optional_ptr<dd::FileOpener> opener) {
+    return !path.empty() && path[0] == '~' ? dd::FileSystem::ExpandPath(path, opener) : path;
+  }
+
   void Check(const std::string& path, dd::optional_ptr<dd::FileOpener> opener) const {
-    const std::string expanded = !path.empty() && path[0] == '~' ? dd::FileSystem::ExpandPath(path, opener) : path;
-    const auto entry = files_->Find(expanded);
-    if (!entry) return;
-    // The instance's own storage: the database's opener (no client), under the spelling
-    // the file was attached with. A client's statement, or another spelling of the same
-    // file (which DuckDB would open as a second database), is refused.
-    if (entry->attached && !dd::FileOpener::TryGetClientContext(opener) && path.rfind(entry->path, 0) == 0) return;
-    throw dd::PermissionException(PrivateFileMessage(path, entry->category));
+    const std::string expanded = Expanded(path, opener);
+    if (files_->MayName(expanded)) {
+      if (const auto entry = files_->Find(expanded)) {
+        // The instance's own storage: the database's opener (no client), under the
+        // spelling the file was attached with. A client's statement, or another spelling
+        // of the same file (which DuckDB would open as a second database), is refused.
+        const bool own_storage =
+            entry->attached && !dd::FileOpener::TryGetClientContext(opener) && path.rfind(entry->path, 0) == 0;
+        if (!own_storage) throw dd::PermissionException(PrivateFileMessage(path, entry->category));
+      }
+    }
+    if (Sensitive()) {
+      if (const auto category = sensitive_->Check(expanded)) {
+        throw dd::PermissionException(SensitivePathMessage(path, *category));
+      }
+    }
   }
 
   dd::VirtualFileSystem& vfs_;
+  const std::string local_name_;
   std::shared_ptr<const PrivateFiles> files_;
+  std::shared_ptr<const SensitivePaths> sensitive_;
 };
 
 // ---- The attach guard ----
@@ -189,8 +242,9 @@ class PrivateFileGuard : public dd::FileSystem {
 // subquery -- has been resolved to a string), any attach or table function whose storage
 // is not DuckDB's own is refused when its path names one of the server's files or a
 // sibling, by every spelling PrivateFiles knows (relative, .., symlink, hard link, case,
-// 8.3). DuckDB-storage attaches are left alone: the file-system guard already covers them,
-// and the server's own startup attaches its files that way.
+// 8.3), or, with block_sensitive_paths on, a protected path (SensitivePaths, by the same
+// spellings). DuckDB-storage attaches are left alone: the file-system guard already
+// covers them, and the server's own startup attaches its files that way.
 
 // The list of table functions that open a local database file outside DuckDB's file
 // system. postgres_scanner and ducklake take a connection string or go through the file
@@ -202,16 +256,22 @@ bool OpensFileOutsideFileSystem(const std::string& function_name) {
 
 class AttachGuardInfo : public dd::PlannerExtensionInfo {
  public:
-  explicit AttachGuardInfo(std::shared_ptr<const PrivateFiles> files) : files(std::move(files)) {}
+  AttachGuardInfo(std::shared_ptr<const PrivateFiles> files, std::shared_ptr<const SensitivePaths> sensitive)
+      : files(std::move(files)), sensitive(std::move(sensitive)) {}
   std::shared_ptr<const PrivateFiles> files;
+  std::shared_ptr<const SensitivePaths> sensitive;
 };
 
-// Refuses `path` when it is one of the server's own files (or a sibling). `path` is the
-// bare filesystem path, any storage-type prefix already stripped.
-void RefuseIfPrivate(const PrivateFiles& files, const std::string& path) {
+// Refuses `path` when it is one of the server's own files (or a sibling), or, with the
+// sensitive path guard on, a protected path. `path` is the bare filesystem path, any
+// storage-type prefix already stripped.
+void RefuseIfGuarded(const AttachGuardInfo& info, const std::string& path) {
   if (path.empty()) return;
-  if (auto entry = files.Find(path, /*thorough=*/true)) {
+  if (auto entry = info.files->Find(path)) {
     throw dd::PermissionException(PrivateFileMessage(path, entry->category));
+  }
+  if (info.sensitive && info.sensitive->enforcing()) {
+    if (auto category = info.sensitive->Check(path)) throw dd::PermissionException(SensitivePathMessage(path, *category));
   }
 }
 
@@ -236,11 +296,11 @@ std::string AttachStorageType(dd::AttachInfo& info, std::string& path) {
   return db_type == "duckdb" ? "" : db_type;
 }
 
-void CheckPlan(const PrivateFiles& files, dd::LogicalOperator& op) {
+void CheckPlan(const AttachGuardInfo& guard, dd::LogicalOperator& op) {
   if (op.type == dd::LogicalOperatorType::LOGICAL_ATTACH) {
     auto& info = *op.Cast<dd::LogicalAttach>().info;
     std::string path;
-    if (!AttachStorageType(info, path).empty()) RefuseIfPrivate(files, path);
+    if (!AttachStorageType(info, path).empty()) RefuseIfGuarded(guard, path);
   } else if (op.type == dd::LogicalOperatorType::LOGICAL_GET) {
     auto& get = op.Cast<dd::LogicalGet>();
     if (OpensFileOutsideFileSystem(get.function.GetName().GetIdentifierName())) {
@@ -248,36 +308,37 @@ void CheckPlan(const PrivateFiles& files, dd::LogicalOperator& op) {
       // sqlite_scan('<path>', '<table>'), sqlite_query('<path>', '<sql>')).
       for (const auto& parameter : get.parameters) {
         if (parameter.type().id() == dd::LogicalTypeId::VARCHAR && !parameter.IsNull()) {
-          RefuseIfPrivate(files, parameter.ToString());
+          RefuseIfGuarded(guard, parameter.ToString());
           break;
         }
       }
     }
   }
   for (auto& child : op.children) {
-    if (child) CheckPlan(files, *child);
+    if (child) CheckPlan(guard, *child);
   }
 }
 
 void AttachGuardPostBind(dd::PlannerExtensionInput& input, dd::BoundStatement& statement) {
   auto* info = dynamic_cast<AttachGuardInfo*>(input.info.get());
   if (!info || !info->files || !statement.plan) return;
-  CheckPlan(*info->files, *statement.plan);
+  CheckPlan(*info, *statement.plan);
 }
 
 }  // namespace
 
-void InstallPrivateFileGuard(duckdb_v2_instance_handle instance, std::shared_ptr<const PrivateFiles> files) {
+void InstallFileGuard(duckdb_v2_instance_handle instance, std::shared_ptr<const PrivateFiles> files,
+                      std::shared_ptr<const SensitivePaths> sensitive) {
   auto& database = *dd::capiv2::Convert(instance)->GetDatabase().instance;
   auto& config = dd::DBConfig::GetConfig(database);
   auto& vfs = dynamic_cast<dd::VirtualFileSystem&>(*config.file_system);
-  vfs.RegisterSubSystem(dd::make_uniq<PrivateFileGuard>(vfs, files));
+  vfs.RegisterSubSystem(dd::make_uniq<ServerFileGuard>(vfs, files, sensitive));
   // And the extensions that open files outside that file system (sqlite_scanner): refused
   // at plan time by the resolved path. Runs for every connection, the server's own
   // included, which attach their files as DuckDB storage and so are never caught here.
   dd::PlannerExtension extension;
   extension.post_bind_function = AttachGuardPostBind;
-  extension.planner_info = dd::make_shared_ptr<AttachGuardInfo>(std::move(files));
+  extension.planner_info = dd::make_shared_ptr<AttachGuardInfo>(std::move(files), std::move(sensitive));
   dd::PlannerExtension::Register(config, std::move(extension));
 }
 
