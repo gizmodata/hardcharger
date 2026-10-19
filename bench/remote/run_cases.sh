@@ -24,7 +24,7 @@ ENVS=""
 [ -n "${DRIVER_LIB:-}" ] && ENVS="WARP_SQL_ADBC_DRIVER_LIB=$DRIVER_LIB"
 CASES=()
 while IFS= read -r line; do CASES+=("$line"); done
-ssh "${SSHO[@]}" "$SERVER" "HC_EXTRA='${HC_EXTRA:-}' WARPSQL_STREAM_STATS=${STREAM_STATS:-0} bash ~/bench/serve.sh $SYSTEM" ||
+ssh "${SSHO[@]}" "$SERVER" "TLS=${TLS:-1} HC_EXTRA='${HC_EXTRA:-}' WARPSQL_STREAM_STATS=${STREAM_STATS:-0} bash ~/bench/serve.sh $SYSTEM" ||
   { echo "FAILED to start $SYSTEM" >&2; exit 1; }
 for c in "${CASES[@]}"; do
   [ -z "$c" ] && continue
