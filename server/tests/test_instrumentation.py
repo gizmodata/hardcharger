@@ -142,6 +142,36 @@ def test_timing_columns_are_timestamp_tz(admin):
     assert len(rows) == 7 and all(r["data_type"] == "TIMESTAMP WITH TIME ZONE" for r in rows), rows
 
 
+def test_statements_record_their_kind_in_warp_sql_terms(admin):
+    """sql_statements.statement_kind says which Warp SQL endpoint a statement came by
+    ('statement' or 'prepared'); 0.3.0 named it flight_method, after GizmoSQL's Flight SQL."""
+    columns = [r["column_name"] for r in admin.rows(sql="SELECT column_name FROM information_schema.columns WHERE "
+                                                        "table_catalog = '_hardcharger_instr' AND "
+                                                        "table_name = 'sql_statements'")]
+    assert "statement_kind" in columns and not any("flight" in c for c in columns), columns
+    marker = f"kind_probe_{time.time_ns()}"
+    admin.scalar(sql=f"SELECT '{marker}' AS direct")
+    prepared = admin.prepare(sql=f"SELECT '{marker}' AS via_prepare")["prepared_id"]
+    assert admin.execute_prepared(prepared_id=prepared).status_code == 200
+    kinds = eventually(admin, "SELECT string_agg(DISTINCT statement_kind, ',' ORDER BY statement_kind) FROM "
+                              f"_hardcharger_instr.sql_statements WHERE sql_text LIKE '%{marker}%'",
+                       lambda v: v == "prepared,statement")
+    assert kinds == "prepared,statement"
+
+
+def test_instrumentation_from_0_3_0_says_how_to_rename_flight_method(launcher, tmp_path):
+    path = tmp_path / "old_instrumentation.db"
+    maker = launcher.start(args=["--database", str(path)])
+    maker.admin().execute(sql="CREATE TABLE sql_statements (statement_id UUID NOT NULL, session_id VARCHAR NOT NULL, "
+                              "sql_text VARCHAR NOT NULL, flight_method VARCHAR, is_internal BOOLEAN NOT NULL, "
+                              "prepare_success BOOLEAN NOT NULL, prepare_error VARCHAR, "
+                              "created_time TIMESTAMP WITH TIME ZONE NOT NULL, query_tag JSON)")
+    maker.stop()
+    server = start(launcher, args=["--instrumentation-db-path", str(path)], expect_up=False)
+    assert server.process.wait(timeout=60) != 0
+    assert "RENAME COLUMN flight_method TO statement_kind" in server.log(), server.log()
+
+
 def test_non_admins_cannot_read_it(server):
     user = server.as_role(role="user", subject="instr-user")
     detail = user.error(sql="SELECT * FROM _hardcharger_instr.sessions")["detail"]

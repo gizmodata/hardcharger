@@ -964,8 +964,7 @@ int64_t Session::Ingest(const warpsql::IngestTarget& target, std::shared_ptr<arr
                 "User '" + principal_.name + "' has a readonly session and cannot ingest data.", "42501");
   }
   const LogFields where = {{"session_id", id_},       {"user", principal_.name},  {"kind", "ingest"},
-                           {"catalog", target.catalog}, {"schema", target.schema}, {"table", target.table},
-                           {"flight_method", "ingest"}};
+                           {"catalog", target.catalog}, {"schema", target.schema}, {"table", target.table}};
   auto with = [&](LogFields extra) {
     LogFields fields = where;
     fields.insert(fields.end(), extra.begin(), extra.end());
