@@ -39,6 +39,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Remove at Hardcharger 2.0.0 together with .github/scripts/check_no_version_labels.py:
+      # until then the docs say "Hardcharger", never "Hardcharger 0.x".
+      - name: No version labels in the docs
+        working-directory: .
+        run: python3 .github/scripts/check_no_version_labels.py
       - uses: astral-sh/setup-uv@v10.3.0
       # uv pip, not uv run: uv run locks the [adbc] extra too, and adbc-driver-hardcharger
       # isn't on PyPI yet.
