@@ -296,7 +296,7 @@ def main() -> None:
     parser.add_argument("--dataset", required=True, choices=list(TABLES))
     parser.add_argument("--reps", type=int, default=7)
     parser.add_argument("--warmup", type=int, default=1)
-    parser.add_argument("--compression", default="none", choices=["none", "zstd"])
+    parser.add_argument("--compression", default="none", choices=["none", "zstd", "lz4_frame", "auto"])
     parser.add_argument("--quack-mode", default="attach", choices=["attach", "query"])
     parser.add_argument("--collect", default="stream", choices=["stream", "table"])
     parser.add_argument("--preserve-order", default="true", choices=["true", "false"])

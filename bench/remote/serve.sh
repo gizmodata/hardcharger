@@ -19,15 +19,23 @@ export BENCH_PASSWORD=${BENCH_PASSWORD:-bench-password-not-secret}
 # WARPSQL_STREAM_STATS=1: Hardcharger logs each result stream's stage times.
 export WARPSQL_STREAM_STATS=${WARPSQL_STREAM_STATS:-0}
 
-# Match the server processes exactly (pgrep -x on the name, or an anchored command line),
-# never a pattern that a shell command naming the same path would also match.
-PATTERN="^($B/gizmosql/gizmosql_server|$B/hardcharger-linux-arm64/bin/hardcharger-server|$HOME/venv/bin/python $B/serve_quack.py)"
+# Each server's PID goes to $PIDFILE when it starts; stop kills that PID and waits for it,
+# never a process found by pattern (a pattern can match the shell running this, or the
+# SSH session that started it).
+PIDFILE=$B/server.pid
 stop() {
-  pkill -f "$PATTERN" || true
-  for _ in $(seq 1 60); do
-    pgrep -f "$PATTERN" >/dev/null || break
-    sleep 0.5
-  done
+  if [ -f "$PIDFILE" ]; then
+    pid=$(cat "$PIDFILE")
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" || true
+      for _ in $(seq 1 60); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.5
+      done
+      kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+    fi
+    rm -f "$PIDFILE"
+  fi
   rm -f "$DB" "$DB.wal"
 }
 
@@ -41,6 +49,7 @@ case "$SYSTEM" in
       --database-filename "$DB" --username bench --port 31337 \
       $([ "$TLS" = 1 ] && echo --tls "$B/tls.crt" "$B/tls.key") --memory-limit "$MEMORY_LIMIT" \
       --init-sql-commands "SET threads=$THREADS;" >"$LOG" 2>&1 </dev/null &
+    echo $! >"$PIDFILE"
     ;;
   hardcharger)
     HC=$(ls -d "$B"/hardcharger-linux-arm64)
@@ -48,11 +57,13 @@ case "$SYSTEM" in
       --database "$DB" --admin-username bench --port 31337 \
       $([ "$TLS" = 1 ] && echo --tls-cert "$B/tls.crt" --tls-key "$B/tls.key") --memory-limit "$MEMORY_LIMIT" \
       --init-sql-commands "SET threads=$THREADS;" ${HC_EXTRA:-} >"$LOG" 2>&1 </dev/null &
+    echo $! >"$PIDFILE"
     ;;
   quack)
     nohup ~/venv/bin/python "$B/serve_quack.py" --database "$DB" --threads "$THREADS" \
       --memory-limit "$MEMORY_LIMIT" --cert "$B/tls.crt" --key "$B/tls.key" \
       $([ "$TLS" = 1 ] || echo --plaintext) >"$LOG" 2>&1 </dev/null &
+    echo $! >"$PIDFILE"
     ;;
   *) echo "unknown system $SYSTEM" >&2; exit 2 ;;
 esac

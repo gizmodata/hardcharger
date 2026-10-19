@@ -32,6 +32,7 @@ if [ "$ROLE" = server ]; then
   # The Hardcharger tarball may arrive later; install-hardcharger.sh unpacks it then.
   for t in hardcharger-*.tar.gz; do [ -f "$t" ] && tar -xzf "$t" -C ~/bench; done
 else
-  ~/venv/bin/pip install -q ~/bench/adbc_driver_warpsql-*.whl
+  # A driver built from source instead (build-from-source.sh client) brings its own.
+  for w in ~/bench/adbc_driver_warpsql-*.whl; do [ -f "$w" ] && ~/venv/bin/pip install -q "$w"; done
 fi
 echo "setup $ROLE done"

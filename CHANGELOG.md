@@ -7,6 +7,25 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- `lz4_frame` Arrow buffer compression beside `zstd` (Warp SQL §8.2, capability
+  `ipc_compression_lz4_frame`), with the client's codec preference list in
+  `Warp-IPC-Compression` (warp-sql d25f797).
+
+### Changed
+
+- Faster remote throughput (warp-sql d25f797, warp-sql-adbc da6b4a6; docs/benchmarks.md,
+  2026-10-19): compressed results compress only the buffers a sample shows are worth it
+  and send the rest by reference; a split result's partition count follows its size; the
+  Go/Python driver decompresses batches in parallel, defaults to `auto` compression
+  (lz4_frame near, zstd far), up to 32 result partitions and `auto` ingest parts, and
+  uploads in 16,384-row slices.
+- `bench/remote/serve.sh` stops each server by the PID it recorded, never by pattern.
+  New: `run_cases.sh` (a list of cases against one system), `build-from-source.sh` (build
+  the server or driver on a benchmark VM), `midsize.py` (partition overhead on mid-sized
+  results).
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file

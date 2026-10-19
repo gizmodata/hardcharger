@@ -38,7 +38,7 @@ Enterprise in GizmoSQL is in every Hardcharger build.
 
 - 🦆 **DuckDB 2.0 inside.** A standalone server on DuckDB's v2 C API, not an extension.
 - ⚡ **Warp SQL on the wire.** A query and its first rows come back in one HTTP round trip.
-  Large results stream as Arrow IPC, with optional zstd, and can be resumed. Bulk ingest
+  Large results stream as Arrow IPC, compressed with LZ4 or zstd when asked, and can be resumed. Bulk ingest
   streams Arrow straight into a table.
 - 🔐 **Security in the core, not bolted on.** Token sign-in, TLS and mTLS, and role-based
   access control checked inside DuckDB against each statement's own plan. Also row
@@ -114,7 +114,7 @@ unless a queue is full.
 ```mermaid
 flowchart LR
   D[(DuckDB 2.0<br/>parallel execution)] --> P[Produce<br/>Arrow batches,<br/>122,880 rows each]
-  P --> Z[Compress<br/>zstd worker pool,<br/>when asked for]
+  P --> Z[Compress<br/>lz4_frame or zstd,<br/>worker pool, when asked for]
   Z --> T[Encrypt and send<br/>TLS in 1 MiB writes,<br/>overlapped with the next]
   T --> C1[connection 1]
   T --> C2[connection 2]
@@ -124,20 +124,26 @@ flowchart LR
 - 🔁 **Overlapped stages.** DuckDB keeps producing while earlier batches are being compressed
   and encrypted, and the socket never waits for the next batch to be built. With TLS on, one
   stream runs as fast as plain HTTP.
-- 🧵 **Parallel compression.** zstd runs on a pool of threads, several batches at once,
-  and the batches still leave in order.
+- 🧵 **Parallel, selective compression.** `lz4_frame` (for fast links) or `zstd` (for slow
+  ones) runs on a pool of threads, several batches at once, and the batches still leave in
+  order. A buffer that a sample shows won't shrink enough is sent as it is, by reference,
+  so compression costs only what it saves. The Go/Python driver picks the codec from the
+  link's round trip by default.
 - 🔀 **Partitioned results.** A client can ask for a large result as several partitions and
   read them over separate connections at once, past the limits of a single TCP stream and a
-  single core. The order is kept when the query asks for one. The drivers and the
-  `hardcharger` CLI read large results as 8 partitions by default (`result_partitions`,
-  `--result-partitions` change it); small results still come as one stream.
+  single core. The order is kept when the query asks for one. The server sizes the split by
+  the result: a few batches get a partition per two batches, a large result as many as the
+  client reads (the Go/Python driver asks for up to 32, JDBC and the `hardcharger` CLI for
+  8; `result_partitions`, `--result-partitions` change it). Small results still come as one
+  stream.
 - 📦 **Big batches.** Results go out in 122,880-row batches, so per-batch overhead is
   negligible; small queries still answer in one round trip.
 - 📥 **Parallel ingest.** Uploads are read in 1 MiB pieces and inserted on all of DuckDB's
   threads, in one transaction: a failed load leaves nothing behind.
-- 📤 **Partitioned uploads.** The drivers send a large load as 8 parts over separate
-  connections at once (`adbc.warp.ingest.parts`), inserted from all of them in parallel and
-  committed as one: all or nothing.
+- 📤 **Partitioned uploads.** The Go/Python driver sends a load in 16,384-row slices as up to
+  16 parts over separate connections at once (32 on a high-latency link; fewer for a small
+  load; `adbc.warp.ingest.parts`), inserted from all of them in parallel and committed as
+  one: all or nothing.
 
 Correctness is never traded for speed: a result is complete only when every partition has
 arrived with its end-of-stream marker, so a query that fails mid-stream can never look like
@@ -359,7 +365,7 @@ maps its options and lists what changed.
 |---|---|
 | 🦆 DuckDB 2.0, DuckLake and DuckDB's extensions | ✅ |
 | 🖥️ Built-in web UI: SQL editor, results grid, schema browser, exports (`--web-ui`) | ✅ |
-| ⚡ Warp SQL: streamed and resumable results, bind parameters, prepared statements, bulk ingest, zstd | ✅ |
+| ⚡ Warp SQL: streamed and resumable results, bind parameters, prepared statements, bulk ingest, lz4_frame and zstd | ✅ |
 | 🔐 TLS and mTLS, password and token sign-in, SSO via OIDC/JWKS, browser sign-in, authorized e-mail filters | ✅ |
 | 👥 Role-based access control: users, roles, grants, ownership, system privileges | ✅ |
 | 🛡️ Row policies, column masking, tenants, per-catalog access rules, Open Policy Agent | ✅ |
