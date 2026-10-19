@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <string>
+#include <chrono>
 #include <thread>
 
 #include <arrow/api.h>
@@ -51,7 +52,84 @@ TEST(ClientSignalWatcherTest, RepeatedShutdownJoinsTheWaiterAndRestoresTheMask) 
   ASSERT_EQ(pthread_sigmask(SIG_BLOCK, nullptr, &after), 0);
   EXPECT_EQ(sigismember(&before, SIGINT), sigismember(&after, SIGINT));
 }
+
+// A non-interactive shell starts background jobs with SIGINT ignored, and an ignored
+// SIGINT is discarded: the shutdown's wake signal never reached sigwait(), and the client
+// hung at exit (fix/cli-background-exit). With SIGINT ignored from the start there is no
+// watcher to wake; ignored only later, shutdown still wakes and joins it. Either way the
+// disposition the process had is left as it was.
+namespace {
+struct sigaction Disposition() {
+  struct sigaction current {};
+  sigaction(SIGINT, nullptr, &current);
+  return current;
+}
+void SetDisposition(void (*handler)(int)) {
+  struct sigaction action {};
+  action.sa_handler = handler;
+  sigemptyset(&action.sa_mask);
+  sigaction(SIGINT, &action, nullptr);
+}
+}  // namespace
+
+TEST(ClientSignalWatcherTest, ShutdownReturnsWhenSigintStartsIgnored) {
+  const struct sigaction before = Disposition();
+  SetDisposition(SIG_IGN);
+  for (int attempt = 0; attempt < 5; ++attempt) {
+    std::atomic<int> calls{0};
+    {
+      SignalWatcher watcher([&calls] { calls.fetch_add(1); });
+      // Long enough for a waiter to be in sigwait(): one destroyed at once never got there,
+      // and saw the stop flag instead (the hang needs a client that ran a while).
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    EXPECT_EQ(calls.load(), 0);
+  }
+  EXPECT_EQ(Disposition().sa_handler, SIG_IGN);
+  sigaction(SIGINT, &before, nullptr);
+}
+
+TEST(ClientSignalWatcherTest, ShutdownReturnsWhenSigintIsIgnoredLater) {
+  const struct sigaction before = Disposition();
+  SetDisposition(SIG_DFL);
+  for (int attempt = 0; attempt < 5; ++attempt) {
+    std::atomic<int> calls{0};
+    {
+      SignalWatcher watcher([&calls] { calls.fetch_add(1); });
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));  // the waiter is in sigwait()
+      SetDisposition(SIG_IGN);
+    }
+    EXPECT_EQ(calls.load(), 0) << "Shutdown's wake signal must not cancel a query";
+    EXPECT_EQ(Disposition().sa_handler, SIG_IGN);
+    SetDisposition(SIG_DFL);
+  }
+  sigaction(SIGINT, &before, nullptr);
+}
 #else
+// Windows' watcher waits on a condition its destructor signals, whatever the console's
+// Ctrl+C state; these are the POSIX cases' counterparts.
+TEST(ClientSignalWatcherTest, ShutdownReturnsWhenSigintStartsIgnored) {
+  SetConsoleCtrlHandler(nullptr, TRUE);  // Ctrl+C ignored, as a background start leaves it
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    std::atomic<int> calls{0};
+    { SignalWatcher watcher([&calls] { calls.fetch_add(1); }); }
+    EXPECT_EQ(calls.load(), 0);
+  }
+  SetConsoleCtrlHandler(nullptr, FALSE);
+}
+
+TEST(ClientSignalWatcherTest, ShutdownReturnsWhenSigintIsIgnoredLater) {
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    std::atomic<int> calls{0};
+    {
+      SignalWatcher watcher([&calls] { calls.fetch_add(1); });
+      SetConsoleCtrlHandler(nullptr, TRUE);
+    }
+    EXPECT_EQ(calls.load(), 0);
+    SetConsoleCtrlHandler(nullptr, FALSE);
+  }
+}
+
 // Windows has no signal mask: the watcher's own thread must be joined, and nothing may
 // run the callback, however often a watcher comes and goes.
 TEST(ClientSignalWatcherTest, RepeatedShutdownJoinsTheWaiterAndRestoresTheMask) {

@@ -83,6 +83,19 @@ own changelog in `python/CHANGELOG.md`.
   Hardcharger through an ADBC extension (Columnar's `adbc` or Query.Farm's `adbc_scanner`) with
   hardcharger-adbc's driver library, with examples run against Hardcharger 0.3.0.
 
+### Fixed
+
+- The `hardcharger` CLI exits when a script starts it in the background
+  (`hardcharger ... -c 'SELECT 1' &`). A non-interactive shell starts background jobs
+  with SIGINT ignored, and the client's Ctrl-C watcher was woken at exit by a SIGINT to
+  its own thread, which an ignored SIGINT never delivers: the client printed its result
+  and then waited forever. With SIGINT ignored from the start the client starts no
+  watcher (there is no Ctrl-C to take); if it is ignored later, shutdown restores the
+  default action for its one wake signal and then puts the ignore back. Ctrl-C still
+  cancels a running statement. `test_client_cli.py` runs a background job four ways
+  (plain, stdin from /dev/null, from a closed pipe, a script on a pipe), and two client
+  unit tests cover the watcher with SIGINT ignored.
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file
