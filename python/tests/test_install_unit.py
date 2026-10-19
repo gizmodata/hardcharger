@@ -129,6 +129,38 @@ def test_version_argument_and_variable(fake_github, monkeypatch):
     assert ensure_server(version="0.3.0").parts[-4] == "v0.3.0"
 
 
+@pytest.mark.parametrize(
+    argnames="spelling",
+    argvalues=["2.0.0-rc.1", "v2.0.0-rc.1", "2.0.0rc1", "v2.0.0rc1"],
+)
+def test_a_release_candidate_downloads_by_its_tag(fake_github, monkeypatch, spelling):
+    # The tag and the server's --version say 2.0.0-rc.1; a PEP 440 spelling (this package's
+    # own version, 2.0.0rc1) means the same release.
+    monkeypatch.setenv("HARDCHARGER_INSTALL_TOKEN", TOKEN)
+    fake_github.version = "2.0.0-rc.1"
+    fake_github.tarball = make_tarball(platform_name=detect_platform(), version="2.0.0-rc.1")
+    fake_github.digest = "sha256:" + hashlib.sha256(fake_github.tarball).hexdigest()
+    binary = ensure_server(version=spelling)
+    assert binary.parts[-4] == "v2.0.0-rc.1"
+    tag_path = "/repos/gizmodata/hardcharger/releases/tags/v2.0.0-rc.1"
+    assert fake_github.api_requests[0].path == tag_path
+
+
+@pytest.mark.parametrize(
+    argnames=("given", "expected"),
+    argvalues=[
+        ("0.2.0", "0.2.0"),
+        ("v0.2.0", "0.2.0"),
+        (" 2.0.0-rc.1 ", "2.0.0-rc.1"),
+        ("2.0.0rc1", "2.0.0-rc.1"),
+        ("2.0.0rc10", "2.0.0-rc.10"),
+        ("2.0.0", "2.0.0"),
+    ],
+)
+def test_normalize_version(given, expected):
+    assert _install.normalize_version(version=given) == expected
+
+
 def test_without_a_token_the_error_says_how_to_get_access(fake_github, monkeypatch):
     monkeypatch.setenv("HARDCHARGER_INSTALL_TOKEN", "none")
     with pytest.raises(expected_exception=InstallError) as error:

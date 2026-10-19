@@ -1,10 +1,12 @@
 // Generated into the build by CMakeLists.txt (Windows): the version Explorer, the
-// installer and `Get-Item hardcharger-server.exe | % VersionInfo` show.
+// installer and `Get-Item hardcharger-server.exe | % VersionInfo` show. The numeric versions
+// carry a release candidate's N in the fourth field (2.0.0-rc.1: 2,0,0,1); the strings are
+// the full version.
 #include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
- PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,@HARDCHARGER_VERSION_TWEAK@
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,@HARDCHARGER_VERSION_TWEAK@
  FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
  FILEFLAGS 0
  FILEOS VOS_NT_WINDOWS32
@@ -17,11 +19,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "GizmoData LLC"
       VALUE "FileDescription", "Hardcharger server"
-      VALUE "FileVersion", "@PROJECT_VERSION@"
+      VALUE "FileVersion", "@HARDCHARGER_VERSION@"
       VALUE "InternalName", "hardcharger-server"
       VALUE "OriginalFilename", "hardcharger-server.exe"
       VALUE "ProductName", "Hardcharger"
-      VALUE "ProductVersion", "@PROJECT_VERSION@"
+      VALUE "ProductVersion", "@HARDCHARGER_VERSION@"
       VALUE "LegalCopyright", "Copyright GizmoData LLC. Apache License 2.0."
     END
   END

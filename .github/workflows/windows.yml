@@ -452,8 +452,10 @@ jobs:
       - name: Build the MSI
         run: |
           7z x -o"stage" artifacts/hardcharger-${{ matrix.name }}.zip > /dev/null
-          version=$(sed -n 's/^project(hardcharger VERSION \([0-9.]*\).*/\1/p' server/CMakeLists.txt)
-          [ -n "$version" ] || { echo "no version in server/CMakeLists.txt"; exit 1; }
+          # MSI versions are numeric: 2.0.0 for 2.0.0, 2.0.0.1 for 2.0.0-rc.1 (release.sh msi-version).
+          full=$(.github/scripts/release.sh version)
+          version=$(.github/scripts/release.sh msi-version "$full")
+          echo "Hardcharger $full: MSI ProductVersion $version"
           # The license page shows LICENSE as plain text in RTF.
           { printf '{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Consolas;}}\\f0\\fs16 '
             sed -e 's/\\/\\\\/g' -e 's/{/\\{/g' -e 's/}/\\}/g' -e 's/$/\\par/' LICENSE

@@ -3,7 +3,7 @@
   The Hardcharger MSI (WiX 6), built by .github/workflows/windows.yml from the same
   staged tree as the zip:
 
-    wix build installer/Hardcharger.wxs -arch x64|arm64 -d Version=X.Y.Z
+    wix build installer/Hardcharger.wxs -arch x64|arm64 -d Version=X.Y.Z[.N]
       -bindpath Stage=<the unpacked hardcharger-windows-*> -bindpath installer
       -ext WixToolset.UI.wixext -o Hardcharger-<arch>.msi
 
@@ -11,6 +11,11 @@
   and CHANGELOG.md under Program Files\Hardcharger, and puts bin\ on the system PATH.
   The UpgradeCode and the GUIDs below are permanent: changing the UpgradeCode orphans
   existing installs.
+
+  Version is numeric (.github/scripts/release.sh msi-version): X.Y.Z for a release, X.Y.Z.N
+  for its release candidate X.Y.Z-rc.N. Windows Installer ignores the fourth field when it
+  compares versions, so AllowSameVersionUpgrades is what lets a later candidate, and then the
+  release, replace an installed candidate of the same X.Y.Z.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">

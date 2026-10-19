@@ -73,6 +73,17 @@ own changelog in `python/CHANGELOG.md`.
   `transactionState()` and the session document's `transaction`, plus the client's changes
   in between: an explicit port 443 kept on plain HTTP, exact wide integers in JSON
   parameters, and client-certificate sign-in through the client.
+- Releases take release-candidate tags, `vX.Y.Z-rc.N` (the next is `v2.0.0-rc.1`), as well as
+  `vX.Y.Z`. `server/CMakeLists.txt` holds the suffix in `HARDCHARGER_VERSION_SUFFIX`, and every
+  reported version (`--version` of the server and the client, `HARDCHARGER_VERSION()`, discovery,
+  server-info, instrumentation, the web UI and its tarball's name, the Windows version strings)
+  is the full `2.0.0-rc.1`; the MSI's numeric ProductVersion is `2.0.0.1`. A candidate is a GitHub
+  pre-release and pushes images `:X.Y.Z-rc.N` and `:sha-<short>`, never `:latest`; a release
+  still pushes `:X.Y.Z` and `:latest`. The release notes come from the CHANGELOG heading matched
+  as text, not as a regex (its dots used to match any character), and a tag whose version or
+  CHANGELOG section is wrong now fails in the workflow's first job instead of after the matrix.
+  The version arithmetic is `.github/scripts/release.sh`, tested by `test-release.sh` on every
+  run; docs/releasing.md describes the process.
 
 ### Documentation
 
