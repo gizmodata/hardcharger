@@ -74,6 +74,21 @@ own changelog in `python/CHANGELOG.md`.
   in between: an explicit port 443 kept on plain HTTP, exact wide integers in JSON
   parameters, and client-certificate sign-in through the client.
 
+### Fixed
+
+- The sensitive-path guard no longer refuses string literals with a `{`, such as
+  `SELECT '{"a": 1}'`, `regexp_matches(s, '^[0-9]{3}$')`, or views and masking policies
+  with such literals ("blocked access to ... (user credential store)"). It took `{` for a
+  glob wildcard reaching anything below the literal's directory, and a literal with no
+  directory part is relative to the working directory, so a server whose working
+  directory holds a protected path refused every one; that includes the Docker image,
+  whose working directory is its home, with `~/.ssh` in it. DuckDB's glob has no brace
+  expansion (its wildcards are `*`, `?` and `[`), so `{` is now an ordinary character, as
+  it is for DuckDB: `read_text('/etc/{passwd,hosts}')` names one file of that name, and a
+  braced path inside a protected directory, or with a real wildcard reaching one, is
+  still refused. `test_sensitive_path_guard.py` covers JSON and regex literals, views,
+  masking policies, the refusals, and that DuckDB still doesn't expand braces.
+
 ### Documentation
 
 - README: "Why Hardcharger instead of Quack?", a feature comparison with DuckDB's Quack
