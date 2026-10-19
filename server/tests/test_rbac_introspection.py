@@ -57,6 +57,16 @@ def server(module_launcher, store):
         "CREATE TENANT acme", "ATTACH ':memory:' AS acme_db", "ALTER CATALOG acme_db SET TENANT acme",
         "CREATE TABLE acme_db.main.t (id INT)", "CREATE USER acme/ann", "CREATE ROLE acme/r",
         "GRANT SELECT ON acme_db.main.t TO acme/r", "GRANT acme/r TO acme/ann",
+        # acme's tenant admin, and a tenant-mate of ann's with a role of its own.
+        "CREATE USER acme/boss", "GRANT acme/tenant_admin TO acme/boss",
+        "CREATE TABLE acme_db.main.t2 (id INT)", "CREATE USER acme/joe", "CREATE ROLE acme/r2",
+        "GRANT SELECT ON acme_db.main.t2 TO acme/r2", "GRANT acme/r2 TO acme/joe",
+        "CREATE ROW POLICY acme_rows ON acme_db.main.t2 TO acme/r2 USING (id > 0)",
+        # Another tenant, with its own admin.
+        "CREATE TENANT beta", "ATTACH ':memory:' AS beta_db", "ALTER CATALOG beta_db SET TENANT beta",
+        "CREATE TABLE beta_db.main.t (id INT)", "CREATE USER beta/bea", "GRANT beta/tenant_admin TO beta/bea",
+        "CREATE USER beta/bo", "CREATE ROLE beta/r", "GRANT SELECT ON beta_db.main.t TO beta/r", "GRANT beta/r TO beta/bo",
+        "CREATE ROW POLICY beta_rows ON beta_db.main.t USING (id > 0)",
     ]:
         expect_allowed(client=admin, sql=sql)
     # alice owns a table she creates.
@@ -440,3 +450,56 @@ def test_a_server_without_access_control_returns_no_rows(module_launcher):
                    f"{SCHEMA}.column_privileges", f"{SCHEMA}.role_table_grants", f"{SCHEMA}.applicable_roles",
                    f"{SCHEMA}.enabled_roles"]:
         assert session.query(sql=f"SELECT count(*) AS n FROM {source}").to_pylist() == [{"n": 0}], source
+
+
+# ---- A tenant admin sees its own tenant, never another ----
+
+def test_a_tenant_admin_sees_everything_of_its_tenant(server):
+    boss = server.user(name="acme/boss")
+    assert grantees(client=boss) >= {"acme/r", "acme/r2"}
+    assert {(r["role"], r["member"]) for r in rows(client=boss, sql="SELECT * FROM hardcharger_role_members()")} == {
+        ("acme/r", "acme/ann"), ("acme/r2", "acme/joe"), ("acme/tenant_admin", "acme/boss")}
+    assert {r["name"] for r in rows(client=boss, sql="SELECT name FROM hardcharger_users()")} == {
+        "acme/ann", "acme/boss", "acme/joe"}
+    assert {r["name"] for r in rows(client=boss, sql="SELECT name FROM hardcharger_roles()")} == {
+        "acme/PUBLIC", "acme/tenant_admin", "acme/r", "acme/r2"}
+    assert [r["name"] for r in rows(client=boss, sql="SELECT name FROM hardcharger_policies()")] == ["acme_rows"]
+    joe = rows(client=boss, sql="SELECT privilege, object_name, via FROM hardcharger_effective_privileges('acme/joe') "
+                                "WHERE object_name IS NOT NULL")
+    assert joe == [{"privilege": "SELECT", "object_name": "t2", "via": "acme/r2"}], joe
+    assert {r["table_name"] for r in rows(client=boss, sql=f"SELECT * FROM {SCHEMA}.table_privileges")} == {"t", "t2"}
+    # Twin: ann, a plain user of the same tenant, sees none of joe's.
+    ann = server.user(name="acme/ann")
+    assert "acme/r2" not in grantees(client=ann)
+    assert [r["name"] for r in rows(client=ann, sql="SELECT name FROM hardcharger_users()")] == ["acme/ann"]
+    expect_blocked(client=ann, sql="SELECT * FROM hardcharger_effective_privileges('acme/joe')",
+                   why="for another user")
+
+
+def test_a_tenant_admin_sees_nothing_of_another_tenant_or_the_system_scope(server, admin):
+    boss = server.user(name="acme/boss")
+    everything = " ".join(str(rows(client=boss, sql=f"SELECT * FROM {source}")) for source in [
+        "hardcharger_grants()", "hardcharger_role_members()", "hardcharger_roles()", "hardcharger_users()",
+        "hardcharger_policies()", f"{SCHEMA}.table_privileges", f"{SCHEMA}.column_privileges",
+        f"{SCHEMA}.applicable_roles"])
+    for name in ["beta", "bea", "beta_db", "analyst", "hr_role", "alice", "'bob'", "sales", "salaries"]:
+        assert name not in everything, f"acme's tenant admin saw {name}"
+    # The same counts (zero) for another tenant's real names and made-up ones, and the
+    # same refusal for another tenant's user, a system-scope user and a user that doesn't exist.
+    for sql in ["SELECT count(*) AS n FROM hardcharger_grants() WHERE grantee = '{role}'",
+                "SELECT count(*) AS n FROM hardcharger_role_members() WHERE member = '{user}' OR role = '{role}'",
+                "SELECT count(*) AS n FROM hardcharger_roles() WHERE name = '{role}'",
+                "SELECT count(*) AS n FROM hardcharger_users() WHERE name = '{user}'",
+                "SELECT count(*) AS n FROM hardcharger_policies() WHERE catalog_name = '{catalog}'"]:
+        real = sql.format(role="beta/r", user="beta/bo", catalog="beta_db")
+        made_up = sql.format(role="beta/nope", user="beta/nobody", catalog="nope_db")
+        assert rows(client=boss, sql=real) == [{"n": 0}] == rows(client=boss, sql=made_up), real
+        assert rows(client=admin, sql=real)[0]["n"] > 0, real
+    refusals = {expect_blocked(client=boss, sql=f"SELECT * FROM hardcharger_effective_privileges('{user}')",
+                               why="for another user").detail.splitlines()[0]
+                for user in ["beta/bo", "beta/bea", "bob", "beta/nobody"]}
+    assert len(refusals) == 1, refusals
+    # Twin: beta's admin sees beta's, and none of acme's.
+    bea = server.user(name="beta/bea")
+    assert "beta/r" in grantees(client=bea) and not {"acme/r", "acme/r2"} & grantees(client=bea)
+    assert {r["name"] for r in rows(client=bea, sql="SELECT name FROM hardcharger_users()")} == {"beta/bea", "beta/bo"}

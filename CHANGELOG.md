@@ -66,12 +66,14 @@ own changelog in `python/CHANGELOG.md`.
   `_hardcharger_system.hardcharger_information_schema` (DuckDB's `information_schema` can't be
   extended, and this name shadows nothing). The administrator sees everything; a store user
   only grants to itself and the roles it holds, those memberships and roles, its own user
-  row and policies on tables it can see; an administrator token with `catalog_access` rules
+  row and policies on tables it can see; a tenant admin also everything of its own tenant
+  (users, roles, memberships, grants, policies, its users' effective privileges) and nothing
+  of another's; an administrator token with `catalog_access` rules
   only grants, ownerships and policies inside the catalogs its rules reach. Without an
   access-control store, every function returns no rows. The store records no grant times, so
-  there is no `granted_at`. `test_rbac_introspection.py` (21 tests, PostgreSQL and DuckDB
+  there is no `granted_at`. `test_rbac_introspection.py` (23 tests, PostgreSQL and DuckDB
   stores) covers each visibility rule with its positive twin, counting and filtering for
-  another user's grants, and the standard views against the table functions.
+  another user's or another tenant's grants, and the standard views against the table functions.
 
 ### Changed
 

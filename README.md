@@ -560,7 +560,10 @@ The same query as joe returns only the two `analyst` rows. The administrator see
 everything, and `hardcharger_effective_privileges('ann')` answers for any user. A user sees
 grants to the roles it holds (directly, inherited, or through its sign-in token's groups),
 the memberships that give it those roles, those roles, its own user row, and policies on
-tables it can see. It never sees another user's grants, whatever it filters or counts. An
+tables it can see. It never sees another user's grants, whatever it filters or counts. A
+tenant admin (holding its tenant's `tenant_admin` role) also sees everything of its own tenant:
+its users, roles, memberships, grants and policies, and its users' effective privileges, and
+nothing of another tenant's. An
 administrator token with `catalog_access` rules sees grants, ownerships and policies only
 on objects in the catalogs its rules reach, and no users or memberships. On a server without
 an access-control store, every function returns no rows.

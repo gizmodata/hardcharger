@@ -191,8 +191,22 @@ class Visibility {
     if (kind_ == ViewerKind::kUser) {
       held_ = snapshot.HeldRoleIds(viewer);
       active_ = snapshot.RolesOf(viewer);
+      // A tenant admin (it holds the tenant's tenant_admin role now, as when it manages
+      // the tenant's users and roles) sees everything of its own tenant.
+      const std::string tenant = snapshot.TenantOfPrincipal(viewer);
+      const RoleRecord* admin = tenant.empty() ? nullptr : snapshot.TenantRole(tenant, kTenantAdminSuffix);
+      if (admin && active_.count(admin->id)) tenant_admin_of_ = tenant;
     }
   }
+
+  // The tenant this store user administers ("" for none).
+  const std::string& tenant_admin_of() const { return tenant_admin_of_; }
+  // A tenant admin: is this user or role one of its tenant's?
+  bool InTenant(PrincipalKind kind, const std::string& id) const {
+    return !tenant_admin_of_.empty() && snapshot_.TenantOf(kind, id) == tenant_admin_of_;
+  }
+  // A store user: may it see this role (held, or its tenant's when it is the tenant admin)?
+  bool SeesRole(const std::string& role_id) const { return Holds(role_id) || InTenant(PrincipalKind::kRole, role_id); }
 
   ViewerKind kind() const { return kind_; }
   const std::set<std::string>& held() const { return held_; }
@@ -214,7 +228,7 @@ class Visibility {
       case ViewerKind::kRestrictedAdministrator:
         return CatalogReached(grant.target.catalog);
       case ViewerKind::kUser:
-        return Holds(grant.role_id);
+        return SeesRole(grant.role_id);
     }
     return false;
   }
@@ -227,7 +241,10 @@ class Visibility {
       case ViewerKind::kRestrictedAdministrator:
         return CatalogReached(owner.object.catalog);
       case ViewerKind::kUser:
-        return owner.owner_kind == OwnerKind::kUser ? owner.owner_id == viewer_.user_id : Holds(owner.owner_id);
+        if (owner.owner_kind == OwnerKind::kUser) {
+          return owner.owner_id == viewer_.user_id || InTenant(PrincipalKind::kUser, owner.owner_id);
+        }
+        return SeesRole(owner.owner_id);
     }
     return false;
   }
@@ -239,7 +256,8 @@ class Visibility {
       case ViewerKind::kRestrictedAdministrator:
         return CatalogReached(table.catalog);
       case ViewerKind::kUser:
-        return snapshot_.ObjectListed(viewer_, table);
+        return snapshot_.ObjectListed(viewer_, table) ||
+               (!tenant_admin_of_.empty() && snapshot_.TenantOfCatalog(table.catalog) == tenant_admin_of_);
     }
     return false;
   }
@@ -250,6 +268,7 @@ class Visibility {
   ViewerKind kind_;
   std::set<std::string> held_;    // every role the user holds
   std::set<std::string> active_;  // ... and those its checks use now (SET ROLE)
+  std::string tenant_admin_of_;
 };
 
 // ---- Names ----
@@ -291,7 +310,7 @@ class Names {
     std::vector<std::string> out;
     for (const auto& id : ids) {
       // A store user is shown only the roles it holds.
-      if (visibility.kind() == ViewerKind::kUser && !visibility.Holds(id)) continue;
+      if (visibility.kind() == ViewerKind::kUser && !visibility.SeesRole(id)) continue;
       out.push_back(Role(id));
     }
     return out;
@@ -346,7 +365,7 @@ std::shared_ptr<arrow::RecordBatch> Grants(const Snapshot& snapshot, const Visib
   // System privileges reach no catalog: a restricted administrator sees none.
   if (visibility.kind() != ViewerKind::kRestrictedAdministrator) {
     for (const auto& r : snapshot.system_privileges()) {
-      if (visibility.kind() == ViewerKind::kUser && !visibility.Holds(r.role_id)) continue;
+      if (visibility.kind() == ViewerKind::kUser && !visibility.SeesRole(r.role_id)) continue;
       rows.Add({names.Role(r.role_id), std::string("ROLE"), SystemPrivilegeName(r.privilege), std::string("SYSTEM"),
                 Cell{}, Cell{}, Cell{}, Cell{}, names.Grantor(r.granted_by), r.admin_option,
                 names.Tenant(PrincipalKind::kRole, r.role_id)});
@@ -375,7 +394,11 @@ std::shared_ptr<arrow::RecordBatch> RoleMembers(const Snapshot& snapshot, const 
   for (const auto& m : snapshot.memberships()) {
     const bool user = m.member_kind == PrincipalKind::kUser;
     // A store user: the memberships that make it hold its roles (its own, and its roles').
-    if (!admin && !(user ? m.member_id == viewer.user_id : visibility.Holds(m.member_id))) continue;
+    // A tenant admin: every membership in its tenant's roles.
+    if (!admin && !visibility.InTenant(PrincipalKind::kRole, m.role_id) &&
+        !(user ? m.member_id == viewer.user_id : visibility.Holds(m.member_id))) {
+      continue;
+    }
     rows.Add({names.Role(m.role_id), user ? names.User(m.member_id) : names.Role(m.member_id),
               std::string(user ? "USER" : "ROLE"), m.admin_option, names.Grantor(m.granted_by), Cell{},
               names.Tenant(PrincipalKind::kRole, m.role_id)});
@@ -384,7 +407,7 @@ std::shared_ptr<arrow::RecordBatch> RoleMembers(const Snapshot& snapshot, const 
   // mappings of the groups its own token lists.
   const std::string tenant = admin ? "" : snapshot.TenantOf(PrincipalKind::kUser, viewer.user_id);
   for (const auto& g : snapshot.group_mappings()) {
-    if (!admin) {
+    if (!admin && !visibility.InTenant(PrincipalKind::kRole, g.role_id)) {
       if (!g.issuer.empty() && g.issuer != viewer.idp_issuer) continue;
       if (std::find(viewer.idp_groups.begin(), viewer.idp_groups.end(), g.group) == viewer.idp_groups.end()) continue;
       if (!snapshot.FindRoleById(g.role_id) || snapshot.TenantOf(PrincipalKind::kRole, g.role_id) != tenant) continue;
@@ -419,7 +442,7 @@ std::shared_ptr<arrow::RecordBatch> Roles(const Snapshot& snapshot, const Visibi
         if (!named.count(r.id)) continue;
         break;
       case ViewerKind::kUser:
-        if (!visibility.Holds(r.id)) continue;
+        if (!visibility.SeesRole(r.id)) continue;
         active = visibility.Active(r.id);
         break;
     }
@@ -437,7 +460,7 @@ std::shared_ptr<arrow::RecordBatch> Users(const Snapshot& snapshot, const Princi
   if (visibility.kind() == ViewerKind::kRestrictedAdministrator) return rows.Finish();
   for (const auto& u : snapshot.users()) {
     const bool current = !viewer.superuser && u.id == viewer.user_id;
-    if (visibility.kind() == ViewerKind::kUser && !current) continue;
+    if (visibility.kind() == ViewerKind::kUser && !current && !visibility.InTenant(PrincipalKind::kUser, u.id)) continue;
     // Never the password hash: only whether there is one.
     rows.Add({u.name, u.enabled, u.password_hash.has_value() && !u.password_hash->empty(),
               names.Tenant(PrincipalKind::kUser, u.id), TextMap(u.attributes.begin(), u.attributes.end()), current});
@@ -519,7 +542,14 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
   const ViewerKind kind = KindOf(viewer);
   const bool asked_for_self = !user_name || (kind != ViewerKind::kAdministrator && !viewer.user_id.empty() &&
                                              IdentifiersEqual(*user_name, viewer.user_name));
-  if (!asked_for_self) {
+  // A tenant admin may ask for a user of its own tenant.
+  const UserRecord* tenant_mate = nullptr;
+  if (!asked_for_self && kind == ViewerKind::kUser) {
+    const Visibility visibility(snapshot, viewer);
+    const auto* user = snapshot.FindUserByName(*user_name);
+    if (user && visibility.InTenant(PrincipalKind::kUser, user->id)) tenant_mate = user;
+  }
+  if (!asked_for_self && !tenant_mate) {
     // The same refusal whether or not the user exists: it tells nothing about other users.
     if (kind == ViewerKind::kRestrictedAdministrator) {
       throw Error(ErrorCode::kPermissionDenied,
@@ -530,7 +560,7 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
     if (kind == ViewerKind::kUser) {
       throw Error(ErrorCode::kPermissionDenied,
                   "Hardcharger blocked hardcharger_effective_privileges() for another user. Users see their own "
-                  "privileges; administrators see everyone's",
+                  "privileges, tenant admins their tenant's users', administrators everyone's",
                   "42501");
     }
   }
@@ -567,6 +597,8 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
   Principal who;
   if (asked_for_self) {
     who = viewer;
+  } else if (tenant_mate) {
+    who = Principal::User(tenant_mate->id, tenant_mate->name);
   } else {
     const auto* user = snapshot.FindUserByName(*user_name);
     if (user == nullptr) throw Error(ErrorCode::kSqlError, "Hardcharger access control: user " + *user_name +

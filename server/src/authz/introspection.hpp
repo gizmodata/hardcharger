@@ -7,6 +7,10 @@
 //  - a store user: grants to the roles it holds (directly, inherited, or through its sign-in
 //    token's groups), the memberships that make it hold them, those roles, its own user row,
 //    and the policies on tables it can see; never another user's grants;
+//  - a tenant admin (a store user holding its tenant's tenant_admin role): everything of its
+//    own tenant as well (the grants, ownerships, memberships, roles and users of the
+//    tenant's principals, policies on the tenant's catalogs, effective privileges of the
+//    tenant's users), and nothing of another tenant's or the system scope's;
 //  - an administrator's token with catalog_access rules: the grants, ownerships and
 //    policies on objects inside the catalogs its rules reach, the roles those grants name,
 //    and no users or memberships (as hardcharger_sessions() shows it only its own session).
