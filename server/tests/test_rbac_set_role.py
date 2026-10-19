@@ -129,3 +129,29 @@ def test_a_tenants_user_names_its_roles_without_the_tenant(server):
     assert error_of(client=ann, sql="SET ROLE r") == ""
     assert error_of(client=ann, sql="SET ROLE acme/r") == ""
     assert "does not hold role ra" in error_of(client=ann, sql="SET ROLE ra")  # a server-wide role it does not hold
+
+
+def test_a_store_users_session_document_reports_its_transaction(sam):
+    """Warp SQL §5.2 under access control: the transaction the session document reports is
+    the one the engine has, after an allowed statement, a refused one and a failed one."""
+    def transaction() -> str:
+        response = sam.http.get(url=sam.url, headers=sam.headers())
+        assert response.status_code == 200, response.text
+        return response.json()["transaction"]
+
+    assert transaction() == "none"
+    assert error_of(client=sam, sql="BEGIN") == ""
+    assert transaction() == "open"
+    reads(client=sam, table="t_a")
+    assert transaction() == "open"
+    assert error_of(client=sam, sql="SET ROLE ra") == ""
+    assert transaction() == "open"
+    refused(client=sam, table="t_b")  # refused by access control
+    after_refusal = transaction()
+    assert after_refusal in ("open", "aborted")
+    assert (error_of(client=sam, sql="SELECT 1") != "") == (after_refusal == "aborted")
+    assert error_of(client=sam, sql="SELECT 'x'::INTEGER") != ""  # a conversion error aborts it
+    assert transaction() == "aborted"
+    assert error_of(client=sam, sql="ROLLBACK") == ""
+    assert transaction() == "none"
+    assert error_of(client=sam, sql="RESET ROLE") == ""

@@ -237,9 +237,9 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMar
       if (s.killed()) return;
       if (s.running()) {
         running++;
-      } else if (s.transaction() == hc::Session::Transaction::kOpen) {
+      } else if (s.transaction() == warpsql::TransactionState::kOpen) {
         in_transaction++;
-      } else if (s.transaction() == hc::Session::Transaction::kAborted) {
+      } else if (s.transaction() == warpsql::TransactionState::kAborted) {
         aborted++;
       } else {
         idle++;

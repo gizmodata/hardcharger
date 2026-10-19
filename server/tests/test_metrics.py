@@ -112,6 +112,12 @@ def test_transaction_states_follow_the_session(server, session):
     session.execute(sql="BEGIN TRANSACTION")
     assert session.scalar(sql="SELECT 42") == 42
     assert metric(watcher, "hardcharger_sessions", state="idle_in_transaction") == 1
+    # DuckDB keeps a transaction usable after a syntax error: still open, not aborted, and
+    # the session document says the same (Warp SQL §5.2).
+    session.error(sql="SELEC 1")
+    assert metric(watcher, "hardcharger_sessions", state="idle_in_transaction") == 1
+    assert metric(watcher, "hardcharger_sessions", state="idle_in_transaction_aborted") == 0
+    assert session.scalar(sql="SELECT 43") == 43
     session.error(sql="INSERT INTO metrics_transactions VALUES (1)")
     assert metric(watcher, "hardcharger_sessions", state="idle_in_transaction_aborted") == 1
     session.execute(sql="ROLLBACK")

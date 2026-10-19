@@ -86,6 +86,7 @@ class Session : public warpduckdb::DuckDBSession {
   boost::json::object Options() override;
   void Commit() override;
   void Rollback() override;
+  warpsql::TransactionState Transaction() override;
   std::optional<std::chrono::milliseconds> DefaultStatementTimeout() override;
   // Killed (KILL SESSION) or ended by access control: session_ended with its reason.
   void CheckEnded() override;
@@ -104,10 +105,10 @@ class Session : public warpduckdb::DuckDBSession {
   int64_t started_at_us() const { return started_at_us_; }
   bool running() const { return running_ > 0; }
 
-  // Whether the session is inside a transaction it opened (BEGIN, or autocommit off),
-  // and whether that transaction failed and waits for a ROLLBACK.
-  enum class Transaction { kNone, kOpen, kAborted };
-  Transaction transaction() const { return transaction_; }
+  // Whether the session is inside a transaction (BEGIN, or autocommit off), and whether
+  // that transaction failed and waits for a ROLLBACK: what Transaction() last said, for the
+  // metrics (safe from any thread).
+  warpsql::TransactionState transaction() const { return transaction_; }
 
   // Ends the session from another thread: its running or queued statement stops and
   // its next request fails with session_ended.
@@ -168,10 +169,8 @@ class Session : public warpduckdb::DuckDBSession {
   std::atomic<int> running_ = 0;
   std::atomic<bool> killed_ = false;
   std::atomic<bool> interrupted_ = false;  // the current statement was cancelled
-  std::atomic<Transaction> transaction_ = Transaction::kNone;
-  bool manual_commit_ = false;  // the autocommit session option is off
+  std::atomic<warpsql::TransactionState> transaction_ = warpsql::TransactionState::kNone;
   int profile_mode_ = 0;        // what the connection's profiler is set to
-  void NoteTransaction(const Piece& piece);
 
   mutable std::mutex settings_mutex_;
   Settings settings_;

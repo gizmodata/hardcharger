@@ -645,16 +645,6 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   return type;
 }
 
-void Session::NoteTransaction(const Piece& piece) {
-  const auto& t = piece.tokens;
-  if (t.empty()) return;
-  if (t[0].IsWord("BEGIN") || t[0].IsWord("START")) {
-    transaction_ = Transaction::kOpen;
-  } else if (t[0].IsWord("COMMIT") || t[0].IsWord("END") || t[0].IsWord("ROLLBACK") || t[0].IsWord("ABORT")) {
-    transaction_ = manual_commit_ ? Transaction::kOpen : Transaction::kNone;
-  }
-}
-
 std::vector<Session::ManagedCatalog> Session::ManagedCatalogs() const {
   std::vector<ManagedCatalog> out;
   if (runtime_.instrumentation != nullptr) out.push_back({runtime_.instrumentation->catalog(), "instrumentation"});
@@ -784,8 +774,6 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
     const std::string_view error_class = ClassifyStatementError(error.what());
     const std::string logged_error = LoggableError(sql, error.what());
     execution->End(error.code() == ErrorCode::kStatementCancelled ? "cancelled" : "error", error_class, logged_error);
-    // A failed statement inside a transaction leaves it aborted until a ROLLBACK.
-    if (transaction_ == Transaction::kOpen) transaction_ = Transaction::kAborted;
     LogQuery(LogLevel::kInfo, "statement failed",
              {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"status", "error"},
               {"error", logged_error}, {"sql", Abbreviate(sql)}});
@@ -883,7 +871,6 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
     auto outcome = Track(ClassifyStatement(steps[0].type), sql, statement_id, [&] {
       return Guarded(sql, has_parameters, [&] { return DuckDBSession::Execute(sql, parameters); });
     });
-    if (steps[0].type == DUCKDB_V2_STATEMENT_TYPE_TRANSACTION) NoteTransaction(pieces[0]);
     return outcome;
   }
   if (!parameters.is_null() && steps.size() > 1) {
@@ -902,7 +889,6 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
                         return Guarded(text, has_parameters,
                                        [&] { return DuckDBSession::Execute(text, parameters); });
                       });
-      if (step.type == DUCKDB_V2_STATEMENT_TYPE_TRANSACTION) NoteTransaction(*step.piece);
     }
     if (i + 1 < steps.size() && outcome.rows) {
       // Every statement but the last runs to its end; its rows are not returned.
@@ -1058,11 +1044,6 @@ warpsql::OptionErrors Session::SetOptions(const json::object& options) {
       }
     }
   }
-  if (const auto* autocommit = options.if_contains("autocommit");
-      autocommit != nullptr && autocommit->is_bool() && !errors.contains("autocommit")) {
-    manual_commit_ = !autocommit->as_bool();
-    transaction_ = manual_commit_ ? Transaction::kOpen : Transaction::kNone;
-  }
   return errors;
 }
 
@@ -1074,13 +1055,21 @@ json::object Session::Options() {
 void Session::Commit() {
   CheckAlive();
   DuckDBSession::Commit();
-  transaction_ = manual_commit_ ? Transaction::kOpen : Transaction::kNone;
 }
 
 void Session::Rollback() {
   CheckAlive();
   DuckDBSession::Rollback();
-  transaction_ = manual_commit_ ? Transaction::kOpen : Transaction::kNone;
+}
+
+// The SDK's DuckDB session follows the transaction statements that ran and asks DuckDB
+// whether an open transaction is aborted (DuckDB forgives a syntax error, not a missing
+// table); the SDK reads this after every call that ran work in the session, for the
+// session document (Warp SQL §5.2), and the metrics read the copy kept here.
+warpsql::TransactionState Session::Transaction() {
+  const warpsql::TransactionState state = DuckDBSession::Transaction();
+  transaction_ = state;
+  return state;
 }
 
 }  // namespace hardcharger

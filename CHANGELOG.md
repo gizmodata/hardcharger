@@ -7,6 +7,31 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- The session document says where the session's transaction stands (Warp SQL §5.2,
+  warp-sql 6afe76d): `GET /warp/v1/sessions/{id}` and the session's creation answer carry
+  `transaction`, `none`, `open` or `aborted`, as the engine has it, read after every
+  statement, ingest, option change, commit and rollback. `test_rbac_set_role.py` checks it
+  for a store user through an allowed, a refused and a failed statement; the conformance
+  suite's ten new session tests pass on this server.
+
+### Changed
+
+- The transaction a session reports (the session document, and the
+  `hardcharger_sessions` metric's `idle_in_transaction` and `idle_in_transaction_aborted`
+  states) is the one DuckDB has: a syntax error inside a transaction leaves it open
+  (DuckDB forgives it), where any failure used to count as aborted. The server's own
+  tracking is gone; it reads the Warp SQL SDK's (`test_metrics.py` covers the syntax
+  error).
+- With `autocommit` false, a SQL `COMMIT` or `ROLLBACK` starts the next transaction, as
+  `POST .../commit` and `.../rollback` do (warp-sql §5.5); the session used to drop out of
+  manual-commit mode after one.
+- Web UI: the vendored `@gizmodata/warp-sql` is warp-sql-js d2fb3b7 (was 2b96f0a), with
+  `transactionState()` and the session document's `transaction`, plus the client's changes
+  in between: an explicit port 443 kept on plain HTTP, exact wide integers in JSON
+  parameters, and client-certificate sign-in through the client.
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file
