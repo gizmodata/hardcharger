@@ -170,6 +170,16 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- A retained result that expires (`result_retention_seconds`) while a client is reading it
+  no longer cuts that read: the read gets every batch and the end of the stream, and only
+  reads that start afterwards get `410 result_expired`. The expiry sweep (every 5 s)
+  dropped the batches at once, so a read in progress ended without the end-of-stream
+  marker ("incomplete chunked read") for a statement that had succeeded; Windows CI hit it
+  in `test_result_retention_seconds_sets_expires_at_and_the_expiry`. The batches are now
+  freed when the last read that started before the expiry ends. Warp SQL SDK fix (the
+  `third_party/warp-sql` bump); `test_a_read_in_progress_when_the_result_expires_runs_to_the_end`
+  stalls a 64 MB read across the expiry.
+
 - The sensitive-path guard no longer refuses string literals with a `{`, such as
   `SELECT '{"a": 1}'`, `regexp_matches(s, '^[0-9]{3}$')`, or views and masking policies
   with such literals ("blocked access to ... (user credential store)"). It took `{` for a

@@ -24,6 +24,7 @@ import time
 
 import httpx
 import pyarrow as pa
+import pyarrow.compute as pc
 import pytest
 from cryptography.hazmat.primitives import serialization
 
@@ -740,6 +741,42 @@ def test_result_retention_seconds_sets_expires_at_and_the_expiry(launcher, tmp_p
     config.write_text("result_retention_seconds: 300\n")
     by_yaml = launcher.start(args=["--config", str(config)])
     assert expires_after_finish(retained(session=by_yaml.admin())) == pytest.approx(300, abs=1)
+
+
+def test_a_read_in_progress_when_the_result_expires_runs_to_the_end(launcher):
+    """Expiry applies to reads that start afterwards (410 result_expired); one that has started
+    gets every batch and the end-of-stream marker (Warp SQL spec §6.5). Windows CI once saw a
+    poll of a 2 s retention cut mid-body ("incomplete chunked read") by the sweep. Here the read
+    stalls mid-stream (a result far larger than what the sockets buffer) until a new read gets 410,
+    while the server still counts it as an open stream: the expiry happened during the read."""
+    short = launcher.start(args=["--result-retention-seconds", "1"])
+    session, admin = short.admin(), short.admin()
+    rows = 8_000_000  # 64 MB of BIGINT
+    submitted = session.submit(sql=f"SELECT range AS v FROM range({rows})", headers={"Prefer": "respond-async"})
+    doc = session.wait_done(statement_id=submitted.json()["statement_id"])
+    assert doc["state"] == "succeeded", doc
+    url = f"{session.url}/statements/{doc['statement_id']}/result"
+    with StreamRead(server=short, session=session, url=url) as read:
+        assert read.response.status_code == 200
+        body = bytearray(read.first_chunk())
+        # Gone for a read that starts now (the server sweeps every 5 s); polled from past the
+        # last batch, so each poll before the expiry is a schema and the end, not 64 MB ...
+        def poll():
+            r = session.result(statement_id=doc["statement_id"], from_batch=1_000_000)
+            return r.status_code == 410 and r
+
+        expired = wait_until(poll, timeout=15 * TIMEOUT_SCALE, interval=0.25)
+        assert expired.json()["code"] == "result_expired", expired.text
+        # ... while this one is still being sent.
+        assert row_of(viewer=admin, session_id=session.id)["open_result_streams"] == 1, "the expiry ended the read"
+        for chunk in read.chunks:
+            body += chunk
+    assert body.endswith(END_OF_STREAM), "the read that started before the expiry was cut"
+    table = pa.ipc.open_stream(source=pa.BufferReader(obj=bytes(body))).read_all()
+    assert table.num_rows == rows
+    assert pc.sum(table.column(i="v")).as_py() == rows * (rows - 1) // 2
+    # The batches went when that read ended.
+    assert wait_until(lambda: row_of(viewer=admin, session_id=session.id)["retained_results"] == 0)
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "2592001"])
