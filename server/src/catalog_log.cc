@@ -20,7 +20,7 @@ namespace {
 // {J} is the JSON type (VARCHAR on PostgreSQL, where DuckDB writes the text as is).
 constexpr const char* kTableSql =
     "CREATE TABLE IF NOT EXISTS {T} (log_time TIMESTAMP WITH TIME ZONE NOT NULL, level VARCHAR NOT NULL, "
-    "instance_id UUID, cluster_id UUID, session_id UUID, username VARCHAR, role VARCHAR, peer VARCHAR, "
+    "instance_id UUID, cluster_id UUID, session_id VARCHAR, username VARCHAR, role VARCHAR, peer VARCHAR, "
     "component VARCHAR, trace_id VARCHAR, span_id VARCHAR, pid INTEGER, tid VARCHAR, source_file VARCHAR, "
     "source_line INTEGER, func VARCHAR, message VARCHAR, fields {J})";
 
@@ -64,8 +64,9 @@ bool IsUuid(std::string_view text) {
 
 std::string Text(std::string_view value) { return value.empty() ? "NULL" : SqlLiteral(value); }
 
-// One record's row. A field the table has a column for goes there; an id that isn't a
-// UUID stays in `fields` rather than failing the row (a sink must not lose lines).
+// One record's row. A field the table has a column for goes there; an instance or cluster
+// id that isn't a UUID stays in `fields` rather than failing the row (a sink must not lose
+// lines).
 std::string Row(const LogRecord& record) {
   std::string instance_id, cluster_id, session_id, username, role, peer, component, trace_id, span_id;
   boost::json::object rest;
@@ -82,7 +83,7 @@ std::string Row(const LogRecord& record) {
     } else if (key == "cluster_id") {
       id(cluster_id);
     } else if (key == "session_id") {
-      id(session_id);
+      session_id = value;  // the Warp SQL session id (s_...)
     } else if (key == "user" || key == "username") {
       username = value;
     } else if (key == "role") {
@@ -178,6 +179,16 @@ void CatalogLog::Start() {
                                                   table_ + "(" + column + ")");
       }
     }
+  }
+  // Hardcharger 0.3.0 kept session ids as UUIDs; they are now Warp SQL session ids (s_...).
+  const std::string session_type = warpduckdb::QueryText(
+      connection_.get(), "SELECT data_type FROM duckdb_columns() WHERE database_name = " + SqlLiteral(catalog_) +
+                             " AND schema_name = " + SqlLiteral(schema_) +
+                             " AND table_name = 'logs' AND column_name = 'session_id'");
+  if (session_type == "UUID") {
+    throw std::runtime_error("log table " + table_ + " is from Hardcharger 0.3.0, whose session ids were UUIDs; "
+                             "session ids are now the Warp SQL session ids clients hold (s_...). Drop or rename "
+                             "the table (or use a new log database) and start the server again.");
   }
   writer_ = std::thread([this] { WriterLoop(); });
   SetLogSink([this](const LogRecord& record) { Add(record); });

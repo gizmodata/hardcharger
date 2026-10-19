@@ -461,11 +461,12 @@ json::object Backend::ServerInfo() {
   return info;
 }
 
-std::unique_ptr<warpsql::EngineSession> Backend::NewSession(const warpsql::Principal& principal) {
+std::unique_ptr<warpsql::EngineSession> Backend::NewSession(const warpsql::Principal& principal,
+                                                          const std::string& session_id) {
   const bool capped = runtime_.sessions.Admit(principal);
   try {
-    return std::make_unique<Session>(runtime_, sensitive_paths_, *private_files_, instance(), principal, capped,
-                                     access_.get());
+    return std::make_unique<Session>(runtime_, sensitive_paths_, *private_files_, instance(), principal, session_id,
+                                     capped, access_.get());
   } catch (...) {
     runtime_.sessions.Unadmit(capped);
     throw;
@@ -475,7 +476,7 @@ std::unique_ptr<warpsql::EngineSession> Backend::NewSession(const warpsql::Princ
 // ---- Session ----
 
 Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, const PrivateFiles& private_files,
-                 duckdb_v2_instance_handle instance, warpsql::Principal principal, bool capped,
+                 duckdb_v2_instance_handle instance, warpsql::Principal principal, std::string id, bool capped,
                  authz::AccessControl* access)
     : DuckDBSession(instance, static_cast<std::size_t>(runtime.config.result_batch_rows)),
       runtime_(runtime),
@@ -491,7 +492,7 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, const 
                          !(access->catalog_rules_only() && principal_.role == "admin" &&
                            !IdentityOf(principal_).catalog_access)),
       rbac_(access != nullptr && !access->catalog_rules_only()),
-      id_(RandomUuid()),
+      id_(std::move(id)),
       started_at_us_(NowMicros()) {
   // User connections are created in exactly one place, the DuckDBSession constructor,
   // and bound here right after it, before any statement runs on them (and before the
@@ -702,7 +703,7 @@ warpsql::StatementOutcome Session::RunCommand(const Piece& piece) {
                 "KILL SESSION needs an administrator without catalog_access rules", "42501");
   }
   if (target.empty()) {
-    throw Error(ErrorCode::kSqlError, "KILL SESSION needs a session id: KILL SESSION '<uuid>'", "42601");
+    throw Error(ErrorCode::kSqlError, "KILL SESSION needs a session id: KILL SESSION '<session id>' (HARDCHARGER_CURRENT_SESSION(), hardcharger_sessions())", "42601");
   }
   switch (runtime_.sessions.Kill(target, *this)) {
     case SessionRegistry::KillResult::kKilled:

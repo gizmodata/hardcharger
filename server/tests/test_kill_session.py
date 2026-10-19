@@ -1,6 +1,6 @@
 """Port of GizmoSQL 1.x tests/integration/test_kill_session.cpp (4 cases).
 
-KILL SESSION '<uuid>' (also "uuid" and bare, any case, trailing ;) ends another session:
+KILL SESSION '<id>' (also "id" and bare, any case, trailing ;) ends another session:
 what it runs stops, and its next request fails with 401
 session_ended ("session has been killed ... re-authenticate", Warp SQL §5.6). An admin
 can't kill its own session; an unknown id is "not found"; non-admins may not kill.
@@ -12,6 +12,10 @@ and the "own session" case is its own test. The syntax case asserts "not found" 
 every request naming a killed session, GET of the session (a liveness probe) included,
 gets session_ended with the structured reason (Warp SQL §5.6), as does a session access
 control ended.
+
+Hardcharger: a session has one id, the Warp SQL session id its client holds (s_..., from
+the session document), where 1.x had a UUID: HARDCHARGER_CURRENT_SESSION(),
+hardcharger_sessions(), the instrumentation tables, the logs and KILL SESSION all use it.
 """
 
 import threading
@@ -40,7 +44,7 @@ def test_non_admin_cannot_kill_session(server):
 def test_admin_cannot_kill_own_session(server):
     session = server.admin()
     own = session.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
-    assert len(own) == 36 and own.count("-") == 4
+    assert own == session.id and own.startswith("s_")  # Hardcharger: the Warp SQL session id, not a UUID
     assert "Cannot kill your own session" in session.error(sql=f"KILL SESSION '{own}'")["detail"]
 
 
@@ -145,3 +149,57 @@ def test_a_session_access_control_ended_says_why_on_get_too(module_launcher, sto
                  reason="credentials_changed")
     # The twin: a user whose password didn't change.
     assert sam.http.get(url=sam.url, headers=sam.headers()).status_code == 200
+
+
+def test_one_session_id_everywhere(launcher):
+    """The id in the session document (what the client holds) is the session's only id:
+    HARDCHARGER_CURRENT_SESSION(), its hardcharger_sessions() row, its instrumentation
+    rows (sessions, statements, execution details), the server's log lines and KILL
+    SESSION all use it. Hardcharger 0.3.0 had a UUID of its own there, and KILL SESSION
+    with the id the client held said "not found"."""
+    server = launcher.start(args=["--enable-instrumentation"])
+    response = server.client().open_session()
+    assert response.status_code == 201, response.text
+    warp_id = response.json()["session_id"]
+    from warp_client import Session
+    victim = Session(client=server.client(), session_id=warp_id)
+    assert victim.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()") == warp_id
+    admin = server.admin()
+    rows = admin.rows(sql="SELECT session_id, is_current FROM hardcharger_sessions() ORDER BY session_id")
+    assert {"session_id": warp_id, "is_current": False} in rows, rows
+    assert victim.rows(sql="SELECT session_id FROM hardcharger_sessions() WHERE is_current") == [{"session_id": warp_id}]
+
+    def eventually(sql: str) -> int:
+        deadline = time.monotonic() + 10
+        while (count := admin.scalar(sql=sql)) == 0 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return count
+
+    literal = "'" + warp_id + "'"
+    assert eventually(f"SELECT count(*) FROM _hardcharger_instr.sessions WHERE session_id = {literal}") == 1
+    assert eventually(f"SELECT count(*) FROM _hardcharger_instr.sql_statements WHERE session_id = {literal}") >= 1
+    assert eventually(f"SELECT count(*) FROM _hardcharger_instr.execution_details WHERE session_id = {literal}") >= 1
+    admin.execute(sql=f"KILL SESSION {literal}")
+    problem = victim.error(sql="SELECT 1")
+    assert problem["code"] == "session_ended" and problem["reason"] == "killed", problem
+    assert f"session_id={warp_id}" in server.log()
+    victim.close()  # the SDK lets the killed session go; its record closes under the same id
+    assert eventually(f"SELECT count(*) FROM _hardcharger_instr.sessions WHERE session_id = {literal} "
+                      "AND status <> 'active'") == 1
+
+
+def test_instrumentation_from_0_3_0_is_refused_with_what_to_do(launcher, tmp_path):
+    """0.3.0's instrumentation tables keyed sessions by UUID, which can't hold a Warp SQL
+    session id: startup says so, rather than failing every insert."""
+    path = tmp_path / "old_instrumentation.db"
+    maker = launcher.start(args=["--database", str(path)])
+    maker.admin().execute(sql="CREATE TABLE sessions (session_id UUID NOT NULL, instance_id UUID NOT NULL, "
+                              "username VARCHAR NOT NULL, role VARCHAR NOT NULL, auth_method VARCHAR NOT NULL, "
+                              "peer VARCHAR NOT NULL, peer_identity VARCHAR, user_agent VARCHAR, "
+                              "connection_protocol VARCHAR NOT NULL, start_time TIMESTAMP WITH TIME ZONE NOT NULL, "
+                              "stop_time TIMESTAMP WITH TIME ZONE, status VARCHAR NOT NULL, stop_reason VARCHAR, "
+                              "session_tag JSON)")
+    maker.stop()
+    server = launcher.start(args=["--enable-instrumentation", "--instrumentation-db-path", str(path)], expect_up=False)
+    assert server.process.wait(timeout=60) != 0
+    assert "from Hardcharger 0.3.0, whose session ids were UUIDs" in server.log(), server.log()

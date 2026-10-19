@@ -46,7 +46,8 @@ class Backend : public warpduckdb::DuckDBBackend {
   void StopInstrumentation();
 
  protected:
-  std::unique_ptr<warpsql::EngineSession> NewSession(const warpsql::Principal& principal) override;
+  std::unique_ptr<warpsql::EngineSession> NewSession(const warpsql::Principal& principal,
+                                                     const std::string& session_id) override;
 
  private:
   void AttachSystemCatalog();
@@ -68,8 +69,11 @@ class Session : public warpduckdb::DuckDBSession {
  public:
   // With `access`, the session's connection is bound to `principal` before anything
   // runs on it; a session that cannot be bound is refused (the constructor throws).
+  // `id` is the session's Warp SQL id (s_...), the one its client holds: the session's
+  // only id, in HARDCHARGER_CURRENT_SESSION(), hardcharger_sessions(), KILL SESSION, the
+  // logs and the instrumentation tables.
   Session(Runtime& runtime, const SensitivePaths& sensitive_paths, const PrivateFiles& private_files,
-          duckdb_v2_instance_handle instance, warpsql::Principal principal, bool capped,
+          duckdb_v2_instance_handle instance, warpsql::Principal principal, std::string id, bool capped,
           authz::AccessControl* access);
   ~Session() override;
 

@@ -130,3 +130,19 @@ def test_unattached_log_catalog_stops_the_server(launcher):
 
 def test_writer_unit():
     assert run_unit_tests(gtest_filter="CatalogLogTest.*") == {"CatalogLogTest.LinesLandInTheirColumns": True}
+
+
+def test_a_log_table_from_0_3_0_is_refused_with_what_to_do(launcher, tmp_path):
+    """0.3.0's logs table typed session_id UUID; session ids are now Warp SQL session ids
+    (s_...): startup says so instead of dropping every session's lines."""
+    path = tmp_path / "old_logs.db"
+    maker = launcher.start(args=["--database", str(path)])
+    maker.admin().execute(sql="CREATE TABLE logs (log_time TIMESTAMP WITH TIME ZONE NOT NULL, level VARCHAR NOT NULL, "
+                              "instance_id UUID, cluster_id UUID, session_id UUID, username VARCHAR, role VARCHAR, "
+                              "peer VARCHAR, component VARCHAR, trace_id VARCHAR, span_id VARCHAR, pid INTEGER, "
+                              "tid VARCHAR, source_file VARCHAR, source_line INTEGER, func VARCHAR, message VARCHAR, "
+                              "fields JSON)")
+    maker.stop()
+    server = launcher.start(args=["--enable-catalog-logging", "--log-catalog-db-path", str(path)], expect_up=False)
+    assert server.process.wait(timeout=60) != 0
+    assert "from Hardcharger 0.3.0, whose session ids were UUIDs" in server.log(), server.log()

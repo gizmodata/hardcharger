@@ -108,7 +108,7 @@ def test_active_sessions_view(admin):
 
 def test_current_session_function(admin):
     sid = admin.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
-    assert len(sid) == 36
+    assert sid == admin.id and sid.startswith("s_")  # Hardcharger: the Warp SQL session id (1.x: a UUID)
     recorded = eventually(admin, f"SELECT session_id::VARCHAR FROM _hardcharger_instr.sessions WHERE session_id = '{sid}'")
     assert recorded == sid
 
