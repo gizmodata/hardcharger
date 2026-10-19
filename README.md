@@ -497,7 +497,7 @@ shows how.
 
 Measured on 2026-10-19 on AWS c8gn.8xlarge machines: server and client in one placement group
 (LAN), or the client in another region, about 46 ms away (WAN). TLS on every server unless the
-row says plaintext; median of five runs. Hardcharger at `53ac8463` with the Warp SQL ADBC
+row says plaintext; median of five runs. Hardcharger at `2718a17e` with the Warp SQL ADBC
 driver's default settings, Quack `e7a9be3f8c` attached from DuckDB 2.0, GizmoSQL 1.42 for
 reference. These are the shapes where Hardcharger came out ahead;
 [the full results](docs/benchmarks.md#lz4-selective-compression-and-result-sized-splits-2026-10-19-perfthroughput-2)
