@@ -17,7 +17,7 @@ case $MODE in
     want hardcharger && printf '%s\n' "--workload fetch --dataset sf1 --driver-defaults" "--workload fetch --dataset sf10 --driver-defaults" \
       "--workload fetch --dataset narrow --driver-defaults" "--workload ingest --dataset sf1 --driver-defaults" \
       "--workload ingest --dataset sf10 --driver-defaults" "--workload fetch --dataset sf10" \
-      "--workload ingest --dataset sf10" | "$HERE/run_cases.sh" lan hardcharger final
+      "--workload ingest --dataset sf10" | "$HERE/run_cases.sh" lan hardcharger ${LABEL:-final}
     want quack && printf '%s\n' "--workload fetch --dataset sf1" "--workload fetch --dataset sf10" "--workload fetch --dataset narrow" \
       "--workload ingest --dataset sf1 --preserve-order true" "--workload ingest --dataset sf1 --preserve-order false" \
       "--workload ingest --dataset sf10 --preserve-order true" "--workload ingest --dataset sf10 --preserve-order false" |
@@ -26,14 +26,14 @@ case $MODE in
       "--workload ingest --dataset sf1" "--workload ingest --dataset sf10" | "$HERE/run_cases.sh" lan gizmosql final ;;
   wan)
     want hardcharger && printf '%s\n' "--workload fetch --dataset sf1 --driver-defaults" "--workload ingest --dataset sf1 --driver-defaults" \
-      "--workload fetch --dataset sf1" | "$HERE/run_cases.sh" wan hardcharger final
+      "--workload fetch --dataset sf1" | "$HERE/run_cases.sh" wan hardcharger ${LABEL:-final}
     want quack && printf '%s\n' "--workload fetch --dataset sf1" "--workload ingest --dataset sf1 --preserve-order true" \
       "--workload ingest --dataset sf1 --preserve-order false" | "$HERE/run_cases.sh" wan quack final
     want gizmosql && printf '%s\n' "--workload fetch --dataset sf1" "--workload ingest --dataset sf1" | "$HERE/run_cases.sh" wan gizmosql final ;;
   plain)
     export TLS=0
     want hardcharger && printf '%s\n' "--workload fetch --dataset sf10 --driver-defaults --tls false" "--workload ingest --dataset sf10 --driver-defaults --tls false" |
-      "$HERE/run_cases.sh" lan hardcharger final-plain
+      "$HERE/run_cases.sh" lan hardcharger ${LABEL:-final}-plain
     want quack && printf '%s\n' "--workload fetch --dataset sf10 --tls false" "--workload ingest --dataset sf10 --preserve-order false --tls false" |
       "$HERE/run_cases.sh" lan quack final-plain
     want gizmosql && printf '%s\n' "--workload fetch --dataset sf10 --tls false" "--workload ingest --dataset sf10 --tls false" |
