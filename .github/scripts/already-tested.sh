@@ -63,6 +63,18 @@ answer() {  # tested run reason
   exit 0
 }
 
+# gh api, retried: the jobs endpoint answers 502 now and then (2026-10-19: for minutes, on
+# some pages of a run and not others), and a failure here only costs a full run.
+# Only a complete answer is printed (a failed --paginate may print some pages first).
+api() {
+  local attempt out
+  for attempt in 1 2 3 4; do
+    if out=$(gh api "$@"); then printf '%s\n' "$out"; return 0; fi
+    [ "$attempt" -lt 4 ] && sleep $(( attempt * 10 ))
+  done
+  return 1
+}
+
 in_list() {  # needle list...
   local needle="$1"; shift
   local item
@@ -70,7 +82,7 @@ in_list() {  # needle list...
   return 1
 }
 
-runs=$(gh api "repos/$repo/actions/workflows/server.yml/runs?head_sha=$sha&status=success&per_page=100" \
+runs=$(api "repos/$repo/actions/workflows/server.yml/runs?head_sha=$sha&status=success&per_page=100" \
          --jq '.workflow_runs[] | select(.head_sha == "'"$sha"'") | select(.event == "push" or .event == "workflow_dispatch") | select(.path == ".github/workflows/server.yml") | "\(.id) \(.event) \(.head_branch)"') \
   || answer false "" "Could not list the earlier runs (API error), so this run tests the commit."
 [ -n "$runs" ] || answer false "" "No earlier successful push or workflow_dispatch run of server.yml on this commit."
@@ -78,7 +90,7 @@ runs=$(gh api "repos/$repo/actions/workflows/server.yml/runs?head_sha=$sha&statu
 notes=""
 while read -r id event branch; do
   [ -n "$id" ] && [ "$id" != "$self" ] || continue
-  jobs=$(gh api --paginate "repos/$repo/actions/runs/$id/jobs?filter=latest&per_page=100" \
+  jobs=$(api --paginate "repos/$repo/actions/runs/$id/jobs?filter=latest&per_page=30" \
            --jq '.jobs[] | "\(.conclusion)\t\(.name)"') || { notes+="run $id: jobs unreadable. "; continue; }
   ok=true
   for name in "${REQUIRED[@]}"; do
@@ -94,7 +106,7 @@ while read -r id event branch; do
     ok=false; notes+="run $id ($event, $branch): \"$name\" is $conclusion. "; break
   done <<< "$jobs"
   [ "$ok" = true ] || continue
-  arts=$(gh api --paginate "repos/$repo/actions/runs/$id/artifacts?per_page=100" \
+  arts=$(api --paginate "repos/$repo/actions/runs/$id/artifacts?per_page=100" \
            --jq '.artifacts[] | select(.expired == false) | .name') || { notes+="run $id: artifacts unreadable. "; continue; }
   for art in "${ARTIFACTS[@]}"; do
     if ! grep -qxF -- "$art" <<< "$arts"; then
