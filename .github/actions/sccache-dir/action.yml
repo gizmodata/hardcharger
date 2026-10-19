@@ -3,7 +3,8 @@
 # 1,300 after a day of this workflow, growing by hundreds with every commit that touches a
 # widely included header, against the repository's entry limit). `restore` takes the
 # newest entry for this job and toolchain (a restore prefix); `save` stores a new one only
-# when the build added objects to the directory, so warm runs add nothing.
+# when the build added objects to the directory (or with `force`), so warm runs add
+# nothing.
 name: sccache directory
 description: Restore or save the sccache directory for one job and toolchain
 inputs:
@@ -16,6 +17,12 @@ inputs:
   toolchain:
     description: the exact toolchain (objects from another compiler are useless)
     required: true
+  force:
+    description: >-
+      save even when the build added nothing (the compile-cache warm-up jobs on main: their
+      new entry is what tells the next push to main that main's cache is fresh)
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -49,8 +56,11 @@ runs:
         after=$(find "$SCCACHE_DIR" -type f | wc -l)
         echo "sccache directory: ${SCCACHE_FILES_BEFORE:-0} files restored, $after now"
         echo "grew=$([ "$after" -gt "${SCCACHE_FILES_BEFORE:-0}" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-    # A tag's caches can't be restored by any other ref, so only branch runs save.
-    - if: inputs.mode == 'save' && steps.grew.outputs.grew == 'true' && !startsWith(github.ref, 'refs/tags/')
+    # A tag's caches can't be restored by any other ref, so only branch runs save (main
+    # included: every branch restores main's entries when it has none of its own).
+    - if: >-
+        inputs.mode == 'save' && !startsWith(github.ref, 'refs/tags/')
+        && (steps.grew.outputs.grew == 'true' || inputs.force == 'true')
       uses: actions/cache/save@v6
       with:
         path: ${{ env.SCCACHE_DIR }}

@@ -4,6 +4,8 @@
 # packages hardcharger-windows-{amd64,arm64}.zip and an MSI of each. server.yml calls it
 # (its `windows` job), on the same events as its other builds; its concurrency is
 # server.yml's (a called workflow's own would share the caller's group and cancel it).
+# With `warm` (server.yml's `windows-warm` job, on a push to main whose tests are skipped),
+# only the compile-cache warm-up jobs at the end run, for the platforms it lists.
 name: windows
 
 on:
@@ -13,6 +15,16 @@ on:
         description: Also run the failed-statement conformance cases 200 times against each server
         type: boolean
         default: false
+      warm:
+        description: >-
+          A JSON list of the platforms (windows-amd64, windows-arm64) whose compile cache to
+          warm: then only those are built, without tests or packages (server.yml's warm-up)
+        type: string
+        default: ""
+      tested_run:
+        description: With warm, the run that tested this commit (its web UI artifact is used)
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -24,22 +36,27 @@ defaults:
 jobs:
   build:
     name: build and test (${{ matrix.name }})
+    if: inputs.warm == ''
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: windows-amd64
+          # (Each leg and step marked &name is reused, unchanged, by the compile-cache
+          # warm-up jobs at the end; YAML anchors.)
+          - &leg-windows-amd64
+            name: windows-amd64
             runner: windows-latest
             arch: x64
             test_python: "3.14"
-          - name: windows-arm64
+          - &leg-windows-arm64
+            name: windows-arm64
             runner: windows-11-arm
             arch: arm64
             # psycopg-binary and pyarrow publish no win_arm64 wheels: the test harnesses run
             # on x64 Python (emulated); the server under test is the native arm64 build.
             test_python: cpython-3.14-windows-x86_64-none
     runs-on: ${{ matrix.runner }}
-    env:
+    env: &build-env
       # OpenSSL from vcpkg: static libraries on the static C runtime (/MT), as everything
       # here is built (DuckDB always builds with it on MSVC).
       VCPKG_TRIPLET: ${{ matrix.arch }}-windows-static
@@ -47,20 +64,23 @@ jobs:
       CC: cl
       CXX: cl
     steps:
-      - uses: actions/checkout@v7
+      - &build-checkout
+        uses: actions/checkout@v7
       # The web UI every build embeds (server.yml's web-ui job).
       - uses: actions/download-artifact@v8
         with:
           name: hardcharger-ui
           path: server/.web-ui
-      - name: The web UI tarball
+      - &build-ui-tarball
+        name: The web UI tarball
         run: |
           shopt -s nullglob
           ui=("$PWD"/server/.web-ui/hardcharger-ui-*.tar.gz)
           [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
           echo "HARDCHARGER_UI_TARBALL=$(cygpath -m "${ui[0]}")" >> "$GITHUB_ENV"
       # The warp-sql submodule is private: fetch it with its read-only deploy key.
-      - name: Fetch the warp-sql submodule
+      - &build-submodule
+        name: Fetch the warp-sql submodule
         env:
           DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
         run: |
@@ -73,14 +93,16 @@ jobs:
 
       # Passes the architecture to vcvarsall (arm64 on the arm64 runner selects the native
       # ARM64-hosted toolchain). Its environment reaches the bash steps too.
-      - uses: ilammy/msvc-dev-cmd@v1
+      - &build-msvc
+        uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ matrix.arch }}
 
       # Every cache below is keyed on the exact MSVC toolset: cached CMake trees record
       # the compiler's absolute path, so a runner image with another toolset must build
       # cold rather than fail at configure.
-      - name: Toolchain
+      - &build-toolchain
+        name: Toolchain
         id: msvc
         run: |
           [ -n "$VCToolsVersion" ] || { echo "VCToolsVersion is not set: did msvc-dev-cmd run?"; exit 1; }
@@ -93,7 +115,8 @@ jobs:
 
       # Git for Windows has sha256sum but no shasum, which server/scripts/ci-deps-key.sh
       # (the dependency caches' keys) calls as `shasum -a 256`.
-      - name: shasum
+      - &build-shasum
+        name: shasum
         run: |
           bin="$(cygpath -u "$RUNNER_TEMP")/bin"
           mkdir -p "$bin"
@@ -105,25 +128,29 @@ jobs:
       # The Windows libraries vcpkg builds (static, on the static C runtime), listed in
       # .github/windows-vcpkg-packages.txt: OpenSSL for everything, and libpq, libcurl and
       # CRoaring for DuckDB's built-in extensions (the postgres scanner, httpfs, ducklake).
-      - name: vcpkg libraries cache key
+      - &build-vcpkg-key
+        name: vcpkg libraries cache key
         id: vcpkg
         run: |
           commit=$(git -C /c/vcpkg rev-parse --short=12 HEAD)
           list=$(sha256sum .github/windows-vcpkg-packages.txt | cut -c1-12)
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "key=vcpkg-${VCPKG_TRIPLET}-msvc${{ steps.msvc.outputs.version }}-$commit-$list" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v6
+      - &build-vcpkg-restore
+        uses: actions/cache/restore@v6
         id: vcpkg-cache
         with:
           path: C:\vcpkg\installed
           key: ${{ steps.vcpkg.outputs.key }}
-      - name: Build the vcpkg libraries
+      - &build-vcpkg-build
+        name: Build the vcpkg libraries
         if: steps.vcpkg-cache.outputs.cache-hit != 'true'
         run: |
           # (The checkout has Windows line ends.)
           mapfile -t packages < <(tr -d '\r' < .github/windows-vcpkg-packages.txt)
           /c/vcpkg/vcpkg.exe install "${packages[@]/%/:$VCPKG_TRIPLET}" --clean-after-build
-      - uses: actions/cache/save@v6
+      - &build-vcpkg-save
+        uses: actions/cache/save@v6
         if: steps.vcpkg-cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
         with:
           path: C:\vcpkg\installed
@@ -133,7 +160,8 @@ jobs:
       # platforms), keyed on the dependency's own recipes, server/scripts/windows-deps.sh's
       # Windows part and the MSVC toolset (DuckDB's also on vcpkg's libraries), so a change
       # to one never rebuilds another. DuckDB takes 35-70 minutes cold.
-      - name: Arrow (cached)
+      - &build-dep-arrow
+        name: Arrow (cached)
         uses: ./.github/actions/dep-cache
         with:
           dependency: arrow
@@ -141,7 +169,8 @@ jobs:
           toolchain: MSVC ${{ steps.msvc.outputs.version }}
           extra-recipes: server/scripts/windows-deps.sh .github/cmake/msvc-static-crt.cmake
           build: server/scripts/windows-deps.sh
-      - name: replxx (cached)
+      - &build-dep-replxx
+        name: replxx (cached)
         uses: ./.github/actions/dep-cache
         with:
           dependency: replxx
@@ -149,7 +178,8 @@ jobs:
           toolchain: MSVC ${{ steps.msvc.outputs.version }}
           extra-recipes: server/scripts/windows-deps.sh .github/cmake/msvc-static-crt.cmake
           build: server/scripts/windows-deps.sh
-      - name: DuckDB (cached)
+      - &build-dep-duckdb
+        name: DuckDB (cached)
         uses: ./.github/actions/dep-cache
         with:
           dependency: duckdb
@@ -169,26 +199,31 @@ jobs:
       # turns the launcher off and the build runs uncached. (A Release build compiles no
       # debug information, so there is no shared /Zi PDB for sccache to refuse; a debug
       # build here would need CMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded, i.e. /Z7.)
-      - uses: mozilla-actions/sccache-action@v0.0.11
+      - &build-sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
-      - name: sccache settings
+      - &build-sccache-settings
+        name: sccache settings
         run: |
           echo "SCCACHE_DIR=$(cygpath -m "$GITHUB_WORKSPACE/.sccache")" >> "$GITHUB_ENV"
           echo "SCCACHE_CACHE_SIZE=2G" >> "$GITHUB_ENV"
-      - name: sccache directory (restore)
+      - &build-sccache-restore
+        name: sccache directory (restore)
         uses: ./.github/actions/sccache-dir
         with:
           mode: restore
           name: ${{ matrix.name }}
           toolchain: MSVC ${{ steps.msvc.outputs.version }}
-      - name: The compiler launcher
+      - &build-launcher
+        name: The compiler launcher
         run: |
           read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
           # C++20 module scanning (CMake's default for MSVC) is off: nothing here is a module,
           # and its per-source scan steps and modmap files only slow the build and the cache.
           echo "HARDCHARGER_CMAKE_LAUNCHER=${launcher[*]} -DCMAKE_CXX_SCAN_FOR_MODULES=OFF" >> "$GITHUB_ENV"
 
-      - name: Build the server
+      - &build-server
+        name: Build the server
         id: server
         run: |
           start=$SECONDS
@@ -205,7 +240,8 @@ jobs:
           server/build/hardcharger-server.exe --print-duckdb-version
           echo "server built in $(( SECONDS - start )) s"
       # The Warp SQL reference server (warp-sql has no CI of its own), on the same deps.
-      - name: Build warp-duckdb
+      - &build-warp
+        name: Build warp-duckdb
         id: warp
         run: |
           start=$SECONDS
@@ -518,3 +554,72 @@ jobs:
           name: hardcharger-${{ matrix.name }}-msi
           path: Hardcharger-${{ matrix.name }}.msi
           if-no-files-found: error
+
+  # The compile-cache warm-up (server.yml's warm-* jobs explain why): the build job's steps up
+  # to its sccache save (YAML anchors: same toolset, flags and launcher, the server and
+  # warp-duckdb), no tests and no packages, then main's sccache directory saved. One job per
+  # platform, since a job's `if` can't see its matrix leg.
+  warm-windows-amd64:
+    name: warm compile cache (${{ matrix.name }})
+    if: contains(inputs.warm, '"windows-amd64"')
+    strategy:
+      matrix:
+        include:
+          - *leg-windows-amd64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read  # the tested run's web UI artifact
+    env: *build-env
+    steps: &warm-steps
+      - *build-checkout
+      - name: The tested run's web UI
+        uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-ui
+          path: server/.web-ui
+          run-id: ${{ inputs.tested_run }}
+          github-token: ${{ github.token }}
+      - *build-ui-tarball
+      - *build-submodule
+      - *build-msvc
+      - *build-toolchain
+      - *build-shasum
+      - *build-vcpkg-key
+      - *build-vcpkg-restore
+      - *build-vcpkg-build
+      - *build-vcpkg-save
+      - *build-dep-arrow
+      - *build-dep-replxx
+      - *build-dep-duckdb
+      - *build-sccache
+      - *build-sccache-settings
+      - *build-sccache-restore
+      - *build-launcher
+      - *build-server
+      - *build-warp
+      # Only after a whole build (a cancelled one would look fresh to the next push), and
+      # even when it added nothing: this entry is what tells the next push main is warm.
+      - name: sccache directory (save)
+        uses: ./.github/actions/sccache-dir
+        with:
+          mode: save
+          name: ${{ matrix.name }}
+          toolchain: MSVC ${{ steps.msvc.outputs.version }}
+          force: true
+
+  warm-windows-arm64:
+    name: warm compile cache (${{ matrix.name }})
+    if: contains(inputs.warm, '"windows-arm64"')
+    strategy:
+      matrix:
+        include:
+          - *leg-windows-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read
+    env: *build-env
+    steps: *warm-steps
