@@ -65,3 +65,58 @@ def test_metrics_enable_sql_and_optional_http(launcher, http_enabled):
         assert response.status_code == 200 and "hardcharger_session_limit 0\n" in response.text
     else:
         assert port_closed(metrics_port)
+
+
+# ---- Saying where /metrics listens turns metrics on ----
+#
+# Hardcharger 0.3.0 served nothing for --metrics-port N without --enable-metrics, and its
+# ready line said "metrics_port=" (empty). A metrics_port (other than 0) or a
+# metrics_bind_address now turns metrics on, from a flag, the environment or the file; an
+# explicit enable_metrics false still wins, and says so.
+
+def ready_line(server) -> str:
+    lines = [line for line in server.log().splitlines() if "Hardcharger is ready" in line]
+    assert len(lines) == 1, server.log()
+    return lines[0]
+
+
+@pytest.mark.parametrize("source", ["flag", "env", "file"])
+def test_metrics_port_alone_turns_metrics_on(launcher, tmp_path, source):
+    metrics_port = free_port()
+    args, env = ["--metrics-bind-address", "127.0.0.1"] if source != "file" else [], {}
+    if source == "flag":
+        args += ["--metrics-port", str(metrics_port)]
+    elif source == "env":
+        env["HARDCHARGER_METRICS_PORT"] = str(metrics_port)
+    else:
+        config = tmp_path / "hardcharger.yaml"
+        config.write_text(f"metrics_port: {metrics_port}\nmetrics_bind_address: 127.0.0.1\n")
+        args += ["--config", str(config)]
+    server = launcher.start(args=args, env=env)
+    session = server.admin()
+    assert session.scalar(sql="SELECT value FROM hardcharger_settings() WHERE name = 'hardcharger.enable_metrics'") == "true"
+    response = httpx.get(url=f"http://127.0.0.1:{metrics_port}/metrics")
+    assert response.status_code == 200 and "hardcharger_session_limit 0\n" in response.text
+    assert f"metrics_port={metrics_port}" in ready_line(server)
+
+
+def test_metrics_bind_address_alone_turns_metrics_on(launcher):
+    # With metrics_port 0 (metrics in SQL only), so the test binds no fixed port.
+    server = launcher.start(args=["--metrics-bind-address", "127.0.0.1", "--metrics-port", "0"])
+    assert scalar(server, "SELECT value FROM hardcharger_metrics() WHERE name = 'hardcharger_session_limit'") == 0.0
+    assert "metrics_port=none" in ready_line(server)
+
+
+def test_metrics_port_zero_alone_leaves_metrics_off(launcher):
+    server = launcher.start(args=["--metrics-port", "0"])
+    detail = server.admin().error(sql="SELECT * FROM hardcharger_metrics()")["detail"]
+    assert "disabled" in detail, detail
+    assert "metrics_port=off" in ready_line(server)
+
+
+def test_explicit_false_wins_over_a_metrics_port_and_says_so(launcher):
+    metrics_port = free_port()
+    server = launcher.start(args=["--enable-metrics", "false", "--metrics-port", str(metrics_port)])
+    assert port_closed(metrics_port)
+    assert "metrics_port=off" in ready_line(server)
+    assert "enable_metrics is false, so metrics_port and metrics_bind_address are unused" in server.log()
