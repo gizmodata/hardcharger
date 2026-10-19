@@ -124,6 +124,18 @@ own changelog in `python/CHANGELOG.md`.
   in between: an explicit port 443 kept on plain HTTP, exact wide integers in JSON
   parameters, and client-certificate sign-in through the client.
 
+- Faster remote throughput (warp-sql d25f797, warp-sql-adbc da6b4a6; docs/benchmarks.md,
+  2026-10-19): compressed results compress only the buffers a sample shows are worth it
+  and send the rest by reference; a split result's partition count follows its size; the
+  Go/Python driver decompresses batches in parallel, defaults to `auto` compression
+  (lz4_frame near, zstd far), up to 32 result partitions and `auto` ingest parts, and
+  uploads in 16,384-row slices.
+
+- `bench/remote/serve.sh` stops each server by the PID it recorded, never by pattern.
+  New: `run_cases.sh` (a list of cases against one system), `build-from-source.sh` (build
+  the server or driver on a benchmark VM), `midsize.py` (partition overhead on mid-sized
+  results).
+
 ### Fixed
 
 - The sensitive-path guard no longer refuses string literals with a `{`, such as
@@ -243,6 +255,10 @@ own changelog in `python/CHANGELOG.md`.
   advisory lock on each port it hands out (a lock file named after the port, released when
   the process exits) and still probes that nothing is bound, so two full suites run at once.
   (The server also logs its bound port in its ready line, for a run that lets the OS choose.)
+
+- `lz4_frame` Arrow buffer compression beside `zstd` (Warp SQL §8.2, capability
+  `ipc_compression_lz4_frame`), with the client's codec preference list in
+  `Warp-IPC-Compression` (warp-sql d25f797).
 
 ## [0.3.0] - 2026-10-18
 
