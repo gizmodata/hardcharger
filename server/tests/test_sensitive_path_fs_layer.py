@@ -186,7 +186,8 @@ def read_vectors(home: pathlib.Path, who: str) -> dict[str, str | list[str]]:
     return vectors
 
 
-VECTORS = [(who, vector) for who in ("admin", "fay") for vector in read_vectors(home=pathlib.Path("/h"), who=who)]
+# (Only the names: any absolute path will do, and "/h" is none on Windows.)
+VECTORS = [(who, vector) for who in ("admin", "fay") for vector in read_vectors(home=pathlib.Path.cwd(), who=who)]
 
 
 @pytest.mark.parametrize("who,vector", VECTORS, ids=[f"{who}-{vector}" for who, vector in VECTORS])
@@ -300,7 +301,7 @@ def attach_vectors(home: pathlib.Path) -> dict[str, str]:
 
 
 @pytest.mark.parametrize("who", ["admin", "fay"])
-@pytest.mark.parametrize("vector", list(attach_vectors(home=pathlib.Path("/h"))))
+@pytest.mark.parametrize("vector", list(attach_vectors(home=pathlib.Path.cwd())))
 def test_attaching_a_credential_file_is_refused(guarded, open_server, fake_home, who, vector):
     sql = attach_vectors(home=fake_home)[vector]
     refused(client=guarded.principals[who], sql=sql)
@@ -333,10 +334,11 @@ def test_globs_from_above_leave_protected_matches_out(guarded, open_server, fake
     assert names == [], "a protected file was listed"
     # With the guard off the same pattern finds the key (DuckDB's glob doesn't follow the
     # symlinked directory).
-    assert open_server.principals[who].run(sql=pattern).column("file").to_pylist() == [f"{home}/{KEY}"]
+    found = open_server.principals[who].run(sql=pattern).column("file").to_pylist()
+    assert [pathlib.Path(f) for f in found] == [fake_home / KEY]
     # Ordinary matches are still listed; a pattern whose fixed part is protected is refused.
     listed = guarded.principals[who].run(sql=f"SELECT file FROM glob('{home}/data/pub*')").column("file").to_pylist()
-    assert listed == [f"{home}/data/public.txt"]
+    assert [pathlib.Path(f) for f in listed] == [fake_home / "data" / "public.txt"]
     refused(client=guarded.principals[who], sql=f"SELECT file FROM glob('{home}/.ssh/*')")
 
 
