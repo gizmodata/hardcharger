@@ -20,14 +20,29 @@ if ! command -v sccache >/dev/null 2>&1; then
   exit 1
 fi
 
-conf="$(mktemp)"
-trap 'rm -f "$conf"' EXIT
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+conf="$work/sccache.conf"
 printf 'server_startup_timeout_ms = 120000\n' > "$conf"
+# sccache is a native program on Windows (Git Bash): give it a Windows path.
+if command -v cygpath >/dev/null 2>&1; then conf="$(cygpath -m "$conf")"; fi
+
+# One compile through sccache, with the compiler the build uses: MSVC's cl takes its own
+# flags (and a file: it can't read stdin), any other compiler the gcc-style ones.
+probe() {
+  case "${CC:-cc}" in
+    cl | cl.exe)
+      printf 'int sccache_probe;\n' > "$work/probe.c"
+      (cd "$work" && sccache cl -nologo -c probe.c -Foprobe.obj) >&2 ;;
+    *)
+      printf 'int sccache_probe;\n' | sccache "${CC:-cc}" -x c -c - -o /dev/null >&2 ;;
+  esac
+}
 
 for attempt in 1 2 3; do
   # Fails with "Address in use" when a server already runs; the probe below decides.
   SCCACHE_CONF="$conf" sccache --start-server >&2 || true
-  if printf 'int sccache_probe;\n' | sccache "${CC:-cc}" -x c -c - -o /dev/null >&2; then
+  if probe; then
     echo "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
     exit 0
   fi

@@ -161,17 +161,45 @@ jobs:
             .github/windows-vcpkg-packages.txt
           build: server/scripts/windows-deps.sh
 
+      # The server's and warp-duckdb's own sources (and what they fetch: Boost.URL, yaml-cpp,
+      # googletest, zlib) compile through sccache, as on Linux and macOS: about 25 minutes
+      # cold, the longest part of the job. Its directory is one actions/cache entry per arch
+      # and MSVC toolset (.github/actions/sccache-dir). Fail-open: when the action can't
+      # install sccache, or its server won't answer, server/scripts/sccache-launcher.sh
+      # turns the launcher off and the build runs uncached. (A Release build compiles no
+      # debug information, so there is no shared /Zi PDB for sccache to refuse; a debug
+      # build here would need CMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded, i.e. /Z7.)
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        continue-on-error: true
+      - name: sccache settings
+        run: |
+          echo "SCCACHE_DIR=$(cygpath -m "$GITHUB_WORKSPACE/.sccache")" >> "$GITHUB_ENV"
+          echo "SCCACHE_CACHE_SIZE=2G" >> "$GITHUB_ENV"
+      - name: sccache directory (restore)
+        uses: ./.github/actions/sccache-dir
+        with:
+          mode: restore
+          name: ${{ matrix.name }}
+          toolchain: MSVC ${{ steps.msvc.outputs.version }}
+      - name: The compiler launcher
+        run: |
+          read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
+          # C++20 module scanning (CMake's default for MSVC) is off: nothing here is a module,
+          # and its per-source scan steps and modmap files only slow the build and the cache.
+          echo "HARDCHARGER_CMAKE_LAUNCHER=${launcher[*]} -DCMAKE_CXX_SCAN_FOR_MODULES=OFF" >> "$GITHUB_ENV"
+
       - name: Build the server
         id: server
         run: |
           start=$SECONDS
           openssl="/c/vcpkg/installed/$VCPKG_TRIPLET"
+          read -ra launcher <<< "$HARDCHARGER_CMAKE_LAUNCHER"
           # vcpkg's toolchain (windows-vcpkg.cmake) finds the libraries DuckDB's built-in
           # extensions link, as DuckDB's own build did.
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_TOOLCHAIN_FILE="$(cygpath -m "$PWD/.github/cmake/windows-vcpkg.cmake")" \
                 -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE \
-                -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL"
+                -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" "${launcher[@]}"
           cmake --build server/build
           server/build/hardcharger-server.exe --version
           server/build/hardcharger-server.exe --print-duckdb-version
@@ -180,14 +208,24 @@ jobs:
       - name: Build warp-duckdb
         id: warp
         run: |
+          start=$SECONDS
           openssl="/c/vcpkg/installed/$VCPKG_TRIPLET"
           deps="$(cygpath -m "$PWD/server/.deps")"
+          read -ra launcher <<< "$HARDCHARGER_CMAKE_LAUNCHER"
           cmake -S third_party/warp-sql/cpp -B build-warp -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_TOOLCHAIN_FILE="$(cygpath -m "$PWD/.github/cmake/windows-vcpkg.cmake")" \
                 -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE \
                 -DWARPSQL_ARROW_PREFIX="$deps/arrow-install" -DWARPSQL_DUCKDB_PREFIX="$deps/duckdb-install" \
-                -DWARPSQL_BUILD_TESTS=ON
+                -DWARPSQL_BUILD_TESTS=ON "${launcher[@]}"
           cmake --build build-warp --target warp-duckdb warpsql-client-tests warpsql-sdk-tests
+          echo "warp-duckdb built in $(( SECONDS - start )) s"
+      - name: sccache directory (save)
+        if: always()
+        uses: ./.github/actions/sccache-dir
+        with:
+          mode: save
+          name: ${{ matrix.name }}
+          toolchain: MSVC ${{ steps.msvc.outputs.version }}
 
       # Windows Error Reporting writes a minidump of any test program that crashes, uploaded
       # below on failure: the unit tests once segfaulted at exit after every test passed

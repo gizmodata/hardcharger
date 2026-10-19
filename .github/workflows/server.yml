@@ -1,18 +1,60 @@
 # The Hardcharger server: builds and tests on every push and pull request; on a v* tag,
 # also publishes the container image (ghcr.io, private) and the GitHub Release. The
 # tests run on the tagged commit itself, in this workflow, before anything is published.
+#
+# What runs where (the `changes` job decides):
+#   - a v* tag: everything, the sanitizers included, always (the release gate);
+#   - a manual run (workflow_dispatch) or a pull request: everything but the sanitizers
+#     (ASan, TSan), which a manual run adds with `full`;
+#   - a push to main: when the same commit already passed this workflow in a push or
+#     manual run (main moves by fast-forwarding a branch that ran it), no tests at all:
+#     the image job publishes `:main` from that run's tested tarballs. Otherwise the same
+#     as a manual run.
 name: server
 
+# Not for changes that build, test and package nothing: the documentation (docs/, Markdown
+# other than the CHANGELOG.md the tarballs ship and the UI's, which its lint checks), the
+# benchmarks (bench/), the Python package (python/, workflow.yml) and the other workflows.
+# Path filters never apply to tags; a manual run is always available.
 on:
   push:
     branches: [main]
     tags: ["v*"]
-    paths-ignore: ["python/**"]
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!bench/**"
+      - "!python/**"
+      - "!**/*.md"
+      - "CHANGELOG.md"
+      - "ui/**/*.md"
+      - "!.github/ISSUE_TEMPLATE/**"
+      - "!.github/workflows/workflow.yml"
+      - "!.github/workflows/dockerhub-check.yml"
   pull_request:
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!bench/**"
+      - "!python/**"
+      - "!**/*.md"
+      - "CHANGELOG.md"
+      - "ui/**/*.md"
+      - "!.github/ISSUE_TEMPLATE/**"
+      - "!.github/workflows/workflow.yml"
+      - "!.github/workflows/dockerhub-check.yml"
   workflow_dispatch:
     inputs:
+      full:
+        description: Also run the AddressSanitizer and ThreadSanitizer jobs (tags always do)
+        type: boolean
+        default: false
       failure_repro:
         description: Also run the failed-statement conformance cases 200 times against each server
+        type: boolean
+        default: false
+      reuse_tested:
+        description: Skip the tests when this commit already passed them, as a push to main does (to check that path; nothing is published)
         type: boolean
         default: false
 
@@ -44,6 +86,8 @@ jobs:
   # prints is the one each server build logs when it embeds the tarball.
   web-ui:
     name: web UI (build)
+    needs: changes
+    if: needs.changes.outputs.tested != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -72,14 +116,45 @@ jobs:
   # Whether this run touches the web UI: its own checks and browser tests (ui-checks,
   # ui-e2e) run when ui/, the server's web UI code or the warp-sql submodule changed, and
   # always on main, on tags and on a manual run.
+  # And, on a push to main only (or a manual run with reuse_tested), whether this commit
+  # already passed the whole workflow (.github/scripts/already-tested.sh): then every job
+  # but the image is skipped. Any doubt answers no, and the commit is tested.
   changes:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read  # the earlier runs of this workflow, their jobs and artifacts
     outputs:
       ui: ${{ steps.diff.outputs.ui }}
+      tested: ${{ steps.tested.outputs.tested }}
+      tested_run: ${{ steps.tested.outputs.run }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - id: tested
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REUSE: ${{ inputs.reuse_tested == true }}
+        run: |
+          if { [ "$EVENT" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; } ||
+             { [ "$EVENT" = workflow_dispatch ] && [ "$REUSE" = true ]; }; then
+            .github/scripts/already-tested.sh "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_RUN_ID" \
+              > "$RUNNER_TEMP/tested" 2>> "$GITHUB_STEP_SUMMARY" || echo "tested=false" > "$RUNNER_TEMP/tested"
+          else
+            echo "tested=false" > "$RUNNER_TEMP/tested"
+            { echo "### Full matrix"; echo
+              echo "A ${EVENT} on ${GITHUB_REF} always runs the tests$([[ "$GITHUB_REF" == refs/tags/* ]] && echo ', the sanitizers included')."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # Exactly one answer: true only when the script said so.
+          if grep -qx 'tested=true' "$RUNNER_TEMP/tested" && [[ "$GITHUB_REF" != refs/tags/* ]]; then
+            grep -E '^(tested|run)=' "$RUNNER_TEMP/tested" >> "$GITHUB_OUTPUT"
+          else
+            echo "tested=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$RUNNER_TEMP/tested"
       - id: diff
         env:
           EVENT: ${{ github.event_name }}
@@ -108,7 +183,7 @@ jobs:
   ui-checks:
     name: web UI (lint, typecheck, unit tests, client provenance)
     needs: changes
-    if: needs.changes.outputs.ui == 'true'
+    if: needs.changes.outputs.ui == 'true' && needs.changes.outputs.tested != 'true'
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -148,7 +223,7 @@ jobs:
   ui-e2e:
     name: web UI e2e (${{ matrix.browser }})
     needs: [changes, build]
-    if: needs.changes.outputs.ui == 'true'
+    if: needs.changes.outputs.ui == 'true' && needs.changes.outputs.tested != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -218,7 +293,8 @@ jobs:
             manylinux: quay.io/pypa/manylinux_2_28_aarch64:2026.10.10-1@sha256:abd1230aa9e4058a74b89d27cd14ba18c0db036d7bfe6e6f219a29ea63c24eb6
           - name: macos-arm64
             runner: macos-15
-    needs: web-ui
+    needs: [changes, web-ui]
+    if: needs.changes.outputs.tested != 'true'
     runs-on: ${{ matrix.runner }}
     env:
       HARDCHARGER_MANYLINUX_IMAGE: ${{ matrix.manylinux }}
@@ -523,9 +599,12 @@ jobs:
   # The server and the Warp SQL conformance suite again, on an AddressSanitizer build: a
   # use-after-free that only crashed now and then (borrowed DuckDB handles destroyed) fails
   # here every time. The suites fail when the server dies or exits non-zero.
+  # On v* tags (the release gate: the image and the release need it to succeed there) and
+  # on a manual run with `full`; never on pull requests, branch runs or pushes to main.
   sanitize:
     name: address sanitizer (linux-amd64)
-    needs: web-ui
+    needs: [changes, web-ui]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.full == true
     runs-on: ubuntu-24.04
     env:
       # Six workers starve the instrumented servers on 2 CPUs (password sign-ins time
@@ -658,9 +737,11 @@ jobs:
   # server and conformance suites. Each sanitized process writes its reports to a file;
   # any unsuppressed report fails the job (server/tests/tsan.supp holds the few
   # justified third-party suppressions). OpenSSL and the C++ runtime are the system's.
+  # When it runs: as the address sanitizer job (v* tags, and a manual run with `full`).
   tsan:
     name: thread sanitizer (linux-amd64)
-    needs: web-ui
+    needs: [changes, web-ui]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.full == true
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
@@ -847,23 +928,55 @@ jobs:
           path: tsan-reports/
           if-no-files-found: ignore
 
+  # Built (and smoke-tested) on every run; pushed on a push to main (`:main`, `:sha-*`) and
+  # on a v* tag. Skipped jobs don't hold it up (the UI's on an unrelated change, the
+  # sanitizers off tags), except on a tag, where every test job must have succeeded,
+  # Windows included, before anything is pushed. On a push to main of a commit that
+  # already passed (changes.outputs.tested), it takes that run's Linux tarballs: the
+  # binaries that were tested, not a rebuild.
   image:
-    needs: [build, portable, sanitize, tsan, ui-checks, ui-e2e]
-    # The UI's jobs run on every main push and tag (the only runs that publish); elsewhere
-    # they may be skipped, which doesn't hold the image build up.
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, windows]
+    if: >-
+      ${{ !cancelled() && needs.changes.result == 'success'
+          && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+          && (needs.changes.outputs.tested == 'true' || needs.build.result == 'success')
+          && (!startsWith(github.ref, 'refs/tags/v')
+              || (needs.build.result == 'success' && needs.portable.result == 'success'
+                  && needs.sanitize.result == 'success' && needs.tsan.result == 'success'
+                  && needs.ui-checks.result == 'success' && needs.ui-e2e.result == 'success'
+                  && needs.windows.result == 'success')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      actions: read  # the tested run's artifacts, when this run reuses them
       packages: write
       id-token: write  # Docker Hub's OIDC sign-in
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
+        if: needs.changes.outputs.tested != 'true'
         with:
           pattern: hardcharger-linux-*
           path: artifacts
           merge-multiple: true
+      - uses: actions/download-artifact@v8
+        if: needs.changes.outputs.tested == 'true'
+        with:
+          pattern: hardcharger-linux-*
+          path: artifacts
+          merge-multiple: true
+          run-id: ${{ needs.changes.outputs.tested_run }}
+          github-token: ${{ github.token }}
+      - name: Where the binaries come from
+        env:
+          TESTED_RUN: ${{ needs.changes.outputs.tested_run }}
+        run: |
+          if [ -n "$TESTED_RUN" ]; then
+            echo "The Linux tarballs of run $TESTED_RUN, which tested $GITHUB_SHA" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The Linux tarballs this run built and tested" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          ls -la artifacts
       - name: Unpack
         run: |
           mkdir -p dist
@@ -932,7 +1045,8 @@ jobs:
   # Windows x64 and arm64 (windows.yml): its build and tests, and the zips and MSIs it
   # packages, which the checksums and the release take with the tarballs.
   windows:
-    needs: web-ui
+    needs: [changes, web-ui]
+    if: needs.changes.outputs.tested != 'true'
     uses: ./.github/workflows/windows.yml
     secrets: inherit
     with:
