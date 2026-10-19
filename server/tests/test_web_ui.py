@@ -77,7 +77,7 @@ def assets(server) -> dict[str, httpx.Response]:
             continue
         found[name] = get(server=server, path=f"/ui/{name}")
         if name.endswith((".js", ".css")):
-            for ref in re.findall(pattern=r'["\'`/(]([\w.-]+-[\w-]{8}\.(?:js|css|wasm|ttf|woff2|png|svg))\b', string=found[name].text):
+            for ref in re.findall(pattern=r'["\'`/(]([\w.-]+-[\w-]{8}\.(?:js|css|wasm|ttf|woff2|png|svg|webp))\b', string=found[name].text):
                 queue.append(f"assets/{ref}")
     return found
 
@@ -114,9 +114,9 @@ def test_every_file_the_ui_loads_is_served_with_its_type_and_cached_for_good(ser
     files = assets(server=server)
     types = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".wasm": "application/wasm",
              ".ttf": "font/ttf", ".woff2": "font/woff2", ".png": "image/png",
-             ".svg": "image/svg+xml"}
+             ".svg": "image/svg+xml", ".webp": "image/webp"}
     kinds = {name.rsplit(".", 1)[1] for name in files}
-    assert {"js", "css", "wasm", "ttf", "woff2", "svg"} <= kinds, sorted(files)
+    assert {"js", "css", "wasm", "ttf", "woff2", "svg", "webp"} <= kinds, sorted(files)
     for name, response in files.items():
         assert response.status_code == 200, name
         assert response.headers["content-type"] == types["." + name.rsplit(".", 1)[1]], name

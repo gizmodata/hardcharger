@@ -4,17 +4,20 @@
 // stylesheet shows the one that matches the theme.
 import headDark from "../assets/brand/head-horizontal-dark.svg";
 import headLight from "../assets/brand/head-horizontal-light.svg";
-import mascotDark from "../assets/brand/mascot-stacked-dark.svg";
-import mascotLight from "../assets/brand/mascot-stacked-light.svg";
+import mascotDark from "../assets/brand/mascot-stacked-dark.webp";
+import mascotLight from "../assets/brand/mascot-stacked-light.webp";
 
-// The header takes the compact horizontal lockup (the bull's head), the sign-in page the
-// stacked one with the full mascot. Sizes keep each artwork's aspect ratio.
+// The header takes the compact horizontal lockup (the bull's head, an SVG trace), the
+// sign-in page and About the stacked one with the full mascot: the original raster art as
+// WebP at 480 px wide (2x the sign-in page's size), since the trace flattens its shading.
+// Sizes keep each artwork's aspect ratio.
 const logos = {
   header: { light: headLight, dark: headDark, width: 134, height: 30 },
   signin: { light: mascotLight, dark: mascotDark, width: 240, height: 208 },
+  about: { light: mascotLight, dark: mascotDark, width: 180, height: 156 },
 };
 
-export function Wordmark({ size }: { size: "header" | "signin" }) {
+export function Wordmark({ size }: { size: "header" | "signin" | "about" }) {
   const logo = logos[size];
   return (
     <span className={`wordmark wordmark-${size}`}>
@@ -34,6 +37,10 @@ export function ByGizmoData() {
       <span className="by-badge-name">GizmoData™</span>
     </a>
   );
+}
+
+export function CopyrightNotice() {
+  return <p className="copyright-notice">© {__BUILD_YEAR__} GizmoData LLC. All rights reserved.</p>;
 }
 
 export function TrademarkNotice() {

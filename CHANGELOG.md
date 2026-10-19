@@ -172,10 +172,12 @@ own changelog in `python/CHANGELOG.md`.
   dark variants) is in `docs/assets/brand/`. The README's banner is the horizontal mascot
   lockup, light or dark to match the reader's GitHub theme (it was a drawn SVG card), and its
   web UI screenshots are refreshed. The web UI shows the head lockup in its header and the
-  stacked mascot on the sign-in page, each in its light or dark variant to match the theme, and
-  the head in About; its icons are new (`favicon.ico`, `favicon.svg`, `apple-touch-icon.png`)
+  stacked mascot on the sign-in page and at the top of About (the original raster art, as
+  WebP; the server now serves `.webp` as `image/webp`), each in its light or dark variant to
+  match the theme; About also says "© <year> GizmoData LLC. All rights reserved.", with the
+  year of the build. Its icons are new (`favicon.ico`, `favicon.svg`, `apple-touch-icon.png`)
   with a web app manifest (`manifest.json`, 192 and 512 px icons), in place of `favicon.png`.
-  The embedded UI grows by about 232 KiB gzipped. On Windows, `hardcharger-server.exe` and
+  The embedded UI grows by about 300 KiB gzipped. On Windows, `hardcharger-server.exe` and
   `hardcharger.exe` carry the bull's head as their icon, and the MSI shows it in Installed apps
   and in its dialogs' banner and welcome panel.
 

@@ -179,7 +179,8 @@ select {
   font-weight: 700;
   line-height: 1;
 }
-.wordmark-signin {
+.wordmark-signin,
+.wordmark-about {
   justify-content: center;
   width: 100%;
 }
@@ -191,6 +192,21 @@ select {
   align-self: flex-end;
   margin-bottom: 24px;
   font-size: 12px;
+}
+.wordmark-about .tm {
+  align-self: flex-end;
+  margin-bottom: 18px;
+  font-size: 10px;
+}
+/* About: the stacked logo above the title, the close button in the corner. */
+.about-brand {
+  position: relative;
+  padding: 18px 16px 4px;
+}
+.about-brand .about-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
 }
 .signin-footer {
   display: flex;

@@ -6,6 +6,12 @@ import { defineConfig } from "vite";
 import { uiVersion } from "./scripts/version.mjs";
 
 const version = uiVersion();
+// The copyright year in About: the build's, from SOURCE_DATE_EPOCH when set (a reproducible build).
+const buildYear = String(
+  new Date(
+    process.env["SOURCE_DATE_EPOCH"] ? Number(process.env["SOURCE_DATE_EPOCH"]) * 1000 : Date.now(),
+  ).getUTCFullYear(),
+);
 
 // The UI is served by hardcharger-server at /ui on the same listener as Warp SQL, so every
 // asset path starts with /ui/ and the app talks to /warp on its own origin.
@@ -24,7 +30,7 @@ export default defineConfig({
       },
     ],
   },
-  define: { __UI_VERSION__: JSON.stringify(version) },
+  define: { __UI_VERSION__: JSON.stringify(version), __BUILD_YEAR__: JSON.stringify(buildYear) },
   build: {
     outDir: "dist",
     assetsDir: "assets",

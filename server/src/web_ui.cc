@@ -40,9 +40,9 @@ std::string_view ContentType(std::string_view path) {
       {".mjs", "text/javascript; charset=utf-8"}, {".css", "text/css; charset=utf-8"},
       {".json", "application/json"},          {".wasm", "application/wasm"},
       {".png", "image/png"},                  {".svg", "image/svg+xml"},
-      {".ico", "image/x-icon"},               {".ttf", "font/ttf"},
-      {".woff", "font/woff"},                 {".woff2", "font/woff2"},
-      {".txt", "text/plain; charset=utf-8"},
+      {".ico", "image/x-icon"},               {".webp", "image/webp"},
+      {".ttf", "font/ttf"},                   {".woff", "font/woff"},
+      {".woff2", "font/woff2"},               {".txt", "text/plain; charset=utf-8"},
   };
   const auto slash = path.rfind('/');
   const auto dot = path.rfind('.');

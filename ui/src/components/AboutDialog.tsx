@@ -1,11 +1,8 @@
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { TrademarkNotice } from "./Brand";
+import { CopyrightNotice, TrademarkNotice, Wordmark } from "./Brand";
 import { errorMessage, useSession } from "../session";
-
-// The bull head (the favicon), from public/.
-const icon = `${import.meta.env.BASE_URL}favicon.svg`;
 
 export function AboutDialog({ onClose }: { onClose: () => void }) {
   const session = useSession();
@@ -42,12 +39,14 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <dialog ref={dialog} className="dialog" onClose={onClose} aria-labelledby="about-title">
-      <div className="dialog-head">
-        <img src={icon} alt="" width={36} height={29} />
-        <h2 id="about-title">About this server</h2>
-        <button type="button" className="btn btn-ghost btn-icon" onClick={onClose} aria-label="Close">
+      <div className="about-brand" data-testid="about-brand">
+        <Wordmark size="about" />
+        <button type="button" className="btn btn-ghost btn-icon about-close" onClick={onClose} aria-label="Close">
           <X size={16} />
         </button>
+      </div>
+      <div className="dialog-head">
+        <h2 id="about-title">About this server</h2>
       </div>
       <table className="kv" data-testid="about-table">
         <tbody>
@@ -68,6 +67,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
           </a>
           .
         </p>
+        <CopyrightNotice />
         <TrademarkNotice />
       </div>
     </dialog>

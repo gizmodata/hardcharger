@@ -25,9 +25,10 @@ the full mascot from about 160 px wide; below that, the head.
 
 - `README.md` (and `ui/README.md`, `python/README.md`): `docs/assets/hardcharger-banner-light.png`
   and `-dark.png`, `logos/mascot-horizontal-*.png` at 1200 px wide, losslessly optimized.
-- The web UI (`ui/`): `ui/src/assets/brand/` holds `logos/head-horizontal-*.svg` (header) and
-  `logos/mascot-stacked-*.svg` (sign-in page), each cropped to the artwork (viewBox only) and
-  run through svgo; `ui/public/` holds `web/favicon.svg` (svgo), a `favicon.ico` of the kit's
+- The web UI (`ui/`): `ui/src/assets/brand/` holds `logos/head-horizontal-*.svg` (header),
+  cropped to the artwork (viewBox only) and run through svgo, and `logos/mascot-stacked-*.png`
+  (sign-in page and About) cropped to the artwork, 480 px wide, as WebP (quality 90): at that
+  size the SVG trace looks flatter than the raster art; `ui/public/` holds `web/favicon.svg` (svgo), a `favicon.ico` of the kit's
   own 16, 32 and 48 px frames (`favicon/favicon-*.png`), and `web/apple-touch-icon.png`,
   `web/app-192.png`, `web/app-512.png` (losslessly optimized) for `manifest.json`.
 - Windows: `installer/hardcharger.ico` is `app-icons/Hardcharger-head.ico`, the icon of
