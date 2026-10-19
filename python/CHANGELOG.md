@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows
 - The package runs `hardcharger-server` 0.3.0 by default (`SERVER_VERSION`; it was 0.2.0).
   `HARDCHARGER_VERSION` still picks another release. The unit tests now follow
   `SERVER_VERSION` instead of naming the pinned release, so the next bump changes one line.
+- The README's banner is the Hardcharger™ bull logo (the horizontal mascot lockup).
 
 ### Fixed
 

@@ -1,0 +1,4 @@
+// Generated into the build by CMakeLists.txt (Windows): the Hardcharger bull's head as the
+// icon of hardcharger-server.exe and hardcharger.exe, from installer/hardcharger.ico (the
+// brand kit's app-icons/Hardcharger-head.ico, docs/assets/brand), which the MSI shows too.
+1 ICON "@HARDCHARGER_ICON@"

@@ -1,9 +1,11 @@
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import logo from "../assets/gizmodata-logo.png";
 import { TrademarkNotice } from "./Brand";
 import { errorMessage, useSession } from "../session";
+
+// The bull head (the favicon), from public/.
+const icon = `${import.meta.env.BASE_URL}favicon.svg`;
 
 export function AboutDialog({ onClose }: { onClose: () => void }) {
   const session = useSession();
@@ -41,7 +43,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
   return (
     <dialog ref={dialog} className="dialog" onClose={onClose} aria-labelledby="about-title">
       <div className="dialog-head">
-        <img src={logo} alt="" width={28} height={30} />
+        <img src={icon} alt="" width={36} height={29} />
         <h2 id="about-title">About this server</h2>
         <button type="button" className="btn btn-ghost btn-icon" onClick={onClose} aria-label="Close">
           <X size={16} />
