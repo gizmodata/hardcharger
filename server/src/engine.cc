@@ -39,6 +39,41 @@ class SessionScope {
   Session* previous_;
 };
 
+// Where DuckDB keeps installed extensions and persistent secrets. DuckDB puts them under
+// HOME (~/.duckdb/extensions, ~/.duckdb/stored_secrets) and, without HOME, can't INSTALL
+// at all ("Can't find the home directory") and keeps secrets relative to the working
+// directory. Services and containers often run without HOME, or with one the account
+// can't write (a container run as a user with no account in the image gets HOME=/). So:
+//  - HOME unset, the account's home (the password database) writable: DuckDB's
+//    home_directory is that home, as '~' is for the sensitive-path guard;
+//  - no writable home at all: the extension and secret directories go under the data
+//    directory (the database file's directory; the working directory for an in-memory
+//    database), in .duckdb/, as they would under a home.
+// Init SQL can still move either (SET GLOBAL extension_directory = ...).
+std::vector<std::pair<std::string, std::string>> DuckDBDirectories(const Config& config) {
+  const std::string home = HomeDirectory();
+  if (IsWritableDirectory(home)) {
+    if (HomeFromEnvironment()) return {};
+    Log(LogLevel::kInfo, "HOME is not set: DuckDB's home directory is the account's", {{"home_directory", home}});
+    return {{"home_directory", home}};
+  }
+  std::error_code ec;
+  const bool file = !config.database.empty() && config.database != ":memory:";
+  std::filesystem::path data = file ? std::filesystem::absolute(PathFromUtf8(config.database), ec).parent_path()
+                                    : std::filesystem::current_path(ec);
+  if (!IsWritableDirectory(data.string())) {
+    Log(LogLevel::kWarning, "no writable home or data directory: INSTALL and persistent secrets fail until init SQL "
+                            "sets extension_directory and secret_directory to a writable directory",
+        {{"home", home}, {"data_directory", data.string()}});
+  }
+  const std::string extensions = (data / ".duckdb" / "extensions").string();
+  const std::string secrets = (data / ".duckdb" / "stored_secrets").string();
+  Log(LogLevel::kInfo, "no writable home directory: DuckDB's extensions and persistent secrets are kept in the data "
+                       "directory",
+      {{"home", home}, {"extension_directory", extensions}, {"secret_directory", secrets}});
+  return {{"extension_directory", extensions}, {"secret_directory", secrets}};
+}
+
 warpduckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
   warpduckdb::DuckDBBackend::Options options;
   options.database = config.database.empty() ? ":memory:" : config.database;
@@ -54,6 +89,7 @@ warpduckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
   // another extension takes an explicit INSTALL and LOAD.
   options.instance_options.emplace_back("autoinstall_known_extensions", "false");
   options.instance_options.emplace_back("autoload_known_extensions", "false");
+  for (auto& option : DuckDBDirectories(config)) options.instance_options.push_back(std::move(option));
   if (!config.storage_version.empty()) {
     options.attach_options.emplace_back("STORAGE_VERSION", config.storage_version);
   }

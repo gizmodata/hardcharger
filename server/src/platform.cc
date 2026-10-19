@@ -109,6 +109,17 @@ std::string HomeDirectory() {
   return {};
 }
 
+bool HomeFromEnvironment() {
+  auto profile = EnvUtf8("USERPROFILE");
+  return profile && !profile->empty();
+}
+
+bool IsWritableDirectory(const std::string& path) {
+  std::error_code ec;
+  if (path.empty() || !std::filesystem::is_directory(PathFromUtf8(path), ec)) return false;
+  return _waccess(PathFromUtf8(path).c_str(), 2) == 0;
+}
+
 std::tm UtcTime(std::time_t seconds) {
   std::tm utc{};
   gmtime_s(&utc, &seconds);
@@ -258,6 +269,16 @@ std::string HomeDirectory() {
   if (const char* home = std::getenv("HOME"); home && *home) return home;
   if (const passwd* pw = getpwuid(getuid()); pw && pw->pw_dir) return pw->pw_dir;
   return {};
+}
+
+bool HomeFromEnvironment() {
+  const char* home = std::getenv("HOME");
+  return home != nullptr && *home != '\0';
+}
+
+bool IsWritableDirectory(const std::string& path) {
+  std::error_code ec;
+  return !path.empty() && std::filesystem::is_directory(path, ec) && access(path.c_str(), W_OK) == 0;
 }
 
 std::tm UtcTime(std::time_t seconds) {

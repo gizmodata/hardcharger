@@ -135,6 +135,17 @@ own changelog in `python/CHANGELOG.md`.
   RENAME COLUMN` that fixes it. No metric label had the name. `test_instrumentation.py`
   and `test_bulk_ingest.py` cover it.
 
+- `INSTALL` works without `HOME` (services, containers): DuckDB keeps extensions and
+  persistent secrets under `HOME` and, without it, refused every `INSTALL` ("Can't find the
+  home directory at ''", a 500) and kept persistent secrets relative to the working
+  directory. With `HOME` unset, DuckDB's `home_directory` is now the account's home (the
+  password database, the home the sensitive-path guard already protects); with no
+  writable home at all (also `HOME=/` for a container run as a user the image has no
+  account for), `extension_directory` and `secret_directory` are `.duckdb/extensions` and
+  `.duckdb/stored_secrets` in the database file's directory (the working directory for an
+  in-memory database). The startup log says which, and warns when neither is writable.
+  `test_extension_directory.py` covers both cases with `HOME` unset or unusable.
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file
