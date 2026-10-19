@@ -295,11 +295,13 @@ const std::vector<Option>& Options() {
        TEXT(capture_query_profile)},
       // Metrics
       {"enable_metrics", Kind::kBool,
-       "collect runtime metrics and serve /metrics", FLAG(enable_metrics)},
-      {"metrics_port", Kind::kInt, "port serving /metrics (0: none)",
+       "collect runtime metrics and serve /metrics (default: on when metrics_port or "
+       "metrics_bind_address is set)", FLAG(enable_metrics)},
+      {"metrics_port", Kind::kInt,
+       "port serving /metrics (0: none, metrics in SQL only); setting it turns metrics on",
        NUMBER(metrics_port)},
       {"metrics_bind_address", Kind::kString,
-       "address /metrics listens on", TEXT(metrics_bind_address)},
+       "address /metrics listens on; setting it turns metrics on", TEXT(metrics_bind_address)},
   };
   return options;
 }
@@ -463,6 +465,17 @@ void Validate(Loaded& loaded) {
   if (c.port < 0 || c.port > 65535 || c.health_port < 0 || c.health_port > 65535 ||
       c.metrics_port < 0 || c.metrics_port > 65535) {
     throw std::invalid_argument("ports must be between 0 and 65535");
+  }
+  // Saying where /metrics listens asks for metrics: a metrics_port (other than 0) or a
+  // metrics_bind_address turns them on, unless enable_metrics is set (an explicit false
+  // wins, and says so at startup).
+  const bool metrics_endpoint_set = (loaded.sources.contains("metrics_port") && c.metrics_port != 0) ||
+                                    loaded.sources.contains("metrics_bind_address");
+  if (metrics_endpoint_set && !loaded.sources.contains("enable_metrics")) {
+    c.enable_metrics = true;
+  } else if (metrics_endpoint_set && !c.enable_metrics) {
+    loaded.notes.push_back("enable_metrics is false, so metrics_port and metrics_bind_address are unused: "
+                           "/metrics is not served");
   }
   if (c.log_format != "text" && c.log_format != "json") {
     throw std::invalid_argument("log_format must be text or json");

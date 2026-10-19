@@ -453,8 +453,10 @@ int main(int argc, char** argv) {
              {"duckdb", backend->duckdb_version()},
              {"url", std::string(config.tls_cert.empty() ? "http" : "https") + "://" +
                          config.host + ":" + std::to_string(server.port()) + "/warp"},
-             {"metrics_port", metrics_endpoint ? std::to_string(metrics_endpoint->port()) : ""},
-             {"oauth_port", oauth ? std::to_string(oauth->port()) : ""},
+             // "off": metrics are off; "none": metrics in SQL only (metrics_port 0).
+             {"metrics_port", metrics_endpoint ? std::to_string(metrics_endpoint->port())
+                              : config.enable_metrics ? "none" : "off"},
+             {"oauth_port", oauth ? std::to_string(oauth->port()) : "off"},
              {"database", config.database}});
     if (config.web_ui) {
       hc::Log(hc::LogLevel::kInfo, "the web UI is on",

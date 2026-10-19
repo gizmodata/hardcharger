@@ -32,6 +32,17 @@ own changelog in `python/CHANGELOG.md`.
   in between: an explicit port 443 kept on plain HTTP, exact wide integers in JSON
   parameters, and client-certificate sign-in through the client.
 
+### Fixed
+
+- `--metrics-port N` (or `HARDCHARGER_METRICS_PORT`, or `metrics_port` in the file)
+  without `--enable-metrics` served nothing, and the ready line said `metrics_port=`.
+  Saying where `/metrics` listens now turns metrics on: a `metrics_port` other than 0, or
+  a `metrics_bind_address`, sets `enable_metrics` unless it is set itself. An explicit
+  `enable_metrics` false still wins, and the startup log says the port is unused. The
+  ready line says `metrics_port=off` when metrics are off and `none` for metrics in SQL
+  only (`metrics_port` 0), and `oauth_port=off` without the OAuth server.
+  `test_metrics_configuration.py` covers each source and case.
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file
