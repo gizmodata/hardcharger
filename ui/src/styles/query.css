@@ -245,13 +245,44 @@
 .grid-head {
   position: relative;
   display: flex;
+  padding: 0;
+  font-family: var(--font);
+  cursor: default;
+  overflow: visible;
+}
+.grid-head-selected {
+  background: var(--select);
+}
+.grid-sort {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   align-items: baseline;
   gap: 6px;
-  font-family: var(--font);
+  height: 100%;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
   cursor: pointer;
 }
-.grid-head.grid-num {
+.grid-sort:hover {
+  background: var(--hover);
+}
+.grid-sort:focus-visible {
+  outline: 2px solid var(--hc-blue);
+  outline-offset: -2px;
+}
+.grid-num .grid-sort {
   justify-content: flex-end;
+}
+.grid-sort svg {
+  flex: none;
+  align-self: center;
+  color: var(--accent);
 }
 .grid-head-name {
   overflow: hidden;
@@ -274,8 +305,13 @@
   cursor: col-resize;
   z-index: 2;
 }
-.grid-resize:hover {
+.grid-resize:hover,
+.grid-resize:focus-visible {
   background: var(--select-strong);
+  outline: none;
+}
+.grid-active {
+  box-shadow: inset 0 0 0 2px var(--hc-blue);
 }
 .grid-empty {
   position: absolute;
@@ -548,4 +584,64 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.results-grid-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.grid-filter {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.grid-filter svg {
+  position: absolute;
+  left: 7px;
+  color: var(--faint);
+  pointer-events: none;
+}
+.grid-filter input {
+  width: 200px;
+  height: 26px;
+  padding: 0 24px 0 25px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.grid-filter input:focus {
+  outline: 2px solid var(--hc-blue);
+  outline-offset: -1px;
+}
+.grid-filter-clear {
+  position: absolute;
+  right: 4px;
+  display: flex;
+  padding: 2px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+.editor-tab-expanded > .editor-area,
+.editor-tab-expanded > .resize-handle,
+.editor-tab-expanded > .toolbar {
+  display: none;
+}
+.inspector-type {
+  margin-left: 6px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 400;
+}
+.inspector-meta {
+  margin: 0 16px 8px;
+  color: var(--muted);
+  font-size: 12px;
 }

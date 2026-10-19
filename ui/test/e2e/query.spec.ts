@@ -108,6 +108,6 @@ test("the row limit caps what is read and says so", async ({ page }) => {
   // The grid holds them all, drawing only the rows in view.
   const grid = page.getByTestId("results-grid");
   await grid.evaluate((el) => (el.scrollTop = el.scrollHeight));
-  await expect(grid.getByRole("rowheader", { name: "1000", exact: true })).toBeVisible();
+  await expect(grid.getByRole("rowheader", { name: "1,000", exact: true })).toBeVisible();
   await page.getByLabel("Row limit").selectOption("10000");
 });

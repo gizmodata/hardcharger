@@ -20,6 +20,11 @@ describe("delimited text", () => {
     expect(delimitedField(" x", ",")).toBe('" x"');
   });
 
+  it("writes the rows shown, in the order shown (the grid's filter and sort)", () => {
+    expect(toDelimited(table, ",", { order: [2, 0] })).toBe('id,label,note\n3,," padded "\n1,plain,"a, b"\n');
+    expect(toDelimited(table, ",", { order: [], header: false })).toBe("");
+  });
+
   it("writes CSV with a header; NULL is an empty field", () => {
     expect(toDelimited(table, ",")).toBe('id,label,note\n1,plain,"a, b"\n2,tab\there,"say ""hi"""\n3,," padded "\n');
   });

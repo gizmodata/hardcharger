@@ -32,13 +32,22 @@ export function delimitedField(text: string, delimiter: string): string {
   return text;
 }
 
-/** Rows of a table as delimited text; NULL is an empty field. Lines end with \n. */
+/**
+ * Rows of a table as delimited text; NULL is an empty field. Lines end with \n. `order` picks
+ * the rows and their order (the grid's filter and sort); `rows` a range of them.
+ */
 export function toDelimited(
   table: Table,
   delimiter: string,
-  options: { header?: boolean; rows?: [number, number]; columns?: [number, number] } = {},
+  options: {
+    header?: boolean;
+    rows?: [number, number];
+    columns?: [number, number];
+    order?: readonly number[];
+  } = {},
 ): string {
-  const [r0, r1] = options.rows ?? [0, table.numRows - 1];
+  const order = options.order;
+  const [r0, r1] = options.rows ?? [0, (order ? order.length : table.numRows) - 1];
   const [c0, c1] = options.columns ?? [0, table.numCols - 1];
   const text = columnText(table.schema);
   const vectors = table.schema.fields.map((_, i) => table.getChildAt(i)!);
@@ -51,7 +60,8 @@ export function toDelimited(
         .join(delimiter),
     );
   }
-  for (let r = r0; r <= r1; r++) {
+  for (let p = r0; p <= r1; p++) {
+    const r = order ? order[p]! : p;
     const fields: string[] = [];
     for (let c = c0; c <= c1; c++) fields.push(delimitedField(text[c]!(vectors[c]!.get(r)) ?? "", delimiter));
     lines.push(fields.join(delimiter));

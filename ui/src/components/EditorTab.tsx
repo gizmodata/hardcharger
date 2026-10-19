@@ -81,6 +81,8 @@ export function EditorTab(props: Props) {
   // Runs finished in this tab (tests wait on it; data-runs).
   const [finished, setFinished] = useState(0);
   const [shown, setShown] = useState<number | "messages">(0);
+  // Expand: the results fill the tab (the editor and its toolbar fold away) until Restore.
+  const [expanded, setExpanded] = useState(false);
   const [notice, setNotice] = useState<string | undefined>();
   const [info, setInfo] = useState<SessionInfo | undefined>();
   const [catalogs, setCatalogs] = useState<string[] | undefined>();
@@ -314,7 +316,7 @@ export function EditorTab(props: Props) {
 
   return (
     <div
-      className="editor-tab"
+      className={`editor-tab${expanded ? " editor-tab-expanded" : ""}`}
       hidden={!active}
       data-testid="editor-tab"
       data-tab-id={tab.id}
@@ -576,6 +578,8 @@ export function EditorTab(props: Props) {
               key={`${run.kind === "done" ? run.startedAt : 0}:${shown}`}
               table={shownSet.table}
               truncatedAt={shownSet.truncated ? tab.rowLimit : undefined}
+              expanded={expanded}
+              onExpand={setExpanded}
             />
           ) : done && done.statements.some((s) => s.omitted) && typeof shown === "number" ? (
             <div className="result-message">

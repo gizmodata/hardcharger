@@ -71,8 +71,10 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   marks it) or exactly the selection; ⇧ runs all, with a result tab per result set and
   Messages. Cancel stops the statement on the server and says how far a script got. An open
   or failed transaction shows as a badge, with Commit and Rollback, straight from the server.
-- 📊 **Results grid** for up to a million rows, in DuckDB's own formatting; Ctrl/⌘+C copies
-  cells in every browser, Safari included.
+- 📊 **Results grid** for up to a million rows, in DuckDB's own formatting: sort (NULLs last),
+  filter, resize columns, and select cells, ranges or rows like a spreadsheet, with the full
+  keyboard. Ctrl/⌘+C copies so a paste into Excel or Google Sheets lands as cells (in every
+  browser, Safari included); double-click or Enter shows a value in full, JSON pretty-printed.
 - 🗂️ **Schema browser** that follows access control: each user sees only the catalogs,
   schemas, tables and columns their roles allow.
 - 💾 **Exports** to CSV, TSV, JSON and Parquet, made in the browser.

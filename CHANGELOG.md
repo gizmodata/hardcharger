@@ -9,6 +9,19 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Web UI, the results grid: sort by a column (asc, desc, off; NULLs last, typed: exact
+  decimals and 64-bit integers, byte-order text), a filter across every column, column
+  resizing (drag, double-click to fit, arrow keys), the spreadsheet selection with its whole
+  keyboard (arrows, Home/End, Page Up/Down, Ctrl/⌘ jumps, Shift ranges, drag with edge
+  scrolling, row numbers, Ctrl/⌘+A, Esc), a copy that pastes into Excel and Google Sheets as
+  cells (text plus an HTML table: full values, NULL empty, line breaks inside a cell,
+  `00123` kept as text; one cell as its bare value; through the copy command, so Safari
+  copies), a cell inspector (double-click or Enter; nested values and JSON text
+  pretty-printed with exact numbers; Copy value), Copy of the rows shown, and Expand /
+  Restore. e2e `grid.spec.ts` (Chromium and WebKit; with the copy command taken out, its
+  WebKit copy test fails); unit tests for the selection moves, the clipboard forms, sorting
+  and the JSON printer.
+
 - Web UI, the SQL editor's tabs, runs and sessions:
   up to 20 tabs (Alt+N, Alt+W asking first about an open transaction or unsaved text, rename,
   drag to reorder, running/failed/transaction markers), each its own Warp SQL session; Run

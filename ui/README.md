@@ -38,7 +38,22 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
   transaction was open: then nothing runs, and the message says it was rolled back.
 - 📊 **Results grid** for up to a million rows (only the rows in view are drawn), with DuckDB's
   own formatting of decimals, dates, timestamps, intervals, lists, structs, maps and blobs.
-  Select cells, rows or columns and copy with Ctrl/⌘+C (Safari included), or copy everything.
+  - **Sort**: click a column header (again for descending, a third time to clear); NULLs sort
+    last either way. **Filter rows…** keeps the rows where any column contains the text.
+  - **Resize columns**: drag a header's right edge, double-click it to fit, or focus it and use
+    the arrow keys.
+  - **Select** like a spreadsheet: click a cell; arrows, Home/End, Page Up/Down and Ctrl/⌘ with
+    them move it; Shift (keys or click) or a drag selects a range, scrolling past the edge; row
+    numbers select rows (drag for several); Ctrl/⌘+A selects every row shown; Esc keeps only
+    the active cell. The toolbar says how much is selected; a sort or filter starts over.
+  - **Copy**: Ctrl/⌘+C copies the selection as text and as an HTML table, so Excel and Google
+    Sheets paste it as cells, full values (not the grid's shortened text), NULL as an empty
+    cell, a line break kept inside its cell, and text like `00123` kept as text; a single cell
+    copies as its bare value. **Copy** in the toolbar copies the rows shown, with headers.
+  - **Inspect**: double-click a cell, or press Enter, for the whole value; nested values and
+    JSON text are pretty-printed (every digit of a big number kept). **Copy value** copies it;
+    Esc closes, and the selection is still there.
+  - **Expand** fills the tab with the results; **Restore** brings the editor back.
 - 🛑 **Cancel** stops the statement on the server, not just the wait for it, and says how far
   a script got and whether the transaction now needs a rollback.
 - 🗂️ **Schema browser**: catalogs, schemas, tables, views and columns with their types, from the

@@ -174,3 +174,38 @@ export async function pasted(page: Page): Promise<string> {
   await page.evaluate(() => document.getElementById("paste-target")?.remove());
   return value;
 }
+
+/**
+ * What a paste receives, as text and as HTML (what a spreadsheet takes the cells from): pasted
+ * into a scratch element, so no clipboard permission is involved (Safari's path).
+ */
+export async function pastedBoth(page: Page): Promise<{ text: string; html: string }> {
+  await page.evaluate(() => {
+    const sink = document.createElement("div");
+    sink.id = "paste-sink";
+    sink.contentEditable = "true";
+    sink.setAttribute("aria-label", "paste sink");
+    sink.style.cssText = "position:fixed;right:0;bottom:0;width:20px;height:20px;opacity:0.01;z-index:2147483647";
+    sink.addEventListener("paste", (e) => {
+      (window as unknown as { pastedBoth: unknown }).pastedBoth = {
+        text: e.clipboardData?.getData("text/plain") ?? "",
+        html: e.clipboardData?.getData("text/html") ?? "",
+      };
+      e.preventDefault();
+    });
+    document.body.appendChild(sink);
+    sink.focus();
+  });
+  await page.keyboard.press("ControlOrMeta+V");
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { pastedBoth?: unknown }).pastedBoth !== undefined))
+    .toBe(true);
+  const got = await page.evaluate(() => {
+    document.getElementById("paste-sink")?.remove();
+    const w = window as unknown as { pastedBoth?: { text: string; html: string } };
+    const value = w.pastedBoth!;
+    delete w.pastedBoth;
+    return value;
+  });
+  return got;
+}
