@@ -372,6 +372,12 @@ export function SavedQueriesPanel() {
           )}
         </ul>
       )}
+      {!unavailable && (
+        <p className="saved-hint" data-testid="saved-hint">
+          Kept in this browser, not on the server. To use them in another browser, export them to a file (the ⋯ menu)
+          and import it there.
+        </p>
+      )}
       {menu && <FloatingMenu x={menu.x} y={menu.y} items={menu.items} onClose={closeMenu} />}
     </div>
   );

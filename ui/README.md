@@ -104,6 +104,15 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
 - 💾 **Downloads**: CSV, TSV, JSON and Excel (.xlsx) hold the rows as shown (the grid's filter
   and sort); Parquet and Arrow IPC (.arrows) the whole result with the server's exact column
   types. Excel keeps numbers as numbers where it holds them exactly, text (`00123`) as text.
+- 📐 **Sizes**: drag the bar under the editor, or the side panel's edge, to resize them;
+  double-click a bar for the default size, or focus it and use the arrow keys (Shift for
+  bigger steps), Home and End. The sizes are kept in this browser and shared by every tab.
+- ❓ **How the editor works** (the **?** at the end of the tab bar): a short summary of
+  sessions (with this server's idle timeout, from the session document's `idle_timeout_s`),
+  transactions, statements, results, and what stays in this browser.
+- 📱 **On a phone-sized screen** (760 px wide or less) the side panel sits above the editor at
+  full width, without the bar, and the page scrolls; a note says a larger screen is easier,
+  and its **×** hides it in this browser.
 - 👥 **Sessions**: an administrator sees every session on the server and can end one
   (`KILL SESSION`); everyone else sees their own.
 - 🔐 **Hardcharger's own sign-in and access control.** The password goes once to

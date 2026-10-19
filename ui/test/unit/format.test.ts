@@ -8,6 +8,7 @@ import {
   formatDate,
   formatInterval,
   formatTime,
+  idleTimeoutText,
   jsonFor,
   scaleDecimal,
   textFor,
@@ -99,5 +100,15 @@ describe("formatters", () => {
   it("handles NULL in every column type", () => {
     const t = tableFromArrays({ a: Int32Array.from([1]), s: ["x"] });
     for (const f of t.schema.fields) expect(textFor(f.type)(null)).toBeNull();
+  });
+});
+
+describe("idleTimeoutText", () => {
+  it("names the largest whole unit", () => {
+    expect(idleTimeoutText(900)).toBe("15 minutes");
+    expect(idleTimeoutText(60)).toBe("1 minute");
+    expect(idleTimeoutText(7200)).toBe("2 hours");
+    expect(idleTimeoutText(90)).toBe("90 seconds");
+    expect(idleTimeoutText(1)).toBe("1 second");
   });
 });

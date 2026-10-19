@@ -97,9 +97,9 @@ export const test = base.extend<{ harness: HarnessState }>({
 
 export { expect };
 
-/** Signs in through the form and waits for the app. */
-export async function signIn(page: Page, who: { username: string; password: string }): Promise<void> {
-  await page.goto("/ui/");
+/** Signs in through the form and waits for the app (at `origin`, the shared server by default). */
+export async function signIn(page: Page, who: { username: string; password: string }, origin = ""): Promise<void> {
+  await page.goto(`${origin}/ui/`);
   await page.getByLabel("User name").fill(who.username);
   await page.getByLabel("Password").fill(who.password);
   await page.getByRole("button", { name: "Sign in" }).click();

@@ -133,3 +133,45 @@ test("the editor's height: drag, keyboard, double-click to reset, remembered", a
   await page.getByTestId("editor-resize").first().dblclick();
   await expect.poll(height).toBe(before);
 });
+
+test("every shortcut acts on the shown tab, not on the tab opened last", async ({ page }) => {
+  // Each tab's editor has its own copy of the shortcuts; Monaco's addCommand would have let
+  // the last editor mounted answer them in every tab.
+  await editorFocused(page);
+  await page.keyboard.press("Alt+N");
+  await editorFocused(page);
+  await page.keyboard.press("Alt+N");
+  await expect(editorTabs(page).getByRole("tab")).toHaveCount(3);
+  await editorTabs(page).getByRole("tab", { name: "Query 1" }).click();
+  await editorFocused(page);
+
+  // Run all (Shift+Ctrl/⌘+Enter) runs the first tab's script, in the first tab.
+  await setSql(page, "SELECT 1 AS a;\nSELECT 2 AS b;");
+  await page.keyboard.press("ControlOrMeta+Shift+Enter");
+  const tab = activeTab(page);
+  await expect(tab.getByRole("tablist", { name: "Result sets" }).getByRole("tab", { name: /^Result/ })).toHaveCount(2);
+  expect(await gridRows(page)).toEqual([["b"], ["2"]]);
+  for (const other of ["Query 2", "Query 3"]) {
+    await editorTabs(page).getByRole("tab", { name: other }).click();
+    await expect(activeTab(page).getByTestId("results-grid")).toHaveCount(0);
+  }
+
+  // Ctrl+Enter, on a Mac too (where ⌘ is the documented key), runs in the first tab.
+  await editorTabs(page).getByRole("tab", { name: "Query 1" }).click();
+  await editorFocused(page);
+  await runDone(page, "SELECT 'one' AS t", "Control+Enter");
+  expect(await gridRows(page)).toEqual([["t"], ["one"]]);
+
+  // Ctrl/⌘+S saves the first tab's SQL under its name.
+  await page.keyboard.press("ControlOrMeta+S");
+  const dialog = page.getByTestId("save-query-dialog");
+  await dialog.getByLabel("Name").fill("First tab's script");
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(editorTabs(page).getByRole("tab", { selected: true })).toHaveText("First tab's script");
+
+  // Alt+W closes the first tab (saved, so it doesn't ask), not the last one.
+  await editorFocused(page);
+  await page.keyboard.press("Alt+W");
+  expect(await tabNames(page)).toEqual(["Query 2", "Query 3"]);
+});

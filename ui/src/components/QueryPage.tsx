@@ -1,4 +1,4 @@
-import { Plus, X } from "lucide-react";
+import { HelpCircle, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { publishActiveTab, resetActiveTab } from "../lib/activeTab";
@@ -17,6 +17,7 @@ import type { Where } from "../lib/tabSession";
 import type { ThemeName } from "../lib/theme";
 import { type QueryRequest, useSession } from "../session";
 import { EditorTab, type TabHandle, type TabStatus } from "./EditorTab";
+import { HelpDialog } from "./HelpDialog";
 import { ResizeHandle } from "./ResizeHandle";
 import { SaveQueryDialog } from "./SaveQueryDialog";
 import "../styles/query.css";
@@ -28,6 +29,16 @@ const editorSize = {
   minPx: 100,
   maxPx: () => Math.max(100, Math.round(window.innerHeight * 0.7)),
 };
+
+const narrowNoteKey = "hardcharger-ui:narrow-note-hidden";
+
+function narrowNoteHidden(): boolean {
+  try {
+    return window.localStorage.getItem(narrowNoteKey) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function initialTabs(user: string): StoredTabs {
   const saved = loadTabs(user);
@@ -55,6 +66,19 @@ export default function QueryPage({ theme }: Props) {
   const [defaults, setDefaults] = useState<Where>({ catalog: "", schema: "" });
   const [catalogVersion, setCatalogVersion] = useState(0);
   const [editorHeight, setEditorHeight, resetEditorHeight] = useStoredSize(editorSize);
+  const [help, setHelp] = useState(false);
+  const [idleTimeoutS, setIdleTimeoutS] = useState<number | undefined>();
+  // On a phone-sized screen a note says the editor is easier on a larger one (CSS shows it
+  // only there); its × hides it in this browser.
+  const [noteHidden, setNoteHidden] = useState(narrowNoteHidden);
+  const hideNote = () => {
+    setNoteHidden(true);
+    try {
+      window.localStorage.setItem(narrowNoteKey, "1");
+    } catch {
+      // hidden until the page reloads
+    }
+  };
   const handles = useRef(new Map<string, TabHandle>());
   const activeRef = useRef(active);
   const dragged = useRef<string | undefined>(undefined);
@@ -72,6 +96,7 @@ export default function QueryPage({ theme }: Props) {
       .then((doc) => {
         const o = doc.options ?? {};
         if (live) {
+          setIdleTimeoutS(doc.idle_timeout_s);
           setDefaults({
             catalog: typeof o["catalog"] === "string" ? o["catalog"] : "",
             schema: typeof o["schema"] === "string" ? o["schema"] : "",
@@ -306,8 +331,34 @@ export default function QueryPage({ theme }: Props) {
       return { ...s, tabs: list };
     });
 
+  // The save dialog is gone: the cursor goes back to the tab's editor (the dialog's own
+  // element, which held it, no longer exists), so typing and the shortcuts carry on.
+  const focusAfterSave = useRef<string | undefined>(undefined);
+  const endSaving = (tabId: string) => {
+    focusAfterSave.current = tabId;
+    setSaving(undefined);
+  };
+  useEffect(() => {
+    if (saving || !focusAfterSave.current) return;
+    handles.current.get(focusAfterSave.current)?.focus();
+    focusAfterSave.current = undefined;
+  }, [saving]);
+
   return (
     <div className="query-page">
+      {!noteHidden && (
+        <div className="narrow-note" role="note" data-testid="narrow-note">
+          <span>The editor works on a phone, but it is easier to use on a larger screen.</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon btn-sm"
+            onClick={hideNote}
+            aria-label="Hide this note"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
       <div className="tabs" role="tablist" aria-label="Editor tabs">
         {tabs.map((t) => {
           const status = statuses[t.id];
@@ -399,7 +450,17 @@ export default function QueryPage({ theme }: Props) {
         >
           <Plus size={14} />
         </button>
+        <button
+          type="button"
+          className="btn btn-ghost btn-icon btn-sm tabs-help"
+          onClick={() => setHelp(true)}
+          aria-label="How the editor works"
+          title="How the editor works: sessions, transactions, statements, results, and what this browser keeps"
+        >
+          <HelpCircle size={14} />
+        </button>
       </div>
+      {help && <HelpDialog idleTimeoutS={idleTimeoutS} onClose={() => setHelp(false)} />}
 
       {tabs.map((t) => (
         <EditorTab
@@ -469,7 +530,7 @@ export default function QueryPage({ theme }: Props) {
           })()}
           initialFolder={getSelectedFolder()}
           items={saving.items}
-          onClose={() => setSaving(undefined)}
+          onClose={() => endSaving(saving.tabId)}
           onSave={async (name, folder) => {
             const tab = tabsNow.current.tabs.find((t) => t.id === saving.tabId);
             if (!tab) return;
@@ -481,7 +542,7 @@ export default function QueryPage({ theme }: Props) {
               schema: tab.schema,
             });
             patchTab(tab.id, { savedQueryId: q.id, savedSql: saving.sql, title: q.name });
-            setSaving(undefined);
+            endSaving(tab.id);
             savedQueriesChanged();
           }}
         />

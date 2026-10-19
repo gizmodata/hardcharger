@@ -9,6 +9,17 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Web UI, the rest of the editor's behavior: **How the editor works** (the ? in the tab bar):
+  sessions, with this server's idle timeout (the session document's `idle_timeout_s`),
+  transactions, statements, results, and what stays in this browser; the Saved queries panel
+  says they're kept in this browser. On a screen 760 px wide or less the side panel sits above
+  the editor at full width (it was hidden) and the page scrolls, with a note, hidden for good
+  by its ×, that a larger screen is easier. After a save, the cursor goes back to the editor
+  (it was left on the page, so the next shortcut went nowhere). e2e: `idle.spec.ts` against a
+  second server whose sessions end after 2 s idle (a new session takes over and says so; with
+  a transaction open the run is refused and nothing of it executes; the schema browser carries
+  on), `layout.spec.ts`, and every editor shortcut (Run, Run all, Save, close) acting on the
+  shown tab rather than the tab opened last (`tabs.spec.ts`).
 - Web UI: the README's screenshots show the editor's tabs, a script's result tabs and an open
   transaction; tests for a script's 64 MiB cap (unit) and for a browser that blocks IndexedDB
   (`saved-blocked.spec.ts`: the panel says it can't keep saved queries, Save says so, queries

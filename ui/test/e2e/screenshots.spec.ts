@@ -109,4 +109,14 @@ test("screenshots of the main views", async ({ page, harness }, testInfo) => {
   await expect(page.getByTestId("sessions-table")).toBeVisible();
   await shot("sessions-dark");
   await page.getByRole("button", { name: "Light theme" }).click();
+
+  // The editor's help, and the page on a phone-sized screen.
+  await page.getByRole("button", { name: "Query", exact: true }).click();
+  await page.getByRole("button", { name: "How the editor works" }).click();
+  await expect(page.getByTestId("help-body")).toBeVisible();
+  await shot("help-light");
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByTestId("narrow-note")).toBeVisible();
+  await shot("phone-light");
 });

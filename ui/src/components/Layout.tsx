@@ -88,10 +88,11 @@ export function Layout({ theme, page, go }: Props) {
       type="button"
       className={`nav-item${page === target ? " nav-item-active" : ""}`}
       aria-current={page === target ? "page" : undefined}
+      aria-label={label}
       onClick={() => go(target)}
     >
       {icon}
-      {label}
+      <span className="nav-label">{label}</span>
     </button>
   );
 
@@ -144,8 +145,14 @@ export function Layout({ theme, page, go }: Props) {
           >
             <Info size={16} />
           </button>
-          <button type="button" className="btn btn-ghost" onClick={() => session.signOut()} title="Sign out">
-            <LogOut size={15} /> Sign out
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => session.signOut()}
+            title="Sign out"
+            aria-label="Sign out"
+          >
+            <LogOut size={15} /> <span className="nav-label">Sign out</span>
           </button>
         </div>
       </header>

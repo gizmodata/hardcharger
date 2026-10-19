@@ -850,16 +850,105 @@ select {
   opacity: 0;
 }
 
+/* A phone-sized screen: the side panel sits above the editor at full width (no bar to drag),
+   and a note says a larger screen is easier. */
+.narrow-note {
+  display: none;
+}
 @media (max-width: 760px) {
   .header-title,
   .chip,
   .toolbar-hint {
     display: none;
   }
-  .sidebar,
+  /* The page scrolls: the panel, then the editor and its results a screen tall. */
+  body {
+    overflow: auto;
+  }
+  .app {
+    height: auto;
+    min-height: 100%;
+  }
+  .app-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .header-brand {
+    margin-right: 4px;
+  }
+  .nav-label {
+    display: none;
+  }
+  .app-body {
+    flex: none;
+    flex-direction: column;
+  }
+  .main > .page {
+    flex: none;
+    height: calc(100vh - 48px);
+  }
+  .sidebar {
+    width: auto !important;
+    height: 36vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-foot {
+    display: none;
+  }
   .resize-handle-column {
     display: none;
   }
+  .narrow-note {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 6px 6px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .narrow-note span {
+    flex: 1;
+  }
+}
+
+.saved-hint {
+  flex: none;
+  margin: 0;
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--faint);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.tabs-help {
+  margin-left: auto;
+  align-self: center;
+}
+.dialog-help {
+  width: min(620px, calc(100vw - 32px));
+}
+.help-body {
+  padding: 4px 16px 14px;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.help-body h3 {
+  margin: 12px 0 2px;
+  font-size: 13px;
+}
+.help-body p {
+  margin: 0;
+  color: var(--muted);
+}
+.help-body code {
+  font-family: var(--mono);
+  font-size: 12px;
 }
 
 .menu-wrap {
@@ -1027,6 +1116,7 @@ select {
   display: none;
 }
 .saved-queries {
+  flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;

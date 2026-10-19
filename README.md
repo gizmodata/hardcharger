@@ -85,6 +85,9 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   (Parquet, Arrow IPC), made in the browser.
 - 📁 **Saved queries** in folders, kept in the browser, with export and import as a file;
   **Run as** one of your roles under access control.
+- 📐 A resizable editor and side panel (drag, keyboard, double-click to reset; kept in the
+  browser), a short **How the editor works** help with the server's session idle timeout, and
+  a layout for phone-sized screens.
 - 🔏 **Certificate sign-in** under mutual TLS: the browser presents its client certificate to
   load `/ui` at all, and with `--mtls-certificate-sign-in` the page offers **Sign in with my
   certificate**, no password needed.

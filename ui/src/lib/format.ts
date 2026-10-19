@@ -445,3 +445,11 @@ export function isNumeric(type: DataType): boolean {
 export function columnText(schema: Schema): ((value: unknown) => string | null)[] {
   return schema.fields.map((f) => textFor(typeOf(f)));
 }
+
+/** A session idle timeout in words: "15 minutes", "90 seconds", "2 hours" (0 is the caller's case). */
+export function idleTimeoutText(seconds: number): string {
+  const unit = (n: number, word: string) => `${n.toLocaleString("en-US")} ${word}${n === 1 ? "" : "s"}`;
+  if (seconds % 3600 === 0) return unit(seconds / 3600, "hour");
+  if (seconds % 60 === 0) return unit(seconds / 60, "minute");
+  return unit(seconds, "second");
+}

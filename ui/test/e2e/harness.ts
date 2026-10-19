@@ -81,55 +81,10 @@ export async function startHarness(): Promise<Harness> {
     process.env["HARDCHARGER_UI_TEST_RBAC_STORE_URI"] ??
     "postgresql://hardcharger:hardcharger@127.0.0.1:55460/hardcharger";
 
-  const work = mkdtempSync(path.join(os.tmpdir(), "hardcharger-ui-e2e-"));
-  const port = await freePort();
   // A password with ':' and '@' in it: it must survive the sign-in form and the JSON body.
   const adminPassword = `ui:${randomBytes(6).toString("hex")}@e2e`;
-  const args = [
-    "--host",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--health-port",
-    "0",
-    "--admin-username",
-    "admin",
-    "--database",
-    path.join(work, "e2e.duckdb"),
-    "--rbac-store-uri",
-    storeUri,
-    "--graceful-shutdown",
-    "false",
-    "--print-queries",
-    "false",
-    ...(embedded ? ["--web-ui"] : []),
-  ];
-  const child: ChildProcess = spawn(binary, args, {
-    env: { ...cleanEnvironment(), HARDCHARGER_ADMIN_PASSWORD: adminPassword },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let log = "";
-  child.stdout?.on("data", (d: Buffer) => (log += d.toString()));
-  child.stderr?.on("data", (d: Buffer) => (log += d.toString()));
-  let exited = false;
-  child.on("exit", () => (exited = true));
-
-  const serverUrl = `http://127.0.0.1:${port}`;
-  const deadline = Date.now() + 30_000;
-  for (;;) {
-    if (exited) throw new Error(`hardcharger-server exited at startup:\n${log.slice(-3000)}`);
-    try {
-      const r = await fetch(`${serverUrl}/warp/v1/health`);
-      if (r.ok) break;
-    } catch {
-      // not listening yet
-    }
-    if (Date.now() > deadline) {
-      child.kill("SIGKILL");
-      throw new Error(`hardcharger-server did not become healthy in 30 s:\n${log.slice(-3000)}`);
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
+  const server = await startServer({ binary, adminPassword, extraArgs: ["--rbac-store-uri", storeUri] });
+  const serverUrl = server.url;
 
   const suffix = randomBytes(3).toString("hex");
   const acme = `acme_${suffix}`;
@@ -212,6 +167,70 @@ export async function startHarness(): Promise<Harness> {
         // the store keeps a few names; they don't collide with the next run's
       }
       if (ui) await new Promise<void>((resolve) => ui.close(() => resolve()));
+      await server.stop();
+    },
+  };
+}
+
+interface RunningServer {
+  url: string;
+  stop: () => Promise<void>;
+}
+
+/**
+ * Starts hardcharger-server on a free port with an empty database of its own, and waits
+ * until it is healthy.
+ */
+async function startServer(o: { binary: string; adminPassword: string; extraArgs: string[] }): Promise<RunningServer> {
+  const work = mkdtempSync(path.join(os.tmpdir(), "hardcharger-ui-e2e-"));
+  const port = await freePort();
+  const args = [
+    "--host",
+    "127.0.0.1",
+    "--port",
+    String(port),
+    "--health-port",
+    "0",
+    "--admin-username",
+    "admin",
+    "--database",
+    path.join(work, "e2e.duckdb"),
+    "--graceful-shutdown",
+    "false",
+    "--print-queries",
+    "false",
+    ...(embedded ? ["--web-ui"] : []),
+    ...o.extraArgs,
+  ];
+  const child: ChildProcess = spawn(o.binary, args, {
+    env: { ...cleanEnvironment(), HARDCHARGER_ADMIN_PASSWORD: o.adminPassword },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let log = "";
+  child.stdout?.on("data", (d: Buffer) => (log += d.toString()));
+  child.stderr?.on("data", (d: Buffer) => (log += d.toString()));
+  let exited = false;
+  child.on("exit", () => (exited = true));
+
+  const url = `http://127.0.0.1:${port}`;
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    if (exited) throw new Error(`hardcharger-server exited at startup:\n${log.slice(-3000)}`);
+    try {
+      const r = await fetch(`${url}/warp/v1/health`);
+      if (r.ok) break;
+    } catch {
+      // not listening yet
+    }
+    if (Date.now() > deadline) {
+      child.kill("SIGKILL");
+      throw new Error(`hardcharger-server did not become healthy in 30 s:\n${log.slice(-3000)}`);
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return {
+    url,
+    stop: async () => {
       if (!exited) {
         child.kill("SIGTERM");
         const t = setTimeout(() => child.kill("SIGKILL"), 5000);
@@ -219,6 +238,43 @@ export async function startHarness(): Promise<Harness> {
         clearTimeout(t);
       }
       rmSync(work, { recursive: true, force: true });
+    },
+  };
+}
+
+export interface IdleServer {
+  /** Where the UI is (the server itself when it embeds the UI). */
+  url: string;
+  admin: { username: string; password: string };
+  stop: () => Promise<void>;
+}
+
+/**
+ * A second server, without access control, whose sessions end after `idleSeconds` idle
+ * (its sweep runs every 5 s): for the tests of a session the server evicted, which the
+ * shared server's default (15 minutes) would make wait too long.
+ */
+export async function startIdleServer(idleSeconds: number): Promise<IdleServer> {
+  const binary = process.env["HARDCHARGER_UI_TEST_SERVER_BINARY"]!;
+  const adminPassword = `ui:${randomBytes(6).toString("hex")}@idle`;
+  const server = await startServer({
+    binary,
+    adminPassword,
+    extraArgs: ["--session-idle-timeout", String(idleSeconds)],
+  });
+  const dist = path.resolve(import.meta.dirname, "../../dist");
+  const ui: Server | undefined = embedded ? undefined : createUiServer({ dist, upstream: server.url });
+  const url = ui
+    ? `http://127.0.0.1:${await new Promise<number>((resolve) =>
+        ui.listen(0, "127.0.0.1", () => resolve((ui.address() as net.AddressInfo).port)),
+      )}`
+    : server.url;
+  return {
+    url,
+    admin: { username: "admin", password: adminPassword },
+    stop: async () => {
+      if (ui) await new Promise<void>((resolve) => ui.close(() => resolve()));
+      await server.stop();
     },
   };
 }
