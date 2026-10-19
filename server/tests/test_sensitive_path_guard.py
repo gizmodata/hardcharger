@@ -20,12 +20,14 @@ import sys
 
 import pytest
 
-from conftest import protected_system_file, run_unit_tests
+from conftest import Launcher, home_env, protected_system_file, run_unit_tests
 
 # The 5 1.x cases, plus each platform's own: Windows has no /proc (its device namespace,
 # credential stores and path spellings instead); elsewhere every file: URL form.
 UNIT_CASES = ["DefaultCategories", "OrdinaryPathsAreAllowed", "OtherSpellingsResolveToTheSamePath",
               "SecretDirectoryAddedAfterStartup",
+              # '{' is no wildcard: DuckDB's glob has no brace expansion.
+              "BracesAreOrdinaryCharacters", "BracedPathsReachingProtectedFilesAreRefused",
               *(["WindowsStoresAndSpellings"] if sys.platform == "win32"
                 else ["OnlyOwnCgroupFileIsReadableInProc", "EveryFileUrlForm"])]
 
@@ -101,3 +103,108 @@ def test_guard_off_allows_access(launcher, guard_dir):
                                  "HARDCHARGER_BLOCK_SENSITIVE_PATHS": "false"})
     token = guard_dir / "protected" / "token.txt"
     assert server.admin().scalar(sql=f"SELECT content FROM read_text('{token}')") == "do-not-read"
+
+
+# ---- Braces (Hardcharger 0.3.0 refused every literal with a '{') ----
+#
+# The guard took '{' for a glob wildcard reaching anywhere below the pattern's directory,
+# and a literal with no directory part is relative to the working directory. So a server
+# started in its home directory (the Docker image's working directory is its home, with
+# ~/.ssh in it) refused every JSON or regex literal with a brace, for "user credential
+# store". DuckDB's glob has no brace expansion: '{' is an ordinary character in a path.
+
+@pytest.fixture(scope="module")
+def home_dir(tmp_path_factory):
+    """A server directory that is also its home, holding a protected ~/.ssh, as in the image."""
+    directory = tmp_path_factory.mktemp("home").resolve()
+    (directory / ".ssh").mkdir()
+    (directory / ".ssh" / "key").write_text("do-not-read")
+    (directory / "data").mkdir()
+    for name in ["a.txt", "b.txt"]:
+        (directory / "data" / name).write_text(name)
+    return directory
+
+
+@pytest.fixture(scope="module")
+def home_launcher(home_dir):
+    launch = Launcher(tmp_path=home_dir)  # the servers' working directory
+    yield launch
+    launch.stop_all()
+
+
+@pytest.fixture(scope="module")
+def home_admin(home_launcher, home_dir):
+    return home_launcher.start(env=home_env(home=home_dir)).admin()
+
+
+BRACE_QUERIES = [
+    ("""SELECT '{"a": 1}' AS v""", '{"a": 1}'),
+    ("""SELECT ('{"a": {"b": [1, 2]}}'::JSON ->> '$.a.b[1]') AS v""", "2"),
+    ("""SELECT json_extract_string('{"a": {"b": "x"}}', '$.a.b') AS v""", "x"),
+    ("SELECT regexp_matches('123', '^[0-9]{3}$') AS v", True),
+    ("SELECT regexp_full_match('ab-12', '[a-z]{1,2}-\\d{2}') AS v", True),
+    ("SELECT regexp_extract('aaaa', 'a{2,3}') AS v", "aaa"),
+    ("SELECT regexp_replace('2026-10-19', '^[0-9]{4}', 'YYYY') AS v", "YYYY-10-19"),
+    ("SELECT '{}' AS v", "{}"),
+    ("SELECT format('{}-{}', 1, 2) AS v", "1-2"),
+    ("SELECT replace('{x}', '{', '(') AS v", "(x}"),
+    ("SELECT string_split('a{b{c', '{')[2] AS v", "b"),
+    ("SELECT strpos('x{y', '{') AS v", 2),
+    ("SELECT '{a,b}' LIKE '{%}' AS v", True),
+]
+
+
+@pytest.mark.parametrize("sql,expected", BRACE_QUERIES, ids=[q for q, _ in BRACE_QUERIES])
+def test_brace_literals_are_not_paths(home_admin, sql, expected):
+    assert home_admin.scalar(sql=sql) == expected
+
+
+def test_brace_literals_in_views(home_admin):
+    home_admin.execute(sql="CREATE TABLE codes AS SELECT * FROM (VALUES ('123'), ('12a')) t(code)")
+    home_admin.execute(sql="""CREATE VIEW code_checks AS SELECT code, regexp_matches(code, '^[0-9]{3}$') AS ok, """
+                           """'{"source": "codes"}'::JSON AS meta, '{}' AS empty FROM codes""")
+    rows = home_admin.rows(sql="SELECT code, ok, meta->>'source' AS source, empty FROM code_checks ORDER BY code")
+    assert rows == [{"code": "123", "ok": True, "source": "codes", "empty": "{}"},
+                    {"code": "12a", "ok": False, "source": "codes", "empty": "{}"}]
+
+
+def test_braced_paths_reaching_protected_files_are_refused(home_admin, home_dir):
+    parent, _, name = SYSTEM_ACCOUNTS_FILE.rpartition("/")
+    for sql in [f"SELECT content FROM read_text('{home_dir}/.ssh/{{key,other}}')",
+                "SELECT content FROM read_text('.ssh/{key}')",
+                f"SELECT file FROM glob('{home_dir}/.ss?/{{key}}')",
+                f"SELECT file FROM glob('{home_dir}/*/{{k}}*')",
+                "SELECT file FROM glob('**/{key}')",
+                f"SELECT content FROM read_text('{parent}/{{a,b}}/../{name}')"]:  # .. past a braced name
+        blocked(problem=home_admin.error(sql=sql))
+
+
+def test_duckdb_does_not_expand_braces(home_launcher, home_dir):
+    """The premise: '{a,b}' in a path is no pattern for DuckDB (with the guard off, as it
+    would see the path). If DuckDB ever expands braces, '{' must be a wildcard again."""
+    server = home_launcher.start(env={**home_env(home=home_dir), "HARDCHARGER_BLOCK_SENSITIVE_PATHS": "false"})
+    admin = server.admin()
+    assert admin.query(sql=f"SELECT * FROM glob('{home_dir}/data/*.txt')").num_rows == 2
+    assert admin.query(sql=f"SELECT * FROM glob('{home_dir}/data/{{a,b}}.txt')").num_rows == 0
+    assert admin.query(sql=f"SELECT * FROM read_text('{home_dir}/data/{{a,b}}.txt')").num_rows == 0
+    server.stop()
+
+
+def test_brace_literals_in_masking_policies(home_launcher, home_dir, store):
+    from rbac import expect_allowed, start_rbac_server
+    server = start_rbac_server(launcher=home_launcher, store_uri=store.new_database(),
+                               env=home_env(home=home_dir), args=["--database", str(home_dir / "masks.duckdb")])
+    admin = server.admin()
+    for sql in [
+        "CREATE TABLE people (name VARCHAR, ssn VARCHAR, prefs VARCHAR)",
+        """INSERT INTO people VALUES ('ann', '123-45-6789', '{"theme": "dark"}')""",
+        "CREATE MASKING POLICY ssn_mask AS (val VARCHAR) RETURNS VARCHAR -> "
+        "regexp_replace(val, '^[0-9]{3}-[0-9]{2}', '***-**')",
+        """CREATE MASKING POLICY prefs_mask AS (val VARCHAR) RETURNS VARCHAR -> '{"masked": true}'""",
+        "ALTER TABLE people MODIFY COLUMN ssn SET MASKING POLICY ssn_mask",
+        "ALTER TABLE people MODIFY COLUMN prefs SET MASKING POLICY prefs_mask",
+        "CREATE ROLE readers", "GRANT SELECT ON people TO readers", "CREATE USER ann", "GRANT readers TO ann",
+    ]:
+        expect_allowed(client=admin, sql=sql)
+    rows = expect_allowed(client=server.user(name="ann"), sql="SELECT ssn, prefs FROM people").to_pylist()
+    assert rows == [{"ssn": "***-**-6789", "prefs": '{"masked": true}'}]

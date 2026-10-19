@@ -30,6 +30,8 @@ constexpr const char* kUserCredentials = "user credential store";
 constexpr const char* kDuckDBSecrets = "DuckDB persistent secrets";
 constexpr const char* kServerCredentials = "Hardcharger server credentials";
 constexpr const char* kOperatorPath = "operator-protected path";
+// The characters that make a path a pattern for DuckDB's glob (FileSystem::HasGlob).
+constexpr const char* kGlobCharacters = "*?[";
 #ifdef _WIN32
 constexpr const char* kWindowsCredentials = "Windows credential and key store";
 constexpr const char* kDevices = "Windows device namespace";
@@ -561,11 +563,15 @@ std::optional<std::string> SensitivePaths::Check(const std::string& path) const 
   // A pattern (glob('/home/*/.ssh/*'), read_csv('dir/*.csv')) is refused when it can
   // match a protected path or something inside one: the entries a glob lists can't be
   // filtered without a hook in DuckDB's file system, so they are never listed instead.
-  if (const auto wildcard = local.find_first_of("*?[{"); wildcard != std::string::npos) {
+  // The wildcards are exactly DuckDB's (FileSystem::HasGlob: * ? [). DuckDB's glob has no
+  // brace expansion, so '{' is an ordinary character: '/etc/{passwd,hosts}' names one
+  // file of that name, and a JSON or regex literal ('{"a": 1}', '^[0-9]{3}$') is no
+  // pattern reaching below the working directory.
+  if (const auto wildcard = local.find_first_of(kGlobCharacters); wildcard != std::string::npos) {
     const auto slash = local.find_last_of('/', wildcard);
     const std::string prefix = slash == std::string::npos ? "." : local.substr(0, slash == 0 ? 1 : slash);
     const std::vector<std::string> pattern = Segments(ComparisonKey(local.substr(slash == std::string::npos ? 0 : slash + 1)));
-    const bool recursive = local.find("**") != std::string::npos || local.find('{') != std::string::npos;
+    const bool recursive = local.find("**") != std::string::npos;
     std::lock_guard lock(mutex_);
     for (const auto& key : Keys(prefix, home_, true)) {
       for (const auto& entry : entries_) {

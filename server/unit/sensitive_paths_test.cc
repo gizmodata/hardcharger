@@ -151,3 +151,32 @@ TEST_F(SensitivePathPolicyTest, SecretDirectoryAddedAfterStartup) {
   policy_->AddSecretDirectory(dir.string());
   EXPECT_EQ(Check(dir / "s.duckdb_secret"), "DuckDB persistent secrets");
 }
+
+// DuckDB's glob has no brace expansion (FileSystem::HasGlob: * ? [ only), so '{' makes no
+// pattern. A literal with a brace was taken for a pattern reaching anywhere below the
+// working directory, so a server whose working directory holds a protected path (the
+// image's: its home, with ~/.ssh) refused every JSON or regex literal.
+TEST_F(SensitivePathPolicyTest, BracesAreOrdinaryCharacters) {
+  fs::current_path(home());
+  for (const char* literal : {"{\"a\": 1}", "{\"a\": {\"b\": [1, 2]}}", "{}", "{x}", "^[0-9]{3}$", "a{2,3}",
+                              "[0-9]{2,4}-[a-z]{1}", "\\d{3}-\\d{4}", "{}-{}", "{.ssh,.aws}", "{*}"}) {
+    EXPECT_FALSE(policy_->Check(literal).has_value()) << literal;
+  }
+#ifndef _WIN32
+  // '/etc/{passwd,hosts}' is one file of that name for DuckDB, not /etc/passwd.
+  EXPECT_FALSE(Check("/etc/{passwd,hosts}").has_value());
+#endif
+  EXPECT_FALSE(Check(home() / "{.ssh,.aws}" / "key").has_value());
+}
+
+TEST_F(SensitivePathPolicyTest, BracedPathsReachingProtectedFilesAreRefused) {
+  fs::current_path(home());
+  EXPECT_EQ(Check(home() / ".ssh" / "{key,other}"), "user credential store");  // inside .ssh
+  EXPECT_EQ(policy_->Check(".ssh/{key}"), "user credential store");           // relative to the working directory
+  EXPECT_EQ(Check(home() / ".ss?" / "{key}"), "user credential store");       // a real wildcard
+  EXPECT_EQ(Check(home() / "*" / "{key}"), "user credential store");
+  EXPECT_EQ(policy_->Check("**/{key}"), "user credential store");
+#ifndef _WIN32
+  EXPECT_EQ(Check("/etc/{passwd,hosts}/../passwd"), "system account files");
+#endif
+}
