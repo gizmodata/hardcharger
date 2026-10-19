@@ -286,7 +286,7 @@ password, or reads `HARDCHARGER_PASSWORD`):
 ```console
 $ hardcharger --host localhost --tls=false --username hardcharger
 Password:
-Hardcharger Client 0.2.0
+Hardcharger Client 0.3.0
 Connected to localhost:31337
 Type '.help' for help, '.quit' to exit.
 

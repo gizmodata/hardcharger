@@ -7,6 +7,15 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-18
+
+A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file
+access-control store for single servers, faster remote transfer (split results and
+partitioned uploads by default), Windows builds, and the `hardcharger` command-line client,
+TLS by default. Security fixes from adversarial reviews: metadata follows privileges,
+`CREATE VIEW` needs SELECT on what a view reads, `catalog_access` holes, and SQL can no
+longer reach the server's own files (see Fixed).
+
 ### Added
 
 - A refused token says why (Warp SQL §4.2): after `ALTER USER ... WITH PASSWORD`, `ALTER
