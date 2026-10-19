@@ -463,3 +463,127 @@ def test_a_server_without_access_control_guards_its_files_from_its_admin(launche
         assert "Hardcharger blocked access to" in error["detail"] and PRIVATE in error["detail"], error
         error = admin.error(sql=f"COPY (SELECT 1) TO '{directory}/{name}.wal'")
         assert PRIVATE in error["detail"], error
+
+
+# ---- sqlite_scanner: an extension that opens files outside DuckDB's file system ----
+#
+# The file-system guard above closes every path DuckDB's own file system opens; it never
+# sees sqlite_scanner, which opens the file with SQLite's C API. So ATTACH (TYPE sqlite),
+# the sqlite: path prefix, and the sqlite_scan / sqlite_query / sqlite_attach table
+# functions are refused at plan time when the path names one of the server's files. A
+# SQLite file created where the database's WAL goes once made a committed INSERT vanish
+# after a crash and restart; this is that hole, closed.
+#
+# ATTACH binds without the sqlite extension loaded (the storage type is resolved at
+# execution, which the guard prevents), so these run offline. The decoy twin (an unrelated
+# path) must NOT be refused as a private file: it attaches the SQLite file when sqlite is
+# installed, and otherwise fails only for the missing extension -- never the guard.
+
+SQLITE_ATTACH = {
+    "TYPE sqlite": "ATTACH '{p}' AS evil (TYPE sqlite)",
+    "TYPE 'SQLite'": "ATTACH '{p}' AS evil (TYPE 'SQLite')",
+    "sqlite3 alias": "ATTACH '{p}' AS evil (TYPE sqlite3)",
+    "sqlite: prefix": "ATTACH 'sqlite:{p}' AS evil",
+    "computed path": "ATTACH '{d}/sr' || 'v.duckdb.wal' AS evil (TYPE sqlite)",
+}
+
+
+def expect_not_private(client, sql: str) -> None:
+    """`sql` is not refused by the private-file guard (it may fail for another reason, such
+    as the sqlite extension not being installed: that is not the guard)."""
+    try:
+        client.run(sql=sql)
+        client.run(sql="DETACH evil")  # it attached: clean up
+    except WarpError as error:
+        assert "Hardcharger blocked access to" not in error.detail, f"{sql}: unexpectedly blocked as private: {error}"
+
+
+@pytest.mark.parametrize("who", ["admin", "fay"])
+@pytest.mark.parametrize("vector", list(SQLITE_ATTACH))
+def test_sqlite_scanner_cannot_attach_a_private_sibling(attached, who, vector):
+    # The ticket's case: a SQLite database created where the server's database WAL goes.
+    client = attached.principals[who]
+    directory, decoy = attached.dir, attached.dir / "decoy"
+    wal = "srv.duckdb.wal"
+    template = SQLITE_ATTACH[vector]
+    expect_not_private(client=client, sql=template.format(p=f"{decoy}/{wal}", d=decoy))  # the twin
+    expect_private(client=client, sql=template.format(p=f"{directory}/{wal}", d=directory),
+                   what="the server's database")
+
+
+@pytest.mark.parametrize("who", ["admin", "fay"])
+@pytest.mark.parametrize("name", list(ATTACHED))
+def test_sqlite_scanner_cannot_attach_any_of_the_servers_files(attached, who, name):
+    client = attached.principals[who]
+    directory, decoy = attached.dir, attached.dir / "decoy"
+    expect_not_private(client=client, sql=f"ATTACH '{decoy}/{name}.wal' AS evil (TYPE sqlite)")  # the twin
+    expect_private(client=client, sql=f"ATTACH '{directory}/{name}.wal' AS evil (TYPE sqlite)",
+                   what=ATTACHED[name])
+
+
+def test_sqlite_table_functions_cannot_reach_the_servers_files(attached):
+    # sqlite_attach takes a file path and creates the SQLite database there; the function
+    # must exist (the sqlite extension loaded) to bind as the plan node the guard inspects.
+    # The extension is installed from DuckDB's repository (CI has network); when it cannot
+    # be reached the same create is closed through ATTACH (which binds without the
+    # extension), so this asserts the guard whichever way, never skipping.
+    #
+    # sqlite_scan / sqlite_query only read: binding them opens the file, and the server's
+    # own files are DuckDB-format, so SQLite refuses them ("file is not a database") before
+    # the guard or any read -- they can never return a private file's contents.
+    admin = attached.principals["admin"]
+    loaded = True
+    try:
+        admin.run(sql="INSTALL sqlite")
+        admin.run(sql="LOAD sqlite")
+    except WarpError:
+        loaded = False
+    directory, decoy = attached.dir, attached.dir / "decoy"
+    for who in ("admin", "fay"):
+        client = attached.principals[who]
+        if loaded:
+            # sqlite_attach creates the file. For the admin the private-file guard refuses
+            # it; a non-admin never reaches the guard, because access control reserves the
+            # sqlite_attach table function for the administrator -- refused either way.
+            expect_not_private(client=client, sql=f"CALL sqlite_attach('{decoy}/created-by-{who}.sqlite')")
+            if who == "admin":
+                expect_private(client=client, sql=f"CALL sqlite_attach('{directory}/srv.duckdb.wal')",
+                               what="the server's database")
+            else:
+                with pytest.raises(WarpError):
+                    client.run(sql=f"CALL sqlite_attach('{directory}/srv.duckdb.wal')")
+            # sqlite_scan / sqlite_query of a private file never succeed (they get no rows).
+            for read in (f"SELECT * FROM sqlite_scan('{directory}/srv.duckdb', 'x')",
+                         f"SELECT * FROM sqlite_query('{directory}/srv.duckdb', 'SELECT 1')"):
+                with pytest.raises(WarpError):
+                    client.run(sql=read)
+        else:
+            # Offline: the functions can't bind at all; ATTACH TYPE sqlite still closes the
+            # same file (it binds without the extension), so prove the guard that way.
+            expect_private(client=client, sql=f"ATTACH '{directory}/srv.duckdb.wal' AS evil (TYPE sqlite)",
+                           what="the server's database")
+
+
+def test_sqlite_scanner_cannot_make_a_committed_change_vanish(launcher, tmp_path):
+    # The concrete symptom: an admin writes and commits a row, then tries to drop a SQLite
+    # file where the database's WAL goes. The attach is refused, the WAL path stays the
+    # server's own, and after a restart the committed row is still there.
+    directory = tmp_path.resolve()
+    database = directory / "data.duckdb"
+    server = launcher.start(args=["--database", str(database)])
+    admin = server.admin()
+    admin.execute(sql="CREATE TABLE t (i INTEGER)")
+    admin.execute(sql="INSERT INTO t VALUES (42)")
+    admin.execute(sql="CHECKPOINT")
+    wal = f"{database}.wal"
+    parent, stem = str(directory), "data.duckdb.wal"
+    for sql in (f"ATTACH '{wal}' AS evil (TYPE sqlite)", f"ATTACH 'sqlite:{wal}' AS evil",
+                f"ATTACH '{parent}/data.duckdb' || '.wal' AS evil (TYPE sqlite)"):  # a computed path
+        error = admin.error(sql=sql)
+        assert PRIVATE in error["detail"], f"{sql}: {error}"
+    # No SQLite file was planted where the WAL goes (it is absent, or DuckDB's own WAL).
+    if pathlib.Path(wal).exists():
+        assert pathlib.Path(wal).read_bytes()[:16] != b"SQLite format 3\x00"
+    server.stop()
+    restarted = launcher.start(args=["--database", str(database)])
+    assert restarted.admin().scalar(sql="SELECT i FROM t") == 42

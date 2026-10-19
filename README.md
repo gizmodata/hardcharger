@@ -424,16 +424,19 @@ reaches it, the administrator's included. Each change is checkpointed into the f
 once, so nothing depends on its write-ahead log. There is no migration between the two
 stores: moving to PostgreSQL later means creating the users, roles and grants there again.
 
-One limit: the guard sits in DuckDB's file system, and an extension with file I/O of its own
-(`sqlite_scanner`, which only an administrator or a user granted `MANAGE EXTENSIONS` can
-load) goes past it. For the store, a path written out in the statement is refused, and a
-computed one reaches a file where SQLite finds no database it can read (`file is not a
-database`): it fails closed, and a file it creates where the store's WAL goes undoes nothing,
-as every change is already in the store file. The database, instrumentation and log files
-keep DuckDB's usual checkpoints, so a SQLite database written where one of their WALs goes
-(which takes the administrator, or a role that may create tables in the catalog it attaches)
-loses that file's changes since its last checkpoint if the server then stops without one.
-Keep `MANAGE EXTENSIONS` for roles you would trust with the server's files.
+The guard above sits in DuckDB's file system, and an extension with file I/O of its own
+(`sqlite_scanner`) does not go through it: `ATTACH '<path>' (TYPE sqlite)`, the `sqlite:`
+path prefix, and the `sqlite_scan` / `sqlite_query` / `sqlite_attach` table functions open
+the file with SQLite's own library. So those are refused separately, when the resolved path
+names one of the server's files or a sibling (the store, the database, the instrumentation
+and log files, and their WAL and temporary siblings): at plan time, after the path has been
+worked out, by every spelling — a computed path, `..`, a relative path, a symlink, a hard
+link, a differing case, a Windows 8.3 name. Attaching an unrelated SQLite file still works.
+A DuckDB-storage `ATTACH` of one of these files is left to the file-system guard, which
+already covers it (and is how the server attaches its own). This closes the one way SQL
+could reach the server's files outside DuckDB's file system; the `sqlite_scanner` load still
+takes the administrator or a role granted `MANAGE EXTENSIONS`, which belong only to roles you
+would trust with the server's files.
 
 ## 🔏 Client certificates as identity
 
