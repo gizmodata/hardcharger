@@ -477,7 +477,53 @@ def test_a_server_without_access_control_guards_its_files_from_its_admin(launche
 # ATTACH binds without the sqlite extension loaded (the storage type is resolved at
 # execution, which the guard prevents), so these run offline. The decoy twin (an unrelated
 # path) must NOT be refused as a private file: it attaches the SQLite file when sqlite is
-# installed, and otherwise fails only for the missing extension -- never the guard.
+# loaded, and otherwise fails only for the missing extension -- never the guard.
+
+@pytest.fixture(scope="module")
+def sqlite_server(module_launcher, tmp_path_factory, store):
+    """Like `attached` (a database file, instrumentation and catalog logging; the admin and
+    fay, with every file-system grant; decoys of the same names), but a server of its own
+    that loads sqlite_scanner in its init SQL, before its health-check and instrumentation
+    threads start. Loading a downloaded extension while those threads plan statements is a
+    race ThreadSanitizer can't see through (the extension isn't instrumented), so nothing
+    here loads one at run time: autoloading and autoinstalling are off.
+
+    The extension comes from DuckDB's repository: a throwaway server installs it first
+    (INSTALL only downloads). Offline, the server starts without it, and the tests that need
+    it prove the same refusal through ATTACH, which binds without the extension."""
+    probe = module_launcher.start()
+    try:
+        probe.admin().execute(sql="INSTALL sqlite")
+        loaded = True
+    except Exception:  # offline: no repository
+        loaded = False
+    probe.stop()
+    no_autoload = "SET GLOBAL autoload_known_extensions = false; SET GLOBAL autoinstall_known_extensions = false;"
+    init = ("LOAD sqlite; " if loaded else "") + no_autoload
+    directory = tmp_path_factory.mktemp("sqlite").resolve()
+    server = start_rbac_server(launcher=module_launcher, store_uri=store.new_database(),
+                               env={"HARDCHARGER_INIT_SQL_COMMANDS": init},
+                               args=["--database", str(directory / "srv.duckdb"), "--enable-instrumentation",
+                                     "--enable-catalog-logging"])
+    admin = server.admin()
+    for sql in ["CREATE TABLE secret AS SELECT 'top secret' AS s", "CHECKPOINT", "CREATE ROLE fs",
+                "GRANT READ FILESYSTEM TO fs", "GRANT WRITE FILESYSTEM TO fs", "GRANT MANAGE CATALOGS TO fs",
+                "CREATE USER fay", "GRANT fs TO fay"]:
+        expect_allowed(client=admin, sql=sql)
+    decoy = directory / "decoy"
+    decoy.mkdir()
+    for name in ATTACHED:
+        for sql in [f"ATTACH '{decoy / name}' AS decoy", "CREATE TABLE decoy.t AS SELECT 'decoy' AS s",
+                    "DETACH decoy"]:
+            expect_allowed(client=admin, sql=sql)
+    loaded_now = admin.run(sql="SELECT count(*) AS n FROM duckdb_extensions() WHERE extension_name = 'sqlite_scanner' "
+                               "AND loaded").column("n").to_pylist() == [1]
+    assert loaded_now == loaded, f"sqlite_scanner loaded: {loaded_now}, expected {loaded}"
+    server.dir = directory
+    server.sqlite_loaded = loaded
+    server.principals = {"admin": admin, "fay": server.user(name="fay")}
+    return server
+
 
 SQLITE_ATTACH = {
     "TYPE sqlite": "ATTACH '{p}' AS evil (TYPE sqlite)",
@@ -500,10 +546,10 @@ def expect_not_private(client, sql: str) -> None:
 
 @pytest.mark.parametrize("who", ["admin", "fay"])
 @pytest.mark.parametrize("vector", list(SQLITE_ATTACH))
-def test_sqlite_scanner_cannot_attach_a_private_sibling(attached, who, vector):
+def test_sqlite_scanner_cannot_attach_a_private_sibling(sqlite_server, who, vector):
     # The ticket's case: a SQLite database created where the server's database WAL goes.
-    client = attached.principals[who]
-    directory, decoy = attached.dir, attached.dir / "decoy"
+    client = sqlite_server.principals[who]
+    directory, decoy = sqlite_server.dir, sqlite_server.dir / "decoy"
     wal = "srv.duckdb.wal"
     template = SQLITE_ATTACH[vector]
     expect_not_private(client=client, sql=template.format(p=f"{decoy}/{wal}", d=decoy))  # the twin
@@ -513,34 +559,27 @@ def test_sqlite_scanner_cannot_attach_a_private_sibling(attached, who, vector):
 
 @pytest.mark.parametrize("who", ["admin", "fay"])
 @pytest.mark.parametrize("name", list(ATTACHED))
-def test_sqlite_scanner_cannot_attach_any_of_the_servers_files(attached, who, name):
-    client = attached.principals[who]
-    directory, decoy = attached.dir, attached.dir / "decoy"
+def test_sqlite_scanner_cannot_attach_any_of_the_servers_files(sqlite_server, who, name):
+    client = sqlite_server.principals[who]
+    directory, decoy = sqlite_server.dir, sqlite_server.dir / "decoy"
     expect_not_private(client=client, sql=f"ATTACH '{decoy}/{name}.wal' AS evil (TYPE sqlite)")  # the twin
     expect_private(client=client, sql=f"ATTACH '{directory}/{name}.wal' AS evil (TYPE sqlite)",
                    what=ATTACHED[name])
 
 
-def test_sqlite_table_functions_cannot_reach_the_servers_files(attached):
+def test_sqlite_table_functions_cannot_reach_the_servers_files(sqlite_server):
     # sqlite_attach takes a file path and creates the SQLite database there; the function
-    # must exist (the sqlite extension loaded) to bind as the plan node the guard inspects.
-    # The extension is installed from DuckDB's repository (CI has network); when it cannot
-    # be reached the same create is closed through ATTACH (which binds without the
-    # extension), so this asserts the guard whichever way, never skipping.
+    # must exist (the sqlite extension loaded, at startup: see sqlite_server) to bind as the
+    # plan node the guard inspects. Offline, the same create is closed through ATTACH (which
+    # binds without the extension), so this asserts the guard whichever way, never skipping.
     #
     # sqlite_scan / sqlite_query only read: binding them opens the file, and the server's
     # own files are DuckDB-format, so SQLite refuses them ("file is not a database") before
     # the guard or any read -- they can never return a private file's contents.
-    admin = attached.principals["admin"]
-    loaded = True
-    try:
-        admin.run(sql="INSTALL sqlite")
-        admin.run(sql="LOAD sqlite")
-    except WarpError:
-        loaded = False
-    directory, decoy = attached.dir, attached.dir / "decoy"
+    loaded = sqlite_server.sqlite_loaded
+    directory, decoy = sqlite_server.dir, sqlite_server.dir / "decoy"
     for who in ("admin", "fay"):
-        client = attached.principals[who]
+        client = sqlite_server.principals[who]
         if loaded:
             # sqlite_attach creates the file. For the admin the private-file guard refuses
             # it; a non-admin never reaches the guard, because access control reserves the
