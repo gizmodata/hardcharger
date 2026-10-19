@@ -127,6 +127,14 @@ own changelog in `python/CHANGELOG.md`.
   document, `HARDCHARGER_CURRENT_SESSION()`, `hardcharger_sessions()`, the instrumentation
   tables, the log and `KILL SESSION`.
 
+- No GizmoSQL-era (Flight SQL) names in logs or instrumentation: bulk-ingest log lines
+  carried `flight_method=ingest` beside `kind=ingest` (now only `kind`), and the
+  instrumentation table `sql_statements` named its column `flight_method`; it is
+  `statement_kind` (`statement` or `prepared`, the Warp SQL endpoint a statement came by).
+  An instrumentation table from 0.3.0 is refused at startup with the `ALTER TABLE ...
+  RENAME COLUMN` that fixes it. No metric label had the name. `test_instrumentation.py`
+  and `test_bulk_ingest.py` cover it.
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file

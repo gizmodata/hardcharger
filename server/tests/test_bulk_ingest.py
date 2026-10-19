@@ -89,7 +89,8 @@ def test_execute_ingest_logs_caller_target_and_row_count(server, session):
     assert attempt and success, records
     for record in (attempt[0], success[0]):
         assert record["level"] == "info" and record["user"] == "admin" and record["session_id"], record
-        assert record["table"] == "ingest_logging_table" and record["flight_method"] == "ingest", record
+        # Hardcharger's and Warp SQL's naming: `kind`, no GizmoSQL-era (Flight SQL) flight_method.
+        assert record["table"] == "ingest_logging_table" and "flight_method" not in record, record
     assert success[0]["rows_ingested"] == "3" and success[0]["duration_ms"].isdigit(), success[0]
 
 

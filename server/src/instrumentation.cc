@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS {P}.sessions (
     connection_protocol VARCHAR NOT NULL, start_time TIMESTAMP WITH TIME ZONE NOT NULL,
     stop_time TIMESTAMP WITH TIME ZONE, status VARCHAR NOT NULL, stop_reason VARCHAR, session_tag JSON);
 CREATE TABLE IF NOT EXISTS {P}.sql_statements (
-    statement_id UUID NOT NULL, session_id VARCHAR NOT NULL, sql_text VARCHAR NOT NULL, flight_method VARCHAR,
+    statement_id UUID NOT NULL, session_id VARCHAR NOT NULL, sql_text VARCHAR NOT NULL, statement_kind VARCHAR,
     is_internal BOOLEAN NOT NULL, prepare_success BOOLEAN NOT NULL, prepare_error VARCHAR,
     created_time TIMESTAMP WITH TIME ZONE NOT NULL, query_tag JSON);
 CREATE TABLE IF NOT EXISTS {P}.sql_executions (
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS {S}.sessions (
     stop_reason VARCHAR, session_tag JSON);
 CREATE TABLE IF NOT EXISTS {S}.sql_statements (
     statement_id UUID PRIMARY KEY, session_id VARCHAR NOT NULL REFERENCES {S}.sessions(session_id) ON DELETE CASCADE,
-    sql_text VARCHAR NOT NULL, flight_method VARCHAR, is_internal BOOLEAN NOT NULL, prepare_success BOOLEAN NOT NULL,
+    sql_text VARCHAR NOT NULL, statement_kind VARCHAR, is_internal BOOLEAN NOT NULL, prepare_success BOOLEAN NOT NULL,
     prepare_error VARCHAR, created_time TIMESTAMP WITH TIME ZONE NOT NULL, query_tag JSON);
 CREATE TABLE IF NOT EXISTS {S}.sql_executions (
     execution_id UUID PRIMARY KEY,
@@ -274,6 +274,19 @@ void Instrumentation::Start() {
                                "new instrumentation database) and start the server again.");
     }
   }
+  // Hardcharger 0.3.0 named sql_statements.statement_kind flight_method (GizmoSQL's Flight
+  // SQL name); CREATE TABLE IF NOT EXISTS kept such a table, and every statement's insert
+  // would fail. Startup says how to rename it instead.
+  if (!warpduckdb::QueryText(connection_.get(),
+                             "SELECT column_name FROM duckdb_columns() WHERE database_name = " + Literal(catalog_) +
+                                 " AND schema_name = " + Literal(schema_) +
+                                 " AND table_name = 'sql_statements' AND column_name = 'flight_method'")
+           .empty()) {
+    throw std::runtime_error("instrumentation table " + Table("sql_statements") +
+                             " is from Hardcharger 0.3.0: its column flight_method is now statement_kind. Rename it "
+                             "(ALTER TABLE ... RENAME COLUMN flight_method TO statement_kind), or drop the "
+                             "instrumentation tables, and start the server again.");
+  }
   // Rows a previous run left open (it was killed). Only in our own file: a shared
   // catalog's open rows may belong to live peers.
   if (!external_) {
@@ -405,13 +418,13 @@ void Instrumentation::SessionTagChanged(const Session& session, const std::strin
           Literal(session.id()));
 }
 
-std::string Instrumentation::StatementCreated(const Session& session, std::string_view sql, std::string_view method,
+std::string Instrumentation::StatementCreated(const Session& session, std::string_view sql, std::string_view kind,
                                               bool accepted, std::string_view error) {
   std::string id = RandomUuid();
   Enqueue("INSERT INTO " + Table("sql_statements") +
-          " (statement_id, session_id, sql_text, flight_method, is_internal, prepare_success, prepare_error, "
+          " (statement_id, session_id, sql_text, statement_kind, is_internal, prepare_success, prepare_error, "
           "created_time, query_tag) VALUES (" + Literal(id) + ", " + Literal(session.id()) + ", " + Literal(sql) + ", " +
-          Literal(method) + ", false, " + (accepted ? "true" : "false") + ", " + Nullable(error) + ", " +
+          Literal(kind) + ", false, " + (accepted ? "true" : "false") + ", " + Nullable(error) + ", " +
           Time(std::chrono::system_clock::now()) + ", " + Json(session.settings().query_tag) + ")");
   return id;
 }

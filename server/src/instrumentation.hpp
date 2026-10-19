@@ -75,8 +75,9 @@ class Instrumentation {
   void SessionStarted(const Session& session);
   void SessionEnded(const Session& session, std::string_view reason);
   void SessionTagChanged(const Session& session, const std::string& tag);
-  // Records a statement (its text, how it arrived, whether it was accepted); returns its id.
-  std::string StatementCreated(const Session& session, std::string_view sql, std::string_view method,
+  // Records a statement (its text, how it arrived: `kind` 'statement' or 'prepared', the
+  // Warp SQL endpoint; whether it was accepted); returns its id.
+  std::string StatementCreated(const Session& session, std::string_view sql, std::string_view kind,
                                bool accepted, std::string_view error);
   void ExecutionStarted(const ExecutionRecord& record);
   // A statement waiting in the statement queue ('queued'), and its leaving it.
