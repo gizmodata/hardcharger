@@ -786,8 +786,15 @@ uv venv .venv && uv pip install --python .venv/bin/python -e .
 WARP_SQL_TEST_SERVER_BINARY=../../../server/build/hardcharger-server \
 WARP_SQL_TEST_SERVER_PASSWORD_ENV=HARDCHARGER_ADMIN_PASSWORD \
 WARP_SQL_TEST_SERVER_USERNAME=warp HARDCHARGER_ADMIN_USERNAME=warp \
+WARP_SQL_TEST_SERVER_MTLS_FLAG=--mtls-ca-cert WARP_SQL_TEST_SERVER_CORS_FLAG=--cors-origins \
+WARP_SQL_TEST_SERVER_IDLE_FLAG=--session-idle-timeout \
+WARP_SQL_TEST_SERVER_DRAIN_FLAG=--shutdown-grace-period-seconds \
   .venv/bin/python -m pytest -q
 ```
+
+Its access-control tests (`test_authorization.py`) need the `WARP_SQL_TEST_AUTHZ_*` variables
+that `.github/workflows/server.yml` sets (a DuckDB access-control store, privileges granted to a
+role); without them they skip, saying so.
 
 The access-control suites run on PostgreSQL by default; `HARDCHARGER_TEST_RBAC_STORE=duckdb
 .venv/bin/python -m pytest -q -m rbac_store` runs them again on the DuckDB file store, as CI does.

@@ -257,7 +257,7 @@ class Client:
                                       headers=self.headers(**{"Content-Type": ARROW_STREAM}))
             if response.status_code >= 400:
                 raise_problem(response=response)
-        response = self.http.post(url=f"{url}/commit", json={"parts": parts}, headers=self.headers())
+        response = self.http.post(url=f"{url}/commit", json={"part_count": parts}, headers=self.headers())
         if response.status_code >= 400:
             raise_problem(response=response)
         return response.json()["rows_ingested"]

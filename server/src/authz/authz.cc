@@ -100,12 +100,12 @@ std::shared_ptr<arrow::RecordBatchReader> Rows(const CommandResult& result) {
     arrow::StringBuilder builder;
     for (const auto& row : result.rows) {
       if (!builder.Append(c < row.size() ? row[c] : std::string()).ok()) {
-        throw Error(ErrorCode::kExecutionError, "could not build the result");
+        throw Error(ErrorCode::kInternalError, "could not build the result");
       }
     }
     std::shared_ptr<arrow::Array> array;
     if (!builder.Finish(&array).ok())
-      throw Error(ErrorCode::kExecutionError, "could not build the result");
+      throw Error(ErrorCode::kInternalError, "could not build the result");
     columns.push_back(std::move(array));
   }
   auto batch = arrow::RecordBatch::Make(schema, static_cast<int64_t>(result.rows.size()), columns);
@@ -838,7 +838,7 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
   if (result.minted) {
     // The token itself goes back once, to the caller; the store keeps only its record.
     if (!owner_.signer_) {
-      throw Error(ErrorCode::kExecutionError,
+      throw Error(ErrorCode::kNotImplemented,
                   "Hardcharger access control: this server cannot sign scoped tokens");
     }
     // A certificate-bound minter's tokens are bound to the same certificate (Warp SQL

@@ -434,7 +434,7 @@ std::string Instrumentation::StatementCreated(const Session& session, std::strin
           " (statement_id, session_id, sql_text, statement_kind, is_internal, prepare_success, prepare_error, "
           "created_time, query_tag) VALUES (" + Literal(id) + ", " + Literal(session.id()) + ", " + Literal(sql) + ", " +
           Literal(kind) + ", false, " + (accepted ? "true" : "false") + ", " + Nullable(error) + ", " +
-          Time(std::chrono::system_clock::now()) + ", " + Json(session.settings().query_tag) + ")");
+          Time(std::chrono::system_clock::now()) + ", " + Json(session.StatementQueryTag()) + ")");
   return id;
 }
 

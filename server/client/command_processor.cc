@@ -1038,8 +1038,8 @@ void CommandProcessor::ShowSettings() {
         auto* value = info->if_contains(key);
         return value != nullptr && value->is_string() ? std::string(value->as_string()) : std::string();
       };
-      std::string engine = text("engine");
-      if (!engine.empty() && !text("engine_version").empty()) engine += " " + text("engine_version");
+      // The engine's own key (Warp SQL §2.7), else the server's version.
+      std::string engine = text("duckdb_version").empty() ? std::string() : "duckdb " + text("duckdb_version");
       if (engine.empty()) engine = text("server_version");
       if (!engine.empty()) out << "      engine: " << engine << "\n";
       if (!text("server_arrow_version").empty()) out << "       arrow: " << text("server_arrow_version") << "\n";

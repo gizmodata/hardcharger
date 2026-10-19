@@ -189,9 +189,15 @@ def test_expired_queued_write_never_executes_after_slot_release(server):
     holders = Holders(server=server, count=2)
     assert wait_until(lambda: active(server) == 2, timeout=30 * TIMEOUT_SCALE)
     response = writer.submit(sql="INSERT INTO queue_expired VALUES (1)", headers={"Warp-Statement-Timeout": "500"})
-    doc = response.json()
-    if doc.get("state") not in ("failed", "cancelled", "succeeded"):
-        doc = writer.wait_done(statement_id=doc["statement_id"])
+    if response.status_code == 409:
+        # Timed out while the submit waited (Warp SQL §6.1): the answer is the statement's error.
+        problem = response.json()
+        assert problem["code"] == "statement_timeout" and problem["cancel_reason"] == "timeout", problem
+        doc = writer.wait_done(statement_id=response.headers["warp-statement-id"])
+    else:
+        doc = response.json()
+        if doc.get("state") not in ("failed", "cancelled", "succeeded"):
+            doc = writer.wait_done(statement_id=doc["statement_id"])
     assert doc["state"] == "cancelled" and doc["cancel_reason"] == "timeout", doc
     holders.release()
     time.sleep(0.5)

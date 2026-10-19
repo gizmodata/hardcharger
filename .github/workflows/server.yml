@@ -507,11 +507,20 @@ jobs:
             --token-authorized-emails {identity} --oauth-client-id {client_id} --oauth-base-url {base_url}
             --oauth-provider-name {provider} --oauth-max-flows {max_flows}
           WARP_SQL_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
+          # One-signal draining (test_lifecycle.py) waits this long for running work.
+          WARP_SQL_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
+          # Metadata and prepared statements under access control (test_authorization.py),
+          # on a server of its own with the DuckDB access-control store; privileges go to roles.
+          WARP_SQL_TEST_AUTHZ_CREATE_USER: "CREATE ROLE {user}_role; CREATE USER {user} WITH PASSWORD '{password}'; GRANT {user}_role TO {user}"
+          WARP_SQL_TEST_AUTHZ_GRANT: "GRANT SELECT ON {table} TO {user}_role"
+          WARP_SQL_TEST_AUTHZ_REVOKE: "REVOKE SELECT ON {table} FROM {user}_role"
           HARDCHARGER_ADMIN_USERNAME: warp
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -e .
+          key="$(openssl rand -hex 32)"
+          export WARP_SQL_TEST_AUTHZ_SERVER_ENV="HARDCHARGER_RBAC_STORE_URI=duckdb:{tmp}/rbac.duckdb HARDCHARGER_SECRET_KEY=$key"
           .venv/bin/python -m pytest -q
       # On request (workflow_dispatch input failure_repro): every way a running statement
       # can fail before or during its answer (streamed, split, prepared), 200 times against
@@ -736,11 +745,20 @@ jobs:
             --token-authorized-emails {identity} --oauth-client-id {client_id} --oauth-base-url {base_url}
             --oauth-provider-name {provider} --oauth-max-flows {max_flows}
           WARP_SQL_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
+          # One-signal draining (test_lifecycle.py) waits this long for running work.
+          WARP_SQL_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
+          # Metadata and prepared statements under access control (test_authorization.py),
+          # on a server of its own with the DuckDB access-control store; privileges go to roles.
+          WARP_SQL_TEST_AUTHZ_CREATE_USER: "CREATE ROLE {user}_role; CREATE USER {user} WITH PASSWORD '{password}'; GRANT {user}_role TO {user}"
+          WARP_SQL_TEST_AUTHZ_GRANT: "GRANT SELECT ON {table} TO {user}_role"
+          WARP_SQL_TEST_AUTHZ_REVOKE: "REVOKE SELECT ON {table} FROM {user}_role"
           HARDCHARGER_ADMIN_USERNAME: warp
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -e .
+          key="$(openssl rand -hex 32)"
+          export WARP_SQL_TEST_AUTHZ_SERVER_ENV="HARDCHARGER_RBAC_STORE_URI=duckdb:{tmp}/rbac.duckdb HARDCHARGER_SECRET_KEY=$key"
           .venv/bin/python -m pytest -q
       - name: Server log
         if: failure()
@@ -915,11 +933,20 @@ jobs:
             --token-authorized-emails {identity} --oauth-client-id {client_id} --oauth-base-url {base_url}
             --oauth-provider-name {provider} --oauth-max-flows {max_flows}
           WARP_SQL_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
+          # One-signal draining (test_lifecycle.py) waits this long for running work.
+          WARP_SQL_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
+          # Metadata and prepared statements under access control (test_authorization.py),
+          # on a server of its own with the DuckDB access-control store; privileges go to roles.
+          WARP_SQL_TEST_AUTHZ_CREATE_USER: "CREATE ROLE {user}_role; CREATE USER {user} WITH PASSWORD '{password}'; GRANT {user}_role TO {user}"
+          WARP_SQL_TEST_AUTHZ_GRANT: "GRANT SELECT ON {table} TO {user}_role"
+          WARP_SQL_TEST_AUTHZ_REVOKE: "REVOKE SELECT ON {table} FROM {user}_role"
           HARDCHARGER_ADMIN_USERNAME: warp
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -e .
+          key="$(openssl rand -hex 32)"
+          export WARP_SQL_TEST_AUTHZ_SERVER_ENV="HARDCHARGER_RBAC_STORE_URI=duckdb:{tmp}/rbac.duckdb HARDCHARGER_SECRET_KEY=$key"
           .venv/bin/python -m pytest -q
       # Any report file means an unsuppressed report: print them all and fail.
       - name: ThreadSanitizer reports

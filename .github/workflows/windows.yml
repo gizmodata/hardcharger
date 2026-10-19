@@ -317,6 +317,8 @@ jobs:
             --token-authorized-emails {identity} --oauth-client-id {client_id} --oauth-base-url {base_url}
             --oauth-provider-name {provider} --oauth-max-flows {max_flows}
           WARP_SQL_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
+          # One-signal draining (test_lifecycle.py) waits this long for running work.
+          WARP_SQL_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
           HARDCHARGER_ADMIN_USERNAME: warp
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |

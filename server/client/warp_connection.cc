@@ -102,12 +102,12 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
     if (e.code() == "certificate_revoked") {
       return arrow::Status::IOError("The server at " + origin + " refused the client certificate: certificate revoked");
     }
-    if (e.code() == "client_certificate_required") {
+    if (e.code() == "certificate_required") {
       return arrow::Status::IOError("The server at " + origin +
                                     " refused the connection: it requires a client certificate (--mtls-cert and "
                                     "--mtls-key)");
     }
-    if (e.code() == "connection_failed") {
+    if (e.code() == "client_connection_failed") {
       const std::string what = e.what();
       if (what.find("could not resolve host") != std::string::npos) {
         return arrow::Status::IOError("Could not resolve host '" + config.host + "'");
@@ -117,7 +117,7 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
     }
     // A TLS handshake that met a plain-HTTP server: say so, and how to connect without TLS. Never
     // fall back to plaintext by itself.
-    if (e.code() == "tls_failed" && config.use_tls && std::string(e.what()).find("TLS handshake") != std::string::npos &&
+    if (e.code() == "client_tls_failed" && config.use_tls && std::string(e.what()).find("TLS handshake") != std::string::npos &&
         AnswersTlsWithHttp(config.host, config.port)) {
       const bool v6 = config.host.find(':') != std::string::npos;
       return arrow::Status::IOError("The server at " + (v6 ? "[" + config.host + "]" : config.host) + ":" +

@@ -107,7 +107,7 @@ async function requestToken(grant: Record<string, string>, username: string, sig
     });
   } catch (err) {
     if (signal?.aborted) throw err;
-    throw new SignInError("The server could not be reached.", "transport_error", undefined);
+    throw new SignInError("The server could not be reached.", "client_transport_error", undefined);
   }
   const body = (await resp.json().catch(() => ({}))) as Problem & {
     access_token?: string;
@@ -115,10 +115,10 @@ async function requestToken(grant: Record<string, string>, username: string, sig
   };
   if (!resp.ok) {
     const detail = body.detail ?? body.title ?? `sign-in failed (HTTP ${resp.status})`;
-    throw new SignInError(detail, body.code ?? "sign_in_failed", resp.status);
+    throw new SignInError(detail, body.code ?? "client_sign_in_failed", resp.status);
   }
   if (typeof body.access_token !== "string" || body.access_token === "") {
-    throw new SignInError("The server answered without an access token.", "protocol_error", resp.status);
+    throw new SignInError("The server answered without an access token.", "client_protocol_error", resp.status);
   }
   const lifetime = typeof body.expires_in === "number" && body.expires_in > 0 ? body.expires_in : 3600;
   return { username, token: body.access_token, expiresAt: Date.now() + lifetime * 1000 };

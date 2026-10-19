@@ -683,7 +683,7 @@ def test_a_flood_of_refusals_is_bounded_and_still_counted(launcher, pki):
         assert sum(f.result() for f in flooding) == total
     windows = int((time.monotonic() - started_at) // 60) + 1  # minutes the flood spanned (a sanitizer build is slow)
     flood_records = lambda: [r for r in server.running.log_records()
-                             if r.get("kind") == "authentication" and r.get("code") == "client_certificate_required"
+                             if r.get("kind") == "authentication" and r.get("code") == "certificate_required"
                              and "audit_hash" in r]
     counted = lambda records: sum(int(r.get("suppressed", 1)) for r in records)
     # The windows end, and summaries count what wasn't written one by one: every refusal is

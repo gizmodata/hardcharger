@@ -80,7 +80,7 @@ def main() -> None:
                                                        "application/vnd.apache.arrow.stream"),
                                         range(args.parts)))
             assert all(a.startswith(b"HTTP/1.1 200") for a in answers), [a[:200] for a in answers]
-            committed = api(args.url, context, f"{base}/commit", {"parts": args.parts}, token)
+            committed = api(args.url, context, f"{base}/commit", {"part_count": args.parts}, token)
             elapsed = time.perf_counter() - started
             print(f"{len(body)} bytes in {elapsed:.3f}s = {len(body) / elapsed / 1e9:.2f} GB/s over "
                   f"{args.parts} parts: {committed['rows_ingested']} rows", flush=True)

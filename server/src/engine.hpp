@@ -99,6 +99,8 @@ class Session : public warpduckdb::DuckDBSession {
   // Interrupt(), remembering why (Warp SQL's cancel_reason) for instrumentation and
   // hardcharger_active_connections().
   void Cancel(std::string_view reason) override;
+  // The request's Warp-Query-Tag (Warp SQL §2.5), for the statement about to run.
+  void SetQueryTag(const boost::json::object* tag) override;
 
   // ---- What the settings, SQL functions and KILL SESSION read ----
   const std::string& id() const { return id_; }
@@ -149,6 +151,9 @@ class Session : public warpduckdb::DuckDBSession {
   };
   Settings settings() const;
   void UpdateSettings(const std::function<void(Settings&)>& update);
+  // The query tag recorded with the statement starting now: the request's Warp-Query-Tag,
+  // else SET hardcharger.query_tag. On the session's engine thread only.
+  std::string StatementQueryTag() const;
   LogLevel QueryLogLevel() const;
   void LogQuery(LogLevel level, std::string_view message, const LogFields& fields) const;
   // A tracked execution ended (its Execution calls it).
@@ -158,6 +163,7 @@ class Session : public warpduckdb::DuckDBSession {
   // Throws once the session was killed or, under access control, unless it is bound
   // and still live.
   void CheckAlive() const;
+  std::string request_query_tag_;  // SetQueryTag()'s, as JSON text; engine thread only
   // Runs `run` (DuckDB) under access control when the session has it.
   warpsql::StatementOutcome Guarded(std::string_view sql, bool has_parameters,
                                     const std::function<warpsql::StatementOutcome()>& run);

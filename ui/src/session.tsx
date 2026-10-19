@@ -69,27 +69,28 @@ export function useSession(): AppSession {
 /** Why the sign-in no longer works, if `err` says so (Warp SQL §4.2, §5.6). */
 export function signInLost(err: unknown): string | undefined {
   if (!WarpSqlError.is(err)) return undefined;
-  if (err.code === ErrorCode.invalidToken) return "Your sign-in has expired. Sign in again.";
-  if (err.code === ErrorCode.sessionEnded) {
-    switch (err.reason) {
-      case "killed":
-        return "An administrator ended your session. Sign in again.";
-      case "credentials_changed":
-        return "Your password or credentials changed. Sign in again.";
-      case "principal_dropped":
-        return "Your user no longer exists on this server.";
-      default:
-        return "Your sign-in has expired. Sign in again.";
-    }
+  if (err.code !== ErrorCode.invalidToken && err.code !== ErrorCode.sessionEnded) return undefined;
+  // The reasons of §4.2 and §5.6; an unknown one (or none) reads as an expired sign-in.
+  switch (err.reason) {
+    case "killed":
+      return "An administrator ended your session. Sign in again.";
+    case "credentials_changed":
+      return "Your password or credentials changed. Sign in again.";
+    case "principal_dropped":
+      return "Your user no longer exists on this server.";
+    case "token_revoked":
+      return "Your sign-in was revoked. Sign in again.";
+    default:
+      return "Your sign-in has expired. Sign in again.";
   }
-  return undefined;
 }
 
 /** The message to show for an error: the server's detail, without the client's suffix. */
 export function errorMessage(err: unknown): string {
   if (WarpSqlError.is(err)) {
     if (err.code === ErrorCode.statementCancelled) return "The query was cancelled.";
-    if (err.code === ErrorCode.transportError) return "The server could not be reached.";
+    if (err.code === ErrorCode.statementTimeout) return "The query ran longer than its time limit.";
+    if (err.code === ErrorCode.clientTransportError) return "The server could not be reached.";
     return err.detail ?? err.message;
   }
   if (err instanceof Error) return err.message;

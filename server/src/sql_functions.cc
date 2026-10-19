@@ -171,14 +171,14 @@ struct TableScan {
 std::unique_ptr<TableScan> OpenScan(const std::shared_ptr<arrow::RecordBatch>& batch,
                                     duckdb_v2_context_handle context) {
   auto reader = arrow::RecordBatchReader::Make({batch}, batch->schema());
-  if (!reader.ok()) throw Error(ErrorCode::kExecutionError, reader.status().message());
+  if (!reader.ok()) throw Error(ErrorCode::kInternalError, reader.status().message());
   auto scan = std::make_unique<TableScan>();
   if (auto status = arrow::ExportRecordBatchReader(*reader, &scan->stream); !status.ok()) {
-    throw Error(ErrorCode::kExecutionError, status.message());
+    throw Error(ErrorCode::kInternalError, status.message());
   }
   ArrowSchema schema{};
   if (int code = scan->stream.get_schema(&scan->stream, &schema); code != 0) {
-    throw Error(ErrorCode::kExecutionError, "cannot read the table's schema");
+    throw Error(ErrorCode::kInternalError, "cannot read the table's schema");
   }
   try {
     Call([&](auto* e) {
@@ -270,7 +270,7 @@ void TableExec(duckdb_v2_table_function_exec_info_handle info, duckdb_v2_context
       }
       ArrowArray array{};
       if (int code = scan.stream.get_next(&scan.stream, &array); code != 0) {
-        throw Error(ErrorCode::kExecutionError, "cannot read the table's rows");
+        throw Error(ErrorCode::kInternalError, "cannot read the table's rows");
       }
       if (array.release == nullptr) {
         scan.input_finished = true;

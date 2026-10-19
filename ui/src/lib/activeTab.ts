@@ -2,12 +2,13 @@
 // schema browser): its catalog and schema, its transaction, and its role. The page publishes
 // it; readers subscribe (useActiveTab).
 
+import type { TransactionState } from "@gizmodata/warp-sql";
 import { useSyncExternalStore } from "react";
 
 export interface ActiveTab {
   catalog: string;
   schema: string;
-  transaction: "none" | "open" | "aborted";
+  transaction: TransactionState;
   /** The role the tab acts with (SET ROLE); "" for all of the user's roles. */
   role: string;
 }

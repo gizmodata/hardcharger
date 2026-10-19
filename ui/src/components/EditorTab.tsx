@@ -1,3 +1,4 @@
+import type { TransactionState } from "@gizmodata/warp-sql";
 import { Check, Copy, Info, ListOrdered, Play, RotateCcw, Save, Square, Undo2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -16,7 +17,7 @@ import { type EditorApi, SqlEditor } from "./SqlEditor";
 export interface TabStatus {
   running: boolean;
   failed: boolean;
-  transaction: "none" | "open" | "aborted";
+  transaction: TransactionState;
 }
 
 /** What the query page can do to a tab: put text at its cursor, run SQL in it. */

@@ -499,8 +499,9 @@ warpsql::ServerIdentity Backend::Identity() {
 
 json::object Backend::ServerInfo() {
   json::object info = DuckDBBackend::ServerInfo();
-  info["instance_id"] = runtime_.instance_id;
-  info["access_control"] = access_ != nullptr && !access_->catalog_rules_only();
+  // Hardcharger's own keys take its prefix (Warp SQL §2.7).
+  info["hardcharger_instance_id"] = runtime_.instance_id;
+  info["hardcharger_access_control"] = access_ != nullptr && !access_->catalog_rules_only();
   return info;
 }
 
@@ -692,6 +693,14 @@ std::string Session::tenant() const { return guard_ ? guard_->tenant_name() : st
 Session::Settings Session::settings() const {
   std::lock_guard lock(settings_mutex_);
   return settings_;
+}
+
+void Session::SetQueryTag(const json::object* tag) {
+  request_query_tag_ = tag == nullptr ? std::string() : json::serialize(*tag);
+}
+
+std::string Session::StatementQueryTag() const {
+  return request_query_tag_.empty() ? settings().query_tag : request_query_tag_;
 }
 
 void Session::UpdateSettings(const std::function<void(Settings&)>& update) {

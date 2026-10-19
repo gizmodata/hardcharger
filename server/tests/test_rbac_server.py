@@ -175,7 +175,7 @@ def test_the_in_memory_store_is_for_tests_only(launcher):
 
 def test_server_info_says_access_control_is_on(server, admin):
     info = admin.http.get(url=f"{admin.url}/metadata/server-info", headers=admin.headers()).json()
-    assert info["access_control"] is True
+    assert info["hardcharger_access_control"] is True
     assert "edition" not in info
 
 

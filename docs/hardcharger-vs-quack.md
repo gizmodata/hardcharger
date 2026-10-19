@@ -116,7 +116,7 @@ and Windows (amd64 and arm64).
 **Protocol.** Client and server agree on a version at connection (`QUACK_VERSION = 3`; the server
 accepts exactly its own). DuckDB's docs say "the protocol, function names, settings, and defaults
 are still subject to change". Warp SQL has a written specification
-(`third_party/warp-sql/spec/warp-sql.md`, version 1, draft 0.1.0) and a conformance suite that
+(`third_party/warp-sql/spec/warp-sql.md`, version 1.0.0, changed since only by addition) and a conformance suite that
 CI runs against every Hardcharger build.
 
 **Licenses.** Quack: MIT. Hardcharger: Apache 2.0.

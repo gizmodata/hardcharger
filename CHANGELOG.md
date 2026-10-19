@@ -149,6 +149,39 @@ own changelog in `python/CHANGELOG.md`.
   when the server offers browser sign-in: the page starts a flow with `return_to` set to
   itself, keeps the poll secret in the tab, and on its return (the flow id in the URL
   fragment, removed at once) collects the token or shows why the sign-in failed.
+- **Warp SQL 1.0.0** (warp-sql `spec/v1.0`). The protocol's shape fixed for its first stable
+  version, with no fallbacks for the drafts:
+  - A statement that fails while running is `422 execution_error` (was `500`); `500` is now
+    `internal_error`, for the server's own faults (an engine internal error, a result
+    Hardcharger itself could not build). `statement_cancelled` and `statement_timeout` are
+    `409`, and a statement cancelled before its submit is answered (a `KILL SESSION`,
+    `hardcharger_cancel()`, its timeout, a session cancel) answers with that error and its
+    `cancel_reason`, no longer a `200`/`201` document.
+  - Server-info keys of Hardcharger's own take its prefix: `hardcharger_instance_id` and
+    `hardcharger_access_control` (were `instance_id` and `access_control`), `duckdb_version`
+    (was `engine` and `engine_version`), and `server_read_only` says whether the server
+    runs read-only; `protocol` and `protocol_version` are gone (discovery has them). The
+    client's `.info` reads `duckdb_version`.
+  - The Warp SQL session option is `duckdb_arrow_lossless_conversion` (was
+    `arrow_lossless_conversion`; the SQL `SET SESSION arrow_lossless_conversion` is DuckDB's
+    and keeps its name).
+  - Discovery has no `draft` field, and no `result_retention` capability (retention is core);
+    a partitioned ingest commits with `{"part_count": n}`; a partition the result doesn't have
+    is `partition_not_found`; `client_certificate_required` is `certificate_required`.
+  - `Warp-Query-Tag` (an ASCII JSON object, at most 4 KiB) is recorded as a submitted
+    statement's query tag in the instrumentation tables, ahead of `SET hardcharger.query_tag`;
+    a malformed one is refused with `400`.
+  - The command-line client's own error codes take the protocol's `client_` prefix
+    (`client_connection_failed`, `client_tls_failed`, `client_protocol_error`, …), and so do
+    the web UI's (`client_transport_error`, `client_protocol_error`, `client_sign_in_failed`).
+  - Web UI: the vendored JavaScript client moves to warp-sql-js `0a91935` (Warp SQL 1.0.0); the
+    About dialog drops the draft label, an `invalid_token` or `session_ended` with
+    `token_revoked` says the sign-in was revoked, a reason the UI doesn't know reads as an
+    expired sign-in, and a statement timeout says so.
+  - Without a signing key, `CREATE SCOPED TOKEN` is `501 not_implemented` (was
+    `execution_error`).
+  - CI: the conformance suite's new one-signal drain and access-control tests run against
+    Hardcharger (`--shutdown-grace-period-seconds`, the DuckDB access-control store).
 
 - `KILL SESSION` runs `hardcharger_cancel()`'s cancel first (one implementation), then ends
   the session: what it runs stops (within milliseconds for a CPU-bound statement), its

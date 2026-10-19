@@ -24,7 +24,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
   const { server, identity, auth } = session;
   const rows: [string, string][] = [
     ["Server", `${server.server?.name ?? ""} ${server.server?.version ?? ""}`.trim()],
-    ["Protocol", `Warp SQL ${server.protocol_versions.join(", ")}${server.draft ? ` (draft ${server.draft})` : ""}`],
+    ["Protocol", `Warp SQL ${server.protocol_versions.join(", ")}`],
     ["Capabilities", (server.capabilities ?? []).join(", ") || "none"],
     ["Signed in as", `${identity.user} (${identity.role})`],
     ["Session", identity.sessionId],

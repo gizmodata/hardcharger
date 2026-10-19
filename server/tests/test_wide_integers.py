@@ -75,13 +75,13 @@ def test_a_value_decimal128_cannot_hold_is_refused_never_sent_wrong(session, typ
     # The statement's error response (Warp SQL §6.1: a statement that has failed by the time
     # the server answers is its error, never a success status with a failed document).
     problem = session.error(sql=f"SELECT {lit(value, type_name)} AS x")
-    assert problem["status"] == 500 and problem["code"] == "execution_error", problem
+    assert problem["status"] == 422 and problem["code"] == "execution_error", problem
     assert "state" not in problem, problem  # an error response, not a statement document
     assert refusal(type_name=type_name, value=value) in problem["detail"], problem
     # The two ways around it, which carry the value exactly: VARCHAR,
     assert session.scalar(sql=f"SELECT {lit(value, type_name)}::VARCHAR") == str(value)
     # and DuckDB's lossless 16-byte type.
-    assert session.set_options(options={"arrow_lossless_conversion": True}).status_code == 200
+    assert session.set_options(options={"duckdb_arrow_lossless_conversion": True}).status_code == 200
     raw = session.query(sql=f"SELECT {lit(value, type_name)} AS x").column("x").combine_chunks().storage[0].as_py()
     assert lossless_value(raw=raw, signed=type_name == "HUGEINT") == value
 
@@ -102,7 +102,7 @@ def test_one_value_too_wide_fails_the_whole_result_and_nested_values_are_checked
 def test_lossless_conversion_carries_every_boundary_value(session, type_name, signed):
     values = [0, 2**63, 2**64, 10**38 - 1, 10**38, 2**127 - 1] + (
         [MIN_H, -1] if signed else [2**127, MAX_U])
-    assert session.set_options(options={"arrow_lossless_conversion": True}).status_code == 200
+    assert session.set_options(options={"duckdb_arrow_lossless_conversion": True}).status_code == 200
     literals = ", ".join(f"({lit(v, type_name)})" for v in values)
     column = session.query(sql=f"SELECT x FROM (VALUES {literals}, (NULL::{type_name})) t(x)").column("x")
     assert column.type.extension_name == "arrow.opaque" and column.type.type_name == type_name.lower()
@@ -167,10 +167,10 @@ def test_bulk_ingest(session):
                      "h": pa.array([decimal.Decimal(-(10**38 - 1)), decimal.Decimal(0)], type=pa.decimal128(38, 0))})
     assert session.ingest(table=rows, name="wide_in", mode="append").status_code == 200
     # DuckDB's lossless types, as a lossless query returns them, carry the extremes.
-    assert session.set_options(options={"arrow_lossless_conversion": True}).status_code == 200
+    assert session.set_options(options={"duckdb_arrow_lossless_conversion": True}).status_code == 200
     extremes = session.query(sql=f"SELECT {lit(MAX_U, 'UHUGEINT')} AS u, {lit(MIN_H, 'HUGEINT')} AS h")
     assert session.ingest(table=extremes, name="wide_in", mode="append").status_code == 200
-    assert session.set_options(options={"arrow_lossless_conversion": False}).status_code == 200
+    assert session.set_options(options={"duckdb_arrow_lossless_conversion": False}).status_code == 200
     assert session.rows(sql="SELECT u::VARCHAR AS u, h::VARCHAR AS h FROM wide_in ORDER BY h") == [
         {"u": str(MAX_U), "h": str(MIN_H)}, {"u": str(10**38 - 1), "h": str(-(10**38 - 1))}, {"u": None, "h": "0"}]
     # A decimal128 beyond its precision is refused, and so is decimal256, which DuckDB
@@ -202,13 +202,13 @@ def test_arrow_lossless_conversion_is_one_sessions_own(server):
     # session's HUGEINT, UUID and JSON results, while their options still said false.
     other = server.admin()
     user = server.as_role(role="user", subject="lossless-user")
-    assert user.set_options(options={"arrow_lossless_conversion": True}).status_code == 200
+    assert user.set_options(options={"duckdb_arrow_lossless_conversion": True}).status_code == 200
     assert user.query(sql="SELECT 1::HUGEINT AS x").schema.field("x").type.extension_name == "arrow.opaque"
     for session in [other, server.admin()]:  # one open before, one opened after
         assert session.query(sql="SELECT 1::HUGEINT AS x").schema.field("x").type == pa.decimal128(38, 0)
-        assert session.options()["arrow_lossless_conversion"] is False
+        assert session.options()["duckdb_arrow_lossless_conversion"] is False
     # Switching it back is the session's own too.
-    assert user.set_options(options={"arrow_lossless_conversion": False}).status_code == 200
+    assert user.set_options(options={"duckdb_arrow_lossless_conversion": False}).status_code == 200
     assert user.query(sql="SELECT 1::HUGEINT AS x").schema.field("x").type == pa.decimal128(38, 0)
 
 
@@ -220,10 +220,10 @@ def lossless_in(session) -> bool:
 
 
 def reported(session) -> bool:
-    """The session document's arrow_lossless_conversion, read again (an empty PATCH)."""
+    """The session document's duckdb_arrow_lossless_conversion, read again (an empty PATCH)."""
     response = session.set_options(options={})
     assert response.status_code == 200, response.text
-    return response.json()["options"]["arrow_lossless_conversion"]
+    return response.json()["options"]["duckdb_arrow_lossless_conversion"]
 
 
 def test_set_session_is_the_sessions_own_and_a_plain_set_is_global(launcher):
@@ -237,9 +237,9 @@ def test_set_session_is_the_sessions_own_and_a_plain_set_is_global(launcher):
     user = server.as_role(role="user", subject="plain-set-user")
     # SET SESSION in SQL: this session only, and its option says so.
     one.execute(sql="SET SESSION arrow_lossless_conversion = true")
-    assert lossless_in(session=one) and one.options()["arrow_lossless_conversion"] is True
+    assert lossless_in(session=one) and one.options()["duckdb_arrow_lossless_conversion"] is True
     for session in (other, user):
-        assert not lossless_in(session=session) and session.options()["arrow_lossless_conversion"] is False
+        assert not lossless_in(session=session) and session.options()["duckdb_arrow_lossless_conversion"] is False
     # A non-administrator's plain SET is a global one, and refused.
     refused = user.error(sql="SET arrow_lossless_conversion = true")
     assert refused["detail"].startswith("Permission Error: Hardcharger blocked this statement: SET GLOBAL needs the "
@@ -252,10 +252,10 @@ def test_set_session_is_the_sessions_own_and_a_plain_set_is_global(launcher):
     for session in (user, later, other):
         assert lossless_in(session=session) and reported(session=session) is True
     # A session's own value still wins over the default.
-    assert user.set_options(options={"arrow_lossless_conversion": False}).status_code == 200
-    assert not lossless_in(session=user) and user.options()["arrow_lossless_conversion"] is False
+    assert user.set_options(options={"duckdb_arrow_lossless_conversion": False}).status_code == 200
+    assert not lossless_in(session=user) and user.options()["duckdb_arrow_lossless_conversion"] is False
     one.execute(sql="SET SESSION arrow_lossless_conversion = false")
-    assert not lossless_in(session=one) and one.options()["arrow_lossless_conversion"] is False
+    assert not lossless_in(session=one) and one.options()["duckdb_arrow_lossless_conversion"] is False
     # RESET GLOBAL brings back the default (false) for those without their own.
     other.execute(sql="RESET GLOBAL arrow_lossless_conversion")
     assert not lossless_in(session=later) and reported(session=later) is False

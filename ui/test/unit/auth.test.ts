@@ -61,7 +61,7 @@ describe("signIn", () => {
     vi.stubGlobal("fetch", async () => {
       throw new TypeError("Failed to fetch");
     });
-    await expect(signIn("joe", "x")).rejects.toMatchObject({ code: "transport_error" });
+    await expect(signIn("joe", "x")).rejects.toMatchObject({ code: "client_transport_error" });
   });
 });
 
