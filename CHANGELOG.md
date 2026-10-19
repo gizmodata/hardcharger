@@ -9,6 +9,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Web UI: the README's screenshots show the editor's tabs, a script's result tabs and an open
+  transaction; tests for a script's 64 MiB cap (unit) and for a browser that blocks IndexedDB
+  (`saved-blocked.spec.ts`: the panel says it can't keep saved queries, Save says so, queries
+  still run).
 - Web UI, saved queries, Run as and downloads: saved queries in folders, kept in this
   browser (IndexedDB, per user; the page works without it), with Save (Ctrl/⌘+S; the same
   query after the first time), Save as…, the unsaved dot, new folder, rename, move by drag,

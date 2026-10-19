@@ -69,7 +69,11 @@ export async function runScript(options: {
   /** Called after each statement ends, before the next one starts (for a session check). */
   afterStatement?: (run: StatementRun) => Promise<void>;
   now?: () => number;
+  /** The caps (default: maxResultSets, maxResultBytes). */
+  limits?: { resultSets?: number; bytes?: number };
 }): Promise<ScriptRun> {
+  const capSets = options.limits?.resultSets ?? maxResultSets;
+  const capBytes = options.limits?.bytes ?? maxResultBytes;
   const { statements, execute, rowLimit, signal } = options;
   const now = options.now ?? (() => performance.now());
   const started = now();
@@ -94,7 +98,7 @@ export async function runScript(options: {
         run.rowsAffected = affected;
       } else {
         const schema = await stream.schema();
-        const keep = resultSets.length < maxResultSets && bytes < maxResultBytes;
+        const keep = resultSets.length < capSets && bytes < capBytes;
         const batches: RecordBatch[] = [];
         let rows = 0;
         let held = 0;
@@ -120,7 +124,7 @@ export async function runScript(options: {
         run.status = "rows";
         run.rows = rows;
         run.truncated = truncated;
-        if (keep && bytes + held <= maxResultBytes) {
+        if (keep && bytes + held <= capBytes) {
           run.resultSet = resultSets.length;
           resultSets.push({ statement: i, table: new Table(schema, batches), truncated, bytes: held });
           bytes += held;

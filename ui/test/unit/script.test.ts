@@ -126,6 +126,23 @@ describe("runScript", () => {
     ]);
   });
 
+  it("keeps results up to the byte cap; a result that would pass it is listed without rows", async () => {
+    const run = await runScript({
+      statements: ["SELECT small", "SELECT big", "SELECT small"],
+      execute: fake({ "SELECT small": () => rows(10), "SELECT big": () => rows(100_000) }),
+      rowLimit: 1_000_000,
+      signal: new AbortController().signal,
+      limits: { bytes: 64 * 1024 },
+    });
+    expect(run.statements.map((s) => [s.status, s.rows, s.omitted ?? false])).toEqual([
+      ["rows", 10, false],
+      ["rows", 100_000, true],
+      ["rows", 10, false],
+    ]);
+    expect(run.resultSets.map((r) => r.statement)).toEqual([0, 2]);
+    expect(run.resultSets.reduce((n, r) => n + r.bytes, 0)).toBeLessThanOrEqual(64 * 1024);
+  });
+
   it("a cancel stops the statement running and every one after it", async () => {
     const abort = new AbortController();
     const run = await runScript({

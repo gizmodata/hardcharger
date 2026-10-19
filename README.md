@@ -52,7 +52,7 @@ Enterprise in GizmoSQL is in every Hardcharger build.
 ## 🖥️ Built-in web UI
 
 <p align="center">
-  <img src="docs/assets/web-ui-query-light.png" alt="Hardcharger's web UI, light theme: the schema browser, the SQL editor and a result" width="49%">
+  <img src="docs/assets/web-ui-query-light.png" alt="Hardcharger's web UI, light theme: the schema browser, two editor tabs, a script's result tabs, and an open transaction with Commit and Rollback" width="49%">
   <img src="docs/assets/web-ui-query-dark.png" alt="Hardcharger's web UI, dark theme" width="49%">
 </p>
 

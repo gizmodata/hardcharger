@@ -13,7 +13,7 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
 (plain HTTP and Apache Arrow) to the server with [`@gizmodata/warp-sql`](https://github.com/gizmodata/warp-sql-js).
 
 <p align="center">
-  <img src="../docs/assets/web-ui-query-light.png" alt="The web UI: the schema browser, the SQL editor and a result" width="80%">
+  <img src="../docs/assets/web-ui-query-light.png" alt="The web UI: the schema browser, two editor tabs, a script's result tabs, and an open transaction" width="80%">
 </p>
 
 - ✍️ **SQL editor** (Monaco), in tabs: up to 20, each with its own Warp SQL session, so one
