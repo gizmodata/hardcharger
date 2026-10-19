@@ -32,6 +32,14 @@ own changelog in `python/CHANGELOG.md`.
   in between: an explicit port 443 kept on plain HTTP, exact wide integers in JSON
   parameters, and client-certificate sign-in through the client.
 
+### Fixed
+
+- `hardcharger`: after a `KILL SESSION` (or another `session_ended`), the statement it caught
+  printed the server's "Sign in again and open a new session to re-authenticate" right below
+  the client's "a new session is open". The client has done both by then; it now says "The
+  statement did not complete: its session ended (killed). It was not run again; run it again
+  to run it in the new session." `test_client_cli.py` checks the whole message.
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file

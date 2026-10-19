@@ -418,9 +418,13 @@ def test_a_killed_session_is_reported_and_reopened(server, tmp_path):
     result = run(server, "--csv", "--no-header", "--command", script)
     stderr = strip_ansi(result.stderr)
     assert result.stdout == "before\nreopened\n", (result.stdout, stderr)
-    assert ("Warning: the server ended this session: an administrator ended it (killed); a new session is open."
-            in stderr), stderr
-    assert "Error: This session has been killed by an administrator" in stderr, stderr
+    # The client already signed in again and opened a new session: it says what became of
+    # the statement, not the server's advice to do what it just did.
+    assert stderr == ("Warning: the server ended this session: an administrator ended it (killed); a new session is "
+                      "open. Temporary tables and session settings are gone.\n"
+                      "Error: The statement did not complete: its session ended (killed). It was not run again; run "
+                      "it again to run it in the new session.\n"), stderr
+    assert "Sign in again" not in stderr, stderr
     assert result.returncode == 1  # the statement the kill caught failed
 
 
