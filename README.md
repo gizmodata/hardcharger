@@ -378,6 +378,69 @@ maps its options and lists what changed.
 | 🚦 Statement queue, timeouts, `KILL SESSION`, graceful shutdown | ✅ |
 | 💳 License key | Not needed |
 
+## 🆚 Why Hardcharger instead of Quack?
+
+[Quack](https://duckdb.org/docs/current/quack/overview) is DuckDB Labs' own remote protocol: a
+DuckDB extension that lets one DuckDB serve its databases (`CALL quack_serve(...)`) and another
+`ATTACH` them over HTTP. It comes from DuckDB's extension repository and loads on first use,
+works on every platform DuckDB ships extensions for (Windows included) and in the browser through
+DuckDB-Wasm, lets one query join remote tables with local ones, and it is fast. If every client
+is a DuckDB you trust, Quack is the easy choice.
+
+Hardcharger™ is built for the other case: one server that many people and applications share,
+reached through drivers, with each user's access governed by the server. Both are young (Quack
+is an experimental extension, Hardcharger is 0.x); this is what each offers today:
+
+| | Hardcharger | Quack |
+|---|:---:|:---:|
+| `ATTACH` from DuckDB, joining remote tables with local ones | ❌ | ✅ |
+| Drivers that don't embed DuckDB: ADBC, JDBC, JavaScript, `curl` | ✅ | ❌ ¹ |
+| Browsers | ✅ | ✅ ² |
+| Bind parameters sent to the server | ✅ | ❌ ³ |
+| Bulk ingest, cancellation | ✅ | ✅ |
+| TLS | ✅ | ✅ ⁴ |
+| Users with passwords, tokens, SSO (OIDC/JWKS) | ✅ | partial ⁵ |
+| Client certificates (mTLS), as identity too | ✅ | ❌ ⁶ |
+| Roles and grants, checked against each statement's plan | ✅ | partial ⁷ |
+| Row policies, column masking, tenants, Open Policy Agent | ✅ | ❌ |
+| Tamper-evident audit log | ✅ | ❌ |
+| Instrumentation tables, Prometheus `/metrics` | ✅ | partial ⁸ |
+| Statement queue, statement timeouts, `KILL SESSION` | ✅ | partial ⁹ |
+| Standalone server: binaries, Docker image, Windows MSI, YAML config | ✅ | ❌ ¹⁰ |
+| Built-in web UI | ✅ | ❌ |
+| Written, versioned protocol spec with a conformance suite | ✅ | partial ¹¹ |
+| License | Apache 2.0 | MIT |
+
+1. Quack's clients are DuckDB itself (the CLI, or a DuckDB library such as Python's or
+   DuckDB-Wasm) with the extension loaded. Results travel in DuckDB's own format, not Arrow.
+2. Through DuckDB-Wasm. The Quack endpoint allows every origin (`Access-Control-Allow-Origin: *`).
+3. Quack sends SQL text only. `SELECT … WHERE i = ?` on an attached table fails ("Values were not
+   provided for the following parameters"), because the client sends `WHERE (i = $1)` to the
+   server without the value. It runs with `SET disabled_optimizers = 'remote_pushdown'`, but then
+   the client reads the whole table and filters it locally.
+4. The server can use its own certificate or a self-signed one it generates; clients check it
+   against a CA or pin its SHA-256 fingerprint.
+5. One shared token by default. `quack_authentication_function` can point at your own SQL
+   function (per-user tokens from a table, say), but the server keeps no user for the session;
+   DuckDB's docs suggest writing an extension to record one.
+6. The Quack server doesn't ask for a client certificate.
+7. A hook, `quack_authorization_function`, gets each statement's text and can allow, refuse or
+   rewrite it; by default it allows everything. DuckDB has no roles or grants.
+8. Every Quack message can go to DuckDB's log (`CALL enable_logging('Quack')`), and
+   `quack_active_connections()` lists connections and their current SQL. We found no metrics
+   endpoint.
+9. A connection limit (`quack_server_max_connections`) and `quack_cancel()`, which stops another
+   connection's query. We found no statement queue and no server-side statement timeout.
+10. Quack serves from inside any DuckDB process that runs `CALL quack_serve(...)`, and is set up
+    with DuckDB settings in SQL.
+11. Quack's protocol has a version that client and server agree on (version 3 in DuckDB 2.0),
+    and its messages are defined in the extension's source. We found no separate specification or
+    conformance suite, and DuckDB's docs say the protocol may still change.
+
+Checked on running servers, with Quack `e7a9be3f8c` (the commit DuckDB 2.0 pins and its extension
+repository serves) and Hardcharger 0.3.0; [docs/hardcharger-vs-quack.md](docs/hardcharger-vs-quack.md)
+shows how.
+
 ## ⚙️ Configuration
 
 Every option is a flag (`--read-only`), an environment variable (`HARDCHARGER_READ_ONLY`)
