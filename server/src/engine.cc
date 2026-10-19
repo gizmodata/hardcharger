@@ -2,7 +2,10 @@
 
 #include <arrow/record_batch.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
+#include <regex>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -568,9 +571,41 @@ void Session::CheckEnded() {
   if (guard_) guard_->RequireLive();
 }
 
+namespace {
+
+// DuckDB 2.0 drops a view's own catalog from the names in its query (BindCreateViewInfo:
+// RemotePushdownOptimizer::StripCatalogName, so the view keeps working under another
+// alias), and binds what is left with the ambiguity check for a two-part name. In a
+// catalog that has a schema of its own name, CREATE VIEW x.x.v AS SELECT * FROM x.x.t
+// then fails as "Ambiguous reference to catalog or schema "x"", though the name was fully
+// qualified (DuckDB 1.5 accepts it). DuckDB's message says to qualify the name, which it
+// already is; this says what really happens and what works instead.
+void ExplainViewAmbiguity(std::string_view sql, const Error& error) {
+  const std::string_view message = error.what();
+  if (message.find("Ambiguous reference to catalog or schema") == std::string_view::npos) return;
+  std::string lowered(sql.substr(0, 512));
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) { return std::tolower(c); });
+  static const std::regex kCreateView(R"(^\s*create\s+(or\s+replace\s+)?(temp\s+|temporary\s+)?view\b)");
+  if (!std::regex_search(lowered, kCreateView)) return;
+  throw Error(error.code(),
+              std::string(message) +
+                  "\nHardcharger: DuckDB 2.0 drops the view's own catalog from the names in its query (x.x.t is "
+                  "read as x.t), so in a catalog that has a schema with the catalog's name, a fully qualified "
+                  "name is ambiguous too. Create the view in another catalog (CREATE VIEW memory.main.v AS SELECT "
+                  "* FROM x.x.t) or use a schema with another name.",
+              error.sqlstate());
+}
+
+}  // namespace
+
 warpsql::StatementOutcome Session::Guarded(std::string_view sql, bool has_parameters,
                                            const std::function<warpsql::StatementOutcome()>& run) {
-  return guard_ ? guard_->Execute(sql, has_parameters, run) : run();
+  try {
+    return guard_ ? guard_->Execute(sql, has_parameters, run) : run();
+  } catch (const Error& error) {
+    ExplainViewAmbiguity(sql, error);
+    throw;
+  }
 }
 
 void Session::FinishRunning() { running_--; }

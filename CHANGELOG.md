@@ -100,6 +100,14 @@ own changelog in `python/CHANGELOG.md`.
   (plain, stdin from /dev/null, from a closed pipe, a script on a pipe), and two client
   unit tests cover the watcher with SIGINT ignored.
 
+- CREATE VIEW in catalog `x` over a schema also named `x` (`CREATE VIEW x.x.v AS SELECT *
+  FROM x.x.t`) fails, as it does on plain DuckDB 2.0 (DuckDB 1.5 creates it): DuckDB drops
+  the view's own catalog from the names in its query and then finds `x.t` ambiguous.
+  Hardcharger's error now says what happens and what works (create the view in another
+  catalog, or rename the schema), where DuckDB's message said to qualify a name that
+  already was; `docs/migrating-from-gizmosql.md` documents it.
+  `test_view_catalog_schema_same_name.py` covers it with access control on and off.
+
 ### Documentation
 
 - README: "Why Hardcharger instead of Quack?", a feature comparison with DuckDB's Quack

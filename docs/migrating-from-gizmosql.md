@@ -243,6 +243,18 @@ owner still reads it with the owner's rights at query time, so a REVOKE after th
 created still closes it. Administrators, and servers without access control, are
 unchanged. (DuckDB has no `ALTER VIEW` that changes a view's query.)
 
+### A view in catalog `x` over a schema also named `x` (DuckDB 2.0)
+
+DuckDB 2.0 drops a view's own catalog from the names in its query, so a view keeps working
+when its database is attached under another name. What is left is bound as a two-part name,
+so in a catalog that has a schema with the catalog's name, even a fully qualified name is
+ambiguous: `CREATE VIEW x.x.v AS SELECT * FROM x.x.t` fails with "Ambiguous reference to
+catalog or schema "x"" (GizmoSQL 1.x, on DuckDB 1.x, creates it). This is DuckDB's
+behaviour, with or without access control, and Hardcharger's error says so. Create the
+view in another catalog (`CREATE VIEW memory.main.v AS SELECT * FROM x.x.t`), or give the
+schema another name. Inside such a view, a two-part `x.t` is read as schema `x` of the
+view's catalog.
+
 ### HUGEINT and UHUGEINT results
 
 Both arrive as Arrow decimal128(38, 0), as from DuckDB's own Arrow export. A value that
