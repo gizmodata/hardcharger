@@ -15,7 +15,7 @@ import pytest
 from conftest import TOKEN, fake_server_script, make_tarball
 
 import hardcharger
-from hardcharger import _install
+from hardcharger import SERVER_VERSION, _install
 from hardcharger._install import InstallError, detect_platform, ensure_server, github_token
 
 
@@ -96,11 +96,14 @@ def test_download_installs_the_release(fake_github, monkeypatch, tmp_path, capsy
     monkeypatch.setenv("HARDCHARGER_INSTALL_TOKEN", TOKEN)
     binary = ensure_server()
     platform_name = detect_platform()
-    assert binary == tmp_path / "cache" / "v0.2.0" / platform_name / "bin" / "hardcharger-server"
+    assert (
+        binary
+        == tmp_path / "cache" / f"v{SERVER_VERSION}" / platform_name / "bin" / "hardcharger-server"
+    )
     assert binary.stat().st_mode & stat.S_IXUSR
     assert (binary.parent.parent / "LICENSE").read_text() == "Apache-2.0"
     assert subprocess.run(args=[binary, "--version"], capture_output=True, text=True).stdout == (
-        "Hardcharger 0.2.0\n"
+        f"Hardcharger {SERVER_VERSION}\n"
     )
     # The token went to the API and nowhere else, and is never printed.
     assert [r.authorization for r in fake_github.api_requests] == [f"Bearer {TOKEN}"] * 2
@@ -121,12 +124,12 @@ def test_token_is_not_sent_to_the_storage_host(fake_github, monkeypatch):
 
 def test_version_argument_and_variable(fake_github, monkeypatch):
     monkeypatch.setenv("HARDCHARGER_INSTALL_TOKEN", TOKEN)
-    fake_github.version = "0.3.0"
-    fake_github.tarball = make_tarball(platform_name=detect_platform(), version="0.3.0")
+    fake_github.version = "0.9.0"  # any version but the pin
+    fake_github.tarball = make_tarball(platform_name=detect_platform(), version="0.9.0")
     fake_github.digest = "sha256:" + hashlib.sha256(fake_github.tarball).hexdigest()
-    monkeypatch.setenv("HARDCHARGER_VERSION", "v0.3.0")
-    assert ensure_server().parts[-4] == "v0.3.0"
-    assert ensure_server(version="0.3.0").parts[-4] == "v0.3.0"
+    monkeypatch.setenv("HARDCHARGER_VERSION", "v0.9.0")
+    assert ensure_server().parts[-4] == "v0.9.0"
+    assert ensure_server(version="0.9.0").parts[-4] == "v0.9.0"
 
 
 def test_without_a_token_the_error_says_how_to_get_access(fake_github, monkeypatch):
@@ -134,7 +137,7 @@ def test_without_a_token_the_error_says_how_to_get_access(fake_github, monkeypat
     with pytest.raises(expected_exception=InstallError) as error:
         ensure_server()
     message = str(error.value)
-    assert "couldn't find Hardcharger release v0.2.0 on GitHub (HTTP 404)" in message
+    assert f"couldn't find Hardcharger release v{SERVER_VERSION} on GitHub (HTTP 404)" in message
     assert (
         "set HARDCHARGER_INSTALL_TOKEN to a GitHub token that can read gizmodata/hardcharger"
         in (message)
@@ -163,7 +166,7 @@ def test_a_digest_mismatch_is_refused(fake_github, monkeypatch, tmp_path):
     with pytest.raises(expected_exception=InstallError) as error:
         ensure_server()
     assert "doesn't match the SHA-256 GitHub recorded for it" in str(error.value)
-    assert not (tmp_path / "cache" / "v0.2.0" / detect_platform()).exists()
+    assert not (tmp_path / "cache" / f"v{SERVER_VERSION}" / detect_platform()).exists()
 
 
 def test_a_binary_reporting_another_version_is_refused(fake_github, monkeypatch, tmp_path):
@@ -172,8 +175,8 @@ def test_a_binary_reporting_another_version_is_refused(fake_github, monkeypatch,
     fake_github.digest = "sha256:" + hashlib.sha256(fake_github.tarball).hexdigest()
     with pytest.raises(expected_exception=InstallError) as error:
         ensure_server()
-    assert "of release v0.2.0 reports version 0.1.9" in str(error.value)
-    assert not (tmp_path / "cache" / "v0.2.0" / detect_platform()).exists()
+    assert f"of release v{SERVER_VERSION} reports version 0.1.9" in str(error.value)
+    assert not (tmp_path / "cache" / f"v{SERVER_VERSION}" / detect_platform()).exists()
 
 
 @pytest.mark.parametrize(
@@ -188,7 +191,7 @@ def test_a_tarball_member_outside_the_target_is_refused(fake_github, monkeypatch
         ensure_server()
     assert "refusing to unpack" in str(error.value)
     assert not (tmp_path / "cache" / "escaped.txt").exists()
-    assert not (tmp_path / "cache" / "v0.2.0" / "escaped.txt").exists()
+    assert not (tmp_path / "cache" / f"v{SERVER_VERSION}" / "escaped.txt").exists()
     assert not Path("/tmp/hardcharger-absolute-escape.txt").exists()
 
 
@@ -246,7 +249,7 @@ def test_cli_download_prints_the_path(fake_github, monkeypatch, tmp_path):
     result = _python_m("download")
     assert result.returncode == 0, result.stderr
     assert Path(result.stdout.strip()) == (
-        tmp_path / "cache" / "v0.2.0" / detect_platform() / "bin" / "hardcharger-server"
+        tmp_path / "cache" / f"v{SERVER_VERSION}" / detect_platform() / "bin" / "hardcharger-server"
     )
     assert TOKEN not in result.stdout + result.stderr
 

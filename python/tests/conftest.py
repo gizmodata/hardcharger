@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from hardcharger import SERVER_VERSION
 from hardcharger._install import detect_platform
 
 TEST_BINARY_ENV = "HARDCHARGER_PY_TEST_SERVER_BINARY"
@@ -61,7 +62,7 @@ def fake_server_script(version: str) -> bytes:
 
 
 def make_tarball(
-    platform_name: str, version: str = "0.2.0", extra: dict[str, bytes] | None = None
+    platform_name: str, version: str = SERVER_VERSION, extra: dict[str, bytes] | None = None
 ) -> bytes:
     """A release tarball shaped like the real ones: hardcharger-<platform>/bin/...,
     lib/, LICENSE."""
@@ -105,7 +106,7 @@ class FakeGitHub:
     makes the API answer 404 without the right token, as GitHub does for a private
     repository."""
 
-    def __init__(self, tarball: bytes, version: str = "0.2.0", digest: str | None = None):
+    def __init__(self, tarball: bytes, version: str = SERVER_VERSION, digest: str | None = None):
         self.tarball = tarball
         self.version = version
         self.digest = (

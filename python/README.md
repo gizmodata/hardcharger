@@ -61,9 +61,9 @@ The package also installs `hardcharger-server`, which runs the downloaded server
 
 ```console
 $ hardcharger-server --version
-Hardcharger 0.2.0
+Hardcharger 0.3.0
 $ python -m hardcharger download       # download (if needed) and print the binary's path
-/home/me/.cache/hardcharger/v0.2.0/linux-amd64/bin/hardcharger-server
+/home/me/.cache/hardcharger/v0.3.0/linux-amd64/bin/hardcharger-server
 ```
 
 ## The download
