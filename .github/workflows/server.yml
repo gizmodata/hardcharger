@@ -8,8 +8,9 @@
 #     (ASan, TSan), which a manual run adds with `full`;
 #   - a push to main: when the same commit already passed this workflow in a push or
 #     manual run (main moves by fast-forwarding a branch that ran it), no tests at all:
-#     the image job publishes `:main` from that run's tested tarballs. Otherwise the same
-#     as a manual run.
+#     the image job publishes `:main` from that run's tested tarballs, and the
+#     compile-cache warm-up jobs build (never test) each platform whose compile cache main
+#     lacks (see `warm-linux-amd64`). Otherwise the same as a manual run.
 name: server
 
 # Not for changes that build, test and package nothing: the documentation (docs/, Markdown
@@ -131,6 +132,7 @@ jobs:
       ui: ${{ steps.diff.outputs.ui }}
       tested: ${{ steps.tested.outputs.tested }}
       tested_run: ${{ steps.tested.outputs.run }}
+      warm: ${{ steps.warm.outputs.warm }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -158,6 +160,29 @@ jobs:
             echo "tested=false" >> "$GITHUB_OUTPUT"
           fi
           cat "$RUNNER_TEMP/tested"
+      # Its tests, against a fake gh (about a second).
+      - name: Test the compile-cache check
+        run: bash .github/scripts/test-stale-compile-caches.sh
+      # On main, when the tests are skipped (so no build saves a compile cache there): the
+      # build platforms whose compile cache main lacks or has only an old one of
+      # (.github/scripts/stale-compile-caches.sh), as a JSON list for the warm-up jobs. Any
+      # doubt lists every platform. Everywhere else: none (`[]`).
+      - id: warm
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED: ${{ steps.tested.outputs.tested }}
+        run: |
+          # Every leg of the build job's and windows.yml's matrices (not the sanitizers').
+          platforms=(linux-amd64 linux-arm64 macos-arm64 windows-amd64 windows-arm64)
+          if [ "$TESTED" = true ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            if ! out=$(.github/scripts/stale-compile-caches.sh "$GITHUB_REPOSITORY" "${platforms[@]}" 2>> "$GITHUB_STEP_SUMMARY") ||
+               [[ "$out" != "warm=["* ]]; then
+              out="warm=$(jq -cn '$ARGS.positional' --args "${platforms[@]}")"
+            fi
+          else
+            out="warm=[]"
+          fi
+          echo "$out" | tee -a "$GITHUB_OUTPUT"
       - id: diff
         env:
           EVENT: ${{ github.event_name }}
@@ -288,27 +313,34 @@ jobs:
           # tarballs run on any distribution with glibc 2.28 or newer, not only on the
           # runner image. Pinned by digest: a new image is a deliberate bump (and a cold
           # dependency build), never a surprise.
-          - name: linux-amd64
+          # (Each leg and step marked &name is reused, unchanged, by the compile-cache
+          # warm-up jobs below; YAML anchors.)
+          - &leg-linux-amd64
+            name: linux-amd64
             runner: ubuntu-24.04
             manylinux: quay.io/pypa/manylinux_2_28_x86_64:2026.10.10-1@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae
-          - name: linux-arm64
+          - &leg-linux-arm64
+            name: linux-arm64
             runner: ubuntu-24.04-arm
             manylinux: quay.io/pypa/manylinux_2_28_aarch64:2026.10.10-1@sha256:abd1230aa9e4058a74b89d27cd14ba18c0db036d7bfe6e6f219a29ea63c24eb6
-          - name: macos-arm64
+          - &leg-macos-arm64
+            name: macos-arm64
             runner: macos-15
     needs: [changes, web-ui]
     if: needs.changes.outputs.tested != 'true'
     runs-on: ${{ matrix.runner }}
-    env:
+    env: &build-env
       HARDCHARGER_MANYLINUX_IMAGE: ${{ matrix.manylinux }}
     steps:
-      - uses: actions/checkout@v7
+      - &build-checkout
+        uses: actions/checkout@v7
       # Inside the checkout: the Linux build's container mounts only that.
       - uses: actions/download-artifact@v8
         with:
           name: hardcharger-ui
           path: server/.web-ui
-      - name: The web UI tarball
+      - &build-ui-tarball
+        name: The web UI tarball
         run: |
           shopt -s nullglob
           ui=("$PWD"/server/.web-ui/hardcharger-ui-*.tar.gz)
@@ -316,7 +348,8 @@ jobs:
           echo "HARDCHARGER_UI_TARBALL=${ui[0]}" >> "$GITHUB_ENV"
       # The warp-sql submodule is private: fetch it with its read-only deploy key (the
       # key reaches only that repository, so the main checkout uses the usual token).
-      - name: Fetch the warp-sql submodule
+      - &build-submodule
+        name: Fetch the warp-sql submodule
         env:
           DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
         run: |
@@ -328,7 +361,8 @@ jobs:
           rm -f "$key"
 
       # (The Linux build tools are in the manylinux image; the build installs the rest.)
-      - name: Install build tools (macOS)
+      - &build-tools
+        name: Install build tools (macOS)
         if: runner.os == 'macOS'
         run: brew install ninja
 
@@ -336,7 +370,8 @@ jobs:
       # recipes and the exact toolchain: on Linux the manylinux image's tag and digest, on
       # macOS the Xcode and clang builds. Only what misses is built (in the manylinux image
       # on Linux), and each is saved right after it is built.
-      - name: Toolchain
+      - &build-toolchain
+        name: Toolchain
         id: toolchain
         run: |
           if [ "$RUNNER_OS" = macOS ]; then
@@ -362,28 +397,32 @@ jobs:
           echo "CMAKE_BUILD_PARALLEL_LEVEL=$(getconf _NPROCESSORS_ONLN)" >> "$GITHUB_ENV"
       # OpenSSL 3, static: linked into everything the release ships, so no user needs an
       # OpenSSL 3 of their own (EL8 has 1.1; a Mac has none outside Homebrew).
-      - name: OpenSSL, static (cached)
+      - &build-dep-openssl
+        name: OpenSSL, static (cached)
         uses: ./.github/actions/dep-cache
         with:
           dependency: openssl
           platform: ${{ matrix.name }}
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: ${{ steps.toolchain.outputs.build }}
-      - name: Arrow (cached)
+      - &build-dep-arrow
+        name: Arrow (cached)
         uses: ./.github/actions/dep-cache
         with:
           dependency: arrow
           platform: ${{ matrix.name }}
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: ${{ steps.toolchain.outputs.build }}
-      - name: replxx (cached)
+      - &build-dep-replxx
+        name: replxx (cached)
         uses: ./.github/actions/dep-cache
         with:
           dependency: replxx
           platform: ${{ matrix.name }}
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: ${{ steps.toolchain.outputs.build }}
-      - name: DuckDB (cached)
+      - &build-dep-duckdb
+        name: DuckDB (cached)
         uses: ./.github/actions/dep-cache
         with:
           dependency: duckdb
@@ -392,8 +431,10 @@ jobs:
           extra-recipes: ${{ steps.toolchain.outputs.duckdb_extra }}
           build: ${{ steps.toolchain.outputs.build }}
 
-      - uses: mozilla-actions/sccache-action@v0.0.11
-      - name: sccache directory (restore)
+      - &build-sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+      - &build-sccache-restore
+        name: sccache directory (restore)
         uses: ./.github/actions/sccache-dir
         with:
           mode: restore
@@ -401,7 +442,8 @@ jobs:
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
       # On Linux, in the manylinux image (server/scripts/build-portable-linux.sh, which
       # also checks the glibc baseline); the tests then run the binaries on the runner.
-      - name: Build the server
+      - &build-server
+        name: Build the server
         id: build
         run: |
           # (warpsql-client-tests and warpsql-sdk-tests, Warp SQL's own tests, build on request.)
@@ -569,6 +611,96 @@ jobs:
         with:
           name: hardcharger-${{ matrix.name }}
           path: dist/hardcharger-${{ matrix.name }}.tar.gz
+
+  # Compile-cache warm-up. GitHub Actions caches are per branch: a branch restores its own
+  # entries and main's, never another branch's. A push to main whose tests are skipped
+  # (changes.outputs.tested) runs no build, so it used to leave main no compile cache, and
+  # every new branch compiled cold (Windows' "Build the server": ~20 min cold, ~6 warm).
+  # These jobs build what the build job builds, with the same steps (YAML anchors: same
+  # toolchain, flags and launcher, so the entries match what branch builds look up) and no
+  # tests or packages, then save main's sccache directory under the same key scheme, whose
+  # prefix is the branches' restore key. Each runs only when changes.outputs.warm lists its
+  # platform: main has no entry for the current toolchain less than 7 days old
+  # (.github/scripts/stale-compile-caches.sh), so most pushes start none. One job per
+  # platform, since a job's `if` can't see its matrix leg. Nothing waits for them (the image
+  # job doesn't), and tags never run them. The web UI is the tested run's (built from this
+  # commit), so its generated source compiles as in a branch run. Windows: windows.yml's
+  # warm-up jobs (`windows-warm` below).
+  warm-linux-amd64:
+    name: warm compile cache (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.tested == 'true' && contains(needs.changes.outputs.warm, '"linux-amd64"')
+    strategy:
+      matrix:
+        include:
+          - *leg-linux-amd64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read  # the tested run's web UI artifact
+    env: *build-env
+    steps: &warm-steps
+      - *build-checkout
+      - name: The tested run's web UI
+        uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-ui
+          path: server/.web-ui
+          run-id: ${{ needs.changes.outputs.tested_run }}
+          github-token: ${{ github.token }}
+      - *build-ui-tarball
+      - *build-submodule
+      - *build-tools
+      - *build-toolchain
+      - *build-dep-openssl
+      - *build-dep-arrow
+      - *build-dep-replxx
+      - *build-dep-duckdb
+      - *build-sccache
+      - *build-sccache-restore
+      - *build-server
+      # Only after a whole build (a cancelled one would look fresh to the next push), and
+      # even when it added nothing: this entry is what tells the next push main is warm.
+      - name: sccache directory (save)
+        uses: ./.github/actions/sccache-dir
+        with:
+          mode: save
+          name: ${{ matrix.name }}
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          force: true
+
+  warm-linux-arm64:
+    name: warm compile cache (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.tested == 'true' && contains(needs.changes.outputs.warm, '"linux-arm64"')
+    strategy:
+      matrix:
+        include:
+          - *leg-linux-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read
+    env: *build-env
+    steps: *warm-steps
+
+  warm-macos-arm64:
+    name: warm compile cache (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.tested == 'true' && contains(needs.changes.outputs.warm, '"macos-arm64"')
+    strategy:
+      matrix:
+        include:
+          - *leg-macos-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read
+    # (No build-env: it names the manylinux image, which a macOS leg has none of.)
+    steps: *warm-steps
 
   # The Linux tarballs on the oldest glibc they claim (2.28): installed on Oracle Linux 8,
   # each starts, verifies TLS against the system's CA bundle and answers a query through
@@ -1054,8 +1186,26 @@ jobs:
     secrets: inherit
     with:
       failure_repro: ${{ inputs.failure_repro == true }}
+    # actions: read for windows.yml's warm-up jobs (skipped here): a called workflow's jobs
+    # may ask only for what the caller grants, checked before any job is skipped.
     permissions:
       contents: read
+      actions: read
+
+  # Windows' compile-cache warm-up (the warm-* jobs above, for windows-amd64 and windows-arm64).
+  windows-warm:
+    needs: changes
+    if: >-
+      needs.changes.outputs.tested == 'true'
+      && (contains(needs.changes.outputs.warm, '"windows-amd64"') || contains(needs.changes.outputs.warm, '"windows-arm64"'))
+    uses: ./.github/workflows/windows.yml
+    secrets: inherit
+    with:
+      warm: ${{ needs.changes.outputs.warm }}
+      tested_run: ${{ needs.changes.outputs.tested_run }}
+    permissions:
+      contents: read
+      actions: read
 
   # SHA256SUMS for the release tarballs (and any zip), in `sha256sum -c` format: made and
   # checked on every run, so the release (and the one-line installer, which verifies

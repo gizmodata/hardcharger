@@ -40,8 +40,10 @@ REQUIRED=(
   "image"
 )
 # Jobs a branch run skips by design: the release (tags only) and the sanitizers (tags, or a
-# manual run with `full`).
-MAY_SKIP=("release" "address sanitizer (linux-amd64)" "thread sanitizer (linux-amd64)")
+# manual run with `full`). And the compile-cache warm-up jobs, which run only when a push to
+# main skips the tests (a skipped matrix job is listed under its unexpanded name, a skipped
+# call of a reusable workflow under its job id): see may_skip().
+MAY_SKIP=("release" "address sanitizer (linux-amd64)" "thread sanitizer (linux-amd64)" "windows-warm")
 ARTIFACTS=("hardcharger-linux-amd64" "hardcharger-linux-arm64")
 
 answer() {  # tested run reason
@@ -82,6 +84,13 @@ in_list() {  # needle list...
   return 1
 }
 
+may_skip() {  # job name
+  case "$1" in
+    "warm compile cache ("* | "windows / warm compile cache ("*) return 0 ;;
+  esac
+  in_list "$1" "${MAY_SKIP[@]}"
+}
+
 runs=$(api "repos/$repo/actions/workflows/server.yml/runs?head_sha=$sha&status=success&per_page=100" \
          --jq '.workflow_runs[] | select(.head_sha == "'"$sha"'") | select(.event == "push" or .event == "workflow_dispatch") | select(.path == ".github/workflows/server.yml") | "\(.id) \(.event) \(.head_branch)"') \
   || answer false "" "Could not list the earlier runs (API error), so this run tests the commit."
@@ -102,7 +111,7 @@ while read -r id event branch; do
   while IFS=$'\t' read -r conclusion name; do
     [ -n "$name" ] || continue
     if [ "$conclusion" = success ]; then continue; fi
-    if [ "$conclusion" = skipped ] && in_list "$name" "${MAY_SKIP[@]}"; then continue; fi
+    if [ "$conclusion" = skipped ] && may_skip "$name"; then continue; fi
     ok=false; notes+="run $id ($event, $branch): \"$name\" is $conclusion. "; break
   done <<< "$jobs"
   [ "$ok" = true ] || continue
