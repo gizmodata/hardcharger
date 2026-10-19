@@ -110,6 +110,17 @@ class SensitivePaths;
 
 namespace hardcharger::authz {
 
+// The access-control introspection table functions (hardcharger_grants(), ...), each
+// read from the store snapshot the server holds, keeping only what the session may see
+// (introspection.hpp has the rules).
+enum class AccessTable { kGrants, kRoleMembers, kRoles, kUsers, kPolicies, kEffectivePrivileges };
+
+// The SQL name of each ("hardcharger_grants", ...).
+const char* AccessTableName(AccessTable table);
+
+// The table with no rows: what a server without an access-control store returns.
+std::shared_ptr<arrow::RecordBatch> EmptyAccessTable(AccessTable table);
+
 // The file a DuckDB store URI names ("duckdb:<path>", or a path ending in .duckdb), as
 // given; empty for any other store.
 std::string DuckDBStoreFile(const std::string& store_uri);
@@ -244,6 +255,12 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // Runs Hardcharger's own statements on the session's connection (its profiler
   // settings, ...) unchecked: they are the server's, not the user's.
   void RunInternal(const std::function<void()>& run);
+
+  // The rows of an introspection table this session may see, for the principal it acts as
+  // now (its SET ROLE role included). `user_name`: hardcharger_effective_privileges()'s
+  // argument. Safe from DuckDB's threads while one of the session's statements runs.
+  std::shared_ptr<arrow::RecordBatch> AccessTableRows(AccessTable table,
+                                                      const std::optional<std::string>& user_name) const;
 
   // The session's connection is going away; nothing may touch it after this.
   void Detach();

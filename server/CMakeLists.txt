@@ -136,6 +136,7 @@ add_library(hardcharger_authz OBJECT
   src/authz/engine.cc
   src/authz/file_guard.cc
   src/authz/gate.cc
+  src/authz/introspection.cc
   src/authz/model.cc
   src/authz/opa.cc
   src/authz/password.cc

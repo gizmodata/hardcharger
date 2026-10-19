@@ -19,6 +19,7 @@
 #include "authz/enforcement.hpp"
 #include "authz/engine.hpp"
 #include "authz/gate.hpp"
+#include "authz/introspection.hpp"
 #include "authz/resolver.hpp"
 #include "duckdb_sql.hpp"
 #include "logging.hpp"
@@ -565,6 +566,26 @@ void SessionGuard::RunInternal(const std::function<void()>& run) {
 void SessionGuard::Detach() {
   std::lock_guard lock(mutex_);
   connection_ = nullptr;
+}
+
+std::shared_ptr<arrow::RecordBatch> SessionGuard::AccessTableRows(
+    AccessTable table, const std::optional<std::string>& user_name) const {
+  // catalog_access rules alone: no store, so no users, roles or grants to show.
+  if (owner_.catalog_rules_only_) return EmptyAccessTable(table);
+  Principal principal;
+  {
+    std::lock_guard lock(mutex_);
+    if (connection_ == nullptr) return EmptyAccessTable(table);
+    auto state = StateOf(connection_);
+    if (!state) {
+      throw Error(ErrorCode::kPermissionDenied,
+                  std::string("Hardcharger blocked ") + AccessTableName(table) +
+                      "(): the session has no access-control state",
+                  "42501");
+    }
+    principal = state->principal();
+  }
+  return authz::AccessTableRows(table, *owner_.engine_->snapshot(), principal, user_name);
 }
 
 void SessionGuard::RequireLive() const {

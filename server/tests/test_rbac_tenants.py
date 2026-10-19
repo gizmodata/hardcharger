@@ -111,7 +111,9 @@ def test_metadata_shows_only_the_tenants_catalogs(joe):
         assert "secrets" not in text, f"{sql} listed another tenant's table"
         assert "shared_default" not in text, f"{sql} listed the shared default catalog"
     databases = expect_allowed(client=joe, sql="SELECT database_name FROM duckdb_databases() WHERE NOT internal")
-    assert column(table=databases) == {"acme_db"}
+    # And the server's read-only system catalog, as for every user (its views list only
+    # what the reader may see).
+    assert column(table=databases) == {"acme_db", "_hardcharger_system"}
     # The Warp SQL metadata calls too.
     catalogs = joe.metadata(kind="catalogs")
     assert "beta_db" not in str(catalogs.to_pylist()) and "acme_db" in str(catalogs.to_pylist())
@@ -227,7 +229,7 @@ def test_changing_a_tenants_catalogs_ends_its_sessions(server, admin):
     assert code == "session_ended" and "tenant's catalogs changed" in detail, (code, detail)
     fresh = server.user(name="acme/joe")
     databases = expect_allowed(client=fresh, sql="SELECT database_name FROM duckdb_databases() WHERE NOT internal")
-    assert column(table=databases) == {"acme_db", "acme_extra"}
+    assert column(table=databases) == {"acme_db", "acme_extra", "_hardcharger_system"}
     expect_allowed(client=admin, sql="ALTER CATALOG acme_extra UNSET TENANT")
 
 

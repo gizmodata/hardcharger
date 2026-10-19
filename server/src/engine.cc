@@ -151,6 +151,63 @@ CREATE VIEW {catalog}.main.hardcharger_view_definition AS
 SELECT database_name AS "TABLE_CAT", schema_name AS "TABLE_SCHEM", view_name AS "TABLE_NAME",
        sql AS "VIEW_DEFINITION"
 FROM duckdb_views();
+-- The SQL standard's privilege views, with its column names, over access control's table
+-- functions: in a schema of their own, since DuckDB's information_schema can't be
+-- extended, and named so they never shadow it (whatever the session's catalog).
+CREATE SCHEMA {catalog}.hardcharger_information_schema;
+CREATE VIEW {catalog}.hardcharger_information_schema.table_privileges AS {table_privileges};
+CREATE VIEW {catalog}.hardcharger_information_schema.column_privileges AS
+WITH tp AS ({table_privileges}),
+cols AS (SELECT database_name AS c, schema_name AS s, table_name AS t, column_name AS col
+         FROM duckdb_columns() WHERE NOT internal)
+SELECT tp.grantor, tp.grantee, cols.c AS table_catalog, cols.s AS table_schema, cols.t AS table_name,
+       cols.col AS column_name, tp.privilege_type, tp.is_grantable
+FROM tp JOIN cols ON cols.c = tp.table_catalog AND cols.s = tp.table_schema AND cols.t = tp.table_name
+WHERE tp.privilege_type IN ('SELECT', 'INSERT', 'UPDATE')
+UNION
+SELECT g.grantor, g.grantee, cols.c, cols.s, cols.t, cols.col, g.privilege,
+       CASE WHEN g.with_grant_option THEN 'YES' ELSE 'NO' END
+FROM hardcharger_grants() g
+JOIN cols ON lower(cols.c) = lower(g.catalog_name) AND lower(cols.s) = lower(g.schema_name)
+         AND lower(cols.t) = lower(g.object_name) AND lower(cols.col) = lower(g.column_name)
+WHERE g.column_name IS NOT NULL;
+CREATE VIEW {catalog}.hardcharger_information_schema.role_table_grants AS
+SELECT * FROM ({table_privileges})
+WHERE grantee IN (SELECT name FROM hardcharger_roles() WHERE is_active);
+CREATE VIEW {catalog}.hardcharger_information_schema.applicable_roles AS
+SELECT member AS grantee, role AS role_name, CASE WHEN admin_option THEN 'YES' ELSE 'NO' END AS is_grantable
+FROM hardcharger_role_members() WHERE member_type IN ('USER', 'ROLE');
+CREATE VIEW {catalog}.hardcharger_information_schema.enabled_roles AS
+SELECT name AS role_name FROM hardcharger_roles() WHERE is_active;
+)SQL";
+
+// The SQL standard's TABLE_PRIVILEGES from hardcharger_grants(): one row per privilege on
+// each table or view that exists, a schema's or catalog's grant expanded to every table and
+// view in it, ALL to the four table privileges. Ownership, column-level and system grants
+// are not table privileges (column-level ones are in column_privileges).
+constexpr const char* kTablePrivileges = R"SQL(
+WITH objects AS (
+  SELECT database_name AS c, schema_name AS s, table_name AS t FROM duckdb_tables() WHERE NOT internal
+  UNION ALL
+  SELECT database_name, schema_name, view_name FROM duckdb_views() WHERE NOT internal
+), grants AS (
+  SELECT * FROM (
+    SELECT g.*, unnest(CASE WHEN g.privilege = 'ALL' THEN ['SELECT', 'INSERT', 'UPDATE', 'DELETE']
+                            ELSE [g.privilege] END) AS privilege_type
+    FROM hardcharger_grants() g
+    WHERE g.object_type IN ('CATALOG', 'SCHEMA', 'TABLE', 'VIEW') AND g.column_name IS NULL)
+  WHERE privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE')
+)
+SELECT DISTINCT g.grantor, g.grantee, o.c AS table_catalog, o.s AS table_schema, o.t AS table_name,
+       g.privilege_type, CASE WHEN g.with_grant_option THEN 'YES' ELSE 'NO' END AS is_grantable,
+       'NO' AS with_hierarchy
+FROM grants g
+JOIN objects o ON lower(o.c) = lower(g.catalog_name)
+ AND (g.object_type = 'CATALOG'
+      OR (g.object_type = 'SCHEMA' AND (lower(o.s) = lower(g.schema_name)
+                                        OR starts_with(lower(o.s), lower(g.schema_name) || '.')))
+      OR (g.object_type IN ('TABLE', 'VIEW') AND lower(o.s) = lower(g.schema_name)
+          AND lower(o.t) = lower(g.object_name)))
 )SQL";
 
 std::string Replace(std::string text, std::string_view from, std::string_view to) {
@@ -331,6 +388,12 @@ class TrackedReader : public arrow::RecordBatchReader {
 
 Session* CurrentSession() { return current_session; }
 
+std::shared_ptr<arrow::RecordBatch> Session::AccessTableRows(authz::AccessTable table,
+                                                             const std::optional<std::string>& user_name) const {
+  if (!rbac_ || !guard_) return authz::EmptyAccessTable(table);
+  return guard_->AccessTableRows(table, user_name);
+}
+
 // ---- Backend ----
 
 Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
@@ -444,7 +507,8 @@ void Backend::AttachSystemCatalog() {
   warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), connection.out(), err); });
   const std::string quoted = "'" + Replace(file, "'", "''") + "'";
   warpduckdb::RunSql(connection.get(), "ATTACH " + quoted + " AS _hardcharger_system_build (READ_WRITE)");
-  warpduckdb::RunSql(connection.get(), Replace(kSystemViews, "{catalog}", "_hardcharger_system_build"));
+  warpduckdb::RunSql(connection.get(), Replace(Replace(kSystemViews, "{table_privileges}", kTablePrivileges), "{catalog}",
+                                               "_hardcharger_system_build"));
   warpduckdb::RunSql(connection.get(), "DETACH _hardcharger_system_build");
   warpduckdb::RunSql(connection.get(), "ATTACH " + quoted + " AS " + kSystemCatalog + " (READ_ONLY)");
 }
