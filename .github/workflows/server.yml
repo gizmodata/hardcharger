@@ -14,7 +14,8 @@ name: server
 
 # Not for changes that build, test and package nothing: the documentation (docs/, Markdown
 # other than the CHANGELOG.md the tarballs ship and the UI's, which its lint checks), the
-# benchmarks (bench/), the Python package (python/, workflow.yml) and the other workflows.
+# benchmarks (bench/), the Python package (python/, workflow.yml), the other workflows and
+# the docs' version-label check (.github/scripts/check_no_version_labels.py, run by workflow.yml).
 # Path filters never apply to tags; a manual run is always available.
 on:
   push:
@@ -31,6 +32,7 @@ on:
       - "!.github/ISSUE_TEMPLATE/**"
       - "!.github/workflows/workflow.yml"
       - "!.github/workflows/dockerhub-check.yml"
+      - "!.github/scripts/check_no_version_labels.py"
   pull_request:
     paths:
       - "**"
@@ -43,6 +45,7 @@ on:
       - "!.github/ISSUE_TEMPLATE/**"
       - "!.github/workflows/workflow.yml"
       - "!.github/workflows/dockerhub-check.yml"
+      - "!.github/scripts/check_no_version_labels.py"
   workflow_dispatch:
     inputs:
       full:
