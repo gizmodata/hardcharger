@@ -28,6 +28,13 @@ own changelog in `python/CHANGELOG.md`.
   the server or driver on a benchmark VM), `midsize.py` (partition overhead on mid-sized
   results).
 
+### Documentation
+
+- README: "Why Hardcharger instead of Quack?", a feature comparison with DuckDB's Quack
+  extension (`e7a9be3f8c`, the commit DuckDB 2.0 pins), and docs/hardcharger-vs-quack.md with
+  the versions and the checks behind each row, run against live Quack and Hardcharger 0.3.0
+  servers. Features only, no throughput figures.
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file
