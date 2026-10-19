@@ -162,6 +162,7 @@ jobs:
           name: dist
           path: dist/
       - name: Extract this version's CHANGELOG section
+        id: notes
         run: |
           version="${GITHUB_REF_NAME#python-v}"
           awk -v ver="$version" '
@@ -170,7 +171,14 @@ jobs:
             found { print }
           ' python/CHANGELOG.md > release-notes.md
           [ -s release-notes.md ] || { echo "no CHANGELOG section for $version"; exit 1; }
+          # PEP 440 pre-releases: 2.0.0a1, 2.0.0b1, 2.0.0rc1.
+          if [[ "$version" =~ (a|b|rc)[0-9]+$ ]]; then prerelease=true; else prerelease=false; fi
+          echo "prerelease=$prerelease" | tee -a "$GITHUB_OUTPUT"
+      # Never the repository's latest release: that is the server's (releases/latest, which
+      # the installer resolves), and a python-v* tag publishes no server.
       - uses: softprops/action-gh-release@v3
         with:
           body_path: release-notes.md
           files: dist/*
+          prerelease: ${{ steps.notes.outputs.prerelease == 'true' }}
+          make_latest: "false"

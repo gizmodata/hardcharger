@@ -2,11 +2,13 @@
 hardcharger_settings(), the hardcharger_build_info metric, the instrumentation's instances
 table, the client's --version, and (followed by the DuckDB version) the /warp discovery
 document and server-info. It is the plain semantic version, as the CHANGELOG and the
-release tags' numbers have it ("0.2.0", never "v0.2.0").
+release tags' numbers have it ("0.2.0", never "v0.2.0"), and the full one server/CMakeLists.txt
+holds: a release candidate's suffix included ("2.0.0-rc.1").
 
 Also the metrics' help text: Hardcharger has no editions, and no help line says otherwise.
 """
 
+import pathlib
 import re
 import subprocess
 
@@ -25,8 +27,18 @@ def server_version() -> str:
     return match.group(1)
 
 
+def source_version() -> str:
+    """`project(hardcharger VERSION X.Y.Z ...)` and `set(HARDCHARGER_VERSION_SUFFIX "...")`."""
+    cmake = (pathlib.Path(__file__).resolve().parents[1] / "CMakeLists.txt").read_text(encoding="utf-8")
+    numbers = re.search(pattern=r"^project\(hardcharger VERSION ([0-9.]+)", string=cmake, flags=re.MULTILINE)
+    suffix = re.search(pattern=r'^set\(HARDCHARGER_VERSION_SUFFIX "([^"]*)"\)', string=cmake, flags=re.MULTILINE)
+    assert numbers and suffix, "no version in server/CMakeLists.txt"
+    return numbers.group(1) + suffix.group(1)
+
+
 def test_every_reported_version_is_the_same_semantic_version(launcher):
     version = server_version()
+    assert version == source_version()
     metrics_port = free_port()
     server = launcher.start(args=["--enable-metrics", "--metrics-port", str(metrics_port),
                                   "--metrics-bind-address", "127.0.0.1", "--enable-instrumentation"])

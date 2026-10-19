@@ -17,6 +17,12 @@ All notable changes to this project are documented here. The format follows
 - The package runs `hardcharger-server` 0.3.0 by default (`SERVER_VERSION`; it was 0.2.0).
   `HARDCHARGER_VERSION` still picks another release. The unit tests now follow
   `SERVER_VERSION` instead of naming the pinned release, so the next bump changes one line.
+- The server version to download (`SERVER_VERSION`, `HARDCHARGER_VERSION`, `ensure_server(version=...)`)
+  may be a release candidate in the server's form (`2.0.0-rc.1`, tag `v2.0.0-rc.1`) or in
+  PEP 440's (`2.0.0rc1`, how this package spells its own candidates); both fetch `v2.0.0-rc.1`.
+- A `python-v*` GitHub Release is never made the repository's latest release, which stays the
+  server's (what `releases/latest` and the installer resolve), and a PEP 440 pre-release
+  (`python-v2.0.0rc1`) is marked a pre-release.
 
 ### Fixed
 

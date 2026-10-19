@@ -36,6 +36,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -88,10 +89,19 @@ def detect_platform(system: str | None = None, machine: str | None = None) -> st
     return name
 
 
+#: A PEP 440 release candidate (``2.0.0rc1``, how this package's own version spells one).
+_PEP440_RC = re.compile(r"(\d+\.\d+\.\d+)rc(\d+)")
+
+
 def normalize_version(version: str) -> str:
-    """``"v0.2.0"`` or ``"0.2.0"`` -> ``"0.2.0"``."""
+    """The server's version as its release tag has it, without the ``v``: ``"v0.2.0"`` or
+    ``"0.2.0"`` -> ``"0.2.0"``; a release candidate ``"v2.0.0-rc.1"`` or ``"2.0.0-rc.1"``
+    stays ``"2.0.0-rc.1"``, and its PEP 440 spelling ``"2.0.0rc1"`` becomes that too."""
     version = version.strip()
-    return version[1:] if version.startswith("v") else version
+    version = version[1:] if version.startswith("v") else version
+    if match := _PEP440_RC.fullmatch(version):
+        return f"{match.group(1)}-rc.{match.group(2)}"
+    return version
 
 
 def resolve_version(version: str | None = None) -> str:

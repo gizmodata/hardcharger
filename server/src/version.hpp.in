@@ -2,6 +2,6 @@
 
 namespace hardcharger {
 
-inline constexpr const char* kVersion = "@PROJECT_VERSION@";
+inline constexpr const char* kVersion = "@HARDCHARGER_VERSION@";
 
 }  // namespace hardcharger

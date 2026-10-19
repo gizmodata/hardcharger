@@ -1,6 +1,8 @@
 # The Hardcharger server: builds and tests on every push and pull request; on a v* tag,
 # also publishes the container image (ghcr.io, private) and the GitHub Release. The
 # tests run on the tagged commit itself, in this workflow, before anything is published.
+# A tag vX.Y.Z-rc.N is a release candidate: the same gate, a pre-release on GitHub and
+# images :X.Y.Z-rc.N and :sha-<short>, never :latest (.github/scripts/release.sh).
 #
 # What runs where (the `changes` job decides):
 #   - a v* tag: everything, the sanitizers included, always (the release gate);
@@ -163,6 +165,18 @@ jobs:
             echo "tested=false" >> "$GITHUB_OUTPUT"
           fi
           cat "$RUNNER_TEMP/tested"
+      # The release's version arithmetic (.github/scripts/release.sh): the version string,
+      # the image tags, the MSI version, the CHANGELOG extraction. On a tag, also the tag
+      # against server/CMakeLists.txt and its CHANGELOG section, here, before the matrix
+      # runs, rather than in the release job after it.
+      - name: Release scripts
+        run: |
+          bash .github/scripts/test-release.sh
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            .github/scripts/release.sh check-tag "$GITHUB_REF_NAME"
+            .github/scripts/release.sh changelog "${GITHUB_REF_NAME#v}" > /dev/null
+            echo "release $GITHUB_REF_NAME, pre-release: $(.github/scripts/release.sh prerelease "${GITHUB_REF_NAME#v}")"
+          fi
       - id: diff
         env:
           EVENT: ${{ github.event_name }}
@@ -1083,11 +1097,14 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
             args=(--tag ghcr.io/gizmodata/hardcharger:main --tag "ghcr.io/gizmodata/hardcharger:sha-${GITHUB_SHA::7}" --push)
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            version="${GITHUB_REF_NAME#v}"
+            # vX.Y.Z: :X.Y.Z and :latest; vX.Y.Z-rc.N: :X.Y.Z-rc.N and :sha-<short>, never
+            # :latest. Both registries.
+            .github/scripts/release.sh check-tag "$GITHUB_REF_NAME"
+            tags=$(.github/scripts/release.sh image-tags "${GITHUB_REF_NAME#v}" "$GITHUB_SHA")
             args=()
-            for repo in ghcr.io/gizmodata/hardcharger docker.io/gizmodata/hardcharger; do
-              args+=(--tag "$repo:$version" --tag "$repo:latest")
-            done
+            while read -r tag; do args+=(--tag "$tag"); done <<< "$tags"
+            [ ${#args[@]} -eq 8 ] || { echo "expected 2 tags per registry, got: $tags"; exit 1; }
+            printf 'pushing:\n%s\n' "$tags"
             args+=(--push)
           fi
           docker buildx build --platform linux/amd64,linux/arm64 --file docker/Dockerfile "${args[@]}" .
@@ -1168,19 +1185,15 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Check the tag matches the server version
-        run: |
-          version=$(sed -n 's/^project(hardcharger VERSION \([0-9.]*\).*/\1/p' server/CMakeLists.txt)
-          [ -n "$version" ] || { echo "no version in server/CMakeLists.txt"; exit 1; }
-          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != v$version"; exit 1; }
+        run: .github/scripts/release.sh check-tag "$GITHUB_REF_NAME"
+      # The section `## [X.Y.Z]` or `## [X.Y.Z-rc.N]`, matched as text; none (or an empty
+      # one) fails the release.
       - name: Extract this version's CHANGELOG section
+        id: notes
         run: |
           version="${GITHUB_REF_NAME#v}"
-          awk -v ver="$version" '
-            $0 ~ "^## \\[" ver "\\]" { found = 1; next }
-            found && /^## \[/ { exit }
-            found { print }
-          ' CHANGELOG.md > release-notes.md
-          [ -s release-notes.md ] || { echo "no CHANGELOG section for $version"; exit 1; }
+          .github/scripts/release.sh changelog "$version" > release-notes.md
+          echo "prerelease=$(.github/scripts/release.sh prerelease "$version")" | tee -a "$GITHUB_OUTPUT"
       # The checksums cover exactly the assets that are about to be published.
       - name: Check SHA256SUMS
         working-directory: dist
@@ -1190,7 +1203,11 @@ jobs:
           for asset in hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi; do
             grep -q "  $asset\$" SHA256SUMS || { echo "$asset is not in SHA256SUMS"; exit 1; }
           done
+      # A release candidate is a pre-release, which GitHub never makes the latest release
+      # (what install.sh and releases/latest resolve); a release is made the latest.
       - uses: softprops/action-gh-release@v3
         with:
           body_path: release-notes.md
           files: dist/*
+          prerelease: ${{ steps.notes.outputs.prerelease == 'true' }}
+          make_latest: ${{ steps.notes.outputs.prerelease == 'true' && 'false' || 'true' }}
