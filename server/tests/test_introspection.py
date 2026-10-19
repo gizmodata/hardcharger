@@ -505,9 +505,11 @@ def test_a_cpu_bound_statement_stops_within_bounds(server, stop):
     thread, outcome = in_background(target=lambda: victim.error(sql=CPU_BOUND))
     wait_state(viewer=admin, session_id=victim.id, state="running")
     pid = server.process.pid
-    # The positive control: the statement keeps the server's CPU busy (on a loaded machine
-    # it may take a moment to get its cores).
-    assert wait_until(lambda: cpu_used(pid=pid, seconds=0.5) > 0.3, timeout=10 * TIMEOUT_SCALE, interval=0)
+    # The positive control: the statement keeps the server's CPU busy. Counted since it began
+    # running, not as most of a core in half a second: a loaded runner (CI's linux-amd64 has
+    # 2 CPUs for 6 test workers) may give it only part of one. A quiet server uses far less.
+    before = cpu_seconds(pid=pid)
+    assert wait_until(lambda: cpu_seconds(pid=pid) - before > 1.0, timeout=10 * TIMEOUT_SCALE, interval=0.1)
     started = time.monotonic()
     STOPS[stop](admin=admin, session_id=victim.id)
     thread.join(timeout=BOUND)
