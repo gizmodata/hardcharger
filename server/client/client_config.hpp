@@ -47,12 +47,10 @@ struct ClientConfig {
   std::string mtls_cert;
   std::string mtls_key;
 
-  // OAuth/External Auth (the server's browser sign-in, --oauth-port)
+  // Browser sign-in through the server's identity provider (Warp SQL oauth_browser).
   bool auth_type_external = false;
   // Sign in with the mTLS client certificate (the client_certificate grant), no password.
   bool auth_type_mtls = false;
-  int oauth_port = 31339;
-  std::string oauth_base_url;  // default: http(s)://host:oauth_port
 
   // Input/Output
   std::optional<std::string> command;
@@ -105,7 +103,7 @@ struct ClientConfig {
 // HARDCHARGER_PORT, HARDCHARGER_USER (falling back to HARDCHARGER_ADMIN_USERNAME, the
 // server's), HARDCHARGER_PASSWORD, HARDCHARGER_TLS (true/false: TLS is on unless it, --tls=false
 // or a URI says false), HARDCHARGER_TLS_ROOTS,
-// HARDCHARGER_OAUTH_PORT, HARDCHARGER_OAUTH_BASE_URL, HARDCHARGER_SESSION_TAG,
+// HARDCHARGER_SESSION_TAG,
 // HARDCHARGER_QUERY_TAG and HARDCHARGER_RESULT_PARTITIONS. No GIZMOSQL_* variable is read.
 void ResolveEnvironmentVariables(ClientConfig& config);
 

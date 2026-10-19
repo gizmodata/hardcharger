@@ -1,9 +1,15 @@
 """A small OpenID Connect identity provider for the sign-in tests: discovery, a JWKS, an
-authorization page, and a token endpoint that trades one code for a signed ID token.
-GizmoSQL 1.x's OAuth tests ran the same kind of mock in C++."""
+authorization endpoint that approves at once (it redirects the browser back to the
+redirect URI with a code, as a provider does once the person has signed in), and a token
+endpoint that trades the code for a signed ID token. It checks what a real provider checks:
+the client id and secret, the redirect URI, single-use codes and PKCE (S256), and it puts
+the request's nonce in the ID token. GizmoSQL 1.x's OAuth tests ran the same kind of mock
+in C++."""
 
 import base64
 import datetime
+import hashlib
+import secrets
 import http.server
 import ipaddress
 import json
@@ -42,9 +48,15 @@ class MockIdP:
             self.key = ec.generate_private_key(curve=ec.SECP256R1())
         else:
             self.key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        self.valid_code = "test-auth-code-123"
         self.email = "testuser@gizmodata.com"
+        # What the next sign-in gets: refused at the provider (`deny`, with this text as its
+        # error_description), or an ID token with another nonce (`nonce_override`).
+        self.deny = False
+        self.deny_description = "The user declined"
+        self.nonce_override: str | None = None
+        self.authorize_requests: list[dict] = []
         self.token_requests: list[dict] = []
+        self.codes: dict[str, dict] = {}
         self.jwks_requests = 0
         idp = self
 
@@ -70,9 +82,31 @@ class MockIdP:
                     idp.jwks_requests += 1
                     self.reply(status=200, body={"keys": [idp.jwk()]})
                 elif path == "/authorize":
-                    self.reply(status=200, body="Mock authorization page", content_type="text/html")
+                    self.authorize(query=dict(urllib.parse.parse_qsl(urllib.parse.urlparse(self.path).query)))
                 else:
                     self.reply(status=404, body={"error": "not_found"})
+
+            def redirect(self, location: str):
+                self.send_response(302)
+                self.send_header("Location", location)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def authorize(self, query: dict):
+                idp.authorize_requests.append(query)
+                redirect_uri = query.get("redirect_uri", "")
+                if query.get("client_id") != idp.client_id or not redirect_uri:
+                    return self.reply(status=400, body={"error": "invalid_request"})
+                state = query.get("state", "")
+                if idp.deny:
+                    return self.redirect(location=redirect_uri + "?" + urllib.parse.urlencode(
+                        {"error": "access_denied", "error_description": idp.deny_description, "state": state}))
+                if query.get("response_type") != "code" or query.get("code_challenge_method") != "S256":
+                    return self.reply(status=400, body={"error": "invalid_request"})
+                code = secrets.token_urlsafe(nbytes=16)
+                idp.codes[code] = {"challenge": query.get("code_challenge"), "nonce": query.get("nonce"),
+                                   "redirect_uri": redirect_uri, "email": idp.email}
+                self.redirect(location=redirect_uri + "?" + urllib.parse.urlencode({"code": code, "state": state}))
 
             def do_POST(self):
                 length = int(self.headers.get("Content-Length", "0"))
@@ -84,11 +118,18 @@ class MockIdP:
                     return self.reply(status=400, body={"error": "unsupported_grant_type"})
                 if form.get("client_id") != idp.client_id or form.get("client_secret") != idp.client_secret:
                     return self.reply(status=401, body={"error": "invalid_client"})
-                if form.get("code") != idp.valid_code:
+                grant = idp.codes.pop(form.get("code", ""), None)  # single use
+                if grant is None or grant["redirect_uri"] != form.get("redirect_uri"):
                     return self.reply(status=400, body={"error": "invalid_grant",
                                                         "error_description": "the code is not valid"})
+                verifier = form.get("code_verifier", "")
+                challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+                if challenge != grant["challenge"]:
+                    return self.reply(status=400, body={"error": "invalid_grant",
+                                                        "error_description": "PKCE verification failed"})
+                nonce = idp.nonce_override if idp.nonce_override is not None else grant["nonce"]
                 self.reply(status=200, body={"access_token": "unused", "token_type": "Bearer",
-                                             "id_token": idp.id_token(email=idp.email)})
+                                             "id_token": idp.id_token(email=grant["email"], nonce=nonce)})
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.issuer = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -106,7 +147,8 @@ class MockIdP:
     def id_token(self, email: str, kid: str | None = None, key=None, **claims) -> str:
         now = datetime.datetime.now(tz=datetime.UTC)
         payload = {"iss": self.issuer, "aud": self.audience, "sub": email, "email": email, "iat": now,
-                   "exp": now + datetime.timedelta(minutes=5), **claims}
+                   "exp": now + datetime.timedelta(minutes=5),
+                   **{name: value for name, value in claims.items() if value is not None}}
         return jwt.encode(payload=payload, key=key or self.key, algorithm=self.algorithm,
                           headers={"kid": kid or self.kid})
 

@@ -1,91 +1,55 @@
-// Browser sign-in through an identity provider, on its own port (oauth_port, default
-// 31339), with the routes drivers and GizmoData Cloud's shared callback proxy use:
+// Browser sign-in through the identity provider (Warp SQL §4.3, capability
+// oauth_browser), on the main port. The Warp SQL SDK serves the flows, the polls and the
+// callback (GET /warp/v1/auth/oauth/callback, the redirect URI operators register with the
+// provider) and issues the access token; this provider builds the authorization request
+// (code flow with PKCE, state and nonce) and exchanges the code as a confidential client.
+// The ID token it receives signs the user in exactly as the token_exchange grant would
+// (the authenticator verifies it with the provider's JWKS, issuer, audience, authorized
+// e-mails, role and store user), after its nonce is checked against the flow's. Clients
+// never see the ID token, only Hardcharger's own access token.
 //
-//   GET /oauth/initiate           -> {"session_uuid", "auth_url"}: the client opens auth_url
-//   GET /oauth/start?session=H    -> 302 to the provider, for a client that made its own
-//                                    H = HMAC-SHA256(secret_key, uuid)
-//   GET /oauth/callback?code&state <- the provider's redirect: the server exchanges the
-//                                    code for an ID token (a confidential client)
-//   GET /oauth/token/<uuid>       -> {"status": "pending" | "complete" | "error" | "not_found"};
-//                                    "complete" carries the ID token, once
-//
-// The client then signs in with that ID token (token_exchange, or as the password of
-// user "token"), which the authenticator verifies with the provider's JWKS. With
-// oauth_instance_id the state is "<instance-id>.<H>", so a shared proxy can route the
-// callback to the right server.
+// With oauth_instance_id the state starts "<instance-id>.", so a proxy that receives the
+// provider's redirects for several servers can route each to its server.
 #pragma once
 
-#include <chrono>
-#include <cstdint>
-#include <map>
-#include <memory>
-#include <mutex>
-#include <optional>
+#include <functional>
 #include <string>
-#include <vector>
+
+#include "warpsql/backend.hpp"
 
 namespace hardcharger {
 
-class OAuthServer {
+class OAuthBrowserSignIn : public warpsql::BrowserSignInProvider {
  public:
   struct Options {
-    std::string host;
-    uint16_t port = 0;
     std::string client_id;
     std::string client_secret;
     std::string scopes;
     std::string redirect_uri;
-    std::string secret_key;  // keys the session hashes
     std::string instance_id;
-    std::vector<std::string> authorized_emails;  // globs, case-insensitive
-    std::string tls_cert;  // empty: plain HTTP
-    std::string tls_key;
+    std::string provider_name;
+    // The server's public origin (scheme://host[:port]) when oauth_base_url names one: the
+    // redirect back to a web page's return_to is then absolute (a callback through a proxy).
+    std::string public_origin;
     std::string authorization_endpoint;
     std::string token_endpoint;
+    // Signs the user in with the provider's ID token (the authenticator's token_exchange).
+    std::function<warpsql::Principal(std::string_view id_token)> sign_in;
   };
 
-  explicit OAuthServer(Options options);
-  ~OAuthServer();
+  explicit OAuthBrowserSignIn(Options options);
 
-  void Start();
-  void Stop();
-  uint16_t port() const;
-
-  struct Reply {
-    int status = 200;
-    std::string content_type;
-    std::string body;
-    std::string location;
-  };
-  // Answers one request (`target`: path and query); public for tests.
-  Reply Handle(const std::string& target);
-
-  // HMAC-SHA256(key, data) in lower-case hex: the session hash.
-  static std::string Hmac(const std::string& key, const std::string& data);
+  std::string DisplayName() override { return options_.provider_name; }
+  std::string AuthorizeUrl(const Authorization& authorization) override;
+  warpsql::Principal CompleteSignIn(const Callback& callback) override;
+  std::string StatePrefix() override { return options_.instance_id.empty() ? "" : options_.instance_id + "."; }
+  std::string PublicOrigin() override { return options_.public_origin; }
 
  private:
-  struct Pending {
-    std::chrono::steady_clock::time_point created;
-    std::optional<std::string> id_token;
-    std::optional<std::string> error;
-  };
-
-  Reply Initiate();
-  Reply StartFlow(const std::map<std::string, std::string>& query);
-  Reply Callback(const std::map<std::string, std::string>& query);
-  Reply Poll(const std::string& uuid);
-  std::string AuthorizeUrl(const std::string& hash) const;
   // The ID token for `code`, from the provider's token endpoint; throws with the reason.
-  std::string ExchangeCode(const std::string& code) const;
-  void Fail(const std::string& hash, const std::string& error);
-  void Expire();
+  std::string ExchangeCode(const Callback& callback) const;
 
   const Options options_;
-  std::mutex mutex_;
-  std::map<std::string, Pending> pending_;  // by session hash
-
-  class Listener;
-  std::unique_ptr<Listener> listener_;
 };
 
 }  // namespace hardcharger

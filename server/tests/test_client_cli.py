@@ -1189,15 +1189,12 @@ def idp():
     provider.stop()
 
 
-def fake_browser(tmp_path: pathlib.Path, code: str) -> pathlib.Path | str:
-    """A "browser" that signs in at once: it follows the authorization URL's redirect_uri
-    with an authorization code, as the identity provider would after the user signed in."""
+def fake_browser(tmp_path: pathlib.Path) -> pathlib.Path | str:
+    """A "browser" that signs in at once: it opens the authorization URL, and the mock
+    identity provider approves and redirects it to the server's callback, as a provider
+    does once the user has signed in."""
     script = tmp_path / "browser.py"
-    script.write_text(
-        "import sys, urllib.parse, urllib.request\n"
-        "query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(sys.argv[1]).query))\n"
-        f"params = urllib.parse.urlencode({{'code': {code!r}, 'state': query['state']}})\n"
-        "urllib.request.urlopen(query['redirect_uri'] + '?' + params, timeout=30).read()\n")
+    script.write_text("import sys, urllib.request\nurllib.request.urlopen(sys.argv[1], timeout=30).read()\n")
     if sys.platform == "win32":
         # There HARDCHARGER_BROWSER is a command line; the client appends the URL.
         return f'"{sys.executable}" -I "{script}"'
@@ -1208,24 +1205,44 @@ def fake_browser(tmp_path: pathlib.Path, code: str) -> pathlib.Path | str:
 
 
 def test_external_auth_signs_in_through_the_browser(launcher, idp, tmp_path):
-    oauth_port = free_port()
+    port = free_port()
     server = launcher.start(args=["--token-allowed-issuer", idp.issuer, "--token-allowed-audience", idp.audience,
                                   "--token-default-role", "admin", "--token-authorized-emails", "*@gizmodata.com",
                                   "--oauth-client-id", idp.client_id, "--oauth-client-secret", idp.client_secret,
-                                  "--oauth-port", str(oauth_port)])
-    idp.valid_code = "browser-code-1"
-    args = [binary(), "--host", "localhost", "--port", str(server.port), "--tls=false", "--auth-type", "external",
-            "--oauth-port", str(oauth_port), "--csv", "--no-header", "-c", "SELECT HARDCHARGER_USER()"]
-    env = client_env(HARDCHARGER_BROWSER=str(fake_browser(tmp_path=tmp_path, code="browser-code-1")))
+                                  "--oauth-base-url", f"http://127.0.0.1:{port}", "--oauth-provider-name", "Mock IdP"],
+                            port=port)
+    args = [binary(), "--host", "127.0.0.1", "--port", str(server.port), "--tls=false", "--auth-type", "external",
+            "--csv", "--no-header", "-c", "SELECT HARDCHARGER_USER()"]
+    env = client_env(HARDCHARGER_BROWSER=str(fake_browser(tmp_path=tmp_path)))
+    idp.deny = False
     result = subprocess.run(args=args, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "testuser@gizmodata.com"
-    assert "Waiting for browser login" in result.stderr
-    # The negative twin: the identity provider refuses the code.
-    env["HARDCHARGER_BROWSER"] = str(fake_browser(tmp_path=tmp_path, code="not-the-code"))
-    refused = subprocess.run(args=args, env=env, capture_output=True, text=True, timeout=60)
+    assert "Waiting for the browser sign-in with Mock IdP" in result.stderr
+    # The negative twin: the identity provider refuses the sign-in.
+    idp.deny = True
+    try:
+        refused = subprocess.run(args=args, env=env, capture_output=True, text=True, timeout=60)
+    finally:
+        idp.deny = False
     assert refused.returncode == 1
-    assert "Error: OAuth login failed:" in refused.stderr, refused.stderr
+    assert "Browser sign-in failed (access_denied)" in refused.stderr, refused.stderr
+
+
+def test_external_auth_needs_the_capability(launcher, tmp_path):
+    server = launcher.start()
+    args = [binary(), "--host", "127.0.0.1", "--port", str(server.port), "--tls=false", "--auth-type", "external",
+            "-c", "SELECT 1"]
+    result = subprocess.run(args=args, env=client_env(HARDCHARGER_BROWSER=str(fake_browser(tmp_path=tmp_path))),
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1
+    assert "does not offer browser sign-in (capability oauth_browser)" in result.stderr, result.stderr
+
+
+def test_the_old_oauth_port_option_is_gone():
+    result = subprocess.run(args=[binary(), "--oauth-port", "31339", "-c", "SELECT 1"], env=client_env(),
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0 and "oauth-port" in result.stderr, result.stderr
 
 
 # ---- Split results (Warp SQL §6.10) ----

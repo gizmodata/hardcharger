@@ -1,24 +1,24 @@
-"""Port of GizmoSQL 1.x tests/integration/test_oauth_server.cpp (9 cases: 8, and a
-non-Enterprise stub).
+"""Browser sign-in (Warp SQL §4.3, capability oauth_browser) against a mock OpenID Connect
+provider (mock_idp.py). Port of GizmoSQL 1.x tests/integration/test_oauth_server.cpp (9
+cases: 8, and a non-Enterprise stub), moved from 1.x's side port and routes to the
+protocol's flows on the main port: POST /warp/v1/auth/oauth/flows, the callback
+GET /warp/v1/auth/oauth/callback, and polls with the poll secret. The provider's ID token
+never reaches the client: the flow hands out Hardcharger's own access token, once. 1.x's
+cases map to: a successful flow; the flow document; an invalid code (the provider refuses
+it); an unauthorized e-mail; polling an unknown flow; a pending flow; a duplicate callback
+(1.x: a duplicate session hash); a missing state (1.x: a missing session parameter). Not
+applicable: the stub, which only skipped on builds without Enterprise code (Hardcharger has
+one build, with no license: see test_needs_no_license).
 
-Browser sign-in (--oauth-client-id and friends, the
-HARDCHARGER_OAUTH_* variables) against a mock OpenID Connect provider (mock_idp.py), on
-1.x's routes: /oauth/initiate, /oauth/start, /oauth/callback, /oauth/token/<uuid>. The
-ID token the flow yields signs in through token_exchange (and as the password of user
-"token"), verified with the provider's JWKS. Not applicable: the stub, which only
-skipped on builds without Enterprise code (Hardcharger has one build, with no license:
-see test_needs_no_license).
-
-Strengthened: a completed flow's token is handed out once; the provider's error text is
-escaped in the page (1.x put it in the HTML as is); the oauth_instance_id state prefix;
-the code exchange sends the client credentials and redirect URI; the signed-in user is
+Strengthened: PKCE and nonce; the poll secret required (and never in a URL); the
+provider's error text escaped; return_to redirects with the flow id in the fragment; the
+oauth_instance_id state prefix and an absolute return redirect on oauth_base_url; the code
+exchange sends the client credentials, redirect URI and PKCE verifier; the signed-in user is
 the token's email.
 """
 
 import base64
-import hashlib
-import hmac
-import uuid as uuid_module
+import urllib.parse
 
 import httpx
 import jwt
@@ -32,6 +32,7 @@ from warp_client import Client
 AUDIENCE = "hardcharger-oauth-test"
 CLIENT_ID = "test-client-id"
 CLIENT_SECRET = "test-client-secret"
+FLOWS = "/warp/v1/auth/oauth/flows"
 
 
 @pytest.fixture(scope="module")
@@ -41,170 +42,264 @@ def idp():
     provider.stop()
 
 
-def oauth_args(idp, port: int, *extra: str) -> list[str]:
+@pytest.fixture(autouse=True)
+def reset_idp(idp):
+    idp.email, idp.deny, idp.nonce_override = "testuser@gizmodata.com", False, None
+    yield
+
+
+def oauth_args(idp, *extra: str) -> list[str]:
     return ["--token-allowed-issuer", idp.issuer, "--token-allowed-audience", AUDIENCE,
             "--token-default-role", "admin", "--token-authorized-emails", "*@gizmodata.com",
-            "--oauth-client-id", CLIENT_ID, "--oauth-client-secret", CLIENT_SECRET,
-            "--oauth-port", str(port), *extra]
+            "--oauth-client-id", CLIENT_ID, *extra]
 
 
 @pytest.fixture(scope="module")
 def server(module_launcher, idp):
     port = free_port()
-    running = module_launcher.start(args=oauth_args(idp, port))
-    running.oauth = httpx.Client(base_url=f"http://127.0.0.1:{port}", follow_redirects=False, timeout=30)
+    running = module_launcher.start(args=oauth_args(idp, "--oauth-base-url", f"http://127.0.0.1:{port}",
+                                                    "--oauth-provider-name", "Mock IdP"),
+                                    env={"HARDCHARGER_OAUTH_CLIENT_SECRET": CLIENT_SECRET}, port=port)
+    running.http = httpx.Client(base_url=running.base_url, follow_redirects=False, timeout=30)
     return running
 
 
-def state_of(auth_url: str) -> str:
-    return httpx.URL(auth_url).params["state"]
+def create(server, body: dict | None = None) -> dict:
+    response = server.http.post(url=FLOWS, json=body if body is not None else {})
+    assert response.status_code == 201, response.text
+    assert response.headers["cache-control"] == "no-store"
+    return response.json()
+
+
+def callback_url(flow: dict) -> str:
+    """What the browser is sent to after signing in: the provider's redirect."""
+    at_idp = httpx.get(url=flow["authorize_url"], follow_redirects=False)
+    assert at_idp.status_code == 302, at_idp.text
+    return at_idp.headers["location"]
+
+
+def browse(server, flow: dict) -> httpx.Response:
+    return server.http.get(url=callback_url(flow=flow))
+
+
+def poll(server, flow: dict, secret: str | None = None) -> httpx.Response:
+    return server.http.post(url=f"{FLOWS}/{flow['flow_id']}",
+                            json={"poll_secret": flow["poll_secret"] if secret is None else secret})
 
 
 def test_successful_oauth_flow(server, idp):
-    initiate = server.oauth.get(url="/oauth/initiate")
-    assert initiate.status_code == 200, initiate.text
-    flow = initiate.json()
-    auth_url = httpx.URL(flow["auth_url"])
-    assert auth_url.path == "/authorize" and str(auth_url).startswith(idp.issuer)
-    assert auth_url.params["client_id"] == CLIENT_ID and auth_url.params["response_type"] == "code"
-    redirect_uri = auth_url.params["redirect_uri"]
-    assert redirect_uri == f"http://localhost:{server.oauth.base_url.port}/oauth/callback"
+    flow = create(server=server)
+    authorize = httpx.URL(flow["authorize_url"])
+    assert authorize.path == "/authorize" and str(authorize).startswith(idp.issuer)
+    params = authorize.params
+    assert params["client_id"] == CLIENT_ID and params["response_type"] == "code"
+    redirect_uri = params["redirect_uri"]
+    assert redirect_uri == f"{server.base_url}/warp/v1/auth/oauth/callback"
 
-    idp.valid_code = "test-auth-code-123"
-    idp.email = "testuser@gizmodata.com"
-    callback = server.oauth.get(url="/oauth/callback", params={"code": "test-auth-code-123",
-                                                               "state": state_of(flow["auth_url"])})
-    assert callback.status_code == 200 and "Authentication Successful" in callback.text, callback.text
+    page = browse(server=server, flow=flow)
+    assert page.status_code == 200 and "Signed in" in page.text, page.text
+    assert "testuser@gizmodata.com" in page.text
     exchange = idp.token_requests[-1]
-    assert exchange == {"grant_type": "authorization_code", "code": "test-auth-code-123",
-                        "redirect_uri": redirect_uri, "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}
+    assert {key: exchange[key] for key in ("grant_type", "redirect_uri", "client_id", "client_secret")} == {
+        "grant_type": "authorization_code", "redirect_uri": redirect_uri, "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET}
+    # PKCE: the verifier the server kept matches the challenge it sent.
+    import hashlib
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(exchange["code_verifier"].encode()).digest()).rstrip(b"=")
+    assert challenge.decode() == params["code_challenge"] and params["code_challenge_method"] == "S256"
 
-    poll = server.oauth.get(url=f"/oauth/token/{flow['session_uuid']}")
-    assert poll.status_code == 200 and poll.json()["status"] == "complete", poll.text
-    id_token = poll.json()["token"]
-    # The provider's own ID token, not one of the server's.
-    claims = jwt.decode(jwt=id_token, options={"verify_signature": False})
-    assert claims["iss"] == idp.issuer and claims["email"] == "testuser@gizmodata.com"
+    done = poll(server=server, flow=flow)
+    assert done.status_code == 200 and done.json()["state"] == "complete", done.text
+    token = done.json()["access_token"]
+    # Hardcharger's own token, not the provider's ID token.
+    claims = jwt.decode(jwt=token, options={"verify_signature": False})
+    assert claims.get("iss") != idp.issuer and claims.get("auth_method") == "oauth_browser", claims
+    session = Client(base_url=server.base_url, token=token).new_session()
+    assert session.scalar(sql="SELECT 1 AS result") == 1
+    assert session.scalar(sql="SELECT HARDCHARGER_USER()") == "testuser@gizmodata.com"
     # Handed out once.
-    again = server.oauth.get(url=f"/oauth/token/{flow['session_uuid']}")
-    assert again.status_code == 404 and again.json()["status"] == "not_found"
-
-    # It signs in: token_exchange, and as the password of user "token" (1.x drivers).
-    for body in ({"grant_type": "token_exchange", "subject_token": id_token},
-                 {"grant_type": "password", "username": "token", "password": id_token}):
-        response = httpx.post(url=f"{server.base_url}/warp/v1/auth/token", json=body)
-        assert response.status_code == 200, response.text
-        session = Client(base_url=server.base_url, token=response.json()["access_token"]).new_session()
-        assert session.scalar(sql="SELECT 1 AS result") == 1
-        assert session.scalar(sql="SELECT HARDCHARGER_USER()") == "testuser@gizmodata.com"
+    again = poll(server=server, flow=flow)
+    assert again.status_code == 404 and again.json()["code"] == "flow_not_found"
 
 
-def test_initiate_endpoint_returns_valid_json(server):
-    response = server.oauth.get(url="/oauth/initiate")
-    assert response.status_code == 200
-    flow = response.json()
-    uuid = flow["session_uuid"]
-    assert len(uuid) == 36 and [uuid[i] for i in (8, 13, 18, 23)] == ["-"] * 4
-    params = httpx.URL(flow["auth_url"]).params
-    assert {"response_type", "client_id", "redirect_uri", "state", "scope"} <= set(params.keys())
+def test_flow_document(server):
+    flow = create(server=server)
+    assert set(flow) == {"flow_id", "poll_secret", "authorize_url", "poll_interval_s", "expires_at"}
+    params = httpx.URL(flow["authorize_url"]).params
+    assert {"response_type", "client_id", "redirect_uri", "state", "scope", "code_challenge",
+            "code_challenge_method", "nonce"} <= set(params.keys())
     assert params["scope"] == "openid profile email"
-    # The state is HMAC-SHA256(secret_key, uuid), as clients that start their own flow compute it.
-    assert params["state"] == hmac_hex(key=server.secret_key, data=uuid)
-    poll = server.oauth.get(url=f"/oauth/token/{uuid}")
-    assert poll.status_code == 200 and poll.json() == {"status": "pending"}
-
-
-def hmac_hex(key: str, data: str) -> str:
-    return hmac.new(key=key.encode(), msg=data.encode(), digestmod=hashlib.sha256).hexdigest()
-
-
-def start_flow(server) -> tuple[str, str]:
-    uuid = str(uuid_module.uuid4())
-    session_hash = hmac_hex(key=server.secret_key, data=uuid)
-    start = server.oauth.get(url="/oauth/start", params={"session": session_hash})
-    assert start.status_code == 302, start.text
-    assert state_of(start.headers["location"]) == session_hash
-    return uuid, session_hash
+    # The state finds the flow at the callback; it is neither the flow id nor the secret,
+    # and the secret appears nowhere in the URL.
+    assert params["state"] not in (flow["flow_id"], flow["poll_secret"])
+    assert flow["poll_secret"] not in flow["authorize_url"]
+    assert poll(server=server, flow=flow).json() == {"state": "pending"}
+    # Discovery says so, with the provider's name.
+    doc = server.http.get(url="/warp").json()
+    assert "oauth_browser" in doc["capabilities"] and doc["auth"]["oauth_browser"] == {"provider": "Mock IdP"}
 
 
 def test_invalid_authorization_code(server, idp):
-    uuid, session_hash = start_flow(server=server)
-    callback = server.oauth.get(url="/oauth/callback", params={"code": "bad-code", "state": session_hash})
-    assert "Authentication Failed" in callback.text and "invalid_grant" in callback.text, callback.text
-    poll = server.oauth.get(url=f"/oauth/token/{uuid}").json()
-    assert poll["status"] == "error" and "invalid_grant: the code is not valid" in poll["error"], poll
+    flow = create(server=server)
+    callback = urllib.parse.urlsplit(callback_url(flow=flow))
+    state = dict(urllib.parse.parse_qsl(callback.query))["state"]
+    page = server.http.get(url="/warp/v1/auth/oauth/callback", params={"code": "bad-code", "state": state})
+    assert "Sign-in failed" in page.text and "invalid_grant" in page.text, page.text
+    body = poll(server=server, flow=flow).json()
+    assert body["state"] == "failed" and body["error"]["code"] == "identity_provider_error", body
+    assert "invalid_grant: the code is not valid" in body["error"]["detail"], body
 
 
 def test_unauthorized_email(server, idp):
-    uuid, session_hash = start_flow(server=server)
     idp.email = "unauthorized@evil.com"
-    idp.valid_code = "unauth-code-456"
-    try:
-        callback = server.oauth.get(url="/oauth/callback", params={"code": "unauth-code-456", "state": session_hash})
-    finally:
-        idp.email = "testuser@gizmodata.com"
-    assert "Authentication Failed" in callback.text and "unauthorized@evil.com" in callback.text, callback.text
-    poll = server.oauth.get(url=f"/oauth/token/{uuid}").json()
-    assert poll["status"] == "error" and "is not authorized" in poll["error"], poll
+    flow = create(server=server)
+    page = browse(server=server, flow=flow)
+    assert "Sign-in failed" in page.text and "unauthorized@evil.com" in page.text, page.text
+    body = poll(server=server, flow=flow).json()
+    assert body["state"] == "failed" and body["error"]["code"] == "invalid_credentials", body
+    assert "is not authorized" in body["error"]["detail"]
     # And the provider's token for that user doesn't sign in either.
-    token = idp.id_token(email="unauthorized@evil.com")
-    response = httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
-                          json={"grant_type": "token_exchange", "subject_token": token})
+    response = exchange(server=server, token=idp.id_token(email="unauthorized@evil.com"))
     assert response.status_code == 401 and "is not authorized" in response.json()["detail"], response.text
 
 
 def test_token_poll_not_found(server):
-    response = server.oauth.get(url=f"/oauth/token/{uuid_module.uuid4()}")
-    assert response.status_code == 404 and response.json() == {"status": "not_found"}
+    response = server.http.post(url=f"{FLOWS}/f_doesnotexist", json={"poll_secret": "x"})
+    assert response.status_code == 404 and response.json()["code"] == "flow_not_found"
 
 
 def test_pending_session_poll(server):
-    uuid, _ = start_flow(server=server)
-    response = server.oauth.get(url=f"/oauth/token/{uuid}")
-    assert response.status_code == 200 and response.json() == {"status": "pending"}
+    flow = create(server=server)
+    response = poll(server=server, flow=flow)
+    assert response.status_code == 200 and response.json() == {"state": "pending"}
 
 
-def test_duplicate_session_rejected(server):
-    _, session_hash = start_flow(server=server)
-    again = server.oauth.get(url="/oauth/start", params={"session": session_hash})
-    assert again.status_code == 409 and "Session already in progress" in again.text
+def test_the_poll_secret_is_required(server):
+    flow = create(server=server)
+    browse(server=server, flow=flow)
+    for wrong in ("", "nope", flow["flow_id"], flow["poll_secret"] + "x"):
+        response = poll(server=server, flow=flow, secret=wrong)
+        assert response.status_code == 404 and response.json()["code"] == "flow_not_found", wrong
+    missing = server.http.post(url=f"{FLOWS}/{flow['flow_id']}", json={})
+    assert missing.status_code == 400 and missing.json()["code"] == "bad_request"
+    in_url = server.http.get(url=f"{FLOWS}/{flow['flow_id']}", params={"poll_secret": flow["poll_secret"]})
+    assert in_url.status_code == 405
+    assert poll(server=server, flow=flow).json()["state"] == "complete"
 
 
-def test_missing_session_parameter(server):
-    response = server.oauth.get(url="/oauth/start")
-    assert response.status_code == 400 and "Missing session parameter" in response.text
+def test_duplicate_callback_rejected(server):
+    flow = create(server=server)
+    url = callback_url(flow=flow)
+    assert server.http.get(url=url).status_code == 200
+    again = server.http.get(url=url)
+    assert again.status_code == 409 and "already been completed" in again.text, again.text
 
 
-def test_provider_error_is_escaped(server):
-    uuid, session_hash = start_flow(server=server)
-    response = server.oauth.get(url="/oauth/callback", params={
-        "error": "access_denied", "error_description": "<script>alert(1)</script>", "state": session_hash})
+def test_missing_state(server):
+    response = server.http.get(url="/warp/v1/auth/oauth/callback", params={"code": "x"})
+    assert response.status_code == 400 and "unknown or has expired" in response.text
+
+
+def test_provider_error_is_escaped(server, idp):
+    idp.deny = True
+    idp.deny_description = "<script>alert(1)</script>"
+    flow = create(server=server)
+    response = browse(server=server, flow=flow)
     assert "<script>alert(1)</script>" not in response.text
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in response.text
-    assert server.oauth.get(url=f"/oauth/token/{uuid}").json()["status"] == "error"
+    assert "default-src 'none'" in response.headers["content-security-policy"]
+    body = poll(server=server, flow=flow).json()
+    assert body["state"] == "failed" and body["error"]["code"] == "access_denied", body
+
+
+def test_a_foreign_nonce_is_refused(server, idp):
+    idp.nonce_override = "another-flows-nonce"
+    flow = create(server=server)
+    browse(server=server, flow=flow)
+    body = poll(server=server, flow=flow).json()
+    assert body["state"] == "failed" and body["error"]["code"] == "invalid_credentials", body
+    assert "nonce" in body["error"]["detail"]
+
+
+def test_return_to_comes_back_with_the_flow_id(server):
+    flow = create(server=server, body={"return_to": "/ui/"})
+    redirect = browse(server=server, flow=flow)
+    # oauth_base_url is set, so the redirect is absolute on it.
+    assert redirect.status_code == 303
+    assert redirect.headers["location"] == f"{server.base_url}/ui/#warp_oauth_flow={flow['flow_id']}"
+    assert poll(server=server, flow=flow).json()["state"] == "complete"
+
+
+@pytest.mark.parametrize("return_to", ["https://evil.example/", "//evil.example", "/\\evil.example", "/ui/#x", ""])
+def test_return_to_must_stay_on_this_server(server, return_to):
+    response = server.http.post(url=FLOWS, json={"return_to": return_to})
+    assert response.status_code == 400 and response.json()["code"] == "invalid_return_to", response.text
+
+
+def test_default_redirect_uri_and_relative_return(launcher, idp):
+    # Without oauth_base_url: http://localhost:<port>, and a relative return redirect.
+    server = launcher.start(args=oauth_args(idp, "--oauth-client-secret", CLIENT_SECRET))
+    http = httpx.Client(base_url=server.base_url, follow_redirects=False)
+    flow = http.post(url=FLOWS, json={"return_to": "/ui/"}).json()
+    params = httpx.URL(flow["authorize_url"]).params
+    assert params["redirect_uri"] == f"http://localhost:{server.port}/warp/v1/auth/oauth/callback"
+    callback = urllib.parse.urlsplit(callback_url(flow=flow))
+    redirect = http.get(url=f"{callback.path}?{callback.query}")
+    assert redirect.headers["location"] == f"/ui/#warp_oauth_flow={flow['flow_id']}"
+    # No provider name configured: discovery names none.
+    assert http.get(url="/warp").json()["auth"]["oauth_browser"] == {}
 
 
 def test_instance_id_prefixes_the_state(launcher, idp):
-    port = free_port()
-    server = launcher.start(args=oauth_args(idp, port, "--oauth-instance-id", "replica-7",
-                                            "--oauth-base-url", "https://sign-in.example.test"))
-    oauth = httpx.Client(base_url=f"http://127.0.0.1:{port}", follow_redirects=False)
-    flow = oauth.get(url="/oauth/initiate").json()
-    params = httpx.URL(flow["auth_url"]).params
-    assert params["state"] == "replica-7." + hmac_hex(key=server.secret_key, data=flow["session_uuid"])
-    assert params["redirect_uri"] == "https://sign-in.example.test/oauth/callback"
-    idp.valid_code = "prefixed-code"
-    callback = oauth.get(url="/oauth/callback", params={"code": "prefixed-code", "state": params["state"]})
-    assert "Authentication Successful" in callback.text, callback.text
-    assert oauth.get(url=f"/oauth/token/{flow['session_uuid']}").json()["status"] == "complete"
+    # A shared callback proxy on another origin routes the provider's redirects by the
+    # state's prefix to the server's callback; the return redirect is absolute on the
+    # server's public URL.
+    server = launcher.start(args=oauth_args(idp, "--oauth-client-secret", CLIENT_SECRET,
+                                            "--oauth-instance-id", "replica-7",
+                                            "--oauth-redirect-uri", "https://sign-in.example.test/callback",
+                                            "--oauth-base-url", "https://replica-7.example.test"))
+    http = httpx.Client(base_url=server.base_url, follow_redirects=False)
+    flow = http.post(url=FLOWS, json={"return_to": "/ui/"}).json()
+    params = httpx.URL(flow["authorize_url"]).params
+    assert params["state"].startswith("replica-7.")
+    assert params["redirect_uri"] == "https://sign-in.example.test/callback"
+    proxied = urllib.parse.urlsplit(callback_url(flow=flow))
+    assert proxied.netloc == "sign-in.example.test"
+    redirect = http.get(url=f"/warp/v1/auth/oauth/callback?{proxied.query}")
+    assert redirect.headers["location"] == f"https://replica-7.example.test/ui/#warp_oauth_flow={flow['flow_id']}"
+    assert http.post(url=f"{FLOWS}/{flow['flow_id']}", json={"poll_secret": flow["poll_secret"]}).json()["state"] == \
+        "complete"
+
+
+def test_pending_sign_ins_are_bounded(launcher, idp):
+    server = launcher.start(args=oauth_args(idp, "--oauth-client-secret", CLIENT_SECRET, "--oauth-max-flows", "3"))
+    http = httpx.Client(base_url=server.base_url)
+    for _ in range(3):
+        assert http.post(url=FLOWS, json={}).status_code == 201
+    refused = http.post(url=FLOWS, json={})
+    assert refused.status_code == 429 and refused.json()["code"] == "rate_limited" and refused.headers["retry-after"]
+
+
+def test_without_oauth_client_id_there_is_no_browser_sign_in(launcher):
+    server = launcher.start()
+    http = httpx.Client(base_url=server.base_url)
+    assert "oauth_browser" not in http.get(url="/warp").json()["capabilities"]
+    response = http.post(url=FLOWS, json={})
+    assert response.status_code == 501 and response.json()["code"] == "not_implemented"
+
+
+def test_the_old_side_port_options_are_gone(launcher):
+    for flag in ("--oauth-port", "--oauth-disable-tls"):
+        server = launcher.start(args=[flag, "31339"], expect_up=False)
+        assert server.process.wait(timeout=30) != 0
+        assert flag.removeprefix("--") in server.log() or "unknown" in server.log().lower(), server.log()
 
 
 def test_needs_no_license(launcher, idp):
     # 1.x refused the OAuth server without its license feature; Hardcharger has no license.
-    port = free_port()
-    server = launcher.start(args=oauth_args(idp, port))
-    response = httpx.get(url=f"http://127.0.0.1:{port}/oauth/initiate")
-    assert response.status_code == 200 and "session_uuid" in response.json(), server.log()
+    server = launcher.start(args=oauth_args(idp, "--oauth-client-secret", CLIENT_SECRET))
+    response = httpx.post(url=f"{server.base_url}{FLOWS}", json={})
+    assert response.status_code == 201 and "flow_id" in response.json(), server.log()
 
 
 def exchange(server, token: str) -> httpx.Response:

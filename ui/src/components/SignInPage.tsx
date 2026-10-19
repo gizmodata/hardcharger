@@ -1,8 +1,19 @@
 import type { DiscoveryDocument } from "@gizmodata/warp-sql";
-import { BadgeCheck, LogIn, Moon, Sun } from "lucide-react";
-import { type SyntheticEvent, useRef, useState } from "react";
+import { BadgeCheck, KeyRound, LogIn, Moon, Sun } from "lucide-react";
+import { type SyntheticEvent, useEffect, useRef, useState } from "react";
 
-import { type SignedIn, SignInError, lastUsername, signIn, signInWithCertificate } from "../lib/auth";
+import {
+  type SignedIn,
+  SignInError,
+  browserSignInProvider,
+  finishBrowserSignIn,
+  lastUsername,
+  offersBrowserSignIn,
+  signIn,
+  signInWithCertificate,
+  startBrowserSignIn,
+  takeReturnedFlow,
+} from "../lib/auth";
 import type { Theme } from "../lib/theme";
 import { ByGizmoData, TrademarkNotice, Wordmark } from "./Brand";
 
@@ -19,13 +30,19 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
   const [username, setUsername] = useState(lastUsername);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | undefined>();
-  const [working, setWorking] = useState(false);
+  // Back from the identity provider: the flow id is in the URL's fragment (read and removed
+  // once, on the first render), and this tab holds the flow's poll secret.
+  const [returned] = useState(takeReturnedFlow);
+  const [working, setWorking] = useState(returned !== null);
   const passwordRef = useRef<HTMLInputElement>(null);
   const grants = server?.auth?.grant_types;
   const passwordGrant = grants?.includes("password") ?? true;
   // Offered by a server with mutual TLS and certificate sign-in on (Warp SQL §4.4): the
   // browser has already presented its certificate to load this page.
   const certificateGrant = grants?.includes("client_certificate") ?? false;
+  // Browser sign-in with the server's identity provider (Warp SQL §4.3).
+  const browserGrant = offersBrowserSignIn(server);
+  const provider = browserSignInProvider(server);
 
   const run = async (attempt: () => Promise<SignedIn>, afterFailure?: () => void) => {
     if (working) return;
@@ -41,6 +58,43 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
     } finally {
       setWorking(false);
     }
+  };
+
+  const signedIn = useRef(onSignedIn);
+  useEffect(() => {
+    signedIn.current = onSignedIn;
+  });
+  useEffect(() => {
+    if (returned === null) return;
+    let live = true;
+    finishBrowserSignIn(returned).then(
+      (auth) => {
+        if (!live) return;
+        setWorking(false);
+        if (auth) signedIn.current(auth);
+      },
+      (err: unknown) => {
+        if (!live) return;
+        setWorking(false);
+        setError(err instanceof SignInError ? err.message : String(err));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [returned]);
+
+  const signInWithBrowser = () => {
+    if (working) return;
+    setWorking(true);
+    setError(undefined);
+    startBrowserSignIn().then(
+      (url) => window.location.assign(url),
+      (err: unknown) => {
+        setWorking(false);
+        setError(err instanceof SignInError ? err.message : String(err));
+      },
+    );
   };
 
   const submit = (e: SyntheticEvent<HTMLFormElement>) => {
@@ -87,7 +141,7 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
             {serverError}
           </p>
         )}
-        {server && !passwordGrant && !certificateGrant && (
+        {server && !passwordGrant && !certificateGrant && !browserGrant && (
           <p className="signin-error" role="alert">
             This server accepts no sign-in this page can offer.
           </p>
@@ -144,6 +198,17 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
             onClick={() => void run(() => signInWithCertificate())}
           >
             <BadgeCheck size={16} /> Sign in with my certificate
+          </button>
+        )}
+        {browserGrant && (
+          <button
+            type="button"
+            className={`btn ${passwordGrant || certificateGrant ? "btn-secondary" : "btn-primary"} signin-submit`}
+            disabled={busy || working}
+            onClick={signInWithBrowser}
+            data-testid="signin-browser"
+          >
+            <KeyRound size={16} /> Sign in with {provider ?? "single sign-on"}
           </button>
         )}
         <p className="signin-foot">

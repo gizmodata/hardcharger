@@ -29,17 +29,14 @@ def idp():
 @pytest.fixture(scope="module")
 def server(module_launcher, idp):
     metrics_port = free_port()
-    oauth_port = free_port()
     running = module_launcher.start(args=[
         "--enable-instrumentation", "--enable-catalog-logging", "--capture-query-profile", "standard",
         "--instance-tag", '{"team": "no-license"}',
         "--enable-metrics", "--metrics-port", str(metrics_port),
         "--max-concurrent-statements", "4",
         "--token-allowed-issuer", idp.issuer, "--token-allowed-audience", AUDIENCE, "--token-default-role", "user",
-        "--oauth-client-id", "no-license-client", "--oauth-client-secret", "no-license-secret",
-        "--oauth-port", str(oauth_port)])
+        "--oauth-client-id", "no-license-client", "--oauth-client-secret", "no-license-secret"])
     running.metrics_port = metrics_port
-    running.oauth_port = oauth_port
     return running
 
 
@@ -110,9 +107,9 @@ def test_identity_provider_sign_in(server, idp):
     assert response.status_code == 200, response.text
 
 
-def test_browser_sign_in_server(server):
-    response = httpx.get(url=f"http://127.0.0.1:{server.oauth_port}/oauth/initiate")
-    assert response.status_code == 200 and "session_uuid" in response.json(), response.text
+def test_browser_sign_in(server):
+    response = httpx.post(url=f"{server.base_url}/warp/v1/auth/oauth/flows", json={})
+    assert response.status_code == 201 and "flow_id" in response.json(), response.text
 
 
 def test_role_based_access_control(launcher, store):

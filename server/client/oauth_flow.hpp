@@ -1,26 +1,16 @@
-// Browser sign-in through the server's OAuth sign-in server (hardcharger-server's
-// --oauth-port routes, as in GizmoSQL 1.x): GET /oauth/initiate, open its auth_url in a
-// browser, poll /oauth/token/{uuid} until the identity provider has answered, then sign
-// in to Warp SQL with the ID token (grant token_exchange).
+// Browser sign-in (Warp SQL §4.3, the server's oauth_browser capability): the server
+// gives a sign-in URL, which opens in a browser ($HARDCHARGER_BROWSER, else the system's),
+// and the client polls the server until the person has signed in with the identity
+// provider, then holds Hardcharger's access token.
 #pragma once
 
-#include <string>
-
-#include <arrow/result.h>
+#include <arrow/status.h>
 
 #include "warpsql/client.hpp"
 
 namespace hardcharger::client {
 
-class OAuthFlow {
- public:
-  explicit OAuthFlow(warpsql::client::TlsOptions tls) : tls_(std::move(tls)) {}
-
-  // The identity provider's ID token, once the user has signed in in the browser.
-  arrow::Result<std::string> Authenticate(const std::string& oauth_base_url);
-
- private:
-  warpsql::client::TlsOptions tls_;
-};
+// Signs `client` in through the browser. `discovery` is the server's GET /warp.
+arrow::Status SignInWithBrowser(warpsql::client::Client& client, const warpsql::client::Discovery& discovery);
 
 }  // namespace hardcharger::client

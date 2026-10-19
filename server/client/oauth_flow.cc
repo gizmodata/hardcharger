@@ -2,79 +2,40 @@
 
 #include <chrono>
 #include <iostream>
-#include <thread>
 
 #include "platform.hpp"
 
 namespace hardcharger::client {
 
 namespace {
-constexpr int kPollIntervalMs = 1000;
-constexpr int kPollTimeoutSeconds = 300;  // 5 minutes
-
-std::string Field(const boost::json::value& body, const char* key) {
-  if (!body.is_object()) return {};
-  auto* value = body.as_object().if_contains(key);
-  return value != nullptr && value->is_string() ? std::string(value->as_string()) : std::string();
-}
+constexpr auto kTimeout = std::chrono::seconds(300);
 }  // namespace
 
-arrow::Result<std::string> OAuthFlow::Authenticate(const std::string& oauth_base_url) {
-  std::string base = oauth_base_url;
-  while (!base.empty() && base.back() == '/') base.pop_back();
-  std::string session_uuid;
-  std::string auth_url;
+arrow::Status SignInWithBrowser(warpsql::client::Client& client, const warpsql::client::Discovery& discovery) {
+  if (!discovery.Has("oauth_browser")) {
+    return arrow::Status::IOError(
+        "The server does not offer browser sign-in (capability oauth_browser): its administrator turns it on "
+        "with oauth_client_id and the identity provider's settings");
+  }
+  const std::string provider = warpsql::client::Client::BrowserSignInProviderName(discovery);
   try {
-    auto [status, body] = warpsql::client::GetJson(base + "/oauth/initiate", tls_);
-    if (status != 200) {
-      return arrow::Status::IOError("OAuth initiate failed with HTTP " + std::to_string(status) + ": " +
-                                    (body.is_null() ? std::string() : boost::json::serialize(body)));
-    }
-    session_uuid = Field(body, "session_uuid");
-    auth_url = Field(body, "auth_url");
+    client.SignInWithBrowser(
+        [&](const std::string& url) {
+          if (!OpenBrowser(url)) {
+            std::cerr << "Could not open a browser. Open this URL to sign in:" << std::endl << url << std::endl;
+          }
+          std::cerr << "Waiting for the browser sign-in" << (provider.empty() ? "" : " with " + provider)
+                    << "... (press Ctrl+C to cancel)" << std::endl;
+        },
+        kTimeout);
   } catch (const warpsql::client::Error& e) {
-    return arrow::Status::IOError("Failed to connect to the OAuth server at " + base + ": " + e.what());
-  }
-  if (session_uuid.empty() || auth_url.empty()) {
-    return arrow::Status::IOError("OAuth initiate response missing required fields");
-  }
-
-  if (!OpenBrowser(auth_url)) {
-    std::cerr << "Could not open browser automatically." << std::endl;
-    std::cerr << "Please open this URL manually:" << std::endl;
-    std::cerr << auth_url << std::endl;
-  }
-  std::cerr << "Waiting for browser login... (press Ctrl+C to cancel)" << std::endl;
-
-  const auto start = std::chrono::steady_clock::now();
-  const std::string poll_url = base + "/oauth/token/" + session_uuid;
-  while (true) {
-    if (std::chrono::steady_clock::now() - start >= std::chrono::seconds(kPollTimeoutSeconds)) {
-      return arrow::Status::IOError("OAuth login timed out after " + std::to_string(kPollTimeoutSeconds) +
-                                    " seconds");
+    if (e.code() == "timeout") {
+      return arrow::Status::IOError("The browser sign-in was not completed within ", kTimeout.count(), " seconds");
     }
-    int status = 0;
-    boost::json::value body;
-    try {
-      std::tie(status, body) = warpsql::client::GetJson(poll_url, tls_);
-    } catch (const warpsql::client::Error& e) {
-      return arrow::Status::IOError(std::string("Failed to poll OAuth token: ") + e.what());
-    }
-    if (status == 404) return arrow::Status::IOError("OAuth sign-in expired or was already used");
-    if (status != 200) return arrow::Status::IOError("OAuth token poll failed with HTTP " + std::to_string(status));
-    const std::string state = Field(body, "status");
-    if (state == "complete") {
-      std::string token = Field(body, "token");
-      if (token.empty()) return arrow::Status::IOError("OAuth response has status 'complete' but no token");
-      return token;
-    }
-    if (state == "error") {
-      std::string message = Field(body, "error");
-      return arrow::Status::IOError("OAuth login failed: " + (message.empty() ? "Unknown OAuth error" : message));
-    }
-    if (state != "pending") return arrow::Status::IOError("Unknown OAuth poll status: " + state);
-    std::this_thread::sleep_for(std::chrono::milliseconds(kPollIntervalMs));
+    if (e.code() == "flow_not_found") return arrow::Status::IOError("The browser sign-in expired; try again");
+    return arrow::Status::IOError("Browser sign-in failed (", e.code(), "): ", e.detail());
   }
+  return arrow::Status::OK();
 }
 
 }  // namespace hardcharger::client

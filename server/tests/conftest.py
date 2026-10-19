@@ -279,14 +279,14 @@ class Launcher:
     def start(self, args: list[str] | None = None, env: dict[str, str] | None = None,
               password: str | None = None, expect_up: bool = True, username: str = "admin",
               secret_key: str | None = None, binary: pathlib.Path | None = None, wait_for: str = "/warp",
-              startup_seconds: float = 30) -> Running:
+              startup_seconds: float = 30, port: int | None = None) -> Running:
         """Starts a server (the administrator `username` with `password`, by default a
-        random one)."""
+        random one) on a free port, or `port`."""
         binary = binary or BINARY
         env = dict(env or {})
         if not binary.exists():
             pytest.fail(reason=f"{binary} is missing: build the server first")
-        port = free_port()
+        port = port or free_port()
         password = password or secrets.token_urlsafe(nbytes=12) + ":p@ss"
         given = env.get("HARDCHARGER_SECRET_KEY")
         secret_key = secret_key or given or secrets.token_hex(nbytes=32)

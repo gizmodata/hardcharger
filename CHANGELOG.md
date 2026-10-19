@@ -126,6 +126,30 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- **Browser sign-in moved into the Warp SQL protocol, on the main port** (Warp SQL §4.3,
+  capability `oauth_browser`; the SDK at warp-sql `feat/oauth-in-protocol`). Clients create a
+  flow (`POST /warp/v1/auth/oauth/flows`), the person signs in with the identity provider,
+  which redirects to `GET /warp/v1/auth/oauth/callback`, and the client collects
+  Hardcharger's own access token once with the flow's poll secret (never in a URL); the
+  provider's ID token no longer reaches clients. The server sends the provider `state`, PKCE
+  (S256) and a `nonce` (checked in the ID token), exchanges the code as before, and signs the
+  user in as `token_exchange` does (JWKS, issuer, audience, `token_authorized_emails`, role,
+  store users); the session's `auth_method` is `oauth_browser`. **The redirect URI to register
+  with the identity provider is now `<oauth_base_url>/warp/v1/auth/oauth/callback`**:
+  `oauth_base_url` is the server's public URL (default `http(s)://localhost:PORT`), and
+  `oauth_redirect_uri` still overrides it. `oauth_instance_id` still prefixes the state for a
+  shared callback proxy, and with `oauth_base_url` set the redirect back to a web page is
+  absolute on it. New: `oauth_provider_name` (discovery's `auth.oauth_browser.provider`, the
+  UI's "Sign in with NAME") and `oauth_max_flows` (sign-ins in progress at once, default
+  10000, and at most 100 per client address; beyond, `429 rate_limited`).
+  `hardcharger_server_info()` has `oauth_enabled` (BOOLEAN) for `oauth_port`.
+- `hardcharger --auth-type external` uses that flow on the server's own port and says which
+  provider it waits for; it refuses a server without `oauth_browser`.
+- Web UI: **Sign in with <provider>** (or "single sign-on") beside the user name and password
+  when the server offers browser sign-in: the page starts a flow with `return_to` set to
+  itself, keeps the poll secret in the tab, and on its return (the flow id in the URL
+  fragment, removed at once) collects the token or shows why the sign-in failed.
+
 - `KILL SESSION` runs `hardcharger_cancel()`'s cancel first (one implementation), then ends
   the session: what it runs stops (within milliseconds for a CPU-bound statement), its
   statement ends cancelled with `cancel_reason` `killed` (it used to fail with
@@ -167,6 +191,15 @@ own changelog in `python/CHANGELOG.md`.
   New: `run_cases.sh` (a list of cases against one system), `build-from-source.sh` (build
   the server or driver on a benchmark VM), `midsize.py` (partition overhead on mid-sized
   results).
+
+### Removed
+
+- The separate browser sign-in server and its port (`oauth_port`, default 31339), its
+  GizmoSQL 1.x routes (`/oauth/initiate`, `/oauth/start`, `/oauth/callback`,
+  `/oauth/token/<uuid>`) and `oauth_disable_tls` (`--oauth-port`, `--oauth-disable-tls`,
+  `HARDCHARGER_OAUTH_PORT`, `HARDCHARGER_OAUTH_DISABLE_TLS`). The client's `--oauth-port`,
+  `--oauth-base-url`, `HARDCHARGER_OAUTH_PORT` and `HARDCHARGER_OAUTH_BASE_URL` are gone too.
+  A redirect URI registered for the old port must be replaced (see above).
 
 ### Fixed
 

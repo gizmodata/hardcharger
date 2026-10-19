@@ -149,17 +149,9 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
     client = std::make_unique<wc::Client>(options);
     // A Warp SQL server answers GET /warp; anything else (a GizmoSQL 1.x gRPC port, a web
     // server) is refused here with a clear message.
-    client->Discover();
+    const wc::Discovery discovery = client->Discover();
     if (config.auth_type_external) {
-      std::string base = config.oauth_base_url;
-      if (base.empty()) {
-        base = std::string(config.use_tls ? "https://" : "http://") + config.host + ":" +
-               std::to_string(config.oauth_port);
-      }
-      OAuthFlow oauth(options.tls);
-      auto id_token = oauth.Authenticate(base);
-      if (!id_token.ok()) return id_token.status();
-      client->SignInWithToken(*id_token);
+      ARROW_RETURN_NOT_OK(SignInWithBrowser(*client, discovery));
     } else if (config.auth_type_mtls) {
       client->SignInWithClientCertificate();
     } else if (!config.username.empty()) {

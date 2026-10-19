@@ -655,7 +655,7 @@ std::shared_ptr<arrow::RecordBatch> ServerInfoTable(Runtime& runtime, const Sess
   int32("health_port", port(c.health_port), full);
   text("metrics_address", c.enable_metrics && c.metrics_port > 0 ? c.metrics_bind_address : "", full);
   int32("metrics_port", c.enable_metrics ? port(c.metrics_port) : std::nullopt, full);
-  int32("oauth_port", c.oauth_client_id.empty() ? std::nullopt : port(c.oauth_port), full);
+  boolean("oauth_enabled", !c.oauth_client_id.empty(), full);
   boolean("tls_enabled", i.tls_enabled, full);
   boolean("mtls_enabled", i.mtls_required, full);
   boolean("mtls_client_certificate_required", i.mtls_required && c.mtls_require_client_cert, full);

@@ -67,7 +67,7 @@ SERVER_INFO_ADMIN = [
     ("cpu_arch", "VARCHAR"), ("cpu_model", "VARCHAR"), ("cpu_count", "INTEGER"), ("memory_total_bytes", "BIGINT"),
     ("memory_resident_bytes", "BIGINT"), ("database_path", "VARCHAR"), ("read_only", "BOOLEAN"),
     ("listen_address", "VARCHAR"), ("port", "INTEGER"), ("health_port", "INTEGER"), ("metrics_address", "VARCHAR"),
-    ("metrics_port", "INTEGER"), ("oauth_port", "INTEGER"), ("tls_enabled", "BOOLEAN"), ("mtls_enabled", "BOOLEAN"),
+    ("metrics_port", "INTEGER"), ("oauth_enabled", "BOOLEAN"), ("tls_enabled", "BOOLEAN"), ("mtls_enabled", "BOOLEAN"),
     ("mtls_client_certificate_required", "BOOLEAN"), ("server_certificate_sha256", "VARCHAR"),
     ("web_ui_enabled", "BOOLEAN"), ("rbac_store_type", "VARCHAR"), ("session_count", "INTEGER"),
 ]

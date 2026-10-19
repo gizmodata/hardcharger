@@ -81,11 +81,6 @@ int main(int argc, char** argv) {
            "'password' (default), 'external' (the server's browser sign-in, OAuth/SSO) or 'mtls' (the "
            "--mtls-cert client certificate is the credential; no password)",
            &auth_type);
-  cl.Int("oauth-port", 0, "PORT", "The server's browser sign-in port (default: 31339; env: HARDCHARGER_OAUTH_PORT)",
-         &config.oauth_port);
-  cl.Value("oauth-base-url", 0, "URL",
-           "The browser sign-in server's URL (default: http(s)://HOST:OAUTH_PORT; env: HARDCHARGER_OAUTH_BASE_URL)",
-           &config.oauth_base_url);
   cl.Section("Input and output");
   cl.Value("command", 'c', "SQL", "Execute SQL (and dot commands) and exit", &command);
   cl.Value("file", 'f', "FILE", "Execute SQL from FILE and exit", &file);

@@ -133,8 +133,11 @@ IdentityProvider DiscoverIdentityProvider(const hc::Config& c) {
   return provider;
 }
 
-std::unique_ptr<hc::OAuthServer> MakeOAuthServer(const hc::Config& c, const IdentityProvider& provider,
-                                                 const std::string& secret_key) {
+// Browser sign-in (Warp SQL §4.3) on the main port: the SDK serves the flows and the
+// callback; this provider talks to the identity provider. The redirect URI to register
+// with it is <oauth_base_url>/warp/v1/auth/oauth/callback (oauth_redirect_uri overrides).
+std::shared_ptr<hc::OAuthBrowserSignIn> MakeBrowserSignIn(const hc::Config& c, const IdentityProvider& provider,
+                                                          std::shared_ptr<hc::Authenticator> authenticator) {
   if (c.oauth_client_id.empty()) return nullptr;
   if (c.token_allowed_issuer.empty() || c.token_allowed_audience.empty()) {
     throw std::runtime_error("oauth_client_id needs token_allowed_issuer and token_allowed_audience");
@@ -142,30 +145,29 @@ std::unique_ptr<hc::OAuthServer> MakeOAuthServer(const hc::Config& c, const Iden
   if (provider.endpoints.authorization_endpoint.empty() || provider.endpoints.token_endpoint.empty()) {
     throw std::runtime_error("the issuer's OpenID configuration has no authorization_endpoint or token_endpoint");
   }
-  const bool tls = !c.tls_cert.empty() && !c.oauth_disable_tls;
-  if (c.oauth_disable_tls && !c.tls_cert.empty()) {
-    hc::Log(hc::LogLevel::kWarning, "the OAuth server runs without TLS (oauth_disable_tls): only behind a TLS proxy");
-  }
-  const std::string base = !c.oauth_base_url.empty()
-                               ? c.oauth_base_url
-                               : std::string(tls ? "https" : "http") + "://localhost:" + std::to_string(c.oauth_port);
-  hc::OAuthServer::Options options;
-  options.host = c.host;
-  options.port = static_cast<uint16_t>(c.oauth_port);
+  std::string base = !c.oauth_base_url.empty()
+                         ? c.oauth_base_url
+                         : std::string(c.tls_cert.empty() ? "http" : "https") + "://localhost:" + std::to_string(c.port);
+  while (base.ends_with('/')) base.pop_back();
+  hc::OAuthBrowserSignIn::Options options;
   options.client_id = c.oauth_client_id;
   options.client_secret = c.oauth_client_secret;
   options.scopes = c.oauth_scopes;
-  options.redirect_uri = !c.oauth_redirect_uri.empty() ? c.oauth_redirect_uri : base + "/oauth/callback";
-  options.secret_key = secret_key;
+  options.redirect_uri = !c.oauth_redirect_uri.empty() ? c.oauth_redirect_uri : base + "/warp/v1/auth/oauth/callback";
   options.instance_id = c.oauth_instance_id;
-  options.authorized_emails = c.token_authorized_emails;
-  if (tls) {
-    options.tls_cert = c.tls_cert;
-    options.tls_key = c.tls_key;
+  options.provider_name = c.oauth_provider_name;
+  if (!c.oauth_base_url.empty()) {
+    // scheme://host[:port] of the configured public URL.
+    const auto scheme_end = base.find("://");
+    const auto path = scheme_end == std::string::npos ? std::string::npos : base.find('/', scheme_end + 3);
+    options.public_origin = base.substr(0, path);
   }
   options.authorization_endpoint = provider.endpoints.authorization_endpoint;
   options.token_endpoint = provider.endpoints.token_endpoint;
-  return std::make_unique<hc::OAuthServer>(std::move(options));
+  options.sign_in = [authenticator](std::string_view id_token) { return authenticator->ExchangeToken(id_token); };
+  hc::Log(hc::LogLevel::kInfo, "browser sign-in is on (register this redirect URI with the identity provider)",
+          {{"redirect_uri", options.redirect_uri}, {"provider", c.oauth_provider_name}});
+  return std::make_shared<hc::OAuthBrowserSignIn>(std::move(options));
 }
 
 double ParseBytes(const std::string& text) {
@@ -431,7 +433,6 @@ int main(int argc, char** argv) {
     auto authenticator = std::make_shared<hc::Authenticator>(
         config, store_access, [tokens](std::string_view token) { return tokens->Validate(token); },
         provider.jwks);
-    auto oauth = MakeOAuthServer(config, provider, secret_key);
     backend->StartHealthCheck();
 
     std::unique_ptr<hc::MetricsEndpoint> metrics_endpoint;
@@ -446,12 +447,14 @@ int main(int argc, char** argv) {
       }
     }
 
-    warpsql::Server server(ServerOptionsFrom(config), backend, authenticator, tokens);
+    warpsql::ServerOptions server_options = ServerOptionsFrom(config);
+    server_options.browser_sign_in = MakeBrowserSignIn(config, provider, authenticator);
+    server_options.max_browser_sign_ins = static_cast<std::size_t>(config.oauth_max_flows);
+    warpsql::Server server(std::move(server_options), backend, authenticator, tokens);
     // For the SQL functions that see and cancel sessions; nothing calls them before Start(),
     // and every engine thread has stopped before `server` goes.
     runtime.server = &server;
     server.Start();
-    if (oauth) oauth->Start();
     hc::Log(hc::LogLevel::kInfo, "Hardcharger is ready",
             {{"version", hc::kVersion},
              {"duckdb", backend->duckdb_version()},
@@ -460,7 +463,7 @@ int main(int argc, char** argv) {
              // "off": metrics are off; "none": metrics in SQL only (metrics_port 0).
              {"metrics_port", metrics_endpoint ? std::to_string(metrics_endpoint->port())
                               : config.enable_metrics ? "none" : "off"},
-             {"oauth_port", oauth ? std::to_string(oauth->port()) : "off"},
+             {"browser_sign_in", config.oauth_client_id.empty() ? "off" : "on"},
              {"database", config.database}});
     if (config.web_ui) {
       hc::Log(hc::LogLevel::kInfo, "the web UI is on",
@@ -518,7 +521,6 @@ int main(int argc, char** argv) {
     if (watcher.joinable()) watcher.join();
     if (access) access->Shutdown();  // the store poller, before the engine and DuckDB go
     if (metrics_endpoint) metrics_endpoint->Stop();
-    if (oauth) oauth->Stop();
     if (exit_marker) exit_marker->Clean();
     backend->StopHealthCheck();
     backend->StopInstrumentation();

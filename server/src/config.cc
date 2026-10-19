@@ -179,24 +179,24 @@ const std::vector<Option>& Options() {
        "JWKS of the identity provider whose ID tokens sign users in", TEXT(token_jwks_uri)},
       // Browser sign-in
       {"oauth_client_id", Kind::kString,
-       "OAuth client id; set, the browser sign-in server runs", TEXT(oauth_client_id)},
-      {"oauth_client_secret", Kind::kString, "OAuth client secret",
+       "OAuth client id; set, browser sign-in is offered (Warp SQL oauth_browser)",
+       TEXT(oauth_client_id)},
+      {"oauth_client_secret", Kind::kString, "OAuth client secret (prefer the environment variable)",
        TEXT(oauth_client_secret)},
       {"oauth_scopes", Kind::kString, "OAuth scopes requested",
        TEXT(oauth_scopes)},
-      {"oauth_port", Kind::kInt, "port of the browser sign-in server",
-       NUMBER(oauth_port)},
       {"oauth_base_url", Kind::kString,
-       "public URL of the browser sign-in server (default http(s)://localhost:<oauth_port>)",
+       "the server's public URL, for the redirect URI (default http(s)://localhost:<port>)",
        TEXT(oauth_base_url)},
       {"oauth_redirect_uri", Kind::kString,
-       "redirect URI registered with the provider (default <base url>/oauth/callback)",
+       "redirect URI registered with the provider (default <base url>/warp/v1/auth/oauth/callback)",
        TEXT(oauth_redirect_uri)},
       {"oauth_instance_id", Kind::kString,
        "prefix of the OAuth state, for a shared callback proxy", TEXT(oauth_instance_id)},
-      {"oauth_disable_tls", Kind::kBool,
-       "serve browser sign-in over plain HTTP even with TLS on (behind a TLS proxy)",
-       FLAG(oauth_disable_tls)},
+      {"oauth_provider_name", Kind::kString,
+       "the identity provider's name for people (\"Sign in with <name>\")", TEXT(oauth_provider_name)},
+      {"oauth_max_flows", Kind::kInt, "browser sign-ins in progress at once",
+       NUMBER(oauth_max_flows)},
       // Sessions
       {"max_sessions", Kind::kInt,
        "most non-admin sessions at once (0: unlimited)", NUMBER(max_sessions)},
@@ -470,6 +470,7 @@ void Validate(Loaded& loaded) {
       c.metrics_port < 0 || c.metrics_port > 65535) {
     throw std::invalid_argument("ports must be between 0 and 65535");
   }
+  if (c.oauth_max_flows < 1) throw std::invalid_argument("oauth_max_flows must be positive");
   // Saying where /metrics listens asks for metrics: a metrics_port (other than 0) or a
   // metrics_bind_address turns them on, unless enable_metrics is set (an explicit false
   // wins, and says so at startup).

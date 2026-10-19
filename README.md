@@ -91,6 +91,8 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
 - 🔏 **Certificate sign-in** under mutual TLS: the browser presents its client certificate to
   load `/ui` at all, and with `--mtls-certificate-sign-in` the page offers **Sign in with my
   certificate**, no password needed.
+- 🌐 **Sign in with your identity provider**: with browser sign-in on (below), the page offers
+  **Sign in with <provider>** beside the user name and password, and comes back signed in.
 - 🛡️ The server's own sign-in, a short-lived token kept only in the tab, and a strict
   Content-Security-Policy: nothing loads from another origin.
 
@@ -623,6 +625,49 @@ already covers it (and is how the server attaches its own). This closes the one 
 could reach the server's files outside DuckDB's file system; the `sqlite_scanner` load still
 takes the administrator or a role granted `MANAGE EXTENSIONS`, which belong only to roles you
 would trust with the server's files.
+
+## 🌐 Browser sign-in (SSO)
+
+People can sign in with your OpenID Connect identity provider in a browser: Warp SQL's
+`oauth_browser` flow, on the server's own port and TLS. The `hardcharger` client
+(`--auth-type external`), the drivers and the web UI all use it. Hardcharger is the
+provider's confidential client: the client id and secret stay on the server, and clients get
+Hardcharger's own access token, never the provider's tokens.
+
+```yaml
+token_allowed_issuer: https://login.example.com/oauth2/default   # found through its OpenID configuration
+token_allowed_audience: hardcharger                               # the ID tokens' audience (the client id)
+token_authorized_emails: ["*@example.com"]
+token_default_role: user
+oauth_client_id: hardcharger
+# oauth_client_secret: from HARDCHARGER_OAUTH_CLIENT_SECRET, not the file
+oauth_base_url: https://db.example.com                           # this server's public URL
+oauth_provider_name: Okta                                         # "Sign in with Okta"
+```
+
+Register **`<oauth_base_url>/warp/v1/auth/oauth/callback`** with the identity provider as the
+client's redirect URI (here `https://db.example.com/warp/v1/auth/oauth/callback`; the server logs
+the one it uses at startup). `oauth_redirect_uri` overrides it. Earlier builds had a separate
+sign-in port (31339, `/oauth/callback`): that port and its options are gone, so a redirect URI
+registered for it must be replaced.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `oauth_client_id` | none | Set: browser sign-in is offered (needs `token_allowed_issuer` and `token_allowed_audience`) |
+| `oauth_client_secret` | none | The client secret (prefer `HARDCHARGER_OAUTH_CLIENT_SECRET`) |
+| `oauth_scopes` | `openid profile email` | |
+| `oauth_base_url` | `http(s)://localhost:PORT` | The server's public URL, for the redirect URI; set, the web UI's return after sign-in is an absolute URL on it |
+| `oauth_redirect_uri` | `<oauth_base_url>/warp/v1/auth/oauth/callback` | The redirect URI, given whole |
+| `oauth_provider_name` | none | The provider's name for people; without it the UI says "single sign-on" |
+| `oauth_instance_id` | none | Starts every `state` with `<id>.`, for a proxy on another origin that receives the provider's redirects for several servers and forwards each to its server's callback (set `oauth_redirect_uri` to the proxy and `oauth_base_url` to the server) |
+| `oauth_max_flows` | `10000` | Sign-ins in progress at once (also at most 100 per client address); beyond, `429` |
+
+The server sends the provider a code request with `state`, PKCE (S256) and a `nonce`, exchanges
+the code itself, and signs the user in with the ID token exactly as `token_exchange` would:
+the provider's JWKS, issuer, audience, `token_authorized_emails`, roles and, under access
+control, the store's users. A sign-in is collected once by the client that started it, with a
+secret that is never in a URL; sign-ins expire after 10 minutes. `hardcharger_server_info()`
+has `oauth_enabled`.
 
 ## 🔏 Client certificates as identity
 

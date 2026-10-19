@@ -53,3 +53,10 @@ test("a returning visitor's reload keeps the session and the tabs, with no error
   expect(local).not.toContain(token);
   expect(await context.cookies()).toEqual([]);
 });
+
+test("a server without browser sign-in offers no provider button", async ({ page }) => {
+  await page.goto("/ui/");
+  await expect(page.getByTestId("server-version")).toContainText("Hardcharger");
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  await expect(page.getByTestId("signin-browser")).toHaveCount(0);
+});

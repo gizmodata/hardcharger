@@ -119,22 +119,6 @@ void ResolveEnvironmentVariables(ClientConfig& config) {
     }
   }
 
-  if (config.oauth_port == 31339) {
-    if (const char* val = get_env("HARDCHARGER_OAUTH_PORT")) {
-      try {
-        config.oauth_port = std::stoi(val);
-      } catch (...) {
-        // ignore invalid port
-      }
-    }
-  }
-
-  if (config.oauth_base_url.empty()) {
-    if (const char* val = get_env("HARDCHARGER_OAUTH_BASE_URL")) {
-      config.oauth_base_url = val;
-    }
-  }
-
   if (config.session_tag.empty()) {
     if (const char* val = get_env("HARDCHARGER_SESSION_TAG")) {
       config.session_tag = val;

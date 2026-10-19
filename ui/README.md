@@ -121,6 +121,13 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
   browser presents its client certificate to load `/ui` at all, and with
   `--mtls-certificate-sign-in` the page offers **Sign in with my certificate** (the UI uses
   fetch's default credentials mode, never `omit`, which would leave the certificate off).
+  With browser sign-in on the server (`oauth_client_id`, Warp SQL's `oauth_browser`), the page
+  offers **Sign in with <provider>** (or "single sign-on"): it starts a flow with `return_to`
+  set to itself, keeps the flow's poll secret in this tab's `sessionStorage`, goes to the
+  identity provider, and on its return (the flow id in the URL fragment, which it removes at
+  once) collects the access token with the secret, or shows why the sign-in failed. A
+  fragment naming a flow this tab didn't start is ignored. e2e: `oauth.spec.ts`, against a
+  mock identity provider (`test/e2e/idp.ts`).
 - 🎨 GizmoData's look: the README banner's orange and Warp blue, light and dark themes (the
   system's choice until you pick one), Inter embedded in the build (SIL Open Font License 1.1,
   served as `/ui/fonts/Inter-LICENSE.txt`).

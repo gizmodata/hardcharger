@@ -68,15 +68,15 @@ struct Config {
   // token_allowed_issuer's OpenID configuration names (with an audience and no PEM key).
   std::string token_jwks_uri;
 
-  // Browser sign-in through the identity provider.
-  std::string oauth_client_id;  // set: the OAuth server runs
+  // Browser sign-in through the identity provider (Warp SQL §4.3), on the main port.
+  std::string oauth_client_id;  // set: browser sign-in is offered
   std::string oauth_client_secret;
   std::string oauth_scopes = "openid profile email";
-  int64_t oauth_port = 31339;
-  std::string oauth_base_url;      // empty: http(s)://localhost:<oauth_port>
-  std::string oauth_redirect_uri;  // empty: <base url>/oauth/callback
-  std::string oauth_instance_id;   // routes a shared proxy's callbacks: state = <id>.<hash>
-  bool oauth_disable_tls = false;  // plain HTTP behind a TLS-terminating proxy
+  std::string oauth_base_url;       // the server's public URL; empty: http(s)://localhost:<port>
+  std::string oauth_redirect_uri;   // empty: <base url>/warp/v1/auth/oauth/callback
+  std::string oauth_instance_id;    // routes a shared proxy's callbacks: state = <id>.<random>
+  std::string oauth_provider_name;  // shown to people ("Sign in with ..."); empty: none
+  int64_t oauth_max_flows = 10000;  // sign-ins in progress at once
 
   // Sessions
   int64_t max_sessions = 0;  // non-admin sessions at once; 0 = unlimited

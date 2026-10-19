@@ -311,6 +311,12 @@ jobs:
           WARP_SQL_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
           # Hardcharger's flag for the CORS allow-list (test_http.py's credentials tests).
           WARP_SQL_TEST_SERVER_CORS_FLAG: --cors-origins
+          # How test_oauth_browser.py configures browser sign-in on Hardcharger (a template).
+          WARP_SQL_TEST_SERVER_OAUTH_ARGS: >-
+            --token-allowed-issuer {issuer} --token-allowed-audience {client_id} --token-default-role admin
+            --token-authorized-emails {identity} --oauth-client-id {client_id} --oauth-base-url {base_url}
+            --oauth-provider-name {provider} --oauth-max-flows {max_flows}
+          WARP_SQL_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
           HARDCHARGER_ADMIN_USERNAME: warp
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |

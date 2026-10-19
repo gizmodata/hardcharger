@@ -181,9 +181,15 @@ interface RunningServer {
  * Starts hardcharger-server on a free port with an empty database of its own, and waits
  * until it is healthy.
  */
-async function startServer(o: { binary: string; adminPassword: string; extraArgs: string[] }): Promise<RunningServer> {
+async function startServer(o: {
+  binary: string;
+  adminPassword: string;
+  extraArgs: string[];
+  port?: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<RunningServer> {
   const work = mkdtempSync(path.join(os.tmpdir(), "hardcharger-ui-e2e-"));
-  const port = await freePort();
+  const port = o.port ?? (await freePort());
   const args = [
     "--host",
     "127.0.0.1",
@@ -203,7 +209,7 @@ async function startServer(o: { binary: string; adminPassword: string; extraArgs
     ...o.extraArgs,
   ];
   const child: ChildProcess = spawn(o.binary, args, {
-    env: { ...cleanEnvironment(), HARDCHARGER_ADMIN_PASSWORD: o.adminPassword },
+    env: { ...cleanEnvironment(), ...o.env, HARDCHARGER_ADMIN_PASSWORD: o.adminPassword },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let log = "";
@@ -272,6 +278,64 @@ export async function startIdleServer(idleSeconds: number): Promise<IdleServer> 
   return {
     url,
     admin: { username: "admin", password: adminPassword },
+    stop: async () => {
+      if (ui) await new Promise<void>((resolve) => ui.close(() => resolve()));
+      await server.stop();
+    },
+  };
+}
+
+export interface OAuthServer {
+  /** Where the UI is (the server itself when it embeds the UI). */
+  url: string;
+  stop: () => Promise<void>;
+}
+
+/**
+ * A server with browser sign-in (Warp SQL §4.3) through the mock identity provider `idp`,
+ * without access control: its users sign in as administrators. The server's public URL
+ * (oauth_base_url) is the UI's origin, which passes /warp through, so the provider's
+ * redirect reaches the server's callback there and the page comes back to the UI.
+ */
+export async function startOAuthServer(idp: {
+  issuer: string;
+  clientId: string;
+  clientSecret: string;
+}): Promise<OAuthServer> {
+  const binary = process.env["HARDCHARGER_UI_TEST_SERVER_BINARY"]!;
+  const port = await freePort();
+  const serverUrl = `http://127.0.0.1:${port}`;
+  const dist = path.resolve(import.meta.dirname, "../../dist");
+  const ui: Server | undefined = embedded ? undefined : createUiServer({ dist, upstream: serverUrl });
+  const url = ui
+    ? `http://127.0.0.1:${await new Promise<number>((resolve) =>
+        ui.listen(0, "127.0.0.1", () => resolve((ui.address() as net.AddressInfo).port)),
+      )}`
+    : serverUrl;
+  const server = await startServer({
+    binary,
+    adminPassword: `ui:${randomBytes(6).toString("hex")}@oauth`,
+    port,
+    env: { HARDCHARGER_OAUTH_CLIENT_SECRET: idp.clientSecret },
+    extraArgs: [
+      "--token-allowed-issuer",
+      idp.issuer,
+      "--token-allowed-audience",
+      idp.clientId,
+      "--token-default-role",
+      "admin",
+      "--token-authorized-emails",
+      "*@example.com",
+      "--oauth-client-id",
+      idp.clientId,
+      "--oauth-base-url",
+      url,
+      "--oauth-provider-name",
+      "Mock IdP",
+    ],
+  });
+  return {
+    url,
     stop: async () => {
       if (ui) await new Promise<void>((resolve) => ui.close(() => resolve()));
       await server.stop();
