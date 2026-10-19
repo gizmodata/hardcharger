@@ -175,7 +175,9 @@ TEST_F(SensitivePathPolicyTest, BracedPathsReachingProtectedFilesAreRefused) {
   EXPECT_EQ(policy_->Check(".ssh/{key}"), "user credential store");           // relative to the working directory
   EXPECT_EQ(Check(home() / ".ss?" / "{key}"), "user credential store");       // a real wildcard
   EXPECT_EQ(Check(home() / "*" / "{key}"), "user credential store");
-  EXPECT_EQ(policy_->Check("**/{key}"), "user credential store");
+  // Recursive: refused for the first protected path under the home (on Windows, its
+  // credential stores come before ~/.ssh).
+  EXPECT_TRUE(policy_->Check("**/{key}").has_value());
 #ifndef _WIN32
   EXPECT_EQ(Check("/etc/{passwd,hosts}/../passwd"), "system account files");
 #endif
