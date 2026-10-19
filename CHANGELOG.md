@@ -195,6 +195,11 @@ own changelog in `python/CHANGELOG.md`.
   servers. Features only, no throughput figures. The doc also shows DuckDB attaching
   Hardcharger through an ADBC extension (Columnar's `adbc` or Query.Farm's `adbc_scanner`) with
   hardcharger-adbc's driver library, with examples run against Hardcharger 0.3.0.
+- README: "Where Hardcharger is faster", under "Why Hardcharger instead of Quack?": the five
+  shapes of the 2026-10-19 benchmark where Hardcharger beat Quack (SF1 fetch and load over the
+  LAN and the WAN, SF10 fetch over plaintext), with the conditions, and a link to the full
+  results, including the shapes where Quack is faster. Each median recomputed from
+  `bench/remote/results/2026-10-19-throughput-2/`.
 
 - Bulk ingest answers `415 unsupported_arrow_type` (Warp SQL §8.1) for an Arrow type
   DuckDB can't keep, where `decimal256` (any precision) and dense unions, also nested in a
