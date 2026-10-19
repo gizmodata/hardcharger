@@ -51,6 +51,18 @@ if (files.some((f) => f.endsWith(".woff2"))) {
     problems.push("a font is embedded without fonts/Inter-LICENSE.txt");
   }
 }
+// The third-party notices (scripts/third-party-notices.mjs) list every package the app
+// depends on at run time, each bundled, each with its licence text.
+try {
+  const notices = readFileSync(path.join(dist, "third-party-notices.txt"), "utf8");
+  const pkg = JSON.parse(readFileSync(path.join(dist, "..", "package.json"), "utf8"));
+  for (const name of Object.keys(pkg.dependencies ?? {})) {
+    const section = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")} \\S+\nLicense: `, "m");
+    if (!section.test(notices)) problems.push(`third-party-notices.txt has no section for ${name}`);
+  }
+} catch (error) {
+  problems.push(`third-party-notices.txt: ${error.message}`);
+}
 if (problems.length) {
   for (const p of problems) console.error(`check-dist: ${p}`);
   process.exit(1);

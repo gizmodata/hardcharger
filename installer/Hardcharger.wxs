@@ -7,8 +7,10 @@
       -bindpath Stage=<the unpacked hardcharger-windows-*> -bindpath installer
       -ext WixToolset.UI.wixext -o Hardcharger-<arch>.msi
 
-  It installs bin\ (hardcharger-server.exe and the hardcharger.exe client), LICENSE
-  and CHANGELOG.md under Program Files\Hardcharger, and puts bin\ on the system PATH.
+  It installs bin\ (hardcharger-server.exe and the hardcharger.exe client), LICENSE,
+  CHANGELOG.md and the third-party notices (THIRD_PARTY_NOTICES.md, with the Windows
+  build's vcpkg libraries at its end, and THIRD_PARTY_NOTICES-web-ui.txt) under
+  Program Files\Hardcharger, and puts bin\ on the system PATH.
   The UpgradeCode and the GUIDs below are permanent: changing the UpgradeCode orphans
   existing installs.
 -->
@@ -48,6 +50,8 @@
       <Component Id="Documents" Directory="INSTALLFOLDER" Guid="{C596126D-117A-4A3B-A2C7-29558489EC8C}">
         <File Source="!(bindpath.Stage)\LICENSE" KeyPath="yes" />
         <File Source="!(bindpath.Stage)\CHANGELOG.md" />
+        <File Source="!(bindpath.Stage)\THIRD_PARTY_NOTICES.md" />
+        <File Source="!(bindpath.Stage)\THIRD_PARTY_NOTICES-web-ui.txt" />
       </Component>
     </ComponentGroup>
 

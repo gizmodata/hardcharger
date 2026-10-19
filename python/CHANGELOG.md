@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Documentation
+
+- README, License: the package itself has no third-party code; the server it downloads carries
+  `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_NOTICES-web-ui.txt`, which the install keeps beside
+  `bin/` (a unit test checks they arrive), and prints them with `--licenses`.
+
 ### Changed
 
 - The package runs `hardcharger-server` 0.3.0 by default (`SERVER_VERSION`; it was 0.2.0).

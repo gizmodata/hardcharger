@@ -174,5 +174,15 @@ TEST(WebUi, WithoutFilesEverythingIsNotFound) {
   EXPECT_EQ(r->status, 404);
 }
 
+// --licenses reads the embedded UI's notices with it: inflated when embedded gzipped, as is
+// otherwise, and nothing for a file the build doesn't embed.
+TEST(WebUi, EmbeddedFileContent) {
+  EXPECT_EQ(EmbeddedWebUiFileContent(kFiles, "index.html"), kIndexText);
+  EXPECT_EQ(EmbeddedWebUiFileContent(kFiles, "favicon.png"),
+            std::string(reinterpret_cast<const char*>(kPng), sizeof(kPng)));
+  EXPECT_EQ(EmbeddedWebUiFileContent(kFiles, "third-party-notices.txt"), std::nullopt);
+  EXPECT_EQ(EmbeddedWebUiFileContent({}, "index.html"), std::nullopt);
+}
+
 }  // namespace
 }  // namespace hardcharger

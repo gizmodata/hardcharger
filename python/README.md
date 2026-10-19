@@ -101,6 +101,12 @@ and download tests fail, never skip, without their server, client or GitHub acce
 
 Apache License 2.0.
 
+This package is Python only and contains no third-party code. The `hardcharger-server` it
+downloads does: its release archive's `THIRD_PARTY_NOTICES.md` and
+`THIRD_PARTY_NOTICES-web-ui.txt`, which the install keeps beside `bin/`
+(`~/.cache/hardcharger/v<version>/<platform>/`), list that software and its licences, and
+`hardcharger-server --licenses` prints them.
+
 ---
 
 <p align="center">

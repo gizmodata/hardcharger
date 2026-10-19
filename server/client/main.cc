@@ -24,6 +24,7 @@
 #include "signal_watcher.hpp"
 #include "sql_processor.hpp"
 #include "sql_quoting.hpp"
+#include "third_party_notices.hpp"
 #include "version.hpp"
 #include "warp_connection.hpp"
 
@@ -110,6 +111,8 @@ int main(int argc, char** argv) {
   cl.Section("Other");
   cl.Flag("help", '?', "Show this help message", &help);
   cl.Flag("version", 'v', "Show version", &version);
+  bool licenses = false;
+  cl.Flag("licenses", 0, "Show the third-party software in this program and their licences", &licenses);
 
   std::string positional_uri;
   if (auto error = cl.Parse(argc, argv, &positional_uri)) {
@@ -128,6 +131,11 @@ int main(int argc, char** argv) {
 
   if (version) {
     std::cout << "Hardcharger Client " << hardcharger::kVersion << std::endl;
+    return 0;
+  }
+
+  if (licenses) {
+    std::cout << hardcharger::ThirdPartyNotices();
     return 0;
   }
 

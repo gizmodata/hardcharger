@@ -1,0 +1,1275 @@
+{
+  "about": "The third-party code Hardcharger's release binaries contain. server/scripts/third-party-notices.py writes THIRD_PARTY_NOTICES.md from this file and the texts/ it fetched; its --check (CI) fails when a recipe pins another version than `pins` records, when a dependency is in no component, or when THIRD_PARTY_NOTICES.md is not what this file generates.",
+  "pins": {
+    "duckdb_commit": {
+      "file": "third_party/warp-sql/cpp/scripts/build-duckdb.sh",
+      "pattern": "^DUCKDB_COMMIT=([0-9a-f]{40})$",
+      "value": "ffe0b8b7a222114f15577ea05434d14357906416"
+    },
+    "duckdb_version": {
+      "file": "third_party/warp-sql/cpp/scripts/build-duckdb.sh",
+      "pattern": "^DUCKDB_VERSION_NAME=(\\S+)$",
+      "value": "v2.0.0-alpha48624"
+    },
+    "httpfs": {
+      "file": "server/scripts/duckdb-extensions.cmake",
+      "pattern": "duckdb_extension_load\\(httpfs\\s+GIT_URL \\S+\\s+GIT_TAG ([0-9a-f]{40})",
+      "value": "2174b462678979089e8bf1f2fc1328d6eb306450"
+    },
+    "ducklake": {
+      "file": "server/scripts/duckdb-extensions.cmake",
+      "pattern": "duckdb_extension_load\\(ducklake\\s+GIT_URL \\S+\\s+GIT_TAG ([0-9a-f]{40})",
+      "value": "4e923e26c34c9058daca2e7247177f49de0ab430"
+    },
+    "postgres_scanner": {
+      "file": "server/scripts/duckdb-extensions.cmake",
+      "pattern": "duckdb_extension_load\\(postgres_scanner\\s+GIT_URL \\S+\\s+GIT_TAG ([0-9a-f]{40})",
+      "value": "c0f5a3c0c4b68b02afbf669d36d7f0e503985c88"
+    },
+    "arrow": {
+      "file": "third_party/warp-sql/cpp/scripts/build-arrow.sh",
+      "pattern": "^ARROW_TAG=apache-arrow-(\\S+)$",
+      "value": "26.0.0"
+    },
+    "boost": {
+      "file": "third_party/warp-sql/cpp/CMakeLists.txt",
+      "pattern": "boost-([0-9.]+)-cmake\\.tar\\.xz",
+      "value": "1.92.0"
+    },
+    "openssl": {
+      "file": "server/scripts/deps-openssl.sh",
+      "pattern": "^OPENSSL_VERSION=(\\S+)$",
+      "value": "3.5.9"
+    },
+    "jwt_cpp": {
+      "file": "server/CMakeLists.txt",
+      "pattern": "Thalhammer/jwt-cpp/archive/refs/tags/v([0-9.]+)\\.tar\\.gz",
+      "value": "0.7.2"
+    },
+    "yaml_cpp": {
+      "file": "server/CMakeLists.txt",
+      "pattern": "jbeder/yaml-cpp/archive/refs/tags/yaml-cpp-([0-9.]+)\\.tar\\.gz",
+      "value": "0.9.0"
+    },
+    "zlib": {
+      "file": "server/CMakeLists.txt",
+      "pattern": "madler/zlib/releases/download/v([0-9.]+)/",
+      "value": "1.3.2"
+    },
+    "replxx": {
+      "file": "server/scripts/build-replxx.sh",
+      "pattern": "^REPLXX_TAG=release-(\\S+)$",
+      "value": "0.0.4"
+    },
+    "roaring": {
+      "file": "server/scripts/build-extension-deps.sh",
+      "pattern": "^ROARING_VERSION=(\\S+)$",
+      "value": "5.2.4"
+    },
+    "postgres": {
+      "file": "server/scripts/build-extension-deps.sh",
+      "pattern": "^POSTGRES_VERSION=(\\S+)$",
+      "value": "18.6"
+    },
+    "curl": {
+      "file": "server/scripts/build-extension-deps.sh",
+      "pattern": "^CURL_VERSION=(\\S+)$",
+      "value": "8.23.0"
+    }
+  },
+  "derived": {
+    "postgres_tag": {
+      "from": "postgres",
+      "replace": [
+        ".",
+        "_"
+      ]
+    },
+    "curl_tag": {
+      "from": "curl",
+      "replace": [
+        ".",
+        "_"
+      ]
+    }
+  },
+  "not_shipped": {
+    "fetchcontent": {
+      "googletest": "the unit tests only"
+    }
+  },
+  "components": [
+    {
+      "id": "duckdb",
+      "group": "DuckDB and its extensions",
+      "name": "DuckDB",
+      "version": "{duckdb_version} (commit {duckdb_commit})",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "note": "The SQL engine, with its built-in extensions core_functions, parquet, json, icu, autocomplete and tpch (each part of DuckDB's own repository and licence, but for the notices listed under Inside DuckDB).",
+      "covers": {
+        "duckdb_extensions": [
+          "autocomplete",
+          "tpch"
+        ]
+      },
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-httpfs",
+      "group": "DuckDB and its extensions",
+      "name": "DuckDB httpfs extension",
+      "version": "commit {httpfs}",
+      "pins": [
+        "httpfs"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb-httpfs/tree/{httpfs}",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "covers": {
+        "duckdb_extensions": [
+          "httpfs"
+        ]
+      },
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb-httpfs/{httpfs}/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-ducklake",
+      "group": "DuckDB and its extensions",
+      "name": "DuckLake (DuckDB extension)",
+      "version": "commit {ducklake}",
+      "pins": [
+        "ducklake"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/ducklake/tree/{ducklake}",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "covers": {
+        "duckdb_extensions": [
+          "ducklake"
+        ]
+      },
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/ducklake/{ducklake}/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-postgres",
+      "group": "DuckDB and its extensions",
+      "name": "DuckDB PostgreSQL extension (postgres_scanner)",
+      "version": "commit {postgres_scanner}",
+      "pins": [
+        "postgres_scanner"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb-postgres/tree/{postgres_scanner}",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "note": "With its database-connector submodule (also MIT, the same text), at the commit this extension commit pins.",
+      "covers": {
+        "duckdb_extensions": [
+          "postgres_scanner"
+        ]
+      },
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb-postgres/{postgres_scanner}/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-brotli",
+      "group": "Inside DuckDB",
+      "name": "Brotli",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/brotli",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/brotli/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-concurrentqueue",
+      "group": "Inside DuckDB",
+      "name": "moodycamel::ConcurrentQueue",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "BSD-2-Clause OR BSL-1.0",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/concurrentqueue",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/concurrentqueue/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-fast_float",
+      "group": "Inside DuckDB",
+      "name": "fast_float",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/fast_float",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/fast_float/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-fastpforlib",
+      "group": "Inside DuckDB",
+      "name": "FastPFor",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "Apache-2.0",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/fastpforlib",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/fastpforlib/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-fmt",
+      "group": "Inside DuckDB",
+      "name": "{fmt}",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/fmt",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/fmt/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-fsst",
+      "group": "Inside DuckDB",
+      "name": "FSST",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/fsst",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/fsst/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-httplib",
+      "group": "Inside DuckDB",
+      "name": "cpp-httplib",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/httplib",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/httplib/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-hyperloglog",
+      "group": "Inside DuckDB",
+      "name": "HyperLogLog",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/hyperloglog",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/hyperloglog/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-jaro_winkler",
+      "group": "Inside DuckDB",
+      "name": "jaro_winkler",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/jaro_winkler",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/jaro_winkler/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-jemalloc",
+      "group": "Inside DuckDB",
+      "name": "jemalloc",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "BSD-2-Clause",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/jemalloc",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "Linux",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/jemalloc/LICENSE"
+        }
+      ],
+      "note": "DuckDB's memory allocator on 64-bit Linux only."
+    },
+    {
+      "id": "duckdb-lz4",
+      "group": "Inside DuckDB",
+      "name": "LZ4",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "BSD-2-Clause",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/lz4",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/lz4/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-mbedtls",
+      "group": "Inside DuckDB",
+      "name": "Mbed TLS",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "Apache-2.0 OR GPL-2.0-or-later",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/mbedtls",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/mbedtls/LICENSE"
+        }
+      ],
+      "note": "Dual-licensed; Hardcharger uses it under the Apache License 2.0."
+    },
+    {
+      "id": "duckdb-miniz",
+      "group": "Inside DuckDB",
+      "name": "miniz",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/miniz",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/miniz/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-parquet",
+      "group": "Inside DuckDB",
+      "name": "Apache Parquet Format (generated code)",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "Apache-2.0",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/parquet",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/parquet/LICENSE"
+        },
+        {
+          "file": "NOTICE",
+          "url": "https://raw.githubusercontent.com/apache/parquet-format/apache-parquet-format-2.11.0/NOTICE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-pcg",
+      "group": "Inside DuckDB",
+      "name": "PCG random number generator",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/pcg",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/pcg/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-pdqsort",
+      "group": "Inside DuckDB",
+      "name": "pdqsort",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "Zlib",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/pdqsort",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/pdqsort/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-re2",
+      "group": "Inside DuckDB",
+      "name": "RE2",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/re2",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/re2/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-ska_sort",
+      "group": "Inside DuckDB",
+      "name": "ska_sort",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "BSL-1.0",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/ska_sort",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/ska_sort/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-skiplist",
+      "group": "Inside DuckDB",
+      "name": "skiplist",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/skiplist",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/skiplist/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-snappy",
+      "group": "Inside DuckDB",
+      "name": "Snappy",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/snappy",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/snappy/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-tdigest",
+      "group": "Inside DuckDB",
+      "name": "t-digest",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "Apache-2.0",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/tdigest",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/tdigest/LICENSE"
+        },
+        {
+          "file": "NOTICES",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/tdigest/NOTICES"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-thrift",
+      "group": "Inside DuckDB",
+      "name": "Apache Thrift (C++ library)",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "Apache-2.0",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/thrift/thrift",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/thrift/thrift/LICENSE"
+        },
+        {
+          "file": "NOTICE",
+          "url": "https://raw.githubusercontent.com/apache/thrift/v0.22.0/NOTICE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-utf8proc",
+      "group": "Inside DuckDB",
+      "name": "utf8proc",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT AND Unicode-DFS-2015",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/utf8proc",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/utf8proc/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-vergesort",
+      "group": "Inside DuckDB",
+      "name": "vergesort",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/vergesort",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/vergesort/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-yyjson",
+      "group": "Inside DuckDB",
+      "name": "yyjson",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/yyjson",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/yyjson/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-zstd",
+      "group": "Inside DuckDB",
+      "name": "Zstandard",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/zstd",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/zstd/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-alp",
+      "group": "Inside DuckDB",
+      "name": "ALP (adaptive lossless floating-point compression)",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/src/include/duckdb/storage/compression/alp/algorithm",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/src/include/duckdb/storage/compression/alp/algorithm/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-merge-sort-tree",
+      "group": "Inside DuckDB",
+      "name": "Merge sort tree (salesforce.com)",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/duckdb/duckdb/blob/{duckdb_commit}/src/include/duckdb/execution/merge_sort_tree.hpp",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "NOTICE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/src/include/duckdb/execution/merge_sort_tree.hpp",
+          "between": [
+            "^// MIT License Text:$",
+            "^// SOFTWARE\\.$"
+          ],
+          "strip": "^// ?"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-robin-hood",
+      "group": "Inside DuckDB",
+      "name": "robin-hood-hashing (hash function)",
+      "version": "3.11.5, as used in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/martinus/robin-hood-hashing/tree/3.11.5",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "note": "DuckDB's string hash and checksum (src/common/types/hash.cpp, src/common/checksum.cpp) follow it.",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/martinus/robin-hood-hashing/3.11.5/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-unicode-data",
+      "group": "Inside DuckDB",
+      "name": "Unicode data (CLDR 48, UCD 17.0.0, the Unicode time zone data)",
+      "version": "as generated into DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "Unicode-3.0",
+      "source": "https://github.com/unicode-org/cldr/tree/release-48",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "note": "The icu extension's collation and time zone tables are generated from Unicode Consortium data (extension/icu/collation/generated, extension/icu/datetime/generated). The time zone data itself is the IANA time zone database, which is in the public domain.",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/unicode-org/cldr/release-48/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "duckdb-tpch-dbgen",
+      "group": "Inside DuckDB",
+      "name": "TPC-H dbgen (the tpch extension's data generator)",
+      "version": "as vendored in DuckDB {duckdb_version}",
+      "pins": [
+        "duckdb_commit",
+        "duckdb_version"
+      ],
+      "license": "LicenseRef-TPC-EULA-2.2",
+      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/extension/tpch/dbgen",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "note": "The tpch extension (dbgen(), tpch_queries()) is built into the server. Its data generator is the Transaction Processing Performance Council's, under the TPC's End User License Agreement below, not an open-source licence.",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/extension/tpch/dbgen/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "arrow",
+      "group": "Apache Arrow",
+      "name": "Apache Arrow C++",
+      "version": "{arrow}",
+      "pins": [
+        "arrow"
+      ],
+      "license": "Apache-2.0",
+      "source": "https://github.com/apache/arrow/tree/apache-arrow-{arrow}/cpp",
+      "in": [
+        "hardcharger-server",
+        "hardcharger"
+      ],
+      "platforms": "all",
+      "note": "Built with the IPC format and its ZSTD and LZ4 codecs only. Arrow's LICENSE.txt includes the licences of the code it vendors.",
+      "texts": [
+        {
+          "file": "LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/apache/arrow/apache-arrow-{arrow}/LICENSE.txt"
+        },
+        {
+          "file": "NOTICE.txt",
+          "url": "https://raw.githubusercontent.com/apache/arrow/apache-arrow-{arrow}/NOTICE.txt"
+        }
+      ]
+    },
+    {
+      "id": "arrow-zstd",
+      "group": "Apache Arrow",
+      "name": "Zstandard (Arrow's bundled build)",
+      "version": "1.5.7, as Arrow {arrow} bundles it (cpp/thirdparty/versions.txt)",
+      "pins": [
+        "arrow"
+      ],
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/facebook/zstd/tree/v1.5.7",
+      "in": [
+        "hardcharger-server",
+        "hardcharger"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/facebook/zstd/v1.5.7/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "arrow-lz4",
+      "group": "Apache Arrow",
+      "name": "LZ4 library (Arrow's bundled build)",
+      "version": "1.10.0, as Arrow {arrow} bundles it (cpp/thirdparty/versions.txt)",
+      "pins": [
+        "arrow"
+      ],
+      "license": "BSD-2-Clause",
+      "source": "https://github.com/lz4/lz4/tree/v1.10.0/lib",
+      "in": [
+        "hardcharger-server",
+        "hardcharger"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/lz4/lz4/v1.10.0/lib/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "arrow-uriparser",
+      "group": "Apache Arrow",
+      "name": "uriparser (Arrow's bundled build)",
+      "version": "1.0.2, as Arrow {arrow} bundles it (cpp/thirdparty/versions.txt)",
+      "pins": [
+        "arrow"
+      ],
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/uriparser/uriparser/tree/uriparser-1.0.2",
+      "in": [
+        "hardcharger-server",
+        "hardcharger"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "COPYING.BSD-3-Clause",
+          "url": "https://raw.githubusercontent.com/uriparser/uriparser/uriparser-1.0.2/COPYING.BSD-3-Clause"
+        }
+      ]
+    },
+    {
+      "id": "arrow-xsimd",
+      "group": "Apache Arrow",
+      "name": "xsimd (headers, Arrow's bundled build)",
+      "version": "14.2.0, as Arrow {arrow} bundles it (cpp/thirdparty/versions.txt)",
+      "pins": [
+        "arrow"
+      ],
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/xtensor-stack/xsimd/tree/14.2.0",
+      "in": [
+        "hardcharger-server",
+        "hardcharger"
+      ],
+      "platforms": "all",
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/xtensor-stack/xsimd/14.2.0/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "boost",
+      "group": "Libraries",
+      "name": "Boost (Beast, JSON, URL and the libraries they use, such as Asio)",
+      "version": "{boost}",
+      "pins": [
+        "boost"
+      ],
+      "license": "BSL-1.0",
+      "source": "https://github.com/boostorg/boost/tree/boost-{boost}",
+      "in": [
+        "hardcharger-server",
+        "hardcharger"
+      ],
+      "platforms": "all",
+      "covers": {
+        "fetchcontent": [
+          "Boost"
+        ]
+      },
+      "texts": [
+        {
+          "file": "LICENSE_1_0.txt",
+          "url": "https://raw.githubusercontent.com/boostorg/boost/boost-{boost}/LICENSE_1_0.txt"
+        }
+      ]
+    },
+    {
+      "id": "openssl",
+      "group": "Libraries",
+      "name": "OpenSSL",
+      "version": "{openssl}",
+      "pins": [
+        "openssl"
+      ],
+      "license": "Apache-2.0",
+      "source": "https://github.com/openssl/openssl/tree/openssl-{openssl}",
+      "in": [
+        "hardcharger-server",
+        "hardcharger"
+      ],
+      "platforms": "all",
+      "note": "Linux and macOS builds link this version (server/scripts/deps-openssl.sh); Windows builds link vcpkg's (its version is listed at the end of the Windows zip's copy of this file).",
+      "covers": {
+        "vcpkg": [
+          "openssl"
+        ]
+      },
+      "texts": [
+        {
+          "file": "LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/openssl/openssl/openssl-{openssl}/LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "id": "jwt-cpp",
+      "group": "Libraries",
+      "name": "jwt-cpp",
+      "version": "{jwt_cpp}",
+      "pins": [
+        "jwt_cpp"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/Thalhammer/jwt-cpp/tree/v{jwt_cpp}",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "covers": {
+        "fetchcontent": [
+          "jwt-cpp"
+        ]
+      },
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/Thalhammer/jwt-cpp/v{jwt_cpp}/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "yaml-cpp",
+      "group": "Libraries",
+      "name": "yaml-cpp",
+      "version": "{yaml_cpp}",
+      "pins": [
+        "yaml_cpp"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/jbeder/yaml-cpp/tree/yaml-cpp-{yaml_cpp}",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "covers": {
+        "fetchcontent": [
+          "yaml-cpp"
+        ]
+      },
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/jbeder/yaml-cpp/yaml-cpp-{yaml_cpp}/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "zlib",
+      "group": "Libraries",
+      "name": "zlib",
+      "version": "{zlib}",
+      "pins": [
+        "zlib"
+      ],
+      "license": "Zlib",
+      "source": "https://github.com/madler/zlib/tree/v{zlib}",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "covers": {
+        "fetchcontent": [
+          "zlib"
+        ]
+      },
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/madler/zlib/v{zlib}/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "replxx",
+      "group": "Libraries",
+      "name": "replxx",
+      "version": "{replxx}",
+      "pins": [
+        "replxx"
+      ],
+      "license": "BSD-3-Clause, with the ConvertUTF (Unicode, Inc.) and wcwidth (Markus Kuhn) notices",
+      "source": "https://github.com/AmokHuginnsson/replxx/tree/release-{replxx}",
+      "in": [
+        "hardcharger"
+      ],
+      "platforms": "all",
+      "note": "The command-line client's line editor. Its LICENSE.md also covers the code it includes (ConvertUTF, wcwidth).",
+      "texts": [
+        {
+          "file": "LICENSE.md",
+          "url": "https://raw.githubusercontent.com/AmokHuginnsson/replxx/release-{replxx}/LICENSE.md"
+        }
+      ]
+    },
+    {
+      "id": "croaring",
+      "group": "Libraries",
+      "name": "CRoaring",
+      "version": "{roaring}",
+      "pins": [
+        "roaring"
+      ],
+      "license": "Apache-2.0 OR MIT",
+      "source": "https://github.com/RoaringBitmap/CRoaring/tree/v{roaring}",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "note": "DuckLake's deletion vectors. Windows builds link vcpkg's.",
+      "covers": {
+        "vcpkg": [
+          "roaring"
+        ],
+        "extension_deps": [
+          "ROARING"
+        ]
+      },
+      "texts": [
+        {
+          "file": "LICENSE",
+          "url": "https://raw.githubusercontent.com/RoaringBitmap/CRoaring/v{roaring}/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "libpq",
+      "group": "Libraries",
+      "name": "libpq (PostgreSQL's client library)",
+      "version": "{postgres}",
+      "pins": [
+        "postgres"
+      ],
+      "license": "PostgreSQL",
+      "source": "https://github.com/postgres/postgres/tree/REL_{postgres_tag}",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "all",
+      "note": "The postgres_scanner extension's connection to PostgreSQL, with the PostgreSQL common and port code it calls. Windows builds link vcpkg's.",
+      "covers": {
+        "vcpkg": [
+          "libpq"
+        ],
+        "extension_deps": [
+          "POSTGRES"
+        ]
+      },
+      "texts": [
+        {
+          "file": "COPYRIGHT",
+          "url": "https://raw.githubusercontent.com/postgres/postgres/REL_{postgres_tag}/COPYRIGHT"
+        }
+      ]
+    },
+    {
+      "id": "curl",
+      "group": "Libraries",
+      "name": "libcurl",
+      "version": "{curl}",
+      "pins": [
+        "curl"
+      ],
+      "license": "curl",
+      "source": "https://github.com/curl/curl/tree/curl-{curl_tag}",
+      "in": [
+        "hardcharger-server"
+      ],
+      "platforms": "Linux, Windows",
+      "note": "The httpfs extension's HTTP client. macOS builds use the system's libcurl instead (not shipped); Windows builds link vcpkg's.",
+      "covers": {
+        "vcpkg": [
+          "curl"
+        ],
+        "extension_deps": [
+          "CURL"
+        ]
+      },
+      "texts": [
+        {
+          "file": "COPYING",
+          "url": "https://raw.githubusercontent.com/curl/curl/curl-{curl_tag}/COPYING"
+        }
+      ]
+    }
+  ]
+}

@@ -66,6 +66,19 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
           </a>
           .
         </p>
+        <p>
+          It includes open-source software under its own licences:{" "}
+          <a
+            href={`${import.meta.env.BASE_URL}third-party-notices.txt`}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="about-licenses"
+          >
+            Open-source licences
+          </a>{" "}
+          (this web UI&rsquo;s; the server&rsquo;s are in its THIRD_PARTY_NOTICES.md, and{" "}
+          <code>hardcharger-server --licenses</code> prints both).
+        </p>
         <TrademarkNotice />
       </div>
     </dialog>

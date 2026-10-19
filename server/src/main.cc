@@ -17,6 +17,7 @@
 #include "oauth.hpp"
 #include "platform.hpp"
 #include "runtime.hpp"
+#include "third_party_notices.hpp"
 #include "tokens.hpp"
 #include "version.hpp"
 #include "warpsql/server.hpp"
@@ -299,6 +300,14 @@ int main(int argc, char** argv) {
     case hc::Action::kPrintOptionsJson:
       std::cout << hc::OptionsJson();
       return 0;
+    case hc::Action::kLicenses: {
+      // THIRD_PARTY_NOTICES.md (embedded at build time), then the embedded web UI's own.
+      std::cout << hc::ThirdPartyNotices();
+      if (const auto ui = hc::EmbeddedWebUiFileContent(hc::EmbeddedWebUiFiles(), "third-party-notices.txt")) {
+        std::cout << "\n\n" << *ui;
+      }
+      return 0;
+    }
     case hc::Action::kVersion:
       std::cout << "Hardcharger " << hc::kVersion << "\n";
       return 0;

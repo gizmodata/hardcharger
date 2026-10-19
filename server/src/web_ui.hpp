@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "warpsql/server.hpp"
@@ -29,6 +30,9 @@ struct WebUiFile {
 std::span<const WebUiFile> EmbeddedWebUiFiles();
 // The embedded UI's version ("" without one).
 std::string_view EmbeddedWebUiVersion();
+
+// The content of the embedded file at `path` (inflated), or nullopt when there is none.
+std::optional<std::string> EmbeddedWebUiFileContent(std::span<const WebUiFile> files, std::string_view path);
 
 // The Content-Security-Policy every /ui answer carries.
 extern const std::string_view kWebUiContentSecurityPolicy;

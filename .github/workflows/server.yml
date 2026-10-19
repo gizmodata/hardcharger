@@ -13,7 +13,8 @@
 name: server
 
 # Not for changes that build, test and package nothing: the documentation (docs/, Markdown
-# other than the CHANGELOG.md the tarballs ship and the UI's, which its lint checks), the
+# other than the CHANGELOG.md and THIRD_PARTY_NOTICES.md the tarballs ship, the notices'
+# texts and the UI's Markdown, which its lint checks), the
 # benchmarks (bench/), the Python package (python/, workflow.yml), the other workflows and
 # the docs' version-label check (.github/scripts/check_no_version_labels.py, run by workflow.yml).
 # Path filters never apply to tags; a manual run is always available.
@@ -28,7 +29,9 @@ on:
       - "!python/**"
       - "!**/*.md"
       - "CHANGELOG.md"
+      - "THIRD_PARTY_NOTICES.md"
       - "ui/**/*.md"
+      - "server/third-party-notices/**"
       - "!.github/ISSUE_TEMPLATE/**"
       - "!.github/workflows/workflow.yml"
       - "!.github/workflows/dockerhub-check.yml"
@@ -41,7 +44,9 @@ on:
       - "!python/**"
       - "!**/*.md"
       - "CHANGELOG.md"
+      - "THIRD_PARTY_NOTICES.md"
       - "ui/**/*.md"
+      - "server/third-party-notices/**"
       - "!.github/ISSUE_TEMPLATE/**"
       - "!.github/workflows/workflow.yml"
       - "!.github/workflows/dockerhub-check.yml"
@@ -326,6 +331,11 @@ jobs:
           GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
             git submodule update --init --depth 1
           rm -f "$key"
+      # THIRD_PARTY_NOTICES.md (which every release artifact ships) is what
+      # server/third-party-notices/ generates, for exactly the versions the dependency
+      # recipes pin: a bump without its licence review fails here. No network.
+      - name: Third-party notices are in step with the recipes
+        run: python3 server/scripts/third-party-notices.py --check
 
       # (The Linux build tools are in the manylinux image; the build installs the rest.)
       - name: Install build tools (macOS)
@@ -537,17 +547,27 @@ jobs:
       - name: Package
         run: |
           # Two self-contained binaries (HARDCHARGER_STATIC: DuckDB and every other
-          # dependency linked in, as GizmoSQL's), the licence and the changelog; nothing
-          # else, never the tests.
+          # dependency linked in, as GizmoSQL's), the licence, the third-party notices (the
+          # binaries' and the embedded web UI's) and the changelog; nothing else, never the
+          # tests.
           export LC_ALL=C  # the checks below compare sorted globs
           stage="dist/hardcharger-${{ matrix.name }}"
           mkdir -p "$stage/bin"
           install -m 755 server/build/hardcharger-server server/build/hardcharger "$stage/bin/"
-          cp LICENSE CHANGELOG.md "$stage/"
-          test "$(cd "$stage" && printf '%s ' *)" = "CHANGELOG.md LICENSE bin "
+          cp LICENSE CHANGELOG.md THIRD_PARTY_NOTICES.md "$stage/"
+          tar -xzOf "$HARDCHARGER_UI_TARBALL" hardcharger-ui/third-party-notices.txt > "$stage/THIRD_PARTY_NOTICES-web-ui.txt"
+          test "$(cd "$stage" && printf '%s ' *)" = "CHANGELOG.md LICENSE THIRD_PARTY_NOTICES-web-ui.txt THIRD_PARTY_NOTICES.md bin "
           test "$(cd "$stage/bin" && printf '%s ' *)" = "hardcharger hardcharger-server "
           "$stage/bin/hardcharger-server" --version
           "$stage/bin/hardcharger" --version
+          # The binaries carry the same notices (--licenses): the server its own and then
+          # the web UI's, the client its own.
+          "$stage/bin/hardcharger-server" --licenses > "$RUNNER_TEMP/server-licenses.txt"
+          { cat "$stage/THIRD_PARTY_NOTICES.md"; printf '\n\n'; cat "$stage/THIRD_PARTY_NOTICES-web-ui.txt"; } \
+            > "$RUNNER_TEMP/expected-licenses.txt"
+          cmp "$RUNNER_TEMP/server-licenses.txt" "$RUNNER_TEMP/expected-licenses.txt"
+          "$stage/bin/hardcharger" --licenses > "$RUNNER_TEMP/client-licenses.txt"
+          cmp "$RUNNER_TEMP/client-licenses.txt" "$stage/THIRD_PARTY_NOTICES.md"
           tar -C dist -czf "dist/hardcharger-${{ matrix.name }}.tar.gz" "hardcharger-${{ matrix.name }}"
       # Every shipped executable and library needs glibc 2.28 at most. The check is first
       # shown to fail on a file that needs more (the runner's own libc), so a check that
@@ -1081,6 +1101,11 @@ jobs:
           docker buildx build --platform linux/amd64 --file docker/Dockerfile --tag hc-smoke --load .
           docker run --rm hc-smoke --version
           docker run --rm --entrypoint hardcharger hc-smoke --version
+          # The licence and the third-party notices, where Debian-style images keep them.
+          docker run --rm --entrypoint sh hc-smoke -c 'cd /usr/share/doc/hardcharger &&
+            grep -q "Apache License" LICENSE &&
+            grep -qx "# Third-party software in Hardcharger" THIRD_PARTY_NOTICES.md &&
+            grep -q "^Hardcharger web UI .*: third-party software notices" THIRD_PARTY_NOTICES-web-ui.txt' 
           docker run -d --name hc -e HARDCHARGER_ADMIN_PASSWORD=smoke -p 31337:31337 -p 31338:31338 hc-smoke
           for _ in $(seq 1 30); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
           curl -sf http://127.0.0.1:31337/warp

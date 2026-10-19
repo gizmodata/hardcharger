@@ -3,9 +3,15 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+import { thirdPartyNotices } from "./scripts/third-party-notices.mjs";
 import { uiVersion } from "./scripts/version.mjs";
 
 const version = uiVersion();
+// dist/third-party-notices.txt: every bundled package's licence (scripts/third-party-notices.mjs).
+const notices = thirdPartyNotices({
+  root: fileURLToPath(new URL(".", import.meta.url)),
+  title: `Hardcharger web UI ${version}: third-party software notices`,
+});
 
 // The UI is served by hardcharger-server at /ui on the same listener as Warp SQL, so every
 // asset path starts with /ui/ and the app talks to /warp on its own origin.
@@ -14,7 +20,7 @@ const version = uiVersion();
 // scripts, no eval, no data: URIs, workers from files of their own.
 export default defineConfig({
   base: "/ui/",
-  plugins: [react()],
+  plugins: [react(), notices.plugin],
   resolve: {
     // Monaco's package exports map only its .js files; its CSS is reached by path.
     alias: [
@@ -37,7 +43,7 @@ export default defineConfig({
     // modulepreload.
     modulePreload: { polyfill: false },
   },
-  worker: { format: "es" },
+  worker: { format: "es", plugins: () => [notices.workerPlugin] },
   server: {
     // `npm run dev` against a local server: HARDCHARGER_UI_DEV_SERVER=http://127.0.0.1:31337
     proxy: { "/warp": { target: process.env["HARDCHARGER_UI_DEV_SERVER"] ?? "http://127.0.0.1:31337" } },

@@ -12,9 +12,15 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --create-home --home-dir /var/lib/hardcharger hardcharger
 
+# The tarball's tree: bin/, LICENSE, CHANGELOG.md and the third-party notices, which are
+# also linked where Debian-style images keep each package's (/usr/share/doc/<package>/).
 COPY dist/hardcharger-linux-${TARGETARCH}/ /opt/hardcharger/
 RUN ln -s /opt/hardcharger/bin/hardcharger-server /usr/local/bin/hardcharger-server \
- && ln -s /opt/hardcharger/bin/hardcharger /usr/local/bin/hardcharger
+ && ln -s /opt/hardcharger/bin/hardcharger /usr/local/bin/hardcharger \
+ && mkdir -p /usr/share/doc/hardcharger \
+ && for f in LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES-web-ui.txt; do \
+      test -f "/opt/hardcharger/$f" && ln -s "/opt/hardcharger/$f" "/usr/share/doc/hardcharger/$f" || exit 1; \
+    done
 
 USER hardcharger
 WORKDIR /var/lib/hardcharger

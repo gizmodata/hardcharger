@@ -114,6 +114,13 @@ bool NoneMatch(std::string_view header, std::string_view etag) {
 
 }  // namespace
 
+std::optional<std::string> EmbeddedWebUiFileContent(std::span<const WebUiFile> files, std::string_view path) {
+  const WebUiFile* file = Find(files, path);
+  if (file == nullptr) return std::nullopt;
+  if (file->gzipped) return Inflate(*file);
+  return std::string(reinterpret_cast<const char*>(file->data), file->size);
+}
+
 bool AcceptsGzip(std::string_view accept_encoding) {
   std::optional<double> gzip, any;
   while (!accept_encoding.empty()) {

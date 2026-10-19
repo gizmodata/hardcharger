@@ -870,6 +870,16 @@ maps every GizmoSQL name to its Hardcharger name.
 
 Apache License 2.0; see [LICENSE](LICENSE).
 
+The binaries contain third-party open-source software, each part under its own licence:
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists every statically linked library (DuckDB
+and what it vendors, its built-in extensions, Arrow, Boost, OpenSSL and the rest) with its version
+and full licence text. The embedded web UI's JavaScript packages are listed in
+`THIRD_PARTY_NOTICES-web-ui.txt`. Every release archive, the MSI and the container image
+(`/usr/share/doc/hardcharger/`) carry both files, `hardcharger-server --licenses` and
+`hardcharger --licenses` print them, and the web UI links its own from **About** (**Open-source
+licences**). Note that the built-in `tpch` extension's data generator is under the TPC's End User
+License Agreement, not an open-source licence.
+
 ---
 
 <p align="center">

@@ -18,6 +18,14 @@ python=$(command -v python3 || echo /usr/libexec/platform-python)
 json() { "$python" -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
 
 "$bin" --version
+# The licence and the third-party notices travel with the binaries, which print them too.
+root=$(dirname "$(dirname "$bin")")
+grep -q "Apache License" "$root/LICENSE"
+grep -qx "# Third-party software in Hardcharger" "$root/THIRD_PARTY_NOTICES.md"
+grep -q "^Hardcharger web UI .*: third-party software notices" "$root/THIRD_PARTY_NOTICES-web-ui.txt"
+"$bin" --licenses > "$prefix/licenses.txt"
+grep -qx "# Third-party software in Hardcharger" "$prefix/licenses.txt"
+grep -q "^Hardcharger web UI .*: third-party software notices" "$prefix/licenses.txt"
 "$bin" --verify-tls https://token.actions.githubusercontent.com/.well-known/openid-configuration
 
 work=$(mktemp -d)
