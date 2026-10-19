@@ -663,6 +663,14 @@ std::shared_ptr<arrow::RecordBatch> ServerInfoTable(Runtime& runtime, const Sess
   boolean("web_ui_enabled", c.web_ui, full);
   text("rbac_store_type", RbacStoreType(c), full);
   int32("session_count", static_cast<int32_t>(runtime.sessions.size()), full);
+  // The instrumentation writer's backlog and losses (NULL with instrumentation off).
+  const bool instrumented = c.enable_instrumentation;
+  const InstrumentationStats& instr = runtime.instrumentation_stats;
+  int64("instrumentation_queued", instrumented ? std::optional<int64_t>(instr.queued.load()) : std::nullopt, full);
+  int64("instrumentation_dropped",
+        instrumented ? std::optional<int64_t>(static_cast<int64_t>(instr.dropped.load())) : std::nullopt, full);
+  int64("instrumentation_failed",
+        instrumented ? std::optional<int64_t>(static_cast<int64_t>(instr.failed.load())) : std::nullopt, full);
   return arrow::RecordBatch::Make(arrow::schema(fields), 1, arrays);
 }
 

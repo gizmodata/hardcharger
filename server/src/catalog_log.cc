@@ -226,7 +226,7 @@ void CatalogLog::Write(const std::vector<LogRecord>& batch) {
     return;
   } catch (const std::exception& e) {
     Log(LogLevel::kWarning, "catalog log batch write failed; retrying line by line",
-        {{"lines", std::to_string(batch.size())}, {"error", e.what()}});
+        {{"lines", std::to_string(batch.size())}, {"error", LoggableError("", e.what())}});
   }
   // One bad line must not lose the batch.
   std::size_t failed = 0;

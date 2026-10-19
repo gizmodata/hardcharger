@@ -43,8 +43,8 @@ Enterprise in GizmoSQL is in every Hardcharger build.
 - 🔐 **Security in the core, not bolted on.** Token sign-in, TLS and mTLS, and role-based
   access control checked inside DuckDB against each statement's own plan. Also row
   policies, column masking, tenants, SSO (OIDC/JWKS) and a tamper-evident audit log.
-- 🔭 **Observable.** Instrumentation and catalog logging into DuckDB or DuckLake, a
-  Prometheus `/metrics` endpoint, query profiles and `KILL SESSION`.
+- 🔭 **Observable.** Instrumentation into a DuckDB file or PostgreSQL, catalog logging (also
+  into DuckLake), a Prometheus `/metrics` endpoint, query profiles and `KILL SESSION`.
 - 🧩 **Configured your way.** Flags, `HARDCHARGER_*` environment variables, or a YAML file.
 - 🌐 **Ready to scale out.** Results are already described as partitions with locations,
   so distributed query execution can arrive without a protocol change.
@@ -607,6 +607,34 @@ same user and tenant), and `hardcharger_sessions()` follows the same rule. Retai
 (resumable) results are kept for `result_retention_seconds` (default 3600) after their
 statement ends; the statement document's `expires_at` says until when.
 
+With instrumentation on (`--enable-instrumentation`), the server keeps its history in
+tables: `instances`, `sessions`, `sql_statements` and `sql_executions`, and the views
+`session_activity`, `active_sessions`, `session_stats` and `execution_details`, which only
+an administrator can read. By default they live in a DuckDB file next to the database
+(`instrumentation_db_path`), for development or a single server. Use PostgreSQL in
+production, and for any cluster of more than one replica: attach it in the init SQL and
+name it in `instrumentation_catalog` (`instrumentation_schema` picks its schema). Any other
+catalog, DuckLake among them, is refused at startup.
+
+```yaml
+init_sql_commands: "INSTALL postgres; LOAD postgres; ATTACH 'host=pg.internal dbname=ops user=hardcharger' AS ops (TYPE postgres);"
+enable_instrumentation: true
+instrumentation_catalog: ops
+instrumentation_schema: hardcharger
+```
+
+Recording never holds up a statement. Records are queued and written by one background
+writer in batches, a transaction each, so the tables keep up with tens of thousands of
+statements a second however large they grow. A statement appears in `sql_executions` as
+`queued` or `executing` from the writer's next batch, usually within milliseconds, and one
+that starts and ends within a batch appears once, finished; `hardcharger_active_connections()`
+always shows what runs now. If the catalog falls behind, the queue holds up to 128 MiB of
+records and then drops new ones: `hardcharger_server_info()` counts them
+(`instrumentation_queued`, `instrumentation_dropped`, `instrumentation_failed`), as does
+`/metrics` (`hardcharger_instrumentation_*`), and the log says so at most once a minute. At
+shutdown the server writes the backlog for up to 30 seconds, then closes its sessions and
+executions in the tables.
+
 ## 👥 Access control
 
 Point `rbac_store_uri` at a PostgreSQL database, the one every replica of a cluster
@@ -768,7 +796,7 @@ flowchart LR
   A & J & H -- "Warp SQL: HTTP + Arrow IPC" --> W
   W --> S --> D
   S -. users, roles, grants .-> P[(PostgreSQL)]
-  D -. instrumentation, logs .-> L[(DuckDB / DuckLake)]
+  D -. instrumentation, logs .-> L[(DuckDB / PostgreSQL)]
 ```
 
 ## 🛠️ Build from source

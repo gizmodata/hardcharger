@@ -262,6 +262,12 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMar
     out.push_back({"process_resident_memory_bytes", {}, hc::ResidentMemoryBytes()});
     out.push_back({"hardcharger_last_exit_unclean", {}, marker.last_unclean()});
     out.push_back({"hardcharger_unclean_exits_total", {}, marker.unclean_exits()});
+    if (runtime.config.enable_instrumentation) {
+      const hc::InstrumentationStats& instr = runtime.instrumentation_stats;
+      out.push_back({"hardcharger_instrumentation_queue_depth", {}, static_cast<double>(instr.queued.load())});
+      out.push_back({"hardcharger_instrumentation_dropped_total", {}, static_cast<double>(instr.dropped.load())});
+      out.push_back({"hardcharger_instrumentation_failed_total", {}, static_cast<double>(instr.failed.load())});
+    }
     bool ok = true;
     double limit = NAN;
     double usage = NAN;

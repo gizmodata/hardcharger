@@ -6,7 +6,8 @@ in _hardcharger_instr (a DuckDB file next to the database, or in the working dir
 an in-memory one), with 1.x's tables, views and columns. 1.x's in-process manager cases
 run against real servers here: stale cleanup after a SIGKILL, closed records after a
 SIGTERM. 1.x's migration of a legacy (naive-timestamp) file and its license gate are not
-applicable: Hardcharger creates its own schema and has no license. The failed-write case is a C++ unit test.
+applicable: Hardcharger creates its own schema and has no license. The failed-write case is a C++ unit
+test, as are the batching writer's own cases (a full queue, the backlog at shutdown).
 
 Execution timeline: the engine-side times (start, end) are exact; fetch_start_time and
 fetch_end_time are when the server took the first and last batch from DuckDB, and
@@ -380,6 +381,80 @@ def test_stale_instance_cleanup(launcher, tmp_path):
     assert rows[0]["open_sessions"] == 0 and rows[0]["executing"] == 0 and rows[0]["failed"] >= 1, rows
 
 
-def test_failed_write_does_not_affect_other_writes():
-    results = run_unit_tests(gtest_filter="InstrumentationTest.*")
-    assert results.get("InstrumentationTest.FailedWriteDoesNotAffectOtherWrites") is True, results
+WRITER_UNIT_CASES = ["FailedWriteDoesNotAffectOtherWrites", "ABadRecordInABatchLosesOnlyItself",
+                     "RowsOfEarlierBatchesAreUpdatedAndOneBatchFoldsThem", "AFullQueueDropsCountsAndReportsNewRecords",
+                     "ShutdownWritesTheBacklog", "ShutdownGivesUpOnTheBacklogAtItsDeadline",
+                     "InvalidUtf8IsStoredReplaced"]
+
+
+@pytest.fixture(scope="module")
+def writer_unit_results():
+    # The PostgreSQL case runs in test_instrumentation_ducklake.py, against the services.
+    return run_unit_tests(gtest_filter="InstrumentationTest.*-InstrumentationTest.Postgres*")
+
+
+@pytest.mark.parametrize("case", WRITER_UNIT_CASES)
+def test_writer_unit_case(writer_unit_results, case):
+    """The batching writer (server/unit/instrumentation_test.cc): a failed write or a bad
+    record loses only itself; rows of earlier batches are updated, one batch folds an
+    execution's events into one row; a full queue drops, counts and reports new records
+    without blocking; Stop() writes the backlog, or drops what is left at its deadline."""
+    assert writer_unit_results.get(f"InstrumentationTest.{case}") is True, writer_unit_results
+
+
+def test_writer_unit_cases_are_all_listed(writer_unit_results):
+    assert sorted(writer_unit_results) == sorted(f"InstrumentationTest.{c}" for c in WRITER_UNIT_CASES)
+
+
+def test_concurrent_sessions_record_every_execution(launcher):
+    """N sessions x M statements at once: exactly N x M executions, each finished with its
+    own row count, under the statement that ran it."""
+    import concurrent.futures
+    server = start(launcher=launcher)
+    sessions, statements = 16, 250
+
+    def run(_):
+        session = server.admin()
+        for i in range(statements):
+            assert session.scalar(sql=f"SELECT {i} AS concurrency_probe") == i
+        return session.id
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=sessions) as pool:
+        ids = list(pool.map(run, range(sessions)))
+    reader = server.admin()
+    where = (f"session_id IN ({', '.join(repr(i) for i in ids)}) AND sql_text LIKE '%concurrency' || '_probe'")
+    eventually(reader, f"SELECT count(*) FROM {I}.execution_details WHERE {where} AND cursor_close_time IS NOT NULL",
+               lambda n: n == sessions * statements)
+    rows = reader.rows(sql=f"SELECT count(*) AS executions, count(DISTINCT execution_id) AS ids, "
+                           f"count(*) FILTER (WHERE status = 'success' AND rows_fetched = 1 AND execution_id = statement_id) "
+                           f"AS right, count(DISTINCT session_id) AS sessions FROM {I}.execution_details WHERE {where}")
+    total = sessions * statements
+    assert rows == [{"executions": total, "ids": total, "right": total, "sessions": sessions}], rows
+    assert reader.scalar(sql=f"SELECT count(*) FROM {I}.sql_statements WHERE {where}") == total
+    info = reader.rows(sql="SELECT instrumentation_dropped, instrumentation_failed FROM hardcharger_server_info()")
+    assert info == [{"instrumentation_dropped": 0, "instrumentation_failed": 0}], info
+
+
+def test_sigterm_writes_the_backlog(launcher, tmp_path):
+    """Every execution a client saw finish before the server was told to stop is in the
+    file afterwards: Stop() writes the backlog before it closes the rows."""
+    import concurrent.futures
+    server = start(launcher=launcher, args=["--database", str(tmp_path / "backlog.duckdb")])
+    sessions, statements = 8, 500
+
+    def run(_):
+        session = server.admin()
+        for i in range(statements):
+            assert session.scalar(sql=f"SELECT {i} AS backlog_probe") == i
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=sessions) as pool:
+        list(pool.map(run, range(sessions)))
+    server.process.send_signal(STOP_SIGNAL)  # at once: nothing waits for the writer
+    assert server.process.wait(timeout=60) == 0
+    rows = read_file(launcher, tmp_path / "hardcharger_instrumentation.db",
+                     "SELECT count(*) FILTER (WHERE e.status = 'success' AND e.cursor_close_time IS NOT NULL) AS done, "
+                     "count(*) AS total FROM {I}.sql_executions e JOIN {I}.sql_statements s USING (statement_id) "
+                     "WHERE s.sql_text LIKE '%backlog' || '_probe'")
+    assert rows == [{"done": sessions * statements, "total": sessions * statements}], rows
+    log = server.log()
+    assert "instrumentation stopped" in log and "dropped=0 failed=0" in log, log

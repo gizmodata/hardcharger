@@ -190,7 +190,10 @@ The dot commands and output modes are 1.x's. What behaves differently, and why:
 | `instances.gizmosql_version`, `instances.gizmosql_edition` | `instances.hardcharger_version` (no edition column) |
 
 Hardcharger creates its own instrumentation and log tables; it does not migrate tables a
-GizmoSQL 1.x server created.
+GizmoSQL 1.x server created. Instrumentation goes to the DuckDB file next to the database or
+to PostgreSQL (use PostgreSQL in production); an `instrumentation_catalog` that is a DuckLake
+catalog, which GizmoSQL accepted, stops the server at startup. Catalog logging still writes to
+DuckLake.
 
 ## Access control, metadata, metrics and tokens
 

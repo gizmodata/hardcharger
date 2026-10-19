@@ -277,10 +277,13 @@ const std::vector<Option>& Options() {
       {"enable_instrumentation", Kind::kBool,
        "record sessions, statements and executions in SQL tables", FLAG(enable_instrumentation)},
       {"instrumentation_db_path", Kind::kString,
-       "DuckDB file for the instrumentation tables (default: next to the database)",
+       "DuckDB file for the instrumentation tables (default: next to the database), for "
+       "development or a single server",
        TEXT(instrumentation_db_path)},
       {"instrumentation_catalog", Kind::kString,
-       "an attached catalog (DuckLake, PostgreSQL) for them instead", TEXT(instrumentation_catalog)},
+       "keep them instead in this PostgreSQL catalog, which the init SQL attaches and several "
+       "servers may share (DuckLake and other catalogs are refused). Use PostgreSQL in production",
+       TEXT(instrumentation_catalog)},
       {"instrumentation_schema", Kind::kString,
        "schema for them in that catalog", TEXT(instrumentation_schema)},
       // Catalog logging

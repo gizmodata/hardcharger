@@ -336,16 +336,18 @@ def launcher(tmp_path):
     launch.stop_all()
 
 
-def run_unit_tests(gtest_filter: str) -> dict[str, bool]:
-    """Runs the C++ unit tests matching `gtest_filter`; returns pass/fail by test name.
-    Fails (never skips) when the binary is missing or no test matched."""
+def run_unit_tests(gtest_filter: str, env: dict[str, str] | None = None) -> dict[str, bool]:
+    """Runs the C++ unit tests matching `gtest_filter` (with `env` added to a clean
+    environment: the run's own HOME, so DuckDB sees none of this machine's secrets);
+    returns pass/fail by test name. Fails (never skips) when the binary is missing or no
+    test matched; a skipped test counts as failed."""
     if not UNIT_TEST_BINARY.exists():
         pytest.fail(reason=f"{UNIT_TEST_BINARY} is missing: build the server first")
     out = subprocess.run(args=[str(UNIT_TEST_BINARY), f"--gtest_filter={gtest_filter}", "--gtest_brief=0"],
-                         capture_output=True, text=True, timeout=300)
+                         capture_output=True, text=True, timeout=300, env={**clean_environment(), **(env or {})})
     results = {}
     for line in out.stdout.splitlines():
-        for marker, passed in (("[       OK ] ", True), ("[  FAILED  ] ", False)):
+        for marker, passed in (("[       OK ] ", True), ("[  FAILED  ] ", False), ("[  SKIPPED ] ", False)):
             if line.startswith(marker) and "(" in line:
                 results[line[len(marker):].split(" (")[0]] = passed
     assert results, f"no unit test matched {gtest_filter}:\n{out.stdout}\n{out.stderr}"

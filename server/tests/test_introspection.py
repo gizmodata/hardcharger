@@ -70,6 +70,7 @@ SERVER_INFO_ADMIN = [
     ("metrics_port", "INTEGER"), ("oauth_enabled", "BOOLEAN"), ("tls_enabled", "BOOLEAN"), ("mtls_enabled", "BOOLEAN"),
     ("mtls_client_certificate_required", "BOOLEAN"), ("server_certificate_sha256", "VARCHAR"),
     ("web_ui_enabled", "BOOLEAN"), ("rbac_store_type", "VARCHAR"), ("session_count", "INTEGER"),
+    ("instrumentation_queued", "BIGINT"), ("instrumentation_dropped", "BIGINT"), ("instrumentation_failed", "BIGINT"),
 ]
 
 
@@ -680,6 +681,8 @@ def test_server_info_for_the_administrator_matches_the_instances_row(server):
     assert (info["web_ui_enabled"], info["rbac_store_type"], info["read_only"]) == (False, "none", False), info
     sessions = admin.scalar(sql="SELECT count(*) FROM hardcharger_sessions()")
     assert info["session_count"] == sessions, (info, sessions)
+    # The instrumentation writer's backlog and losses (this server records instrumentation).
+    assert info["instrumentation_queued"] >= 0 and (info["instrumentation_dropped"], info["instrumentation_failed"]) == (0, 0)
     # One collection at startup feeds both: no drift.
     shared = ["instance_id", "hardcharger_version", "duckdb_version", "arrow_version", "hostname", "os_platform",
               "os_name", "os_version", "cpu_arch", "cpu_model", "cpu_count", "memory_total_bytes", "start_time"]
@@ -707,6 +710,8 @@ def test_server_info_with_tls(launcher, tmp_path):
     info = tls_server.admin(identity=ops).run(sql="SELECT * FROM hardcharger_server_info()").to_pylist()[0]
     assert (info["tls_enabled"], info["mtls_enabled"], info["mtls_client_certificate_required"]) == (True, True, True)
     assert info["server_certificate_sha256"] == fingerprint, info
+    # No instrumentation here: its writer's columns are NULL.
+    assert (info["instrumentation_queued"], info["instrumentation_dropped"]) == (None, None), info
 
 
 # ---- result_retention_seconds ----

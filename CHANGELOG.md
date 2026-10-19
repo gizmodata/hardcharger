@@ -126,6 +126,41 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- **Instrumentation keeps up**: the writer records tens of thousands of statements a second
+  and stays as fast however large its tables grow. It wrote three statements per execution
+  (insert the statement, insert the execution, update it at the end), each its own
+  transaction, and each update scanned the whole `sql_executions` table, which has no index
+  in the DuckDB file: on a laptop it managed ~580 statements a second into an empty file and
+  ~250 with 5 million rows (a 100,000-statement run took 169 s after the clients finished),
+  and PostgreSQL, through the postgres extension, ~130 a second, ~24 with 2 million rows
+  (the extension read the table to find each row). Now it writes in
+  batches, one transaction each: every event queued since the last write, with an
+  execution that starts and ends within a batch folded into one row, rows of earlier
+  batches updated by one statement per table, and the rows travelling as one JSON literal.
+  In the DuckDB file each update reads only recent row groups (bounded by the start time);
+  PostgreSQL gets native SQL, one round trip per batch, that its keys serve. Measured with
+  `server/tests/bench_instrumentation.py` (16 sessions): the DuckDB file records every
+  statement as fast as the clients run them (~22,000 a second) with 5 million rows already
+  in the tables, and its writer alone does ~120,000 a second; PostgreSQL ~20,000 a second
+  with 2 million rows, also as fast as the clients ran (~29,000 for the writer alone); the
+  backlog is written within 0.2 s of the clients stopping. The DuckDB file gets no indexes: an ART key made inserts 2.5x
+  slower and holds memory, for no faster update.
+- Instrumentation's queue is bounded (128 MiB of records): past it, new records are dropped
+  rather than held, counted in `hardcharger_server_info()` (`instrumentation_queued`,
+  `instrumentation_dropped`, `instrumentation_failed`, administrators without
+  `catalog_access` rules) and on `/metrics` (`hardcharger_instrumentation_queue_depth`,
+  `hardcharger_instrumentation_dropped_total`, `hardcharger_instrumentation_failed_total`),
+  and logged at most once a minute. A statement never waits for its record. At shutdown
+  the backlog is written for up to 30 seconds; what is left then is dropped and counted,
+  and the instance's sessions and executions are closed in the tables all the same.
+- A batch that fails is retried in halves, so one bad record loses only itself; text that
+  isn't valid UTF-8 (a statement cut at 4,000 bytes can split a character) is stored with
+  U+FFFD instead of failing its row. In PostgreSQL, a statement or execution whose parent
+  row was never written (dropped from a full queue) is left out instead of failing its
+  batch on the foreign key.
+- A session's `stop_time` is when it ended, taken by the server, not when its row was
+  updated.
+
 - **One id everywhere, for statements too**: instrumentation keys statements and executions
   by the Warp SQL ids clients hold, not by UUIDs of the server's own, so a `q_...` from
   `Warp-Statement-Id`, an error response or `hardcharger_active_connections()` finds the
@@ -253,6 +288,13 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Removed
 
+- **DuckLake as an instrumentation backend.** Instrumentation has two backends: the DuckDB
+  file next to the database (the default, for development or a single server) and
+  PostgreSQL, recommended in production and for any cluster of more than one replica. An
+  `instrumentation_catalog` that names a DuckLake catalog (or any catalog but PostgreSQL)
+  now stops the server at startup with what to use instead. Catalog logging still writes to
+  DuckLake.
+
 - The separate browser sign-in server and its port (`oauth_port`, default 31339), its
   GizmoSQL 1.x routes (`/oauth/initiate`, `/oauth/start`, `/oauth/callback`,
   `/oauth/token/<uuid>`) and `oauth_disable_tls` (`--oauth-port`, `--oauth-disable-tls`,
@@ -306,6 +348,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Security
 
+- A failed instrumentation or catalog-log write no longer logs the password of the
+  catalog's connection string: PostgreSQL's connection errors quote it
+  (`Unable to connect to Postgres at "host=... password=..."`), and the warning now masks
+  it as the query log does (`password=***`).
 - The private-file guard now also covers extensions that open files outside DuckDB's file
   system. `sqlite_scanner` opens the file with SQLite's own library, so `ATTACH '<path>'
   (TYPE sqlite)`, the `sqlite:` path prefix, and the `sqlite_scan` / `sqlite_query` /

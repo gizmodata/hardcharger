@@ -123,3 +123,22 @@ def test_transaction_states_follow_the_session(server, session):
     session.execute(sql="ROLLBACK")
     assert metric(watcher, "hardcharger_sessions", state="idle_in_transaction") == 0
     assert metric(watcher, "hardcharger_sessions", state="idle_in_transaction_aborted") == 0
+
+
+def test_instrumentation_writer_gauges(launcher, server, session):
+    """With instrumentation on, /metrics shows its writer: the backlog and the records it
+    dropped (a full queue, or left at the shutdown deadline) or failed to write. Without
+    it, no such family."""
+    port = free_port()
+    instrumented = launcher.start(args=["--enable-metrics", "--metrics-port", str(port), "--metrics-bind-address",
+                                        "127.0.0.1", "--enable-instrumentation"])
+    admin = instrumented.admin()
+    assert admin.scalar(sql="SELECT 1") == 1
+    assert metric(admin, "hardcharger_instrumentation_dropped_total") == 0
+    assert metric(admin, "hardcharger_instrumentation_failed_total") == 0
+    assert metric(admin, "hardcharger_instrumentation_queue_depth") >= 0
+    text = httpx.get(url=f"http://127.0.0.1:{port}/metrics").text
+    assert "# TYPE hardcharger_instrumentation_dropped_total counter\nhardcharger_instrumentation_dropped_total 0\n" \
+        in text, text
+    assert session.scalar(sql="SELECT count(*) FROM hardcharger_metrics() WHERE name LIKE 'hardcharger_instrumentation%'") \
+        == 0

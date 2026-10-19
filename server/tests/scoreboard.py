@@ -55,8 +55,8 @@ rows = [
  ("integration/test_system_managed_catalog_visibility.cpp", 2, 2, 0, 0, 0, "test_system_managed_catalog_visibility.py", "SQL's catalog functions filtered by access control's plan rewrite"),
  ("integration/test_system_catalog.cpp", 4, 4, 0, 0, 0, "test_system_catalog.py", "+1 (DETACH)"),
  # Instrumentation and catalog logging
- ("integration/test_instrumentation.cpp", 17, 15, 0, 2, 0, "test_instrumentation.py", "manager cases against real servers; failed write as a C++ unit test; N/A: the license gate (no license) and the 1.x-schema migration (Hardcharger takes only its own names); +2"),
- ("integration/test_instrumentation_ducklake.cpp", 7, 6, 0, 1, 0, "test_instrumentation_ducklake.py", "catalog logging through a real server, also on DuckLake; N/A: the 1.x-schema migration (Hardcharger takes only its own names); +1"),
+ ("integration/test_instrumentation.cpp", 17, 15, 0, 2, 0, "test_instrumentation.py", "manager cases against real servers; failed write and the batching writer's cases (full queue, backlog at shutdown) as C++ unit tests; N/A: the license gate (no license) and the 1.x-schema migration (Hardcharger takes only its own names); +11"),
+ ("integration/test_instrumentation_ducklake.cpp", 7, 6, 0, 1, 0, "test_instrumentation_ducklake.py", "on PostgreSQL: DuckLake is refused for instrumentation (a case asserts the refusal); catalog logging through a real server, also on DuckLake; N/A: the 1.x-schema migration (Hardcharger takes only its own names); +5"),
  ("integration/test_catalog_logging.cpp", 3, 3, 0, 0, 0, "test_catalog_logging.py", "non-admin, no-license and file-location cases; writer as a C++ unit test; +5"),
  # Engine features
  ("integration/test_ducklake.cpp", 2, 2, 0, 0, 0, "test_ducklake.py", ""),

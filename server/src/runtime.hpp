@@ -25,6 +25,14 @@ class CatalogLog;
 class HealthChecker;
 class Instrumentation;
 
+// What the instrumentation writer has done, for hardcharger_server_info() and /metrics.
+struct InstrumentationStats {
+  std::atomic<uint64_t> written{0};  // events written to the tables
+  std::atomic<uint64_t> dropped{0};  // events never written: the queue was full, or left at the drain deadline
+  std::atomic<uint64_t> failed{0};   // events whose write failed (logged)
+  std::atomic<int64_t> queued{0};    // events waiting now
+};
+
 struct Runtime {
   Runtime(const Config& config, std::string instance_id)
       : config(config),
@@ -53,6 +61,7 @@ struct Runtime {
   Metrics metrics;
   HealthChecker* health = nullptr;  // set once the backend has started it
   Instrumentation* instrumentation = nullptr;  // set while instrumentation runs
+  InstrumentationStats instrumentation_stats;  // kept after it stops
   CatalogLog* catalog_log = nullptr;           // set while catalog logging runs
   // The Warp SQL server, for the SQL functions that see and cancel its sessions (set before
   // it starts; null in a process that serves nothing).

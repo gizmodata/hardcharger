@@ -116,6 +116,10 @@ FamilyInfo Family(std::string_view name) {
       {"process_resident_memory_bytes", {"gauge", "Resident memory of the server process."}},
       {"hardcharger_last_exit_unclean", {"gauge", "1 if the last run on this database did not stop cleanly (NaN: unknown)."}},
       {"hardcharger_unclean_exits_total", {"counter", "Runs on this database that did not stop cleanly."}},
+      {"hardcharger_instrumentation_queue_depth", {"gauge", "Instrumentation records waiting to be written."}},
+      {"hardcharger_instrumentation_dropped_total",
+       {"counter", "Instrumentation records never written: the queue was full, or left at the shutdown deadline."}},
+      {"hardcharger_instrumentation_failed_total", {"counter", "Instrumentation records whose write failed."}},
   };
   auto it = kFamilies.find(name);
   return it == kFamilies.end() ? FamilyInfo{"gauge", ""} : it->second;
