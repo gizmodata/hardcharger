@@ -333,12 +333,25 @@ def test_copy_and_export_never_write_the_store(guarded, who, write):
 
 
 @pytest.mark.parametrize("who", ["admin", "fay"])
-def test_copy_from_the_store_is_refused(guarded, who):
+def test_copy_from_the_store_is_refused(guarded, who, tmp_path):
     client = guarded.principals[who]
     client.run(sql=f"CREATE OR REPLACE TABLE {who}_lines (line VARCHAR)")
-    attack(guarded=guarded, who=who,
-           sql_for=lambda t: f"COPY {who}_lines FROM '{t.file}' (FORMAT csv, HEADER false, DELIMITER '\\x01', "
-                             "IGNORE_ERRORS true)")
+    # COPY ... FROM sniffs the file, and how a DuckDB file's bytes sniff depends on the
+    # platform and the run ("Error when sniffing file" on windows-arm64), which would fail
+    # the twin before the guard is ever reached. So the twin reads a decoy of its own: the
+    # same name, rbac.duckdb, holding fixed CSV text. The attack on the store is unchanged.
+    csv_decoy = Target(dir=store_dir(tmp_path, f"csv-decoy-{who}"), cwd=guarded.targets["decoy"].cwd,
+                       links=tmp_path / f"csv-decoy-links-{who}")
+    pathlib.Path(csv_decoy.file).write_text("decoy line one\ndecoy line two\n")
+    sql_for = (lambda t: f"COPY {who}_lines FROM '{t.file}' (FORMAT csv, HEADER false, DELIMITER '\\x01', "
+                         "IGNORE_ERRORS true)")
+    try:
+        client.run(sql=sql_for(csv_decoy))
+    except WarpError as error:
+        pytest.fail(reason=f"the decoy twin failed, so the attack proves nothing: {sql_for(csv_decoy)} -> {error}")
+    lines = client.run(sql=f"SELECT line FROM {who}_lines ORDER BY line").column("line").to_pylist()
+    assert lines == ["decoy line one", "decoy line two"], lines
+    expect_private(client=client, sql=sql_for(guarded.targets["store"]), what="the access-control store")
 
 
 @pytest.mark.parametrize("who", ["admin", "fay"])
