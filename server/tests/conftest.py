@@ -8,6 +8,7 @@ license.
 """
 
 import dataclasses
+import getpass
 import json
 import os
 import pathlib
@@ -17,6 +18,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 import httpx
@@ -103,39 +105,70 @@ def interrupt(process: subprocess.Popen) -> None:
 
 
 # Ports for the servers the tests start. The OS's "any free port" (bind to 0) is free only
-# until the socket closes, and the server binds it a moment later: under pytest-xdist
-# another worker's bind to 0 can be handed the same port in between. So each worker
-# takes ports from a block of its own, below every OS's ephemeral range (Linux starts
-# at 32768, macOS at 49152), and never hands out the same port twice while it has others.
+# until the socket closes, and the server binds it a moment later: another test process's
+# bind to 0 can be handed the same port in between. A server started on port 0 could say
+# which port it got, but only in its "ready" log line, at info level and in the log's own
+# destination and format, which tests change, and 0 turns the health and metrics ports off.
+# So the tests pick ports themselves, below every OS's ephemeral range (Linux starts at
+# 32768, macOS at 49152), and reserve each one machine-wide before using it: an exclusive
+# lock on a file named after the port, held until this process exits. Another pytest-xdist
+# worker, or another run of the suite in another checkout, finds the lock taken and moves
+# on; the OS drops the lock when the process ends, however it ends. Each worker starts in a
+# block of its own, so they rarely contend.
 _PORTS_FIRST, _PORTS_END = 20000, 32000
+_PORT_LOCKS = pathlib.Path(tempfile.gettempdir()) / f"hardcharger-test-ports-{getpass.getuser()}"
 
 
-def _worker_ports() -> range:
+def _worker_ports() -> list[int]:
     count = max(1, int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1")))
     worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
     index = int(worker.removeprefix("gw")) if worker.removeprefix("gw").isdigit() else 0
     size = (_PORTS_END - _PORTS_FIRST) // count
     first = _PORTS_FIRST + (index % count) * size
-    return range(first, first + size)
+    # This worker's block first, then the rest of the range.
+    return [*range(first, _PORTS_END), *range(_PORTS_FIRST, first)]
 
 
 _PORTS = _worker_ports()
-_next_port = _PORTS.start
+_next_port = 0
+_held: dict[int, int] = {}  # port -> the descriptor holding its lock (kept open: the lock lasts)
+
+
+def _reserve(port: int) -> bool:
+    """Takes this machine's lock on `port` for the life of this process; False when another
+    process holds it."""
+    _PORT_LOCKS.mkdir(parents=True, exist_ok=True)
+    fd = os.open(_PORT_LOCKS / f"{port}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return False
+    _held[port] = fd
+    return True
 
 
 def free_port() -> int:
-    """A port no other worker of this run hands out, that nothing has bound right now."""
+    """A port no other test process on this machine hands out, that nothing has bound
+    right now."""
     global _next_port
-    for _ in range(len(_PORTS)):
-        port = _next_port
-        _next_port = _PORTS.start + (_next_port + 1 - _PORTS.start) % len(_PORTS)
+    while _next_port < len(_PORTS):
+        port = _PORTS[_next_port]
+        _next_port += 1
+        if not _reserve(port):
+            continue  # another worker or run has it
         with socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM) as sock:
             try:
                 sock.bind(("127.0.0.1", port))
             except OSError:
-                continue  # in use (or lingering): try the next one
-            return port
-    pytest.fail(reason=f"no free port in {_PORTS.start}-{_PORTS.stop - 1}")
+                continue  # in use by something else (or lingering): try the next one
+        return port
+    pytest.fail(reason=f"no free port left in {_PORTS_FIRST}-{_PORTS_END - 1}")
 
 
 def _test_home() -> pathlib.Path:
@@ -144,7 +177,6 @@ def _test_home() -> pathlib.Path:
     extension cache is shared, so extensions download once."""
     global _HOME
     if _HOME is None:
-        import tempfile
         _HOME = pathlib.Path(tempfile.mkdtemp(prefix="hardcharger-test-home-"))
         real = pathlib.Path.home() / ".duckdb" / "extensions"
         real.mkdir(parents=True, exist_ok=True)

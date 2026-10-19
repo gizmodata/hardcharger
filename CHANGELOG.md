@@ -235,6 +235,15 @@ own changelog in `python/CHANGELOG.md`.
   statement did not complete: its session ended (killed). It was not run again; run it again
   to run it in the new session." `test_client_cli.py` checks the whole message.
 
+- Tests now pick listen ports collision-free across concurrent runs on one machine. Each
+  server's port was taken from a fixed range (20000+) split only between one run's
+  pytest-xdist workers, so a second run (another checkout, a non-xdist run) reused the same
+  ports: a bind failed with "Address already in use", or a client signed in to the other
+  run's server and got `invalid_credentials`. `free_port()` now holds a machine-wide
+  advisory lock on each port it hands out (a lock file named after the port, released when
+  the process exits) and still probes that nothing is bound, so two full suites run at once.
+  (The server also logs its bound port in its ready line, for a run that lets the OS choose.)
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file
