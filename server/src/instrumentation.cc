@@ -280,7 +280,8 @@ void Instrumentation::Start() {
   }
   // Hardcharger 0.3.0 named sql_statements.statement_kind flight_method (GizmoSQL's Flight
   // SQL name); CREATE TABLE IF NOT EXISTS kept such a table, and every statement's insert
-  // would fail. Startup says how to rename it instead.
+  // would fail. Startup says how to rename it instead. (A table straight from 0.3.0 also
+  // has UUID session ids and is refused above; this is for one whose ids are VARCHAR.)
   if (!warpduckdb::QueryText(connection_.get(),
                              "SELECT column_name FROM duckdb_columns() WHERE database_name = " + Literal(catalog_) +
                                  " AND schema_name = " + Literal(schema_) +

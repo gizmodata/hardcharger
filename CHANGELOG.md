@@ -261,8 +261,10 @@ own changelog in `python/CHANGELOG.md`.
   carried `flight_method=ingest` beside `kind=ingest` (now only `kind`), and the
   instrumentation table `sql_statements` named its column `flight_method`; it is
   `statement_kind` (`statement` or `prepared`, the Warp SQL endpoint a statement came by).
-  An instrumentation table from 0.3.0 is refused at startup with the `ALTER TABLE ...
-  RENAME COLUMN` that fixes it. No metric label had the name. `test_instrumentation.py`
+  A 0.3.0 instrumentation table is refused at startup in any case, as its session ids are
+  UUIDs (above: drop it); one whose `session_id` is already `VARCHAR` but still has
+  `flight_method` is refused with the `ALTER TABLE ... RENAME COLUMN` that fixes it. No
+  metric label had the name. `test_instrumentation.py`
   and `test_bulk_ingest.py` cover it.
 
 - `INSTALL` works without `HOME` (services, containers): DuckDB keeps extensions and
