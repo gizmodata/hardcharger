@@ -1,4 +1,4 @@
-import { Database, Info, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Sun, Users } from "lucide-react";
+import { Braces, Database, Info, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Sun, Users } from "lucide-react";
 import { Suspense, lazy, useMemo, useState } from "react";
 
 import { useActiveTab } from "../lib/activeTab";
@@ -46,6 +46,8 @@ function storedHidden(): boolean {
 // page's error boundary turns into reloads and, failing those, a "new version" notice.
 const QueryPage = lazy(loadModule("query", () => import("./QueryPage")));
 const SessionsPage = lazy(loadModule("sessions", () => import("./SessionsPage")));
+// The API page carries Swagger UI: loaded only when the page is first shown.
+const ApiPage = lazy(loadModule("api", () => import("./ApiPage")));
 
 interface Props {
   theme: Theme;
@@ -58,6 +60,9 @@ export function Layout({ theme, page, go }: Props) {
   // The query page stays mounted once shown (its tabs, editors and results live there).
   const [visitedQuery, setVisitedQuery] = useState(page === "query");
   if (page === "query" && !visitedQuery) setVisitedQuery(true);
+  // So does the API page (Swagger UI has no way to unmount it, and keeps what was tried).
+  const [visitedApi, setVisitedApi] = useState(page === "api");
+  if (page === "api" && !visitedApi) setVisitedApi(true);
   const [about, setAbout] = useState(false);
   const [panelWidth, setPanelWidth, resetPanelWidth] = useStoredSize(panelSize);
   const [panelHidden, setPanelHidden] = useState(storedHidden);
@@ -117,6 +122,7 @@ export function Layout({ theme, page, go }: Props) {
           <nav className="header-nav" aria-label="Pages">
             {nav("query", "Query", <Database size={15} />)}
             {nav("sessions", "Sessions", <Users size={15} />)}
+            {nav("api", "API", <Braces size={15} />)}
           </nav>
         </div>
         <div className="header-right">
@@ -217,6 +223,15 @@ export function Layout({ theme, page, go }: Props) {
               <ErrorBoundary scope="page" resetKey="sessions">
                 <Suspense fallback={<div className="page-loading">Loading…</div>}>
                   <SessionsPage />
+                </Suspense>
+              </ErrorBoundary>
+            </div>
+          )}
+          {visitedApi && (
+            <div className="page" hidden={page !== "api"}>
+              <ErrorBoundary scope="page" resetKey="api">
+                <Suspense fallback={<div className="page-loading">Loading…</div>}>
+                  <ApiPage theme={theme.name} />
                 </Suspense>
               </ErrorBoundary>
             </div>

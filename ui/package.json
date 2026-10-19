@@ -32,7 +32,8 @@
     "monaco-editor": "^0.57.0",
     "parquet-wasm": "^0.9.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "swagger-ui-dist": "5.34.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -57,5 +58,8 @@
     "typescript-eslint": "^8.71.2",
     "vite": "^8.3.4",
     "vitest": "^5.0.5"
+  },
+  "scarfSettings": {
+    "enabled": false
   }
 }

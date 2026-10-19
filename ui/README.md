@@ -115,6 +115,21 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
   and its **×** hides it in this browser.
 - 👥 **Sessions**: an administrator sees every session on the server and can end one
   (`KILL SESSION`); everyone else sees their own.
+- 🧭 **API** (`/ui/api`): the server's Warp SQL API in [Swagger UI](https://github.com/swagger-api/swagger-ui)
+  (`swagger-ui-dist`, pinned, in the build: nothing comes from a CDN), from the OpenAPI
+  document the server lists in discovery (capability `openapi`, `links.openapi`, normally
+  `GET /warp/v1/openapi.json`); a server without one gets a short note instead. The page's
+  code (about 1.7 MB, 435 KiB gzipped) loads only when the page is first opened. Every
+  request goes to this origin: the document's `servers` are replaced by it and the server
+  switcher and **Authorize** are gone. **Try it out** is signed in as you: a request
+  interceptor adds `Authorization: Bearer …` to each request to this origin as it is sent
+  (and removes any Authorization header from a request anywhere else), so Swagger UI never
+  holds the token, and nothing new is stored; the Curl and Request URL it shows are the
+  request without it. A binary answer (an Arrow IPC stream above all) is offered as
+  **Download file** (`result.arrows`) instead of being printed as text. Swagger UI's own dark
+  theme follows the app's. e2e: `api.spec.ts` (operations listed, Try it out on POST and GET
+  with the page's token, an Arrow download, nothing sent to another origin, the dark theme,
+  and a server without the document); unit: `apiDocs.test.ts` (which requests get the token).
 - 🔐 **Hardcharger's own sign-in and access control.** The password goes once to
   `POST /warp/v1/auth/token`; the browser keeps only the short-lived access token, in memory
   and this tab's `sessionStorage`, never in `localStorage` or a cookie. Under mutual TLS, the
@@ -168,9 +183,9 @@ The e2e tests run under this policy and fail on any violation; taking `'wasm-uns
 - `'wasm-unsafe-eval'`: the Parquet export compiles WebAssembly. It allows WebAssembly only,
   not `eval` of JavaScript.
 - `style-src 'unsafe-inline'`: the editor writes `<style>` elements and style attributes at run
-  time.
+  time, and Swagger UI (the API page) sets style attributes.
 - `img-src data:`: two small images in the editor's stylesheet (the color picker's
-  background; no test reaches it, and it costs nothing to allow).
+  background), and Swagger UI's icons, which its stylesheet carries as `data:` SVGs.
 
 The editor's worker is a file of its own (`worker-src 'self'`, no `blob:`).
 
