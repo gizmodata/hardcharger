@@ -175,7 +175,7 @@ The dot commands and output modes are 1.x's. What behaves differently, and why:
 |---|---|
 | `SET [SESSION\|GLOBAL] gizmosql.<name>`, `RESET gizmosql.<name>` | `SET [SESSION\|GLOBAL] hardcharger.<name>`, `RESET hardcharger.<name>` |
 | `GIZMOSQL_USER()`, `GIZMOSQL_ROLE()`, `GIZMOSQL_VERSION()` | `HARDCHARGER_USER()`, `HARDCHARGER_ROLE()`, `HARDCHARGER_VERSION()` |
-| `GIZMOSQL_CURRENT_SESSION()`, `_CURRENT_INSTANCE()`, `_CURRENT_CLUSTER()` | `HARDCHARGER_CURRENT_SESSION()`, `_CURRENT_INSTANCE()`, `_CURRENT_CLUSTER()` |
+| `GIZMOSQL_CURRENT_SESSION()`, `_CURRENT_INSTANCE()`, `_CURRENT_CLUSTER()` | `HARDCHARGER_CURRENT_SESSION()`, `_CURRENT_INSTANCE()`, `_CURRENT_CLUSTER()`; a session id is the Warp SQL session id (`s_...`), not a UUID, in `KILL SESSION`, `hardcharger_sessions()` and the instrumentation tables too |
 | `GIZMOSQL_INSTRUMENTATION_ENABLED()`, `_CATALOG()`, `_SCHEMA()` | `HARDCHARGER_INSTRUMENTATION_ENABLED()`, `_CATALOG()`, `_SCHEMA()` |
 | `GIZMOSQL_EDITION()`, `gizmosql.edition` | (none: no editions) |
 | `gizmosql.backend` | (none: DuckDB is the only engine) |

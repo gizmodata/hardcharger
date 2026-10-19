@@ -114,6 +114,19 @@ own changelog in `python/CHANGELOG.md`.
   only (`metrics_port` 0), and `oauth_port=off` without the OAuth server.
   `test_metrics_configuration.py` covers each source and case.
 
+- A session has one id: the Warp SQL session id its client holds (`s_...`, from the
+  session document). `KILL SESSION '<id>'` with that id said "not found", because the
+  server kept a UUID of its own, which only `HARDCHARGER_CURRENT_SESSION()` showed.
+  `HARDCHARGER_CURRENT_SESSION()`, `hardcharger_sessions()`, `KILL SESSION`, the log
+  lines' `session_id`, the instrumentation tables (`sessions`, `sql_statements` and the
+  views over them) and the catalog log's `session_id` all carry the Warp SQL id now
+  (warp-sql e1775b3: the SDK hands it to the engine). Those `session_id` columns are
+  `VARCHAR`; an instrumentation or log table that Hardcharger 0.3.0 created with UUIDs is
+  refused at startup, saying to drop it or use a new database (its rows' ids match no
+  session anyone holds). `test_kill_session.py` checks one session's id in the session
+  document, `HARDCHARGER_CURRENT_SESSION()`, `hardcharger_sessions()`, the instrumentation
+  tables, the log and `KILL SESSION`.
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file

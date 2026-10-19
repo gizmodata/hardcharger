@@ -46,12 +46,12 @@ TEST(CatalogLogTest, LinesLandInTheirColumns) {
     log.Attach();
     log.Start();
     hardcharger::Log(hardcharger::LogLevel::kWarning, "it's a probe",
-                     {{"session_id", "11111111-2222-3333-4444-555555555555"},
+                     {{"session_id", "s_abcdefghijklmnopqrstuvwxyz234567"},  // a Warp SQL session id
                       {"user", "alice"},
                       {"role", "admin"},
                       {"kind", "sql"}});
-    // Not a UUID: kept in fields, not lost and not failing the row.
-    hardcharger::Log(hardcharger::LogLevel::kDebug, "odd id probe", {{"session_id", "nope"}});
+    // A cluster id that isn't a UUID: kept in fields, not lost and not failing the row.
+    hardcharger::Log(hardcharger::LogLevel::kDebug, "odd id probe", {{"cluster_id", "nope"}});
     log.Stop();  // writes everything queued
   }
   hardcharger::SetDefaultLogFields({});
@@ -61,9 +61,9 @@ TEST(CatalogLogTest, LinesLandInTheirColumns) {
                 "pid IS NOT NULL, tid IS NOT NULL, log_time > now() - INTERVAL 1 MINUTE) "
                 "FROM _hardcharger_logs.main.logs WHERE message = 'it''s a probe'");
   EXPECT_EQ(row,
-            "WARN|00000000-0000-0000-0000-0000000000aa|11111111-2222-3333-4444-555555555555|alice|admin|sql|true|true|"
+            "WARN|00000000-0000-0000-0000-0000000000aa|s_abcdefghijklmnopqrstuvwxyz234567|alice|admin|sql|true|true|"
             "true");
-  EXPECT_EQ(Query(db, "SELECT concat_ws('|', level, session_id IS NULL, fields->>'session_id') "
+  EXPECT_EQ(Query(db, "SELECT concat_ws('|', level, cluster_id IS NULL, fields->>'cluster_id') "
                       "FROM _hardcharger_logs.main.logs WHERE message = 'odd id probe'"),
             "DEBUG|true|nope");
   // Nothing logged after Stop reaches the table.

@@ -31,12 +31,12 @@ CREATE TABLE IF NOT EXISTS {P}.instances (
     start_time TIMESTAMP WITH TIME ZONE NOT NULL, stop_time TIMESTAMP WITH TIME ZONE, status VARCHAR NOT NULL,
     stop_reason VARCHAR, instance_tag JSON);
 CREATE TABLE IF NOT EXISTS {P}.sessions (
-    session_id UUID NOT NULL, instance_id UUID NOT NULL, username VARCHAR NOT NULL, role VARCHAR NOT NULL,
+    session_id VARCHAR NOT NULL, instance_id UUID NOT NULL, username VARCHAR NOT NULL, role VARCHAR NOT NULL,
     auth_method VARCHAR NOT NULL, peer VARCHAR NOT NULL, peer_identity VARCHAR, user_agent VARCHAR,
     connection_protocol VARCHAR NOT NULL, start_time TIMESTAMP WITH TIME ZONE NOT NULL,
     stop_time TIMESTAMP WITH TIME ZONE, status VARCHAR NOT NULL, stop_reason VARCHAR, session_tag JSON);
 CREATE TABLE IF NOT EXISTS {P}.sql_statements (
-    statement_id UUID NOT NULL, session_id UUID NOT NULL, sql_text VARCHAR NOT NULL, flight_method VARCHAR,
+    statement_id UUID NOT NULL, session_id VARCHAR NOT NULL, sql_text VARCHAR NOT NULL, flight_method VARCHAR,
     is_internal BOOLEAN NOT NULL, prepare_success BOOLEAN NOT NULL, prepare_error VARCHAR,
     created_time TIMESTAMP WITH TIME ZONE NOT NULL, query_tag JSON);
 CREATE TABLE IF NOT EXISTS {P}.sql_executions (
@@ -109,13 +109,13 @@ CREATE TABLE IF NOT EXISTS {S}.instances (
     memory_total_bytes BIGINT, start_time TIMESTAMP WITH TIME ZONE NOT NULL, stop_time TIMESTAMP WITH TIME ZONE,
     status VARCHAR NOT NULL, stop_reason VARCHAR, instance_tag JSON);
 CREATE TABLE IF NOT EXISTS {S}.sessions (
-    session_id UUID PRIMARY KEY, instance_id UUID NOT NULL REFERENCES {S}.instances(instance_id) ON DELETE CASCADE,
+    session_id VARCHAR PRIMARY KEY, instance_id UUID NOT NULL REFERENCES {S}.instances(instance_id) ON DELETE CASCADE,
     username VARCHAR NOT NULL, role VARCHAR NOT NULL, auth_method VARCHAR NOT NULL, peer VARCHAR NOT NULL,
     peer_identity VARCHAR, user_agent VARCHAR, connection_protocol VARCHAR NOT NULL,
     start_time TIMESTAMP WITH TIME ZONE NOT NULL, stop_time TIMESTAMP WITH TIME ZONE, status VARCHAR NOT NULL,
     stop_reason VARCHAR, session_tag JSON);
 CREATE TABLE IF NOT EXISTS {S}.sql_statements (
-    statement_id UUID PRIMARY KEY, session_id UUID NOT NULL REFERENCES {S}.sessions(session_id) ON DELETE CASCADE,
+    statement_id UUID PRIMARY KEY, session_id VARCHAR NOT NULL REFERENCES {S}.sessions(session_id) ON DELETE CASCADE,
     sql_text VARCHAR NOT NULL, flight_method VARCHAR, is_internal BOOLEAN NOT NULL, prepare_success BOOLEAN NOT NULL,
     prepare_error VARCHAR, created_time TIMESTAMP WITH TIME ZONE NOT NULL, query_tag JSON);
 CREATE TABLE IF NOT EXISTS {S}.sql_executions (
@@ -257,6 +257,22 @@ void Instrumentation::Start() {
       warpduckdb::RunSql(connection_.get(), "CREATE SCHEMA IF NOT EXISTS " + prefix);
     }
     warpduckdb::RunSql(connection_.get(), Replace(kSchemaSql, "{P}", prefix));
+  }
+  // Hardcharger 0.3.0 kept session ids as UUIDs; a session's id is now its Warp SQL id
+  // (s_...), which such a table can't hold. Its rows can't be carried over (the old ids
+  // match no session anyone holds), so startup says what to do instead of failing on
+  // every insert.
+  for (const char* table : {"sessions", "sql_statements"}) {
+    const std::string type = warpduckdb::QueryText(
+        connection_.get(), "SELECT data_type FROM duckdb_columns() WHERE database_name = " + Literal(catalog_) +
+                               " AND schema_name = " + Literal(schema_) + " AND table_name = " + Literal(table) +
+                               " AND column_name = 'session_id'");
+    if (type == "UUID") {
+      throw std::runtime_error("instrumentation table " + Table(table) +
+                               " is from Hardcharger 0.3.0, whose session ids were UUIDs; session ids are now the "
+                               "Warp SQL session ids clients hold (s_...). Drop the instrumentation tables (or use a "
+                               "new instrumentation database) and start the server again.");
+    }
   }
   // Rows a previous run left open (it was killed). Only in our own file: a shared
   // catalog's open rows may belong to live peers.
