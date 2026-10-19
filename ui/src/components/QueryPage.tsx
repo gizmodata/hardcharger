@@ -90,21 +90,26 @@ export default function QueryPage({ theme }: Props) {
     [],
   );
 
+  // The tabs as last rendered, for adding one: its id must be known at once (a preview runs
+  // in it), and a state updater may run later than the call that queued it.
+  const tabsNow = useRef({ tabs, active });
+  useEffect(() => {
+    tabsNow.current = { tabs, active };
+  }, [tabs, active]);
+
   const addTab = useCallback((init: Partial<TabDoc> = {}): string | undefined => {
-    let id: string | undefined;
-    setTabs((s) => {
-      if (s.tabs.length >= maxTabs) return s;
-      const current = s.tabs.find((t) => t.id === s.active);
-      const tab = makeTab(s.tabs, {
-        catalog: current?.catalog ?? "",
-        schema: current?.schema ?? "",
-        rowLimit: current?.rowLimit ?? 1000,
-        ...init,
-      });
-      id = tab.id;
-      return { tabs: [...s.tabs, tab], active: tab.id };
+    const now = tabsNow.current;
+    if (now.tabs.length >= maxTabs) return undefined;
+    const current = now.tabs.find((t) => t.id === now.active);
+    const tab = makeTab(now.tabs, {
+      catalog: current?.catalog ?? "",
+      schema: current?.schema ?? "",
+      rowLimit: current?.rowLimit ?? 1000,
+      ...init,
     });
-    return id;
+    tabsNow.current = { tabs: [...now.tabs, tab], active: tab.id };
+    setTabs((s) => (s.tabs.length >= maxTabs ? s : { tabs: [...s.tabs, tab], active: tab.id }));
+    return tab.id;
   }, []);
 
   const closeTab = useCallback(
