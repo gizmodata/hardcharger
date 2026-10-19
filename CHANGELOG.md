@@ -174,7 +174,9 @@ own changelog in `python/CHANGELOG.md`.
   - The command-line client's own error codes take the protocol's `client_` prefix
     (`client_connection_failed`, `client_tls_failed`, `client_protocol_error`, …), and so do
     the web UI's (`client_transport_error`, `client_protocol_error`, `client_sign_in_failed`).
-  - Web UI: the vendored JavaScript client moves to warp-sql-js `0a91935` (Warp SQL 1.0.0); the
+  - Web UI: the vendored JavaScript client moves to warp-sql-js `4a27d4d` (Warp SQL 1.0.0, on
+    browser sign-in); browser sign-in's own failures take the `client_` codes too, and a flow
+    state the page doesn't know is polled on (Warp SQL §12) rather than refused; the
     About dialog drops the draft label, an `invalid_token` or `session_ended` with
     `token_revoked` says the sign-in was revoked, a reason the UI doesn't know reads as an
     expired sign-in, and a statement timeout says so.

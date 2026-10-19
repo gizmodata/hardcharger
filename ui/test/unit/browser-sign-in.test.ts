@@ -107,6 +107,21 @@ describe("returning from the identity provider", () => {
     });
   });
 
+  it("polls on through a flow state it doesn't know (Warp SQL §12)", async () => {
+    vi.useFakeTimers();
+    try {
+      const auth = await freshAuth();
+      sessionStorage.setItem("hardcharger-ui:browser-sign-in", JSON.stringify({ flowId: "f_abc", pollSecret: "pss" }));
+      const answers = [{ state: "some_later_state" }, { state: "complete", access_token: "tok", expires_in: 60 }];
+      vi.stubGlobal("fetch", async () => Response.json(answers.shift()));
+      const signedIn = auth.finishBrowserSignIn("f_abc");
+      await vi.runAllTimersAsync();
+      await expect(signedIn).resolves.toMatchObject({ token: "tok" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says when the flow expired or was used", async () => {
     const auth = await freshAuth();
     sessionStorage.setItem("hardcharger-ui:browser-sign-in", JSON.stringify({ flowId: "f_abc", pollSecret: "pss" }));

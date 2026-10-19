@@ -170,7 +170,7 @@ export async function startBrowserSignIn(signal?: AbortSignal): Promise<string> 
     });
   } catch (err) {
     if (signal?.aborted) throw err;
-    throw new SignInError("The server could not be reached.", "transport_error", undefined);
+    throw new SignInError("The server could not be reached.", "client_transport_error", undefined);
   }
   const body = (await resp.json().catch(() => ({}))) as Problem & {
     flow_id?: string;
@@ -179,10 +179,10 @@ export async function startBrowserSignIn(signal?: AbortSignal): Promise<string> 
   };
   if (!resp.ok) {
     const detail = body.detail ?? body.title ?? `the sign-in could not start (HTTP ${resp.status})`;
-    throw new SignInError(detail, body.code ?? "sign_in_failed", resp.status);
+    throw new SignInError(detail, body.code ?? "client_sign_in_failed", resp.status);
   }
   if (!body.flow_id || !body.poll_secret || !body.authorize_url) {
-    throw new SignInError("The server answered without a sign-in to follow.", "protocol_error", resp.status);
+    throw new SignInError("The server answered without a sign-in to follow.", "client_protocol_error", resp.status);
   }
   const flow: StoredFlow = { flowId: body.flow_id, pollSecret: body.poll_secret };
   try {
@@ -268,7 +268,7 @@ async function collectFlow(flowId: string): Promise<SignedIn | null> {
         cache: "no-store",
       });
     } catch {
-      throw new SignInError("The server could not be reached.", "transport_error", undefined);
+      throw new SignInError("The server could not be reached.", "client_transport_error", undefined);
     }
     const body = (await resp.json().catch(() => ({}))) as Problem & {
       state?: string;
@@ -282,7 +282,7 @@ async function collectFlow(flowId: string): Promise<SignedIn | null> {
       }
       throw new SignInError(
         body.detail ?? `sign-in failed (HTTP ${resp.status})`,
-        body.code ?? "sign_in_failed",
+        body.code ?? "client_sign_in_failed",
         resp.status,
       );
     }
@@ -291,18 +291,12 @@ async function collectFlow(flowId: string): Promise<SignedIn | null> {
       return { username: "", token: body.access_token, expiresAt: Date.now() + lifetime * 1000 };
     }
     if (body.state === "failed") {
-      const code = body.error?.code ?? "sign_in_failed";
+      const code = body.error?.code ?? "client_sign_in_failed";
       const detail = body.error?.detail ?? "the identity provider did not sign you in";
       throw new SignInError(`Sign-in failed: ${detail}`, code, resp.status);
     }
-    if (body.state !== "pending") {
-      throw new SignInError(
-        "The server's answer to the sign-in is not one this page knows.",
-        "protocol_error",
-        resp.status,
-      );
-    }
+    // "pending", or a state this page doesn't know, which is not an end either (Warp SQL §12).
     await new Promise((r) => setTimeout(r, 1000));
   }
-  throw new SignInError("The sign-in did not finish. Sign in again.", "timeout", undefined);
+  throw new SignInError("The sign-in did not finish. Sign in again.", "client_timeout", undefined);
 }
