@@ -446,7 +446,7 @@ is an experimental extension, Hardcharger is 0.x); this is what each offers toda
     conformance suite, and DuckDB's docs say the protocol may still change.
 
 Checked on running servers, with Quack `e7a9be3f8c` (the commit DuckDB 2.0 pins and its extension
-repository serves) and Hardcharger 0.3.0; [docs/hardcharger-vs-quack.md](docs/hardcharger-vs-quack.md)
+repository serves) and Hardcharger; [docs/hardcharger-vs-quack.md](docs/hardcharger-vs-quack.md)
 shows how.
 
 ## ⚙️ Configuration

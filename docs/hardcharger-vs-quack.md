@@ -13,7 +13,7 @@ only; no throughput figures.
   `duckdb==2.0.0.dev2610162032` (v2.0.0-alpha48730), installs that same commit. The
   [duckdb-quack](https://github.com/duckdb/duckdb-quack) `main` branch was 11 commits further on
   (`f96420ed`, catalog snapshots and transaction cleanup); none of them change a row of the table.
-- **Hardcharger:** the 0.3.0 release (`hardcharger-macos-arm64.tar.gz`).
+- **Hardcharger:** the release build (`hardcharger-macos-arm64.tar.gz`).
 
 ## The Quack server
 
@@ -99,7 +99,7 @@ call their read-only example "illustrative, not a robust read-only filter". `CRE
 
 **Observability.** Quack's log type records each message's type, connection, SQL, duration and
 error; `quack_active_connections()` lists connections and their current SQL. The source has no
-metrics endpoint or audit log. Hardcharger 0.3.0 served `hardcharger_statements_total` on
+metrics endpoint or audit log. Hardcharger served `hardcharger_statements_total` on
 `/metrics` (`--enable-metrics --metrics-port …`) and recorded statements in
 `_hardcharger_instr.sql_statements` (`--enable-instrumentation`).
 
@@ -126,7 +126,7 @@ CI runs against every Hardcharger build.
 DuckDB reaches Hardcharger through either of two community extensions, each loading the
 [hardcharger-adbc](https://github.com/gizmodata/hardcharger-adbc) driver library
 (`libadbc_driver_hardcharger`, entrypoint `AdbcDriverHardchargerInit`, from a release tarball or
-`scripts/build_lib.sh`). Checked with hardcharger-adbc `9a087be` against Hardcharger 0.3.0:
+`scripts/build_lib.sh`). Checked with hardcharger-adbc `9a087be` against Hardcharger:
 
 | | Columnar's `adbc` | Query.Farm's `adbc_scanner` |
 |---|---|---|

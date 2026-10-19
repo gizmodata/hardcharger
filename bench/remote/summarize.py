@@ -64,7 +64,7 @@ def main() -> None:
     parser.add_argument("--results", nargs="+", required=True)
     parser.add_argument("--cpu")
     parser.add_argument("--label", default="", help="only rows with this label")
-    parser.add_argument("--hardcharger", default="Hardcharger 0.2.0", help="how Hardcharger rows are named")
+    parser.add_argument("--hardcharger", default="Hardcharger", help="how Hardcharger rows are named")
     args = parser.parse_args()
     global HARDCHARGER
     HARDCHARGER = args.hardcharger

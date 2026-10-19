@@ -103,8 +103,8 @@ Every option also has a YAML key: the flag without its leading `--`, with `_` fo
 | `TLS_ENABLED` | (none: `--tls-cert` and `--tls-key` turn TLS on) | (none) |
 | `--otel-enabled`, `GIZMOSQL_OTEL_*` | (none: no OpenTelemetry export yet) | (none) |
 
-Hardcharger 0.1.x's own `--username` / `--password` (`HARDCHARGER_USERNAME` /
-`HARDCHARGER_PASSWORD`) are `--admin-username` / `--admin-password` from 0.2.0.
+Hardcharger's own administrator is set with `--admin-username` / `--admin-password`
+(`HARDCHARGER_ADMIN_USERNAME` / `HARDCHARGER_ADMIN_PASSWORD`).
 
 ## The command-line client
 
