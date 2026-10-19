@@ -280,11 +280,11 @@ def test_uri_cannot_be_combined_with_connection_flags(server):
     uri = f"hardcharger://localhost:{server.port}?tls=false"
     for flag in (["--host", "localhost"], ["--port", str(server.port)], ["--tls"], ["--tls=false"]):
         result = subprocess.run(args=[binary(), uri, *flag, "--username", server.username, "-c", "SELECT 1"],
-                                env=client_env(server=server), capture_output=True, text=True)
+                                env=client_env(server=server), capture_output=True, text=True, timeout=60)
         assert result.returncode == 1
         assert result.stderr.strip() == f"Error: --uri cannot be combined with {flag[0].split('=')[0]}", result.stderr
     ok = subprocess.run(args=[binary(), uri, "--username", server.username, "--csv", "--no-header", "-c", "SELECT 'uri'"],
-                        env=client_env(server=server), capture_output=True, text=True)
+                        env=client_env(server=server), capture_output=True, text=True, timeout=60)
     assert ok.returncode == 0 and ok.stdout.strip() == "uri", ok.stderr
 
 
@@ -992,7 +992,8 @@ def test_uri_with_tls_false_is_plain_http_to_its_base_path(first_bytes):
 def test_uri_against_plain_and_tls_servers(launcher, server, tmp_path):
     plain = f"hardcharger://localhost:{server.port}"
     ok = subprocess.run(args=[binary(), f"{plain}?tls=false", "--username", server.username, "--csv", "--no-header",
-                              "-c", "SELECT 'plain'"], env=client_env(server=server), capture_output=True, text=True)
+                              "-c", "SELECT 'plain'"], env=client_env(server=server), capture_output=True, text=True,
+                        timeout=60)
     assert ok.returncode == 0 and ok.stdout.strip() == "plain", ok.stderr
     # Without ?tls=false the URI is HTTPS, which a plain-HTTP server can't answer.
     tls_to_plain = subprocess.run(args=[binary(), plain, "--username", server.username, "-c", "SELECT 1"],
@@ -1006,15 +1007,16 @@ def test_uri_against_plain_and_tls_servers(launcher, server, tmp_path):
     uri = f"hardcharger://localhost:{tls_server.port}"
     https = subprocess.run(args=[binary(), uri, "--username", tls_server.username, "--tls-roots", str(certs["ca"]),
                                  "--csv", "--no-header", "-c", "SELECT 'https'"],
-                           env=client_env(server=tls_server), capture_output=True, text=True)
+                           env=client_env(server=tls_server), capture_output=True, text=True, timeout=60)
     assert https.returncode == 0 and https.stdout.strip() == "https", https.stderr
     # The same server, with the roots it isn't signed by: verification still applies.
     wrong = subprocess.run(args=[binary(), uri, "--username", tls_server.username, "--tls-roots",
                                  str(certs["other_ca"]), "-c", "SELECT 1"],
-                           env=client_env(server=tls_server), capture_output=True, text=True)
+                           env=client_env(server=tls_server), capture_output=True, text=True, timeout=60)
     assert wrong.returncode == 1 and "certificate verify failed" in wrong.stderr, wrong.stderr
     plain_to_tls = subprocess.run(args=[binary(), f"{uri}?tls=false", "--username", tls_server.username, "-c",
-                                        "SELECT 1"], env=client_env(server=tls_server), capture_output=True, text=True)
+                                        "SELECT 1"], env=client_env(server=tls_server), capture_output=True, text=True,
+                                  timeout=60)
     assert plain_to_tls.returncode == 1 and plain_to_tls.stderr.startswith("Error: "), plain_to_tls.stderr
 
 
