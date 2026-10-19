@@ -319,6 +319,33 @@ export default function QueryPage({ theme }: Props) {
 
   const select = (id: string) => setTabs((s) => ({ ...s, active: id }));
 
+  // The tab strip scrolls sideways with no scrollbar of its own: WebKit's overlay scrollbar
+  // sat over the bottom of the tabs and took their clicks. A vertical wheel scrolls it (a
+  // trackpad's sideways swipe already does), and the shown tab is always scrolled into view.
+  const strip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      if (el.scrollWidth <= el.clientWidth) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY * 16 : e.deltaY;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+  useEffect(() => {
+    const el = strip.current;
+    const tab = el?.querySelector<HTMLElement>('[aria-selected="true"]')?.parentElement;
+    if (!el || !tab) return;
+    // Only the strip scrolls (scrollIntoView could scroll the page or the panes too).
+    const left = tab.offsetLeft - el.offsetLeft;
+    const right = left + tab.offsetWidth;
+    if (left < el.scrollLeft) el.scrollLeft = left - 8;
+    else if (right > el.scrollLeft + el.clientWidth) el.scrollLeft = right - el.clientWidth + 8;
+  }, [active, tabs.length]);
+
   const move = (from: string, to: string) =>
     setTabs((s) => {
       if (from === to) return s;
@@ -359,106 +386,110 @@ export default function QueryPage({ theme }: Props) {
           </button>
         </div>
       )}
-      <div className="tabs" role="tablist" aria-label="Editor tabs">
-        {tabs.map((t) => {
-          const status = statuses[t.id];
-          const marker = status?.running
-            ? "running"
-            : status?.failed
-              ? "failed"
-              : status && status.transaction !== "none"
-                ? "transaction"
-                : undefined;
-          const unsaved = !!t.savedQueryId && hasUnsavedText(t);
-          return (
-            <div
-              key={t.id}
-              className={`tab${t.id === active ? " tab-active" : ""}`}
-              draggable={renaming !== t.id}
-              data-testid="editor-tab-button"
-              onDragStart={(e) => {
-                dragged.current = t.id;
-                e.dataTransfer.effectAllowed = "move";
-                e.dataTransfer.setData("application/x-hardcharger-tab", t.id);
-              }}
-              onDragOver={(e) => {
-                if (dragged.current) e.preventDefault();
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                if (dragged.current) move(dragged.current, t.id);
-                dragged.current = undefined;
-              }}
-              onDragEnd={() => (dragged.current = undefined)}
-            >
-              {renaming === t.id ? (
-                <input
-                  className="tab-rename"
-                  aria-label="Tab name"
-                  defaultValue={t.title}
-                  autoFocus
-                  onFocus={(e) => e.currentTarget.select()}
-                  onBlur={(e) => {
-                    const title = e.currentTarget.value.trim();
-                    if (title) patchTab(t.id, { title });
-                    setRenaming(undefined);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") e.currentTarget.blur();
-                    if (e.key === "Escape") setRenaming(undefined);
-                  }}
-                />
-              ) : (
+      <div className="tabs-bar">
+        <div className="tabs" role="tablist" aria-label="Editor tabs" ref={strip}>
+          {tabs.map((t) => {
+            const status = statuses[t.id];
+            const marker = status?.running
+              ? "running"
+              : status?.failed
+                ? "failed"
+                : status && status.transaction !== "none"
+                  ? "transaction"
+                  : undefined;
+            const unsaved = !!t.savedQueryId && hasUnsavedText(t);
+            return (
+              <div
+                key={t.id}
+                className={`tab${t.id === active ? " tab-active" : ""}`}
+                draggable={renaming !== t.id}
+                data-testid="editor-tab-button"
+                onDragStart={(e) => {
+                  dragged.current = t.id;
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("application/x-hardcharger-tab", t.id);
+                }}
+                onDragOver={(e) => {
+                  if (dragged.current) e.preventDefault();
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragged.current) move(dragged.current, t.id);
+                  dragged.current = undefined;
+                }}
+                onDragEnd={() => (dragged.current = undefined)}
+              >
+                {renaming === t.id ? (
+                  <input
+                    className="tab-rename"
+                    aria-label="Tab name"
+                    defaultValue={t.title}
+                    autoFocus
+                    onFocus={(e) => e.currentTarget.select()}
+                    onBlur={(e) => {
+                      const title = e.currentTarget.value.trim();
+                      if (title) patchTab(t.id, { title });
+                      setRenaming(undefined);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.currentTarget.blur();
+                      if (e.key === "Escape") setRenaming(undefined);
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={t.id === active}
+                    className="tab-title"
+                    onClick={() => select(t.id)}
+                    onDoubleClick={() => setRenaming(t.id)}
+                    title={`${t.title}: double-click to rename, drag to move`}
+                  >
+                    {marker && <span className={`tab-marker tab-marker-${marker}`} data-marker={marker} aria-hidden />}
+                    {t.title}
+                    {unsaved && (
+                      <span className="tab-unsaved" title="Unsaved changes" aria-label="unsaved changes">
+                        {" "}
+                        ●
+                      </span>
+                    )}
+                  </button>
+                )}
                 <button
                   type="button"
-                  role="tab"
-                  aria-selected={t.id === active}
-                  className="tab-title"
-                  onClick={() => select(t.id)}
-                  onDoubleClick={() => setRenaming(t.id)}
-                  title={`${t.title}: double-click to rename, drag to move`}
+                  className="tab-close"
+                  aria-label={`Close ${t.title}`}
+                  title="Close (Alt+W)"
+                  onClick={() => closeTab(t.id)}
                 >
-                  {marker && <span className={`tab-marker tab-marker-${marker}`} data-marker={marker} aria-hidden />}
-                  {t.title}
-                  {unsaved && (
-                    <span className="tab-unsaved" title="Unsaved changes" aria-label="unsaved changes">
-                      {" "}
-                      ●
-                    </span>
-                  )}
+                  <X size={12} />
                 </button>
-              )}
-              <button
-                type="button"
-                className="tab-close"
-                aria-label={`Close ${t.title}`}
-                title="Close (Alt+W)"
-                onClick={() => closeTab(t.id)}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          );
-        })}
-        <button
-          type="button"
-          className="btn btn-ghost btn-icon btn-sm"
-          onClick={() => addTab()}
-          disabled={tabs.length >= maxTabs}
-          aria-label="New tab"
-          title={tabs.length >= maxTabs ? `At most ${maxTabs} tabs` : "New tab (Alt+N)"}
-        >
-          <Plus size={14} />
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost btn-icon btn-sm tabs-help"
-          onClick={() => setHelp(true)}
-          aria-label="How the editor works"
-          title="How the editor works: sessions, transactions, statements, results, and what this browser keeps"
-        >
-          <HelpCircle size={14} />
-        </button>
+              </div>
+            );
+          })}
+        </div>
+        <div className="tabs-actions">
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon btn-sm"
+            onClick={() => addTab()}
+            disabled={tabs.length >= maxTabs}
+            aria-label="New tab"
+            title={tabs.length >= maxTabs ? `At most ${maxTabs} tabs` : "New tab (Alt+N)"}
+          >
+            <Plus size={14} />
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon btn-sm tabs-help"
+            onClick={() => setHelp(true)}
+            aria-label="How the editor works"
+            title="How the editor works: sessions, transactions, statements, results, and what this browser keeps"
+          >
+            <HelpCircle size={14} />
+          </button>
+        </div>
       </div>
       {help && <HelpDialog idleTimeoutS={idleTimeoutS} onClose={() => setHelp(false)} />}
 

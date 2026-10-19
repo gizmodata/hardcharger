@@ -399,6 +399,13 @@ own changelog in `python/CHANGELOG.md`.
   retained result is expired from its `expires_at` on (Warp SQL §6.5), where the SDK refused
   new reads only after its next sweep, up to 5 seconds later; and an idempotent replay of a
   submit or execute (§6.7) carries `Warp-Statement-Id`, as every statement response does.
+- Web UI: once the editor's tabs no longer fit, clicks on them and on **New tab** work in
+  Safari. The tab bar scrolled as a whole, and Safari's overlay scrollbar sat over the bottom
+  of the tabs and the bottom-aligned **New tab** button and took their clicks (the e2e "at most
+  20 tabs" test lost 1 or 2 tabs in about 40% of WebKit runs). Only the tabs scroll now, with
+  no visible scrollbar (a mouse wheel, a sideways swipe or keyboard focus scrolls them), the
+  shown tab is always scrolled into view, and **New tab** and the help button stay put after
+  them, outside the scrolling part (and outside the `tablist`, which now holds only tabs).
 - The Windows zips no longer carry jwt-cpp's headers (`include/jwt-cpp/`) and CMake package
   files (`cmake/`): the package step took the whole `cmake --install` tree, which jwt-cpp's
   install rules add to; it now copies the two executables, and checks the zip's top level.
