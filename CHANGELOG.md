@@ -83,6 +83,16 @@ own changelog in `python/CHANGELOG.md`.
   Hardcharger through an ADBC extension (Columnar's `adbc` or Query.Farm's `adbc_scanner`) with
   hardcharger-adbc's driver library, with examples run against Hardcharger 0.3.0.
 
+### Fixed
+
+- CREATE VIEW in catalog `x` over a schema also named `x` (`CREATE VIEW x.x.v AS SELECT *
+  FROM x.x.t`) fails, as it does on plain DuckDB 2.0 (DuckDB 1.5 creates it): DuckDB drops
+  the view's own catalog from the names in its query and then finds `x.t` ambiguous.
+  Hardcharger's error now says what happens and what works (create the view in another
+  catalog, or rename the schema), where DuckDB's message said to qualify a name that
+  already was; `docs/migrating-from-gizmosql.md` documents it.
+  `test_view_catalog_schema_same_name.py` covers it with access control on and off.
+
 ## [0.3.0] - 2026-10-18
 
 A built-in web UI, client certificates as identity (mutual TLS), a DuckDB-file
