@@ -166,6 +166,14 @@ Images are multi-architecture (`linux/amd64`, `linux/arm64`) and published to bo
 `ghcr.io/gizmodata/hardcharger` and `docker.io/gizmodata/hardcharger`. Port 31337 speaks
 Warp SQL; 31338 answers `/health`.
 
+Installed extensions (`INSTALL`) and persistent secrets live under the home directory
+(`~/.duckdb/`), as DuckDB keeps them. Without a usable one (no `HOME`, or a container run
+as a user the image has no account for, which gets `HOME=/`), the server uses the
+account's home from the password database, else `.duckdb/` in the database file's
+directory, and says so at startup; mount a writable volume for the database (`--database
+/data/my.duckdb`) and they go there. Init SQL can set `extension_directory` and
+`secret_directory` to anywhere else.
+
 `ghcr.io/gizmodata/hardcharger:main` (and `:sha-<commit>`) is the development build: the
 newest commit on `main` that passed every CI gate, built exactly as a release. Use
 `:latest` or a version tag for anything else.

@@ -23,9 +23,14 @@ std::optional<std::string> EnvUtf8(const char* name);
 // For tests: sets (or, with nullopt, removes) an environment variable.
 void SetEnv(const char* name, const std::optional<std::string>& value);
 
-// The user's home directory as DuckDB sees it ('~'): HOME on POSIX (else the password
-// database), USERPROFILE on Windows. Empty when unknown.
+// The user's home directory ('~'): HOME on POSIX (else the password database),
+// USERPROFILE on Windows. Empty when unknown. DuckDB itself reads only HOME
+// (USERPROFILE); the server hands it this one when HOME is unset (DuckDBDirectories).
 std::string HomeDirectory();
+// Whether HOME (USERPROFILE on Windows) is set and not empty.
+bool HomeFromEnvironment();
+// Whether `path` is an existing directory this process may create files in.
+bool IsWritableDirectory(const std::string& path);
 
 // A new directory only this user can use, named `prefix` plus a random suffix, in the
 // system's temporary directory (mkdtemp). Throws when it can't be made.
