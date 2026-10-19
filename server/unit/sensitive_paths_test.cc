@@ -150,6 +150,16 @@ TEST_F(SensitivePathPolicyTest, HardLinksToProtectedFilesAreRefused) {
   fs::create_hard_link(home() / ".netrc", root_ / "data" / "notes.txt", ec);
   ASSERT_FALSE(ec) << ec.message();
   EXPECT_EQ(Check(root_ / "data" / "notes.txt"), "user credential store");
+  // And of a file inside a protected directory, at any depth.
+  fs::create_directories(home() / ".aws" / "sso" / "cache");
+  std::ofstream(home() / ".aws" / "credentials") << "[default]\naws_secret_access_key = dummy";
+  std::ofstream(home() / ".aws" / "sso" / "cache" / "token.json") << "{\"accessToken\": \"dummy\"}";
+  fs::create_hard_link(home() / ".aws" / "credentials", root_ / "data" / "creds.txt", ec);
+  ASSERT_FALSE(ec) << ec.message();
+  fs::create_hard_link(home() / ".aws" / "sso" / "cache" / "token.json", root_ / "data" / "token.json", ec);
+  ASSERT_FALSE(ec) << ec.message();
+  EXPECT_EQ(Check(root_ / "data" / "creds.txt"), "user credential store");
+  EXPECT_EQ(Check(root_ / "data" / "token.json"), "user credential store");
   // The positive twin: a file with one link, and a second link of an ordinary file.
   EXPECT_FALSE(Check(root_ / "data" / "ok.csv").has_value());
   fs::create_hard_link(root_ / "data" / "ok.csv", root_ / "data" / "ok-again.csv", ec);

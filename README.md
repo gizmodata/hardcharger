@@ -390,6 +390,49 @@ In SQL, `SET SESSION name = value` changes a DuckDB setting for your session onl
 settings (`arrow_lossless_conversion` among them) is `GLOBAL`: then only an administrator
 may run it, and it changes the default of every session that has no value of its own.
 
+### Credential and system files
+
+With `block_sensitive_paths` on (the default), no statement can open, list, write, move or
+delete the credential and system files on the server host, whoever runs it, the
+administrator included:
+
+- the home directory's `.ssh`, `.aws`, `.azure`, `.config/gcloud`, `.kube`,
+  `.docker/config.json`, `.netrc`, `.pgpass`, `.git-credentials` and `.gnupg`, and DuckDB's
+  secret directory (`~/.duckdb/stored_secrets`, or wherever the init SQL moved it);
+- the server's own TLS key and certificate, client CA, init SQL file and config file;
+- `/etc/passwd`, `/etc/shadow`, `/etc/gshadow`, `/etc/master.passwd`, `/etc/sudoers` and
+  `/etc/sudoers.d`, `/proc` and `/dev/fd` (except `/proc/self/cgroup`, which DuckDB reads to
+  size its memory limit), and `/var/run/secrets` and `/run/secrets` (container and
+  Kubernetes secrets);
+- on Windows, the account database and registry hives, DPAPI keys, Credential Manager and
+  the vaults, installer answer files, and the device namespace (`\\.\`, `\\?\`);
+- and any path listed in `sensitive_paths` (comma-separated).
+
+The check sits in DuckDB's file system, so it sees the path DuckDB is about to use, however
+the statement arrived at it: a literal, a concatenation, a variable, a prepared statement's
+parameter, `query('…')`, a macro or view, `file_search_path`, `~`, `..`, a symlink, a second
+hard link, or a different letter case where the file system ignores case. A refusal reads
+`Permission denied: Hardcharger blocked access to '<path>' (<what it is>)`. A glob that
+reaches into a protected directory from above (`/home/*/.ssh/*`, `**/id_rsa`) lists its
+other matches only; one whose fixed part is protected (`~/.ssh/*`) is refused. SQL text is
+not inspected for paths, so string literals such as `'{"a": 1}'`, `'.*'` or
+`'~/.ssh/id_rsa'` used as values work as anywhere else. `SET secret_directory` is refused
+after startup, because DuckDB's secret manager reads that directory outside its file system.
+
+Two limits:
+
+- The server's startup is not checked: its own attaches and the operator's init SQL
+  (`init_sql_commands`, `init_sql_commands_file`) run before the guard switches on, so init
+  SQL may read a mounted credential, for example to create a secret from it. (GizmoSQL 1.x
+  checks init SQL too.)
+- Extensions that do their own file I/O don't go through DuckDB's file system.
+  `sqlite_scanner` is closed separately, at plan time (see the access-control section).
+  `postgres_scanner` is not: PostgreSQL's client library reads `~/.pgpass`, and files named by
+  `passfile=`, `sslkey=` and similar connection options, itself. So a statement that may
+  `ATTACH` a PostgreSQL database (the administrator, or a role granted `MANAGE CATALOGS`) can
+  make the server connect with a password or client key it finds there. Keep PostgreSQL
+  credentials off a server host whose users you wouldn't trust with them.
+
 ## 👥 Access control
 
 Point `rbac_store_uri` at a PostgreSQL database, the one every replica of a cluster

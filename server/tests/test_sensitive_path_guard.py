@@ -6,14 +6,11 @@ system files out of SQL's reach for every user, admins included; sensitive_paths
 mounts). The 5 policy cases are C++ unit tests (server/unit/sensitive_paths_test.cc),
 run here; the 5 server cases run below. All 10 apply.
 
-How it differs from 1.x: 1.x wrapped DuckDB's file system, which the v2 C API cannot do,
-so Hardcharger checks every path the SQL text names (literals and quoted identifiers,
-however spelled: .., symlinks, file://, ~, relative). So glob() over a directory that
-holds a protected file is refused rather than listed without that file; the 1.x case
-"ProtectedEntriesHiddenFromGlob" asserts the property that matters, that a protected
-file is never listed, and passes either way. A path an admin computes at run time
-('/etc/' || 'passwd') is not seen; non-admins can't use computed paths at all (the
-admin command guard fails closed).
+As in 1.x, the guard sits in DuckDB's file system (ServerFileGuard,
+server/src/authz/file_guard.cc), so a path is checked as DuckDB resolved it, however the
+statement computed it. A glob that reaches a protected path from above lists its other
+matches only (1.x's "ProtectedEntriesHiddenFromGlob"); one whose fixed part is protected
+is refused. test_sensitive_path_fs_layer.py covers every way SQL reaches a file.
 """
 
 import sys
@@ -27,7 +24,7 @@ from conftest import Launcher, home_env, protected_system_file, run_unit_tests
 UNIT_CASES = ["DefaultCategories", "OrdinaryPathsAreAllowed", "OtherSpellingsResolveToTheSamePath",
               "SecretDirectoryAddedAfterStartup",
               # '{' is no wildcard: DuckDB's glob has no brace expansion.
-              "BracesAreOrdinaryCharacters", "BracedPathsReachingProtectedFilesAreRefused",
+              "BracesAreOrdinaryCharacters", "PatternsAreCheckedByTheirFixedPart", "HardLinksToProtectedFilesAreRefused",
               *(["WindowsStoresAndSpellings"] if sys.platform == "win32"
                 else ["OnlyOwnCgroupFileIsReadableInProc", "EveryFileUrlForm"])]
 
@@ -82,13 +79,8 @@ def test_ordinary_files_still_readable(admin, guard_dir):
 
 
 def test_protected_entries_hidden_from_glob(admin, guard_dir):
-    pattern = f"{guard_dir}/*/*"
-    response = admin.submit(sql=f"SELECT file FROM glob('{pattern}') WHERE file LIKE '%token.txt'", arrow=True)
-    if response.status_code == 200 and response.headers["content-type"].startswith("application/vnd.apache.arrow"):
-        from warp_client import read_table
-        assert read_table(content=response.content).num_rows == 0, "a protected file was listed"
-    else:
-        blocked(problem=response.json())
+    rows = admin.query(sql=f"SELECT file FROM glob('{guard_dir}/*/*')").column("file").to_pylist()
+    assert not [f for f in rows if f.endswith("token.txt")], "a protected file was listed"
     # A pattern that can't reach a protected path lists normally.
     assert admin.query(sql=f"SELECT file FROM glob('{guard_dir}/*.csv')").num_rows == 1
 
@@ -172,11 +164,12 @@ def test_braced_paths_reaching_protected_files_are_refused(home_admin, home_dir)
     parent, _, name = SYSTEM_ACCOUNTS_FILE.rpartition("/")
     for sql in [f"SELECT content FROM read_text('{home_dir}/.ssh/{{key,other}}')",
                 "SELECT content FROM read_text('.ssh/{key}')",
-                f"SELECT file FROM glob('{home_dir}/.ss?/{{key}}')",
-                f"SELECT file FROM glob('{home_dir}/*/{{k}}*')",
-                "SELECT file FROM glob('**/{key}')",
                 f"SELECT content FROM read_text('{parent}/{{a,b}}/../{name}')"]:  # .. past a braced name
         blocked(problem=home_admin.error(sql=sql))
+    # A wildcard before the protected part lists the other matches only.
+    for sql in [f"SELECT file FROM glob('{home_dir}/.ss?/{{key}}')", f"SELECT file FROM glob('{home_dir}/*/{{k}}*')",
+                "SELECT file FROM glob('**/{key}')", f"SELECT file FROM glob('{home_dir}/.ss?/*')"]:
+        assert home_admin.query(sql=sql).num_rows == 0, sql
 
 
 def test_duckdb_does_not_expand_braces(home_launcher, home_dir):

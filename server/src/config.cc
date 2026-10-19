@@ -235,9 +235,10 @@ const std::vector<Option>& Options() {
        FLAG(admin_bypass_queue_default)},
       // Guards
       {"block_sensitive_paths", Kind::kBool,
-       "refuse SQL naming credential and system files", FLAG(block_sensitive_paths)},
+       "keep credential and system files from every statement, admins' included",
+       FLAG(block_sensitive_paths)},
       {"sensitive_paths", Kind::kList,
-       "more paths SQL may not name (comma-separated)", LIST(sensitive_paths)},
+       "more paths no statement may open, list or write (comma-separated)", LIST(sensitive_paths)},
       {"block_unredacted_secrets", Kind::kBool,
        "refuse SET allow_unredacted_secrets, even for admins", FLAG(block_unredacted_secrets)},
       {"cluster_id", Kind::kString,

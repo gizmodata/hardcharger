@@ -45,21 +45,37 @@ own changelog in `python/CHANGELOG.md`.
   hard link, case, Windows 8.3). Attaching an unrelated SQLite file still works. DuckDB-
   storage attaches are unchanged (the file-system guard already covers them). Tested as the
   administrator and as a file-system-privileged user, each with a positive twin.
+- The sensitive-path guard (`block_sensitive_paths`, on by default) now checks every path
+  in DuckDB's file system, as GizmoSQL 1.x's does, instead of scanning the SQL text for
+  path literals. The text scan missed every path the statement computes: `query('…')`, a
+  table macro's or view's argument, a prepared statement's parameter, a variable, a
+  concatenation, `file_search_path`. So an administrator, whom the guard holds too, could
+  read `~/.ssh`, cloud CLI credentials, `/etc/shadow` or `/proc` by spelling the path
+  indirectly. Now every open, stat, listing, glob, copy, move, remove and
+  directory change is checked by the path DuckDB resolved, for every principal, after
+  `..`, `~`, symlinks, second hard links and case folding: a glob reaching into a protected
+  directory from above leaves those matches out, and one whose fixed part is protected is
+  refused. The `sqlite_scanner` plan-time guard also refuses protected paths (`ATTACH …
+  (TYPE sqlite)`, `sqlite:`, `sqlite_scan`, `sqlite_query`, `sqlite_attach`). `SET
+  secret_directory` stays refused after startup. Not checked, as before: the server's
+  startup and the operator's init SQL, and files `postgres_scanner`'s libpq reads itself
+  (`~/.pgpass`, `passfile=`, `sslkey=`); the README says so.
+  `test_sensitive_path_fs_layer.py` runs against a fake home of dummy credential files:
+  each way of reaching a file, as the administrator and as a file-system-privileged user,
+  is refused, and each has a twin on a server with the guard off that reads the file.
 
 ### Fixed
 
-- The sensitive-path guard no longer refuses string literals with a `{`, such as
-  `SELECT '{"a": 1}'`, `regexp_matches(s, '^[0-9]{3}$')`, or views and masking policies
-  with such literals ("blocked access to ... (user credential store)"). It took `{` for a
-  glob wildcard reaching anything below the literal's directory, and a literal with no
-  directory part is relative to the working directory, so a server whose working
-  directory holds a protected path refused every one; that includes the Docker image,
-  whose working directory is its home, with `~/.ssh` in it. DuckDB's glob has no brace
-  expansion (its wildcards are `*`, `?` and `[`), so `{` is now an ordinary character, as
-  it is for DuckDB: `read_text('/etc/{passwd,hosts}')` names one file of that name, and a
-  braced path inside a protected directory, or with a real wildcard reaching one, is
-  still refused. `test_sensitive_path_guard.py` covers JSON and regex literals, views,
-  masking policies, the refusals, and that DuckDB still doesn't expand braces.
+- The sensitive-path guard no longer refuses harmless string literals. It used to scan the
+  SQL text for literals that looked like paths, and a literal with no directory part is
+  relative to the working directory, so a server whose working directory holds a protected
+  path (the Docker image's is its home, with `~/.ssh` in it) refused, as "user credential
+  store", every literal with a `{` (JSON, regex quantifiers such as `'^[0-9]{3}$'` or
+  `'(\d{2})'`, `format('{:,}', n)`), `'*'` and `'.*'`, in queries, views and masking
+  policies alike. SQL text is no longer scanned for paths at all (see Security), so
+  literals, `'~/.ssh/id_rsa'` used as a value included, work as anywhere else.
+  `test_sensitive_path_fs_layer.py` and `test_sensitive_path_guard.py` cover them, with the
+  server's working directory a home holding `~/.ssh`.
 
 ## [0.3.0] - 2026-10-18
 

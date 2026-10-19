@@ -623,8 +623,24 @@ std::optional<std::string> SensitivePaths::Check(const std::string& path) const 
   const fs::path file = PathFromUtf8(local);
   for (const auto& entry : entries) {
     const fs::path protected_path = PathFromUtf8(entry.path);
-    if (!fs::is_regular_file(protected_path, ec)) continue;
-    if (fs::equivalent(file, protected_path, ec) && !ec) return entry.category;
+    if (fs::is_regular_file(protected_path, ec)) {
+      if (fs::equivalent(file, protected_path, ec) && !ec) return entry.category;
+      continue;
+    }
+    // A protected directory (~/.ssh, ~/.aws, ...): the files in it, at any depth (its
+    // symlinks aren't followed: what they point to is checked by its own path). /proc and
+    // /dev/fd hold nothing a hard link can name. A directory too large to walk refuses.
+    if (entry.category == kProcFs || !fs::is_directory(protected_path, ec)) continue;
+    constexpr int kMaxFiles = 100000;
+    int seen = 0;
+    for (fs::recursive_directory_iterator it(protected_path, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+      if (++seen > kMaxFiles) return entry.category;
+      std::error_code file_ec;
+      if (it->is_regular_file(file_ec) && fs::equivalent(file, it->path(), file_ec) && !file_ec) {
+        return entry.category;
+      }
+    }
   }
   return std::nullopt;
 }
