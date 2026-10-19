@@ -1,0 +1,215 @@
+{
+ "source": "https://gizmodata.com/blog/tpch-1tb-graviton5-80-seconds (2026-09-04), raw-numbers table",
+ "note": "runs are published to 2 decimals, means to 3",
+ "instance": "r9gd.24xlarge",
+ "region": "us-east-2",
+ "price_per_hour_usd": 7.69,
+ "duckdb": "v1.5.5",
+ "runner": "benchmark-flight-sql --num-query-runs 3, port 443, TLS",
+ "total_of_means_s": 80.475,
+ "published_run_totals_s": [
+  84.29,
+  79.04,
+  78.1
+ ],
+ "queries": [
+  {
+   "query": 1,
+   "runs_s": [
+    5.35,
+    1.69,
+    1.68
+   ],
+   "mean_s": 2.905
+  },
+  {
+   "query": 2,
+   "runs_s": [
+    0.85,
+    0.47,
+    0.55
+   ],
+   "mean_s": 0.624
+  },
+  {
+   "query": 3,
+   "runs_s": [
+    2.69,
+    2.5,
+    2.5
+   ],
+   "mean_s": 2.561
+  },
+  {
+   "query": 4,
+   "runs_s": [
+    3.09,
+    2.23,
+    2.37
+   ],
+   "mean_s": 2.563
+  },
+  {
+   "query": 5,
+   "runs_s": [
+    2.31,
+    2.06,
+    2.34
+   ],
+   "mean_s": 2.237
+  },
+  {
+   "query": 6,
+   "runs_s": [
+    0.6,
+    0.62,
+    0.58
+   ],
+   "mean_s": 0.599
+  },
+  {
+   "query": 7,
+   "runs_s": [
+    1.82,
+    2.0,
+    2.31
+   ],
+   "mean_s": 2.042
+  },
+  {
+   "query": 8,
+   "runs_s": [
+    2.02,
+    1.82,
+    2.5
+   ],
+   "mean_s": 2.115
+  },
+  {
+   "query": 9,
+   "runs_s": [
+    14.16,
+    13.57,
+    13.86
+   ],
+   "mean_s": 13.865
+  },
+  {
+   "query": 10,
+   "runs_s": [
+    6.05,
+    4.3,
+    4.48
+   ],
+   "mean_s": 4.947
+  },
+  {
+   "query": 11,
+   "runs_s": [
+    1.2,
+    0.84,
+    0.5
+   ],
+   "mean_s": 0.847
+  },
+  {
+   "query": 12,
+   "runs_s": [
+    1.39,
+    1.58,
+    1.64
+   ],
+   "mean_s": 1.537
+  },
+  {
+   "query": 13,
+   "runs_s": [
+    7.55,
+    8.72,
+    8.81
+   ],
+   "mean_s": 8.36
+  },
+  {
+   "query": 14,
+   "runs_s": [
+    3.23,
+    2.15,
+    2.07
+   ],
+   "mean_s": 2.487
+  },
+  {
+   "query": 15,
+   "runs_s": [
+    1.37,
+    0.97,
+    1.18
+   ],
+   "mean_s": 1.173
+  },
+  {
+   "query": 16,
+   "runs_s": [
+    2.53,
+    2.12,
+    1.95
+   ],
+   "mean_s": 2.199
+  },
+  {
+   "query": 17,
+   "runs_s": [
+    2.52,
+    2.05,
+    2.77
+   ],
+   "mean_s": 2.446
+  },
+  {
+   "query": 18,
+   "runs_s": [
+    9.73,
+    10.27,
+    10.22
+   ],
+   "mean_s": 10.075
+  },
+  {
+   "query": 19,
+   "runs_s": [
+    2.53,
+    2.72,
+    2.34
+   ],
+   "mean_s": 2.53
+  },
+  {
+   "query": 20,
+   "runs_s": [
+    2.68,
+    2.53,
+    2.62
+   ],
+   "mean_s": 2.611
+  },
+  {
+   "query": 21,
+   "runs_s": [
+    8.17,
+    12.03,
+    8.85
+   ],
+   "mean_s": 9.686
+  },
+  {
+   "query": 22,
+   "runs_s": [
+    2.46,
+    1.78,
+    1.96
+   ],
+   "mean_s": 2.066
+  }
+ ]
+}

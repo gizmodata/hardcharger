@@ -1,0 +1,99 @@
+[18:07:25] == load
+stable: lineitem 59,986,052 rows in 10.8 s
+stable: orders 15,000,000 rows in 2.2 s
+stable: customer 1,500,000 rows in 0.5 s
+stable: part 2,000,000 rows in 0.4 s
+stable: partsupp 8,000,000 rows in 1.1 s
+stable: supplier 100,000 rows in 0.1 s
+stable: nation 25 rows in 0.0 s
+stable: region 5 rows in 0.0 s
+[18:07:42] loaded /data/tpch_sf10_stable.duckdb with stable: 2.5G
+edge: lineitem 59,986,052 rows in 9.2 s
+edge: orders 15,000,000 rows in 1.7 s
+edge: customer 1,500,000 rows in 0.5 s
+edge: part 2,000,000 rows in 0.3 s
+edge: partsupp 8,000,000 rows in 1.2 s
+edge: supplier 100,000 rows in 0.1 s
+edge: nation 25 rows in 0.2 s
+edge: region 5 rows in 0.0 s
+[18:07:57] loaded /data/tpch_sf10_edge.duckdb with edge: 2.7G
+[18:07:57] == stable
+stable (pid 8728) listening on 31337, log /home/ubuntu/tpch1tb/logs/server-stable-20261019T180757Z.log
+/home/ubuntu/tpch1tb/results/sf10/stable.json: v1.5.6, 66 ok, 0 failed, total of means 3.469 s
+[18:08:10] == edge
+edge (pid 9040) listening on 31337, log /home/ubuntu/tpch1tb/logs/server-edge-20261019T180811Z.log
+/home/ubuntu/tpch1tb/results/sf10/edge.json: v2.0.0-alpha46057, 66 ok, 0 failed, total of means 2.936 s
+[18:08:23] == hardcharger
+[18:08:25] Hardcharger opens the edge-loaded file; using it
+hardcharger (pid 9508) listening on 31337, log /home/ubuntu/tpch1tb/logs/server-hardcharger-20261019T180826Z.log
+TPCH-01 run 1: 0.364 s rows=4 SUCCESS
+TPCH-01 run 2: 0.197 s rows=4 SUCCESS
+TPCH-01 run 3: 0.197 s rows=4 SUCCESS
+TPCH-02 run 1: 0.099 s rows=100 SUCCESS
+TPCH-02 run 2: 0.069 s rows=100 SUCCESS
+TPCH-02 run 3: 0.067 s rows=100 SUCCESS
+TPCH-03 run 1: 0.207 s rows=10 SUCCESS
+TPCH-03 run 2: 0.143 s rows=10 SUCCESS
+TPCH-03 run 3: 0.141 s rows=10 SUCCESS
+TPCH-04 run 1: 0.209 s rows=5 SUCCESS
+TPCH-04 run 2: 0.132 s rows=5 SUCCESS
+TPCH-04 run 3: 0.133 s rows=5 SUCCESS
+TPCH-05 run 1: 0.177 s rows=5 SUCCESS
+TPCH-05 run 2: 0.145 s rows=5 SUCCESS
+TPCH-05 run 3: 0.146 s rows=5 SUCCESS
+TPCH-06 run 1: 0.086 s rows=1 SUCCESS
+TPCH-06 run 2: 0.084 s rows=1 SUCCESS
+TPCH-06 run 3: 0.086 s rows=1 SUCCESS
+TPCH-07 run 1: 0.152 s rows=4 SUCCESS
+TPCH-07 run 2: 0.151 s rows=4 SUCCESS
+TPCH-07 run 3: 0.146 s rows=4 SUCCESS
+TPCH-08 run 1: 0.172 s rows=2 SUCCESS
+TPCH-08 run 2: 0.146 s rows=2 SUCCESS
+TPCH-08 run 3: 0.143 s rows=2 SUCCESS
+TPCH-09 run 1: 0.409 s rows=175 SUCCESS
+TPCH-09 run 2: 0.400 s rows=175 SUCCESS
+TPCH-09 run 3: 0.397 s rows=175 SUCCESS
+TPCH-10 run 1: 0.251 s rows=20 SUCCESS
+TPCH-10 run 2: 0.232 s rows=20 SUCCESS
+TPCH-10 run 3: 0.232 s rows=20 SUCCESS
+TPCH-11 run 1: 0.068 s rows=0 SUCCESS
+TPCH-11 run 2: 0.062 s rows=0 SUCCESS
+TPCH-11 run 3: 0.062 s rows=0 SUCCESS
+TPCH-12 run 1: 0.139 s rows=2 SUCCESS
+TPCH-12 run 2: 0.140 s rows=2 SUCCESS
+TPCH-12 run 3: 0.139 s rows=2 SUCCESS
+TPCH-13 run 1: 0.424 s rows=45 SUCCESS
+TPCH-13 run 2: 0.377 s rows=45 SUCCESS
+TPCH-13 run 3: 0.374 s rows=45 SUCCESS
+TPCH-14 run 1: 0.126 s rows=1 SUCCESS
+TPCH-14 run 2: 0.122 s rows=1 SUCCESS
+TPCH-14 run 3: 0.123 s rows=1 SUCCESS
+TPCH-15 run 1: 0.107 s rows=1 SUCCESS
+TPCH-15 run 2: 0.106 s rows=1 SUCCESS
+TPCH-15 run 3: 0.106 s rows=1 SUCCESS
+TPCH-16 run 1: 0.085 s rows=27840 SUCCESS
+TPCH-16 run 2: 0.120 s rows=27840 SUCCESS
+TPCH-16 run 3: 0.120 s rows=27840 SUCCESS
+TPCH-17 run 1: 0.119 s rows=1 SUCCESS
+TPCH-17 run 2: 0.119 s rows=1 SUCCESS
+TPCH-17 run 3: 0.120 s rows=1 SUCCESS
+TPCH-18 run 1: 0.317 s rows=624 SUCCESS
+TPCH-18 run 2: 0.304 s rows=624 SUCCESS
+TPCH-18 run 3: 0.305 s rows=624 SUCCESS
+TPCH-19 run 1: 0.126 s rows=1 SUCCESS
+TPCH-19 run 2: 0.116 s rows=1 SUCCESS
+TPCH-19 run 3: 0.115 s rows=1 SUCCESS
+TPCH-20 run 1: 0.138 s rows=1804 SUCCESS
+TPCH-20 run 2: 0.141 s rows=1804 SUCCESS
+TPCH-20 run 3: 0.137 s rows=1804 SUCCESS
+TPCH-21 run 1: 0.263 s rows=100 SUCCESS
+TPCH-21 run 2: 0.250 s rows=100 SUCCESS
+TPCH-21 run 3: 0.248 s rows=100 SUCCESS
+TPCH-22 run 1: 0.102 s rows=7 SUCCESS
+TPCH-22 run 2: 0.104 s rows=7 SUCCESS
+TPCH-22 run 3: 0.101 s rows=7 SUCCESS
+/home/ubuntu/tpch1tb/results/sf10/hardcharger.json: v2.0.0-alpha48624, 66 ok, 0 failed, total of means 3.811 s
+[18:08:40] == probe
+[18:08:44] probe: edge opens the DuckDB 1.5 file
+[18:08:51] probe: hardcharger opens the DuckDB 1.5 file
+[18:08:56] == done

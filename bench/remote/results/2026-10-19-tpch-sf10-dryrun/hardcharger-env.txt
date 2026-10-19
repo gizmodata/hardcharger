@@ -1,0 +1,8 @@
+system=hardcharger db=/data/tpch_sf10_edge.duckdb date=2026-10-19T18:08:25Z
+instance=r8gd.2xlarge
+8
+               total        used        free      shared  buff/cache   available
+Mem:              61           1          60           0           0          60
+/dev/md0        434G  7.5G  404G   2% /data
+7.0.0-1014-aws
+-rw-rw-r-- 1 ubuntu ubuntu 2804166656 Oct 19 18:07 /data/tpch_sf10_edge.duckdb

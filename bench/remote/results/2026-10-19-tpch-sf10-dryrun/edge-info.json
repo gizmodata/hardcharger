@@ -1,0 +1,77 @@
+{
+  "server": "edge",
+  "version": "v2.0.0-alpha46057",
+  "pragma_version": [
+    {
+      "library_version": "v2.0.0-alpha46057",
+      "source_id": "b15358c371",
+      "codename": "Cyanoptera"
+    }
+  ],
+  "database_size": [
+    {
+      "database_name": "_gizmosql_system",
+      "database_size": "0 bytes",
+      "block_size": 0,
+      "total_blocks": 0,
+      "used_blocks": 0,
+      "free_blocks": 0,
+      "wal_size": "0 bytes",
+      "memory_usage": "1.6 GiB",
+      "memory_limit": "49.3 GiB"
+    },
+    {
+      "database_name": "tpch_sf10_edge",
+      "database_size": "2.6 GiB",
+      "block_size": 262144,
+      "total_blocks": 10697,
+      "used_blocks": 10697,
+      "free_blocks": 0,
+      "wal_size": "0 bytes",
+      "memory_usage": "1.6 GiB",
+      "memory_limit": "49.3 GiB"
+    }
+  ],
+  "databases": [
+    {
+      "database_name": "_gizmosql_system",
+      "path": null,
+      "type": "duckdb",
+      "readonly": false
+    },
+    {
+      "database_name": "tpch_sf10_edge",
+      "path": "/data/tpch_sf10_edge.duckdb",
+      "type": "duckdb",
+      "readonly": false
+    }
+  ],
+  "settings": [
+    {
+      "name": "max_temp_directory_size",
+      "value": "90% of available disk space"
+    },
+    {
+      "name": "memory_limit",
+      "value": "49.3 GiB"
+    },
+    {
+      "name": "temp_directory",
+      "value": "/data/tpch_sf10_edge.duckdb.tmp"
+    },
+    {
+      "name": "threads",
+      "value": "8"
+    }
+  ],
+  "row_counts": {
+    "lineitem": 59986052,
+    "orders": 15000000,
+    "customer": 1500000,
+    "part": 2000000,
+    "partsupp": 8000000,
+    "supplier": 100000,
+    "nation": 25,
+    "region": 5
+  }
+}
