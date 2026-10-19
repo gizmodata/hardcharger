@@ -250,6 +250,8 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // True when this session is allowed everything: the administrator without catalog_access
   // rules. A restricted administrator (admin token with rules) is false.
   bool unrestricted() const { return unrestricted_; }
+  // The tenant the session's user belongs to, by name ("" for none).
+  const std::string& tenant_name() const { return tenant_name_; }
 
  private:
   SessionGuard(AccessControl& owner, duckdb_v2_connection_handle connection, Identity identity,
@@ -273,6 +275,7 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   const std::string user_id_;  // empty for the administrator
   std::string credential_;     // the user's password hash when the session started
   std::string tenant_id_;
+  std::string tenant_name_;
   int64_t scope_expires_at_ = 0;  // a scoped token's session: when the scope ends (Unix s)
   std::string tenant_catalogs_;
 

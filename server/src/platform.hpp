@@ -43,6 +43,9 @@ struct OsInfo {
 };
 OsInfo Os();
 
+// The CPU's model name ("Apple M4 Max", "AMD EPYC 9R14"); empty when the system doesn't say.
+std::string CpuModel();
+
 int64_t PhysicalMemoryBytes();
 // The process's resident memory; NaN when unknown.
 double ResidentMemoryBytes();

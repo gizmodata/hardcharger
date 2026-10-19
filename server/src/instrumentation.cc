@@ -7,6 +7,7 @@
 
 #include "duckdb_sql.hpp"
 #include "engine.hpp"
+#include "instance_info.hpp"
 #include "logging.hpp"
 #include "platform.hpp"
 #include "runtime.hpp"
@@ -45,7 +46,9 @@ CREATE TABLE IF NOT EXISTS {P}.sql_executions (
     enqueue_time TIMESTAMP WITH TIME ZONE, fetch_start_time TIMESTAMP WITH TIME ZONE,
     fetch_end_time TIMESTAMP WITH TIME ZONE, cursor_close_time TIMESTAMP WITH TIME ZONE, rows_fetched BIGINT,
     status VARCHAR NOT NULL, error_message VARCHAR, duration_ms BIGINT, total_duration_ms BIGINT,
-    query_profile JSON);
+    query_profile JSON, cancel_reason VARCHAR);
+-- Tables made before cancel_reason existed get it.
+ALTER TABLE {P}.sql_executions ADD COLUMN IF NOT EXISTS cancel_reason VARCHAR;
 CREATE OR REPLACE VIEW {P}.session_activity AS
 SELECT i.instance_id, i.hardcharger_version, i.duckdb_version, i.arrow_version, i.hostname,
        i.hostname_arg, i.server_ip, i.port, i.database_path, i.start_time AS instance_start_time,
@@ -55,7 +58,7 @@ SELECT i.instance_id, i.hardcharger_version, i.duckdb_version, i.arrow_version, 
        s.session_tag, st.statement_id, st.sql_text, st.created_time AS statement_created_time, e.execution_id,
        e.bind_parameters, e.execution_start_time, e.execution_end_time, e.rows_fetched,
        e.status AS execution_status, e.error_message, e.duration_ms, e.query_profile, st.query_tag, i.cluster_id,
-       e.fetch_start_time, e.fetch_end_time, e.cursor_close_time, e.total_duration_ms
+       e.fetch_start_time, e.fetch_end_time, e.cursor_close_time, e.total_duration_ms, e.cancel_reason
 FROM {P}.instances i
 LEFT JOIN {P}.sessions s ON i.instance_id = s.instance_id
 LEFT JOIN {P}.sql_statements st ON s.session_id = st.session_id
@@ -89,7 +92,7 @@ SELECT e.execution_id, e.statement_id, st.session_id, s.instance_id, st.sql_text
             THEN CAST(date_diff('millisecond', e.enqueue_time, e.execution_start_time) AS BIGINT) END AS queue_wait_ms,
        e.rows_fetched, e.status, e.error_message, e.duration_ms, e.query_profile, s.username, s.auth_method,
        s.peer, st.query_tag, s.session_tag, e.fetch_start_time, e.fetch_end_time, e.cursor_close_time,
-       e.total_duration_ms
+       e.total_duration_ms, e.cancel_reason
 FROM {P}.sql_executions e
 JOIN {P}.sql_statements st ON e.statement_id = st.statement_id
 JOIN {P}.sessions s ON st.session_id = s.session_id;
@@ -125,12 +128,14 @@ CREATE TABLE IF NOT EXISTS {S}.sql_executions (
     execution_end_time TIMESTAMP WITH TIME ZONE, enqueue_time TIMESTAMP WITH TIME ZONE,
     fetch_start_time TIMESTAMP WITH TIME ZONE, fetch_end_time TIMESTAMP WITH TIME ZONE,
     cursor_close_time TIMESTAMP WITH TIME ZONE, rows_fetched BIGINT, status VARCHAR NOT NULL, error_message VARCHAR,
-    duration_ms BIGINT, total_duration_ms BIGINT, query_profile JSON);
+    duration_ms BIGINT, total_duration_ms BIGINT, query_profile JSON, cancel_reason VARCHAR);
 CREATE INDEX IF NOT EXISTS sessions_instance_id ON {S}.sessions(instance_id);
 CREATE INDEX IF NOT EXISTS sql_statements_session_id ON {S}.sql_statements(session_id);
 CREATE INDEX IF NOT EXISTS sql_statements_created_time ON {S}.sql_statements(created_time);
 CREATE INDEX IF NOT EXISTS sql_executions_statement_id ON {S}.sql_executions(statement_id);
 CREATE INDEX IF NOT EXISTS sql_executions_start_time ON {S}.sql_executions(execution_start_time);
+-- Tables made before cancel_reason existed get it.
+ALTER TABLE {S}.sql_executions ADD COLUMN IF NOT EXISTS cancel_reason VARCHAR;
 CREATE OR REPLACE VIEW {S}.session_activity AS
 SELECT i.instance_id, i.hardcharger_version, i.duckdb_version, i.arrow_version, i.hostname,
        i.hostname_arg, i.server_ip, i.port, i.database_path, i.start_time AS instance_start_time,
@@ -140,7 +145,7 @@ SELECT i.instance_id, i.hardcharger_version, i.duckdb_version, i.arrow_version, 
        s.session_tag, st.statement_id, st.sql_text, st.created_time AS statement_created_time, e.execution_id,
        e.bind_parameters, e.execution_start_time, e.execution_end_time, e.rows_fetched,
        e.status AS execution_status, e.error_message, e.duration_ms, e.query_profile, st.query_tag, i.cluster_id,
-       e.fetch_start_time, e.fetch_end_time, e.cursor_close_time, e.total_duration_ms
+       e.fetch_start_time, e.fetch_end_time, e.cursor_close_time, e.total_duration_ms, e.cancel_reason
 FROM {S}.instances i
 LEFT JOIN {S}.sessions s ON i.instance_id = s.instance_id
 LEFT JOIN {S}.sql_statements st ON s.session_id = st.session_id
@@ -174,7 +179,7 @@ SELECT e.execution_id, e.statement_id, st.session_id, s.instance_id, st.sql_text
             THEN CAST(EXTRACT(EPOCH FROM (e.execution_start_time - e.enqueue_time)) * 1000 AS BIGINT) END AS queue_wait_ms,
        e.rows_fetched, e.status, e.error_message, e.duration_ms, e.query_profile, s.username, s.auth_method,
        s.peer, st.query_tag, s.session_tag, e.fetch_start_time, e.fetch_end_time, e.cursor_close_time,
-       e.total_duration_ms
+       e.total_duration_ms, e.cancel_reason
 FROM {S}.sql_executions e
 JOIN {S}.sql_statements st ON e.statement_id = st.statement_id
 JOIN {S}.sessions s ON st.session_id = s.session_id;
@@ -236,7 +241,6 @@ void Instrumentation::Attach() {
 }
 
 void Instrumentation::Start() {
-  const Config& config = runtime_.config;
   const std::string prefix = Quoted(catalog_) + "." + Quoted(schema_);
   const bool postgres =
       external_ && warpduckdb::QueryText(connection_.get(), "SELECT type FROM duckdb_databases() WHERE database_name = " +
@@ -292,23 +296,27 @@ void Instrumentation::Start() {
                            " SET stop_time = now(), status = 'stopped', stop_reason = 'unclean_shutdown' WHERE "
                            "status = 'running';");
   }
-  const OsInfo host = Os();
-  const bool tls = !config.tls_cert.empty();
+  // What hardcharger_server_info() shows too (the backend collects it at startup; without
+  // one, as in the unit tests, it is collected here, the same way).
+  if (runtime_.instance_info.instance_id.empty()) {
+    runtime_.instance_info =
+        CollectInstanceInfo(runtime_.config, runtime_.instance_id, duckdb_version_, runtime_.started_at);
+  }
+  const InstanceInfo& i = runtime_.instance_info;
   Run("INSERT INTO " + Table("instances") +
       " (instance_id, cluster_id, hardcharger_version, duckdb_version, arrow_version, hostname, "
       "hostname_arg, server_ip, port, database_path, tls_enabled, tls_cert_path, tls_key_path, mtls_required, "
       "mtls_ca_cert_path, readonly, os_platform, os_name, os_version, cpu_arch, cpu_model, cpu_count, "
       "memory_total_bytes, start_time, status, instance_tag) VALUES (" +
-      Literal(runtime_.instance_id) + ", " + Nullable(config.cluster_id) + ", " + Literal(kVersion) +
-      ", " + Literal(duckdb_version_) + ", " +
-      Literal(arrow::GetBuildInfo().version_string) + ", " + Nullable(HostName()) + ", " + Nullable(config.host) +
-      ", NULL, " + std::to_string(config.port) + ", " + Nullable(config.database) + ", " + (tls ? "true" : "false") +
-      ", " + Nullable(config.tls_cert) + ", " + Nullable(config.tls_key) + ", " +
-      (config.mtls_ca_cert.empty() ? "false" : "true") + ", " + Nullable(config.mtls_ca_cert) + ", " +
-      (config.read_only ? "true" : "false") + ", " + Nullable(host.system) + ", " + Nullable(host.node) + ", " +
-      Nullable(host.release) + ", " + Nullable(host.machine) + ", NULL, " +
-      std::to_string(std::thread::hardware_concurrency()) + ", " + std::to_string(PhysicalMemoryBytes()) + ", " +
-      Time(runtime_.started_at) + ", 'running', " + Json(config.instance_tag) + ")");
+      Literal(i.instance_id) + ", " + Nullable(i.cluster_id) + ", " + Literal(i.hardcharger_version) + ", " +
+      Literal(i.duckdb_version) + ", " + Literal(i.arrow_version) + ", " + Nullable(i.hostname) + ", " +
+      Nullable(i.hostname_arg) + ", NULL, " + std::to_string(i.port) + ", " + Nullable(i.database_path) + ", " +
+      (i.tls_enabled ? "true" : "false") + ", " + Nullable(i.tls_cert_path) + ", " + Nullable(i.tls_key_path) + ", " +
+      (i.mtls_required ? "true" : "false") + ", " + Nullable(i.mtls_ca_cert_path) + ", " +
+      (i.readonly ? "true" : "false") + ", " + Nullable(i.os_platform) + ", " + Nullable(i.os_name) + ", " +
+      Nullable(i.os_version) + ", " + Nullable(i.cpu_arch) + ", " + Nullable(i.cpu_model) + ", " +
+      std::to_string(i.cpu_count) + ", " + std::to_string(i.memory_total_bytes) + ", " + Time(i.start_time) +
+      ", 'running', " + Json(i.instance_tag) + ")");
   writer_ = std::thread([this] { WriterLoop(); });
   Log(LogLevel::kInfo, "instrumentation on", {{"catalog", catalog_}, {"schema", schema_}});
 }
@@ -441,6 +449,7 @@ void Instrumentation::ExecutionFinished(const ExecutionRecord& r) {
           ", fetch_start_time = " + Time(r.fetch_start) + ", fetch_end_time = " + Time(r.fetch_end) +
           ", cursor_close_time = " + Time(r.cursor_close) + ", rows_fetched = " + std::to_string(r.rows) +
           ", status = " + Literal(r.status) + ", error_message = " + Nullable(r.error) +
+          ", cancel_reason = " + Nullable(r.cancel_reason) +
           // Only when captured: through the postgres extension a NULL arrives as text, which
           // PostgreSQL won't store in a json column.
           (r.query_profile.empty() ? std::string() : ", query_profile = " + Json(r.query_profile)) +

@@ -180,6 +180,7 @@ The dot commands and output modes are 1.x's. What behaves differently, and why:
 | `GIZMOSQL_EDITION()`, `gizmosql.edition` | (none: no editions) |
 | `gizmosql.backend` | (none: DuckDB is the only engine) |
 | `gizmosql_settings()`, `gizmosql_sessions()`, `gizmosql_metrics()` | `hardcharger_settings()`, `hardcharger_sessions()`, `hardcharger_metrics()` (`hardcharger_settings()` has no `enterprise` column) |
+| (none) | `hardcharger_active_connections()`, `hardcharger_cancel(session_id)`, `hardcharger_server_info()`: what every session is doing, cancel one without ending it, and the server's facts and uptime (README, Introspection) |
 | `_gizmosql_system` (`gizmosql_index_info`, `gizmosql_view_definition`) | `_hardcharger_system` (`hardcharger_index_info`, `hardcharger_view_definition`) |
 | `_gizmosql_instr` | `_hardcharger_instr` |
 | `_gizmosql_logs` | `_hardcharger_logs` |
@@ -268,7 +269,7 @@ SESSION and every session in `hardcharger_sessions()`. Hardcharger differs on pu
 | files: `read_csv()`, `read_blob()`, `COPY ... FROM/TO` a file, `FROM 'file'` | allowed | refused (the database files themselves are files) |
 | INSTALL / LOAD, CREATE / DROP SECRET, EXPORT / IMPORT DATABASE | allowed | refused |
 | read the instrumentation / log catalogs | allowed (read-only) | refused (a read exposes every session's SQL text, with denied-catalog literals); hidden, as for a non-administrator |
-| `hardcharger_sessions()`, `KILL SESSION` | every session | only its own session; KILL needs an administrator without rules |
+| `hardcharger_sessions()`, `KILL SESSION` | every session | only its own principal's sessions (as for a non-administrator, in `hardcharger_active_connections()` too); KILL needs an administrator without rules |
 | CREATE MACRO / TYPE | allowed | refused (as for every non-superuser under the plan check) |
 | table functions such as `pragma_storage_info('c.t')` | allowed | only those any rules principal gets |
 | `nextval()` / `currval()` on a sequence | any | by the rules of the sequence's catalog |

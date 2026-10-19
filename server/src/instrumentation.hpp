@@ -48,6 +48,9 @@ struct ExecutionRecord {
   int64_t rows = 0;
   std::string status = "executing";  // success, error, cancelled
   std::string error;
+  // A cancelled execution's Warp SQL cancel_reason (client, timeout, killed, cancelled,
+  // session_closed, server_shutdown), when the server knows it.
+  std::string cancel_reason;
   std::string query_profile;  // DuckDB's JSON profile, when captured
 };
 

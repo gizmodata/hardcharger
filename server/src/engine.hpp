@@ -96,6 +96,9 @@ class Session : public warpduckdb::DuckDBSession {
   void CheckEnded() override;
   // Also stops a statement waiting in the statement queue.
   void Interrupt() override;
+  // Interrupt(), remembering why (Warp SQL's cancel_reason) for instrumentation and
+  // hardcharger_active_connections().
+  void Cancel(std::string_view reason) override;
 
   // ---- What the settings, SQL functions and KILL SESSION read ----
   const std::string& id() const { return id_; }
@@ -108,6 +111,21 @@ class Session : public warpduckdb::DuckDBSession {
   Runtime& runtime() const { return runtime_; }
   int64_t started_at_us() const { return started_at_us_; }
   bool running() const { return running_ > 0; }
+  // The tenant of an access-control store user ("" for none).
+  std::string tenant() const;
+
+  // What the session is doing, for hardcharger_active_connections() (safe from any thread).
+  struct Activity {
+    std::string statement;            // what it runs now, as the logs show it; empty: nothing
+    int64_t statement_started_us = 0;  // when it left the statement queue (since the epoch)
+    int64_t queued_since_us = 0;       // waiting in the statement queue since; 0: not waiting
+    bool ingesting = false;            // a bulk ingest is running
+    std::string cancel_reason;         // why its latest statement was cancelled, until the next
+    std::string session_tag_option;    // the Warp SQL session_tag option, as JSON text
+  };
+  Activity activity() const;
+  // Why the current statement was cancelled (Cancel()), or empty.
+  std::string cancel_reason() const;
 
   // Whether the session is inside a transaction (BEGIN, or autocommit off), and whether
   // that transaction failed and waits for a ROLLBACK: what Transaction() last said, for the
@@ -148,8 +166,13 @@ class Session : public warpduckdb::DuckDBSession {
   warpsql::StatementOutcome RunCommand(const Piece& piece);
   // Takes a queue slot (when the queue is on), runs `work`, and tracks its outcome
   // until its rows are read: running state, metrics, the slot.
+  // `shown`: the statement as hardcharger_active_connections() shows it (default: `sql`
+  // as the logs show it).
   warpsql::StatementOutcome Track(StatementKind kind, std::string_view sql, const std::string& statement_id,
-                                  const std::function<warpsql::StatementOutcome()>& work);
+                                  const std::function<warpsql::StatementOutcome()>& work,
+                                  std::string_view shown = {});
+  // A new statement starts: the previous one's cancellation is over.
+  void BeginStatement();
   // A catalog the server owns (instrumentation, logs) and what it is called in messages.
   struct ManagedCatalog {
     std::string name;
@@ -178,8 +201,12 @@ class Session : public warpduckdb::DuckDBSession {
 
   mutable std::mutex settings_mutex_;
   Settings settings_;
+  mutable std::mutex activity_mutex_;
+  Activity activity_;
   // Instrumentation's statement id for each prepared statement of this session.
   std::map<const warpsql::PreparedStatement*, std::string> prepared_statement_ids_;
+  // Each prepared statement's text, as the logs show it (for its executions' activity).
+  std::map<const warpsql::PreparedStatement*, std::string> prepared_sql_;
 };
 
 // The session whose statement this thread is running, for the SQL functions; null
