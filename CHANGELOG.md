@@ -158,6 +158,20 @@ own changelog in `python/CHANGELOG.md`.
   already was; `docs/migrating-from-gizmosql.md` documents it.
   `test_view_catalog_schema_same_name.py` covers it with access control on and off.
 
+### Security
+
+- The private-file guard now also covers extensions that open files outside DuckDB's file
+  system. `sqlite_scanner` opens the file with SQLite's own library, so `ATTACH '<path>'
+  (TYPE sqlite)`, the `sqlite:` path prefix, and the `sqlite_scan` / `sqlite_query` /
+  `sqlite_attach` table functions bypassed the file-system guard; a SQLite file created
+  where the database's WAL goes made a committed INSERT vanish after a crash and restart.
+  These are refused at plan time, once the path is resolved, whenever it names one of the
+  server's own files or a sibling (the store, database, instrumentation and log files, with
+  their WAL and temporary siblings), by every spelling (computed, `..`, relative, symlink,
+  hard link, case, Windows 8.3). Attaching an unrelated SQLite file still works. DuckDB-
+  storage attaches are unchanged (the file-system guard already covers them). Tested as the
+  administrator and as a file-system-privileged user, each with a positive twin.
+
 ### Documentation
 
 - README: "Why Hardcharger instead of Quack?", a feature comparison with DuckDB's Quack

@@ -14,10 +14,16 @@
 #include <duckdb/common/file_system.hpp>
 #include <duckdb/common/memory_mapped_file.hpp>
 #include <duckdb/common/multi_file/multi_file_list.hpp>
+#include <duckdb/common/string_util.hpp>
 #include <duckdb/common/virtual_file_system.hpp>
 #include <duckdb/main/capi_v2/capi_v2_internal.hpp>
 #include <duckdb/main/config.hpp>
 #include <duckdb/main/database.hpp>
+#include <duckdb/main/database_path_and_type.hpp>
+#include <duckdb/main/extension_helper.hpp>
+#include <duckdb/planner/operator/logical_attach.hpp>
+#include <duckdb/planner/operator/logical_get.hpp>
+#include <duckdb/planner/planner_extension.hpp>
 
 #include "authz/authz.hpp"
 #include "guards.hpp"
@@ -171,12 +177,108 @@ class PrivateFileGuard : public dd::FileSystem {
   std::shared_ptr<const PrivateFiles> files_;
 };
 
+// ---- The attach guard ----
+//
+// The file-system guard above closes every path DuckDB's own file system opens. An
+// extension that does its own file I/O never reaches it: sqlite_scanner opens the file
+// with SQLite's C API (ATTACH '<path>' (TYPE sqlite), the sqlite: path prefix, and the
+// sqlite_scan / sqlite_query / sqlite_attach table functions), so a statement could create
+// or read one of the server's own files through it (a SQLite file written where the
+// database's WAL goes made a committed INSERT vanish after a crash and restart). So, at
+// plan time (after binding, when a computed path -- a concatenation, a variable, a
+// subquery -- has been resolved to a string), any attach or table function whose storage
+// is not DuckDB's own is refused when its path names one of the server's files or a
+// sibling, by every spelling PrivateFiles knows (relative, .., symlink, hard link, case,
+// 8.3). DuckDB-storage attaches are left alone: the file-system guard already covers them,
+// and the server's own startup attaches its files that way.
+
+// The list of table functions that open a local database file outside DuckDB's file
+// system. postgres_scanner and ducklake take a connection string or go through the file
+// system, and httpfs is remote, so only sqlite_scanner's are here.
+bool OpensFileOutsideFileSystem(const std::string& function_name) {
+  const std::string name = dd::StringUtil::Lower(function_name);
+  return name == "sqlite_scan" || name == "sqlite_query" || name == "sqlite_attach";
+}
+
+class AttachGuardInfo : public dd::PlannerExtensionInfo {
+ public:
+  explicit AttachGuardInfo(std::shared_ptr<const PrivateFiles> files) : files(std::move(files)) {}
+  std::shared_ptr<const PrivateFiles> files;
+};
+
+// Refuses `path` when it is one of the server's own files (or a sibling). `path` is the
+// bare filesystem path, any storage-type prefix already stripped.
+void RefuseIfPrivate(const PrivateFiles& files, const std::string& path) {
+  if (path.empty()) return;
+  if (auto entry = files.Find(path, /*thorough=*/true)) {
+    throw dd::PermissionException(PrivateFileMessage(path, entry->category));
+  }
+}
+
+// An attach's effective storage type, lower-cased and alias-resolved (sqlite3 -> sqlite),
+// and the path with any type prefix stripped. db_type is empty for a DuckDB-storage attach
+// (an explicit TYPE duckdb, or none, when DuckDB reads the file's magic bytes -- a path
+// that is a DuckDB file, which the file-system guard already covers).
+std::string AttachStorageType(dd::AttachInfo& info, std::string& path) {
+  path = info.path;
+  std::string db_type;
+  for (const auto& [key, value] : info.options) {
+    if (dd::StringUtil::CIEquals(key, "type") && !value.IsNull()) {
+      db_type = dd::StringUtil::Lower(value.ToString());
+    }
+  }
+  if (db_type.empty()) {
+    // sqlite:/path, postgres:dbname, ... : the prefix names the storage and is stripped.
+    dd::DBPathAndType::ExtractExtensionPrefix(path, db_type);
+  }
+  if (db_type.empty()) return "";
+  db_type = dd::StringUtil::Lower(dd::ExtensionHelper::ApplyExtensionAlias(db_type));
+  return db_type == "duckdb" ? "" : db_type;
+}
+
+void CheckPlan(const PrivateFiles& files, dd::LogicalOperator& op) {
+  if (op.type == dd::LogicalOperatorType::LOGICAL_ATTACH) {
+    auto& info = *op.Cast<dd::LogicalAttach>().info;
+    std::string path;
+    if (!AttachStorageType(info, path).empty()) RefuseIfPrivate(files, path);
+  } else if (op.type == dd::LogicalOperatorType::LOGICAL_GET) {
+    auto& get = op.Cast<dd::LogicalGet>();
+    if (OpensFileOutsideFileSystem(get.function.GetName().GetIdentifierName())) {
+      // The database file is the first positional argument (sqlite_attach('<path>'),
+      // sqlite_scan('<path>', '<table>'), sqlite_query('<path>', '<sql>')).
+      for (const auto& parameter : get.parameters) {
+        if (parameter.type().id() == dd::LogicalTypeId::VARCHAR && !parameter.IsNull()) {
+          RefuseIfPrivate(files, parameter.ToString());
+          break;
+        }
+      }
+    }
+  }
+  for (auto& child : op.children) {
+    if (child) CheckPlan(files, *child);
+  }
+}
+
+void AttachGuardPostBind(dd::PlannerExtensionInput& input, dd::BoundStatement& statement) {
+  auto* info = dynamic_cast<AttachGuardInfo*>(input.info.get());
+  if (!info || !info->files || !statement.plan) return;
+  CheckPlan(*info->files, *statement.plan);
+}
+
 }  // namespace
 
 void InstallPrivateFileGuard(duckdb_v2_instance_handle instance, std::shared_ptr<const PrivateFiles> files) {
   auto& database = *dd::capiv2::Convert(instance)->GetDatabase().instance;
-  auto& vfs = dynamic_cast<dd::VirtualFileSystem&>(*dd::DBConfig::GetConfig(database).file_system);
-  vfs.RegisterSubSystem(dd::make_uniq<PrivateFileGuard>(vfs, std::move(files)));
+  auto& config = dd::DBConfig::GetConfig(database);
+  auto& vfs = dynamic_cast<dd::VirtualFileSystem&>(*config.file_system);
+  vfs.RegisterSubSystem(dd::make_uniq<PrivateFileGuard>(vfs, files));
+  // And the extensions that open files outside that file system (sqlite_scanner): refused
+  // at plan time by the resolved path. Runs for every connection, the server's own
+  // included, which attach their files as DuckDB storage and so are never caught here.
+  dd::PlannerExtension extension;
+  extension.post_bind_function = AttachGuardPostBind;
+  extension.planner_info = dd::make_shared_ptr<AttachGuardInfo>(std::move(files));
+  dd::PlannerExtension::Register(config, std::move(extension));
 }
 
 }  // namespace hardcharger::authz
