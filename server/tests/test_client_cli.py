@@ -373,6 +373,39 @@ def test_ctrl_c_stops_a_script_waiting_for_input(server):
     assert "before" in process.stdout.read()
 
 
+# A non-interactive shell starts a background job (`cmd &`) with SIGINT ignored. The
+# client's signal watcher took SIGINT with sigwait() and was woken at exit by a SIGINT sent
+# to its own thread, which an ignored SIGINT never delivers: the client printed its result
+# and then waited forever. Each way a script starts it in the background, the job must end
+# on its own, with its exit code.
+BACKGROUND_STARTS = {
+    "plain": "{client} -c 'SELECT 41 + 1' > {out} &",
+    "stdin_dev_null": "{client} -c 'SELECT 41 + 1' > {out} < /dev/null &",
+    "stdin_closed_pipe": ": | {client} -c 'SELECT 41 + 1' > {out} &",
+    "script_on_a_pipe": "echo 'SELECT 41 + 1;' | {client} > {out} &",
+}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shells' background jobs (SIGINT ignored)")
+@pytest.mark.parametrize("start", BACKGROUND_STARTS)
+def test_a_background_job_in_a_script_exits_by_itself(server, tmp_path, start):
+    out = tmp_path / "out.csv"
+    client = shlex.join([binary(), *conn_args(server), "--csv", "--no-header"])
+    deadline = int(20 * TIMEOUT_SCALE)
+    # The script waits for the job with a deadline of its own and kills it if it hangs, so
+    # nothing outlives the test.
+    script = (BACKGROUND_STARTS[start].format(client=client, out=shlex.quote(str(out))) + "\n"
+              "job=$!\n"
+              f"for _ in $(seq {deadline * 10}); do kill -0 $job 2>/dev/null || break; sleep 0.1; done\n"
+              "if kill -0 $job 2>/dev/null; then kill -9 $job; echo hung; exit 0; fi\n"
+              "wait $job; echo \"exit=$?\"\n")
+    started = time.monotonic()
+    result = run_bash(script=script, env=client_env(server=server))
+    assert result.stdout.strip() == "exit=0", (result.stdout, result.stderr, out.read_text() if out.exists() else "")
+    assert out.read_text() == "42\n"
+    assert time.monotonic() - started < 15 * TIMEOUT_SCALE
+
+
 def test_a_session_the_server_lost_is_reopened(launcher, server):
     # The server evicts a session idle for a second (it sweeps every 5 s); the next
     # statement finds it gone (session_not_found), and the client opens a new session,

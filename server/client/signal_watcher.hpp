@@ -2,6 +2,15 @@
 // thread takes it with sigwait(), so the callback runs as ordinary code (it makes HTTP
 // requests to cancel the statement), not in a signal handler. Windows: a console control
 // handler, which Windows already runs on a thread of its own.
+//
+// Shutdown must always release the watcher thread. On POSIX it is woken by a SIGINT sent
+// to that thread alone, which only works while SIGINT is not ignored: an ignored signal
+// is discarded, never delivered to sigwait(). A non-interactive shell starts background
+// jobs (`hardcharger -c ... &`) with SIGINT ignored, so the client then hung at exit,
+// waiting for the watcher. When SIGINT starts out ignored there is no Ctrl-C to watch
+// (the shell asked for none), so no thread is started; and if SIGINT has been set to
+// ignored since, the destructor restores the default action for the one signal it sends
+// (blocked in every thread, so it stays pending for sigwait()).
 #pragma once
 
 #include <atomic>
@@ -32,6 +41,8 @@ namespace hardcharger::client {
 class SignalWatcher {
  public:
   explicit SignalWatcher(std::function<void()> on_interrupt) {
+    struct sigaction current {};
+    if (sigaction(SIGINT, nullptr, &current) == 0 && current.sa_handler == SIG_IGN) return;  // nothing to watch
     sigemptyset(&mask_);
     sigaddset(&mask_, SIGINT);
     const int error = pthread_sigmask(SIG_BLOCK, &mask_, &previous_mask_);
@@ -52,11 +63,22 @@ class SignalWatcher {
   }
 
   ~SignalWatcher() {
+    if (!thread_.joinable()) return;  // SIGINT was ignored: no watcher
     stopped_.store(true);
+    // An ignored SIGINT would be discarded instead of waking the waiter.
+    struct sigaction current {};
+    const bool ignored = sigaction(SIGINT, nullptr, &current) == 0 && current.sa_handler == SIG_IGN;
+    if (ignored) {
+      struct sigaction fallback {};
+      fallback.sa_handler = SIG_DFL;
+      sigemptyset(&fallback.sa_mask);
+      sigaction(SIGINT, &fallback, nullptr);
+    }
     // A thread-directed signal wakes only our waiter, including when shutdown
     // races with an in-flight callback. No detached thread survives this scope.
     pthread_kill(thread_.native_handle(), SIGINT);
     thread_.join();
+    if (ignored) sigaction(SIGINT, &current, nullptr);  // sigwait() took the signal: none is pending
     pthread_sigmask(SIG_SETMASK, &previous_mask_, nullptr);
   }
 

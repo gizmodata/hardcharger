@@ -35,7 +35,8 @@ def results(module_launcher):
 
 
 def test_every_case_is_ported():
-    assert len(CASES) == 115, CASES
+    # 1.x's 115, plus the two shutdown cases with SIGINT ignored (a script's background job).
+    assert len(CASES) == 117, CASES
 
 
 def test_every_case_ran(results):

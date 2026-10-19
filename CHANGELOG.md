@@ -89,6 +89,17 @@ own changelog in `python/CHANGELOG.md`.
   still refused. `test_sensitive_path_guard.py` covers JSON and regex literals, views,
   masking policies, the refusals, and that DuckDB still doesn't expand braces.
 
+- The `hardcharger` CLI exits when a script starts it in the background
+  (`hardcharger ... -c 'SELECT 1' &`). A non-interactive shell starts background jobs
+  with SIGINT ignored, and the client's Ctrl-C watcher was woken at exit by a SIGINT to
+  its own thread, which an ignored SIGINT never delivers: the client printed its result
+  and then waited forever. With SIGINT ignored from the start the client starts no
+  watcher (there is no Ctrl-C to take); if it is ignored later, shutdown restores the
+  default action for its one wake signal and then puts the ignore back. Ctrl-C still
+  cancels a running statement. `test_client_cli.py` runs a background job four ways
+  (plain, stdin from /dev/null, from a closed pipe, a script on a pipe), and two client
+  unit tests cover the watcher with SIGINT ignored.
+
 ### Documentation
 
 - README: "Why Hardcharger instead of Quack?", a feature comparison with DuckDB's Quack
