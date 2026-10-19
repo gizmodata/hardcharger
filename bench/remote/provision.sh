@@ -6,6 +6,14 @@
 #   provision.sh status    every instance tagged Purpose=hardcharger-benchmark
 #   provision.sh down      terminate everything tagged Purpose=hardcharger-benchmark and
 #                          delete the key pairs, security groups and placement group
+#   provision.sh canary    one small instance (t4g.nano unless TYPE is set) in us-east-2,
+#                          to check the self-destruct below; `down` removes it as well
+#
+# Every instance destroys itself: it shuts down LIFETIME_MIN minutes after boot (default
+# 120; `shutdown -h +N` from its user data), and shutdown terminates it
+# (--instance-initiated-shutdown-behavior terminate), with its volumes. A controller that
+# dies mid-run (a laptop that sleeps) leaves nothing billing past that. Set LIFETIME_MIN
+# above the run's length; `sudo shutdown -c` on a VM cancels it, `shutdown -h +N` resets it.
 #
 # Needs AWS credentials in the environment (never printed). Every resource is tagged
 # Name=hardcharger-bench-*, Purpose=hardcharger-benchmark, Owner=claude. SSH is open only
@@ -20,8 +28,11 @@ EAST=${EAST:-us-east-2}
 WEST=${WEST:-us-west-2}
 EAST_AZ=${EAST_AZ:-us-east-2c}
 WEST_AZ=${WEST_AZ:-us-west-2c}
+TYPE_SET=${TYPE:-}                                # what the caller set, if anything
 TYPE=${TYPE:-c8gn.8xlarge}
 MARKET=${MARKET:-spot}
+LIFETIME_MIN=${LIFETIME_MIN:-120}               # minutes after boot each instance terminates itself
+[[ "$LIFETIME_MIN" =~ ^[1-9][0-9]*$ ]] || { echo "LIFETIME_MIN must be a positive number of minutes" >&2; exit 2; }
 STATE=${STATE:-$HOME/.hardcharger-bench}      # key and instance addresses (never committed)
 mkdir -p "$STATE"
 KEY_NAME=hardcharger-bench-key
@@ -75,7 +86,7 @@ allow() { # allow <region> <sg> <port> <cidr-or-sg>
 }
 
 launch() { # launch <region> <az> <sg> <name> [placement-group] -> instance id
-  local ami subnet market=() placement=()
+  local ami subnet market=() placement=() user_data
   ami=$(aws ssm get-parameter --region "$1" --name "$AMI_PARAM" --query Parameter.Value --output text)
   subnet=$(aws ec2 describe-subnets --region "$1" \
     --filters Name=availability-zone,Values="$2" Name=default-for-az,Values=true \
@@ -83,11 +94,14 @@ launch() { # launch <region> <az> <sg> <name> [placement-group] -> instance id
   [ "$MARKET" = spot ] && market=(--instance-market-options \
     'MarketType=spot,SpotOptions={SpotInstanceType=one-time,InstanceInterruptionBehavior=terminate}')
   [ -n "${5:-}" ] && placement=(--placement "GroupName=$5")
+  # cloud-init runs this as root at first boot: the self-destruct (see the top).
+  user_data=$(printf '#!/bin/bash\nshutdown -h +%s "hardcharger-bench: lifetime of %s minutes reached"\n' \
+    "$LIFETIME_MIN" "$LIFETIME_MIN")
   aws ec2 run-instances --region "$1" --image-id "$ami" --instance-type "$TYPE" \
     --key-name "$KEY_NAME" --subnet-id "$subnet" --security-group-ids "$3" \
     --associate-public-ip-address ${placement[@]+"${placement[@]}"} ${market[@]+"${market[@]}"} \
-    --instance-initiated-shutdown-behavior terminate \
-    --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}' \
+    --instance-initiated-shutdown-behavior terminate --user-data "$user_data" \
+    --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=${VOLUME_GB:-100},VolumeType=gp3,DeleteOnTermination=true}" \
     --tag-specifications "$(tags instance "$4")" "$(tags volume "$4")" "$(tags network-interface "$4")" \
     --query 'Instances[0].InstanceId' --output text
 }
@@ -127,6 +141,15 @@ case "${1:-}" in
     record "$WEST" "$w" client-wan
     server_sg=$(ensure_sg "$EAST" hardcharger-bench-server-sg)
     for p in "${SERVER_PORTS[@]}"; do allow "$EAST" "$server_sg" "$p" "$(cat "$STATE/client-wan.public")/32"; done
+    ;;
+  canary)
+    ip=$(my_ip)
+    ensure_key "$EAST"
+    canary_sg=$(ensure_sg "$EAST" hardcharger-bench-client-sg)
+    allow "$EAST" "$canary_sg" 22 "$ip/32"
+    c=$(TYPE=${TYPE_SET:-t4g.nano} VOLUME_GB=8 launch "$EAST" "$EAST_AZ" "$canary_sg" hardcharger-bench-canary)
+    record "$EAST" "$c" canary
+    echo "canary $c terminates itself $LIFETIME_MIN minutes after boot"
     ;;
   status)
     for r in "$EAST" "$WEST"; do
