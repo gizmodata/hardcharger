@@ -23,6 +23,7 @@ All notable changes to this project are documented here. The format follows
 - A `python-v*` GitHub Release is never made the repository's latest release, which stays the
   server's (what `releases/latest` and the installer resolve), and a PEP 440 pre-release
   (`python-v2.0.0rc1`) is marked a pre-release.
+- The README's banner is the Hardcharger™ bull logo (the horizontal mascot lockup).
 
 ### Fixed
 

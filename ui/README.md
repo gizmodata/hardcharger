@@ -1,6 +1,9 @@
 <p align="center">
   <a href="https://gizmodata.com">
-    <img src="../docs/assets/hardcharger-banner.svg" alt="Hardcharger by GizmoData" width="100%">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="../docs/assets/hardcharger-banner-dark.png">
+      <img src="../docs/assets/hardcharger-banner-light.png" alt="Hardcharger™" width="600">
+    </picture>
   </a>
 </p>
 
@@ -143,13 +146,15 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
   once) collects the access token with the secret, or shows why the sign-in failed. A
   fragment naming a flow this tab didn't start is ignored. e2e: `oauth.spec.ts`, against a
   mock identity provider (`test/e2e/idp.ts`).
-- 🎨 GizmoData's look: the README banner's orange and Warp blue, light and dark themes (the
-  system's choice until you pick one), Inter embedded in the build (SIL Open Font License 1.1,
+- 🎨 The Hardcharger™ bull logo (its light or dark variant to match the theme), GizmoData's
+  orange and Warp blue, light and dark themes (the system's choice until you pick one), Inter
+  embedded in the build (SIL Open Font License 1.1,
   served as `/ui/fonts/Inter-LICENSE.txt`).
 
 ## 🛡️ Serving it
 
-`npm run build` writes a self-contained directory, `dist/`: `index.html`, `favicon.png`,
+`npm run build` writes a self-contained directory, `dist/`: `index.html`, the icons (`favicon.ico`,
+`favicon.svg`, `apple-touch-icon.png`, `app-192.png`, `app-512.png`) and `manifest.json`,
 `fonts/Inter-LICENSE.txt`, and `assets/` with content-hashed file names. The server embeds it and serves it with these rules
 (written down once in [`scripts/ui-contract.mjs`](scripts/ui-contract.mjs), which
 `scripts/serve.mjs` and the e2e tests use):

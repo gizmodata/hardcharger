@@ -1,4 +1,4 @@
-/* Hardcharger UI, in the README banner's brand (docs/assets/hardcharger-banner.svg): orange
+/* Hardcharger UI, in the GizmoData brand colors of the original README banner: orange
    #f15a24 and Warp blue #31a8db (the gradient pair), dark surfaces #0b1416 / #101f26, light
    text #f5f8f7 and muted #c9d6d4. The light theme takes the same hues, darkened where text
    needs WCAG AA contrast (4.5:1) on its surface: orange #b93d0e, blue #1a6f96. The gradient
@@ -144,55 +144,69 @@ select {
   display: none !important;
 }
 
-/* Brand marks (components/Brand.tsx) */
+/* Brand marks (components/Brand.tsx): the logo variant for the theme's background. */
 .wordmark {
   display: inline-flex;
-  align-items: center;
-  gap: 10px;
+  align-items: flex-start;
   color: var(--text);
   text-decoration: none;
 }
-.wordmark-text {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 3px;
+.wordmark img {
+  display: block;
+  max-width: 100%;
+  height: auto;
 }
-.wordmark-name {
-  font-weight: 800;
-  letter-spacing: -0.02em;
+.wordmark .logo-dark {
+  display: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .wordmark .logo-light {
+    display: none;
+  }
+  :root:not([data-theme="light"]) .wordmark .logo-dark {
+    display: block;
+  }
+}
+:root[data-theme="dark"] .wordmark .logo-light {
+  display: none;
+}
+:root[data-theme="dark"] .wordmark .logo-dark {
+  display: block;
+}
+.wordmark .tm {
+  margin-left: 1px;
+  font-size: 9px;
+  font-weight: 700;
   line-height: 1;
 }
-.wordmark-name .tm {
-  margin-left: 0.06em;
-  font-size: 0.45em;
-  font-weight: 700;
-  vertical-align: 0.95em;
-  line-height: 0;
+.wordmark-signin,
+.wordmark-about {
+  justify-content: center;
+  width: 100%;
 }
-.wordmark-bar {
-  height: 3px;
-  border-radius: 2px;
-  background: var(--hc-gradient);
+.wordmark-header .tm {
+  margin-top: 6px;
 }
-.wordmark-header .wordmark-name {
-  font-size: 17px;
+/* In the stacked lockup the ™ sits by the lettering, at the foot of the artwork. */
+.wordmark-signin .tm {
+  align-self: flex-end;
+  margin-bottom: 24px;
+  font-size: 12px;
 }
-.wordmark-signin {
-  gap: 14px;
+.wordmark-about .tm {
+  align-self: flex-end;
+  margin-bottom: 18px;
+  font-size: 10px;
 }
-.wordmark-signin .wordmark-name {
-  font-size: 30px;
+/* About: the stacked logo above the title, the close button in the corner. */
+.about-brand {
+  position: relative;
+  padding: 18px 16px 4px;
 }
-.wordmark-signin .wordmark-name .tm {
-  margin-left: 0.06em;
-  font-size: 0.45em;
-  font-weight: 700;
-  vertical-align: 0.95em;
-  line-height: 0;
-}
-.wordmark-bar {
-  height: 5px;
-  border-radius: 3px;
+.about-brand .about-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
 }
 .signin-footer {
   display: flex;

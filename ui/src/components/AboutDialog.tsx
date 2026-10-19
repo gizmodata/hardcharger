@@ -1,8 +1,7 @@
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import logo from "../assets/gizmodata-logo.png";
-import { TrademarkNotice } from "./Brand";
+import { CopyrightNotice, TrademarkNotice, Wordmark } from "./Brand";
 import { errorMessage, useSession } from "../session";
 
 export function AboutDialog({ onClose }: { onClose: () => void }) {
@@ -40,12 +39,14 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <dialog ref={dialog} className="dialog" onClose={onClose} aria-labelledby="about-title">
-      <div className="dialog-head">
-        <img src={logo} alt="" width={28} height={30} />
-        <h2 id="about-title">About this server</h2>
-        <button type="button" className="btn btn-ghost btn-icon" onClick={onClose} aria-label="Close">
+      <div className="about-brand" data-testid="about-brand">
+        <Wordmark size="about" />
+        <button type="button" className="btn btn-ghost btn-icon about-close" onClick={onClose} aria-label="Close">
           <X size={16} />
         </button>
+      </div>
+      <div className="dialog-head">
+        <h2 id="about-title">About this server</h2>
       </div>
       <table className="kv" data-testid="about-table">
         <tbody>
@@ -79,6 +80,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
           (this web UI&rsquo;s; the server&rsquo;s are in its THIRD_PARTY_NOTICES.md, and{" "}
           <code>hardcharger-server --licenses</code> prints both).
         </p>
+        <CopyrightNotice />
         <TrademarkNotice />
       </div>
     </dialog>

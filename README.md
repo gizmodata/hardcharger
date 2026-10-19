@@ -1,6 +1,9 @@
 <p align="center">
   <a href="https://gizmodata.com">
-    <img src="docs/assets/hardcharger-banner.svg" alt="Hardcharger™ by GizmoData™: the DuckDB 2.0 server that speaks Warp SQL" width="100%">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hardcharger-banner-dark.png">
+      <img src="docs/assets/hardcharger-banner-light.png" alt="Hardcharger™" width="600">
+    </picture>
   </a>
 </p>
 

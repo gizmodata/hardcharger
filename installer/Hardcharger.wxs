@@ -7,6 +7,9 @@
       -bindpath Stage=<the unpacked hardcharger-windows-*> -bindpath installer
       -ext WixToolset.UI.wixext -o Hardcharger-<arch>.msi
 
+  installer\ also holds the icon and the dialog bitmaps (hardcharger.ico, banner.bmp,
+  dialog.bmp), found through the unnamed bind path.
+
   It installs bin\ (hardcharger-server.exe and the hardcharger.exe client), LICENSE,
   CHANGELOG.md and the third-party notices (THIRD_PARTY_NOTICES.md, with the Windows
   build's vcpkg libraries at its end, and THIRD_PARTY_NOTICES-web-ui.txt) under
@@ -32,6 +35,12 @@
     <Media Id="1" Cabinet="hardcharger.cab" EmbedCab="yes" />
 
     <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+    <!-- The Hardcharger bull (docs/assets/brand): the icon in Installed apps, the inner
+         pages' top banner (493x58) and the welcome/finish pages' panel (493x312). -->
+    <Icon Id="HardchargerIcon" SourceFile="hardcharger.ico" />
+    <Property Id="ARPPRODUCTICON" Value="HardchargerIcon" />
+    <WixVariable Id="WixUIBannerBmp" Value="banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="dialog.bmp" />
 
     <Feature Id="ProductFeature" Title="Hardcharger" Level="1">
       <ComponentGroupRef Id="ProgramFiles" />
