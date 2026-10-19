@@ -183,7 +183,9 @@ def test_bulk_ingest(session):
     response = session.ingest(table=pa.table({"u": pa.array([decimal.Decimal(MAX_U)], type=pa.decimal256(39, 0)),
                                               "h": pa.array([0], type=pa.decimal128(38, 0))}),
                               name="wide_in", mode="append")
-    assert response.status_code == 400 and "Unsupported Internal Arrow Type for Decimal d:39,0,256" in response.text
+    # Warp SQL §8.1: 415 unsupported_arrow_type (it was DuckDB's own 400 sql_error).
+    assert response.status_code == 415 and response.json()["code"] == "unsupported_arrow_type", response.text
+    assert "decimal256(39, 0) cannot be ingested" in response.json()["detail"], response.text
     assert session.scalar(sql="SELECT count(*) FROM wide_in") == 3
 
 
