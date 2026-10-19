@@ -280,12 +280,16 @@ def test_system_files_are_refused(guarded, who):
     client = guarded.principals[who]
     refused(client=client, sql=f"SELECT content FROM read_text('{protected_system_file(posix='/etc/shadow')}')",
             category="system account files")
+    # Kubernetes' secret mounts: Windows pods get them at C:\var\run\secrets.
+    secrets = f"{os.environ.get('SystemDrive', 'C:')}/var/run" if sys.platform == "win32" else "/var/run"
+    refused(client=client, sql=f"SELECT content FROM read_text('{secrets}/secrets/kubernetes.io/token')",
+            category="container and Kubernetes secrets")
+    # POSIX only: Windows has no /etc/sudoers or /proc, so the guard's Windows list doesn't
+    # name them (its account database, the SAM, is the shadow case above).
     if sys.platform != "win32":
         refused(client=client, sql="SELECT content FROM read_text('/etc/sudoers')", category="system account files")
         refused(client=client, sql="SELECT content FROM read_text('/proc/self/environ')",
                 category="process information (/proc)")
-        refused(client=client, sql="SELECT content FROM read_text('/var/run/secrets/kubernetes.io/token')",
-                category="container and Kubernetes secrets")
 
 
 # ---- Attaching ----
