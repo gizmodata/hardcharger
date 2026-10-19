@@ -40,7 +40,7 @@ own changelog in `python/CHANGELOG.md`.
   file's contents and its failures), `about.spec.ts` (Chromium and WebKit), the tarball smoke
   test and the image smoke test.
 - Web UI, **API** page (`/ui/api`, next to Query and Sessions): the server's Warp SQL API in
-  Swagger UI (swagger-ui-dist 5.34.0, in the build, loaded only when the page is opened:
+  Swagger UI (swagger-ui-dist 5.33.3, in the build, loaded only when the page is opened:
   +1.7 MB, +435 KiB gzipped in the binary), from the OpenAPI 3.1 document the server now serves
   at `GET /warp/v1/openapi.json` (no sign-in; discovery lists capability `openapi` and
   `links.openapi`). Every request goes to the server's own origin (no server switcher, no
