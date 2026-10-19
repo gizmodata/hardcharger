@@ -65,6 +65,16 @@ class Backend : public warpduckdb::DuckDBBackend {
   std::unique_ptr<CatalogLog> catalog_log_;  // last: it takes the lines of everything above
 };
 
+// The ids one execution is logged and recorded in instrumentation under (Warp SQL ids,
+// the ones clients hold). A submitted statement's statement and execution share its q_...
+// id; the statements of a submitted script are its executions q_....1, q_....2, ... (by
+// position in the script); a prepared statement's executions are each request's own q_...
+struct ExecutionIds {
+  std::string statement;  // its sql_statements row: the submitted q_..., or the prepared statement's p_...
+  std::string execution;  // q_..., or q_....N
+  bool prepared = false;  // `statement` is a prepared statement's
+};
+
 class Session : public warpduckdb::DuckDBSession {
  public:
   // With `access`, the session's connection is bound to `principal` before anything
@@ -101,6 +111,9 @@ class Session : public warpduckdb::DuckDBSession {
   void Cancel(std::string_view reason) override;
   // The request's Warp-Query-Tag (Warp SQL §2.5), for the statement about to run.
   void SetQueryTag(const boost::json::object* tag) override;
+  // The Warp SQL id the client holds for what is about to run (q_..., p_...): the id it
+  // is logged and recorded in instrumentation under.
+  void SetStatementId(std::string_view id) override;
 
   // ---- What the settings, SQL functions and KILL SESSION read ----
   const std::string& id() const { return id_; }
@@ -164,6 +177,10 @@ class Session : public warpduckdb::DuckDBSession {
   // and still live.
   void CheckAlive() const;
   std::string request_query_tag_;  // SetQueryTag()'s, as JSON text; engine thread only
+  std::string request_statement_id_;  // SetStatementId()'s; engine thread only
+  // The id of what runs now: the client's (SetStatementId()), or, for work that reached
+  // the engine without one, a new id of the server's own (x_...).
+  std::string RequestStatementId() const;
   // Runs `run` (DuckDB) under access control when the session has it.
   warpsql::StatementOutcome Guarded(std::string_view sql, bool has_parameters,
                                     const std::function<warpsql::StatementOutcome()>& run);
@@ -174,7 +191,8 @@ class Session : public warpduckdb::DuckDBSession {
   // until its rows are read: running state, metrics, the slot.
   // `shown`: the statement as hardcharger_active_connections() shows it (default: `sql`
   // as the logs show it).
-  warpsql::StatementOutcome Track(StatementKind kind, std::string_view sql, const std::string& statement_id,
+  // `ids`: what it is recorded and logged under.
+  warpsql::StatementOutcome Track(StatementKind kind, std::string_view sql, const ExecutionIds& ids,
                                   const std::function<warpsql::StatementOutcome()>& work,
                                   std::string_view shown = {});
   // A new statement starts: the previous one's cancellation is over.
@@ -209,7 +227,7 @@ class Session : public warpduckdb::DuckDBSession {
   Settings settings_;
   mutable std::mutex activity_mutex_;
   Activity activity_;
-  // Instrumentation's statement id for each prepared statement of this session.
+  // Each prepared statement's Warp SQL id (p_...), its id in the logs and instrumentation.
   std::map<const warpsql::PreparedStatement*, std::string> prepared_statement_ids_;
   // Each prepared statement's text, as the logs show it (for its executions' activity).
   std::map<const warpsql::PreparedStatement*, std::string> prepared_sql_;

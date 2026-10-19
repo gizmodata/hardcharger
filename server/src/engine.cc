@@ -17,7 +17,6 @@
 #include "platform.hpp"
 #include "settings.hpp"
 #include "sql_functions.hpp"
-#include "tokens.hpp"
 #include "version.hpp"
 #include "warpsql/server.hpp"
 
@@ -204,14 +203,18 @@ void RefuseAccessControlStatement(std::string_view sql) {
 class Execution {
  public:
   // `profile`: where DuckDB writes this execution's profile, when one is captured.
+  // `recorded`: in instrumentation; `ids`: the log fields naming it.
   Execution(Session& session, StatementKind kind, std::string sql, AdmissionSlot slot,
-            std::chrono::steady_clock::time_point started, ExecutionRecord record, std::string profile)
+            std::chrono::steady_clock::time_point started, ExecutionRecord record, bool recorded, LogFields ids,
+            std::string profile)
       : session_(session),
         kind_(kind),
         sql_(std::move(sql)),
         slot_(std::move(slot)),
         started_(started),
         record_(std::move(record)),
+        recorded_(recorded),
+        ids_(std::move(ids)),
         profile_(std::move(profile)) {
     if (auto* instrumentation = Instr()) {
       if (record_.enqueue_time) {
@@ -246,9 +249,10 @@ class Execution {
     session_.FinishRunning();
     Runtime& runtime = session_.runtime();
     if (status == "ok" && runtime.config.print_queries) {
-      session_.LogQuery(LogLevel::kInfo, "Client SQL command execution succeeded",
-                        {{"session_id", session_.id()}, {"user", session_.principal().name}, {"kind", "sql"},
-                         {"status", "success"}, {"is_internal", "false"}, {"sql", sql_}});
+      LogFields fields = {{"session_id", session_.id()}, {"user", session_.principal().name}};
+      fields.insert(fields.end(), ids_.begin(), ids_.end());
+      fields.insert(fields.end(), {{"kind", "sql"}, {"status", "success"}, {"is_internal", "false"}, {"sql", sql_}});
+      session_.LogQuery(LogLevel::kInfo, "Client SQL command execution succeeded", fields);
     }
     runtime.metrics.RecordStatement(kind_, status, error_class,
                                     std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count());
@@ -271,7 +275,7 @@ class Execution {
   }
 
  private:
-  Instrumentation* Instr() const { return record_.execution_id.empty() ? nullptr : session_.runtime().instrumentation; }
+  Instrumentation* Instr() const { return recorded_ ? session_.runtime().instrumentation : nullptr; }
 
   Session& session_;
   const StatementKind kind_;
@@ -279,6 +283,8 @@ class Execution {
   AdmissionSlot slot_;
   const std::chrono::steady_clock::time_point started_;
   ExecutionRecord record_;
+  const bool recorded_;
+  const LogFields ids_;
   const std::string profile_;
   bool ended_ = false;
   bool closed_ = false;
@@ -699,6 +705,12 @@ void Session::SetQueryTag(const json::object* tag) {
   request_query_tag_ = tag == nullptr ? std::string() : json::serialize(*tag);
 }
 
+void Session::SetStatementId(std::string_view id) { request_statement_id_ = std::string(id); }
+
+std::string Session::RequestStatementId() const {
+  return request_statement_id_.empty() ? warpsql::NewId("x") : request_statement_id_;
+}
+
 std::string Session::StatementQueryTag() const {
   return request_query_tag_.empty() ? settings().query_tag : request_query_tag_;
 }
@@ -843,16 +855,16 @@ warpsql::StatementOutcome Session::RunCommand(const Piece& piece) {
   return {};
 }
 
-warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sql, const std::string& statement_id,
+warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sql, const ExecutionIds& ids,
                                          const std::function<warpsql::StatementOutcome()>& work,
                                          std::string_view shown) {
   const auto started = std::chrono::steady_clock::now();
-  Instrumentation* const instrumentation = statement_id.empty() ? nullptr : runtime_.instrumentation;
+  Instrumentation* const instrumentation = ids.statement.empty() ? nullptr : runtime_.instrumentation;
   ExecutionRecord record;
-  if (instrumentation != nullptr) {
-    record.execution_id = RandomUuid();
-    record.statement_id = statement_id;
-  }
+  record.execution_id = ids.execution;
+  record.statement_id = ids.statement;
+  LogFields id_fields = {{"statement_id", ids.execution}};
+  if (ids.prepared) id_fields.push_back({"prepared_id", ids.statement});
   // What hardcharger_active_connections() shows, from the moment it waits in the queue.
   // (The redaction runs once: the execution's log text is the same.)
   std::string abbreviated = Abbreviate(sql);
@@ -916,9 +928,9 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
   // The execution clock starts when it leaves the queue.
   if (instrumentation != nullptr) record.start = std::chrono::system_clock::now();
   std::string profile;
-  if (!record.execution_id.empty()) profile = PrepareProfile(record.execution_id);
+  if (instrumentation != nullptr) profile = PrepareProfile(record.execution_id);
   auto execution = std::make_shared<Execution>(*this, kind, std::move(abbreviated), std::move(slot), started,
-                                               std::move(record),
+                                               std::move(record), instrumentation != nullptr, id_fields,
                                                std::move(profile));
   warpsql::StatementOutcome outcome;
   try {
@@ -927,9 +939,10 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
     const std::string_view error_class = ClassifyStatementError(error.what());
     const std::string logged_error = LoggableError(sql, error.what());
     execution->End(error.code() == ErrorCode::kStatementCancelled ? "cancelled" : "error", error_class, logged_error);
-    LogQuery(LogLevel::kInfo, "statement failed",
-             {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"status", "error"},
-              {"error", logged_error}, {"sql", Abbreviate(sql)}});
+    LogFields fields = {{"session_id", id_}, {"user", principal_.name}};
+    fields.insert(fields.end(), id_fields.begin(), id_fields.end());
+    fields.insert(fields.end(), {{"kind", "sql"}, {"status", "error"}, {"error", logged_error}, {"sql", Abbreviate(sql)}});
+    LogQuery(LogLevel::kInfo, "statement failed", fields);
     if (killed_) throw KilledError();
     throw;
   }
@@ -962,19 +975,20 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
   }
   if (!rbac_) RefuseAccessControlStatement(sql);
   const bool has_parameters = !parameters.is_null();
+  // The statement's Warp SQL id (q_...): its sql_statements row, and its execution's.
+  const std::string statement_id = RequestStatementId();
   // An access-control statement (GRANT, CREATE USER, ...) is the guard's, text and all:
   // it runs one at a time, and the guard refuses anything riding along.
   if (rbac_ && authz::LooksLikeAccessControlStatement(sql)) {
-    const std::string statement_id =
-        runtime_.instrumentation != nullptr
-            ? runtime_.instrumentation->StatementCreated(*this, Abbreviate(sql), "statement", true, "")
-            : std::string();
+    if (runtime_.instrumentation != nullptr) {
+      runtime_.instrumentation->StatementCreated(*this, statement_id, Abbreviate(sql), "statement", true, "");
+    }
     if (runtime_.config.print_queries) {
       LogQuery(LogLevel::kInfo, "statement",
-               {{"session_id", id_}, {"user", principal_.name}, {"role", principal_.role}, {"kind", "sql"},
-                {"is_internal", "false"}, {"sql", Abbreviate(sql)}});
+               {{"session_id", id_}, {"user", principal_.name}, {"role", principal_.role},
+                {"statement_id", statement_id}, {"kind", "sql"}, {"is_internal", "false"}, {"sql", Abbreviate(sql)}});
     }
-    return Track(StatementKind::kOther, Abbreviate(sql), statement_id, [&] {
+    return Track(StatementKind::kOther, Abbreviate(sql), {.statement = statement_id, .execution = statement_id}, [&] {
       return Guarded(sql, has_parameters, [&] { return DuckDBSession::Execute(sql, parameters); });
     });
   }
@@ -1011,22 +1025,24 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
     // Refused or unparseable: a failed statement all the same, for metrics and the record.
     runtime_.metrics.RecordStatement(StatementKind::kOther, "error", ClassifyStatementError(error.what()), 0);
     if (runtime_.instrumentation != nullptr) {
-      runtime_.instrumentation->StatementCreated(*this, Abbreviate(sql), "statement", false, LoggableError(sql, error.what()));
+      runtime_.instrumentation->StatementCreated(*this, statement_id, Abbreviate(sql), "statement", false,
+                                                 LoggableError(sql, error.what()));
     }
     throw;
   }
-  const std::string statement_id =
-      runtime_.instrumentation != nullptr
-          ? runtime_.instrumentation->StatementCreated(*this, Abbreviate(sql), "statement", true, "")
-          : std::string();
+  if (runtime_.instrumentation != nullptr) {
+    runtime_.instrumentation->StatementCreated(*this, statement_id, Abbreviate(sql), "statement", true, "");
+  }
   if (runtime_.config.print_queries) {
     LogQuery(LogLevel::kInfo, "statement",
-          {{"session_id", id_}, {"user", principal_.name}, {"role", principal_.role}, {"kind", "sql"},
-           {"is_internal", "false"}, {"sql", Abbreviate(sql)}});
+          {{"session_id", id_}, {"user", principal_.name}, {"role", principal_.role}, {"statement_id", statement_id},
+           {"kind", "sql"}, {"is_internal", "false"}, {"sql", Abbreviate(sql)}});
   }
 
+  // One statement: its execution has the statement's id. Several: each is numbered by
+  // its place in the script (q_....1, q_....2, ...), commands included.
   if (steps.size() == 1 && !steps[0].command) {
-    auto outcome = Track(ClassifyStatement(steps[0].type), sql, statement_id, [&] {
+    auto outcome = Track(ClassifyStatement(steps[0].type), sql, {.statement = statement_id, .execution = statement_id}, [&] {
       return Guarded(sql, has_parameters, [&] { return DuckDBSession::Execute(sql, parameters); });
     });
     return outcome;
@@ -1043,7 +1059,7 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
       const std::string_view text = step.piece->text;
       outcome = Track(step.type == DUCKDB_V2_STATEMENT_TYPE_TRANSACTION ? StatementKind::kOther
                                                                        : ClassifyStatement(step.type),
-                      text, statement_id, [&] {
+                      text, {.statement = statement_id, .execution = statement_id + "." + std::to_string(i + 1)}, [&] {
                         return Guarded(text, has_parameters,
                                        [&] { return DuckDBSession::Execute(text, parameters); });
                       });
@@ -1068,10 +1084,12 @@ std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sq
     throw Error(ErrorCode::kSqlError, "SQL text must not contain a NUL byte", "22021");
   }
   const auto pieces = SplitStatements(connection(), sql);
+  // The prepared statement's Warp SQL id (p_...), what its record and log lines carry.
+  const std::string prepared_id = RequestStatementId();
   auto record = [&](bool accepted, std::string_view error) {
-    return runtime_.instrumentation != nullptr
-               ? runtime_.instrumentation->StatementCreated(*this, Abbreviate(sql), "prepared", accepted, error)
-               : std::string();
+    if (runtime_.instrumentation != nullptr) {
+      runtime_.instrumentation->StatementCreated(*this, prepared_id, Abbreviate(sql), "prepared", accepted, error);
+    }
   };
   std::unique_ptr<warpsql::PreparedStatement> prepared;
   try {
@@ -1085,8 +1103,8 @@ std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sq
     }
     if (runtime_.config.print_queries) {
       LogQuery(LogLevel::kInfo, "prepare",
-               {{"session_id", id_}, {"user", principal_.name}, {"kind", "sql"}, {"is_internal", "false"},
-                {"sql", Abbreviate(sql)}});
+               {{"session_id", id_}, {"user", principal_.name}, {"prepared_id", prepared_id}, {"kind", "sql"},
+                {"is_internal", "false"}, {"sql", Abbreviate(sql)}});
     }
     prepared = guard_ ? guard_->Prepare(sql, [&] { return DuckDBSession::Prepare(sql); })
                       : DuckDBSession::Prepare(sql);
@@ -1094,7 +1112,8 @@ std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sq
     record(false, LoggableError(sql, error.what()));
     throw;
   }
-  prepared_statement_ids_[prepared.get()] = record(true, "");
+  record(true, "");
+  prepared_statement_ids_[prepared.get()] = prepared_id;
   prepared_sql_[prepared.get()] = Abbreviate(sql);
   return prepared;
 }
@@ -1106,8 +1125,12 @@ warpsql::StatementOutcome Session::ExecutePrepared(warpsql::PreparedStatement& s
   BeginStatement();
   const auto id = prepared_statement_ids_.find(&statement);
   const auto text = prepared_sql_.find(&statement);
+  // Each execution is its request's statement (q_...), of the prepared statement (p_...).
   return Track(StatementKind::kOther, "(prepared statement)",
-               id == prepared_statement_ids_.end() ? std::string() : id->second, [&] {
+               {.statement = id == prepared_statement_ids_.end() ? std::string() : id->second,
+                .execution = RequestStatementId(),
+                .prepared = true},
+               [&] {
                  if (!guard_) return DuckDBSession::ExecutePrepared(statement, parameters);
                  const bool has_parameters = parameters.rows != nullptr || !parameters.json.is_null();
                  return guard_->ExecutePrepared(statement, has_parameters, [&](warpsql::PreparedStatement& inner) {

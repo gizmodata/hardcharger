@@ -12,7 +12,6 @@
 #include "platform.hpp"
 #include "runtime.hpp"
 #include "sql_text.hpp"
-#include "tokens.hpp"
 #include "version.hpp"
 
 namespace hardcharger {
@@ -37,11 +36,11 @@ CREATE TABLE IF NOT EXISTS {P}.sessions (
     connection_protocol VARCHAR NOT NULL, start_time TIMESTAMP WITH TIME ZONE NOT NULL,
     stop_time TIMESTAMP WITH TIME ZONE, status VARCHAR NOT NULL, stop_reason VARCHAR, session_tag JSON);
 CREATE TABLE IF NOT EXISTS {P}.sql_statements (
-    statement_id UUID NOT NULL, session_id VARCHAR NOT NULL, sql_text VARCHAR NOT NULL, statement_kind VARCHAR,
+    statement_id VARCHAR NOT NULL, session_id VARCHAR NOT NULL, sql_text VARCHAR NOT NULL, statement_kind VARCHAR,
     is_internal BOOLEAN NOT NULL, prepare_success BOOLEAN NOT NULL, prepare_error VARCHAR,
     created_time TIMESTAMP WITH TIME ZONE NOT NULL, query_tag JSON);
 CREATE TABLE IF NOT EXISTS {P}.sql_executions (
-    execution_id UUID NOT NULL, statement_id UUID NOT NULL, bind_parameters VARCHAR,
+    execution_id VARCHAR NOT NULL, statement_id VARCHAR NOT NULL, bind_parameters VARCHAR,
     execution_start_time TIMESTAMP WITH TIME ZONE NOT NULL, execution_end_time TIMESTAMP WITH TIME ZONE,
     enqueue_time TIMESTAMP WITH TIME ZONE, fetch_start_time TIMESTAMP WITH TIME ZONE,
     fetch_end_time TIMESTAMP WITH TIME ZONE, cursor_close_time TIMESTAMP WITH TIME ZONE, rows_fetched BIGINT,
@@ -118,12 +117,12 @@ CREATE TABLE IF NOT EXISTS {S}.sessions (
     start_time TIMESTAMP WITH TIME ZONE NOT NULL, stop_time TIMESTAMP WITH TIME ZONE, status VARCHAR NOT NULL,
     stop_reason VARCHAR, session_tag JSON);
 CREATE TABLE IF NOT EXISTS {S}.sql_statements (
-    statement_id UUID PRIMARY KEY, session_id VARCHAR NOT NULL REFERENCES {S}.sessions(session_id) ON DELETE CASCADE,
+    statement_id VARCHAR PRIMARY KEY, session_id VARCHAR NOT NULL REFERENCES {S}.sessions(session_id) ON DELETE CASCADE,
     sql_text VARCHAR NOT NULL, statement_kind VARCHAR, is_internal BOOLEAN NOT NULL, prepare_success BOOLEAN NOT NULL,
     prepare_error VARCHAR, created_time TIMESTAMP WITH TIME ZONE NOT NULL, query_tag JSON);
 CREATE TABLE IF NOT EXISTS {S}.sql_executions (
-    execution_id UUID PRIMARY KEY,
-    statement_id UUID NOT NULL REFERENCES {S}.sql_statements(statement_id) ON DELETE CASCADE,
+    execution_id VARCHAR PRIMARY KEY,
+    statement_id VARCHAR NOT NULL REFERENCES {S}.sql_statements(statement_id) ON DELETE CASCADE,
     bind_parameters VARCHAR, execution_start_time TIMESTAMP WITH TIME ZONE NOT NULL,
     execution_end_time TIMESTAMP WITH TIME ZONE, enqueue_time TIMESTAMP WITH TIME ZONE,
     fetch_start_time TIMESTAMP WITH TIME ZONE, fetch_end_time TIMESTAMP WITH TIME ZONE,
@@ -278,19 +277,25 @@ void Instrumentation::Start() {
                                "new instrumentation database) and start the server again.");
     }
   }
-  // Hardcharger 0.3.0 named sql_statements.statement_kind flight_method (GizmoSQL's Flight
-  // SQL name); CREATE TABLE IF NOT EXISTS kept such a table, and every statement's insert
-  // would fail. Startup says how to rename it instead. (A table straight from 0.3.0 also
-  // has UUID session ids and is refused above; this is for one whose ids are VARCHAR.)
-  if (!warpduckdb::QueryText(connection_.get(),
-                             "SELECT column_name FROM duckdb_columns() WHERE database_name = " + Literal(catalog_) +
-                                 " AND schema_name = " + Literal(schema_) +
-                                 " AND table_name = 'sql_statements' AND column_name = 'flight_method'")
-           .empty()) {
-    throw std::runtime_error("instrumentation table " + Table("sql_statements") +
-                             " is from Hardcharger 0.3.0: its column flight_method is now statement_kind. Rename it "
-                             "(ALTER TABLE ... RENAME COLUMN flight_method TO statement_kind), or drop the "
-                             "instrumentation tables, and start the server again.");
+  // Earlier Hardcharger builds kept statement and execution ids as UUIDs of the server's
+  // own; they are now the Warp SQL ids clients hold (q_..., p_...), which such a table
+  // can't hold. As above, startup says what to do rather than failing every insert. (The
+  // tables that named statement_kind flight_method had UUID statement ids too.)
+  for (const auto& [table, column] : {std::pair{"sql_statements", "statement_id"},
+                                      std::pair{"sql_executions", "execution_id"},
+                                      std::pair{"sql_executions", "statement_id"}}) {
+    const std::string type = warpduckdb::QueryText(
+        connection_.get(), "SELECT data_type FROM duckdb_columns() WHERE database_name = " + Literal(catalog_) +
+                               " AND schema_name = " + Literal(schema_) + " AND table_name = " + Literal(table) +
+                               " AND column_name = " + Literal(column));
+    if (type == "UUID") {
+      throw std::runtime_error("Hardcharger can't use instrumentation table " + Table(table) + ": its " + column +
+                               " is a UUID, from an earlier Hardcharger. Statement and execution ids are now the "
+                               "Warp SQL ids clients hold (q_... for a statement, p_... for a prepared "
+                               "statement). Drop the instrumentation tables, or rename them to keep their rows "
+                               "(ALTER TABLE ... RENAME TO ...), or use a new instrumentation database, and start "
+                               "the server again.");
+    }
   }
   // Rows a previous run left open (it was killed). Only in our own file: a shared
   // catalog's open rows may belong to live peers.
@@ -427,15 +432,13 @@ void Instrumentation::SessionTagChanged(const Session& session, const std::strin
           Literal(session.id()));
 }
 
-std::string Instrumentation::StatementCreated(const Session& session, std::string_view sql, std::string_view kind,
-                                              bool accepted, std::string_view error) {
-  std::string id = RandomUuid();
+void Instrumentation::StatementCreated(const Session& session, const std::string& id, std::string_view sql,
+                                       std::string_view kind, bool accepted, std::string_view error) {
   Enqueue("INSERT INTO " + Table("sql_statements") +
           " (statement_id, session_id, sql_text, statement_kind, is_internal, prepare_success, prepare_error, "
           "created_time, query_tag) VALUES (" + Literal(id) + ", " + Literal(session.id()) + ", " + Literal(sql) + ", " +
           Literal(kind) + ", false, " + (accepted ? "true" : "false") + ", " + Nullable(error) + ", " +
           Time(std::chrono::system_clock::now()) + ", " + Json(session.StatementQueryTag()) + ")");
-  return id;
 }
 
 void Instrumentation::ExecutionStarted(const ExecutionRecord& r) {

@@ -141,6 +141,10 @@ def test_postgres_schema_writes_and_cascade(launcher):
     assert admin.scalar(sql=f"SELECT count(*) FROM {p}instances") >= 1
     assert admin.scalar(sql=f"SELECT count(*) FROM {p}sql_executions WHERE status = 'executing'") == 0
     assert admin.scalar(sql=f"SELECT count(*) FROM {p}sql_executions WHERE status = 'success'") >= 3
+    # Keyed by the Warp SQL ids clients hold: each plain statement's execution shares its q_... id.
+    assert admin.scalar(sql=f"SELECT count(*) FROM {p}sql_executions WHERE execution_id = statement_id "
+                            "AND starts_with(execution_id, 'q_') AND length(execution_id) = 34") >= 3
+    assert admin.scalar(sql=f"SELECT count(*) FROM {p}sql_executions WHERE NOT starts_with(execution_id, 'q_')") == 0
     admin.query(sql=f"SELECT * FROM {p}execution_details LIMIT 1")
     admin.query(sql=f"SELECT * FROM {p}session_activity LIMIT 1")
     assert admin.scalar(sql=f"SELECT count(*) FROM {p}sessions") > 0

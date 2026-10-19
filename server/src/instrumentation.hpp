@@ -37,8 +37,8 @@ using WallTime = std::chrono::system_clock::time_point;
 
 // What one execution of a statement records.
 struct ExecutionRecord {
-  std::string execution_id;
-  std::string statement_id;
+  std::string execution_id;  // Warp SQL statement id of the request that ran it (q_..., q_....N in a script)
+  std::string statement_id;  // its sql_statements row (q_..., or a prepared statement's p_...)
   std::optional<WallTime> enqueue_time;  // when it joined the statement queue, if it did
   WallTime start;
   std::optional<WallTime> end;          // the engine produced its outcome
@@ -78,10 +78,11 @@ class Instrumentation {
   void SessionStarted(const Session& session);
   void SessionEnded(const Session& session, std::string_view reason);
   void SessionTagChanged(const Session& session, const std::string& tag);
-  // Records a statement (its text, how it arrived: `kind` 'statement' or 'prepared', the
-  // Warp SQL endpoint; whether it was accepted); returns its id.
-  std::string StatementCreated(const Session& session, std::string_view sql, std::string_view kind,
-                               bool accepted, std::string_view error);
+  // Records a statement under `id`, its Warp SQL id (q_..., or a prepared statement's
+  // p_...): its text, how it arrived (`kind` 'statement' or 'prepared', the Warp SQL
+  // endpoint), whether it was accepted.
+  void StatementCreated(const Session& session, const std::string& id, std::string_view sql, std::string_view kind,
+                        bool accepted, std::string_view error);
   void ExecutionStarted(const ExecutionRecord& record);
   // A statement waiting in the statement queue ('queued'), and its leaving it.
   void ExecutionQueued(const ExecutionRecord& record);

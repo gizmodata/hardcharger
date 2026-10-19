@@ -14,6 +14,7 @@ cursor_close_time when it let the result go (the Warp SDK has no delivery callba
 these are not the moments the client received the bytes). The invariants 1.x asserts hold.
 """
 
+import re
 import time
 
 import pytest
@@ -159,17 +160,156 @@ def test_statements_record_their_kind_in_warp_sql_terms(admin):
     assert kinds == "prepared,statement"
 
 
-def test_instrumentation_from_0_3_0_says_how_to_rename_flight_method(launcher, tmp_path):
+# ---- Ids: a statement is recorded under the Warp SQL id its client holds ----
+
+I = "_hardcharger_instr.main"
+WARP_ID = r"^[a-z]_[a-z2-7]{32}$"
+
+
+def marker(name: str) -> str:
+    return f"{name}_{time.time_ns()}"
+
+
+def statement_id_of(response) -> str:
+    statement_id = response.headers["Warp-Statement-Id"]
+    assert re.match(WARP_ID, statement_id) and statement_id.startswith("q_"), statement_id
+    return statement_id
+
+
+def executions(session, where: str, expected: int) -> list[dict]:
+    """sql_executions rows matching `where`, once there are `expected` of them, finished."""
+    eventually(session, f"SELECT count(*) FROM {I}.sql_executions WHERE ({where}) AND cursor_close_time IS NOT NULL",
+               lambda n: n == expected)
+    return session.rows(sql=f"SELECT execution_id, statement_id, status, error_message, cancel_reason "
+                            f"FROM {I}.sql_executions WHERE {where} ORDER BY execution_id")
+
+
+def test_a_submitted_statement_is_recorded_under_the_id_its_client_holds(admin):
+    """The Warp-Statement-Id a client gets (also in errors and hardcharger_active_connections())
+    finds the statement and its execution: they share it."""
+    probe = marker("id_probe")
+    response = admin.submit(sql=f"SELECT 42 AS {probe}", arrow=True)
+    assert response.status_code == 200, response.text
+    q = statement_id_of(response)
+    assert executions(admin, f"execution_id = '{q}'", 1)[0]["statement_id"] == q
+    row = admin.rows(sql=f"SELECT statement_id, execution_id, session_id, sql_text, status FROM {I}.execution_details "
+                         f"WHERE execution_id = '{q}'")
+    assert row == [{"statement_id": q, "execution_id": q, "session_id": admin.id,
+                    "sql_text": f"SELECT 42 AS {probe}", "status": "success"}], row
+    assert admin.scalar(sql=f"SELECT statement_kind FROM {I}.sql_statements WHERE statement_id = '{q}'") == "statement"
+
+
+def test_a_prepared_statement_is_one_p_row_with_an_execution_per_request(admin):
+    probe = marker("prepared_probe")
+    prepared = admin.prepare(sql=f"SELECT ? + 1 AS {probe}")["prepared_id"]
+    assert re.match(WARP_ID, prepared) and prepared.startswith("p_"), prepared
+    ran = []
+    for i in range(3):
+        response = admin.execute_prepared(prepared_id=prepared, parameters=[i])
+        assert response.status_code == 200, response.text
+        ran.append(statement_id_of(response))
+    assert len(set(ran)) == 3
+    rows = executions(admin, f"statement_id = '{prepared}'", 3)
+    assert sorted(r["execution_id"] for r in rows) == sorted(ran), (rows, ran)
+    assert {r["status"] for r in rows} == {"success"}
+    assert admin.rows(sql=f"SELECT statement_id, statement_kind, prepare_success FROM {I}.sql_statements "
+                          f"WHERE sql_text LIKE '%{probe}%' AND sql_text NOT LIKE '%sql_statements%'") == [
+        {"statement_id": prepared, "statement_kind": "prepared", "prepare_success": True}]
+
+
+def test_the_statements_of_a_script_are_numbered_executions_of_its_id(admin):
+    probe = marker("script_probe")
+    response = admin.submit(sql=f"SELECT 1; SELECT 2; SELECT 3 AS {probe}")
+    q = statement_id_of(response)
+    rows = executions(admin, f"statement_id = '{q}'", 3)
+    assert [r["execution_id"] for r in rows] == [f"{q}.1", f"{q}.2", f"{q}.3"], rows
+    assert admin.scalar(sql=f"SELECT count(*) FROM {I}.sql_statements WHERE statement_id = '{q}'") == 1
+
+
+def test_a_scripts_numbers_are_places_in_the_script_commands_included(admin):
+    """A SET hardcharger.* command is the script's first statement but runs no execution:
+    the SELECT after it is still .2."""
+    response = admin.submit(sql=f"SET hardcharger.query_tag = '{{}}'; SELECT 1 AS {marker('command_probe')}")
+    q = statement_id_of(response)
+    assert [r["execution_id"] for r in executions(admin, f"statement_id = '{q}'", 1)] == [f"{q}.2"]
+
+
+def test_failed_and_refused_statements_are_recorded_under_their_ids(admin):
+    probe = marker("failed_probe")
+    failed = admin.submit(sql=f"SELECT error('{probe}')")
+    assert failed.status_code >= 400, failed.text
+    q = statement_id_of(failed)
+    [row] = executions(admin, f"execution_id = '{q}'", 1)
+    assert row["status"] == "error" and probe in row["error_message"], row
+    refused = admin.submit(sql=f"SELEC '{probe}'")
+    assert refused.status_code >= 400, refused.text
+    r = statement_id_of(refused)
+    eventually(admin, f"SELECT count(*) FROM {I}.sql_statements WHERE statement_id = '{r}' AND NOT prepare_success",
+               lambda n: n == 1)
+
+
+def test_a_cancelled_statement_is_recorded_under_its_id(server, admin):
+    response = admin.submit(sql="SELECT count(*) FROM range(10000000000) a, range(1000) b",
+                            headers={"Prefer": "respond-async"})
+    q = response.json()["statement_id"]
+    reader = server.admin()  # the first session is busy running it
+    eventually(reader, f"SELECT count(*) FROM {I}.sql_executions WHERE execution_id = '{q}' AND status = 'executing'",
+               lambda n: n == 1)
+    cancel = admin.http.post(url=f"{admin.url}/statements/{q}/cancel", headers=admin.headers())
+    assert cancel.status_code in (200, 202, 204), cancel.text
+    assert admin.wait_done(statement_id=q)["state"] == "cancelled"
+    [row] = executions(reader, f"execution_id = '{q}'", 1)
+    assert row["status"] == "cancelled" and row["cancel_reason"] == "client", row
+
+
+def test_the_query_log_names_statements_by_the_same_ids(server, admin):
+    probe = marker("log_probe")
+    q = statement_id_of(admin.submit(sql=f"SELECT 1 AS {probe}", arrow=True))
+    prepared = admin.prepare(sql=f"SELECT 2 AS {probe}")["prepared_id"]
+    p_run = statement_id_of(admin.execute_prepared(prepared_id=prepared))
+
+    def lines_with(text: str, count: int) -> list[str]:
+        deadline = time.monotonic() + 10
+        while True:
+            found = [line for line in server.log().splitlines() if text in line]
+            if len(found) >= count or time.monotonic() > deadline:
+                return found
+            time.sleep(0.05)
+
+    # The statement, and its execution's success.
+    submitted = lines_with(text=f"statement_id={q} ", count=2)
+    assert any(probe in line for line in submitted) and any("succeeded" in line for line in submitted), submitted
+    assert any(probe in line for line in lines_with(text=f"prepared_id={prepared} ", count=1))
+    # A prepared execution's line names its own id and its prepared statement's.
+    executed = lines_with(text=f"statement_id={p_run} ", count=1)
+    assert any(f"prepared_id={prepared} " in line and "succeeded" in line for line in executed), executed
+
+
+@pytest.mark.parametrize("table, columns", [
+    # 0.3.0 and the builds after it: UUID statement ids (and, in 0.3.0, a flight_method column).
+    ("sql_statements", "statement_id UUID NOT NULL, session_id VARCHAR NOT NULL, sql_text VARCHAR NOT NULL, "
+                       "flight_method VARCHAR, is_internal BOOLEAN NOT NULL, prepare_success BOOLEAN NOT NULL, "
+                       "prepare_error VARCHAR, created_time TIMESTAMP WITH TIME ZONE NOT NULL, query_tag JSON"),
+    ("sql_executions", "execution_id UUID NOT NULL, statement_id UUID NOT NULL, bind_parameters VARCHAR, "
+                       "execution_start_time TIMESTAMP WITH TIME ZONE NOT NULL, "
+                       "execution_end_time TIMESTAMP WITH TIME ZONE, enqueue_time TIMESTAMP WITH TIME ZONE, "
+                       "fetch_start_time TIMESTAMP WITH TIME ZONE, fetch_end_time TIMESTAMP WITH TIME ZONE, "
+                       "cursor_close_time TIMESTAMP WITH TIME ZONE, rows_fetched BIGINT, status VARCHAR NOT NULL, "
+                       "error_message VARCHAR, duration_ms BIGINT, total_duration_ms BIGINT, query_profile JSON, "
+                       "cancel_reason VARCHAR"),
+])
+def test_a_table_with_uuid_statement_ids_is_refused_with_what_to_do(launcher, tmp_path, table, columns):
     path = tmp_path / "old_instrumentation.db"
     maker = launcher.start(args=["--database", str(path)])
-    maker.admin().execute(sql="CREATE TABLE sql_statements (statement_id UUID NOT NULL, session_id VARCHAR NOT NULL, "
-                              "sql_text VARCHAR NOT NULL, flight_method VARCHAR, is_internal BOOLEAN NOT NULL, "
-                              "prepare_success BOOLEAN NOT NULL, prepare_error VARCHAR, "
-                              "created_time TIMESTAMP WITH TIME ZONE NOT NULL, query_tag JSON)")
+    maker.admin().execute(sql=f"CREATE TABLE {table} ({columns})")
     maker.stop()
     server = start(launcher, args=["--instrumentation-db-path", str(path)], expect_up=False)
     assert server.process.wait(timeout=60) != 0
-    assert "RENAME COLUMN flight_method TO statement_kind" in server.log(), server.log()
+    column = "statement_id" if table == "sql_statements" else "execution_id"
+    log = server.log()
+    assert (f'Hardcharger can\'t use instrumentation table "_hardcharger_instr"."main"."{table}": its {column} '
+            "is a UUID") in log, log
+    assert "Warp SQL ids clients hold (q_..." in log and "Drop the instrumentation tables" in log, log
 
 
 def test_non_admins_cannot_read_it(server):

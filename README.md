@@ -554,6 +554,35 @@ $ hardcharger --command "SELECT hardcharger_cancel(session_id) AS cancelled FROM
 └───────────┘
 ```
 
+A statement's `statement_id` is its Warp SQL id (`q_...`), the one its client got in
+`Warp-Statement-Id` and error responses. With instrumentation on (`--enable-instrumentation`),
+the same id finds it in the history once it is over: `sql_executions.execution_id`, and
+`sql_statements.statement_id` for a submitted statement (a prepared statement's row is its
+`p_...`, with an execution per request under each request's `q_...`; the statements of a
+script sent in one request are `q_....1`, `q_....2`, ...). The query log's `statement_id`
+and `prepared_id` fields carry the same ids. Here the statement above, cancelled:
+
+```console
+$ hardcharger --command "SELECT statement_id, state, statement FROM hardcharger_active_connections() WHERE NOT is_current"
+┌────────────────────────────────────┬─────────┬──────────────────────────────────────────────────────────┐
+│            statement_id            │  state  │                        statement                         │
+│              varchar               │ varchar │                         varchar                          │
+├────────────────────────────────────┼─────────┼──────────────────────────────────────────────────────────┤
+│ q_n5zugypkhvoe7e6poydlvnsqaqnfzk6d │ running │ SELECT count(*) FROM range(10000000000) a, range(1000) b │
+├────────────────────────────────────┴─────────┴──────────────────────────────────────────────────────────┤
+│ 1 row  3 columns                                                                                        │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+$ hardcharger --command "SELECT execution_id, status, cancel_reason, sql_text FROM _hardcharger_instr.execution_details WHERE execution_id = 'q_n5zugypkhvoe7e6poydlvnsqaqnfzk6d'"
+┌────────────────────────────────────┬───────────┬───────────────┬──────────────────────────────────────────────────────────┐
+│            execution_id            │  status   │ cancel_reason │                         sql_text                         │
+│              varchar               │  varchar  │    varchar    │                         varchar                          │
+├────────────────────────────────────┼───────────┼───────────────┼──────────────────────────────────────────────────────────┤
+│ q_n5zugypkhvoe7e6poydlvnsqaqnfzk6d │ cancelled │ cancelled     │ SELECT count(*) FROM range(10000000000) a, range(1000) b │
+├────────────────────────────────────┴───────────┴───────────────┴──────────────────────────────────────────────────────────┤
+│ 1 row  4 columns                                                                                                          │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 `hardcharger_server_info()` is one row: the versions, the instance and cluster ids, the
 start time and the uptime for everyone; the host (hostname, OS, CPU model and count,
 memory), the listen addresses and ports, TLS and mutual TLS, the server certificate's

@@ -185,6 +185,7 @@ The dot commands and output modes are 1.x's. What behaves differently, and why:
 | `_gizmosql_instr` | `_hardcharger_instr` |
 | `_gizmosql_logs` | `_hardcharger_logs` |
 | `gizmosql_instrumentation.db`, `gizmosql_logs.db` (default files) | `hardcharger_instrumentation.db`, `hardcharger_logs.db` |
+| instrumentation `sql_statements.statement_id`, `sql_executions.execution_id` (UUIDs) | the Warp SQL ids clients hold (`VARCHAR`): a statement's `q_...` (its execution shares it; the statements of a one-request script are `q_....1`, `q_....2`, ...), a prepared statement's `p_...` with an execution per request under its own `q_...`; the query log's `statement_id` and `prepared_id` are the same ids |
 | instrumentation `sql_statements.flight_method`; log lines' `flight_method=ingest` | `sql_statements.statement_kind` (`statement` or `prepared`, the Warp SQL endpoint); log lines say `kind=ingest` (or `sql`) |
 | `instances.gizmosql_version`, `instances.gizmosql_edition` | `instances.hardcharger_version` (no edition column) |
 

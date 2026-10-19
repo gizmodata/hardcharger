@@ -126,6 +126,30 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- **One id everywhere, for statements too**: instrumentation keys statements and executions
+  by the Warp SQL ids clients hold, not by UUIDs of the server's own, so a `q_...` from
+  `Warp-Statement-Id`, an error response or `hardcharger_active_connections()` finds the
+  statement in `_hardcharger_instr`. `sql_executions.execution_id` is the id of the request
+  that ran it (`q_...`); `sql_statements.statement_id` is that same `q_...` for a submitted
+  statement (statement and execution share it) or the prepared statement's `p_...` (one row,
+  with an execution per execute request, each under its own `q_...`). A request carrying
+  several statements is one statement row (`q_...`) whose executions are numbered by place in
+  the script: `q_....1`, `q_....2`, ... (a `SET hardcharger.*` or `KILL SESSION` among them
+  takes its number but runs no execution); one statement alone has no suffix. Statements the
+  server runs for itself (init SQL, access-control internals, bookkeeping) are still not
+  recorded. The columns are `VARCHAR` (`instance_id` and `cluster_id` stay UUIDs), in the
+  DuckDB file, DuckLake and PostgreSQL schemas alike; a table with UUID statement or
+  execution ids is refused at startup with what to do (drop or rename the instrumentation
+  tables, or use a new instrumentation database). The query log's lines carry the same ids:
+  `statement_id` (`q_...`, or `q_....N`) on statement, success and failure lines, and
+  `prepared_id` (`p_...`) on prepare lines and on a prepared statement's executions. The SDK
+  tells the engine these ids (warp-sql `feat/instrumentation-warp-ids`:
+  `EngineSession::SetStatementId()`, and the prepared id is chosen before preparing).
+  `test_instrumentation.py` looks up a submitted statement, a prepared statement's three
+  executions, a three-statement script, failed, refused and cancelled statements and the log
+  lines by the ids the client got, and checks that both kinds of old table are refused; the
+  same tests fail against the previous server.
+
 - **Browser sign-in moved into the Warp SQL protocol, on the main port** (Warp SQL §4.3,
   capability `oauth_browser`; the SDK at warp-sql `feat/oauth-in-protocol`). Clients create a
   flow (`POST /warp/v1/auth/oauth/flows`), the person signs in with the identity provider,
@@ -342,8 +366,8 @@ own changelog in `python/CHANGELOG.md`.
   instrumentation table `sql_statements` named its column `flight_method`; it is
   `statement_kind` (`statement` or `prepared`, the Warp SQL endpoint a statement came by).
   A 0.3.0 instrumentation table is refused at startup in any case, as its session ids are
-  UUIDs (above: drop it); one whose `session_id` is already `VARCHAR` but still has
-  `flight_method` is refused with the `ALTER TABLE ... RENAME COLUMN` that fixes it. No
+  UUIDs (above: drop it); so is one whose `session_id` is already `VARCHAR` but still has
+  `flight_method`, as its statement ids are UUIDs (Changed: one id everywhere). No
   metric label had the name. `test_instrumentation.py`
   and `test_bulk_ingest.py` cover it.
 
