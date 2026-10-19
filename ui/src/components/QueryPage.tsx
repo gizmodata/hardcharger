@@ -1,8 +1,16 @@
 import { Plus, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { publishActiveTab, resetActiveTab } from "../lib/activeTab";
 import { clearCatalogCaches } from "../lib/catalogs";
+import { grantedRoles } from "../lib/roles";
+import {
+  type SavedItem,
+  getSelectedFolder,
+  onSavedQueriesChanged,
+  savedQueriesChanged,
+  savedQueryStore,
+} from "../lib/savedQueries";
 import { useStoredSize } from "../lib/storedSize";
 import { type StoredTabs, type TabDoc, hasUnsavedText, loadTabs, makeTab, maxTabs, saveTabs } from "../lib/tabs";
 import type { Where } from "../lib/tabSession";
@@ -10,6 +18,7 @@ import type { ThemeName } from "../lib/theme";
 import { type QueryRequest, useSession } from "../session";
 import { EditorTab, type TabHandle, type TabStatus } from "./EditorTab";
 import { ResizeHandle } from "./ResizeHandle";
+import { SaveQueryDialog } from "./SaveQueryDialog";
 import "../styles/query.css";
 
 const firstSql = "SELECT HARDCHARGER_VERSION() AS version, HARDCHARGER_USER() AS me;\n";
@@ -73,7 +82,20 @@ export default function QueryPage({ theme }: Props) {
     return () => {
       live = false;
     };
-  }, [session]);
+  }, [session, user]);
+
+  // The roles the user may act with (Run as): none for an administrator or without access control.
+  const [roles, setRoles] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    grantedRoles(session.connection, user, session.isAdmin).then(
+      (r) => live && setRoles(r),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [session, user]);
 
   // Leaving the page with a transaction open loses it: the browser asks first.
   const anyTransaction = Object.values(statuses).some((s) => s.transaction !== "none");
@@ -142,8 +164,18 @@ export default function QueryPage({ theme }: Props) {
   // Requests from elsewhere (the schema browser's preview): a new tab, or the active one.
   const open = useCallback(
     (r: QueryRequest) => {
+      if (r.saved) {
+        // A saved query: its tab if one has it, else a new tab.
+        const savedId = r.saved.id;
+        const has = tabsNow.current.tabs.find((t) => t.savedQueryId === savedId);
+        if (has) {
+          setTabs((st) => ({ ...st, active: has.id }));
+          return;
+        }
+      }
       if (r.newTab) {
         const id = addTab({
+          ...(r.saved ? { savedQueryId: r.saved.id, savedSql: r.saved.sql } : {}),
           sql: r.sql,
           ...(r.title ? { title: r.title } : {}),
           ...(r.catalog ? { catalog: r.catalog, schema: r.schema ?? "" } : {}),
@@ -156,6 +188,73 @@ export default function QueryPage({ theme }: Props) {
       }
     },
     [addTab, patchTab],
+  );
+
+  // ── Saved queries ─────────────────────────────────────────────────────────────────────────
+  const store = useMemo(() => savedQueryStore(user), [user]);
+  const [saving, setSaving] = useState<{ tabId: string; as: boolean; items: SavedItem[]; sql: string } | undefined>();
+  const save = useCallback(
+    async (tabId: string, as: boolean, sql: string) => {
+      const found = tabsNow.current.tabs.find((t) => t.id === tabId);
+      if (!found) return;
+      // The editor's text as it is now: the tab's copy follows it a render later.
+      const tab = { ...found, sql };
+      let items: SavedItem[];
+      try {
+        items = await store.list();
+      } catch {
+        window.alert("This browser doesn't let the page keep saved queries (a private window, or blocked site data).");
+        return;
+      }
+      const existing = tab.savedQueryId
+        ? items.find((i) => i.id === tab.savedQueryId && i.kind === "query")
+        : undefined;
+      if (existing && !as) {
+        await store.saveQuery({
+          id: existing.id,
+          name: existing.name,
+          parentId: existing.parentId,
+          sql: tab.sql,
+          catalog: tab.catalog,
+          schema: tab.schema,
+        });
+        patchTab(tab.id, { savedSql: tab.sql });
+        savedQueriesChanged();
+        return;
+      }
+      setSaving({ tabId, as, items, sql });
+    },
+    [store, patchTab, setSaving],
+  );
+
+  // A saved query renamed or deleted (here, or in another tab of the browser): its tabs follow.
+  useEffect(
+    () =>
+      onSavedQueriesChanged(() => {
+        store.list().then(
+          (items) =>
+            setTabs((st) => {
+              let changed = false;
+              const next = st.tabs.map((t) => {
+                if (!t.savedQueryId) return t;
+                const q = items.find((i) => i.id === t.savedQueryId);
+                if (!q) {
+                  changed = true;
+                  const { savedQueryId: _id, savedSql: _sql, ...rest } = t;
+                  return rest;
+                }
+                if (q.name !== t.title) {
+                  changed = true;
+                  return { ...t, title: q.name };
+                }
+                return t;
+              });
+              return changed ? { ...st, tabs: next } : st;
+            }),
+          () => {},
+        );
+      }),
+    [store],
   );
 
   const statusesRef = useRef(statuses);
@@ -188,9 +287,9 @@ export default function QueryPage({ theme }: Props) {
       catalog: activeTab?.catalog || defaults.catalog,
       schema: activeTab?.schema || defaults.schema,
       transaction: activeStatus?.transaction ?? "none",
-      role: "",
+      role: activeTab?.role ?? "",
     });
-  }, [activeTab?.catalog, activeTab?.schema, activeStatus?.transaction, defaults]);
+  }, [activeTab?.catalog, activeTab?.schema, activeTab?.role, activeStatus?.transaction, defaults]);
   useEffect(() => () => resetActiveTab(), []);
 
   const select = (id: string) => setTabs((s) => ({ ...s, active: id }));
@@ -331,6 +430,9 @@ export default function QueryPage({ theme }: Props) {
             })
           }
           onNewTab={() => addTab()}
+          onSave={(sql) => void save(t.id, false, sql)}
+          onSaveAs={(sql) => void save(t.id, true, sql)}
+          roles={roles}
           onCloseTab={() => closeTab(t.id)}
           onReady={(h) => {
             if (h) handles.current.set(t.id, h);
@@ -358,6 +460,32 @@ export default function QueryPage({ theme }: Props) {
           }
         />
       ))}
+      {saving && (
+        <SaveQueryDialog
+          title={saving.as ? "Save as" : "Save query"}
+          initialName={(() => {
+            const tab = tabs.find((t) => t.id === saving.tabId);
+            return saving.as ? `${tab?.title ?? "Query"} copy` : (tab?.title ?? "Query");
+          })()}
+          initialFolder={getSelectedFolder()}
+          items={saving.items}
+          onClose={() => setSaving(undefined)}
+          onSave={async (name, folder) => {
+            const tab = tabsNow.current.tabs.find((t) => t.id === saving.tabId);
+            if (!tab) return;
+            const q = await store.saveQuery({
+              name,
+              parentId: folder,
+              sql: saving.sql,
+              catalog: tab.catalog,
+              schema: tab.schema,
+            });
+            patchTab(tab.id, { savedQueryId: q.id, savedSql: saving.sql, title: q.name });
+            setSaving(undefined);
+            savedQueriesChanged();
+          }}
+        />
+      )}
     </div>
   );
 }

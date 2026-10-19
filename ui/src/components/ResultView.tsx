@@ -6,6 +6,7 @@ import { copyText } from "../lib/clipboard";
 import { exportName, saveFile } from "../lib/download";
 import { type ExportFormat, exportFormats, exportTable, toDelimited } from "../lib/export";
 import { errorMessage } from "../session";
+import { FloatingMenu } from "./FloatingMenu";
 import { ResultsGrid } from "./ResultsGrid";
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
@@ -22,7 +23,7 @@ interface Props {
 /** One result set: the grid, with its toolbar (copy, export, expand). */
 export function ResultView({ table, truncatedAt, expanded = false, onExpand }: Props) {
   const [notice, setNotice] = useState<string | undefined>();
-  const [exportOpen, setExportOpen] = useState(false);
+  const [exportMenu, setExportMenu] = useState<{ x: number; y: number; shown: readonly number[] } | undefined>();
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
@@ -31,13 +32,14 @@ export function ResultView({ table, truncatedAt, expanded = false, onExpand }: P
     return () => window.clearTimeout(t);
   }, [notice]);
 
-  const doExport = async (format: ExportFormat) => {
-    setExportOpen(false);
+  const doExport = async (format: ExportFormat, shown: readonly number[]) => {
     setExporting(true);
+    const info = exportFormats.find((f) => f.format === format)!;
     try {
-      const blob = await exportTable(table, format);
-      saveFile(blob, exportName(exportFormats.find((f) => f.format === format)!.extension));
-      setNotice(`Exported ${plural(table.numRows, "row")} as ${format.toUpperCase()}.`);
+      const blob = await exportTable(table, format, info.scope === "shown" ? shown : undefined);
+      saveFile(blob, exportName(info.extension));
+      const rows = info.scope === "shown" ? shown.length : table.numRows;
+      setNotice(`Exported ${plural(rows, "row")} as ${format.toUpperCase()}.`);
     } catch (err) {
       console.info("export failed:", err);
       setNotice(`The ${format.toUpperCase()} export failed: ${errorMessage(err)}`);
@@ -87,28 +89,41 @@ export function ResultView({ table, truncatedAt, expanded = false, onExpand }: P
             >
               <Copy size={14} /> Copy
             </button>
-            <div className="menu-wrap">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => setExportOpen((o) => !o)}
-                disabled={exporting}
-                aria-haspopup="menu"
-                aria-expanded={exportOpen}
-                data-testid="export-button"
-              >
-                <Download size={14} /> {exporting ? "Exporting…" : "Export"}
-              </button>
-              {exportOpen && (
-                <div className="menu" role="menu" onMouseLeave={() => setExportOpen(false)}>
-                  {exportFormats.map((f) => (
-                    <button key={f.format} type="button" role="menuitem" onClick={() => void doExport(f.format)}>
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                setExportMenu({ x: r.right, y: r.bottom + 4, shown });
+              }}
+              disabled={exporting}
+              aria-haspopup="menu"
+              aria-expanded={!!exportMenu}
+              data-testid="export-button"
+            >
+              <Download size={14} /> {exporting ? "Downloading…" : "Download"}
+            </button>
+            {exportMenu && (
+              <FloatingMenu
+                x={exportMenu.x}
+                y={exportMenu.y}
+                align="right"
+                onClose={() => setExportMenu(undefined)}
+                items={[
+                  {
+                    label: `As shown (${exportMenu.shown.length === table.numRows ? "all rows" : plural(exportMenu.shown.length, "shown row")})`,
+                    heading: true,
+                  },
+                  ...exportFormats
+                    .filter((f) => f.scope === "shown")
+                    .map((f) => ({ label: f.label, run: () => void doExport(f.format, exportMenu.shown) })),
+                  { label: `Full result, typed (${plural(table.numRows, "row")})`, heading: true },
+                  ...exportFormats
+                    .filter((f) => f.scope === "full")
+                    .map((f) => ({ label: f.label, run: () => void doExport(f.format, exportMenu.shown) })),
+                ]}
+              />
+            )}
           </>
         )}
       />

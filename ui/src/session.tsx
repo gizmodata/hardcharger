@@ -24,6 +24,8 @@ export interface QueryRequest {
   /** The new tab's catalog and schema (a table preview opens where the table is). */
   catalog?: string;
   schema?: string;
+  /** A saved query: open it in the tab that has it, or in a new tab that edits it. */
+  saved?: { id: string; sql: string };
 }
 
 /** What the query page offers the rest of the app while it is mounted. */

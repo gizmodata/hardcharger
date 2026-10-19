@@ -1,6 +1,17 @@
 // Screenshots of the main views, light and dark, kept as test artifacts (CI uploads them).
 // The run fails on any console error or failed request along the way, as every test does.
-import { activeTab, editorFocused, expect, gridRows, runDone, runSql, setSql, signIn, test } from "./fixtures.ts";
+import {
+  activeTab,
+  editorFocused,
+  expect,
+  gridRows,
+  runDone,
+  runSql,
+  setSql,
+  signIn,
+  test,
+  editorTabs,
+} from "./fixtures.ts";
 
 test("screenshots of the main views", async ({ page, harness }, testInfo) => {
   const shot = (name: string) => page.screenshot({ path: testInfo.outputPath(`${name}.png`) });
@@ -21,7 +32,7 @@ test("screenshots of the main views", async ({ page, harness }, testInfo) => {
   await expect(orders.getByRole("treeitem", { name: "amount" })).toBeVisible();
   // A second tab with a script (a result tab per result set) and an open transaction, then
   // back to the first tab, named, with its result.
-  await page.getByRole("tab", { name: "Query 1" }).dblclick();
+  await editorTabs(page).getByRole("tab", { name: "Query 1" }).dblclick();
   await page.getByLabel("Tab name").fill("Top customers");
   await page.getByLabel("Tab name").press("Enter");
   await page.getByRole("button", { name: "New tab" }).click();
@@ -38,7 +49,7 @@ test("screenshots of the main views", async ({ page, harness }, testInfo) => {
   await page.getByRole("button", { name: "Light theme" }).click();
   await activeTab(page).getByRole("button", { name: "Rollback" }).click();
   await expect(activeTab(page).getByTestId("in-transaction")).toHaveCount(0);
-  await page.getByRole("tab", { name: "Top customers" }).click();
+  await editorTabs(page).getByRole("tab", { name: "Top customers" }).click();
   await runSql(
     page,
     "SELECT customer, count(*) AS orders, sum(amount) AS total, min(ordered_on) AS first_order\n" +
@@ -71,6 +82,27 @@ test("screenshots of the main views", async ({ page, harness }, testInfo) => {
   await shot("explorer-light");
   await page.keyboard.press("Escape");
   await page.getByLabel("Search tables and views").fill("");
+  await page.getByRole("button", { name: "Dark theme" }).click();
+
+  // Saved queries: a folder with the tab's query in it, and the results' Download menu.
+  await page.getByRole("tab", { name: "Saved queries" }).click();
+  await page.getByTestId("saved-queries").getByRole("button", { name: "New folder" }).click();
+  await page.getByLabel("New name").fill("Reports");
+  await page.getByLabel("New name").press("Enter");
+  await page.getByRole("tree", { name: "Saved queries" }).getByRole("button", { name: "Reports" }).click();
+  await activeTab(page).getByTestId("save-button").click();
+  await page.getByTestId("save-query-dialog").getByRole("button", { name: "Save", exact: true }).click();
+  await expect(
+    page.getByRole("tree", { name: "Saved queries" }).getByRole("treeitem", { name: "Top customers" }),
+  ).toBeVisible();
+  await activeTab(page).getByTestId("export-button").click();
+  await shot("saved-dark");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Light theme" }).click();
+  await activeTab(page).getByTestId("export-button").click();
+  await shot("saved-light");
+  await page.keyboard.press("Escape");
+  await page.getByRole("tab", { name: "Data" }).click();
   await page.getByRole("button", { name: "Dark theme" }).click();
 
   await page.getByRole("button", { name: "Sessions" }).click();

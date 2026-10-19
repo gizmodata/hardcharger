@@ -80,8 +80,30 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
   quotes are inserted quoted; nothing is offered inside a string or a comment. The lists come
   from the server, as the user may see them, kept a few minutes and refreshed after a run
   that changes the catalog.
-- 💾 **Exports**: CSV, TSV, JSON (exact numbers) and Parquet (every Arrow type, written in the
-  browser by parquet-wasm).
+- 💾 **Saved queries** (the side panel's first tab): your SQL in folders and sub-folders,
+  **kept in this browser** (IndexedDB, for each user of each server): they don't follow you
+  to another browser or computer, and clearing the site's data removes them. **Export all to
+  a file** and **Import from a file** (the … at the top of the panel) move them between
+  browsers.
+  - **Save** (Ctrl/⌘+S in the editor) asks for a name and a folder the first time and updates
+    the same query after that; the tab shows a dot while it has unsaved changes. **Save as…**
+    saves a copy under a new name.
+  - Click a query to open it (or go to the tab that already has it), on the catalog and schema
+    it was saved with. Click a folder to select and open it: new folders and imports go there.
+  - Drag a query or folder onto a folder, or onto **Top level**. Each row's **…** (or a
+    right-click) renames it, downloads it (a query as `.sql`, a folder as a `.zip` of its
+    `.sql` files) or deletes it (a folder with everything in it, after asking).
+  - **Import .sql files** adds `.sql` files as queries in the selected folder.
+  - Names are unique within a folder; up to 1,000 folders 20 deep and 5,000 queries of up to
+    1 MB each. In a private window, or with site data blocked, the panel says it can't keep
+    them, and everything else works.
+- 🎭 **Run as** (with access control on, for a user holding roles): a tab acts with one of
+  the user's roles (`SET ROLE`) or **All my roles**, and the schema browser and autocomplete
+  list what that role sees. Locked while a transaction is open. An administrator, who holds
+  every right already, has no picker.
+- 💾 **Downloads**: CSV, TSV, JSON and Excel (.xlsx) hold the rows as shown (the grid's filter
+  and sort); Parquet and Arrow IPC (.arrows) the whole result with the server's exact column
+  types. Excel keeps numbers as numbers where it holds them exactly, text (`00123`) as text.
 - 👥 **Sessions**: an administrator sees every session on the server and can end one
   (`KILL SESSION`); everyone else sees their own.
 - 🔐 **Hardcharger's own sign-in and access control.** The password goes once to

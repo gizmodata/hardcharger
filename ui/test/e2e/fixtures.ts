@@ -130,6 +130,11 @@ export async function runDone(page: Page, sql: string, keys = "ControlOrMeta+Ent
   await expect.poll(async () => Number(await tab.getAttribute("data-runs"))).toBeGreaterThan(before);
 }
 
+/** The editor tabs' bar (its tabs are role="tab"; so are the side panel's and the result sets'). */
+export function editorTabs(page: Page) {
+  return page.getByRole("tablist", { name: "Editor tabs" });
+}
+
 /** The editor tab on show (each tab keeps its own editor, toolbar and results). */
 export function activeTab(page: Page) {
   return page.locator(".editor-tab:not([hidden])");

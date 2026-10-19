@@ -1,7 +1,7 @@
-import { Check, Copy, Info, ListOrdered, Play, RotateCcw, Square, Undo2 } from "lucide-react";
+import { Check, Copy, Info, ListOrdered, Play, RotateCcw, Save, Square, Undo2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { catalogCache } from "../lib/catalogs";
+import { listingsFor } from "../lib/catalogs";
 import { copyText } from "../lib/clipboard";
 import type { monaco } from "../lib/monaco";
 import { type ScriptRun, cancelNote, messageFor, runScript } from "../lib/script";
@@ -41,7 +41,12 @@ interface Props {
   onStatus: (status: TabStatus) => void;
   onNewTab: () => void;
   onCloseTab: () => void;
-  onSave?: () => void;
+  /** Ctrl/⌘+S and Save: the tab's saved query (asking a name the first time). */
+  onSave?: (sql: string) => void;
+  /** Save as…: a copy under a new name. */
+  onSaveAs?: (sql: string) => void;
+  /** The roles the user may act with (Run as); empty: no picker. */
+  roles: readonly string[];
   onReady: (handle: TabHandle | undefined) => void;
   /** Run the whole text once the editor is ready (a table preview), then call onRunStarted. */
   runOnOpen?: boolean;
@@ -96,7 +101,11 @@ export function EditorTab(props: Props) {
     latest.current = props;
   });
 
-  const where: Where = { catalog: tab.catalog || defaults.catalog, schema: tab.schema || defaults.schema };
+  const where: Where = {
+    catalog: tab.catalog || defaults.catalog,
+    schema: tab.schema || defaults.schema,
+    role: tab.role,
+  };
   const sessionId = info?.serverId ?? info?.id ?? "";
   const schemas = schemaList && schemaList.catalog === where.catalog ? schemaList.names : undefined;
   const transaction = info?.transaction ?? "none";
@@ -119,7 +128,7 @@ export function EditorTab(props: Props) {
 
   // The catalogs the user may see, and the schemas of the tab's catalog, for the pickers
   // (Warp SQL metadata, as access control filters it).
-  const listings = useMemo(() => catalogCache(app, "", () => Promise.resolve(app.connection)), [app]);
+  const listings = useMemo(() => listingsFor(app, tab.role), [app, tab.role]);
   useEffect(() => {
     let live = true;
     listings.catalogs().then(
@@ -284,7 +293,13 @@ export function EditorTab(props: Props) {
   // the open session's at once; a session opens on them.
   useEffect(() => {
     const now = tabSession.info;
-    if (!tabSession.open || !now || (now.catalog === where.catalog && now.schema === where.schema)) return;
+    if (
+      !tabSession.open ||
+      !now ||
+      (now.catalog === where.catalog && now.schema === where.schema && now.role === where.role)
+    ) {
+      return;
+    }
     if (now.transaction !== "none") return;
     tabSession.setWhere(where).then(
       () => setInfo(tabSession.info),
@@ -294,7 +309,7 @@ export function EditorTab(props: Props) {
     );
     // where's parts are the dependencies.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [where.catalog, where.schema, tabSession, app]);
+  }, [where.catalog, where.schema, where.role, tabSession, app]);
 
   const newSession = async () => {
     if (inTransaction && !window.confirm("End this session? The open transaction will be rolled back.")) return;
@@ -336,7 +351,7 @@ export function EditorTab(props: Props) {
           onRunAll={runAll}
           onNewTab={props.onNewTab}
           onCloseTab={props.onCloseTab}
-          {...(props.onSave ? { onSave: props.onSave } : {})}
+          {...(props.onSave ? { onSave: () => props.onSave?.(editor.current?.value() ?? tab.sql) } : {})}
           onReady={(api) => {
             editor.current = api;
             setEditorReady(!!api);
@@ -420,6 +435,25 @@ export function EditorTab(props: Props) {
             ))}
           </select>
         </label>
+        {props.roles.length > 0 && (
+          <label className="toolbar-field" title={lockedTitle ?? "The role this tab acts with (SET ROLE)"}>
+            Run as
+            <select
+              aria-label="Run as"
+              value={tab.role}
+              disabled={inTransaction}
+              onChange={(e) => onChange({ role: e.target.value })}
+            >
+              <option value="">All my roles</option>
+              {tab.role && !props.roles.includes(tab.role) && <option value={tab.role}>{tab.role}</option>}
+              {props.roles.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="toolbar-field">
           Row limit
           <select
@@ -434,6 +468,28 @@ export function EditorTab(props: Props) {
             ))}
           </select>
         </label>
+        {props.onSave && (
+          <span className="button-pair">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => props.onSave?.(editor.current?.value() ?? tab.sql)}
+              title="Save the tab's SQL as a saved query (Ctrl/⌘+S)"
+              data-testid="save-button"
+            >
+              <Save size={14} /> Save
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => props.onSaveAs?.(editor.current?.value() ?? tab.sql)}
+              title="Save a copy under a new name"
+              aria-label="Save as…"
+            >
+              Save as…
+            </button>
+          </span>
+        )}
         <span className="toolbar-spacer" />
         <span className="toolbar-hint">
           Ctrl/⌘+Enter runs the statement at the cursor (or the selection) · ⇧ runs all · Alt+N new tab · Alt+W close

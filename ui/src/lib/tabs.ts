@@ -20,6 +20,8 @@ export interface TabDoc {
   /** The catalog and schema the tab's session uses ("": the user's default). */
   catalog: string;
   schema: string;
+  /** The role the tab acts with (Run as); "" for all of the user's roles. */
+  role: string;
   rowLimit: number;
   /** The saved query this tab edits, and its text as last saved (for the unsaved dot). */
   savedQueryId?: string;
@@ -44,7 +46,16 @@ export function nextTitle(tabs: readonly TabDoc[]): string {
 }
 
 export function makeTab(tabs: readonly TabDoc[], init: Partial<TabDoc> = {}): TabDoc {
-  return { id: newId(), title: nextTitle(tabs), sql: "", catalog: "", schema: "", rowLimit: defaultRowLimit, ...init };
+  return {
+    id: newId(),
+    title: nextTitle(tabs),
+    sql: "",
+    catalog: "",
+    schema: "",
+    role: "",
+    rowLimit: defaultRowLimit,
+    ...init,
+  };
 }
 
 /** True when the tab has text that isn't in a saved query (closing it would lose it). */
@@ -71,6 +82,7 @@ function normalized(t: TabDoc): TabDoc {
     ...t,
     catalog: typeof t.catalog === "string" ? t.catalog : "",
     schema: typeof t.schema === "string" ? t.schema : "",
+    role: typeof t.role === "string" ? t.role : "",
     rowLimit: typeof limit === "number" && (rowLimits as readonly number[]).includes(limit) ? limit : defaultRowLimit,
   };
 }

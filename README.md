@@ -81,7 +81,10 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   qualified, quoted where needed); preview a table, show a view's definition, search every
   table and view by name. Autocomplete offers tables, schemas, columns (through aliases too),
   functions and keywords.
-- 💾 **Exports** to CSV, TSV, JSON and Parquet, made in the browser.
+- 💾 **Downloads** of the rows as shown (CSV, TSV, JSON, Excel) or the whole typed result
+  (Parquet, Arrow IPC), made in the browser.
+- 📁 **Saved queries** in folders, kept in the browser, with export and import as a file;
+  **Run as** one of your roles under access control.
 - 🔏 **Certificate sign-in** under mutual TLS: the browser presents its client certificate to
   load `/ui` at all, and with `--mtls-certificate-sign-in` the page offers **Sign in with my
   certificate**, no password needed.

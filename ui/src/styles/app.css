@@ -992,3 +992,78 @@ select {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* The side panel's tabs: Saved queries and Data. */
+.panel-tabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.panel-tab {
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.panel-tab-active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.panel-body[hidden] {
+  display: none;
+}
+.saved-queries {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.tree-rename {
+  flex: 1;
+  height: 26px;
+  margin: 0 4px 0 8px;
+  border: 1px solid var(--hc-blue);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.tree-root {
+  font-weight: 600;
+}
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 16px 8px;
+}
+.field select {
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.field-error {
+  margin: 0;
+  color: var(--danger);
+}
+.button-pair {
+  display: inline-flex;
+  gap: 2px;
+}

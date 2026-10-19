@@ -20,7 +20,8 @@ export interface HarnessState {
   url: string;
   serverUrl: string;
   admin: { username: string; password: string };
-  user: { username: string; password: string; catalog: string };
+  /** A tenant user holding two roles: readers (orders) and billing (invoices). */
+  user: { username: string; password: string; catalog: string; roles: string[] };
   hiddenCatalog: string;
   catalog: string;
 }
@@ -133,7 +134,12 @@ export async function startHarness(): Promise<Harness> {
   const suffix = randomBytes(3).toString("hex");
   const acme = `acme_${suffix}`;
   const beta = `beta_${suffix}`;
-  const user = { username: `${acme}/joe`, password: `joe:${randomBytes(4).toString("hex")}@x`, catalog: acme };
+  const user = {
+    username: `${acme}/joe`,
+    password: `joe:${randomBytes(4).toString("hex")}@x`,
+    catalog: acme,
+    roles: [`${acme}/readers`, `${acme}/billing`],
+  };
   const admin = await connect({ url: serverUrl, username: "admin", password: adminPassword });
   const seed = [
     "CREATE SCHEMA sales",
@@ -157,6 +163,10 @@ export async function startHarness(): Promise<Harness> {
     `CREATE ROLE ${acme}/readers`,
     `GRANT SELECT ON ${acme}.main.orders TO ${acme}/readers`,
     `GRANT ${acme}/readers TO ${user.username}`,
+    `CREATE TABLE ${acme}.main.invoices AS SELECT range AS id, range * 10 AS total FROM range(2)`,
+    `CREATE ROLE ${acme}/billing`,
+    `GRANT SELECT ON ${acme}.main.invoices TO ${acme}/billing`,
+    `GRANT ${acme}/billing TO ${user.username}`,
   ];
   for (const sql of seed) await admin.execute(sql);
   const catalog = String((await admin.query("SELECT current_database() AS c")).get(0)!.toJSON()["c"]);
@@ -189,6 +199,7 @@ export async function startHarness(): Promise<Harness> {
         for (const sql of [
           `DROP USER ${user.username}`,
           `DROP ROLE ${acme}/readers`,
+          `DROP ROLE ${acme}/billing`,
           `ALTER CATALOG ${acme} UNSET TENANT`,
           `ALTER CATALOG ${beta} UNSET TENANT`,
           `DROP TENANT ${acme}`,

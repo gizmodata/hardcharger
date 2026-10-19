@@ -2,7 +2,9 @@ import { useEffect, useRef } from "react";
 
 export interface MenuItem {
   label: string;
-  run: () => void;
+  /** A group's heading: shown, not a choice. */
+  heading?: boolean;
+  run?: () => void;
   /** Why it can't be used now (shown as its tooltip), or undefined. */
   disabled?: string | undefined;
 }
@@ -16,11 +18,14 @@ export function FloatingMenu({
   y,
   items,
   onClose,
+  align = "left",
 }: {
   x: number;
   y: number;
   items: MenuItem[];
   onClose: () => void;
+  /** "right": the menu's right edge at x (under a button at the right of a toolbar). */
+  align?: "left" | "right";
 }) {
   const menu = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -58,7 +63,9 @@ export function FloatingMenu({
         className="menu menu-floating"
         role="menu"
         style={{
-          left: Math.min(x, window.innerWidth - 240),
+          ...(align === "right"
+            ? { right: Math.max(8, window.innerWidth - x) }
+            : { left: Math.min(x, window.innerWidth - 240) }),
           top: Math.min(y, window.innerHeight - items.length * 30 - 16),
         }}
         onKeyDown={(e) => {
@@ -68,21 +75,27 @@ export function FloatingMenu({
           }
         }}
       >
-        {items.map((item) => (
-          <button
-            key={item.label}
-            type="button"
-            role="menuitem"
-            disabled={!!item.disabled}
-            title={item.disabled}
-            onClick={() => {
-              onClose();
-              item.run();
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
+        {items.map((item) =>
+          item.heading ? (
+            <p key={item.label} className="menu-label">
+              {item.label}
+            </p>
+          ) : (
+            <button
+              key={item.label}
+              type="button"
+              role="menuitem"
+              disabled={!!item.disabled}
+              title={item.disabled}
+              onClick={() => {
+                onClose();
+                item.run?.();
+              }}
+            >
+              {item.label}
+            </button>
+          ),
+        )}
       </div>
     </>
   );

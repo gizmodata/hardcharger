@@ -1,17 +1,41 @@
-// Result exports: CSV, TSV and JSON from the Arrow table the grid shows; Parquet through
-// parquet-wasm (loaded only when asked for, see parquet.ts).
+// Result downloads. CSV, TSV, JSON and Excel hold the rows as the grid shows them (its filter
+// and sort); Parquet (parquet-wasm, loaded only when asked for, see parquet.ts) and Arrow IPC
+// hold the whole result as it arrived, with the server's exact column types.
 
-import type { DataType, Table } from "apache-arrow";
+import { type DataType, type Table, tableToIPC } from "apache-arrow";
 
 import { columnText, jsonFor } from "./format";
 
-export type ExportFormat = "csv" | "tsv" | "json" | "parquet";
+export type ExportFormat = "csv" | "tsv" | "json" | "xlsx" | "parquet" | "arrow";
 
-export const exportFormats: { format: ExportFormat; label: string; extension: string; type: string }[] = [
-  { format: "csv", label: "CSV (comma-separated)", extension: "csv", type: "text/csv" },
-  { format: "tsv", label: "TSV (tab-separated)", extension: "tsv", type: "text/tab-separated-values" },
-  { format: "json", label: "JSON", extension: "json", type: "application/json" },
-  { format: "parquet", label: "Parquet", extension: "parquet", type: "application/vnd.apache.parquet" },
+export interface ExportFormatInfo {
+  format: ExportFormat;
+  label: string;
+  extension: string;
+  type: string;
+  /** "shown": the rows as the grid shows them; "full": the whole result, typed. */
+  scope: "shown" | "full";
+}
+
+export const exportFormats: ExportFormatInfo[] = [
+  { format: "csv", label: "CSV (comma-separated)", extension: "csv", type: "text/csv", scope: "shown" },
+  { format: "tsv", label: "TSV (tab-separated)", extension: "tsv", type: "text/tab-separated-values", scope: "shown" },
+  { format: "json", label: "JSON", extension: "json", type: "application/json", scope: "shown" },
+  {
+    format: "xlsx",
+    label: "Excel (.xlsx)",
+    extension: "xlsx",
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    scope: "shown",
+  },
+  { format: "parquet", label: "Parquet", extension: "parquet", type: "application/vnd.apache.parquet", scope: "full" },
+  {
+    format: "arrow",
+    label: "Arrow IPC (.arrows)",
+    extension: "arrows",
+    type: "application/vnd.apache.arrow.stream",
+    scope: "full",
+  },
 ];
 
 /**
@@ -69,32 +93,41 @@ export function toDelimited(
   return lines.length ? `${lines.join("\n")}\n` : "";
 }
 
-/** The rows as a JSON array of objects, with exact numbers. */
-export function toJson(table: Table): string {
+/** The rows (those in `order`, in that order) as a JSON array of objects, with exact numbers. */
+export function toJson(table: Table, order?: readonly number[]): string {
   const json = table.schema.fields.map((f) => jsonFor(f.type as DataType));
   const keys = table.schema.fields.map((f) => JSON.stringify(f.name));
   const vectors = table.schema.fields.map((_, i) => table.getChildAt(i)!);
   const rows: string[] = [];
-  for (let r = 0; r < table.numRows; r++) {
+  const count = order ? order.length : table.numRows;
+  for (let p = 0; p < count; p++) {
+    const r = order ? order[p]! : p;
     rows.push(`{${keys.map((k, c) => `${k}:${json[c]!(vectors[c]!.get(r))}`).join(",")}}`);
   }
   return rows.length ? `[\n${rows.join(",\n")}\n]\n` : "[]\n";
 }
 
-/** A file of the table in `format`. */
-export async function exportTable(table: Table, format: ExportFormat): Promise<Blob> {
+/** A file of the table in `format`: `order` is the rows shown (the formats "as shown" use it). */
+export async function exportTable(table: Table, format: ExportFormat, order?: readonly number[]): Promise<Blob> {
   const meta = exportFormats.find((f) => f.format === format)!;
+  const shown = order ? { order } : {};
   switch (format) {
     case "csv":
-      return new Blob([toDelimited(table, ",")], { type: meta.type });
+      return new Blob([toDelimited(table, ",", shown)], { type: meta.type });
     case "tsv":
-      return new Blob([toDelimited(table, "\t")], { type: meta.type });
+      return new Blob([toDelimited(table, "\t", shown)], { type: meta.type });
     case "json":
-      return new Blob([toJson(table)], { type: meta.type });
+      return new Blob([toJson(table, order)], { type: meta.type });
+    case "xlsx": {
+      const { tableToXlsx } = await import("./xlsx");
+      return new Blob([(await tableToXlsx(table, shown)) as BlobPart], { type: meta.type });
+    }
     case "parquet": {
       const { tableToParquet } = await import("./parquet");
       const bytes = await tableToParquet(table);
       return new Blob([bytes], { type: meta.type });
     }
+    case "arrow":
+      return new Blob([tableToIPC(table, "stream") as BlobPart], { type: meta.type });
   }
 }

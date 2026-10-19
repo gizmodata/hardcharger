@@ -4,15 +4,17 @@
 
 import type { Connection } from "@gizmodata/warp-sql";
 
-import { CatalogCache } from "./catalogCache";
+import { CatalogCache, type ConnectionSource } from "./catalogCache";
+import { RoleConnection } from "./roles";
+import type { ConnectionOptions } from "./warp";
 
 const bySession = new WeakMap<object, Map<string, CatalogCache>>();
 
 /**
- * The cache for `role` in `session`. `open` gives the connection a role lists through (the
- * session's own connection for "").
+ * The cache for `role` in `session`. `source` gives the connection a role lists through (the
+ * session's own connection for ""); it is asked for once per role.
  */
-export function catalogCache(session: object, role: string, open: () => Promise<Connection>): CatalogCache {
+export function catalogCache(session: object, role: string, source: () => ConnectionSource): CatalogCache {
   let caches = bySession.get(session);
   if (!caches) {
     caches = new Map();
@@ -20,7 +22,7 @@ export function catalogCache(session: object, role: string, open: () => Promise<
   }
   let cache = caches.get(role);
   if (!cache) {
-    cache = new CatalogCache(open);
+    cache = new CatalogCache(source());
     caches.set(role, cache);
   }
   return cache;
@@ -38,4 +40,21 @@ export function clearCatalogCaches(session: object): void {
 export function onCatalogsChanged(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+interface Signed {
+  connection: Connection;
+  openConnection: (options?: ConnectionOptions) => Promise<Connection>;
+}
+
+/**
+ * The listings `role` sees in a signed-in session: through the session's own connection for
+ * "" (all of the user's roles), else through a connection of the role's own (SET ROLE).
+ */
+export function listingsFor(app: Signed, role: string): CatalogCache {
+  return catalogCache(app, role, () => {
+    if (!role) return { run: (work) => work(app.connection) };
+    const conn = new RoleConnection(role, () => app.openConnection({ reconnect: false }));
+    return { run: (work) => conn.run(work) };
+  });
 }

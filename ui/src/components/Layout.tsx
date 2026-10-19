@@ -2,7 +2,7 @@ import { Database, Info, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Sun, Users
 import { Suspense, lazy, useMemo, useState } from "react";
 
 import { useActiveTab } from "../lib/activeTab";
-import { catalogCache } from "../lib/catalogs";
+import { listingsFor } from "../lib/catalogs";
 import { useStoredSize } from "../lib/storedSize";
 import type { Page } from "../lib/route";
 import { loadModule } from "../lib/stale";
@@ -12,6 +12,7 @@ import { AboutDialog } from "./AboutDialog";
 import { ByGizmoData, TrademarkNotice, Wordmark } from "./Brand";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { DataExplorer } from "./DataExplorer";
+import { SavedQueriesPanel } from "./SavedQueriesPanel";
 import { ResizeHandle } from "./ResizeHandle";
 
 const panelSize = {
@@ -21,6 +22,16 @@ const panelSize = {
   maxPx: () => Math.max(220, Math.round(window.innerWidth * 0.45)),
 };
 const panelHiddenKey = "hardcharger-ui:side-panel-hidden";
+
+const panelTabKey = "hardcharger-ui:side-panel-tab";
+
+function storedPanelTab(): "saved" | "data" {
+  try {
+    return window.localStorage.getItem(panelTabKey) === "saved" ? "saved" : "data";
+  } catch {
+    return "data";
+  }
+}
 
 function storedHidden(): boolean {
   try {
@@ -59,12 +70,18 @@ export function Layout({ theme, page, go }: Props) {
       // not remembered
     }
   };
+  const [panelTab, setPanelTab] = useState<"saved" | "data">(storedPanelTab);
+  const choosePanelTab = (tab: "saved" | "data") => {
+    setPanelTab(tab);
+    try {
+      window.localStorage.setItem(panelTabKey, tab);
+    } catch {
+      // not remembered
+    }
+  };
   // The schema browser lists what the active editor tab's role may see.
   const active = useActiveTab();
-  const listings = useMemo(
-    () => catalogCache(session, active.role, () => Promise.resolve(session.connection)),
-    [session, active.role],
-  );
+  const listings = useMemo(() => listingsFor(session, active.role), [session, active.role]);
 
   const nav = (target: Page, label: string, icon: React.ReactNode) => (
     <button
@@ -136,7 +153,31 @@ export function Layout({ theme, page, go }: Props) {
         {!panelHidden && (
           <>
             <aside className="sidebar" style={{ width: panelWidth }} aria-label="Side panel" data-testid="side-panel">
-              <DataExplorer cache={listings} />
+              <div className="panel-tabs" role="tablist" aria-label="Side panel">
+                {(
+                  [
+                    ["saved", "Saved queries"],
+                    ["data", "Data"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    aria-selected={panelTab === key}
+                    className={`panel-tab${panelTab === key ? " panel-tab-active" : ""}`}
+                    onClick={() => choosePanelTab(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="panel-body" hidden={panelTab !== "saved"}>
+                <SavedQueriesPanel />
+              </div>
+              <div className="panel-body" hidden={panelTab !== "data"}>
+                <DataExplorer cache={listings} />
+              </div>
               <footer className="sidebar-foot">
                 <ByGizmoData />
                 <TrademarkNotice />

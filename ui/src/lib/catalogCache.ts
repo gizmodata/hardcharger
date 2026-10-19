@@ -67,13 +67,18 @@ const records = (t: Rows) =>
 const str = (v: unknown) =>
   typeof v === "string" ? v : v === null || v === undefined ? "" : (v as number | bigint | boolean).toString();
 
+/** Where listings are read: a connection, run again on a new session if the server lost one. */
+export interface ConnectionSource {
+  run<T>(work: (conn: Connection) => Promise<T>): Promise<T>;
+}
+
 export class CatalogCache {
-  readonly #conn: () => Promise<Connection>;
+  readonly #source: ConnectionSource;
   readonly #entries = new Map<string, { at: number; value: Promise<unknown> }>();
   #generation = 0;
 
-  constructor(conn: () => Promise<Connection>) {
-    this.#conn = conn;
+  constructor(source: ConnectionSource) {
+    this.#source = source;
   }
 
   /** Bumped by clear(): what a listing was made from. */
@@ -100,13 +105,13 @@ export class CatalogCache {
 
   catalogs(): Promise<string[]> {
     return this.#cached("catalogs", async () =>
-      records(await (await this.#conn()).metadata.catalogs()).map((r) => str(r["catalog_name"])),
+      records(await this.#source.run((c) => c.metadata.catalogs())).map((r) => str(r["catalog_name"])),
     );
   }
 
   schemas(catalog: string): Promise<string[]> {
     return this.#cached(JSON.stringify(["schemas", catalog]), async () =>
-      records(await (await this.#conn()).metadata.dbSchemas({ catalog }))
+      records(await this.#source.run((c) => c.metadata.dbSchemas({ catalog })))
         .filter((r) => r["catalog_name"] === catalog)
         .map((r) => str(r["db_schema_name"])),
     );
@@ -114,7 +119,7 @@ export class CatalogCache {
 
   tables(catalog: string, schema: string): Promise<TableEntry[]> {
     return this.#cached(JSON.stringify(["tables", catalog, schema]), async () =>
-      records(await (await this.#conn()).metadata.tables({ catalog, dbSchemaFilterPattern: exactLike(schema) }))
+      records(await this.#source.run((c) => c.metadata.tables({ catalog, dbSchemaFilterPattern: exactLike(schema) })))
         .filter((r) => r["db_schema_name"] === schema)
         .map((r) => {
           const type = str(r["table_type"]);
@@ -125,12 +130,13 @@ export class CatalogCache {
 
   columns(catalog: string, schema: string, table: string): Promise<ColumnEntry[]> {
     return this.#cached(JSON.stringify(["columns", catalog, schema, table]), async () => {
-      const conn = await this.#conn();
-      const found = await conn.metadata.columns({
-        catalog,
-        dbSchemaFilterPattern: exactLike(schema),
-        tableNameFilterPattern: exactLike(table),
-      });
+      const found = await this.#source.run((conn) =>
+        conn.metadata.columns({
+          catalog,
+          dbSchemaFilterPattern: exactLike(schema),
+          tableNameFilterPattern: exactLike(table),
+        }),
+      );
       return found
         .filter((c) => c.dbSchemaName === schema && c.tableName === table)
         .map((c) => ({ name: c.columnName, type: c.typeName ?? String(c.field.type), nullable: c.nullable }));
@@ -140,15 +146,16 @@ export class CatalogCache {
   /** The engine's keywords and functions (as the user may see them), for autocomplete. */
   vocabulary(): Promise<Vocabulary> {
     return this.#cached("vocabulary", async () => {
-      const conn = await this.#conn();
-      const [k, f] = await Promise.all([
-        conn.query("SELECT DISTINCT keyword_name FROM duckdb_keywords() ORDER BY 1"),
-        conn.query(
-          "SELECT DISTINCT function_name, function_type FROM duckdb_functions() " +
-            "WHERE NOT internal OR function_type IN ('scalar', 'aggregate', 'table', 'macro', 'table_macro') " +
-            "ORDER BY 1",
-        ),
-      ]);
+      const [k, f] = await this.#source.run((conn) =>
+        Promise.all([
+          conn.query("SELECT DISTINCT keyword_name FROM duckdb_keywords() ORDER BY 1"),
+          conn.query(
+            "SELECT DISTINCT function_name, function_type FROM duckdb_functions() " +
+              "WHERE NOT internal OR function_type IN ('scalar', 'aggregate', 'table', 'macro', 'table_macro') " +
+              "ORDER BY 1",
+          ),
+        ]),
+      );
       return {
         keywords: records(k).map((r) => str(r["keyword_name"])),
         functions: records(f)
@@ -160,8 +167,7 @@ export class CatalogCache {
 
   /** Tables and views whose name contains `term` (at most searchLimit, and whether there were more). */
   async search(term: string): Promise<{ hits: SearchHit[]; more: boolean }> {
-    const conn = await this.#conn();
-    const rows = records(await conn.query(searchSql(term)));
+    const rows = records(await this.#source.run((conn) => conn.query(searchSql(term))));
     const hits = rows.map((r) => ({
       catalog: str(r["database_name"]),
       schema: str(r["schema_name"]),
@@ -173,11 +179,13 @@ export class CatalogCache {
 
   /** A view's CREATE VIEW statement, as the engine keeps it. */
   async viewDefinition(catalog: string, schema: string, view: string): Promise<string | undefined> {
-    const conn = await this.#conn();
     const rows = records(
-      await conn.query(
-        "SELECT sql FROM duckdb_views() WHERE database_name = $1 AND schema_name = $2 AND view_name = $3",
-        [catalog, schema, view],
+      await this.#source.run((conn) =>
+        conn.query("SELECT sql FROM duckdb_views() WHERE database_name = $1 AND schema_name = $2 AND view_name = $3", [
+          catalog,
+          schema,
+          view,
+        ]),
       ),
     );
     const sql = rows[0]?.["sql"];

@@ -14,6 +14,8 @@ export interface EditorApi {
   /** Every statement in the editor, for Run all. */
   all: () => { statements: string[]; range: monaco.IRange } | undefined;
   insert: (text: string) => void;
+  /** The editor's text now (the tab's copy follows it a render later). */
+  value: () => string;
   focus: () => void;
   highlight: (range: monaco.IRange | undefined) => void;
 }
@@ -207,6 +209,7 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
         ed.pushUndoStop();
         ed.focus();
       },
+      value: () => model.getValue(),
       focus: () => ed.focus(),
       highlight: (range) => {
         running.clear();

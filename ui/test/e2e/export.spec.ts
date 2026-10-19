@@ -1,13 +1,14 @@
 import { readFileSync } from "node:fs";
+import { inflateRawSync } from "node:zlib";
 
 import type { Page } from "@playwright/test";
 import { tableFromIPC } from "apache-arrow";
 import { readParquet } from "parquet-wasm";
 
-import { expect, gridRows, runSql, signIn, test } from "./fixtures.ts";
+import { activeTab, expect, gridRows, runDone, runSql, signIn, test } from "./fixtures.ts";
 
 async function exportAs(page: Page, label: string): Promise<{ name: string; bytes: Buffer }> {
-  await page.getByTestId("export-button").click();
+  await activeTab(page).getByTestId("export-button").click();
   const download = page.waitForEvent("download");
   await page.getByRole("menuitem", { name: label }).click();
   const d = await download;
@@ -58,4 +59,56 @@ test("the Parquet export (WebAssembly, under the server's CSP) reads back the sa
     { id: 3, label: null, note: "line\nbreak" },
   ]);
   await expect(page.getByTestId("results-notice")).toHaveText("Exported 3 rows as PARQUET.");
+});
+
+/** The files of a zip (an .xlsx), read back. */
+function unzip(bytes: Buffer): Map<string, string> {
+  const out = new Map<string, string>();
+  let at = 0;
+  while (bytes.readUInt32LE(at) === 0x04034b50) {
+    const method = bytes.readUInt16LE(at + 8);
+    const size = bytes.readUInt32LE(at + 18);
+    const nameLength = bytes.readUInt16LE(at + 26);
+    const name = bytes.subarray(at + 30, at + 30 + nameLength).toString();
+    const body = bytes.subarray(at + 30 + nameLength, at + 30 + nameLength + size);
+    out.set(name, (method === 8 ? inflateRawSync(body) : body).toString());
+    at += 30 + nameLength + size;
+  }
+  return out;
+}
+
+test("CSV, TSV, JSON and Excel hold the rows as shown (filtered and sorted)", async ({ page }) => {
+  const tab = activeTab(page);
+  await tab.getByTestId("results-filter").fill("odd"); // row 1 only
+  await tab.getByRole("columnheader", { name: /^id/ }).getByRole("button").click();
+  const csv = await exportAs(page, "CSV (comma-separated)");
+  expect(csv.bytes.toString()).toBe("id,label,note\n1,plain,nothing odd\n");
+  await tab.getByTestId("results-filter").fill("");
+  await tab.getByRole("columnheader", { name: /^id/ }).getByRole("button").click(); // descending
+  const json = await exportAs(page, "JSON");
+  expect((JSON.parse(json.bytes.toString()) as { id: number }[]).map((r) => r.id)).toEqual([3, 2, 1]);
+  const xlsx = await exportAs(page, "Excel (.xlsx)");
+  expect(xlsx.name).toMatch(/\.xlsx$/);
+  const sheet = unzip(xlsx.bytes).get("xl/worksheets/sheet1.xml")!;
+  const ids = [...sheet.matchAll(/<c r="A(\d+)"><v>(\d+)<\/v><\/c>/g)].map((m) => m[2]);
+  expect(ids).toEqual(["3", "2", "1"]);
+  expect(sheet).toContain('<t xml:space="preserve">line\nbreak</t>');
+  await expect(page.getByTestId("results-notice")).toHaveText("Exported 3 rows as XLSX.");
+});
+
+test("Arrow IPC holds the full result with the server's exact types", async ({ page }) => {
+  await runDone(
+    page,
+    "SELECT 12345678901234567890::HUGEINT AS big, 0.10::DECIMAL(4,2) AS cents, TIMESTAMP '2026-10-18 01:02:03.25' AS ts, [1, 2] AS l",
+  );
+  const arrow = await exportAs(page, "Arrow IPC (.arrows)");
+  expect(arrow.name).toMatch(/\.arrows$/);
+  const table = tableFromIPC(new Uint8Array(arrow.bytes));
+  expect(table.schema.fields.map((f) => [f.name, String(f.type)])).toEqual([
+    ["big", "Decimal[38e0]"],
+    ["cents", "Decimal[4e+2]"],
+    ["ts", "Timestamp<MICROSECOND>"],
+    ["l", "List<Int32>"],
+  ]);
+  expect(table.numRows).toBe(1);
 });

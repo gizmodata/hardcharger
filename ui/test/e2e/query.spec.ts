@@ -1,4 +1,4 @@
-import { expect, expectProblem, gridRows, runSql, setSql, signIn, test } from "./fixtures.ts";
+import { expect, expectProblem, gridRows, runSql, setSql, signIn, test, editorTabs } from "./fixtures.ts";
 
 test.beforeEach(async ({ page, harness }) => {
   await signIn(page, harness.admin);
@@ -89,15 +89,15 @@ test("tabs keep their own SQL and results", async ({ page }) => {
   await runSql(page, "SELECT 'one' AS tab");
   expect((await gridRows(page))[1]).toEqual(["one"]);
   await page.getByRole("button", { name: "New tab" }).click();
-  await expect(page.getByRole("tab", { selected: true })).toHaveText("Query 2");
+  await expect(editorTabs(page).getByRole("tab", { selected: true })).toHaveText("Query 2");
   await runSql(page, "SELECT 'two' AS tab");
   expect((await gridRows(page))[1]).toEqual(["two"]);
-  await page.getByRole("tab", { name: "Query 1" }).click();
+  await editorTabs(page).getByRole("tab", { name: "Query 1" }).click();
   expect((await gridRows(page))[1]).toEqual(["one"]);
   // Its text isn't saved anywhere: closing it asks first.
   page.once("dialog", (d) => void d.accept());
   await page.getByRole("button", { name: "Close Query 2" }).click();
-  await expect(page.getByRole("tab")).toHaveCount(1);
+  await expect(editorTabs(page).getByRole("tab")).toHaveCount(1);
 });
 
 test("the row limit caps what is read and says so", async ({ page }) => {

@@ -10,6 +10,7 @@
 
 import { type Connection, ErrorCode, type TransactionState, WarpSqlError } from "@gizmodata/warp-sql";
 
+import { setRoleSql } from "./roles";
 import type { StatementStream } from "./script";
 
 export interface SessionInfo {
@@ -21,11 +22,15 @@ export interface SessionInfo {
   catalog: string;
   schema: string;
   idleTimeoutS: number | undefined;
+  /** The role it acts with ("": all of the user's roles), as this tab set it. */
+  role: string;
 }
 
 export interface Where {
   catalog: string;
   schema: string;
+  /** The role the session acts with (SET ROLE); "" or absent for all of the user's roles. */
+  role?: string;
 }
 
 export type Opener = (where: Where) => Promise<Connection>;
@@ -55,6 +60,7 @@ export class TabSession {
   readonly #identify: Identify | undefined;
   #conn: Promise<Connection> | undefined;
   #serverId: string | undefined;
+  #role = "";
   #info: SessionInfo | undefined;
   /** Why the last session was replaced (shown once as a note), if it was. */
   #replaced: string | undefined;
@@ -83,6 +89,11 @@ export class TabSession {
     if (!this.#conn) {
       const opening = this.#open(where).then(async (conn) => {
         this.#serverId = this.#identify ? await this.#identify(conn).catch(() => undefined) : undefined;
+        this.#role = "";
+        if (where.role) {
+          await conn.execute(setRoleSql(where.role));
+          this.#role = where.role;
+        }
         return conn;
       });
       opening.catch(() => {
@@ -155,6 +166,7 @@ export class TabSession {
     this.#info = {
       id: doc.session_id,
       serverId: this.#serverId,
+      role: this.#role,
       transaction: doc.transaction,
       catalog: typeof options["catalog"] === "string" ? options["catalog"] : "",
       schema: typeof options["schema"] === "string" ? options["schema"] : "",
@@ -163,15 +175,19 @@ export class TabSession {
     return this.#info;
   }
 
-  /** Sets the session's catalog and schema now, if it is open (else at its opening). */
+  /** Sets the session's catalog, schema and role now, if it is open (else at its opening). */
   async setWhere(where: Where): Promise<void> {
     if (!this.#conn) return;
     const options: Record<string, string> = {};
     if (where.catalog) options["catalog"] = where.catalog;
     if (where.schema) options["schema"] = where.schema;
-    if (Object.keys(options).length === 0) return;
+    const role = where.role ?? "";
     await this.run(where, async (conn) => {
-      await conn.setOptions(options);
+      if (Object.keys(options).length) await conn.setOptions(options);
+      if (role !== this.#role) {
+        await conn.execute(setRoleSql(role));
+        this.#role = role;
+      }
       await this.#read(conn);
     });
   }

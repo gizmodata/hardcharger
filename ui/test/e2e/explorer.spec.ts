@@ -14,6 +14,7 @@ import {
   setSql,
   signIn,
   test,
+  editorTabs,
 } from "./fixtures.ts";
 
 test.beforeEach(async ({ page, harness }) => {
@@ -95,7 +96,7 @@ test("the menu: preview, SELECT, column names, copy, a view's definition, use th
   const orders = sales.getByRole("treeitem", { name: "orders", exact: true });
 
   await menu(page, orders, "Preview data");
-  await expect(page.getByRole("tab", { selected: true })).toHaveText("orders");
+  await expect(editorTabs(page).getByRole("tab", { selected: true })).toHaveText("orders");
   await expect(activeTab(page).getByTestId("results-status")).toContainText("100 rows in");
   await expect(activeTab(page).getByLabel("Schema")).toHaveValue("sales");
 

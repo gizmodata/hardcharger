@@ -9,6 +9,18 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Web UI, saved queries, Run as and downloads: saved queries in folders, kept in this
+  browser (IndexedDB, per user; the page works without it), with Save (Ctrl/⌘+S; the same
+  query after the first time), Save as…, the unsaved dot, new folder, rename, move by drag,
+  delete (asking, with counts), import .sql files, a query's .sql or a folder's .zip, opening
+  a query (or going to its tab), and the whole library exported to a file and imported in
+  another browser. Run as: under access control a user's tab acts with one of their roles
+  (SET ROLE) or all of them, the schema browser and autocomplete listing what that role sees;
+  locked in a transaction; no picker for an administrator or without access control.
+  Downloads: CSV, TSV, JSON and Excel (.xlsx, written here) of the rows as shown (the grid's
+  filter and sort), Parquet and Arrow IPC (.arrows) of the whole result with its exact types.
+  e2e `saved.spec.ts`, `roles.spec.ts`, `export.spec.ts` (Excel, Arrow, as shown); unit tests of
+  the zip and xlsx writers (a workbook also read back with openpyxl).
 - Web UI, the schema browser and autocomplete: Tables and Views groups, column type icons,
   double-click or drag a fully qualified, quoted-where-needed name into the editor, a menu
   (insert or copy a name, preview data in a new tab on that catalog and schema, insert column
