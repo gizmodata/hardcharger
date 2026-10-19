@@ -29,8 +29,6 @@ import "monaco-editor/languages/definitions/sql/register.js";
 import * as monaco from "monaco-editor/editor/editor.api.js";
 import EditorWorker from "monaco-editor/editor/editor.worker.js?worker";
 
-import { completionNames } from "./names";
-
 self.MonacoEnvironment = {
   getWorker: () => new EditorWorker(),
 };
@@ -60,34 +58,6 @@ monaco.editor.defineTheme("hardcharger-dark", {
     "editor.background": "#0b1416",
     "editorLineNumber.foreground": "#8fa3a0",
     "editor.lineHighlightBackground": "#101f26",
-  },
-});
-
-const keywords = `SELECT FROM WHERE GROUP BY ORDER HAVING LIMIT OFFSET JOIN LEFT RIGHT FULL INNER OUTER CROSS
-  ON USING AS AND OR NOT IN IS NULL LIKE ILIKE BETWEEN CASE WHEN THEN ELSE END DISTINCT ALL UNION
-  INTERSECT EXCEPT WITH RECURSIVE INSERT INTO VALUES UPDATE SET DELETE CREATE REPLACE TABLE VIEW
-  SCHEMA DATABASE DROP ALTER ADD COLUMN INDEX IF EXISTS PRIMARY KEY FOREIGN REFERENCES DEFAULT
-  CAST TRY_CAST QUALIFY WINDOW OVER PARTITION ROWS RANGE PIVOT UNPIVOT DESCRIBE SUMMARIZE SHOW
-  EXPLAIN ANALYZE ATTACH DETACH USE COPY TO EXPORT IMPORT BEGIN COMMIT ROLLBACK TRANSACTION
-  GRANT REVOKE ROLE USER COUNT SUM AVG MIN MAX ASC DESC NULLS FIRST LAST TRUE FALSE`
-  .split(/\s+/)
-  .filter(Boolean);
-
-monaco.languages.registerCompletionItemProvider("sql", {
-  provideCompletionItems(model, position) {
-    const word = model.getWordUntilPosition(position);
-    const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
-    return {
-      suggestions: [
-        ...keywords.map((k) => ({ label: k, kind: monaco.languages.CompletionItemKind.Keyword, insertText: k, range })),
-        ...[...completionNames].map((n) => ({
-          label: n,
-          kind: monaco.languages.CompletionItemKind.Field,
-          insertText: n,
-          range,
-        })),
-      ],
-    };
   },
 });
 

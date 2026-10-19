@@ -12,6 +12,7 @@ test("screenshots of the main views", async ({ page, harness }, testInfo) => {
   await page.getByRole("button", { name: "Light theme" }).click();
 
   await signIn(page, harness.admin);
+  await editorFocused(page);
   const catalog = page.getByRole("treeitem", { name: harness.catalog, exact: true });
   const sales = catalog.getByRole("treeitem", { name: "sales", exact: true });
   await sales.getByRole("button", { name: "sales" }).click();
@@ -20,7 +21,6 @@ test("screenshots of the main views", async ({ page, harness }, testInfo) => {
   await expect(orders.getByRole("treeitem", { name: "amount" })).toBeVisible();
   // A second tab with a script (a result tab per result set) and an open transaction, then
   // back to the first tab, named, with its result.
-  await editorFocused(page);
   await page.getByRole("tab", { name: "Query 1" }).dblclick();
   await page.getByLabel("Tab name").fill("Top customers");
   await page.getByLabel("Tab name").press("Enter");
@@ -57,6 +57,21 @@ test("screenshots of the main views", async ({ page, harness }, testInfo) => {
 
   await page.getByRole("button", { name: "Dark theme" }).click();
   await shot("query-dark");
+
+  // The schema browser: a search, and a view's menu.
+  await page.getByLabel("Search tables and views").fill("order");
+  await expect(page.getByTestId("search-results").getByRole("button").first()).toBeVisible();
+  const view = sales.getByRole("treeitem", { name: "big_orders", exact: true });
+  await view.locator(":scope > .tree-row-wrap").click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Show definition" })).toBeVisible();
+  await shot("explorer-dark");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Light theme" }).click();
+  await view.locator(":scope > .tree-row-wrap").click({ button: "right" });
+  await shot("explorer-light");
+  await page.keyboard.press("Escape");
+  await page.getByLabel("Search tables and views").fill("");
+  await page.getByRole("button", { name: "Dark theme" }).click();
 
   await page.getByRole("button", { name: "Sessions" }).click();
   await expect(page.getByTestId("sessions-table")).toBeVisible();

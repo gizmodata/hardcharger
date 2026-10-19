@@ -75,8 +75,12 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   filter, resize columns, and select cells, ranges or rows like a spreadsheet, with the full
   keyboard. Ctrl/⌘+C copies so a paste into Excel or Google Sheets lands as cells (in every
   browser, Safari included); double-click or Enter shows a value in full, JSON pretty-printed.
-- 🗂️ **Schema browser** that follows access control: each user sees only the catalogs,
-  schemas, tables and columns their roles allow.
+- 🗂️ **Schema browser and autocomplete** that follow access control: each user sees only the
+  catalogs, schemas, tables and columns their roles allow. Tables and Views in their own
+  groups, columns with their types; double-click or drag a name into the editor (fully
+  qualified, quoted where needed); preview a table, show a view's definition, search every
+  table and view by name. Autocomplete offers tables, schemas, columns (through aliases too),
+  functions and keywords.
 - 💾 **Exports** to CSV, TSV, JSON and Parquet, made in the browser.
 - 🔏 **Certificate sign-in** under mutual TLS: the browser presents its client certificate to
   load `/ui` at all, and with `--mtls-certificate-sign-in` the page offers **Sign in with my

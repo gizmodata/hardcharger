@@ -121,6 +121,11 @@ export function App() {
   );
 
   const insertText = useCallback((text: string) => queryPage.current?.insert(text), []);
+  const pointTabAt = useCallback(
+    (catalog: string, schema?: string) =>
+      queryPage.current ? queryPage.current.pointTabAt(catalog, schema) : "Open the query page first.",
+    [],
+  );
 
   const registerQueryPage = useCallback((handle: QueryPageHandle) => {
     queryPage.current = handle;
@@ -149,9 +154,10 @@ export function App() {
       },
       requestQuery,
       insertText,
+      pointTabAt,
       registerQueryPage,
     };
-  }, [phase, server, signOut, openExtraConnection, requestQuery, insertText, registerQueryPage]);
+  }, [phase, server, signOut, openExtraConnection, requestQuery, insertText, pointTabAt, registerQueryPage]);
 
   // The session's functions read refs only when called (in handlers and effects), never while
   // rendering; the compiler's check can't tell them apart from a read of the ref itself.

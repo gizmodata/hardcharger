@@ -1,6 +1,7 @@
 import { Check, Copy, Info, ListOrdered, Play, RotateCcw, Square, Undo2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { catalogCache } from "../lib/catalogs";
 import { copyText } from "../lib/clipboard";
 import type { monaco } from "../lib/monaco";
 import { type ScriptRun, cancelNote, messageFor, runScript } from "../lib/script";
@@ -118,12 +119,13 @@ export function EditorTab(props: Props) {
 
   // The catalogs the user may see, and the schemas of the tab's catalog, for the pickers
   // (Warp SQL metadata, as access control filters it).
+  const listings = useMemo(() => catalogCache(app, "", () => Promise.resolve(app.connection)), [app]);
   useEffect(() => {
     let live = true;
-    app.connection.metadata.catalogs().then(
-      (t) => {
+    listings.catalogs().then(
+      (names) => {
         if (!live) return;
-        setCatalogs([...t].map((r) => (r as { catalog_name: string }).catalog_name));
+        setCatalogs(names);
         setListingError(undefined);
       },
       (err: unknown) => {
@@ -135,18 +137,9 @@ export function EditorTab(props: Props) {
     return () => {
       live = false;
     };
-  }, [app, props.catalogVersion]);
+  }, [app, listings, props.catalogVersion]);
 
-  const listSchemas = useCallback(
-    async (catalog: string): Promise<string[]> => {
-      const t = await app.connection.metadata.dbSchemas({ catalog });
-      return [...t]
-        .map((r) => r as { catalog_name: string | null; db_schema_name: string })
-        .filter((r) => r.catalog_name === catalog)
-        .map((r) => r.db_schema_name);
-    },
-    [app],
-  );
+  const listSchemas = useCallback((catalog: string) => listings.schemas(catalog), [listings]);
 
   useEffect(() => {
     let live = true;
@@ -277,25 +270,31 @@ export function EditorTab(props: Props) {
     if (inTransaction) return;
     try {
       const names = await listSchemas(catalog);
-      const schema = names.includes("main") ? "main" : (names[0] ?? "");
-      onChange({ catalog, schema });
-      await tabSession.setWhere({ catalog, schema });
-      setInfo(tabSession.info);
+      onChange({ catalog, schema: names.includes("main") ? "main" : (names[0] ?? "") });
     } catch (err) {
       if (!app.checkSignIn(err)) setNotice(errorMessage(err));
     }
   };
 
-  const pickSchema = async (schema: string) => {
-    if (inTransaction) return;
-    onChange({ catalog: where.catalog, schema });
-    try {
-      await tabSession.setWhere({ catalog: where.catalog, schema });
-      setInfo(tabSession.info);
-    } catch (err) {
-      if (!app.checkSignIn(err)) setNotice(errorMessage(err));
-    }
+  const pickSchema = (schema: string) => {
+    if (!inTransaction) onChange({ catalog: where.catalog, schema });
   };
+
+  // The tab's catalog and schema (a picker, the schema browser's "Use this catalog") become
+  // the open session's at once; a session opens on them.
+  useEffect(() => {
+    const now = tabSession.info;
+    if (!tabSession.open || !now || (now.catalog === where.catalog && now.schema === where.schema)) return;
+    if (now.transaction !== "none") return;
+    tabSession.setWhere(where).then(
+      () => setInfo(tabSession.info),
+      (err: unknown) => {
+        if (!app.checkSignIn(err)) setNotice(errorMessage(err));
+      },
+    );
+    // where's parts are the dependencies.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [where.catalog, where.schema, tabSession, app]);
 
   const newSession = async () => {
     if (inTransaction && !window.confirm("End this session? The open transaction will be rolled back.")) return;
@@ -325,6 +324,11 @@ export function EditorTab(props: Props) {
     >
       <div className="editor-area" style={{ height: editorHeight }}>
         <SqlEditor
+          completion={() => ({
+            cache: listings,
+            catalog: latest.current.tab.catalog || latest.current.defaults.catalog,
+            schema: latest.current.tab.schema || latest.current.defaults.schema,
+          })}
           value={tab.sql}
           theme={theme}
           onChange={(sql) => onChange({ sql })}
@@ -403,7 +407,7 @@ export function EditorTab(props: Props) {
             aria-label="Schema"
             value={where.schema}
             disabled={inTransaction || !schemas}
-            onChange={(e) => void pickSchema(e.target.value)}
+            onChange={(e) => pickSchema(e.target.value)}
           >
             {!schemas && <option value={where.schema}>Loading…</option>}
             {schemas && where.schema && !schemas.includes(where.schema) && (

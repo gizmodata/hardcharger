@@ -137,36 +137,6 @@
   color: var(--faint);
 }
 
-.menu-wrap {
-  position: relative;
-}
-.menu {
-  position: absolute;
-  right: 0;
-  top: 30px;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  min-width: 200px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-  box-shadow: var(--shadow);
-}
-.menu button {
-  height: 30px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-.menu button:hover {
-  background: var(--hover);
-}
-
 /* The grid: rows are positioned absolutely (only those in view exist), the header sticks. */
 .grid {
   flex: 1;
@@ -597,7 +567,7 @@
   display: flex;
   align-items: center;
 }
-.grid-filter svg {
+.grid-filter > svg {
   position: absolute;
   left: 7px;
   color: var(--faint);
@@ -617,17 +587,6 @@
 .grid-filter input:focus {
   outline: 2px solid var(--hc-blue);
   outline-offset: -1px;
-}
-.grid-filter-clear {
-  position: absolute;
-  right: 4px;
-  display: flex;
-  padding: 2px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--faint);
-  cursor: pointer;
 }
 .editor-tab-expanded > .editor-area,
 .editor-tab-expanded > .resize-handle,

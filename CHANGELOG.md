@@ -9,6 +9,18 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Web UI, the schema browser and autocomplete: Tables and Views groups, column type icons,
+  double-click or drag a fully qualified, quoted-where-needed name into the editor, a menu
+  (insert or copy a name, preview data in a new tab on that catalog and schema, insert column
+  names or a SELECT, a view's definition, use this catalog and schema; not during a
+  transaction), search of every table and view the user may see (two or more characters, up
+  to 100), re-listing after a run that changes the catalog, Retry on a failed listing, and a
+  hideable, resizable side panel (kept in this browser). Autocomplete of catalogs, schemas,
+  tables, views, columns (through aliases), functions and keywords from the server's
+  metadata, as access control filters it; nothing inside strings or comments. e2e
+  `explorer.spec.ts`, `autocomplete.spec.ts` (an RBAC user is offered only what they may see),
+  unit tests of the completion parser and quoting.
+
 - Web UI, the results grid: sort by a column (asc, desc, off; NULLs last, typed: exact
   decimals and 64-bit integers, byte-order text), a filter across every column, column
   resizing (drag, double-click to fit, arrow keys), the spreadsheet selection with its whole

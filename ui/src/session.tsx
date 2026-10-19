@@ -21,12 +21,17 @@ export interface QueryRequest {
   run: boolean;
   newTab: boolean;
   title?: string;
+  /** The new tab's catalog and schema (a table preview opens where the table is). */
+  catalog?: string;
+  schema?: string;
 }
 
 /** What the query page offers the rest of the app while it is mounted. */
 export interface QueryPageHandle {
   open: (request: QueryRequest) => void;
   insert: (text: string) => void;
+  /** Points the active tab at a catalog (and schema); says why not when it can't. */
+  pointTabAt: (catalog: string, schema?: string) => string | undefined;
 }
 
 export interface AppSession {
@@ -45,6 +50,8 @@ export interface AppSession {
   requestQuery: (request: QueryRequest) => void;
   /** Inserts text into the active editor at its cursor. */
   insertText: (text: string) => void;
+  /** Points the active editor tab at a catalog (and schema); says why not when it can't. */
+  pointTabAt: (catalog: string, schema?: string) => string | undefined;
   /** The query page registers itself while mounted; returns the way to unregister. */
   registerQueryPage: (handle: QueryPageHandle) => () => void;
 }

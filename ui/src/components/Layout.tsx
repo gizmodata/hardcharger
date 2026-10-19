@@ -1,6 +1,9 @@
-import { Database, Info, LogOut, Moon, Sun, Users } from "lucide-react";
-import { Suspense, lazy, useCallback, useState } from "react";
+import { Database, Info, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Sun, Users } from "lucide-react";
+import { Suspense, lazy, useMemo, useState } from "react";
 
+import { useActiveTab } from "../lib/activeTab";
+import { catalogCache } from "../lib/catalogs";
+import { useStoredSize } from "../lib/storedSize";
 import type { Page } from "../lib/route";
 import { loadModule } from "../lib/stale";
 import type { Theme } from "../lib/theme";
@@ -8,7 +11,24 @@ import { useSession } from "../session";
 import { AboutDialog } from "./AboutDialog";
 import { ByGizmoData, TrademarkNotice, Wordmark } from "./Brand";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { SchemaBrowser } from "./SchemaBrowser";
+import { DataExplorer } from "./DataExplorer";
+import { ResizeHandle } from "./ResizeHandle";
+
+const panelSize = {
+  key: "hardcharger-ui:side-panel-width",
+  defaultPx: 288,
+  minPx: 220,
+  maxPx: () => Math.max(220, Math.round(window.innerWidth * 0.45)),
+};
+const panelHiddenKey = "hardcharger-ui:side-panel-hidden";
+
+function storedHidden(): boolean {
+  try {
+    return window.localStorage.getItem(panelHiddenKey) === "1";
+  } catch {
+    return false;
+  }
+}
 
 // The pages are loaded when first shown (the query page carries the editor, which is most of
 // the app's size). A file that is gone after an upgrade becomes a StaleBuildError, which the
@@ -28,23 +48,22 @@ export function Layout({ theme, page, go }: Props) {
   const [visitedQuery, setVisitedQuery] = useState(page === "query");
   if (page === "query" && !visitedQuery) setVisitedQuery(true);
   const [about, setAbout] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(280);
-
-  const startResize = useCallback(
-    (e: React.PointerEvent) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = sidebarWidth;
-      const move = (ev: PointerEvent) =>
-        setSidebarWidth(Math.max(200, Math.min(560, startWidth + ev.clientX - startX)));
-      const up = () => {
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
-    },
-    [sidebarWidth],
+  const [panelWidth, setPanelWidth, resetPanelWidth] = useStoredSize(panelSize);
+  const [panelHidden, setPanelHidden] = useState(storedHidden);
+  const togglePanel = () => {
+    const next = !panelHidden;
+    setPanelHidden(next);
+    try {
+      window.localStorage.setItem(panelHiddenKey, next ? "1" : "0");
+    } catch {
+      // not remembered
+    }
+  };
+  // The schema browser lists what the active editor tab's role may see.
+  const active = useActiveTab();
+  const listings = useMemo(
+    () => catalogCache(session, active.role, () => Promise.resolve(session.connection)),
+    [session, active.role],
   );
 
   const nav = (target: Page, label: string, icon: React.ReactNode) => (
@@ -63,6 +82,17 @@ export function Layout({ theme, page, go }: Props) {
     <div className="app">
       <header className="app-header">
         <div className="header-left">
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon"
+            onClick={togglePanel}
+            aria-label={panelHidden ? "Show the side panel" : "Hide the side panel"}
+            title={panelHidden ? "Show the side panel" : "Hide the side panel"}
+            aria-expanded={!panelHidden}
+            data-testid="side-panel-toggle"
+          >
+            {panelHidden ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </button>
           <a href="https://gizmodata.com" target="_blank" rel="noopener noreferrer" className="header-brand">
             <Wordmark size="header" />
           </a>
@@ -103,20 +133,27 @@ export function Layout({ theme, page, go }: Props) {
         </div>
       </header>
       <div className="app-body">
-        <aside className="sidebar" style={{ width: sidebarWidth }} aria-label="Schema browser">
-          <SchemaBrowser />
-          <footer className="sidebar-foot">
-            <ByGizmoData />
-            <TrademarkNotice />
-          </footer>
-          <div
-            className="sidebar-resizer"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize the schema browser"
-            onPointerDown={startResize}
-          />
-        </aside>
+        {!panelHidden && (
+          <>
+            <aside className="sidebar" style={{ width: panelWidth }} aria-label="Side panel" data-testid="side-panel">
+              <DataExplorer cache={listings} />
+              <footer className="sidebar-foot">
+                <ByGizmoData />
+                <TrademarkNotice />
+              </footer>
+            </aside>
+            <ResizeHandle
+              direction="column"
+              label="Resize the side panel"
+              sizePx={panelWidth}
+              minPx={panelSize.minPx}
+              maxPx={panelSize.maxPx()}
+              onResize={setPanelWidth}
+              onReset={resetPanelWidth}
+              testId="side-panel-resize"
+            />
+          </>
+        )}
         <main className="main">
           {visitedQuery && (
             <div className="page" hidden={page !== "query"}>

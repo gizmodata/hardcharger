@@ -1,6 +1,8 @@
 import { Plus, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { publishActiveTab, resetActiveTab } from "../lib/activeTab";
+import { clearCatalogCaches } from "../lib/catalogs";
 import { useStoredSize } from "../lib/storedSize";
 import { type StoredTabs, type TabDoc, hasUnsavedText, loadTabs, makeTab, maxTabs, saveTabs } from "../lib/tabs";
 import type { Where } from "../lib/tabSession";
@@ -141,7 +143,11 @@ export default function QueryPage({ theme }: Props) {
   const open = useCallback(
     (r: QueryRequest) => {
       if (r.newTab) {
-        const id = addTab({ sql: r.sql, ...(r.title ? { title: r.title } : {}) });
+        const id = addTab({
+          sql: r.sql,
+          ...(r.title ? { title: r.title } : {}),
+          ...(r.catalog ? { catalog: r.catalog, schema: r.schema ?? "" } : {}),
+        });
         if (id && r.run) setRunOnOpen((s) => new Set(s).add(id));
       } else {
         const id = activeRef.current;
@@ -152,14 +158,40 @@ export default function QueryPage({ theme }: Props) {
     [addTab, patchTab],
   );
 
+  const statusesRef = useRef(statuses);
+  useEffect(() => {
+    statusesRef.current = statuses;
+  }, [statuses]);
+
   useEffect(
     () =>
       session.registerQueryPage({
         open,
         insert: (text) => handles.current.get(activeRef.current)?.insert(text),
+        pointTabAt: (catalog, schema) => {
+          const id = activeRef.current;
+          if ((statusesRef.current[id]?.transaction ?? "none") !== "none") {
+            return "The active tab has an open transaction: commit or roll it back first.";
+          }
+          patchTab(id, { catalog, schema: schema ?? "" });
+          return undefined;
+        },
       }),
-    [session, open],
+    [session, open, patchTab],
   );
+
+  // What the schema browser follows: the active tab's catalog, schema and transaction.
+  const activeTab = tabs.find((t) => t.id === active);
+  const activeStatus = statuses[active];
+  useEffect(() => {
+    publishActiveTab({
+      catalog: activeTab?.catalog || defaults.catalog,
+      schema: activeTab?.schema || defaults.schema,
+      transaction: activeStatus?.transaction ?? "none",
+      role: "",
+    });
+  }, [activeTab?.catalog, activeTab?.schema, activeStatus?.transaction, defaults]);
+  useEffect(() => () => resetActiveTab(), []);
 
   const select = (id: string) => setTabs((s) => ({ ...s, active: id }));
 
@@ -279,7 +311,10 @@ export default function QueryPage({ theme }: Props) {
           editorHeight={editorHeight}
           defaults={defaults}
           catalogVersion={catalogVersion}
-          onCatalogChanged={() => setCatalogVersion((v) => v + 1)}
+          onCatalogChanged={() => {
+            clearCatalogCaches(session);
+            setCatalogVersion((v) => v + 1);
+          }}
           onChange={(patch) => patchTab(t.id, patch)}
           onStatus={(status) =>
             setStatuses((s) => {

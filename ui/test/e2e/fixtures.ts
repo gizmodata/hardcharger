@@ -209,3 +209,16 @@ export async function pastedBoth(page: Page): Promise<{ text: string; html: stri
   });
   return got;
 }
+
+/** The shown tab's editor text, as drawn (Monaco draws spaces as no-break spaces). */
+export async function editorText(page: Page): Promise<string> {
+  const lines = await activeTab(page)
+    .locator(".view-line")
+    .evaluateAll((els) =>
+      els
+        .map((el) => ({ top: parseFloat((el as HTMLElement).style.top || "0"), text: el.textContent ?? "" }))
+        .sort((a, b) => a.top - b.top)
+        .map((l) => l.text),
+    );
+  return lines.join("\n").replaceAll("\u00a0", " ");
+}

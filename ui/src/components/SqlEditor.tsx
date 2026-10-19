@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 
+import { type CompletionTarget, registerCompletionTarget, registerSqlCompletion } from "../lib/completion";
 import { monaco } from "../lib/monaco";
+import { sqlNameDragType } from "../lib/sqlNameDrag";
 import { splitStatements, statementAt } from "../lib/sql";
 
 export interface EditorApi {
@@ -25,6 +27,8 @@ export interface EditorCommands {
 }
 
 interface Props extends EditorCommands {
+  /** What autocomplete lists for this editor (the tab's listings, catalog and schema). */
+  completion?: () => CompletionTarget | undefined;
   value: string;
   onChange: (value: string) => void;
   theme: "light" | "dark";
@@ -37,12 +41,12 @@ interface Props extends EditorCommands {
  * last one mounted would answer Ctrl/⌘+Enter in all of them. An action's keybinding fires only
  * in its own focused editor. Ctrl+… also works on macOS (other SQL tools' habit).
  */
-export function SqlEditor({ value, onChange, theme, onReady, ...commands }: Props) {
+export function SqlEditor({ value, onChange, theme, onReady, completion, ...commands }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | undefined>(undefined);
-  const latest = useRef({ onChange, commands });
+  const latest = useRef({ onChange, commands, completion });
   useEffect(() => {
-    latest.current = { onChange, commands };
+    latest.current = { onChange, commands, completion };
   });
 
   useEffect(() => {
@@ -73,6 +77,34 @@ export function SqlEditor({ value, onChange, theme, onReady, ...commands }: Prop
     });
     editor.current = ed;
     const model = ed.getModel()!;
+    // Autocomplete: one provider for every editor; this model follows this tab.
+    registerSqlCompletion();
+    const stopCompletion = registerCompletionTarget(model, () => latest.current.completion?.());
+
+    // A name dragged from the schema browser goes in as plain text where it is dropped
+    // (capture phase, ahead of Monaco's own listeners).
+    const dom = ed.getContainerDomNode();
+    const onDragOver = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes(sqlNameDragType)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    };
+    const onDrop = (e: DragEvent) => {
+      const text = e.dataTransfer?.getData(sqlNameDragType);
+      if (!text) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const at = ed.getTargetAtClientPoint(e.clientX, e.clientY)?.position ?? ed.getPosition();
+      if (!at) return;
+      ed.executeEdits("schema-browser", [
+        { range: new monaco.Range(at.lineNumber, at.column, at.lineNumber, at.column), text, forceMoveMarkers: true },
+      ]);
+      ed.pushUndoStop();
+      ed.setPosition({ lineNumber: at.lineNumber, column: at.column + text.length });
+      ed.focus();
+    };
+    dom.addEventListener("dragover", onDragOver, true);
+    dom.addEventListener("drop", onDrop, true);
     const changes = ed.onDidChangeModelContent(() => latest.current.onChange(ed.getValue()));
     const { KeyMod, KeyCode } = monaco;
     const action = (id: string, label: string, keys: number[], run: () => void, menu = false) =>
@@ -186,6 +218,9 @@ export function SqlEditor({ value, onChange, theme, onReady, ...commands }: Prop
     onReady(api);
     return () => {
       onReady(undefined);
+      stopCompletion();
+      dom.removeEventListener("dragover", onDragOver, true);
+      dom.removeEventListener("drop", onDrop, true);
       cancelAnimationFrame(pendingMark);
       changes.dispose();
       cursor.dispose();

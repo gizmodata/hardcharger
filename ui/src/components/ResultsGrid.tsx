@@ -459,7 +459,7 @@ export function ResultsGrid({ table, toolbar, onNotice }: Props) {
         <div className="grid-filter">
           <Search size={13} aria-hidden />
           <input
-            type="search"
+            type="text"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter rows…"

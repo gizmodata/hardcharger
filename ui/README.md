@@ -56,9 +56,30 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
   - **Expand** fills the tab with the results; **Restore** brings the editor back.
 - 🛑 **Cancel** stops the statement on the server, not just the wait for it, and says how far
   a script got and whether the transaction now needs a rollback.
-- 🗂️ **Schema browser**: catalogs, schemas, tables, views and columns with their types, from the
-  Warp SQL metadata calls, filtered by the server's access control; preview a table in a new
-  tab; double-click to insert a name.
+- 🗂️ **Schema browser** (the side panel; hide it with the panel button in the header, drag its
+  edge to resize): the catalogs, their schemas, **Tables** and **Views** in separate groups,
+  and columns with their types, each level listed when opened through the Warp SQL metadata
+  calls, so it shows exactly what the server's access control lets the user see. The active
+  tab's catalog starts open; `temp` (one session's own) is left out.
+  - **Double-click** a name, or **drag** it into the editor: tables and views go in fully
+    qualified (`lake.main.orders`), schemas as `catalog.schema`, columns as their name, quoted
+    where needed (`lake.main."Order Lines"`).
+  - The **…** button or a right-click: Insert name, Copy name, Preview data (a new tab with
+    `SELECT * … LIMIT 100`, run at once, on that catalog and schema), Insert column names,
+    Insert SELECT statement, Show definition (views; open it in a new tab to change it), Use
+    this catalog / Use this catalog and schema (not while the active tab has a transaction).
+  - **Search tables and views** (two or more characters) finds them by name in every catalog
+    the user may see, up to 100; click one to show it in the tree. Esc clears.
+  - A run that creates, drops, alters, attaches or detaches something lists what's open again;
+    **Refresh** does it by hand. A listing that fails says why, with **Retry**.
+- 💡 **Autocomplete** (as you type, or Ctrl+Space): after `FROM`, `JOIN`, `INTO`, `UPDATE`,
+  `TABLE` or `DESCRIBE`, the current schema's tables, then the catalog's schemas and the
+  catalogs; after a dot, a catalog's schemas, a schema's tables, or a table's columns with
+  their types (also through an alias, `o.` for `FROM orders o`); elsewhere, the statement's
+  columns, the server's functions (inserted with parentheses) and keywords. Names that need
+  quotes are inserted quoted; nothing is offered inside a string or a comment. The lists come
+  from the server, as the user may see them, kept a few minutes and refreshed after a run
+  that changes the catalog.
 - 💾 **Exports**: CSV, TSV, JSON (exact numbers) and Parquet (every Arrow type, written in the
   browser by parquet-wasm).
 - 👥 **Sessions**: an administrator sees every session on the server and can end one
