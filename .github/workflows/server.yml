@@ -16,7 +16,8 @@
 #
 # The iOS app (ios/): its simulator build and tests (`ios`) run only on a v* tag and on a
 # manual run with `ios` (macOS runners are expensive; never on a push or pull request); the
-# signed device build (`ios-archive`, an .ipa artifact, uploaded nowhere) only on a v* tag.
+# signed device build (`ios-archive`, an .ipa artifact) also runs on a manual run with
+# both `ios` and `sign`. Only a v* tag uploads the .ipa to TestFlight.
 #
 # Code signing (docs/releasing.md): on a v* tag always, and on a manual run with `sign`
 # (from a release/* branch: the `production` environment, which holds the signing secrets,
@@ -1258,7 +1259,7 @@ jobs:
   # already passed (changes.outputs.tested), it takes that run's Linux tarballs: the
   # binaries that were tested, not a rebuild.
   image:
-    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, windows, verify-macos, verify-windows]
+    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, windows, verify-macos, verify-windows, ios, ios-archive]
     if: >-
       ${{ !cancelled() && needs.changes.result == 'success'
           && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
@@ -1268,7 +1269,8 @@ jobs:
                   && needs.sanitize.result == 'success' && needs.tsan.result == 'success'
                   && needs.ui-checks.result == 'success' && needs.ui-e2e.result == 'success'
                   && needs.windows.result == 'success'
-                  && needs.verify-macos.result == 'success' && needs.verify-windows.result == 'success')) }}
+                  && needs.verify-macos.result == 'success' && needs.verify-windows.result == 'success'
+                  && needs.ios.result == 'success' && needs.ios-archive.result == 'success')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1465,7 +1467,7 @@ jobs:
   ios-archive:
     name: iOS app (signed device build)
     needs: [changes, web-ui, ios]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.ios && inputs.sign)
     runs-on: macos-26
     environment: production
     timeout-minutes: 180
@@ -1514,8 +1516,10 @@ jobs:
           [ -n "$ASC_KEY_B64" ] && [ -n "$ASC_KEY_ID" ] && [ -n "$ASC_ISSUER_ID" ] || { echo "::error::ASC_KEY_B64 / ASC_KEY_ID / ASC_ISSUER_ID are not all set"; exit 1; }
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           printf '%s' "$ASC_KEY_B64" | base64 --decode > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
-          ipa="$(ls "$RUNNER_TEMP"/ios-export/*.ipa | head -1)"
-          xcrun altool --upload-app -f "$ipa" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+          shopt -s nullglob
+          ipas=("$RUNNER_TEMP"/ios-export/*.ipa)
+          [ "${#ipas[@]}" -eq 1 ] || { echo "::error::expected exactly one exported .ipa"; exit 1; }
+          xcrun altool --upload-app -f "${ipas[0]}" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
       - name: Remove the App Store Connect key
         if: always()
         run: rm -rf "$HOME/.appstoreconnect"
@@ -1635,7 +1639,7 @@ jobs:
   # fails unless every job it needs succeeded (none skipped) and the run signed.
   release:
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums, verify-macos, verify-windows]
+    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums, verify-macos, verify-windows, ios, ios-archive]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -1649,7 +1653,7 @@ jobs:
         run: |
           echo "needed jobs: $RESULTS"
           echo "signed: $SIGN; macOS signatures: $MACOS; Windows signatures: $WINDOWS"
-          [ "$(jq -r 'length' <<< "$RESULTS")" -eq 12 ] || { echo "expected the results of 12 jobs"; exit 1; }
+          [ "$(jq -r 'length' <<< "$RESULTS")" -eq 14 ] || { echo "expected the results of 14 jobs"; exit 1; }
           [ "$(jq -r 'map(select(. != "success")) | length' <<< "$RESULTS")" -eq 0 ] || { echo "a needed job did not succeed"; exit 1; }
           [ "$SIGN" = true ] && [ "$MACOS" = success ] && [ "$WINDOWS" = success ] || { echo "the release is not signed"; exit 1; }
       - uses: actions/checkout@v7

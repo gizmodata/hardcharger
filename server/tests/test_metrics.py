@@ -26,7 +26,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from conftest import free_port, run_unit_tests
+from conftest import TIMEOUT_SCALE, free_port, run_unit_tests
 from test_mtls_identity import Pki
 from test_mtls_identity import start as start_tls
 
@@ -259,8 +259,13 @@ def test_spill_and_temporary_storage(launcher, tmp_path):
 
     def sort():
         try:
-            running.admin().execute(sql="CREATE TABLE metrics_spilled AS SELECT range AS n, random() AS r "
-                                        "FROM range(30000000) ORDER BY r")
+            sorter = running.admin()
+            response = sorter.submit(sql="CREATE TABLE metrics_spilled AS SELECT range AS n, random() AS r "
+                                         "FROM range(30000000) ORDER BY r",
+                                     headers={"Prefer": "respond-async"})
+            assert response.status_code in (200, 201, 202), response.text
+            doc = sorter.wait_done(statement_id=response.json()["statement_id"], timeout=120 * TIMEOUT_SCALE)
+            assert doc["state"] == "succeeded", doc
         except Exception as error:  # noqa: BLE001 - reported below
             failure.append(error)
         finally:

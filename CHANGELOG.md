@@ -202,6 +202,11 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
 
 ### Fixed
 
+- Release CI now gates container publishing and the GitHub Release on the iOS simulator
+  tests, signed device build and TestFlight upload. A manual run with `ios` and `sign`
+  proves the signed device build before tagging, without uploading it. Trusted-proxy
+  parsing also refuses abbreviated IPv4 addresses and ports on Windows consistently
+  with Unix (Warp SQL SDK update).
 - Server: a text log line leaves out a field with no value (`health check passing` printed
   an empty `error=`); JSON lines keep every key, and the passing health check's has no
   `error` at all. A health check that fails from the start is now logged too (only changes

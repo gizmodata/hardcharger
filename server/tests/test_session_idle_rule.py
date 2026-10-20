@@ -73,18 +73,30 @@ def test_a_slow_read_keeps_the_session_to_the_end_of_its_stream(server):
     session = server.admin()
     headers = session.headers(**{"Accept": ARROW_STREAM, "Warp-Retain-Result": "false"})
     received, failure = 0, None
+    tail = b""
+    checked_live = False
+    started = time.monotonic()
     with session.http.stream(method="POST", url=f"{session.url}/statements", headers=headers,
                              json={"sql": "SELECT range AS n FROM range(10000000)"}, timeout=120) as response:
         assert response.status_code == 200, response.read()
         try:
             for chunk in response.iter_raw(chunk_size=256 * 1024):
                 received += len(chunk)
+                tail = (tail + chunk)[-8:]
+                if not checked_live and time.monotonic() - started > IDLE + SWEEP + SLACK:
+                    # Probe while most of the body is still to come. Once the server
+                    # has sent it all, the session may expire while the client drains
+                    # bytes already buffered by TCP, even though iter_raw still runs.
+                    assert received < 40_000_000, received
+                    assert status_of(session=session) == 200
+                    checked_live = True
                 time.sleep(0.08)  # ~3 MB/s
         except httpx.HTTPError as error:
             failure = repr(error)
     assert failure is None, f"the stream was cut after {received} bytes: {failure}"
     assert received > 80_000_000, received
-    assert status_of(session=session) == 200
+    assert checked_live, "the read must outlast the idle timeout plus a sweep"
+    assert tail == b"\xff\xff\xff\xff\x00\x00\x00\x00", "missing Arrow end-of-stream marker"
 
 
 def test_a_session_whose_reads_are_done_is_idle_again(server):
