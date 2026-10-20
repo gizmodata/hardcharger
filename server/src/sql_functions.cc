@@ -496,8 +496,8 @@ std::shared_ptr<arrow::RecordBatch> ActiveConnectionsTable(Runtime& runtime, con
 
   arrow::MemoryPool* pool = arrow::default_memory_pool();
   arrow::StringBuilder session_id, instance_id, cluster_id, username, role, tenant, auth_method, client_address,
-      client_info, tls_version, certificate_identity, certificate_thumbprint, state, transaction, statement_id,
-      statement, cancel_reason;
+      proxy_address, client_info, tls_version, certificate_identity, certificate_thumbprint, state, transaction,
+      statement_id, statement, cancel_reason;
   auto tag_keys = std::make_shared<arrow::StringBuilder>();
   auto tag_values = std::make_shared<arrow::StringBuilder>();
   auto map_type = arrow::map(arrow::utf8(), arrow::utf8());
@@ -521,6 +521,7 @@ std::shared_ptr<arrow::RecordBatch> ActiveConnectionsTable(Runtime& runtime, con
     text(tenant, row.tenant);
     (void)auth_method.Append(row.auth_method);
     text(client_address, sdk ? sdk->client_address : "");
+    text(proxy_address, sdk ? sdk->proxy_address : "");
     text(client_info, sdk ? sdk->user_agent : "");
     (void)session_tags.Append();
     for (const auto& [k, v] : row.tags) {
@@ -569,6 +570,7 @@ std::shared_ptr<arrow::RecordBatch> ActiveConnectionsTable(Runtime& runtime, con
       {"tenant", &tenant},
       {"auth_method", &auth_method},
       {"client_address", &client_address},
+      {"proxy_address", &proxy_address},
       {"client_info", &client_info},
       {"session_tags", &session_tags},
       {"tls", &tls},

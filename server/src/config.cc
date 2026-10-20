@@ -14,6 +14,7 @@
 #include <stdexcept>
 
 #include "authz/authz.hpp"
+#include "warpsql/server.hpp"
 
 namespace hardcharger {
 
@@ -108,6 +109,13 @@ const std::vector<Option>& Options() {
        NUMBER(max_result_partitions)},
       {"web_ui", Kind::kBool,
        "serve the web UI at /ui on this port (a build that embeds it)", FLAG(web_ui)},
+      {"trusted_proxies", Kind::kList,
+       "reverse proxies (CIDRs such as 10.0.0.0/8 or fd00::/8, or single addresses) whose "
+       "X-Forwarded-For or Forwarded header names the client; from them, the client's address in "
+       "logs, audit, sessions and the per-address browser sign-in bound is the rightmost forwarded "
+       "hop that is not itself a trusted proxy. Never used for authentication or TLS. Empty: trust "
+       "none (the TCP peer is the client)",
+       LIST(trusted_proxies)},
       // TLS
       {"tls_cert", Kind::kString, "TLS certificate chain (PEM)",
        TEXT(tls_cert)},
@@ -475,6 +483,13 @@ void Validate(Loaded& loaded) {
     throw std::invalid_argument("ports must be between 0 and 65535");
   }
   if (c.oauth_max_flows < 1) throw std::invalid_argument("oauth_max_flows must be positive");
+  for (const auto& proxy : c.trusted_proxies) {
+    try {
+      warpsql::ParseIpNetwork(proxy);
+    } catch (const std::invalid_argument& e) {
+      throw std::invalid_argument(std::string("trusted_proxies: ") + e.what());
+    }
+  }
   // Saying where /metrics listens asks for metrics: a metrics_port (other than 0) or a
   // metrics_bind_address turns them on, unless enable_metrics is set (an explicit false
   // wins, and says so at startup).
