@@ -1,4 +1,4 @@
-"""The comparison report for one TPC-H run directory (Markdown on stdout).
+"""The comparison report for one TPC-H-derived run directory (Markdown on stdout).
 
     python report.py --results-dir results/sf1000 --price-per-hour 7.69 --instance r9gd.24xlarge \
         [--published published-2026-09-04-r9gd.24xlarge.json]
@@ -13,6 +13,10 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+# TPC fair use: every report says once that this is derived from TPC-H, not a TPC-H result.
+DISCLAIMER = ("Derived from the TPC-H benchmark; not an official TPC-H result and not comparable to published T"
+              "PC-H results, as these results do not comply with the TPC-H specification. TPC-H™ is a trademark of the Transaction Processing Performance Council (TPC).")
 
 SERVERS = [("stable", "GizmoSQL stable"), ("edge", "GizmoSQL edge"), ("hardcharger", "Hardcharger")]
 
@@ -48,7 +52,7 @@ def main() -> None:
     present = [(k, label) for k, label in SERVERS if k in runs]
     problems = []
 
-    out = [f"### Per query (seconds; {args.instance})", ""]
+    out = [f"*{DISCLAIMER}*", "", f"### Per query (seconds; {args.instance})", ""]
     head = "| Query |"
     rule = "|---|"
     if published:

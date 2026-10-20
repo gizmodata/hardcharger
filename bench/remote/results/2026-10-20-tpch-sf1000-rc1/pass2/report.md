@@ -1,3 +1,5 @@
+*Derived from the TPC-H benchmark; not an official TPC-H result and not comparable to published TPC-H results, as these results do not comply with the TPC-H specification. TPC-H™ is a trademark of the Transaction Processing Performance Council (TPC).*
+
 ### Per query (seconds; r9gd.24xlarge)
 
 | Query | Published G5 runs | Published mean | GizmoSQL stable runs | GizmoSQL stable mean | GizmoSQL edge runs | GizmoSQL edge mean | Hardcharger runs | Hardcharger mean | HC / stable | HC / edge |

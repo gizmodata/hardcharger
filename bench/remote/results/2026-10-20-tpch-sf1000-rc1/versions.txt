@@ -10,7 +10,7 @@ pyarrow==25.0.1
 adbc-driver-hardcharger @ file:///home/ubuntu/tpch1tb/adbc_driver_hardcharger-0.1.0-py3-none-linux_aarch64.whl#sha256=cf20e19dd0dcfe78e862c54991b079766615b86b0eda34904a32d55aad8d0d1b
 adbc-driver-manager==1.12.0
 pyarrow==26.0.0
-Linux ip-172-31-47-185 7.0.0-1014-aws #14~24.04.1-Ubuntu SMP PREEMPT Fri Sep 18 21:50:22 UTC 2026 aarch64 aarch64 aarch64 GNU/Linux
+Linux <host> 7.0.0-1014-aws #14~24.04.1-Ubuntu SMP PREEMPT Fri Sep 18 21:50:22 UTC 2026 aarch64 aarch64 aarch64 GNU/Linux
 PRETTY_NAME="Ubuntu 24.04.5 LTS"
 96
                total        used        free      shared  buff/cache   available

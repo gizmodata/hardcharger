@@ -1,12 +1,17 @@
-# TPC-H SF1000 on one VM: GizmoSQL stable, GizmoSQL edge, Hardcharger
+# TPC-H-derived workload at SF1000 on one VM: GizmoSQL stable, GizmoSQL edge, Hardcharger
+
+*Derived from the TPC-H benchmark; not an official TPC-H result and not comparable to published TPC-H results, as these results do not comply with the TPC-H specification. TPC-H™ is a trademark of the Transaction Processing Performance Council (TPC).*
 
 Reproduces the method of "TPC-H 1 TB in 80 Seconds" (gizmodata.com, 2026-09-04) and adds the two
 DuckDB 2.0 servers. Internal; results never go anywhere public.
 
 - **VM:** `r9gd.24xlarge` on demand, us-east-2 (the SF10 dry run: `r8gd.2xlarge` Spot). Local NVMe
   in RAID 0 (`mdadm --create /dev/md0 --level=0 --raid-devices=<n>`, `mkfs.ext4 -F`, `/data`).
-- **Data:** tpch-datagen Parquet from `s3://sidewindr-benchmark-data-us-east-2/tpch/sf=<N>/`, fetched
+- **Data:** tpch-datagen Parquet from `s3://$HARDCHARGER_BENCH_DATA_BUCKET/tpch/sf=<N>/`, fetched
   with presigned GET URLs (the VM never gets AWS credentials) to `/data/tpch/sf<N>/<table>/`.
+  `HARDCHARGER_BENCH_DATA_BUCKET` (required) names the private S3 bucket the data was staged in;
+  `HARDCHARGER_BENCH_DATA_REGION` is its region (default `us-east-2`). `run.sh push` reads both
+  through `presign.py` (or pass `--bucket` / `--region` to it directly).
 - **Load (untimed):** file A by GizmoSQL stable; file B by GizmoSQL edge, which Hardcharger also
   uses if it opens it (else Hardcharger loads file C). The published eight `CREATE TABLE ... AS
   SELECT * FROM read_parquet(...)` statements, through each server.
@@ -20,6 +25,7 @@ DuckDB 2.0 servers. Internal; results never go anywhere public.
 ```bash
 cd bench/remote/tpch1tb
 set -a; . <aws .env>; set +a                      # never printed
+export HARDCHARGER_BENCH_DATA_BUCKET=<bucket>     # where tpch-datagen staged tpch/sf=<N>/
 TYPE=r9gd.24xlarge MARKET=on-demand AZ=us-east-2c LIFETIME_MIN=240 bash provision.sh up
 bash run.sh push 1000 hardcharger-linux-arm64.tar.gz adbc_driver_hardcharger-*-linux_aarch64.whl
 bash run.sh start 1000                            # fetch load stable edge hardcharger probe

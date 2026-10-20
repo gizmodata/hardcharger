@@ -1,4 +1,6 @@
-# TPC-H SF1000: Hardcharger 2.0.0-rc.1 vs GizmoSQL v1.42.0 stable and edge (2026-10-20)
+# TPC-H-derived workload, SF1000: Hardcharger 2.0.0-rc.1 vs GizmoSQL v1.42.0 stable and edge (2026-10-20)
+
+*Derived from the TPC-H benchmark; not an official TPC-H result and not comparable to published TPC-H results, as these results do not comply with the TPC-H specification. TPC-H™ is a trademark of the Transaction Processing Performance Council (TPC).*
 
 Internal. Method as in `../../tpch1tb/README.md` and the SF10 dry run (`../2026-10-19-tpch-sf10-dryrun/`):
 one r9gd.24xlarge on demand (us-east-2c, 96 vCPU, 742 GiB, 3 x 1.9 TB NVMe in RAID 0), SF1000 Parquet
@@ -51,7 +53,7 @@ both ran on file B (loaded by edge; Hardcharger opened it). Every server had 96 
   image unpinned, Hardcharger's pinned by digest), DuckDB's default jemalloc, static libduckdb, no
   LTO, no native-arch flags (DuckDB's default `-march=armv8-a` on both).
 - **Built-in extensions:** both have icu and tpch built in; Hardcharger also builds in httpfs, ducklake,
-  postgres_scanner and autocomplete (not used by TPC-H on local files). Hardcharger applies two DuckDB
+  postgres_scanner and autocomplete (not used by the TPC-H-derived queries on local files). Hardcharger applies two DuckDB
   patches (a view-binder hook for access control; HUGEINT Arrow export range check).
 - **Path:** GizmoSQL uses DuckDB's C++ API and Arrow Flight SQL over gRPC; Hardcharger uses the v2 C
   API Arrow results over Warp SQL (HTTP, Arrow IPC). Both over TLS on 127.0.0.1.

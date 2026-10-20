@@ -3,8 +3,10 @@
 Runs on the client VM. One invocation measures one system on one workload and appends a
 JSON line per measured repetition to --out.
 
-    client.py --system hardcharger --host 172.31.41.94 --workload fetch --dataset sf10
-    client.py --system quack --host 172.31.41.94 --workload ingest --dataset sf1
+    client.py --system hardcharger --host "$SERVER_IP" --workload fetch --dataset sf10
+    client.py --system quack --host "$SERVER_IP" --workload ingest --dataset sf1
+
+SERVER_IP is the server VM's address as the client VM reaches it (its private IP in the VPC).
 
 fetch:  SELECT * FROM <table>; the client drains the whole result as Arrow record batches
         (counting rows and Arrow bytes, dropping each batch), or with --collect table builds

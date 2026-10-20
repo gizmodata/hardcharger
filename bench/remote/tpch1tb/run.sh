@@ -9,7 +9,9 @@
 #   run.sh wait <sf>              block until the VM's pipeline finishes; print its log
 #   run.sh pull <sf> <dir>        copy the VM's results/sf<N> and logs into <dir>
 #   run.sh ssh [command...]
-# The VM comes from provision.sh up (same STATE directory).
+# The VM comes from provision.sh up (same STATE directory). push needs HARDCHARGER_BENCH_DATA_BUCKET
+# (the private S3 bucket tpch-datagen staged tpch/sf=<N>/ in; HARDCHARGER_BENCH_DATA_REGION, default
+# us-east-2, is its region): presign.py reads them.
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STATE=${STATE:-$HOME/.hardcharger-bench-tpch}
@@ -22,6 +24,7 @@ SCP=(scp -q -i "$KEY" -o UserKnownHostsFile="$STATE/known_hosts" -o StrictHostKe
 case "${1:-}" in
   push)
     SF=${2:?sf}; TARBALL=${3:?hardcharger tarball}; WHEEL=${4:?driver wheel}
+    : "${HARDCHARGER_BENCH_DATA_BUCKET:?set it to the S3 bucket the TPC-H-derived data is staged in}"
     for _ in $(seq 1 30); do "${SSH[@]}" true 2>/dev/null && break; sleep 5; done
     "${SSH[@]}" "mkdir -p ~/tpch1tb"
     "${SCP[@]}" "$HERE"/*.sh "$HERE"/*.py "ubuntu@$IP:tpch1tb/"
