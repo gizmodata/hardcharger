@@ -56,12 +56,13 @@ final class AppModel {
                             signIn: .password, username: LocalCredential.defaultUsername)
     }
 
-    /// UI tests start from nothing: no settings, database, imports, logs or connections.
+    /// UI tests start from nothing: no settings, database, imports, logs, web view data (the
+    /// web UI's saved tabs) or connections.
     private static func resetState() {
         UserDefaults.standard.removePersistentDomain(forName: Bundle.main.bundleIdentifier ?? "")
         let paths = AppPaths.standard
         for url in [paths.database, paths.database.appendingPathExtension("wal"), paths.imports, paths.exports,
-                    paths.logFile, paths.previousLogFile] {
+                    paths.logFile, paths.previousLogFile, paths.library.appending(path: "WebKit")] {
             try? FileManager.default.removeItem(at: url)
         }
         for item in (try? Keychain.all(service: RemoteServerStore.service)) ?? [] {

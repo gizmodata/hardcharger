@@ -94,11 +94,7 @@ private struct LogList: View {
             ScrollView([.vertical]) {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(lines) { line in
-                        Text(line.text(style: style))
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(color(line))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
+                        LogRow(line: line, style: style, color: color(line))
                             .id(line.id)
                     }
                 }
@@ -120,6 +116,55 @@ private struct LogList: View {
         case .warning: .orange
         case .debug: .secondary
         default: line.outcome == .success ? .green : .primary
+        }
+    }
+}
+
+/// One log line: its time and level in a narrow column, the message beside them, a few
+/// lines of it until tapped; Copy in its menu.
+private struct LogRow: View {
+    let line: LogLine
+    let style: LogStyle
+    let color: Color
+    @State private var expanded = false
+
+    var body: some View {
+        if line.level == nil {
+            Text(line.raw)
+                .font(.system(.caption, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(LogLine.shortTime(line.time))
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 3) {
+                        if style == .emoji, !line.emoji.isEmpty { Text(line.emoji) }
+                        Text(line.level?.rawValue ?? "")
+                            .foregroundStyle(color)
+                            .fontWeight(.semibold)
+                    }
+                }
+                .font(.system(.caption2, design: .monospaced))
+                .frame(width: 86, alignment: .leading)
+                Text(line.message)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(line.level == .debug ? .secondary : .primary)
+                    .lineLimit(expanded ? nil : 3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+            .onTapGesture { expanded.toggle() }
+            .contextMenu {
+                Button {
+                    UIPasteboard.general.string = line.raw
+                } label: {
+                    Label("Copy Line", systemImage: "doc.on.doc")
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityHint(Text("Shows the whole line"))
         }
     }
 }

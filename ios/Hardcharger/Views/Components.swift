@@ -116,39 +116,61 @@ struct CopyableRow: View {
     @State private var copied = false
 
     var body: some View {
-        LabeledContent {
-            HStack(spacing: 8) {
-                Text(secret && !revealed ? String(repeating: "•", count: 12) : value)
-                    .font(monospaced ? .callout.monospaced() : .callout)
-                    .textSelection(.enabled)
-                    .lineLimit(secret && !revealed ? 1 : nil)
-                    .multilineTextAlignment(.trailing)
-                if secret {
-                    Button {
-                        revealed.toggle()
-                    } label: {
-                        Image(systemName: revealed ? "eye.slash" : "eye")
-                    }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel(revealed ? Text("Hide") : Text("Show"))
+        // Long values (addresses, passwords) go under their title, with the whole row's width
+        // to wrap in at large text sizes.
+        if monospaced {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    valueText
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    buttons
                 }
-                Button {
-                    UIPasteboard.general.string = value
-                    copied = true
-                    Task {
-                        try? await Task.sleep(for: .seconds(1.5))
-                        copied = false
-                    }
-                } label: {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .contentTransition(.symbolEffect(.replace))
+            }
+        } else {
+            LabeledContent {
+                HStack(spacing: 8) {
+                    valueText
+                    buttons
                 }
-                .buttonStyle(.borderless)
-                .accessibilityLabel(Text("Copy"))
+            } label: {
+                Text(title)
+            }
+        }
+    }
+
+    private var valueText: some View {
+        Text(secret && !revealed ? String(repeating: "•", count: 12) : value)
+            .font(.system(.callout, design: monospaced ? .monospaced : .default))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(Text(title))
+            .accessibilityValue(secret && !revealed ? Text("Hidden") : Text(verbatim: value))
+    }
+
+    @ViewBuilder private var buttons: some View {
+        if secret {
+            Button {
+                revealed.toggle()
+            } label: {
+                Image(systemName: revealed ? "eye.slash" : "eye")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(revealed ? Text("Hide") : Text("Show"))
+        }
+        Button {
+            UIPasteboard.general.string = value
+            copied = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                copied = false
             }
         } label: {
-            Text(title)
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .contentTransition(.symbolEffect(.replace))
         }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(Text("Copy"))
     }
 }
 

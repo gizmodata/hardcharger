@@ -36,4 +36,10 @@ the full mascot from about 160 px wide; below that, the head.
   `installer/dialog.bmp` (WiX's dialog bitmaps) are made from `standalone/head/` and
   `logos/mascot-stacked-dark.png`.
 
+- The iOS app (`ios/`): its asset catalog is made from `logos/mascot-stacked-*.png` (launch
+  screen, splash, About), `logos/head-horizontal-*.png`, `standalone/head/` and the app icon
+  from `app-icons/head-light`, `head-dark` and `monochrome/white` (tinted), by
+  `ios/scripts/brand-assets.py` (crop, scale and, for the icon, flatten onto the tile's
+  colour), with the GizmoData mark (`docs/assets/gizmodata-logo.png`) on the splash.
+
 The kit's generation sources, reference images, masters and local gallery are not included.

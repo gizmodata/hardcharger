@@ -111,6 +111,33 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
 
 The UI's source is in [`ui/`](ui/README.md), built and tested with the server in the same CI run.
 
+## 📱 iPhone and iPad app
+
+<p align="center">
+  <img src="docs/assets/ios-iphone-console-light.png" alt="The Hardcharger app on iPhone: the native SQL console with a TPC-H query and its table" width="24%">
+  <img src="docs/assets/ios-iphone-server-dark.png" alt="The Hardcharger app on iPhone, dark: the server running on the phone, with its port, uptime and buttons" width="24%">
+  <img src="docs/assets/ios-iphone-share-light.png" alt="Share on Local Network: the address as a QR code for a computer on the same Wi-Fi" width="24%">
+  <img src="docs/assets/ios-iphone-splash-dark.png" alt="The splash screen, dark: the charging bull and the Hardcharger lettering, by GizmoData" width="24%">
+</p>
+<p align="center">
+  <img src="docs/assets/ios-ipad-webui-light.png" alt="The Hardcharger app on iPad: the sidebar and the server's own web UI, signed in" width="80%">
+</p>
+
+The whole server runs on the iPhone or iPad itself: the same `hardcharger-server`, DuckDB 2.0
+and its built-in extensions, built into the app. The app shows:
+
+- 🖥️ **Web UI**: the server's own web UI (editor, results grid, schema browser, sessions, API
+  page, uploads), signed in by the app; or a saved remote server's.
+- ⌨️ **Console**: the `hardcharger` command-line client in the app, with its dot commands and
+  formatting: Return runs a statement once it ends with `;`, ↑/↓ history, ⌘↩ on iPad.
+- 📲 **Your files**: import CSV, TSV, JSON and Parquet from Files, the share sheet or a drop on
+  iPad; the database is in Files (On My iPhone › Hardcharger).
+- 📡 **Share on Local Network** (off by default): a laptop on the same Wi-Fi opens the web UI
+  over TLS at the address in the QR code, checking the certificate's fingerprint.
+- 🌐 **Other servers**: saved in the Keychain, signed in with a password or single sign-on.
+
+It needs iOS 18 or later. Build it from [`ios/`](ios/README.md).
+
 ## 🚀 Performance
 
 Measured on one machine (Apple M5 Max) against GizmoSQL 1.41 with the same data
@@ -411,6 +438,7 @@ maps its options and lists what changed.
 |---|---|
 | 🦆 DuckDB 2.0, DuckLake and DuckDB's extensions | ✅ |
 | 🖥️ Built-in web UI: SQL editor, results grid, schema browser, exports (`--web-ui`) | ✅ |
+| 📱 iPhone and iPad app: the server on the device, its web UI and a SQL console | ✅ |
 | ⚡ Warp SQL: streamed and resumable results, bind parameters, prepared statements, bulk ingest, lz4_frame and zstd | ✅ |
 | 🔐 TLS and mTLS, password and token sign-in, SSO via OIDC/JWKS, browser sign-in, authorized e-mail filters | ✅ |
 | 👥 Role-based access control: users, roles, grants, ownership, system privileges | ✅ |

@@ -47,7 +47,7 @@ struct ServerScreen: View {
                         }
                     }
                 }
-                Section("Address") {
+                Section {
                     if let endpoint = server.localEndpoint {
                         CopyableRow(title: "On this device", value: endpoint.consoleURL.absoluteString, monospaced: true)
                     } else {
@@ -63,6 +63,12 @@ struct ServerScreen: View {
                         }
                     }
                     .tint(.primary)
+                } header: {
+                    Text("Address")
+                } footer: {
+                    if let note = server.portNote {
+                        Label(note, systemImage: "info.circle")
+                    }
                 }
                 Section("Database") {
                     LabeledContent("File") {
@@ -108,11 +114,6 @@ struct ServerScreen: View {
                 }
             }
             .navigationTitle("Server")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    startStopButton
-                }
-            }
         }
     }
 
@@ -127,12 +128,14 @@ struct ServerScreen: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Hardcharger™")
                         .font(.title2.weight(.bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                     Text("on this \(UIDevice.current.localizedModel)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                    StatusBadge(phase: server.phase)
                 }
                 Spacer(minLength: 0)
-                StatusBadge(phase: server.phase)
             }
             if server.phase == .running, let startedAt = server.startedAt {
                 HStack {
@@ -146,27 +149,11 @@ struct ServerScreen: View {
                 }
                 .frame(maxWidth: .infinity)
             }
-            HStack(spacing: 12) {
-                startStopButton
-                    .hcProminentButton()
-                    .controlSize(.large)
-                if server.phase == .running {
-                    Button {
-                        Task { await server.restart() }
-                    } label: {
-                        Label("Restart", systemImage: "arrow.clockwise")
-                    }
-                    .hcButton()
-                    .controlSize(.large)
-                    .accessibilityIdentifier("server.restart")
-                    Button {
-                        scene.openWeb(.local)
-                    } label: {
-                        Label("Web UI", systemImage: "macwindow")
-                    }
-                    .hcButton()
-                    .controlSize(.large)
-                }
+            // Titles and icons where they fit, icons alone where they don't (narrow windows,
+            // large text); VoiceOver reads the titles either way.
+            ViewThatFits(in: .horizontal) {
+                heroButtons.labelStyle(.titleAndIcon).controlSize(.large)
+                stackedHeroButtons
             }
         }
         .padding(20)
@@ -174,18 +161,72 @@ struct ServerScreen: View {
         .padding(.vertical, 4)
     }
 
-    @ViewBuilder private var startStopButton: some View {
+    private var heroButtons: some View {
+        HStack(spacing: 10) {
+            startStopButton()
+                .hcProminentButton()
+            if server.phase == .running {
+                Button {
+                    Task { await server.restart() }
+                } label: {
+                    Label("Restart", systemImage: "arrow.clockwise")
+                }
+                .hcButton()
+                .accessibilityIdentifier("server.restart")
+                Button {
+                    scene.openWeb(.local)
+                } label: {
+                    Label("Web UI", systemImage: "macwindow")
+                }
+                .hcButton()
+            }
+        }
+        .lineLimit(1)
+        .fixedSize()
+    }
+
+    /// Narrow screens: start/stop across the card, the others below it.
+    private var stackedHeroButtons: some View {
+        VStack(spacing: 10) {
+            startStopButton(wide: true)
+                .hcProminentButton()
+            if server.phase == .running {
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await server.restart() }
+                    } label: {
+                        Label("Restart", systemImage: "arrow.clockwise").frame(maxWidth: .infinity)
+                    }
+                    .hcButton()
+                    .accessibilityIdentifier("server.restart")
+                    Button {
+                        scene.openWeb(.local)
+                    } label: {
+                        Label("Web UI", systemImage: "macwindow").frame(maxWidth: .infinity)
+                    }
+                    .hcButton()
+                }
+            }
+        }
+        .labelStyle(.titleAndIcon)
+        .lineLimit(1)
+        .controlSize(.large)
+    }
+
+    @ViewBuilder private func startStopButton(wide: Bool = false) -> some View {
         switch server.phase {
         case .running:
             Button {
                 Task { await server.stop() }
             } label: {
                 Label("Stop", systemImage: "stop.fill")
+                    .frame(maxWidth: wide ? .infinity : nil)
             }
             .accessibilityIdentifier("server.stop")
         case .starting, .stopping:
             Button {} label: {
                 Label(server.phase == .starting ? "Starting" : "Stopping", systemImage: "hourglass")
+                    .frame(maxWidth: wide ? .infinity : nil)
             }
             .disabled(true)
         case .stopped, .failed:
@@ -193,6 +234,7 @@ struct ServerScreen: View {
                 Task { await server.start() }
             } label: {
                 Label("Start", systemImage: "play.fill")
+                    .frame(maxWidth: wide ? .infinity : nil)
             }
             .accessibilityIdentifier("server.start")
         }

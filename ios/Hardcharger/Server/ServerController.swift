@@ -26,6 +26,8 @@ final class ServerController {
     private(set) var certificate: ServerCertificateFiles.Current?
     /// The device's addresses when the server last started sharing.
     private(set) var sharedAddresses: [LocalNetwork.Address] = []
+    /// Set when the configured port was taken and the server runs on another for now.
+    private(set) var portNote: String?
 
     var settings: ServerSettings {
         didSet {
@@ -100,9 +102,24 @@ final class ServerController {
                 certificate = nil
                 sharedAddresses = []
             }
-            let launch = ServerLaunch(settings: settings, paths: paths, credential: credential)
-            let port = try await engine.start(launch: launch) { [weak self] exit in
+            let onExit: @Sendable (EmbeddedServer.Exit) -> Void = { [weak self] exit in
                 Task { @MainActor in self?.serverExited(exit, generation: generation) }
+            }
+            let port: Int
+            portNote = nil
+            do {
+                port = try await engine.start(
+                    launch: ServerLaunch(settings: settings, paths: paths, credential: credential), onExit: onExit)
+            } catch let failure as EmbeddedServer.StartFailure
+                where failure.message.localizedCaseInsensitiveContains("in use") && settings.port != 0
+            {
+                // The port is taken (in the simulator, by a server on the Mac): another one for
+                // this run; the setting stays.
+                var elsewhere = settings
+                elsewhere.port = 0
+                port = try await engine.start(
+                    launch: ServerLaunch(settings: elsewhere, paths: paths, credential: credential), onExit: onExit)
+                portNote = String(localized: "Port \(String(settings.port)) is in use on this device, so Hardcharger is on \(String(port)) for now.")
             }
             self.port = port
             runningSettings = settings

@@ -133,6 +133,27 @@ final class ConfigurationTests: XCTestCase {
         XCTAssertEqual(other.text(style: .emoji), "usage: hardcharger-server")
     }
 
+    @MainActor
+    func testLogTailFoldsContinuationLines() throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "tail-\(UUID().uuidString).log")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("""
+            2026-10-20T10:46:09.923Z info    statement sql=SELECT 1,
+              2 AS two
+            2026-10-20T10:46:09.924Z warning slow
+            """.utf8).write(to: file)
+        let tail = LogTail(file: file)
+        tail.poll()
+        XCTAssertEqual(tail.lines.count, 1, "the last line waits for its newline")
+        XCTAssertEqual(tail.lines.first?.message, "statement sql=SELECT 1,\n  2 AS two")
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("\n".utf8))
+        try handle.close()
+        tail.poll()
+        XCTAssertEqual(tail.lines.map(\.level), [.info, .warning])
+    }
+
     func testImportTableNames() {
         XCTAssertEqual(DataImport.tableName(for: URL(filePath: "/x/Sales 2026.csv")), "sales_2026")
         XCTAssertEqual(DataImport.tableName(for: URL(filePath: "/x/2026-q1.parquet")), "t_2026_q1")

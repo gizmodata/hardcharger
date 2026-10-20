@@ -108,6 +108,33 @@ final class ServerBridgeTests: XCTestCase {
         XCTAssertFalse(other, "another fingerprint isn't accepted")
     }
 
+    @MainActor
+    func testTakenPortFallsBackWithANote() async throws {
+        // Something else listens on the configured port (as a server on the Mac does in the simulator).
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, length) == 0 && listen(fd, 1) == 0 && getsockname(fd, $0, &length) == 0
+            }
+        }
+        XCTAssertTrue(bound)
+        let taken = Int(UInt16(bigEndian: address.sin_port))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "fallback-\(UUID().uuidString)"))
+        let controller = ServerController(paths: paths, defaults: defaults, engine: engine)
+        controller.settings.port = taken
+        await controller.start()
+        XCTAssertEqual(controller.phase, .running, controller.phase.failureMessage ?? "")
+        XCTAssertNotEqual(controller.port, taken)
+        XCTAssertEqual(controller.settings.port, taken, "the setting stays")
+        XCTAssertTrue(controller.portNote?.contains(String(taken)) == true, controller.portNote ?? "no note")
+        await controller.stop()
+    }
+
     func testVersionsAndNotices() {
         let versions = EmbeddedServer.versions
         XCTAssertFalse(versions.hardcharger.isEmpty)

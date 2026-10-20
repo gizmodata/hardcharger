@@ -30,6 +30,8 @@ struct SQLConsoleScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbar }
             .task(id: connectionKey) { await connect() }
+            // Another tab: the input lets the keyboard go (it would stay up over that tab).
+            .onDisappear { inputFocused = false }
         }
     }
 
@@ -48,7 +50,7 @@ struct SQLConsoleScreen: View {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     banner
                     ForEach(console.entries) { entry in
-                        EntryView(entry: entry, continuationPrompt: console.continuationPrompt, font: Font(uiFont))
+                        EntryView(entry: entry, continuationPrompt: console.continuationPrompt, uiFont: uiFont)
                             .id(entry.id)
                     }
                     if console.isRunning {
@@ -112,10 +114,14 @@ struct SQLConsoleScreen: View {
                     }
                 }
                 .fixedSize()
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("Catalog and schema"))
+                .accessibilityValue(Text(verbatim: console.prompt.trimmingCharacters(in: CharacterSet(charactersIn: "> "))))
                 .accessibilityIdentifier("sqlconsole.prompt")
                 ConsoleInputView(
                     text: Binding(get: { console.input }, set: { console.input = $0 }),
                     font: uiFont,
+                    active: scene.tab == .console,
                     onReturn: { console.returnPressed() },
                     onRun: { console.submit() },
                     onHistoryBack: { console.historyBack() },
@@ -145,6 +151,15 @@ struct SQLConsoleScreen: View {
                 }
                 .accessibilityLabel(Text("Clear input"))
                 .accessibilityIdentifier("sqlconsole.clearInput")
+                if inputFocused {
+                    Button {
+                        inputFocused = false
+                    } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                    }
+                    .accessibilityLabel(Text("Hide keyboard"))
+                    .accessibilityIdentifier("sqlconsole.hideKeyboard")
+                }
                 Spacer()
                 if console.isRunning {
                     Button(role: .destructive) {
@@ -311,7 +326,8 @@ enum CABundle {
 private struct EntryView: View {
     let entry: SQLConsole.Entry
     let continuationPrompt: String
-    let font: Font
+    let uiFont: UIFont
+    private var font: Font { Font(uiFont) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -320,15 +336,8 @@ private struct EntryView: View {
                 .foregroundStyle(.tint)
                 .textSelection(.enabled)
             if !entry.output.isEmpty {
-                ScrollView(.horizontal, showsIndicators: true) {
-                    Text(verbatim: entry.output.hasSuffix("\n") ? String(entry.output.dropLast()) : entry.output)
-                        .font(font)
-                        .foregroundStyle(entry.kind == .error ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
-                        .fixedSize(horizontal: true, vertical: false)
-                        .textSelection(.enabled)
-                        .padding(.bottom, 2)
-                }
-                .accessibilityIdentifier("sqlconsole.output")
+                ConsoleOutputView(text: entry.output.hasSuffix("\n") ? String(entry.output.dropLast()) : entry.output,
+                                  font: uiFont, color: entry.kind == .error ? .systemRed : .label)
             }
             if let duration = entry.duration, duration > .milliseconds(250) {
                 Text(duration.formatted(.units(allowed: [.seconds, .milliseconds], width: .narrow)))

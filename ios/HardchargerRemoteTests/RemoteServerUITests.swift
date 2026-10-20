@@ -81,7 +81,7 @@ final class RemoteServerUITests: XCTestCase {
         let input = app.textViews["sqlconsole.input"]
         input.tap()
         input.typeText("SELECT name FROM remote_people;\n")
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Grace'")).firstMatch
+        XCTAssertTrue(app.consoleOutput(containing: "Grace")
             .waitForExistence(timeout: 30), "the remote table answers")
     }
 
@@ -96,5 +96,12 @@ final class RemoteServerUITests: XCTestCase {
         // The mock provider approves at once; the app collects the token and closes the sheet.
         XCTAssertTrue(app.webViews.firstMatch.buttons["Run"].waitForExistence(timeout: 60),
                       "the web UI opens signed in through the identity provider")
+    }
+}
+
+extension XCUIApplication {
+    /// A console output (a text view) whose text contains `text`.
+    func consoleOutput(containing text: String) -> XCUIElement {
+        textViews.matching(NSPredicate(format: "identifier == 'sqlconsole.output' AND value CONTAINS %@", text)).firstMatch
     }
 }

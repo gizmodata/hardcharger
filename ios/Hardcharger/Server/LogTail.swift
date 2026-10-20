@@ -58,6 +58,11 @@ struct LogLine: Identifiable, Equatable, Sendable {
         return LogLine(id: id, raw: raw, time: time, level: level, message: message)
     }
 
+    /// This entry with a continuation line added (a logged statement's next line).
+    func continued(with text: String) -> LogLine {
+        LogLine(id: id, raw: raw + "\n" + text, time: time, level: level, message: message + "\n" + text)
+    }
+
     /// The line as shown: with marks, or plain (marks the server wrote taken out).
     func text(style: LogStyle) -> String {
         guard let level else { return raw }
@@ -142,7 +147,20 @@ final class LogTail {
         var fresh: [LogLine] = []
         fresh.reserveCapacity(pieces.count)
         for piece in pieces where !piece.isEmpty {
-            fresh.append(LogLine.parse(piece, id: nextID))
+            let line = LogLine.parse(piece, id: nextID)
+            // A line without a time and level continues the entry before it (a statement's
+            // text with line breaks).
+            if line.level == nil {
+                if let last = fresh.last {
+                    fresh[fresh.count - 1] = last.continued(with: piece)
+                    continue
+                }
+                if let last = lines.last {
+                    lines[lines.count - 1] = last.continued(with: piece)
+                    continue
+                }
+            }
+            fresh.append(line)
             nextID += 1
         }
         lines.append(contentsOf: fresh)

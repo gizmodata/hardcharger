@@ -13,6 +13,8 @@ import UIKit
 struct ConsoleInputView: UIViewRepresentable {
     @Binding var text: String
     let font: UIFont
+    /// False while another tab shows: the input gives up the keyboard.
+    var active: Bool = true
     var onReturn: () -> Bool
     var onRun: () -> Void
     var onHistoryBack: () -> Bool
@@ -55,6 +57,7 @@ struct ConsoleInputView: UIViewRepresentable {
             view.selectedRange = NSRange(location: (text as NSString).length, length: 0)
         }
         if view.font != font { view.font = font }
+        if !active, view.isFirstResponder { view.resignFirstResponder() }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ConsoleTextView, context: Context) -> CGSize? {

@@ -18,6 +18,7 @@ struct HardchargerApp: App {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
+                delegate.endBackgroundTask()
                 Task { await model.server.resumeAfterBackground() }
             case .background:
                 delegate.keepServingBriefly()
@@ -64,7 +65,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     @MainActor
-    private func endBackgroundTask() {
+    func endBackgroundTask() {
         guard backgroundTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(backgroundTask)
         backgroundTask = .invalid

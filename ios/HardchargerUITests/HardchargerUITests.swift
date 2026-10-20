@@ -67,6 +67,54 @@ final class HardchargerUITests: XCTestCase {
             .firstMatch.exists, "under its column, answer")
     }
 
+    /// The native screens pass Xcode's accessibility audit: every element described for
+    /// VoiceOver, with the right traits, and text that isn't clipped. (The web UI has its own
+    /// checks in ui/.)
+    func testAccessibilityAudit() throws {
+        app.launchArguments += ["-HCInitialTab", "server"]
+        app.launch()
+        waitForApp()
+        XCTAssertTrue(app.buttons["server.stop"].firstMatch.waitForExistence(timeout: 30))
+        for tab in ["Server", "Settings", "Console"] {
+            open(tab)
+            Thread.sleep(forTimeInterval: 1)
+            // (Dynamic Type: every font is a text style; the audit's own check flags List rows
+            // with long monospaced values alternately, so it is checked by eye at the largest
+            // accessibility size instead, ios/README.md.)
+            try app.performAccessibilityAudit(for: [.sufficientElementDescription, .trait, .textClipped]) { issue in
+                // System controls the app doesn't draw (the tab bar's own items, keyboard).
+                let element = issue.element
+                print("AUDIT>>> \(tab): \(issue.auditType) \(issue.compactDescription) " +
+                      "[\(element?.elementType.rawValue ?? 0) \(element?.identifier ?? "") \(element?.label ?? "")]")
+                return false
+            }
+        }
+    }
+
+    func testWebUIKeyboardCanBeHidden() throws {
+        app.launchArguments += ["-HCInitialTab", "web"]
+        app.launch()
+        waitForApp()
+        let web = app.webViews.firstMatch
+        let editor = web.textViews["SQL editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 30))
+        // After Run, WebKit brings the keyboard up for the page's editor.
+        web.buttons["Run"].firstMatch.tap()
+        XCTAssertTrue(web.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'version'")).firstMatch
+            .waitForExistence(timeout: 30))
+        if !app.keyboards.firstMatch.waitForExistence(timeout: 5) {
+            let frame = editor.frame
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.minY + 120)).tap()
+        }
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "a keyboard is up")
+        let hide = app.buttons["webui.hideKeyboard"].firstMatch
+        XCTAssertTrue(hide.waitForExistence(timeout: 5), "the toolbar offers to hide it")
+        hide.tap()
+        let gone = NSPredicate(format: "exists == false")
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: gone, object: app.keyboards.firstMatch)],
+                                        timeout: 10), .completed, "and it goes")
+    }
+
     func testConsoleRunsSelect42AndTables() throws {
         app.launchArguments += ["-HCInitialTab", "console"]
         app.launch()
@@ -80,15 +128,15 @@ final class HardchargerUITests: XCTestCase {
         // Return on an open statement adds a line; the ';' runs it.
         input.typeText("SELECT 42\n")
         input.typeText("AS answer;\n")
-        let answer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS '│      42 │'")).firstMatch
+        let answer = app.consoleOutput(containing: "│      42 │")
         XCTAssertTrue(answer.waitForExistence(timeout: 30), "the table shows 42")
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS '│ answer  │'")).firstMatch.exists)
+        XCTAssertTrue(app.consoleOutput(containing: "│ answer  │").exists)
         XCTAssertEqual((input.value as? String) ?? "", "", "the input is cleared after it runs")
 
         input.typeText("CREATE TABLE people AS SELECT 1 AS id, 'Ada' AS name;\n")
-        XCTAssertTrue(app.staticTexts["OK, 1 row affected"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.consoleOutput(containing: "OK, 1 row affected").waitForExistence(timeout: 30))
         input.typeText(".tables\n")
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'people'")).firstMatch
+        XCTAssertTrue(app.consoleOutput(containing: "people")
             .waitForExistence(timeout: 30), ".tables lists people")
     }
 
@@ -161,7 +209,7 @@ final class HardchargerUITests: XCTestCase {
             .firstMatch.waitForExistence(timeout: 30), "the console connects over TLS")
         input.tap()
         input.typeText("SELECT 42 AS answer;\n")
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS '│      42 │'")).firstMatch
+        XCTAssertTrue(app.consoleOutput(containing: "│      42 │")
             .waitForExistence(timeout: 30))
     }
 
@@ -199,5 +247,12 @@ private final class Pin: NSObject, URLSessionDelegate, @unchecked Sendable {
             .map { String(format: "%02X", $0) }.joined(separator: ":")
         matched = presented == fingerprint
         return matched ? (.useCredential, URLCredential(trust: trust)) : (.cancelAuthenticationChallenge, nil)
+    }
+}
+
+extension XCUIApplication {
+    /// A console output (a text view) whose text contains `text`.
+    func consoleOutput(containing text: String) -> XCUIElement {
+        textViews.matching(NSPredicate(format: "identifier == 'sqlconsole.output' AND value CONTAINS %@", text)).firstMatch
     }
 }

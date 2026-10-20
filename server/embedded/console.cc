@@ -28,7 +28,8 @@ struct hardcharger_console {
 namespace {
 
 // The client writes to std::cout and std::cerr; a run sends both to one buffer, in the
-// order written. One run at a time in the process holds them.
+// order written. One run at a time in the process holds them (so two consoles' statements,
+// in two windows, run one after the other).
 std::mutex stdio_mutex;
 
 class Capture {
@@ -129,13 +130,14 @@ int hardcharger_console_open(const hardcharger_console_options* options, hardcha
   c.auto_width = false;
   c.bail_on_error = true;
   c.output_stream = &std::cout;
-  std::ostringstream text;
-  arrow::Status status;
-  {
+  // Connecting prints nothing (its failures are the status), so it holds no capture: a slow
+  // server doesn't keep another console waiting.
+  const arrow::Status status = console->connection.Connect(c);
+  if (status.ok()) {
+    std::ostringstream text;
     std::lock_guard lock(stdio_mutex);
     Capture capture(text);
-    status = console->connection.Connect(c);
-    if (status.ok()) hc::RefreshDynamicPrompt(console->connection, c);
+    hc::RefreshDynamicPrompt(console->connection, c);
   }
   if (!status.ok()) {
     CopyError(status.message(), error, error_size);

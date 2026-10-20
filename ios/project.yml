@@ -101,6 +101,20 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Hardcharger
 
+  # The README's screenshots: ios/scripts/screenshots.sh (not a test of behaviour).
+  HardchargerScreenshots:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: HardchargerScreenshots
+    dependencies:
+      - target: Hardcharger
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gizmodata.hardcharger.screenshots
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Hardcharger
+
 schemes:
   Hardcharger:
     build:
@@ -127,3 +141,12 @@ schemes:
       config: Debug
       targets:
         - name: HardchargerRemoteTests
+  HardchargerScreenshots:
+    build:
+      targets:
+        Hardcharger: all
+        HardchargerScreenshots: [test]
+    test:
+      config: Debug
+      targets:
+        - name: HardchargerScreenshots

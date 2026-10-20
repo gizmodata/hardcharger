@@ -10,6 +10,7 @@ struct WebUIScreen: View {
     @Environment(SceneModel.self) private var scene
     @State private var signInError: String?
     @State private var presentation = WindowPresentation()
+    @State private var keyboardShown = false
 
     var body: some View {
         NavigationStack {
@@ -18,6 +19,12 @@ struct WebUIScreen: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
                 .toolbarRole(.editor)
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                    keyboardShown = true
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                    keyboardShown = false
+                }
         }
     }
 
@@ -112,6 +119,22 @@ struct WebUIScreen: View {
             .accessibilityIdentifier("console.target")
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
+            // On a phone the keyboard covers the editor's results.
+            if keyboardShown {
+                Button {
+                    let webView = scene.webConsole(for: scene.webTarget).webView
+                    // The page's focus (the editor's hidden input) first, then the view's.
+                    webView.evaluateJavaScript(
+                        "document.querySelectorAll('textarea, input').forEach(e => e.blur()); document.activeElement && document.activeElement.blur && document.activeElement.blur()"
+                    ) { _, _ in
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil,
+                                                        for: nil)
+                    }
+                } label: {
+                    Label("Hide Keyboard", systemImage: "keyboard.chevron.compact.down")
+                }
+                .accessibilityIdentifier("webui.hideKeyboard")
+            }
             if scene.webTarget == .local {
                 Button {
                     scene.showImporter = true

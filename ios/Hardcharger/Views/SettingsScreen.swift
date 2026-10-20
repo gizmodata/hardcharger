@@ -40,11 +40,7 @@ struct SettingsScreen: View {
                     }
                     Picker("Memory limit", selection: $server.settings.memoryLimit) {
                         ForEach(MemoryLimit.allCases) { limit in
-                            if limit == .automatic {
-                                Text("Automatic (\(limit.megabytes()) MB)").tag(limit)
-                            } else {
-                                Text(limit.label).tag(limit)
-                            }
+                            Text(limit.label).tag(limit)
                         }
                     }
                     .accessibilityIdentifier("settings.memoryLimit")
@@ -57,7 +53,7 @@ struct SettingsScreen: View {
                 } header: {
                     Text("Server")
                 } footer: {
-                    Text("iOS ends an app that uses too much memory, so the server keeps DuckDB well inside it: larger work spills to the device's storage.")
+                    Text("Automatic is \(MemoryLimit.automatic.megabytes()) MB on this \(UIDevice.current.localizedModel). iOS ends an app that uses too much memory, so the server keeps DuckDB well inside it: larger work spills to the device's storage.")
                 }
 
                 Section("Logging") {
