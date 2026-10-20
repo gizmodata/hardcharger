@@ -274,7 +274,10 @@ def test_licenses_prints_the_third_party_notices():
                             timeout=30)
     assert result.returncode == 0, result.stderr
     notices = (pathlib.Path(__file__).resolve().parents[2] / "THIRD_PARTY_NOTICES.md").read_bytes()
-    assert result.stdout.replace(b"\r\n", b"\n") == notices
+    # Byte for byte, on every platform: .gitattributes keeps the file LF in every checkout
+    # (Windows' too), and --licenses writes stdout in binary mode there.
+    assert b"\r" not in notices, "THIRD_PARTY_NOTICES.md has CR line ends in this checkout: see .gitattributes"
+    assert result.stdout == notices
     assert b"### replxx\n" in notices
 
 

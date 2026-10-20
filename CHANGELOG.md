@@ -395,6 +395,14 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- `--licenses` on Windows prints the notices byte for byte, as on Linux and macOS: the Windows
+  checkout had turned `THIRD_PARTY_NOTICES.md` to CRLF line ends (git's `core.autocrlf`), so
+  the binaries embedded those, and stdout in text mode then wrote `\r\r\n`. A
+  `.gitattributes` keeps the file LF in every checkout, and both binaries write the notices
+  with stdout in binary mode.
+- The server builds with clang against libstdc++ 14 (Ubuntu 24.04's): warp-sql's build-time
+  OpenAPI tool instantiated a `std::pair` of an incomplete type, which libstdc++ 14 refuses
+  (warp-sql `0e8dc87`; the served document is unchanged).
 - From the warp-sql 1.0.0 release branch (`third_party/warp-sql` at `release/v1.0.0`): a
   retained result is expired from its `expires_at` on (Warp SQL §6.5), where the SDK refused
   new reads only after its next sweep, up to 5 seconds later; and an idempotent replay of a

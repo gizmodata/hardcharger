@@ -72,8 +72,11 @@ def test_licenses_flag_prints_the_third_party_notices():
     out = subprocess.run(args=[str(BINARY), "--licenses"], capture_output=True, timeout=30,
                          env={"PATH": "/usr/bin:/bin"})
     assert out.returncode == 0, out.stderr
-    printed = out.stdout.replace(b"\r\n", b"\n").decode("utf-8")
-    notices = NOTICES.read_text(encoding="utf-8")
+    # Byte for byte, on every platform: .gitattributes keeps the file LF in every checkout
+    # (Windows' too), and --licenses writes stdout in binary mode there.
+    printed = out.stdout.decode("utf-8")
+    notices = NOTICES.read_bytes().decode("utf-8")
+    assert "\r" not in notices, "THIRD_PARTY_NOTICES.md has CR line ends in this checkout: see .gitattributes"
     assert printed.startswith(notices), printed[:300]
     assert printed.startswith("# Third-party software in Hardcharger\n")
     for component in ("### DuckDB\n", "### Apache Arrow C++\n", "### OpenSSL\n", "### Boost "):

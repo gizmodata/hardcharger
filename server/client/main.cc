@@ -2,15 +2,19 @@
 // 1.x's gizmosql_client (src/client/main.cpp): the same options, with Hardcharger's names
 // (docs/migrating-from-gizmosql.md maps them).
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <fcntl.h>
+#include <io.h>
 #include <windows.h>
 #endif
 
@@ -31,6 +35,18 @@
 using namespace hardcharger::client;
 
 namespace {
+
+// --licenses writes the embedded notices byte for byte, the same on every platform as the
+// THIRD_PARTY_NOTICES.md beside the binary: stdout in text mode (Windows) would turn each
+// \n into \r\n.
+void WriteExactly(std::string_view text) {
+#ifdef _WIN32
+  std::fflush(stdout);
+  _setmode(_fileno(stdout), _O_BINARY);
+#endif
+  std::fwrite(text.data(), 1, text.size(), stdout);
+  std::fflush(stdout);
+}
 
 void SigtermHandler(int /*signum*/) {
   // Nothing here is async-signal-safe to tear down. The server reaps abandoned sessions;
@@ -135,7 +151,7 @@ int main(int argc, char** argv) {
   }
 
   if (licenses) {
-    std::cout << hardcharger::ThirdPartyNotices();
+    WriteExactly(hardcharger::ThirdPartyNotices());
     return 0;
   }
 

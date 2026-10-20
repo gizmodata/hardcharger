@@ -1,0 +1,4 @@
+# THIRD_PARTY_NOTICES.md is embedded in the binaries byte for byte (server/cmake/
+# third_party_notices.cmake) and printed by their --licenses: LF in every checkout,
+# Windows' (core.autocrlf) included, so every platform's binaries carry the same bytes.
+THIRD_PARTY_NOTICES.md text eol=lf

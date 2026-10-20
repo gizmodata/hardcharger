@@ -1,9 +1,16 @@
 // hardcharger-server: the server. See `hardcharger-server --help` for configuration.
 
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <string_view>
 #include <thread>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 #include "audit.hpp"
 #include "auth.hpp"
@@ -27,6 +34,18 @@
 namespace hc = hardcharger;
 
 namespace {
+
+// --licenses writes the embedded notices byte for byte, the same on every platform as the
+// THIRD_PARTY_NOTICES.md beside the binary: stdout in text mode (Windows) would turn each
+// \n into \r\n.
+void WriteExactly(std::string_view text) {
+#ifdef _WIN32
+  std::fflush(stdout);
+  _setmode(_fileno(stdout), _O_BINARY);
+#endif
+  std::fwrite(text.data(), 1, text.size(), stdout);
+  std::fflush(stdout);
+}
 
 warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   warpsql::ServerOptions options;
@@ -308,9 +327,10 @@ int main(int argc, char** argv) {
       return 0;
     case hc::Action::kLicenses: {
       // THIRD_PARTY_NOTICES.md (embedded at build time), then the embedded web UI's own.
-      std::cout << hc::ThirdPartyNotices();
+      WriteExactly(hc::ThirdPartyNotices());
       if (const auto ui = hc::EmbeddedWebUiFileContent(hc::EmbeddedWebUiFiles(), "third-party-notices.txt")) {
-        std::cout << "\n\n" << *ui;
+        WriteExactly("\n\n");
+        WriteExactly(*ui);
       }
       return 0;
     }
