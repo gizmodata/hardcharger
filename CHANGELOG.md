@@ -74,6 +74,8 @@ own changelog in `python/CHANGELOG.md`.
   tells its own text coming back from a value set from outside (opening a saved query, Preview
   data). e2e: a 93-character statement typed at script speed arrives whole (it lost keys in
   every Chromium run before).
+- README: the web UI screenshots (the query view and the API page, light and dark) are
+  retaken with the new logo and the API page in the header (`ui/test/e2e/screenshots.spec.ts`).
 - Web UI: in a narrow side panel, a column's type now gives up its width before the column's
   name (`l_orderkey  BIG…`, not `l_or…  BIGINT NOT NULL`); a name is shortened only once its
   type is down to a few letters, and the row's tooltip has the whole name and type. A long
