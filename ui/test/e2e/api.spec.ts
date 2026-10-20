@@ -110,7 +110,9 @@ test("follows the dark theme", async ({ page, harness }) => {
   const ui = page.getByTestId("api-swagger");
   await expect(ui.locator(".opblock").first()).toBeVisible();
   await page.getByRole("button", { name: "Dark theme" }).click();
-  await expect(page.locator("html")).toHaveClass(/\bdark-mode\b/);
+  // Swagger UI's dark theme is on its own shadow host, not on the page.
+  await expect(ui).toHaveClass(/\bdark-mode\b/);
+  await expect(page.locator("html")).not.toHaveClass(/\bdark-mode\b/);
   // Readable: light text on the app's dark background (Swagger UI fades colours in over 0.2 s).
   const luminance = (selector: string, property: "color" | "backgroundColor") =>
     page
@@ -124,7 +126,31 @@ test("follows the dark theme", async ({ page, harness }) => {
   await expect.poll(() => luminance(".api-swagger .opblock-summary-description", "color")).toBeGreaterThan(180);
   expect(await luminance("body", "backgroundColor")).toBeLessThan(60);
   await page.getByRole("button", { name: "Light theme" }).click();
-  await expect(page.locator("html")).not.toHaveClass(/\bdark-mode\b/);
+  await expect(ui).not.toHaveClass(/\bdark-mode\b/);
+});
+
+test("Swagger UI's styles stay inside the API page, and the page's stay out of it", async ({ page, harness }) => {
+  await signIn(page, harness.user);
+  await page.getByRole("button", { name: "API", exact: true }).click();
+  const ui = page.getByTestId("api-swagger");
+  await expect(ui.locator(".opblock").first()).toBeVisible();
+  // Swagger UI is in a shadow root with its stylesheet; the page's own stylesheets have none
+  // of its rules (they would style other elements with its generic class names: .main, .info).
+  expect(await ui.evaluate((el) => el.shadowRoot?.querySelector("style")?.textContent?.includes(".opblock"))).toBe(
+    true,
+  );
+  const leaked = await page.evaluate(() =>
+    [...document.styleSheets].flatMap((sheet) =>
+      [...sheet.cssRules].map((r) => r.cssText).filter((t) => /\.swagger-ui|\.opblock/.test(t)),
+    ),
+  );
+  expect(leaked).toEqual([]);
+  // ...and the app's generic rules don't reach Swagger UI: its .btn (the app's makes a button
+  // a 30 px inline-flex box, Swagger UI's doesn't say).
+  await ui.locator(".opblock-summary-control").first().click();
+  const swaggerBtn = ui.getByRole("button", { name: "Try it out" }).first();
+  await expect(swaggerBtn).toBeVisible();
+  expect(await swaggerBtn.evaluate((el) => getComputedStyle(el).display)).not.toBe("inline-flex");
 });
 
 test("says so when the server doesn't describe its API", async ({ page, harness }) => {

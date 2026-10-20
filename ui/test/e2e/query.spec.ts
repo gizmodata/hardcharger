@@ -1,4 +1,4 @@
-import { expect, expectProblem, gridRows, runSql, setSql, signIn, test, editorTabs } from "./fixtures.ts";
+import { editorText, expect, expectProblem, gridRows, runSql, setSql, signIn, test, editorTabs } from "./fixtures.ts";
 
 test.beforeEach(async ({ page, harness }) => {
   await signIn(page, harness.admin);
@@ -110,4 +110,19 @@ test("the row limit caps what is read and says so", async ({ page }) => {
   await grid.evaluate((el) => (el.scrollTop = el.scrollHeight));
   await expect(grid.getByRole("rowheader", { name: "1,000", exact: true })).toBeVisible();
   await page.getByLabel("Row limit").selectOption("10000");
+});
+
+// The editor's own text comes back to it as its value after React renders; a key pressed
+// before that render's effect ran once had the older text put back (keys lost, the cursor
+// moved to the start). Typing as fast as a script can makes that window certain to be hit.
+test("fast typing keeps every key", async ({ page }) => {
+  const sql = "SELECT version(), current_database(), 42 AS answer FROM range(10) WHERE range > 3 ORDER BY 1";
+  for (let i = 0; i < 3; i++) {
+    await setSql(page, "");
+    await page.keyboard.type(sql);
+    await expect.poll(() => editorText(page)).toBe(sql);
+    // And it stays so (no late echo puts an older text back).
+    await page.waitForTimeout(300);
+    expect(await editorText(page)).toBe(sql);
+  }
 });

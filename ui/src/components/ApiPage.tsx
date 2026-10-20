@@ -1,8 +1,8 @@
-import "swagger-ui-dist/swagger-ui.css";
 import "../styles/api.css";
 
 import { RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import swaggerCss from "swagger-ui-dist/swagger-ui.css?inline";
 import SwaggerUIBundle from "swagger-ui-dist/swagger-ui-es-bundle.js";
 
 import {
@@ -15,6 +15,28 @@ import {
 } from "../lib/apiDocs";
 import type { ThemeName } from "../lib/theme";
 import { errorMessage, useSession } from "../session";
+import swaggerFitCss from "../styles/swagger-shadow.css?inline";
+
+// Swagger UI's stylesheet styles generic class names (.main, .info, .btn, .tab, ...), and the
+// app's own stylesheets would style Swagger UI's elements. So Swagger UI lives in a shadow
+// root with its stylesheet inside: nothing of it reaches the rest of the page (the editor's
+// suggestion list included), and nothing of the page's reaches it. Its dark theme, written
+// for html.dark-mode, follows the shadow host's class instead.
+const shadowCss = `${swaggerCss.replace(/html\.dark-mode/g, ":host(.dark-mode)")}\n${swaggerFitCss}`;
+
+/** The shadow root Swagger UI renders into, made once per host element. */
+function swaggerRoot(host: HTMLElement): HTMLElement {
+  const shadow = host.shadowRoot ?? host.attachShadow({ mode: "open" });
+  let node = shadow.querySelector<HTMLElement>(".api-swagger-root");
+  if (!node) {
+    const style = document.createElement("style");
+    style.textContent = shadowCss;
+    node = document.createElement("div");
+    node.className = "api-swagger-root";
+    shadow.replaceChildren(style, node);
+  }
+  return node;
+}
 
 // Swagger UI without what this page decides itself: the server switcher (every request goes
 // to this origin) and the Authorize dialogs (requests carry the user's own sign-in).
@@ -61,7 +83,7 @@ export default function ApiPage({ theme }: { theme: ThemeName }) {
   useEffect(() => {
     if (state.kind !== "ready" || !host.current) return;
     const origin = window.location.origin;
-    const node = host.current;
+    const node = swaggerRoot(host.current);
     SwaggerUIBundle({
       domNode: node,
       spec: sameOriginSpec(state.doc, origin),
@@ -87,11 +109,10 @@ export default function ApiPage({ theme }: { theme: ThemeName }) {
     };
   }, [state]);
 
-  // Swagger UI's own dark theme follows the app's.
+  // Swagger UI's own dark theme follows the app's (on the shadow host, not on <html>).
   useEffect(() => {
-    document.documentElement.classList.toggle("dark-mode", theme === "dark");
-    return () => document.documentElement.classList.remove("dark-mode");
-  }, [theme]);
+    host.current?.classList.toggle("dark-mode", theme === "dark");
+  }, [theme, state]);
 
   return (
     <div className="api-page" data-testid="api-page">

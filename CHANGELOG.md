@@ -7,6 +7,38 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Web UI: the editor's suggestion list showed empty rows (only the kind icons, no names) in
+  every browser. The app's stylesheet had a rule for a class named `main` (the page's main
+  area, `flex-direction: column`), and Monaco's suggestion rows have an element of that class
+  too, so each row's name and detail were laid out below its icon, outside the 20 px row, and
+  clipped. The app's generic class names that Monaco also uses (`main`, `tree`, `messages`,
+  `message`) are renamed (`app-main`, `side-tree`, `run-messages`, `run-message`), and a unit
+  test (`css-isolation.test.ts`) fails when a global rule names any class Monaco's stylesheets
+  use, unless the rule is a deliberate Monaco override. The e2e test types a table's and a
+  function's prefix and checks that each suggestion's label is drawn inside its row, is what
+  the browser shows at its place, and has a colour other than its background, in Chromium and
+  WebKit, before and after a visit to the API page. (The old tests checked only that rows
+  were there and held the text.)
+- Web UI: the API page's Swagger UI, with its stylesheet, now lives in a shadow root, so its
+  rules (for generic names such as `.main`, `.info`, `.btn`, `.tab`) can't reach the rest of
+  the app, and the app's (its `.btn`) don't reach Swagger UI. Before, Swagger UI's stylesheet
+  stayed in the page for good after the first visit to the API page. Its dark theme follows
+  the shadow host instead of a class on `<html>`. e2e: no rule of Swagger UI's in the page's
+  stylesheets, and Swagger UI's buttons don't take the app's button style.
+- Web UI: fast typing in the editor lost keys in Chromium (and moved the cursor to the start).
+  The editor's own text came back to it as its value after React rendered, and when a key was
+  pressed between that render and its effect, the older text was put back. The editor now
+  tells its own text coming back from a value set from outside (opening a saved query, Preview
+  data). e2e: a 93-character statement typed at script speed arrives whole (it lost keys in
+  every Chromium run before).
+- Web UI: in a narrow side panel, a column's type now gives up its width before the column's
+  name (`l_orderkey  BIG…`, not `l_or…  BIGINT NOT NULL`); a name is shortened only once its
+  type is down to a few letters, and the row's tooltip has the whole name and type. A long
+  type no longer runs under the row's **…** button, and the button keeps clear of a scroll bar
+  drawn over the content (macOS). e2e in Chromium and WebKit at a narrow, scrolling panel.
+
 ## [2.0.0-rc.1] - 2026-10-20
 
 ### Added

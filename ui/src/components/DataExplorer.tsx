@@ -466,6 +466,8 @@ export function DataExplorer({ cache }: Props) {
                               label: c.name,
                               icon: <Icon size={13} className="tree-icon" />,
                               drag: ident(c.name),
+                              // The whole name and type, however narrow the panel has cut them.
+                              title: `${c.name}  ${c.type}${c.nullable ? "" : " NOT NULL"}\nDouble-click or drag to insert ${ident(c.name)}`,
                               detail: (
                                 <span className="tree-type">
                                   {c.type}
@@ -558,7 +560,7 @@ export function DataExplorer({ cache }: Props) {
           {hits?.more && <li className="tree-note">More than 100 match: type more of the name.</li>}
         </ul>
       )}
-      <ul className="tree" role="tree" aria-label="Catalogs" ref={tree}>
+      <ul className="side-tree" role="tree" aria-label="Catalogs" ref={tree}>
         {catalogs.map((catalog) => {
           const ck = keyOf(catalog);
           const cOpen = open.has(ck);

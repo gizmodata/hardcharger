@@ -620,9 +620,9 @@ export function EditorTab(props: Props) {
         )}
         <div className="results-body">
           {done && shown === "messages" && showTabs ? (
-            <ol className="messages" data-testid="messages">
+            <ol className="run-messages" data-testid="messages">
               {done.statements.map((s) => (
-                <li key={s.index} className={`message message-${s.status}`}>
+                <li key={s.index} className={`run-message message-${s.status}`}>
                   <span className="message-n">{s.index + 1}.</span>
                   <span className="message-sql mono" title={s.sql}>
                     {statementPreview(s.sql, 120)}
