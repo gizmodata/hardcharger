@@ -3,7 +3,9 @@
 # a slow server from a slow client (Warp SQL's one-round-trip path: POST the statement with
 # Accept: application/vnd.apache.arrow.stream).
 #
-#   raw_fetch.sh https://172.31.41.94:31337 "SELECT * FROM sf1.lineitem" [times] [curl args...]
+#   raw_fetch.sh "https://$SERVER_IP:31337" "SELECT * FROM sf1.lineitem" [times] [curl args...]
+#
+# SERVER_IP: the server VM's address as this machine reaches it (its private IP in the VPC).
 set -euo pipefail
 BASE=${1:?base URL}/warp/v1
 SQL=${2:?SQL}
