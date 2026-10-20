@@ -239,6 +239,26 @@ Images are multi-architecture (`linux/amd64`, `linux/arm64`) and published to bo
 `ghcr.io/gizmodata/hardcharger` and `docker.io/gizmodata/hardcharger`. Port 31337 speaks
 Warp SQL; 31338 answers `/health`.
 
+The `:2.0.0-adbc` and `:latest-adbc` variants on both registries include the same
+server and CLI plus 15 native ADBC drivers: BigQuery, Databricks, Exasol, Flight SQL,
+SQL Server, MySQL, PostgreSQL, Redshift, Snowflake, Trino, GizmoSQL, Oracle, Db2,
+Quack and Hardcharger. Both `linux/amd64` and `linux/arm64` are supported. For example:
+
+```bash
+docker run --rm -p 31337:31337 -p 31338:31338 \
+  -e HARDCHARGER_ADMIN_PASSWORD='change-me' \
+  ghcr.io/gizmodata/hardcharger:2.0.0-adbc
+```
+
+Driver manifests are installed system-wide in `/etc/adbc/drivers`; stable library
+paths are `/usr/local/lib/libadbc_driver_<name>.so`. An ADBC driver manager in the
+container can discover them by name (`hardcharger`, `gizmosql`, `snowflake`, etc.).
+`SNOWFLAKE_ADBC_DRIVER_PATH` points at the bundled Snowflake library. Driver versions,
+source-asset digests and notices are under `/usr/share/doc/hardcharger-adbc/`; dbc's
+driver manifests and bundled license files are retained in `/etc/adbc/drivers`.
+These variants use the same non-root user and server entrypoint as the base image.
+See [releasing](docs/releasing.md#bundled-adbc-images) for the separate driver-layer workflow.
+
 Installed extensions (`INSTALL`) and persistent secrets live under the home directory
 (`~/.duckdb/`), as DuckDB keeps them. Without a usable one (no `HOME`, or a container run
 as a user the image has no account for, which gets `HOME=/`), the server uses the

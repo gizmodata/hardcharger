@@ -1,0 +1,140 @@
+# Separate from server.yml: the first GA driver's live tests require the server
+# release first. Dispatch this after both releases; it can also rebuild just the
+# driver layer without re-releasing the server.
+name: ADBC images
+on:
+  workflow_dispatch:
+    inputs:
+      server_version:
+        description: Published server version (without v)
+        required: true
+        default: '2.0.0'
+        type: string
+      driver_tag:
+        description: Published hardcharger-adbc release tag
+        required: true
+        default: 'v2.0.0'
+        type: string
+      publish:
+        description: Publish version-adbc tags to GHCR and Docker Hub after both architectures pass
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: adbc-images-${{ inputs.server_version }}
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SERVER_VERSION: ${{ inputs.server_version }}
+      DRIVER_TAG: ${{ inputs.driver_tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate published releases
+        run: |
+          [[ "$SERVER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]
+          [[ "$DRIVER_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh release view "v$SERVER_VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft == false' | grep -qx true
+          gh release view "$DRIVER_TAG" --repo gizmodata/hardcharger-adbc --json isDraft,isPrerelease --jq '(.isDraft or .isPrerelease) == false' | grep -qx true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Pin the released base image by digest
+        run: |
+          digest=$(docker buildx imagetools inspect "ghcr.io/gizmodata/hardcharger:$SERVER_VERSION" --format '{{.Manifest.Digest}}')
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "BASE_IMAGE=ghcr.io/gizmodata/hardcharger@$digest" >> "$GITHUB_ENV"
+      - name: Stage and verify native driver release assets
+        run: python3 docker/prepare-adbc-drivers.py --arch '${{ matrix.arch }}' --hardcharger-tag "$DRIVER_TAG"
+      - name: Build the ADBC image
+        run: docker buildx build --load --build-arg "BASE_IMAGE=$BASE_IMAGE" -f docker/Dockerfile.adbc -t hc-adbc .
+      - name: Smoke-test every driver and query Hardcharger
+        run: bash docker/test-adbc.sh hc-adbc
+      - uses: docker/login-action@v4
+        if: inputs.publish
+        env:
+          DOCKERHUB_OIDC_CONNECTIONID: 07b8e4b3-1db1-46b5-a5e1-7d2fff417c60
+        with:
+          registry: docker.io
+          username: gizmodata
+      - name: Push tested architecture by digest
+        if: inputs.publish
+        run: |
+          docker buildx build --build-arg "BASE_IMAGE=$BASE_IMAGE" -f docker/Dockerfile.adbc \
+            --provenance=mode=max --sbom=true \
+            --output 'type=image,"name=ghcr.io/gizmodata/hardcharger,docker.io/gizmodata/hardcharger",push-by-digest=true,name-canonical=true,push=true' \
+            --metadata-file metadata.json .
+          mkdir -p digests
+          digest=$(jq -r '."containerimage.digest"' metadata.json)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          touch "digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@v7
+        if: inputs.publish
+        with:
+          name: adbc-digest-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+  publish:
+    if: inputs.publish
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SERVER_VERSION: ${{ inputs.server_version }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: adbc-digest-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/login-action@v4
+        env:
+          DOCKERHUB_OIDC_CONNECTIONID: 07b8e4b3-1db1-46b5-a5e1-7d2fff417c60
+        with:
+          registry: docker.io
+          username: gizmodata
+      - name: Publish multi-architecture tags
+        run: |
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          digests=(digests/*)
+          [ "${#digests[@]}" -eq 2 ]
+          for repo in ghcr.io/gizmodata/hardcharger docker.io/gizmodata/hardcharger; do
+            tags=(--tag "$repo:$SERVER_VERSION-adbc")
+            # An old-version rebuild or release candidate must never replace latest-adbc.
+            if [[ "$SERVER_VERSION" != *-* && "$latest" == "v$SERVER_VERSION" ]]; then
+              tags+=(--tag "$repo:latest-adbc")
+            fi
+            sources=()
+            for digest in "${digests[@]}"; do sources+=("$repo@sha256:${digest##*/}"); done
+            docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+            docker buildx imagetools inspect "$repo:$SERVER_VERSION-adbc"
+          done

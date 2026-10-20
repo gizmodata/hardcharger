@@ -1,0 +1,29 @@
+# The -adbc variant keeps the base image's entrypoint, ports, home and non-root user.
+# Native GizmoData drivers are staged by prepare-adbc-drivers.py outside Docker so
+# private-release credentials never enter a build argument or layer.
+ARG BASE_IMAGE=ghcr.io/gizmodata/hardcharger:2.0.0
+FROM ubuntu:24.04 AS drivers
+ARG DBC_VERSION=0.3.1
+ARG TARGETARCH
+RUN apt-get update \
+ && apt-get install --no-install-recommends -y ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://dbc.columnar.tech/install.sh -o /tmp/install-dbc.sh \
+ && sh /tmp/install-dbc.sh --version "${DBC_VERSION}" \
+ && for driver in bigquery databricks exasol flightsql mssql mysql postgresql redshift snowflake trino; do \
+      /root/.local/bin/dbc install --level system "$driver"; \
+    done \
+ && mkdir -p /usr/share/doc/hardcharger-adbc \
+ && /root/.local/bin/dbc list --level system > /usr/share/doc/hardcharger-adbc/dbc-drivers.txt
+COPY drivers/linux_${TARGETARCH}/ /staged/
+RUN cp -a /staged/lib/. /usr/local/lib/ \
+ && cp -a /staged/manifests/. /etc/adbc/drivers/ \
+ && cp -a /staged/notices/. /usr/share/doc/hardcharger-adbc/ \
+ && find /etc/adbc/drivers -name 'libadbc_driver_*.so' \
+      -exec sh -c 'ln -sf "$1" "/usr/local/lib/$(basename "$1")"' _ {} \;
+
+FROM ${BASE_IMAGE}
+COPY --from=drivers /etc/adbc/drivers/ /etc/adbc/drivers/
+COPY --from=drivers /usr/local/lib/ /usr/local/lib/
+COPY --from=drivers /usr/share/doc/hardcharger-adbc/ /usr/share/doc/hardcharger-adbc/
+ENV SNOWFLAKE_ADBC_DRIVER_PATH=/usr/local/lib/libadbc_driver_snowflake.so

@@ -19,6 +19,12 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
 
 ### Added
 
+- Docker: multi-architecture `:2.0.0-adbc` / `:latest-adbc` variants on GHCR and Docker
+  Hub, with GizmoSQL's ten dbc-managed drivers and the native GizmoSQL, Oracle, Db2 and
+  Quack drivers, plus the Hardcharger ADBC driver. System-wide manifests, stable library
+  paths, version/digest inventories and notices are included. The separate `ADBC images`
+  workflow checks every driver loads and queries Hardcharger by manifest on both native
+  architectures before publishing the multi-architecture tags.
 - Server: a startup banner in a text log: the "Hardcharger" wordmark (plain ASCII), the
   server's, Warp SQL's and DuckDB's versions, the web UI's address (or the Warp SQL endpoint's
   without `--web-ui`) and the documentation's, within 80 columns. Never in a JSON log.

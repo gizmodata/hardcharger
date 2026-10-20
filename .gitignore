@@ -6,3 +6,5 @@ build/
 .idea/
 .DS_Store
 build-*/
+# Native release assets staged for docker/Dockerfile.adbc.
+/drivers/

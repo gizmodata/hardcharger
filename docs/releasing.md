@@ -132,3 +132,40 @@ CHANGELOG section, fails in the workflow's first job (`changes`), before the mat
 nothing is published; the image job checks the tag again before it pushes, and the release job
 checks both. The next candidate is a new tag (`-rc.2`); a
 published tag is never moved.
+
+## Bundled ADBC images
+
+The `ADBC images` workflow (`adbc-images.yml`) publishes `:<server-version>-adbc`
+to the same GHCR and Docker Hub repositories. It also updates `:latest-adbc` for
+the current stable server release; older releases and candidates never move it.
+Both native Linux architectures must build, load all 15 drivers and query the
+running server through the `hardcharger` manifest before the multi-architecture
+tags are published. The server image is resolved to a digest before building.
+
+Run this **after the server and hardcharger-adbc releases have both published**.
+The first GA driver needs the released server for its own tests, so this is a
+separate workflow rather than a dependency of the server release:
+
+```bash
+# Build and test first without publishing.
+gh workflow run adbc-images.yml --ref main \
+  -f server_version=2.0.0 -f driver_tag=v2.0.0 -f publish=false
+# After it succeeds, publish the same pinned versions.
+gh workflow run adbc-images.yml --ref main \
+  -f server_version=2.0.0 -f driver_tag=v2.0.0 -f publish=true
+```
+
+The native pins in `docker/prepare-adbc-drivers.py` are GizmoSQL 2.0.15, Oracle
+1.0.1, Db2 0.2.1 and Quack 0.1.0-alpha.11; Hardcharger defaults to 2.0.0 and can
+be selected with `driver_tag`. Every native release asset is checked against
+GitHub's SHA-256 digest before it enters the Docker context. Credentials stay
+outside the image. The other ten drivers are installed from the public dbc
+registry using dbc 0.3.1; the installed version inventory is saved in the image.
+Update these pins when refreshing the driver layer, then rerun this workflow.
+The base server release does not need to be rebuilt or retagged.
+
+For a local build, stage both architectures with
+`python3 docker/prepare-adbc-drivers.py`, then build `docker/Dockerfile.adbc` with
+`BASE_IMAGE` pointing at the desired released server image. Run
+`bash docker/test-adbc.sh <image>` to check the drivers and manifest discovery.
+The Python test tools are installed only in a disposable test image.
