@@ -7,6 +7,22 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- A DuckLake with a DuckDB metadata file stays readable by the DuckDB release that created
+  it. The bundled DuckLake extension attached an existing metadata file with
+  `STORAGE_VERSION 'latest'`, so the first write from Hardcharger upgraded the file, and
+  DuckDB 1.5 then refused it (`cannot initialize database with storage version 7 - which is
+  lower than what the database itself uses`). Our build of the extension now attaches an
+  existing file without a storage version, so it keeps its own; `META_STORAGE_VERSION
+  'latest'` in the `ATTACH` still upgrades it on purpose (it used to fail with a duplicate
+  option). A new metadata file gets `--storage-version` when that is set, and the latest
+  format otherwise, as before. `--storage-version` is now also the format of new files a
+  plain `ATTACH` creates, not just of the `--database` file. The patch is Hardcharger's own
+  (`server/scripts/extension-patches/ducklake/`), applied by the DuckDB build after DuckDB's
+  patches for the extension (`server/scripts/patch-duckdb-extensions.cmake`), and the build
+  fails if it didn't reach the extension's source. PostgreSQL metadata was never affected.
+
 ## [2.0.0-rc.1] - 2026-10-20
 
 ### Added
