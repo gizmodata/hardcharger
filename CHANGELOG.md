@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.0.0-rc.1] - 2026-10-20
+
 ### Added
 
 - Third-party notices in everything that ships. `THIRD_PARTY_NOTICES.md` lists the 49

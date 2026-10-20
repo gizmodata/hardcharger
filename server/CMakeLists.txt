@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.28)
-project(hardcharger VERSION 0.3.0 LANGUAGES C CXX)
+project(hardcharger VERSION 2.0.0 LANGUAGES C CXX)
 # The pre-release part of the version, after PROJECT_VERSION (which takes numbers only): ""
 # for a release (tag vX.Y.Z), "-rc.N" for a release candidate (tag vX.Y.Z-rc.N). Every
 # reported version is HARDCHARGER_VERSION, the two together. .github/scripts/release.sh
 # (the release jobs, the MSI) and ui/scripts/version.mjs read this line as written.
-set(HARDCHARGER_VERSION_SUFFIX "")
+set(HARDCHARGER_VERSION_SUFFIX "-rc.1")
 if(HARDCHARGER_VERSION_SUFFIX STREQUAL "")
   set(HARDCHARGER_VERSION_TWEAK 0)
 elseif(HARDCHARGER_VERSION_SUFFIX MATCHES "^-rc\\.([1-9][0-9]*)$" AND CMAKE_MATCH_1 LESS_EQUAL 65535)
