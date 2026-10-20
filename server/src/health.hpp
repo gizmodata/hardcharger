@@ -46,6 +46,7 @@ class HealthChecker {
   bool stopping_ = false;
   bool exited_ = false;
   bool last_ok_ = false;
+  bool reported_ = false;  // the first result is logged too (a check failing from the start)
   std::string last_error_ = "no health check has run yet";
   std::chrono::steady_clock::time_point last_finished_{};
   std::atomic<bool> running_query_ = false;

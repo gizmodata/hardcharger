@@ -24,14 +24,37 @@ LogLevel ParseLogLevel(std::string_view name);
 std::string_view LogLevelName(LogLevel level);
 
 // Configures the process-wide logger. `file`: empty for stderr, "-" for stdout, else a
-// path appended to. Throws std::invalid_argument for unknown values.
-void ConfigureLogging(std::string_view level, std::string_view format, const std::string& file = {});
+// path appended to. `emoji` (log_emoji): "always", "never", or "auto", which marks text lines
+// with emoji only when the destination is a terminal and the locale is UTF-8 (never in a
+// file, a pipe, systemd's journal, Docker or Kubernetes). JSON lines never have them. Throws
+// std::invalid_argument for unknown values.
+void ConfigureLogging(std::string_view level, std::string_view format, const std::string& file = {},
+                      std::string_view emoji = "auto");
+
+// Whether text lines carry an emoji marker now (after ConfigureLogging).
+bool LogEmojiEnabled();
+
+// What log_emoji=auto decides from: whether the destination is a terminal, and the locale
+// (the first set of LC_ALL, LC_CTYPE, LANG names UTF-8; on Windows, the console's output
+// code page is UTF-8). Exposed for tests.
+bool LogEmojiAuto(bool terminal, const char* lc_all, const char* lc_ctype, const char* lang);
+
+// Writes `text` as it is to the log's destination when the log is text, not JSON (the
+// startup banner); nothing else (the capture, the sink) sees it.
+void WriteToTextLog(std::string_view text);
 
 // Fields added to every line (instance_id, cluster_id).
 void SetDefaultLogFields(LogFields fields);
 
 // Writes `message` if `level` reaches the logger's threshold.
 void Log(LogLevel level, std::string_view message, const LogFields& fields = {});
+
+// An info line that reports an outcome (the server is ready, it stopped cleanly): marked as a
+// success where lines carry emoji, an ordinary info line otherwise.
+void LogSuccess(std::string_view message, const LogFields& fields = {});
+
+// An error that stops the server: an error line, marked as fatal where lines carry emoji.
+void LogFatal(std::string_view message, const LogFields& fields = {});
 
 // Writes `message` if `level` reaches `threshold` (a component's) and, unless
 // `ignore_logger_threshold`, the logger's threshold too. A session that asked for

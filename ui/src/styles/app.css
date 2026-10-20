@@ -533,7 +533,7 @@ select {
   font-size: 10.5px;
   line-height: 1.35;
 }
-.main {
+.app-main {
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -580,13 +580,13 @@ select {
   border-radius: 6px;
   background: var(--bg);
 }
-.tree,
-.tree ul {
+.side-tree,
+.side-tree ul {
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.tree {
+.side-tree {
   flex: 1;
   overflow: auto;
   padding-bottom: 12px;
@@ -599,9 +599,10 @@ select {
   flex: 1;
   min-width: 0;
 }
+/* Room at the right for the panel's scroll bar, which macOS draws over the content. */
 .tree-action {
   visibility: hidden;
-  margin-right: 4px;
+  margin-right: 8px;
 }
 .tree-row-wrap:hover .tree-action,
 .tree-action:focus-visible {
@@ -623,7 +624,11 @@ select {
 .tree-row:hover {
   background: var(--hover);
 }
+/* In a narrow panel a column's type gives up its width first (its flex-shrink dwarfs the
+   name's), down to a few letters; only then is the name shortened. The row's tooltip has both. */
 .tree-name {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -632,6 +637,10 @@ select {
   color: var(--faint);
 }
 .tree-type {
+  flex: 0 100000 auto;
+  min-width: calc(8px + 3ch);
+  overflow: hidden;
+  text-overflow: ellipsis;
   margin-left: auto;
   padding-left: 8px;
   color: var(--faint);
@@ -898,7 +907,7 @@ select {
     flex: none;
     flex-direction: column;
   }
-  .main > .page {
+  .app-main > .page {
     flex: none;
     height: calc(100vh - 48px);
   }

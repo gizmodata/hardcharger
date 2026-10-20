@@ -208,7 +208,7 @@ export function Layout({ theme, page, go }: Props) {
             />
           </>
         )}
-        <main className="main">
+        <main className="app-main">
           {visitedQuery && (
             <div className="page" hidden={page !== "query"}>
               <ErrorBoundary scope="page">

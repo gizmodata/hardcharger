@@ -85,8 +85,8 @@ int main(int argc, char** argv) {
            &uri_flag);
   cl.Section("TLS");
   cl.Bool("tls", 0,
-          "TLS (HTTPS), on by default; --tls=false for plain HTTP to a server without TLS (env: "
-          "HARDCHARGER_TLS=false; in a URI, ?tls=false)",
+          "TLS (HTTPS), on by default; --no-tls (or --tls=false, --tls false) for plain HTTP to a server "
+          "without TLS (env: HARDCHARGER_TLS=false; in a URI, ?tls=false)",
           &config.use_tls);
   cl.Value("tls-roots", 0, "FILE", "Trusted root certificates (PEM; default: the system's) (env: HARDCHARGER_TLS_ROOTS)",
            &config.tls_roots);
@@ -140,6 +140,11 @@ int main(int argc, char** argv) {
 
   if (help) {
     std::cout << "Usage: hardcharger [OPTIONS] [URI]" << std::endl << std::endl;
+    std::cout << "Examples:\n"
+                 "  hardcharger --username admin             localhost:31337, over TLS (the default)\n"
+                 "  hardcharger --no-tls --username admin    a server without TLS (plain HTTP)\n"
+                 "  hardcharger hardcharger://db.example.com:31337 --username admin -c \"SELECT 1\"\n"
+              << std::endl;
     std::cout << "Hardcharger Client Options" << std::endl;
     cl.PrintHelp(std::cout);
     return 0;
@@ -185,6 +190,10 @@ int main(int argc, char** argv) {
       for (size_t i = 0; i < conflicts.size(); ++i) {
         if (i > 0) std::cerr << ",";
         std::cerr << " " << conflicts[i];
+      }
+      // A word that isn't a URI (--tls maybe) ends up here: say which argument was taken.
+      if (!positional_uri.empty() && positional_uri.find("://") == std::string::npos) {
+        std::cerr << " (the argument '" << positional_uri << "' is read as the URI)";
       }
       std::cerr << std::endl;
       return 1;
@@ -280,8 +289,11 @@ int main(int argc, char** argv) {
   };
   bool host_explicit = cl.Given("host") || env_set("HARDCHARGER_HOST");
   bool user_explicit = cl.Given("username") || env_set("HARDCHARGER_USER") || env_set("HARDCHARGER_ADMIN_USERNAME");
-  bool has_connection_params =
-      host_explicit || user_explicit || config.auth_type_external || config.auth_type_mtls || uri_provided;
+  // Saying where on the command line (a port, TLS on or off) asks for a connection too.
+  // (HARDCHARGER_PORT and HARDCHARGER_TLS are defaults for a later .connect as well.)
+  bool where_explicit = cl.Given("port") || cl.Given("tls");
+  bool has_connection_params = host_explicit || user_explicit || where_explicit || config.auth_type_external ||
+                               config.auth_type_mtls || uri_provided;
 
   WarpConnection conn;
 
@@ -319,7 +331,10 @@ int main(int argc, char** argv) {
       }
     }
   }
-  // else: start in disconnected state — user can use .connect later
+  // else: start in disconnected state — user can use .connect later. A script (-c, -f, a
+  // pipe) that runs SQL before any .connect connects then with the defaults, so a failure
+  // says why (refused, no user) instead of only "not connected".
+  if (!has_connection_params && !config.is_interactive) conn.ConnectWhenNeeded(config);
 
   SqlProcessor sql_proc;
   CommandProcessor cmd_proc(conn, config);

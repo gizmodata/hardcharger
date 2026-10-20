@@ -811,7 +811,8 @@ def test_interactive_password_prompt(server, home):
 def test_interactive_without_a_server_starts_disconnected(home):
     child = pexpect.spawn(command=binary(), args=[], env=client_env(home=home), encoding="utf-8",
                           dimensions=(40, 160), timeout=30)
-    child.expect("Not connected. Use '.connect HOST PORT USERNAME' to connect.")
+    child.expect(re.escape("Not connected. Use '.connect HOST PORT USERNAME' (add --no-tls for a server without "
+                           "TLS) or '.connect URI' to connect."))
     child.expect("hardcharger> ")
     enter(child, "SELECT 1;")
     child.expect("Error: not connected to a server")
@@ -1030,7 +1031,12 @@ def test_uri_against_plain_and_tls_servers(launcher, server, tmp_path):
     plain_to_tls = subprocess.run(args=[binary(), f"{uri}?tls=false", "--username", tls_server.username, "-c",
                                         "SELECT 1"], env=client_env(server=tls_server), capture_output=True, text=True,
                                   timeout=60)
-    assert plain_to_tls.returncode == 1 and plain_to_tls.stderr.startswith("Error: "), plain_to_tls.stderr
+    assert plain_to_tls.returncode == 1, plain_to_tls.stdout
+    # Plain HTTP to a TLS server: the reason, and the way back to TLS.
+    assert plain_to_tls.stderr.startswith(f"Error: Could not connect to http://localhost:{tls_server.port}: "), \
+        plain_to_tls.stderr
+    assert plain_to_tls.stderr.endswith(". If the server uses TLS, drop --no-tls (or --tls=false, ?tls=false).\n"), \
+        plain_to_tls.stderr
 
 
 def test_dot_connect_takes_a_uri_then_the_user_and_password(server):
@@ -1051,8 +1057,9 @@ def test_dot_connect_takes_a_uri_then_the_user_and_password(server):
 
 
 def plain_http_hint(host: str, port: int) -> str:
-    return (f"Error: The server at {host}:{port} speaks plain HTTP, not TLS. Add --tls=false (or ?tls=false in a "
-            "hardcharger:// URI) to connect without encryption.\n")
+    return (f"Error: The server at {host}:{port} speaks plain HTTP, not TLS. Add --no-tls (or --tls=false; in a "
+            "hardcharger:// URI ?tls=false; after .connect HOST PORT USERNAME, --no-tls) to connect without "
+            "encryption.\n")
 
 
 class RecordingProxy:
@@ -1175,7 +1182,11 @@ def test_help_says_tls_is_the_default():
     result = subprocess.run(args=[binary(), "--help"], env=client_env(), capture_output=True, text=True)
     assert result.returncode == 0
     help_text = " ".join(result.stdout.split())
-    assert "--tls[=BOOL] TLS (HTTPS), on by default; --tls=false for plain HTTP" in help_text, result.stdout
+    assert ("--tls[=BOOL] TLS (HTTPS), on by default; --no-tls (or --tls=false, --tls false) for plain HTTP"
+            in help_text), result.stdout
+    # How to connect without TLS is among the first lines, before the options.
+    head = result.stdout.splitlines()[:6]
+    assert any(line.strip().startswith("hardcharger --no-tls") for line in head), head
 
 
 def test_the_environment_never_changes_a_uri(server):
@@ -1284,3 +1295,118 @@ def test_result_partitions_report_a_failure(server):
                  "FROM range(100000000) t(i)")
     assert result.returncode != 0
     assert "boom in a split" in result.stderr + result.stdout
+
+
+# ---- Added: connecting without TLS, and saying why a connection failed ----
+
+
+@pytest.mark.parametrize("spelling", [["--no-tls"], ["--tls=false"], ["--tls", "false"], ["--tls", "0"],
+                                      ["--tls", "no"], ["--tls", "off"], ["--tls", "OFF"], ["--tls=no"]])
+def test_every_spelling_of_tls_off_reaches_a_plain_server(server, spelling):
+    result = subprocess.run(args=[binary(), "--host", "localhost", "--port", str(server.port), *spelling,
+                                  "--username", server.username, "--csv", "--no-header", "-c", "SELECT 'plain'"],
+                            env=client_env(server=server), capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0 and result.stdout.strip() == "plain", (spelling, result.stderr)
+
+
+@pytest.mark.parametrize("spelling", [["--tls"], ["--tls", "true"], ["--tls", "1"], ["--tls", "yes"], ["--tls", "on"],
+                                      ["--tls=on"]])
+def test_every_spelling_of_tls_on_means_tls(server, spelling):
+    # The twin: these mean TLS, which the plain-HTTP server can't answer (so the value after
+    # the space was read as the option's, not as a URI).
+    result = subprocess.run(args=[binary(), "--host", "localhost", "--port", str(server.port), *spelling,
+                                  "--username", server.username, "-c", "SELECT 1"],
+                            env=client_env(server=server), capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1
+    assert result.stderr == plain_http_hint(host="localhost", port=server.port), (spelling, result.stderr)
+
+
+def test_tls_takes_only_boolean_words_after_a_space(server):
+    # Anything else after --tls stays the positional argument (the URI), and says so.
+    result = subprocess.run(args=[binary(), "--tls", "maybe", "-c", "SELECT 1"], env=client_env(),
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1
+    assert result.stderr == "Error: --uri cannot be combined with --tls (the argument 'maybe' is read as the URI)\n", \
+        result.stderr
+    twice = subprocess.run(args=[binary(), "--tls", "--no-tls", "-c", "SELECT 1"], env=client_env(),
+                           capture_output=True, text=True, timeout=60)
+    assert twice.returncode == 1
+    assert twice.stderr.startswith("Error: option '--tls' cannot be specified more than once\n"), twice.stderr
+    valued = subprocess.run(args=[binary(), "--no-tls=true", "-c", "SELECT 1"], env=client_env(),
+                            capture_output=True, text=True, timeout=60)
+    assert valued.returncode == 1
+    assert valued.stderr.startswith("Error: option '--no-tls' takes no value\n"), valued.stderr
+
+
+def test_nothing_listening_says_why():
+    port = free_port()
+    for spelling in (["--tls=false"], ["--no-tls"]):
+        result = subprocess.run(args=[binary(), *spelling, "--port", str(port), "-c", "SELECT 1"], env=client_env(),
+                                capture_output=True, text=True, timeout=60)
+        assert result.returncode == 1
+        assert result.stderr == (f"Error: Could not connect to http://localhost:{port}: connection refused. "
+                                 "Is the server running on that port?\n"), result.stderr
+    tls = subprocess.run(args=[binary(), "--port", str(port), "-c", "SELECT 1"], env=client_env(),
+                         capture_output=True, text=True, timeout=60)
+    assert tls.returncode == 1
+    assert tls.stderr == (f"Error: Could not connect to https://localhost:{port}: connection refused. "
+                          "Is the server running on that port?\n"), tls.stderr
+
+
+def test_a_script_without_connection_settings_connects_when_it_needs_the_server():
+    # No host, port, TLS or user anywhere: the first statement connects with the defaults
+    # (https://localhost:31337), and its error is the connection's, never just "not
+    # connected". (What answers there differs by machine; whatever it is, the reason is said.)
+    result = subprocess.run(args=[binary(), "-c", "SELECT 1"], env=client_env(), capture_output=True, text=True,
+                            timeout=60)
+    assert result.returncode == 1
+    assert "not connected" not in result.stderr, result.stderr
+    assert result.stderr.startswith("Error: ") and "localhost:31337" in result.stderr, result.stderr
+    # A script that needs no server still runs without one.
+    offline = subprocess.run(args=[binary(), "-c", ".help connect"], env=client_env(), capture_output=True,
+                             text=True, timeout=60)
+    assert offline.returncode == 0 and ".connect" in offline.stdout, offline.stderr
+
+
+def test_dot_connect_host_port_takes_tls_off_and_on(server):
+    for tls_off in ("--no-tls", "--tls=false", "--tls false"):
+        script = (f".connect localhost {server.port} {server.username} {server.password} {tls_off}\n"
+                  "SELECT 'dot connect' AS val;\n")
+        ok = subprocess.run(args=[binary(), "-q", "--csv", "--no-header"], env=client_env(), input=script,
+                            capture_output=True, text=True, timeout=60)
+        assert ok.returncode == 0, (tls_off, ok.stderr)
+        assert ok.stdout.strip().endswith("dot connect"), (tls_off, ok.stdout)
+        # The flag may come before the user, too.
+        early = subprocess.run(args=[binary(), "-q", "--csv", "--no-header"], env=client_env(),
+                               input=f".connect localhost {server.port} {tls_off} {server.username} "
+                                     f"{server.password}\nSELECT 'early';\n",
+                               capture_output=True, text=True, timeout=60)
+        assert early.returncode == 0 and early.stdout.strip().endswith("early"), (tls_off, early.stderr)
+    # The twins: TLS (the default, or --tls) against the plain server fails, with the hint.
+    for tls_on in ("", "--tls"):
+        script = f".connect localhost {server.port} {server.username} {server.password} {tls_on}\nSELECT 1;\n"
+        bad = subprocess.run(args=[binary(), "-q"], env=client_env(), input=script, capture_output=True, text=True,
+                             timeout=60)
+        assert bad.returncode == 1
+        assert bad.stderr.startswith(plain_http_hint(host="localhost", port=server.port)), (tls_on, bad.stderr)
+    # A URI says it itself.
+    uri = subprocess.run(args=[binary(), "-q"], env=client_env(),
+                         input=f".connect hardcharger://localhost:{server.port} {server.username} --no-tls\n",
+                         capture_output=True, text=True, timeout=60)
+    assert uri.returncode == 1
+    assert uri.stderr.startswith("Error: a URI says whether to use TLS itself (?tls=false): drop --no-tls\n"), \
+        uri.stderr
+    bad_value = subprocess.run(args=[binary(), "-q"], env=client_env(),
+                               input=f".connect localhost {server.port} {server.username} --tls=maybe\n",
+                               capture_output=True, text=True, timeout=60)
+    assert bad_value.returncode == 1
+    assert bad_value.stderr.startswith("Error: --tls=maybe: want --tls=true or --tls=false\n"), bad_value.stderr
+
+
+def test_dot_help_and_the_not_connected_hint_say_how_to_turn_tls_off(server):
+    result = run(server, "--command", ".help connect")
+    assert result.returncode == 0, result.stderr
+    assert "HOST PORT USER --no-tls: without TLS" in " ".join(result.stdout.split()), result.stdout
+    usage = subprocess.run(args=[binary(), "-q"], env=client_env(), input=".connect\n", capture_output=True,
+                           text=True, timeout=60)
+    assert ".connect HOST PORT USERNAME [PASSWORD] [--no-tls | --tls]" in usage.stderr, usage.stderr

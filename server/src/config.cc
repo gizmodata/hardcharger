@@ -253,6 +253,14 @@ const std::vector<Option>& Options() {
       {"log_format", Kind::kString, "text or json", TEXT(log_format)},
       {"log_file", Kind::kString, "log destination (empty: stderr; -: stdout)",
        TEXT(log_file)},
+      {"log_emoji", Kind::kString,
+       "mark text log lines' levels with emoji: auto (only on a UTF-8 terminal), always or never; "
+       "JSON lines never have them",
+       TEXT(log_emoji)},
+      {"banner", Kind::kBool,
+       "print the startup banner (versions and URLs) in a text log; --no-banner or "
+       "HARDCHARGER_NO_BANNER=true turns it off",
+       FLAG(banner)},
       {"query_log_level", Kind::kString,
        "level of statement log lines", TEXT(query_log_level)},
       {"auth_log_level", Kind::kString, "level of sign-in log lines",
@@ -489,6 +497,10 @@ void Validate(Loaded& loaded) {
   if (c.log_format != "text" && c.log_format != "json") {
     throw std::invalid_argument("log_format must be text or json");
   }
+  c.log_emoji = Lower(c.log_emoji);
+  if (c.log_emoji != "auto" && c.log_emoji != "always" && c.log_emoji != "never") {
+    throw std::invalid_argument("log_emoji must be auto, always or never, not '" + c.log_emoji + "'");
+  }
   if (c.rbac_store_uri == "memory") {
     throw std::invalid_argument(
         "rbac_store_uri must be a PostgreSQL connection string or a DuckDB file (memory is for tests only)");
@@ -597,6 +609,15 @@ Loaded LoadConfig(int argc, char** argv) {
       continue;
     }
     const Option* option = FindByFlag(arg);
+    // --no-NAME: a boolean option's false (--no-banner).
+    if (option == nullptr && arg.starts_with("--no-")) {
+      const Option* negated = FindByFlag("--" + arg.substr(5));
+      if (negated != nullptr && negated->kind == Kind::kBool) {
+        if (inline_value) throw std::invalid_argument(arg + " takes no value");
+        flags[negated->name] = "false";
+        continue;
+      }
+    }
     if (option == nullptr) throw std::invalid_argument("unknown option " + arg);
     if (inline_value) {
       flags[option->name] = *inline_value;
@@ -638,6 +659,16 @@ Loaded LoadConfig(int argc, char** argv) {
     }
   }
 
+  // HARDCHARGER_NO_BANNER, the environment's spelling of --no-banner (below a flag, above
+  // the file, as HARDCHARGER_BANNER).
+  if (auto no_banner = Env("HARDCHARGER_NO_BANNER"); no_banner && !flags.contains("banner")) {
+    if (Env("HARDCHARGER_BANNER")) {
+      throw std::invalid_argument("set HARDCHARGER_BANNER or HARDCHARGER_NO_BANNER, not both");
+    }
+    loaded.config.banner = !ParseBool("HARDCHARGER_NO_BANNER", *no_banner);
+    loaded.sources["banner"] = "env HARDCHARGER_NO_BANNER";
+  }
+
   if (loaded.action == Action::kVerifyAuditLog) {
     return loaded;  // checks a log file; nothing to serve
   }
@@ -653,7 +684,9 @@ std::string Usage() {
   for (const auto& option : Options()) {
     out << "  " << Flag(option.name) << "\n      " << option.help << "  [" << EnvName(option.name) << "]\n";
   }
-  out << "\n  --verify-tls URL  (fetch URL over HTTPS with the system's CA bundle, then exit)\n"
+  out << "\n  Every boolean option also takes --no-NAME for false (--no-banner, --no-web-ui), and\n"
+      << "  HARDCHARGER_NO_BANNER=true is the environment's --no-banner.\n"
+      << "\n  --verify-tls URL  (fetch URL over HTTPS with the system's CA bundle, then exit)\n"
       << "  --verify-audit-log FILE [--verify-audit-log-partial]\n"
       << "      check the access-control audit records in a JSON log and exit (0: intact)\n"
       << "  --print-options-json  (every option, with its flag, variable, YAML key and default, as JSON)\n"

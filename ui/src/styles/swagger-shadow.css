@@ -1,0 +1,50 @@
+/* Inside the API page's shadow root, after Swagger UI's own stylesheet: Swagger UI fitted
+   into the app. The dark theme is the shadow host's dark-mode class (Swagger UI's own
+   html.dark-mode rules are rewritten to it, ApiPage.tsx). The app's colour variables
+   (--text, --panel, ...) are inherited through the shadow boundary. Each rule starts at
+   .api-swagger-root to outweigh Swagger UI's rule for the same element. */
+
+:host {
+  display: block;
+}
+
+/* Swagger UI fills the page's width; the app's header already names the server. */
+.api-swagger-root .swagger-ui .wrapper {
+  max-width: none;
+  padding: 0;
+}
+.api-swagger-root .swagger-ui .information-container .info {
+  margin: 8px 0 20px;
+}
+/* What the server switcher and the Authorize button sat in: both are gone. */
+.api-swagger-root .swagger-ui .scheme-container {
+  display: none;
+}
+.api-swagger-root .swagger-ui .filter-container .operation-filter-input {
+  margin: 0 0 12px;
+  border-color: var(--border);
+}
+
+/* The dark theme on the app's own colours (Swagger UI's would paint the host its own grey). */
+:host(.dark-mode) {
+  background: transparent;
+}
+:host(.dark-mode) .api-swagger-root .swagger-ui {
+  background: transparent;
+  color: var(--text);
+}
+:host(.dark-mode) .api-swagger-root .swagger-ui .opblock .opblock-section-header {
+  background: var(--panel-2);
+}
+:host(.dark-mode) .api-swagger-root .swagger-ui .model-box,
+:host(.dark-mode) .api-swagger-root .swagger-ui section.models {
+  background: var(--panel);
+  border-color: var(--border);
+}
+:host(.dark-mode) .api-swagger-root .swagger-ui input[type="text"],
+:host(.dark-mode) .api-swagger-root .swagger-ui textarea,
+:host(.dark-mode) .api-swagger-root .swagger-ui select {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border);
+}

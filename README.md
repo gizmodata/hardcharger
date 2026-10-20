@@ -332,11 +332,13 @@ curl -s localhost:31337/warp/v1/openapi.json | jq '{openapi, title: .info.title,
 ## 💻 Command-line client
 
 `hardcharger`, the command-line client, ships beside `hardcharger-server` in every tarball
-and in the image. Run it with no statement for an interactive shell (it asks for the
-password, or reads `HARDCHARGER_PASSWORD`):
+and in the image. It uses TLS by default. **Connect to a server without TLS:
+`hardcharger --no-tls`** (the same as `--tls=false` or `--tls false`). Run it with no
+statement for an interactive shell (it asks for the password, or reads
+`HARDCHARGER_PASSWORD`):
 
 ```console
-$ hardcharger --host localhost --tls=false --username hardcharger
+$ hardcharger --host localhost --no-tls --username hardcharger
 Password:
 Hardcharger Client 0.3.0
 Connected to localhost:31337
@@ -367,7 +369,7 @@ One statement with `--command` (`-c`), in any output mode (`--csv`, `--json`,
 `--markdown`, `--table`, or `.mode` for the rest):
 
 ```console
-$ HARDCHARGER_PASSWORD='change-me' hardcharger --host localhost --tls=false --username hardcharger --csv \
+$ HARDCHARGER_PASSWORD='change-me' hardcharger --host localhost --no-tls --username hardcharger --csv \
     --command "SELECT city, miles FROM trips ORDER BY id"
 city,miles
 Boston,12.5
@@ -378,7 +380,7 @@ A script from a heredoc, a pipe or `--file`; the exit status is 1 when a stateme
 
 ```console
 $ export HARDCHARGER_PASSWORD='change-me'
-$ hardcharger --host localhost --tls=false --username hardcharger --quiet <<'SQL'
+$ hardcharger --host localhost --no-tls --username hardcharger --quiet <<'SQL'
 INSERT INTO trips VALUES (3, 'Austin', 8.5);
 SELECT count(*) AS trips, sum(miles) AS miles FROM trips;
 SQL
@@ -393,10 +395,14 @@ OK, 1 row affected
 └────────────────────────┘
 ```
 
-The client uses TLS unless told otherwise, as the drivers do: `--tls=false` (or
-`HARDCHARGER_TLS=false`) is plain HTTP, for a local server like this one started without
-`--tls-cert`. Against such a server without it, the client says so and connects nothing in
-plaintext. `--tls-roots` names a private CA, `--mtls-cert` and `--mtls-key` a client
+The client uses TLS unless told otherwise, as the drivers do: `--no-tls` (or `--tls=false`,
+`--tls false`, `--tls off`, or `HARDCHARGER_TLS=false`) is plain HTTP, for a local server like
+this one started without `--tls-cert`; in the shell, `.connect HOST PORT USERNAME --no-tls`.
+Against such a server without it, the client says so and connects nothing in plaintext. When
+nothing answers, the error says why (`Could not connect to http://localhost:9: connection
+refused. Is the server running on that port?`), and a script run without any connection
+options connects to the default (`https://localhost:31337`) at its first statement, so its
+error is the connection's too. `--tls-roots` names a private CA, `--mtls-cert` and `--mtls-key` a client
 certificate, and `--auth-type external` signs in through the server's browser sign-in. A URI
 takes the place of `--host`, `--port` and `--tls`, with the Python driver's rules:
 `hardcharger://db.example.com` is HTTPS to port 31337, and
@@ -530,6 +536,41 @@ log_level: info
 print_queries: true
 init_sql_commands_file: /etc/hardcharger/init.sql
 ```
+
+### Startup banner and logging
+
+Started with a text log (the default), the server opens it with a banner: the wordmark,
+its version, the Warp SQL and DuckDB versions, and where to go (the web UI's address when
+`--web-ui` is on, else the Warp SQL endpoint), then the documentation's:
+
+```text
+    __  __               __     __
+   / / / /___ __________/ /____/ /_  ____ __________ ____  _____
+  / /_/ / __ `/ ___/ __  / ___/ __ \/ __ `/ ___/ __ `/ _ \/ ___/
+ / __  / /_/ / /  / /_/ / /__/ / / / /_/ / /  / /_/ /  __/ /
+/_/ /_/\__,_/_/   \__,_/\___/_/ /_/\__,_/_/   \__, /\___/_/
+                                             /____/
+  Hardcharger 2.0.0 | Warp SQL 1.0.0 | DuckDB v2.0.0 | by GizmoData
+  UI   http://localhost:31337/ui/      Docs  docs.hardcharger.gizmodata.com
+       http://build-box:31337/ui/
+```
+
+It is plain ASCII within 80 columns, and never in a JSON log (`--log-format json`).
+`--no-banner` (or `--banner=false`, `HARDCHARGER_NO_BANNER=true`, `HARDCHARGER_BANNER=false`,
+`banner: false` in the YAML file) leaves it out. Every boolean option takes `--no-NAME`.
+
+The addresses printed (in the banner, and as `url=` on the `Hardcharger is ready` and `the web
+UI is on` lines) are ones a browser can open: a server bound to every interface (`0.0.0.0`, the default,
+or `::`) prints `http://localhost:<port>` and `http://<this machine's name>:<port>`
+(the second as `also=`), and with TLS the certificate's first DNS name (else the machine's
+name), so the browser shows no certificate warning; `listen=` is the address bound.
+
+`--log-emoji auto|always|never` (`HARDCHARGER_LOG_EMOJI`, `log_emoji:`) marks the level of a text
+log line: ✅ for an outcome (ready, stopped), ⚠️ for a warning, ❌ for an error and 💥 for one
+that stops the server (info and debug lines get none). `auto`, the default, marks lines only
+when the log goes to a terminal and the locale is UTF-8 (`LC_ALL`, `LC_CTYPE` or `LANG`
+names UTF-8; on Windows, the console's code page is UTF-8), so a file, a pipe, systemd's
+journal, Docker and Kubernetes get none. JSON lines never have them. The log has no colour.
 
 In SQL, `SET SESSION name = value` changes a DuckDB setting for your session only. A plain
 `SET name = value` takes the setting's own default scope, which for about half of DuckDB's

@@ -1,5 +1,6 @@
 // Ported from GizmoSQL 1.x src/client/command_processor.cpp.
 #include "command_processor.hpp"
+#include "options.hpp"
 #include "sql_quoting.hpp"
 
 #include <algorithm>
@@ -74,7 +75,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
     return CommandResult::EXIT;
   }
 
-  // .connect HOST PORT USERNAME [PASSWORD]
+  // .connect HOST PORT USERNAME [PASSWORD] [--no-tls | --tls], or .connect URI [USERNAME [PASSWORD]]
   if (cmd == ".connect") {
     return HandleConnect(args);
   }
@@ -87,12 +88,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
 
   // .tables [PATTERN] [--flat]
   if (cmd == ".tables") {
-    if (!conn_.IsConnected()) {
-      std::cerr << ErrorStyle() << "Error: not connected to a server. Use '.connect HOST PORT "
-                   "USERNAME' to connect."
-                << ErrorStyleReset() << std::endl;
-      return CommandResult::ERROR;
-    }
+    if (!RequireConnection(conn_)) return CommandResult::ERROR;
     std::string pattern;
     bool flat_mode = false;
     for (size_t i = 1; i < args.size(); ++i) {
@@ -470,12 +466,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
 
   // .schema [PATTERN]
   if (cmd == ".schema") {
-    if (!conn_.IsConnected()) {
-      std::cerr << ErrorStyle() << "Error: not connected to a server. Use '.connect HOST PORT "
-                   "USERNAME' to connect."
-                << ErrorStyleReset() << std::endl;
-      return CommandResult::ERROR;
-    }
+    if (!RequireConnection(conn_)) return CommandResult::ERROR;
     std::string pattern = args.size() > 1 ? args[1] : "";
     auto result = conn_.GetDbSchemas("", pattern.empty() ? "" : "%" + pattern + "%");
     if (result.ok()) {
@@ -488,12 +479,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
 
   // .catalogs
   if (cmd == ".catalogs") {
-    if (!conn_.IsConnected()) {
-      std::cerr << ErrorStyle() << "Error: not connected to a server. Use '.connect HOST PORT "
-                   "USERNAME' to connect."
-                << ErrorStyleReset() << std::endl;
-      return CommandResult::ERROR;
-    }
+    if (!RequireConnection(conn_)) return CommandResult::ERROR;
     auto result = conn_.GetCatalogs();
     if (result.ok()) {
       RenderTable(*result, config_);
@@ -761,10 +747,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
 
   // .describe TABLE
   if (cmd == ".describe") {
-    if (!conn_.IsConnected()) {
-      std::cerr << ErrorStyle() << "Error: not connected to a server." << ErrorStyleReset() << std::endl;
-      return CommandResult::ERROR;
-    }
+    if (!RequireConnection(conn_)) return CommandResult::ERROR;
     if (args.size() < 2) {
       std::cerr << ErrorStyle() << "Usage: .describe TABLE" << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
@@ -970,7 +953,7 @@ void CommandProcessor::ShowHelp(const std::string& pattern) {
       {".catalogs", "List all catalogs"},
       {".cd DIR", "Change working directory"},
       {".connect URI | HOST PORT USER",
-       "Connect to a Hardcharger server"},
+       "Connect to a Hardcharger server (HOST PORT USER --no-tls: without TLS)"},
       {".describe TABLE", "Show table column names and types"},
       {".echo on|off", "Echo input commands. Default: off"},
       {".exit", "Exit this program (same as .quit)"},
@@ -1091,21 +1074,63 @@ void CommandProcessor::ShowSettings() {
 }
 
 CommandResult CommandProcessor::HandleConnect(
-    const std::vector<std::string>& args) {
+    const std::vector<std::string>& given) {
+  // TLS for the host/port form, anywhere after .connect: --no-tls, --tls, --tls=BOOL or
+  // --tls BOOL (true/false, 1/0, yes/no, on/off). A URI says it itself (?tls=false).
+  std::vector<std::string> args;
+  std::optional<bool> tls;
+  for (size_t i = 0; i < given.size(); ++i) {
+    const std::string& a = given[i];
+    std::optional<bool> value;
+    if (i > 0 && a == "--no-tls") {
+      value = false;
+    } else if (i > 0 && a == "--tls") {
+      value = true;
+      if (i + 1 < given.size()) {
+        if (auto word = CommandLine::ParseBoolWord(given[i + 1])) {
+          value = word;
+          ++i;
+        }
+      }
+    } else if (i > 0 && a.starts_with("--tls=")) {
+      value = CommandLine::ParseBoolWord(a.substr(6));
+      if (!value) {
+        std::cerr << ErrorStyle() << "Error: " << a << ": want --tls=true or --tls=false" << ErrorStyleReset()
+                  << std::endl;
+        return CommandResult::ERROR;
+      }
+    } else {
+      args.push_back(a);
+      continue;
+    }
+    if (tls) {
+      std::cerr << ErrorStyle() << "Error: give TLS once (--tls or --no-tls)" << ErrorStyleReset() << std::endl;
+      return CommandResult::ERROR;
+    }
+    tls = value;
+  }
   if (args.size() < 2) {
     std::cerr << ErrorStyle()
         << "Usage: .connect URI [USERNAME [PASSWORD]]\n"
-        << "       .connect HOST PORT USERNAME [PASSWORD]\n"
+        << "       .connect HOST PORT USERNAME [PASSWORD] [--no-tls | --tls]\n"
         << "\n"
         << "URI: hardcharger://HOST[:PORT][/PREFIX][?tls=false]\n"
         << "     HTTPS unless ?tls=false; port 31337 by default; also warp://, https://, http://.\n"
         << "     The user is USERNAME, or the current one; the TLS roots, the client certificate\n"
         << "     and the sign-in type are the current ones (--tls-roots, --mtls-cert, --auth-type).\n"
+        << "HOST PORT: TLS as now (on unless --no-tls was given); --no-tls for a server without\n"
+        << "     TLS (plain HTTP), --tls for one with it.\n"
         << ErrorStyleReset() << std::endl;
     return CommandResult::ERROR;
   }
 
   ClientConfig new_config = config_;
+  if (tls && args[1].find("://") != std::string::npos) {
+    std::cerr << ErrorStyle() << "Error: a URI says whether to use TLS itself (?tls=false): drop "
+              << (*tls ? "--tls" : "--no-tls") << ErrorStyleReset() << std::endl;
+    return CommandResult::ERROR;
+  }
+  if (tls) new_config.use_tls = *tls;
 
   if (args[1].find("://") != std::string::npos) {
     // URI format: .connect URI [USERNAME [PASSWORD]]
@@ -1130,7 +1155,8 @@ CommandResult CommandProcessor::HandleConnect(
   } else {
     // Positional format: .connect HOST PORT USERNAME [PASSWORD]
     if (args.size() < 4) {
-      std::cerr << ErrorStyle() << "Usage: .connect HOST PORT USERNAME [PASSWORD]" << ErrorStyleReset() << std::endl;
+      std::cerr << ErrorStyle() << "Usage: .connect HOST PORT USERNAME [PASSWORD] [--no-tls | --tls]"
+                << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;
     }
 

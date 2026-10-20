@@ -47,6 +47,8 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | undefined>(undefined);
   const latest = useRef({ onChange, commands, completion });
+  /** What the editor reported through onChange that has not come back as `value` yet. */
+  const echoes = useRef<string[]>([]);
   useEffect(() => {
     latest.current = { onChange, commands, completion };
   });
@@ -107,7 +109,22 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
     };
     dom.addEventListener("dragover", onDragOver, true);
     dom.addEventListener("drop", onDrop, true);
-    const changes = ed.onDidChangeModelContent(() => latest.current.onChange(ed.getValue()));
+    const changes = ed.onDidChangeModelContent(() => {
+      const text = ed.getValue();
+      // Each is acknowledged at a later render. Many keys can come before one (a script types
+      // a hundred in a few milliseconds); the cap only keeps memory bounded if none ever is.
+      const e = echoes.current;
+      e.push(text);
+      let size = 0;
+      for (let i = e.length - 1; i >= 0; i--) {
+        size += e[i]!.length;
+        if (size > 8_000_000 || e.length - i > 2000) {
+          e.splice(0, i + 1);
+          break;
+        }
+      }
+      latest.current.onChange(text);
+    });
     const { KeyMod, KeyCode } = monaco;
     const action = (id: string, label: string, keys: number[], run: () => void, menu = false) =>
       ed.addAction({
@@ -239,10 +256,21 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
     monaco.editor.setTheme(theme === "dark" ? "hardcharger-dark" : "hardcharger-light");
   }, [theme]);
 
-  // A value set from outside (a table preview, a saved query) replaces the text.
+  // A value set from outside (a table preview, a saved query) replaces the text. The editor's
+  // own text comes back here too, after React renders, and may by then be older than what is
+  // in the editor (a key pressed between the render and this effect): that is an echo, never
+  // a reason to put the older text back (it lost keystrokes and moved the cursor).
   useEffect(() => {
     const ed = editor.current;
-    if (ed && ed.getValue() !== value) ed.setValue(value);
+    if (!ed) return;
+    const echo = echoes.current.lastIndexOf(value);
+    if (echo >= 0) {
+      echoes.current.splice(0, echo + 1);
+      return;
+    }
+    if (ed.getValue() !== value) ed.setValue(value);
+    // (setValue reported the new text too; it is this value, not an echo to wait for.)
+    echoes.current = [];
   }, [value]);
 
   return <div ref={host} className="editor-host" data-testid="sql-editor" />;

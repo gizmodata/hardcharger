@@ -71,6 +71,12 @@ class WarpConnection {
   void SendCancelToServer();
 
   bool IsConnected() const { return session_ != nullptr; }
+  // A script run without connection settings: Connect(config) is tried once, when something
+  // first needs the server (RequireConnection), so a failure says why.
+  void ConnectWhenNeeded(const ClientConfig& config) { deferred_ = config; }
+  // Connects now if ConnectWhenNeeded asked to and it hasn't been tried; the status of that
+  // attempt, or nullopt when there was nothing to try.
+  std::optional<arrow::Status> ConnectDeferred();
   // Whether a statement is running now (for the interrupt thread).
   bool IsExecuting() const { return executing_.load(); }
   // The server's base URL (http(s)://host:port/warp), once connected.
@@ -93,10 +99,19 @@ class WarpConnection {
   std::unique_ptr<warpsql::client::Session> session_;
   std::string server_url_;
   ClientConfig config_;  // what Connect was given, to sign in again
+  std::optional<ClientConfig> deferred_;  // ConnectWhenNeeded's, until tried
   // Only cancellation and the connection's lifecycle take it; statements never do.
   std::mutex cancel_mutex_;
   std::atomic<bool> cancel_requested_{false};
   std::atomic<bool> executing_{false};
 };
+
+// Whether `conn` is connected, connecting it first when ConnectWhenNeeded asked to; when it
+// isn't, says why on stderr (the connection's error, or how to connect).
+bool RequireConnection(WarpConnection& conn);
+
+// The hint for a session without a server.
+inline constexpr const char* kNotConnectedHint =
+    "Use '.connect HOST PORT USERNAME' (add --no-tls for a server without TLS) or '.connect URI' to connect.";
 
 }  // namespace hardcharger::client

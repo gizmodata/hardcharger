@@ -7,6 +7,85 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Server: a startup banner in a text log: the "Hardcharger" wordmark (plain ASCII), the
+  server's, Warp SQL's and DuckDB's versions, the web UI's address (or the Warp SQL endpoint's
+  without `--web-ui`) and the documentation's, within 80 columns. Never in a JSON log.
+  `--no-banner`, `--banner=false`, `HARDCHARGER_NO_BANNER=true`, `HARDCHARGER_BANNER=false` or
+  `banner: false` leaves it out; every boolean option now takes `--no-NAME`. The Warp SQL
+  version is the specification's (`info.version` of its OpenAPI document, read at configure
+  time). Tests: `test_startup_log.py` (the art byte for byte against
+  `tests/fixtures/banner-art.txt`, each way to turn it off, JSON), `startup_banner_test.cc`.
+- Server: `log_emoji` (`--log-emoji`, `HARDCHARGER_LOG_EMOJI`): `auto` (the default) marks
+  text log lines' levels with emoji only when the log goes to a terminal and the locale is
+  UTF-8 (on Windows, a UTF-8 console code page), `always`, or `never`; JSON lines never have
+  them. ✅ marks an outcome (ready, stopped), ⚠️ a warning, ❌ an error, 💥 the error that stops
+  the server; info and debug lines get none. Tests at a pty (auto with a UTF-8 locale, with
+  `C`, `never`, JSON) and in a file.
+- Client: `--no-tls` connects without TLS (plain HTTP), as `--tls=false` does; `--tls false`
+  (with a space) works too, as do `true`/`false`, `1`/`0`, `yes`/`no` and `on`/`off` after
+  `--tls` and `--tls=`. Only those words are taken after a space; anything else stays the
+  positional URI, and the error then names it (`--uri cannot be combined with --tls (the
+  argument 'maybe' is read as the URI)`). `--help` starts with examples, the TLS-off one among
+  them. In the shell, `.connect HOST PORT USERNAME [PASSWORD]` takes `--no-tls`, `--tls`,
+  `--tls=BOOL` or `--tls BOOL` (a URI says it itself and refuses them), and `.help` and the
+  "not connected" hint say so. Tests: `test_client_cli.py` (each spelling against a plain
+  server, and each spelling of on as its twin).
+
+### Fixed
+
+- Server: a text log line leaves out a field with no value (`health check passing` printed
+  an empty `error=`); JSON lines keep every key, and the passing health check's has no
+  `error` at all. A health check that fails from the start is now logged too (only changes
+  were). Tests: `test_startup_log.py`.
+- Server: the startup log printed `url=http://0.0.0.0:31337/ui/`, which a browser can't
+  open. On a wildcard bind (`0.0.0.0`, `::`) the `Hardcharger is ready` and `the web UI is
+  on` lines (and the banner) now give `http://localhost:<port>` as `url` and
+  `http://<host name>:<port>` as `also`; with TLS, the certificate's first DNS name that
+  isn't a wildcard (else the host name), and localhost too when the certificate names it.
+  `listen=` keeps the bind address. Unit tests for each case; `test_startup_log.py` for the
+  log text.
+- Client: a connection that fails says why. `--tls=false --port 9 -c "SELECT 1"` said only
+  "not connected to a server" (a port or TLS on the command line didn't count as asking for a
+  connection, so none was tried); it now connects and says `Could not connect to
+  http://localhost:9: connection refused. Is the server running on that port?`. A script run
+  without any connection options connects to the default at its first statement that needs
+  the server (a script that only runs `.connect` or `.help` still needs none). Plain HTTP to a
+  TLS server says to drop `--no-tls`; TLS to a plain-HTTP server names `--no-tls` (and
+  `--tls=false`, `?tls=false`, `.connect … --no-tls`).
+- Web UI: the editor's suggestion list showed empty rows (only the kind icons, no names) in
+  every browser. The app's stylesheet had a rule for a class named `main` (the page's main
+  area, `flex-direction: column`), and Monaco's suggestion rows have an element of that class
+  too, so each row's name and detail were laid out below its icon, outside the 20 px row, and
+  clipped. The app's generic class names that Monaco also uses (`main`, `tree`, `messages`,
+  `message`) are renamed (`app-main`, `side-tree`, `run-messages`, `run-message`), and a unit
+  test (`css-isolation.test.ts`) fails when a global rule names any class Monaco's stylesheets
+  use, unless the rule is a deliberate Monaco override. The e2e test types a table's and a
+  function's prefix and checks that each suggestion's label is drawn inside its row, is what
+  the browser shows at its place, and has a colour other than its background, in Chromium and
+  WebKit, before and after a visit to the API page. (The old tests checked only that rows
+  were there and held the text.)
+- Web UI: the API page's Swagger UI, with its stylesheet, now lives in a shadow root, so its
+  rules (for generic names such as `.main`, `.info`, `.btn`, `.tab`) can't reach the rest of
+  the app, and the app's (its `.btn`) don't reach Swagger UI. Before, Swagger UI's stylesheet
+  stayed in the page for good after the first visit to the API page. Its dark theme follows
+  the shadow host instead of a class on `<html>`. e2e: no rule of Swagger UI's in the page's
+  stylesheets, and Swagger UI's buttons don't take the app's button style.
+- Web UI: fast typing in the editor lost keys in Chromium (and moved the cursor to the start).
+  The editor's own text came back to it as its value after React rendered, and when a key was
+  pressed between that render and its effect, the older text was put back. The editor now
+  tells its own text coming back from a value set from outside (opening a saved query, Preview
+  data). e2e: a 93-character statement typed at script speed arrives whole (it lost keys in
+  every Chromium run before).
+- README: the web UI screenshots (the query view and the API page, light and dark) are
+  retaken with the new logo and the API page in the header (`ui/test/e2e/screenshots.spec.ts`).
+- Web UI: in a narrow side panel, a column's type now gives up its width before the column's
+  name (`l_orderkey  BIG…`, not `l_or…  BIGINT NOT NULL`); a name is shortened only once its
+  type is down to a few letters, and the row's tooltip has the whole name and type. A long
+  type no longer runs under the row's **…** button, and the button keeps clear of a scroll bar
+  drawn over the content (macOS). e2e in Chromium and WebKit at a narrow, scrolling panel.
+
 ## [2.0.0-rc.1] - 2026-10-20
 
 ### Added

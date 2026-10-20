@@ -24,6 +24,7 @@
 #include "oauth.hpp"
 #include "platform.hpp"
 #include "runtime.hpp"
+#include "startup_banner.hpp"
 #include "third_party_notices.hpp"
 #include "tokens.hpp"
 #include "version.hpp"
@@ -391,7 +392,7 @@ int main(int argc, char** argv) {
   warpsql::StopSignals stop_signals;
 
   try {
-    hc::ConfigureLogging(config.log_level, config.log_format, config.log_file);
+    hc::ConfigureLogging(config.log_level, config.log_format, config.log_file, config.log_emoji);
     const std::string instance_id = hc::RandomUuid();
     hc::LogFields identity = {{"instance_id", instance_id}};
     if (!config.cluster_id.empty()) identity.emplace_back("cluster_id", config.cluster_id);
@@ -490,21 +491,47 @@ int main(int argc, char** argv) {
     // and every engine thread has stopped before `server` goes.
     runtime.server = &server;
     server.Start();
-    hc::Log(hc::LogLevel::kInfo, "Hardcharger is ready",
-            {{"version", hc::kVersion},
-             {"duckdb", backend->duckdb_version()},
-             {"url", std::string(config.tls_cert.empty() ? "http" : "https") + "://" +
-                         config.host + ":" + std::to_string(server.port()) + "/warp"},
-             // "off": metrics are off; "none": metrics in SQL only (metrics_port 0).
-             {"metrics_port", metrics_endpoint ? std::to_string(metrics_endpoint->port())
-                              : config.enable_metrics ? "none" : "off"},
-             {"browser_sign_in", config.oauth_client_id.empty() ? "off" : "on"},
-             {"database", config.database}});
+    // Addresses a person can open: on a wildcard bind (0.0.0.0, ::), localhost and this
+    // machine's name (with TLS, the certificate's name), never the bind address itself.
+    const bool tls = !config.tls_cert.empty();
+    const std::vector<std::string> bases =
+        hc::UsableBaseUrls(config.host, server.port(), tls,
+                           tls ? hc::CertificateDnsNames(config.tls_cert) : std::vector<std::string>{}, hc::HostName());
+    auto urls = [&](std::string_view path) {
+      std::vector<std::string> out;
+      for (const auto& base : bases) out.push_back(base + std::string(path));
+      return out;
+    };
+    // The first as url, any others as also (comma-separated); listen is the bind address.
+    auto url_fields = [&](std::string_view path) {
+      const std::vector<std::string> all = urls(path);
+      hc::LogFields fields{{"url", all.front()}};
+      std::string also;
+      for (std::size_t i = 1; i < all.size(); ++i) also += (also.empty() ? "" : ",") + all[i];
+      if (!also.empty()) fields.emplace_back("also", also);
+      return fields;
+    };
+    if (config.banner) {
+      hc::WriteToTextLog(hc::Banner({.version = hc::kVersion,
+                                     .warp_sql_version = hc::kWarpSqlVersion,
+                                     .duckdb_version = backend->duckdb_version(),
+                                     .label = config.web_ui ? "UI" : "Warp SQL",
+                                     .urls = config.web_ui ? urls("/ui/") : urls("/warp")}));
+    }
+    hc::LogFields ready{{"version", hc::kVersion}, {"duckdb", backend->duckdb_version()}};
+    for (auto& field : url_fields("/warp")) ready.push_back(std::move(field));
+    const bool v6 = config.host.find(':') != std::string::npos && !config.host.starts_with('[');
+    ready.emplace_back("listen", (v6 ? "[" + config.host + "]" : config.host) + ":" + std::to_string(server.port()));
+    // "off": metrics are off; "none": metrics in SQL only (metrics_port 0).
+    ready.emplace_back("metrics_port", metrics_endpoint ? std::to_string(metrics_endpoint->port())
+                                       : config.enable_metrics ? "none" : "off");
+    ready.emplace_back("browser_sign_in", config.oauth_client_id.empty() ? "off" : "on");
+    ready.emplace_back("database", config.database);
+    hc::LogSuccess("Hardcharger is ready", ready);
     if (config.web_ui) {
-      hc::Log(hc::LogLevel::kInfo, "the web UI is on",
-              {{"url", std::string(config.tls_cert.empty() ? "http" : "https") + "://" + config.host + ":" +
-                           std::to_string(server.port()) + "/ui/"},
-               {"version", std::string(hc::EmbeddedWebUiVersion())}});
+      hc::LogFields ui = url_fields("/ui/");
+      ui.emplace_back("version", std::string(hc::EmbeddedWebUiVersion()));
+      hc::Log(hc::LogLevel::kInfo, "the web UI is on", ui);
     }
 
     // First signal: with graceful_shutdown, drain (finish running work, refuse new work)
@@ -559,9 +586,9 @@ int main(int argc, char** argv) {
     if (exit_marker) exit_marker->Clean();
     backend->StopHealthCheck();
     backend->StopInstrumentation();
-    hc::Log(hc::LogLevel::kInfo, "stopped");
+    hc::LogSuccess("stopped");
   } catch (const std::exception& e) {
-    hc::Log(hc::LogLevel::kError, e.what());
+    hc::LogFatal(e.what());
     return 1;
   }
   return 0;

@@ -25,9 +25,13 @@ void HealthChecker::RunOnce() {
   }
   running_query_ = false;
   std::lock_guard lock(mutex_);
-  if (ok != last_ok_) {
-    Log(ok ? LogLevel::kInfo : LogLevel::kWarning, ok ? "health check passing" : "health check failing",
-        {{"error", error}});
+  if (ok != last_ok_ || !reported_) {
+    reported_ = true;
+    if (ok) {
+      Log(LogLevel::kInfo, "health check passing");
+    } else {
+      Log(LogLevel::kWarning, "health check failing", {{"error", error}});
+    }
   }
   last_ok_ = ok;
   last_error_ = error;

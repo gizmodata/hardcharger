@@ -172,3 +172,76 @@ test("the side panel hides and shows, and resizes (kept in this browser)", async
   await page.getByTestId("side-panel-resize").dblclick();
   await expect.poll(width).toBe(before);
 });
+
+// A narrow panel shortens a column's type before its name: `l_orderkey  BIG…`, never
+// `l_or…  BIGINT NOT NULL`; a name is shortened only once its type is down to a few letters.
+// The row's tooltip has both whole, and nothing (the … button, the scroll bar) covers them.
+test("a narrow panel shortens the column type first, then the name", async ({ page, harness }) => {
+  const longName = "l_comment_that_goes_on_and_on_and_on_forever";
+  await runDone(
+    page,
+    `CREATE OR REPLACE TABLE sales.rc_narrow (l_orderkey BIGINT NOT NULL, ` +
+      `l_shipdate TIMESTAMP WITH TIME ZONE, ${longName} VARCHAR)`,
+  );
+  // A narrow panel (268 px; the narrowest is 220), short enough that the tree scrolls.
+  await page.setViewportSize({ width: 1360, height: 560 });
+  const handle = page.getByTestId("side-panel-resize");
+  await handle.focus();
+  await page.keyboard.press("Home");
+  for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight");
+  await expect.poll(async () => (await page.getByTestId("side-panel").boundingBox())?.width).toBe(268);
+
+  const sales = await openSales(page, harness.catalog);
+  const table = sales.getByRole("treeitem", { name: "rc_narrow", exact: true });
+  await table.getByRole("button", { name: "rc_narrow", exact: true }).click();
+  await expect(table.getByRole("treeitem")).toHaveCount(3);
+
+  const measure = (name: string) =>
+    table
+      .getByRole("treeitem", { name, exact: true })
+      .locator(":scope > .tree-row-wrap")
+      .evaluate((wrap) => {
+        const part = (sel: string) => {
+          const el = wrap.querySelector<HTMLElement>(sel)!;
+          const r = el.getBoundingClientRect();
+          return { cut: el.scrollWidth > el.clientWidth + 1, left: r.left, right: r.right, width: r.width };
+        };
+        const tree = wrap.closest<HTMLElement>(".side-tree")!;
+        const t = tree.getBoundingClientRect();
+        return {
+          name: part(".tree-name"),
+          type: part(".tree-type"),
+          action: part(".tree-action"),
+          // Where the tree's content ends: its scroll bar, if any, is to the right of this.
+          contentRight: t.left + tree.clientLeft + tree.clientWidth,
+          scrolls: tree.scrollHeight > tree.clientHeight,
+          gutter: tree.offsetWidth - tree.clientWidth,
+          title: wrap.querySelector(".tree-row")!.getAttribute("title") ?? "",
+        };
+      });
+
+  // A short name stays whole; its long type is shortened.
+  const ship = await measure("l_shipdate");
+  expect(ship.scrolls, "the tree scrolls").toBe(true);
+  expect(ship.name.cut, "l_shipdate is shown whole").toBe(false);
+  expect(ship.type.cut, "its type is shortened").toBe(true);
+  expect(ship.type.width).toBeGreaterThan(10);
+  expect(ship.title).toContain("l_shipdate");
+  expect(ship.title).toContain("TIMESTAMP WITH TIME ZONE");
+  const key = await measure("l_orderkey");
+  expect(key.name.cut, "l_orderkey is shown whole").toBe(false);
+  expect(key.title).toContain("BIGINT NOT NULL");
+  // A name too long for the row is shortened too, once its type is down to a few letters.
+  const long = await measure(longName);
+  expect(long.name.cut).toBe(true);
+  expect(long.type.width).toBeLessThan(40);
+  expect(long.title).toContain(longName);
+  // Nothing overlaps: name, type, then the … button, all left of the scroll bar (with room
+  // for one drawn over the content, as macOS does, when it takes no width of its own).
+  for (const m of [ship, key, long]) {
+    expect(m.name.right).toBeLessThanOrEqual(m.type.left + 0.5);
+    expect(m.type.right).toBeLessThanOrEqual(m.action.left + 0.5);
+    expect(m.action.right).toBeLessThanOrEqual(m.contentRight - (m.gutter > 0 ? 0 : 7) + 0.5);
+  }
+  await runDone(page, "DROP TABLE sales.rc_narrow");
+});

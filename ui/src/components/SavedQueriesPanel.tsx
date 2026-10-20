@@ -356,7 +356,7 @@ export function SavedQueriesPanel() {
           else works.
         </p>
       ) : (
-        <ul className="tree" role="tree" aria-label="Saved queries">
+        <ul className="side-tree" role="tree" aria-label="Saved queries">
           <li role="treeitem" aria-label="Top level" aria-selected={selected === null} aria-expanded>
             <div className={`tree-row-wrap${selected === null ? " tree-found" : ""}`} {...dropOn(null)}>
               <button type="button" className="tree-row depth-0 tree-root" onClick={() => select(null)}>
