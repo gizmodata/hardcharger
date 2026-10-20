@@ -1,6 +1,6 @@
 {
   "repository": "gizmodata/warp-sql-js",
-  "commit": "cb563f9d3686ed6d477bc2ddd163908e12f514b8",
-  "tarball": "gizmodata-warp-sql-0.1.0.tgz",
-  "sha256": "aff22b0969b6c5850d60890ea278a798d46b2b541299f0a08487acd7e7a4f0da"
+  "commit": "d65ff8fcd890bb1ad44e82a75512edb1f4dd09ac",
+  "tarball": "gizmodata-warp-sql-1.0.0.tgz",
+  "sha256": "4eb59f4cf0fe187cd7eda960abaac845eb7533d583ca8e0488ff2c39b95d0403"
 }

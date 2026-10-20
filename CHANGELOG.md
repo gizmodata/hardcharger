@@ -208,6 +208,10 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
 
 ### Fixed
 
+- Web UI: update the embedded Warp SQL client so queries finishing during sign-out do not
+  send statement-cleanup requests after their session has ended. Connection close releases
+  those statements, avoiding spurious 404 errors while background queries finish.
+
 - Web UI: pasted SQL reaches the editor in Linux WebKit as well as Chromium and Safari.
   The SQL editor uses the plain-text clipboard path instead of optional Paste As providers,
   keeping the pasted text and its indentation intact.

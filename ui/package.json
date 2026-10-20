@@ -26,7 +26,7 @@
     "vendor:verify": "node scripts/vendor-warp-sql.mjs --verify && node scripts/vendor-sheetjs.mjs --verify"
   },
   "dependencies": {
-    "@gizmodata/warp-sql": "file:vendor/gizmodata-warp-sql-0.1.0.tgz",
+    "@gizmodata/warp-sql": "file:vendor/gizmodata-warp-sql-1.0.0.tgz",
     "apache-arrow": "^21.2.0",
     "lucide-react": "^1.59.0",
     "monaco-editor": "^0.57.0",
