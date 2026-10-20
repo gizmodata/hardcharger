@@ -36,6 +36,7 @@ def main() -> None:
     parser.add_argument("--price-per-hour", type=float, required=True)
     parser.add_argument("--instance", required=True)
     parser.add_argument("--published")
+    parser.add_argument("--require-duckdb-version", help="Refuse a GA comparison with a missing server or different engine version")
     args = parser.parse_args()
     directory = Path(args.results_dir)
 
@@ -47,6 +48,14 @@ def main() -> None:
     pub_q = {q["query"]: q for q in published["queries"]} if published else {}
     present = [(k, label) for k, label in SERVERS if k in runs]
     problems = []
+    if args.require_duckdb_version:
+        expected = args.require_duckdb_version.removeprefix("v")
+        for key in ("edge", "hardcharger"):
+            if key not in runs:
+                problems.append(f"missing {key} run")
+        for key, run in runs.items():
+            if str(run["version"]).removeprefix("v") != expected:
+                problems.append(f"{key}: DuckDB {run['version']}, expected {expected}")
 
     out = [f"### Per query (seconds; {args.instance})", ""]
     head = "| Query |"
@@ -98,7 +107,10 @@ def main() -> None:
         row += f" **{totals['hardcharger'] / totals['edge']:.2f}** |"
     out.append(row)
 
-    out += ["", "### Totals and cost per run", "",
+    out += ["", "Derived from the TPC-H benchmark; not an official TPC-H result and not comparable "
+            "to published TPC-H results.",
+            "TPC-H™ is a trademark of the Transaction Processing Performance Council (TPC).",
+            "", "### Totals and AWS on-demand cost per run", "",
             "| Server | Engine | Total of 22 means (s) | Cost per run (USD) |", "|---|---|---:|---:|"]
     if published:
         out.append(f"| Published GizmoSQL (2026-09-04) | DuckDB {published['duckdb']} | "

@@ -25,18 +25,18 @@ MARKET=${MARKET:-spot}                          # on-demand for the real run
 LIFETIME_MIN=${LIFETIME_MIN:-120}
 ROOT_GB=${ROOT_GB:-100}
 [[ "$LIFETIME_MIN" =~ ^[1-9][0-9]*$ ]] || { echo "LIFETIME_MIN must be a positive number" >&2; exit 2; }
-STATE=${STATE:-$HOME/.hardcharger-bench-tpch}   # key and address (never committed)
+STATE=${STATE:-$HOME/.hardcharger-bench-tpch-ga}   # key and address (never committed)
 mkdir -p "$STATE"
-NAME=hardcharger-bench-tpch
-KEY_NAME=hardcharger-bench-tpch-key
+NAME=hardcharger-bench-tpch-ga
+KEY_NAME=hardcharger-bench-tpch-ga-key
 KEY_FILE="$STATE/$KEY_NAME"
-SG_NAME=hardcharger-bench-tpch-sg
+SG_NAME=hardcharger-bench-tpch-ga-sg
 PURPOSE=hardcharger-benchmark
-RUN=tpch-sf1000
+RUN=tpch-sf1000-ga
 AMI_PARAM=/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id
 
 tags() { # tags <resource-type>
-  echo "ResourceType=$1,Tags=[{Key=Name,Value=$NAME},{Key=Purpose,Value=$PURPOSE},{Key=Run,Value=$RUN},{Key=Owner,Value=claude}]"
+  echo "ResourceType=$1,Tags=[{Key=Name,Value=$NAME},{Key=Purpose,Value=$PURPOSE},{Key=Run,Value=$RUN},{Key=Owner,Value=codex}]"
 }
 
 mine() { # instance ids of this run in the given states

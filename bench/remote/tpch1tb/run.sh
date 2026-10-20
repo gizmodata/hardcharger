@@ -12,8 +12,8 @@
 # The VM comes from provision.sh up (same STATE directory).
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-STATE=${STATE:-$HOME/.hardcharger-bench-tpch}
-KEY="$STATE/hardcharger-bench-tpch-key"
+STATE=${STATE:-$HOME/.hardcharger-bench-tpch-ga}
+KEY="$STATE/hardcharger-bench-tpch-ga-key"
 IP=$(cat "$STATE/vm.public")
 SSH=(ssh -i "$KEY" -o UserKnownHostsFile="$STATE/known_hosts" -o StrictHostKeyChecking=accept-new
   -o ServerAliveInterval=30 -o ConnectTimeout=15 "ubuntu@$IP")

@@ -12,7 +12,9 @@
 # Every server: defaults plus TLS; one server at a time; page cache dropped before each run.
 set -euo pipefail  # pipefail: a failed step piped into tee stops the pipeline
 SF=${1:?scale factor}; shift
-STEPS=("$@"); [ ${#STEPS[@]} -gt 0 ] || STEPS=(fetch load stable edge hardcharger probe)
+# GA comparison: both timed servers use the same DuckDB 2.0.0 commit. Older stable
+# numbers remain historical baselines in the archived reports, not part of this run.
+STEPS=("$@"); [ ${#STEPS[@]} -gt 0 ] || STEPS=(fetch load edge hardcharger)
 B=~/tpch1tb
 echo $$ >"$B/pipeline.pid"   # run.sh wait watches this PID
 R=$B/results/sf$SF
@@ -46,7 +48,7 @@ for step in "${STEPS[@]}"; do
   log "== $step"
   case "$step" in
     fetch) bash "$B/fetch_data.sh" "$SF" | tee -a "$R/pipeline.log" ;;
-    load) load stable "$A"; load edge "$DB2" ;;
+    load) load edge "$DB2" ;;
     stable) bash "$B/bench.sh" stable "$A" "$R" | tee -a "$R/pipeline.log" ;;
     edge) bash "$B/bench.sh" edge "$DB2" "$R" | tee -a "$R/pipeline.log" ;;
     hardcharger)

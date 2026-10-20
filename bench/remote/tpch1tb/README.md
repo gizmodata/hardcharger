@@ -1,4 +1,13 @@
-# TPC-H SF1000 on one VM: GizmoSQL stable, GizmoSQL edge, Hardcharger
+# Workload derived from TPC-H, SF1000: DuckDB 2.0.0 GA comparison
+
+The GA run times Hardcharger and a benchmark-only GizmoSQL edge build against the same
+DuckDB commit, `d54cbbe3df17e8e5ce68312f483b4155836112aa` (`v2.0.0`). Run
+`build-edge-ga.sh` on the disposable VM after setup, before starting the pipeline. The
+published 1.5.x stable numbers stay historical; they are not re-run as a GA engine comparison.
+Use `report.py --require-duckdb-version 2.0.0` to reject mismatched or missing GA runs.
+
+Derived from the TPC-H benchmark; not an official TPC-H result and not comparable to published
+TPC-H results. TPC-H™ is a trademark of the Transaction Processing Performance Council (TPC).
 
 Reproduces the method of "TPC-H 1 TB in 80 Seconds" (gizmodata.com, 2026-09-04) and adds the two
 DuckDB 2.0 servers. Internal; results never go anywhere public.
