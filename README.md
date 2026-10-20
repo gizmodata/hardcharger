@@ -738,6 +738,18 @@ same user and tenant), and `hardcharger_sessions()` follows the same rule. Retai
 (resumable) results are kept for `result_retention_seconds` (default 3600) after their
 statement ends; the statement document's `expires_at` says until when.
 
+A session is evicted within 5 s (the server's sweep interval) after `session_idle_timeout`
+seconds (default 900; 0 never evicts) without a request on it, unless one of its statements
+is still running, one of its ingests is in progress, one of its results is being read (a
+slow download keeps it to the end of the stream), or it holds a retained result that hasn't
+expired. That last one follows Warp SQL §5.7, so that a result kept for re-reading stays
+readable until its `expires_at`: a session whose statement ran in JSON mode (a retained
+result) lives up to `result_retention_seconds` after the statement ended, then goes at the
+next sweep. To bound a session's life by the idle timeout alone, set
+`result_retention_seconds` no higher than `session_idle_timeout`, or have clients delete
+statements (or the session) they are done with. An evicted session answers
+`session_not_found`.
+
 With instrumentation on (`--enable-instrumentation`), the server keeps its history in
 tables: `instances`, `sessions`, `sql_statements` and `sql_executions`, and the views
 `session_activity`, `active_sessions`, `session_stats` and `execution_details`, which only
@@ -853,6 +865,48 @@ set `rbac_store_shared: true` on the clusters that join. A server with no `clust
 opens any store, with a warning when the store belongs to a cluster. The store also
 records its schema version, and a server refuses a store a later version has upgraded.
 
+### Users from the identity provider
+
+Under access control, a sign-in token (`token_exchange`, browser sign-in, or the token sent as
+user `token`'s password) signs in a user of the store, the administrator role aside: an
+administrator creates them first (`CREATE USER "pat@example.com"`, no password needed), or a
+first sign-in is refused with `user … is not defined on this server. An administrator creates
+it with CREATE USER`. With `token_auto_provision_users: true`, the first sign-in creates the user
+instead:
+
+```yaml
+token_allowed_issuer: https://login.example.com/oauth2/default
+token_allowed_audience: hardcharger
+token_auto_provision_users: true
+# token_auto_provision_issuer: defaults to token_allowed_issuer
+```
+
+- Only a verified token from `token_auto_provision_issuer` (default `token_allowed_issuer`) that
+  `token_authorized_emails` admits provisions, and only for the roles `user` and `readonly`; an
+  `admin` token signs in as an administrator, as before, and creates nothing.
+- The user is named as the token's user always is (`email`, else `sub`), has no password and
+  no grants (only `PUBLIC`'s), and gets the token's role in its `provisioned_role` attribute.
+  Grant it roles (`GRANT analyst TO USER "pat@example.com"`), or map its identity-provider
+  groups to roles (`CREATE GROUP MAPPING`).
+- A user provisioned from a `readonly` token signs in readonly with every token from then on,
+  whatever role later tokens carry, until an administrator lifts it with `ALTER USER
+  "pat@example.com" UNSET ATTRIBUTE provisioned_role`. A readonly session runs no access-control
+  statement but `SHOW …` and `SET ROLE`, so it can't mint itself a scoped token (which signs in
+  as a user).
+- A user that exists is never changed: a disabled one stays disabled and is refused. A name that
+  is a role's, the administrator's, or a tenant's user (`acme/pat`) in a tenant that doesn't
+  exist is refused.
+- First sign-ins of the same user on several replicas at once all succeed (the store serializes
+  them); the user is created once, and each creation is an audit record (`provisioned a user on
+  its first sign-in`, with the user, the issuer and the role) in the access-control audit chain.
+
+Startup refuses `token_auto_provision_users` without `rbac_store_uri`, without a way to verify
+tokens (`token_signature_verify_cert_path`, `token_jwks_uri`, or `token_allowed_issuer` with
+`token_allowed_audience`), or with a `token_auto_provision_issuer` other than
+`token_allowed_issuer` (whose tokens alone sign in, so it would provision no one). With no
+`token_allowed_issuer`, tokens of any issuer the key verifies sign in, and only
+`token_auto_provision_issuer`'s provision.
+
 ## 🌐 Browser sign-in (SSO)
 
 People can sign in with your OpenID Connect identity provider in a browser: Warp SQL's
@@ -892,7 +946,7 @@ registered for it must be replaced.
 The server sends the provider a code request with `state`, PKCE (S256) and a `nonce`, exchanges
 the code itself, and signs the user in with the ID token exactly as `token_exchange` would:
 the provider's JWKS, issuer, audience, `token_authorized_emails`, roles and, under access
-control, the store's users. A sign-in is collected once by the client that started it, with a
+control, the store's users (created on first sign-in with `token_auto_provision_users`). A sign-in is collected once by the client that started it, with a
 secret that is never in a URL; sign-ins expire after 10 minutes. `hardcharger_server_info()`
 has `oauth_enabled`.
 

@@ -257,6 +257,17 @@ void RefuseAccessControlStatement(std::string_view sql) {
   }
 }
 
+// A readonly session changes nothing, the access-control store included: of the
+// access-control statements it runs only SHOW ... and SET ROLE. (CREATE SCOPED TOKEN would
+// hand it a token that signs in as a user, outside readonly.)
+void RefuseStoreChangeWhenReadonly(const warpsql::Principal& principal, std::string_view sql) {
+  if (principal.role != "readonly") return;
+  const auto kind = authz::AccessControlStatementKind(sql);
+  if (!kind || kind->starts_with("SHOW") || *kind == "SET ROLE") return;
+  throw Error(ErrorCode::kPermissionDenied,
+              "User '" + principal.name + "' has a readonly session and cannot run " + *kind + ".", "42501");
+}
+
 }  // namespace
 
 // One execution of a statement, from its queue slot to its result being let go: gives
@@ -1081,6 +1092,7 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
   // An access-control statement (GRANT, CREATE USER, ...) is the guard's, text and all:
   // it runs one at a time, and the guard refuses anything riding along.
   if (rbac_ && authz::LooksLikeAccessControlStatement(sql)) {
+    RefuseStoreChangeWhenReadonly(principal_, sql);
     if (runtime_.instrumentation != nullptr) {
       runtime_.instrumentation->StatementCreated(*this, statement_id, Abbreviate(sql), "statement", true, "");
     }
@@ -1196,6 +1208,7 @@ std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sq
   try {
     if (!rbac_) RefuseAccessControlStatement(sql);
     const bool access_control = rbac_ && authz::LooksLikeAccessControlStatement(sql);
+    if (access_control) RefuseStoreChangeWhenReadonly(principal_, sql);
     if (pieces.size() == 1 && !access_control) {
       if (ParseSettingCommand(pieces[0]) || ParseKillSession(pieces[0])) {
         throw Error(ErrorCode::kSqlError, "SET hardcharger.* and KILL SESSION can't be prepared; run them directly");

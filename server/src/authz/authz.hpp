@@ -95,6 +95,10 @@ struct Identity {
   std::optional<std::vector<CatalogAccessRule>> catalog_access;
 };
 
+// The store user attribute that keeps a provisioned user's token sign-ins readonly
+// (token_auto_provision_users): the role of the token that created the user.
+inline constexpr const char* kProvisionedRoleAttribute = "provisioned_role";
+
 // Signs a scoped token for (user name, scope id, expiry in seconds since the epoch, the
 // minter's certificate binding or empty).
 using ScopedTokenSigner =
@@ -176,9 +180,26 @@ class AccessControl {
   std::optional<SignIn> AuthenticatePassword(std::string_view user_name,
                                              std::string_view password) const;
 
+  // A sign-in token's store user. `readonly`: the user's provisioned_role attribute
+  // (kProvisionedRoleAttribute) is "readonly", so its token sign-ins are readonly whatever
+  // role the token gives. `created`: ProvisionStoreUser created it just now.
+  struct TokenUser {
+    bool readonly = false;
+    bool created = false;
+  };
+
   // Refuses a sign-in token's user when it is not one of the store's enabled users.
   // Throws warpsql::Error(kInvalidCredentials).
-  void RequireStoreUser(const std::string& user_name) const;
+  TokenUser RequireStoreUser(const std::string& user_name) const;
+
+  // RequireStoreUser for token_auto_provision_users: a user the store doesn't have is
+  // created first, with no password and no grants, and the token's role ("user" or
+  // "readonly") in its provisioned_role attribute. A disabled user stays disabled (and is
+  // refused). Throws warpsql::Error(kInvalidCredentials) when the user can't be created
+  // (its name is a role's, the administrator's, or an unknown tenant's) or is disabled.
+  // Each creation, and each refusal to create, is an audit record naming `issuer`.
+  TokenUser ProvisionStoreUser(const std::string& user_name, const std::string& token_role,
+                               const std::string& issuer);
 
   // A client certificate's identity (spec §4.4): the store's name of the enabled user it
   // names, or nullopt. An e-mail or CN identity compares as user names do (ignoring ASCII

@@ -116,6 +116,23 @@ arrow::Result<std::string> TenantForName(const Snapshot& snap, const std::string
   return tenant->id;
 }
 
+// A name CREATE USER (or a first token sign-in, RbacEngine::ProvisionUser) may give a
+// new user: free, and neither the administrator's name nor a certificate administrator's.
+arrow::Status CheckNewUserName(const Snapshot& snap, const std::string& name, const RbacEngine::Options& options) {
+  ARROW_RETURN_NOT_OK(CheckNameFree(snap, name));
+  if (!options.administrator_name.empty() && IdentifiersEqual(name, options.administrator_name)) {
+    return AccessControlError(name + " is the server administrator's name");
+  }
+  for (const auto& administrator : options.certificate_administrators) {
+    if (IdentifiersEqual(name, administrator)) {
+      return AccessControlError(name +
+                                " signs in as the server administrator with a client certificate "
+                                "(mtls_admin_identities)");
+    }
+  }
+  return arrow::Status::OK();
+}
+
 // Does the principal hold the tenant's tenant_admin role?
 bool IsTenantAdmin(const Snapshot& snap, const Principal& actor, const std::string& tenant_id) {
   if (tenant_id.empty() || actor.superuser) return false;
@@ -305,6 +322,40 @@ arrow::Result<Principal> RbacEngine::PrincipalForUser(const std::string& user_na
   }
   if (!user->enabled) return AccessControlError("user " + user->name + " is disabled");
   return Principal::User(user->id, user->name);
+}
+
+arrow::Result<Principal> RbacEngine::ProvisionUser(const std::string& user_name,
+                                                   const std::map<std::string, std::string>& attributes,
+                                                   bool* created) {
+  *created = false;
+  if (snapshot()->FindUserByName(user_name)) return PrincipalForUser(user_name);  // disabled stays disabled
+  bool inserted = false;
+  const auto written = store_->Mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+    inserted = false;
+    // Read inside the transaction, after the writers before it: another replica's first
+    // sign-in of the same user may have created it since this replica's snapshot.
+    if (snap.FindUserByName(user_name)) return arrow::Status::OK();
+    ARROW_RETURN_NOT_OK(CheckNewUserName(snap, user_name, options_));
+    ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, user_name));
+    UserRecord user{StoreTransaction::NewId(), user_name, std::nullopt, true, {}};
+    ARROW_RETURN_NOT_OK(txn.InsertUser(user));
+    for (const auto& [attribute, value] : attributes) {
+      ARROW_RETURN_NOT_OK(txn.SetUserAttribute(user.id, attribute, value));
+    }
+    ARROW_RETURN_NOT_OK(txn.SetPrincipalTenant(PrincipalKind::kUser, user.id, tenant));
+    inserted = true;
+    return arrow::Status::OK();
+  });
+  // Re-read either way: a write that failed may have lost a race to the same user's
+  // first sign-in elsewhere, which then counts (and its user is the one to sign in).
+  ARROW_ASSIGN_OR_RAISE(auto fresh, store_->Load());
+  Publish(std::move(fresh));
+  if (!written.ok()) {
+    if (snapshot()->FindUserByName(user_name)) return PrincipalForUser(user_name);
+    return written;
+  }
+  *created = inserted;
+  return PrincipalForUser(user_name);
 }
 
 bool RbacEngine::IsActive(const Principal& principal) const {
@@ -711,18 +762,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
         message = "User " + c->name + " already exists";
         return arrow::Status::OK();
       }
-      ARROW_RETURN_NOT_OK(CheckNameFree(snap, c->name));
-      if (!options_.administrator_name.empty() &&
-          IdentifiersEqual(c->name, options_.administrator_name)) {
-        return AccessControlError(c->name + " is the server administrator's name");
-      }
-      for (const auto& administrator : options_.certificate_administrators) {
-        if (IdentifiersEqual(c->name, administrator)) {
-          return AccessControlError(c->name +
-                                    " signs in as the server administrator with a client certificate "
-                                    "(mtls_admin_identities)");
-        }
-      }
+      ARROW_RETURN_NOT_OK(CheckNewUserName(snap, c->name, options_));
       ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name));
       message = "User " + c->name + " created";
       UserRecord user{StoreTransaction::NewId(), c->name, hash, true, {}};

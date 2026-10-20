@@ -77,11 +77,32 @@ own changelog in `python/CHANGELOG.md`.
   and audit lines a `proxy` field. Warp SQL C++ SDK `ServerOptions::trusted_proxies`. Tests:
   `test_trusted_proxies.py`, the SDK's `forwarded_test.cc`.
 
+- **Users from the identity provider are created on first sign-in**, when asked:
+  `token_auto_provision_users` (off by default; `token_auto_provision_issuer`, default
+  `token_allowed_issuer`). Under access control, a verified sign-in token from that issuer
+  (not an administrator's) whose user the store lacks creates the user, with no password and
+  no grants, and keeps the token's role in its `provisioned_role` attribute: a user
+  provisioned from a `readonly` token signs in readonly from then on until an administrator
+  removes the attribute. Existing users are never changed, so a disabled user stays disabled.
+  First sign-ins of one user on several replicas at once all succeed, and each creation is an
+  access-control audit record with the user, the issuer and the role. Startup refuses the
+  option without `rbac_store_uri`, without a way to verify tokens, or with an issuer other
+  than `token_allowed_issuer`. Off, nothing changes: such a sign-in is refused, saying an
+  administrator creates the user.
+
 ### Changed
 
 - An IPv6 client's address is written `[2001:db8::7]:51234` (it was `2001:db8::7:51234`,
   which can't be told apart from an address without a port), in
   `hardcharger_active_connections().client_address` and security events.
+
+- **The idle rule is documented exactly** (README, `--help` for `session_idle_timeout`): a
+  session is evicted within 5 s after `session_idle_timeout` seconds without a request, unless
+  a statement of it is running, an ingest is in progress, a result is being read, or it holds a
+  retained result that hasn't expired. That last one is Warp SQL §5.7's rule, kept: a session
+  whose statement ran in JSON mode lives up to `result_retention_seconds` after it ended. Set
+  `result_retention_seconds` no higher than `session_idle_timeout` to bound sessions by the idle
+  timeout alone.
 
 ### Fixed
 
@@ -104,6 +125,17 @@ own changelog in `python/CHANGELOG.md`.
   (`server/scripts/extension-patches/ducklake/`), applied by the DuckDB build after DuckDB's
   patches for the extension (`server/scripts/patch-duckdb-extensions.cmake`), and the build
   fails if it didn't reach the extension's source. PostgreSQL metadata was never affected.
+
+- **A readonly session can't leave readonly through a scoped token.** Under access control, a
+  session signed in with a `readonly` token could run `CREATE SCOPED TOKEN`, and the token it
+  got signs in as a user, so it could write with the user's grants. A readonly session now runs
+  no access-control statement but `SHOW …` and `SET ROLE` (`permission_denied`, "has a readonly
+  session and cannot run CREATE SCOPED TOKEN").
+- **A slow download keeps its session.** The idle sweep evicted a session whose statement had
+  finished while the client was still reading its unretained result (up to 32 MB of it is
+  sent after the statement finishes), cutting the stream mid-body; a reader slower than
+  `session_idle_timeout` plus 5 s for that tail lost it. A read in progress now keeps the
+  session (the Warp SQL SDK; spec §5.7 says a request in progress counts as one).
 
 ## [2.0.0-rc.1] - 2026-10-20
 

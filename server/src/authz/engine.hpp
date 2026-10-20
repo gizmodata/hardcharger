@@ -135,6 +135,15 @@ class RbacEngine {
   // exists in the store and is enabled.
   arrow::Result<Principal> PrincipalForUser(const std::string& user_name) const;
 
+  // A first sign-in's user (token_auto_provision_users): creates the user, with no
+  // password, no grants and `attributes`, when the store has none of that name, then
+  // returns its principal as PrincipalForUser does (a disabled user stays disabled).
+  // `created`: whether this call created it. The same user's first sign-ins on several
+  // replicas at once all succeed: the store serializes them, and the later ones find it.
+  arrow::Result<Principal> ProvisionUser(const std::string& user_name,
+                                         const std::map<std::string, std::string>& attributes,
+                                         bool* created);
+
   // Is the principal still allowed to run anything (exists, enabled)?
   bool IsActive(const Principal& principal) const;
 
