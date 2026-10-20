@@ -28,6 +28,19 @@ if old in text:
     path.write_text(data=text.replace(old, ''))
 else:
     assert 'result_eagerness' not in text
+needle = '    auto submitted = stmt.Submit(values);\n'
+completion = '''    // Final DuckDB 2.0 Submit is lazy for DDL/DML too. Finish side effects
+    // before Flight SQL returns the update count and destroys this result.
+    if (submitted && !submitted->HasError() &&
+        submitted->GetStatementProperties().return_type != duckdb::StatementReturnType::QUERY_RESULT) {
+      submitted->Complete();
+      return std::make_unique<StatementResult>(std::move(submitted));
+    }
+'''
+if completion not in text:
+    assert needle in text
+    text = text.replace(needle, needle + completion)
+    path.write_text(data=text)
 path = source / 'src/enterprise/metrics/metrics_service.cpp'
 text = path.read_text()
 text = text.replace('DBConfig::ParseMemoryLimit(', 'DBConfig::ParseMemoryLimitOrMaximum(')
