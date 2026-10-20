@@ -1,6 +1,6 @@
 import { webkit } from '@playwright/test';
 const text = 'SELECT id,\n    customer\n  FROM sales.orders\n    WHERE id < 3;';
-for (const headless of [true, false]) {
+for (const headless of process.env.PROBE_HEADLESS_ONLY ? [true] : [true, false]) {
   for (const removeSource of [true, false]) {
     const browser = await webkit.launch({ headless });
     const context = await browser.newContext({ userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 Version/18.4 Safari/605.1.15' });
@@ -19,7 +19,7 @@ for (const headless of [true, false]) {
     await page.locator('#target').click();
     await page.keyboard.press('Control+V');
     await page.waitForTimeout(250);
-    console.log(JSON.stringify({ headless, removeSource, matched: (await page.locator('#target').inputValue()) === text,
+    console.log(JSON.stringify({ display: process.env.DISPLAY ?? null, headless, removeSource, matched: (await page.locator('#target').inputValue()) === text,
       details: await page.evaluate(() => ({ events: window.clipEvents, clipboard: !!navigator.clipboard, platform: navigator.platform })) }));
     await browser.close();
   }

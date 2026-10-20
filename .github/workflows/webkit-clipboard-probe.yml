@@ -19,4 +19,5 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       - run: npm ci
       - run: npx playwright install --with-deps webkit
+      - run: env -u DISPLAY PROBE_HEADLESS_ONLY=1 node scripts/webkit-clipboard-probe.mjs
       - run: xvfb-run --auto-servernum node scripts/webkit-clipboard-probe.mjs
