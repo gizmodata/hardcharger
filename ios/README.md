@@ -86,7 +86,8 @@ CI (`.github/workflows/server.yml`): the `ios` job builds the server for the sim
 its smoke test there and runs the unit and UI tests, on `v*` tags and on a manual run with
 `ios: true` only (macOS runners are expensive; never on a push or pull request). On a `v*`
 tag, `ios-archive` then builds for devices and exports an App Store-signed `.ipa` as the
-run's artifact. Nothing is uploaded to App Store Connect or TestFlight.
+run's artifact and uploads it to TestFlight (App Store Connect API key; a failed upload fails
+the release gate, and the `.ipa` artifact can then be uploaded by hand with Transporter).
 
 ## How it works
 
@@ -152,7 +153,7 @@ own, with these secrets of the `production` environment:
 | `IOS_DIST_CERT_B64` | The "Apple Distribution: Gizmo Data LLC (XYB42X6NFX)" certificate with its private key, a base64 `.p12` |
 | `IOS_DIST_CERT_PASSWORD` | Its password |
 | `IOS_PROVISIONING_PROFILE_B64` | The App Store profile "Hardcharger App Store" for `XYB42X6NFX.com.gizmodata.hardcharger`, base64 |
-| `ASC_KEY_B64`, `ASC_KEY_ID`, `ASC_ISSUER_ID` | An App Store Connect API key, for a TestFlight upload step that doesn't exist yet and would run only when approved |
+| `ASC_KEY_B64`, `ASC_KEY_ID`, `ASC_ISSUER_ID` | An App Store Connect API key (base64 `.p8`, key id, issuer id): the TestFlight upload on `v*` tags |
 
 The certificate and the profile expire on 2027-04-27. `ios/scripts/ci-signing.sh` installs
 them, archives, exports and checks the `.ipa` (team and bundle in the signature, the profile

@@ -14,8 +14,8 @@
 #   IOS_DIST_CERT_PASSWORD        its password
 #   IOS_PROVISIONING_PROFILE_B64  the App Store profile for XYB42X6NFX.com.gizmodata.hardcharger
 #                                 ("Hardcharger App Store"), base64
-# Nothing is uploaded: the .ipa is the run's artifact. (An App Store Connect upload, with
-# ASC_KEY_B64, ASC_KEY_ID and ASC_ISSUER_ID, is a separate step Philip approves.)
+# This script uploads nothing: the .ipa is the run's artifact, and the workflow's next step
+# uploads it to TestFlight (ASC_KEY_B64, ASC_KEY_ID, ASC_ISSUER_ID) on v* tags.
 set -euo pipefail
 set +x
 IOS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

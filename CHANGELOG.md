@@ -195,8 +195,8 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
 
 - CI (`server.yml`): an `ios` job (the app built for the simulator, its smoke test inside a
   simulator, unit and UI tests) on `v*` tags and on manual runs with `ios: true` only; on
-  `v*` tags, `ios-archive` builds the signed App Store `.ipa` as the run's artifact (nothing
-  is uploaded).
+  `v*` tags, `ios-archive` builds the signed App Store `.ipa` as the run's artifact and
+  uploads it to TestFlight (App Store Connect API key; the build number is the run number).
 - The server's log file is closed when logging is configured again (a server started again
   in the same process, as in the app).
 

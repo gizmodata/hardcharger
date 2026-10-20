@@ -1472,7 +1472,7 @@ jobs:
   # The signed device build, on a v* tag only, after the simulator tests passed: an App
   # Store-signed .ipa as this run's artifact. Nothing is uploaded to App Store Connect or
   # TestFlight (Philip decides; the App Store Connect key in `production` is for that later,
-  # approved step). Manual signing with the distribution certificate and the "Hardcharger App
+  # uploaded to TestFlight). Manual signing with the distribution certificate and the "Hardcharger App
   # Store" profile, in a keychain of the run's own that is deleted afterwards.
   ios-archive:
     name: iOS app (signed device build)
@@ -1511,6 +1511,26 @@ jobs:
           name: hardcharger-ios-ipa
           path: ${{ runner.temp }}/ios-export/*.ipa
           if-no-files-found: error
+      # TestFlight, on release tags (Philip, 2026-10-20: "add the upload step to CI - we do that in
+      # GizmoSQL"). The App Store Connect API key lives only for this step; the build number is the
+      # run number, so every upload of a version is a new build. A failed upload fails the gate
+      # (the .ipa is already the run's artifact, so it can be uploaded by hand).
+      - name: Upload to TestFlight
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          ASC_KEY_B64: ${{ secrets.ASC_KEY_B64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          [ -n "$ASC_KEY_B64" ] && [ -n "$ASC_KEY_ID" ] && [ -n "$ASC_ISSUER_ID" ] || { echo "::error::ASC_KEY_B64 / ASC_KEY_ID / ASC_ISSUER_ID are not all set"; exit 1; }
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          printf '%s' "$ASC_KEY_B64" | base64 --decode > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          ipa="$(ls "$RUNNER_TEMP"/ios-export/*.ipa | head -1)"
+          xcrun altool --upload-app -f "$ipa" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+      - name: Remove the App Store Connect key
+        if: always()
+        run: rm -rf "$HOME/.appstoreconnect"
 
   verify-macos:
     name: verify signatures (macos-arm64)
