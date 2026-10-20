@@ -1,0 +1,77 @@
+[09:57:04] == stable
+stable (pid 28733) listening on 31337, log /home/ubuntu/tpch1tb/logs/server-stable-20261020T095714Z.log
+/home/ubuntu/tpch1tb/results/sf1000/stable.json: v1.5.6, 66 ok, 0 failed, total of means 76.196 s
+[10:01:24] == edge
+edge (pid 29801) listening on 31337, log /home/ubuntu/tpch1tb/logs/server-edge-20261020T100140Z.log
+/home/ubuntu/tpch1tb/results/sf1000/edge.json: v2.0.0-alpha46057, 66 ok, 0 failed, total of means 49.166 s
+[10:04:31] == hardcharger
+[10:04:49] Hardcharger opens the edge-loaded file; using it
+hardcharger (pid 32148) listening on 31337, log /home/ubuntu/tpch1tb/logs/server-hardcharger-20261020T100450Z.log
+TPCH-01 run 1: 6.167 s rows=4 SUCCESS
+TPCH-01 run 2: 0.948 s rows=4 SUCCESS
+TPCH-01 run 3: 0.952 s rows=4 SUCCESS
+TPCH-02 run 1: 0.680 s rows=100 SUCCESS
+TPCH-02 run 2: 0.167 s rows=100 SUCCESS
+TPCH-02 run 3: 0.167 s rows=100 SUCCESS
+TPCH-03 run 1: 2.529 s rows=10 SUCCESS
+TPCH-03 run 2: 1.364 s rows=10 SUCCESS
+TPCH-03 run 3: 1.369 s rows=10 SUCCESS
+TPCH-04 run 1: 2.674 s rows=5 SUCCESS
+TPCH-04 run 2: 1.014 s rows=5 SUCCESS
+TPCH-04 run 3: 1.003 s rows=5 SUCCESS
+TPCH-05 run 1: 2.148 s rows=5 SUCCESS
+TPCH-05 run 2: 1.349 s rows=5 SUCCESS
+TPCH-05 run 3: 1.350 s rows=5 SUCCESS
+TPCH-06 run 1: 0.255 s rows=1 SUCCESS
+TPCH-06 run 2: 0.249 s rows=1 SUCCESS
+TPCH-06 run 3: 0.252 s rows=1 SUCCESS
+TPCH-07 run 1: 1.207 s rows=4 SUCCESS
+TPCH-07 run 2: 1.236 s rows=4 SUCCESS
+TPCH-07 run 3: 1.219 s rows=4 SUCCESS
+TPCH-08 run 1: 2.210 s rows=2 SUCCESS
+TPCH-08 run 2: 1.234 s rows=2 SUCCESS
+TPCH-08 run 3: 1.223 s rows=2 SUCCESS
+TPCH-09 run 1: 6.154 s rows=175 SUCCESS
+TPCH-09 run 2: 5.722 s rows=175 SUCCESS
+TPCH-09 run 3: 5.510 s rows=175 SUCCESS
+TPCH-10 run 1: 4.148 s rows=20 SUCCESS
+TPCH-10 run 2: 4.027 s rows=20 SUCCESS
+TPCH-10 run 3: 4.132 s rows=20 SUCCESS
+TPCH-11 run 1: 0.299 s rows=0 SUCCESS
+TPCH-11 run 2: 0.580 s rows=0 SUCCESS
+TPCH-11 run 3: 0.605 s rows=0 SUCCESS
+TPCH-12 run 1: 0.872 s rows=2 SUCCESS
+TPCH-12 run 2: 0.699 s rows=2 SUCCESS
+TPCH-12 run 3: 0.702 s rows=2 SUCCESS
+TPCH-13 run 1: 7.593 s rows=30 SUCCESS
+TPCH-13 run 2: 6.699 s rows=30 SUCCESS
+TPCH-13 run 3: 6.673 s rows=30 SUCCESS
+TPCH-14 run 1: 1.052 s rows=1 SUCCESS
+TPCH-14 run 2: 1.050 s rows=1 SUCCESS
+TPCH-14 run 3: 0.848 s rows=1 SUCCESS
+TPCH-15 run 1: 0.728 s rows=1 SUCCESS
+TPCH-15 run 2: 0.704 s rows=1 SUCCESS
+TPCH-15 run 3: 0.695 s rows=1 SUCCESS
+TPCH-16 run 1: 0.806 s rows=27840 SUCCESS
+TPCH-16 run 2: 0.845 s rows=27840 SUCCESS
+TPCH-16 run 3: 0.832 s rows=27840 SUCCESS
+TPCH-17 run 1: 1.283 s rows=1 SUCCESS
+TPCH-17 run 2: 0.990 s rows=1 SUCCESS
+TPCH-17 run 3: 1.145 s rows=1 SUCCESS
+TPCH-18 run 1: 5.330 s rows=63430 SUCCESS
+TPCH-18 run 2: 5.042 s rows=63430 SUCCESS
+TPCH-18 run 3: 4.943 s rows=63430 SUCCESS
+TPCH-19 run 1: 0.760 s rows=1 SUCCESS
+TPCH-19 run 2: 0.704 s rows=1 SUCCESS
+TPCH-19 run 3: 0.667 s rows=1 SUCCESS
+TPCH-20 run 1: 0.917 s rows=112013 SUCCESS
+TPCH-20 run 2: 0.783 s rows=112013 SUCCESS
+TPCH-20 run 3: 0.864 s rows=112013 SUCCESS
+TPCH-21 run 1: 2.328 s rows=100 SUCCESS
+TPCH-21 run 2: 2.468 s rows=100 SUCCESS
+TPCH-21 run 3: 2.441 s rows=100 SUCCESS
+TPCH-22 run 1: 0.842 s rows=7 SUCCESS
+TPCH-22 run 2: 0.772 s rows=7 SUCCESS
+TPCH-22 run 3: 0.755 s rows=7 SUCCESS
+/home/ubuntu/tpch1tb/results/sf1000/hardcharger.json: v2.0.0-alpha48624, 66 ok, 0 failed, total of means 42.658 s
+[10:07:21] == done

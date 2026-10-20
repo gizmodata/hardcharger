@@ -1,0 +1,9 @@
+system=stable db=/data/tpch_sf1000_stable.duckdb date=2026-10-20T09:41:32Z
+instance=r9gd.24xlarge
+96
+               total        used        free      shared  buff/cache   available
+Mem:             742           8         316           0         421         733
+/dev/md0        5.2T  791G  4.2T  16% /data
+7.0.0-1014-aws
+-rw-rw-r-- 1 ubuntu ubuntu 284214702080 Oct 20 09:38 /data/tpch_sf1000_stable.duckdb
+server pid=19403 cwd=/data

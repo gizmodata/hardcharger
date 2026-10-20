@@ -39,6 +39,10 @@ case "${1:-}" in
     LOG=$B/logs/server-$SYSTEM-$(date -u +%Y%m%dT%H%M%SZ).log
     mkdir -p "$B/logs"
     cd /data
+    # SF1000 lineitem is 755 Parquet files; GizmoSQL edge (DuckDB 2.0 alpha) opens more of them at
+    # once than the default soft limit of 1024 descriptors ("Too many open files" in the first
+    # SF1000 load). Same raised OS limit for every server; no server setting changes.
+    ulimit -n 1048576
     PRELOAD=(); [ -n "${SERVER_LD_PRELOAD:-}" ] && PRELOAD=(env "LD_PRELOAD=$SERVER_LD_PRELOAD")
     case "$SYSTEM" in
       stable|edge)

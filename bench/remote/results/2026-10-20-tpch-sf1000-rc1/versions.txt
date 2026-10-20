@@ -1,0 +1,20 @@
+gizmosql-stable: GizmoSQL Server CLI: v1.42.0; DuckDB v1.5.6; sha256 01199632bd09e60133e93f6f50de863fa58bba3653fa26fa68884c56bcf931c8
+gizmosql-edge: GizmoSQL Server CLI: v1.42.0-EDGE; DuckDB v2.0.0-alpha46057; sha256 73fed40fdefa9f9b8dc36f2b43e0e6a47a50dce72a3e2dbcb04370cd836241cb
+hardcharger: Hardcharger 2.0.0-rc.1; DuckDB v2.0.0-alpha48624; tarball sha256 b7b95bf10d59796aecf6f0ea2a72d967fbc536e644c192f93af32e3cb42d07c5
+driver wheel sha256 cf20e19dd0dcfe78e862c54991b079766615b86b0eda34904a32d55aad8d0d1b adbc_driver_hardcharger-0.1.0-py3-none-linux_aarch64.whl
+benchmark-flight-sql 28bb41e58bb394c37cc040870486805f223c7e81
+adbc-driver-gizmosql==2.0.15
+adbc-driver-manager==1.12.0
+benchmark-flight-sql @ file:///home/ubuntu/tpch1tb/benchmark-flight-sql
+pyarrow==25.0.1
+adbc-driver-hardcharger @ file:///home/ubuntu/tpch1tb/adbc_driver_hardcharger-0.1.0-py3-none-linux_aarch64.whl#sha256=cf20e19dd0dcfe78e862c54991b079766615b86b0eda34904a32d55aad8d0d1b
+adbc-driver-manager==1.12.0
+pyarrow==26.0.0
+Linux ip-172-31-47-185 7.0.0-1014-aws #14~24.04.1-Ubuntu SMP PREEMPT Fri Sep 18 21:50:22 UTC 2026 aarch64 aarch64 aarch64 GNU/Linux
+PRETTY_NAME="Ubuntu 24.04.5 LTS"
+96
+               total        used        free      shared  buff/cache   available
+Mem:             742           4         381           0         359         737
+Personalities : [raid0] 
+md0 : active raid0 nvme3n1[2] nvme2n1[1] nvme0n1[0]
+      5566009344 blocks super 1.2 512k chunks

@@ -11,7 +11,8 @@ DuckDB 2.0 servers. Internal; results never go anywhere public.
   uses if it opens it (else Hardcharger loads file C). The published eight `CREATE TABLE ... AS
   SELECT * FROM read_parquet(...)` statements, through each server.
 - **Runs, in order:** stable on A, edge on B, Hardcharger on B. OS page cache dropped and the server
-  started fresh before each; 22 queries in order, 3 runs each, one connection, client on the VM.
+  started fresh before each (soft fd limit raised to the hard limit for every server: edge's SF1000
+  load hit 1024); 22 queries in order, 3 runs each, one connection, client on the VM.
   GizmoSQL through `benchmark-flight-sql --num-query-runs 3` (0.0.6); Hardcharger through
   `warp_benchmark.py`, the same loop over `adbc-driver-hardcharger`. TLS on all three; no tuning.
 - **Total** = sum of the 22 per-query means; **cost per run** = total / 3600 x hourly price.

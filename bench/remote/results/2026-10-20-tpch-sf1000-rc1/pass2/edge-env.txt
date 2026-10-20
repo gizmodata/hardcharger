@@ -1,0 +1,9 @@
+system=edge db=/data/tpch_sf1000_edge.duckdb date=2026-10-20T10:01:24Z
+instance=r9gd.24xlarge
+96
+               total        used        free      shared  buff/cache   available
+Mem:             742           8         532           0         203         733
+/dev/md0        5.2T  791G  4.2T  16% /data
+7.0.0-1014-aws
+-rw-rw-r-- 1 ubuntu ubuntu 302509731840 Oct 20 09:40 /data/tpch_sf1000_edge.duckdb
+server pid=29801 cwd=/data

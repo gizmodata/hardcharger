@@ -1,0 +1,56 @@
+{
+  "server": "edge",
+  "scale_factor": "1000",
+  "start": "2026-10-20T09:38:44.494855+00:00",
+  "tables": [
+    {
+      "table": "lineitem",
+      "sql": "CREATE TABLE lineitem AS SELECT * FROM read_parquet('/data/tpch/sf1000/lineitem/*.parquet');",
+      "seconds": 76.49412298202515,
+      "rows": 5999989709
+    },
+    {
+      "table": "orders",
+      "sql": "CREATE TABLE orders AS SELECT * FROM read_parquet('/data/tpch/sf1000/orders/*.parquet');",
+      "seconds": 29.889784574508667,
+      "rows": 1500000000
+    },
+    {
+      "table": "customer",
+      "sql": "CREATE TABLE customer AS SELECT * FROM read_parquet('/data/tpch/sf1000/customer/*.parquet');",
+      "seconds": 4.8464460372924805,
+      "rows": 150000000
+    },
+    {
+      "table": "part",
+      "sql": "CREATE TABLE part AS SELECT * FROM read_parquet('/data/tpch/sf1000/part/*.parquet');",
+      "seconds": 3.053147315979004,
+      "rows": 200000000
+    },
+    {
+      "table": "partsupp",
+      "sql": "CREATE TABLE partsupp AS SELECT * FROM read_parquet('/data/tpch/sf1000/partsupp/*.parquet');",
+      "seconds": 18.193296670913696,
+      "rows": 800000000
+    },
+    {
+      "table": "supplier",
+      "sql": "CREATE TABLE supplier AS SELECT * FROM read_parquet('/data/tpch/sf1000/supplier/*.parquet');",
+      "seconds": 1.1231765747070312,
+      "rows": 10000000
+    },
+    {
+      "table": "nation",
+      "sql": "CREATE TABLE nation AS SELECT * FROM read_parquet('/data/tpch/sf1000/nation/*.parquet');",
+      "seconds": 0.0062408447265625,
+      "rows": 25
+    },
+    {
+      "table": "region",
+      "sql": "CREATE TABLE region AS SELECT * FROM read_parquet('/data/tpch/sf1000/region/*.parquet');",
+      "seconds": 0.0037605762481689453,
+      "rows": 5
+    }
+  ],
+  "end": "2026-10-20T09:40:58.652244+00:00"
+}
