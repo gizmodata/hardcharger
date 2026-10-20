@@ -158,6 +158,18 @@ const std::vector<Option>& Options() {
        "SQL run at startup (before the file)", TEXT(init_sql_commands)},
       {"init_sql_commands_file", Kind::kString, "SQL file run at startup",
        TEXT(init_sql_commands_file)},
+      {"default_catalog", Kind::kString,
+       "the catalog every new session starts in, unless the client's session options name one "
+       "(checked after the init SQL: the server refuses to start if it isn't attached). Unset, "
+       "with default_schema unset too, an init SQL that ends in USE x or USE x.y sets where "
+       "sessions start; else they start in the database's catalog. Under access control a user "
+       "who may not see it starts where they would without it",
+       TEXT(default_catalog)},
+      {"default_schema", Kind::kString,
+       "the schema every new session starts in, in default_catalog (or, without it, in the "
+       "database's catalog), unless the client's session options name one; the server refuses "
+       "to start if it doesn't exist",
+       TEXT(default_schema)},
       {"result_batch_rows", Kind::kInt, "most rows per Arrow batch in a result",
        NUMBER(result_batch_rows)},
       // Authentication

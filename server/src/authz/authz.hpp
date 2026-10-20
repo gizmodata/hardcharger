@@ -325,6 +325,8 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   bool unrestricted() const { return unrestricted_; }
   // The tenant the session's user belongs to, by name ("" for none).
   const std::string& tenant_name() const { return tenant_name_; }
+  // The session started in its tenant's default catalog (ALTER TENANT ... SET DEFAULT CATALOG).
+  bool started_in_tenant_catalog() const { return started_in_tenant_catalog_; }
 
  private:
   SessionGuard(AccessControl& owner, duckdb_v2_connection_handle connection, Identity identity,
@@ -349,6 +351,7 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   std::string credential_;     // the user's password hash when the session started
   std::string tenant_id_;
   std::string tenant_name_;
+  bool started_in_tenant_catalog_ = false;
   int64_t scope_expires_at_ = 0;  // a scoped token's session: when the scope ends (Unix s)
   std::string tenant_catalogs_;
 

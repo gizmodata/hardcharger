@@ -525,6 +525,9 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
     add_attached(SqlLiteral(catalog_log_->catalog()), catalog_log_->file(), "the log database");
   }
   RunInitSql();
+  // After the init SQL, which attaches the catalogs the defaults name, and after the
+  // instrumentation and log catalogs are known (neither can be the default).
+  ResolveDefaultLocation();
   // Both after the init SQL, which may attach their catalogs.
   if (catalog_log_) {
     catalog_log_->Start();
@@ -613,7 +616,102 @@ void Backend::RunInitSql() {
     throw std::runtime_error("init SQL failed: " + (hint ? *hint + "\n" : std::string()) +
                              RedactCredentials(error.what()));
   }
+  // Where the init SQL left its connection: a final USE there is where GizmoSQL 1.x's
+  // sessions started (ResolveDefaultLocation). Read from the connection, not the text, so
+  // a USE in any form (USE x, USE x.y, SET schema, a file that ends in one) counts, and
+  // a USE that a later one undid doesn't.
+  try {
+    init_sql_location_.emplace(warpduckdb::QueryText(connection.get(), "SELECT current_database()"),
+                               warpduckdb::QueryText(connection.get(), "SELECT current_schema()"));
+  } catch (const std::exception&) {
+    // A connection that can't say (an init SQL that left a failed transaction): nothing to adopt.
+  }
   Log(LogLevel::kInfo, "init SQL ran");
+}
+
+void Backend::ResolveDefaultLocation() {
+  const Config& config = runtime_.config;
+  warpduckdb::Connection probe;
+  warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), probe.out(), err); });
+  // Where a session starts without any of this: the database's catalog and schema.
+  const std::string base_catalog = warpduckdb::QueryText(probe.get(), "SELECT current_database()");
+  const std::string base_schema = warpduckdb::QueryText(probe.get(), "SELECT current_schema()");
+  runtime_.default_catalog = base_catalog;
+  runtime_.default_schema = base_schema;
+
+  const bool configured = !config.default_catalog.empty() || !config.default_schema.empty();
+  std::string catalog;
+  std::string schema;
+  if (configured) {
+    // default_schema alone: that schema in the database's catalog.
+    catalog = config.default_catalog.empty() ? base_catalog : config.default_catalog;
+    schema = config.default_schema;
+  } else if (init_sql_location_ &&
+             (init_sql_location_->first != base_catalog || init_sql_location_->second != base_schema)) {
+    std::tie(catalog, schema) = *init_sql_location_;
+  } else {
+    return;
+  }
+  // As the option would be named in errors: the option, or the init SQL's USE.
+  const std::string source = configured ? std::string() : "init SQL ended in USE " + catalog + "." + schema + ": ";
+
+  // The server's own catalogs belong to it: DuckDB's system catalog, the read-only system
+  // views, and the instrumentation and log catalogs, which only administrators may read.
+  std::vector<std::string> reserved = {"system", kSystemCatalog};
+  if (instrumentation_) reserved.push_back(instrumentation_->catalog());
+  if (catalog_log_) reserved.push_back(catalog_log_->catalog());
+  const auto lower = [](std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return std::tolower(c); });
+    return text;
+  };
+  for (const auto& name : reserved) {
+    if (lower(name) == lower(catalog)) {
+      throw std::runtime_error(source + "default_catalog '" + catalog + "' is one of the server's own catalogs, " +
+                               "which can't be where sessions start: name a catalog the init SQL attaches");
+    }
+  }
+  // The names `sql` lists (one string_agg), for an error.
+  const auto list = [&](const std::string& sql) {
+    std::string names;
+    try {
+      names = warpduckdb::QueryText(probe.get(), sql);
+    } catch (const std::exception&) {
+    }
+    return names.empty() ? std::string("none") : names;
+  };
+  try {
+    warpduckdb::RunSql(probe.get(), "USE " + SqlIdentifier(catalog));
+  } catch (const std::exception&) {
+    std::string excluded;
+    for (const auto& name : reserved) excluded += ", " + SqlLiteral(name);
+    throw std::runtime_error(
+        source + "default_catalog '" + catalog + "' is not attached: the attached catalogs are " +
+        list("SELECT string_agg(database_name, ', ' ORDER BY database_name) FROM duckdb_databases() "
+             "WHERE NOT internal AND database_name NOT IN (" + excluded.substr(2) + ")") +
+        " (attach it in the init SQL)");
+  }
+  if (!schema.empty()) {
+    try {
+      warpduckdb::RunSql(probe.get(), "USE " + SqlIdentifier(catalog) + "." + SqlIdentifier(schema));
+    } catch (const std::exception&) {
+      throw std::runtime_error(
+          source + "default_schema '" + schema + "' does not exist in catalog '" + catalog + "': its schemas are " +
+          list("SELECT string_agg(schema_name, ', ' ORDER BY schema_name) FROM duckdb_schemas() "
+               "WHERE database_name = current_database()") +
+          " (create it in the init SQL)");
+    }
+  }
+  // DuckDB's own spelling of the names, which every session's USE takes.
+  runtime_.default_catalog = warpduckdb::QueryText(probe.get(), "SELECT current_database()");
+  runtime_.default_schema = warpduckdb::QueryText(probe.get(), "SELECT current_schema()");
+  start_sessions_elsewhere_ = runtime_.default_catalog != base_catalog || runtime_.default_schema != base_schema;
+  const std::string where = runtime_.default_catalog + "." + runtime_.default_schema;
+  if (configured) {
+    Log(LogLevel::kInfo, "sessions start in " + where + " (default_catalog, default_schema)");
+  } else {
+    Log(LogLevel::kInfo, "init SQL ended in USE " + where +
+                             ": sessions start there (set default_catalog to choose explicitly)");
+  }
 }
 
 void Backend::StartHealthCheck() {
@@ -660,8 +758,11 @@ std::unique_ptr<warpsql::EngineSession> Backend::NewSession(const warpsql::Princ
                                                           const std::string& session_id) {
   const bool capped = runtime_.sessions.Admit(principal);
   try {
-    return std::make_unique<Session>(runtime_, *sensitive_paths_, instance(), principal, session_id, capped,
-                                     access_.get());
+    auto session = std::make_unique<Session>(runtime_, *sensitive_paths_, instance(), principal, session_id, capped,
+                                             access_.get());
+    // Before the client's own session options, which the SDK applies next and which win.
+    if (start_sessions_elsewhere_) session->StartIn(runtime_.default_catalog, runtime_.default_schema);
+    return session;
   } catch (...) {
     runtime_.sessions.Unadmit(capped);
     throw;
@@ -708,6 +809,25 @@ Session::~Session() {
   if (runtime_.instrumentation != nullptr) runtime_.instrumentation->SessionEnded(*this, killed_ ? "killed" : "closed");
   LogAt(runtime_.session_log_level, LogLevel::kInfo, "session closed",
         {{"session_id", id_}, {"user", principal_.name}, {"reason", killed_ ? "killed" : "closed"}});
+}
+
+bool Session::StartIn(const std::string& catalog, const std::string& schema) {
+  // A tenant's session that started in its tenant's default catalog stays there: the
+  // tenant's choice is the more specific one.
+  if (guard_ && guard_->started_in_tenant_catalog()) return false;
+  SessionScope scope(this);
+  try {
+    // One statement, so the session moves to both or stays where it was. On a bound
+    // connection it is the user's own USE to the plan check (no catalog they cannot see).
+    warpduckdb::RunSql(connection(), "USE " + SqlIdentifier(catalog) + "." + SqlIdentifier(schema));
+    return true;
+  } catch (const std::exception& error) {
+    LogAt(runtime_.session_log_level, LogLevel::kDebug,
+          "session starts in its usual catalog: its user may not use the default catalog",
+          {{"session_id", id_}, {"user", principal_.name}, {"default", catalog + "." + schema},
+           {"error", error.what()}});
+    return false;
+  }
 }
 
 void Session::CheckAlive() const {

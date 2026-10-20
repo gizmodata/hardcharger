@@ -36,6 +36,7 @@ Every option also has a YAML key: the flag without its leading `--`, with `_` fo
 | `GIZMOSQL_ALLOW_UNSIGNED_EXTENSIONS` | `--allow-unsigned-extensions` | `HARDCHARGER_ALLOW_UNSIGNED_EXTENSIONS` |
 | `-I`, `INIT_SQL_COMMANDS`, `GIZMOSQL_INIT_SQL_COMMANDS` | `--init-sql-commands` | `HARDCHARGER_INIT_SQL_COMMANDS` |
 | `-F`, `INIT_SQL_COMMANDS_FILE`, `GIZMOSQL_INIT_SQL_COMMANDS_FILE` | `--init-sql-commands-file` | `HARDCHARGER_INIT_SQL_COMMANDS_FILE` |
+| (none: sessions started where the init SQL's final `USE` left off) | `--default-catalog`, `--default-schema` (an init SQL that ends in `USE` still sets where sessions start when neither is set: see below) | `HARDCHARGER_DEFAULT_CATALOG`, `HARDCHARGER_DEFAULT_SCHEMA` |
 | `-U`, `GIZMOSQL_USERNAME` | `--admin-username` | `HARDCHARGER_ADMIN_USERNAME` |
 | `-P`, `GIZMOSQL_PASSWORD` | `--admin-password` | `HARDCHARGER_ADMIN_PASSWORD` |
 | `-S`, `SECRET_KEY`, `GIZMOSQL_SECRET_KEY` | `--secret-key` | `HARDCHARGER_SECRET_KEY` |
@@ -106,6 +107,11 @@ Every option also has a YAML key: the flag without its leading `--`, with `_` fo
 
 Hardcharger's own administrator is set with `--admin-username` / `--admin-password`
 (`HARDCHARGER_ADMIN_USERNAME` / `HARDCHARGER_ADMIN_PASSWORD`).
+
+An init SQL that ends in `USE lake.sales` starts every session in `lake.sales`, as it did in
+1.x, and the server logs that it did. To say so explicitly, set `default_catalog` (and
+`default_schema`), which then win over the init SQL's `USE`; a catalog or schema that doesn't
+exist after the init SQL stops the server (README, "Where sessions start").
 
 `--block-sensitive-paths` guards DuckDB's file system as GizmoSQL 1.x's does, with one
 difference: the operator's init SQL runs before the guard switches on, so it may read a

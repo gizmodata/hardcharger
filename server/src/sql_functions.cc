@@ -705,6 +705,11 @@ std::shared_ptr<arrow::RecordBatch> ServerInfoTable(Runtime& runtime, const Sess
   boolean("web_ui_enabled", c.web_ui, full);
   text("rbac_store_type", RbacStoreType(c), full);
   int32("session_count", static_cast<int32_t>(runtime.sessions.size()), full);
+  // Where new sessions start (default_catalog / default_schema, the init SQL's final USE, or
+  // the database's own); a client's session options, a tenant's default catalog or access
+  // control may start one elsewhere.
+  text("default_catalog", runtime.default_catalog, full);
+  text("default_schema", runtime.default_schema, full);
   // The instrumentation writer's backlog and losses (NULL with instrumentation off).
   const bool instrumented = c.enable_instrumentation;
   const InstrumentationStats& instr = runtime.instrumentation_stats;

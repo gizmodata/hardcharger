@@ -57,6 +57,9 @@ class Backend : public warpduckdb::DuckDBBackend {
  private:
   void AttachSystemCatalog();
   void RunInitSql();
+  // Settles where new sessions start (default_catalog / default_schema, else the init
+  // SQL's final USE) and checks it exists; throws (the server doesn't start) if not.
+  void ResolveDefaultLocation();
 
   Runtime& runtime_;
   std::shared_ptr<authz::AccessControl> access_;
@@ -66,6 +69,12 @@ class Backend : public warpduckdb::DuckDBBackend {
   // system guard in the instance.
   std::shared_ptr<PrivateFiles> private_files_;
   std::string system_catalog_dir_;
+  // The init SQL connection's current catalog and schema once the init SQL ran (unset
+  // without init SQL).
+  std::optional<std::pair<std::string, std::string>> init_sql_location_;
+  // New sessions are moved to runtime_.default_catalog.default_schema: it isn't where a
+  // fresh connection starts.
+  bool start_sessions_elsewhere_ = false;
   std::unique_ptr<HealthChecker> health_;
   std::unique_ptr<Instrumentation> instrumentation_;
   std::unique_ptr<CatalogLog> catalog_log_;  // last: it takes the lines of everything above
@@ -120,6 +129,13 @@ class Session : public warpduckdb::DuckDBSession {
   // The Warp SQL id the client holds for what is about to run (q_..., p_...): the id it
   // is logged and recorded in instrumentation under.
   void SetStatementId(std::string_view id) override;
+
+  // Moves the new session to catalog.schema (the server's default_catalog /
+  // default_schema), before the client's own session options apply. Under access control
+  // the move is checked like the user's own USE: a session whose user may not see it stays
+  // where it started, and so does a tenant's session that starts in its tenant's default
+  // catalog. Returns whether it moved.
+  bool StartIn(const std::string& catalog, const std::string& schema);
 
   // ---- What the settings, SQL functions and KILL SESSION read ----
   const std::string& id() const { return id_; }
