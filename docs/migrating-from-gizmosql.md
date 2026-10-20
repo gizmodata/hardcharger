@@ -306,4 +306,6 @@ run statements that modify state.`, and both let it change its own session: tran
 reports as modifying no database; Hardcharger allows a list (README, "Read-only sessions")
 and then checks the same DuckDB analysis, so SQL-level `PREPARE` / `EXECUTE`, `CALL`, the
 `PRAGMA`s that don't only read, and settings that reach the server stay refused. Temporary
-tables, views and macros are refused in both.
+tables, views and macros are refused in both. A cancelled statement's log line,
+`SQL Statement was successfully canceled.` in 1.x, is `statement cancelled` (with `reason`
+and `duration`).

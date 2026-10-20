@@ -536,6 +536,25 @@ In SQL, `SET SESSION name = value` changes a DuckDB setting for your session onl
 settings (`arrow_lossless_conversion` among them) is `GLOBAL`: then only an administrator
 may run it, and it changes the default of every session that has no value of its own.
 
+### Logs
+
+The server logs to stderr (`log_file` for a file), at `log_level` (`info` by default), as
+text or, with `log_format: json`, one JSON object per line. Statements are logged as they
+start and end with `print_queries` (on by default), at `query_log_level`. Whatever those
+say, a statement stopped by a cancel gets one `info` line, `statement cancelled`, with its
+`session_id`, `statement_id` (the `q_…` id), `user`, `reason` and `duration` (seconds, its
+wait in the statement queue included):
+
+```json
+{"time":"2026-10-20T14:31:39.702Z","level":"info","message":"statement cancelled","session_id":"s_…","statement_id":"q_…","user":"joe","reason":"timeout","duration":"1.003"}
+```
+
+`reason` is Warp SQL's `cancel_reason`: `client` (the client's cancel, or it closed the
+connection of a streamed result), `timeout` (`Warp-Statement-Timeout` or
+`query_timeout_seconds`), `killed` (`KILL SESSION`), `cancelled` (`hardcharger_cancel()`),
+`session_closed` (the session was deleted) or `server_shutdown`. A statement that
+ends on its own, or fails, gets none.
+
 ### Credential and system files
 
 With `block_sensitive_paths` on (the default), no statement can open, list, write, move or

@@ -8,6 +8,7 @@
 #include <regex>
 #include <set>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <sstream>
 
@@ -290,6 +291,21 @@ void RefuseAccessControlStatement(std::string_view sql) {
 
 }  // namespace
 
+// One info line for each statement a cancel stopped, whatever the statement log level (as
+// GizmoSQL 1.x's "SQL Statement was successfully canceled"): its ids, its user, why it was
+// stopped (Warp SQL's cancel_reason: client, timeout, killed, cancelled, session_closed,
+// server_shutdown) and how long it had run, queue wait included, in seconds.
+static void LogCancelled(const Session& session, const LogFields& ids, std::string_view reason,
+                  std::chrono::steady_clock::time_point started) {
+  LogFields fields = {{"session_id", session.id()}};
+  fields.insert(fields.end(), ids.begin(), ids.end());
+  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+  fields.insert(fields.end(), {{"user", session.principal().name},
+                               {"reason", std::string(reason)},
+                               {"duration", std::format("{:.3f}", seconds)}});
+  Log(LogLevel::kInfo, "statement cancelled", fields);
+}
+
 // One execution of a statement, from its queue slot to its result being let go: gives
 // the slot back, counts it in metrics, logs its success and records its timeline in
 // instrumentation, each exactly once.
@@ -338,6 +354,11 @@ class Execution {
     record_.status = status == "ok" ? "success" : std::string(status);
     record_.error = std::string(error);
     if (status == "cancelled") record_.cancel_reason = session_.cancel_reason();
+    // Stopped by a cancel (the reason says which); a result abandoned without one, such as
+    // a client that stopped reading, is no cancelled statement.
+    if (status == "cancelled" && !record_.cancel_reason.empty()) {
+      LogCancelled(session_, ids_, record_.cancel_reason, started_);
+    }
     slot_.Release();
     session_.FinishRunning();
     Runtime& runtime = session_.runtime();
@@ -1008,6 +1029,11 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
     } catch (const AdmissionController::Refused& refused) {
       runtime_.metrics.CountQueueRejected();
       const bool cancelled = killed_ || refused.reason == AdmissionController::Refusal::kAborted;
+      if (cancelled) {
+        std::string reason = cancel_reason();
+        if (reason.empty() && killed_) reason = warpsql::reason::kKilled;
+        if (!reason.empty()) LogCancelled(*this, id_fields, reason, started);
+      }
       if (record.enqueue_time) {
         record.end = record.cursor_close = std::chrono::system_clock::now();
         record.status = cancelled ? "cancelled" : "error";

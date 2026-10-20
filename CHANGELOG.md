@@ -7,6 +7,15 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- One `info` log line for each cancelled statement, `statement cancelled`, with its
+  `session_id`, `statement_id` (`q_…`), `user`, `reason` (Warp SQL's `cancel_reason`:
+  `client`, `timeout`, `killed`, `cancelled`, `session_closed`, `server_shutdown`) and
+  `duration` in seconds, whatever `print_queries` and `query_log_level` say (GizmoSQL 1.x
+  logged `SQL Statement was successfully canceled.`). A statement that ends on its own or
+  fails logs none. Tests: `test_statement_cancel_log.py`.
+
 ### Fixed
 
 - A `readonly` session could write through a data-modifying CTE
