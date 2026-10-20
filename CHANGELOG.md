@@ -7,6 +7,24 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- A `readonly` session could write through a data-modifying CTE
+  (`WITH c AS (INSERT … RETURNING *) SELECT * FROM c`, also `UPDATE` / `DELETE`), which
+  DuckDB reports as a `SELECT`. DuckDB's own analysis of every statement a readonly session
+  prepares now decides, as in GizmoSQL 1.x: one that modifies any database (temp included)
+  or writes a file is refused before it runs, also inside a transaction, in a batch, under
+  `EXPLAIN ANALYZE` or as a prepared statement.
+- A `readonly` session can change its own session again, as in GizmoSQL 1.x: `BEGIN` /
+  `START TRANSACTION`, `COMMIT` / `END`, `ROLLBACK` / `ABORT`, `SET VARIABLE` /
+  `RESET VARIABLE`, `USE`, `SET` / `RESET` of a setting DuckDB keeps for the session
+  (`SET SESSION …`, or a plain `SET` of a session-scoped setting such as `TimeZone`), and the
+  `PRAGMA`s that read (`table_info`, `database_list`, `version`, ...). They were refused as
+  modifying state. `SET GLOBAL`, a plain `SET` of a setting whose default scope is global,
+  settings that reach the server (resources, extensions, secrets, files, the profiler, the
+  grammar), temporary tables, views and macros, and every other write stay refused. README:
+  "Read-only sessions". Tests: `test_readonly_session.py`.
+
 ## [2.0.0-rc.1] - 2026-10-20
 
 ### Added

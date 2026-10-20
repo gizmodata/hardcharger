@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <regex>
+#include <set>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -100,10 +101,45 @@ warpduckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
   return options;
 }
 
-// Statements a "readonly" principal may run. A strict allow-list until the authorization
-// module (with DuckDB's own read-only analysis) lands.
+// Statements that read: what may run on the server's own catalogs.
 bool ReadOnlyStatement(DUCKDB_V2_STATEMENT_TYPE type) {
   return type == DUCKDB_V2_STATEMENT_TYPE_SELECT || type == DUCKDB_V2_STATEMENT_TYPE_EXPLAIN;
+}
+
+// PRAGMAs that only read (DuckDB runs each as a query of the pragma_* table function).
+bool IsReadingPragma(const Piece& piece) {
+  const auto& t = piece.tokens;
+  if (t.size() < 2 || !t[0].IsWord("PRAGMA")) return false;
+  if (t.size() > 2 && t[2].IsOp("=")) return false;  // PRAGMA name = value is a SET
+  static const std::set<std::string> kReading = {
+      "table_info", "show",     "show_tables", "show_tables_expanded", "show_databases", "database_list",
+      "database_size", "storage_info", "metadata_info", "version", "platform", "functions", "collations",
+      "user_agent"};
+  return kReading.contains(t[1].Value());
+}
+
+// The kinds of statement a "readonly" principal may run, as GizmoSQL 1.x allowed them: reads,
+// and statements that change only its own session (transactions, SET VARIABLE, session
+// settings, USE, reading PRAGMAs). What each of them really does is then checked by DuckDB's
+// own analysis (authz::BindReadOnlySession): a write anywhere in a SELECT, a SET VARIABLE's
+// value or a transaction is refused all the same. Everything else (CREATE, temporary objects
+// included; DROP, ALTER, INSERT, UPDATE, DELETE, MERGE, COPY, EXPORT, IMPORT, ATTACH, DETACH,
+// INSTALL, LOAD, CHECKPOINT, VACUUM, CALL, SQL-level PREPARE / EXECUTE) is refused.
+bool ReadOnlySessionMayRun(duckdb_v2_connection_handle connection, const Piece& piece,
+                           DUCKDB_V2_STATEMENT_TYPE type) {
+  switch (type) {
+    case DUCKDB_V2_STATEMENT_TYPE_SELECT:
+    case DUCKDB_V2_STATEMENT_TYPE_EXPLAIN:
+    case DUCKDB_V2_STATEMENT_TYPE_TRANSACTION:   // BEGIN, COMMIT, ROLLBACK, ABORT, END
+    case DUCKDB_V2_STATEMENT_TYPE_VARIABLE_SET:  // SET VARIABLE, RESET VARIABLE
+      return true;
+    case DUCKDB_V2_STATEMENT_TYPE_SET:  // SET / RESET of a setting, USE
+      return authz::ReadOnlySessionMaySet(connection, piece.text);
+    case DUCKDB_V2_STATEMENT_TYPE_PRAGMA:
+      return IsReadingPragma(piece);
+    default:
+      return false;
+  }
 }
 
 // SQL as logs and instrumentation keep it: shortened, and never with the credentials
@@ -616,6 +652,7 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb
   // and bound here right after it, before any statement runs on them (and before the
   // session is listed anywhere, so a refused one leaves nothing behind).
   if (access_controlled_) guard_ = access->Bind(connection(), IdentityOf(principal_));
+  if (principal_.role == "readonly") authz::BindReadOnlySession(connection(), principal_.name);
   runtime_.sessions.Add(this, capped);
   runtime_.metrics.CountSessionOpened();
   if (runtime_.instrumentation != nullptr) runtime_.instrumentation->SessionStarted(*this);
@@ -833,7 +870,7 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   // query): it reads, and the enum is the session's own.
   const bool pivot = executed == DUCKDB_V2_STATEMENT_TYPE_MULTI && !piece.tokens.empty() &&
                      (piece.tokens[0].IsWord("PIVOT") || piece.tokens[0].IsWord("UNPIVOT"));
-  if (principal_.role == "readonly" && !ReadOnlyStatement(executed) && !pivot) {
+  if (principal_.role == "readonly" && !ReadOnlySessionMayRun(connection(), piece, executed) && !pivot) {
     throw Error(ErrorCode::kPermissionDenied,
                 "User '" + principal_.name + "' has a readonly session and cannot run statements that modify state.",
                 "42501");

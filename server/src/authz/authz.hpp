@@ -132,6 +132,20 @@ std::string DuckDBStoreFile(const std::string& store_uri);
 void InstallFileGuard(duckdb_v2_instance_handle instance, std::shared_ptr<const PrivateFiles> files,
                       std::shared_ptr<const SensitivePaths> sensitive);
 
+// A "readonly" principal's session (read_only.cc): from now on DuckDB's own analysis of
+// every statement it prepares on `connection` decides whether it writes, as in GizmoSQL
+// 1.x. One that modifies a database (the temp catalog included) or writes a file, wherever
+// in the statement (a data-modifying CTE, COPY ... TO inside a CTE), is refused before it
+// runs: "User '<user_name>' has a readonly session and cannot run statements that modify
+// state." Called once, before any statement runs on the connection.
+void BindReadOnlySession(duckdb_v2_connection_handle connection, const std::string& user_name);
+
+// Whether a readonly session may run `sql`, one SET or RESET of a DuckDB setting: only a
+// setting DuckDB keeps for the session (SET SESSION, or a plain SET of a setting whose
+// default scope is the session) that doesn't reach the host or the instance, switch the
+// grammar or write files. Never GLOBAL.
+bool ReadOnlySessionMaySet(duckdb_v2_connection_handle connection, std::string_view sql);
+
 class AccessControl {
  public:
   // Opens the store and loads it. Throws std::runtime_error (never quoting the store's

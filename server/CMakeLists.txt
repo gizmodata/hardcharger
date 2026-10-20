@@ -155,6 +155,7 @@ add_library(hardcharger_authz OBJECT
   src/authz/opa.cc
   src/authz/password.cc
   src/authz/policies.cc
+  src/authz/read_only.cc
   src/authz/resolver.cc
   src/authz/store.cc
   src/authz/types.cc
