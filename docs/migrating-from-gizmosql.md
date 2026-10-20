@@ -32,7 +32,7 @@ Every option also has a YAML key: the flag without its leading `--`, with `_` fo
 | `--database-filename`, `-D`, `DATABASE_FILENAME`, `GIZMOSQL_DATABASE_FILENAME` | `--database` | `HARDCHARGER_DATABASE` |
 | `--readonly`, `-O`, `READONLY`, `GIZMOSQL_READONLY` | `--read-only` | `HARDCHARGER_READ_ONLY` |
 | `GIZMOSQL_MEMORY_LIMIT` | `--memory-limit` | `HARDCHARGER_MEMORY_LIMIT` |
-| `GIZMOSQL_STORAGE_VERSION` | `--storage-version` | `HARDCHARGER_STORAGE_VERSION` |
+| `GIZMOSQL_STORAGE_VERSION` | `--storage-version` (also the format of new `ATTACH` files and new DuckLake metadata files; an existing file keeps its own, so a DuckLake that GizmoSQL 1.x's DuckDB created stays readable by it: README, "DuckDB files and DuckLake metadata") | `HARDCHARGER_STORAGE_VERSION` |
 | `GIZMOSQL_ALLOW_UNSIGNED_EXTENSIONS` | `--allow-unsigned-extensions` | `HARDCHARGER_ALLOW_UNSIGNED_EXTENSIONS` |
 | `-I`, `INIT_SQL_COMMANDS`, `GIZMOSQL_INIT_SQL_COMMANDS` | `--init-sql-commands` | `HARDCHARGER_INIT_SQL_COMMANDS` |
 | `-F`, `INIT_SQL_COMMANDS_FILE`, `GIZMOSQL_INIT_SQL_COMMANDS_FILE` | `--init-sql-commands-file` | `HARDCHARGER_INIT_SQL_COMMANDS_FILE` |

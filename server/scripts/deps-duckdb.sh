@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Builds DuckDB 2.0 into server/.deps/duckdb-install with warp-sql's build-duckdb.sh, after
 # patching it with every scripts/patch-duckdb*.cmake in name order (patch-duckdb.cmake: the
-# binder hook access control needs to check views with their owner's rights), and with the
-# extensions in scripts/duckdb-extensions.cmake built in (their libraries:
-# build-extension-deps.sh). OpenSSL comes from $OPENSSL_ROOT_DIR, else server/.deps's own
-# (the portable build's), else the system's. `build-deps.sh duckdb` runs it.
+# binder hook access control needs to check views with their owner's rights;
+# patch-duckdb-extensions.cmake: our own patches to the extensions, from
+# scripts/extension-patches), and with the extensions in scripts/duckdb-extensions.cmake
+# built in (their libraries: build-extension-deps.sh). OpenSSL comes from
+# $OPENSSL_ROOT_DIR, else server/.deps's own (the portable build's), else the system's.
+# `build-deps.sh duckdb` runs it.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WARP="$HERE/../third_party/warp-sql/cpp/scripts"
@@ -71,3 +73,6 @@ grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_baset
   || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
 grep -q HardchargerDecimal38Converter "$SRC/src/common/arrow/arrow_appender.cpp" \
   || { echo "DuckDB lost the HUGEINT / UHUGEINT Arrow export patch" >&2; exit 1; }
+grep -q HardchargerMetadataStorageVersion \
+  "$WARPSQL_DEPS_DIR/duckdb-build/_deps/ducklake_extension_fc-src/src/storage/ducklake_initializer.cpp" \
+  || { echo "ducklake lost the metadata storage version patch (scripts/extension-patches)" >&2; exit 1; }

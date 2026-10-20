@@ -96,6 +96,10 @@ warpduckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
   for (auto& option : DuckDBDirectories(config)) options.instance_options.push_back(std::move(option));
   if (!config.storage_version.empty()) {
     options.attach_options.emplace_back("STORAGE_VERSION", config.storage_version);
+    // Also the instance's default for every other new database file: a plain ATTACH, and
+    // a new DuckLake's DuckDB metadata file (scripts/extension-patches/ducklake). An
+    // existing file keeps the storage version it has.
+    options.instance_options.emplace_back("storage_compatibility_version", config.storage_version);
   }
   options.result_batch_rows = static_cast<std::size_t>(config.result_batch_rows);
   return options;

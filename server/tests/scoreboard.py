@@ -37,7 +37,7 @@ rows = [
  ("integration/test_admin_command_guard.cpp", 42, 42, 0, 0, 0, "test_admin_command_guard.py", "36 as C++ unit tests"),
  ("integration/test_sensitive_path_guard.cpp", 10, 10, 0, 0, 0, "test_sensitive_path_guard.py", "glob() refuses instead of hiding"),
  ("integration/test_allow_unsigned_extensions.cpp", 2, 2, 0, 0, 0, "test_allow_unsigned_extensions.py", ""),
- ("integration/test_storage_version.cpp", 3, 3, 0, 0, 0, "test_storage_version.py", ""),
+ ("integration/test_storage_version.cpp", 3, 3, 0, 0, 0, "test_storage_version.py", "+1 (a new ATTACH file)"),
  ("integration/test_set_query_log_level.cpp", 2, 2, 0, 0, 0, "test_set_query_log_level.py", ""),
  ("integration/test_internal_query_log_level.cpp", 3, 3, 0, 0, 0, "test_internal_query_log_level.py", ""),
  ("integration/test_log_level_filtering.cpp", 14, 14, 0, 0, 0, "test_log_level_filtering.py", "C++ unit tests"),

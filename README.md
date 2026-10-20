@@ -576,6 +576,32 @@ trusted_proxies: [10.0.0.0/8, fd00::/8]   # flag: --trusted-proxies 10.0.0.0/8,f
 - List only proxies that append to or overwrite these headers: one that passes a client's
   header through lets that client choose the address it is recorded under.
 
+### DuckDB files and DuckLake metadata
+
+An existing DuckDB file keeps the storage format it has: the `--database` file, a file you
+`ATTACH`, and a DuckLake's DuckDB metadata file (`ATTACH 'ducklake:lake.ducklake'`). So a
+database or DuckLake that DuckDB 1.5 created is still readable by DuckDB 1.5 after
+Hardcharger writes to it. (DuckDB's own DuckLake extension attaches its metadata file with
+the latest storage format, which upgrades the file; Hardcharger's build of it doesn't.) A
+DuckLake also keeps its DuckLake format version unless you attach it with
+`AUTOMATIC_MIGRATION true`.
+
+`--storage-version` (`storage_version`) sets the format of every DuckDB file the server
+creates: the `--database` file, a new file an `ATTACH` creates, and a new DuckLake's
+metadata file. Unset, a new `--database` or `ATTACH` file gets DuckDB 2.0's format and a new
+DuckLake metadata file the latest one, which DuckDB 1.x can't open. To make a new DuckLake
+that DuckDB 1.5 can read, start the server with `--storage-version v1.5.0` and create the
+lake with `DUCKLAKE_VERSION '1.0'` (DuckDB 1.5's DuckLake can't read the newer default,
+1.1-dev1):
+
+```sql
+ATTACH 'ducklake:/data/lake.ducklake' AS lake (DATA_PATH '/data/lake/', DUCKLAKE_VERSION '1.0');
+```
+
+To upgrade an existing metadata file on purpose, attach it with
+`META_STORAGE_VERSION 'latest'`; DuckDB 1.x can't open it afterwards. A PostgreSQL metadata
+catalog has no DuckDB storage format, so none of this applies to it.
+
 ### Credential and system files
 
 With `block_sensitive_paths` on (the default), no statement can open, list, write, move or
