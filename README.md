@@ -327,6 +327,14 @@ curl -s localhost:31337/warp/v1/sessions/$SESSION/statements -H "Authorization: 
 Ask for `Accept: application/vnd.apache.arrow.stream` and the rows arrive as an Arrow IPC
 stream in that same response.
 
+A session (and its statements, results, prepared statements and ingests) belongs to the token
+that opened it: its user and that token's authority, meaning its role, scoped token,
+`catalog_access` rules, tenant and identity-provider groups. Any other token gets
+`404 session_not_found` on it, a readonly or scoped token of the same user included, so a
+client that attaches to a session by its id runs with that session's own rights or not at
+all. A new token with the same authority, such as signing in again with the same password,
+reaches the session.
+
 The server describes its API in OpenAPI 3.1 at `GET /warp/v1/openapi.json` (no sign-in
 needed; discovery, `GET /warp`, lists it as capability `openapi`), for API tools and client
 generators; the web UI's API page shows it:

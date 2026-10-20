@@ -237,6 +237,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 add_executable(hardcharger-unit-tests
   unit/admission_test.cc
+  unit/authority_key_test.cc
   unit/catalog_log_test.cc
   unit/extension_hint_test.cc
   unit/guards_test.cc

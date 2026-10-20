@@ -5,7 +5,8 @@ end the user's sessions and the tokens they were opened with. The session's own 
 refused before the server looks at the session, so its holder learns why from the
 invalid_token refusal's `reason` (credentials_changed, principal_dropped, token_revoked,
 token_expired). A token that signs in again, used on the old session, gets session_ended
-with the same reason. A token the server can't verify as one it signed (another key, a
+with the same reason; the user's own token on a scoped token's session is another
+principal's (Warp SQL §9.2) and gets session_not_found. A token the server can't verify as one it signed (another key, a
 changed signature) gets no reason, whatever user it names.
 """
 
@@ -57,6 +58,11 @@ def assert_token_refused(response: httpx.Response, reason: str, detail: str) -> 
 def assert_session_ended(response: httpx.Response, reason: str) -> None:
     problem = refusal(response=response)
     assert problem["code"] == "session_ended" and problem["reason"] == reason, problem
+
+
+def assert_session_not_found(response: httpx.Response) -> None:
+    assert response.status_code == 404, response.text
+    assert response.json()["code"] == "session_not_found", response.text
 
 
 def on(client: Client, token: str, path: str = "") -> httpx.Response:
@@ -114,8 +120,9 @@ def test_a_revoked_scoped_token_says_token_revoked(server):
     expect_allowed(client=ray, sql="DROP SCOPED TOKEN job")
     assert_token_refused(response=until_refused(client=bot), reason="token_revoked",
                          detail="this scoped token was revoked")
-    # The user's own token on the scoped session: the session ended with the token.
-    assert_session_ended(response=on(client=bot, token=ray.token), reason="token_revoked")
+    # The user's own token on the scoped session: another principal's session (Warp SQL
+    # §9.2: a scoped token is another authority), so it is told nothing about it.
+    assert_session_not_found(response=on(client=bot, token=ray.token))
     # The twins: the user's other scoped token and the user's own session still work.
     assert other.http.get(url=other.url, headers=other.headers()).status_code == 200
     assert ray.http.get(url=ray.url, headers=ray.headers()).status_code == 200
@@ -130,7 +137,7 @@ def test_an_expired_scoped_token_says_token_expired(server):
     time.sleep(2 * valid)
     assert_token_refused(response=bot.http.get(url=bot.url, headers=bot.headers()), reason="token_expired",
                          detail="the access token has expired")
-    assert_session_ended(response=on(client=bot, token=eve.token), reason="token_expired")
+    assert_session_not_found(response=on(client=bot, token=eve.token))  # another authority's
 
 
 def test_an_expired_token_says_token_expired(server):

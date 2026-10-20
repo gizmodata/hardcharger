@@ -107,6 +107,34 @@ authz::Identity IdentityOf(const warpsql::Principal& principal) {
   return who;
 }
 
+std::string AuthorityKey(const warpsql::Principal& principal,
+                         const authz::AccessControl::TokenStanding& standing) {
+  const authz::Identity who = IdentityOf(principal);
+  boost::json::value rules;  // null: no catalog_access claim
+  if (who.catalog_access) {
+    boost::json::array list;
+    for (const auto& rule : *who.catalog_access) list.push_back(boost::json::array{rule.catalog, rule.access});
+    rules = std::move(list);
+  }
+  std::vector<std::string> groups = who.idp_groups;
+  std::sort(groups.begin(), groups.end());
+  groups.erase(std::unique(groups.begin(), groups.end()), groups.end());
+  boost::json::array group_list;
+  for (const auto& group : groups) group_list.emplace_back(group);
+  // A JSON array: every value quoted and escaped, so no two lists serialize alike.
+  const std::string canonical = boost::json::serialize(boost::json::array{
+      "hardcharger-authority-1", principal.role, who.scope_id, std::move(rules), who.idp_issuer,
+      std::move(group_list), standing.user_id, standing.tenant_id});
+  const auto digest = Digest(canonical);
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string out;
+  for (const unsigned char byte : digest) {
+    out += kHex[byte >> 4];
+    out += kHex[byte & 15];
+  }
+  return out;
+}
+
 Authenticator::Authenticator(const Config& config,
                              std::shared_ptr<authz::AccessControl> access,
                              std::function<warpsql::Principal(std::string_view)> server_tokens,

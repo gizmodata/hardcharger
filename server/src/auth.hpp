@@ -27,6 +27,26 @@ namespace hardcharger {
 // Who a principal is to access control, from the claims its access token carries.
 authz::Identity IdentityOf(const warpsql::Principal& principal);
 
+// The principal's authority (warpsql::Principal::authority_key, Warp SQL §9.2): SHA-256 hex
+// of a canonical list of everything that changes what the principal may do. A session and
+// its handles answer only a token of the same name and the same key, so a readonly or
+// scoped token of a user, or one with catalog_access limits, can't act through a session
+// that a stronger token of that user opened (its connection is bound to the opener).
+//
+// In it: the role (admin, user, readonly; a token-provisioned user's readonly
+// provisioned_role is already its role), the scoped token's store record (scope_id), the
+// catalog_access rules as access control reads them (absent and empty differ), the identity
+// provider's issuer and groups (sorted), and the store user (its id, so a user dropped and
+// created again under the name is another user, and its tenant).
+// Not in it: the token's id, issue time and expiry, which change with every sign-in, so a
+// new token of the same authority reaches the session; the password fingerprint
+// (`credential`), so signing in again with the password (or after a password change, a new
+// one) still does: the old token already fails CheckToken; how the user signed in
+// (auth_method), which grants nothing by itself; and the certificate binding, which the SDK
+// compares on every session request itself (certificate_mismatch).
+std::string AuthorityKey(const warpsql::Principal& principal,
+                         const authz::AccessControl::TokenStanding& standing = {});
+
 class Authenticator : public warpsql::Authenticator {
  public:
   // `access`: access control, or null. `server_tokens` validates this server's own

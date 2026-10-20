@@ -416,8 +416,8 @@ std::optional<std::string> AccessControl::CertificateUser(const std::string& ide
   return user->name;
 }
 
-void AccessControl::CheckToken(const Identity& who) const {
-  if (who.superuser || catalog_rules_only_) return;
+AccessControl::TokenStanding AccessControl::CheckToken(const Identity& who) const {
+  if (who.superuser || catalog_rules_only_) return {};
   RequireFresh(*engine_);
   // Only for a token this server signed and verified (JwtTokenService::Validate), so each
   // refusal says why (Warp SQL §4.2's reason): only the token's holder learns it.
@@ -441,6 +441,7 @@ void AccessControl::CheckToken(const Identity& who) const {
                                                                          : "this scoped token has expired");
     }
   }
+  return {user->id, snapshot->TenantOf(PrincipalKind::kUser, user->id)};
 }
 
 std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle connection,

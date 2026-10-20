@@ -9,6 +9,25 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Security
 
+- A session can no longer be used by a weaker token of the same user. Sessions (and their
+  statements, retained results, prepared statements and ingests) were bound to the user
+  name only, while a session's DuckDB connection is bound to the token that opened it. So
+  any token of that name could run statements through a stronger token's session, with
+  that token's privileges, by naming its id (as the ADBC driver's session attach does): a
+  readonly token through its user's session, a scoped token (`CREATE SCOPED TOKEN`)
+  through the session of the user who minted it, a token with `catalog_access` rules
+  through an unrestricted one's, an identity-provider token with other groups (and so
+  other mapped roles). Every request now also compares the token's authority, a SHA-256
+  of its role, scoped token, `catalog_access` rules, identity-provider issuer and groups,
+  and its store user and tenant (`AuthorityKey`, `server/src/auth.hpp`): any difference
+  gets `404 session_not_found` on every route, as another user's token would. A new
+  token of the same authority (signing in again, also after a password change, or
+  exchanging the same scoped token again) still reaches the session; the token's id,
+  times, password fingerprint and sign-in method are not part of it, and the certificate
+  binding is checked as before. A store user dropped and created again under the same
+  name no longer reaches the old user's sessions either. Warp SQL SDK
+  `Principal::authority_key` (warp-sql §9.2). Tests:
+  `server/tests/test_session_authority.py`, `server/unit/authority_key_test.cc`.
 - Access-control store errors no longer carry the store's connection string. While a
   PostgreSQL store was unreachable, `CREATE USER`, `GRANT`, `REVOKE` and every other
   access-control write answered the client, and logged, DuckDB's "Unable to connect to

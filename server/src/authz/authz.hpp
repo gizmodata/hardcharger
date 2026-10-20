@@ -226,7 +226,14 @@ class AccessControl {
   // (principal_dropped), the password it was issued against was changed
   // (credentials_changed), or its scoped token was revoked (token_revoked) or expired
   // (token_expired). Only for a token this server signed. Cheap: called on every request.
-  void CheckToken(const Identity& who) const;
+  // Returns the store user the token names right now (empty for the administrator and on
+  // catalog_rules_only servers), for the token's authority (AuthorityKey in auth.hpp): a
+  // user dropped and created again under the same name is another user.
+  struct TokenStanding {
+    std::string user_id;
+    std::string tenant_id;
+  };
+  TokenStanding CheckToken(const Identity& who) const;
 
   // Binds a new session's connection to `who`. Throws warpsql::Error when the session
   // is refused (unknown or disabled user, revoked scoped token, policy service).
