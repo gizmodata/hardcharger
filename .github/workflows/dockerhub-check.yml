@@ -1,7 +1,6 @@
 name: dockerhub-check
 
-# Run by hand: proves the release can sign in to Docker Hub by OIDC and that the
-# repository is not public, without pushing anything.
+# Run by hand: proves the release can sign in to Docker Hub by OIDC, without pushing anything.
 on:
   workflow_dispatch:
 
@@ -35,9 +34,5 @@ jobs:
         with:
           registry: docker.io
           username: gizmodata
-      - name: Check the Docker Hub repository is not public
-        run: |
-          code=$(curl -s -o /dev/null -w '%{http_code}' https://hub.docker.com/v2/repositories/gizmodata/hardcharger/)
-          [ "$code" = 404 ] || { echo "docker.io/gizmodata/hardcharger answers $code without credentials: it is public"; exit 1; }
       - name: Signed in, the repository is reachable
         run: docker manifest inspect docker.io/gizmodata/hardcharger:latest >/dev/null 2>&1 && echo "latest exists" || echo "no latest tag yet (expected before the first release)"

@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-20
+
+### Changed
+
+- The package's version now tracks the server's: 2.0.0 installs Hardcharger 2.0.0 (the Python
+  package was 0.1.0 while the server was pre-release).
+
 ### Documentation
 
 - README, License: the package itself has no third-party code; the server it downloads carries

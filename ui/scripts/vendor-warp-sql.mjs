@@ -9,7 +9,7 @@
 //   node scripts/vendor-warp-sql.mjs --update <commit>    build <commit> and vendor it
 //
 // --rebuild and --update clone HARDCHARGER_UI_WARP_SQL_JS_GIT (default
-// git@github.com:gizmodata/warp-sql-js.git; a local checkout's path works too).
+// https://github.com/gizmodata/warp-sql-js.git; a local checkout's path works too).
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -24,7 +24,7 @@ const pin = JSON.parse(readFileSync(pinFile, "utf8"));
 const { values } = parseArgs({
   options: { verify: { type: "boolean" }, rebuild: { type: "boolean" }, update: { type: "string" } },
 });
-const source = process.env.HARDCHARGER_UI_WARP_SQL_JS_GIT ?? `git@github.com:${pin.repository}.git`;
+const source = process.env.HARDCHARGER_UI_WARP_SQL_JS_GIT ?? `https://github.com/${pin.repository}.git`;
 const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
 const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, stdio: ["ignore", "pipe", "inherit"] }).toString();
 

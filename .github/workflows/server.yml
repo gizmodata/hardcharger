@@ -1326,13 +1326,6 @@ jobs:
         with:
           registry: docker.io
           username: gizmodata
-      # Hardcharger is not public yet: never push to a Docker Hub repository anyone can pull.
-      # Asked without credentials, a public repository answers 200 and a private one 404.
-      - name: Check the Docker Hub repository is not public
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          code=$(curl -s -o /dev/null -w '%{http_code}' https://hub.docker.com/v2/repositories/gizmodata/hardcharger/)
-          [ "$code" = 404 ] || { echo "docker.io/gizmodata/hardcharger answers $code without credentials: it is public"; exit 1; }
       - name: Build (and on a tag or a push to main, push) the image
         run: |
           args=(--tag ghcr.io/gizmodata/hardcharger:dev)
@@ -1350,11 +1343,6 @@ jobs:
             args+=(--push)
           fi
           docker buildx build --platform linux/amd64,linux/arm64 --file docker/Dockerfile "${args[@]}" .
-      - name: Check the pushed Docker Hub repository is still not public
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          code=$(curl -s -o /dev/null -w '%{http_code}' https://hub.docker.com/v2/repositories/gizmodata/hardcharger/)
-          [ "$code" = 404 ] || { echo "docker.io/gizmodata/hardcharger answers $code without credentials: it is public"; exit 1; }
       - name: Smoke-test the image
         run: |
           docker buildx build --platform linux/amd64 --file docker/Dockerfile --tag hc-smoke --load .
