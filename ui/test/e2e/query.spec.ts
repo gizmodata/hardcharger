@@ -148,6 +148,15 @@ async function copyText(page: import("@playwright/test").Page, text: string): Pr
 }
 
 test("typed and pasted SQL keeps its own indentation; Enter keeps the line's", async ({ page }) => {
+  page.on("console", (msg) => console.log("COPY-PROBE", msg.type(), msg.text()));
+  await page.evaluate(() => {
+    for (const type of ["copy", "paste", "focusin"] as const) {
+      document.addEventListener(type, (event) => {
+        const e = event as ClipboardEvent;
+        console.info(JSON.stringify({ type, target: (e.target as HTMLElement)?.outerHTML?.slice(0, 150), text: e.clipboardData?.getData("text/plain"), trusted: e.isTrusted, selected: window.getSelection()?.toString() }));
+      }, true);
+    }
+  });
   // Typed key by key.
   await setSql(page, "");
   await page.keyboard.type(indented);

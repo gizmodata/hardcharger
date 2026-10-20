@@ -9,6 +9,13 @@ test("a lazily loaded page that is gone: reloads with backoff, then a 'new versi
   harness,
 }) => {
   test.setTimeout(90_000);
+  page.on("console", (msg) => console.log("STALE-PROBE", msg.type(), msg.text()));
+  page.on("pageerror", (err) => console.log("STALE-PAGEERROR", err.name, err.message));
+  await page.addInitScript(() => {
+    addEventListener("unhandledrejection", e => console.info("STALE-UNHANDLED", String(e.reason)));
+    addEventListener("beforeunload", () => console.info("STALE-BEFOREUNLOAD"));
+    addEventListener("pagehide", () => console.info("STALE-PAGEHIDE"));
+  });
   const missing = /\/ui\/assets\/QueryPage-[^/]+\.js$/;
   expectProblem(page, { status: 404, url: missing });
   // How each browser reports the failed module import.

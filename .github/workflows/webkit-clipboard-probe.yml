@@ -4,6 +4,7 @@ on:
     branches: [debug/webkit-clipboard]
 permissions:
   contents: read
+  actions: read
 jobs:
   probe:
     runs-on: ubuntu-24.04
@@ -21,3 +22,48 @@ jobs:
       - run: npx playwright install --with-deps webkit
       - run: env -u DISPLAY PROBE_HEADLESS_ONLY=1 node scripts/webkit-clipboard-probe.mjs
       - run: xvfb-run --auto-servernum node scripts/webkit-clipboard-probe.mjs
+  ui:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: hardcharger
+          POSTGRES_PASSWORD: hardcharger
+          POSTGRES_DB: hardcharger
+        ports: ["127.0.0.1:55460:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hardcharger" --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      HARDCHARGER_UI_TEST_EMBEDDED: "1"
+      HARDCHARGER_UI_TEST_RBAC_STORE_URI: postgresql://hardcharger:hardcharger@127.0.0.1:55460/hardcharger
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-linux-amd64
+          path: ${{ runner.temp }}/server
+          run-id: 39489870241
+          github-token: ${{ github.token }}
+      - name: Unpack the server
+        run: |
+          tar -C "$RUNNER_TEMP/server" -xzf "$RUNNER_TEMP/server/hardcharger-linux-amd64.tar.gz"
+          echo "HARDCHARGER_UI_TEST_SERVER_BINARY=$RUNNER_TEMP/server/hardcharger-linux-amd64/bin/hardcharger-server" >> "$GITHUB_ENV"
+      - run: npx playwright install --with-deps webkit
+      - run: npx playwright test --project webkit --grep 'typed and pasted|lazily loaded' --repeat-each 3
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ui-probe
+          path: |
+            ui/test-results
+            ui/playwright-report
