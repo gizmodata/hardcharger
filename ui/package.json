@@ -23,7 +23,7 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "vendor:verify": "node scripts/vendor-warp-sql.mjs --verify"
+    "vendor:verify": "node scripts/vendor-warp-sql.mjs --verify && node scripts/vendor-sheetjs.mjs --verify"
   },
   "dependencies": {
     "@gizmodata/warp-sql": "file:vendor/gizmodata-warp-sql-0.1.0.tgz",
@@ -33,7 +33,8 @@
     "parquet-wasm": "^0.9.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "swagger-ui-dist": "5.33.3"
+    "swagger-ui-dist": "5.33.3",
+    "xlsx": "file:vendor/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

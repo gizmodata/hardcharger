@@ -33,6 +33,46 @@ own changelog in `python/CHANGELOG.md`.
   "not connected" hint say so. Tests: `test_client_cli.py` (each spelling against a plain
   server, and each spelling of on as its twin).
 
+- **Upload data** in the web UI: a CSV, TSV, Excel (.xlsx, .xls, .xlsb), Parquet, JSON lines /
+  JSON array or Arrow IPC file into a new or existing table, from the query toolbar's **Upload
+  data** button, the schema browser (its toolbar, and **Upload data…** on a catalog's or
+  schema's menu), or a file dropped anywhere on the page. The dialog follows GizmoData Cloud's
+  SQL editor (the same fields, labels, modes, table-name derivation and result message): File,
+  Catalog, Schema (or a new one), Table, **If the table…** (create, which fails if it exists;
+  append, with the file's columns matched to the table's by name and NULL for the ones it
+  lacks; replace, the table's columns and rows), Header row, and the CSV delimiter or the Excel
+  worksheet (a picker of the workbook's sheets). **Preview & column types**, folded away until
+  opened, shows the first 100 rows as they will load, with each column's inferred type to
+  change (VARCHAR, BIGINT, DOUBLE, DECIMAL(p,s), BOOLEAN, DATE, TIMESTAMP, TIMESTAMPTZ, TIME),
+  rename or skip; a value that wouldn't fit shows in red. An append warns where the file's
+  types differ from the table's, and stops before it starts when the file has a column the
+  table hasn't. The file is read and converted to Arrow in the browser, in a Web Worker (a
+  large or malformed file can't freeze the page), and sent over Warp SQL's bulk ingest in
+  pieces of about 8 MB, one request each, in one transaction of the upload's own session (as
+  the tab's **Run as** role): the server never stores the raw file, a progress bar counts
+  rows and bytes, **Cancel upload** rolls everything back, and a failed upload leaves the
+  table as it was. CSV, JSON lines, Parquet (row group by row group, with parquet-wasm) and
+  Arrow streams are read as they upload, at any size; Excel workbooks and JSON arrays are read
+  whole, up to 100 MB. CSV: the delimiter (`,` `;` tab `|`, or one typed, up to 4 characters),
+  quotes, line breaks inside quotes and the header row are detected; UTF-8, UTF-16 with a byte
+  order mark, and otherwise Windows-1252 with a note. A whole number with a leading zero
+  (`00123`) stays text. Excel: dates and times from the cells' number formats and the
+  workbook's own date system (1900 or 1904), a formula's saved value (none is calculated),
+  numbers, booleans, text (a "number stored as text" stays text), error cells as NULL, empty
+  rows left out and merged ranges' values in their first cell, each said in a note. A value
+  that doesn't convert fails the upload with its line or cell and column (`Cell C12, column
+  "amount": "n/a" is not a whole number`); the server's permission errors (CREATE, INSERT,
+  row policies) are shown as it words them. The result says the rows, mode, format and time,
+  lists the table's columns, refreshes the schema browser and autocomplete, and **Query this
+  table** opens a tab with `SELECT * … LIMIT 100`. Excel is read with SheetJS Community
+  Edition 0.20.3 (Apache-2.0), vendored from SheetJS's own CDN at a pinned SHA-256
+  (`ui/vendor/sheetjs.json`, checked by `npm run vendor:verify`), not npm's abandoned `xlsx`
+  0.18.5 (CVE-2023-30533, CVE-2024-22363): it reads .xlsx, .xls and .xlsb without running
+  macros or formulas and needs no change to the UI's Content-Security-Policy (no `eval`, no
+  workers of its own, nothing fetched). It and the converters load only when a file is read,
+  in the upload worker (SheetJS about 490 KB, the worker 230 KB, the dialog 33 KB; the main
+  bundle grows by about 3 KB).
+
 ### Fixed
 
 - Server: a text log line leaves out a field with no value (`health check passing` printed
@@ -116,6 +156,12 @@ own changelog in `python/CHANGELOG.md`.
   the disclaimer once: derived from the TPC-H benchmark, not an official TPC-H result and not
   comparable to published TPC-H results, and TPC-H™ a trademark of the Transaction Processing
   Performance Council (TPC).
+
+- The web UI's JavaScript client (`ui/vendor`, gizmodata/warp-sql-js) moves to cb563f9, which
+  fixes two things the first browser upload found: bulk ingest (and Arrow parameters) failed in
+  any bundled app with `"throughDOM" not available in this environment` (apache-arrow installs
+  that only as a side effect its `"sideEffects": false` lets bundlers drop), and `close()` could
+  end a session before a statement's delete reached it, which the browser logged as a 404.
 
 ## [2.0.0-rc.1] - 2026-10-20
 
