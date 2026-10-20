@@ -113,6 +113,15 @@ FetchContent_Declare(
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(yaml-cpp)
 
+# The Warp SQL specification's version (the startup banner names it): its OpenAPI
+# document's info.version.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/warp-sql/spec/openapi.yaml" _warpsql_openapi LIMIT 4096)
+if(NOT _warpsql_openapi MATCHES "\ninfo:\r?\n  title: Warp SQL\r?\n  version: ([0-9]+\\.[0-9]+\\.[0-9]+)\r?\n")
+  message(FATAL_ERROR "third_party/warp-sql/spec/openapi.yaml: no info.version for Warp SQL")
+endif()
+set(WARPSQL_SPEC_VERSION "${CMAKE_MATCH_1}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/warp-sql/spec/openapi.yaml")
 configure_file(src/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.hpp" @ONLY)
 
 # The web UI, embedded when HARDCHARGER_WEB_UI names a build of ui/ (cmake/web_ui.cmake).
@@ -188,6 +197,7 @@ add_library(hardcharger_core STATIC
   src/settings.cc
   src/sql_functions.cc
   src/sql_text.cc
+  src/startup_banner.cc
   src/tokens.cc
   src/web_ui.cc
   "${CMAKE_CURRENT_BINARY_DIR}/generated/web_ui_files.cc")
@@ -247,6 +257,7 @@ add_executable(hardcharger-unit-tests
   unit/redaction_test.cc
   unit/sensitive_paths_test.cc
   unit/sql_text_test.cc
+  unit/startup_banner_test.cc
   unit/web_ui_test.cc)
 target_link_libraries(hardcharger-unit-tests PRIVATE hardcharger_core GTest::gtest_main ZLIB::ZLIBSTATIC)
 hardcharger_rpath(hardcharger-unit-tests)

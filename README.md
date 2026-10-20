@@ -537,6 +537,41 @@ print_queries: true
 init_sql_commands_file: /etc/hardcharger/init.sql
 ```
 
+### Startup banner and logging
+
+Started with a text log (the default), the server opens it with a banner: the wordmark,
+its version, the Warp SQL and DuckDB versions, and where to go (the web UI's address when
+`--web-ui` is on, else the Warp SQL endpoint), then the documentation's:
+
+```text
+    __  __               __     __
+   / / / /___ __________/ /____/ /_  ____ __________ ____  _____
+  / /_/ / __ `/ ___/ __  / ___/ __ \/ __ `/ ___/ __ `/ _ \/ ___/
+ / __  / /_/ / /  / /_/ / /__/ / / / /_/ / /  / /_/ /  __/ /
+/_/ /_/\__,_/_/   \__,_/\___/_/ /_/\__,_/_/   \__, /\___/_/
+                                             /____/
+  Hardcharger 2.0.0 | Warp SQL 1.0.0 | DuckDB v2.0.0 | by GizmoData
+  UI   http://localhost:31337/ui/      Docs  docs.hardcharger.gizmodata.com
+       http://build-box:31337/ui/
+```
+
+It is plain ASCII within 80 columns, and never in a JSON log (`--log-format json`).
+`--no-banner` (or `--banner=false`, `HARDCHARGER_NO_BANNER=true`, `HARDCHARGER_BANNER=false`,
+`banner: false` in the YAML file) leaves it out. Every boolean option takes `--no-NAME`.
+
+The addresses printed (in the banner, and as `url=` on the `Hardcharger is ready` and `the web
+UI is on` lines) are ones a browser can open: a server bound to every interface (`0.0.0.0`, the default,
+or `::`) prints `http://localhost:<port>` and `http://<this machine's name>:<port>`
+(the second as `also=`), and with TLS the certificate's first DNS name (else the machine's
+name), so the browser shows no certificate warning; `listen=` is the address bound.
+
+`--log-emoji auto|always|never` (`HARDCHARGER_LOG_EMOJI`, `log_emoji:`) marks the level of a text
+log line: ✅ for an outcome (ready, stopped), ⚠️ for a warning, ❌ for an error and 💥 for one
+that stops the server (info and debug lines get none). `auto`, the default, marks lines only
+when the log goes to a terminal and the locale is UTF-8 (`LC_ALL`, `LC_CTYPE` or `LANG`
+names UTF-8; on Windows, the console's code page is UTF-8), so a file, a pipe, systemd's
+journal, Docker and Kubernetes get none. JSON lines never have them. The log has no colour.
+
 In SQL, `SET SESSION name = value` changes a DuckDB setting for your session only. A plain
 `SET name = value` takes the setting's own default scope, which for about half of DuckDB's
 settings (`arrow_lossless_conversion` among them) is `GLOBAL`: then only an administrator

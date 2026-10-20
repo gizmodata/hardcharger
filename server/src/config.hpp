@@ -110,6 +110,8 @@ struct Config {
   std::string log_level = "info";  // debug, info, warning, error
   std::string log_format = "text";  // text or json
   std::string log_file;  // empty: stderr; "-": stdout
+  std::string log_emoji = "auto";  // auto (a UTF-8 terminal), always or never; never in JSON
+  bool banner = true;  // the startup banner, in a text log
   std::string query_log_level = "info";
   std::string auth_log_level = "info";
   std::string session_log_level = "info";

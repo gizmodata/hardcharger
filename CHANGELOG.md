@@ -9,6 +9,20 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Server: a startup banner in a text log: the "Hardcharger" wordmark (plain ASCII), the
+  server's, Warp SQL's and DuckDB's versions, the web UI's address (or the Warp SQL endpoint's
+  without `--web-ui`) and the documentation's, within 80 columns. Never in a JSON log.
+  `--no-banner`, `--banner=false`, `HARDCHARGER_NO_BANNER=true`, `HARDCHARGER_BANNER=false` or
+  `banner: false` leaves it out; every boolean option now takes `--no-NAME`. The Warp SQL
+  version is the specification's (`info.version` of its OpenAPI document, read at configure
+  time). Tests: `test_startup_log.py` (the art byte for byte against
+  `tests/fixtures/banner-art.txt`, each way to turn it off, JSON), `startup_banner_test.cc`.
+- Server: `log_emoji` (`--log-emoji`, `HARDCHARGER_LOG_EMOJI`): `auto` (the default) marks
+  text log lines' levels with emoji only when the log goes to a terminal and the locale is
+  UTF-8 (on Windows, a UTF-8 console code page), `always`, or `never`; JSON lines never have
+  them. ✅ marks an outcome (ready, stopped), ⚠️ a warning, ❌ an error, 💥 the error that stops
+  the server; info and debug lines get none. Tests at a pty (auto with a UTF-8 locale, with
+  `C`, `never`, JSON) and in a file.
 - Client: `--no-tls` connects without TLS (plain HTTP), as `--tls=false` does; `--tls false`
   (with a space) works too, as do `true`/`false`, `1`/`0`, `yes`/`no` and `on`/`off` after
   `--tls` and `--tls=`. Only those words are taken after a space; anything else stays the
@@ -21,6 +35,13 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Server: the startup log printed `url=http://0.0.0.0:31337/ui/`, which a browser can't
+  open. On a wildcard bind (`0.0.0.0`, `::`) the `Hardcharger is ready` and `the web UI is
+  on` lines (and the banner) now give `http://localhost:<port>` as `url` and
+  `http://<host name>:<port>` as `also`; with TLS, the certificate's first DNS name that
+  isn't a wildcard (else the host name), and localhost too when the certificate names it.
+  `listen=` keeps the bind address. Unit tests for each case; `test_startup_log.py` for the
+  log text.
 - Client: a connection that fails says why. `--tls=false --port 9 -c "SELECT 1"` said only
   "not connected to a server" (a port or TLS on the command line didn't count as asking for a
   connection, so none was tried); it now connects and says `Could not connect to
