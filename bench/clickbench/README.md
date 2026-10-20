@@ -6,7 +6,8 @@
 - [`PR.md`](PR.md) is the pull request draft and the GA-day steps.
 - [`dry-run/`](dry-run/) is our tooling for running the entry on an AWS VM the way ClickBench's
   `run-benchmark.sh` + `cloud-init.sh.in` do, without sending anything to ClickBench's results sink,
-  and the dry-run results. **The dry-run results are from 2.0.0-rc.1 and are not for submission.**
+  and the dry-run results (`dry-run/results/<YYYYMMDD>/`: result JSON, benchmark log, comparison).
+  **The dry-run results are from 2.0.0-rc.1 and are not for submission.**
 
 ```bash
 cd bench/clickbench/dry-run

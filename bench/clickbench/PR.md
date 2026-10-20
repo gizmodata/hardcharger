@@ -37,9 +37,35 @@ Add Hardcharger
 > **Reproduction**
 > - The committed `results/<date>/c6a.4xlarge.json` comes from `benchmark.sh` on a fresh
 >   c6a.4xlarge (Ubuntu 24.04, 500 GB gp2), set up as `cloud-init.sh.in` does, unattended.
->   Load <LOAD> s; the whole run takes about <MIN> minutes.
+>   Load 109 s; the whole run takes about 62 minutes.
 > - Linux amd64 and arm64 builds are released, so every machine in `machine:all` should work.
 >   Could a maintainer add `machine:all`?
+
+The load time and duration above are from the **dry run on 2.0.0-rc.1 (2026-10-20)**; the GA run
+(step 2 below) re-measures them on the released 2.0.0 and the committed result file comes from
+that run, never from the dry run.
+
+## Dry run: 2.0.0-rc.1 on c6a.4xlarge, 2026-10-20 (not for submission)
+
+`dry-run/results/20261020/` holds the result JSON (`make-result.py` output, validated with
+ClickBench's `validate-results.py` against upstream `57db2a04`: no errors, no warnings), the
+benchmark log and the comparison. Same machine, OS, disk and ClickBench scripts as the public
+`gizmosql` results; on-demand c6a.4xlarge, Ubuntu 24.04, 500 GB gp2, unattended.
+
+| entry | load s | size GB | cold sum s | hot sum s | QPS | error ratio |
+|---|---|---|---|---|---|---|
+| Hardcharger 2.0.0-rc.1 (dry run) | 109 | 20.46 | 115.09 | 20.08 | 0.350 | 0.000 |
+| GizmoSQL 2026-05-11 (published) | 123 | 20.46 | 116.29 | 21.03 | 0.117 | 0.901 |
+
+- Cold = first run of each query, hot = the faster of runs 2 and 3; sums over the 43 queries.
+- Per-query hot times are within 0.65x-1.27x of GizmoSQL's; only Q36 is marked (0.65x, faster).
+- Cold times of the sub-second queries are ~0.07 s higher than GizmoSQL's (Q1 0.071 vs 0.038,
+  Q7 0.151 vs 0.078): the per-query cost of a new client process, sign-in and session. Worth a
+  look before GA (the cold sum is 1.23x the best-of-file rating vs GizmoSQL's 1.01x); the hot
+  rating is 1.04x vs 1.08x.
+- The concurrency phase: 0.350 QPS with no errors, against GizmoSQL's 0.117 QPS at a 0.901 error
+  ratio.
+- Whole run 3707 s (61.8 min) from `benchmark.sh` start to end; the VM ran 16:46Z-17:55Z.
 
 ## Files
 
