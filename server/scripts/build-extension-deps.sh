@@ -52,12 +52,13 @@ if [ ! -f "$LIBPQ/.libpq-$POSTGRES_VERSION.stamp" ]; then
   fetch "https://ftp.postgresql.org/pub/source/v$POSTGRES_VERSION/postgresql-$POSTGRES_VERSION.tar.bz2" \
     "$POSTGRES_SHA256" "$src/postgres"
   rm -rf "$LIBPQ"
+  # (Expanded as ${a[@]+"${a[@]}"}: macOS's bash 3.2 calls an empty array unbound under set -u.)
   ssl_flags=()
   if [ -n "${OPENSSL_ROOT_DIR:-}" ]; then
     ssl_flags=(--with-includes="$OPENSSL_ROOT_DIR/include" --with-libraries="$OPENSSL_ROOT_DIR/lib")
   fi
   (cd "$src/postgres" \
-     && CFLAGS="${CFLAGS:-} -O2 -fPIC" ./configure --prefix="$LIBPQ" --with-ssl=openssl "${ssl_flags[@]}" \
+     && CFLAGS="${CFLAGS:-} -O2 -fPIC" ./configure --prefix="$LIBPQ" --with-ssl=openssl ${ssl_flags[@]+"${ssl_flags[@]}"} \
           --without-readline --without-icu --without-zlib --without-zstd --without-lz4 \
           --without-gssapi --without-ldap >/dev/null \
      && make -s -j"$JOBS" -C src/include >/dev/null \
