@@ -11,19 +11,11 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - The package's version now tracks the server's: 2.0.0 installs Hardcharger 2.0.0 (the Python
-  package was 0.1.0 while the server was pre-release).
+  package was 0.1.0 while the server was pre-release). Both the runtime `__version__` and
+  the default downloaded server are 2.0.0; the `[adbc]` extra requires the 2.0.0 driver.
+  PyPI metadata identifies the package as stable, and the download documentation uses
+  anonymous access with an optional token to raise the API rate limit.
 
-### Documentation
-
-- README, License: the package itself has no third-party code; the server it downloads carries
-  `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_NOTICES-web-ui.txt`, which the install keeps beside
-  `bin/` (a unit test checks they arrive), and prints them with `--licenses`.
-
-### Changed
-
-- The package runs `hardcharger-server` 0.3.0 by default (`SERVER_VERSION`; it was 0.2.0).
-  `HARDCHARGER_VERSION` still picks another release. The unit tests now follow
-  `SERVER_VERSION` instead of naming the pinned release, so the next bump changes one line.
 - The server version to download (`SERVER_VERSION`, `HARDCHARGER_VERSION`, `ensure_server(version=...)`)
   may be a release candidate in the server's form (`2.0.0-rc.1`, tag `v2.0.0-rc.1`) or in
   PEP 440's (`2.0.0rc1`, how this package spells its own candidates); both fetch `v2.0.0-rc.1`.
@@ -31,6 +23,12 @@ All notable changes to this project are documented here. The format follows
   server's (what `releases/latest` and the installer resolve), and a PEP 440 pre-release
   (`python-v2.0.0rc1`) is marked a pre-release.
 - The README's banner is the Hardcharger™ bull logo (the horizontal mascot lockup).
+
+### Documentation
+
+- README, License: the package itself has no third-party code; the server it downloads carries
+  `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_NOTICES-web-ui.txt`, which the install keeps beside
+  `bin/` (a unit test checks they arrive), and prints them with `--licenses`.
 
 ### Fixed
 

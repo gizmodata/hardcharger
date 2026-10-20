@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 authors = [{ name = "GizmoData LLC", email = "info@gizmodata.com" }]
 keywords = ["hardcharger", "duckdb", "sql", "server", "warp-sql", "arrow", "test-fixture"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: MacOS",
@@ -27,7 +27,7 @@ dependencies = []
 
 [project.optional-dependencies]
 # The client, so Server.connect() returns a connection.
-adbc = ["adbc-driver-hardcharger>=0.1.0"]
+adbc = ["adbc-driver-hardcharger>=2.0.0"]
 
 [project.scripts]
 hardcharger-server = "hardcharger.__main__:server_main"

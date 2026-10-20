@@ -72,10 +72,11 @@ The release comes from [gizmodata/hardcharger](https://github.com/gizmodata/hard
 through the GitHub API. Its SHA-256 must match the digest GitHub recorded for the asset,
 and the unpacked server must report the expected version, or nothing is installed.
 
-While the releases are internal, the download needs a GitHub token that can read the
-repository: `HARDCHARGER_INSTALL_TOKEN`, else `GH_TOKEN`, else the token of a signed-in
-[`gh`](https://cli.github.com) (`gh auth token`). The token is sent only to the GitHub API,
-never to the storage host the download is redirected to, and is never printed.
+Public releases download anonymously. An optional GitHub token raises the API rate limit:
+`HARDCHARGER_INSTALL_TOKEN`, else `GH_TOKEN`, else the token of a signed-in
+[`gh`](https://cli.github.com) (`gh auth token`). Set `HARDCHARGER_INSTALL_TOKEN=none` to
+force an anonymous download. The token is sent only to the GitHub API, never to the
+storage host the download is redirected to, and is never printed.
 
 | Variable | Meaning |
 |---|---|
