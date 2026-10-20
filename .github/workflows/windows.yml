@@ -96,7 +96,8 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > "$key"
           chmod 600 "$key"
           GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-            git submodule update --init --depth 1
+            git -c url.git@github.com:gizmodata/warp-sql.git.insteadOf=https://github.com/gizmodata/warp-sql.git \
+              submodule update --init --depth 1
           rm -f "$key"
 
       # Passes the architecture to vcvarsall (arm64 on the arm64 runner selects the native
