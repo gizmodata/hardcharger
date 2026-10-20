@@ -268,8 +268,9 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
       echoes.current.splice(0, echo + 1);
       return;
     }
-    echoes.current = [];
     if (ed.getValue() !== value) ed.setValue(value);
+    // (setValue reported the new text too; it is this value, not an echo to wait for.)
+    echoes.current = [];
   }, [value]);
 
   return <div ref={host} className="editor-host" data-testid="sql-editor" />;
