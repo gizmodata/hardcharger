@@ -95,7 +95,7 @@ final class EmbeddedServer: Sendable {
         defer { for name in launch.environment.keys { unsetenv(name) } }
 
         let arguments = launch.arguments.map { strdup($0) }
-        defer { arguments.forEach { free($0) } }
+        defer { for pointer in arguments { free(pointer) } }
         var argv = arguments.map { UnsafePointer<CChar>($0) }
         var error = [CChar](repeating: 0, count: 1024)
         var server: OpaquePointer?

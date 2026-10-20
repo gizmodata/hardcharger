@@ -123,7 +123,9 @@ final class ConsoleEngine: Sendable {
         let user = cString(options.username)
         let password = cString(options.password)
         let token = cString(options.accessToken)
-        defer { [host, roots, user, password, token].forEach { free($0) } }
+        // A for loop, not forEach { free($0) }: Xcode 26.6's Swift rejects the closure
+        // (typed pointer vs. raw pointer); the direct call converts implicitly.
+        defer { for pointer in [host, roots, user, password, token] { free(pointer) } }
         var raw = hardcharger_console_options()
         raw.host = UnsafePointer(host)
         raw.port = Int32(options.port)
