@@ -6,6 +6,7 @@ here "Hardcharger <version>" rather than 1.x's "GizmoSQL Server CLI".
 """
 
 import pathlib
+import re
 import subprocess
 
 import duckdb_version_probe
@@ -32,7 +33,8 @@ def test_version_flag_prints_server_version():
     assert out.returncode == 0, out.stderr
     assert out.stdout.startswith("Hardcharger "), out.stdout
     version = out.stdout.split()[1]
-    assert version.count(".") == 2 and version.split(".")[0].isdigit(), out.stdout
+    # X.Y.Z, or a release candidate X.Y.Z-rc.N (the only forms CMake accepts).
+    assert re.fullmatch(r"\d+\.\d+\.\d+(-rc\.[1-9]\d*)?", version), out.stdout
 
 
 def test_print_options_json_lists_every_option_of_help():
