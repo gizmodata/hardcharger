@@ -87,6 +87,20 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Hardcharger
 
+  # Against a server elsewhere: ios/scripts/test-remote.sh (not in the CI gate).
+  HardchargerRemoteTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: HardchargerRemoteTests
+    dependencies:
+      - target: Hardcharger
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gizmodata.hardcharger.remotetests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Hardcharger
+
 schemes:
   Hardcharger:
     build:
@@ -104,3 +118,12 @@ schemes:
         - name: HardchargerUITests
     archive:
       config: Release
+  HardchargerRemote:
+    build:
+      targets:
+        Hardcharger: all
+        HardchargerRemoteTests: [test]
+    test:
+      config: Debug
+      targets:
+        - name: HardchargerRemoteTests
