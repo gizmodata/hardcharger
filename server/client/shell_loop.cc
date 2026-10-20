@@ -130,12 +130,7 @@ void PrintFooter(const QueryResult& query_result, const RenderResult& render_res
 bool ExecuteStatement(WarpConnection& conn, ClientConfig& config,
                       const std::string& sql,
                       std::shared_ptr<arrow::Table>* last_result = nullptr) {
-  if (!conn.IsConnected()) {
-    std::cerr << ErrorStyle() << "Error: not connected to a server. Use '.connect HOST PORT "
-                 "USERNAME' to connect."
-              << ErrorStyleReset() << std::endl;
-    return false;
-  }
+  if (!RequireConnection(conn)) return false;
 
   // Handle `_` references — upload last result and rewrite SQL
   std::string effective_sql = sql;
@@ -403,9 +398,7 @@ int RunShellLoop(WarpConnection& conn, CommandProcessor& cmd_proc,
       std::cout << "Connected to " << config.host << ":" << config.port
                 << std::endl;
     } else {
-      std::cout << "Not connected. Use '.connect HOST PORT USERNAME' to "
-                   "connect."
-                << std::endl;
+      std::cout << "Not connected. " << kNotConnectedHint << std::endl;
     }
     std::cout << "Type '.help' for help, '.quit' to exit." << std::endl;
     std::cout << std::endl;

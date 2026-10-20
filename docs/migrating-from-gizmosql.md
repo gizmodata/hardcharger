@@ -125,7 +125,7 @@ files and URI scheme change. It reads no `GIZMOSQL_*` variable.
 | `--port`, `-p` | `--port`, `-p` (default 31337) | `GIZMOSQL_PORT` → `HARDCHARGER_PORT` |
 | `--username`, `-u` | `--username`, `-u` | `GIZMOSQL_USER` → `HARDCHARGER_USER`; the fallback `GIZMOSQL_USERNAME` (the server's) → `HARDCHARGER_ADMIN_USERNAME` |
 | `--password`, `-W` (forces the prompt) | `--password`, `-W` | `GIZMOSQL_PASSWORD` → `HARDCHARGER_PASSWORD` (the user's own password; never falls back to the server's `HARDCHARGER_ADMIN_PASSWORD`) |
-| `--tls` (off by default: 1.x's client was plaintext unless `--tls`) | `--tls[=true\|false]`, **on by default**: `--tls=false` (or `HARDCHARGER_TLS=false`) for plain HTTP. Against a plain-HTTP server without it, the client fails with "The server at HOST:PORT speaks plain HTTP, not TLS. Add --tls=false ..." and sends nothing in plaintext | `GIZMOSQL_TLS` → `HARDCHARGER_TLS` (`true` or `false`) |
+| `--tls` (off by default: 1.x's client was plaintext unless `--tls`) | `--tls[=true\|false]`, **on by default**: `--no-tls` (or `--tls=false`, `--tls false`, `HARDCHARGER_TLS=false`) for plain HTTP. Against a plain-HTTP server without it, the client fails with "The server at HOST:PORT speaks plain HTTP, not TLS. Add --no-tls ..." and sends nothing in plaintext | `GIZMOSQL_TLS` → `HARDCHARGER_TLS` (`true` or `false`) |
 | `--tls-roots` | `--tls-roots` | `GIZMOSQL_TLS_ROOTS` → `HARDCHARGER_TLS_ROOTS` |
 | `--tls-skip-verify` | `--tls-skip-verify` | |
 | `--mtls-cert`, `--mtls-key` | `--mtls-cert`, `--mtls-key` (also with `--tls-skip-verify`, which 1.x refused: Arrow Flight dropped the certificate then) | |
@@ -148,11 +148,12 @@ current `catalog.schema`, as in 1.x.
 The dot commands and output modes are 1.x's. What behaves differently, and why:
 
 - **TLS is the default.** 1.x's client connected in plaintext unless `--tls`; Hardcharger's
-  uses TLS unless `--tls=false`, `HARDCHARGER_TLS=false` or a URI's `?tls=false`, as the
-  drivers do. A script that ran `gizmosql_client --host localhost ...` against a server without
-  TLS needs `--tls=false`; without it the client stops with "The server at localhost:31337
-  speaks plain HTTP, not TLS. Add --tls=false (or ?tls=false in a hardcharger:// URI) to connect
-  without encryption." It never falls back to plaintext by itself.
+  uses TLS unless `--no-tls` (or `--tls=false`, `--tls false`), `HARDCHARGER_TLS=false` or a
+  URI's `?tls=false`, as the drivers do. A script that ran `gizmosql_client --host localhost ...`
+  against a server without TLS needs `--no-tls`; without it the client stops with "The server
+  at localhost:31337 speaks plain HTTP, not TLS. Add --no-tls (or --tls=false; in a
+  hardcharger:// URI ?tls=false; after .connect HOST PORT USERNAME, --no-tls) to connect without
+  encryption." It never falls back to plaintext by itself.
 - **Statements with rows show them.** Warp SQL answers rows or a statement document, so
   the server decides, not the statement's first word: `INSERT … RETURNING` shows its rows
   (1.x printed `OK`).

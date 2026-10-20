@@ -391,17 +391,18 @@ echo ""
 echo "--- Test Group 10: Disconnected Mode & .connect ---"
 # ============================================================================
 
-# SQL without connection should show "not connected" error
+# SQL in a script without connection settings connects then, to the default
+# (localhost:31337), and its error says why that failed (refused there, on a CI runner).
 set +e
 OUTPUT=$(echo "SELECT 1;" | HARDCHARGER_PASSWORD="" HARDCHARGER_HOST="" HARDCHARGER_USER="" HARDCHARGER_PORT="" "$CLIENT_BIN" -q 2>&1)
 set -e
-run_test "SQL without connection - error" "not connected" "$OUTPUT"
+run_test "SQL without connection - error" "localhost:31337" "$OUTPUT"
 
-# .tables without connection should show "not connected" error
+# .tables likewise
 set +e
 OUTPUT=$(echo ".tables" | HARDCHARGER_PASSWORD="" HARDCHARGER_HOST="" HARDCHARGER_USER="" HARDCHARGER_PORT="" "$CLIENT_BIN" -q 2>&1)
 set -e
-run_test ".tables without connection - error" "not connected" "$OUTPUT"
+run_test ".tables without connection - error" "localhost:31337" "$OUTPUT"
 
 # .connect then query via pipe
 set +e

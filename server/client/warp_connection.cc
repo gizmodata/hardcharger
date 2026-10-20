@@ -1,6 +1,7 @@
 #include "warp_connection.hpp"
 
 #include "plain_http_probe.hpp"
+#include "platform.hpp"
 
 #include <iostream>
 #include <utility>
@@ -112,8 +113,24 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
       if (what.find("could not resolve host") != std::string::npos) {
         return arrow::Status::IOError("Could not resolve host '" + config.host + "'");
       }
-      return arrow::Status::IOError("Could not connect to " + origin + " — is the server running?" +
-                                    (what.find("timed out") != std::string::npos ? " (timed out)" : ""));
+      // The reason first (refused, timed out, reset), then what to check.
+      std::string reason = what;
+      if (what.find("refused") != std::string::npos) {
+        reason = "connection refused";
+      } else if (what.find("timed out") != std::string::npos) {
+        reason = "timed out";
+      } else if (what.find("reset") != std::string::npos || what.find("end of stream") != std::string::npos ||
+                 what.find("closed") != std::string::npos) {
+        reason = "the server closed the connection";
+      }
+      std::string message = "Could not connect to " + origin + ": " + reason;
+      if (reason == "connection refused" || reason == "timed out") {
+        message += ". Is the server running" + std::string(config.port == 31337 ? "" : " on that port") + "?";
+      } else if (!config.use_tls) {
+        // Plain HTTP to a TLS server: it closes the connection without an HTTP answer.
+        message += ". If the server uses TLS, drop --no-tls (or --tls=false, ?tls=false).";
+      }
+      return arrow::Status::IOError(message);
     }
     // A TLS handshake that met a plain-HTTP server: say so, and how to connect without TLS. Never
     // fall back to plaintext by itself.
@@ -122,8 +139,9 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
       const bool v6 = config.host.find(':') != std::string::npos;
       return arrow::Status::IOError("The server at " + (v6 ? "[" + config.host + "]" : config.host) + ":" +
                                     std::to_string(config.port) +
-                                    " speaks plain HTTP, not TLS. Add --tls=false (or ?tls=false in a "
-                                    "hardcharger:// URI) to connect without encryption.");
+                                    " speaks plain HTTP, not TLS. Add --no-tls (or --tls=false; in a "
+                                    "hardcharger:// URI ?tls=false; after .connect HOST PORT USERNAME, --no-tls) "
+                                    "to connect without encryption.");
     }
     // What the server said: its problem code, and its detail when it sent one. Nothing
     // else (the request, the credentials) goes into the message.
@@ -169,6 +187,36 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
   client_ = std::move(client);
   session_ = std::move(session);
   return arrow::Status::OK();
+}
+
+std::optional<arrow::Status> WarpConnection::ConnectDeferred() {
+  if (!deferred_) return std::nullopt;
+  const ClientConfig config = std::move(*deferred_);
+  deferred_.reset();  // tried once
+  arrow::Status status = Connect(config);
+  if (!status.ok()) return status;
+  // The tags, as main() sets them after a connection at startup.
+  for (const auto& [name, value] : {std::pair{"session_tag", config.session_tag},
+                                    std::pair{"query_tag", config.query_tag}}) {
+    if (value.empty()) continue;
+    auto result = ExecuteUpdate(std::string("SET hardcharger.") + name + " = " + QuoteSqlLiteral(value));
+    if (!result.ok()) {
+      std::cerr << "Warning: failed to set " << name << ": " << result.status().message() << std::endl;
+    }
+  }
+  return status;
+}
+
+bool RequireConnection(WarpConnection& conn) {
+  if (conn.IsConnected()) return true;
+  if (auto status = conn.ConnectDeferred()) {
+    if (status->ok()) return true;
+    std::cerr << ErrorStyle() << "Error: " << status->message() << ErrorStyleReset() << std::endl;
+    return false;
+  }
+  std::cerr << ErrorStyle() << "Error: not connected to a server. " << kNotConnectedHint << ErrorStyleReset()
+            << std::endl;
+  return false;
 }
 
 bool WarpConnection::Reopen(const wc::Error& error) {

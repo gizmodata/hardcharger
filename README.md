@@ -332,11 +332,13 @@ curl -s localhost:31337/warp/v1/openapi.json | jq '{openapi, title: .info.title,
 ## 💻 Command-line client
 
 `hardcharger`, the command-line client, ships beside `hardcharger-server` in every tarball
-and in the image. Run it with no statement for an interactive shell (it asks for the
-password, or reads `HARDCHARGER_PASSWORD`):
+and in the image. It uses TLS by default. **Connect to a server without TLS:
+`hardcharger --no-tls`** (the same as `--tls=false` or `--tls false`). Run it with no
+statement for an interactive shell (it asks for the password, or reads
+`HARDCHARGER_PASSWORD`):
 
 ```console
-$ hardcharger --host localhost --tls=false --username hardcharger
+$ hardcharger --host localhost --no-tls --username hardcharger
 Password:
 Hardcharger Client 0.3.0
 Connected to localhost:31337
@@ -367,7 +369,7 @@ One statement with `--command` (`-c`), in any output mode (`--csv`, `--json`,
 `--markdown`, `--table`, or `.mode` for the rest):
 
 ```console
-$ HARDCHARGER_PASSWORD='change-me' hardcharger --host localhost --tls=false --username hardcharger --csv \
+$ HARDCHARGER_PASSWORD='change-me' hardcharger --host localhost --no-tls --username hardcharger --csv \
     --command "SELECT city, miles FROM trips ORDER BY id"
 city,miles
 Boston,12.5
@@ -378,7 +380,7 @@ A script from a heredoc, a pipe or `--file`; the exit status is 1 when a stateme
 
 ```console
 $ export HARDCHARGER_PASSWORD='change-me'
-$ hardcharger --host localhost --tls=false --username hardcharger --quiet <<'SQL'
+$ hardcharger --host localhost --no-tls --username hardcharger --quiet <<'SQL'
 INSERT INTO trips VALUES (3, 'Austin', 8.5);
 SELECT count(*) AS trips, sum(miles) AS miles FROM trips;
 SQL
@@ -393,10 +395,14 @@ OK, 1 row affected
 └────────────────────────┘
 ```
 
-The client uses TLS unless told otherwise, as the drivers do: `--tls=false` (or
-`HARDCHARGER_TLS=false`) is plain HTTP, for a local server like this one started without
-`--tls-cert`. Against such a server without it, the client says so and connects nothing in
-plaintext. `--tls-roots` names a private CA, `--mtls-cert` and `--mtls-key` a client
+The client uses TLS unless told otherwise, as the drivers do: `--no-tls` (or `--tls=false`,
+`--tls false`, `--tls off`, or `HARDCHARGER_TLS=false`) is plain HTTP, for a local server like
+this one started without `--tls-cert`; in the shell, `.connect HOST PORT USERNAME --no-tls`.
+Against such a server without it, the client says so and connects nothing in plaintext. When
+nothing answers, the error says why (`Could not connect to http://localhost:9: connection
+refused. Is the server running on that port?`), and a script run without any connection
+options connects to the default (`https://localhost:31337`) at its first statement, so its
+error is the connection's too. `--tls-roots` names a private CA, `--mtls-cert` and `--mtls-key` a client
 certificate, and `--auth-type external` signs in through the server's browser sign-in. A URI
 takes the place of `--host`, `--port` and `--tls`, with the Python driver's rules:
 `hardcharger://db.example.com` is HTTPS to port 31337, and

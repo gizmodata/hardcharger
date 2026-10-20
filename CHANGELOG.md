@@ -7,8 +7,28 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Client: `--no-tls` connects without TLS (plain HTTP), as `--tls=false` does; `--tls false`
+  (with a space) works too, as do `true`/`false`, `1`/`0`, `yes`/`no` and `on`/`off` after
+  `--tls` and `--tls=`. Only those words are taken after a space; anything else stays the
+  positional URI, and the error then names it (`--uri cannot be combined with --tls (the
+  argument 'maybe' is read as the URI)`). `--help` starts with examples, the TLS-off one among
+  them. In the shell, `.connect HOST PORT USERNAME [PASSWORD]` takes `--no-tls`, `--tls`,
+  `--tls=BOOL` or `--tls BOOL` (a URI says it itself and refuses them), and `.help` and the
+  "not connected" hint say so. Tests: `test_client_cli.py` (each spelling against a plain
+  server, and each spelling of on as its twin).
+
 ### Fixed
 
+- Client: a connection that fails says why. `--tls=false --port 9 -c "SELECT 1"` said only
+  "not connected to a server" (a port or TLS on the command line didn't count as asking for a
+  connection, so none was tried); it now connects and says `Could not connect to
+  http://localhost:9: connection refused. Is the server running on that port?`. A script run
+  without any connection options connects to the default at its first statement that needs
+  the server (a script that only runs `.connect` or `.help` still needs none). Plain HTTP to a
+  TLS server says to drop `--no-tls`; TLS to a plain-HTTP server names `--no-tls` (and
+  `--tls=false`, `?tls=false`, `.connect … --no-tls`).
 - Web UI: the editor's suggestion list showed empty rows (only the kind icons, no names) in
   every browser. The app's stylesheet had a rule for a class named `main` (the page's main
   area, `flex-direction: column`), and Monaco's suggestion rows have an element of that class

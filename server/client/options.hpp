@@ -27,8 +27,9 @@ class CommandLine {
     entries_.push_back({Kind::kFlag, std::move(name), short_name, "", std::move(help), {nullptr, nullptr, target}});
   }
 
-  // A boolean: --name is true, --name=VALUE takes true/false/1/0 (any case). A value after a
-  // space is not taken (it would read as the positional argument).
+  // A boolean: --name is true, --no-name false, and --name=VALUE or --name VALUE takes
+  // true/false, 1/0, yes/no or on/off (any case). After a space only those words are taken
+  // as its value; anything else is the next argument (the positional URI, say).
   void Bool(std::string name, char short_name, std::string help, bool* target) {
     entries_.push_back({Kind::kBool, std::move(name), short_name, "[=BOOL]", std::move(help), {nullptr, nullptr, target}});
   }
@@ -54,6 +55,18 @@ class CommandLine {
         }
         entry = FindLong(name);
         shown = "--" + name;
+        // --no-NAME: a boolean's false.
+        if (entry == nullptr && name.starts_with("no-")) {
+          const Entry* negated = FindLong(name.substr(3));
+          if (negated != nullptr && negated->kind == Kind::kBool) {
+            if (inline_value) return "option '" + shown + "' takes no value";
+            if (!given_.insert(negated->name).second) {
+              return "option '--" + negated->name + "' cannot be specified more than once";
+            }
+            *negated->target.flag = false;
+            continue;
+          }
+        }
         if (entry == nullptr) return "unrecognised option '" + shown + "'";
       } else if (arg.size() >= 2 && arg[0] == '-' && arg[1] != '-') {
         entry = FindShort(arg[1]);
@@ -76,20 +89,19 @@ class CommandLine {
         continue;
       }
       if (entry->kind == Kind::kBool) {
+        if (!inline_value && i + 1 < argc && ParseBoolWord(argv[i + 1]).has_value()) {
+          inline_value = argv[++i];  // --name false
+        }
         if (!inline_value) {
           *entry->target.flag = true;
           continue;
         }
-        std::string lower = *inline_value;
-        for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (lower == "true" || lower == "1") {
-          *entry->target.flag = true;
-        } else if (lower == "false" || lower == "0") {
-          *entry->target.flag = false;
-        } else {
+        const auto value = ParseBoolWord(*inline_value);
+        if (!value) {
           return "the argument ('" + *inline_value + "') for option '--" + entry->name +
                  "' is invalid: want true or false";
         }
+        *entry->target.flag = *value;
         continue;
       }
       std::string value;
@@ -117,6 +129,14 @@ class CommandLine {
   }
 
   bool Given(const std::string& name) const { return given_.contains(name); }
+
+  // true/false, 1/0, yes/no, on/off (any case): a boolean option's value; else nullopt.
+  static std::optional<bool> ParseBoolWord(std::string word) {
+    for (auto& c : word) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (word == "true" || word == "1" || word == "yes" || word == "on") return true;
+    if (word == "false" || word == "0" || word == "no" || word == "off") return false;
+    return std::nullopt;
+  }
 
   void PrintHelp(std::ostream& out) const {
     for (const auto& entry : entries_) {
