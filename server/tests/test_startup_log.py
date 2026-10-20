@@ -10,6 +10,7 @@ localhost and the host name (or the certificate's name) is the unit test's
 import json
 import pathlib
 import re
+import secrets
 import subprocess
 import time
 
@@ -156,6 +157,19 @@ def test_always_marks_levels_and_outcomes(launcher, tmp_path):
     failed = launcher.start(args=["--log-emoji", "always", "--database", str(missing)], expect_up=False)
     assert failed.process.wait(timeout=60) == 1
     assert re.search(rf"^\S+Z {FATAL} error   ", failed.log(), flags=re.M), failed.log()
+
+
+def test_a_fatal_error_is_redacted(launcher, tmp_path):
+    # The last-resort error line (main.cc) goes through the credential redaction too: here a
+    # database path that reads as a libpq key=value pair, quoted back by DuckDB's open error.
+    secret = "fatal-secret-" + secrets.token_hex(nbytes=6)
+    missing = tmp_path / "no-such-dir" / f"password={secret}" / "x.duckdb"
+    failed = launcher.start(args=["--database", str(missing)], expect_up=False)
+    assert failed.process.wait(timeout=60) == 1
+    log = failed.log()
+    assert "Cannot open file" in log, log  # the reason survives
+    assert "password=***" in log, log
+    assert secret not in log, log
 
 
 def test_an_unknown_log_emoji_is_refused():

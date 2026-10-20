@@ -30,6 +30,7 @@
 #include "logging.hpp"
 #include "oauth.hpp"
 #include "platform.hpp"
+#include "redact.hpp"
 #include "runtime.hpp"
 #include "startup_banner.hpp"
 #include "third_party_notices.hpp"
@@ -716,8 +717,13 @@ int main(int argc, char** argv) {
     backend->StopInstrumentation();
     hc::LogSuccess("stopped");
   } catch (const std::exception& e) {
-    hc::LogFatal(e.what());
-    hc::embedding::Failed(e.what());
+    // The last resort, for whatever escaped the code that should have handled it: such an
+    // error may quote a connection string (the store's, an ATTACH's) or a credential, so it
+    // gets the redaction the store's and the engine's errors get (and so does the app that
+    // embeds the server).
+    const std::string error = hc::RedactCredentials(e.what(), {config.rbac_store_uri});
+    hc::LogFatal(error);
+    hc::embedding::Failed(error);
     return 1;
   }
   return 0;
