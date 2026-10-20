@@ -103,7 +103,10 @@ void Write(LogLevel level, std::string_view message, const LogFields& fields, Ma
   } else {
     line = emoji ? std::format("{} {} {:<7} {}", Timestamp(now), EmojiFor(level, marker), LogLevelName(level), message)
                  : std::format("{} {:<7} {}", Timestamp(now), LogLevelName(level), message);
+    // A field without a value (an optional error or detail that didn't happen) says nothing
+    // in a text line: it is left out there. JSON lines keep every key.
     for (const auto& [key, value] : fields) {
+      if (value.empty()) continue;
       line += std::format(" {}={}", key, value);
     }
   }

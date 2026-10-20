@@ -35,6 +35,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Server: a text log line leaves out a field with no value (`health check passing` printed
+  an empty `error=`); JSON lines keep every key, and the passing health check's has no
+  `error` at all. A health check that fails from the start is now logged too (only changes
+  were). Tests: `test_startup_log.py`.
 - Server: the startup log printed `url=http://0.0.0.0:31337/ui/`, which a browser can't
   open. On a wildcard bind (`0.0.0.0`, `::`) the `Hardcharger is ready` and `the web UI is
   on` lines (and the banner) now give `http://localhost:<port>` as `url` and

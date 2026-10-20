@@ -11,6 +11,7 @@ import json
 import pathlib
 import re
 import subprocess
+import time
 
 import pexpect
 import pytest
@@ -214,3 +215,35 @@ def test_a_terminal_without_utf8_never_or_json_has_none(args, env):
     finally:
         child.kill(15)
         child.close()
+
+
+# ---- Fields without a value ----
+
+
+def test_a_text_line_leaves_out_fields_without_a_value(launcher):
+    server = launcher.start()
+    log = server.log()
+    passing = next(line for line in log.splitlines() if "health check passing" in line)
+    assert passing.endswith("health check passing"), passing  # no "error="
+    # No line of the text log has a field with nothing after its "=".
+    empty = [line for line in log.splitlines() if re.search(r" [a-z_]+=(?: |$)", line)]
+    assert empty == [], empty
+
+
+def test_a_failing_health_check_names_its_error(launcher):
+    # The twin: an error that happened is there, with its text.
+    server = launcher.start(args=["--health-check-query", "SELECT no_such_column"])
+    failing = None
+    for _ in range(100):
+        failing = next((line for line in server.log().splitlines() if "health check failing" in line), None)
+        if failing:
+            break
+        time.sleep(0.1)
+    assert failing and re.search(r" error=\S", failing), server.log()
+    assert "no_such_column" in failing, failing
+
+
+def test_a_json_line_of_a_passing_health_check_has_no_error(launcher):
+    server = launcher.start(args=["--log-format", "json"])
+    passing = next(r for r in server.log_records() if r["message"] == "health check passing")
+    assert "error" not in passing, passing
