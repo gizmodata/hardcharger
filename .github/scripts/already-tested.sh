@@ -39,11 +39,13 @@ REQUIRED=(
   "checksums"
   "image"
 )
-# Jobs a branch run skips by design: the release (tags only) and the sanitizers (tags, or a
-# manual run with `full`). And the compile-cache warm-up jobs, which run only when a push to
-# main skips the tests (a skipped matrix job is listed under its unexpanded name, a skipped
-# call of a reusable workflow under its job id): see may_skip().
-MAY_SKIP=("release" "address sanitizer (linux-amd64)" "thread sanitizer (linux-amd64)" "windows-warm")
+# Jobs a branch run skips by design: the release (tags only), the sanitizers (tags, or a
+# manual run with `full`) and the code signing and its checks (tags, or a manual run with
+# `sign`). And the compile-cache warm-up jobs, which run only when a push to main skips the
+# tests (a skipped matrix job is listed under its unexpanded name, a skipped call of a
+# reusable workflow under its job id): see may_skip().
+MAY_SKIP=("release" "address sanitizer (linux-amd64)" "thread sanitizer (linux-amd64)" "windows-warm"
+          "verify signatures (macos-arm64)" "verify signatures (windows)")
 ARTIFACTS=("hardcharger-linux-amd64" "hardcharger-linux-arm64")
 
 answer() {  # tested run reason
@@ -86,7 +88,7 @@ in_list() {  # needle list...
 
 may_skip() {  # job name
   case "$1" in
-    "warm compile cache ("* | "windows / warm compile cache ("*) return 0 ;;
+    "warm compile cache ("* | "windows / warm compile cache ("* | "windows / sign ("*) return 0 ;;
   esac
   in_list "$1" "${MAY_SKIP[@]}"
 }

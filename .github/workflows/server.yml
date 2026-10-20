@@ -13,6 +13,14 @@
 #     the image job publishes `:main` from that run's tested tarballs, and the
 #     compile-cache warm-up jobs build (never test) each platform whose compile cache main
 #     lacks (see `warm-linux-amd64`). Otherwise the same as a manual run.
+#
+# Code signing (docs/releasing.md): on a v* tag always, and on a manual run with `sign`
+# (from a release/* branch: the `production` environment, which holds the signing secrets,
+# admits only those and v* tags), the macOS server and client are signed with GizmoData's
+# Developer ID and notarized (in the build job, before the tarball is packed) and the Windows
+# executables and MSIs are Authenticode-signed (windows.yml); `verify signatures (...)` then
+# checks the artifacts the release takes. Never on pull requests or pushes. A tag whose
+# artifacts are not all signed publishes nothing: the image and the release need those checks.
 name: server
 
 # Not for changes that build, test and package nothing: the documentation (docs/, Markdown
@@ -66,6 +74,10 @@ on:
         default: false
       reuse_tested:
         description: Skip the tests when this commit already passed them, as a push to main does (to check that path; nothing is published)
+        type: boolean
+        default: false
+      sign:
+        description: Sign (and notarize) the macOS and Windows artifacts, as a tag does (release/* branches only; nothing is published)
         type: boolean
         default: false
 
@@ -140,18 +152,34 @@ jobs:
       tested: ${{ steps.tested.outputs.tested }}
       tested_run: ${{ steps.tested.outputs.run }}
       warm: ${{ steps.warm.outputs.warm }}
+      sign: ${{ steps.sign.outputs.sign }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      # Whether this run signs the macOS and Windows artifacts: every v* tag, and a manual run
+      # with `sign`; nothing else (never a pull request or a push).
+      - id: sign
+        env:
+          EVENT: ${{ github.event_name }}
+          SIGN: ${{ inputs.sign == true }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] || { [ "$EVENT" = workflow_dispatch ] && [ "$SIGN" = true ]; }; then
+            sign=true
+          else
+            sign=false
+          fi
+          echo "sign=$sign" | tee -a "$GITHUB_OUTPUT"
       - id: tested
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           REUSE: ${{ inputs.reuse_tested == true }}
+          SIGNING: ${{ steps.sign.outputs.sign }}
         run: |
+          # (A signing run builds everything: there is nothing signed to reuse.)
           if { [ "$EVENT" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; } ||
-             { [ "$EVENT" = workflow_dispatch ] && [ "$REUSE" = true ]; }; then
+             { [ "$EVENT" = workflow_dispatch ] && [ "$REUSE" = true ] && [ "$SIGNING" != true ]; }; then
             .github/scripts/already-tested.sh "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_RUN_ID" \
               > "$RUNNER_TEMP/tested" 2>> "$GITHUB_STEP_SUMMARY" || echo "tested=false" > "$RUNNER_TEMP/tested"
           else
@@ -348,6 +376,9 @@ jobs:
     needs: [changes, web-ui]
     if: needs.changes.outputs.tested != 'true'
     runs-on: ${{ matrix.runner }}
+    # The macOS leg of a signing run reads the Apple secrets from the `production`
+    # environment; every other leg and run uses none.
+    environment: ${{ matrix.name == 'macos-arm64' && needs.changes.outputs.sign == 'true' && 'production' || '' }}
     env: &build-env
       HARDCHARGER_MANYLINUX_IMAGE: ${{ matrix.manylinux }}
     steps:
@@ -599,6 +630,57 @@ jobs:
           HARDCHARGER_ADMIN_USERNAME: warp
           HARDCHARGER_PRINT_QUERIES: "false"
         run: bash "$GITHUB_WORKSPACE/.github/scripts/failure-repro.sh" "$GITHUB_WORKSPACE/server/build/hardcharger-server" "$GITHUB_WORKSPACE/server/build/warp-sql/warp-duckdb" .venv/bin/python
+
+      # Code signing (macOS, on a signing run): the client and the server, signed with
+      # GizmoData's Developer ID Application certificate and the hardened runtime, and
+      # notarized by Apple (toitlang/action-macos-sign-notarize, as GizmoSQL's releases), after
+      # the tests and before the tarball is packed, so the package checks, the smoke test, the
+      # artifact and SHA256SUMS all have the signed binaries. The server's entitlements
+      # (server/macos/entitlements.plist) only turn library validation off, for the DuckDB
+      # extensions a user INSTALLs. The client is signed first: the action leaves its
+      # entitlements argument in the job's environment, and a signing after the server's would
+      # give the client the server's entitlements.
+      - name: Keep an unsigned copy (the signature check's proof)
+        if: matrix.name == 'macos-arm64' && needs.changes.outputs.sign == 'true'
+        run: cp server/build/hardcharger "$RUNNER_TEMP/unsigned-proof"
+      - name: Sign and notarize the client (macOS)
+        if: matrix.name == 'macos-arm64' && needs.changes.outputs.sign == 'true'
+        uses: toitlang/action-macos-sign-notarize@v1.3.0
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          username: ${{ secrets.APPLE_ID_USERNAME }}
+          password: ${{ secrets.APPLE_ID_PASSWORD }}
+          apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
+          app-path: server/build/hardcharger
+      - name: Sign and notarize the server (macOS)
+        if: matrix.name == 'macos-arm64' && needs.changes.outputs.sign == 'true'
+        uses: toitlang/action-macos-sign-notarize@v1.3.0
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          username: ${{ secrets.APPLE_ID_USERNAME }}
+          password: ${{ secrets.APPLE_ID_PASSWORD }}
+          apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
+          app-path: server/build/hardcharger-server
+          entitlements-path: server/macos/entitlements.plist
+      # (.github/scripts/verify-macos-signature.sh: Developer ID of our team, hardened runtime,
+      # timestamp, notarization ticket, Gatekeeper, entitlements.) Proven to fail first, on the
+      # unsigned copy, for that reason. Then the signed binaries run.
+      - name: Check the signatures (macOS)
+        if: matrix.name == 'macos-arm64' && needs.changes.outputs.sign == 'true'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if .github/scripts/verify-macos-signature.sh "$RUNNER_TEMP/unsigned-proof" 2> "$RUNNER_TEMP/proof.err"; then
+            echo "the signature check passed an unsigned binary"; exit 1
+          fi
+          cat "$RUNNER_TEMP/proof.err"
+          grep -q "not a Developer ID Application signature" "$RUNNER_TEMP/proof.err"
+          .github/scripts/verify-macos-signature.sh \
+            --entitlements server/macos/entitlements.plist server/build/hardcharger-server -- server/build/hardcharger
+          server/build/hardcharger-server --version
+          server/build/hardcharger --version
 
       - name: Package
         run: |
@@ -1144,12 +1226,12 @@ jobs:
 
   # Built (and smoke-tested) on every run; pushed on a push to main (`:main`, `:sha-*`) and
   # on a v* tag. Skipped jobs don't hold it up (the UI's on an unrelated change, the
-  # sanitizers off tags), except on a tag, where every test job must have succeeded,
-  # Windows included, before anything is pushed. On a push to main of a commit that
+  # sanitizers and the signature checks off tags), except on a tag, where every test job
+  # and both signature checks must have succeeded, Windows included, before anything is pushed. On a push to main of a commit that
   # already passed (changes.outputs.tested), it takes that run's Linux tarballs: the
   # binaries that were tested, not a rebuild.
   image:
-    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, windows]
+    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, windows, verify-macos, verify-windows]
     if: >-
       ${{ !cancelled() && needs.changes.result == 'success'
           && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
@@ -1158,7 +1240,8 @@ jobs:
               || (needs.build.result == 'success' && needs.portable.result == 'success'
                   && needs.sanitize.result == 'success' && needs.tsan.result == 'success'
                   && needs.ui-checks.result == 'success' && needs.ui-e2e.result == 'success'
-                  && needs.windows.result == 'success')) }}
+                  && needs.windows.result == 'success'
+                  && needs.verify-macos.result == 'success' && needs.verify-windows.result == 'success')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1273,11 +1356,14 @@ jobs:
     secrets: inherit
     with:
       failure_repro: ${{ inputs.failure_repro == true }}
-    # actions: read for windows.yml's warm-up jobs (skipped here): a called workflow's jobs
-    # may ask only for what the caller grants, checked before any job is skipped.
+      sign: ${{ needs.changes.outputs.sign == 'true' }}
+    # actions: read for windows.yml's warm-up jobs (skipped here), id-token: write for its
+    # signing jobs' Azure sign-in (used only when signing): a called workflow's jobs may ask
+    # only for what the caller grants, checked before any job is skipped.
     permissions:
       contents: read
       actions: read
+      id-token: write
 
   # Windows' compile-cache warm-up (the warm-* jobs above, for windows-amd64 and windows-arm64).
   windows-warm:
@@ -1293,6 +1379,95 @@ jobs:
     permissions:
       contents: read
       actions: read
+      id-token: write  # asked for by windows.yml's signing jobs (skipped here)
+
+  # The signatures of exactly what the checksums and the release take (the hardcharger-*
+  # artifacts), checked once more on runners of their own, whenever this run signs. On a v*
+  # tag the image and the release need both, so no tag publishes an unsigned binary, even if
+  # a signing step were skipped by mistake. Each check is first shown to refuse a copy of a
+  # signed binary with one byte changed.
+  verify-macos:
+    name: verify signatures (macos-arm64)
+    needs: [changes, build]
+    if: needs.changes.outputs.sign == 'true'
+    runs-on: macos-15
+    environment: production  # APPLE_TEAM_ID, the team the signature must name
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            server/macos
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-macos-arm64
+          path: dist
+      - name: Check the signatures, then run the binaries
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          tar -C "$RUNNER_TEMP" -xzf dist/hardcharger-macos-arm64.tar.gz
+          bin="$RUNNER_TEMP/hardcharger-macos-arm64/bin"
+          tampered="$RUNNER_TEMP/tampered"
+          cp "$bin/hardcharger" "$tampered"
+          perl -e 'open(my $f, "+<", $ARGV[0]) or die; seek($f, 20000, 0); read($f, my $b, 1); seek($f, 20000, 0); print $f chr(ord($b) ^ 0xff); close($f) or die' "$tampered"
+          if cmp -s "$bin/hardcharger" "$tampered"; then echo "the copy was not modified"; exit 1; fi
+          if .github/scripts/verify-macos-signature.sh "$tampered" 2> "$RUNNER_TEMP/proof.err"; then
+            echo "the signature check passed a modified binary"; exit 1
+          fi
+          cat "$RUNNER_TEMP/proof.err"
+          grep -q "missing, broken or not strictly valid" "$RUNNER_TEMP/proof.err"
+          .github/scripts/verify-macos-signature.sh \
+            --entitlements server/macos/entitlements.plist "$bin/hardcharger-server" -- "$bin/hardcharger"
+          "$bin/hardcharger-server" --version
+          "$bin/hardcharger" --version
+
+  # Windows on Arm runs both platforms' executables (x64 emulated), so the signed arm64
+  # executables run here too (windows.yml's sign job, on x64, can run only the x64 ones).
+  verify-windows:
+    name: verify signatures (windows)
+    needs: [changes, windows]
+    if: needs.changes.outputs.sign == 'true'
+    runs-on: windows-11-arm
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: hardcharger-windows-*
+          path: dist
+          merge-multiple: true
+      - name: Check the signatures, then run the executables
+        run: |
+          $files = @()
+          foreach ($platform in 'windows-amd64', 'windows-arm64') {
+            Expand-Archive "dist/hardcharger-$platform.zip" -DestinationPath unpacked
+            $files += "unpacked/hardcharger-$platform/bin/hardcharger-server.exe", "unpacked/hardcharger-$platform/bin/hardcharger.exe"
+          }
+          $exes = $files
+          $files += "dist/Hardcharger-windows-amd64.msi", "dist/Hardcharger-windows-arm64.msi"
+          $tampered = Join-Path $PWD 'tampered.exe'
+          Copy-Item $exes[0] $tampered
+          $bytes = [IO.File]::ReadAllBytes($tampered)
+          $bytes[0x2000] = $bytes[0x2000] -bxor 0xff
+          [IO.File]::WriteAllBytes($tampered, $bytes)
+          pwsh -NoProfile -File .github/scripts/verify-windows-signature.ps1 $tampered *> proof.log
+          $refused = $LASTEXITCODE
+          Get-Content proof.log
+          if ($refused -eq 0) { throw "the signature check passed a modified executable" }
+          if (-not (Select-String -Quiet -SimpleMatch -Pattern 'signature status HashMismatch' -Path proof.log)) {
+            throw "the signature check refused the modified executable, but not as modified"
+          }
+          pwsh -NoProfile -File .github/scripts/verify-windows-signature.ps1 @files
+          if ($LASTEXITCODE -ne 0) { throw "the release's Windows files failed the signature check" }
+          foreach ($exe in $exes) {
+            & $exe --version
+            if ($LASTEXITCODE -ne 0) { throw "$exe did not run" }
+          }
 
   # SHA256SUMS for the release tarballs (and any zip), in `sha256sum -c` format: made and
   # checked on every run, so the release (and the one-line installer, which verifies
@@ -1321,13 +1496,28 @@ jobs:
           name: hardcharger-SHA256SUMS
           path: dist/SHA256SUMS
 
+  # On every v* tag, whatever happened before it, so that a tag whose gate didn't pass fails
+  # here, visibly, rather than skipping the release in a run that looks green: its first step
+  # fails unless every job it needs succeeded (none skipped) and the run signed.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums, verify-macos, verify-windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      - name: Every gate passed, the signature checks included
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+          SIGN: ${{ needs.changes.outputs.sign }}
+          MACOS: ${{ needs.verify-macos.result }}
+          WINDOWS: ${{ needs.verify-windows.result }}
+        run: |
+          echo "needed jobs: $RESULTS"
+          echo "signed: $SIGN; macOS signatures: $MACOS; Windows signatures: $WINDOWS"
+          [ "$(jq -r 'length' <<< "$RESULTS")" -eq 12 ] || { echo "expected the results of 12 jobs"; exit 1; }
+          [ "$(jq -r 'map(select(. != "success")) | length' <<< "$RESULTS")" -eq 0 ] || { echo "a needed job did not succeed"; exit 1; }
+          [ "$SIGN" = true ] && [ "$MACOS" = success ] && [ "$WINDOWS" = success ] || { echo "the release is not signed"; exit 1; }
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:

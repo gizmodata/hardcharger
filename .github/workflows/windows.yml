@@ -4,6 +4,10 @@
 # packages hardcharger-windows-{amd64,arm64}.zip and an MSI of each. server.yml calls it
 # (its `windows` job), on the same events as its other builds; its concurrency is
 # server.yml's (a called workflow's own would share the caller's group and cancel it).
+# With `sign` (server.yml: every v* tag, and a manual run with `sign`), the `sign` job signs
+# both executables of each zip with GizmoData's code-signing certificate (Azure Key Vault,
+# through the `production` environment's OIDC credential) before the zip and the MSI are
+# made from them, and the msi job signs each MSI; without it, everything stays unsigned.
 # With `warm` (server.yml's `windows-warm` job, on a push to main whose tests are skipped),
 # only the compile-cache warm-up jobs at the end run, for the platforms it lists.
 name: windows
@@ -25,6 +29,10 @@ on:
         description: With warm, the run that tested this commit (its web UI artifact is used)
         type: string
         default: ""
+      sign:
+        description: Sign the executables and the MSIs (production environment; server.yml decides)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -466,10 +474,13 @@ jobs:
           if (-not $up -or -not $token) { throw "the unpacked server did not serve" }
           if ("$answer".Trim() -ne "42") { throw "the unpacked client did not answer 42: $answer" }
           if (-not (Test-Path my.duckdb)) { throw "no database file" }
+      # The zip, tested above. With `sign` it goes to the sign job instead, under a name the
+      # checksums and the release (pattern hardcharger-*) never pick up; the sign job uploads
+      # the signed zip as hardcharger-<platform>.
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         with:
-          name: hardcharger-${{ matrix.name }}
+          name: ${{ inputs.sign && format('unsigned-{0}', matrix.name) || format('hardcharger-{0}', matrix.name) }}
           path: dist/hardcharger-${{ matrix.name }}.zip
           if-no-files-found: error
       - name: Crash dumps
@@ -487,10 +498,116 @@ jobs:
         if: failure()
         run: tail -100 "$(cygpath -u "$RUNNER_TEMP")/pg.log" || true
 
-  # An MSI of each zip (WiX 6). Unsigned: the code-signing certificate is a follow-up.
+  # Code signing, with `sign` only: both executables of each zip are signed with GizmoData's
+  # code-signing certificate, whose key stays in Azure Key Vault (AzureSignTool signs through
+  # the vault), checked, and zipped again under the final name, which the MSI, the checksums
+  # and the release then take. As GizmoSQL's sign-windows job. The `production` environment
+  # holds the Azure secrets and admits only v* tags and release/* branches; the Azure app
+  # trusts this job's OIDC token by the repository's immutable subject (docs/releasing.md).
+  # The tests ran on these same executables, unsigned, in the build job: signing appends a
+  # signature and changes nothing else, and the zip is checked to differ only there.
+  sign:
+    name: sign (${{ matrix.name }})
+    needs: build
+    if: inputs.sign
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-amd64
+          - name: windows-arm64
+    runs-on: windows-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write  # the Azure sign-in (OIDC)
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/download-artifact@v8
+        with:
+          name: unsigned-${{ matrix.name }}
+          path: unsigned
+      - name: Unpack
+        run: |
+          7z x -o"dist" "unsigned/hardcharger-${{ matrix.name }}.zip" > /dev/null
+          7z x -o"orig" "unsigned/hardcharger-${{ matrix.name }}.zip" > /dev/null
+          bin="dist/hardcharger-${{ matrix.name }}/bin"
+          test "$(export LC_ALL=C; cd "$bin" && printf '%s ' *)" = "hardcharger-server.exe hardcharger.exe "
+          # An unsigned copy, which the signature check must refuse (below).
+          cp "$bin/hardcharger.exe" "$(cygpath -u "$RUNNER_TEMP")/unsigned-proof.exe"
+      - uses: azure/login@v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Install AzureSignTool
+        run: dotnet tool install --global AzureSignTool --version 7.0.1
+      - name: Sign the executables
+        shell: pwsh
+        env:
+          KEY_VAULT_URI: ${{ secrets.AZURE_KEY_VAULT_URI }}
+          CERT_NAME: ${{ secrets.AZURE_CERT_NAME }}
+        run: |
+          $bin = "dist/hardcharger-${{ matrix.name }}/bin"
+          pwsh -NoProfile -File .github/scripts/azure-sign.ps1 "$bin/hardcharger-server.exe" "$bin/hardcharger.exe"
+          if ($LASTEXITCODE -ne 0) { throw "signing failed" }
+      # The check is proven to fail first: the same executable, unsigned, must be refused as
+      # not signed.
+      - name: Check the signatures
+        shell: pwsh
+        run: |
+          $bin = "dist/hardcharger-${{ matrix.name }}/bin"
+          pwsh -NoProfile -File .github/scripts/verify-windows-signature.ps1 "$env:RUNNER_TEMP/unsigned-proof.exe" *> proof.log
+          $refused = $LASTEXITCODE
+          Get-Content proof.log
+          if ($refused -eq 0) { throw "the signature check passed an unsigned executable" }
+          if (-not (Select-String -Quiet -SimpleMatch -Pattern 'signature status NotSigned' -Path proof.log)) {
+            throw "the signature check refused the unsigned executable, but not as unsigned"
+          }
+          pwsh -NoProfile -File .github/scripts/verify-windows-signature.ps1 "$bin/hardcharger-server.exe" "$bin/hardcharger.exe"
+          if ($LASTEXITCODE -ne 0) { throw "the signed executables failed the signature check" }
+      # Only x64 runs on this runner; server.yml's `verify signatures (windows)` runs both
+      # platforms' signed executables on Windows on Arm.
+      - name: Run the signed executables
+        if: matrix.name == 'windows-amd64'
+        run: |
+          bin="dist/hardcharger-${{ matrix.name }}/bin"
+          "$bin/hardcharger-server.exe" --version
+          "$bin/hardcharger.exe" --version
+      - name: Zip the signed executables
+        run: |
+          zip="hardcharger-${{ matrix.name }}.zip"
+          (cd dist && 7z a -tzip "$zip" "hardcharger-${{ matrix.name }}" > /dev/null)
+          # The same files as the tested zip; only the two executables differ.
+          7z x -o"check" "dist/$zip" > /dev/null
+          diff <(cd orig && find . -type f | sort) <(cd check && find . -type f | sort)
+          diff -r --exclude='*.exe' orig check
+          for exe in hardcharger-server.exe hardcharger.exe; do
+            if cmp -s "orig/hardcharger-${{ matrix.name }}/bin/$exe" "check/hardcharger-${{ matrix.name }}/bin/$exe"; then
+              echo "$exe in the zip is the unsigned one"; exit 1
+            fi
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hardcharger-${{ matrix.name }}
+          path: dist/hardcharger-${{ matrix.name }}.zip
+          if-no-files-found: error
+
+  # An MSI of each zip (WiX 6), from the signed zip when signing (and then signed itself,
+  # before the install test runs it).
   msi:
     name: msi (${{ matrix.name }})
-    needs: build
+    needs: [build, sign]
+    if: >-
+      ${{ !cancelled() && needs.build.result == 'success'
+          && ((inputs.sign && needs.sign.result == 'success') || (!inputs.sign && needs.sign.result == 'skipped')) }}
+    # The environment (its Azure secrets, its tag/branch policy) only when signing.
+    environment: ${{ inputs.sign && 'production' || '' }}
+    permissions:
+      contents: read
+      id-token: write  # the Azure sign-in (OIDC), when signing
     strategy:
       fail-fast: false
       matrix:
@@ -526,6 +643,32 @@ jobs:
             -bindpath "$(cygpath -w "$PWD/installer")" \
             -ext WixToolset.UI.wixext -o "Hardcharger-${{ matrix.name }}.msi"
           ls -la "Hardcharger-${{ matrix.name }}.msi"
+      - uses: azure/login@v3.1.0
+        if: inputs.sign
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Install AzureSignTool
+        if: inputs.sign
+        run: dotnet tool install --global AzureSignTool --version 7.0.1
+      - name: Sign the MSI
+        if: inputs.sign
+        shell: pwsh
+        env:
+          KEY_VAULT_URI: ${{ secrets.AZURE_KEY_VAULT_URI }}
+          CERT_NAME: ${{ secrets.AZURE_CERT_NAME }}
+        run: |
+          pwsh -NoProfile -File .github/scripts/azure-sign.ps1 "Hardcharger-${{ matrix.name }}.msi"
+          if ($LASTEXITCODE -ne 0) { throw "signing failed" }
+      # The MSI and the executables it packaged (the signed zip's).
+      - name: Check the signatures
+        if: inputs.sign
+        shell: pwsh
+        run: |
+          $bin = "stage/hardcharger-${{ matrix.name }}/bin"
+          pwsh -NoProfile -File .github/scripts/verify-windows-signature.ps1 "Hardcharger-${{ matrix.name }}.msi" "$bin/hardcharger-server.exe" "$bin/hardcharger.exe"
+          if ($LASTEXITCODE -ne 0) { throw "the MSI or its executables failed the signature check" }
       # Installs it (only the x64 one runs on this runner), checks what landed and that
       # the installed server starts, then removes it.
       - name: Install, run and uninstall
@@ -538,6 +681,12 @@ jobs:
           $exe = "$env:ProgramFiles\Hardcharger\bin\hardcharger-server.exe"
           & $exe --version
           if ($LASTEXITCODE -ne 0) { throw "the installed server did not run" }
+          if ('${{ inputs.sign }}' -eq 'true') {
+            foreach ($installed in $exe, "$env:ProgramFiles\Hardcharger\bin\hardcharger.exe") {
+              $status = (Get-AuthenticodeSignature -LiteralPath $installed).Status
+              if ($status -ne 'Valid') { throw "the installed $installed is not validly signed: $status" }
+            }
+          }
           $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
           if ($machinePath -notlike "*Hardcharger\bin*") { throw "bin is not on the system PATH" }
           foreach ($doc in "LICENSE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES-web-ui.txt") {

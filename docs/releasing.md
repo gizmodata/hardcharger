@@ -54,12 +54,67 @@ Two places can't hold `-rc.N` and use numbers instead:
 | MSIs | `Hardcharger-windows-<arch>.msi`, ProductVersion `2.0.0.1` | the same names, `2.0.0` |
 | Web UI tarball | `hardcharger-ui-2.0.0-rc.1.tar.gz` | `hardcharger-ui-2.0.0.tar.gz` |
 | `SHA256SUMS` | every tarball, zip and MSI | the same |
+| Code signatures | macOS binaries Developer ID signed and notarized, Windows executables and MSIs Authenticode-signed (see [Code signing](#code-signing)) | the same |
 
 A release candidate never moves `:latest`, and no tag ever pushes a floating `:2.0` or `:2`.
 Because GitHub never makes a pre-release the latest release, `releases/latest` and the
 one-line installer's default keep resolving to the last release; a candidate installs only by
 name (`HARDCHARGER_VERSION=2.0.0-rc.1`, `--version 2.0.0-rc.1`). The platform assets keep
 version-free names, which the installers and the Python package download by.
+
+## Code signing
+
+Every `v*` tag signs what users run on macOS and Windows; a release can't be published unsigned.
+
+| Platform | What is signed | How |
+|---|---|---|
+| macOS | `hardcharger-server` and `hardcharger` in `hardcharger-macos-arm64.tar.gz` | Developer ID Application: Gizmo Data LLC, hardened runtime, secure timestamp, notarized by Apple (`toitlang/action-macos-sign-notarize`, as GizmoSQL) |
+| Windows | `hardcharger-server.exe` and `hardcharger.exe` in each zip, and each MSI | Authenticode, SHA-256 digests, RFC 3161 timestamp (DigiCert), with GizmoData's code-signing certificate in Azure Key Vault (`AzureSignTool`, `.github/scripts/azure-sign.ps1`; the key never leaves the vault) |
+
+The Linux tarballs and the container images aren't code-signed; `SHA256SUMS` covers every asset.
+
+**Order.** The tests run on the unsigned binaries, then they are signed, and only then packed:
+the macOS build job signs and notarizes both binaries before it packs the tarball (and smoke-tests
+the signed ones); windows.yml's `sign` job signs the two executables from each tested zip, checks
+them and zips them again, the `msi` job builds each MSI from that signed zip, signs the MSI and
+runs the install test on it. `SHA256SUMS` is computed over the signed files. The server is signed
+with `server/macos/entitlements.plist`, which turns off only library validation, so that DuckDB
+can load extensions a user `INSTALL`s (they aren't signed by our team); the client has no
+entitlements. Bare executables can't be stapled: Gatekeeper finds their notarization ticket online.
+
+**Checks.** `.github/scripts/verify-macos-signature.sh` (codesign `--verify --strict`, the
+Developer ID requirement for our Team ID, the hardened runtime, the timestamp, the notarization
+ticket, Gatekeeper's `spctl` assessment, the exact entitlements) and
+`.github/scripts/verify-windows-signature.ps1` (`Get-AuthenticodeSignature` Valid, a timestamp,
+`signtool verify /pa`, one signer for every file) run in the signing jobs, the executables'
+checks first shown to refuse an unsigned binary. Then `verify signatures (macos-arm64)` and `verify signatures (windows)`
+check the very artifacts the release takes (each first shown to refuse a copy with one byte
+changed) and run them, the Windows one on Windows on Arm, which runs both platforms' executables.
+On a tag the image job and the release need both checks, and the release job fails, visibly,
+unless every job it needs succeeded and the run signed.
+
+**When.** Every `v*` tag, and a manual run with `sign`
+(`gh workflow run server.yml --ref release/v2.0.0-rc.1 -f sign=true`), which signs and checks
+everything a tag would and publishes nothing. Never on pull requests or pushes; every other run
+leaves the artifacts unsigned, as before.
+
+**Credentials.** All in the repository's `production` environment, none at repository level:
+`APPLE_CERTIFICATE` (the Developer ID Application certificate and key, a base64 `.p12`; valid to
+2030), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID_USERNAME` and `APPLE_ID_PASSWORD` (the Apple ID and
+app-specific password notarization uses), `APPLE_TEAM_ID`, and `AZURE_CLIENT_ID`,
+`AZURE_TENANT_ID`, `AZURE_KEY_VAULT_URI` and `AZURE_CERT_NAME`. The environment admits only `v*`
+tags and `release/*` branches, so only those runs can read them; only the jobs that sign or check
+signatures enter it (the build job's macOS leg only on a signing run). Azure signs in by OIDC, no
+stored secret: the existing code-signing app registration has a federated credential for the
+subject `repo:gizmodata@181902052/hardcharger@1422890225:environment:production`. This
+repository's OIDC tokens use GitHub's immutable subject format, owner and repository with their
+numeric IDs, so the credential keeps working through a rename and can't be matched by another
+repository that later takes the name.
+
+To check a download yourself: `codesign --verify --strict --verbose=2 bin/hardcharger-server` and
+`spctl --assess --type open --context context:primary-signature -v bin/hardcharger-server` on macOS
+(`accepted`, `source=Notarized Developer ID`), `Get-AuthenticodeSignature .\bin\hardcharger-server.exe`
+or the file's Properties > Digital Signatures on Windows.
 
 ## Cutting one
 

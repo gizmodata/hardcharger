@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The hardened-runtime entitlements of the signed macOS hardcharger-server (server.yml).
+     Library validation is off because DuckDB loads extensions a user INSTALLs (dlopen of a
+     .duckdb_extension) that GizmoData's Team ID did not sign; with it on, every LOAD of a
+     non-built-in extension would fail. Nothing else: DuckDB has no JIT, so no allow-jit or
+     unsigned executable memory. The client (hardcharger) loads no extensions and is signed
+     without entitlements. As GizmoSQL's macos/entitlements.plist. -->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

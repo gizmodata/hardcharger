@@ -182,6 +182,20 @@ own changelog in `python/CHANGELOG.md`.
   there is no `granted_at`. `test_rbac_introspection.py` (23 tests, PostgreSQL and DuckDB
   stores) covers each visibility rule with its positive twin, counting and filtering for
   another user's or another tenant's grants, and the standard views against the table functions.
+- Code-signed macOS and Windows releases. In `hardcharger-macos-arm64.tar.gz`,
+  `hardcharger-server` and `hardcharger` are signed with GizmoData's Developer ID (hardened
+  runtime, secure timestamp) and notarized by Apple, so Gatekeeper accepts them; the server's
+  only entitlement turns library validation off, so DuckDB can still load extensions a user
+  `INSTALL`s. On Windows, `hardcharger-server.exe` and `hardcharger.exe` in both zips, and both
+  MSIs, carry an Authenticode signature (SHA-256, RFC 3161 timestamp) from GizmoData's
+  code-signing certificate in Azure Key Vault. Every `v*` tag signs, and a manual
+  `server.yml` run with `sign` signs without publishing; the tests run on the unsigned
+  binaries, which are signed before they are packed, so the tarball, the zips, the MSIs and
+  `SHA256SUMS` all hold the signed files. Two jobs check the artifacts the release takes
+  (`codesign`, the notarization ticket and `spctl` on macOS; `Get-AuthenticodeSignature` and
+  `signtool verify /pa` on Windows on Arm, which also runs both platforms' signed
+  executables), each first shown to refuse a modified binary, and a tag publishes nothing,
+  and its release job fails, unless both pass. See "Code signing" in `docs/releasing.md`.
 
 ### Changed
 
