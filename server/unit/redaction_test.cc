@@ -7,6 +7,7 @@
 #include <string>
 
 #include "logging.hpp"
+#include "redact.hpp"
 
 using hardcharger::LoggableError;
 using hardcharger::LoggableSql;
@@ -85,4 +86,11 @@ TEST(Redaction, ErrorOfAttachMasksCredentialAndDropsLineExcerpt) {
   const std::string logged = LoggableError("ATTACH 'postgres:password=M14x host=h' AS d (TYPE postgres)", error);
   EXPECT_EQ(logged.find("M14x"), std::string::npos) << logged;
   EXPECT_EQ(logged.find("LINE "), std::string::npos) << logged;
+}
+
+TEST(Redaction, SharedHelperMasksEveryConnectionStringForm) {
+  // The store's errors, the init SQL's and the logs' masking all use RedactCredentials.
+  EXPECT_EQ(hardcharger::RedactCredentials("postgresql://u:p@ss@h/db"), "postgresql://u:***@h/db");
+  EXPECT_EQ(hardcharger::RedactCredentials("postgresql://u@h/db?sslpassword=k3y"), "postgresql://u@h/db?sslpassword=***");
+  EXPECT_EQ(hardcharger::RedactCredentials("ATTACH 'dbname=d password=pw' AS x"), "ATTACH 'dbname=d password=***' AS x");
 }

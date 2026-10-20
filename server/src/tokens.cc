@@ -190,6 +190,7 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
   if (principal.name.empty()) {
     throw invalid("a valid access token is required");
   }
+  authz::AccessControl::TokenStanding standing;
   if (!access_) {
     // Without access control nothing could hold a scoped token to its scope.
     if (principal.claims.contains("scope_id")) {
@@ -203,8 +204,11 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
                                            decoded.get_expires_at().time_since_epoch())
                                            .count();
     }
-    access_->CheckToken(IdentityOf(principal));
+    standing = access_->CheckToken(IdentityOf(principal));
   }
+  // Handles belong to the name and this (Warp SQL §9.2): computed from the claims and the
+  // store, never carried in a token.
+  principal.authority_key = AuthorityKey(principal, standing);
   // For the SDK's security events; Issue() never copies it into a token.
   if (decoded.has_id()) principal.claims["token_id"] = decoded.get_id();
   return principal;

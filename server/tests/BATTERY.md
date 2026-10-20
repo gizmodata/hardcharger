@@ -87,7 +87,7 @@ run the same way against the `hardcharger` client's (`server/client/tests/`, bin
 | `integration/test_admin_command_guard.cpp` | 42 | 42 | 0 | 0 | 0 | `test_admin_command_guard.py` | ported & passing; 36 as C++ unit tests |
 | `integration/test_sensitive_path_guard.cpp` | 10 | 10 | 0 | 0 | 0 | `test_sensitive_path_guard.py` | ported & passing; glob() refuses instead of hiding |
 | `integration/test_allow_unsigned_extensions.cpp` | 2 | 2 | 0 | 0 | 0 | `test_allow_unsigned_extensions.py` | ported & passing |
-| `integration/test_storage_version.cpp` | 3 | 3 | 0 | 0 | 0 | `test_storage_version.py` | ported & passing |
+| `integration/test_storage_version.cpp` | 3 | 3 | 0 | 0 | 0 | `test_storage_version.py` | ported & passing; +1 (a new ATTACH file) |
 | `integration/test_set_query_log_level.cpp` | 2 | 2 | 0 | 0 | 0 | `test_set_query_log_level.py` | ported & passing |
 | `integration/test_internal_query_log_level.cpp` | 3 | 3 | 0 | 0 | 0 | `test_internal_query_log_level.py` | ported & passing |
 | `integration/test_log_level_filtering.cpp` | 14 | 14 | 0 | 0 | 0 | `test_log_level_filtering.py` | ported & passing; C++ unit tests |

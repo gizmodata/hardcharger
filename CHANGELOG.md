@@ -73,6 +73,97 @@ own changelog in `python/CHANGELOG.md`.
   in the upload worker (SheetJS about 490 KB, the worker 230 KB, the dialog 33 KB; the main
   bundle grows by about 3 KB).
 
+- `default_catalog` and `default_schema`: where every new session starts, unless the client's
+  own `catalog` / `schema` session options say otherwise. With neither set, an init SQL that
+  ends in `USE x.y` sets it, as in GizmoSQL 1.x (on rc.1 sessions ignored it and started in
+  the database's catalog), and the server logs that it did. Both are checked after the init
+  SQL: a catalog that isn't attached, a missing schema or one of the server's own catalogs
+  stops the server (exit 1). Under access control a session moves there only if its user's own
+  `USE` could; otherwise it starts where it would have, and a tenant's default catalog wins.
+  `hardcharger_server_info()` shows the administrator the effective defaults.
+- `rbac_store_timeout_seconds` (default 10): every access-control store round trip is
+  bounded. With PostgreSQL paused, a `CREATE TABLE` waited 152 s for the store; it now fails
+  with `access control store unavailable: timed out after 10 s`, and what it was doing is
+  rolled back once the store answers. PostgreSQL connection strings get libpq's
+  `connect_timeout`, TCP keepalives, `tcp_user_timeout` and a `statement_timeout`, each
+  unless they set it.
+- Store outages are visible: a warning when the store stops answering (then every 30 s,
+  with the snapshot's age), a line when it answers again, and the metrics
+  `hardcharger_rbac_store_up` and `hardcharger_rbac_snapshot_age_seconds`.
+  `rbac_max_snapshot_age_seconds` (default 0, no limit) refuses every principal but the
+  administrator once the store has not answered for longer (fail closed).
+- The access-control store belongs to one cluster: it records the first `cluster_id` that
+  opens it and refuses a server of another cluster (`the access control store belongs to
+  cluster ...`); `rbac_store_shared: true` shares users, roles and grants between clusters
+  on purpose. The store's schema version is checked too: a store a later version upgraded
+  is refused.
+
+- The engine, host and process gauges GizmoData Cloud's Engine Metrics page reads from
+  GizmoSQL 1.x, under `hardcharger_*` names with 1.x's meanings and units, in `/metrics` and
+  `hardcharger_metrics()`: `hardcharger_duckdb_threads`, `hardcharger_duckdb_temp_storage_bytes`
+  (from `duckdb_memory()`), `hardcharger_duckdb_spill_files` and `hardcharger_duckdb_spill_bytes`
+  (live files in `duckdb_temporary_files()`), `hardcharger_database_file_bytes` and
+  `hardcharger_wal_bytes` (the main database file DuckDB opened and its `.wal`; attached catalogs
+  don't count), `hardcharger_health_check_duration_seconds`,
+  `hardcharger_tls_certificate_expiry_seconds` (the serving certificate's notAfter as Unix time,
+  read again whenever a client CRL reload rebuilds the TLS context),
+  `hardcharger_metrics_collection_duration_seconds`, `hardcharger_host_memory_bytes`,
+  `hardcharger_host_cpus`, `hardcharger_cgroup_memory_limit_bytes` and
+  `hardcharger_cgroup_cpu_quota_cores` (cgroup v2, else v1, read on every collection so an
+  in-place pod resize shows), and the standard `process_start_time_seconds`, `process_open_fds`
+  and `process_threads` (Linux, macOS and Windows; Windows has no `process_open_fds`). As in 1.x,
+  a measurement that can't be taken is left out rather than reported as 0: no file sizes for an
+  in-memory or remote database, no certificate expiry without TLS, no cgroup gauges without a
+  limit.
+
+- **`trusted_proxies`** (`--trusted-proxies`, `HARDCHARGER_TRUSTED_PROXIES`): CIDRs or single
+  addresses (IPv4 and IPv6) of the reverse proxies whose `X-Forwarded-For` or RFC 7239
+  `Forwarded: for=` header names the client. From them, the client's address in the log, the
+  audit records, `hardcharger_active_connections()` and the per-address bound on browser
+  sign-ins is the rightmost forwarded hop that is not itself a trusted proxy (all trusted: the
+  leftmost); `X-Forwarded-For` wins over `Forwarded`, and an unknown, obfuscated or malformed
+  hop leaves the proxy's address. Behind an ingress these all showed the ingress's address
+  before. The default (empty) trusts no one, and another peer's headers are ignored. A bad CIDR stops the server at startup (exit 2) naming it. The forwarded address
+  is never used for authentication or TLS: client certificates and certificate-bound tokens
+  stay tied to the connection. `hardcharger_active_connections()` has a new `proxy_address`
+  column (the proxy's own `address:port` when the address was forwarded), and security log
+  and audit lines a `proxy` field. Warp SQL C++ SDK `ServerOptions::trusted_proxies`. Tests:
+  `test_trusted_proxies.py`, the SDK's `forwarded_test.cc`.
+
+- **Users from the identity provider are created on first sign-in**, when asked:
+  `token_auto_provision_users` (off by default; `token_auto_provision_issuer`, default
+  `token_allowed_issuer`). Under access control, a verified sign-in token from that issuer
+  (not an administrator's) whose user the store lacks creates the user, with no password and
+  no grants, and keeps the token's role in its `provisioned_role` attribute: a user
+  provisioned from a `readonly` token signs in readonly from then on until an administrator
+  removes the attribute. Existing users are never changed, so a disabled user stays disabled.
+  First sign-ins of one user on several replicas at once all succeed, and each creation is an
+  access-control audit record with the user, the issuer and the role. Startup refuses the
+  option without `rbac_store_uri`, without a way to verify tokens, or with an issuer other
+  than `token_allowed_issuer`. Off, nothing changes: such a sign-in is refused, saying an
+  administrator creates the user.
+
+- One `info` log line for each cancelled statement, `statement cancelled`, with its
+  `session_id`, `statement_id` (`q_…`), `user`, `reason` (Warp SQL's `cancel_reason`:
+  `client`, `timeout`, `killed`, `cancelled`, `session_closed`, `server_shutdown`) and
+  `duration` in seconds, whatever `print_queries` and `query_log_level` say (GizmoSQL 1.x
+  logged `SQL Statement was successfully canceled.`). A statement that ends on its own or
+  fails logs none. Tests: `test_statement_cancel_log.py`.
+
+### Changed
+
+- An IPv6 client's address is written `[2001:db8::7]:51234` (it was `2001:db8::7:51234`,
+  which can't be told apart from an address without a port), in
+  `hardcharger_active_connections().client_address` and security events.
+
+- **The idle rule is documented exactly** (README, `--help` for `session_idle_timeout`): a
+  session is evicted within 5 s after `session_idle_timeout` seconds without a request, unless
+  a statement of it is running, an ingest is in progress, a result is being read, or it holds a
+  retained result that hasn't expired. That last one is Warp SQL §5.7's rule, kept: a session
+  whose statement ran in JSON mode lives up to `result_retention_seconds` after it ended. Set
+  `result_retention_seconds` no higher than `session_idle_timeout` to bound sessions by the idle
+  timeout alone.
+
 ### Fixed
 
 - Server: a text log line leaves out a field with no value (`health check passing` printed
@@ -162,6 +253,91 @@ own changelog in `python/CHANGELOG.md`.
   any bundled app with `"throughDOM" not available in this environment` (apache-arrow installs
   that only as a side effect its `"sideEffects": false` lets bundlers drop), and `close()` could
   end a session before a statement's delete reached it, which the browser logged as a 404.
+
+- `LOAD iceberg` without the avro extension installed now says first what to run
+  (`INSTALL avro;`, then `LOAD iceberg` again); iceberg loads avro itself once it is
+  installed. The server never installs or loads extensions by itself, so DuckDB's own
+  reason was buried in a long initialization error. The same hint is given when init SQL
+  fails this way.
+
+- A DuckLake with a DuckDB metadata file stays readable by the DuckDB release that created
+  it. The bundled DuckLake extension attached an existing metadata file with
+  `STORAGE_VERSION 'latest'`, so the first write from Hardcharger upgraded the file, and
+  DuckDB 1.5 then refused it (`cannot initialize database with storage version 7 - which is
+  lower than what the database itself uses`). Our build of the extension now attaches an
+  existing file without a storage version, so it keeps its own; `META_STORAGE_VERSION
+  'latest'` in the `ATTACH` still upgrades it on purpose (it used to fail with a duplicate
+  option). A new metadata file gets `--storage-version` when that is set, and the latest
+  format otherwise, as before. `--storage-version` is now also the format of new files a
+  plain `ATTACH` creates, not just of the `--database` file. The patch is Hardcharger's own
+  (`server/scripts/extension-patches/ducklake/`), applied by the DuckDB build after DuckDB's
+  patches for the extension (`server/scripts/patch-duckdb-extensions.cmake`), and the build
+  fails if it didn't reach the extension's source. PostgreSQL metadata was never affected.
+
+- **A readonly session can't leave readonly through a scoped token.** Under access control, a
+  session signed in with a `readonly` token could run `CREATE SCOPED TOKEN`, and the token it
+  got signs in as a user, so it could write with the user's grants. A readonly session now runs
+  no access-control statement but `SHOW …` and `SET ROLE` (`permission_denied`, "has a readonly
+  session and cannot run CREATE SCOPED TOKEN").
+- **A slow download keeps its session.** The idle sweep evicted a session whose statement had
+  finished while the client was still reading its unretained result (up to 32 MB of it is
+  sent after the statement finishes), cutting the stream mid-body; a reader slower than
+  `session_idle_timeout` plus 5 s for that tail lost it. A read in progress now keeps the
+  session (the Warp SQL SDK; spec §5.7 says a request in progress counts as one).
+
+- A `readonly` session could write through a data-modifying CTE
+  (`WITH c AS (INSERT … RETURNING *) SELECT * FROM c`, also `UPDATE` / `DELETE`), which
+  DuckDB reports as a `SELECT`. DuckDB's own analysis of every statement a readonly session
+  prepares now decides, as in GizmoSQL 1.x: one that modifies any database (temp included)
+  or writes a file is refused before it runs, also inside a transaction, in a batch, under
+  `EXPLAIN ANALYZE` or as a prepared statement.
+- A `readonly` session can change its own session again, as in GizmoSQL 1.x: `BEGIN` /
+  `START TRANSACTION`, `COMMIT` / `END`, `ROLLBACK` / `ABORT`, `SET VARIABLE` /
+  `RESET VARIABLE`, `USE`, `SET` / `RESET` of a setting DuckDB keeps for the session
+  (`SET SESSION …`, or a plain `SET` of a session-scoped setting such as `TimeZone`), and the
+  `PRAGMA`s that read (`table_info`, `database_list`, `version`, ...). They were refused as
+  modifying state. `SET GLOBAL`, a plain `SET` of a setting whose default scope is global,
+  settings that reach the server (resources, extensions, secrets, files, the profiler, the
+  grammar), temporary tables, views and macros, and every other write stay refused. README:
+  "Read-only sessions". Tests: `test_readonly_session.py`.
+
+### Security
+
+- A session can no longer be used by a weaker token of the same user. Sessions (and their
+  statements, retained results, prepared statements and ingests) were bound to the user
+  name only, while a session's DuckDB connection is bound to the token that opened it. So
+  any token of that name could run statements through a stronger token's session, with
+  that token's privileges, by naming its id (as the ADBC driver's session attach does): a
+  readonly token through its user's session, a scoped token (`CREATE SCOPED TOKEN`)
+  through the session of the user who minted it, a token with `catalog_access` rules
+  through an unrestricted one's, an identity-provider token with other groups (and so
+  other mapped roles). Every request now also compares the token's authority, a SHA-256
+  of its role, scoped token, `catalog_access` rules, identity-provider issuer and groups,
+  and its store user and tenant (`AuthorityKey`, `server/src/auth.hpp`): any difference
+  gets `404 session_not_found` on every route, as another user's token would. A new
+  token of the same authority (signing in again, also after a password change, or
+  exchanging the same scoped token again) still reaches the session; the token's id,
+  times, password fingerprint and sign-in method are not part of it, and the certificate
+  binding is checked as before. A store user dropped and created again under the same
+  name no longer reaches the old user's sessions either. Warp SQL SDK
+  `Principal::authority_key` (warp-sql §9.2). Tests:
+  `server/tests/test_session_authority.py`, `server/unit/authority_key_test.cc`.
+- Access-control store errors no longer carry the store's connection string. While a
+  PostgreSQL store was unreachable, `CREATE USER`, `GRANT`, `REVOKE` and every other
+  access-control write answered the client, and logged, DuckDB's "Unable to connect to
+  Postgres at ..." with the full `postgresql://user:password@...` string. Every store error
+  is now redacted (the string as given and as the server rewrites it, a URL's
+  `user:password@`, libpq's `password=` and URL parameters such as `password=` and
+  `sslpassword=`), and so is a failing init SQL `ATTACH`, which stopped startup with the
+  password in its log line. One helper (`server/src/redact.cc`) does it for the store, init
+  SQL and the logs.
+- DDL no longer runs when its owner can't be recorded. During a store outage an
+  administrator's (or a user's) `CREATE TABLE` / `CREATE VIEW` succeeded while its
+  ownership record was silently dropped, leaving an object with no owner (and any stale
+  record of an earlier object of that name in force). The owner is now recorded before the
+  statement runs; when the store can't take it, the statement fails with the store's error
+  and creates nothing, and a statement that fails after its owner was recorded puts the
+  previous record back.
 
 ## [2.0.0-rc.1] - 2026-10-20
 

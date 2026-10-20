@@ -220,6 +220,12 @@ directory, and says so at startup; mount a writable volume for the database (`--
 /data/my.duckdb`) and they go there. Init SQL can set `extension_directory` and
 `secret_directory` to anywhere else.
 
+The server never installs or loads an extension by itself (DuckDB's
+`autoinstall_known_extensions` and `autoload_known_extensions` are off), so an extension
+that needs another one needs that one installed too: `iceberg` needs `avro`. Run `INSTALL
+iceberg; INSTALL avro; LOAD iceberg;` (iceberg loads avro itself once it is installed); a
+`LOAD iceberg` without avro fails with a message that says to run `INSTALL avro;` first.
+
 `ghcr.io/gizmodata/hardcharger:main` (and `:sha-<commit>`) is the development build: the
 newest commit on `main` that passed every CI gate, built exactly as a release. Use
 `:latest` or a version tag for anything else.
@@ -347,6 +353,14 @@ curl -s localhost:31337/warp/v1/sessions/$SESSION/statements -H "Authorization: 
 Without that `Accept` header the answer is the statement's JSON document: its `state`, and
 in `result` its Arrow schema and partitions, whose rows `GET …/statements/{id}/result`
 returns (Warp SQL §6.3, §6.4).
+
+A session (and its statements, results, prepared statements and ingests) belongs to the token
+that opened it: its user and that token's authority, meaning its role, scoped token,
+`catalog_access` rules, tenant and identity-provider groups. Any other token gets
+`404 session_not_found` on it, a readonly or scoped token of the same user included, so a
+client that attaches to a session by its id runs with that session's own rights or not at
+all. A new token with the same authority, such as signing in again with the same password,
+reaches the session.
 
 The server describes its API in OpenAPI 3.1 at `GET /warp/v1/openapi.json` (no sign-in
 needed; discovery, `GET /warp`, lists it as capability `openapi`), for API tools and client
@@ -605,6 +619,118 @@ In SQL, `SET SESSION name = value` changes a DuckDB setting for your session onl
 settings (`arrow_lossless_conversion` among them) is `GLOBAL`: then only an administrator
 may run it, and it changes the default of every session that has no value of its own.
 
+### Where sessions start
+
+A new session starts in the database's catalog (`memory`, or the `--database` file's) and its
+`main` schema. To start every session in a catalog the init SQL attaches, name it:
+
+```yaml
+init_sql_commands: "ATTACH ':memory:' AS lake; CREATE SCHEMA lake.sales;"
+default_catalog: lake     # flag: --default-catalog lake
+default_schema: sales     # flag: --default-schema sales
+```
+
+- A client's own `catalog` / `schema` session options (Warp SQL `POST /warp/v1/sessions`) still
+  win, and `USE` still moves a session anywhere. A `schema` option alone is that schema in the
+  default catalog. `default_schema` alone is that schema in the database's catalog;
+  `default_catalog` alone starts in that catalog's default schema (`main`).
+- With neither option set, an init SQL that ends in `USE x` or `USE x.y` sets where sessions
+  start, as in GizmoSQL 1.x. The server reads where the init SQL's connection ended up (a
+  `USE` that a later one undid doesn't count) and logs it: `init SQL ended in USE lake.sales:
+  sessions start there (set default_catalog to choose explicitly)`. Setting either option turns
+  this off.
+- Both are checked once the init SQL has run: a catalog that isn't attached, a schema that
+  doesn't exist, or one of the server's own catalogs (`system`, `_hardcharger_system`, the
+  instrumentation and log catalogs) stops the server with exit code 1 and says why
+  (`default_catalog 'lake' is not attached: the attached catalogs are memory (attach it in the
+  init SQL)`).
+- Under access control a session moves there only if its user's own `USE` could: a user held
+  to `catalog_access` rules that don't include it, or a tenant's user, starts where they would
+  without it (logged at debug level), and a tenant with a default catalog starts its users
+  there. A user outside any tenant sees every catalog's name, so they start in the default and
+  their grants decide what they may read there.
+- The administrator sees the effective defaults in `hardcharger_server_info()`
+  (`default_catalog`, `default_schema`).
+
+### Behind a load balancer or proxy
+
+Behind an HTTP reverse proxy (an ingress, an application load balancer) every connection
+comes from the proxy, so by default the log, the audit records, `hardcharger_active_connections()`
+and the per-address bound on browser sign-ins all see the proxy's address. List the proxies in
+`trusted_proxies` (CIDRs or single addresses, IPv4 or IPv6) and Hardcharger takes the client's
+address from their forwarding header instead:
+
+```yaml
+trusted_proxies: [10.0.0.0/8, fd00::/8]   # flag: --trusted-proxies 10.0.0.0/8,fd00::/8
+```
+
+- Only a request whose TCP peer is in the list is read this way; anyone else's
+  `X-Forwarded-For` or `Forwarded` header is ignored. The default (empty) trusts no one.
+- `X-Forwarded-For` is read right to left, skipping each hop that is itself a trusted proxy;
+  the first that isn't is the client (when every hop is trusted, the leftmost). Several
+  instances of the header count as one list, in order. A request without `X-Forwarded-For`
+  uses RFC 7239 `Forwarded: for=` the same way (quoted values, `"[2001:db8::7]:4711"`). When
+  both are present `X-Forwarded-For` wins: the common proxies append to it and pass a
+  client's own `Forwarded` header on unchanged. Behind a proxy that sets only `Forwarded`,
+  have it drop `X-Forwarded-For`.
+- A hop that is `unknown`, obfuscated (`for=_hidden`), not an IP address, or otherwise
+  malformed stops the search, and the proxy's own address is recorded.
+- A forwarded address has no port: `203.0.113.9`, `[2001:db8::7]` (a direct client's is
+  `127.0.0.1:51234`, `[::1]:51234`). Where it was forwarded, the proxy's own `address:port`
+  is kept beside it: `proxy_address` in `hardcharger_active_connections()`, `proxy` in
+  security log and audit lines.
+- The forwarded address only describes the client. It is never used for authentication,
+  and client certificates and certificate-bound tokens stay tied to the real connection. A
+  client certificate refused by the TLS handshake is recorded with the TCP peer, since no
+  request has arrived yet.
+- List only proxies that append to or overwrite these headers: one that passes a client's
+  header through lets that client choose the address it is recorded under.
+
+### DuckDB files and DuckLake metadata
+
+An existing DuckDB file keeps the storage format it has: the `--database` file, a file you
+`ATTACH`, and a DuckLake's DuckDB metadata file (`ATTACH 'ducklake:lake.ducklake'`). So a
+database or DuckLake that DuckDB 1.5 created is still readable by DuckDB 1.5 after
+Hardcharger writes to it. (DuckDB's own DuckLake extension attaches its metadata file with
+the latest storage format, which upgrades the file; Hardcharger's build of it doesn't.) A
+DuckLake also keeps its DuckLake format version unless you attach it with
+`AUTOMATIC_MIGRATION true`.
+
+`--storage-version` (`storage_version`) sets the format of every DuckDB file the server
+creates: the `--database` file, a new file an `ATTACH` creates, and a new DuckLake's
+metadata file. Unset, a new `--database` or `ATTACH` file gets DuckDB 2.0's format and a new
+DuckLake metadata file the latest one, which DuckDB 1.x can't open. To make a new DuckLake
+that DuckDB 1.5 can read, start the server with `--storage-version v1.5.0` and create the
+lake with `DUCKLAKE_VERSION '1.0'` (DuckDB 1.5's DuckLake can't read the newer default,
+1.1-dev1):
+
+```sql
+ATTACH 'ducklake:/data/lake.ducklake' AS lake (DATA_PATH '/data/lake/', DUCKLAKE_VERSION '1.0');
+```
+
+To upgrade an existing metadata file on purpose, attach it with
+`META_STORAGE_VERSION 'latest'`; DuckDB 1.x can't open it afterwards. A PostgreSQL metadata
+catalog has no DuckDB storage format, so none of this applies to it.
+
+### Logs
+
+The server logs to stderr (`log_file` for a file), at `log_level` (`info` by default), as
+text or, with `log_format: json`, one JSON object per line. Statements are logged as they
+start and end with `print_queries` (on by default), at `query_log_level`. Whatever those
+say, a statement stopped by a cancel gets one `info` line, `statement cancelled`, with its
+`session_id`, `statement_id` (the `q_…` id), `user`, `reason` and `duration` (seconds, its
+wait in the statement queue included):
+
+```json
+{"time":"2026-10-20T14:31:39.702Z","level":"info","message":"statement cancelled","session_id":"s_…","statement_id":"q_…","user":"joe","reason":"timeout","duration":"1.003"}
+```
+
+`reason` is Warp SQL's `cancel_reason`: `client` (the client's cancel, or it closed the
+connection of a streamed result), `timeout` (`Warp-Statement-Timeout` or
+`query_timeout_seconds`), `killed` (`KILL SESSION`), `cancelled` (`hardcharger_cancel()`),
+`session_closed` (the session was deleted) or `server_shutdown`. A statement that
+ends on its own, or fails, gets none.
+
 ### Credential and system files
 
 With `block_sensitive_paths` on (the default), no statement can open, list, write, move or
@@ -652,8 +778,9 @@ Two limits:
 
 Three SQL functions show what the server is doing, with no instrumentation or metrics
 turned on. `hardcharger_active_connections()` has a row per open session: who (user, role,
-tenant, how they signed in), from where (the latest request's address and User-Agent, TLS
-version, client certificate), what it runs (`state`: idle, queued, running, streaming,
+tenant, how they signed in), from where (the latest request's address, behind a trusted
+proxy the forwarded one with the proxy's in `proxy_address`, its User-Agent, TLS version and
+client certificate), what it runs (`state`: idle, queued, running, streaming,
 idle_in_transaction or idle_in_transaction_aborted; the statement, redacted as the log
 redacts it; since when), and its open result streams, partitions, uploads and retained
 results:
@@ -740,6 +867,18 @@ same user and tenant), and `hardcharger_sessions()` follows the same rule. Retai
 (resumable) results are kept for `result_retention_seconds` (default 3600) after their
 statement ends; the statement document's `expires_at` says until when.
 
+A session is evicted within 5 s (the server's sweep interval) after `session_idle_timeout`
+seconds (default 900; 0 never evicts) without a request on it, unless one of its statements
+is still running, one of its ingests is in progress, one of its results is being read (a
+slow download keeps it to the end of the stream), or it holds a retained result that hasn't
+expired. That last one follows Warp SQL §5.7, so that a result kept for re-reading stays
+readable until its `expires_at`: a session whose statement ran in JSON mode (a retained
+result) lives up to `result_retention_seconds` after the statement ended, then goes at the
+next sweep. To bound a session's life by the idle timeout alone, set
+`result_retention_seconds` no higher than `session_idle_timeout`, or have clients delete
+statements (or the session) they are done with. An evicted session answers
+`session_not_found`.
+
 With instrumentation on (`--enable-instrumentation`), the server keeps its history in
 tables: `instances`, `sessions`, `sql_statements` and `sql_executions`, and the views
 `session_activity`, `active_sessions`, `session_stats` and `execution_details`, which only
@@ -816,6 +955,108 @@ could reach the server's files outside DuckDB's file system; the `sqlite_scanner
 takes the administrator or a role granted `MANAGE EXTENSIONS`, which belong only to roles you
 would trust with the server's files.
 
+### When the store is down
+
+Access control never lets the store hold up the server, and never fails open on
+anything it has to write:
+
+- **Every store round trip is bounded** by `rbac_store_timeout_seconds` (default 10). A
+  store that doesn't answer in time fails the statement that needed it with `access control
+  store unavailable: timed out after N s`, and what that statement was doing is rolled back
+  as soon as the store answers again, so a `CREATE USER` the client was told failed never
+  appears later. (A timeout while committing says the change may have been applied.) For a
+  PostgreSQL store the server also adds libpq's `connect_timeout`, TCP keepalives,
+  `tcp_user_timeout` and a `statement_timeout` to the connection string, each unless the
+  string sets it already.
+- **Access-control statements and DDL fail** while the store is unreachable. A `CREATE
+  TABLE` or `CREATE VIEW` records its owner in the store before it runs: when that can't
+  be done, the statement fails and creates nothing, so no object is ever left without an
+  owner.
+- **Sign-ins and queries go on** with the users, roles and grants the store last gave
+  (availability), and the server says so: a warning when the store stops answering and
+  every 30 s after, with the snapshot's age, a line when it answers again, and the metrics
+  `hardcharger_rbac_store_up` and `hardcharger_rbac_snapshot_age_seconds`. A revoke made
+  on another replica during the outage doesn't reach this one until the store answers.
+  Set `rbac_max_snapshot_age_seconds` to bound that: once the store has not answered for
+  longer, every principal but the administrator is refused (fail closed) until it does.
+  The default, 0, keeps serving; pick a limit when a stale grant is worse than an outage.
+- **Errors never carry the store's credentials**: neither the connection string nor any
+  password in it reaches a client, a log line or the audit chain.
+
+### One store per cluster
+
+Grants name catalogs, so a store two clusters shared by mistake would apply one cluster's
+grants to the other's catalogs of the same names. The store records the `cluster_id` of
+the first server that opens it, and a server with another `cluster_id` refuses to start
+(`the access control store belongs to cluster ...`). Replicas and restarts of the same
+cluster share it as before. To share users, roles and grants between clusters on purpose,
+set `rbac_store_shared: true` on the clusters that join. A server with no `cluster_id`
+opens any store, with a warning when the store belongs to a cluster. The store also
+records its schema version, and a server refuses a store a later version has upgraded.
+
+### Users from the identity provider
+
+Under access control, a sign-in token (`token_exchange`, browser sign-in, or the token sent as
+user `token`'s password) signs in a user of the store, the administrator role aside: an
+administrator creates them first (`CREATE USER "pat@example.com"`, no password needed), or a
+first sign-in is refused with `user … is not defined on this server. An administrator creates
+it with CREATE USER`. With `token_auto_provision_users: true`, the first sign-in creates the user
+instead:
+
+```yaml
+token_allowed_issuer: https://login.example.com/oauth2/default
+token_allowed_audience: hardcharger
+token_auto_provision_users: true
+# token_auto_provision_issuer: defaults to token_allowed_issuer
+```
+
+- Only a verified token from `token_auto_provision_issuer` (default `token_allowed_issuer`) that
+  `token_authorized_emails` admits provisions, and only for the roles `user` and `readonly`; an
+  `admin` token signs in as an administrator, as before, and creates nothing.
+- The user is named as the token's user always is (`email`, else `sub`), has no password and
+  no grants (only `PUBLIC`'s), and gets the token's role in its `provisioned_role` attribute.
+  Grant it roles (`GRANT analyst TO USER "pat@example.com"`), or map its identity-provider
+  groups to roles (`CREATE GROUP MAPPING`).
+- A user provisioned from a `readonly` token signs in readonly with every token from then on,
+  whatever role later tokens carry, until an administrator lifts it with `ALTER USER
+  "pat@example.com" UNSET ATTRIBUTE provisioned_role`. A readonly session runs no access-control
+  statement but `SHOW …` and `SET ROLE`, so it can't mint itself a scoped token (which signs in
+  as a user).
+- A user that exists is never changed: a disabled one stays disabled and is refused. A name that
+  is a role's, the administrator's, or a tenant's user (`acme/pat`) in a tenant that doesn't
+  exist is refused.
+- First sign-ins of the same user on several replicas at once all succeed (the store serializes
+  them); the user is created once, and each creation is an audit record (`provisioned a user on
+  its first sign-in`, with the user, the issuer and the role) in the access-control audit chain.
+
+Startup refuses `token_auto_provision_users` without `rbac_store_uri`, without a way to verify
+tokens (`token_signature_verify_cert_path`, `token_jwks_uri`, or `token_allowed_issuer` with
+`token_allowed_audience`), or with a `token_auto_provision_issuer` other than
+`token_allowed_issuer` (whose tokens alone sign in, so it would provision no one). With no
+`token_allowed_issuer`, tokens of any issuer the key verifies sign in, and only
+`token_auto_provision_issuer`'s provision.
+
+### Read-only sessions
+
+A sign-in token whose `role` is `readonly` gives a session that reads and changes nothing but
+itself, with or without an access-control store. It may run queries (`SELECT`, `EXPLAIN`,
+`SHOW`, `DESCRIBE`, `SUMMARIZE`, `PIVOT`, the `PRAGMA`s that read such as `table_info` and
+`database_list`) and the statements that change only its own session: transactions
+(`BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`), `SET VARIABLE` and
+`RESET VARIABLE`, `USE`, and `SET` / `RESET` of a DuckDB setting kept for the session
+(`SET SESSION default_order = 'desc'`, `SET TimeZone = '…'`, `SET search_path = '…'`).
+Everything else is refused with `User '<name>' has a readonly session and cannot run
+statements that modify state.`: `INSERT`, `UPDATE`, `DELETE`, `MERGE`, bulk ingest, `CREATE`
+(temporary tables, views and macros too), `ALTER`, `DROP`, `COPY` either way, `EXPORT`,
+`IMPORT`, `CHECKPOINT`, `VACUUM`, `ATTACH`, `DETACH`, `INSTALL`, `LOAD`, `CALL`, SQL-level
+`PREPARE` / `EXECUTE`, `SET GLOBAL`, a plain `SET` of a setting whose default scope is global
+(`SET default_order`), and settings that reach the server (`threads`, `memory_limit`,
+`enable_profiling`, `profiling_output`, the extension and secret settings, ...). DuckDB's own
+analysis of each statement decides what writes, so a write hidden in a query
+(`WITH c AS (INSERT … RETURNING *) SELECT * FROM c`, `EXPLAIN ANALYZE` of one), in a
+transaction, in a batch or in a prepared statement is refused too. Under access control a
+readonly token adds this to the user's grants: it never widens them.
+
 ## 🌐 Browser sign-in (SSO)
 
 People can sign in with your OpenID Connect identity provider in a browser: Warp SQL's
@@ -855,7 +1096,7 @@ registered for it must be replaced.
 The server sends the provider a code request with `state`, PKCE (S256) and a `nonce`, exchanges
 the code itself, and signs the user in with the ID token exactly as `token_exchange` would:
 the provider's JWKS, issuer, audience, `token_authorized_emails`, roles and, under access
-control, the store's users. A sign-in is collected once by the client that started it, with a
+control, the store's users (created on first sign-in with `token_auto_provision_users`). A sign-in is collected once by the client that started it, with a
 secret that is never in a URL; sign-ins expire after 10 minutes. `hardcharger_server_info()`
 has `oauth_enabled`.
 

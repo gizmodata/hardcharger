@@ -107,6 +107,34 @@ authz::Identity IdentityOf(const warpsql::Principal& principal) {
   return who;
 }
 
+std::string AuthorityKey(const warpsql::Principal& principal,
+                         const authz::AccessControl::TokenStanding& standing) {
+  const authz::Identity who = IdentityOf(principal);
+  boost::json::value rules;  // null: no catalog_access claim
+  if (who.catalog_access) {
+    boost::json::array list;
+    for (const auto& rule : *who.catalog_access) list.push_back(boost::json::array{rule.catalog, rule.access});
+    rules = std::move(list);
+  }
+  std::vector<std::string> groups = who.idp_groups;
+  std::sort(groups.begin(), groups.end());
+  groups.erase(std::unique(groups.begin(), groups.end()), groups.end());
+  boost::json::array group_list;
+  for (const auto& group : groups) group_list.emplace_back(group);
+  // A JSON array: every value quoted and escaped, so no two lists serialize alike.
+  const std::string canonical = boost::json::serialize(boost::json::array{
+      "hardcharger-authority-1", principal.role, who.scope_id, std::move(rules), who.idp_issuer,
+      std::move(group_list), standing.user_id, standing.tenant_id});
+  const auto digest = Digest(canonical);
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string out;
+  for (const unsigned char byte : digest) {
+    out += kHex[byte >> 4];
+    out += kHex[byte & 15];
+  }
+  return out;
+}
+
 Authenticator::Authenticator(const Config& config,
                              std::shared_ptr<authz::AccessControl> access,
                              std::function<warpsql::Principal(std::string_view)> server_tokens,
@@ -119,6 +147,8 @@ Authenticator::Authenticator(const Config& config,
       default_role_(config.token_default_role),
       groups_claim_(config.token_groups_claim),
       authorized_emails_(config.token_authorized_emails),
+      auto_provision_users_(config.token_auto_provision_users),
+      auto_provision_issuer_(config.token_auto_provision_issuer),
       log_level_(ParseLogLevel(config.auth_log_level)),
       access_(std::move(access)),
       server_tokens_(std::move(server_tokens)),
@@ -246,9 +276,19 @@ warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) 
     }
   }
   // Under access control a sign-in token signs in one of the store's users (the
-  // administrator role aside); an administrator creates them with CREATE USER.
+  // administrator role aside); an administrator creates them with CREATE USER, or, with
+  // token_auto_provision_users, the first sign-in of a token from that issuer does.
   if (access_ && principal.role != "admin") {
-    access_->RequireStoreUser(principal.name);
+    const std::string issuer = decoded.has_issuer() ? decoded.get_issuer() : std::string();
+    authz::AccessControl::TokenUser user;
+    if (auto_provision_users_ && issuer == auto_provision_issuer_) {
+      user = access_->ProvisionStoreUser(principal.name, principal.role, issuer);
+    } else {
+      user = access_->RequireStoreUser(principal.name);
+    }
+    // A user provisioned from a readonly token stays readonly, whatever later tokens say,
+    // until an administrator removes its provisioned_role attribute.
+    if (user.readonly) principal.role = "readonly";
   }
   LogAt(log_level_, LogLevel::kInfo, "signed in", {{"user", principal.name}, {"method", "token"},
                                                    {"role", principal.role}});

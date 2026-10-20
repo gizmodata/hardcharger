@@ -12,12 +12,18 @@
 // Every mutation runs in one store transaction that first bumps a data version
 // row, which serializes writers across replicas; readers poll that version to
 // know when to reload.
+//
+// Every store round trip is bounded (StoreOptions::timeout): a store that stops answering
+// (PostgreSQL paused, overloaded, or unreachable without a reset) fails the call with
+// "access control store unavailable: timed out after N s" instead of holding it. The
+// store's errors never carry its connection string's credentials.
 
 #pragma once
 
 #include <arrow/result.h>
 #include <arrow/status.h>
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -35,13 +41,48 @@ class Connection;
 namespace hardcharger::authz {
 
 class StoreTransaction;
+class StoreLink;
+
+// The version of the store's schema this server writes and reads. A store whose schema
+// is newer (a later server migrated it) is refused at startup.
+constexpr int64_t kStoreSchemaVersion = 1;
+
+struct StoreOptions {
+  // A PostgreSQL connection string or URI ("postgresql://...", "postgres://...", or libpq
+  // "host=... dbname=..."), a DuckDB file ("duckdb:<path>", or a path ending in .duckdb),
+  // or "memory" for an in-process store (tests).
+  std::string uri;
+  // The longest one store round trip may take (rbac_store_timeout_seconds). For
+  // PostgreSQL it also sets libpq's connect_timeout, TCP keepalives, tcp_user_timeout and
+  // the session's statement_timeout, each unless the connection string sets it.
+  std::chrono::milliseconds timeout{10000};
+  // This server's cluster (cluster_id), or empty. The store records the first cluster
+  // that opens it and refuses another one, unless `shared`.
+  std::string cluster_id;
+  bool shared = false;  // rbac_store_shared: several clusters share users, roles and grants
+};
+
+// The text "access control store unavailable" every error of an unreachable or hung
+// store carries.
+inline constexpr const char* kStoreUnavailable = "access control store unavailable";
+
+// Whether `status` says the store did not answer (timed out or unreachable), as opposed
+// to refusing a statement.
+bool IsStoreUnavailable(const arrow::Status& status);
+
+// A PostgreSQL store's connection string as the store connects with it: with libpq's
+// connect_timeout, keepalives, tcp_user_timeout and statement_timeout (from `timeout`)
+// added, each unless `uri` sets it. (Exposed for the unit tests.)
+std::string StoreConnectionWithTimeouts(const std::string& uri, std::chrono::milliseconds timeout);
 
 class RbacStore {
  public:
-  // `uri`: a PostgreSQL connection string or URI ("postgresql://...",
-  // "postgres://...", or libpq "host=... dbname=..."), a DuckDB file ("duckdb:<path>",
-  // or a path ending in .duckdb), or "memory" for an in-process store (tests).
-  static arrow::Result<std::unique_ptr<RbacStore>> Open(const std::string& uri);
+  static arrow::Result<std::unique_ptr<RbacStore>> Open(const StoreOptions& options);
+  static arrow::Result<std::unique_ptr<RbacStore>> Open(const std::string& uri) {
+    StoreOptions options;
+    options.uri = uri;
+    return Open(options);
+  }
 
   // The file a DuckDB store URI names, as given (empty: not a DuckDB store).
   static std::string DuckDBFile(const std::string& uri);
@@ -63,19 +104,37 @@ class RbacStore {
   const std::string& description() const { return description_; }
   // A DuckDB store's file, absolute; empty for any other store.
   const std::string& file_path() const { return file_path_; }
+  // The cluster the store belongs to (its first cluster_id), or empty.
+  const std::string& cluster_id() const { return cluster_id_; }
+  std::chrono::milliseconds timeout() const { return options_.timeout; }
+
+  // `text` without this store's connection string or any credential it may quote.
+  std::string Redact(const std::string& text) const;
 
  private:
   RbacStore() = default;
+  arrow::Status OpenStore();
   arrow::Status InitializeSchema();
+  arrow::Status CheckOwnership();
   void CheckpointFile();
   arrow::Result<std::shared_ptr<const Snapshot>> LoadLocked();
+  // Takes mutex_ within the timeout, or says the store is busy with a call that hangs.
+  arrow::Status Lock(std::unique_lock<std::timed_mutex>& lock);
+  arrow::Status Redacted(const arrow::Status& status) const;
+  template <typename T>
+  arrow::Result<T> Redacted(arrow::Result<T> result) const {
+    if (result.ok()) return result;
+    return Redacted(result.status());
+  }
 
-  std::unique_ptr<duckdb::DuckDB> db_;
-  std::unique_ptr<duckdb::Connection> conn_;
-  std::mutex mutex_;
+  StoreOptions options_;
+  std::string connect_uri_;  // options_.uri with the timeouts libpq takes added
+  std::shared_ptr<StoreLink> link_;
+  std::timed_mutex mutex_;
   std::string description_;  // for logs; never contains credentials
   std::string secret_dir_;   // the private instance's (empty) secret directory
   std::string file_path_;    // a DuckDB store's file
+  std::string cluster_id_;
 
   friend class StoreTransaction;
 };
@@ -127,9 +186,9 @@ class StoreTransaction {
   arrow::Result<std::shared_ptr<const Snapshot>> Reload();
 
  private:
-  StoreTransaction(RbacStore& store, duckdb::Connection& conn) : store_(store), conn_(conn) {}
+  StoreTransaction(RbacStore& store, StoreLink& conn) : store_(store), conn_(conn) {}
   RbacStore& store_;
-  duckdb::Connection& conn_;
+  StoreLink& conn_;
   friend class RbacStore;
 };
 

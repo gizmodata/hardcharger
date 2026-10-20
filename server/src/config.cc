@@ -14,6 +14,7 @@
 #include <stdexcept>
 
 #include "authz/authz.hpp"
+#include "warpsql/server.hpp"
 
 namespace hardcharger {
 
@@ -108,6 +109,13 @@ const std::vector<Option>& Options() {
        NUMBER(max_result_partitions)},
       {"web_ui", Kind::kBool,
        "serve the web UI at /ui on this port (a build that embeds it)", FLAG(web_ui)},
+      {"trusted_proxies", Kind::kList,
+       "reverse proxies (CIDRs such as 10.0.0.0/8 or fd00::/8, or single addresses) whose "
+       "X-Forwarded-For or Forwarded header names the client; from them, the client's address in "
+       "logs, audit, sessions and the per-address browser sign-in bound is the rightmost forwarded "
+       "hop that is not itself a trusted proxy. Never used for authentication or TLS. Empty: trust "
+       "none (the TCP peer is the client)",
+       LIST(trusted_proxies)},
       // TLS
       {"tls_cert", Kind::kString, "TLS certificate chain (PEM)",
        TEXT(tls_cert)},
@@ -150,6 +158,18 @@ const std::vector<Option>& Options() {
        "SQL run at startup (before the file)", TEXT(init_sql_commands)},
       {"init_sql_commands_file", Kind::kString, "SQL file run at startup",
        TEXT(init_sql_commands_file)},
+      {"default_catalog", Kind::kString,
+       "the catalog every new session starts in, unless the client's session options name one "
+       "(checked after the init SQL: the server refuses to start if it isn't attached). Unset, "
+       "with default_schema unset too, an init SQL that ends in USE x or USE x.y sets where "
+       "sessions start; else they start in the database's catalog. Under access control a user "
+       "who may not see it starts where they would without it",
+       TEXT(default_catalog)},
+      {"default_schema", Kind::kString,
+       "the schema every new session starts in, in default_catalog (or, without it, in the "
+       "database's catalog), unless the client's session options name one; the server refuses "
+       "to start if it doesn't exist",
+       TEXT(default_schema)},
       {"result_batch_rows", Kind::kInt, "most rows per Arrow batch in a result",
        NUMBER(result_batch_rows)},
       // Authentication
@@ -177,6 +197,16 @@ const std::vector<Option>& Options() {
        LIST(token_authorized_emails)},
       {"token_jwks_uri", Kind::kString,
        "JWKS of the identity provider whose ID tokens sign users in", TEXT(token_jwks_uri)},
+      {"token_auto_provision_users", Kind::kBool,
+       "under access control, a verified sign-in token from token_auto_provision_issuer whose "
+       "user the store lacks creates it on first sign-in (no password, no grants; the token's "
+       "role in its provisioned_role attribute, readonly staying readonly); admin tokens and "
+       "existing users (a disabled one stays disabled) are unchanged",
+       FLAG(token_auto_provision_users)},
+      {"token_auto_provision_issuer", Kind::kString,
+       "the issuer (iss) whose sign-in tokens token_auto_provision_users provisions users for "
+       "(default: token_allowed_issuer)",
+       TEXT(token_auto_provision_issuer)},
       // Browser sign-in
       {"oauth_client_id", Kind::kString,
        "OAuth client id; set, browser sign-in is offered (Warp SQL oauth_browser)",
@@ -201,7 +231,10 @@ const std::vector<Option>& Options() {
       {"max_sessions", Kind::kInt,
        "most non-admin sessions at once (0: unlimited)", NUMBER(max_sessions)},
       {"session_idle_timeout", Kind::kInt,
-       "seconds an idle session lives (0: forever)", NUMBER(session_idle_timeout)},
+       "a session is evicted within 5 s after this many seconds without requests (0: never), "
+       "unless a statement of it is running, an ingest of it is in progress, a result of it is "
+       "being read, or it holds a retained result that hasn't expired (result_retention_seconds)",
+       NUMBER(session_idle_timeout)},
       {"result_retention_seconds", Kind::kInt,
        "seconds a retained result (resumable, readable again) is kept after its statement ends, "
        "from 1 to 2592000 (30 days); its statement document's expires_at says until when",
@@ -223,6 +256,24 @@ const std::vector<Option>& Options() {
        TEXT(rbac_opa_url)},
       {"rbac_opa_timeout_ms", Kind::kInt,
        "how long to wait for the policy service (no answer refuses)", NUMBER(rbac_opa_timeout_ms)},
+      {"rbac_store_timeout_seconds", Kind::kInt,
+       "the longest one access-control store round trip may take, from 1 to 300: a store that does "
+       "not answer in time fails the statement that needed it (access control store unavailable: "
+       "timed out after N s) and what it was doing is rolled back. For PostgreSQL it also sets libpq's "
+       "connect_timeout, TCP keepalives, tcp_user_timeout and the session's statement_timeout, each "
+       "unless the connection string sets it",
+       NUMBER(rbac_store_timeout_seconds)},
+      {"rbac_max_snapshot_age_seconds", Kind::kInt,
+       "while the store does not answer, sign-ins and statements go on with the last users, roles and "
+       "grants it gave (a warning is logged, and hardcharger_rbac_snapshot_age_seconds says how old they "
+       "are); past this many seconds every principal but the administrator is refused until it answers "
+       "again (fail closed). 0: no limit (stay available)",
+       NUMBER(rbac_max_snapshot_age_seconds)},
+      {"rbac_store_shared", Kind::kBool,
+       "let clusters with different cluster_ids share one store, and with it their users, roles and "
+       "grants (grants name catalogs, so a grant on one cluster's catalog applies to another's catalog "
+       "of that name). Off: the store records the first cluster_id that opens it and refuses any other",
+       FLAG(rbac_store_shared)},
       {"audit_chain_key", Kind::kString,
        "key that seals access-control audit records into a tamper-evident chain "
        "(HMAC-SHA256; unset: SHA-256); --verify-audit-log FILE checks a JSON log",
@@ -483,6 +534,13 @@ void Validate(Loaded& loaded) {
     throw std::invalid_argument("ports must be between 0 and 65535");
   }
   if (c.oauth_max_flows < 1) throw std::invalid_argument("oauth_max_flows must be positive");
+  for (const auto& proxy : c.trusted_proxies) {
+    try {
+      warpsql::ParseIpNetwork(proxy);
+    } catch (const std::invalid_argument& e) {
+      throw std::invalid_argument(std::string("trusted_proxies: ") + e.what());
+    }
+  }
   // Saying where /metrics listens asks for metrics: a metrics_port (other than 0) or a
   // metrics_bind_address turns them on, unless enable_metrics is set (an explicit false
   // wins, and says so at startup).
@@ -506,11 +564,45 @@ void Validate(Loaded& loaded) {
         "rbac_store_uri must be a PostgreSQL connection string or a DuckDB file (memory is for tests only)");
   }
   CheckStoreFileIsItsOwn(c);
+  if (!c.token_auto_provision_issuer.empty() && !c.token_auto_provision_users) {
+    throw std::invalid_argument("token_auto_provision_issuer needs token_auto_provision_users");
+  }
+  if (c.token_auto_provision_users) {
+    if (c.rbac_store_uri.empty()) {
+      throw std::invalid_argument("token_auto_provision_users needs rbac_store_uri (access control)");
+    }
+    // As the server finds its keys (main.cc): a PEM key, a JWKS, or the issuer's OpenID
+    // configuration (an issuer and an audience).
+    if (c.token_signature_verify_cert_path.empty() && c.token_jwks_uri.empty() &&
+        (c.token_allowed_issuer.empty() || c.token_allowed_audience.empty())) {
+      throw std::invalid_argument(
+          "token_auto_provision_users needs a way to verify sign-in tokens: "
+          "token_signature_verify_cert_path, token_jwks_uri, or token_allowed_issuer with "
+          "token_allowed_audience");
+    }
+    if (c.token_auto_provision_issuer.empty()) c.token_auto_provision_issuer = c.token_allowed_issuer;
+    if (c.token_auto_provision_issuer.empty()) {
+      throw std::invalid_argument(
+          "token_auto_provision_users needs token_auto_provision_issuer or token_allowed_issuer: "
+          "only one issuer's tokens provision users");
+    }
+    if (!c.token_allowed_issuer.empty() && c.token_auto_provision_issuer != c.token_allowed_issuer) {
+      throw std::invalid_argument("token_auto_provision_issuer '" + c.token_auto_provision_issuer +
+                                  "' is not token_allowed_issuer '" + c.token_allowed_issuer +
+                                  "', the only issuer whose tokens sign in, so it would provision no one");
+    }
+  }
   if (!c.rbac_opa_url.empty() && c.rbac_store_uri.empty()) {
     throw std::invalid_argument("rbac_opa_url needs rbac_store_uri (access control)");
   }
   if (c.rbac_opa_timeout_ms < 0) {
     throw std::invalid_argument("rbac_opa_timeout_ms must not be negative");
+  }
+  if (c.rbac_store_timeout_seconds < 1 || c.rbac_store_timeout_seconds > 300) {
+    throw std::invalid_argument("rbac_store_timeout_seconds must be from 1 to 300");
+  }
+  if (c.rbac_max_snapshot_age_seconds < 0) {
+    throw std::invalid_argument("rbac_max_snapshot_age_seconds must not be negative");
   }
   if (c.rbac_opa_timeout_ms == 0) {
     c.rbac_opa_timeout_ms = 2000;  // 0: the default

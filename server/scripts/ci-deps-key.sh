@@ -23,7 +23,7 @@ case "$dep" in
   arrow) recipes=(third_party/warp-sql/cpp/scripts/build-arrow.sh server/scripts/deps-arrow.sh) ;;
   duckdb) recipes=(third_party/warp-sql/cpp/scripts/build-duckdb.sh server/scripts/deps-duckdb.sh
                    server/scripts/patch-duckdb*.cmake server/scripts/duckdb-extensions.cmake
-                   server/scripts/build-extension-deps.sh) ;;
+                   server/scripts/extension-patches/*/*.patch server/scripts/build-extension-deps.sh) ;;
   replxx) recipes=(server/scripts/build-replxx.sh) ;;
   openssl) recipes=(server/scripts/deps-openssl.sh) ;;
   *) echo "ci-deps-key: no dependency '$dep'" >&2; exit 2 ;;

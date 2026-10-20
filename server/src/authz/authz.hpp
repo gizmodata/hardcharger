@@ -56,6 +56,14 @@ struct Options {
   std::chrono::milliseconds policy_service_timeout{2000};
   // How often to look for changes other replicas made.
   std::chrono::milliseconds poll_interval{1000};
+  // The longest one store round trip may take (rbac_store_timeout_seconds).
+  std::chrono::milliseconds store_timeout{10000};
+  // This server's cluster_id: the store must belong to it unless store_shared.
+  std::string cluster_id;
+  bool store_shared = false;  // rbac_store_shared
+  // rbac_max_snapshot_age_seconds: how long store users are served from the last snapshot
+  // while the store does not answer (0: for as long as it takes).
+  std::chrono::seconds max_snapshot_age{0};
   // No store: sign-in tokens' catalog_access rules restrict sessions (per-catalog
   // permissions), and every principal but the administrator is held to a
   // non-administrator's limits. Users, roles and grants don't exist; access-control
@@ -86,6 +94,10 @@ struct Identity {
   // The token's catalog_access rules (catalog_rules_only servers; ignored under RBAC).
   std::optional<std::vector<CatalogAccessRule>> catalog_access;
 };
+
+// The store user attribute that keeps a provisioned user's token sign-ins readonly
+// (token_auto_provision_users): the role of the token that created the user.
+inline constexpr const char* kProvisionedRoleAttribute = "provisioned_role";
 
 // Signs a scoped token for (user name, scope id, expiry in seconds since the epoch, the
 // minter's certificate binding or empty).
@@ -132,6 +144,20 @@ std::string DuckDBStoreFile(const std::string& store_uri);
 void InstallFileGuard(duckdb_v2_instance_handle instance, std::shared_ptr<const PrivateFiles> files,
                       std::shared_ptr<const SensitivePaths> sensitive);
 
+// A "readonly" principal's session (read_only.cc): from now on DuckDB's own analysis of
+// every statement it prepares on `connection` decides whether it writes, as in GizmoSQL
+// 1.x. One that modifies a database (the temp catalog included) or writes a file, wherever
+// in the statement (a data-modifying CTE, COPY ... TO inside a CTE), is refused before it
+// runs: "User '<user_name>' has a readonly session and cannot run statements that modify
+// state." Called once, before any statement runs on the connection.
+void BindReadOnlySession(duckdb_v2_connection_handle connection, const std::string& user_name);
+
+// Whether a readonly session may run `sql`, one SET or RESET of a DuckDB setting: only a
+// setting DuckDB keeps for the session (SET SESSION, or a plain SET of a setting whose
+// default scope is the session) that doesn't reach the host or the instance, switch the
+// grammar or write files. Never GLOBAL.
+bool ReadOnlySessionMaySet(duckdb_v2_connection_handle connection, std::string_view sql);
+
 class AccessControl {
  public:
   // Opens the store and loads it. Throws std::runtime_error (never quoting the store's
@@ -168,9 +194,26 @@ class AccessControl {
   std::optional<SignIn> AuthenticatePassword(std::string_view user_name,
                                              std::string_view password) const;
 
+  // A sign-in token's store user. `readonly`: the user's provisioned_role attribute
+  // (kProvisionedRoleAttribute) is "readonly", so its token sign-ins are readonly whatever
+  // role the token gives. `created`: ProvisionStoreUser created it just now.
+  struct TokenUser {
+    bool readonly = false;
+    bool created = false;
+  };
+
   // Refuses a sign-in token's user when it is not one of the store's enabled users.
   // Throws warpsql::Error(kInvalidCredentials).
-  void RequireStoreUser(const std::string& user_name) const;
+  TokenUser RequireStoreUser(const std::string& user_name) const;
+
+  // RequireStoreUser for token_auto_provision_users: a user the store doesn't have is
+  // created first, with no password and no grants, and the token's role ("user" or
+  // "readonly") in its provisioned_role attribute. A disabled user stays disabled (and is
+  // refused). Throws warpsql::Error(kInvalidCredentials) when the user can't be created
+  // (its name is a role's, the administrator's, or an unknown tenant's) or is disabled.
+  // Each creation, and each refusal to create, is an audit record naming `issuer`.
+  TokenUser ProvisionStoreUser(const std::string& user_name, const std::string& token_role,
+                               const std::string& issuer);
 
   // A client certificate's identity (spec §4.4): the store's name of the enabled user it
   // names, or nullopt. An e-mail or CN identity compares as user names do (ignoring ASCII
@@ -183,7 +226,14 @@ class AccessControl {
   // (principal_dropped), the password it was issued against was changed
   // (credentials_changed), or its scoped token was revoked (token_revoked) or expired
   // (token_expired). Only for a token this server signed. Cheap: called on every request.
-  void CheckToken(const Identity& who) const;
+  // Returns the store user the token names right now (empty for the administrator and on
+  // catalog_rules_only servers), for the token's authority (AuthorityKey in auth.hpp): a
+  // user dropped and created again under the same name is another user.
+  struct TokenStanding {
+    std::string user_id;
+    std::string tenant_id;
+  };
+  TokenStanding CheckToken(const Identity& who) const;
 
   // Binds a new session's connection to `who`. Throws warpsql::Error when the session
   // is refused (unknown or disabled user, revoked scoped token, policy service).
@@ -192,6 +242,16 @@ class AccessControl {
   const std::string& store_description() const;
   // A DuckDB store's file (absolute), which SQL must never reach; empty for PostgreSQL.
   const std::string& store_file() const;
+  // The cluster the store belongs to (the first cluster_id that opened it), or empty.
+  const std::string& store_cluster_id() const;
+
+  // The store's health, for metrics: whether its last poll answered, and how long ago it
+  // last did (the age of the grants this server holds).
+  struct StoreHealth {
+    bool up = true;
+    double snapshot_age_seconds = 0;
+  };
+  StoreHealth store_health() const;
 
  private:
   void OnSnapshot(const Snapshot& snapshot);
@@ -272,6 +332,8 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   bool unrestricted() const { return unrestricted_; }
   // The tenant the session's user belongs to, by name ("" for none).
   const std::string& tenant_name() const { return tenant_name_; }
+  // The session started in its tenant's default catalog (ALTER TENANT ... SET DEFAULT CATALOG).
+  bool started_in_tenant_catalog() const { return started_in_tenant_catalog_; }
 
  private:
   SessionGuard(AccessControl& owner, duckdb_v2_connection_handle connection, Identity identity,
@@ -296,6 +358,7 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   std::string credential_;     // the user's password hash when the session started
   std::string tenant_id_;
   std::string tenant_name_;
+  bool started_in_tenant_catalog_ = false;
   int64_t scope_expires_at_ = 0;  // a scoped token's session: when the scope ends (Unix s)
   std::string tenant_catalogs_;
 

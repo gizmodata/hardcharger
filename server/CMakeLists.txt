@@ -164,6 +164,7 @@ add_library(hardcharger_authz OBJECT
   src/authz/opa.cc
   src/authz/password.cc
   src/authz/policies.cc
+  src/authz/read_only.cc
   src/authz/resolver.cc
   src/authz/store.cc
   src/authz/types.cc
@@ -193,6 +194,7 @@ add_library(hardcharger_core STATIC
   src/oauth.cc
   src/patterns.cc
   src/platform.cc
+  src/redact.cc
   src/sessions.cc
   src/settings.cc
   src/sql_functions.cc
@@ -245,7 +247,9 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 add_executable(hardcharger-unit-tests
   unit/admission_test.cc
+  unit/authority_key_test.cc
   unit/catalog_log_test.cc
+  unit/extension_hint_test.cc
   unit/guards_test.cc
   unit/http_client_test.cc
   unit/ingest_test.cc
@@ -255,6 +259,7 @@ add_executable(hardcharger-unit-tests
   unit/patterns_test.cc
   unit/platform_test.cc
   unit/redaction_test.cc
+  unit/store_test.cc
   unit/sensitive_paths_test.cc
   unit/sql_text_test.cc
   unit/startup_banner_test.cc

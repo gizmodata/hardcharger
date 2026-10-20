@@ -7,6 +7,7 @@
 #include <sstream>
 
 #include "authz/policies.hpp"
+#include "logging.hpp"
 #include "platform.hpp"
 
 namespace hardcharger::authz {
@@ -115,6 +116,23 @@ arrow::Result<std::string> TenantForName(const Snapshot& snap, const std::string
   return tenant->id;
 }
 
+// A name CREATE USER (or a first token sign-in, RbacEngine::ProvisionUser) may give a
+// new user: free, and neither the administrator's name nor a certificate administrator's.
+arrow::Status CheckNewUserName(const Snapshot& snap, const std::string& name, const RbacEngine::Options& options) {
+  ARROW_RETURN_NOT_OK(CheckNameFree(snap, name));
+  if (!options.administrator_name.empty() && IdentifiersEqual(name, options.administrator_name)) {
+    return AccessControlError(name + " is the server administrator's name");
+  }
+  for (const auto& administrator : options.certificate_administrators) {
+    if (IdentifiersEqual(name, administrator)) {
+      return AccessControlError(name +
+                                " signs in as the server administrator with a client certificate "
+                                "(mtls_admin_identities)");
+    }
+  }
+  return arrow::Status::OK();
+}
+
 // Does the principal hold the tenant's tenant_admin role?
 bool IsTenantAdmin(const Snapshot& snap, const Principal& actor, const std::string& tenant_id) {
   if (tenant_id.empty() || actor.superuser) return false;
@@ -144,13 +162,19 @@ arrow::Result<std::shared_ptr<RbacEngine>> RbacEngine::Create(const Options& opt
   std::shared_ptr<RbacEngine> engine(new RbacEngine(options));
   ARROW_ASSIGN_OR_RAISE(engine->dummy_hash_,
                         HashPassword("hardcharger-timing-equalizer", options.password_iterations));
-  ARROW_ASSIGN_OR_RAISE(engine->store_, RbacStore::Open(options.store_uri));
+  StoreOptions store_options;
+  store_options.uri = options.store_uri;
+  store_options.timeout = options.store_timeout;
+  store_options.cluster_id = options.cluster_id;
+  store_options.shared = options.store_shared;
+  ARROW_ASSIGN_OR_RAISE(engine->store_, RbacStore::Open(store_options));
   if (!options.policy_service_url.empty()) {
     engine->policy_service_ =
         std::make_unique<PolicyService>(options.policy_service_url, options.policy_service_timeout);
   }
   ARROW_ASSIGN_OR_RAISE(auto snapshot, engine->store_->Load());
   engine->Publish(std::move(snapshot));
+  engine->NoteStoreAnswer(arrow::Status::OK());
   if (options.poll_interval.count() > 0) {
     engine->poller_ = std::thread([raw = engine.get()] { raw->PollLoop(); });
   }
@@ -175,8 +199,69 @@ void RbacEngine::PollLoop() {
     poll_cv_.wait_for(lock, options_.poll_interval, [this] { return stopping_; });
     if (stopping_) break;
     lock.unlock();
-    (void)Refresh();  // a store blip keeps the last good snapshot
+    NoteStoreAnswer(Refresh());  // a store that does not answer keeps the last good snapshot
     lock.lock();
+  }
+}
+
+namespace {
+int64_t SteadyNs() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+std::string Seconds(double seconds) {
+  std::ostringstream out;
+  out << static_cast<int64_t>(seconds);
+  return out.str();
+}
+}  // namespace
+
+double RbacEngine::SnapshotAgeSeconds() const {
+  const int64_t last = last_answer_ns_.load();
+  if (last == 0) return 0;
+  return static_cast<double>(SteadyNs() - last) / 1e9;
+}
+
+arrow::Status RbacEngine::RequireFreshSnapshot() const {
+  if (options_.max_snapshot_age.count() <= 0) return arrow::Status::OK();
+  const double age = SnapshotAgeSeconds();
+  if (age <= static_cast<double>(options_.max_snapshot_age.count())) return arrow::Status::OK();
+  return AccessControlError("the access control store has not answered for " + Seconds(age) +
+                            " s, longer than rbac_max_snapshot_age_seconds (" +
+                            std::to_string(options_.max_snapshot_age.count()) +
+                            "), so the grants this server holds may be out of date: store users are "
+                            "refused until the store answers again");
+}
+
+// Sign-ins and statements go on with the last snapshot while the store does not answer
+// (availability), but not silently: the first failed poll logs a warning, then one at
+// most every 30 s with the snapshot's age, and the store's return is logged too.
+void RbacEngine::NoteStoreAnswer(const arrow::Status& status) {
+  const int64_t now = SteadyNs();
+  if (status.ok()) {
+    last_answer_ns_.store(now);
+    if (!store_up_.exchange(true)) {
+      Log(LogLevel::kInfo, "the access control store answers again",
+          {{"outage_seconds", Seconds(static_cast<double>(now - outage_started_ns_) / 1e9)}});
+    }
+    return;
+  }
+  const bool was_up = store_up_.exchange(false);
+  if (was_up) outage_started_ns_ = now;
+  if (was_up || now - outage_logged_ns_ >= int64_t{30} * 1000000000) {
+    outage_logged_ns_ = now;
+    LogFields fields = {{"snapshot_age_seconds", Seconds(SnapshotAgeSeconds())},
+                        {"error", status.message()}};
+    if (options_.max_snapshot_age.count() > 0) {
+      fields.push_back({"rbac_max_snapshot_age_seconds", std::to_string(options_.max_snapshot_age.count())});
+    }
+    Log(LogLevel::kWarning,
+        options_.max_snapshot_age.count() > 0
+            ? "the access control store does not answer: serving the last grants it gave until "
+              "rbac_max_snapshot_age_seconds, then refusing store users"
+            : "the access control store does not answer: serving the last grants it gave (no "
+              "rbac_max_snapshot_age_seconds limit)",
+        fields);
   }
 }
 
@@ -239,6 +324,40 @@ arrow::Result<Principal> RbacEngine::PrincipalForUser(const std::string& user_na
   return Principal::User(user->id, user->name);
 }
 
+arrow::Result<Principal> RbacEngine::ProvisionUser(const std::string& user_name,
+                                                   const std::map<std::string, std::string>& attributes,
+                                                   bool* created) {
+  *created = false;
+  if (snapshot()->FindUserByName(user_name)) return PrincipalForUser(user_name);  // disabled stays disabled
+  bool inserted = false;
+  const auto written = store_->Mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+    inserted = false;
+    // Read inside the transaction, after the writers before it: another replica's first
+    // sign-in of the same user may have created it since this replica's snapshot.
+    if (snap.FindUserByName(user_name)) return arrow::Status::OK();
+    ARROW_RETURN_NOT_OK(CheckNewUserName(snap, user_name, options_));
+    ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, user_name));
+    UserRecord user{StoreTransaction::NewId(), user_name, std::nullopt, true, {}};
+    ARROW_RETURN_NOT_OK(txn.InsertUser(user));
+    for (const auto& [attribute, value] : attributes) {
+      ARROW_RETURN_NOT_OK(txn.SetUserAttribute(user.id, attribute, value));
+    }
+    ARROW_RETURN_NOT_OK(txn.SetPrincipalTenant(PrincipalKind::kUser, user.id, tenant));
+    inserted = true;
+    return arrow::Status::OK();
+  });
+  // Re-read either way: a write that failed may have lost a race to the same user's
+  // first sign-in elsewhere, which then counts (and its user is the one to sign in).
+  ARROW_ASSIGN_OR_RAISE(auto fresh, store_->Load());
+  Publish(std::move(fresh));
+  if (!written.ok()) {
+    if (snapshot()->FindUserByName(user_name)) return PrincipalForUser(user_name);
+    return written;
+  }
+  *created = inserted;
+  return PrincipalForUser(user_name);
+}
+
 bool RbacEngine::IsActive(const Principal& principal) const {
   // A rules-only principal has no store record: its token decides.
   if (principal.superuser || principal.catalog_rules) return true;
@@ -257,6 +376,14 @@ arrow::Status RbacEngine::RecordOwner(const ObjectPath& object, ObjectType type,
     record.definition_hash = definition_hash;
     return txn.UpsertOwner(record);
   }));
+  ARROW_ASSIGN_OR_RAISE(auto snap, store_->Load());
+  Publish(std::move(snap));
+  return arrow::Status::OK();
+}
+
+arrow::Status RbacEngine::PutOwner(const OwnerRecord& record) {
+  ARROW_RETURN_NOT_OK(
+      store_->Mutate([&](StoreTransaction& txn, const Snapshot&) { return txn.UpsertOwner(record); }));
   ARROW_ASSIGN_OR_RAISE(auto snap, store_->Load());
   Publish(std::move(snap));
   return arrow::Status::OK();
@@ -635,18 +762,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
         message = "User " + c->name + " already exists";
         return arrow::Status::OK();
       }
-      ARROW_RETURN_NOT_OK(CheckNameFree(snap, c->name));
-      if (!options_.administrator_name.empty() &&
-          IdentifiersEqual(c->name, options_.administrator_name)) {
-        return AccessControlError(c->name + " is the server administrator's name");
-      }
-      for (const auto& administrator : options_.certificate_administrators) {
-        if (IdentifiersEqual(c->name, administrator)) {
-          return AccessControlError(c->name +
-                                    " signs in as the server administrator with a client certificate "
-                                    "(mtls_admin_identities)");
-        }
-      }
+      ARROW_RETURN_NOT_OK(CheckNewUserName(snap, c->name, options_));
       ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name));
       message = "User " + c->name + " created";
       UserRecord user{StoreTransaction::NewId(), c->name, hash, true, {}};

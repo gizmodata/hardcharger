@@ -50,3 +50,6 @@ grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_baset
   || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
 grep -q HardchargerDecimal38Converter "$SRC/src/common/arrow/arrow_appender.cpp" \
   || { echo "DuckDB lost the HUGEINT / UHUGEINT Arrow export patch" >&2; exit 1; }
+grep -q HardchargerMetadataStorageVersion \
+  "$WARPSQL_DEPS_DIR/duckdb-build/_deps/ducklake_extension_fc-src/src/storage/ducklake_initializer.cpp" \
+  || { echo "ducklake lost the metadata storage version patch (scripts/extension-patches)" >&2; exit 1; }

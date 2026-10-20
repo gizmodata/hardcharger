@@ -127,6 +127,8 @@ class GuardedPrepared : public warpsql::PreparedStatement {
 
   warpsql::PreparedStatement& inner() { return *inner_; }
   std::vector<PendingOwnership> TakeOwnership() { return std::move(ownership_); }
+  // A run that failed: the next one records them.
+  void GiveBackOwnership(std::vector<PendingOwnership> ownership) { ownership_ = std::move(ownership); }
 
  private:
   std::unique_ptr<warpsql::PreparedStatement> inner_;
@@ -290,6 +292,12 @@ AccessControl::AccessControl(const Options& options)
   engine_options.policy_service_url = options.policy_service_url;
   engine_options.policy_service_timeout = options.policy_service_timeout;
   engine_options.poll_interval = catalog_rules_only_ ? std::chrono::milliseconds(0) : options.poll_interval;
+  engine_options.store_timeout = options.store_timeout;
+  if (!catalog_rules_only_) {
+    engine_options.cluster_id = options.cluster_id;
+    engine_options.store_shared = options.store_shared;
+    engine_options.max_snapshot_age = options.max_snapshot_age;
+  }
   auto engine = RbacEngine::Create(engine_options);
   if (!engine.ok()) throw std::runtime_error(engine.status().message());
   engine_ = *engine;
@@ -310,6 +318,21 @@ const std::string& AccessControl::store_description() const { return engine_->st
 
 const std::string& AccessControl::store_file() const { return engine_->store_file(); }
 
+const std::string& AccessControl::store_cluster_id() const { return engine_->store_cluster_id(); }
+
+AccessControl::StoreHealth AccessControl::store_health() const {
+  return {engine_->store_up(), engine_->SnapshotAgeSeconds()};
+}
+
+namespace {
+// Store users are refused once the snapshot is older than rbac_max_snapshot_age_seconds.
+void RequireFresh(const RbacEngine& engine) {
+  if (auto fresh = engine.RequireFreshSnapshot(); !fresh.ok()) {
+    throw Error(ErrorCode::kPermissionDenied, fresh.message(), "42501");
+  }
+}
+}  // namespace
+
 void AccessControl::InstallEnforcement(duckdb_v2_instance_handle instance) {
   // DuckDB 2.0 lets optimizer and planner extensions register on an open instance.
   auto& database = *dd::capiv2::Convert(instance)->GetDatabase().instance;
@@ -322,6 +345,7 @@ void AccessControl::SetHiddenCatalogs(std::vector<std::string> catalogs) { hidde
 
 std::optional<AccessControl::SignIn> AccessControl::AuthenticatePassword(
     std::string_view user_name, std::string_view password) const {
+  if (!catalog_rules_only_) RequireFresh(*engine_);
   auto principal = engine_->AuthenticatePassword(std::string(user_name), std::string(password));
   if (!principal.ok()) return std::nullopt;
   const UserRecord* user = engine_->snapshot()->FindUserById(principal->user_id);
@@ -329,13 +353,56 @@ std::optional<AccessControl::SignIn> AccessControl::AuthenticatePassword(
   return SignIn{user->name, Fingerprint(user->password_hash)};
 }
 
-void AccessControl::RequireStoreUser(const std::string& user_name) const {
+namespace {
+
+AccessControl::TokenUser TokenUserOf(const Snapshot& snapshot, const std::string& user_id) {
+  AccessControl::TokenUser out;
+  if (const UserRecord* user = snapshot.FindUserById(user_id)) {
+    const auto role = user->attributes.find(kProvisionedRoleAttribute);
+    out.readonly = role != user->attributes.end() && role->second == "readonly";
+  }
+  return out;
+}
+
+}  // namespace
+
+AccessControl::TokenUser AccessControl::RequireStoreUser(const std::string& user_name) const {
+  RequireFresh(*engine_);
   auto principal = engine_->PrincipalForUser(user_name);
   if (!principal.ok()) throw Error(ErrorCode::kInvalidCredentials, principal.status().message());
+  return TokenUserOf(*engine_->snapshot(), principal->user_id);
+}
+
+AccessControl::TokenUser AccessControl::ProvisionStoreUser(const std::string& user_name,
+                                                           const std::string& token_role,
+                                                           const std::string& issuer) {
+  RequireFresh(*engine_);
+  bool created = false;
+  auto principal = engine_->ProvisionUser(user_name, {{kProvisionedRoleAttribute, token_role}}, &created);
+  if (!principal.ok()) {
+    // A user that exists (a disabled one) was refused as any sign-in is; one that couldn't
+    // be created is an access-control refusal.
+    if (engine_->snapshot()->FindUserByName(user_name) == nullptr) {
+      Audit(LogLevel::kWarning, "refused to provision a user from a sign-in token",
+            {{"kind", "access_control"}, {"status", "rejected"}, {"statement", "CREATE USER"},
+             {"method", "token_auto_provision"}, {"user", user_name}, {"issuer", issuer},
+             {"error", principal.status().message()}});
+    }
+    throw Error(ErrorCode::kInvalidCredentials, principal.status().message());
+  }
+  if (created) {
+    Audit(LogLevel::kInfo, "provisioned a user on its first sign-in",
+          {{"kind", "access_control"}, {"status", "success"}, {"statement", "CREATE USER"},
+           {"method", "token_auto_provision"}, {"user", user_name}, {"issuer", issuer}, {"role", token_role}});
+  }
+  TokenUser out = TokenUserOf(*engine_->snapshot(), principal->user_id);
+  out.created = created;
+  return out;
 }
 
 std::optional<std::string> AccessControl::CertificateUser(const std::string& identity) const {
   if (catalog_rules_only_) return std::nullopt;
+  RequireFresh(*engine_);
   const auto snapshot = engine_->snapshot();  // keeps `user` alive
   const UserRecord* user = snapshot->FindUserByName(identity);
   if (user == nullptr || !user->enabled) return std::nullopt;
@@ -349,8 +416,9 @@ std::optional<std::string> AccessControl::CertificateUser(const std::string& ide
   return user->name;
 }
 
-void AccessControl::CheckToken(const Identity& who) const {
-  if (who.superuser || catalog_rules_only_) return;
+AccessControl::TokenStanding AccessControl::CheckToken(const Identity& who) const {
+  if (who.superuser || catalog_rules_only_) return {};
+  RequireFresh(*engine_);
   // Only for a token this server signed and verified (JwtTokenService::Validate), so each
   // refusal says why (Warp SQL §4.2's reason): only the token's holder learns it.
   namespace why = warpsql::reason;
@@ -373,6 +441,7 @@ void AccessControl::CheckToken(const Identity& who) const {
                                                                          : "this scoped token has expired");
     }
   }
+  return {user->id, snapshot->TenantOf(PrincipalKind::kUser, user->id)};
 }
 
 std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle connection,
@@ -412,6 +481,7 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
     principal.rules_administrator = who.superuser;
     principal.hidden_catalogs = hidden_catalogs_;  // the server's own catalogs, even from a restricted admin
   } else {
+    RequireFresh(*engine_);
     auto found = engine_->PrincipalForUser(who.user_name);
     if (!found.ok()) throw Error(ErrorCode::kPermissionDenied, found.status().message(), "42501");
     principal = *found;
@@ -466,6 +536,7 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
       RbacSessionState::BypassScope internal(ContextOf(connection));
       try {
         warpduckdb::RunSql(connection, "USE " + Quoted(record->default_catalog));
+        guard->started_in_tenant_catalog_ = true;
       } catch (const Error& error) {
         Log(LogLevel::kWarning, "a tenant's default catalog could not be used",
             {{"user", who.user_name}, {"error", error.what()}});
@@ -599,6 +670,7 @@ void SessionGuard::RequireLive() const {
     if (*ended_ == "scoped token expired") reason = why::kTokenExpired;
     throw Error::SessionEnded(reason, "Hardcharger access control ended this session (" + *ended_ + ")");
   }
+  if (!unrestricted_ && !owner_.catalog_rules_only_) RequireFresh(*owner_.engine_);
   if (connection_ == nullptr) {
     throw Error::SessionEnded(warpsql::reason::kKilled, "the session has ended");
   }
@@ -970,13 +1042,32 @@ warpsql::StatementOutcome SessionGuard::ExecutePrepared(
   }
   auto busy = MarkBusy();
   try {
-    auto outcome = run(guarded->inner());
+    // Its first successful run records who owns what it creates: before it runs, so that
+    // nothing it creates can be left without an owner (put back if the run fails).
     auto ownership = guarded->TakeOwnership();
-    if (!ownership.empty()) {
-      if (auto state = StateOf(connection_)) {
-        ApplyOwnership(*owner_.engine_, state->principal(), ownership);
+    auto state = ownership.empty() ? nullptr : StateOf(connection_);
+    std::vector<RecordedOwnership> recorded;
+    if (state) {
+      auto status = RecordCreatedOwners(*owner_.engine_, state->principal(), ownership, recorded);
+      if (!status.ok()) {
+        guarded->GiveBackOwnership(std::move(ownership));
+        throw Error(ErrorCode::kExecutionError,
+                    "Hardcharger did not run this statement: the owner of what it creates could not be "
+                    "recorded (" + status.message() + ")");
       }
     }
+    warpsql::StatementOutcome outcome;
+    try {
+      outcome = run(guarded->inner());
+    } catch (...) {
+      if (state) {
+        UndoRecordedOwners(*owner_.engine_, recorded);
+        for (auto& o : ownership) o.recorded = false;
+        guarded->GiveBackOwnership(std::move(ownership));
+      }
+      throw;
+    }
+    if (state) ApplyOwnership(*owner_.engine_, state->principal(), ownership);
     AuditAllowed();
     if (outcome.rows) outcome.rows = Track(std::move(outcome.rows), std::move(busy));
     return outcome;

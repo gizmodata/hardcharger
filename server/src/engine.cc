@@ -6,7 +6,9 @@
 #include <cctype>
 #include <cstdlib>
 #include <regex>
+#include <set>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <sstream>
 
@@ -14,6 +16,7 @@
 #include "duckdb_sql.hpp"
 #include "instrumentation.hpp"
 #include "logging.hpp"
+#include "redact.hpp"
 #include "platform.hpp"
 #include "settings.hpp"
 #include "sql_functions.hpp"
@@ -95,15 +98,54 @@ warpduckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
   for (auto& option : DuckDBDirectories(config)) options.instance_options.push_back(std::move(option));
   if (!config.storage_version.empty()) {
     options.attach_options.emplace_back("STORAGE_VERSION", config.storage_version);
+    // Also the instance's default for every other new database file: a plain ATTACH, and
+    // a new DuckLake's DuckDB metadata file (scripts/extension-patches/ducklake). An
+    // existing file keeps the storage version it has.
+    options.instance_options.emplace_back("storage_compatibility_version", config.storage_version);
   }
   options.result_batch_rows = static_cast<std::size_t>(config.result_batch_rows);
   return options;
 }
 
-// Statements a "readonly" principal may run. A strict allow-list until the authorization
-// module (with DuckDB's own read-only analysis) lands.
+// Statements that read: what may run on the server's own catalogs.
 bool ReadOnlyStatement(DUCKDB_V2_STATEMENT_TYPE type) {
   return type == DUCKDB_V2_STATEMENT_TYPE_SELECT || type == DUCKDB_V2_STATEMENT_TYPE_EXPLAIN;
+}
+
+// PRAGMAs that only read (DuckDB runs each as a query of the pragma_* table function).
+bool IsReadingPragma(const Piece& piece) {
+  const auto& t = piece.tokens;
+  if (t.size() < 2 || !t[0].IsWord("PRAGMA")) return false;
+  if (t.size() > 2 && t[2].IsOp("=")) return false;  // PRAGMA name = value is a SET
+  static const std::set<std::string> kReading = {
+      "table_info", "show",     "show_tables", "show_tables_expanded", "show_databases", "database_list",
+      "database_size", "storage_info", "metadata_info", "version", "platform", "functions", "collations",
+      "user_agent"};
+  return kReading.contains(t[1].Value());
+}
+
+// The kinds of statement a "readonly" principal may run, as GizmoSQL 1.x allowed them: reads,
+// and statements that change only its own session (transactions, SET VARIABLE, session
+// settings, USE, reading PRAGMAs). What each of them really does is then checked by DuckDB's
+// own analysis (authz::BindReadOnlySession): a write anywhere in a SELECT, a SET VARIABLE's
+// value or a transaction is refused all the same. Everything else (CREATE, temporary objects
+// included; DROP, ALTER, INSERT, UPDATE, DELETE, MERGE, COPY, EXPORT, IMPORT, ATTACH, DETACH,
+// INSTALL, LOAD, CHECKPOINT, VACUUM, CALL, SQL-level PREPARE / EXECUTE) is refused.
+bool ReadOnlySessionMayRun(duckdb_v2_connection_handle connection, const Piece& piece,
+                           DUCKDB_V2_STATEMENT_TYPE type) {
+  switch (type) {
+    case DUCKDB_V2_STATEMENT_TYPE_SELECT:
+    case DUCKDB_V2_STATEMENT_TYPE_EXPLAIN:
+    case DUCKDB_V2_STATEMENT_TYPE_TRANSACTION:   // BEGIN, COMMIT, ROLLBACK, ABORT, END
+    case DUCKDB_V2_STATEMENT_TYPE_VARIABLE_SET:  // SET VARIABLE, RESET VARIABLE
+      return true;
+    case DUCKDB_V2_STATEMENT_TYPE_SET:  // SET / RESET of a setting, USE
+      return authz::ReadOnlySessionMaySet(connection, piece.text);
+    case DUCKDB_V2_STATEMENT_TYPE_PRAGMA:
+      return IsReadingPragma(piece);
+    default:
+      return false;
+  }
 }
 
 // SQL as logs and instrumentation keep it: shortened, and never with the credentials
@@ -252,7 +294,33 @@ void RefuseAccessControlStatement(std::string_view sql) {
   }
 }
 
+// A readonly session changes nothing, the access-control store included: of the
+// access-control statements it runs only SHOW ... and SET ROLE. (CREATE SCOPED TOKEN would
+// hand it a token that signs in as a user, outside readonly.)
+void RefuseStoreChangeWhenReadonly(const warpsql::Principal& principal, std::string_view sql) {
+  if (principal.role != "readonly") return;
+  const auto kind = authz::AccessControlStatementKind(sql);
+  if (!kind || kind->starts_with("SHOW") || *kind == "SET ROLE") return;
+  throw Error(ErrorCode::kPermissionDenied,
+              "User '" + principal.name + "' has a readonly session and cannot run " + *kind + ".", "42501");
+}
+
 }  // namespace
+
+// One info line for each statement a cancel stopped, whatever the statement log level (as
+// GizmoSQL 1.x's "SQL Statement was successfully canceled"): its ids, its user, why it was
+// stopped (Warp SQL's cancel_reason: client, timeout, killed, cancelled, session_closed,
+// server_shutdown) and how long it had run, queue wait included, in seconds.
+static void LogCancelled(const Session& session, const LogFields& ids, std::string_view reason,
+                  std::chrono::steady_clock::time_point started) {
+  LogFields fields = {{"session_id", session.id()}};
+  fields.insert(fields.end(), ids.begin(), ids.end());
+  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+  fields.insert(fields.end(), {{"user", session.principal().name},
+                               {"reason", std::string(reason)},
+                               {"duration", std::format("{:.3f}", seconds)}});
+  Log(LogLevel::kInfo, "statement cancelled", fields);
+}
 
 // One execution of a statement, from its queue slot to its result being let go: gives
 // the slot back, counts it in metrics, logs its success and records its timeline in
@@ -302,6 +370,11 @@ class Execution {
     record_.status = status == "ok" ? "success" : std::string(status);
     record_.error = std::string(error);
     if (status == "cancelled") record_.cancel_reason = session_.cancel_reason();
+    // Stopped by a cancel (the reason says which); a result abandoned without one, such as
+    // a client that stopped reading, is no cancelled statement.
+    if (status == "cancelled" && !record_.cancel_reason.empty()) {
+      LogCancelled(session_, ids_, record_.cancel_reason, started_);
+    }
     slot_.Release();
     session_.FinishRunning();
     Runtime& runtime = session_.runtime();
@@ -452,6 +525,9 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
     add_attached(SqlLiteral(catalog_log_->catalog()), catalog_log_->file(), "the log database");
   }
   RunInitSql();
+  // After the init SQL, which attaches the catalogs the defaults name, and after the
+  // instrumentation and log catalogs are known (neither can be the default).
+  ResolveDefaultLocation();
   // Both after the init SQL, which may attach their catalogs.
   if (catalog_log_) {
     catalog_log_->Start();
@@ -535,9 +611,107 @@ void Backend::RunInitSql() {
   try {
     warpduckdb::RunSql(connection.get(), sql);
   } catch (const Error& error) {
-    throw std::runtime_error(std::string("init SQL failed: ") + error.what());
+    // DuckDB quotes an ATTACH's connection string, password included, in its errors.
+    const auto hint = ExtensionDependencyHint(error.what());
+    throw std::runtime_error("init SQL failed: " + (hint ? *hint + "\n" : std::string()) +
+                             RedactCredentials(error.what()));
+  }
+  // Where the init SQL left its connection: a final USE there is where GizmoSQL 1.x's
+  // sessions started (ResolveDefaultLocation). Read from the connection, not the text, so
+  // a USE in any form (USE x, USE x.y, SET schema, a file that ends in one) counts, and
+  // a USE that a later one undid doesn't.
+  try {
+    init_sql_location_.emplace(warpduckdb::QueryText(connection.get(), "SELECT current_database()"),
+                               warpduckdb::QueryText(connection.get(), "SELECT current_schema()"));
+  } catch (const std::exception&) {
+    // A connection that can't say (an init SQL that left a failed transaction): nothing to adopt.
   }
   Log(LogLevel::kInfo, "init SQL ran");
+}
+
+void Backend::ResolveDefaultLocation() {
+  const Config& config = runtime_.config;
+  warpduckdb::Connection probe;
+  warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), probe.out(), err); });
+  // Where a session starts without any of this: the database's catalog and schema.
+  const std::string base_catalog = warpduckdb::QueryText(probe.get(), "SELECT current_database()");
+  const std::string base_schema = warpduckdb::QueryText(probe.get(), "SELECT current_schema()");
+  runtime_.default_catalog = base_catalog;
+  runtime_.default_schema = base_schema;
+
+  const bool configured = !config.default_catalog.empty() || !config.default_schema.empty();
+  std::string catalog;
+  std::string schema;
+  if (configured) {
+    // default_schema alone: that schema in the database's catalog.
+    catalog = config.default_catalog.empty() ? base_catalog : config.default_catalog;
+    schema = config.default_schema;
+  } else if (init_sql_location_ &&
+             (init_sql_location_->first != base_catalog || init_sql_location_->second != base_schema)) {
+    std::tie(catalog, schema) = *init_sql_location_;
+  } else {
+    return;
+  }
+  // As the option would be named in errors: the option, or the init SQL's USE.
+  const std::string source = configured ? std::string() : "init SQL ended in USE " + catalog + "." + schema + ": ";
+
+  // The server's own catalogs belong to it: DuckDB's system catalog, the read-only system
+  // views, and the instrumentation and log catalogs, which only administrators may read.
+  std::vector<std::string> reserved = {"system", kSystemCatalog};
+  if (instrumentation_) reserved.push_back(instrumentation_->catalog());
+  if (catalog_log_) reserved.push_back(catalog_log_->catalog());
+  const auto lower = [](std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return std::tolower(c); });
+    return text;
+  };
+  for (const auto& name : reserved) {
+    if (lower(name) == lower(catalog)) {
+      throw std::runtime_error(source + "default_catalog '" + catalog + "' is one of the server's own catalogs, " +
+                               "which can't be where sessions start: name a catalog the init SQL attaches");
+    }
+  }
+  // The names `sql` lists (one string_agg), for an error.
+  const auto list = [&](const std::string& sql) {
+    std::string names;
+    try {
+      names = warpduckdb::QueryText(probe.get(), sql);
+    } catch (const std::exception&) {
+    }
+    return names.empty() ? std::string("none") : names;
+  };
+  try {
+    warpduckdb::RunSql(probe.get(), "USE " + SqlIdentifier(catalog));
+  } catch (const std::exception&) {
+    std::string excluded;
+    for (const auto& name : reserved) excluded += ", " + SqlLiteral(name);
+    throw std::runtime_error(
+        source + "default_catalog '" + catalog + "' is not attached: the attached catalogs are " +
+        list("SELECT string_agg(database_name, ', ' ORDER BY database_name) FROM duckdb_databases() "
+             "WHERE NOT internal AND database_name NOT IN (" + excluded.substr(2) + ")") +
+        " (attach it in the init SQL)");
+  }
+  if (!schema.empty()) {
+    try {
+      warpduckdb::RunSql(probe.get(), "USE " + SqlIdentifier(catalog) + "." + SqlIdentifier(schema));
+    } catch (const std::exception&) {
+      throw std::runtime_error(
+          source + "default_schema '" + schema + "' does not exist in catalog '" + catalog + "': its schemas are " +
+          list("SELECT string_agg(schema_name, ', ' ORDER BY schema_name) FROM duckdb_schemas() "
+               "WHERE database_name = current_database()") +
+          " (create it in the init SQL)");
+    }
+  }
+  // DuckDB's own spelling of the names, which every session's USE takes.
+  runtime_.default_catalog = warpduckdb::QueryText(probe.get(), "SELECT current_database()");
+  runtime_.default_schema = warpduckdb::QueryText(probe.get(), "SELECT current_schema()");
+  start_sessions_elsewhere_ = runtime_.default_catalog != base_catalog || runtime_.default_schema != base_schema;
+  const std::string where = runtime_.default_catalog + "." + runtime_.default_schema;
+  if (configured) {
+    Log(LogLevel::kInfo, "sessions start in " + where + " (default_catalog, default_schema)");
+  } else {
+    Log(LogLevel::kInfo, "init SQL ended in USE " + where +
+                             ": sessions start there (set default_catalog to choose explicitly)");
+  }
 }
 
 void Backend::StartHealthCheck() {
@@ -584,8 +758,11 @@ std::unique_ptr<warpsql::EngineSession> Backend::NewSession(const warpsql::Princ
                                                           const std::string& session_id) {
   const bool capped = runtime_.sessions.Admit(principal);
   try {
-    return std::make_unique<Session>(runtime_, *sensitive_paths_, instance(), principal, session_id, capped,
-                                     access_.get());
+    auto session = std::make_unique<Session>(runtime_, *sensitive_paths_, instance(), principal, session_id, capped,
+                                             access_.get());
+    // Before the client's own session options, which the SDK applies next and which win.
+    if (start_sessions_elsewhere_) session->StartIn(runtime_.default_catalog, runtime_.default_schema);
+    return session;
   } catch (...) {
     runtime_.sessions.Unadmit(capped);
     throw;
@@ -616,6 +793,7 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb
   // and bound here right after it, before any statement runs on them (and before the
   // session is listed anywhere, so a refused one leaves nothing behind).
   if (access_controlled_) guard_ = access->Bind(connection(), IdentityOf(principal_));
+  if (principal_.role == "readonly") authz::BindReadOnlySession(connection(), principal_.name);
   runtime_.sessions.Add(this, capped);
   runtime_.metrics.CountSessionOpened();
   if (runtime_.instrumentation != nullptr) runtime_.instrumentation->SessionStarted(*this);
@@ -631,6 +809,25 @@ Session::~Session() {
   if (runtime_.instrumentation != nullptr) runtime_.instrumentation->SessionEnded(*this, killed_ ? "killed" : "closed");
   LogAt(runtime_.session_log_level, LogLevel::kInfo, "session closed",
         {{"session_id", id_}, {"user", principal_.name}, {"reason", killed_ ? "killed" : "closed"}});
+}
+
+bool Session::StartIn(const std::string& catalog, const std::string& schema) {
+  // A tenant's session that started in its tenant's default catalog stays there: the
+  // tenant's choice is the more specific one.
+  if (guard_ && guard_->started_in_tenant_catalog()) return false;
+  SessionScope scope(this);
+  try {
+    // One statement, so the session moves to both or stays where it was. On a bound
+    // connection it is the user's own USE to the plan check (no catalog they cannot see).
+    warpduckdb::RunSql(connection(), "USE " + SqlIdentifier(catalog) + "." + SqlIdentifier(schema));
+    return true;
+  } catch (const std::exception& error) {
+    LogAt(runtime_.session_log_level, LogLevel::kDebug,
+          "session starts in its usual catalog: its user may not use the default catalog",
+          {{"session_id", id_}, {"user", principal_.name}, {"default", catalog + "." + schema},
+           {"error", error.what()}});
+    return false;
+  }
 }
 
 void Session::CheckAlive() const {
@@ -675,7 +872,29 @@ void ExplainViewAmbiguity(std::string_view sql, const Error& error) {
               error.sqlstate());
 }
 
+// An extension that needs another one (iceberg needs avro) loads it itself, but only
+// once it is installed: Hardcharger turns DuckDB's autoinstall_known_extensions and
+// autoload_known_extensions off, so "LOAD iceberg" on a host without avro fails, and
+// DuckDB's reason is buried in its message. This says it first, with what to run.
+void ExplainExtensionDependency(const Error& error) {
+  if (auto hint = ExtensionDependencyHint(error.what())) {
+    throw Error(error.code(), *hint + "\n" + error.what(), error.sqlstate());
+  }
+}
+
 }  // namespace
+
+std::optional<std::string> ExtensionDependencyHint(std::string_view message) {
+  static const std::regex kNeeds(R"(The (\w+) extension requires the (\w+) extension, but it could not be loaded)");
+  std::match_results<std::string_view::const_iterator> match;
+  if (!std::regex_search(message.begin(), message.end(), match, kNeeds)) return std::nullopt;
+  const std::string extension = match[1].str();
+  const std::string needed = match[2].str();
+  return "Hardcharger: the " + extension + " extension needs the " + needed + " extension installed. Run INSTALL " +
+         needed + "; then LOAD " + extension + " again (" + extension + " loads " + needed +
+         " itself once it is installed). Hardcharger never installs or loads an extension on its own "
+         "(DuckDB's autoinstall_known_extensions and autoload_known_extensions are off).";
+}
 
 warpsql::StatementOutcome Session::Guarded(std::string_view sql, bool has_parameters,
                                            const std::function<warpsql::StatementOutcome()>& run) {
@@ -683,6 +902,7 @@ warpsql::StatementOutcome Session::Guarded(std::string_view sql, bool has_parame
     return guard_ ? guard_->Execute(sql, has_parameters, run) : run();
   } catch (const Error& error) {
     ExplainViewAmbiguity(sql, error);
+    ExplainExtensionDependency(error);
     throw;
   }
 }
@@ -833,7 +1053,7 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   // query): it reads, and the enum is the session's own.
   const bool pivot = executed == DUCKDB_V2_STATEMENT_TYPE_MULTI && !piece.tokens.empty() &&
                      (piece.tokens[0].IsWord("PIVOT") || piece.tokens[0].IsWord("UNPIVOT"));
-  if (principal_.role == "readonly" && !ReadOnlyStatement(executed) && !pivot) {
+  if (principal_.role == "readonly" && !ReadOnlySessionMayRun(connection(), piece, executed) && !pivot) {
     throw Error(ErrorCode::kPermissionDenied,
                 "User '" + principal_.name + "' has a readonly session and cannot run statements that modify state.",
                 "42501");
@@ -971,6 +1191,11 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
     } catch (const AdmissionController::Refused& refused) {
       runtime_.metrics.CountQueueRejected();
       const bool cancelled = killed_ || refused.reason == AdmissionController::Refusal::kAborted;
+      if (cancelled) {
+        std::string reason = cancel_reason();
+        if (reason.empty() && killed_) reason = warpsql::reason::kKilled;
+        if (!reason.empty()) LogCancelled(*this, id_fields, reason, started);
+      }
       if (record.enqueue_time) {
         record.end = record.cursor_close = std::chrono::system_clock::now();
         record.status = cancelled ? "cancelled" : "error";
@@ -1050,6 +1275,7 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
   // An access-control statement (GRANT, CREATE USER, ...) is the guard's, text and all:
   // it runs one at a time, and the guard refuses anything riding along.
   if (rbac_ && authz::LooksLikeAccessControlStatement(sql)) {
+    RefuseStoreChangeWhenReadonly(principal_, sql);
     if (runtime_.instrumentation != nullptr) {
       runtime_.instrumentation->StatementCreated(*this, statement_id, Abbreviate(sql), "statement", true, "");
     }
@@ -1165,6 +1391,7 @@ std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sq
   try {
     if (!rbac_) RefuseAccessControlStatement(sql);
     const bool access_control = rbac_ && authz::LooksLikeAccessControlStatement(sql);
+    if (access_control) RefuseStoreChangeWhenReadonly(principal_, sql);
     if (pieces.size() == 1 && !access_control) {
       if (ParseSettingCommand(pieces[0]) || ParseKillSession(pieces[0])) {
         throw Error(ErrorCode::kSqlError, "SET hardcharger.* and KILL SESSION can't be prepared; run them directly");

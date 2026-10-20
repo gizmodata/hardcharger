@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <mutex>
 #include <string>
@@ -31,6 +32,8 @@ class HealthChecker {
   // Throws (with the reason) unless the last check passed recently enough.
   void Check() const;
   bool Healthy() const;
+  // How long the last finished check took, in seconds; NaN before the first.
+  double LastDurationSeconds() const { return last_duration_seconds_; }
 
  private:
   void RunOnce();
@@ -50,6 +53,7 @@ class HealthChecker {
   std::string last_error_ = "no health check has run yet";
   std::chrono::steady_clock::time_point last_finished_{};
   std::atomic<bool> running_query_ = false;
+  std::atomic<double> last_duration_seconds_ = NAN;
   std::thread thread_;
 };
 

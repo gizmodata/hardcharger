@@ -261,13 +261,17 @@ export interface IdleServer {
  * shared server's default (15 minutes) would make wait too long.
  */
 export async function startIdleServer(idleSeconds: number): Promise<IdleServer> {
+  return startOwnServer(["--session-idle-timeout", String(idleSeconds)]);
+}
+
+/**
+ * A second server, without access control, started with `extraArgs` and `env` (HARDCHARGER_*
+ * options): for the tests of a server option the shared server doesn't set.
+ */
+export async function startOwnServer(extraArgs: string[], env: NodeJS.ProcessEnv = {}): Promise<IdleServer> {
   const binary = process.env["HARDCHARGER_UI_TEST_SERVER_BINARY"]!;
-  const adminPassword = `ui:${randomBytes(6).toString("hex")}@idle`;
-  const server = await startServer({
-    binary,
-    adminPassword,
-    extraArgs: ["--session-idle-timeout", String(idleSeconds)],
-  });
+  const adminPassword = `ui:${randomBytes(6).toString("hex")}@own`;
+  const server = await startServer({ binary, adminPassword, extraArgs, env });
   const dist = path.resolve(import.meta.dirname, "../../dist");
   const ui: Server | undefined = embedded ? undefined : createUiServer({ dist, upstream: server.url });
   const url = ui

@@ -80,6 +80,10 @@ struct Runtime {
   // 0 off, 1 standard, 2 detailed (SET GLOBAL hardcharger.capture_query_profile).
   std::atomic<int> capture_query_profile;
   std::string scratch_dir;  // the server's private directory (query profiles)
+  // Where new sessions start (default_catalog / default_schema, or the init SQL's final
+  // USE, or the database's own catalog and schema): set once by the backend at startup.
+  std::string default_catalog;
+  std::string default_schema;
 
   const std::chrono::system_clock::time_point started_at;
 };

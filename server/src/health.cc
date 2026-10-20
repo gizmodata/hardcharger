@@ -17,12 +17,14 @@ void HealthChecker::RunOnce() {
   bool ok = true;
   std::string error;
   running_query_ = true;
+  const auto started = std::chrono::steady_clock::now();
   try {
     warpduckdb::RunSql(connection_.get(), query_);
   } catch (const std::exception& e) {
     ok = false;
     error = e.what();
   }
+  last_duration_seconds_ = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
   running_query_ = false;
   std::lock_guard lock(mutex_);
   if (ok != last_ok_ || !reported_) {

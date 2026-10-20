@@ -20,6 +20,10 @@ struct Config {
   int64_t max_header_bytes = 16 * 1024;  // larger request headers get 431
   int64_t max_result_partitions = 32;    // most partitions a client may have a result split into
   bool web_ui = false;  // serve the embedded web UI at /ui on this listener
+  // Reverse proxies (CIDRs, or single addresses) whose X-Forwarded-For / Forwarded headers
+  // name the client in logs, audit, sessions and the per-address sign-in bound; never
+  // used for authentication or TLS. Empty: trust none.
+  std::vector<std::string> trusted_proxies;
 
   // TLS
   std::string tls_cert;   // PEM certificate chain; with tls_key, turns TLS on
@@ -50,6 +54,11 @@ struct Config {
   bool allow_unsigned_extensions = false;
   std::string init_sql_commands;       // run at startup, before the file
   std::string init_sql_commands_file;  // a SQL file run at startup
+  // Where every new session starts (its current catalog and schema) unless the client's
+  // session options say otherwise. Checked at startup, after the init SQL; with neither
+  // set, an init SQL that ends in USE x.y sets them (engine.cc).
+  std::string default_catalog;
+  std::string default_schema;
   int64_t result_batch_rows = 122880;  // rows per Arrow batch in results (a DuckDB row group)
 
   // Authentication
@@ -67,6 +76,11 @@ struct Config {
   // An identity provider's keys: this JWKS, else the one
   // token_allowed_issuer's OpenID configuration names (with an audience and no PEM key).
   std::string token_jwks_uri;
+  // Under access control: a verified sign-in token (not an administrator's) whose user the
+  // store lacks creates it, with no grants, when the token's issuer is
+  // token_auto_provision_issuer (default: token_allowed_issuer).
+  bool token_auto_provision_users = false;
+  std::string token_auto_provision_issuer;
 
   // Browser sign-in through the identity provider (Warp SQL §4.3), on the main port.
   std::string oauth_client_id;  // set: browser sign-in is offered
@@ -101,6 +115,9 @@ struct Config {
   std::string rbac_store_uri;       // PostgreSQL connection string or URI of the grant store
   std::string rbac_opa_url;         // Open Policy Agent decision URL also asked; empty: none
   int64_t rbac_opa_timeout_ms = 2000;
+  int64_t rbac_store_timeout_seconds = 10;     // longest one store round trip may take
+  int64_t rbac_max_snapshot_age_seconds = 0;   // store down: refuse store users after this; 0 = never
+  bool rbac_store_shared = false;              // several clusters may share the store
   std::string audit_chain_key;      // seals access-control audit records (HMAC-SHA256)
 
   // Identity of this deployment

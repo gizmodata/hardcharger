@@ -78,6 +78,22 @@ def test_a_scoped_token_also_signs_in_as_the_password_of_user_token(server, wes)
     assert "only on catalog sales_db" in error(client=bot, sql="SELECT * FROM hr_db.main.staff")
 
 
+def test_a_readonly_session_cannot_mint_its_way_out_of_readonly(server):
+    # A scoped token signs in as a user, so one minted in a readonly session would write
+    # with the user's grants (wes may INSERT); a readonly session changes nothing in the
+    # store, and still reads it.
+    readonly = server.user(name="wes", role="readonly")
+    for sql in ["CREATE SCOPED TOKEN escape ALLOW SELECT, INSERT ON CATALOG sales_db", "CREATE ROLE planted"]:
+        with pytest.raises(WarpError) as refused:
+            readonly.run(sql=sql)
+        assert refused.value.code == "permission_denied", refused.value
+        assert "has a readonly session and cannot run" in refused.value.detail, refused.value
+    assert readonly.run(sql="SHOW GRANTS FOR wes").num_rows >= 1
+    expect_allowed(client=readonly, sql="SHOW SCOPED TOKENS")
+    # The positive twin: the same user's own session mints one.
+    mint_scoped(client=server.user(name="wes"), sql="CREATE SCOPED TOKEN not_readonly ALLOW SELECT")
+
+
 def test_a_token_never_does_more_than_its_user(server, admin, wes):
     # A token that allows writes on a catalog wes may only read stays read-only there.
     bot = agent(server=server, token=mint_scoped(client=wes,

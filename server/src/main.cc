@@ -1,7 +1,9 @@
 // hardcharger-server: the server. See `hardcharger-server --help` for configuration.
 
+#include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string_view>
@@ -12,6 +14,9 @@
 #include <io.h>
 #endif
 
+#include <arrow/scalar.h>
+#include <arrow/table.h>
+
 #include "audit.hpp"
 #include "auth.hpp"
 #include "authz/authz.hpp"
@@ -19,6 +24,7 @@
 #include "duckdb_sql.hpp"
 #include "engine.hpp"
 #include "http_client.hpp"
+#include "instance_info.hpp"
 #include "jwks.hpp"
 #include "logging.hpp"
 #include "oauth.hpp"
@@ -48,6 +54,11 @@ void WriteExactly(std::string_view text) {
   std::fflush(stdout);
 }
 
+// The serving TLS certificate's notAfter as Unix time (NaN without TLS): read when the
+// collectors are installed, and again whenever the TLS context is rebuilt (a client CRL
+// reload loads the certificate chain again too; on_crl_reload below).
+std::atomic<double> g_tls_certificate_not_after = NAN;
+
 warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   warpsql::ServerOptions options;
   options.host = config.host;
@@ -63,7 +74,9 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
     tls.allow_missing_ca_crls = config.mtls_crl_allow_missing_ca_crls;
     tls.client_identity_source = warpsql::ParseClientIdentitySource(config.mtls_identity_source);
     tls.require_identity_match = config.mtls_require_identity_match;
-    tls.on_crl_reload = [](bool ok, const std::string& message) {
+    tls.on_crl_reload = [certificate = config.tls_cert](bool ok, const std::string& message) {
+      // A successful (re)load built a new TLS context from the certificate file as it is now.
+      if (ok) g_tls_certificate_not_after = hc::CertificateNotAfterSeconds(certificate);
       hc::Log(ok ? hc::LogLevel::kInfo : hc::LogLevel::kError, message, {{"component", "tls"}});
     };
     options.tls = std::move(tls);
@@ -80,6 +93,8 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   // SET [GLOBAL] hardcharger.query_timeout changes).
   options.default_statement_timeout = std::chrono::milliseconds(0);
   options.cors_allowed_origins = config.cors_origins;
+  // Validated at startup (config.cc): only the address recorded for the client changes.
+  for (const auto& proxy : config.trusted_proxies) options.trusted_proxies.push_back(warpsql::ParseIpNetwork(proxy));
   // Certificate refusals (a replayed bound token, another identity's sign-in, a revoked
   // certificate, an unknown identity): a security warning and an audit record each.
   // The SDK rate-limits them per source: a summary (suppressed > 0) stands for the
@@ -90,6 +105,8 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
                          {"token_id", event.token_id}, {"certificate_thumbprint", event.presented_thumbprint},
                          {"certificate_subject", event.certificate_subject}, {"peer", event.peer},
                          {"request_id", event.request_id}, {"error", event.detail}};
+    // The peer came from a trusted proxy's forwarding header: the connection's own address too.
+    if (!event.proxy.empty()) fields.emplace_back("proxy", event.proxy);
     if (event.suppressed > 0) fields.emplace_back("suppressed", std::to_string(event.suppressed));
     const bool handshake = event.code == "client_certificate_refused";
     hc::Log(hc::LogLevel::kWarning,
@@ -245,12 +262,51 @@ class ExitMarker {
   double last_unclean_ = NAN;
 };
 
+// Every column of the first row of `sql`, as text ("" for NULL); empty for no row.
+std::vector<std::string> QueryRow(duckdb_v2_connection_handle connection, std::string_view sql) {
+  auto table = warpduckdb::QueryArrow(connection, sql)->ToTable();
+  std::vector<std::string> row;
+  if (!table.ok() || (*table)->num_rows() == 0) return row;
+  for (const auto& column : (*table)->columns()) {
+    auto scalar = column->GetScalar(0);
+    row.push_back(scalar.ok() && (*scalar)->is_valid ? (*scalar)->ToString() : std::string());
+  }
+  return row;
+}
+
+// A file's size in bytes: 0 when it doesn't exist (no WAL yet), NaN when it can't be read.
+double FileBytes(const std::string& path) {
+  std::error_code ec;
+  const auto bytes = std::filesystem::file_size(hc::PathFromUtf8(path), ec);
+  if (!ec) return static_cast<double>(bytes);
+  return ec == std::errc::no_such_file_or_directory ? 0 : NAN;
+}
+
 void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMarker& marker) {
   auto connection = std::make_shared<warpduckdb::Connection>();
   warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(backend.instance(), connection->out(), err); });
   auto mutex = std::make_shared<std::mutex>();
-  runtime.metrics.AddCollector([&runtime, &backend, &marker, connection, mutex](std::vector<hc::Sample>& out) {
+  g_tls_certificate_not_after = hc::CertificateNotAfterSeconds(runtime.config.tls_cert);
+  // Neither changes while the server runs. The main database's file is the one DuckDB
+  // opened (its path in duckdb_databases(); none for an in-memory database), and only a
+  // local one has a size to read. Attached catalogs don't count, as in GizmoSQL 1.x.
+  const double process_start = hc::ProcessStartTimeSeconds();
+  std::string database_path;
+  try {
+    database_path = warpduckdb::QueryText(
+        connection->get(), "SELECT path FROM duckdb_databases() WHERE database_name = current_database()");
+  } catch (const std::exception&) {
+    database_path = runtime.config.database;
+  }
+  if (database_path == ":memory:" || database_path.find("://") != std::string::npos) database_path.clear();
+  runtime.metrics.AddCollector([&runtime, &backend, &marker, connection, mutex, process_start,
+                                database_path](std::vector<hc::Sample>& out) {
+    const auto begin = std::chrono::steady_clock::now();
     const auto now = std::chrono::system_clock::now();
+    // Measurements that couldn't be taken are left out, never reported as 0 (1.x's rule).
+    auto gauge = [&out](const char* name, double value) {
+      if (!std::isnan(value)) out.push_back({name, {}, value});
+    };
     out.push_back({"hardcharger_build_info",
                    {{"version", hc::kVersion},
                     {"duckdb_version", backend.duckdb_version()}, {"server", "hardcharger"}},
@@ -289,22 +345,64 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMar
       out.push_back({"hardcharger_instrumentation_dropped_total", {}, static_cast<double>(instr.dropped.load())});
       out.push_back({"hardcharger_instrumentation_failed_total", {}, static_cast<double>(instr.failed.load())});
     }
+    gauge("hardcharger_health_check_duration_seconds", runtime.health ? runtime.health->LastDurationSeconds() : NAN);
+    gauge("hardcharger_tls_certificate_expiry_seconds", g_tls_certificate_not_after.load());
+    gauge("process_start_time_seconds", process_start);
+    gauge("process_open_fds", hc::ProcessOpenFds());
+    gauge("process_threads", hc::ProcessThreads());
+    const int64_t host_memory = hc::PhysicalMemoryBytes();
+    gauge("hardcharger_host_memory_bytes", host_memory > 0 ? static_cast<double>(host_memory) : NAN);
+    const unsigned cpus = std::thread::hardware_concurrency();
+    gauge("hardcharger_host_cpus", cpus > 0 ? static_cast<double>(cpus) : NAN);
+    // Read on every collection: a pod's limits can be resized in place.
+    const hc::CGroupLimits cgroup = hc::ReadCGroupLimits();
+    gauge("hardcharger_cgroup_memory_limit_bytes", cgroup.memory_limit_bytes);
+    gauge("hardcharger_cgroup_cpu_quota_cores", cgroup.cpu_quota_cores);
+    if (!database_path.empty()) {
+      gauge("hardcharger_database_file_bytes", FileBytes(database_path));
+      gauge("hardcharger_wal_bytes", FileBytes(database_path + ".wal"));
+    }
+    // DuckDB's own numbers, on this collector's connection: catalog functions and settings
+    // only, nothing that reads data or waits on a client's statement. Each query fails on
+    // its own, so a broken temp directory doesn't blank the memory gauges.
     bool ok = true;
-    double limit = NAN;
-    double usage = NAN;
-    try {
+    double limit = NAN, usage = NAN, temporary = NAN, threads = NAN, spill_files = NAN, spill_bytes = NAN;
+    {
       std::lock_guard lock(*mutex);
-      limit = ParseBytes(warpduckdb::QueryText(connection->get(), "SELECT current_setting('memory_limit')"));
-      usage = std::stod(warpduckdb::QueryText(
-          connection->get(), "SELECT coalesce(sum(memory_usage_bytes), 0)::DOUBLE FROM duckdb_memory()"));
-    } catch (const std::exception&) {
-      ok = false;
+      try {
+        const auto row = QueryRow(connection->get(),
+                                  "SELECT current_setting('memory_limit'), current_setting('threads')::DOUBLE, "
+                                  "coalesce(sum(memory_usage_bytes), 0)::DOUBLE, "
+                                  "coalesce(sum(temporary_storage_bytes), 0)::DOUBLE FROM duckdb_memory()");
+        if (row.size() != 4) throw std::runtime_error("no settings row");
+        limit = ParseBytes(row[0]);
+        threads = std::stod(row[1]);
+        usage = std::stod(row[2]);
+        temporary = std::stod(row[3]);
+      } catch (const std::exception&) {
+        ok = false;
+      }
+      try {
+        const auto row = QueryRow(
+            connection->get(), "SELECT count(*)::DOUBLE, coalesce(sum(size), 0)::DOUBLE FROM duckdb_temporary_files()");
+        if (row.size() != 2) throw std::runtime_error("no temporary files row");
+        spill_files = std::stod(row[0]);
+        spill_bytes = std::stod(row[1]);
+      } catch (const std::exception&) {
+        ok = false;
+      }
     }
     out.push_back({"hardcharger_duckdb_memory_limit_bytes", {}, limit});
     out.push_back({"hardcharger_duckdb_memory_usage_bytes", {}, usage});
+    gauge("hardcharger_duckdb_threads", threads);
+    gauge("hardcharger_duckdb_temp_storage_bytes", temporary);
+    gauge("hardcharger_duckdb_spill_files", spill_files);
+    gauge("hardcharger_duckdb_spill_bytes", spill_bytes);
     out.push_back({"hardcharger_metrics_collection_success", {}, ok ? 1.0 : 0.0});
     out.push_back({"hardcharger_metrics_last_collection_success_seconds", {},
                    ok ? std::chrono::duration<double>(now.time_since_epoch()).count() : NAN});
+    out.push_back({"hardcharger_metrics_collection_duration_seconds", {},
+                   std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count()});
   });
 }
 
@@ -418,6 +516,10 @@ int main(int argc, char** argv) {
       options.certificate_administrators = config.mtls_admin_identities;
       options.policy_service_url = config.rbac_opa_url;
       options.policy_service_timeout = std::chrono::milliseconds(config.rbac_opa_timeout_ms);
+      options.store_timeout = std::chrono::seconds(config.rbac_store_timeout_seconds);
+      options.cluster_id = config.cluster_id;
+      options.store_shared = config.rbac_store_shared;
+      options.max_snapshot_age = std::chrono::seconds(config.rbac_max_snapshot_age_seconds);
       // Access-control audit records form a hash chain from here on.
       hc::StartAuditChain(config.audit_chain_key);
       access = std::make_shared<hc::authz::AccessControl>(options);
@@ -425,6 +527,18 @@ int main(int argc, char** argv) {
               "role-based access control is on: users, roles and grants come from the store; "
               "sign-in token roles other than admin, and catalog_access claims, grant nothing",
               {{"store", access->store_description()}});
+      if (!access->store_cluster_id().empty() && config.cluster_id.empty()) {
+        hc::Log(hc::LogLevel::kWarning,
+                "the access control store belongs to a cluster, and this server has no cluster_id: "
+                "set cluster_id to the store's so another cluster can't open it by mistake",
+                {{"store_cluster_id", access->store_cluster_id()}});
+      } else if (config.rbac_store_shared && !access->store_cluster_id().empty() &&
+                 access->store_cluster_id() != config.cluster_id) {
+        hc::Log(hc::LogLevel::kWarning,
+                "rbac_store_shared: this cluster shares the access control store, and its users, roles and "
+                "grants, with another cluster",
+                {{"store_cluster_id", access->store_cluster_id()}, {"cluster_id", config.cluster_id}});
+      }
       if (!config.rbac_opa_url.empty()) {
         hc::Log(hc::LogLevel::kInfo,
                 "access control also asks the policy service (statements are refused when it "
@@ -453,6 +567,15 @@ int main(int argc, char** argv) {
     if (config.enable_metrics) runtime.metrics.Enable();
     // Sign-in and tokens deal with the store's users; rules-only access control has none.
     const auto store_access = access && !access->catalog_rules_only() ? access : nullptr;
+    if (store_access) {
+      // How the access-control store is doing: whether its last poll answered, and the age of
+      // the grants this server holds (seconds since it last did).
+      runtime.metrics.AddCollector([store_access](std::vector<hc::Sample>& out) {
+        const auto health = store_access->store_health();
+        out.push_back({"hardcharger_rbac_store_up", {}, health.up ? 1.0 : 0.0});
+        out.push_back({"hardcharger_rbac_snapshot_age_seconds", {}, health.snapshot_age_seconds});
+      });
+    }
     auto tokens = std::make_shared<hc::JwtTokenService>(
         secret_key, std::chrono::seconds(config.token_lifetime_seconds), instance_id,
         config.allow_cross_instance_tokens, hc::ParseLogLevel(config.auth_log_level), store_access);

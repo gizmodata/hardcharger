@@ -39,6 +39,14 @@ struct PendingOwnership {
   ObjectPath object;
   ObjectType type;
   std::string definition_hash = {};  // a created view's (OwnerRecord::definition_hash)
+  bool recorded = false;  // a creation whose owner was recorded before the statement ran
+};
+
+// An owner record written before its statement ran, and what it replaced (to put back if
+// the statement fails).
+struct RecordedOwnership {
+  ObjectPath object;
+  std::optional<OwnerRecord> previous;
 };
 
 class RbacSessionState : public duckdb::ClientContextState {
@@ -104,6 +112,8 @@ class RbacSessionState : public duckdb::ClientContextState {
 
  private:
   duckdb::RebindQueryInfo RebindIfGrantsChanged(const duckdb::PreparedStatementData& prepared);
+  duckdb::RebindQueryInfo FinalizePrepareLocked(duckdb::PreparedStatementData& prepared,
+                                                duckdb::PreparedStatementMode mode, bool& runs_now);
 
   std::weak_ptr<RbacEngine> engine_;
   mutable std::mutex principal_mutex_;
@@ -127,6 +137,8 @@ class RbacSessionState : public duckdb::ClientContextState {
   // Which snapshot version each prepared statement was checked against.
   std::unordered_map<const void*, std::pair<int64_t, int64_t>> prepared_versions_;
   std::vector<PendingOwnership> pending_ownership_;
+  // Owners recorded for the statement now running, before it ran (undone if it fails).
+  std::vector<RecordedOwnership> recorded_ownership_;
 };
 
 // The system privilege that lets a store user past the admin command gate for
@@ -139,9 +151,23 @@ std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(const std::string
 // and no file)? `name_lower`: the function's name, lower case.
 bool IsAllowedTableFunction(const std::string& name_lower);
 
-// Record what a statement that ran successfully created or dropped.
+// Record what a statement that ran successfully created or dropped (but for creations
+// RecordCreatedOwners recorded already). A drop whose record can't be removed is logged:
+// the record of an object that no longer exists is replaced when one of its name is
+// created, and a creation can't run without the store.
 void ApplyOwnership(RbacEngine& engine, const Principal& principal,
                     const std::vector<PendingOwnership>& changes);
+
+// Before a statement runs: records the owner of each object it creates (marking those
+// changes recorded, and adding to `undo` what each replaced), so that a statement whose
+// owner can't be recorded (the store doesn't answer) never creates an object without one.
+// Fails with the store's error, having undone what it recorded.
+arrow::Status RecordCreatedOwners(RbacEngine& engine, const Principal& principal,
+                                  std::vector<PendingOwnership>& changes,
+                                  std::vector<RecordedOwnership>& undo);
+
+// The statement failed: puts back what RecordCreatedOwners replaced (best effort, logged).
+void UndoRecordedOwners(RbacEngine& engine, const std::vector<RecordedOwnership>& undo);
 
 // Install the pre-optimize hook on a database configuration (once, before the
 // database is opened).

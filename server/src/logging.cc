@@ -26,6 +26,7 @@
 #endif
 
 #include "platform.hpp"
+#include "redact.hpp"
 
 namespace hardcharger {
 
@@ -344,22 +345,8 @@ std::optional<std::string> SensitiveStatement(std::string_view sql) {
   return check(raw);
 }
 
-// Masks credential values a statement or a connection error may carry, idempotently:
-//   key=value for the usual credential keys and x-amz-*; 'key': 'value' when the key is
-//   quoted; and the password of a user:password@ URL authority.
-std::string MaskCredentials(std::string text) {
-  static const std::regex kPair(
-      R"(((?:password|passwd|pwd|secret|token|access_key|accountkey|sig|x-amz-[a-z-]+)\s*=\s*)('[^']*'|"[^"]*"|[^\s"';)]+))",
-      std::regex::icase | std::regex::optimize);
-  static const std::regex kQuoted(
-      R"(('(?:password|passwd|pwd|secret|token|access_key|accountkey|sig)'\s*:\s*)('[^']*'))",
-      std::regex::icase | std::regex::optimize);
-  static const std::regex kAuthority(R"((://[^:/@\s"']*:)[^@\s"']*@)");
-  text = std::regex_replace(text, kPair, "$1***");
-  text = std::regex_replace(text, kQuoted, "$1'***'");
-  text = std::regex_replace(text, kAuthority, "$1***@");
-  return text;
-}
+// Masks credential values a statement or a connection error may carry (redact.hpp).
+std::string MaskCredentials(std::string text) { return RedactCredentials(std::move(text)); }
 
 }  // namespace
 

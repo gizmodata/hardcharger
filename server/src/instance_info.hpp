@@ -48,5 +48,8 @@ InstanceInfo CollectInstanceInfo(const Config& config, const std::string& instan
 // The SHA-256 fingerprint of the first certificate in a PEM file (InstanceInfo's form);
 // empty when it can't be read.
 std::string CertificateFingerprintSha256(const std::string& pem_file);
+// When the first certificate in a PEM file expires (its notAfter), as Unix time in
+// seconds; NaN when it can't be read.
+double CertificateNotAfterSeconds(const std::string& pem_file);
 
 }  // namespace hardcharger
