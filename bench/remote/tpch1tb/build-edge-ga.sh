@@ -13,13 +13,34 @@ if [ ! -d "$SOURCE/.git" ]; then
   git clone --quiet --depth 1 --branch v1.42.0 https://github.com/gizmodata/gizmosql.git "$SOURCE"
 fi
 [ "$(git -C "$SOURCE" rev-parse HEAD)" = "$GIZMOSQL_COMMIT" ]
-[ -z "$(git -C "$SOURCE" status --porcelain)" ]
+# The final 2.0 release removed two C++ API names used by the older edge alpha.
+# Keep these benchmark-only compatibility edits explicit in the provenance.
+python3 - "$SOURCE" <<'PY'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1])
+path = source / 'src/duckdb/duckdb_compat.h'
+text = path.read_text()
+old = '''        submitted->GetStatementProperties().result_eagerness !=
+            duckdb::ResultEagerness::FORCED &&
+'''
+if old in text:
+    path.write_text(data=text.replace(old, ''))
+else:
+    assert 'result_eagerness' not in text
+path = source / 'src/enterprise/metrics/metrics_service.cpp'
+text = path.read_text()
+text = text.replace('DBConfig::ParseMemoryLimit(', 'DBConfig::ParseMemoryLimitOrMaximum(')
+path.write_text(data=text)
+PY
 mkdir -p "$SOURCE/build"
+if [ ! -f "$SOURCE/build/CMakeCache.txt" ]; then
 cat > "$SOURCE/build/CMakeCache.txt" <<EOF
 DUCKDB_EDGE_VERSION:STRING=v2.0.0
 DUCKDB_EDGE_GIT_REF:STRING=$DUCKDB_COMMIT
 CMAKE_CXX_FLAGS:STRING=-DDUCKDB_V2_API_ALLOW_UNSTABLE=1
 EOF
+fi
 sudo docker run --rm -v "$SOURCE:$SOURCE" -e REPO_ROOT="$SOURCE" \
   -e CMAKE_BUILD_TYPE=Release -e CMAKE_BUILD_PARALLEL_LEVEL=64 \
   quay.io/pypa/manylinux_2_28_aarch64 \
@@ -33,3 +54,4 @@ ln -sf gizmosql_server_edge "$B/gizmosql-edge/server"
   printf 'GizmoSQL commit: %s\nDuckDB ref: %s\n' "$GIZMOSQL_COMMIT" "$DUCKDB_COMMIT"
   printf 'Build: Release, edge channel, GCC manylinux_2_28, DUCKDB_V2_API_ALLOW_UNSTABLE=1\n'
 } > "$B/gizmosql-edge/build-provenance.txt"
+git -C "$SOURCE" diff >> "$B/gizmosql-edge/build-provenance.txt"
