@@ -47,6 +47,14 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- `default_catalog` and `default_schema`: where every new session starts, unless the client's
+  own `catalog` / `schema` session options say otherwise. With neither set, an init SQL that
+  ends in `USE x.y` sets it, as in GizmoSQL 1.x (on rc.1 sessions ignored it and started in
+  the database's catalog), and the server logs that it did. Both are checked after the init
+  SQL: a catalog that isn't attached, a missing schema or one of the server's own catalogs
+  stops the server (exit 1). Under access control a session moves there only if its user's own
+  `USE` could; otherwise it starts where it would have, and a tenant's default catalog wins.
+  `hardcharger_server_info()` shows the administrator the effective defaults.
 - `rbac_store_timeout_seconds` (default 10): every access-control store round trip is
   bounded. With PostgreSQL paused, a `CREATE TABLE` waited 152 s for the store; it now fails
   with `access control store unavailable: timed out after 10 s`, and what it was doing is

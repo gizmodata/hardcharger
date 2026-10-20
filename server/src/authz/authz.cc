@@ -536,6 +536,7 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
       RbacSessionState::BypassScope internal(ContextOf(connection));
       try {
         warpduckdb::RunSql(connection, "USE " + Quoted(record->default_catalog));
+        guard->started_in_tenant_catalog_ = true;
       } catch (const Error& error) {
         Log(LogLevel::kWarning, "a tenant's default catalog could not be used",
             {{"user", who.user_name}, {"error", error.what()}});

@@ -550,6 +550,39 @@ In SQL, `SET SESSION name = value` changes a DuckDB setting for your session onl
 settings (`arrow_lossless_conversion` among them) is `GLOBAL`: then only an administrator
 may run it, and it changes the default of every session that has no value of its own.
 
+### Where sessions start
+
+A new session starts in the database's catalog (`memory`, or the `--database` file's) and its
+`main` schema. To start every session in a catalog the init SQL attaches, name it:
+
+```yaml
+init_sql_commands: "ATTACH ':memory:' AS lake; CREATE SCHEMA lake.sales;"
+default_catalog: lake     # flag: --default-catalog lake
+default_schema: sales     # flag: --default-schema sales
+```
+
+- A client's own `catalog` / `schema` session options (Warp SQL `POST /warp/v1/sessions`) still
+  win, and `USE` still moves a session anywhere. A `schema` option alone is that schema in the
+  default catalog. `default_schema` alone is that schema in the database's catalog;
+  `default_catalog` alone starts in that catalog's default schema (`main`).
+- With neither option set, an init SQL that ends in `USE x` or `USE x.y` sets where sessions
+  start, as in GizmoSQL 1.x. The server reads where the init SQL's connection ended up (a
+  `USE` that a later one undid doesn't count) and logs it: `init SQL ended in USE lake.sales:
+  sessions start there (set default_catalog to choose explicitly)`. Setting either option turns
+  this off.
+- Both are checked once the init SQL has run: a catalog that isn't attached, a schema that
+  doesn't exist, or one of the server's own catalogs (`system`, `_hardcharger_system`, the
+  instrumentation and log catalogs) stops the server with exit code 1 and says why
+  (`default_catalog 'lake' is not attached: the attached catalogs are memory (attach it in the
+  init SQL)`).
+- Under access control a session moves there only if its user's own `USE` could: a user held
+  to `catalog_access` rules that don't include it, or a tenant's user, starts where they would
+  without it (logged at debug level), and a tenant with a default catalog starts its users
+  there. A user outside any tenant sees every catalog's name, so they start in the default and
+  their grants decide what they may read there.
+- The administrator sees the effective defaults in `hardcharger_server_info()`
+  (`default_catalog`, `default_schema`).
+
 ### Behind a load balancer or proxy
 
 Behind an HTTP reverse proxy (an ingress, an application load balancer) every connection

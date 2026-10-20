@@ -71,6 +71,7 @@ SERVER_INFO_ADMIN = [
     ("metrics_port", "INTEGER"), ("oauth_enabled", "BOOLEAN"), ("tls_enabled", "BOOLEAN"), ("mtls_enabled", "BOOLEAN"),
     ("mtls_client_certificate_required", "BOOLEAN"), ("server_certificate_sha256", "VARCHAR"),
     ("web_ui_enabled", "BOOLEAN"), ("rbac_store_type", "VARCHAR"), ("session_count", "INTEGER"),
+    ("default_catalog", "VARCHAR"), ("default_schema", "VARCHAR"),
     ("instrumentation_queued", "BIGINT"), ("instrumentation_dropped", "BIGINT"), ("instrumentation_failed", "BIGINT"),
 ]
 

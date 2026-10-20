@@ -54,6 +54,11 @@ struct Config {
   bool allow_unsigned_extensions = false;
   std::string init_sql_commands;       // run at startup, before the file
   std::string init_sql_commands_file;  // a SQL file run at startup
+  // Where every new session starts (its current catalog and schema) unless the client's
+  // session options say otherwise. Checked at startup, after the init SQL; with neither
+  // set, an init SQL that ends in USE x.y sets them (engine.cc).
+  std::string default_catalog;
+  std::string default_schema;
   int64_t result_batch_rows = 122880;  // rows per Arrow batch in results (a DuckDB row group)
 
   // Authentication
