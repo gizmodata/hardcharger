@@ -181,6 +181,9 @@ void ConfigureLogging(std::string_view level, std::string_view format, const std
   min_level = parsed;
   json_format = json;
   emoji = marks;
+  // A server started again in the same process (embedded in an app: embedding.hpp)
+  // configures logging again: the last log file is closed, not left open for good.
+  if (output != stderr && output != stdout && output != destination) std::fclose(output);
   output = destination;
 }
 

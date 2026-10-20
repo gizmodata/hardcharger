@@ -17,6 +17,8 @@ export interface SignedIn {
   expiresAt: number;
 }
 
+// The iOS app signs its web views in by writing these two keys (ios/Hardcharger/Web/
+// WebConsole.swift, signInScript): keep them, and SignedIn's shape, in step with it.
 const key = "hardcharger-ui:sign-in";
 const userKey = "hardcharger-ui:user-name";
 

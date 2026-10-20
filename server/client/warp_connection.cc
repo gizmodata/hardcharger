@@ -172,6 +172,8 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
       ARROW_RETURN_NOT_OK(SignInWithBrowser(*client, discovery));
     } else if (config.auth_type_mtls) {
       client->SignInWithClientCertificate();
+    } else if (!config.access_token.empty()) {
+      client->SetAccessToken(config.access_token);
     } else if (!config.username.empty()) {
       client->SignInWithPassword(config.username, config.password);
     }

@@ -150,6 +150,25 @@ own changelog in `python/CHANGELOG.md`.
   logged `SQL Statement was successfully canceled.`). A statement that ends on its own or
   fails logs none. Tests: `test_statement_cancel_log.py`.
 
+- **Hardcharger™ for iPhone and iPad** (`ios/`, iOS 18 and later): the Hardcharger server
+  running on the device itself, its web UI and a native SQL console, and a client for
+  Hardcharger servers anywhere. The server is `hardcharger-server` itself, built into the
+  app as a library (`HARDCHARGER_EMBEDDED`, `server/embedded/hardcharger_embedded.h`) and
+  cross-compiled for iOS devices and the simulator with the same recipes, pins and patches
+  as every other platform (`ios/scripts/build-server-ios.sh`). The web UI opens signed in
+  (an administrator password and token key made on first launch, kept in the Keychain); the
+  console is the `hardcharger` client's own statement splitting, dot commands and output
+  formatting. Import CSV, TSV, JSON and Parquet from Files, the share sheet or a drop;
+  **Share on Local Network** (off by default) serves the database and web UI to computers on
+  the same Wi-Fi over TLS with a certificate the device makes, shown with a QR code and its
+  fingerprint; saved remote servers sign in with a password or the server's single sign-on.
+  Sidebar, keyboard shortcuts and multiple windows on iPad. See `ios/README.md`.
+- Web UI: on a touch-first device (a phone, a tablet without a mouse) the editor no longer
+  takes the focus by itself when a tab shows, which brought up the keyboard over the results
+  at the next tap; a tap on the editor still focuses it.
+- The `hardcharger` client reads dollar-quoted strings (`$$ … $$`, `$tag$ … $tag$`): a `;`
+  inside a function body no longer ends the statement.
+
 ### Changed
 
 - An IPv6 client's address is written `[2001:db8::7]:51234` (it was `2001:db8::7:51234`,
@@ -163,6 +182,13 @@ own changelog in `python/CHANGELOG.md`.
   whose statement ran in JSON mode lives up to `result_retention_seconds` after it ended. Set
   `result_retention_seconds` no higher than `session_idle_timeout` to bound sessions by the idle
   timeout alone.
+
+- CI (`server.yml`): an `ios` job (the app built for the simulator, its smoke test inside a
+  simulator, unit and UI tests) on `v*` tags and on manual runs with `ios: true` only; on
+  `v*` tags, `ios-archive` builds the signed App Store `.ipa` as the run's artifact (nothing
+  is uploaded).
+- The server's log file is closed when logging is configured again (a server started again
+  in the same process, as in the app).
 
 ### Fixed
 

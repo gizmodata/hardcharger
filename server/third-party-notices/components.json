@@ -1173,7 +1173,7 @@
         "hardcharger"
       ],
       "platforms": "all",
-      "note": "The command-line client's line editor. Its LICENSE.md also covers the code it includes (ConvertUTF, wcwidth).",
+      "note": "The command-line client's line editor. Its LICENSE.md also covers the code it includes (ConvertUTF, wcwidth). The iOS app's console links it too, as part of the client's library (it reads no terminal there).",
       "texts": [
         {
           "file": "LICENSE.md",
@@ -1254,8 +1254,8 @@
       "in": [
         "hardcharger-server"
       ],
-      "platforms": "Linux, Windows",
-      "note": "The httpfs extension's HTTP client. macOS builds use the system's libcurl instead (not shipped); Windows builds link vcpkg's.",
+      "platforms": "Linux, Windows, iOS",
+      "note": "The httpfs extension's HTTP client. macOS builds use the system's libcurl instead (not shipped); Windows builds link vcpkg's; the iOS app links this version, built for iOS (iOS has no libcurl).",
       "covers": {
         "vcpkg": [
           "curl"

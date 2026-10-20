@@ -239,7 +239,12 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
         ed.focus();
       },
       value: () => model.getValue(),
-      focus: () => ed.focus(),
+      // Focus the page asks for by itself (a tab shown): not on a touch-first device, where it
+      // would bring up the keyboard over the results of the next tap (Run). A tap on the
+      // editor still focuses it.
+      focus: () => {
+        if (!window.matchMedia?.("(pointer: coarse)").matches) ed.focus();
+      },
       highlight: (range) => {
         running.clear();
         if (range) {

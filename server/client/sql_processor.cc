@@ -35,6 +35,14 @@ bool SqlProcessor::AccumulateLine(const std::string& line) {
       continue;
     }
 
+    if (!dollar_tag_.empty()) {
+      if (buffer_.compare(i, dollar_tag_.size(), dollar_tag_) == 0) {
+        i += dollar_tag_.size() - 1;
+        dollar_tag_.clear();
+      }
+      continue;
+    }
+
     if (in_double_quote_) {
       if (c == '"' && next == '"') {
         ++i;  // escaped quote
@@ -55,6 +63,23 @@ bool SqlProcessor::AccumulateLine(const std::string& line) {
     } else if (c == '/' && next == '*') {
       in_block_comment_ = true;
       ++i;  // skip '*'
+    } else if (c == '$') {
+      // A dollar quote opens with $$ or $tag$ (tag: a letter or underscore, then letters,
+      // digits and underscores), not inside an identifier; $1 is a parameter.
+      const bool after_word = i > 0 && (std::isalnum(static_cast<unsigned char>(buffer_[i - 1])) ||
+                                        buffer_[i - 1] == '_' || buffer_[i - 1] == '$');
+      size_t end = i + 1;
+      if (!after_word && end < buffer_.size() &&
+          (std::isalpha(static_cast<unsigned char>(buffer_[end])) || buffer_[end] == '_' || buffer_[end] == '$')) {
+        while (end < buffer_.size() &&
+               (std::isalnum(static_cast<unsigned char>(buffer_[end])) || buffer_[end] == '_')) {
+          ++end;
+        }
+        if (end < buffer_.size() && buffer_[end] == '$') {
+          dollar_tag_ = buffer_.substr(i, end - i + 1);
+          i = end;
+        }
+      }
     } else if (c == ';') {
       semicolon_pos_ = i;
       return true;  // Statement complete
@@ -64,7 +89,8 @@ bool SqlProcessor::AccumulateLine(const std::string& line) {
   // Only comments so far (a standalone comment line, or what followed a statement's
   // semicolon): nothing to run, so nothing is pending. An open block comment stays
   // pending until it closes.
-  if (!in_block_comment_ && !in_single_quote_ && !in_double_quote_ && IsOnlyComments(buffer_)) {
+  if (!in_block_comment_ && !in_single_quote_ && !in_double_quote_ && dollar_tag_.empty() &&
+      IsOnlyComments(buffer_)) {
     buffer_.clear();
   }
   return false;
@@ -125,6 +151,7 @@ void SqlProcessor::Reset() {
   in_single_quote_ = false;
   in_double_quote_ = false;
   in_block_comment_ = false;
+  dollar_tag_.clear();
 }
 
 bool SqlProcessor::IsAccumulating() const {

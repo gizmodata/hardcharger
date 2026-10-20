@@ -33,6 +33,9 @@ class SqlProcessor {
   bool in_single_quote_ = false;
   bool in_double_quote_ = false;
   bool in_block_comment_ = false;
+  // Inside a dollar-quoted string ($$...$$ or $tag$...$tag$, as DuckDB and PostgreSQL
+  // write function bodies): its opening tag, which alone ends it.
+  std::string dollar_tag_;
 };
 
 }  // namespace hardcharger::client

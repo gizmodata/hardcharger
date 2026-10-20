@@ -51,6 +51,9 @@ struct ClientConfig {
   bool auth_type_external = false;
   // Sign in with the mTLS client certificate (the client_certificate grant), no password.
   bool auth_type_mtls = false;
+  // An access token the server already issued (an app that signed in by itself, e.g. the
+  // iOS app's console after its own browser sign-in): used as is, no sign-in.
+  std::string access_token;
 
   // Input/Output
   std::optional<std::string> command;
