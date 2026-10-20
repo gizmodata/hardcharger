@@ -5,6 +5,7 @@ import SwiftUI
 struct ServerScreen: View {
     @Environment(ServerController.self) private var server
     @Environment(SceneModel.self) private var scene
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         NavigationStack {
@@ -129,25 +130,31 @@ struct ServerScreen: View {
                     Text("Hardcharger™")
                         .font(.title2.weight(.bold))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                        .minimumScaleFactor(0.4)
                     Text("on this \(UIDevice.current.localizedModel)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     StatusBadge(phase: server.phase)
                 }
                 Spacer(minLength: 0)
             }
             if server.phase == .running, let startedAt = server.startedAt {
-                HStack {
-                    Metric(title: "Port", value: server.port.map(String.init) ?? "–")
-                    Divider().frame(height: 32)
+                // Side by side; one under the other at the accessibility text sizes.
+                let layout = typeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout())
+                layout {
+                    Metric(title: "Port", value: server.port.map(String.init) ?? "–", stacked: typeSize.isAccessibilitySize)
+                    if !typeSize.isAccessibilitySize { Divider().frame(height: 32) }
                     TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Metric(title: "Up", value: Self.uptime(from: startedAt, to: context.date))
+                        Metric(title: "Up", value: Self.uptime(from: startedAt, to: context.date),
+                               stacked: typeSize.isAccessibilitySize)
                     }
-                    Divider().frame(height: 32)
-                    Metric(title: "TLS", value: server.usesTLS ? String(localized: "On") : String(localized: "Off"))
+                    if !typeSize.isAccessibilitySize { Divider().frame(height: 32) }
+                    Metric(title: "TLS", value: server.usesTLS ? String(localized: "On") : String(localized: "Off"),
+                           stacked: typeSize.isAccessibilitySize)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             // Titles and icons where they fit, icons alone where they don't (narrow windows,
             // large text); VoiceOver reads the titles either way.
@@ -253,17 +260,27 @@ struct ServerScreen: View {
 private struct Metric: View {
     let title: LocalizedStringKey
     let value: String
+    var stacked = false
 
     var body: some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.headline.monospacedDigit())
-                .contentTransition(.numericText())
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        Group {
+            if stacked {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(title).foregroundStyle(.secondary)
+                    Text(value).font(.headline.monospacedDigit())
+                }
+            } else {
+                VStack(spacing: 2) {
+                    Text(value)
+                        .font(.headline.monospacedDigit())
+                        .contentTransition(.numericText())
+                    Text(title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
         }
-        .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
     }
 }
