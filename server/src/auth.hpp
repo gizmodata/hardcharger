@@ -59,6 +59,8 @@ class Authenticator : public warpsql::Authenticator {
   std::string default_role_;
   std::string groups_claim_;
   std::vector<std::string> authorized_emails_;
+  bool auto_provision_users_ = false;  // token_auto_provision_users
+  std::string auto_provision_issuer_;  // the issuer whose tokens provision users
   LogLevel log_level_;
   std::shared_ptr<authz::AccessControl> access_;
   std::function<warpsql::Principal(std::string_view)> server_tokens_;

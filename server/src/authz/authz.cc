@@ -329,9 +329,49 @@ std::optional<AccessControl::SignIn> AccessControl::AuthenticatePassword(
   return SignIn{user->name, Fingerprint(user->password_hash)};
 }
 
-void AccessControl::RequireStoreUser(const std::string& user_name) const {
+namespace {
+
+AccessControl::TokenUser TokenUserOf(const Snapshot& snapshot, const std::string& user_id) {
+  AccessControl::TokenUser out;
+  if (const UserRecord* user = snapshot.FindUserById(user_id)) {
+    const auto role = user->attributes.find(kProvisionedRoleAttribute);
+    out.readonly = role != user->attributes.end() && role->second == "readonly";
+  }
+  return out;
+}
+
+}  // namespace
+
+AccessControl::TokenUser AccessControl::RequireStoreUser(const std::string& user_name) const {
   auto principal = engine_->PrincipalForUser(user_name);
   if (!principal.ok()) throw Error(ErrorCode::kInvalidCredentials, principal.status().message());
+  return TokenUserOf(*engine_->snapshot(), principal->user_id);
+}
+
+AccessControl::TokenUser AccessControl::ProvisionStoreUser(const std::string& user_name,
+                                                           const std::string& token_role,
+                                                           const std::string& issuer) {
+  bool created = false;
+  auto principal = engine_->ProvisionUser(user_name, {{kProvisionedRoleAttribute, token_role}}, &created);
+  if (!principal.ok()) {
+    // A user that exists (a disabled one) was refused as any sign-in is; one that couldn't
+    // be created is an access-control refusal.
+    if (engine_->snapshot()->FindUserByName(user_name) == nullptr) {
+      Audit(LogLevel::kWarning, "refused to provision a user from a sign-in token",
+            {{"kind", "access_control"}, {"status", "rejected"}, {"statement", "CREATE USER"},
+             {"method", "token_auto_provision"}, {"user", user_name}, {"issuer", issuer},
+             {"error", principal.status().message()}});
+    }
+    throw Error(ErrorCode::kInvalidCredentials, principal.status().message());
+  }
+  if (created) {
+    Audit(LogLevel::kInfo, "provisioned a user on its first sign-in",
+          {{"kind", "access_control"}, {"status", "success"}, {"statement", "CREATE USER"},
+           {"method", "token_auto_provision"}, {"user", user_name}, {"issuer", issuer}, {"role", token_role}});
+  }
+  TokenUser out = TokenUserOf(*engine_->snapshot(), principal->user_id);
+  out.created = created;
+  return out;
 }
 
 std::optional<std::string> AccessControl::CertificateUser(const std::string& identity) const {

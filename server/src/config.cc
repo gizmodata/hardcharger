@@ -177,6 +177,16 @@ const std::vector<Option>& Options() {
        LIST(token_authorized_emails)},
       {"token_jwks_uri", Kind::kString,
        "JWKS of the identity provider whose ID tokens sign users in", TEXT(token_jwks_uri)},
+      {"token_auto_provision_users", Kind::kBool,
+       "under access control, a verified sign-in token from token_auto_provision_issuer whose "
+       "user the store lacks creates it on first sign-in (no password, no grants; the token's "
+       "role in its provisioned_role attribute, readonly staying readonly); admin tokens and "
+       "existing users (a disabled one stays disabled) are unchanged",
+       FLAG(token_auto_provision_users)},
+      {"token_auto_provision_issuer", Kind::kString,
+       "the issuer (iss) whose sign-in tokens token_auto_provision_users provisions users for "
+       "(default: token_allowed_issuer)",
+       TEXT(token_auto_provision_issuer)},
       // Browser sign-in
       {"oauth_client_id", Kind::kString,
        "OAuth client id; set, browser sign-in is offered (Warp SQL oauth_browser)",
@@ -201,7 +211,10 @@ const std::vector<Option>& Options() {
       {"max_sessions", Kind::kInt,
        "most non-admin sessions at once (0: unlimited)", NUMBER(max_sessions)},
       {"session_idle_timeout", Kind::kInt,
-       "seconds an idle session lives (0: forever)", NUMBER(session_idle_timeout)},
+       "a session is evicted within 5 s after this many seconds without requests (0: never), "
+       "unless a statement of it is running, an ingest of it is in progress, a result of it is "
+       "being read, or it holds a retained result that hasn't expired (result_retention_seconds)",
+       NUMBER(session_idle_timeout)},
       {"result_retention_seconds", Kind::kInt,
        "seconds a retained result (resumable, readable again) is kept after its statement ends, "
        "from 1 to 2592000 (30 days); its statement document's expires_at says until when",
@@ -494,6 +507,34 @@ void Validate(Loaded& loaded) {
         "rbac_store_uri must be a PostgreSQL connection string or a DuckDB file (memory is for tests only)");
   }
   CheckStoreFileIsItsOwn(c);
+  if (!c.token_auto_provision_issuer.empty() && !c.token_auto_provision_users) {
+    throw std::invalid_argument("token_auto_provision_issuer needs token_auto_provision_users");
+  }
+  if (c.token_auto_provision_users) {
+    if (c.rbac_store_uri.empty()) {
+      throw std::invalid_argument("token_auto_provision_users needs rbac_store_uri (access control)");
+    }
+    // As the server finds its keys (main.cc): a PEM key, a JWKS, or the issuer's OpenID
+    // configuration (an issuer and an audience).
+    if (c.token_signature_verify_cert_path.empty() && c.token_jwks_uri.empty() &&
+        (c.token_allowed_issuer.empty() || c.token_allowed_audience.empty())) {
+      throw std::invalid_argument(
+          "token_auto_provision_users needs a way to verify sign-in tokens: "
+          "token_signature_verify_cert_path, token_jwks_uri, or token_allowed_issuer with "
+          "token_allowed_audience");
+    }
+    if (c.token_auto_provision_issuer.empty()) c.token_auto_provision_issuer = c.token_allowed_issuer;
+    if (c.token_auto_provision_issuer.empty()) {
+      throw std::invalid_argument(
+          "token_auto_provision_users needs token_auto_provision_issuer or token_allowed_issuer: "
+          "only one issuer's tokens provision users");
+    }
+    if (!c.token_allowed_issuer.empty() && c.token_auto_provision_issuer != c.token_allowed_issuer) {
+      throw std::invalid_argument("token_auto_provision_issuer '" + c.token_auto_provision_issuer +
+                                  "' is not token_allowed_issuer '" + c.token_allowed_issuer +
+                                  "', the only issuer whose tokens sign in, so it would provision no one");
+    }
+  }
   if (!c.rbac_opa_url.empty() && c.rbac_store_uri.empty()) {
     throw std::invalid_argument("rbac_opa_url needs rbac_store_uri (access control)");
   }

@@ -67,6 +67,11 @@ struct Config {
   // An identity provider's keys: this JWKS, else the one
   // token_allowed_issuer's OpenID configuration names (with an audience and no PEM key).
   std::string token_jwks_uri;
+  // Under access control: a verified sign-in token (not an administrator's) whose user the
+  // store lacks creates it, with no grants, when the token's issuer is
+  // token_auto_provision_issuer (default: token_allowed_issuer).
+  bool token_auto_provision_users = false;
+  std::string token_auto_provision_issuer;
 
   // Browser sign-in through the identity provider (Warp SQL §4.3), on the main port.
   std::string oauth_client_id;  // set: browser sign-in is offered
