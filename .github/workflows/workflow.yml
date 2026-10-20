@@ -20,6 +20,11 @@ on:
     paths-ignore: ["server/**", "third_party/**"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      client:
+        description: Also test Server.connect() with the published ADBC driver before tagging
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -113,8 +118,8 @@ jobs:
 
   client:
     name: Server.connect() through adbc-driver-hardcharger
-    # The release gate only (see the top of this file): its driver isn't on PyPI yet.
-    if: startsWith(github.ref, 'refs/tags/python-v')
+    # Tags always test it; a manual run can prove the same gate once the driver is published.
+    if: startsWith(github.ref, 'refs/tags/python-v') || (github.event_name == 'workflow_dispatch' && inputs.client)
     runs-on: ubuntu-24.04
     env:
       HARDCHARGER_INSTALL_TOKEN: ${{ github.token }}
