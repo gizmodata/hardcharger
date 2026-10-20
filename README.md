@@ -84,6 +84,14 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   qualified, quoted where needed); preview a table, show a view's definition, search every
   table and view by name. Autocomplete offers tables, schemas, columns (through aliases too),
   functions and keywords.
+- 📤 **Upload data**: a CSV, TSV, Excel (.xlsx, .xls, .xlsb), Parquet, JSON or Arrow file into
+  a new table, or appended to (columns matched by name) or replacing an existing one, from the
+  toolbar, the schema browser, or a file dropped on the page. The browser reads the file (an
+  Excel workbook's sheets, dates in its own date system, numbers, text and blank cells; a CSV's
+  delimiter, quotes and header row), shows the first rows with each column's type to change,
+  rename or skip, and sends it over Warp SQL's bulk ingest in pieces of a few megabytes, in
+  one transaction: a progress bar, Cancel, and a failed upload leaves the table unchanged.
+  Large CSV, JSON-lines, Parquet and Arrow files upload at any size.
 - 💾 **Downloads** of the rows as shown (CSV, TSV, JSON, Excel) or the whole typed result
   (Parquet, Arrow IPC), made in the browser.
 - 📁 **Saved queries** in folders, kept in the browser, with export and import as a file;
@@ -103,6 +111,11 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   **Sign in with <provider>** beside the user name and password, and comes back signed in.
 - 🛡️ The server's own sign-in, a short-lived token kept only in the tab, and a strict
   Content-Security-Policy: nothing loads from another origin.
+
+<p align="center">
+  <img src="docs/assets/web-ui-upload-light.png" alt="Upload data, light theme: an Excel workbook's columns and first rows, with their types, before the upload" width="49%">
+  <img src="docs/assets/web-ui-upload-dark.png" alt="Upload data, dark theme: the upload's result, the rows loaded and the table's columns" width="49%">
+</p>
 
 <p align="center">
   <img src="docs/assets/web-ui-api-light.png" alt="The web UI's API page, light theme: the server's Warp SQL operations in Swagger UI" width="49%">

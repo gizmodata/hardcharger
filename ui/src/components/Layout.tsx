@@ -14,6 +14,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { DataExplorer } from "./DataExplorer";
 import { SavedQueriesPanel } from "./SavedQueriesPanel";
 import { ResizeHandle } from "./ResizeHandle";
+import { UploadHost } from "./UploadHost";
 
 const panelSize = {
   key: "hardcharger-ui:side-panel-width",
@@ -247,6 +248,7 @@ export function Layout({ theme, page, go }: Props) {
         </main>
       </div>
       {about && <AboutDialog onClose={() => setAbout(false)} />}
+      <UploadHost />
     </div>
   );
 }

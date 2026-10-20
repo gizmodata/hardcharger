@@ -1,5 +1,5 @@
 import type { TransactionState } from "@gizmodata/warp-sql";
-import { Check, Copy, Info, ListOrdered, Play, RotateCcw, Save, Square, Undo2 } from "lucide-react";
+import { Check, Copy, FileUp, Info, ListOrdered, Play, RotateCcw, Save, Square, Undo2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { listingsFor } from "../lib/catalogs";
@@ -10,6 +10,7 @@ import { isTransactionStatement, mayChangeCatalog, splitStatements, statementPre
 import { type TabDoc, rowLimits } from "../lib/tabs";
 import { type SessionInfo, TabSession, TransactionLostError, type Where } from "../lib/tabSession";
 import type { ThemeName } from "../lib/theme";
+import { requestUpload } from "../lib/upload/request";
 import { errorMessage, useSession } from "../session";
 import { ResultView } from "./ResultView";
 import { type EditorApi, SqlEditor } from "./SqlEditor";
@@ -436,6 +437,15 @@ export function EditorTab(props: Props) {
             ))}
           </select>
         </label>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => requestUpload({ catalog: where.catalog, schema: where.schema, role: tab.role })}
+          title="Load a CSV / Excel / Parquet / JSON / Arrow file into a table"
+          data-testid="upload-button"
+        >
+          <FileUp size={14} /> Upload data
+        </button>
         {props.roles.length > 0 && (
           <label className="toolbar-field" title={lockedTitle ?? "The role this tab acts with (SET ROLE)"}>
             Run as

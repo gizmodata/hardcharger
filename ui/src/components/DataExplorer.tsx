@@ -8,6 +8,7 @@ import {
   Columns3,
   Database,
   Eye,
+  FileUp,
   FolderTree,
   Hash,
   Layers,
@@ -28,6 +29,7 @@ import { onCatalogsChanged } from "../lib/catalogs";
 import { copyText } from "../lib/clipboard";
 import { sqlIdentifier } from "../lib/completionContext";
 import { sqlNameDragType } from "../lib/sqlNameDrag";
+import { requestUpload } from "../lib/upload/request";
 import { errorMessage, useSession } from "../session";
 import { FloatingMenu, type MenuItem } from "./FloatingMenu";
 
@@ -279,10 +281,17 @@ export function DataExplorer({ cache }: Props) {
       { label: "Use this catalog and schema", run: () => pointTabAt(catalog, schema), disabled: useBlocked },
     ];
   };
+  const upload = (catalog?: string, schema?: string) =>
+    requestUpload({
+      catalog: catalog ?? active.catalog,
+      schema: schema ?? (catalog === undefined ? active.schema : ""),
+      role: active.role,
+    });
   const schemaMenu = (catalog: string, schema: string): MenuItem[] => [
     { label: "Insert name in editor", run: () => insert(qualified(catalog, schema)) },
     { label: "Copy name", run: () => copy(qualified(catalog, schema)) },
     { label: "Use this catalog and schema", run: () => pointTabAt(catalog, schema), disabled: useBlocked },
+    { label: "Upload data…", run: () => upload(catalog, schema) },
   ];
   const catalogMenu = (catalog: string): MenuItem[] => [
     { label: "Insert name in editor", run: () => insert(ident(catalog)) },
@@ -296,6 +305,7 @@ export function DataExplorer({ cache }: Props) {
         ),
       disabled: useBlocked,
     },
+    { label: "Upload data…", run: () => upload(catalog) },
   ];
   const columnMenu = (column: ColumnEntry): MenuItem[] => [
     { label: "Insert name in editor", run: () => insert(ident(column.name)) },
@@ -499,6 +509,16 @@ export function DataExplorer({ cache }: Props) {
       <div className="sidebar-head">
         <FolderTree size={15} />
         <span>Data</span>
+        <button
+          type="button"
+          className="btn btn-ghost btn-icon btn-sm"
+          onClick={() => upload()}
+          title="Upload data: a CSV, Excel, Parquet, JSON or Arrow file into a table"
+          aria-label="Upload data"
+          data-testid="explorer-upload"
+        >
+          <FileUp size={14} />
+        </button>
         <button
           type="button"
           className="btn btn-ghost btn-icon btn-sm"

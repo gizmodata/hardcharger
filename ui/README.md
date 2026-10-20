@@ -104,6 +104,54 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
   the user's roles (`SET ROLE`) or **All my roles**, and the schema browser and autocomplete
   list what that role sees. Locked while a transaction is open. An administrator, who holds
   every right already, has no picker.
+- 📤 **Upload data** (the toolbar's **Upload data**, the schema browser's upload button and
+  **Upload data…** on a catalog's or schema's menu, or a file dropped anywhere on the page): a
+  CSV, TSV, Excel (.xlsx, .xls, .xlsb), Parquet, JSON lines or JSON array, or Arrow IPC file
+  (stream or file) into a table. The dialog has GizmoData Cloud's fields, labels and messages:
+  File; Catalog (or the session's); Schema (or **New schema…**); Table, from the file's name
+  (`Sales Q3 2026.xlsx` → `sales_q3_2026`); **If the table…** create (fails if it exists),
+  append (the file's columns matched to the table's by name, any case; a table column the file
+  lacks gets NULL; a file column the table lacks stops the upload before it starts) or replace
+  (the table's columns and rows become the file's); Header row (Detect, or say); and the CSV
+  delimiter (Detect, or up to 4 characters; `\t` or `tab` for a tab) or the Excel worksheet
+  (the workbook's sheets, the first by default).
+  - **Preview & column types** (folded away until opened): the first 100 rows as they will
+    load, each column's type to change (VARCHAR, BIGINT, DOUBLE, DECIMAL(p,s), BOOLEAN, DATE,
+    TIMESTAMP, TIMESTAMPTZ, TIME), its name to change, or **Skip column**; a value that doesn't
+    fit its type is shown in red. Parquet and Arrow columns keep the file's own types. Notes say
+    what was detected or left out (an encoding that isn't UTF-8, empty rows, error cells, merged
+    ranges, the 1904 date system). An append's types are the table's unless picked, and a
+    warning lists where the file's and the table's differ.
+  - **Reading**: in a Web Worker (`upload.worker`, a file of its own), so a large or malformed
+    file can't freeze the page; it ends when the dialog closes or the upload is cancelled. CSV,
+    JSON lines, Parquet (with parquet-wasm, row group by row group) and Arrow streams are read
+    as they upload, in pieces of about 8 MB, at any size; Excel workbooks and JSON arrays are
+    read whole, up to 100 MB (Arrow IPC files up to 1 GB). Types are inferred from the first
+    20,480 rows, as DuckDB's CSV sniffer does, except that a whole number with a leading zero
+    (`00123`) stays text; CSV text is UTF-8 or UTF-16 with a byte order mark, else
+    Windows-1252, with a note. Excel (SheetJS Community Edition, below): numbers, text (a
+    "number stored as text" stays text unless a number type is picked), booleans, and dates
+    and times by the cells' number formats in the workbook's date system; a formula's saved
+    value (formulas aren't calculated, macros never run); error cells NULL; empty rows left
+    out; a merged range's value in its first cell; at most 32,767 characters a cell and
+    1,048,576 rows, as Excel itself.
+  - **Sending**: its own Warp SQL session (as the tab's **Run as** role), one transaction, and
+    one bulk-ingest request (§8.1) per piece, in the file's order: the first creates or
+    replaces the table, the rest append. Nothing is visible until the commit; an error or
+    **Cancel upload** rolls back, and the table is as it was. A partitioned ingest (§8.3) isn't
+    used: its rows have no order, and a browser can't stream a request body (so each part
+    would be held in memory all the same). The progress bar counts the file read, the rows
+    and the bytes sent.
+  - **Errors** say what and where: a value that doesn't convert names its line (CSV, JSON) or
+    cell (Excel) and column; the server's own refusals (CREATE or INSERT not granted, a row
+    policy, a type it can't convert) come as it words them, after "Permission denied:" for a
+    permission. **Done** closes; **Upload another** starts over; **Query this table** opens a
+    tab with `SELECT * … LIMIT 100`; the schema browser and autocomplete list the new table.
+  - e2e: `upload.spec.ts` (an .xlsx with two sheets, a CSV, Parquet and JSON lines read back by
+    value; append, replace and create on an existing table; a 200 MB CSV in pieces with
+    progress; cancel; a user without CREATE; a dropped file; the schema browser's entry);
+    unit: `upload.test.ts` (inference, the CSV reader, Excel's date systems and cell types,
+    JSON, conversions), with workbooks written by hand (`test/unit/workbook.ts`).
 - 💾 **Downloads**: CSV, TSV, JSON and Excel (.xlsx) hold the rows as shown (the grid's filter
   and sort); Parquet and Arrow IPC (.arrows) the whole result with the server's exact column
   types. Excel keeps numbers as numbers where it holds them exactly, text (`00123`) as text.
@@ -185,14 +233,14 @@ object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
 The e2e tests run under this policy and fail on any violation; taking `'wasm-unsafe-eval'` or
 `'unsafe-inline'` out makes them fail. The exceptions:
 
-- `'wasm-unsafe-eval'`: the Parquet export compiles WebAssembly. It allows WebAssembly only,
-  not `eval` of JavaScript.
+- `'wasm-unsafe-eval'`: the Parquet export, and the Parquet reader in the upload worker,
+  compile WebAssembly. It allows WebAssembly only, not `eval` of JavaScript.
 - `style-src 'unsafe-inline'`: the editor writes `<style>` elements and style attributes at run
   time, and Swagger UI (the API page) sets style attributes.
 - `img-src data:`: two small images in the editor's stylesheet (the color picker's
   background), and Swagger UI's icons, which its stylesheet carries as `data:` SVGs.
 
-The editor's worker is a file of its own (`worker-src 'self'`, no `blob:`).
+The editor's and the upload's workers are files of their own (`worker-src 'self'`, no `blob:`).
 
 When an upgrade replaces the hashed files, a tab opened before it may ask for one that is gone.
 The page then reloads after 0, 3 and 10 seconds (long enough for a rolling restart), and after
@@ -235,6 +283,14 @@ The JavaScript client, `@gizmodata/warp-sql`, is not on npm. `vendor/` holds the
 commit pinned in [`vendor/warp-sql-js.json`](vendor/warp-sql-js.json) (and
 `package-lock.json` pins its hash again). `node scripts/vendor-warp-sql.mjs --verify --rebuild`
 rebuilds that commit and checks every file; `--update <commit>` moves the pin.
+
+SheetJS Community Edition (`xlsx`, Apache-2.0), which reads Excel workbooks for Upload data, is
+published on SheetJS's own CDN: npm's `xlsx` stopped at 0.18.5, which has known vulnerabilities
+(CVE-2023-30533 and CVE-2024-22363, fixed in 0.19.3 and 0.20.2). `vendor/` holds the 0.20.3
+release's tarball, [`vendor/sheetjs.json`](vendor/sheetjs.json) its source and SHA-256;
+`node scripts/vendor-sheetjs.mjs --verify` checks it (`--fetch` also compares the CDN's copy),
+and `npm run vendor:verify` runs both checks. Advisory databases list every version of npm's
+`xlsx` as affected, since no fixed version is on npm; `npm audit` skips a `file:` dependency.
 
 ### End-to-end tests
 
