@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { publishActiveTab, resetActiveTab } from "../lib/activeTab";
 import { clearCatalogCaches } from "../lib/catalogs";
+import { warnBeforeLeaving } from "../lib/pageExit";
 import { grantedRoles } from "../lib/roles";
 import {
   type SavedItem,
@@ -124,14 +125,7 @@ export default function QueryPage({ theme }: Props) {
 
   // Leaving the page with a transaction open loses it: the browser asks first.
   const anyTransaction = Object.values(statuses).some((s) => s.transaction !== "none");
-  useEffect(() => {
-    if (!anyTransaction) return;
-    const warn = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-    };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [anyTransaction]);
+  useEffect(() => (anyTransaction ? warnBeforeLeaving() : undefined), [anyTransaction]);
 
   const patchTab = useCallback(
     (id: string, patch: Partial<TabDoc>) =>

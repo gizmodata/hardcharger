@@ -1,4 +1,4 @@
-"""Ten clients at once, each with its own session, running a mix of TPC-H queries.
+"""Ten clients at once, each with its own session, running a mix of queries derived from TPC-H.
 
 Usage: python bench/concurrency.py hardcharger|gizmosql (after tpch.py has loaded the data).
 """

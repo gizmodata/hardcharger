@@ -1,10 +1,19 @@
 # Benchmarks
 
-## TPC-H SF10: Hardcharger vs GizmoSQL 1.41.0 (2026-10-17)
+The workloads here are derived from TPC-H: the 22 queries' text (`tpch_queries()`) and the
+data (`dbgen`, scale factor 1 or 10; `lineitem` alone for the transfer and load runs) come from
+DuckDB's `tpch` extension. They deviate from the TPC-H specification throughout: no refresh
+functions, no power or throughput test, no audit, the query text as DuckDB's extension has it
+(fixed substitution parameters), and timings that include moving every row to the client.
+Derived from the TPC-H benchmark; not an official TPC-H result and not comparable to published
+TPC-H results, as these results do not comply with the TPC-H specification. TPC-H™ is a
+trademark of the Transaction Processing Performance Council (TPC).
 
-Same machine, same data, each server on loopback with no TLS. Each server loads the
-TPC-H SF10 Parquet files (lineitem: 59,986,052 rows) into its own DuckDB file through
-init SQL. Every query runs once to warm up, then five times; the figure is the median,
+## Queries derived from TPC-H at SF10: Hardcharger vs GizmoSQL 1.41.0 (2026-10-17)
+
+Same machine, same data, each server on loopback with no TLS. Each server loads
+Parquet files of the TPC-H-derived data at SF10 (lineitem: 59,986,052 rows) into its own
+DuckDB file through init SQL. Every query runs once to warm up, then five times; the figure is the median,
 measured at the client from submit to the last row in a `pyarrow.Table`. Hardcharger is
 called over Warp SQL's one-round-trip path (`Accept: application/vnd.apache.arrow.stream`,
 plain `httpx`); GizmoSQL through `adbc-driver-gizmosql` 2.0.15. Script: `bench/tpch.py`.

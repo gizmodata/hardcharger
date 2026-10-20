@@ -748,7 +748,69 @@ select {
 .kv td {
   font-family: var(--mono);
   font-size: 12px;
-  word-break: break-all;
+  /* Wrap at spaces; only a value with none (an id) breaks inside a word. */
+  overflow-wrap: anywhere;
+}
+/* About: the logo and title at the top and the notices at the bottom stay in view; the
+   details between them scroll inside the dialog. */
+.dialog-about {
+  max-height: calc(100dvh - 32px);
+}
+.dialog-about[open] {
+  display: flex;
+  flex-direction: column;
+}
+.about-top,
+.about-foot {
+  flex: none;
+}
+.about-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.about-foot {
+  border-top: 1px solid var(--border-soft);
+}
+.about-foot code {
+  white-space: nowrap;
+}
+.about-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.about-caps li {
+  padding: 1px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--bg);
+  white-space: nowrap;
+}
+.about-more {
+  margin: 0 0 8px;
+}
+.about-more summary {
+  padding: 6px 16px;
+  color: var(--muted);
+  font-weight: 600;
+  cursor: pointer;
+}
+.about-more .kv {
+  margin-top: 0;
+}
+/* A short or narrow window: a smaller logo leaves the details room. */
+@media (max-height: 760px), (max-width: 480px) {
+  .dialog-about .wordmark-about img {
+    width: 120px;
+  }
+  .dialog-about .about-brand {
+    padding-top: 10px;
+  }
 }
 .value-text {
   margin: 0;

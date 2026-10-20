@@ -126,3 +126,50 @@ test("fast typing keeps every key", async ({ page }) => {
     expect(await editorText(page)).toBe(sql);
   }
 });
+
+// Enter keeps the line's indentation, but typed or pasted text keeps exactly its own: it was
+// indented once more on every line (Enter's indentation plus the text's own spaces).
+const indented = "SELECT id,\n    customer\n  FROM sales.orders\n    WHERE id < 3;";
+
+/** Puts `text` on the clipboard the way a person would: select it in a text box and copy. */
+async function copyText(page: import("@playwright/test").Page, text: string): Promise<void> {
+  await page.evaluate((t) => {
+    const box = document.createElement("textarea");
+    box.id = "copy-source";
+    box.value = t;
+    document.body.appendChild(box);
+    box.select();
+  }, text);
+  await page.keyboard.press("ControlOrMeta+C");
+  await page.evaluate(() => document.getElementById("copy-source")?.remove());
+}
+
+test("typed and pasted SQL keeps its own indentation; Enter keeps the line's", async ({ page }) => {
+  // Typed key by key.
+  await setSql(page, "");
+  await page.keyboard.type(indented);
+  await expect.poll(() => editorText(page)).toBe(indented);
+
+  // Pasted into an empty editor, and after an Enter that kept an indentation.
+  await copyText(page, indented);
+  await setSql(page, "");
+  await page.keyboard.press("ControlOrMeta+V");
+  await expect.poll(() => editorText(page)).toBe(indented);
+  await copyText(page, "  WHERE id > 1\n  LIMIT 2");
+  await setSql(page, "SELECT *\n  FROM sales.orders");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ControlOrMeta+V");
+  await expect.poll(() => editorText(page)).toBe("SELECT *\n  FROM sales.orders\n  WHERE id > 1\n  LIMIT 2");
+
+  // Enter alone keeps the line's indentation, for text that doesn't bring its own.
+  await setSql(page, "SELECT id\n    FROM sales.orders");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("WHERE id < 2");
+  await expect.poll(() => editorText(page)).toBe("SELECT id\n    FROM sales.orders\n    WHERE id < 2");
+
+  // And the text runs as typed.
+  await setSql(page, "");
+  await page.keyboard.type(indented);
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await expect.poll(async () => (await gridRows(page)).length).toBe(4);
+});

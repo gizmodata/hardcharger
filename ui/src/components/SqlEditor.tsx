@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { type CompletionTarget, registerCompletionTarget, registerSqlCompletion } from "../lib/completion";
 import { monaco } from "../lib/monaco";
 import { sqlNameDragType } from "../lib/sqlNameDrag";
+import { keepTypedIndentation } from "../lib/typedIndent";
 import { splitStatements, statementAt } from "../lib/sql";
 
 export interface EditorApi {
@@ -65,6 +66,16 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
       fontFamily: "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace",
       scrollBeyondLastLine: false,
       tabSize: 2,
+      // Enter keeps the line's indentation and nothing more (no language rules), and pasted
+      // text goes in as it is (keepTypedIndentation below: typed or pasted indentation
+      // replaces the kept one rather than adding to it).
+      autoIndent: "keep",
+      formatOnPaste: false,
+      formatOnType: false,
+      autoIndentOnPaste: false,
+      // Enter takes a suggestion only when it changes the text: a word typed out in full,
+      // then Enter, is a new line, not the same word put in again.
+      acceptSuggestionOnEnter: "smart",
       wordWrap: "on",
       padding: { top: 8, bottom: 8 },
       renderLineHighlight: "line",
@@ -81,6 +92,7 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
     });
     editor.current = ed;
     const model = ed.getModel()!;
+    const indentation = keepTypedIndentation(ed);
     // Autocomplete: one provider for every editor; this model follows this tab.
     registerSqlCompletion();
     const stopCompletion = registerCompletionTarget(model, () => latest.current.completion?.());
@@ -245,6 +257,7 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
       changes.dispose();
       cursor.dispose();
       content.dispose();
+      indentation.dispose();
       ed.dispose();
       editor.current = undefined;
     };

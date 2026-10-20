@@ -24,7 +24,8 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
   with **×** or Alt+W (asking first when a transaction is open or text is unsaved),
   double-click to rename, drag to reorder; a spinner, a red dot or an amber dot says a tab is
   running, failed, or in a transaction. Tabs, their text, catalog, schema and row limit come
-  back after a reload (kept in this browser).
+  back after a reload (kept in this browser). Enter keeps the line's indentation; text typed
+  or pasted with indentation of its own keeps exactly that, not that plus the line's.
 - ▶️ **Run** (Ctrl/⌘+Enter, Ctrl+Enter on a Mac too) runs the statement at the cursor, marked
   by a bar in the margin, or exactly the selected text. **Run all** (⇧+Ctrl/⌘+Enter) runs every
   statement in order, stopping at the first error, with a result tab for each result set and
@@ -39,6 +40,9 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
   `KILL SESSION` use it) and copies it; **New session** starts afresh. When the server has lost
   a tab's session (idle timeout, restart), the next run starts a new one and says so, unless a
   transaction was open: then nothing runs, and the message says it was rolled back.
+  Closing, reloading or leaving the page ends its sessions on the server at once (keepalive
+  `DELETE`s on `pagehide`), rather than at their idle timeout; with a transaction open the
+  browser asks first. A page brought back with Back loads again, with new sessions.
 - 📊 **Results grid** for up to a million rows (only the rows in view are drawn), with DuckDB's
   own formatting of decimals, dates, timestamps, intervals, lists, structs, maps and blobs.
   - **Sort**: click a column header (again for descending, a third time to clear); NULLs sort

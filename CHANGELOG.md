@@ -85,6 +85,37 @@ own changelog in `python/CHANGELOG.md`.
   type is down to a few letters, and the row's tooltip has the whole name and type. A long
   type no longer runs under the row's **…** button, and the button keeps clear of a scroll bar
   drawn over the content (macOS). e2e in Chromium and WebKit at a narrow, scrolling panel.
+- Web UI, **About**: capabilities are chips that wrap between names, never inside one
+  (`ipc_compression_` / `zstd`); values wrap at spaces, and only one with none (an id) breaks
+  inside a word. Each fact is listed once: the summary, then only the server-info keys it
+  doesn't show (no second `server_name`, `server_version` or instance id), under a collapsed
+  **All server info**. The dialog fits the window: the logo and title stay at the top and the
+  notices at the bottom, and the details scroll between them (it was taller than a 900 px
+  window). e2e in Chromium and WebKit at 1280×800 and phone width, light and dark.
+- Web UI: SQL typed into the editor line by line was indented once more on every line (Enter
+  kept the line's indentation, and the text's own spaces went on top). Enter still keeps the
+  line's indentation (`autoIndent: "keep"`, no language rules), but indentation typed or
+  pasted right after it replaces it; pasted text goes in as it is (no format or re-indent on
+  paste). Enter after a word typed out in full is a new line, not that word's suggestion taken
+  again (`acceptSuggestionOnEnter: "smart"`; WebKit lost the line break). e2e in Chromium and
+  WebKit: a 4-line indented statement typed and pasted arrives byte for byte.
+- Web UI: closing, reloading or leaving the page left its Warp SQL sessions open on the server
+  until their idle timeout. It now ends them on `pagehide` (and on `beforeunload`, which some
+  browsers send alone) with keepalive `DELETE`s carrying the token; with a transaction open the
+  browser asks first, and the sessions stay if the user does. A page brought back from the
+  back/forward cache loads again, with new sessions. e2e in Chromium and WebKit: the server
+  lists none of the page's sessions within seconds of a close or a navigation, Back works, and
+  staying at the transaction prompt keeps them.
+- README: the `curl` example printed the statement's JSON metadata (`jq .result`), not the
+  answer. It now asks for the Arrow stream and reads it with pyarrow (`[{'answer': 42}]`, run
+  against a server), and says what the JSON document holds.
+- Docs: benchmark results follow the TPC's fair-use policy. The runs are described as derived
+  from TPC-H ("the 22 queries derived from TPC-H, SF10", "TPC-H-derived data"), never as TPC-H
+  results; README's Performance section, `docs/benchmarks.md` (which also lists how the runs
+  deviate from the specification), this changelog's benchmark entry and `bench/tpch.py` carry
+  the disclaimer once: derived from the TPC-H benchmark, not an official TPC-H result and not
+  comparable to published TPC-H results, and TPC-H™ a trademark of the Transaction Processing
+  Performance Council (TPC).
 
 ## [2.0.0-rc.1] - 2026-10-20
 
@@ -1497,8 +1528,11 @@ See 0.1.2.
 - Tests (`server/tests`, 27) for all of the above.
 - Release artifacts: `hardcharger-linux-amd64`, `-linux-arm64` and `-macos-arm64`
   tarballs (server plus `libduckdb`), and the image `ghcr.io/gizmodata/hardcharger`.
-- A TPC-H SF10 benchmark (`bench/tpch.py`, results in `docs/benchmarks.md`): 1.44× faster
-  than GizmoSQL 1.41 over the 22 queries, and 1.6× faster at moving 10M rows.
+- A benchmark derived from TPC-H, the 22 queries at SF10 (`bench/tpch.py`, results in
+  `docs/benchmarks.md`): 1.44× faster than GizmoSQL 1.41 over the 22 queries, and 1.6× faster
+  at moving 10M rows. Derived from the TPC-H benchmark; not an official TPC-H result and not
+  comparable to published TPC-H results, as these results do not comply with the TPC-H
+  specification. TPC-H™ is a trademark of the Transaction Processing Performance Council (TPC).
 
 ### Known gaps
 

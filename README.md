@@ -118,7 +118,7 @@ Measured on one machine (Apple M5 Max) against GizmoSQL 1.41 with the same data
 
 | Workload | Hardcharger | GizmoSQL 1.41 | |
 |---|---:|---:|---:|
-| TPC-H SF10, all 22 queries | **832 ms** | 1,201 ms | **1.44× faster** |
+| The 22 queries derived from TPC-H, SF10 | **832 ms** | 1,201 ms | **1.44× faster** |
 | Fetch 10M rows (1.73 GB of Arrow) | **0.83 s** | 1.32 s | **1.59× faster** |
 | 10 concurrent clients | **39.0 queries/s** | 21.9 queries/s | **1.8× the throughput** |
 | 10 concurrent clients, p95 latency | **471 ms** | 1,328 ms | **2.8× lower** |
@@ -129,12 +129,18 @@ the loads: [partitioned uploads](docs/benchmarks.md#partitioned-uploads-and-spli
 
 | Workload | Hardcharger | GizmoSQL 1.42 | |
 |---|---:|---:|---:|
-| Fetch TPC-H SF10 lineitem (60M rows, 10.5 GB of Arrow) | **0.97 s** | 15.2 s | **15.7× faster** |
-| Fetch TPC-H SF1 lineitem (6M rows) | **0.148 s** | 1.74 s | **11.7× faster** |
+| Fetch SF10 lineitem (60M rows, 10.5 GB of Arrow) | **0.97 s** | 15.2 s | **15.7× faster** |
+| Fetch SF1 lineitem (6M rows) | **0.148 s** | 1.74 s | **11.7× faster** |
 | Fetch 100M narrow rows | **0.45 s** | 5.43 s | **12.0× faster** |
 | Fetch SF1 lineitem across regions (46 ms away) | **1.96 s** | 12.26 s | **6.3× faster** |
 | Load SF10 lineitem (bulk ingest, 8 upload parts) | **3.00 s** | 9.44 s | **3.1× faster** |
 | Load SF1 lineitem across regions (8 upload parts) | **2.91 s** | 13.94 s | **4.8× faster** |
+
+The queries and data (`lineitem` at scale factor 1 or 10) come from DuckDB's `tpch` extension,
+and the runs follow none of the TPC-H run rules or metrics. Derived from the TPC-H benchmark;
+not an official TPC-H result and not comparable to published TPC-H results, as these results
+do not comply with the TPC-H specification. TPC-H™ is a trademark of the Transaction Processing
+Performance Council (TPC).
 
 ## ⚙️ How it's fast
 
@@ -307,7 +313,8 @@ for any Warp SQL server, which it re-exports.
 
 ### Plain HTTP
 
-Warp SQL is plain HTTP, so `curl` works:
+Warp SQL is plain HTTP, so `curl` works. Rows come back as an Arrow IPC stream (here read
+with [`pyarrow`](https://pypi.org/project/pyarrow/), `pip install pyarrow`):
 
 ```bash
 TOKEN=$(curl -s localhost:31337/warp/v1/auth/token -H 'Content-Type: application/json' \
@@ -315,11 +322,18 @@ TOKEN=$(curl -s localhost:31337/warp/v1/auth/token -H 'Content-Type: application
 SESSION=$(curl -s localhost:31337/warp/v1/sessions -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{}' | jq -r .session_id)
 curl -s localhost:31337/warp/v1/sessions/$SESSION/statements -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"sql": "SELECT 42 AS answer"}' | jq .result
+  -H 'Content-Type: application/json' -H 'Accept: application/vnd.apache.arrow.stream' \
+  -d '{"sql": "SELECT 42 AS answer"}' |
+  python3 -c 'import sys, pyarrow as pa; print(pa.ipc.open_stream(source=sys.stdin.buffer).read_all().to_pylist())'
 ```
 
-Ask for `Accept: application/vnd.apache.arrow.stream` and the rows arrive as an Arrow IPC
-stream in that same response.
+```text
+[{'answer': 42}]
+```
+
+Without that `Accept` header the answer is the statement's JSON document: its `state`, and
+in `result` its Arrow schema and partitions, whose rows `GET …/statements/{id}/result`
+returns (Warp SQL §6.3, §6.4).
 
 The server describes its API in OpenAPI 3.1 at `GET /warp/v1/openapi.json` (no sign-in
 needed; discovery, `GET /warp`, lists it as capability `openapi`), for API tools and client
@@ -505,13 +519,14 @@ Measured on 2026-10-19 on AWS c8gn.8xlarge machines: server and client in one pl
 (LAN), or the client in another region, about 46 ms away (WAN). TLS on every server unless the
 row says plaintext; median of five runs. Hardcharger at `2718a17e` with the Warp SQL ADBC
 driver's default settings, Quack `e7a9be3f8c` attached from DuckDB 2.0, GizmoSQL 1.42 for
-reference. These are the shapes where Hardcharger came out ahead;
+reference. The data is TPC-H-derived, as under [Performance](#-performance). These are the
+shapes where Hardcharger came out ahead;
 [the full results](docs/benchmarks.md#lz4-selective-compression-and-result-sized-splits-2026-10-19-perfthroughput-2)
 include the shapes where Quack is faster.
 
 | Workload | Hardcharger | Quack | GizmoSQL 1.42 |
 |---|---:|---:|---:|
-| Fetch TPC-H SF1 lineitem (6M rows), WAN | **0.383 s** | 1.508 s | 12.972 s |
+| Fetch SF1 lineitem (6M rows), WAN | **0.383 s** | 1.508 s | 12.972 s |
 | Load SF1 lineitem, WAN | **1.107 s** | 1.801 s † | 13.802 s |
 | Fetch SF1 lineitem, LAN | **0.126 s** | 0.164 s | 1.484 s |
 | Load SF1 lineitem, LAN | **0.538 s** | 0.600 s † | 1.607 s |

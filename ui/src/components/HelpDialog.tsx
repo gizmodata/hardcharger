@@ -31,7 +31,8 @@ export function HelpDialog({ idleTimeoutS, onClose }: { idleTimeoutS: number | u
         <h3>Sessions</h3>
         <p>
           Each tab has its own session on the server, kept from one run to the next: temporary tables, <code>USE</code>{" "}
-          and <code>SET</code> carry over. <strong>New session</strong> ends it, and closing the tab does too. A session
+          and <code>SET</code> carry over. <strong>New session</strong> ends it, and closing the tab does too, as does
+          closing, reloading or leaving this page (the browser asks first while a transaction is open). A session also
           ends {idle}, or when the server restarts. If no transaction was open, the next run starts a new session and
           says so.
         </p>

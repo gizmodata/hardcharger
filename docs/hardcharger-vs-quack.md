@@ -70,7 +70,7 @@ Hardcharger takes values beside the SQL (Warp SQL §6.1): `{"sql": "SELECT s FRO
 "parameters": {"i": 3}}` returns `row 3`.
 
 **Bulk ingest, cancellation.** Quack streams `CREATE TABLE remote.t AS SELECT …` and `INSERT`
-rows to the server (`SEND_DATA` messages; [docs/benchmarks.md](benchmarks.md) loads TPC-H
+rows to the server (`SEND_DATA` messages; [docs/benchmarks.md](benchmarks.md) loads TPC-H-derived
 lineitem this way), and has a `CANCEL` message: interrupting the client stops the server's
 query.
 
