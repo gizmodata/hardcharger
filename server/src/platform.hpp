@@ -3,6 +3,7 @@
 
 #include <boost/asio/ip/tcp.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -61,6 +62,26 @@ std::string CpuModelFromCpuinfo(std::string_view cpuinfo);
 int64_t PhysicalMemoryBytes();
 // The process's resident memory; NaN when unknown.
 double ResidentMemoryBytes();
+
+// For the process_* metrics (Prometheus's standard meanings); NaN when unknown.
+// When the process started, as Unix time in seconds (Linux: /proc/self/stat's start
+// ticks plus /proc/stat's btime; macOS: proc_pidinfo; Windows: GetProcessTimes).
+double ProcessStartTimeSeconds();
+// Open file descriptors (Linux: /proc/self/fd; macOS: proc_pidinfo). NaN on Windows,
+// whose handles are not file descriptors.
+double ProcessOpenFds();
+// The process's operating-system threads.
+double ProcessThreads();
+
+// The container's limits from the cgroup file system mounted at `root`: cgroup v2's
+// memory.max and cpu.max, else v1's memory/memory.limit_in_bytes and
+// cpu/cpu.cfs_quota_us / cpu.cfs_period_us. NaN where there is no limit ("max", -1, v1's
+// huge "unlimited" number), or no cgroup file system (macOS, Windows).
+struct CGroupLimits {
+  double memory_limit_bytes = NAN;
+  double cpu_quota_cores = NAN;  // quota / period: fractional CPUs
+};
+CGroupLimits ReadCGroupLimits(const std::string& root = "/sys/fs/cgroup");
 
 // Whether a listener sets SO_REUSEADDR (POSIX: rebind past TIME_WAIT). Never on Windows,
 // where it lets a second server bind a port the first still listens on.

@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <wincrypt.h>
 #include <psapi.h>
+#include <tlhelp32.h>
 
 #include <cwctype>
 #else
@@ -14,6 +15,7 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 #if defined(__APPLE__)
+#include <libproc.h>
 #include <mach/mach.h>
 #include <sys/sysctl.h>
 #endif
@@ -30,6 +32,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 namespace hardcharger {
 
@@ -136,6 +139,67 @@ std::string MakePrivateTempDirectory(const std::string& prefix) {
   if (mkdtemp(base.data()) == nullptr) throw std::runtime_error("cannot create a private temporary directory");
   return base;
 #endif
+}
+
+namespace {
+
+// The first line of a small file, trailing white space removed; nullopt when unreadable.
+std::optional<std::string> FirstLine(const std::string& path) {
+  std::ifstream in(path);
+  std::string line;
+  if (!in.is_open() || !std::getline(in, line)) return std::nullopt;
+  while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
+  return line;
+}
+
+std::optional<int64_t> WholeNumber(std::string_view text) {
+  if (text.empty()) return std::nullopt;
+  try {
+    std::size_t used = 0;
+    const long long value = std::stoll(std::string(text), &used);
+    if (used != text.size()) return std::nullopt;
+    return static_cast<int64_t>(value);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+// cgroup v1 says "no limit" with a huge number (PAGE_COUNTER_MAX in pages), not a word.
+bool IsLimitBytes(int64_t value) { return value > 0 && value < (int64_t{1} << 62); }
+
+double CpuQuota(std::optional<int64_t> quota, std::optional<int64_t> period) {
+  return quota && period && *quota > 0 && *period > 0 ? static_cast<double>(*quota) / static_cast<double>(*period)
+                                                      : NAN;
+}
+
+}  // namespace
+
+CGroupLimits ReadCGroupLimits(const std::string& root) {
+  CGroupLimits limits;
+  if (const auto v2 = FirstLine(root + "/memory.max")) {
+    // "max", or bytes
+    if (const auto bytes = WholeNumber(*v2); bytes && IsLimitBytes(*bytes)) {
+      limits.memory_limit_bytes = static_cast<double>(*bytes);
+    }
+  } else if (const auto v1 = FirstLine(root + "/memory/memory.limit_in_bytes")) {
+    if (const auto bytes = WholeNumber(*v1); bytes && IsLimitBytes(*bytes)) {
+      limits.memory_limit_bytes = static_cast<double>(*bytes);
+    }
+  }
+  if (const auto v2 = FirstLine(root + "/cpu.max")) {
+    // "<quota> <period>", or "max <period>"
+    const auto space = v2->find(' ');
+    if (space != std::string::npos) {
+      const std::string_view text(*v2);
+      limits.cpu_quota_cores = CpuQuota(WholeNumber(text.substr(0, space)), WholeNumber(text.substr(space + 1)));
+    }
+  } else {
+    // v1: cfs_quota_us is -1 without a limit.
+    const auto quota = FirstLine(root + "/cpu/cpu.cfs_quota_us");
+    const auto period = FirstLine(root + "/cpu/cpu.cfs_period_us");
+    if (quota && period) limits.cpu_quota_cores = CpuQuota(WholeNumber(*quota), WholeNumber(*period));
+  }
+  return limits;
 }
 
 #ifdef _WIN32
@@ -263,6 +327,33 @@ double ResidentMemoryBytes() {
     return static_cast<double>(counters.WorkingSetSize);
   }
   return NAN;
+}
+
+double ProcessStartTimeSeconds() {
+  FILETIME created{}, exited{}, kernel{}, user{};
+  if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return NAN;
+  ULARGE_INTEGER ticks{};  // 100 ns since 1601-01-01
+  ticks.LowPart = created.dwLowDateTime;
+  ticks.HighPart = created.dwHighDateTime;
+  return static_cast<double>(ticks.QuadPart) / 1e7 - 11644473600.0;
+}
+
+double ProcessOpenFds() { return NAN; }
+
+double ProcessThreads() {
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) return NAN;
+  const DWORD self = GetCurrentProcessId();
+  THREADENTRY32 entry{};
+  entry.dwSize = sizeof(entry);
+  int64_t count = 0;
+  if (Thread32First(snapshot, &entry)) {
+    do {
+      if (entry.th32OwnerProcessID == self) count++;
+    } while (Thread32Next(snapshot, &entry));
+  }
+  CloseHandle(snapshot);
+  return count > 0 ? static_cast<double>(count) : NAN;
 }
 
 void SetSocketTimeouts(boost::asio::ip::tcp::socket& socket, int seconds) {
@@ -428,6 +519,81 @@ double ResidentMemoryBytes() {
   long pages = 0, resident = 0;
   if (statm >> pages >> resident) return static_cast<double>(resident) * static_cast<double>(sysconf(_SC_PAGESIZE));
   return NAN;
+#endif
+}
+
+#if !defined(__APPLE__)
+namespace {
+// Entries of a /proc directory (fd, task); NaN when it can't be listed.
+double CountEntries(const char* directory) {
+  std::error_code ec;
+  std::filesystem::directory_iterator it(directory, ec);
+  if (ec) return NAN;
+  int64_t count = 0;
+  for (; it != std::filesystem::directory_iterator(); it.increment(ec)) {
+    if (ec) return NAN;
+    count++;
+  }
+  return static_cast<double>(count);
+}
+}  // namespace
+#endif
+
+double ProcessStartTimeSeconds() {
+#if defined(__APPLE__)
+  proc_bsdinfo info{};
+  if (proc_pidinfo(getpid(), PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != static_cast<int>(sizeof(info))) return NAN;
+  return static_cast<double>(info.pbi_start_tvsec) + static_cast<double>(info.pbi_start_tvusec) / 1e6;
+#else
+  // Field 22 of /proc/self/stat: clock ticks after boot. Field 2 (the command) is in
+  // parentheses and may hold spaces or ')', so count from the last ')'.
+  std::ifstream stat("/proc/self/stat");
+  std::string line;
+  if (!std::getline(stat, line)) return NAN;
+  const auto name_end = line.rfind(')');
+  if (name_end == std::string::npos) return NAN;
+  std::istringstream fields(line.substr(name_end + 1));
+  std::string skipped;
+  for (int field = 3; field < 22; field++) {
+    if (!(fields >> skipped)) return NAN;
+  }
+  double ticks = 0;
+  const long ticks_per_second = sysconf(_SC_CLK_TCK);
+  if (!(fields >> ticks) || ticks_per_second <= 0) return NAN;
+  std::ifstream system("/proc/stat");
+  while (std::getline(system, line)) {
+    if (!line.starts_with("btime ")) continue;
+    double boot = 0;
+    std::istringstream value(line.substr(6));
+    if (value >> boot) return boot + ticks / static_cast<double>(ticks_per_second);
+    break;
+  }
+  return NAN;
+#endif
+}
+
+double ProcessOpenFds() {
+#if defined(__APPLE__)
+  const int bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, nullptr, 0);
+  if (bytes <= 0) return NAN;
+  // Room for descriptors opened since the size was asked.
+  std::vector<proc_fdinfo> fds(static_cast<std::size_t>(bytes) / sizeof(proc_fdinfo) + 32);
+  const int used =
+      proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, fds.data(), static_cast<int>(fds.size() * sizeof(proc_fdinfo)));
+  return used < 0 ? NAN : static_cast<double>(static_cast<std::size_t>(used) / sizeof(proc_fdinfo));
+#else
+  // As Prometheus's own clients count them: the listing's descriptor included.
+  return CountEntries("/proc/self/fd");
+#endif
+}
+
+double ProcessThreads() {
+#if defined(__APPLE__)
+  proc_taskinfo info{};
+  if (proc_pidinfo(getpid(), PROC_PIDTASKINFO, 0, &info, sizeof(info)) != static_cast<int>(sizeof(info))) return NAN;
+  return static_cast<double>(info.pti_threadnum);
+#else
+  return CountEntries("/proc/self/task");
 #endif
 }
 

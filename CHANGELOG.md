@@ -7,6 +7,26 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- The engine, host and process gauges GizmoData Cloud's Engine Metrics page reads from
+  GizmoSQL 1.x, under `hardcharger_*` names with 1.x's meanings and units, in `/metrics` and
+  `hardcharger_metrics()`: `hardcharger_duckdb_threads`, `hardcharger_duckdb_temp_storage_bytes`
+  (from `duckdb_memory()`), `hardcharger_duckdb_spill_files` and `hardcharger_duckdb_spill_bytes`
+  (live files in `duckdb_temporary_files()`), `hardcharger_database_file_bytes` and
+  `hardcharger_wal_bytes` (the main database file DuckDB opened and its `.wal`; attached catalogs
+  don't count), `hardcharger_health_check_duration_seconds`,
+  `hardcharger_tls_certificate_expiry_seconds` (the serving certificate's notAfter as Unix time,
+  read again whenever a client CRL reload rebuilds the TLS context),
+  `hardcharger_metrics_collection_duration_seconds`, `hardcharger_host_memory_bytes`,
+  `hardcharger_host_cpus`, `hardcharger_cgroup_memory_limit_bytes` and
+  `hardcharger_cgroup_cpu_quota_cores` (cgroup v2, else v1, read on every collection so an
+  in-place pod resize shows), and the standard `process_start_time_seconds`, `process_open_fds`
+  and `process_threads` (Linux, macOS and Windows; Windows has no `process_open_fds`). As in 1.x,
+  a measurement that can't be taken is left out rather than reported as 0: no file sizes for an
+  in-memory or remote database, no certificate expiry without TLS, no cgroup gauges without a
+  limit.
+
 ## [2.0.0-rc.1] - 2026-10-20
 
 ### Added

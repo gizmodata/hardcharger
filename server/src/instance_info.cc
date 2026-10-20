@@ -5,6 +5,7 @@
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 
+#include <cmath>
 #include <cstdio>
 #include <thread>
 
@@ -34,6 +35,22 @@ std::string CertificateFingerprintSha256(const std::string& pem_file) {
     out += pair;
   }
   return out;
+}
+
+double CertificateNotAfterSeconds(const std::string& pem_file) {
+  if (pem_file.empty()) return NAN;
+  BIO* bio = BIO_new_file(pem_file.c_str(), "r");
+  if (bio == nullptr) return NAN;
+  X509* certificate = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+  BIO_free(bio);
+  if (certificate == nullptr) return NAN;
+  // The distance from the Unix epoch, which needs no time-zone or timegm() call.
+  ASN1_TIME* epoch = ASN1_TIME_set(nullptr, 0);
+  int days = 0, seconds = 0;
+  const bool ok = epoch != nullptr && ASN1_TIME_diff(&days, &seconds, epoch, X509_get0_notAfter(certificate)) == 1;
+  ASN1_TIME_free(epoch);
+  X509_free(certificate);
+  return ok ? static_cast<double>(days) * 86400.0 + static_cast<double>(seconds) : NAN;
 }
 
 InstanceInfo CollectInstanceInfo(const Config& config, const std::string& instance_id,
