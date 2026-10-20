@@ -15,9 +15,15 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 #if defined(__APPLE__)
-#include <libproc.h>
+#include <TargetConditionals.h>
+#if !TARGET_OS_IPHONE
+#include <libproc.h>  // macOS only; the iOS app (ios/) uses sysctl, fcntl and Mach below
+#endif
+#include <fcntl.h>
 #include <mach/mach.h>
 #include <sys/sysctl.h>
+
+#include <cerrno>
 #endif
 #endif
 
@@ -540,7 +546,15 @@ double CountEntries(const char* directory) {
 #endif
 
 double ProcessStartTimeSeconds() {
-#if defined(__APPLE__)
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+  // iOS has no libproc: the process's kinfo_proc from sysctl.
+  kinfo_proc info{};
+  std::size_t size = sizeof(info);
+  int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, static_cast<int>(getpid())};
+  if (sysctl(mib, 4, &info, &size, nullptr, 0) != 0 || size == 0) return NAN;
+  return static_cast<double>(info.kp_proc.p_starttime.tv_sec) +
+         static_cast<double>(info.kp_proc.p_starttime.tv_usec) / 1e6;
+#elif defined(__APPLE__)
   proc_bsdinfo info{};
   if (proc_pidinfo(getpid(), PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != static_cast<int>(sizeof(info))) return NAN;
   return static_cast<double>(info.pbi_start_tvsec) + static_cast<double>(info.pbi_start_tvusec) / 1e6;
@@ -573,7 +587,15 @@ double ProcessStartTimeSeconds() {
 }
 
 double ProcessOpenFds() {
-#if defined(__APPLE__)
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+  // iOS has no libproc: every descriptor below the table size that fcntl knows.
+  const int limit = getdtablesize();
+  int64_t count = 0;
+  for (int fd = 0; fd < limit; fd++) {
+    if (fcntl(fd, F_GETFD) != -1 || errno != EBADF) count++;
+  }
+  return static_cast<double>(count);
+#elif defined(__APPLE__)
   const int bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, nullptr, 0);
   if (bytes <= 0) return NAN;
   // Room for descriptors opened since the size was asked.
@@ -588,7 +610,15 @@ double ProcessOpenFds() {
 }
 
 double ProcessThreads() {
-#if defined(__APPLE__)
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+  // iOS has no libproc: the task's threads from Mach.
+  thread_act_array_t threads = nullptr;
+  mach_msg_type_number_t count = 0;
+  if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS) return NAN;
+  for (mach_msg_type_number_t i = 0; i < count; i++) mach_port_deallocate(mach_task_self(), threads[i]);
+  vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads), count * sizeof(thread_act_t));
+  return static_cast<double>(count);
+#elif defined(__APPLE__)
   proc_taskinfo info{};
   if (proc_pidinfo(getpid(), PROC_PIDTASKINFO, 0, &info, sizeof(info)) != static_cast<int>(sizeof(info))) return NAN;
   return static_cast<double>(info.pti_threadnum);
