@@ -43,10 +43,10 @@
  DuckLakeInitializer::DuckLakeInitializer(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeOptions &options_p)
      : context(context), catalog(catalog), options(options_p) {
  	InitializeDataPath();
-@@ -37,9 +66,13 @@
- 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
+@@ -42,9 +71,13 @@ string DuckLakeInitializer::GetAttachOptions() {
+ 		// open a visible metadata catalog as DuckDB explicitly so DuckDB does not warn that it is a DuckLake catalog
+ 		attach_options.push_back("TYPE duckdb");
  	}
- 	const string metadata_type = catalog.MetadataType();
 -	if (metadata_type.empty() || metadata_type == "duckdb") {
 -		// this is duckdb, we always do latest storage
 -		attach_options.push_back(StringUtil::Format("STORAGE_VERSION '%s'", "latest"));
