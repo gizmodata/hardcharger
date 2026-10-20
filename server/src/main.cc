@@ -92,6 +92,8 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   // SET [GLOBAL] hardcharger.query_timeout changes).
   options.default_statement_timeout = std::chrono::milliseconds(0);
   options.cors_allowed_origins = config.cors_origins;
+  // Validated at startup (config.cc): only the address recorded for the client changes.
+  for (const auto& proxy : config.trusted_proxies) options.trusted_proxies.push_back(warpsql::ParseIpNetwork(proxy));
   // Certificate refusals (a replayed bound token, another identity's sign-in, a revoked
   // certificate, an unknown identity): a security warning and an audit record each.
   // The SDK rate-limits them per source: a summary (suppressed > 0) stands for the
@@ -102,6 +104,8 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
                          {"token_id", event.token_id}, {"certificate_thumbprint", event.presented_thumbprint},
                          {"certificate_subject", event.certificate_subject}, {"peer", event.peer},
                          {"request_id", event.request_id}, {"error", event.detail}};
+    // The peer came from a trusted proxy's forwarding header: the connection's own address too.
+    if (!event.proxy.empty()) fields.emplace_back("proxy", event.proxy);
     if (event.suppressed > 0) fields.emplace_back("suppressed", std::to_string(event.suppressed));
     const bool handshake = event.code == "client_certificate_refused";
     hc::Log(hc::LogLevel::kWarning,

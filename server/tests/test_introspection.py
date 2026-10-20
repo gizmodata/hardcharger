@@ -47,6 +47,7 @@ END_OF_STREAM = b"\xff\xff\xff\xff\x00\x00\x00\x00"
 COLUMNS = [
     ("session_id", "VARCHAR"), ("instance_id", "VARCHAR"), ("cluster_id", "VARCHAR"), ("username", "VARCHAR"),
     ("role", "VARCHAR"), ("tenant", "VARCHAR"), ("auth_method", "VARCHAR"), ("client_address", "VARCHAR"),
+    ("proxy_address", "VARCHAR"),
     ("client_info", "VARCHAR"), ("session_tags", "MAP(VARCHAR, VARCHAR)"), ("tls", "BOOLEAN"),
     ("tls_version", "VARCHAR"), ("certificate_identity", "VARCHAR"), ("certificate_thumbprint", "VARCHAR"),
     ("token_certificate_bound", "BOOLEAN"), ("state", "VARCHAR"), ("transaction", "VARCHAR"),
@@ -265,12 +266,12 @@ def test_a_row_describes_the_session_and_its_latest_request(server):
     row = row_of(viewer=admin, session_id=victim.id)
     instance = admin.scalar(sql="SELECT HARDCHARGER_CURRENT_INSTANCE()")
     assert {k: row[k] for k in ("instance_id", "cluster_id", "username", "role", "tenant", "auth_method",
-                                "client_info", "tls", "tls_version", "certificate_identity",
+                                "proxy_address", "client_info", "tls", "tls_version", "certificate_identity",
                                 "certificate_thumbprint", "token_certificate_bound", "state", "transaction",
                                 "statement", "statement_started_at", "queued_since", "cancel_reason",
                                 "open_result_streams", "open_ingest_parts", "is_current")} == {
         "instance_id": instance, "cluster_id": None, "username": "admin", "role": "admin", "tenant": None,
-        "auth_method": "password", "client_info": "etl-runner/1.0", "tls": False, "tls_version": None,
+        "auth_method": "password", "proxy_address": None, "client_info": "etl-runner/1.0", "tls": False, "tls_version": None,
         "certificate_identity": None, "certificate_thumbprint": None, "token_certificate_bound": False,
         "state": "idle", "transaction": "none", "statement": None, "statement_started_at": None,
         "queued_since": None, "cancel_reason": None, "open_result_streams": 0, "open_ingest_parts": 0,

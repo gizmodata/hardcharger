@@ -542,6 +542,40 @@ In SQL, `SET SESSION name = value` changes a DuckDB setting for your session onl
 settings (`arrow_lossless_conversion` among them) is `GLOBAL`: then only an administrator
 may run it, and it changes the default of every session that has no value of its own.
 
+### Behind a load balancer or proxy
+
+Behind an HTTP reverse proxy (an ingress, an application load balancer) every connection
+comes from the proxy, so by default the log, the audit records, `hardcharger_active_connections()`
+and the per-address bound on browser sign-ins all see the proxy's address. List the proxies in
+`trusted_proxies` (CIDRs or single addresses, IPv4 or IPv6) and Hardcharger takes the client's
+address from their forwarding header instead:
+
+```yaml
+trusted_proxies: [10.0.0.0/8, fd00::/8]   # flag: --trusted-proxies 10.0.0.0/8,fd00::/8
+```
+
+- Only a request whose TCP peer is in the list is read this way; anyone else's
+  `X-Forwarded-For` or `Forwarded` header is ignored. The default (empty) trusts no one.
+- `X-Forwarded-For` is read right to left, skipping each hop that is itself a trusted proxy;
+  the first that isn't is the client (when every hop is trusted, the leftmost). Several
+  instances of the header count as one list, in order. A request without `X-Forwarded-For`
+  uses RFC 7239 `Forwarded: for=` the same way (quoted values, `"[2001:db8::7]:4711"`). When
+  both are present `X-Forwarded-For` wins: the common proxies append to it and pass a
+  client's own `Forwarded` header on unchanged. Behind a proxy that sets only `Forwarded`,
+  have it drop `X-Forwarded-For`.
+- A hop that is `unknown`, obfuscated (`for=_hidden`), not an IP address, or otherwise
+  malformed stops the search, and the proxy's own address is recorded.
+- A forwarded address has no port: `203.0.113.9`, `[2001:db8::7]` (a direct client's is
+  `127.0.0.1:51234`, `[::1]:51234`). Where it was forwarded, the proxy's own `address:port`
+  is kept beside it: `proxy_address` in `hardcharger_active_connections()`, `proxy` in
+  security log and audit lines.
+- The forwarded address only describes the client. It is never used for authentication,
+  and client certificates and certificate-bound tokens stay tied to the real connection. A
+  client certificate refused by the TLS handshake is recorded with the TCP peer, since no
+  request has arrived yet.
+- List only proxies that append to or overwrite these headers: one that passes a client's
+  header through lets that client choose the address it is recorded under.
+
 ### Credential and system files
 
 With `block_sensitive_paths` on (the default), no statement can open, list, write, move or
@@ -589,8 +623,9 @@ Two limits:
 
 Three SQL functions show what the server is doing, with no instrumentation or metrics
 turned on. `hardcharger_active_connections()` has a row per open session: who (user, role,
-tenant, how they signed in), from where (the latest request's address and User-Agent, TLS
-version, client certificate), what it runs (`state`: idle, queued, running, streaming,
+tenant, how they signed in), from where (the latest request's address, behind a trusted
+proxy the forwarded one with the proxy's in `proxy_address`, its User-Agent, TLS version and
+client certificate), what it runs (`state`: idle, queued, running, streaming,
 idle_in_transaction or idle_in_transaction_aborted; the statement, redacted as the log
 redacts it; since when), and its open result streams, partitions, uploads and retained
 results:

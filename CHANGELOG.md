@@ -63,6 +63,26 @@ own changelog in `python/CHANGELOG.md`.
   in-memory or remote database, no certificate expiry without TLS, no cgroup gauges without a
   limit.
 
+- **`trusted_proxies`** (`--trusted-proxies`, `HARDCHARGER_TRUSTED_PROXIES`): CIDRs or single
+  addresses (IPv4 and IPv6) of the reverse proxies whose `X-Forwarded-For` or RFC 7239
+  `Forwarded: for=` header names the client. From them, the client's address in the log, the
+  audit records, `hardcharger_active_connections()` and the per-address bound on browser
+  sign-ins is the rightmost forwarded hop that is not itself a trusted proxy (all trusted: the
+  leftmost); `X-Forwarded-For` wins over `Forwarded`, and an unknown, obfuscated or malformed
+  hop leaves the proxy's address. Behind an ingress these all showed the ingress's address
+  before. The default (empty) trusts no one, and another peer's headers are ignored. A bad CIDR stops the server at startup (exit 2) naming it. The forwarded address
+  is never used for authentication or TLS: client certificates and certificate-bound tokens
+  stay tied to the connection. `hardcharger_active_connections()` has a new `proxy_address`
+  column (the proxy's own `address:port` when the address was forwarded), and security log
+  and audit lines a `proxy` field. Warp SQL C++ SDK `ServerOptions::trusted_proxies`. Tests:
+  `test_trusted_proxies.py`, the SDK's `forwarded_test.cc`.
+
+### Changed
+
+- An IPv6 client's address is written `[2001:db8::7]:51234` (it was `2001:db8::7:51234`,
+  which can't be told apart from an address without a port), in
+  `hardcharger_active_connections().client_address` and security events.
+
 ### Fixed
 
 - `LOAD iceberg` without the avro extension installed now says first what to run
