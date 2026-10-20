@@ -1,10 +1,10 @@
 # The DuckDB extensions built into Hardcharger's libduckdb (build-deps.sh passes this file
 # to warp-sql's build-duckdb.sh as WARPSQL_DUCKDB_EXTENSION_CONFIGS). Built in, they work
-# with no network and no extension repository: the server is pinned to a DuckDB
-# pre-release commit, whose extensions DuckDB's repository may not have (a probe already
-# met "Extension Autoloading Error" for one), and air-gapped deployments have no
-# repository at all. Any other extension still installs and loads on request (INSTALL,
-# LOAD); the server never installs or loads one by itself (src/engine.cc).
+# with no network and no extension repository: DuckDB's repository may lack one for a
+# platform or for a while (a probe on a DuckDB pre-release met "Extension Autoloading
+# Error" for one), and air-gapped deployments have no repository at all. Any other
+# extension still installs and loads on request (INSTALL, LOAD); the server never installs
+# or loads one by itself (src/engine.cc).
 #
 # DuckDB also builds a loadable copy of each extension, which nothing here ships. Linked
 # against libduckdb's symbols at load time rather than a static copy of DuckDB: smaller,
@@ -25,12 +25,11 @@ duckdb_extension_load(tpch)
 # come from build-extension-deps.sh (CRoaring, libpq: static) and the system (libcurl).
 duckdb_extension_load(httpfs
     GIT_URL https://github.com/duckdb/duckdb-httpfs
-    GIT_TAG 2174b462678979089e8bf1f2fc1328d6eb306450
-    APPLY_PATCHES
+    GIT_TAG 77392a72077a85897db2519fae11e2c0da972b8a
 )
 duckdb_extension_load(ducklake
     GIT_URL https://github.com/duckdb/ducklake
-    GIT_TAG 4e923e26c34c9058daca2e7247177f49de0ab430
+    GIT_TAG 417a9117f590e8141742ac0579d02f6a90162e37
     APPLY_PATCHES
 )
 duckdb_extension_load(postgres_scanner
