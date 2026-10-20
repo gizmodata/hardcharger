@@ -1,8 +1,12 @@
-"""TPC-H SF10: Hardcharger (Warp SQL over HTTP) vs GizmoSQL 1.x (Flight SQL over gRPC).
+"""Queries derived from TPC-H at SF10: Hardcharger (Warp SQL over HTTP) vs GizmoSQL 1.x
+(Flight SQL over gRPC).
 
 Each server loads the same Parquet files into its own database file, then every
 query runs once to warm up and five times timed; times include fetching every row.
 See docs/benchmarks.md. Usage: python bench/tpch.py [hardcharger] [gizmosql]
+
+Derived from the TPC-H benchmark; not an official TPC-H result and not comparable to published
+TPC-H results. TPC-H is a trademark of the Transaction Processing Performance Council (TPC).
 """
 
 import io
