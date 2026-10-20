@@ -43,6 +43,11 @@ set(WARPSQL_DUCKDB_PREFIX "${HARDCHARGER_DEPS}/duckdb-install" CACHE PATH "" FOR
 # always do. The binaries then need only the C/C++ runtime and, on macOS, OS frameworks.
 # Otherwise they link libduckdb's shared library (the sanitizer and developer builds).
 option(HARDCHARGER_STATIC "Link DuckDB statically (release builds)" OFF)
+# HARDCHARGER_EMBEDDED: the server as a library an app runs in its own process
+# (hardcharger_embedded, embedded/hardcharger_embedded.h), as the iOS app does (ios/,
+# ios/scripts/build-server-ios.sh, which cross-compiles with ios/cmake/ios.toolchain.cmake).
+# It builds that library and its smoke test instead of the programs and their tests.
+option(HARDCHARGER_EMBEDDED "Build the server as a library for an app (the iOS app)" OFF)
 if(HARDCHARGER_STATIC)
   # DuckDB's archives: the extensions first, then its vendored libraries and the engine,
   # with the libraries the extensions link (scripts/build-extension-deps.sh; deps-duckdb.sh
@@ -57,7 +62,8 @@ if(HARDCHARGER_STATIC)
   list(REMOVE_ITEM _duckdb_vendored "${_duckdb_lib}/libduckdb_static.a")
   set(_duckdb_archives ${_duckdb_extensions} ${_duckdb_vendored} "${_duckdb_lib}/libduckdb_static.a"
       "${_duckdb_lib}/static-deps/libpq.a" "${_duckdb_lib}/static-deps/libroaring.a")
-  if(NOT APPLE)
+  if(NOT APPLE OR IOS)
+    # Linux's and iOS's own libcurl (iOS has none); macOS links the system's.
     list(APPEND _duckdb_archives "${_duckdb_lib}/static-deps/libcurl.a")
   endif()
   foreach(_archive IN LISTS _duckdb_archives)
@@ -72,7 +78,13 @@ if(HARDCHARGER_STATIC)
                  "${WARPSQL_DUCKDB_PREFIX}/share/duckdb-static/duckdb_static_extension_loader.c"
                  "${WARPSQL_DUCKDB_PREFIX}/share/duckdb-static/static_extension_autoregister.cpp")
   target_include_directories(hardcharger_duckdb INTERFACE "${WARPSQL_DUCKDB_PREFIX}/include")
-  if(APPLE)
+  if(IOS)
+    # As macOS, with the build's libcurl (in the archives); libcurl also uses the
+    # system's proxy settings (SystemConfiguration).
+    target_link_libraries(hardcharger_duckdb INTERFACE ${_duckdb_archives} OpenSSL::SSL OpenSSL::Crypto
+                          "-framework CoreFoundation" "-framework Security" "-framework SystemConfiguration"
+                          Threads::Threads)
+  elseif(APPLE)
     # ld64 resolves archives in any order. libcurl, CoreFoundation and Security are the OS's.
     target_link_libraries(hardcharger_duckdb INTERFACE ${_duckdb_archives} OpenSSL::SSL OpenSSL::Crypto
                           curl "-framework CoreFoundation" "-framework Security" Threads::Threads)
@@ -211,6 +223,28 @@ function(hardcharger_rpath target)
                                                INSTALL_RPATH "\$ORIGIN/../lib")
   endif()
 endfunction()
+
+if(HARDCHARGER_EMBEDDED)
+  # The server for an app's process: main.cc as hardcharger_server_main, with the hooks of
+  # src/embedding.hpp, behind embedded/hardcharger_embedded.h. The smoke test starts,
+  # uses and stops a server through that API, twice, as an app would.
+  file(STRINGS ../third_party/warp-sql/cpp/CMakeLists.txt _warpsql_project REGEX "^project\\(warpsql VERSION ")
+  string(REGEX REPLACE "^project\\(warpsql VERSION ([0-9.]+).*" "\\1" HARDCHARGER_WARP_SQL_VERSION "${_warpsql_project}")
+  add_library(hardcharger_embedded STATIC src/main.cc src/embedding.cc)
+  target_compile_definitions(hardcharger_embedded PRIVATE HARDCHARGER_EMBEDDED main=hardcharger_server_main
+                             HARDCHARGER_WARP_SQL_VERSION="${HARDCHARGER_WARP_SQL_VERSION}")
+  target_include_directories(hardcharger_embedded PUBLIC embedded)
+  target_link_libraries(hardcharger_embedded PUBLIC hardcharger_core hardcharger_notices)
+  target_compile_options(hardcharger_embedded PRIVATE ${HARDCHARGER_WARNINGS})
+  if(HARDCHARGER_STATIC)
+    target_compile_definitions(hardcharger_embedded PRIVATE HARDCHARGER_STATIC_DUCKDB)
+  endif()
+  add_executable(hardcharger-embedded-smoke embedded/smoke_test.cc)
+  target_link_libraries(hardcharger-embedded-smoke PRIVATE hardcharger_embedded warpsql_client)
+  target_compile_options(hardcharger-embedded-smoke PRIVATE ${HARDCHARGER_WARNINGS})
+  hardcharger_rpath(hardcharger-embedded-smoke)
+  return()
+endif()
 
 add_executable(hardcharger-server src/main.cc)
 if(WIN32)

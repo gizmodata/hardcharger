@@ -20,7 +20,19 @@ sum=$("${hash[@]}" "$src/openssl.tar.gz" | cut -d' ' -f1)
 [ "$sum" = "$OPENSSL_SHA256" ] || { echo "openssl.tar.gz: checksum $sum, expected $OPENSSL_SHA256" >&2; exit 1; }
 tar -xzf "$src/openssl.tar.gz" -C "$src" --strip-components=1
 rm -rf "$PREFIX"
-(cd "$src" && ./config no-shared no-tests no-docs --prefix="$PREFIX" --libdir=lib \
+configure=(./config)
+if [ -n "${HARDCHARGER_IOS_SDK:-}" ]; then
+  # The iOS app (ios/scripts/build-server-ios.sh): OpenSSL's own iOS targets, for the SDK
+  # and oldest iOS the app builds for, without loadable modules (iOS loads no code at run
+  # time). Certificates still come from a CA bundle at run time (the app's).
+  min="${HARDCHARGER_IOS_DEPLOYMENT_TARGET:-18.0}"
+  case "$HARDCHARGER_IOS_SDK" in
+    iphoneos) configure=(./Configure ios64-xcrun no-dso "-mios-version-min=$min") ;;
+    iphonesimulator) configure=(./Configure iossimulator-arm64-xcrun no-dso "-mios-simulator-version-min=$min") ;;
+    *) echo "HARDCHARGER_IOS_SDK: iphoneos or iphonesimulator, not $HARDCHARGER_IOS_SDK" >&2; exit 2 ;;
+  esac
+fi
+(cd "$src" && "${configure[@]}" no-shared no-tests no-docs --prefix="$PREFIX" --libdir=lib \
    && make -j"${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" build_libs >/dev/null \
    && make install_dev >/dev/null)
 rm -rf "$src"

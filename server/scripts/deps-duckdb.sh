@@ -41,7 +41,31 @@ done
 "$HERE/scripts/build-extension-deps.sh"
 # (The environment variable is ':'-separated, like PATH.)
 export CMAKE_PREFIX_PATH="$WARPSQL_DEPS_DIR/roaring-install:$WARPSQL_DEPS_DIR/libpq-install:$WARPSQL_DEPS_DIR/curl-install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
-WARPSQL_DUCKDB_EXTENSION_CONFIGS="$EXTENSIONS" "$WARP/build-duckdb.sh"
+if [ -z "${HARDCHARGER_IOS_SDK:-}" ]; then
+  WARPSQL_DUCKDB_EXTENSION_CONFIGS="$EXTENSIONS" "$WARP/build-duckdb.sh"
+else
+  # The iOS app (ios/scripts/build-server-ios.sh): build-duckdb.sh's build of the same
+  # commit, cross-compiled with CMAKE_TOOLCHAIN_FILE (ios/cmake/ios.toolchain.cmake), and
+  # without loading extensions at run time (ENABLE_EXTENSION_LOAD=OFF): iOS runs only the
+  # code the app was signed with, so INSTALL and LOAD have nothing to load, and the
+  # extensions above are built in. The platform is named (DuckDB would run a program it
+  # builds to find out, which can't run here). Keep the rest in step with build-duckdb.sh.
+  [ -n "${CMAKE_TOOLCHAIN_FILE:-}" ] || { echo "HARDCHARGER_IOS_SDK needs CMAKE_TOOLCHAIN_FILE" >&2; exit 2; }
+  VERSION_NAME=$(sed -n 's/^DUCKDB_VERSION_NAME=\(v[^ ]*\)$/\1/p' "$WARP/build-duckdb.sh")
+  [ -n "$VERSION_NAME" ] || { echo "no DUCKDB_VERSION_NAME in $WARP/build-duckdb.sh" >&2; exit 1; }
+  cmake -S "$SRC" -B "$WARPSQL_DEPS_DIR/duckdb-build" -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$WARPSQL_DEPS_DIR/duckdb-install" \
+    -DOVERRIDE_GIT_DESCRIBE="$VERSION_NAME" \
+    -DBUILD_SHELL=OFF -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF \
+    -DENABLE_EXTENSION_LOAD=OFF \
+    -DDUCKDB_EXPLICIT_PLATFORM="$([ "$HARDCHARGER_IOS_SDK" = iphoneos ] && echo ios_arm64 || echo ios_simulator_arm64)" \
+    -DBUILD_EXTENSIONS="" -DDUCKDB_EXTENSION_CONFIGS="$EXTENSIONS"
+  cmake --build "$WARPSQL_DEPS_DIR/duckdb-build"
+  cmake --install "$WARPSQL_DEPS_DIR/duckdb-build"
+  cp "$SRC/src/include/duckdb_v2.h" "$WARPSQL_DEPS_DIR/duckdb-install/include/"
+fi
 # CMake installs libraries into lib64 on RPM-based systems; the server's CMake uses lib.
 if [ -d "$WARPSQL_DEPS_DIR/duckdb-install/lib64" ] && [ ! -e "$WARPSQL_DEPS_DIR/duckdb-install/lib" ]; then
   ln -s lib64 "$WARPSQL_DEPS_DIR/duckdb-install/lib"

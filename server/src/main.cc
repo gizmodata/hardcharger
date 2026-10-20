@@ -17,6 +17,7 @@
 #include "authz/authz.hpp"
 #include "config.hpp"
 #include "duckdb_sql.hpp"
+#include "embedding.hpp"
 #include "engine.hpp"
 #include "http_client.hpp"
 #include "jwks.hpp"
@@ -316,6 +317,7 @@ int main(int argc, char** argv) {
     loaded = hc::LoadConfig(argc, argv);
   } catch (const std::exception& e) {
     std::cerr << "hardcharger-server: " << e.what() << "\n\n" << hc::Usage();
+    hc::embedding::Failed(e.what());
     return 2;
   }
   switch (loaded.action) {
@@ -383,12 +385,14 @@ int main(int argc, char** argv) {
   if (config.web_ui && hc::EmbeddedWebUiFiles().empty()) {
     std::cerr << "hardcharger-server: web_ui is on, but this build has no web UI "
                  "(build with -DHARDCHARGER_WEB_UI=<hardcharger-ui tarball>)\n";
+    hc::embedding::Failed("web_ui is on, but this build has no web UI");
     return 2;
   }
 
   // Before any thread starts, so only stop_signals.Wait() below sees the stop requests
-  // (SIGINT/SIGTERM; on Windows, the console's Ctrl+C/Ctrl+Break/close/shutdown events).
-  warpsql::StopSignals stop_signals;
+  // (SIGINT/SIGTERM; on Windows, the console's Ctrl+C/Ctrl+Break/close/shutdown events;
+  // embedded in an app, the app's stop requests: embedding.hpp).
+  hc::embedding::Stop stop_signals;
 
   try {
     hc::ConfigureLogging(config.log_level, config.log_format, config.log_file);
@@ -506,6 +510,7 @@ int main(int argc, char** argv) {
                            std::to_string(server.port()) + "/ui/"},
                {"version", std::string(hc::EmbeddedWebUiVersion())}});
     }
+    hc::embedding::Ready(server.port());
 
     // First signal: with graceful_shutdown, drain (finish running work, refuse new work)
     // for up to shutdown_grace_period_seconds, both live-adjustable with SET GLOBAL;
@@ -562,6 +567,7 @@ int main(int argc, char** argv) {
     hc::Log(hc::LogLevel::kInfo, "stopped");
   } catch (const std::exception& e) {
     hc::Log(hc::LogLevel::kError, e.what());
+    hc::embedding::Failed(e.what());
     return 1;
   }
   return 0;
