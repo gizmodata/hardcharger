@@ -5,17 +5,23 @@
 #include <algorithm>
 #include <boost/json.hpp>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <duckdb.hpp>
 #include <duckdb/common/file_open_flags.hpp>
 #include <duckdb/common/local_file_system.hpp>
 #include <duckdb/common/virtual_file_system.hpp>
 #include <filesystem>
+#include <mutex>
 #include <random>
 #include <regex>
+#include <set>
+#include <string_view>
 #include <thread>
 
 #include "authz/authz.hpp"
 #include "authz/duckdb_internal.hpp"
+#include "redact.hpp"
 
 #ifndef _WIN32
 #include <sys/stat.h>
@@ -23,31 +29,229 @@
 
 namespace hardcharger::authz {
 
+namespace dd = duckdb;
+
+// The store's DuckDB connection, which only a thread of its own uses, so that a store that
+// stops answering holds no caller longer than the store timeout. A PostgreSQL that is
+// paused, overloaded or cut off without a reset leaves libpq waiting in recv(), and
+// nothing in DuckDB can interrupt that. So a caller that has waited the timeout is told
+// the store is unavailable, and the statement is left to this thread. Whatever it was part
+// of is then cancelled: when the statement returns, the thread rolls back the open
+// transaction before it runs anything else, so a change a caller was told failed never
+// commits (a COMMIT already sent may still land, and the caller is told so). The thread
+// only ever holds what a statement owns (its SQL and values), never a caller's data, and
+// keeps the DuckDB instance alive for as long as it runs.
+class StoreLink {
+ public:
+  using Work = std::function<dd::unique_ptr<dd::QueryResult>(dd::Connection&)>;
+
+  StoreLink(std::unique_ptr<dd::DuckDB> db, std::chrono::milliseconds timeout)
+      : state_(std::make_shared<State>()), timeout_(timeout) {
+    state_->db = std::move(db);
+    state_->conn = std::make_unique<dd::Connection>(*state_->db);
+    thread_ = std::thread([state = state_] { Loop(*state); });
+  }
+
+  ~StoreLink() {
+    std::unique_lock lock(state_->mutex);
+    state_->stopping = true;
+    state_->cv.notify_all();
+    // A thread still waiting on a store that hangs is left behind: it owns all it uses.
+    const bool finished =
+        state_->cv.wait_for(lock, timeout_, [this] { return state_->finished; });
+    lock.unlock();
+    if (finished) {
+      thread_.join();
+    } else {
+      thread_.detach();
+    }
+  }
+
+  StoreLink(const StoreLink&) = delete;
+  StoreLink& operator=(const StoreLink&) = delete;
+
+  std::chrono::milliseconds timeout() const { return timeout_; }
+
+  // Runs `work` on the store's thread, waiting at most the timeout. Ok: its result.
+  arrow::Result<dd::unique_ptr<dd::QueryResult>> Call(Work work) {
+    auto task = std::make_shared<Task>();
+    task->work = std::move(work);
+    std::unique_lock lock(state_->mutex);
+    const auto now = std::chrono::steady_clock::now();
+    // A statement that has hung for the whole timeout already: no use queueing behind it.
+    if (state_->busy && now - state_->busy_since >= timeout_) return TimedOut();
+    state_->queue.push_back(task);
+    state_->cv.notify_all();
+    if (!state_->cv.wait_until(lock, now + timeout_, [&] { return task->done; })) {
+      task->abandoned = true;
+      state_->rollback_pending = true;  // whatever transaction it was part of is cancelled
+      state_->cv.notify_all();
+      return TimedOut();
+    }
+    if (!task->error.empty()) {
+      return arrow::Status::IOError("Hardcharger access-control store: statement failed: " + task->error);
+    }
+    return std::move(task->result);
+  }
+
+  arrow::Status TimedOut() const {
+    const auto ms = timeout_.count();
+    std::string seconds = std::to_string(ms / 1000);
+    if (ms % 1000 != 0) seconds += "." + std::to_string(ms % 1000 / 100);
+    return arrow::Status::IOError("Hardcharger ", kStoreUnavailable, ": timed out after ", seconds,
+                                  " s (rbac_store_timeout_seconds)");
+  }
+
+ private:
+  struct Task {
+    Work work;
+    bool done = false;
+    bool abandoned = false;
+    dd::unique_ptr<dd::QueryResult> result;
+    std::string error;
+  };
+  struct State {
+    std::unique_ptr<dd::DuckDB> db;
+    std::unique_ptr<dd::Connection> conn;
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::deque<std::shared_ptr<Task>> queue;
+    bool stopping = false;
+    bool finished = false;
+    bool rollback_pending = false;
+    bool busy = false;  // running a statement (since busy_since)
+    std::chrono::steady_clock::time_point busy_since;
+    ~State() {
+      conn.reset();
+      db.reset();
+    }
+  };
+
+  static void Loop(State& state) {
+    std::unique_lock lock(state.mutex);
+    while (true) {
+      state.cv.wait(lock, [&] { return state.stopping || state.rollback_pending || !state.queue.empty(); });
+      if (state.rollback_pending) {
+        // A caller gave up on a statement of this connection's transaction: undo it
+        // before anything else runs (outside a transaction this only errs).
+        state.rollback_pending = false;
+        state.busy = true;
+        state.busy_since = std::chrono::steady_clock::now();
+        lock.unlock();
+        try {
+          (void)state.conn->Query("ROLLBACK");
+        } catch (const std::exception&) {
+        }
+        lock.lock();
+        state.busy = false;
+        continue;
+      }
+      if (state.stopping) break;
+      auto task = std::move(state.queue.front());
+      state.queue.pop_front();
+      if (task->abandoned) continue;
+      state.busy = true;
+      state.busy_since = std::chrono::steady_clock::now();
+      lock.unlock();
+      dd::unique_ptr<dd::QueryResult> result;
+      std::string error;
+      try {
+        result = task->work(*state.conn);
+      } catch (const std::exception& e) {
+        error = e.what();
+        if (error.empty()) error = "unknown error";
+      }
+      lock.lock();
+      state.busy = false;
+      if (!task->abandoned) {
+        task->result = std::move(result);
+        task->error = std::move(error);
+        task->done = true;
+        state.cv.notify_all();
+      } else {
+        lock.unlock();
+        result.reset();
+        lock.lock();
+      }
+    }
+    state.finished = true;
+    state.cv.notify_all();
+  }
+
+  std::shared_ptr<State> state_;
+  std::chrono::milliseconds timeout_;
+  std::thread thread_;
+};
+
+bool IsStoreUnavailable(const arrow::Status& status) {
+  return !status.ok() && status.message().find(kStoreUnavailable) != std::string::npos;
+}
+
 namespace {
 
-namespace dd = duckdb;
 namespace compat = hardcharger::authz::ddb;
 
 constexpr const char* kSchema = "rbac_store.hardcharger_rbac";
 
 std::string T(const char* table) { return std::string(kSchema) + "." + table; }
 
+std::string Lower(std::string text) {
+  std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return std::tolower(c); });
+  return text;
+}
+
+// libpq's and the postgres scanner's ways of saying the server is not there (as
+// opposed to refusing a statement).
+bool LooksUnreachable(const std::string& message) {
+  for (const char* text :
+       {"Unable to connect to Postgres", "Connection refused", "could not connect to server",
+        "connection to server", "server closed the connection", "no connection to the server",
+        "terminating connection", "could not receive data from server", "could not send data to server",
+        "SSL SYSCALL error", "SSL connection has been closed", "timeout expired", "Connection timed out",
+        "canceling statement due to statement timeout", "Operation timed out", "Network is unreachable",
+        "No route to host", "could not translate host name"}) {
+    if (message.find(text) != std::string::npos) return true;
+  }
+  return false;
+}
+
 arrow::Status StoreError(const std::string& what, const std::string& detail) {
+  if (LooksUnreachable(detail)) {
+    return arrow::Status::IOError(std::string("Hardcharger ") + kStoreUnavailable + ": " + what + ": " + detail);
+  }
   return arrow::Status::IOError("Hardcharger access-control store: " + what + ": " + detail);
 }
 
-arrow::Status Exec(dd::Connection& conn, const std::string& sql) {
-  auto result = conn.Query(sql);
+// A statement's error as Call() reports it, refiled by StoreError.
+arrow::Status Refile(const arrow::Status& status, const std::string& what) {
+  constexpr std::string_view kPrefix = "Hardcharger access-control store: statement failed: ";
+  const std::string& message = status.message();
+  if (message.rfind(kPrefix, 0) != 0) return status;  // a timeout, already filed
+  return StoreError(what, message.substr(kPrefix.size()));
+}
+
+arrow::Result<dd::unique_ptr<dd::QueryResult>> Query(StoreLink& conn, const std::string& sql) {
+  auto result = conn.Call([sql](dd::Connection& c) -> dd::unique_ptr<dd::QueryResult> { return c.Query(sql); });
+  if (!result.ok()) return Refile(result.status(), "statement failed");
+  return result;
+}
+
+arrow::Status Exec(StoreLink& conn, const std::string& sql) {
+  ARROW_ASSIGN_OR_RAISE(auto result, Query(conn, sql));
   if (result->HasError()) return StoreError("statement failed", result->GetError());
   return arrow::Status::OK();
 }
 
-arrow::Result<dd::unique_ptr<dd::QueryResult>> Run(dd::Connection& conn, const std::string& sql,
+arrow::Result<dd::unique_ptr<dd::QueryResult>> Run(StoreLink& conn, const std::string& sql,
                                                    dd::vector<dd::Value> params = {}) {
-  auto stmt = conn.Prepare(sql);
-  if (stmt->HasError()) return StoreError("prepare failed", stmt->GetError());
-  auto result = compat::ExecuteMaterialized(*stmt, params);
-  if (result->HasError()) return StoreError("statement failed", result->GetError());
+  auto result = conn.Call([sql, params = std::move(params)](dd::Connection& c) mutable -> dd::unique_ptr<dd::QueryResult> {
+    auto stmt = c.Prepare(sql);
+    if (stmt->HasError()) throw std::runtime_error("prepare failed: " + stmt->GetError());
+    auto out = compat::ExecuteMaterialized(*stmt, params);
+    if (out->HasError()) throw std::runtime_error(out->GetError());
+    return out;
+  });
+  if (!result.ok()) return Refile(result.status(), "statement failed");
   return result;
 }
 
@@ -156,24 +360,74 @@ bool IsRetryableConflict(const std::string& message) {
          message.find("deadlock detected") != std::string::npos;
 }
 
-// DuckDB's connection errors quote the whole connection string, password
-// included. Keep the useful part (libpq's reason) and none of the credentials:
-// the string itself, any user:password@ authority and any password=... pair.
-std::string RedactConnectionString(std::string message, const std::string& uri) {
-  if (auto nl = message.find('\n'); nl != std::string::npos) message.resize(nl);
-  for (size_t at; !uri.empty() && (at = message.find(uri)) != std::string::npos;) {
-    message.replace(at, uri.size(), "<connection string>");
-  }
-  message = std::regex_replace(message, std::regex(R"((://[^:/@\s"']*:)[^@\s"']*@)"), "$1***@");
-  message = std::regex_replace(
-      message, std::regex(R"((password\s*=\s*)('[^']*'|"[^"]*"|[^\s"']+))", std::regex::icase),
-      "$1***");
-  return message;
-}
-
 bool LooksLikePostgres(const std::string& uri) {
   return uri.rfind("postgresql://", 0) == 0 || uri.rfind("postgres://", 0) == 0 ||
          uri.find("dbname=") != std::string::npos || uri.find("host=") != std::string::npos;
+}
+
+// The connection string with bounds on every way libpq can wait, each unless the string
+// sets it already: connect_timeout (the whole connection setup, sign-in included), TCP
+// keepalives and tcp_user_timeout (a peer that vanished without a reset; Linux), and the
+// session's statement_timeout (a statement the server is slow to finish, lock waits
+// included). The store's own deadline (StoreLink) covers what none of these can see,
+// such as a paused server whose kernel still acknowledges.
+std::string WithTimeouts(const std::string& uri, std::chrono::milliseconds timeout) {
+  const int64_t seconds = std::max<int64_t>(2, (timeout.count() + 999) / 1000);  // libpq's minimum is 2
+  const int64_t idle = std::max<int64_t>(1, seconds / 2);
+  const std::vector<std::pair<std::string, std::string>> wanted = {
+      {"connect_timeout", std::to_string(seconds)},
+      {"keepalives", "1"},
+      {"keepalives_idle", std::to_string(idle)},
+      {"keepalives_interval", std::to_string(std::max<int64_t>(1, idle / 2))},
+      {"keepalives_count", "3"},
+      {"tcp_user_timeout", std::to_string(timeout.count())},
+  };
+  const std::string statement_timeout = "-c statement_timeout=" + std::to_string(timeout.count());
+  const bool url = uri.rfind("postgresql://", 0) == 0 || uri.rfind("postgres://", 0) == 0;
+  std::string out = uri;
+  if (url) {
+    // libpq allows '?' in the user info: the query starts at the first '?' after it.
+    const auto scheme_end = uri.find("://") + 3;
+    auto start = scheme_end;
+    if (const auto at = uri.rfind('@'); at != std::string::npos && at >= scheme_end) start = at + 1;
+    const auto query = uri.find('?', start);
+    std::set<std::string> present;
+    if (query != std::string::npos) {
+      std::string rest = uri.substr(query + 1);
+      for (std::size_t i = 0; i <= rest.size();) {
+        auto amp = rest.find('&', i);
+        if (amp == std::string::npos) amp = rest.size();
+        const std::string pair = rest.substr(i, amp - i);
+        present.insert(pair.substr(0, pair.find('=')));
+        i = amp + 1;
+      }
+    }
+    char separator = query == std::string::npos ? '?' : '&';
+    if (separator == '&' && (out.back() == '&' || out.back() == '?')) separator = 0;
+    auto append = [&](const std::string& key, const std::string& value) {
+      if (present.contains(key)) return;
+      if (separator != 0) out += separator;
+      out += key + "=" + value;
+      separator = '&';
+    };
+    for (const auto& [key, value] : wanted) append(key, value);
+    std::string encoded;  // percent-encoded for the query string
+    for (char c : statement_timeout) {
+      if (c == ' ') encoded += "%20";
+      else if (c == '=') encoded += "%3D";
+      else encoded += c;
+    }
+    append("options", encoded);
+    return out;
+  }
+  auto has = [&](const std::string& key) {
+    return std::regex_search(uri, std::regex("(^|\\s)" + key + "\\s*="));
+  };
+  for (const auto& [key, value] : wanted) {
+    if (!has(key)) out += " " + key + "=" + value;
+  }
+  if (!has("options")) out += " options='" + statement_timeout + "'";
+  return out;
 }
 
 std::string Quote(const std::string& text) {
@@ -253,6 +507,10 @@ arrow::Result<std::string> PrepareStoreFile(const std::string& given) {
 
 std::string DuckDBStoreFile(const std::string& store_uri) { return RbacStore::DuckDBFile(store_uri); }
 
+std::string StoreConnectionWithTimeouts(const std::string& uri, std::chrono::milliseconds timeout) {
+  return WithTimeouts(uri, timeout);
+}
+
 std::string RbacStore::DuckDBFile(const std::string& uri) {
   if (uri.rfind("duckdb:", 0) == 0) return uri.substr(7);
   std::string lower = uri;
@@ -265,15 +523,23 @@ std::string RbacStore::DuckDBFile(const std::string& uri) {
   return {};
 }
 
-arrow::Result<std::unique_ptr<RbacStore>> RbacStore::Open(const std::string& uri) {
+arrow::Result<std::unique_ptr<RbacStore>> RbacStore::Open(const StoreOptions& options) {
   std::unique_ptr<RbacStore> store(new RbacStore());
+  store->options_ = options;
+  if (store->options_.timeout.count() <= 0) store->options_.timeout = std::chrono::milliseconds(10000);
+  ARROW_RETURN_NOT_OK(store->Redacted(store->OpenStore()));
+  return store;
+}
+
+arrow::Status RbacStore::OpenStore() {
+  const std::string& uri = options_.uri;
   const bool duckdb_file = uri.rfind("duckdb:", 0) == 0 || !DuckDBFile(uri).empty();
   if (duckdb_file) {
     const std::string file = DuckDBFile(uri);
     if (file.empty()) {
       return arrow::Status::Invalid("Hardcharger access control: duckdb: needs a file (duckdb:/path/to/rbac.duckdb)");
     }
-    ARROW_ASSIGN_OR_RAISE(store->file_path_, PrepareStoreFile(file));
+    ARROW_ASSIGN_OR_RAISE(file_path_, PrepareStoreFile(file));
   }
   dd::DBConfig config;
   if (duckdb_file) {
@@ -293,47 +559,49 @@ arrow::Result<std::unique_ptr<RbacStore>> RbacStore::Open(const std::string& uri
   }
   std::filesystem::permissions(secret_dir, std::filesystem::perms::owner_all,
                                std::filesystem::perm_options::replace, ec);
-  store->secret_dir_ = secret_dir.string();
-  config.SetOptionByName("secret_directory", dd::Value(store->secret_dir_));
+  secret_dir_ = secret_dir.string();
+  config.SetOptionByName("secret_directory", dd::Value(secret_dir_));
   try {
-    store->db_ = std::make_unique<dd::DuckDB>(nullptr, &config);
-    store->conn_ = std::make_unique<dd::Connection>(*store->db_);
+    link_ = std::make_shared<StoreLink>(std::make_unique<dd::DuckDB>(nullptr, &config), options_.timeout);
   } catch (const std::exception& e) {
     return StoreError("could not start", e.what());
   }
-  auto& conn = *store->conn_;
+  auto& conn = *link_;
 
   if (uri == "memory") {
-    store->description_ = "in-memory (tests only)";
+    description_ = "in-memory (tests only)";
     ARROW_RETURN_NOT_OK(Exec(conn, "ATTACH ':memory:' AS rbac_store"));
   } else if (duckdb_file) {
-    store->description_ = "DuckDB file " + store->file_path_ + " (one server only)";
-    auto attach = conn.Query("ATTACH " + Quote(store->file_path_) + " AS rbac_store");
+    description_ = "DuckDB file " + file_path_ + " (one server only)";
+    ARROW_ASSIGN_OR_RAISE(auto attach, Query(conn, "ATTACH " + Quote(file_path_) + " AS rbac_store"));
     if (attach->HasError()) {
       std::string error = attach->GetError();
       if (auto nl = error.find('\n'); nl != std::string::npos) error.resize(nl);
       // DuckDB's file lock (Windows: the file's sharing mode): another process has it open.
       if (error.find("Could not set lock") != std::string::npos ||
           error.find("being used by another process") != std::string::npos) {
-        return StoreError("the DuckDB store " + store->file_path_ + " is in use by another process",
+        return StoreError("the DuckDB store " + file_path_ + " is in use by another process",
                           error +
                               ". A DuckDB store serves a single server; for several replicas, use a "
                               "PostgreSQL store (rbac_store_uri: postgresql://...)");
       }
-      return StoreError("could not open the DuckDB store " + store->file_path_, error);
+      return StoreError("could not open the DuckDB store " + file_path_, error);
     }
   } else if (LooksLikePostgres(uri)) {
-    store->description_ = "PostgreSQL";
-    auto load = conn.Query("LOAD postgres");
+    description_ = "PostgreSQL";
+    ARROW_ASSIGN_OR_RAISE(auto load, Query(conn, "LOAD postgres"));
     if (load->HasError()) {
       ARROW_RETURN_NOT_OK(Exec(conn, "INSTALL postgres"));
       ARROW_RETURN_NOT_OK(Exec(conn, "LOAD postgres"));
     }
-    // The connection string carries credentials: never log it.
-    auto attach = conn.Query("ATTACH " + Quote(uri) + " AS rbac_store (TYPE postgres)");
+    connect_uri_ = WithTimeouts(uri, options_.timeout);
+    // The connection string carries credentials: never log it (Redacted() takes it out of
+    // every error, as given and as rewritten).
+    ARROW_ASSIGN_OR_RAISE(auto attach, Query(conn, "ATTACH " + Quote(connect_uri_) + " AS rbac_store (TYPE postgres)"));
     if (attach->HasError()) {
-      return StoreError("could not connect to the PostgreSQL store",
-                        RedactConnectionString(attach->GetError(), uri));
+      std::string error = attach->GetError();
+      if (auto nl = error.find('\n'); nl != std::string::npos) error.resize(nl);
+      return StoreError("could not connect to the PostgreSQL store", error);
     }
   } else {
     return arrow::Status::Invalid(
@@ -345,13 +613,29 @@ arrow::Result<std::unique_ptr<RbacStore>> RbacStore::Open(const std::string& uri
   // Two replicas starting at once can race on CREATE ... IF NOT EXISTS.
   arrow::Status init;
   for (int attempt = 0; attempt < 5; ++attempt) {
-    init = store->InitializeSchema();
-    if (init.ok()) break;
+    init = InitializeSchema();
+    if (init.ok() || IsStoreUnavailable(init) || init.IsInvalid()) break;
     std::this_thread::sleep_for(std::chrono::milliseconds(100 * (attempt + 1)));
   }
   ARROW_RETURN_NOT_OK(init);
-  store->CheckpointFile();
-  return store;
+  ARROW_RETURN_NOT_OK(CheckOwnership());
+  CheckpointFile();
+  return arrow::Status::OK();
+}
+
+std::string RbacStore::Redact(const std::string& text) const {
+  return RedactCredentials(text, {connect_uri_, options_.uri});
+}
+
+arrow::Status RbacStore::Redacted(const arrow::Status& status) const {
+  if (status.ok()) return status;
+  return arrow::Status(status.code(), Redact(status.message()));
+}
+
+arrow::Status RbacStore::Lock(std::unique_lock<std::timed_mutex>& lock) {
+  lock = std::unique_lock<std::timed_mutex>(mutex_, std::defer_lock);
+  if (lock.try_lock_for(options_.timeout)) return arrow::Status::OK();
+  return link_->TimedOut();
 }
 
 // A DuckDB store keeps nothing in its WAL past a write: each change is checkpointed into
@@ -361,20 +645,51 @@ arrow::Result<std::unique_ptr<RbacStore>> RbacStore::Open(const std::string& uri
 // checkpoint leaves the change in the WAL, committed: the next write tries again.
 void RbacStore::CheckpointFile() {
   if (file_path_.empty()) return;
-  (void)conn_->Query("CHECKPOINT rbac_store");
+  (void)Query(*link_, "CHECKPOINT rbac_store");
 }
 
 RbacStore::~RbacStore() {
-  conn_.reset();
-  db_.reset();
+  link_.reset();
   if (!secret_dir_.empty()) {
     std::error_code ec;
     std::filesystem::remove_all(secret_dir_, ec);
   }
 }
 
+// The store says which cluster it serves (meta cluster_id, written by the first server
+// with a cluster_id to open it): grants name catalogs, and another cluster's catalogs of
+// the same names are other data. Replicas of one cluster share the store; another
+// cluster is refused unless sharing is asked for (rbac_store_shared).
+arrow::Status RbacStore::CheckOwnership() {
+  auto& conn = *link_;
+  auto read = [&]() -> arrow::Result<std::string> {
+    ARROW_ASSIGN_OR_RAISE(auto r, Run(conn, "SELECT value FROM " + T("meta") + " WHERE key = 'cluster_id'"));
+    return compat::ResultRowCount(*r) == 0 ? std::string() : GetString(*r, 0, 0);
+  };
+  ARROW_ASSIGN_OR_RAISE(cluster_id_, read());
+  if (cluster_id_.empty() && !options_.cluster_id.empty()) {
+    ARROW_RETURN_NOT_OK(Run(conn,
+                            "INSERT INTO " + T("meta") +
+                                " SELECT 'cluster_id', $1 WHERE NOT EXISTS (SELECT 1 FROM " + T("meta") +
+                                " WHERE key = 'cluster_id')",
+                            {Text(options_.cluster_id)})
+                            .status());
+    ARROW_ASSIGN_OR_RAISE(cluster_id_, read());  // another cluster may have been first
+  }
+  if (!cluster_id_.empty() && !options_.cluster_id.empty() && !options_.shared &&
+      Lower(cluster_id_) != Lower(options_.cluster_id)) {
+    return arrow::Status::Invalid(
+        "Hardcharger access control: the access control store belongs to cluster ", cluster_id_,
+        ", and this server's cluster_id is ", options_.cluster_id,
+        ". Grants name catalogs, so another cluster's grants would apply to this cluster's "
+        "catalogs of the same names: give each cluster a store of its own, or set "
+        "rbac_store_shared=true to share users, roles and grants between the clusters");
+  }
+  return arrow::Status::OK();
+}
+
 arrow::Status RbacStore::InitializeSchema() {
-  auto& conn = *conn_;
+  auto& conn = *link_;
   ARROW_RETURN_NOT_OK(Exec(conn, std::string("CREATE SCHEMA IF NOT EXISTS ") + kSchema));
   const std::string ddl[] = {
       "CREATE TABLE IF NOT EXISTS " + T("meta") +
@@ -461,6 +776,27 @@ arrow::Status RbacStore::InitializeSchema() {
           "NOT NULL, "
           "granted_by VARCHAR NOT NULL, PRIMARY KEY (role_id, privilege, granted_by))",
   };
+  ARROW_RETURN_NOT_OK(Exec(conn, ddl[0]));  // meta, which says the schema's version
+  {
+    ARROW_ASSIGN_OR_RAISE(auto r, Run(conn, "SELECT value FROM " + T("meta") + " WHERE key = 'schema_version'"));
+    if (compat::ResultRowCount(*r) == 1) {
+      const std::string text = GetString(*r, 0, 0);
+      int64_t version = 0;
+      try {
+        version = std::stoll(text);
+      } catch (const std::exception&) {
+        return arrow::Status::Invalid("Hardcharger access control: the store's schema version '", text,
+                                      "' is not a number");
+      }
+      if (version > kStoreSchemaVersion) {
+        return arrow::Status::Invalid(
+            "Hardcharger access control: the access control store's schema is version ", version,
+            ", newer than this server's (", kStoreSchemaVersion,
+            "): a later Hardcharger has upgraded it. Run that version (or later), or give this "
+            "server another store");
+      }
+    }
+  }
   for (const auto& sql : ddl) ARROW_RETURN_NOT_OK(Exec(conn, sql));
   ARROW_RETURN_NOT_OK(Run(conn, "INSERT INTO " + T("meta") +
                                     " SELECT 'data_version', '1' WHERE NOT EXISTS (SELECT 1 FROM " +
@@ -468,7 +804,8 @@ arrow::Status RbacStore::InitializeSchema() {
                           .status());
   ARROW_RETURN_NOT_OK(
       Run(conn, "INSERT INTO " + T("meta") +
-                    " SELECT 'schema_version', '1' WHERE NOT EXISTS (SELECT 1 FROM " + T("meta") +
+                    " SELECT 'schema_version', '" + std::to_string(kStoreSchemaVersion) +
+                    "' WHERE NOT EXISTS (SELECT 1 FROM " + T("meta") +
                     " WHERE key = 'schema_version')")
           .status());
   ARROW_RETURN_NOT_OK(
@@ -482,20 +819,22 @@ arrow::Status RbacStore::InitializeSchema() {
 }
 
 arrow::Result<int64_t> RbacStore::CurrentVersion() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  ARROW_ASSIGN_OR_RAISE(
-      auto result, Run(*conn_, "SELECT value FROM " + T("meta") + " WHERE key = 'data_version'"));
-  if (compat::ResultRowCount(*result) != 1) return StoreError("corrupt store", "no data version");
-  return std::stoll(GetString(*result, 0, 0));
+  std::unique_lock<std::timed_mutex> lock;
+  ARROW_RETURN_NOT_OK(Lock(lock));
+  auto result = Run(*link_, "SELECT value FROM " + T("meta") + " WHERE key = 'data_version'");
+  if (!result.ok()) return Redacted(result.status());
+  if (compat::ResultRowCount(**result) != 1) return StoreError("corrupt store", "no data version");
+  return std::stoll(GetString(**result, 0, 0));
 }
 
 arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::Load() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return LoadLocked();
+  std::unique_lock<std::timed_mutex> lock;
+  ARROW_RETURN_NOT_OK(Lock(lock));
+  return Redacted(LoadLocked());
 }
 
 arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
-  auto& conn = *conn_;
+  auto& conn = *link_;
   ARROW_ASSIGN_OR_RAISE(auto version_result, Run(conn, "SELECT value FROM " + T("meta") +
                                                            " WHERE key = 'data_version'"));
   if (compat::ResultRowCount(*version_result) != 1) {
@@ -687,8 +1026,9 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
 
 arrow::Status RbacStore::Mutate(
     const std::function<arrow::Status(StoreTransaction&, const Snapshot&)>& fn) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto& conn = *conn_;
+  std::unique_lock<std::timed_mutex> lock;
+  ARROW_RETURN_NOT_OK(Lock(lock));
+  auto& conn = *link_;
   arrow::Status last;
   // Replicas writing at once conflict on the version row; the loser retries.
   // Under steady contention a few attempts are not enough, so keep trying for
@@ -696,7 +1036,7 @@ arrow::Status RbacStore::Mutate(
   thread_local std::minstd_rand jitter(std::random_device{}());
   constexpr int kAttempts = 40;
   for (int attempt = 0; attempt < kAttempts; ++attempt) {
-    ARROW_RETURN_NOT_OK(Exec(conn, "BEGIN TRANSACTION"));
+    ARROW_RETURN_NOT_OK(Redacted(Exec(conn, "BEGIN TRANSACTION")));
     auto body = [&]() -> arrow::Status {
       // Bump the version first: the row lock serializes writers on every replica.
       ARROW_RETURN_NOT_OK(Run(conn, "UPDATE " + T("meta") +
@@ -706,15 +1046,23 @@ arrow::Status RbacStore::Mutate(
       ARROW_ASSIGN_OR_RAISE(auto snapshot, LoadLocked());
       StoreTransaction txn(*this, conn);
       ARROW_RETURN_NOT_OK(fn(txn, *snapshot));
-      return Exec(conn, "COMMIT");
+      auto commit = Exec(conn, "COMMIT");
+      if (!commit.ok() && commit.message().find("timed out after") != std::string::npos) {
+        return arrow::Status::IOError(commit.message(),
+                                      " while committing: the change may have been applied");
+      }
+      return commit;
     };
-    last = body();
+    last = Redacted(body());
     if (last.ok()) {
       CheckpointFile();
       return last;
     }
-    (void)conn.Query("ROLLBACK");
-    if (!IsRetryableConflict(last.message())) return last;
+    // A store that did not answer is not asked to roll back: the store's thread does that
+    // once the statement returns. Neither that nor an unreachable store is retried.
+    if (last.message().find("timed out after") != std::string::npos) return last;
+    (void)Query(conn, "ROLLBACK");
+    if (IsStoreUnavailable(last) || !IsRetryableConflict(last.message())) return last;
     const int backoff_ms = std::min(10 * (attempt + 1), 200) + static_cast<int>(jitter() % 25);
     std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
   }

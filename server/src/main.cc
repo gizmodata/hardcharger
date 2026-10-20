@@ -417,6 +417,10 @@ int main(int argc, char** argv) {
       options.certificate_administrators = config.mtls_admin_identities;
       options.policy_service_url = config.rbac_opa_url;
       options.policy_service_timeout = std::chrono::milliseconds(config.rbac_opa_timeout_ms);
+      options.store_timeout = std::chrono::seconds(config.rbac_store_timeout_seconds);
+      options.cluster_id = config.cluster_id;
+      options.store_shared = config.rbac_store_shared;
+      options.max_snapshot_age = std::chrono::seconds(config.rbac_max_snapshot_age_seconds);
       // Access-control audit records form a hash chain from here on.
       hc::StartAuditChain(config.audit_chain_key);
       access = std::make_shared<hc::authz::AccessControl>(options);
@@ -424,6 +428,18 @@ int main(int argc, char** argv) {
               "role-based access control is on: users, roles and grants come from the store; "
               "sign-in token roles other than admin, and catalog_access claims, grant nothing",
               {{"store", access->store_description()}});
+      if (!access->store_cluster_id().empty() && config.cluster_id.empty()) {
+        hc::Log(hc::LogLevel::kWarning,
+                "the access control store belongs to a cluster, and this server has no cluster_id: "
+                "set cluster_id to the store's so another cluster can't open it by mistake",
+                {{"store_cluster_id", access->store_cluster_id()}});
+      } else if (config.rbac_store_shared && !access->store_cluster_id().empty() &&
+                 access->store_cluster_id() != config.cluster_id) {
+        hc::Log(hc::LogLevel::kWarning,
+                "rbac_store_shared: this cluster shares the access control store, and its users, roles and "
+                "grants, with another cluster",
+                {{"store_cluster_id", access->store_cluster_id()}, {"cluster_id", config.cluster_id}});
+      }
       if (!config.rbac_opa_url.empty()) {
         hc::Log(hc::LogLevel::kInfo,
                 "access control also asks the policy service (statements are refused when it "
@@ -452,6 +468,15 @@ int main(int argc, char** argv) {
     if (config.enable_metrics) runtime.metrics.Enable();
     // Sign-in and tokens deal with the store's users; rules-only access control has none.
     const auto store_access = access && !access->catalog_rules_only() ? access : nullptr;
+    if (store_access) {
+      // How the access-control store is doing: whether its last poll answered, and the age of
+      // the grants this server holds (seconds since it last did).
+      runtime.metrics.AddCollector([store_access](std::vector<hc::Sample>& out) {
+        const auto health = store_access->store_health();
+        out.push_back({"hardcharger_rbac_store_up", {}, health.up ? 1.0 : 0.0});
+        out.push_back({"hardcharger_rbac_snapshot_age_seconds", {}, health.snapshot_age_seconds});
+      });
+    }
     auto tokens = std::make_shared<hc::JwtTokenService>(
         secret_key, std::chrono::seconds(config.token_lifetime_seconds), instance_id,
         config.allow_cross_instance_tokens, hc::ParseLogLevel(config.auth_log_level), store_access);

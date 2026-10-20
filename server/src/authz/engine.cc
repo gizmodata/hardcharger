@@ -7,6 +7,7 @@
 #include <sstream>
 
 #include "authz/policies.hpp"
+#include "logging.hpp"
 #include "platform.hpp"
 
 namespace hardcharger::authz {
@@ -144,13 +145,19 @@ arrow::Result<std::shared_ptr<RbacEngine>> RbacEngine::Create(const Options& opt
   std::shared_ptr<RbacEngine> engine(new RbacEngine(options));
   ARROW_ASSIGN_OR_RAISE(engine->dummy_hash_,
                         HashPassword("hardcharger-timing-equalizer", options.password_iterations));
-  ARROW_ASSIGN_OR_RAISE(engine->store_, RbacStore::Open(options.store_uri));
+  StoreOptions store_options;
+  store_options.uri = options.store_uri;
+  store_options.timeout = options.store_timeout;
+  store_options.cluster_id = options.cluster_id;
+  store_options.shared = options.store_shared;
+  ARROW_ASSIGN_OR_RAISE(engine->store_, RbacStore::Open(store_options));
   if (!options.policy_service_url.empty()) {
     engine->policy_service_ =
         std::make_unique<PolicyService>(options.policy_service_url, options.policy_service_timeout);
   }
   ARROW_ASSIGN_OR_RAISE(auto snapshot, engine->store_->Load());
   engine->Publish(std::move(snapshot));
+  engine->NoteStoreAnswer(arrow::Status::OK());
   if (options.poll_interval.count() > 0) {
     engine->poller_ = std::thread([raw = engine.get()] { raw->PollLoop(); });
   }
@@ -175,8 +182,69 @@ void RbacEngine::PollLoop() {
     poll_cv_.wait_for(lock, options_.poll_interval, [this] { return stopping_; });
     if (stopping_) break;
     lock.unlock();
-    (void)Refresh();  // a store blip keeps the last good snapshot
+    NoteStoreAnswer(Refresh());  // a store that does not answer keeps the last good snapshot
     lock.lock();
+  }
+}
+
+namespace {
+int64_t SteadyNs() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+std::string Seconds(double seconds) {
+  std::ostringstream out;
+  out << static_cast<int64_t>(seconds);
+  return out.str();
+}
+}  // namespace
+
+double RbacEngine::SnapshotAgeSeconds() const {
+  const int64_t last = last_answer_ns_.load();
+  if (last == 0) return 0;
+  return static_cast<double>(SteadyNs() - last) / 1e9;
+}
+
+arrow::Status RbacEngine::RequireFreshSnapshot() const {
+  if (options_.max_snapshot_age.count() <= 0) return arrow::Status::OK();
+  const double age = SnapshotAgeSeconds();
+  if (age <= static_cast<double>(options_.max_snapshot_age.count())) return arrow::Status::OK();
+  return AccessControlError("the access control store has not answered for " + Seconds(age) +
+                            " s, longer than rbac_max_snapshot_age_seconds (" +
+                            std::to_string(options_.max_snapshot_age.count()) +
+                            "), so the grants this server holds may be out of date: store users are "
+                            "refused until the store answers again");
+}
+
+// Sign-ins and statements go on with the last snapshot while the store does not answer
+// (availability), but not silently: the first failed poll logs a warning, then one at
+// most every 30 s with the snapshot's age, and the store's return is logged too.
+void RbacEngine::NoteStoreAnswer(const arrow::Status& status) {
+  const int64_t now = SteadyNs();
+  if (status.ok()) {
+    last_answer_ns_.store(now);
+    if (!store_up_.exchange(true)) {
+      Log(LogLevel::kInfo, "the access control store answers again",
+          {{"outage_seconds", Seconds(static_cast<double>(now - outage_started_ns_) / 1e9)}});
+    }
+    return;
+  }
+  const bool was_up = store_up_.exchange(false);
+  if (was_up) outage_started_ns_ = now;
+  if (was_up || now - outage_logged_ns_ >= int64_t{30} * 1000000000) {
+    outage_logged_ns_ = now;
+    LogFields fields = {{"snapshot_age_seconds", Seconds(SnapshotAgeSeconds())},
+                        {"error", status.message()}};
+    if (options_.max_snapshot_age.count() > 0) {
+      fields.push_back({"rbac_max_snapshot_age_seconds", std::to_string(options_.max_snapshot_age.count())});
+    }
+    Log(LogLevel::kWarning,
+        options_.max_snapshot_age.count() > 0
+            ? "the access control store does not answer: serving the last grants it gave until "
+              "rbac_max_snapshot_age_seconds, then refusing store users"
+            : "the access control store does not answer: serving the last grants it gave (no "
+              "rbac_max_snapshot_age_seconds limit)",
+        fields);
   }
 }
 
@@ -257,6 +325,14 @@ arrow::Status RbacEngine::RecordOwner(const ObjectPath& object, ObjectType type,
     record.definition_hash = definition_hash;
     return txn.UpsertOwner(record);
   }));
+  ARROW_ASSIGN_OR_RAISE(auto snap, store_->Load());
+  Publish(std::move(snap));
+  return arrow::Status::OK();
+}
+
+arrow::Status RbacEngine::PutOwner(const OwnerRecord& record) {
+  ARROW_RETURN_NOT_OK(
+      store_->Mutate([&](StoreTransaction& txn, const Snapshot&) { return txn.UpsertOwner(record); }));
   ARROW_ASSIGN_OR_RAISE(auto snap, store_->Load());
   Publish(std::move(snap));
   return arrow::Status::OK();

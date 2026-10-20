@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "authz/authz.hpp"
 #include "config.hpp"
@@ -26,6 +27,10 @@ namespace hardcharger {
 
 // The catalog with the server's own read-only views (hardcharger_index_info, ...).
 inline constexpr const char* kSystemCatalog = "_hardcharger_system";
+
+// For a LOAD that failed because the extension needs another one that isn't installed
+// (iceberg needs avro): what to run, said first; nullopt for any other error.
+std::optional<std::string> ExtensionDependencyHint(std::string_view message);
 
 class Backend : public warpduckdb::DuckDBBackend {
  public:

@@ -101,6 +101,9 @@ struct Config {
   std::string rbac_store_uri;       // PostgreSQL connection string or URI of the grant store
   std::string rbac_opa_url;         // Open Policy Agent decision URL also asked; empty: none
   int64_t rbac_opa_timeout_ms = 2000;
+  int64_t rbac_store_timeout_seconds = 10;     // longest one store round trip may take
+  int64_t rbac_max_snapshot_age_seconds = 0;   // store down: refuse store users after this; 0 = never
+  bool rbac_store_shared = false;              // several clusters may share the store
   std::string audit_chain_key;      // seals access-control audit records (HMAC-SHA256)
 
   // Identity of this deployment

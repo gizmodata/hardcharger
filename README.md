@@ -201,6 +201,12 @@ directory, and says so at startup; mount a writable volume for the database (`--
 /data/my.duckdb`) and they go there. Init SQL can set `extension_directory` and
 `secret_directory` to anywhere else.
 
+The server never installs or loads an extension by itself (DuckDB's
+`autoinstall_known_extensions` and `autoload_known_extensions` are off), so an extension
+that needs another one needs that one installed too: `iceberg` needs `avro`. Run `INSTALL
+iceberg; INSTALL avro; LOAD iceberg;` (iceberg loads avro itself once it is installed); a
+`LOAD iceberg` without avro fails with a message that says to run `INSTALL avro;` first.
+
 `ghcr.io/gizmodata/hardcharger:main` (and `:sha-<commit>`) is the development build: the
 newest commit on `main` that passed every CI gate, built exactly as a release. Use
 `:latest` or a version tag for anything else.
@@ -746,6 +752,45 @@ already covers it (and is how the server attaches its own). This closes the one 
 could reach the server's files outside DuckDB's file system; the `sqlite_scanner` load still
 takes the administrator or a role granted `MANAGE EXTENSIONS`, which belong only to roles you
 would trust with the server's files.
+
+### When the store is down
+
+Access control never lets the store hold up the server, and never fails open on
+anything it has to write:
+
+- **Every store round trip is bounded** by `rbac_store_timeout_seconds` (default 10). A
+  store that doesn't answer in time fails the statement that needed it with `access control
+  store unavailable: timed out after N s`, and what that statement was doing is rolled back
+  as soon as the store answers again, so a `CREATE USER` the client was told failed never
+  appears later. (A timeout while committing says the change may have been applied.) For a
+  PostgreSQL store the server also adds libpq's `connect_timeout`, TCP keepalives,
+  `tcp_user_timeout` and a `statement_timeout` to the connection string, each unless the
+  string sets it already.
+- **Access-control statements and DDL fail** while the store is unreachable. A `CREATE
+  TABLE` or `CREATE VIEW` records its owner in the store before it runs: when that can't
+  be done, the statement fails and creates nothing, so no object is ever left without an
+  owner.
+- **Sign-ins and queries go on** with the users, roles and grants the store last gave
+  (availability), and the server says so: a warning when the store stops answering and
+  every 30 s after, with the snapshot's age, a line when it answers again, and the metrics
+  `hardcharger_rbac_store_up` and `hardcharger_rbac_snapshot_age_seconds`. A revoke made
+  on another replica during the outage doesn't reach this one until the store answers.
+  Set `rbac_max_snapshot_age_seconds` to bound that: once the store has not answered for
+  longer, every principal but the administrator is refused (fail closed) until it does.
+  The default, 0, keeps serving; pick a limit when a stale grant is worse than an outage.
+- **Errors never carry the store's credentials**: neither the connection string nor any
+  password in it reaches a client, a log line or the audit chain.
+
+### One store per cluster
+
+Grants name catalogs, so a store two clusters shared by mistake would apply one cluster's
+grants to the other's catalogs of the same names. The store records the `cluster_id` of
+the first server that opens it, and a server with another `cluster_id` refuses to start
+(`the access control store belongs to cluster ...`). Replicas and restarts of the same
+cluster share it as before. To share users, roles and grants between clusters on purpose,
+set `rbac_store_shared: true` on the clusters that join. A server with no `cluster_id`
+opens any store, with a warning when the store belongs to a cluster. The store also
+records its schema version, and a server refuses a store a later version has upgraded.
 
 ## 🌐 Browser sign-in (SSO)
 

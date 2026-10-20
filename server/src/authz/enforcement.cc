@@ -45,6 +45,7 @@
 #include <unordered_set>
 
 #include "authz/duckdb_internal.hpp"
+#include "logging.hpp"
 #include "authz/policies.hpp"
 #include "authz/resolver.hpp"
 #include "authz/views.hpp"
@@ -1298,7 +1299,45 @@ void RbacSessionState::NoteBindChecked() {
 dd::RebindQueryInfo RbacSessionState::OnFinalizePrepare(dd::ClientContext&,
                                                         dd::PreparedStatementData& prepared,
                                                         dd::PreparedStatementMode mode) {
+  bool runs_now = false;
+  dd::RebindQueryInfo rebind;
+  std::vector<PendingOwnership> to_record;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    rebind = FinalizePrepareLocked(prepared, mode, runs_now);
+    if (runs_now) {
+      for (const auto& o : pending_ownership_) {
+        if (o.kind == PendingOwnership::Kind::kCreate && !o.recorded) to_record.push_back(o);
+      }
+    }
+  }
+  if (to_record.empty()) return rebind;
+  // The statement runs now: its creations get their owners first, so none can exist
+  // without one (QueryEnd puts the records back if it fails).
+  auto engine = engine_.lock();
+  if (!engine) {
+    throw dd::PermissionException("Hardcharger blocked this statement: access control is shutting down");
+  }
+  std::vector<RecordedOwnership> undo;
+  auto status = RecordCreatedOwners(*engine, principal(), to_record, undo);
   std::lock_guard<std::mutex> lock(mutex_);
+  for (auto& u : undo) recorded_ownership_.push_back(std::move(u));
+  if (!status.ok()) {
+    pending_ownership_.clear();
+    throw dd::IOException(
+        "Hardcharger did not run this statement: the owner of what it creates could not be recorded (" +
+        status.message() + ")");
+  }
+  for (auto& o : pending_ownership_) {
+    for (const auto& r : to_record) {
+      if (r.recorded && o.kind == r.kind && o.object.ToString() == r.object.ToString()) o.recorded = true;
+    }
+  }
+  return rebind;
+}
+
+dd::RebindQueryInfo RbacSessionState::FinalizePrepareLocked(dd::PreparedStatementData& prepared,
+                                                            dd::PreparedStatementMode mode, bool& runs_now) {
   // A statement with parameters that DuckDB prepared without optimizing (it is
   // planned again with the values for each run). It may go ahead when the
   // bind-time check passed it, or when DuckDB could not plan it yet and so
@@ -1318,6 +1357,7 @@ dd::RebindQueryInfo RbacSessionState::OnFinalizePrepare(dd::ClientContext&,
   planned_prepare_only_ = false;
   auto& target = prepare_only ? prepared_ownership_ : pending_ownership_;
   if (prepare_only) prepared_ownership_.clear();
+  runs_now = !prepare_only;
   for (auto& o : planned_ownership_) target.push_back(std::move(o));
   planned_ownership_.clear();
   if (checked_pending_ > 0) {
@@ -1369,15 +1409,22 @@ dd::RebindQueryInfo RbacSessionState::OnRebindPreparedStatement(
 
 void RbacSessionState::QueryEnd(dd::ClientContext&, dd::optional_ptr<dd::ErrorData> error) {
   std::vector<PendingOwnership> pending;
+  std::vector<RecordedOwnership> recorded;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     pending.swap(pending_ownership_);
+    recorded.swap(recorded_ownership_);
     planned_ownership_.clear();
     checked_pending_ = 0;
     bind_checked_pending_ = false;
   }
-  if (error || pending.empty()) return;
-  if (auto engine = engine_.lock()) ApplyOwnership(*engine, principal_, pending);
+  auto engine = engine_.lock();
+  if (!engine) return;
+  if (error) {
+    UndoRecordedOwners(*engine, recorded);
+    return;
+  }
+  if (!pending.empty()) ApplyOwnership(*engine, principal_, pending);
 }
 
 bool IsAllowedTableFunction(const std::string& name_lower) {
@@ -1387,20 +1434,73 @@ bool IsAllowedTableFunction(const std::string& name_lower) {
 void ApplyOwnership(RbacEngine& engine, const Principal& principal,
                     const std::vector<PendingOwnership>& changes) {
   for (const auto& p : changes) {
+    if (p.recorded) continue;
+    // CREATE OR REPLACE drops and creates the same object: the creation's record, written
+    // before the statement ran, is the one that stands.
+    const bool replaced = p.kind == PendingOwnership::Kind::kDrop &&
+                          std::any_of(changes.begin(), changes.end(), [&](const PendingOwnership& c) {
+                            return c.kind == PendingOwnership::Kind::kCreate && c.recorded &&
+                                   c.object.ToString() == p.object.ToString();
+                          });
+    if (replaced) continue;
     // A catalog_access principal (rules only, or an administrator's token with rules) is
     // no store user or role: its rights are its token's rules, for that session only, so
     // nothing could read a view with them later. What it creates gets no owner (and loses
     // any record left by an earlier object of that name): a view it creates reads with
     // each reader's own rights, its creator's included, and fails when those don't reach
     // what the view reads.
-    if (principal.catalog_rules && !principal.superuser) {
-      (void)engine.ForgetOwner(p.object);
+    arrow::Status status;
+    if ((principal.catalog_rules && !principal.superuser) || p.kind == PendingOwnership::Kind::kDrop) {
+      status = engine.ForgetOwner(p.object);
+    } else {
+      status = engine.RecordOwner(p.object, p.type, principal, p.definition_hash);
+    }
+    if (!status.ok()) {
+      Log(LogLevel::kWarning, "an object's owner record could not be updated",
+          {{"object", p.object.ToString()},
+           {"change", p.kind == PendingOwnership::Kind::kDrop ? "drop" : "create"},
+           {"error", status.message()}});
+    }
+  }
+}
+
+arrow::Status RecordCreatedOwners(RbacEngine& engine, const Principal& principal,
+                                  std::vector<PendingOwnership>& changes,
+                                  std::vector<RecordedOwnership>& undo) {
+  const std::size_t first = undo.size();
+  for (auto& p : changes) {
+    if (p.kind != PendingOwnership::Kind::kCreate || p.recorded) continue;
+    bool seen = false;  // the same object twice in one statement (a re-plan)
+    for (std::size_t i = first; i < undo.size(); ++i) seen = seen || undo[i].object.ToString() == p.object.ToString();
+    if (seen) {
+      p.recorded = true;
       continue;
     }
-    if (p.kind == PendingOwnership::Kind::kCreate) {
-      (void)engine.RecordOwner(p.object, p.type, principal, p.definition_hash);
-    } else {
-      (void)engine.ForgetOwner(p.object);
+    const auto snapshot = engine.snapshot();
+    std::optional<OwnerRecord> previous;
+    if (const OwnerRecord* record = snapshot->FindOwner(p.object)) previous = *record;
+    // See ApplyOwnership: a catalog_access principal's creations get no owner.
+    const bool rules_only = principal.catalog_rules && !principal.superuser;
+    auto status = rules_only ? engine.ForgetOwner(p.object)
+                             : engine.RecordOwner(p.object, p.type, principal, p.definition_hash);
+    if (!status.ok()) {
+      std::vector<RecordedOwnership> mine(undo.begin() + static_cast<std::ptrdiff_t>(first), undo.end());
+      UndoRecordedOwners(engine, mine);
+      undo.resize(first);
+      return status;
+    }
+    p.recorded = true;
+    undo.push_back({p.object, std::move(previous)});
+  }
+  return arrow::Status::OK();
+}
+
+void UndoRecordedOwners(RbacEngine& engine, const std::vector<RecordedOwnership>& undo) {
+  for (auto it = undo.rbegin(); it != undo.rend(); ++it) {
+    auto status = it->previous ? engine.PutOwner(*it->previous) : engine.ForgetOwner(it->object);
+    if (!status.ok()) {
+      Log(LogLevel::kWarning, "the owner record of an object a failed statement would have created could not be put back",
+          {{"object", it->object.ToString()}, {"error", status.message()}});
     }
   }
 }

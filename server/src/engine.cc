@@ -14,6 +14,7 @@
 #include "duckdb_sql.hpp"
 #include "instrumentation.hpp"
 #include "logging.hpp"
+#include "redact.hpp"
 #include "platform.hpp"
 #include "settings.hpp"
 #include "sql_functions.hpp"
@@ -535,7 +536,10 @@ void Backend::RunInitSql() {
   try {
     warpduckdb::RunSql(connection.get(), sql);
   } catch (const Error& error) {
-    throw std::runtime_error(std::string("init SQL failed: ") + error.what());
+    // DuckDB quotes an ATTACH's connection string, password included, in its errors.
+    const auto hint = ExtensionDependencyHint(error.what());
+    throw std::runtime_error("init SQL failed: " + (hint ? *hint + "\n" : std::string()) +
+                             RedactCredentials(error.what()));
   }
   Log(LogLevel::kInfo, "init SQL ran");
 }
@@ -675,7 +679,29 @@ void ExplainViewAmbiguity(std::string_view sql, const Error& error) {
               error.sqlstate());
 }
 
+// An extension that needs another one (iceberg needs avro) loads it itself, but only
+// once it is installed: Hardcharger turns DuckDB's autoinstall_known_extensions and
+// autoload_known_extensions off, so "LOAD iceberg" on a host without avro fails, and
+// DuckDB's reason is buried in its message. This says it first, with what to run.
+void ExplainExtensionDependency(const Error& error) {
+  if (auto hint = ExtensionDependencyHint(error.what())) {
+    throw Error(error.code(), *hint + "\n" + error.what(), error.sqlstate());
+  }
+}
+
 }  // namespace
+
+std::optional<std::string> ExtensionDependencyHint(std::string_view message) {
+  static const std::regex kNeeds(R"(The (\w+) extension requires the (\w+) extension, but it could not be loaded)");
+  std::match_results<std::string_view::const_iterator> match;
+  if (!std::regex_search(message.begin(), message.end(), match, kNeeds)) return std::nullopt;
+  const std::string extension = match[1].str();
+  const std::string needed = match[2].str();
+  return "Hardcharger: the " + extension + " extension needs the " + needed + " extension installed. Run INSTALL " +
+         needed + "; then LOAD " + extension + " again (" + extension + " loads " + needed +
+         " itself once it is installed). Hardcharger never installs or loads an extension on its own "
+         "(DuckDB's autoinstall_known_extensions and autoload_known_extensions are off).";
+}
 
 warpsql::StatementOutcome Session::Guarded(std::string_view sql, bool has_parameters,
                                            const std::function<warpsql::StatementOutcome()>& run) {
@@ -683,6 +709,7 @@ warpsql::StatementOutcome Session::Guarded(std::string_view sql, bool has_parame
     return guard_ ? guard_->Execute(sql, has_parameters, run) : run();
   } catch (const Error& error) {
     ExplainViewAmbiguity(sql, error);
+    ExplainExtensionDependency(error);
     throw;
   }
 }

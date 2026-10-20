@@ -7,6 +7,52 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Security
+
+- Access-control store errors no longer carry the store's connection string. While a
+  PostgreSQL store was unreachable, `CREATE USER`, `GRANT`, `REVOKE` and every other
+  access-control write answered the client, and logged, DuckDB's "Unable to connect to
+  Postgres at ..." with the full `postgresql://user:password@...` string. Every store error
+  is now redacted (the string as given and as the server rewrites it, a URL's
+  `user:password@`, libpq's `password=` and URL parameters such as `password=` and
+  `sslpassword=`), and so is a failing init SQL `ATTACH`, which stopped startup with the
+  password in its log line. One helper (`server/src/redact.cc`) does it for the store, init
+  SQL and the logs.
+- DDL no longer runs when its owner can't be recorded. During a store outage an
+  administrator's (or a user's) `CREATE TABLE` / `CREATE VIEW` succeeded while its
+  ownership record was silently dropped, leaving an object with no owner (and any stale
+  record of an earlier object of that name in force). The owner is now recorded before the
+  statement runs; when the store can't take it, the statement fails with the store's error
+  and creates nothing, and a statement that fails after its owner was recorded puts the
+  previous record back.
+
+### Added
+
+- `rbac_store_timeout_seconds` (default 10): every access-control store round trip is
+  bounded. With PostgreSQL paused, a `CREATE TABLE` waited 152 s for the store; it now fails
+  with `access control store unavailable: timed out after 10 s`, and what it was doing is
+  rolled back once the store answers. PostgreSQL connection strings get libpq's
+  `connect_timeout`, TCP keepalives, `tcp_user_timeout` and a `statement_timeout`, each
+  unless they set it.
+- Store outages are visible: a warning when the store stops answering (then every 30 s,
+  with the snapshot's age), a line when it answers again, and the metrics
+  `hardcharger_rbac_store_up` and `hardcharger_rbac_snapshot_age_seconds`.
+  `rbac_max_snapshot_age_seconds` (default 0, no limit) refuses every principal but the
+  administrator once the store has not answered for longer (fail closed).
+- The access-control store belongs to one cluster: it records the first `cluster_id` that
+  opens it and refuses a server of another cluster (`the access control store belongs to
+  cluster ...`); `rbac_store_shared: true` shares users, roles and grants between clusters
+  on purpose. The store's schema version is checked too: a store a later version upgraded
+  is refused.
+
+### Fixed
+
+- `LOAD iceberg` without the avro extension installed now says first what to run
+  (`INSTALL avro;`, then `LOAD iceberg` again); iceberg loads avro itself once it is
+  installed. The server never installs or loads extensions by itself, so DuckDB's own
+  reason was buried in a long initialization error. The same hint is given when init SQL
+  fails this way.
+
 ## [2.0.0-rc.1] - 2026-10-20
 
 ### Added

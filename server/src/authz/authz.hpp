@@ -56,6 +56,14 @@ struct Options {
   std::chrono::milliseconds policy_service_timeout{2000};
   // How often to look for changes other replicas made.
   std::chrono::milliseconds poll_interval{1000};
+  // The longest one store round trip may take (rbac_store_timeout_seconds).
+  std::chrono::milliseconds store_timeout{10000};
+  // This server's cluster_id: the store must belong to it unless store_shared.
+  std::string cluster_id;
+  bool store_shared = false;  // rbac_store_shared
+  // rbac_max_snapshot_age_seconds: how long store users are served from the last snapshot
+  // while the store does not answer (0: for as long as it takes).
+  std::chrono::seconds max_snapshot_age{0};
   // No store: sign-in tokens' catalog_access rules restrict sessions (per-catalog
   // permissions), and every principal but the administrator is held to a
   // non-administrator's limits. Users, roles and grants don't exist; access-control
@@ -192,6 +200,16 @@ class AccessControl {
   const std::string& store_description() const;
   // A DuckDB store's file (absolute), which SQL must never reach; empty for PostgreSQL.
   const std::string& store_file() const;
+  // The cluster the store belongs to (the first cluster_id that opened it), or empty.
+  const std::string& store_cluster_id() const;
+
+  // The store's health, for metrics: whether its last poll answered, and how long ago it
+  // last did (the age of the grants this server holds).
+  struct StoreHealth {
+    bool up = true;
+    double snapshot_age_seconds = 0;
+  };
+  StoreHealth store_health() const;
 
  private:
   void OnSnapshot(const Snapshot& snapshot);

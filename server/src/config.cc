@@ -223,6 +223,24 @@ const std::vector<Option>& Options() {
        TEXT(rbac_opa_url)},
       {"rbac_opa_timeout_ms", Kind::kInt,
        "how long to wait for the policy service (no answer refuses)", NUMBER(rbac_opa_timeout_ms)},
+      {"rbac_store_timeout_seconds", Kind::kInt,
+       "the longest one access-control store round trip may take, from 1 to 300: a store that does "
+       "not answer in time fails the statement that needed it (access control store unavailable: "
+       "timed out after N s) and what it was doing is rolled back. For PostgreSQL it also sets libpq's "
+       "connect_timeout, TCP keepalives, tcp_user_timeout and the session's statement_timeout, each "
+       "unless the connection string sets it",
+       NUMBER(rbac_store_timeout_seconds)},
+      {"rbac_max_snapshot_age_seconds", Kind::kInt,
+       "while the store does not answer, sign-ins and statements go on with the last users, roles and "
+       "grants it gave (a warning is logged, and hardcharger_rbac_snapshot_age_seconds says how old they "
+       "are); past this many seconds every principal but the administrator is refused until it answers "
+       "again (fail closed). 0: no limit (stay available)",
+       NUMBER(rbac_max_snapshot_age_seconds)},
+      {"rbac_store_shared", Kind::kBool,
+       "let clusters with different cluster_ids share one store, and with it their users, roles and "
+       "grants (grants name catalogs, so a grant on one cluster's catalog applies to another's catalog "
+       "of that name). Off: the store records the first cluster_id that opens it and refuses any other",
+       FLAG(rbac_store_shared)},
       {"audit_chain_key", Kind::kString,
        "key that seals access-control audit records into a tamper-evident chain "
        "(HMAC-SHA256; unset: SHA-256); --verify-audit-log FILE checks a JSON log",
@@ -499,6 +517,12 @@ void Validate(Loaded& loaded) {
   }
   if (c.rbac_opa_timeout_ms < 0) {
     throw std::invalid_argument("rbac_opa_timeout_ms must not be negative");
+  }
+  if (c.rbac_store_timeout_seconds < 1 || c.rbac_store_timeout_seconds > 300) {
+    throw std::invalid_argument("rbac_store_timeout_seconds must be from 1 to 300");
+  }
+  if (c.rbac_max_snapshot_age_seconds < 0) {
+    throw std::invalid_argument("rbac_max_snapshot_age_seconds must not be negative");
   }
   if (c.rbac_opa_timeout_ms == 0) {
     c.rbac_opa_timeout_ms = 2000;  // 0: the default
