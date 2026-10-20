@@ -1,0 +1,59 @@
+name: UI connection-close regression
+on:
+  push:
+    branches: [debug/close-inflight]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  ui:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [webkit, chromium]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: hardcharger
+          POSTGRES_PASSWORD: hardcharger
+          POSTGRES_DB: hardcharger
+        ports: ["127.0.0.1:55460:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hardcharger" --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      HARDCHARGER_UI_TEST_EMBEDDED: "0"
+      HARDCHARGER_UI_TEST_RBAC_STORE_URI: postgresql://hardcharger:hardcharger@127.0.0.1:55460/hardcharger
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck && npm run build && npm run vendor:verify
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-linux-amd64
+          path: ${{ runner.temp }}/server
+          run-id: 39500109503
+          github-token: ${{ github.token }}
+      - name: Unpack the tested server
+        run: |
+          tar -C "$RUNNER_TEMP/server" -xzf "$RUNNER_TEMP/server/hardcharger-linux-amd64.tar.gz"
+          echo "HARDCHARGER_UI_TEST_SERVER_BINARY=$RUNNER_TEMP/server/hardcharger-linux-amd64/bin/hardcharger-server" >> "$GITHUB_ENV"
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Repeat OAuth, paste and reload regressions
+        run: npx playwright test --project ${{ matrix.browser }} --grep 'Sign in with the provider|typed and pasted|lazily loaded' --repeat-each 5
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: close-regression-${{ matrix.browser }}
+          path: |
+            ui/test-results
+            ui/playwright-report
