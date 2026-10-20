@@ -73,6 +73,10 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
       formatOnPaste: false,
       formatOnType: false,
       autoIndentOnPaste: false,
+      // SQL is plain text. Use Monaco's synchronous clipboard event path: the optional
+      // Paste As providers reread DataTransfer items asynchronously, which loses text in
+      // Linux WebKit even though the trusted paste event contains it.
+      pasteAs: { enabled: false },
       // Enter takes a suggestion only when it changes the text: a word typed out in full,
       // then Enter, is a new line, not the same word put in again.
       acceptSuggestionOnEnter: "smart",

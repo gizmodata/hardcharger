@@ -7,6 +7,7 @@ import { expect, expectProblem, signIn, test } from "./fixtures.ts";
 test("a lazily loaded page that is gone: reloads with backoff, then a 'new version' notice", async ({
   page,
   harness,
+  browserName,
 }) => {
   test.setTimeout(90_000);
   const missing = /\/ui\/assets\/QueryPage-[^/]+\.js$/;
@@ -57,6 +58,19 @@ test("a lazily loaded page that is gone: reloads with backoff, then a 'new versi
     const body = (await response.text()).replaceAll(/(QueryPage-[\w-]+\.js)/g, "$1?build=2");
     await route.fulfill({ response, body });
   });
+  // During this deliberate document replacement, WebKit can report a caught statement
+  // cleanup fetch as a pageerror (microsoft/playwright#43120). Allow only that native
+  // diagnostic, for this same-origin statement endpoint, from the explicit reload on.
+  // HTTP failures, CSP violations and other uncaught errors remain test failures.
+  if (browserName === "webkit") {
+    const host = new URL(harness.url).host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expectProblem(page, {
+      console: new RegExp(
+        `${host}/warp/v1/sessions/s_[a-z0-9]+/statements/q_[a-z0-9]+ due to access control checks\\.$`,
+      ),
+      required: false,
+    });
+  }
   await page.getByTestId("stale-build").getByRole("button", { name: "Reload", exact: true }).click();
   await expect(page.locator(".editor-tab .monaco-editor")).toBeVisible();
   await expect(page.getByTestId("stale-build")).toHaveCount(0);

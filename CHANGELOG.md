@@ -208,6 +208,9 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
 
 ### Fixed
 
+- Web UI: pasted SQL reaches the editor in Linux WebKit as well as Chromium and Safari.
+  The SQL editor uses the plain-text clipboard path instead of optional Paste As providers,
+  keeping the pasted text and its indentation intact.
 - Release CI now gates container publishing and the GitHub Release on the iOS simulator
   tests, signed device build and TestFlight upload. A manual run with `ios` and `sign`
   proves the signed device build before tagging, without uploading it. Trusted-proxy
