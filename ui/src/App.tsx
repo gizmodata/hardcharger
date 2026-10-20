@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Layout } from "./components/Layout";
 import { SignInPage } from "./components/SignInPage";
 import { type SignedIn, clearSignIn, loadSignIn, saveSignIn } from "./lib/auth";
+import { endSessionsOnExit } from "./lib/pageExit";
 import { useRoute } from "./lib/route";
 import { useTheme } from "./lib/theme";
 import { type ConnectionOptions, discover, openConnection } from "./lib/warp";
@@ -53,6 +54,22 @@ export function App() {
   const queryPage = useRef<QueryPageHandle | undefined>(undefined);
   const pending = useRef<QueryRequest[]>([]);
   const extra = useRef(new Set<Connection>());
+  const current = useRef(phase);
+  useEffect(() => {
+    current.current = phase;
+  });
+
+  // Closing or leaving the page ends its sessions on the server now, not at their idle timeout.
+  useEffect(
+    () =>
+      endSessionsOnExit(() => {
+        const now = current.current;
+        if (now.kind !== "ready") return undefined;
+        const open = [now.connection, ...extra.current].filter((c) => !c.closed);
+        return { token: now.auth.token, ids: open.map((c) => c.sessionId) };
+      }),
+    [],
+  );
 
   useEffect(() => {
     const controller = new AbortController();

@@ -1,0 +1,84 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { endSessionsOnExit, warnBeforeLeaving } from "../../src/lib/pageExit";
+
+function pageEvent(type: string, persisted = false): Event {
+  const e = new Event(type, { cancelable: true });
+  Object.defineProperty(e, "persisted", { value: persisted });
+  return e;
+}
+
+describe("endSessionsOnExit", () => {
+  const fetches: { url: string; init: RequestInit }[] = [];
+  let stop: () => void = () => {};
+  let ids: string[] = [];
+  const reload = vi.fn();
+
+  beforeEach(() => {
+    fetches.length = 0;
+    ids = ["s_one", "s/two"];
+    reload.mockReset();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init: RequestInit) => {
+        fetches.push({ url, init });
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }),
+    );
+    stop = endSessionsOnExit(() => ({ token: "tok", ids }), reload);
+  });
+  afterEach(() => {
+    stop();
+    vi.unstubAllGlobals();
+  });
+
+  it("ends every open session with a keepalive DELETE carrying the token, once", () => {
+    window.dispatchEvent(pageEvent("pagehide"));
+    expect(fetches.map((f) => f.url)).toEqual([
+      `${window.location.origin}/warp/v1/sessions/s_one`,
+      `${window.location.origin}/warp/v1/sessions/s%2Ftwo`,
+    ]);
+    for (const { init } of fetches) {
+      expect(init.method).toBe("DELETE");
+      expect(init.keepalive).toBe(true);
+      expect(new Headers(init.headers).get("Authorization")).toBe("Bearer tok");
+    }
+    window.dispatchEvent(pageEvent("pagehide"));
+    expect(fetches).toHaveLength(2);
+    // A session opened since (the page went on after all) is ended at the next exit.
+    ids = ["s_one", "s_three"];
+    window.dispatchEvent(pageEvent("pagehide"));
+    expect(fetches.map((f) => f.url).at(-1)).toBe(`${window.location.origin}/warp/v1/sessions/s_three`);
+  });
+
+  it("ends them on beforeunload, unless the page asks the user first", () => {
+    const stopWarning = warnBeforeLeaving();
+    const asked = pageEvent("beforeunload");
+    window.dispatchEvent(asked);
+    expect(asked.defaultPrevented).toBe(true); // the browser asks
+    expect(fetches).toHaveLength(0); // and the user may stay
+    stopWarning();
+    stopWarning(); // twice is once
+    const left = pageEvent("beforeunload");
+    window.dispatchEvent(left);
+    expect(left.defaultPrevented).toBe(false);
+    expect(fetches).toHaveLength(2);
+  });
+
+  it("loads the page again when it comes back from the back/forward cache with its sessions ended", () => {
+    window.dispatchEvent(pageEvent("pageshow", true));
+    expect(reload).not.toHaveBeenCalled(); // nothing was ended
+    window.dispatchEvent(pageEvent("pagehide", true));
+    window.dispatchEvent(pageEvent("pageshow", false));
+    expect(reload).not.toHaveBeenCalled(); // a fresh load
+    window.dispatchEvent(pageEvent("pageshow", true));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing while signed out", () => {
+    stop();
+    stop = endSessionsOnExit(() => undefined, reload);
+    window.dispatchEvent(pageEvent("pagehide"));
+    expect(fetches).toHaveLength(0);
+  });
+});

@@ -307,7 +307,8 @@ for any Warp SQL server, which it re-exports.
 
 ### Plain HTTP
 
-Warp SQL is plain HTTP, so `curl` works:
+Warp SQL is plain HTTP, so `curl` works. Rows come back as an Arrow IPC stream (here read
+with [`pyarrow`](https://pypi.org/project/pyarrow/), `pip install pyarrow`):
 
 ```bash
 TOKEN=$(curl -s localhost:31337/warp/v1/auth/token -H 'Content-Type: application/json' \
@@ -315,11 +316,18 @@ TOKEN=$(curl -s localhost:31337/warp/v1/auth/token -H 'Content-Type: application
 SESSION=$(curl -s localhost:31337/warp/v1/sessions -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{}' | jq -r .session_id)
 curl -s localhost:31337/warp/v1/sessions/$SESSION/statements -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"sql": "SELECT 42 AS answer"}' | jq .result
+  -H 'Content-Type: application/json' -H 'Accept: application/vnd.apache.arrow.stream' \
+  -d '{"sql": "SELECT 42 AS answer"}' |
+  python3 -c 'import sys, pyarrow as pa; print(pa.ipc.open_stream(source=sys.stdin.buffer).read_all().to_pylist())'
 ```
 
-Ask for `Accept: application/vnd.apache.arrow.stream` and the rows arrive as an Arrow IPC
-stream in that same response.
+```text
+[{'answer': 42}]
+```
+
+Without that `Accept` header the answer is the statement's JSON document: its `state`, and
+in `result` its Arrow schema and partitions, whose rows `GET …/statements/{id}/result`
+returns (Warp SQL §6.3, §6.4).
 
 The server describes its API in OpenAPI 3.1 at `GET /warp/v1/openapi.json` (no sign-in
 needed; discovery, `GET /warp`, lists it as capability `openapi`), for API tools and client
