@@ -602,6 +602,25 @@ To upgrade an existing metadata file on purpose, attach it with
 `META_STORAGE_VERSION 'latest'`; DuckDB 1.x can't open it afterwards. A PostgreSQL metadata
 catalog has no DuckDB storage format, so none of this applies to it.
 
+### Logs
+
+The server logs to stderr (`log_file` for a file), at `log_level` (`info` by default), as
+text or, with `log_format: json`, one JSON object per line. Statements are logged as they
+start and end with `print_queries` (on by default), at `query_log_level`. Whatever those
+say, a statement stopped by a cancel gets one `info` line, `statement cancelled`, with its
+`session_id`, `statement_id` (the `q_…` id), `user`, `reason` and `duration` (seconds, its
+wait in the statement queue included):
+
+```json
+{"time":"2026-10-20T14:31:39.702Z","level":"info","message":"statement cancelled","session_id":"s_…","statement_id":"q_…","user":"joe","reason":"timeout","duration":"1.003"}
+```
+
+`reason` is Warp SQL's `cancel_reason`: `client` (the client's cancel, or it closed the
+connection of a streamed result), `timeout` (`Warp-Statement-Timeout` or
+`query_timeout_seconds`), `killed` (`KILL SESSION`), `cancelled` (`hardcharger_cancel()`),
+`session_closed` (the session was deleted) or `server_shutdown`. A statement that
+ends on its own, or fails, gets none.
+
 ### Credential and system files
 
 With `block_sensitive_paths` on (the default), no statement can open, list, write, move or
@@ -906,6 +925,27 @@ tokens (`token_signature_verify_cert_path`, `token_jwks_uri`, or `token_allowed_
 `token_allowed_issuer` (whose tokens alone sign in, so it would provision no one). With no
 `token_allowed_issuer`, tokens of any issuer the key verifies sign in, and only
 `token_auto_provision_issuer`'s provision.
+
+### Read-only sessions
+
+A sign-in token whose `role` is `readonly` gives a session that reads and changes nothing but
+itself, with or without an access-control store. It may run queries (`SELECT`, `EXPLAIN`,
+`SHOW`, `DESCRIBE`, `SUMMARIZE`, `PIVOT`, the `PRAGMA`s that read such as `table_info` and
+`database_list`) and the statements that change only its own session: transactions
+(`BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`), `SET VARIABLE` and
+`RESET VARIABLE`, `USE`, and `SET` / `RESET` of a DuckDB setting kept for the session
+(`SET SESSION default_order = 'desc'`, `SET TimeZone = '…'`, `SET search_path = '…'`).
+Everything else is refused with `User '<name>' has a readonly session and cannot run
+statements that modify state.`: `INSERT`, `UPDATE`, `DELETE`, `MERGE`, bulk ingest, `CREATE`
+(temporary tables, views and macros too), `ALTER`, `DROP`, `COPY` either way, `EXPORT`,
+`IMPORT`, `CHECKPOINT`, `VACUUM`, `ATTACH`, `DETACH`, `INSTALL`, `LOAD`, `CALL`, SQL-level
+`PREPARE` / `EXECUTE`, `SET GLOBAL`, a plain `SET` of a setting whose default scope is global
+(`SET default_order`), and settings that reach the server (`threads`, `memory_limit`,
+`enable_profiling`, `profiling_output`, the extension and secret settings, ...). DuckDB's own
+analysis of each statement decides what writes, so a write hidden in a query
+(`WITH c AS (INSERT … RETURNING *) SELECT * FROM c`, `EXPLAIN ANALYZE` of one), in a
+transaction, in a batch or in a prepared statement is refused too. Under access control a
+readonly token adds this to the user's grants: it never widens them.
 
 ## 🌐 Browser sign-in (SSO)
 

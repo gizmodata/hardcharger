@@ -90,6 +90,13 @@ own changelog in `python/CHANGELOG.md`.
   than `token_allowed_issuer`. Off, nothing changes: such a sign-in is refused, saying an
   administrator creates the user.
 
+- One `info` log line for each cancelled statement, `statement cancelled`, with its
+  `session_id`, `statement_id` (`q_…`), `user`, `reason` (Warp SQL's `cancel_reason`:
+  `client`, `timeout`, `killed`, `cancelled`, `session_closed`, `server_shutdown`) and
+  `duration` in seconds, whatever `print_queries` and `query_log_level` say (GizmoSQL 1.x
+  logged `SQL Statement was successfully canceled.`). A statement that ends on its own or
+  fails logs none. Tests: `test_statement_cancel_log.py`.
+
 ### Changed
 
 - An IPv6 client's address is written `[2001:db8::7]:51234` (it was `2001:db8::7:51234`,
@@ -136,6 +143,22 @@ own changelog in `python/CHANGELOG.md`.
   sent after the statement finishes), cutting the stream mid-body; a reader slower than
   `session_idle_timeout` plus 5 s for that tail lost it. A read in progress now keeps the
   session (the Warp SQL SDK; spec §5.7 says a request in progress counts as one).
+
+- A `readonly` session could write through a data-modifying CTE
+  (`WITH c AS (INSERT … RETURNING *) SELECT * FROM c`, also `UPDATE` / `DELETE`), which
+  DuckDB reports as a `SELECT`. DuckDB's own analysis of every statement a readonly session
+  prepares now decides, as in GizmoSQL 1.x: one that modifies any database (temp included)
+  or writes a file is refused before it runs, also inside a transaction, in a batch, under
+  `EXPLAIN ANALYZE` or as a prepared statement.
+- A `readonly` session can change its own session again, as in GizmoSQL 1.x: `BEGIN` /
+  `START TRANSACTION`, `COMMIT` / `END`, `ROLLBACK` / `ABORT`, `SET VARIABLE` /
+  `RESET VARIABLE`, `USE`, `SET` / `RESET` of a setting DuckDB keeps for the session
+  (`SET SESSION …`, or a plain `SET` of a session-scoped setting such as `TimeZone`), and the
+  `PRAGMA`s that read (`table_info`, `database_list`, `version`, ...). They were refused as
+  modifying state. `SET GLOBAL`, a plain `SET` of a setting whose default scope is global,
+  settings that reach the server (resources, extensions, secrets, files, the profiler, the
+  grammar), temporary tables, views and macros, and every other write stay refused. README:
+  "Read-only sessions". Tests: `test_readonly_session.py`.
 
 ## [2.0.0-rc.1] - 2026-10-20
 

@@ -297,3 +297,15 @@ SESSION and every session in `hardcharger_sessions()`. Hardcharger differs on pu
 | `nextval()` / `currval()` on a sequence | any | by the rules of the sequence's catalog |
 | access-control statements (CREATE USER, GRANT, ...) on a server with access control | (none: 1.x has no access control statements) | refused, and the rules still hold |
 | a claim that isn't a non-empty list (`[]`, a string, an object, `null`) | no rules: unrestricted | grants nothing |
+
+### The `readonly` role
+
+Both refuse a `readonly` token's writes with `User '<name>' has a readonly session and cannot
+run statements that modify state.`, and both let it change its own session: transactions,
+`SET VARIABLE`, `USE` and session settings. GizmoSQL 1.x allowed every statement DuckDB
+reports as modifying no database; Hardcharger allows a list (README, "Read-only sessions")
+and then checks the same DuckDB analysis, so SQL-level `PREPARE` / `EXECUTE`, `CALL`, the
+`PRAGMA`s that don't only read, and settings that reach the server stay refused. Temporary
+tables, views and macros are refused in both. A cancelled statement's log line,
+`SQL Statement was successfully canceled.` in 1.x, is `statement cancelled` (with `reason`
+and `duration`).
