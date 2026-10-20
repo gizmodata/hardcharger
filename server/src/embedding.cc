@@ -239,7 +239,15 @@ const char* hardcharger_embedded_web_ui_version(void) {
 }
 
 const char* hardcharger_embedded_third_party_notices(void) {
-  static const std::string notices(hardcharger::ThirdPartyNotices());
+  // As hardcharger-server --licenses: THIRD_PARTY_NOTICES.md, then the web UI's own.
+  static const std::string notices = [] {
+    std::string text(hardcharger::ThirdPartyNotices());
+    if (const auto ui = hardcharger::EmbeddedWebUiFileContent(hardcharger::EmbeddedWebUiFiles(), "third-party-notices.txt")) {
+      text += "\n\n";
+      text += *ui;
+    }
+    return text;
+  }();
   return notices.c_str();
 }
 

@@ -29,7 +29,7 @@ enum LocalNetwork {
             guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0,
                               NI_NUMERICHOST) == 0
             else { continue }
-            let ip = String(cString: host)
+            let ip = String(cBuffer: host)
             if ip.hasPrefix("169.254.") { continue }
             result.append(Address(interface: name, ip: ip))
         }

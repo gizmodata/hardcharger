@@ -33,8 +33,8 @@ final class ConsoleEngine: Sendable {
 
     deinit {
         let address = handle.withLock { $0 }
-        if let console = OpaquePointer(bitPattern: address) {
-            queue.async { hardcharger_console_close(console) }
+        if address != 0 {
+            queue.async { hardcharger_console_close(OpaquePointer(bitPattern: address)) }
         }
     }
 
@@ -53,7 +53,7 @@ final class ConsoleEngine: Sendable {
                     handle.withLock { $0 = UInt(bitPattern: console) }
                     continuation.resume()
                 } else {
-                    continuation.resume(throwing: OpenFailure(message: String(cString: error)))
+                    continuation.resume(throwing: OpenFailure(message: String(cBuffer: error)))
                 }
             }
         }

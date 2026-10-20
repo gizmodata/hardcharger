@@ -134,7 +134,7 @@ for sdk in iphoneos iphonesimulator; do
 done
 rm -rf "$BUILD/HardchargerServer.xcframework"
 xcodebuild -create-xcframework "${args[@]}" -output "$BUILD/HardchargerServer.xcframework" >/dev/null
-echo "built $BUILD/HardchargerServer.xcframework ($(ls "$BUILD/HardchargerServer.xcframework" | grep -v Info.plist | paste -sd' ' -))"
+echo "built $BUILD/HardchargerServer.xcframework"
 
 # The smoke test, in the simulator.
 # (CMake builds an iOS program as an app bundle.)

@@ -1,3 +1,4 @@
+import CryptoKit
 import UIKit
 import XCTest
 
@@ -116,6 +117,54 @@ final class HardchargerUITests: XCTestCase {
         XCTAssertEqual(app.switches["settings.startAutomatically"].value as? String, "0")
     }
 
+    func testShareOnLocalNetworkServesTLSOnTheLAN() throws {
+        app.launchArguments += ["-HCInitialTab", "server", "-HCInitialSheet", "share"]
+        app.launch()
+        waitForApp()
+        let toggle = app.switches["share.toggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 30))
+        toggle.switches.firstMatch.exists ? toggle.switches.firstMatch.tap() : toggle.tap()
+        // A warning first, then the server restarts on every interface with TLS.
+        app.buttons["Share"].firstMatch.tap()
+        let address = app.staticTexts["share.url"].firstMatch
+        XCTAssertTrue(address.waitForExistence(timeout: 30), "an address on the network")
+        let url = try XCTUnwrap(URL(string: address.label))
+        XCTAssertEqual(url.scheme, "https")
+        XCTAssertNotEqual(url.host(), "127.0.0.1")
+        let fingerprintText = app.staticTexts["share.fingerprint"].firstMatch
+        for _ in 0..<6 where !fingerprintText.exists { app.swipeUp() }
+        XCTAssertTrue(fingerprintText.waitForExistence(timeout: 5), "the certificate's fingerprint")
+        let fingerprint = fingerprintText.label
+        XCTAssertEqual(fingerprint.count, 95, "a SHA-256 fingerprint")
+        XCTAssertTrue(app.images.containing(NSPredicate(format: "label BEGINSWITH 'QR code for'")).firstMatch.exists)
+
+        // Another device on the network: TLS with exactly that certificate.
+        let pin = Pin(fingerprint: fingerprint)
+        let session = URLSession(configuration: .ephemeral, delegate: pin, delegateQueue: nil)
+        let answered = expectation(description: "health")
+        let status = Status()
+        session.dataTask(with: url.deletingLastPathComponent().appending(path: "warp/v1/health")) { _, response, _ in
+            status.code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            answered.fulfill()
+        }.resume()
+        wait(for: [answered], timeout: 20)
+        XCTAssertEqual(status.code, 200, "the server answers on its LAN address")
+        XCTAssertTrue(pin.matched, "with the certificate the app shows")
+
+        // This device's own web UI and console, now over TLS with the same certificate.
+        app.buttons["Done"].firstMatch.tap()
+        open("Web UI")
+        XCTAssertTrue(app.webViews.firstMatch.buttons["Run"].waitForExistence(timeout: 30), "the web UI over TLS")
+        open("Console")
+        let input = app.textViews["sqlconsole.input"]
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Statements end with'"))
+            .firstMatch.waitForExistence(timeout: 30), "the console connects over TLS")
+        input.tap()
+        input.typeText("SELECT 42 AS answer;\n")
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS '│      42 │'")).firstMatch
+            .waitForExistence(timeout: 30))
+    }
+
     func testServerStopsAndStartsAgain() throws {
         app.launchArguments += ["-HCInitialTab", "server"]
         app.launch()
@@ -127,5 +176,28 @@ final class HardchargerUITests: XCTestCase {
         XCTAssertTrue(start.waitForExistence(timeout: 30), "stopped")
         start.tap()
         XCTAssertTrue(app.buttons["server.stop"].firstMatch.waitForExistence(timeout: 30), "running again")
+    }
+}
+
+private final class Status: @unchecked Sendable {
+    var code = 0
+}
+
+/// Trusts exactly the certificate with this fingerprint (as a person comparing it would).
+private final class Pin: NSObject, URLSessionDelegate, @unchecked Sendable {
+    let fingerprint: String
+    var matched = false
+    init(fingerprint: String) { self.fingerprint = fingerprint }
+
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge) async
+        -> (URLSession.AuthChallengeDisposition, URLCredential?)
+    {
+        guard let trust = challenge.protectionSpace.serverTrust,
+              let leaf = (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first
+        else { return (.cancelAuthenticationChallenge, nil) }
+        let presented = SHA256.hash(data: SecCertificateCopyData(leaf) as Data)
+            .map { String(format: "%02X", $0) }.joined(separator: ":")
+        matched = presented == fingerprint
+        return matched ? (.useCredential, URLCredential(trust: trust)) : (.cancelAuthenticationChallenge, nil)
     }
 }

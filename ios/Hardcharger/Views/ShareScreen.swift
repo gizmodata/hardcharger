@@ -57,7 +57,7 @@ struct ShareScreen: View {
                     .foregroundStyle(.secondary)
             }
         }
-        ForEach(urls, id: \.self) { url in
+        if let url = urls.first {
             Section {
                 VStack(spacing: 14) {
                     QRCodeView(text: url.absoluteString)
@@ -84,6 +84,26 @@ struct ShareScreen: View {
                 .padding(.vertical, 8)
             } header: {
                 Text("Open on a computer on this network")
+            }
+        }
+        if urls.count > 1 {
+            Section("Also on") {
+                ForEach(urls.dropFirst(), id: \.self) { other in
+                    CopyableRow(title: "Address", value: other.absoluteString, monospaced: true)
+                }
+            }
+        }
+        if let first = urls.first, let link = server.connectLink(for: first) {
+            Section {
+                HStack(spacing: 16) {
+                    QRCodeView(text: link.absoluteString)
+                        .frame(width: 120, height: 120)
+                    Text("Scan with the camera of another iPhone or iPad that has Hardcharger: it adds this server, trusting this device's certificate.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Open in Hardcharger on another device")
             }
         }
         if let certificate = server.certificate {

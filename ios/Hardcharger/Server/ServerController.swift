@@ -39,6 +39,7 @@ final class ServerController {
     private let engine: EmbeddedServer
     private let defaults: UserDefaults
     private var token: AccessToken?
+    private let bonjour = BonjourAdvertiser()
     /// Bumped on every start: a stop report from an earlier server is ignored.
     private var generation = 0
 
@@ -238,6 +239,27 @@ final class ServerController {
     private func applyKeepAwake() {
         let sharing = phase == .running && runningSettings?.shareOnLocalNetwork == true
         UIApplication.shared.isIdleTimerDisabled = sharing && settings.keepAwakeWhileSharing
+        if sharing, let port {
+            bonjour.advertise(port: port, name: "Hardcharger on \(UIDevice.current.name)")
+        } else {
+            bonjour.stop()
+        }
+    }
+
+    /// A link that opens another device's Hardcharger app with this server, trusting its
+    /// certificate (the QR code on the Share screen).
+    func connectLink(for url: URL) -> URL? {
+        guard let certificate else { return nil }
+        var components = URLComponents()
+        components.scheme = "hardcharger"
+        components.host = "connect"
+        let origin = url.deletingLastPathComponent().absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        components.queryItems = [
+            URLQueryItem(name: "url", value: origin),
+            URLQueryItem(name: "fingerprint", value: certificate.fingerprint),
+            URLQueryItem(name: "name", value: UIDevice.current.name),
+        ]
+        return components.url
     }
 
     /// The database file's size, with its write-ahead log.

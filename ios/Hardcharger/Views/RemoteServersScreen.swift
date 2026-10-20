@@ -278,6 +278,13 @@ struct RemoteServerEditor: View {
             draft.serverVersion = found.serverVersion
             draft.browserProvider = found.browserSignInProvider
             if draft.name.isEmpty { draft.name = draft.endpoint.origin.host() ?? found.serverName }
+            // A pinned certificate (a link from another device's Share screen): keep the
+            // certificate itself too, for the console (OpenSSL trusts certificates, not
+            // fingerprints).
+            if let pinned = draft.endpoint.pinnedFingerprint, draft.trustedCertificatePEM == nil,
+               let der = client.presentedCertificate, SelfSignedCertificate.fingerprint(of: der) == pinned {
+                draft.trustedCertificatePEM = SelfSignedCertificate.pem(der, label: "CERTIFICATE")
+            }
             if draft.signIn == .password, !draft.username.isEmpty, !draft.password.isEmpty {
                 _ = try await client.signIn(username: draft.username, password: draft.password)
             }

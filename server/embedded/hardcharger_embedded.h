@@ -72,7 +72,8 @@ const char *hardcharger_embedded_duckdb_version(void); /* the DuckDB library */
 const char *hardcharger_embedded_warp_sql_version(void); /* the Warp SQL SDK */
 const char *hardcharger_embedded_web_ui_version(void); /* "" when no web UI is built in */
 
-/* THIRD_PARTY_NOTICES.md as built in (hardcharger-server --licenses). Static. */
+/* THIRD_PARTY_NOTICES.md as built in, then the web UI's notices (hardcharger-server
+ * --licenses). Static. */
 const char *hardcharger_embedded_third_party_notices(void);
 
 /*

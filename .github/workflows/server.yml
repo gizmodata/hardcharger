@@ -14,6 +14,10 @@
 #     compile-cache warm-up jobs build (never test) each platform whose compile cache main
 #     lacks (see `warm-linux-amd64`). Otherwise the same as a manual run.
 #
+# The iOS app (ios/): its simulator build and tests (`ios`) run only on a v* tag and on a
+# manual run with `ios` (macOS runners are expensive; never on a push or pull request); the
+# signed device build (`ios-archive`, an .ipa artifact, uploaded nowhere) only on a v* tag.
+#
 # Code signing (docs/releasing.md): on a v* tag always, and on a manual run with `sign`
 # (from a release/* branch: the `production` environment, which holds the signing secrets,
 # admits only those and v* tags), the macOS server and client are signed with GizmoData's
@@ -78,6 +82,10 @@ on:
         default: false
       sign:
         description: Sign (and notarize) the macOS and Windows artifacts, as a tag does (release/* branches only; nothing is published)
+        type: boolean
+        default: false
+      ios:
+        description: Also build the iOS app for the simulator and run its unit and UI tests (tags always do)
         type: boolean
         default: false
 
@@ -1386,6 +1394,105 @@ jobs:
   # tag the image and the release need both, so no tag publishes an unsigned binary, even if
   # a signing step were skipped by mistake. Each check is first shown to refuse a copy of a
   # signed binary with one byte changed.
+  # The iOS app on the simulator: the server cross-built for it (ios/scripts/
+  # build-server-ios.sh, with its smoke test inside a booted simulator), then the app's
+  # unit tests and UI tests (splash, web UI, console, settings, sharing). The dependency
+  # builds are cached on their recipes and the exact Xcode (a new Xcode rebuilds them cold).
+  ios:
+    name: iOS app (simulator build and tests)
+    needs: [changes, web-ui]
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.ios)
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - *build-checkout
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-ui
+          path: ui/release
+      - *build-submodule
+      - &ios-tools
+        name: Tools and toolchain
+        id: ios-toolchain
+        run: |
+          brew install ninja xcodegen
+          xcodebuild -version
+          echo "xcode=$(xcodebuild -version | tr '\n' ' ' | tr -s ' ')" >> "$GITHUB_OUTPUT"
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+      - &ios-deps-cache
+        name: iOS dependencies (cached)
+        uses: actions/cache@v5
+        with:
+          path: |
+            ios/build/iphonesimulator/deps/*-install
+            ios/build/iphoneos/deps/*-install
+          key: ios-deps-${{ steps.ios-toolchain.outputs.xcode }}-${{ hashFiles('server/scripts/build-deps.sh', 'server/scripts/deps-*.sh', 'server/scripts/build-extension-deps.sh', 'server/scripts/build-replxx.sh', 'server/scripts/patch-duckdb*.cmake', 'server/scripts/duckdb-extensions.cmake', 'third_party/warp-sql/cpp/scripts/*.sh', 'ios/cmake/ios.toolchain.cmake') }}
+      - name: Cross-build the server for the simulator, smoke-test it in one
+        run: ios/scripts/build-server-ios.sh iphonesimulator
+      - name: Unit and UI tests
+        run: |
+          ios/scripts/generate-project.sh
+          device=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          for runtime, devices in sorted(json.load(sys.stdin)["devices"].items(), reverse=True):
+              if "iOS" in runtime:
+                  for d in devices:
+                      if d["name"].startswith("iPhone"):
+                          print(d["udid"]); sys.exit()')
+          [ -n "$device" ] || { echo "no iPhone simulator"; exit 1; }
+          xcodebuild test -project ios/Hardcharger.xcodeproj -scheme Hardcharger \
+            -destination "id=$device" -derivedDataPath ios/build/DerivedData \
+            -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult"
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-test-results
+          path: ${{ runner.temp }}/ios-tests.xcresult
+          if-no-files-found: ignore
+
+  # The signed device build, on a v* tag only, after the simulator tests passed: an App
+  # Store-signed .ipa as this run's artifact. Nothing is uploaded to App Store Connect or
+  # TestFlight (Philip decides; the App Store Connect key in `production` is for that later,
+  # approved step). Manual signing with the distribution certificate and the "Hardcharger App
+  # Store" profile, in a keychain of the run's own that is deleted afterwards.
+  ios-archive:
+    name: iOS app (signed device build)
+    needs: [changes, web-ui, ios]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-26
+    environment: production
+    timeout-minutes: 180
+    steps:
+      - *build-checkout
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-ui
+          path: ui/release
+      - *build-submodule
+      - *ios-tools
+      - *ios-deps-cache
+      - name: Cross-build the server for devices
+        run: ios/scripts/build-server-ios.sh iphoneos
+      - name: Install the signing certificate and profile
+        env:
+          IOS_DIST_CERT_B64: ${{ secrets.IOS_DIST_CERT_B64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_B64: ${{ secrets.IOS_PROVISIONING_PROFILE_B64 }}
+        run: ios/scripts/ci-signing.sh install
+      - name: Archive and export the .ipa
+        run: |
+          # The build number grows with every run, so each upload of a version is new.
+          HARDCHARGER_IOS_BUILD_NUMBER="${{ github.run_number }}" ios/scripts/generate-project.sh
+          ios/scripts/ci-signing.sh archive "$RUNNER_TEMP/ios-export"
+      - name: Remove the signing keychain and profile
+        if: always()
+        run: ios/scripts/ci-signing.sh cleanup
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hardcharger-ios-ipa
+          path: ${{ runner.temp }}/ios-export/*.ipa
+          if-no-files-found: error
+
   verify-macos:
     name: verify signatures (macos-arm64)
     needs: [changes, build]

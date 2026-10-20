@@ -103,7 +103,7 @@ final class EmbeddedServer: Sendable {
             hardcharger_server_start(Int32(buffer.count), buffer.baseAddress, &server, &error, error.count)
         }
         guard status == 0, let server else {
-            throw StartFailure(status: status, message: String(cString: error))
+            throw StartFailure(status: status, message: String(cBuffer: error))
         }
         return (server, Int(hardcharger_server_port(server)))
     }
@@ -115,8 +115,15 @@ final class EmbeddedServer: Sendable {
             let status = hardcharger_server_wait(server, &error, error.count)
             handle.withLock { $0 = 0 }
             hardcharger_server_free(server)
-            let message = status == 0 ? nil : String(cString: error)
+            let message = status == 0 ? nil : String(cBuffer: error)
             onExit(Exit(status: status, message: message))
         }
+    }
+}
+
+extension String {
+    /// The NUL-terminated text a C function wrote into a buffer.
+    init(cBuffer buffer: [CChar]) {
+        self.init(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 }

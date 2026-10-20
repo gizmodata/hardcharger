@@ -50,12 +50,12 @@ final class WebConsole {
         webView.navigationDelegate = coordinator
         webView.uiDelegate = coordinator
         observations = [
-            webView.observe(\.estimatedProgress) { [weak self] view, _ in
-                let value = view.estimatedProgress
+            webView.observe(\.estimatedProgress, options: [.new]) { [weak self] _, change in
+                let value = change.newValue ?? 0
                 Task { @MainActor in self?.progress = value }
             },
-            webView.observe(\.isLoading) { [weak self] view, _ in
-                let value = view.isLoading
+            webView.observe(\.isLoading, options: [.new]) { [weak self] _, change in
+                let value = change.newValue ?? false
                 Task { @MainActor in self?.isLoading = value }
             },
         ]
