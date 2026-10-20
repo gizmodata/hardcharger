@@ -166,6 +166,14 @@ def test_head_is_get_without_the_body(server):
         assert head.headers["content-security-policy"] == CSP
 
 
+# Formats that are compressed already (an image, a WOFF2 font): gzip doesn't shrink them, so
+# the build embeds them as they are, as it does a file too small for gzip's own header and
+# trailer to pay off (a 70-byte re-export module). Every other file (HTML, scripts,
+# stylesheets, SVG, a TrueType font, WebAssembly) must come gzipped.
+ALREADY_COMPRESSED = (".png", ".webp", ".ico", ".woff2")
+TOO_SMALL_TO_GZIP = 256
+
+
 def test_gzip_and_identity_answers_are_the_files_bytes(server):
     """The UI is embedded gzipped: a client that takes gzip gets those bytes, any other the
     inflated file. Both are the file the UI build made: its SHA-256 is the identity ETag."""
@@ -188,8 +196,11 @@ def test_gzip_and_identity_answers_are_the_files_bytes(server):
             assert gz.headers["vary"] == plain.headers["vary"] == "Accept-Encoding", name
             assert gz.headers["etag"] == f'"{tag}-gzip"', name
         else:
+            assert name.endswith(ALREADY_COMPRESSED) or len(plain_body) < TOO_SMALL_TO_GZIP, \
+                f"{name} ({len(plain_body)} bytes) came without gzip"
             assert gz_body == plain_body, name  # stored as is: gzip wouldn't shrink it
-    assert compressed >= len(names) - 2, f"{compressed} of {len(names)} files came gzipped"
+    # The build's gzip decision is exercised both ways: files it compressed, and ones it kept.
+    assert compressed >= 1 and compressed < len(names), f"{compressed} of {len(names)} files came gzipped"
 
 
 def test_a_matching_etag_answers_304(server):
