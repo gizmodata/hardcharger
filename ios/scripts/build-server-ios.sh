@@ -7,7 +7,8 @@
 #   ios/build/HardchargerServer.xcframework   (the app links it; module HardchargerServer)
 #
 # The dependencies are server/scripts' own recipes at their pinned versions (OpenSSL,
-# Arrow, DuckDB with the same patches and built-in extensions, CRoaring, libpq, libcurl),
+# Arrow, DuckDB with the same patches and built-in extensions, CRoaring, libpq, libcurl,
+# replxx),
 # run with HARDCHARGER_IOS_SDK and ios/cmake/ios.toolchain.cmake, so the app runs the same
 # server as every other platform. Each platform's build is kept in ios/build/<sdk>/ and
 # only redone when its inputs change (the recipes' stamps, ninja).
@@ -67,7 +68,9 @@ for sdk in "$@"; do
     export CMAKE_TOOLCHAIN_FILE="$TOOLCHAIN"
     export HARDCHARGER_DEPS_DIR="$DEPS"
     export OPENSSL_ROOT_DIR="$DEPS/openssl-install"
-    "$ROOT/server/scripts/build-deps.sh" openssl
+    # replxx: the command-line client's line editor, which its library (the app's SQL
+    # console) links; the console itself never reads a terminal.
+    "$ROOT/server/scripts/build-deps.sh" openssl replxx
     # A stamp for Arrow too: build-arrow.sh reconfigures and reinstalls every time.
     if [ ! -f "$DEPS/arrow-install/.ios-arrow.stamp" ]; then
       "$ROOT/server/scripts/build-deps.sh" arrow

@@ -1,5 +1,9 @@
 // Ported from GizmoSQL 1.x src/client/command_processor.cpp.
 #include "command_processor.hpp"
+
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #include "sql_quoting.hpp"
 
 #include <algorithm>
@@ -712,12 +716,18 @@ CommandResult CommandProcessor::Process(const std::string& line) {
         if (i > 1) shell_cmd += " ";
         shell_cmd += args[i];
       }
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+      // iOS runs no other programs (system() is prohibited): the iOS app's console.
+      std::cerr << ErrorStyle() << "Error: .shell is not available on iOS" << ErrorStyleReset() << std::endl;
+      return CommandResult::ERROR;
+#else
 #ifdef _WIN32
       // cmd.exe /c drops a command's first and last quote when it has more than two:
       // quoting the whole command keeps the user's own quotes.
       shell_cmd = "\"" + shell_cmd + "\"";
 #endif
       std::system(shell_cmd.c_str());
+#endif
     }
     return CommandResult::OK;
   }

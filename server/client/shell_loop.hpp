@@ -14,4 +14,7 @@ int RunShellLoop(WarpConnection& conn, CommandProcessor& cmd_proc,
 int RunNonInteractive(WarpConnection& conn, CommandProcessor& cmd_proc,
                       SqlProcessor& sql_proc, ClientConfig& config);
 
+// Sets config.main_prompt to the session's current catalog and schema (dynamic_prompt).
+void RefreshDynamicPrompt(WarpConnection& conn, ClientConfig& config);
+
 }  // namespace hardcharger::client

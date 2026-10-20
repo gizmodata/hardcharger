@@ -224,17 +224,45 @@ function(hardcharger_rpath target)
   endif()
 endfunction()
 
+# The command-line client's library (client/), on the Warp SQL client library, with
+# replxx for line editing (built by scripts/build-replxx.sh at its pinned release).
+set(HARDCHARGER_REPLXX_PREFIX "${HARDCHARGER_DEPS}/replxx-install" CACHE PATH "replxx install prefix")
+find_package(Threads REQUIRED)  # replxx's config names Threads::Threads
+find_package(replxx CONFIG REQUIRED PATHS "${HARDCHARGER_REPLXX_PREFIX}" NO_DEFAULT_PATH)
+add_library(hardcharger_client STATIC
+  client/client_config.cc
+  client/command_processor.cc
+  client/oauth_flow.cc
+  client/output_renderer.cc
+  client/pager.cc
+  client/password_prompt.cc
+  client/platform.cc
+  client/plain_http_probe.cc
+  client/shell_completer.cc
+  client/shell_loop.cc
+  client/sql_processor.cc
+  client/syntax_highlighter.cc
+  client/warp_connection.cc)
+target_include_directories(hardcharger_client PUBLIC client "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(hardcharger_client PUBLIC warpsql_client replxx::replxx)
+target_compile_options(hardcharger_client PRIVATE ${HARDCHARGER_WARNINGS})
+if(WIN32)
+  # windows.h without GDI: its ERROR macro would replace CommandResult::ERROR.
+  target_compile_definitions(hardcharger_client PUBLIC NOGDI)
+endif()
 if(HARDCHARGER_EMBEDDED)
   # The server for an app's process: main.cc as hardcharger_server_main, with the hooks of
   # src/embedding.hpp, behind embedded/hardcharger_embedded.h. The smoke test starts,
   # uses and stops a server through that API, twice, as an app would.
   file(STRINGS ../third_party/warp-sql/cpp/CMakeLists.txt _warpsql_project REGEX "^project\\(warpsql VERSION ")
   string(REGEX REPLACE "^project\\(warpsql VERSION ([0-9.]+).*" "\\1" HARDCHARGER_WARP_SQL_VERSION "${_warpsql_project}")
-  add_library(hardcharger_embedded STATIC src/main.cc src/embedding.cc)
+  # With the console (embedded/console.cc): the `hardcharger` client's own statement
+  # splitting, dot commands and output formatting, for an app's SQL console.
+  add_library(hardcharger_embedded STATIC src/main.cc src/embedding.cc embedded/console.cc)
   target_compile_definitions(hardcharger_embedded PRIVATE HARDCHARGER_EMBEDDED main=hardcharger_server_main
                              HARDCHARGER_WARP_SQL_VERSION="${HARDCHARGER_WARP_SQL_VERSION}")
   target_include_directories(hardcharger_embedded PUBLIC embedded)
-  target_link_libraries(hardcharger_embedded PUBLIC hardcharger_core hardcharger_notices)
+  target_link_libraries(hardcharger_embedded PUBLIC hardcharger_core hardcharger_notices hardcharger_client)
   target_compile_options(hardcharger_embedded PRIVATE ${HARDCHARGER_WARNINGS})
   if(HARDCHARGER_STATIC)
     target_compile_definitions(hardcharger_embedded PRIVATE HARDCHARGER_STATIC_DUCKDB)
@@ -290,32 +318,7 @@ if(MSVC)
   target_link_options(hardcharger-unit-tests PRIVATE /DEBUG /OPT:REF /OPT:ICF)
 endif()
 
-# The command-line client, `hardcharger` (client/), on the Warp SQL client library, with
-# replxx for line editing (built by scripts/build-replxx.sh at its pinned release).
-set(HARDCHARGER_REPLXX_PREFIX "${HARDCHARGER_DEPS}/replxx-install" CACHE PATH "replxx install prefix")
-find_package(Threads REQUIRED)  # replxx's config names Threads::Threads
-find_package(replxx CONFIG REQUIRED PATHS "${HARDCHARGER_REPLXX_PREFIX}" NO_DEFAULT_PATH)
-add_library(hardcharger_client STATIC
-  client/client_config.cc
-  client/command_processor.cc
-  client/oauth_flow.cc
-  client/output_renderer.cc
-  client/pager.cc
-  client/password_prompt.cc
-  client/platform.cc
-  client/plain_http_probe.cc
-  client/shell_completer.cc
-  client/shell_loop.cc
-  client/sql_processor.cc
-  client/syntax_highlighter.cc
-  client/warp_connection.cc)
-target_include_directories(hardcharger_client PUBLIC client "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(hardcharger_client PUBLIC warpsql_client replxx::replxx)
-target_compile_options(hardcharger_client PRIVATE ${HARDCHARGER_WARNINGS})
-if(WIN32)
-  # windows.h without GDI: its ERROR macro would replace CommandResult::ERROR.
-  target_compile_definitions(hardcharger_client PUBLIC NOGDI)
-endif()
+# The command-line client, `hardcharger`, from hardcharger_client (defined above).
 add_executable(hardcharger-client client/main.cc)
 set_target_properties(hardcharger-client PROPERTIES OUTPUT_NAME hardcharger)
 if(WIN32)

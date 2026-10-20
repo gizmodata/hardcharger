@@ -1,0 +1,131 @@
+import UIKit
+import XCTest
+
+/// The app as a person uses it: the splash, the web UI signed in by itself running a query,
+/// the SQL console, and settings that stick.
+@MainActor
+final class HardchargerUITests: XCTestCase {
+    private var app: XCUIApplication!
+
+    override func setUp() async throws {
+        continueAfterFailure = false
+        app = XCUIApplication()
+        // A fresh app on a free port (a Mac running Hardcharger may hold 31337).
+        app.launchArguments = ["-HCResetState", "YES", "-HCPort", "0", "-HCSplashMinimum", "2"]
+    }
+
+    override func tearDown() async throws {
+        app.terminate()
+    }
+
+    /// Waits until the splash is gone (the app is on screen).
+    private func waitForApp() {
+        let gone = NSPredicate(format: "exists == false")
+        _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: gone, object: app.descendants(matching: .any)["splash"].firstMatch)],
+                             timeout: 30)
+    }
+
+    private func open(_ tab: String) {
+        let button = app.tabBars.buttons[tab].exists ? app.tabBars.buttons[tab] : app.buttons[tab]
+        XCTAssertTrue(button.waitForExistence(timeout: 10), "no \(tab) tab")
+        button.tap()
+    }
+
+    func testSplashThenWebUIRunsSelect42() throws {
+        app.launchArguments = ["-HCResetState", "YES", "-HCPort", "0", "-HCSplashMinimum", "4", "-HCInitialTab", "web"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["splash"].firstMatch.waitForExistence(timeout: 5),
+                      "the splash shows first")
+        XCTAssertTrue(app.images["Hardcharger™"].firstMatch.exists, "with the bull and the lettering")
+        XCTAssertTrue(app.descendants(matching: .any)["by GizmoData™"].firstMatch.exists, "and the GizmoData mark")
+
+        let web = app.webViews.firstMatch
+        XCTAssertTrue(web.waitForExistence(timeout: 30), "the web UI loads")
+        // Signed in by the app: the editor's Run button, not the sign-in form.
+        let run = web.buttons["Run"]
+        XCTAssertTrue(run.waitForExistence(timeout: 30), "the web UI opens signed in")
+        XCTAssertFalse(web.secureTextFields.firstMatch.exists, "no password form")
+
+        // Replace the editor's text with SELECT 42 and run it. (Monaco's own input is a
+        // hidden textarea; a tap on its visible line focuses it.)
+        let editor = web.textViews["SQL editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        // A tap below the text puts the cursor on the empty last line and opens the keyboard
+        // (WebConsole.editorFocusScript); Run runs the statement at the cursor.
+        let frame = editor.frame
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.minY + 120)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "the keyboard opens for the editor")
+        app.typeText("SELECT 42 AS answer")
+        let typed = NSPredicate(format: "value CONTAINS 'SELECT 42 AS answer'")
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: typed, object: editor)], timeout: 10),
+                       .completed, "the editor holds SELECT 42")
+        run.tap()
+        let cell = web.descendants(matching: .any).matching(NSPredicate(format: "label == '42'")).firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 30), "the result shows 42")
+        XCTAssertTrue(web.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'answer'"))
+            .firstMatch.exists, "under its column, answer")
+    }
+
+    func testConsoleRunsSelect42AndTables() throws {
+        app.launchArguments += ["-HCInitialTab", "console"]
+        app.launch()
+        waitForApp()
+        let input = app.textViews["sqlconsole.input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Statements end with'"))
+            .firstMatch.waitForExistence(timeout: 30), "connected")
+        input.tap()
+
+        // Return on an open statement adds a line; the ';' runs it.
+        input.typeText("SELECT 42\n")
+        input.typeText("AS answer;\n")
+        let answer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS '│      42 │'")).firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 30), "the table shows 42")
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS '│ answer  │'")).firstMatch.exists)
+        XCTAssertEqual((input.value as? String) ?? "", "", "the input is cleared after it runs")
+
+        input.typeText("CREATE TABLE people AS SELECT 1 AS id, 'Ada' AS name;\n")
+        XCTAssertTrue(app.staticTexts["OK, 1 row affected"].waitForExistence(timeout: 30))
+        input.typeText(".tables\n")
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'people'")).firstMatch
+            .waitForExistence(timeout: 30), ".tables lists people")
+    }
+
+    func testSettingsTogglesStick() throws {
+        app.launchArguments += ["-HCInitialTab", "settings"]
+        app.launch()
+        waitForApp()
+        let printQueries = app.switches["settings.printQueries"]
+        XCTAssertTrue(printQueries.waitForExistence(timeout: 30))
+        XCTAssertEqual(printQueries.value as? String, "1")
+        printQueries.switches.firstMatch.exists ? printQueries.switches.firstMatch.tap() : printQueries.tap()
+        XCTAssertEqual(printQueries.value as? String, "0")
+        // A setting the running server started with: Settings offers the restart.
+        XCTAssertTrue(app.buttons["settings.restart"].waitForExistence(timeout: 10))
+
+        let autoStart = app.switches["settings.startAutomatically"]
+        autoStart.switches.firstMatch.exists ? autoStart.switches.firstMatch.tap() : autoStart.tap()
+        XCTAssertEqual(autoStart.value as? String, "0")
+
+        // Again, without the reset: both stuck.
+        app.terminate()
+        app.launchArguments = ["-HCPort", "0", "-HCSplashMinimum", "0.2", "-HCInitialTab", "settings"]
+        app.launch()
+        XCTAssertTrue(app.switches["settings.printQueries"].waitForExistence(timeout: 30))
+        XCTAssertEqual(app.switches["settings.printQueries"].value as? String, "0")
+        XCTAssertEqual(app.switches["settings.startAutomatically"].value as? String, "0")
+    }
+
+    func testServerStopsAndStartsAgain() throws {
+        app.launchArguments += ["-HCInitialTab", "server"]
+        app.launch()
+        waitForApp()
+        let stop = app.buttons["server.stop"].firstMatch
+        XCTAssertTrue(stop.waitForExistence(timeout: 30), "running")
+        stop.tap()
+        let start = app.buttons["server.start"].firstMatch
+        XCTAssertTrue(start.waitForExistence(timeout: 30), "stopped")
+        start.tap()
+        XCTAssertTrue(app.buttons["server.stop"].firstMatch.waitForExistence(timeout: 30), "running again")
+    }
+}

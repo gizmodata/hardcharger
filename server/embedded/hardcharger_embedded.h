@@ -75,6 +75,60 @@ const char *hardcharger_embedded_web_ui_version(void); /* "" when no web UI is b
 /* THIRD_PARTY_NOTICES.md as built in (hardcharger-server --licenses). Static. */
 const char *hardcharger_embedded_third_party_notices(void);
 
+/*
+ * The console: the `hardcharger` command-line client inside an app, for a SQL console
+ * screen. The same statement splitting (a statement ends at a ';' outside strings, quoted
+ * names, comments and dollar quotes), dot commands (.help, .tables, .schema, .mode, .timer,
+ * .maxrows, ...) and output formatting as `hardcharger -c`, against any Warp SQL server.
+ * A console is used by one thread at a time, except hardcharger_console_cancel.
+ */
+typedef struct hardcharger_console hardcharger_console;
+
+typedef struct hardcharger_console_options {
+  const char *host;
+  int port;
+  int tls;                   /* 1: https */
+  const char *tls_roots;     /* PEM file of the certificates to trust (a self-signed
+                                server's own); NULL: the system's CA bundle */
+  const char *username;      /* with password: the password grant */
+  const char *password;
+  const char *access_token;  /* instead: a token the app already has */
+  int max_width;             /* columns a table may use; 0: no limit */
+  int max_rows;              /* rows a result shows (.maxrows); 0: all of them */
+} hardcharger_console_options;
+
+/* Connects (signs in, opens a session). Returns 0, or nonzero with the reason in error. */
+int hardcharger_console_open(const hardcharger_console_options *options, hardcharger_console **console,
+                             char *error, size_t error_size);
+
+/*
+ * Runs `input` as `hardcharger -c` would: dot commands, then each complete statement in
+ * order, stopping at the first error (with more than one statement, each is echoed before
+ * its output, so the transcript says which one failed); a last statement without ';' runs
+ * too. Returns what the client wrote (results, messages, errors), NUL-terminated; free it
+ * with hardcharger_console_free_text. *exit_requested (may be NULL) is set to 1 after .exit
+ * or .quit.
+ */
+char *hardcharger_console_run(hardcharger_console *console, const char *input, int *exit_requested);
+
+/* Cancels the statement running in hardcharger_console_run (from another thread). */
+void hardcharger_console_cancel(hardcharger_console *console);
+
+/* The prompts: "catalog.schema> " and its continuation ("   -> "). Free with
+ * hardcharger_console_free_text. */
+char *hardcharger_console_prompt(hardcharger_console *console, int continuation);
+
+/*
+ * Whether `input` is ready to run as the client reads it: every statement in it ends with
+ * a ';' (outside strings, quoted names, comments and dollar quotes), or it is a dot
+ * command; 0 while a statement is still open (or there is nothing but whitespace and
+ * comments). The statements it holds go to *statements (may be NULL).
+ */
+int hardcharger_console_input_complete(const char *input, int *statements);
+
+void hardcharger_console_close(hardcharger_console *console);
+void hardcharger_console_free_text(char *text);
+
 #ifdef __cplusplus
 }
 #endif

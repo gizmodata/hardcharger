@@ -46,6 +46,60 @@ int64_t Answer(const std::shared_ptr<arrow::Table>& table) {
   return std::stoll(scalar->ToString());
 }
 
+std::string Run(hardcharger_console* console, const std::string& input) {
+  char* text = hardcharger_console_run(console, input.c_str(), nullptr);
+  std::string out = text ? text : "";
+  hardcharger_console_free_text(text);
+  std::cout << "      > " << input << "\n" << out;
+  return out;
+}
+
+bool Complete(const std::string& input, int expected_statements = -1) {
+  int statements = 0;
+  const bool complete = hardcharger_console_input_complete(input.c_str(), &statements) == 1;
+  return complete && (expected_statements < 0 || statements == expected_statements);
+}
+
+// The console (the `hardcharger` client in the app): when input is ready, and what it prints.
+void ConsoleChecks(int port, const std::string& password) {
+  Check(!Complete("SELECT\n  42\n  AS answer"), "console: a 3-line SELECT without ';' waits");
+  Check(Complete("SELECT\n  42\n  AS answer;", 1), "console: ... and is ready at the ';'");
+  Check(!Complete("SELECT 'a;b'"), "console: a ';' in a string ends nothing");
+  Check(!Complete("SELECT \"a;b\""), "console: nor in a quoted name");
+  Check(!Complete("SELECT 1 -- ;"), "console: nor in a line comment");
+  Check(!Complete("SELECT /* ; */ 1"), "console: nor in a block comment");
+  Check(!Complete("CREATE MACRO m() AS $$ SELECT 1; $$"), "console: nor in a dollar quote");
+  Check(Complete("SELECT 1; SELECT 2;", 2), "console: two statements in one input");
+  Check(Complete(".tables", 0), "console: a dot command needs no ';'");
+  Check(!Complete("   "), "console: whitespace is nothing to run");
+
+  hardcharger_console_options options{};
+  options.host = "127.0.0.1";
+  options.port = port;
+  options.username = "hardcharger";
+  options.password = password.c_str();
+  hardcharger_console* console = nullptr;
+  char error[512] = {};
+  Check(hardcharger_console_open(&options, &console, error, sizeof(error)) == 0, std::string("console: opens ") + error);
+  if (!console) return;
+  char* prompt = hardcharger_console_prompt(console, 0);
+  Check(std::string(prompt) == "smoke.main> ", std::string("console: the prompt names catalog and schema (") + prompt + ")");
+  hardcharger_console_free_text(prompt);
+  const std::string answer = Run(console, "SELECT 42 AS answer;");
+  Check(answer.find("answer") != std::string::npos && answer.find("42") != std::string::npos &&
+            answer.find("1 row") != std::string::npos,
+        "console: SELECT 42 AS answer renders a table and its footer");
+  Check(Run(console, ".tables").find("people") != std::string::npos, "console: .tables lists people");
+  const std::string two = Run(console, "SELECT 1 AS one;\nSELECT 'x' AS two;");
+  Check(two.find("one") != std::string::npos && two.find("two") != std::string::npos, "console: two statements both run");
+  const std::string failing = Run(console, "SELECT 1 AS first;\nSELECT * FROM nowhere;\nSELECT 3 AS third;");
+  Check(failing.find("Error") != std::string::npos && failing.find("third") == std::string::npos &&
+            failing.find("SELECT * FROM nowhere;") != std::string::npos,
+        "console: stops at the failing statement, which the echo names");
+  Check(Run(console, ".mode csv\nSELECT 42 AS answer;").find("answer\n42") != std::string::npos, "console: .mode csv");
+  hardcharger_console_close(console);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -107,6 +161,8 @@ int main(int argc, char** argv) {
     } catch (const std::exception& e) {
       Check(false, std::string("queries: ") + e.what());
     }
+
+    if (round == 1) ConsoleChecks(port, password);
 
     hardcharger_server_request_stop(server, 0);
     char error[256] = {};

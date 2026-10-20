@@ -1,0 +1,106 @@
+# The Hardcharger iOS/iPadOS app (xcodegen). ios/scripts/generate-project.sh writes
+# build/Version.xcconfig from the server's version, then runs xcodegen; the server library
+# comes from ios/scripts/build-server-ios.sh (build/HardchargerServer.xcframework).
+name: Hardcharger
+options:
+  bundleIdPrefix: com.gizmodata
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+configFiles:
+  Debug: build/Version.xcconfig
+  Release: build/Version.xcconfig
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    DEVELOPMENT_TEAM: XYB42X6NFX
+    CLANG_CXX_LANGUAGE_STANDARD: c++20
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+    DEAD_CODE_STRIPPING: YES
+
+targets:
+  Hardcharger:
+    type: application
+    platform: iOS
+    sources:
+      - path: Hardcharger
+    dependencies:
+      # A static library: linked, not embedded.
+      - framework: build/HardchargerServer.xcframework
+        embed: false
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: CoreFoundation.framework
+      - sdk: WebKit.framework
+      - sdk: AuthenticationServices.framework
+      - sdk: libc++.tbd
+      - sdk: libz.tbd
+    settings:
+      base:
+        PRODUCT_NAME: Hardcharger
+        PRODUCT_BUNDLE_IDENTIFIER: com.gizmodata.hardcharger
+        INFOPLIST_FILE: Hardcharger/Resources/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
+        # DuckDB's archives hold members of the same name; the server library is one merged
+        # archive, so nothing is listed twice.
+        OTHER_LDFLAGS: ["$(inherited)", "-Wl,-no_warn_duplicate_libraries"]
+        ENABLE_PREVIEWS: YES
+
+  HardchargerTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: HardchargerTests
+    dependencies:
+      - target: Hardcharger
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gizmodata.hardcharger.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Hardcharger.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Hardcharger"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+  HardchargerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: HardchargerUITests
+    dependencies:
+      - target: Hardcharger
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gizmodata.hardcharger.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Hardcharger
+
+schemes:
+  Hardcharger:
+    build:
+      targets:
+        Hardcharger: all
+        HardchargerTests: [test]
+        HardchargerUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: false
+      targets:
+        - name: HardchargerTests
+        - name: HardchargerUITests
+    archive:
+      config: Release

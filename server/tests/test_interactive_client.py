@@ -35,8 +35,9 @@ def results(module_launcher):
 
 
 def test_every_case_is_ported():
-    # 1.x's 115, plus the two shutdown cases with SIGINT ignored (a script's background job).
-    assert len(CASES) == 117, CASES
+    # 1.x's 115, plus the two shutdown cases with SIGINT ignored (a script's background job)
+    # and two of dollar-quoted strings (SqlProcessorDollar*).
+    assert len(CASES) == 119, CASES
 
 
 def test_every_case_ran(results):

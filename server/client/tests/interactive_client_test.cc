@@ -820,6 +820,27 @@ TEST_F(InteractiveClientFixture, SqlProcessorMultiLineBlockComment) {
   ASSERT_TRUE(proc.AccumulateLine(";"));
 }
 
+TEST_F(InteractiveClientFixture, SqlProcessorDollarQuotedSemicolon) {
+  // A function body in $$...$$ or $tag$...$tag$ keeps its semicolons.
+  SqlProcessor proc;
+  ASSERT_FALSE(proc.AccumulateLine("CREATE MACRO m() AS $$ SELECT 1; SELECT 2;"));
+  ASSERT_TRUE(proc.IsAccumulating());
+  ASSERT_TRUE(proc.AccumulateLine("$$;"));
+  EXPECT_EQ(proc.GetStatement(), "CREATE MACRO m() AS $$ SELECT 1; SELECT 2;\n$$");
+
+  SqlProcessor tagged;
+  ASSERT_FALSE(tagged.AccumulateLine("SELECT $body$ a; $$ b; $body$"));
+  ASSERT_TRUE(tagged.AccumulateLine(";"));
+  EXPECT_EQ(tagged.GetStatement(), "SELECT $body$ a; $$ b; $body$");
+}
+
+TEST_F(InteractiveClientFixture, SqlProcessorDollarParameterIsNoQuote) {
+  // $1 is a parameter and a$b$ part of a name, not the start of a dollar quote.
+  SqlProcessor proc;
+  ASSERT_TRUE(proc.AccumulateLine("SELECT $1, a$b$ FROM t;"));
+  EXPECT_EQ(proc.GetStatement(), "SELECT $1, a$b$ FROM t");
+}
+
 TEST_F(InteractiveClientFixture, SqlProcessorReset) {
   SqlProcessor proc;
   proc.AccumulateLine("SELECT");
