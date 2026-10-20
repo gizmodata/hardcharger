@@ -172,10 +172,10 @@ def test_side_effect_statements_execute_without_fetching(session):
     assert session.scalar(sql="SELECT current_setting('search_path')") != "eager_side_effects"
 
 
-# Serial: it streams 20 million rows while a second execution waits behind them, and on
-# a runner shared with other tests' servers (2 CPUs, six pytest-xdist workers) the wait
-# outlasted the server's synchronous answer, so the second came back as a statement
-# document instead of a stream.
+# Serial: it streams 20 million rows while a second execution waits behind them. When
+# that wait outlasts the server's synchronous answer (60 s at most, spec §6.1; ASan CI
+# took 112 s), the second comes back as a 200 with its statement document, still queued,
+# instead of a stream; a client follows it (Session.table_of), as the next test checks.
 @pytest.mark.serial
 def test_rebind_while_streaming_waits_its_turn(session):
     # 20 million rows (160 MB): more than the server buffers ahead of a reader that has
@@ -209,7 +209,36 @@ def test_rebind_while_streaming_waits_its_turn(session):
     worker.join(timeout=60)
     assert rows_first == 20000000
     assert second["response"].status_code == 200, second["response"].text
-    assert read_table(content=second["response"].content).num_rows == 3
+    assert session.table_of(response=second["response"]).num_rows == 3
+
+
+@pytest.mark.serial
+def test_a_streamed_execution_still_waiting_its_turn_answers_its_document(session):
+    """The slow case of the test above, made certain with Prefer: wait=1: an execution
+    whose outcome isn't known when the server's wait ends answers 200 with its statement
+    document (queued), not an Arrow stream, and that statement then runs and its result
+    can be read (once: it isn't retained)."""
+    session.execute(sql="CREATE OR REPLACE TABLE busy_document AS SELECT range AS v FROM range(20000000)")
+    prepared = session.prepare(sql="SELECT v FROM busy_document WHERE v >= ?")
+    url = f"{session.client.base_url}{session.url}/prepared/{prepared['prepared_id']}/execute"
+    headers = session.headers(**{"Accept": ARROW_STREAM})
+    with httpx.Client(timeout=120) as first_client:
+        with first_client.stream("POST", url, headers=headers, json={"parameters": [0]}) as stream:
+            chunks = stream.iter_bytes()
+            body = next(chunks)
+            with httpx.Client(timeout=120) as c:
+                second = c.post(url=url, headers={**headers, "Prefer": "wait=1"}, json={"parameters": [19999997]})
+            assert second.status_code == 200, second.text
+            assert second.headers["content-type"].startswith("application/json"), second.headers
+            doc = second.json()
+            assert doc["state"] == "queued" and doc["result"] is None, doc
+            assert second.headers["warp-statement-id"] == doc["statement_id"]
+            for chunk in chunks:
+                body += chunk
+        assert read_table(content=body).num_rows == 20000000
+    assert session.table_of(response=second).num_rows == 3
+    again = session.result(statement_id=doc["statement_id"])
+    assert again.status_code == 409 and again.json()["code"] == "result_not_resumable", again.text
 
 
 def test_sequential_reexecute_after_cancelled_stream_succeeds(session):

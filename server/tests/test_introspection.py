@@ -100,8 +100,12 @@ def wait_until(predicate, timeout: float = 10 * TIMEOUT_SCALE, interval: float =
     raise AssertionError("timed out waiting")
 
 
-def wait_state(viewer, session_id: str, state: str) -> dict:
-    return wait_until(lambda: (row := row_of(viewer=viewer, session_id=session_id)) and row["state"] == state and row)
+def wait_state(viewer, session_id: str, state: str, shows_statement: bool = False) -> dict:
+    """The session's row once it is in `state`. With shows_statement, once its statement
+    text shows too: Warp SQL reports a statement queued (accepted, not yet on the engine)
+    and then running (parsed and checked first) before the engine has recorded its text."""
+    return wait_until(lambda: (row := row_of(viewer=viewer, session_id=session_id)) and row["state"] == state
+                      and (row["statement"] is not None or not shows_statement) and row)
 
 
 def in_background(target) -> tuple[threading.Thread, dict]:
@@ -300,7 +304,7 @@ def test_the_state_follows_the_transaction(server):
 def test_running_then_streaming(server):
     admin, victim = server.admin(), server.admin()
     thread, _ = in_background(target=lambda: victim.error(sql=CPU_BOUND))
-    row = wait_state(viewer=admin, session_id=victim.id, state="running")
+    row = wait_state(viewer=admin, session_id=victim.id, state="running", shows_statement=True)
     assert row["statement"] == CPU_BOUND and row["statement_id"].startswith("q_"), row
     assert row["statement_started_at"] is not None and row["queued_since"] is None, row
     assert cancel(admin=admin, session_id=victim.id) is True
@@ -327,7 +331,9 @@ def test_a_queued_statement_shows_its_text_as_the_log_does(launcher):
     wait_state(viewer=admin, session_id=holder.id, state="running")
     secret = "CREATE SECRET queued_s3 (TYPE s3, KEY_ID 'AKIAQUEUEDEXAMPLE', SECRET 'hunter2-queued-secret')"
     queued, outcome = in_background(target=lambda: victim.execute(sql=secret))
-    row = wait_state(viewer=admin, session_id=victim.id, state="queued")
+    # 'queued' twice over: first in Warp SQL's sense (accepted, not yet on the engine), with
+    # no text yet, then in the statement queue, with its text: this test is about the second.
+    row = wait_state(viewer=admin, session_id=victim.id, state="queued", shows_statement=True)
     assert row["queued_since"] is not None and row["statement_started_at"] is None, row
     assert "hunter2-queued-secret" not in json.dumps(row, default=str) and "AKIAQUEUEDEXAMPLE" not in row["statement"]
     logged = [line.split(" sql=", 1)[1] for line in queued_server.log().splitlines()

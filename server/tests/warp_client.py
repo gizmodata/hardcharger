@@ -16,12 +16,21 @@ ARROW_STREAM = "application/vnd.apache.arrow.stream"
 TERMINAL = ("succeeded", "failed", "cancelled")
 
 
+def _arrow_body(content: bytes) -> io.BytesIO:
+    # A JSON body (a statement or problem document) read as Arrow fails deep in pyarrow
+    # with a meaningless length ("Expected to read 1953702523 metadata bytes": '{"st');
+    # say what it was instead.
+    if content[:1] == b"{":
+        raise WarpError(f"expected an Arrow stream, got JSON: {content[:500].decode(errors='replace')}")
+    return io.BytesIO(initial_bytes=content)
+
+
 def read_table(content: bytes) -> pa.Table:
-    return ipc.open_stream(source=io.BytesIO(initial_bytes=content)).read_all()
+    return ipc.open_stream(source=_arrow_body(content=content)).read_all()
 
 
 def read_batches(content: bytes) -> list[pa.RecordBatch]:
-    return list(ipc.open_stream(source=io.BytesIO(initial_bytes=content)))
+    return list(ipc.open_stream(source=_arrow_body(content=content)))
 
 
 def ipc_bytes(table: pa.Table) -> bytes:
@@ -122,17 +131,30 @@ class Session:
         """Runs SQL on the streamed path and returns its rows; raises WarpError with the
         problem document's detail when the statement fails."""
         response = self.submit(sql=sql, parameters=parameters, arrow=True, headers=headers)
-        if response.status_code != 200 or not response.headers.get("content-type", "").startswith(ARROW_STREAM):
-            if response.headers.get("content-type", "").startswith("application/json"):
-                doc = response.json()
-                if doc.get("state") == "succeeded":
-                    raise WarpError(f"statement returned no rows: {doc}")
-                if "statement_id" in doc and doc.get("state") not in TERMINAL:
-                    doc = self.wait_done(statement_id=doc["statement_id"])
-                    if doc["state"] == "succeeded":
-                        return read_table(content=self.result(statement_id=doc["statement_id"]).content)
-            raise WarpError(f"{response.status_code}: {response.text}")
-        return read_table(content=response.content)
+        return self.table_of(response=response)
+
+    def table_of(self, response: httpx.Response) -> pa.Table:
+        """The rows of a streamed-path answer (spec §6.1, §7.2), read as a conforming client
+        reads it, by its status and Content-Type: an Arrow body is the result. A 200 with
+        the JSON document of a statement that hasn't finished (the server's wait for an
+        outcome ran out: Prefer: wait, else its 60 s cap, e.g. while the statement waited
+        its turn behind an open result stream) is followed to the statement's end, and its
+        result read. Raises WarpError for anything else (no rows, a failure, an error)."""
+        if response.status_code == 200 and response.headers.get("content-type", "").startswith(ARROW_STREAM):
+            return read_table(content=response.content)
+        if response.status_code == 200 and response.headers.get("content-type", "").startswith("application/json"):
+            doc = response.json()
+            if doc.get("state") == "succeeded":
+                raise WarpError(f"statement returned no rows: {doc}")
+            if "statement_id" in doc and doc.get("state") not in TERMINAL:
+                doc = self.wait_done(statement_id=doc["statement_id"])
+                if doc["state"] == "succeeded":
+                    result = self.result(statement_id=doc["statement_id"])
+                    if result.status_code != 200:
+                        raise WarpError(f"result of {doc['statement_id']}: {result.status_code}: {result.text}")
+                    return read_table(content=result.content)
+                raise WarpError(f"statement {doc['state']}: {doc}")
+        raise WarpError(f"{response.status_code}: {response.text}")
 
     def rows(self, sql: str, parameters=None) -> list[dict]:
         return self.query(sql=sql, parameters=parameters).to_pylist()
