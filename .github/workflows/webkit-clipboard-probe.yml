@@ -24,6 +24,10 @@ jobs:
       - run: xvfb-run --auto-servernum node scripts/webkit-clipboard-probe.mjs
   ui:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [webkit, chromium]
     services:
       postgres:
         image: postgres:17-alpine
@@ -35,7 +39,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U hardcharger" --health-interval 2s --health-timeout 5s --health-retries 30
     env:
-      HARDCHARGER_UI_TEST_EMBEDDED: "1"
+      HARDCHARGER_UI_TEST_EMBEDDED: "0"
       HARDCHARGER_UI_TEST_RBAC_STORE_URI: postgresql://hardcharger:hardcharger@127.0.0.1:55460/hardcharger
     defaults:
       run:
@@ -48,6 +52,7 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: npm ci
+      - run: npm run typecheck && npm run build
       - uses: actions/download-artifact@v8
         with:
           name: hardcharger-linux-amd64
@@ -58,12 +63,12 @@ jobs:
         run: |
           tar -C "$RUNNER_TEMP/server" -xzf "$RUNNER_TEMP/server/hardcharger-linux-amd64.tar.gz"
           echo "HARDCHARGER_UI_TEST_SERVER_BINARY=$RUNNER_TEMP/server/hardcharger-linux-amd64/bin/hardcharger-server" >> "$GITHUB_ENV"
-      - run: npx playwright install --with-deps webkit
-      - run: npx playwright test --project webkit --grep 'typed and pasted|lazily loaded' --repeat-each 3
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - run: npx playwright test --project ${{ matrix.browser }} --grep 'typed and pasted|lazily loaded' --repeat-each 3
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: ui-probe
+          name: ui-probe-${{ matrix.browser }}
           path: |
             ui/test-results
             ui/playwright-report
