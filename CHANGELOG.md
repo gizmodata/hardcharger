@@ -7,6 +7,16 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-20
+
+The first general release of Hardcharger: a SQL server on DuckDB 2.0.0 that speaks Warp SQL
+1.0.1 over plain HTTP, with access control (users, roles, grants, catalog access, scoped
+tokens, sign-in through an identity provider or a client certificate), a web UI embedded in
+the server (query editor, results, schema browser, uploads, sessions, API page), the
+`hardcharger` command-line client, the Python package, Docker images, builds for Linux, macOS
+and Windows, and the app for iPhone and iPad. This section lists what changed since
+2.0.0-rc.1; the rc.1 section below has everything since 0.3.0.
+
 ### Added
 
 - Server: a startup banner in a text log: the "Hardcharger" wordmark (plain ASCII), the
@@ -356,7 +366,9 @@ own changelog in `python/CHANGELOG.md`.
   `user:password@`, libpq's `password=` and URL parameters such as `password=` and
   `sslpassword=`), and so is a failing init SQL `ATTACH`, which stopped startup with the
   password in its log line. One helper (`server/src/redact.cc`) does it for the store, init
-  SQL and the logs.
+  SQL, the logs and the last-resort fatal line that stops the server (`main.cc`), which may
+  quote a database path or an `ATTACH` string. Test: `test_startup_log.py` (a `password=`
+  in a database path that DuckDB's open error quotes back).
 - DDL no longer runs when its owner can't be recorded. During a store outage an
   administrator's (or a user's) `CREATE TABLE` / `CREATE VIEW` succeeded while its
   ownership record was silently dropped, leaving an object with no owner (and any stale
