@@ -54,7 +54,8 @@ def test_the_banner_opens_a_text_log(launcher):
     assert lines[:6] == ART
     # (One line when it fits in 80 columns; a long DuckDB version moves it to a second.)
     info = " ".join(" ".join(lines[6:]).split())
-    assert re.search(rf"Hardcharger {re.escape(version())} \| Warp SQL 1\.0\.0 \|? ?DuckDB v\S+ \| by GizmoData", info), \
+    # The Warp SQL version is the specification's (third_party/warp-sql/spec/openapi.yaml).
+    assert re.search(rf"Hardcharger {re.escape(version())} \| Warp SQL \d+\.\d+\.\d+ \|? ?DuckDB v\S+ \| by GizmoData", info), \
         lines
     assert any(line.startswith(f"  Warp SQL  http://127.0.0.1:{server.port}/warp") for line in lines), lines
     assert "docs.hardcharger.gizmodata.com" in info

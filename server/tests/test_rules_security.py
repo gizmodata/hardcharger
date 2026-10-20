@@ -122,10 +122,15 @@ def test_sequences_need_their_catalogs_access(mallory, admin):
 
 def test_credential_settings_stay_hidden(admin, mallory):
     refused(mallory, "SELECT current_setting('s3_secret_access_key')", "Hardcharger blocked", "MANAGE CONFIG")
-    rows = mallory.rows(sql="SELECT name, value FROM duckdb_settings() WHERE name = 's3_secret_access_key'")
-    assert all("global-shh" not in str(row["value"]) for row in rows), rows
+    # DuckDB 2.0 lists the s3_* settings (deprecated in favour of secrets) only when asked
+    # (include_all / deprecated); the row is left out whichever way they are asked for.
+    for listing in ["duckdb_settings()", "duckdb_settings(include_all := true)",
+                    "duckdb_settings(deprecated := true)"]:
+        rows = mallory.rows(sql=f"SELECT name, value FROM {listing} WHERE name = 's3_secret_access_key'")
+        assert rows == [], (listing, rows)
     assert admin.scalar(sql="SELECT current_setting('s3_secret_access_key')") == "global-shh"
-    assert "global-shh" in str(admin.rows(sql="SELECT value FROM duckdb_settings() "
+    assert admin.rows(sql="SELECT name, value FROM duckdb_settings() WHERE name = 's3_secret_access_key'") == []
+    assert "global-shh" in str(admin.rows(sql="SELECT value FROM duckdb_settings(include_all := true) "
                                               "WHERE name = 's3_secret_access_key'"))
 
 
