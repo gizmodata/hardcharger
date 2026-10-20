@@ -138,6 +138,9 @@ async function copyText(page: import("@playwright/test").Page, text: string): Pr
     box.id = "copy-source";
     box.value = t;
     document.body.appendChild(box);
+    // Selecting a textarea does not focus it in every browser. Safari must copy
+    // from this element rather than the Monaco editor that was focused before it.
+    box.focus();
     box.select();
   }, text);
   await page.keyboard.press("ControlOrMeta+C");

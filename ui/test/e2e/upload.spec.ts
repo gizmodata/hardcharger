@@ -329,7 +329,9 @@ test("a 200 MB CSV uploads in pieces of a few megabytes, with progress", async (
   let heapPeak = 0;
   const result = dialog.getByTestId("upload-data-result");
   while (!(await result.isVisible())) {
-    const now = await bar.getAttribute("aria-valuenow").catch(() => null);
+    // Completion can remove the progress bar after isVisible() returned false.
+    // A locator getAttribute would then wait for it to reappear until timeout.
+    const now = await bar.evaluateAll((bars) => bars[0]?.getAttribute("aria-valuenow") ?? null);
     if (now !== null) seen.add(Number(now));
     heapPeak = Math.max(
       heapPeak,
