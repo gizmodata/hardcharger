@@ -210,6 +210,7 @@ jobs:
       - name: Release scripts
         run: |
           bash .github/scripts/test-release.sh
+          python3 .github/scripts/test_versions_json.py
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             .github/scripts/release.sh check-tag "$GITHUB_REF_NAME"
             .github/scripts/release.sh changelog "${GITHUB_REF_NAME#v}" > /dev/null
@@ -750,6 +751,24 @@ jobs:
         with:
           name: hardcharger-${{ matrix.name }}
           path: dist/hardcharger-${{ matrix.name }}.tar.gz
+      # versions.json, which the release publishes for machines (GizmoData Cloud): this
+      # version and commit, Warp SQL's, DuckDB's version name and commit, and the built-in
+      # extensions' pins (.github/scripts/versions_json.py), checked against what the packaged
+      # server says it is. Made on every run, so a tag never meets it first.
+      - name: versions.json (Linux amd64)
+        if: matrix.name == 'linux-amd64'
+        run: |
+          tag=()
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then tag=(--tag "$GITHUB_REF_NAME"); fi
+          python3 .github/scripts/versions_json.py --binary "dist/hardcharger-${{ matrix.name }}/bin/hardcharger-server" \
+            ${tag[@]+"${tag[@]}"} > dist/versions.json
+          cat dist/versions.json
+      - uses: actions/upload-artifact@v7
+        if: matrix.name == 'linux-amd64'
+        with:
+          name: hardcharger-versions
+          path: dist/versions.json
+          if-no-files-found: error
 
   # Compile-cache warm-up. GitHub Actions caches are per branch: a branch restores its own
   # entries and main's, never another branch's. A push to main whose tests are skipped
@@ -1641,6 +1660,14 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           .github/scripts/release.sh changelog "$version" > release-notes.md
           echo "prerelease=$(.github/scripts/release.sh prerelease "$version")" | tee -a "$GITHUB_OUTPUT"
+      # versions.json (from the build job) describes this release: its version is the tag's.
+      - name: Check versions.json
+        run: |
+          test -f dist/versions.json || { echo "no versions.json (the build job's hardcharger-versions artifact)"; exit 1; }
+          [ "v$(jq -r .hardcharger.version dist/versions.json)" = "$GITHUB_REF_NAME" ] \
+            || { echo "versions.json is for $(jq -r .hardcharger.version dist/versions.json), not $GITHUB_REF_NAME"; exit 1; }
+          [ "$(jq -r .hardcharger.commit dist/versions.json)" = "$GITHUB_SHA" ] \
+            || { echo "versions.json is for commit $(jq -r .hardcharger.commit dist/versions.json), not $GITHUB_SHA"; exit 1; }
       # The checksums cover exactly the assets that are about to be published.
       - name: Check SHA256SUMS
         working-directory: dist
