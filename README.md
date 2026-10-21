@@ -8,6 +8,7 @@
 </p>
 
 <p align="center">
+  <a href="https://docs.hardcharger.gizmodata.com"><img src="https://img.shields.io/badge/docs-Hardcharger-2563eb.svg" alt="Hardcharger documentation"></a>
   <a href="https://hub.docker.com/r/gizmodata/hardcharger"><img src="https://img.shields.io/badge/dockerhub-image-green.svg?logo=Docker" alt="Docker Hub image"></a>
   <a href="https://github.com/gizmodata/hardcharger/pkgs/container/hardcharger"><img src="https://img.shields.io/badge/github--package-container--image-green.svg?logo=Docker" alt="GitHub container image"></a>
   <a href="https://github.com/gizmodata/hardcharger/releases/latest"><img src="https://img.shields.io/badge/release-binaries-orange.svg?logo=GitHub" alt="Release binaries"></a>
