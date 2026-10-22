@@ -5,6 +5,7 @@
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/hardcharger/"><img src="https://img.shields.io/pepy/dt/hardcharger.svg" alt="PyPI Downloads"></a>
   <a href="https://pypi.org/project/hardcharger/"><img src="https://img.shields.io/badge/PyPI-hardcharger-blue.svg?logo=PyPI" alt="PyPI: hardcharger"></a>
   <a href="https://pypi.org/project/adbc-driver-hardcharger/"><img src="https://img.shields.io/badge/PyPI-adbc--driver--hardcharger-blue.svg?logo=PyPI" alt="PyPI: adbc-driver-hardcharger"></a>
   <a href="https://github.com/gizmodata/hardcharger"><img src="https://img.shields.io/badge/server-Hardcharger-f15a24.svg" alt="Hardcharger"></a>
@@ -20,6 +21,8 @@ server, from Python. The package has no dependencies: on first use it downloads 
 `hardcharger-server` release for your platform (Linux x86-64 and arm64, macOS on Apple
 silicon), checks it, caches it, and runs it as a subprocess. That makes a real server one
 line away in tests, notebooks and scripts.
+
+Python package 2.0.1 downloads Hardcharger server 2.0.0 by default.
 
 | Package | What it is |
 |---|---|

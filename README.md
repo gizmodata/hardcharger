@@ -1,14 +1,15 @@
 <p align="center">
   <a href="https://gizmodata.com">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hardcharger-banner-dark.png">
-      <img src="docs/assets/hardcharger-banner-light.png" alt="Hardcharger™" width="600">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/gizmodata/hardcharger/main/docs/assets/hardcharger-banner-dark.png">
+      <img src="https://raw.githubusercontent.com/gizmodata/hardcharger/main/docs/assets/hardcharger-banner-light.png" alt="Hardcharger™" width="600">
     </picture>
   </a>
 </p>
 
 <p align="center">
   <a href="https://docs.hardcharger.gizmodata.com"><img src="https://img.shields.io/badge/docs-Hardcharger-2563eb.svg" alt="Hardcharger documentation"></a>
+  <a href="https://pypi.org/project/hardcharger/"><img src="https://img.shields.io/pepy/dt/hardcharger.svg" alt="PyPI Downloads"></a>
   <a href="https://hub.docker.com/r/gizmodata/hardcharger"><img src="https://img.shields.io/badge/dockerhub-image-green.svg?logo=Docker" alt="Docker Hub image"></a>
   <a href="https://github.com/gizmodata/hardcharger/pkgs/container/hardcharger"><img src="https://img.shields.io/badge/github--package-container--image-green.svg?logo=Docker" alt="GitHub container image"></a>
   <a href="https://github.com/gizmodata/hardcharger/releases/latest"><img src="https://img.shields.io/badge/release-binaries-orange.svg?logo=GitHub" alt="Release binaries"></a>
@@ -1388,7 +1389,7 @@ License Agreement, not an open-source licence.
 ---
 
 <p align="center">
-  <a href="https://gizmodata.com"><img src="docs/assets/gizmodata-logo.png" alt="GizmoData™" width="56"></a><br>
+  <a href="https://gizmodata.com"><img src="https://raw.githubusercontent.com/gizmodata/hardcharger/main/docs/assets/gizmodata-logo.png" alt="GizmoData™" width="56"></a><br>
   <sub>Built by <a href="https://gizmodata.com">GizmoData™</a></sub><br>
   <sub>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</sub>
 </p>

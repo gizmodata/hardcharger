@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-22
+
+### Documentation
+
+- Add a total PyPI downloads badge to the package and repository READMEs.
+- Use absolute logo image URLs in the repository README.
+- This Python package still downloads Hardcharger server 2.0.0 by default.
+
 ## [2.0.0] - 2026-10-20
 
 ### Changed

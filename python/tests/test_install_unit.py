@@ -21,7 +21,8 @@ from hardcharger._install import InstallError, detect_platform, ensure_server, g
 
 def test_version_matches_metadata():
     assert hardcharger.__version__ == importlib.metadata.version(distribution_name="hardcharger")
-    assert SERVER_VERSION == _install.normalize_version(version=hardcharger.__version__)
+    # A Python packaging patch can ship without a new server binary release.
+    assert SERVER_VERSION == "2.0.0"
 
 
 # ---- platforms ------------------------------------------------------------------------
