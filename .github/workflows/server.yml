@@ -1616,8 +1616,20 @@ jobs:
   # SHA256SUMS for the release tarballs (and any zip), in `sha256sum -c` format: made and
   # checked on every run, so the release (and the one-line installer, which verifies
   # downloads against it) never meets it for the first time on a tag.
+  desktop:
+    needs: [changes, build, windows]
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: ./.github/workflows/desktop.yml
+    with:
+      native_run: ${{ github.run_id }}
+      sign: ${{ needs.changes.outputs.sign == 'true' }}
+    secrets: inherit
+
   checksums:
-    needs: [build, windows]
+    needs: [build, windows, desktop]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
@@ -1629,9 +1641,9 @@ jobs:
         working-directory: dist
         run: |
           shopt -s nullglob
-          assets=(hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi)
+          assets=(hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi Hardcharger-desktop-*.dmg Hardcharger-desktop-*.app.zip)
           # Three tarballs (Linux amd64/arm64, macOS), two Windows zips and two MSIs.
-          [ ${#assets[@]} -ge 7 ] || { echo "expected the release tarballs, zips and MSIs, found: ${assets[*]}"; exit 1; }
+          [ ${#assets[@]} -ge 11 ] || { echo "expected native and desktop release assets, found: ${assets[*]}"; exit 1; }
           sha256sum "${assets[@]}" > SHA256SUMS
           cat SHA256SUMS
           sha256sum -c SHA256SUMS
@@ -1645,7 +1657,7 @@ jobs:
   # fails unless every job it needs succeeded (none skipped) and the run signed.
   release:
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums, verify-macos, verify-windows, ios, ios-archive]
+    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums, verify-macos, verify-windows, ios, ios-archive, desktop]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -1659,7 +1671,7 @@ jobs:
         run: |
           echo "needed jobs: $RESULTS"
           echo "signed: $SIGN; macOS signatures: $MACOS; Windows signatures: $WINDOWS"
-          [ "$(jq -r 'length' <<< "$RESULTS")" -eq 14 ] || { echo "expected the results of 14 jobs"; exit 1; }
+          [ "$(jq -r 'length' <<< "$RESULTS")" -eq 15 ] || { echo "expected the results of 15 jobs"; exit 1; }
           [ "$(jq -r 'map(select(. != "success")) | length' <<< "$RESULTS")" -eq 0 ] || { echo "a needed job did not succeed"; exit 1; }
           [ "$SIGN" = true ] && [ "$MACOS" = success ] && [ "$WINDOWS" = success ] || { echo "the release is not signed"; exit 1; }
       - uses: actions/checkout@v7
@@ -1692,7 +1704,7 @@ jobs:
         run: |
           sha256sum -c SHA256SUMS
           shopt -s nullglob
-          for asset in hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi; do
+          for asset in hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi Hardcharger-desktop-*.dmg Hardcharger-desktop-*.app.zip; do
             grep -q "  $asset\$" SHA256SUMS || { echo "$asset is not in SHA256SUMS"; exit 1; }
           done
       # A release candidate is a pre-release, which GitHub never makes the latest release

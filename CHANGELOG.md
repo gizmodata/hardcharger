@@ -7,6 +7,17 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Desktop preview in `desktop/`: a Tauri app that bundles the existing server and CLI,
+  opens the server's web SQL workspace, and manages the local server from a branded
+  dashboard and bull-head menu-bar/tray icon. Closing the dashboard keeps the server
+  running; Quit drains queries and stops it. Includes launch at login, logs, server
+  options from `--print-options-json`, reviewed YAML imports, exports without secrets,
+  and OS credential storage for sensitive options. Desktop packages use the existing
+  Apple Developer ID/notarization and Windows Azure signing credentials; branch previews
+  upload Actions artifacts without publishing a release.
+
 ## [2.0.0] - 2026-10-20
 
 The first general release of Hardcharger: a SQL server on DuckDB 2.0.0 that speaks Warp SQL

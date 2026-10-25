@@ -1,0 +1,217 @@
+name: desktop
+
+# Standalone previews only upload Actions artifacts; they never create a release or tag.
+# The server workflow calls this with the current run's binaries when releasing later.
+on:
+  push:
+    branches: [feature/desktop-app, release/desktop-preview]
+    paths: ["desktop/**", ".github/workflows/desktop.yml", "docs/assets/brand/**"]
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: Sign/notarize preview artifacts (release/* branches only; never publishes)
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      sign:
+        type: boolean
+        default: false
+      native_run:
+        description: Use native binary artifacts from this server workflow run
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      sign: ${{ steps.plan.outputs.sign }}
+    steps:
+      - id: plan
+        env:
+          REQUESTED: ${{ inputs.sign || github.ref == 'refs/heads/release/desktop-preview' }}
+        run: |
+          if [ "$REQUESTED" = true ]; then
+            case "$GITHUB_REF" in refs/tags/v*|refs/heads/release/*) ;; *) echo "Signing is restricted to tags and release/* branches"; exit 1;; esac
+          fi
+          echo "sign=$REQUESTED" >> "$GITHUB_OUTPUT"
+
+  ui:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+        working-directory: desktop
+      - run: npm run build
+        working-directory: desktop
+      - run: npx playwright install --with-deps chromium
+        working-directory: desktop
+      - run: npm test
+        working-directory: desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-design-preview
+          path: desktop/artifacts/*.png
+          if-no-files-found: error
+
+  build:
+    needs: [plan, ui]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            extension: tar.gz
+          - name: windows-amd64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            extension: zip
+          - name: windows-arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            extension: zip
+    runs-on: ${{ matrix.runner }}
+    environment: ${{ needs.plan.outputs.sign == 'true' && 'production' || '' }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      DESKTOP_SIGNED: ${{ needs.plan.outputs.sign }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Native binaries from the server run
+        if: inputs.native_run != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-${{ matrix.name }}
+          path: native
+          run-id: ${{ inputs.native_run }}
+          github-token: ${{ github.token }}
+      - name: Preview binaries from the matching published version
+        if: inputs.native_run == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM: ${{ matrix.name }}
+          EXTENSION: ${{ matrix.extension }}
+        run: |
+          version=$(.github/scripts/release.sh version)
+          gh release download "v$version" --repo "$GITHUB_REPOSITORY" --pattern "hardcharger-$PLATFORM.$EXTENSION" --pattern SHA256SUMS --dir native
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: Stage the trusted server and CLI
+        env:
+          PLATFORM: ${{ matrix.name }}
+          EXTENSION: ${{ matrix.extension }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          checksums=()
+          if [ -f native/SHA256SUMS ]; then checksums=(--checksums native/SHA256SUMS); fi
+          python desktop/scripts/native-assets.py "native/hardcharger-$PLATFORM.$EXTENSION" --target "$TARGET" "${checksums[@]}"
+      - name: Rust checks and real server lifecycle
+        working-directory: desktop/src-tauri
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked -- --nocapture
+      - name: Azure sign-in
+        if: runner.os == 'Windows' && needs.plan.outputs.sign == 'true'
+        uses: azure/login@v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Install AzureSignTool
+        if: runner.os == 'Windows' && needs.plan.outputs.sign == 'true'
+        run: dotnet tool install --global AzureSignTool --version 7.0.1
+      - name: Build and sign the macOS application
+        if: runner.os == 'macOS'
+        working-directory: desktop
+        env:
+          APPLE_CERTIFICATE: ${{ needs.plan.outputs.sign == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID_USERNAME }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Gizmo Data LLC (XYB42X6NFX)"
+        run: |
+          config='{"bundle":{"macOS":{"signingIdentity":"-"}}}'
+          if [ "$DESKTOP_SIGNED" = true ]; then
+            config='{"bundle":{"macOS":{"signingIdentity":"Developer ID Application: Gizmo Data LLC (XYB42X6NFX)"}}}'
+          fi
+          npm run desktop:build -- --bundles app --config "$config"
+          python -m pip install ds-store==1.3.3
+          python scripts/create-dmg.py src-tauri/target/release/bundle/macos/Hardcharger.app "artifacts/Hardcharger-desktop-macos-arm64.dmg"
+          ditto -c -k --keepParent src-tauri/target/release/bundle/macos/Hardcharger.app artifacts/Hardcharger-desktop-macos-arm64.app.zip
+      - name: Verify Developer ID signatures, notarization, and stapling
+        if: runner.os == 'macOS' && needs.plan.outputs.sign == 'true'
+        run: |
+          app=desktop/src-tauri/target/release/bundle/macos/Hardcharger.app
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --verify -R='anchor apple generic and certificate leaf[subject.OU] = "XYB42X6NFX"' "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          xcrun stapler validate desktop/artifacts/Hardcharger-desktop-macos-arm64.dmg
+          spctl --assess --type open --context context:primary-signature --verbose=2 desktop/artifacts/Hardcharger-desktop-macos-arm64.dmg
+      - name: Build the Windows installer
+        if: runner.os == 'Windows'
+        working-directory: desktop
+        env:
+          KEY_VAULT_URI: ${{ secrets.AZURE_KEY_VAULT_URI }}
+          CERT_NAME: ${{ secrets.AZURE_CERT_NAME }}
+        run: |
+          config='{}'
+          if [ "$DESKTOP_SIGNED" = true ]; then
+            config='{"bundle":{"windows":{"signCommand":{"cmd":"pwsh","args":["-NoProfile","-File","../../.github/scripts/azure-sign.ps1","%1"]}}}}'
+          fi
+          npm run desktop:build -- --bundles msi --config "$config"
+          mkdir -p artifacts
+          cp src-tauri/target/release/bundle/msi/*.msi "artifacts/Hardcharger-desktop-${{ matrix.name }}.msi"
+      - name: Verify the Windows application, bundled executables, and installer
+        if: runner.os == 'Windows' && needs.plan.outputs.sign == 'true'
+        shell: pwsh
+        run: |
+          $files = @("desktop/src-tauri/target/release/hardcharger-desktop.exe", "desktop/artifacts/Hardcharger-desktop-${{ matrix.name }}.msi")
+          $files += (Get-ChildItem desktop/src-tauri/binaries/*.exe).FullName
+          & .github/scripts/verify-windows-signature.ps1 @files
+          if ($LASTEXITCODE -ne 0) { throw "desktop signature verification failed" }
+      - name: Checksums and provenance
+        env:
+          PLATFORM: ${{ matrix.name }}
+          DESKTOP_NATIVE_RUN: ${{ inputs.native_run }}
+        run: python desktop/scripts/artifact-manifest.py "$PLATFORM"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hardcharger-desktop-${{ matrix.name }}
+          path: desktop/artifacts/*
+          if-no-files-found: error

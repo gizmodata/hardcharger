@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-main",
+  "description": "Only the bundled controller receives desktop permissions. The server web UI has none.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+public/brand/
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/icons/
+src-tauri/gen/
+artifacts/
+test-results/
