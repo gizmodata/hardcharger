@@ -57,8 +57,9 @@ jobs:
         working-directory: desktop
       - run: npm run build
         working-directory: desktop
-      - run: npx playwright install --with-deps chromium
-        working-directory: desktop
+      # Standard Ubuntu runners already include Chrome. Avoid re-downloading a browser
+      # and running apt for a controller-only layout/configuration test.
+      - run: google-chrome --version
       - run: npm test
         working-directory: desktop
       - uses: actions/upload-artifact@v7
@@ -93,6 +94,7 @@ jobs:
       id-token: write
     env:
       DESKTOP_SIGNED: ${{ needs.plan.outputs.sign }}
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -106,6 +108,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
+          cache-on-failure: true
       - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
@@ -142,8 +145,8 @@ jobs:
         working-directory: desktop/src-tauri
         run: |
           cargo fmt --all -- --check
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked -- --nocapture
+          cargo clippy --locked --target "$TARGET" --all-targets -- -D warnings
+          cargo test --locked --target "$TARGET" -- --nocapture
       - name: Azure sign-in
         if: runner.os == 'Windows' && needs.plan.outputs.sign == 'true'
         uses: azure/login@v3.1.0
@@ -168,15 +171,18 @@ jobs:
           config='{"bundle":{"macOS":{"signingIdentity":"-"}}}'
           if [ "$DESKTOP_SIGNED" = true ]; then
             config='{"bundle":{"macOS":{"signingIdentity":"Developer ID Application: Gizmo Data LLC (XYB42X6NFX)"}}}'
+          else
+            # Tauri treats an empty certificate variable as an attempted import.
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_SIGNING_IDENTITY
           fi
-          npm run desktop:build -- --bundles app --config "$config"
+          npm run desktop:build -- --target "$TARGET" --bundles app --config "$config"
           python -m pip install ds-store==1.3.3
-          python scripts/create-dmg.py src-tauri/target/release/bundle/macos/Hardcharger.app "artifacts/Hardcharger-desktop-macos-arm64.dmg"
-          ditto -c -k --keepParent src-tauri/target/release/bundle/macos/Hardcharger.app artifacts/Hardcharger-desktop-macos-arm64.app.zip
+          python scripts/create-dmg.py "src-tauri/target/$TARGET/release/bundle/macos/Hardcharger.app" "artifacts/Hardcharger-desktop-macos-arm64.dmg"
+          ditto -c -k --keepParent "src-tauri/target/$TARGET/release/bundle/macos/Hardcharger.app" artifacts/Hardcharger-desktop-macos-arm64.app.zip
       - name: Verify Developer ID signatures, notarization, and stapling
         if: runner.os == 'macOS' && needs.plan.outputs.sign == 'true'
         run: |
-          app=desktop/src-tauri/target/release/bundle/macos/Hardcharger.app
+          app="desktop/src-tauri/target/$TARGET/release/bundle/macos/Hardcharger.app"
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign --verify -R='anchor apple generic and certificate leaf[subject.OU] = "XYB42X6NFX"' "$app"
           spctl --assess --type execute --verbose=2 "$app"
@@ -195,15 +201,15 @@ jobs:
             node scripts/signing-config.mjs
             config=src-tauri/signing.generated.json
           fi
-          npm run desktop:build -- --bundles msi --config "$config"
+          npm run desktop:build -- --target "$TARGET" --bundles msi --config "$config"
           mkdir -p artifacts
-          cp src-tauri/target/release/bundle/msi/*.msi "artifacts/Hardcharger-desktop-${{ matrix.name }}.msi"
+          cp src-tauri/target/"$TARGET"/release/bundle/msi/*.msi "artifacts/Hardcharger-desktop-${{ matrix.name }}.msi"
       - name: Verify the Windows application, bundled executables, and installer
         if: runner.os == 'Windows' && needs.plan.outputs.sign == 'true'
         shell: pwsh
         run: |
-          $files = @("desktop/src-tauri/target/release/hardcharger-desktop.exe", "desktop/artifacts/Hardcharger-desktop-${{ matrix.name }}.msi")
-          $files += @("desktop/src-tauri/target/release/hardcharger-server.exe", "desktop/src-tauri/target/release/hardcharger.exe")
+          $files = @("desktop/src-tauri/target/$env:TARGET/release/hardcharger-desktop.exe", "desktop/artifacts/Hardcharger-desktop-${{ matrix.name }}.msi")
+          $files += @("desktop/src-tauri/target/$env:TARGET/release/hardcharger-server.exe", "desktop/src-tauri/target/$env:TARGET/release/hardcharger.exe")
           & .github/scripts/verify-windows-signature.ps1 @files
           if ($LASTEXITCODE -ne 0) { throw "desktop signature verification failed" }
       - name: Checksums and provenance
