@@ -441,17 +441,18 @@ impl Server {
     }
 
     pub fn database(&self) -> String {
-        self.settings
+        let path = self
+            .settings
             .server_options
             .get("database")
             .and_then(|v| v.as_str())
             .map(str::to_owned)
-            .unwrap_or_else(|| {
-                self.directory
-                    .join("Hardcharger.duckdb")
-                    .display()
-                    .to_string()
-            })
+            .unwrap_or_else(|| "Hardcharger.duckdb".into());
+        if path == ":memory:" || Path::new(&path).is_absolute() {
+            path
+        } else {
+            self.directory.join(path).display().to_string()
+        }
     }
 
     pub fn options(&self) -> Vec<serde_json::Value> {
@@ -496,6 +497,12 @@ impl Server {
             }
         }
         Ok(())
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.stop();
     }
 }
 
@@ -565,6 +572,24 @@ fn tail(path: &Path, maximum: u64) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_settings_never_return_stored_secrets() {
+        let mut settings = Settings::default();
+        settings
+            .server_options
+            .insert("oauth_client_secret".into(), "private-test-value".into());
+        settings
+            .server_options
+            .insert("block_unredacted_secrets".into(), true.into());
+        let public = public_settings(&settings);
+        assert_eq!(public.server_options["oauth_client_secret"], REDACTED);
+        assert_eq!(public.server_options["block_unredacted_secrets"], true);
+        assert!(!serde_json::to_string(&public)
+            .unwrap()
+            .contains("private-test-value"));
+        assert!(!is_secret("block_unredacted_secrets"));
+    }
 
     #[test]
     fn lifecycle_with_real_server() {

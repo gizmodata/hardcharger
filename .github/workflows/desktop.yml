@@ -192,7 +192,8 @@ jobs:
         run: |
           config='{}'
           if [ "$DESKTOP_SIGNED" = true ]; then
-            config='{"bundle":{"windows":{"signCommand":{"cmd":"pwsh","args":["-NoProfile","-File","../../.github/scripts/azure-sign.ps1","%1"]}}}}'
+            node scripts/signing-config.mjs
+            config=src-tauri/signing.generated.json
           fi
           npm run desktop:build -- --bundles msi --config "$config"
           mkdir -p artifacts
@@ -202,7 +203,7 @@ jobs:
         shell: pwsh
         run: |
           $files = @("desktop/src-tauri/target/release/hardcharger-desktop.exe", "desktop/artifacts/Hardcharger-desktop-${{ matrix.name }}.msi")
-          $files += (Get-ChildItem desktop/src-tauri/binaries/*.exe).FullName
+          $files += @("desktop/src-tauri/target/release/hardcharger-server.exe", "desktop/src-tauri/target/release/hardcharger.exe")
           & .github/scripts/verify-windows-signature.ps1 @files
           if ($LASTEXITCODE -ne 0) { throw "desktop signature verification failed" }
       - name: Checksums and provenance

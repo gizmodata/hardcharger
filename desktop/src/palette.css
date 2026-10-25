@@ -1,0 +1,26 @@
+/* Match gizmodata.com's blue brand. Also applied to the existing server UI inside the
+   desktop workspace; its query implementation and browser distribution stay unchanged. */
+:root {
+  --bg: hsl(220 60% 99%); --panel: #fff; --panel-2: hsl(210 40% 96.1%);
+  --text: hsl(222 48% 11%); --muted: #43546e; --faint: #536782;
+  --border: hsl(216 30% 90%); --border-soft: #e4eaf3; --soft: #e4eaf3;
+  --accent: hsl(215 93% 47%); --accent-hover: hsl(215 93% 40%);
+  --accent-soft: #e9f1fe; --on-accent: #fff; --link: hsl(215 93% 47%);
+  --hc-gradient: linear-gradient(90deg, hsl(215 93% 47%), hsl(206 93% 60%));
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: hsl(222 58% 7%); --panel: hsl(221 48% 11%); --panel-2: hsl(220 35% 15%);
+    --text: hsl(216 50% 96%); --muted: #c9d5e8; --faint: hsl(215 24% 72%);
+    --border: hsl(219 30% 20%); --border-soft: #1b2b45; --soft: #1b2b45;
+    --accent: hsl(206 93% 60%); --accent-hover: hsl(206 93% 70%);
+    --accent-soft: #142d50; --on-accent: hsl(221 85% 12%); --link: hsl(206 93% 60%);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: hsl(222 58% 7%); --panel: hsl(221 48% 11%); --panel-2: hsl(220 35% 15%);
+  --text: hsl(216 50% 96%); --muted: #c9d5e8; --faint: hsl(215 24% 72%);
+  --border: hsl(219 30% 20%); --border-soft: #1b2b45; --soft: #1b2b45;
+  --accent: hsl(206 93% 60%); --accent-hover: hsl(206 93% 70%);
+  --accent-soft: #142d50; --on-accent: hsl(221 85% 12%); --link: hsl(206 93% 60%);
+}

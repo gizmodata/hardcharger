@@ -1,0 +1,10 @@
+{
+  "productName": "Hardcharger Desktop",
+  "bundle": {
+    "windows": {
+      "wix": {
+        "upgradeCode": "18B3E785-96BE-4BFC-B24D-585B55278510"
+      }
+    }
+  }
+}

@@ -114,6 +114,13 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
     let script = format!(
         r#"(() => {{
         if (location.origin !== {origin}) return;
+        const applyTheme = () => {{
+            const style = document.createElement('style');
+            style.textContent = {palette};
+            document.head.appendChild(style);
+        }};
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', applyTheme, {{once:true}});
+        else applyTheme();
         const signIn = {token};
         const marker = 'hardcharger-desktop:handed-token';
         if (sessionStorage.getItem(marker) !== signIn.token) {{
@@ -123,7 +130,9 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
         }}
     }})();"#,
         origin = serde_json::to_string(&origin).map_err(|e| e.to_string())?,
-        token = token
+        token = token,
+        palette = serde_json::to_string(include_str!("../../src/palette.css"))
+            .map_err(|e| e.to_string())?
     );
     let url = format!("{origin}/ui/")
         .parse::<tauri::Url>()
@@ -341,7 +350,20 @@ fn main() {
                     &PredefinedMenuItem::select_all(app, None)?,
                 ],
             )?;
-            app.set_menu(Menu::with_items(app, &[&application, &server_menu, &edit])?)?;
+            let window_menu = Submenu::with_items(
+                app,
+                "Window",
+                true,
+                &[
+                    &PredefinedMenuItem::minimize(app, None)?,
+                    &PredefinedMenuItem::fullscreen(app, None)?,
+                    &PredefinedMenuItem::close_window(app, None)?,
+                ],
+            )?;
+            app.set_menu(Menu::with_items(
+                app,
+                &[&application, &server_menu, &edit, &window_menu],
+            )?)?;
             app.on_menu_event(|app, event| menu_action(app, event.id.as_ref()));
             if !std::env::args().any(|a| a == "--background") {
                 reveal(app.handle());

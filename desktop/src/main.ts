@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { stringify } from "yaml";
 import { parseConfiguration, exportConfiguration, type ServerOption } from "./configuration";
 import "./style.css";
+import "./palette.css";
 
 interface Settings { port: number; start_on_open: boolean; server_options: Record<string, unknown> }
 interface Status {
@@ -109,6 +110,7 @@ function render() {
     if (field) field.disabled = !input.checked;
   }));
   document.querySelector("#import-yaml")?.addEventListener("change", e => void importYaml((e.target as HTMLInputElement).files?.[0]));
+  document.querySelector("#choose-import")?.addEventListener("click", () => document.querySelector<HTMLInputElement>("#import-yaml")?.click());
   document.querySelector("#export-yaml")?.addEventListener("click", exportYaml);
   document.querySelector("#apply-import")?.addEventListener("click", () => {
     if (!pendingImport || !current) return;
@@ -143,7 +145,7 @@ function serverView(s: Status | null) {
 function settingsView(s: Status | null) {
   return `<div class="page-heading"><div><p class="eyebrow">MAKE IT YOURS</p><h1>Settings</h1><p>A few preferences for your local server.</p></div></div>
     ${settingsNotice ? `<p class="settings-notice" role="status">${esc(settingsNotice)}</p>` : ""}
-    <section class="card detail-card"><div class="section-heading"><div><h3>Configuration YAML</h3><p>Import server settings, or export a configuration for another machine.</p></div></div><div class="yaml-actions"><label class="button import-label ${s?.running || !native || busy ? "disabled" : ""}">${icon("folder")}Import YAML<input id="import-yaml" type="file" accept=".yaml,.yml,.json" hidden ${s?.running || !native || busy ? "disabled" : ""}></label><button id="export-yaml" class="button" ${!s ? "disabled" : ""}>Export YAML</button><span class="muted">Exports leave out passwords and other secrets.</span></div>${pendingImport ? `<div class="import-review"><h3>Review imported settings</h3><p class="muted">These settings replace your custom values. Existing stored secrets are kept unless the file supplies replacements. The server validates the configuration when it starts.</p><pre>${esc(stringify(Object.fromEntries(Object.entries(pendingImport).map(([key, value]) => [key, schema.find(o => o.name === key)?.secret ? "[secret supplied]" : value]))))}</pre><button id="apply-import" class="button primary">Apply imported settings</button> <button id="cancel-import" class="button">Cancel</button></div>` : ""}</section>
+    <section class="card detail-card"><div class="section-heading"><div><h3>Configuration YAML</h3><p>Import server settings, or export a configuration for another machine.</p></div></div><div class="yaml-actions"><button id="choose-import" class="button" ${s?.running || !native || busy ? "disabled" : ""}>${icon("folder")}Import YAML</button><input id="import-yaml" type="file" accept=".yaml,.yml,.json" hidden><button id="export-yaml" class="button" ${!s ? "disabled" : ""}>Export YAML</button><span class="muted">Exports leave out passwords and other secrets.</span></div>${pendingImport ? `<div class="import-review"><h3>Review imported settings</h3><p class="muted">These settings replace your custom values. Existing stored secrets are kept unless the file supplies replacements. The server validates the configuration when it starts.</p><pre>${esc(stringify(Object.fromEntries(Object.entries(pendingImport).map(([key, value]) => [key, schema.find(o => o.name === key)?.secret ? "[secret supplied]" : value]))))}</pre><button id="apply-import" class="button primary">Apply imported settings</button> <button id="cancel-import" class="button">Cancel</button></div>` : ""}</section>
     <form id="settings-form" class="card detail-card"><div class="section-heading"><div><h3>Local server</h3><p>${s?.running ? "Stop the server to change these settings." : "Changes apply the next time the server starts."}</p></div></div>
       <label class="field"><span>Port</span><input name="port" type="number" min="1024" max="65535" required value="${s?.settings.port ?? 31337}" ${s?.running || !native ? "disabled" : ""}><small>The server accepts connections from this computer only.</small></label>
       <label class="check-row"><input name="start" type="checkbox" ${s?.settings.start_on_open ? "checked" : ""} ${s?.running || !native ? "disabled" : ""}><span><strong>Start server when Hardcharger opens</strong><small>Your database is ready when you need it.</small></span></label>
