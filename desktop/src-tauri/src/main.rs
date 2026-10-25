@@ -303,7 +303,6 @@ fn main() {
                 .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip("Hardcharger — local DuckDB server")
                 .menu(&menu)
-                .on_menu_event(|app, event| menu_action(app, event.id.as_ref()))
                 .build(app)?;
 
             let server_menu = Submenu::with_items(

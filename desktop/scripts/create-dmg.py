@@ -12,6 +12,8 @@ import plistlib
 import shutil
 import subprocess
 import secrets
+import shlex
+import re
 import tempfile
 from ds_store import DSStore
 
@@ -56,14 +58,25 @@ if os.getenv("DESKTOP_SIGNED") == "true":
         certificate.write_bytes(base64.b64decode(os.environ["APPLE_CERTIFICATE"]))
         certificate.chmod(0o600)
         password = secrets.token_hex(32)
+        previous_keychains = shlex.split(run_private(["security", "list-keychains", "-d", "user"], capture=True))
         run_private(["security", "create-keychain", "-p", password, keychain])
         try:
             run_private(["security", "unlock-keychain", "-p", password, keychain])
             run_private(["security", "set-keychain-settings", "-lut", "3600", keychain])
             run_private(["security", "import", str(certificate), "-k", keychain, "-P", os.environ["APPLE_CERTIFICATE_PASSWORD"], "-T", "/usr/bin/codesign"])
             run_private(["security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", password, keychain])
-            run_private(["codesign", "--force", "--timestamp", "--keychain", keychain, "--sign", os.environ["APPLE_SIGNING_IDENTITY"], str(args.destination)])
+            # codesign also looks up the private key through the user's search list,
+            # even when --keychain restricts its certificate lookup.
+            run_private(["security", "list-keychains", "-d", "user", "-s", keychain, *previous_keychains])
+            identities = run_private(["security", "find-identity", "-v", "-p", "codesigning", keychain], capture=True)
+            identity = next((match.group(1) for line in identities.splitlines()
+                             if os.environ["APPLE_SIGNING_IDENTITY"] in line
+                             and (match := re.search(r"\b([0-9A-Fa-f]{40})\b", line))), None)
+            if not identity:
+                raise SystemExit("No valid Developer ID identity in the temporary signing keychain")
+            run_private(["codesign", "--force", "--timestamp", "--keychain", keychain, "--sign", identity, str(args.destination)])
         finally:
+            run_private(["security", "list-keychains", "-d", "user", "-s", *previous_keychains])
             run_private(["security", "delete-keychain", keychain])
     output = run_private(["xcrun", "notarytool", "submit", str(args.destination), "--apple-id", os.environ["APPLE_ID"],
                           "--password", os.environ["APPLE_PASSWORD"], "--team-id", os.environ["APPLE_TEAM_ID"],
