@@ -15,6 +15,7 @@ import secrets
 import shlex
 import re
 import tempfile
+import time
 from ds_store import DSStore
 
 parser = argparse.ArgumentParser()
@@ -22,6 +23,23 @@ parser.add_argument("app", type=Path)
 parser.add_argument("destination", type=Path)
 args = parser.parse_args()
 args.destination.parent.mkdir(parents=True, exist_ok=True)
+
+def staple_and_validate(path):
+    # Apple's ticket-delivery service can drop a connection just after acceptance.
+    # A retry still requires a real ticket and successful validation; it never skips it.
+    for attempt in range(3):
+        if subprocess.run(["xcrun", "stapler", "staple", str(path)]).returncode == 0:
+            if subprocess.run(["xcrun", "stapler", "validate", str(path)]).returncode == 0:
+                return
+        if attempt < 2:
+            time.sleep(10)
+    raise SystemExit(f"Could not staple and validate {path.name} after three attempts")
+
+if os.getenv("DESKTOP_SIGNED") == "true":
+    # Do not rely on a bundler's successful notarization log as proof of a local ticket.
+    # Staple before copying the app into the disk image or the standalone app archive.
+    staple_and_validate(args.app)
+
 with tempfile.TemporaryDirectory(prefix="hardcharger-dmg-") as directory:
     stage = Path(directory)
     subprocess.run(["ditto", str(args.app), str(stage / "Hardcharger.app")], check=True)
@@ -85,5 +103,4 @@ if os.getenv("DESKTOP_SIGNED") == "true":
     if receipt.get("status") != "Accepted":
         raise SystemExit(f"Disk image notarization was not accepted: {receipt.get('status')} ({receipt.get('id')})")
     print(f"Disk image notarization: {receipt['status']} ({receipt['id']})")
-    subprocess.run(["xcrun", "stapler", "staple", str(args.destination)], check=True)
-    subprocess.run(["xcrun", "stapler", "validate", str(args.destination)], check=True)
+    staple_and_validate(args.destination)
