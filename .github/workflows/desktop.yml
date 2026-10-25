@@ -208,8 +208,16 @@ jobs:
         if: runner.os == 'Windows' && needs.plan.outputs.sign == 'true'
         shell: pwsh
         run: |
-          $files = @("desktop/src-tauri/target/$env:TARGET/release/hardcharger-desktop.exe", "desktop/artifacts/Hardcharger-desktop-${{ matrix.name }}.msi")
-          $files += @("desktop/src-tauri/target/$env:TARGET/release/hardcharger-server.exe", "desktop/src-tauri/target/$env:TARGET/release/hardcharger.exe")
+          # Tauri restores the unsigned build executable after packaging. Verify the
+          # actual files shipped inside the signed MSI, using administrative extraction
+          # (no installation or uninstall registration on the runner).
+          $installer = (Resolve-Path "desktop/artifacts/Hardcharger-desktop-${{ matrix.name }}.msi").Path
+          $extract = Join-Path $env:RUNNER_TEMP 'desktop-installed'
+          $process = Start-Process msiexec.exe -ArgumentList "/a `"$installer`" /qn TARGETDIR=`"$extract`"" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "MSI extraction failed: $($process.ExitCode)" }
+          $executables = @(Get-ChildItem $extract -Recurse -Filter *.exe)
+          if ($executables.Count -ne 3) { throw "Expected the desktop app, server and CLI in the MSI; found $($executables.Count) executables" }
+          $files = @($installer) + $executables.FullName
           & .github/scripts/verify-windows-signature.ps1 @files
           if ($LASTEXITCODE -ne 0) { throw "desktop signature verification failed" }
       - name: Checksums and provenance
