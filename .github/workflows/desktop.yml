@@ -186,6 +186,7 @@ jobs:
           npm run desktop:build -- --target "$TARGET" --bundles app --config "$config"
           # Tauri re-signs sidecars: inspect the actual bundled server after that step.
           python3 scripts/check-extension-entitlement.py "src-tauri/target/$TARGET/release/bundle/macos/Hardcharger.app/Contents/MacOS/hardcharger-server"
+          python3 scripts/check-macos-minimum.py "src-tauri/target/$TARGET/release/bundle/macos/Hardcharger.app"
           python -m pip install ds-store==1.3.3
           python scripts/create-dmg.py "src-tauri/target/$TARGET/release/bundle/macos/Hardcharger.app" "artifacts/Hardcharger-desktop-macos-arm64.dmg"
           ditto -c -k --sequesterRsrc --keepParent "src-tauri/target/$TARGET/release/bundle/macos/Hardcharger.app" artifacts/Hardcharger-desktop-macos-arm64.app.zip

@@ -58,9 +58,10 @@ Enterprise in GizmoSQL is in every Hardcharger build.
 
 ## 🖥️ Desktop app (v2.1.0+)
 
-Run Hardcharger from a native macOS or Windows app: start and stop the server, open its
-SQL workspace, manage settings, and follow the logs. Closing the window leaves the server
-running in the macOS menu bar or Windows system tray; **Quit Hardcharger** stops it.
+Run Hardcharger from a native app for macOS 15+ on Apple silicon or Windows: start and
+stop the server, open its SQL workspace, manage settings, and follow the logs. Closing
+the window leaves the server running in the macOS menu bar or Windows system tray;
+**Quit Hardcharger** stops it.
 
 <p align="center">
   <img src="docs/assets/desktop-preview-light.png" alt="Hardcharger desktop dashboard design preview, light theme: server controls, database information and the SQL workspace button" width="49%">

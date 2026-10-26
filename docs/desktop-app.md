@@ -1,11 +1,21 @@
 # Desktop app
 
-**Available in v2.1.0+.** Hardcharger for macOS and Windows combines a native server
+**Available in v2.1.0+.** Hardcharger for macOS 15+ on Apple silicon and Windows combines a native server
 dashboard with the server's SQL workspace. The desktop app supplements the existing
 command-line packages. Linux desktop packaging is planned; Linux server and CLI builds
 remain available.
 
 ![Desktop dashboard in its light theme, shown in the design preview with sample data](assets/desktop-preview-light.png)
+
+## Runtime requirements
+
+- **macOS:** version 15 or later on Apple silicon; WebKit and Keychain are supplied by the OS.
+- **Windows:** x64 or Arm64 with Microsoft Edge WebView2. The MSI installs WebView2 if missing;
+  that download needs an internet connection. Passwords use Windows Credential Manager.
+
+The server, CLI, DuckDB and web UI are bundled. No separate Node.js, Python, Docker or
+database installation is required. Optional DuckDB extensions download when first needed
+and are cached for later use.
 
 ## Choose a download
 

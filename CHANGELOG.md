@@ -15,7 +15,7 @@ The existing server and command-line packages remain available.
 
 ### Added
 
-- **Hardcharger Desktop** for macOS on Apple silicon and Windows on x64 and Arm64.
+- **Hardcharger Desktop** for macOS 15+ on Apple silicon and Windows on x64 and Arm64.
   The app bundles the server and CLI with a dashboard and the SQL workspace. Manage
   the server from the menu bar or system tray, keep it running after closing the
   dashboard, and optionally launch it at login. macOS downloads are signed and
