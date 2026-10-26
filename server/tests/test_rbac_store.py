@@ -9,7 +9,7 @@ import urllib.parse
 
 import pytest
 
-from conftest import STOP_SIGNAL, home_env
+from conftest import STOP_SIGNAL, TSAN_EXTENSIONS, home_env
 from rbac import WarpError, expect_allowed, rbac_env, start_rbac_server
 
 
@@ -124,13 +124,14 @@ def test_the_store_lives_in_its_own_schema_and_no_session_can_reach_it(launcher,
 def test_fresh_host_installs_only_the_store_extension_when_needed(launcher, store, tmp_path):
     # The file store needs no runtime module. PostgreSQL explicitly installs its signed
     # scanner into a fresh server cache; it is no longer part of the native executable.
+    # The unshipped TSan fixture instead instruments and links the scanner into DuckDB.
     home = tmp_path / "fresh-home"
     home.mkdir()
     uri = store.new_database()
     server = start_rbac_server(launcher=launcher, store_uri=uri, env=home_env(home=home))
     expect_allowed(client=server.admin(), sql="CREATE ROLE installed")
     modules = list(home.rglob("*.duckdb_extension"))
-    expected = [] if uri.startswith("duckdb:") else ["postgres_scanner.duckdb_extension"]
+    expected = [] if TSAN_EXTENSIONS or uri.startswith("duckdb:") else ["postgres_scanner.duckdb_extension"]
     assert sorted(p.name for p in modules) == expected
 
 
