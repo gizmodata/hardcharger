@@ -212,7 +212,9 @@ jobs:
         run: |
           bash .github/scripts/test-release.sh
           python3 .github/scripts/test_versions_json.py
+          python3 .github/scripts/check_python_version.py
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            python3 .github/scripts/check_python_version.py --server-tag "$GITHUB_REF_NAME"
             .github/scripts/release.sh check-tag "$GITHUB_REF_NAME"
             .github/scripts/release.sh changelog "${GITHUB_REF_NAME#v}" > /dev/null
             echo "release $GITHUB_REF_NAME, pre-release: $(.github/scripts/release.sh prerelease "${GITHUB_REF_NAME#v}")"

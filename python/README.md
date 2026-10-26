@@ -22,7 +22,7 @@ server, from Python. The package has no dependencies: on first use it downloads 
 silicon), checks it, caches it, and runs it as a subprocess. That makes a real server one
 line away in tests, notebooks and scripts.
 
-Python package 2.0.1 downloads Hardcharger server 2.0.0 by default.
+Python package 2.1.0 downloads Hardcharger server 2.1.0 by default.
 
 | Package | What it is |
 |---|---|
@@ -64,12 +64,18 @@ The package also installs `hardcharger-server`, which runs the downloaded server
 
 ```console
 $ hardcharger-server --version
-Hardcharger 0.3.0
+Hardcharger 2.1.0
 $ python -m hardcharger download       # download (if needed) and print the binary's path
-/home/me/.cache/hardcharger/v0.3.0/linux-amd64/bin/hardcharger-server
+/home/me/.cache/hardcharger/v2.1.0/linux-amd64/bin/hardcharger-server
 ```
 
 ## The download
+
+Starting with **2.1.0**, the `hardcharger` PyPI package version matches the server it
+downloads: `hardcharger==2.1.0` uses server `2.1.0`. A Python-only fix uses a post-release,
+such as `2.1.0.post1`, and still downloads server `2.1.0`. Release candidates use PEP 440
+(`2.1.0rc1`) for Python and `2.1.0-rc.1` for the server. The separate ADBC driver has its
+own release cycle.
 
 The release comes from [gizmodata/hardcharger](https://github.com/gizmodata/hardcharger/releases)
 through the GitHub API. Its SHA-256 must match the digest GitHub recorded for the asset,

@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Prepare Python package 2.1.0 with the matching server 2.1.0 download pin. Future
+  Python-only fixes use `.postN` instead of an independent patch version. CI checks
+  metadata, runtime version, download pin and release tags against the server version.
+
 ## [2.0.1] - 2026-10-22
 
 ### Documentation

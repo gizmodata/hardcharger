@@ -42,6 +42,13 @@ Two places can't hold `-rc.N` and use numbers instead:
 - **The Python package (`python/`).** Its own version is PEP 440, so its candidate of 2.0.0 is
   `2.0.0rc1` (tag `python-v2.0.0rc1`). Its `SERVER_VERSION` pin, and `HARDCHARGER_VERSION`, take the
   server's form (`2.0.0-rc.1`) or the PEP 440 one; both download the release tagged `v2.0.0-rc.1`.
+  From 2.1.0 onward, the package release matches the server exactly: server `X.Y.Z` uses
+  package `X.Y.Z` and tag `python-vX.Y.Z`. Python-only fixes use `X.Y.Z.postN` and
+  `python-vX.Y.Z.postN`; `SERVER_VERSION` continues to point at server `X.Y.Z`.
+  Keep package metadata, runtime `__version__`, and the download pin aligned, and run
+  `.github/scripts/check_python_version.py`. Both server and Python CI enforce this;
+  a server release tag requires the base package without a post suffix. Publish the
+  server artifacts first, then the matching Python tag so its download tests can use them.
 
 ## What a tag publishes
 

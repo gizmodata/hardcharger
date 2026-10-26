@@ -44,6 +44,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Python package tracks the server version
+        working-directory: .
+        run: |
+          args=()
+          if [[ "$GITHUB_REF" == refs/tags/python-v* ]]; then args+=(--python-tag "$GITHUB_REF_NAME"); fi
+          python3 .github/scripts/check_python_version.py "${args[@]}"
       # Remove at Hardcharger 2.0.0 together with .github/scripts/check_no_version_labels.py:
       # until then the docs say "Hardcharger", never "Hardcharger 0.x".
       - name: No version labels in the docs

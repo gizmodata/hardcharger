@@ -9,6 +9,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Enforce server/PyPI package version alignment for 2.1.0+: a server release `X.Y.Z`
+  uses `hardcharger==X.Y.Z`; Python-only fixes use `X.Y.Z.postN` while downloading the
+  same base server. CI rejects version or tag drift; AGENTS.md and CLAUDE.md record the rule.
+
 - Desktop Stop and Restart require a confirmation modal from the dashboard, app menu
   and system tray, explaining interrupted work, disconnected sessions and closed SQL
   windows. Cancel is the default; Escape dismisses without changing the server.
