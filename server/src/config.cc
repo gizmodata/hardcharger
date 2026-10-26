@@ -107,6 +107,9 @@ const std::vector<Option>& Options() {
       {"max_result_partitions", Kind::kInt,
        "most partitions a result is split into for a client that reads them at once (1: never split)",
        NUMBER(max_result_partitions)},
+      {"max_ingest_message_bytes", Kind::kInt,
+       "most wire bytes per Arrow ingest message and expanded buffer bytes per batch (default: 64 MiB)",
+       NUMBER(max_ingest_message_bytes)},
       {"web_ui", Kind::kBool,
        "serve the web UI at /ui on this port (a build that embeds it)", FLAG(web_ui)},
       {"trusted_proxies", Kind::kList,
@@ -239,6 +242,12 @@ const std::vector<Option>& Options() {
        "seconds a retained result (resumable, readable again) is kept after its statement ends, "
        "from 1 to 2592000 (30 days); its statement document's expires_at says until when",
        NUMBER(result_retention_seconds)},
+      {"retained_bytes_per_principal", Kind::kInt,
+       "retained Arrow buffer bytes per principal (default: 1 GiB; 0: no nonempty retained results)",
+       NUMBER(retained_bytes_per_principal)},
+      {"retained_bytes_total", Kind::kInt,
+       "retained Arrow buffer bytes shared by the whole server (default: 1 GiB; 0: no nonempty retained results)",
+       NUMBER(retained_bytes_total)},
       // Statements
       {"query_timeout_seconds", Kind::kInt, "default statement timeout (0: none)", NUMBER(query_timeout_seconds)},
       {"print_queries", Kind::kBool,
@@ -629,6 +638,9 @@ void Validate(Loaded& loaded) {
     throw std::invalid_argument("max_result_partitions must be from 1 to 256");
   }
   if (c.result_batch_rows < 1) throw std::invalid_argument("result_batch_rows must be positive");
+  if (c.max_ingest_message_bytes < 1) throw std::invalid_argument("max_ingest_message_bytes must be positive");
+  if (c.retained_bytes_per_principal < 0 || c.retained_bytes_total < 0)
+    throw std::invalid_argument("retained byte limits cannot be negative");
   if (c.max_sessions < 0 || c.session_idle_timeout < 0 || c.shutdown_grace_period_seconds < 0 ||
       c.max_concurrent_statements < 0) {
     throw std::invalid_argument(

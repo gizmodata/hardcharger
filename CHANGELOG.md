@@ -9,6 +9,14 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Configurable Arrow upload-message limit (`max_ingest_message_bytes`, default 64 MiB),
+  checked before wire-body allocation and before expanded-buffer allocation on ordinary,
+  partitioned and prepared uploads. Oversized messages return `payload_too_large` (413).
+- Startup settings for per-principal and server-wide retained-result buffer budgets
+  (`retained_bytes_per_principal` and `retained_bytes_total`, default 1 GiB each).
+  Exhaustion fails with `result_quota_exceeded`; nested/dictionary Arrow buffers count.
+- Backpressure design note for resumable production, transactional ingest and global
+  unretained-buffer accounting. Shared engine-worker parking remains pending that work.
 - SQL Monitor in the web SQL workspace for unrestricted administrators, enabled with
   server instrumentation. Shows live queued, executing, and fetching statements regardless
   of age, recent outcomes (10 minutes by default), execution and queue timeouts, statement

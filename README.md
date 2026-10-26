@@ -921,6 +921,28 @@ same user and tenant), and `hardcharger_sessions()` follows the same rule. Retai
 (resumable) results are kept for `result_retention_seconds` (default 3600) after their
 statement ends; the statement document's `expires_at` says until when.
 
+Retained results also reserve Arrow buffer bytes against two startup limits:
+`retained_bytes_per_principal` and `retained_bytes_total`, both 1073741824 (1 GiB) by
+default. The second is shared by all principals and sessions. Either limit being reached
+fails the statement with `result_quota_exceeded`; zero refuses nonempty retained results.
+Delete a statement or close its session to release its cache; expiry frees it once any
+read already in progress ends. Nested and dictionary buffers count too. These limits
+cover cached Arrow buffers, not DuckDB execution memory, temporary encoding references
+or all unretained streams. DuckDB's `memory_limit` is separate.
+
+`max_ingest_message_bytes` defaults to 67108864 (64 MiB). Each Arrow IPC message must
+fit on the wire, including its framing and metadata, and the sum of its expanded buffers
+must fit before decompression. This applies to ordinary ingest, every partitioned-ingest
+part, and Arrow prepared parameters, including dictionary messages. Oversized input is
+refused with HTTP 413 `payload_too_large` before the requested allocation. It limits each
+message, not the total upload; split larger data into smaller record batches. It must be
+positive. All three options accept YAML names as shown, CLI names with hyphens, and
+`HARDCHARGER_` environment variables with uppercase names. They appear as read-only
+startup settings in Server Configuration; restart the server to change them.
+
+The remaining engine-worker scheduling issue and a proposed global budget for
+unretained streams are described in [the backpressure design note](docs/backpressure-resume-design.md).
+
 A session is evicted within 5 s (the server's sweep interval) after `session_idle_timeout`
 seconds (default 900; 0 never evicts) without a request on it, unless one of its statements
 is still running, one of its ingests is in progress, one of its results is being read (a

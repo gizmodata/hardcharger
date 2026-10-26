@@ -19,6 +19,7 @@ struct Config {
   int64_t health_port = 0;  // plaintext /health listener; 0 = none
   int64_t max_header_bytes = 16 * 1024;  // larger request headers get 431
   int64_t max_result_partitions = 32;    // most partitions a client may have a result split into
+  int64_t max_ingest_message_bytes = 64 * 1024 * 1024;  // wire/expanded bytes per Arrow ingest message
   bool web_ui = false;  // serve the embedded web UI at /ui on this listener
   // Reverse proxies (CIDRs, or single addresses) whose X-Forwarded-For / Forwarded headers
   // name the client in logs, audit, sessions and the per-address sign-in bound; never
@@ -97,6 +98,8 @@ struct Config {
   int64_t session_idle_timeout = 900;  // seconds; 0 = never
   // How long a retained result (Warp SQL §6.5) can be read again, from its statement's end.
   int64_t result_retention_seconds = 3600;
+  int64_t retained_bytes_per_principal = int64_t{1} << 30;
+  int64_t retained_bytes_total = int64_t{1} << 30;
 
   // Statements
   int64_t query_timeout_seconds = 0;  // 0 = none

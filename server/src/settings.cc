@@ -287,6 +287,14 @@ std::vector<Setting> Build() {
            .default_value = number(kDefaults.session_idle_timeout),
            .description = "Seconds an idle session lives (0: forever).",
            .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.session_idle_timeout); })});
+  startup({.name = "retained_bytes_per_principal", .input_type = "INTEGER", .option = "retained_bytes_per_principal",
+           .default_value = number(kDefaults.retained_bytes_per_principal),
+           .description = "Retained Arrow buffer byte limit per principal (0 refuses nonempty retained results).",
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.retained_bytes_per_principal); })});
+  startup({.name = "retained_bytes_total", .input_type = "INTEGER", .option = "retained_bytes_total",
+           .default_value = number(kDefaults.retained_bytes_total),
+           .description = "Retained Arrow buffer byte limit shared by all sessions and principals.",
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.retained_bytes_total); })});
   startup({.name = "version", .input_type = "VARCHAR", .description = "Server version (as HARDCHARGER_VERSION()).",
            .get_global = config_value([](const Runtime&) { return std::string(kVersion); })});
   startup({.name = "read_only", .input_type = "BOOLEAN", .option = "read_only",
@@ -296,6 +304,10 @@ std::vector<Setting> Build() {
   startup({.name = "max_header_bytes", .input_type = "INTEGER", .option = "max_header_bytes",
            .default_value = number(kDefaults.max_header_bytes), .description = "Largest request header block accepted, in bytes.",
            .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.max_header_bytes); })});
+  startup({.name = "max_ingest_message_bytes", .input_type = "INTEGER", .option = "max_ingest_message_bytes",
+           .default_value = number(kDefaults.max_ingest_message_bytes),
+           .description = "Maximum wire bytes per Arrow ingest message and total expanded buffer bytes per batch.",
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.max_ingest_message_bytes); })});
   startup({.name = "memory_limit", .input_type = "VARCHAR", .option = "memory_limit",
            .description = "DuckDB memory_limit (empty: DuckDB's default).",
            .get_global = config_value([](const Runtime& r) { return r.config.memory_limit; })});

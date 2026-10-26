@@ -100,7 +100,7 @@ def test_queries_execute_through_the_queue(server):
 
 def test_settings_table_is_composable(server):
     table = server.admin().query(sql="SELECT name, value, settable FROM hardcharger_settings() WHERE name LIKE 'hardcharger.max%'")
-    assert table.num_rows == 5 and table.num_columns == 3, table.to_pylist()
+    assert table.num_rows == 6 and table.num_columns == 3, table.to_pylist()
 
 
 def test_queue_serializes_concurrent_statements(server):
