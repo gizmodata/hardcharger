@@ -107,6 +107,9 @@ const std::vector<Option>& Options() {
       {"max_result_partitions", Kind::kInt,
        "most partitions a result is split into for a client that reads them at once (1: never split)",
        NUMBER(max_result_partitions)},
+      {"max_ingest_message_bytes", Kind::kInt,
+       "most wire bytes per Arrow ingest message and expanded buffer bytes per batch (default: 64 MiB)",
+       NUMBER(max_ingest_message_bytes)},
       {"web_ui", Kind::kBool,
        "serve the web UI at /ui on this port (a build that embeds it)", FLAG(web_ui)},
       {"trusted_proxies", Kind::kList,
@@ -628,6 +631,7 @@ void Validate(Loaded& loaded) {
   if (c.max_result_partitions < 1 || c.max_result_partitions > 256) {
     throw std::invalid_argument("max_result_partitions must be from 1 to 256");
   }
+  if (c.max_ingest_message_bytes < 1) throw std::invalid_argument("max_ingest_message_bytes must be positive");
   if (c.result_batch_rows < 1) throw std::invalid_argument("result_batch_rows must be positive");
   if (c.max_sessions < 0 || c.session_idle_timeout < 0 || c.shutdown_grace_period_seconds < 0 ||
       c.max_concurrent_statements < 0) {

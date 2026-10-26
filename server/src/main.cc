@@ -85,6 +85,7 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   }
   options.max_header_bytes = static_cast<std::size_t>(config.max_header_bytes);
   options.max_result_partitions = static_cast<std::size_t>(config.max_result_partitions);
+  options.max_ingest_message_bytes = static_cast<std::size_t>(config.max_ingest_message_bytes);
   options.token_lifetime = std::chrono::seconds(config.token_lifetime_seconds);
   options.result_ttl = std::chrono::seconds(config.result_retention_seconds);
   // 0 means "never": a session then lives until it is closed.

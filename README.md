@@ -956,6 +956,15 @@ same user and tenant), and `hardcharger_sessions()` follows the same rule. Retai
 (resumable) results are kept for `result_retention_seconds` (default 3600) after their
 statement ends; the statement document's `expires_at` says until when.
 
+`max_ingest_message_bytes` defaults to 67108864 (64 MiB). Each Arrow IPC message
+must fit on the wire, including framing and metadata, and its aggregate expanded buffers
+must fit before decompression. This applies to ordinary ingest, partitioned-ingest parts,
+dictionaries and Arrow prepared parameters. Oversized input returns HTTP 413
+`payload_too_large` before the requested allocation. Split larger uploads into smaller
+record batches: the limit is per message, not per upload. Configure this positive startup
+setting with YAML, `--max-ingest-message-bytes` or `HARDCHARGER_MAX_INGEST_MESSAGE_BYTES`;
+it is visible in Server Configuration and takes effect after restarting the server.
+
 A session is evicted within 5 s (the server's sweep interval) after `session_idle_timeout`
 seconds (default 900; 0 never evicts) without a request on it, unless one of its statements
 is still running, one of its ingests is in progress, one of its results is being read (a

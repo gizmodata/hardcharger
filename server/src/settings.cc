@@ -296,6 +296,10 @@ std::vector<Setting> Build() {
   startup({.name = "max_header_bytes", .input_type = "INTEGER", .option = "max_header_bytes",
            .default_value = number(kDefaults.max_header_bytes), .description = "Largest request header block accepted, in bytes.",
            .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.max_header_bytes); })});
+  startup({.name = "max_ingest_message_bytes", .input_type = "INTEGER", .option = "max_ingest_message_bytes",
+           .default_value = number(kDefaults.max_ingest_message_bytes),
+           .description = "Maximum wire bytes per Arrow ingest message and total expanded buffer bytes per batch.",
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.max_ingest_message_bytes); })});
   startup({.name = "memory_limit", .input_type = "VARCHAR", .option = "memory_limit",
            .description = "DuckDB memory_limit (empty: DuckDB's default).",
            .get_global = config_value([](const Runtime& r) { return r.config.memory_limit; })});

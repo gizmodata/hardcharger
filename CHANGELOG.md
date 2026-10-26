@@ -102,6 +102,11 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Reject oversized Arrow IPC ingest messages and expanded compressed buffers before
+  allocation, with HTTP 413 `payload_too_large`. The configurable startup limit
+  `max_ingest_message_bytes` defaults to 64 MiB per message; ordinary and partitioned
+  ingest, dictionaries and Arrow prepared parameters all enforce it.
+
 - Closing the native SQL Workspace waits for all of that window's session DELETEs
   before destroying it, preventing idle sessions from accumulating on reopen. An open
   transaction still requires confirmation; Cancel and Escape preserve its sessions.
