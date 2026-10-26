@@ -145,4 +145,15 @@ footer { padding:14px 32px; border-top:1px solid var(--soft); display:flex; just
 .managed-label { color:var(--faint); font-size:10px; }
 .save-settings { margin-top:20px; }
 .settings-notice { padding:12px; color:var(--green); background:var(--green-soft); border-radius:5px; font-size:12px; }
+.network-settings { margin:26px 0; padding:22px 0; border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
+.network-settings [hidden] { display:none; }
+.network-settings .field { margin-top:18px; }
+.network-settings input, .network-settings select { width:100%; min-width:0; padding:9px 12px; border:1px solid var(--border); border-radius:5px; background:var(--bg); color:var(--text); font:inherit; }
+.network-settings input:disabled, .network-settings select:disabled { opacity:.6; }
+.network-settings > .field { max-width:350px; }
+.network-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 22px; }
+.network-warning { padding:12px; border:1px solid var(--border); border-radius:5px; color:var(--text); background:var(--bg); font-size:12px; line-height:1.6; }
+.network-connection { margin:18px 0; padding:22px; overflow-wrap:anywhere; }
+.network-connection p { font-size:12px; line-height:1.7; }
+.stat strong.mono { overflow-wrap:anywhere; }
 @media(max-width:960px) { .sidebar { width:190px; padding-left:12px; padding-right:12px; } main { margin-left:190px; width:calc(100% - 190px); } header { padding:0 24px; } .content { padding:24px; } .hero { padding:24px; } .hero-mascot { width:140px; } .hero h2 { font-size:23px; } .hero-content { width:75%; } .control-note { display:none; } .stats { gap:10px; } .stat { padding:16px; } .stat strong.mono { font-size:13px; } }

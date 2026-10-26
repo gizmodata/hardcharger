@@ -3,7 +3,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom},
-    net::TcpListener,
+    net::{IpAddr, SocketAddr, TcpListener},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
@@ -15,6 +15,35 @@ pub struct Settings {
     pub port: u16,
     pub start_on_open: bool,
     pub server_options: BTreeMap<String, serde_json::Value>,
+    pub network: NetworkSettings,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NetworkSettings {
+    pub enabled: bool,
+    pub listen_address: String,
+    pub server_name: String,
+    pub tls: bool,
+    pub tls_cert: String,
+    pub tls_key: String,
+    pub username: String,
+    pub password: String,
+}
+
+impl Default for NetworkSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen_address: "0.0.0.0".into(),
+            server_name: String::new(),
+            tls: true,
+            tls_cert: String::new(),
+            tls_key: String::new(),
+            username: "hardcharger".into(),
+            password: String::new(),
+        }
+    }
 }
 
 impl Default for Settings {
@@ -23,6 +52,7 @@ impl Default for Settings {
             port: 31337,
             start_on_open: true,
             server_options: BTreeMap::new(),
+            network: NetworkSettings::default(),
         }
     }
 }
@@ -31,6 +61,40 @@ impl Settings {
     pub fn validate(&self) -> Result<(), String> {
         if self.port < 1024 {
             return Err("Choose a port between 1024 and 65535.".into());
+        }
+        let n = &self.network;
+        if n.enabled {
+            n.listen_address.parse::<IpAddr>().map_err(|_| {
+                "Listen address must be an IPv4 or IPv6 address (for example 0.0.0.0)."
+            })?;
+            let host = n.server_name.trim_matches(['[', ']']);
+            if host.is_empty()
+                || host
+                    .chars()
+                    .any(|c| c.is_whitespace() || matches!(c, '/' | '\\' | '@' | '?' | '#'))
+                || (host.contains(':') && host.parse::<IpAddr>().is_err())
+                || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_unspecified())
+            {
+                return Err("Server address must be a DNS name or usable IP address, without a scheme, port or path.".into());
+            }
+            let authority = if host.contains(':') {
+                format!("[{host}]")
+            } else {
+                host.into()
+            };
+            tauri::Url::parse(&format!("https://{authority}:{}", self.port))
+                .map_err(|_| "Server address must be a valid DNS name or IP address.")?;
+            if n.username.trim().is_empty() || n.username.chars().any(char::is_control) {
+                return Err("Network access requires a user name.".into());
+            }
+            if n.password.is_empty() {
+                return Err("Set a password before allowing network connections.".into());
+            }
+            if n.tls && (n.tls_cert.is_empty() || n.tls_key.is_empty()) {
+                return Err(
+                    "TLS requires both a PEM certificate chain and private key path.".into(),
+                );
+            }
         }
         Ok(())
     }
@@ -65,6 +129,7 @@ pub struct Server {
 }
 
 const REDACTED: &str = "__HARDCHARGER_STORED_SECRET__";
+const NETWORK_PASSWORD: &str = "__desktop_network_password__";
 
 // Fixed string domains validated by server/src/config.cc. Keep free-form strings
 // (paths, catalog names, roles, DuckDB memory/storage settings) as text fields.
@@ -155,13 +220,43 @@ fn public_settings(settings: &Settings) -> Settings {
             *value = REDACTED.into();
         }
     }
+    if !result.network.password.is_empty() {
+        result.network.password = REDACTED.into();
+    }
     result
+}
+
+fn settings_secrets(settings: &Settings) -> BTreeMap<String, serde_json::Value> {
+    let mut secrets: BTreeMap<_, _> = settings
+        .server_options
+        .iter()
+        .filter(|(key, _)| is_secret(key))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    if !settings.network.password.is_empty() {
+        secrets.insert(
+            NETWORK_PASSWORD.into(),
+            settings.network.password.clone().into(),
+        );
+    }
+    secrets
 }
 
 fn random_secret() -> Result<String, String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(|e| e.to_string())?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+fn request_error(error: reqwest::Error) -> String {
+    let mut text = error.to_string();
+    let mut cause = std::error::Error::source(&error);
+    while let Some(source) = cause {
+        text.push_str(": ");
+        text.push_str(&source.to_string());
+        cause = source.source();
+    }
+    text
 }
 
 impl Server {
@@ -179,10 +274,11 @@ impl Server {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
             Err(e) => return Err(e.to_string()),
         };
-        if settings
-            .server_options
-            .values()
-            .any(|v| v.as_str() == Some(REDACTED))
+        if settings.network.password == REDACTED
+            || settings
+                .server_options
+                .values()
+                .any(|v| v.as_str() == Some(REDACTED))
         {
             let stored = credential_store()?.get_password().map_err(|e| {
                 format!("Could not read server credentials from the OS credential store: {e}")
@@ -196,6 +292,13 @@ impl Server {
                         .ok_or_else(|| format!("Missing stored credential for {name}."))?
                         .clone();
                 }
+            }
+            if settings.network.password == REDACTED {
+                settings.network.password = secrets
+                    .get(NETWORK_PASSWORD)
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing stored network password.")?
+                    .into();
             }
         }
         settings.validate()?;
@@ -236,7 +339,99 @@ impl Server {
     }
 
     pub fn endpoint(&self) -> String {
-        format!("http://127.0.0.1:{}", self.settings.port)
+        if !self.settings.network.enabled {
+            return format!("http://127.0.0.1:{}", self.settings.port);
+        }
+        let host = self.settings.network.server_name.trim_matches(['[', ']']);
+        let host = if host.contains(':') {
+            format!("[{host}]")
+        } else {
+            host.into()
+        };
+        let url = format!(
+            "{}://{host}:{}",
+            if self.settings.network.tls {
+                "https"
+            } else {
+                "http"
+            },
+            self.settings.port
+        );
+        // Match the canonical origin that the webview reports to the token handoff.
+        tauri::Url::parse(&url)
+            .map(|url| url.origin().ascii_serialization())
+            .unwrap_or(url)
+    }
+
+    fn listen_address(&self) -> Result<IpAddr, String> {
+        if !self.settings.network.enabled {
+            return Ok(IpAddr::from([127, 0, 0, 1]));
+        }
+        self.settings
+            .network
+            .listen_address
+            .parse()
+            .map_err(|_| "Invalid listen address.".into())
+    }
+
+    fn username(&self) -> &str {
+        if self.settings.network.enabled {
+            &self.settings.network.username
+        } else {
+            "hardcharger"
+        }
+    }
+
+    fn http_client(&self) -> Result<reqwest::blocking::Client, String> {
+        let mut builder = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(2));
+        if self.settings.network.enabled {
+            let listen = self.listen_address()?;
+            let control = if listen.is_unspecified() {
+                if listen.is_ipv4() {
+                    IpAddr::from([127, 0, 0, 1])
+                } else {
+                    IpAddr::from(std::net::Ipv6Addr::LOCALHOST)
+                }
+            } else {
+                listen
+            };
+            let endpoint =
+                tauri::Url::parse(&self.endpoint()).map_err(|_| "Invalid server address.")?;
+            let host = endpoint
+                .host_str()
+                .ok_or("Missing server address.")?
+                .trim_matches(['[', ']']);
+            // DNS names keep their TLS identity but control traffic always reaches
+            // our own listener, even before the machine's DNS is configured.
+            if host.parse::<IpAddr>().is_err() {
+                builder = builder.resolve(host, SocketAddr::new(control, self.settings.port));
+            } else {
+                let address: IpAddr = host.parse().map_err(|_| "Invalid server address.")?;
+                if (!listen.is_unspecified() && address != listen)
+                    || TcpListener::bind((address, 0)).is_err()
+                {
+                    return Err("The server IP address must belong to this computer and match the listen address.".into());
+                }
+            }
+            if self.settings.network.tls {
+                let pem = fs::read(&self.settings.network.tls_cert)
+                    .map_err(|e| format!("Could not read TLS certificate: {e}"))?;
+                let certificates = reqwest::Certificate::from_pem_bundle(&pem)
+                    .map_err(|e| format!("Invalid PEM certificate chain: {e}"))?;
+                if certificates.is_empty() {
+                    return Err("The certificate file contains no PEM certificates.".into());
+                }
+                for cert in certificates {
+                    builder = builder.add_root_certificate(cert);
+                }
+                File::open(&self.settings.network.tls_key)
+                    .map_err(|e| format!("Could not read TLS private key: {e}"))?;
+            }
+        }
+        builder.build().map_err(|e| e.to_string())
     }
 
     pub fn status(&mut self) -> Result<Status, String> {
@@ -270,14 +465,27 @@ impl Server {
             return self.status();
         }
         self.error = None;
+        self.settings.validate()?;
+        let client = self.http_client()?;
         // Refuse a collision; never attach to, authenticate to, or stop somebody else's server.
-        let reservation = TcpListener::bind(("127.0.0.1", self.settings.port)).map_err(|_| {
-            format!(
-                "Port {} is already in use. Choose another port in Settings.",
-                self.settings.port
-            )
-        })?;
-        self.password = random_secret()?;
+        let reservation =
+            TcpListener::bind((self.listen_address()?, self.settings.port)).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AddrInUse {
+                    format!(
+                        "Port {} is already in use. Choose another port in Settings.",
+                        self.settings.port
+                    )
+                } else {
+                    format!(
+                        "Could not bind the listen address: {e}. Check Network access in Settings."
+                    )
+                }
+            })?;
+        self.password = if self.settings.network.enabled {
+            self.settings.network.password.clone()
+        } else {
+            random_secret()?
+        };
         let log = OpenOptions::new()
             .create(true)
             .append(true)
@@ -287,10 +495,10 @@ impl Server {
         command
             .current_dir(&self.directory)
             .args([
-                "--host=127.0.0.1",
+                &format!("--host={}", self.listen_address()?),
                 &format!("--port={}", self.settings.port),
                 "--web-ui=true",
-                "--admin-username=hardcharger",
+                &format!("--admin-username={}", self.username()),
                 "--health-port=0",
                 "--metrics-port=0",
                 "--graceful-shutdown=true",
@@ -309,6 +517,11 @@ impl Server {
             .stdin(Stdio::null())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
+        if self.settings.network.enabled && self.settings.network.tls {
+            command
+                .arg(format!("--tls-cert={}", self.settings.network.tls_cert))
+                .arg(format!("--tls-key={}", self.settings.network.tls_key));
+        }
         // A terminal's server configuration must not silently change the app's networking,
         // TLS, credentials, init SQL, or logging. Leave ordinary OS/home variables intact.
         for (key, _) in std::env::vars_os() {
@@ -361,39 +574,36 @@ impl Server {
                     .clone()
                     .unwrap_or("The server stopped during startup.".into()));
             }
-            if self.sign_in().is_ok() {
+            let sign_in = self.sign_in_with(&client);
+            if sign_in.is_ok() {
                 // Also verify the actual web interface is embedded in this server build.
-                let ready = reqwest::blocking::Client::builder()
-                    .no_proxy()
-                    .timeout(Duration::from_secs(2))
-                    .build()
-                    .map_err(|e| e.to_string())?
-                    .get(format!("{}/ui/", self.endpoint()))
-                    .send();
+                let ready = client.get(format!("{}/ui/", self.endpoint())).send();
                 if ready.is_ok_and(|r| r.status().is_success()) {
                     return self.status();
                 }
             }
             if Instant::now() >= deadline {
                 self.stop()?;
-                return Err("The server did not become ready within 30 seconds. Check Logs and use a build with the web UI embedded.".into());
+                return Err(format!("The server did not become ready within 30 seconds. Check Logs, the server address, and TLS certificate names. {}", sign_in.err().unwrap_or_default()));
             }
             std::thread::sleep(Duration::from_millis(150));
         }
     }
 
     pub fn sign_in(&self) -> Result<serde_json::Value, String> {
+        self.sign_in_with(&self.http_client()?)
+    }
+
+    fn sign_in_with(
+        &self,
+        client: &reqwest::blocking::Client,
+    ) -> Result<serde_json::Value, String> {
         if self.child.is_none() {
             return Err("Start the local server first.".into());
         }
-        let client = reqwest::blocking::Client::builder()
-            .no_proxy()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .map_err(|e| e.to_string())?;
         let response = client.post(format!("{}/warp/v1/auth/token", self.endpoint()))
-            .json(&serde_json::json!({"grant_type": "password", "username": "hardcharger", "password": self.password}))
-            .send().and_then(|r| r.error_for_status()).map_err(|_| "Could not sign in to the local server.".to_string())?;
+            .json(&serde_json::json!({"grant_type": "password", "username": self.username(), "password": self.password}))
+            .send().and_then(|r| r.error_for_status()).map_err(|e| format!("Could not sign in to the desktop server: {}", request_error(e)))?;
         let token: serde_json::Value = response.json().map_err(|e| e.to_string())?;
         let access = token["access_token"]
             .as_str()
@@ -403,7 +613,7 @@ impl Server {
             .map_err(|e| e.to_string())?
             .as_millis() as u64
             + token["expires_in"].as_u64().unwrap_or(3600) * 1000;
-        Ok(serde_json::json!({"username": "hardcharger", "token": access, "expiresAt": expires}))
+        Ok(serde_json::json!({"username": self.username(), "token": access, "expiresAt": expires}))
     }
 
     pub fn stop(&mut self) -> Result<Status, String> {
@@ -436,6 +646,10 @@ impl Server {
     pub fn save_settings(&mut self, settings: Settings) -> Result<Status, String> {
         settings.validate()?;
         let mut settings = settings;
+        if settings.network.password == REDACTED {
+            settings.network.password = self.settings.network.password.clone();
+        }
+        settings.validate()?;
         for (name, value) in &mut settings.server_options {
             if value.as_str() == Some(REDACTED) {
                 *value = self
@@ -453,18 +667,8 @@ impl Server {
         if self.status()?.running {
             return Err("Stop the server before changing its settings.".into());
         }
-        let secrets: BTreeMap<_, _> = settings
-            .server_options
-            .iter()
-            .filter(|(key, _)| is_secret(key))
-            .collect();
-        if !secrets.is_empty()
-            || self
-                .settings
-                .server_options
-                .keys()
-                .any(|key| is_secret(key))
-        {
+        let secrets = settings_secrets(&settings);
+        if !secrets.is_empty() || !settings_secrets(&self.settings).is_empty() {
             credential_store()?
                 .set_password(&serde_json::to_string(&secrets).map_err(|e| e.to_string())?)
                 .map_err(|e| {
@@ -620,6 +824,113 @@ fn tail(path: &Path, maximum: u64) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_defaults_migration_validation_and_secret_redaction() {
+        let old: Settings =
+            serde_json::from_str(r#"{"port":31337,"start_on_open":true,"server_options":{}}"#)
+                .unwrap();
+        assert!(!old.network.enabled);
+        assert!(old.network.tls);
+        let mut settings = old;
+        settings.network.enabled = true;
+        assert!(settings.validate().is_err());
+        settings.network.server_name = "desktop.test".into();
+        settings.network.password = "synthetic-network-test-password".into();
+        assert!(settings.validate().is_err()); // No certificate/key yet.
+        settings.network.tls = false;
+        assert!(settings.validate().is_ok());
+        let public = public_settings(&settings);
+        assert_eq!(public.network.password, REDACTED);
+        assert!(!serde_json::to_string(&public)
+            .unwrap()
+            .contains("synthetic-network-test-password"));
+        assert_eq!(
+            settings_secrets(&settings)[NETWORK_PASSWORD],
+            "synthetic-network-test-password"
+        );
+        for host in [
+            "",
+            "0.0.0.0",
+            "::",
+            "https://desktop.test",
+            "user@desktop.test",
+            "desktop.test:31337",
+            "desktop.test/path",
+        ] {
+            settings.network.server_name = host.into();
+            assert!(settings.validate().is_err(), "{host}");
+        }
+        settings.network.server_name = "[::1]".into();
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn network_listener_credentials_and_tls_with_real_server() {
+        let Some(binary) = std::env::var_os("HARDCHARGER_DESKTOP_TEST_SERVER") else {
+            return;
+        };
+        for tls in [false, true] {
+            let directory = std::env::temp_dir().join(format!(
+                "hardcharger-network-test-{}",
+                random_secret().unwrap()
+            ));
+            let mut server = Server::new(binary.clone().into(), directory.clone()).unwrap();
+            if tls {
+                let mut parameters = rcgen::CertificateParams::new(vec![
+                    "desktop.test".into(),
+                    "localhost".into(),
+                    "127.0.0.1".into(),
+                ])
+                .unwrap();
+                parameters.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(1);
+                parameters.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(30);
+                parameters.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+                parameters.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
+                let key = rcgen::KeyPair::generate().unwrap();
+                let certificate = parameters.self_signed(&key).unwrap();
+                fs::write(directory.join("test.pem"), certificate.pem()).unwrap();
+                private_write(&directory.join("test.key"), key.serialize_pem().as_bytes()).unwrap();
+            }
+            let bind = if tls { "127.0.0.1" } else { "::1" };
+            let reservation = TcpListener::bind((bind, 0)).unwrap();
+            server.settings.port = reservation.local_addr().unwrap().port();
+            drop(reservation);
+            server.settings.network = NetworkSettings {
+                enabled: true,
+                listen_address: bind.into(),
+                server_name: "desktop.test".into(),
+                tls,
+                username: "desktop-network-admin".into(),
+                password: "synthetic-network-test-password".into(),
+                tls_cert: directory.join("test.pem").display().to_string(),
+                tls_key: directory.join("test.key").display().to_string(),
+            };
+            assert!(server.start().unwrap().running);
+            let token = server.sign_in().unwrap();
+            assert_eq!(token["username"], "desktop-network-admin");
+            assert!(token["token"].as_str().unwrap().len() > 20);
+            let rejected = server.http_client().unwrap().post(format!("{}/warp/v1/auth/token", server.endpoint()))
+                .json(&serde_json::json!({"grant_type":"password", "username":"desktop-network-admin", "password":"wrong"}))
+                .send().unwrap();
+            assert_eq!(rejected.status(), reqwest::StatusCode::UNAUTHORIZED);
+            let config = fs::read_to_string(directory.join("server.yaml")).unwrap();
+            assert!(!config.contains("synthetic-network-test-password"));
+            if tls {
+                server.settings.network.server_name = "wrong-host.test".into();
+                assert!(
+                    server.sign_in().is_err(),
+                    "TLS hostname verification must remain enabled"
+                );
+                server.settings.network.server_name = "desktop.test".into();
+            } else {
+                assert!(std::net::TcpStream::connect(("127.0.0.1", server.settings.port)).is_err());
+            }
+            assert!(!server.stop().unwrap().running);
+            assert!(TcpListener::bind((bind, server.settings.port)).is_ok());
+            fs::remove_dir_all(directory).unwrap();
+        }
+    }
 
     #[test]
     fn fixed_choices_match_server_validation() {

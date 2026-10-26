@@ -1,11 +1,12 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { stringify } from "yaml";
+import { defaultNetwork, validateNetwork, type NetworkSettings } from "./network";
 import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, type ServerOption } from "./configuration";
 import "./style.css";
 import "./palette.css";
 
-interface Settings { port: number; start_on_open: boolean; server_options: Record<string, unknown> }
+interface Settings { port: number; start_on_open: boolean; server_options: Record<string, unknown>; network?: NetworkSettings }
 interface Status {
   running: boolean; pid: number | null; port: number; endpoint: string;
   database: string; logFile: string; uptimeSeconds: number; databaseBytes: number;
@@ -87,6 +88,7 @@ function render() {
   });
   document.querySelector("#settings-form")?.addEventListener("submit", e => {
     e.preventDefault();
+    if (busy) return;
     const data = new FormData(e.target as HTMLFormElement);
     try {
       const options: Record<string, unknown> = {};
@@ -106,9 +108,34 @@ function render() {
         else if (option.type === "list") options[option.name] = text.split("\n").filter(v => v !== "");
         else options[option.name] = text;
       }
-      void saveSettings({ port: Number(data.get("port")), start_on_open: data.get("start") === "on", server_options: options });
-    } catch (e) { showError(e); }
+      const previous = current?.settings.network ?? defaultNetwork;
+      const password = String(data.get("network-password") ?? "");
+      const network: NetworkSettings = {
+        enabled: data.get("network-mode") === "network",
+        listen_address: String(data.get("network-listen") ?? previous.listen_address).trim(),
+        server_name: String(data.get("network-name") ?? previous.server_name).trim(),
+        tls: data.get("network-transport") === "tls",
+        tls_cert: String(data.get("network-cert") ?? previous.tls_cert).trim(),
+        tls_key: String(data.get("network-key") ?? previous.tls_key).trim(),
+        username: String(data.get("network-user") ?? previous.username).trim(),
+        password: password || (previous.password === "__HARDCHARGER_STORED_SECRET__" ? previous.password : ""),
+      };
+      validateNetwork(network);
+      void saveSettings({ port: Number(data.get("port")), start_on_open: data.get("start") === "on", server_options: options, network });
+    } catch (e) { showFormError(e); }
   });
+  const updateNetwork = () => {
+    const fields = document.querySelector<HTMLElement>("#network-fields");
+    if (fields) fields.hidden = document.querySelector<HTMLSelectElement>("#network-mode")?.value !== "network";
+    const tls = document.querySelector<HTMLSelectElement>("#network-transport")?.value === "tls";
+    const certificates = document.querySelector<HTMLElement>("#network-tls-fields");
+    if (certificates) certificates.hidden = !tls;
+    const plain = document.querySelector<HTMLElement>("#network-plaintext-note");
+    if (plain) plain.hidden = tls;
+  };
+  document.querySelector("#network-mode")?.addEventListener("change", updateNetwork);
+  document.querySelector("#network-transport")?.addEventListener("change", updateNetwork);
+  updateNetwork();
   document.querySelectorAll<HTMLInputElement>("[data-override]").forEach(input => input.addEventListener("change", () => {
     const field = document.getElementById(`option:${input.dataset.override}`) as HTMLInputElement;
     if (field) field.disabled = !input.checked;
@@ -147,10 +174,11 @@ function serverView(s: Status | null) {
       <div class="hero-content"><div class="status-label ${running ? "online" : "offline"}"><span class="nav-dot ${running ? "running" : ""}"></span>${busy ? "Working…" : running ? "RUNNING" : s ? "STOPPED" : "CONNECTING"}</div>
         <h2>${running ? "Ready for your next query." : "Your engine. Ready to go."}</h2>
         <p>${running ? "Your local Hardcharger server is up. Open the SQL workspace to query, import, and explore." : "Start Hardcharger to open your database and work with the full SQL workspace."}</p>
-        <div class="hero-actions">${running ? button("workspace", "Open SQL workspace", "arrow", true) : button("start", "Start server", "play", true, !s)}<span class="private-note">${icon("shield")}Local connections only</span></div>
+        <div class="hero-actions">${running ? button("workspace", "Open SQL workspace", "arrow", true) : button("start", "Start server", "play", true, !s)}<span class="private-note">${icon("shield")}${s?.settings.network?.enabled ? s.settings.network.tls ? "Network access · TLS" : "Network access · HTTP" : "Local connections only"}</span></div>
       </div>${picture("mascot", "Hardcharger charging bull mascot", "hero-mascot")}
     </section>
-    <div class="stats"><section class="card stat"><span class="stat-label">SERVER ADDRESS</span><strong class="mono">127.0.0.1:${s?.port ?? "—"}</strong><span>Warp SQL endpoint</span></section><section class="card stat"><span class="stat-label">UPTIME</span><strong>${running ? uptime(s!.uptimeSeconds) : "—"}</strong><span>${running ? "Since the last start" : "Server is stopped"}</span></section><section class="card stat"><span class="stat-label">DATABASE SIZE</span><strong>${s ? bytes(s.databaseBytes) : "—"}</strong><span>Stored on this computer</span></section></div>
+    <div class="stats"><section class="card stat"><span class="stat-label">SERVER ADDRESS</span><strong class="mono" title="${esc(s?.endpoint ?? "")}">${esc(s?.endpoint ?? "Loading…")}</strong><span>Warp SQL endpoint${s?.settings.network?.enabled ? ` · listening on ${esc(s.settings.network.listen_address)}` : ""}</span></section><section class="card stat"><span class="stat-label">UPTIME</span><strong>${running ? uptime(s!.uptimeSeconds) : "—"}</strong><span>${running ? "Since the last start" : "Server is stopped"}</span></section><section class="card stat"><span class="stat-label">DATABASE SIZE</span><strong>${s ? bytes(s.databaseBytes) : "—"}</strong><span>Stored on this computer</span></section></div>
+    ${s?.settings.network?.enabled ? `<section class="card network-connection"><h3>Connect from another computer</h3><p>SQL workspace: <code>${esc(s.endpoint)}/ui/</code></p><p>Warp SQL: <code>${esc(s.endpoint)}/warp</code> · user <code>${esc(s.settings.network.username)}</code></p><p class="muted">Use your saved network password. This computer must be awake; allow inbound TCP port ${s.port} in its firewall if needed.</p></section>` : ""}
     <section class="card detail-card"><div class="section-heading"><div><h3>Server controls</h3><p>Manage the server running on this computer.</p></div><span class="pill">${running ? `PID ${s?.pid}` : "Offline"}</span></div><div class="control-actions">${button("start", "Start", "play", false, running || !s)}${button("stop", "Stop", "stop", false, !running)}${button("restart", "Restart", "restart", false, !running)}<span class="control-note">Stopping closes the SQL workspace.</span></div><div class="database-row">${icon("folder")}<div><strong>Hardcharger.duckdb</strong><span title="${esc(s?.database ?? "")}">${esc(s?.database ?? "Loading database location…")}</span></div>${button("folder", "Show folder", "folder")}</div></section>
     <div class="resident-note">${icon("info")}<p><strong>Close the window. Keep the engine running.</strong> Hardcharger stays in your menu bar or system tray. Choose <strong>Quit Hardcharger</strong> there to stop the server and exit.</p></div>`;
 }
@@ -160,8 +188,9 @@ function settingsView(s: Status | null) {
     ${settingsNotice ? `<p class="settings-notice" role="status">${esc(settingsNotice)}</p>` : ""}
     <section class="card detail-card"><div class="section-heading"><div><h3>Configuration YAML</h3><p>Import server settings, or export a configuration for another machine.</p></div></div><div class="yaml-actions"><button id="choose-import" class="button" ${s?.running || !native || busy ? "disabled" : ""}>${icon("folder")}Import YAML</button><input id="import-yaml" type="file" accept=".yaml,.yml,.json" hidden><button id="export-yaml" class="button" ${!s ? "disabled" : ""}>Export YAML</button><span class="muted">Exports leave out passwords and other secrets.</span></div>${pendingImport ? `<div class="import-review"><h3>Review imported settings</h3><p class="muted">These settings replace your custom values. Existing stored secrets are kept unless the file supplies replacements. The server validates the configuration when it starts.</p><pre>${esc(stringify(Object.fromEntries(Object.entries(pendingImport).map(([key, value]) => [key, schema.find(o => o.name === key)?.secret ? "[secret supplied]" : value]))))}</pre><button id="apply-import" class="button primary">Apply imported settings</button> <button id="cancel-import" class="button">Cancel</button></div>` : ""}</section>
     <form id="settings-form" class="card detail-card"><div class="section-heading"><div><h3>Local server</h3><p>${s?.running ? "Stop the server to change these settings." : "Changes apply the next time the server starts."}</p></div></div>
-      <label class="field"><span>Port</span><input name="port" type="number" min="1024" max="65535" required value="${s?.settings.port ?? 31337}" ${s?.running || !native ? "disabled" : ""}><small>The server accepts connections from this computer only.</small></label>
+      <label class="field"><span>Port</span><input name="port" type="number" min="1024" max="65535" required value="${s?.settings.port ?? 31337}" ${s?.running || !native ? "disabled" : ""}><small>Used by the SQL workspace and Warp SQL clients.</small></label>
       <label class="check-row"><input name="start" type="checkbox" ${s?.settings.start_on_open ? "checked" : ""} ${s?.running || !native ? "disabled" : ""}><span><strong>Start server when Hardcharger opens</strong><small>Your database is ready when you need it.</small></span></label>
+      ${networkView(s)}
       <h3 class="options-heading">Server options</h3><p class="muted">Defaults come from this server build. Enable an override to change a value.</p>
       <div class="settings-search"><label for="settings-search">Search setting names</label><div class="settings-search-input"><input id="settings-search" type="search" placeholder="e.g. memory_limit" value="${esc(settingsSearch)}" autocomplete="off" aria-controls="server-options" aria-describedby="settings-search-status"><button id="clear-settings-search" class="button" type="button" hidden>Clear</button></div><p id="settings-search-status" class="muted" role="status" aria-live="polite"></p></div>
       <div id="server-options">
@@ -170,6 +199,34 @@ function settingsView(s: Status | null) {
       <button class="button primary save-settings" type="submit" ${s?.running || !native || busy ? "disabled" : ""}>Save settings</button>
     </form>
     <section class="card detail-card"><div class="section-heading"><div><h3>Application</h3><p>Keep Hardcharger close at hand.</p></div></div><label class="check-row"><input id="launch-login" type="checkbox" ${login ? "checked" : ""} ${!native ? "disabled" : ""}><span><strong>Launch at login</strong><small>Open quietly in the menu bar or system tray when you sign in.</small></span></label><p class="muted">The window can close while the server keeps running. Quit Hardcharger to stop it cleanly.</p></section>`;
+}
+
+function networkView(s: Status | null) {
+  const n = s?.settings.network ?? defaultNetwork;
+  const disabled = s?.running || !native || busy ? "disabled" : "";
+  return `<section class="network-settings" aria-label="Network access">
+    <h3>Network access</h3><p class="muted">Choose who can reach the server on this computer. Changes apply at the next server start.</p>
+    <label class="field"><span>Connections</span><select id="network-mode" name="network-mode" aria-label="Connections" ${disabled}><option value="local" ${!n.enabled ? "selected" : ""}>Only this computer</option><option value="network" ${n.enabled ? "selected" : ""}>Allow network connections</option></select></label>
+    <div id="network-fields" ${!n.enabled ? "hidden" : ""}>
+      <div class="network-grid">
+        <label class="field"><span>Listen IP address</span><input name="network-listen" aria-label="Listen IP address" value="${esc(n.listen_address)}" placeholder="0.0.0.0" ${disabled}><small>0.0.0.0 listens on all IPv4 interfaces; use a specific LAN IP to limit it.</small></label>
+        <label class="field"><span>Server DNS name or IP</span><input name="network-name" aria-label="Server DNS name or IP" value="${esc(n.server_name)}" placeholder="my-mac.local or 192.168.1.20" ${disabled}><small>The address clients use. It must resolve to this computer and match the TLS certificate.</small></label>
+        <label class="field"><span>Transport</span><select id="network-transport" name="network-transport" aria-label="Transport" ${disabled}><option value="tls" ${n.tls ? "selected" : ""}>TLS — encrypted (recommended)</option><option value="http" ${!n.tls ? "selected" : ""}>HTTP — unencrypted private network</option></select></label>
+      </div>
+      <p id="network-plaintext-note" class="network-warning" ${n.tls ? "hidden" : ""}>HTTP sends passwords, queries, and results without encryption. Use it only on a trusted private network.</p>
+      <div id="network-tls-fields" ${!n.tls ? "hidden" : ""}>
+        <div class="network-grid">
+          <label class="field"><span>TLS certificate chain (PEM path)</span><input name="network-cert" aria-label="TLS certificate chain (PEM path)" value="${esc(n.tls_cert)}" placeholder="/path/to/server.pem" ${disabled}></label>
+          <label class="field"><span>TLS private key (PEM path)</span><input name="network-key" aria-label="TLS private key (PEM path)" value="${esc(n.tls_key)}" placeholder="/path/to/server.key" ${disabled}></label>
+        </div>
+        <p class="muted">Certificate verification stays enabled. For the desktop SQL workspace and client browsers, trust a private CA in the operating system, or use a certificate already trusted there. Private keys stay in their files.</p>
+      </div>
+      <div class="network-grid">
+        <label class="field"><span>Administrator user name</span><input name="network-user" aria-label="Administrator user name" value="${esc(n.username)}" autocomplete="off" ${disabled}></label>
+        <label class="field"><span>Administrator password</span><input name="network-password" aria-label="Administrator password" type="password" autocomplete="new-password" placeholder="${n.password ? "Saved in OS credential store — leave blank to keep" : "Set a strong password"}" ${disabled}><small>Stored in the OS credential store. Other users can sign in through the server's configured access control or identity provider.</small></label>
+      </div>
+    </div>
+  </section>`;
 }
 
 function optionGroups(s: Status | null) {
@@ -252,6 +309,12 @@ function aboutView() {
 
 function showError(e: unknown) { error = String(e); render(); }
 
+function showFormError(e: unknown) {
+  error = String(e);
+  const alert = document.querySelector<HTMLElement>("#error");
+  if (alert) { alert.textContent = error; alert.hidden = false; alert.scrollIntoView({ block: "nearest" }); }
+}
+
 async function refresh() {
   if (!native || busy) return;
   try {
@@ -292,8 +355,9 @@ async function action(name: string) {
 async function saveSettings(settings: Settings) {
   busy = true; error = "";
   try { current = await invoke<Status>("save_settings", { settings }); pendingImport = null; settingsNotice = "Settings saved. They take effect the next time the server starts."; }
-  catch (e) { error = String(e); }
-  finally { busy = false; render(); }
+  catch (e) { busy = false; showFormError(e); return; }
+  finally { busy = false; }
+  render();
 }
 
 if (designPreview) {

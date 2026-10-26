@@ -26,6 +26,9 @@ own changelog in `python/CHANGELOG.md`.
   server/listener facts. Startup settings stay read-only.
 - SQL Monitor session controls cancel queued/in-flight work while keeping its session
   connected, or end a session and cancel all of its work, with confirmation.
+- Desktop Network access settings: opt-in shared listener, client-facing address, TLS
+  certificates, and persistent administrator credentials in the OS credential store.
+  Existing installations remain local-only. The dashboard shows connection URLs.
 
 - Desktop preview in `desktop/`: a Tauri app that bundles the existing server and CLI,
   opens the server's web SQL workspace, and manages the local server from a branded
@@ -40,6 +43,8 @@ own changelog in `python/CHANGELOG.md`.
   upload Actions artifacts without publishing a release.
 
 ### Fixed
+
+- Query detail windows' Close window button now closes their native desktop window.
 
 - Web UI and CLI decode Arrow VARIANT values into readable scalars, objects, and arrays
   instead of exposing binary metadata/value structs (#2). Web headers show VARIANT;

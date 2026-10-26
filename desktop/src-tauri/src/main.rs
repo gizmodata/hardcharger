@@ -167,6 +167,9 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
                 "query-detail-{}",
                 DETAIL_WINDOW.fetch_add(1, Ordering::Relaxed)
             );
+            let close_app = detail_app.clone();
+            let close_label = label.clone();
+            let close_origin = detail_origin.clone();
             let result = WebviewWindowBuilder::new(
                 &detail_app,
                 label,
@@ -179,7 +182,28 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
             .inner_size(1100.0, 850.0)
             .min_inner_size(700.0, 500.0)
             .initialization_script(detail_script.clone())
-            .on_navigation(move |url| url.as_str() == "about:blank" || url.origin() == allowed)
+            .on_page_load(move |window, payload| {
+                if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+                    && payload.url().origin() == close_origin {
+                    // A related WebKit window inherits its opener's initial scripts;
+                    // install the self-close hook after its actual page has loaded.
+                    let _ = window.eval("window.close = () => window.location.replace('/ui/__desktop_close_query');");
+                }
+            })
+            .on_navigation(move |url| {
+                if url.origin() == allowed && url.path() == "/ui/__desktop_close_query" {
+                    // WebKit does not reliably close a Tauri-created window through
+                    // JavaScript window.close(). This navigation can close only this
+                    // inspector; it grants no IPC or controller capabilities.
+                    let app = close_app.clone();
+                    let label = close_label.clone();
+                    let _ = close_app.run_on_main_thread(move || {
+                        if let Some(window) = app.get_webview_window(&label) { let _ = window.close(); }
+                    });
+                    return false;
+                }
+                url.as_str() == "about:blank" || url.origin() == allowed
+            })
             .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
             .disable_drag_drop_handler()
             .build();

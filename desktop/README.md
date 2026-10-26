@@ -43,9 +43,25 @@ x64/Arm64. Linux packaging and testing are follow-up work.
 
 - The local server starts by default, bound to `127.0.0.1:31337`. The app refuses a port
   collision and never attaches to or stops an existing server.
+- **Settings → Network access** switches between **Only this computer** (the default)
+  and **Allow network connections**. Stop the server, choose a listen IP (all IPv4:
+  `0.0.0.0`, all IPv6: `::`, or a specific interface), enter this computer's client-facing
+  DNS name/IP, and set the administrator user name and password. The password persists
+  in the OS credential store. Save and start the server; the dashboard shows the actual
+  endpoint, transport, listen address, and URLs for other computers.
+- TLS is the default transport for network mode. Supply the PEM certificate-chain and
+  private-key paths; the certificate must match the server DNS name/IP. The controller
+  trusts the supplied chain and verifies its name and validity. The native SQL workspace
+  and other browsers also need the certificate/CA trusted in their operating system.
+  No certificate checks are bypassed. **HTTP — unencrypted private network** is an
+  explicit alternative; it sends credentials and SQL without encryption. The app does
+  not change firewall/router rules. Clients must be able to reach the configured TCP
+  port, and this computer must stay awake.
 - **Open SQL workspace** opens the server's actual `/ui/` in its own window, automatically
   signed in using the same token handoff contract as iOS. The query interface is not
   duplicated. Its native privileges are restricted: it cannot call desktop commands.
+  Query inspectors can request closing their own window through a dedicated navigation
+  action; this grants no controller or general native access.
 - Closing the dashboard hides it and leaves the server and bull-head menu-bar/tray icon
   running. The icon and Dock/Start-menu shortcut reopen the app. **Quit Hardcharger** drains
   running queries and stops the child before exiting. Stop/restart closes the query window.
@@ -67,8 +83,11 @@ x64/Arm64. Linux packaging and testing are follow-up work.
   command line or generated YAML. Preferences and generated server YAML use private files.
 - The preview owns the local listener, built-in web UI, local administrator credential,
   log destination, sensitive-path protections, and shutdown lifecycle. These options are
-  visible as managed. TLS/mTLS and network sharing are reserved for a later desktop build;
-  this preview serves loopback HTTP only. Saved remote connections are also follow-up work.
+  visible as managed; listener/TLS/administrator fields are edited in Network access.
+  YAML imports cannot change network sharing or its credentials, and exports leave
+  desktop-managed networking/authentication out. mTLS and saved remote connections remain
+  follow-up work. Returning to local-only mode restores loopback HTTP and a freshly
+  generated private administrator password, while retaining the saved network configuration.
 - Normal close/quit is covered; crash recovery and OS logout/reboot behavior still need
   platform acceptance testing before release. Background residency does not keep a sleeping
   computer awake or make this a system service.
@@ -91,6 +110,9 @@ release. Browser tests cover the blue controller, themes, navigation, minimum wi
 typed YAML import/export with secret omission. `npm run dev` with `?preview=1` is a clearly
 labeled **design preview**, with sample status and native controls disabled; it generates
 `artifacts/desktop-light.png` and `desktop-dark.png` during tests.
+Network tests also cover an IPv6 listener, persistent credential redaction, authenticated
+HTTP/TLS startup with a freshly generated short-lived test certificate, wrong passwords,
+and rejection of a mismatched TLS hostname. Test certificates never enter the OS trust store.
 
 ## Signing and release artifacts
 
