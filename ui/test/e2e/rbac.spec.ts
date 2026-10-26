@@ -46,7 +46,6 @@ test("an administrator ends a user's sessions; the user is sent to sign in again
 
   const adminContext = await browser.newContext({ baseURL: harness.url });
   const admin = await adminContext.newPage();
-  admin.on("dialog", (d) => void d.accept());
   await signIn(admin, harness.admin);
   await admin.getByRole("button", { name: "Sessions" }).click();
   const rows = admin.getByTestId("sessions-table").locator("tbody tr", { hasText: harness.user.username });
@@ -56,6 +55,10 @@ test("an administrator ends a user's sessions; the user is sent to sign in again
     await rows
       .first()
       .getByRole("button", { name: /^End session/ })
+      .click();
+    await admin
+      .getByRole("dialog", { name: "End session?", exact: true })
+      .getByRole("button", { name: "End session", exact: true })
       .click();
     await expect(rows).toHaveCount(before - 1);
   }

@@ -105,8 +105,10 @@ x64/Arm64. Linux packaging and testing are follow-up work.
 - Closing the native SQL workspace or a query inspector waits for that window's
   sessions to end before destroying its webview. Reopening a workspace starts fresh
   sessions instead of accumulating idle ones. An open workspace transaction requires
-  confirmation; Cancel or Escape keeps its sessions usable. Independent inspectors
-  remain open when the workspace closes and retain their own observer sessions.
+  confirmation; Cancel or Escape keeps its sessions and query inspectors usable.
+  A confirmed workspace close also closes its inspectors, awaiting their own cleanup
+  before the workspace is destroyed. A disconnected or unresponsive view has a bounded
+  close deadline; the server's idle eviction remains the fallback for unreachable sessions.
 - Closing the dashboard hides it and leaves the server and bull-head menu-bar/tray icon
   running. The icon and Dock/Start-menu shortcut reopen the app. **Quit Hardcharger** drains
   running queries and stops the child before exiting. Stop/restart closes the query window.

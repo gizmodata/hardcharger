@@ -115,7 +115,7 @@ export default function QueryDetailPage({ theme }: { theme: Theme }) {
                   : "Waiting for instrumentation; the history may have been removed or belong to another instance."}
               </p>
             )}
-            {query && <StatementDetails query={query} />}
+            {query && <StatementDetails query={query} now={updated ?? query.execution_start_time} />}
           </>
         )}
       </main>

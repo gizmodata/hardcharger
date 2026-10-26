@@ -9,6 +9,12 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Query details show elapsed queue, execution, fetch, cursor-release and total times,
+  including live durations and compact same-day end timestamps.
+- The macOS Window menu lists open workspaces and query inspectors, making windows
+  that retain observer sessions easier to find behind the dashboard.
+- Closing the desktop SQL Workspace also closes its query-detail windows and awaits
+  their observer-session cleanup. Cancelling a transaction-close prompt keeps them open.
 - Desktop About links directly to the Hardcharger documentation.
 - Desktop network sharing includes copyable Web UI, Python/ADBC, JDBC, CLI and JavaScript
   examples using the saved address and Hardcharger URI schemes, with private-CA guidance

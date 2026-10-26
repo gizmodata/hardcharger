@@ -441,6 +441,7 @@ export default function SqlMonitorPage() {
           {inspected && (
             <StatementDetails
               query={inspected}
+              now={now}
               actions={
                 <>
                   <button

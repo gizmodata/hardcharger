@@ -9,7 +9,6 @@ test("an admin cancels executing work and the editor session remains usable", as
     required: false,
   });
   const server = await startOwnServer(["--enable-instrumentation"]);
-  page.on("dialog", (dialog) => void dialog.accept());
   try {
     await signIn(page, server.admin, server.url);
     await runSql(page, "SELECT count(*) AS cancellable_monitor_work FROM range(10000000000) a, range(1000) b");
@@ -19,6 +18,10 @@ test("an admin cancels executing work and the editor session remains usable", as
       has: page.getByRole("button", { name: /SELECT count\(\*\) AS cancellable_monitor_work/ }),
     });
     await row.getByRole("button", { name: /^Cancel work in session/ }).click();
+    await page
+      .getByRole("dialog", { name: "Cancel session work?", exact: true })
+      .getByRole("button", { name: "Cancel work", exact: true })
+      .click();
     await expect(page.getByText(/^Cancelled work in session/)).toBeVisible();
     await expect(row).toContainText("Cancelled");
     await page.getByRole("button", { name: "Query", exact: true }).click();
@@ -35,7 +38,6 @@ test("an admin cancels a queued statement and ends the session holding its slot"
   const server = await startOwnServer(["--enable-instrumentation", "--max-concurrent-statements", "1"]);
   const holder = await connect({ url: `${server.url}/warp`, ...server.admin, resultPartitions: 1 });
   const queued = await connect({ url: `${server.url}/warp`, ...server.admin, resultPartitions: 1 });
-  page.on("dialog", (dialog) => void dialog.accept());
   try {
     await holder.execute("SET hardcharger.bypass_queue = false");
     await queued.execute("SET hardcharger.bypass_queue = false");
@@ -56,6 +58,10 @@ test("an admin cancels a queued statement and ends the session holding its slot"
     });
     await expect(row.getByRole("img", { name: "Queued", exact: true })).toBeVisible();
     await row.getByRole("button", { name: /^Cancel work in session/ }).click();
+    await page
+      .getByRole("dialog", { name: "Cancel session work?", exact: true })
+      .getByRole("button", { name: "Cancel work", exact: true })
+      .click();
     expect(await waiting).not.toBeNull();
     await expect(row).toContainText("Cancelled");
     const queuedId = queued.sessionId;
@@ -64,6 +70,10 @@ test("an admin cancels a queued statement and ends the session holding its slot"
       has: page.getByRole("button", { name: /SELECT count\(\*\) AS monitor_slot_holder/ }),
     });
     await holding.getByRole("button", { name: /^End session/ }).click();
+    await page
+      .getByRole("dialog", { name: "End session?", exact: true })
+      .getByRole("button", { name: "End session", exact: true })
+      .click();
     await expect(page.getByText(new RegExp(`^Ended session ${holder.sessionId}`))).toBeVisible();
     expect(await held).not.toBeNull();
     const answer = await queued.query("SELECT 1 AS alive");

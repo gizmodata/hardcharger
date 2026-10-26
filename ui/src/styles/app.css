@@ -1072,6 +1072,41 @@ select {
   margin: 0;
   overflow-wrap: anywhere;
 }
+.query-timings-scroll {
+  overflow-x: auto;
+}
+.query-timings {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.query-timings caption {
+  text-align: left;
+  color: var(--muted);
+  padding: 12px 0 8px;
+  font-size: 12px;
+}
+.query-timings th,
+.query-timings td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  text-align: left;
+  vertical-align: top;
+}
+.query-timings thead th {
+  background: var(--bg);
+  color: var(--muted);
+  font-weight: 500;
+}
+.query-timings tbody th {
+  font-weight: 500;
+}
+.query-timings td:last-child {
+  white-space: nowrap;
+}
+.query-timings tbody tr:last-child {
+  font-weight: 600;
+}
 .query-detail-window {
   display: flex;
   flex-direction: column;

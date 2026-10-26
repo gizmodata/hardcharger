@@ -24,6 +24,8 @@ test("query windows retain profiles and refresh independently of the monitor", a
     const check = await watchPage(details);
     await expect(details.getByRole("heading", { name: "Query details", exact: true })).toBeVisible();
     await expect(details.getByRole("region", { name: "Statement details" })).toContainText(sql);
+    await expect(details.getByRole("table", { name: "Query step timings", exact: true })).toBeVisible();
+    await expect(details.getByTestId("query-timing-total")).not.toContainText("so far");
     const sqlBlock = details.getByLabel("SQL text", { exact: true });
     expect(await sqlBlock.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
     await sqlBlock.focus();
@@ -94,7 +96,7 @@ test("blocked windows fall back to inline details and the layout preference is r
   }
 });
 
-test("a query window follows an executing statement through cancellation", async ({ page }) => {
+test("a query window follows an executing statement through cancellation", async ({ page }, testInfo) => {
   const server = await startOwnServer(["--enable-instrumentation"]);
   const target = await connect({ url: `${server.url}/warp`, ...server.admin });
   const admin = await connect({ url: `${server.url}/warp`, ...server.admin });
@@ -117,6 +119,11 @@ test("a query window follows an executing statement through cancellation", async
         .getByRole("region", { name: "Statement details" })
         .getByRole("heading", { name: "Executing", exact: true }),
     ).toBeVisible();
+    const executionTiming = details.getByTestId("query-timing-execution");
+    const totalTiming = details.getByTestId("query-timing-total");
+    await expect(totalTiming).toContainText("so far");
+    const initialElapsed = await totalTiming.locator("td").last().innerText();
+    await expect.poll(() => totalTiming.locator("td").last().innerText()).not.toBe(initialElapsed);
     await admin.query(`SELECT hardcharger_cancel('${target.sessionId}')`);
     await running;
     await expect(
@@ -124,6 +131,16 @@ test("a query window follows an executing statement through cancellation", async
         .getByRole("region", { name: "Statement details" })
         .getByRole("heading", { name: "Cancelled", exact: true }),
     ).toBeVisible();
+    await expect(executionTiming).not.toContainText("so far");
+    await expect(details.getByTestId("query-timing-total")).not.toContainText("so far");
+    await details.setViewportSize({ width: 1100, height: 1100 });
+    await details.screenshot({
+      path: `../desktop/artifacts/sql-monitor/query-timings-light-${testInfo.project.name}.png`,
+    });
+    await details.getByRole("button", { name: "Toggle color theme", exact: true }).click();
+    await details.screenshot({
+      path: `../desktop/artifacts/sql-monitor/query-timings-dark-${testInfo.project.name}.png`,
+    });
     await details.close();
     check();
   } finally {

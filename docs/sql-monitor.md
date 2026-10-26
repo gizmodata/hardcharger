@@ -66,11 +66,22 @@ remain available after reloading the window. Choose **Query details → Below mo
 for the inline layout; its **Pop out** button moves the current inspection to a window.
 The layout preference is remembered. Browsers that block the pop-up show a notice and
 fall back to inline details. The desktop app opens native inspector windows; stopping
-or restarting its server closes the workspace and all inspectors.
+or restarting its server closes the workspace and all inspectors. Closing a desktop
+workspace also closes its inspectors and ends their observer sessions; cancelling the
+transaction-close confirmation keeps all of those windows open. Browser pop-outs can
+remain open independently of their original browser tab.
 
 SQL text has a bordered, keyboard-focusable scroll area. Long lines wrap, and the
 execution metadata stays outside that area. **Copy SQL** copies the complete captured
 text, including content outside the visible scroll area.
+
+The timing table separates queue wait, initial execution until the result cursor is ready,
+fetch setup through the first batch, remaining result fetching, cursor release and total
+elapsed time. Active steps show elapsed time so far
+at the latest refresh; completed steps stay fixed. A statement stopped in the queue
+shows execution as **Not started**. Missing timestamps stay unknown rather than becoming
+zero durations. Timestamps use your local time; an end date is repeated only when it
+differs from the start's calendar date. Hover the end time to see its full date.
 
 Each inspector opens its own observer sessions and enforces the same unrestricted
 administrator permission. It uses the existing short-lived sign-in in session storage;

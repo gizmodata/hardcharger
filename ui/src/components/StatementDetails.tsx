@@ -2,12 +2,11 @@ import { Copy } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { copyText } from "../lib/clipboard";
+import { queryTimings, timingElapsed, timingTimestamp } from "../lib/queryTiming";
 import { statusLabel, type MonitoredQuery } from "../lib/sqlMonitor";
 import { QueryProfile } from "./QueryProfile";
 
-const timestamp = (ms: number | null) => (ms == null ? "—" : new Date(ms).toLocaleString());
-
-export function StatementDetails({ query, actions }: { query: MonitoredQuery; actions?: ReactNode }) {
+export function StatementDetails({ query, now, actions }: { query: MonitoredQuery; now: number; actions?: ReactNode }) {
   const [copied, setCopied] = useState<{ executionId: string; message: string }>();
   return (
     <section className="monitor-detail" aria-label="Statement details">
@@ -46,21 +45,41 @@ export function StatementDetails({ query, actions }: { query: MonitoredQuery; ac
         <dd>
           {query.session_id} / {query.username}
         </dd>
-        <dt>Enqueued</dt>
-        <dd>{timestamp(query.enqueue_time)}</dd>
-        <dt>Execution started / produced results</dt>
-        <dd>
-          {timestamp(query.execution_start_time)} / {timestamp(query.execution_end_time)}
-        </dd>
-        <dt>Fetch started / ended</dt>
-        <dd>
-          {timestamp(query.fetch_start_time)} / {timestamp(query.fetch_end_time)}
-        </dd>
-        <dt>Cursor closed</dt>
-        <dd>{timestamp(query.cursor_close_time)}</dd>
         <dt>Cancellation reason</dt>
         <dd>{query.cancel_reason || "—"}</dd>
       </dl>
+      <div className="query-timings-scroll">
+        <table className="query-timings" aria-label="Query step timings">
+          <caption>Timing · local time</caption>
+          <thead>
+            <tr>
+              <th scope="col">Step</th>
+              <th scope="col">Started</th>
+              <th scope="col">Ended</th>
+              <th scope="col">Elapsed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {queryTimings(query, now).map((step) => (
+              <tr key={step.id} data-testid={`query-timing-${step.id}`}>
+                <th scope="row">{step.label}</th>
+                <td>{timingTimestamp(step.start)}</td>
+                <td title={step.end === null ? undefined : timingTimestamp(step.end)}>
+                  {step.end !== null ? timingTimestamp(step.end, step.start) : step.live ? "In progress" : step.empty}
+                </td>
+                <td className="mono">
+                  {timingElapsed(step.elapsed)}
+                  {step.live && " so far"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="page-sub">
+        Execution ends when the result cursor is ready; fetch setup includes producing the first batch. Total runs from
+        enqueue or execution start through cursor close, rather than measuring client download time.
+      </p>
       {query.error_message && <pre className="result-error">{query.error_message}</pre>}
       <QueryProfile key={query.execution_id} executionId={query.execution_id} />
     </section>

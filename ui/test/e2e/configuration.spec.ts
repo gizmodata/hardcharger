@@ -65,6 +65,7 @@ test("an administrator enables profiling for the current editor session from con
     await page.getByRole("button", { name: "Query", exact: true }).click();
     await runDone(page, "SELECT sum(i) AS configured_profile_probe FROM range(10000) t(i)");
     await page.getByRole("button", { name: "SQL Monitor", exact: true }).click();
+    await page.getByLabel("Query details", { exact: true }).selectOption("inline");
     await page
       .getByTestId("sql-monitor-table")
       .getByRole("button", { name: /SELECT sum\(i\) AS configured_profile_probe/ })

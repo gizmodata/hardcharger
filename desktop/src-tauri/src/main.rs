@@ -122,6 +122,40 @@ fn finish_sql_window_close(app: &AppHandle, label: &str) {
     });
 }
 
+// Reached only after the workspace has confirmed any transaction rollback and
+// ended its own sessions. Each inspector takes its own awaited cleanup path.
+fn finish_workspace_close(app: &AppHandle) {
+    let owner = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        for (label, window) in owner.webview_windows() {
+            if label.starts_with("query-detail-") {
+                let _ = window.close();
+            }
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+        loop {
+            let children: Vec<_> = owner
+                .webview_windows()
+                .into_iter()
+                .filter(|(label, _)| label.starts_with("query-detail-"))
+                .collect();
+            if children.is_empty() {
+                break;
+            }
+            // The page's normal cleanup has a five-second disconnected-server
+            // deadline. Also allow a close if a webview itself is unresponsive.
+            if std::time::Instant::now() >= deadline {
+                for (_, window) in children {
+                    let _ = window.destroy();
+                }
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        finish_sql_window_close(&owner, "workspace");
+    });
+}
+
 async fn workspace(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("workspace") {
         window.show().map_err(|e| e.to_string())?;
@@ -184,7 +218,7 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
                 return false;
             }
             if destination.path() == SQL_CLOSE_PATH {
-                finish_sql_window_close(&workspace_app, "workspace");
+                finish_workspace_close(&workspace_app);
                 return false;
             }
             true
@@ -590,6 +624,8 @@ fn main() {
                 app,
                 &[&application, &server_menu, &edit, &window_menu],
             )?)?;
+            #[cfg(target_os = "macos")]
+            window_menu.set_as_windows_menu_for_nsapp()?;
             app.on_menu_event(|app, event| menu_action(app, event.id.as_ref()));
             if !std::env::args().any(|a| a == "--background") {
                 reveal(app.handle());

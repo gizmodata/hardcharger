@@ -44,9 +44,12 @@ manager when the server must operate independently of a desktop login.
 
 Closing the **SQL workspace** ends that window's sessions before closing. An open
 transaction requires confirmation; Cancel or Escape keeps the workspace and its sessions.
-Reopening starts fresh sessions and restores saved editor text. Independent query-detail
-windows keep their own observer sessions until those windows close. Closing the desktop
+Reopening starts fresh sessions and restores saved editor text. Closing the workspace
+also closes its query-detail windows and ends their observer sessions. Cancelling the
+transaction-close prompt keeps those windows open too. Closing the desktop
 dashboard still leaves the server running in the menu bar or system tray.
+On macOS, the **Window** menu lists open workspaces and query inspectors, including
+windows behind the dashboard.
 
 ## Settings and logs
 
