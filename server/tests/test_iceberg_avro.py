@@ -1,4 +1,4 @@
-"""LOAD iceberg on a server that never installs or loads an extension by itself
+"""LOAD iceberg with automatic loading explicitly disabled by the administrator
 (autoinstall_known_extensions and autoload_known_extensions are off): iceberg needs avro,
 and loads it itself once it is installed. Without it, the error says first what to run.
 Needs the network once to INSTALL iceberg and avro (DuckDB's extension repository);
@@ -9,7 +9,9 @@ runs anything else (the extensions are DuckDB's prebuilt downloads; see test_geo
 def test_load_iceberg_without_avro_says_what_to_install(launcher, tmp_path):
     extensions = tmp_path / "extensions"  # empty: neither is installed
     running = launcher.start(args=["--init-sql-commands",
-                                   f"SET extension_directory = '{extensions}'; INSTALL iceberg; LOAD iceberg;"],
+                                   f"SET extension_directory = '{extensions}'; "
+                                   "SET autoinstall_known_extensions = false; SET autoload_known_extensions = false; "
+                                   "INSTALL iceberg; LOAD iceberg;"],
                              expect_up=False, startup_seconds=120)
     assert running.process.wait(timeout=180) == 1
     log = running.log()

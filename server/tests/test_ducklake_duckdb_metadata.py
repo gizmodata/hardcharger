@@ -1,15 +1,8 @@
-"""DuckLake with a DuckDB metadata file stays readable by the DuckDB release that made it.
+"""DuckLake metadata follows upstream storage-version behavior, without a project patch.
 
-The bundled ducklake attaches an EXISTING metadata file without STORAGE_VERSION, so the
-file keeps its own storage version (scripts/extension-patches/ducklake): a DuckLake that
-DuckDB 1.5 created is still readable by DuckDB 1.5 after the server writes to it. Upstream
-attached it with STORAGE_VERSION 'latest', and the next checkpoint upgraded the file, after
-which DuckDB 1.5 refused it ("cannot initialize database with storage version ... lower
-than what the database itself uses"). META_STORAGE_VERSION in the ATTACH still upgrades
-on purpose. A NEW metadata file takes --storage-version when set, else the latest.
-
-DuckDB 1.5.6 is the Python package (pyproject.toml), with its ducklake extension from
-DuckDB's extension repository: needs the network once per module; without it these fail.
+DuckDB 1.5 is an independent older reader. --storage-version controls plain DuckDB
+files, not the metadata version DuckLake explicitly chooses. No compatibility
+workaround is promised. Tests need signed repository modules.
 """
 
 import pathlib
@@ -58,6 +51,7 @@ def write_from_server(launcher, metadata: str, data: str, args=None, attach_opti
     hidden: its storage version tag isn't in duckdb_databases().)"""
     server = launcher.start(args=args)
     session = server.admin()
+    session.execute(sql="INSTALL ducklake; LOAD ducklake;")
     session.execute(sql=f"ATTACH 'ducklake:{metadata}' AS lake (DATA_PATH '{data}'{attach_options})")
     session.execute(sql="CREATE TABLE IF NOT EXISTS lake.t (id INTEGER, name VARCHAR)")
     session.execute(sql="INSERT INTO lake.t VALUES (2, 'two')")
@@ -75,33 +69,25 @@ def create_with_duckdb15(extension_directory: pathlib.Path, metadata: str, data:
         con.close()
 
 
-def test_existing_duckdb15_lake_stays_readable_by_duckdb15(launcher, tmp_path, extension_directory):
+def test_existing_duckdb15_lake_follows_upstream_upgrade(launcher, tmp_path, extension_directory):
     metadata, data = lake_paths(tmp_path=tmp_path)
     create_with_duckdb15(extension_directory=extension_directory, metadata=metadata, data=data)
     write_from_server(launcher=launcher, metadata=metadata, data=data)
-    assert read_with_duckdb15(extension_directory=extension_directory, metadata=metadata, data=data) == [
-        (1, "one"), (2, "two")]
-
-
-def test_meta_storage_version_upgrades_an_existing_lake_on_purpose(launcher, tmp_path, extension_directory):
-    metadata, data = lake_paths(tmp_path=tmp_path)
-    create_with_duckdb15(extension_directory=extension_directory, metadata=metadata, data=data)
-    write_from_server(launcher=launcher, metadata=metadata, data=data, attach_options=", META_STORAGE_VERSION 'latest'")
     with pytest.raises(duckdb.Error, match=TOO_NEW):
         read_with_duckdb15(extension_directory=extension_directory, metadata=metadata, data=data)
-
-
-def test_new_lake_takes_the_server_storage_version(launcher, tmp_path, extension_directory):
-    metadata, data = lake_paths(tmp_path=tmp_path)
-    write_from_server(launcher=launcher, metadata=metadata, data=data, args=["--storage-version", "v1.5.0"],
-                      attach_options=f", DUCKLAKE_VERSION '{DUCKLAKE_FORMAT}'")
-    assert read_with_duckdb15(extension_directory=extension_directory, metadata=metadata, data=data) == [
-        (2, "two")]
 
 
 def test_new_lake_without_storage_version_is_latest(launcher, tmp_path, extension_directory):
     metadata, data = lake_paths(tmp_path=tmp_path)
     write_from_server(launcher=launcher, metadata=metadata, data=data,
+                      attach_options=f", DUCKLAKE_VERSION '{DUCKLAKE_FORMAT}'")
+    with pytest.raises(duckdb.Error, match=TOO_NEW):
+        read_with_duckdb15(extension_directory=extension_directory, metadata=metadata, data=data)
+
+
+def test_global_storage_version_does_not_override_ducklake(launcher, tmp_path, extension_directory):
+    metadata, data = lake_paths(tmp_path=tmp_path)
+    write_from_server(launcher=launcher, metadata=metadata, data=data, args=["--storage-version", "v1.5.0"],
                       attach_options=f", DUCKLAKE_VERSION '{DUCKLAKE_FORMAT}'")
     with pytest.raises(duckdb.Error, match=TOO_NEW):
         read_with_duckdb15(extension_directory=extension_directory, metadata=metadata, data=data)

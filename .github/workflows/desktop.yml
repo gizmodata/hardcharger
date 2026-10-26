@@ -12,6 +12,10 @@ on:
         description: Sign/notarize preview artifacts (release/* branches only; never publishes)
         type: boolean
         default: false
+      native_run:
+        description: Server workflow run with this version's native artifacts (needed before its release exists)
+        type: string
+        default: ""
   workflow_call:
     inputs:
       sign:
@@ -70,6 +74,10 @@ jobs:
 
   build:
     needs: [plan, ui]
+    # Branch pushes check the controller and capture its design. For an unreleased
+    # version, server.yml builds current native binaries and calls us with native_run.
+    # Never try downloading a release that has not been published yet.
+    if: github.event_name != 'push' || inputs.native_run != ''
     strategy:
       fail-fast: false
       matrix:

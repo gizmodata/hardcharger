@@ -162,7 +162,11 @@ server after Tauri re-signs sidecars, using `scripts/check-extension-entitlement
 alongside the existing signature/notarization checks. DuckDB still validates module signatures.
 
 `.github/workflows/desktop.yml` produces Actions artifacts for review; it never publishes a
-release. A feature-branch push builds unsigned/ad hoc previews. The dedicated
+release. A feature-branch push checks the controller and captures design previews. For
+native installers of an unreleased version, run the server workflow on the review branch;
+it builds current server/CLI binaries and calls the desktop workflow with the same run.
+The desktop workflow also accepts a `native_run` on manual runs, and refuses a native
+binary whose version differs from the desktop source. The dedicated
 `release/desktop-preview` branch requests signed previews using the existing `production`
 environment, whose branch rules already allow `release/*`. It does not merge into main,
 create a tag, submit to an app store, or publish a GitHub release.
@@ -178,7 +182,7 @@ signature checks, notarization/stapling, and shared checksums pass.
 - Windows reuses the existing Azure OIDC login, Key Vault certificate, and
   `.github/scripts/azure-sign.ps1`. The application and MSI receive Authenticode signatures;
   the bundled server/client signatures are checked too.
-- Standalone previews use the published native archive matching the repository's server
+- Standalone manual previews without `native_run` use the published native archive matching the repository's server
   version, verified against that release's `SHA256SUMS`. Their manifest records this source
   separately from the desktop commit. They do not claim those native binaries were rebuilt
   from the preview branch.

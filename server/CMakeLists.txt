@@ -57,14 +57,21 @@ if(HARDCHARGER_STATIC)
   # shared libduckdb, the library does that itself); as an interface source, it is
   # compiled into every program that links DuckDB.
   set(_duckdb_lib "${WARPSQL_DUCKDB_PREFIX}/lib")
-  file(GLOB _duckdb_extensions "${_duckdb_lib}/lib*_extension.a")
+  if(IOS)
+    file(GLOB _duckdb_extensions "${_duckdb_lib}/lib*_extension.a")
+  else()
+    # Explicitly limit native builds, even if an old install prefix contains extra archives.
+    set(_duckdb_extensions)
+    foreach(_extension core_functions parquet json icu)
+      list(APPEND _duckdb_extensions "${_duckdb_lib}/lib${_extension}_extension.a")
+    endforeach()
+  endif()
   file(GLOB _duckdb_vendored "${_duckdb_lib}/libduckdb_*.a")
   list(REMOVE_ITEM _duckdb_vendored "${_duckdb_lib}/libduckdb_static.a")
-  set(_duckdb_archives ${_duckdb_extensions} ${_duckdb_vendored} "${_duckdb_lib}/libduckdb_static.a"
-      "${_duckdb_lib}/static-deps/libpq.a" "${_duckdb_lib}/static-deps/libroaring.a")
-  if(NOT APPLE OR IOS)
-    # Linux's and iOS's own libcurl (iOS has none); macOS links the system's.
-    list(APPEND _duckdb_archives "${_duckdb_lib}/static-deps/libcurl.a")
+  set(_duckdb_archives ${_duckdb_extensions} ${_duckdb_vendored} "${_duckdb_lib}/libduckdb_static.a")
+  if(IOS)
+    list(APPEND _duckdb_archives "${_duckdb_lib}/static-deps/libpq.a"
+         "${_duckdb_lib}/static-deps/libroaring.a" "${_duckdb_lib}/static-deps/libcurl.a")
   endif()
   foreach(_archive IN LISTS _duckdb_archives)
     if(NOT EXISTS "${_archive}")
@@ -85,12 +92,11 @@ if(HARDCHARGER_STATIC)
                           "-framework CoreFoundation" "-framework Security" "-framework SystemConfiguration"
                           Threads::Threads)
   elseif(APPLE)
-    # ld64 resolves archives in any order. libcurl, CoreFoundation and Security are the OS's.
+    # ld64 resolves archives in any order. TLS and system certificate support use OS frameworks.
     target_link_libraries(hardcharger_duckdb INTERFACE ${_duckdb_archives} OpenSSL::SSL OpenSSL::Crypto
-                          curl "-framework CoreFoundation" "-framework Security" Threads::Threads)
+                          "-framework CoreFoundation" "-framework Security" Threads::Threads)
   else()
-    # OpenSSL inside the group too: libcurl and libpq call it, and CMake may place the
-    # OpenSSL targets other libraries name before the group.
+    # Keep OpenSSL inside the archive group for static DuckDB TLS/extension downloads.
     target_link_libraries(hardcharger_duckdb INTERFACE
                           "$<LINK_GROUP:RESCAN,${_duckdb_archives},${OPENSSL_SSL_LIBRARY},${OPENSSL_CRYPTO_LIBRARY}>"
                           OpenSSL::SSL OpenSSL::Crypto Threads::Threads ${CMAKE_DL_LIBS})
@@ -220,6 +226,9 @@ target_sources(hardcharger_core PRIVATE $<TARGET_OBJECTS:hardcharger_authz>)
 target_link_libraries(hardcharger_core PUBLIC warpsql_duckdb OpenSSL::Crypto jwt-cpp::jwt-cpp yaml-cpp::yaml-cpp
                       PRIVATE ZLIB::ZLIBSTATIC)
 target_compile_options(hardcharger_core PRIVATE ${HARDCHARGER_WARNINGS})
+if(IOS)
+  target_compile_definitions(hardcharger_core PRIVATE HARDCHARGER_IOS)
+endif()
 if(WIN32)
   target_link_libraries(hardcharger_core PUBLIC crypt32 iphlpapi)  # certificate store and local interface addresses
 endif()

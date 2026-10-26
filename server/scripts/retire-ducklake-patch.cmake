@@ -1,0 +1,16 @@
+# Retire the former metadata-storage compatibility patch from cached dependency trees.
+# Leave DuckDB's own patches alone. Invalidate an already-patched fetched iOS extension.
+if(NOT DUCKDB_SOURCE_DIR)
+  message(FATAL_ERROR "DUCKDB_SOURCE_DIR is required")
+endif()
+get_filename_component(build "${DUCKDB_SOURCE_DIR}/../duckdb-build" ABSOLUTE)
+set(patch "${DUCKDB_SOURCE_DIR}/.github/patches/extensions/ducklake/hardcharger-keep-metadata-storage-version.patch")
+set(stamp "${build}/_deps/.hardcharger-ducklake-patches")
+if(EXISTS "${patch}" OR EXISTS "${stamp}")
+  file(REMOVE "${patch}" "${stamp}")
+  file(GLOB fetched LIST_DIRECTORIES true "${build}/_deps/ducklake_extension_fc-*")
+  if(fetched)
+    file(REMOVE_RECURSE ${fetched})
+  endif()
+  message(STATUS "Removed retired Hardcharger DuckLake patch and cached checkout")
+endif()

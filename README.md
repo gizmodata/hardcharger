@@ -307,11 +307,15 @@ directory, and says so at startup; mount a writable volume for the database (`--
 /data/my.duckdb`) and they go there. Init SQL can set `extension_directory` and
 `secret_directory` to anywhere else.
 
-The server never installs or loads an extension by itself (DuckDB's
-`autoinstall_known_extensions` and `autoload_known_extensions` are off), so an extension
-that needs another one needs that one installed too: `iceberg` needs `avro`. Run `INSTALL
-iceberg; INSTALL avro; LOAD iceberg;` (iceberg loads avro itself once it is installed); a
-`LOAD iceberg` without avro fails with a message that says to run `INSTALL avro;` first.
+In **v2.1.0+**, non-iOS builds statically include DuckDB's standard `core_functions`,
+`parquet`, `json` and `icu` extensions. Optional extensions—including `httpfs`, `postgres`,
+`ducklake`, `tpch` and `autocomplete`—load at runtime and can be replaced independently
+of the server. Automatic installation and loading of known extensions are enabled by
+default, matching GizmoSQL; signature verification stays enabled. A first use may need
+network access and a writable extension cache. For offline use, preinstall the needed
+modules for the server's DuckDB version and platform. Administrators can select a custom
+repository or disable automatic installation/loading through init SQL. See
+[Extensions](docs/extensions.md). iOS keeps its extensions built in and dynamic loading off.
 
 `ghcr.io/gizmodata/hardcharger:main` (and `:sha-<commit>`) is the development build: the
 newest commit on `main` that passed every CI gate, built exactly as a release. Use
@@ -779,29 +783,21 @@ trusted_proxies: [10.0.0.0/8, fd00::/8]   # flag: --trusted-proxies 10.0.0.0/8,f
 
 ### DuckDB files and DuckLake metadata
 
-An existing DuckDB file keeps the storage format it has: the `--database` file, a file you
-`ATTACH`, and a DuckLake's DuckDB metadata file (`ATTACH 'ducklake:lake.ducklake'`). So a
-database or DuckLake that DuckDB 1.5 created is still readable by DuckDB 1.5 after
-Hardcharger writes to it. (DuckDB's own DuckLake extension attaches its metadata file with
-the latest storage format, which upgrades the file; Hardcharger's build of it doesn't.) A
-DuckLake also keeps its DuckLake format version unless you attach it with
-`AUTOMATIC_MIGRATION true`.
+An existing plain DuckDB file keeps its storage format: the `--database` file and ordinary
+files you `ATTACH`. `--storage-version` (`storage_version`) selects the format for a new
+server database or a new plain attached database; unset, these use DuckDB 2.0's format.
 
-`--storage-version` (`storage_version`) sets the format of every DuckDB file the server
-creates: the `--database` file, a new file an `ATTACH` creates, and a new DuckLake's
-metadata file. Unset, a new `--database` or `ATTACH` file gets DuckDB 2.0's format and a new
-DuckLake metadata file the latest one, which DuckDB 1.x can't open. To make a new DuckLake
-that DuckDB 1.5 can read, start the server with `--storage-version v1.5.0` and create the
-lake with `DUCKLAKE_VERSION '1.0'` (DuckDB 1.5's DuckLake can't read the newer default,
-1.1-dev1):
+**v2.1.0+ removes Hardcharger's DuckLake metadata storage-version patch.** DuckLake now
+follows upstream behavior: its DuckDB metadata database defaults to the latest storage
+format, including when attaching an existing metadata file. Writes/checkpoints can upgrade
+it so an older DuckDB cannot reopen it. `--storage-version` does not override DuckLake's
+metadata choice. Back up metadata before using it with a newer server.
 
-```sql
-ATTACH 'ducklake:/data/lake.ducklake' AS lake (DATA_PATH '/data/lake/', DUCKLAKE_VERSION '1.0');
-```
-
-To upgrade an existing metadata file on purpose, attach it with
-`META_STORAGE_VERSION 'latest'`; DuckDB 1.x can't open it afterwards. A PostgreSQL metadata
-catalog has no DuckDB storage format, so none of this applies to it.
+Hardcharger no longer guarantees that older DuckDB clients can reopen DuckLake metadata
+after writes by a newer server. Use the compatibility and migration controls supported by
+your chosen upstream DuckLake version. DuckLake's catalog format and its
+`AUTOMATIC_MIGRATION` option are separate from the metadata database's storage format.
+PostgreSQL metadata has no DuckDB file storage version. See [Extensions](docs/extensions.md).
 
 ### Logs
 
@@ -1424,7 +1420,7 @@ and full licence text. The embedded web UI's JavaScript packages are listed in
 `THIRD_PARTY_NOTICES-web-ui.txt`. Every release archive, the MSI and the container image
 (`/usr/share/doc/hardcharger/`) carry both files, `hardcharger-server --licenses` and
 `hardcharger --licenses` print them, and the web UI links its own from **About** (**Open-source
-licences**). Note that the built-in `tpch` extension's data generator is under the TPC's End User
+licences**). The `tpch` extension's data generator (built in on iOS) is under the TPC's End User
 License Agreement, not an open-source licence.
 
 ---

@@ -13,6 +13,11 @@ own changelog in `python/CHANGELOG.md`.
 - Desktop network sharing includes copyable Web UI, Python/ADBC, JDBC, CLI and JavaScript
   examples using the saved address and Hardcharger URI schemes, with private-CA guidance
   and credential environment variables instead of saved passwords.
+- Desktop macOS packaging verifies the bundled server retains its extension-loading
+  entitlement after Tauri re-signing, in addition to signature and notarization checks.
+- Desktop previews for an unreleased version use current server-workflow artifacts;
+  branch pushes check the controller without trying to download an unpublished release.
+  Native staging rejects a server version that differs from the desktop source.
 
 - Enforce server/PyPI package version alignment for 2.1.0+: a server release `X.Y.Z`
   uses `hardcharger==X.Y.Z`; Python-only fixes use `X.Y.Z.postN` while downloading the
@@ -71,6 +76,17 @@ own changelog in `python/CHANGELOG.md`.
   sensitive options. Desktop packages use the existing
   Apple Developer ID/notarization and Windows Azure signing credentials; branch previews
   upload Actions artifacts without publishing a release.
+
+### Changed
+
+- Non-iOS builds retain DuckDB's four standard built-in extensions; httpfs, PostgreSQL,
+  DuckLake, tpch and autocomplete are runtime modules that administrators can replace.
+  Automatic installation/loading of known extensions defaults to enabled, matching
+  GizmoSQL. Signature verification remains enabled; startup SQL can disable automation
+  or select a repository. iOS retains its built-in extensions and disables dynamic loading.
+- Remove the DuckLake metadata storage-version compatibility patch. DuckLake follows
+  upstream metadata-format behavior; older readers may refuse a metadata file after
+  newer-server writes; compatibility controls follow the selected upstream extension.
 
 ### Fixed
 

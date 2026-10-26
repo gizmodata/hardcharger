@@ -12,17 +12,17 @@
       "value": "v2.0.0"
     },
     "httpfs": {
-      "file": "server/scripts/duckdb-extensions.cmake",
+      "file": "server/scripts/duckdb-extensions-ios.cmake",
       "pattern": "duckdb_extension_load\\(httpfs\\s+GIT_URL \\S+\\s+GIT_TAG ([0-9a-f]{40})",
       "value": "77392a72077a85897db2519fae11e2c0da972b8a"
     },
     "ducklake": {
-      "file": "server/scripts/duckdb-extensions.cmake",
+      "file": "server/scripts/duckdb-extensions-ios.cmake",
       "pattern": "duckdb_extension_load\\(ducklake\\s+GIT_URL \\S+\\s+GIT_TAG ([0-9a-f]{40})",
       "value": "417a9117f590e8141742ac0579d02f6a90162e37"
     },
     "postgres_scanner": {
-      "file": "server/scripts/duckdb-extensions.cmake",
+      "file": "server/scripts/duckdb-extensions-ios.cmake",
       "pattern": "duckdb_extension_load\\(postgres_scanner\\s+GIT_URL \\S+\\s+GIT_TAG ([0-9a-f]{40})",
       "value": "c0f5a3c0c4b68b02afbf669d36d7f0e503985c88"
     },
@@ -114,7 +114,7 @@
         "hardcharger-server"
       ],
       "platforms": "all",
-      "note": "The SQL engine, with its built-in extensions core_functions, parquet, json, icu, autocomplete and tpch (each part of DuckDB's own repository and licence, but for the notices listed under Inside DuckDB).",
+      "note": "The SQL engine includes core_functions, parquet, json and icu on every platform. iOS also builds in autocomplete and tpch (each part of DuckDB\u2019s repository and licence, except for notices listed under Inside DuckDB). Native optional extensions are loaded separately.",
       "covers": {
         "duckdb_extensions": [
           "autocomplete",
@@ -141,7 +141,7 @@
       "in": [
         "hardcharger-server"
       ],
-      "platforms": "all",
+      "platforms": "iOS",
       "covers": {
         "duckdb_extensions": [
           "httpfs"
@@ -167,7 +167,7 @@
       "in": [
         "hardcharger-server"
       ],
-      "platforms": "all",
+      "platforms": "iOS",
       "covers": {
         "duckdb_extensions": [
           "ducklake"
@@ -193,7 +193,7 @@
       "in": [
         "hardcharger-server"
       ],
-      "platforms": "all",
+      "platforms": "iOS",
       "note": "With its database-connector submodule (also MIT, the same text), at the commit this extension commit pins.",
       "covers": {
         "duckdb_extensions": [
@@ -902,8 +902,8 @@
       "in": [
         "hardcharger-server"
       ],
-      "platforms": "all",
-      "note": "The tpch extension (dbgen(), tpch_queries()) is built into the server. Its data generator is the Transaction Processing Performance Council's, under the TPC's End User License Agreement below, not an open-source licence.",
+      "platforms": "iOS",
+      "note": "The iOS app builds in tpch (dbgen(), tpch_queries()). Other platforms can install it separately. Its data generator is the Transaction Processing Performance Council\u2019s, under the TPC End User License Agreement below, not an open-source licence.",
       "texts": [
         {
           "file": "LICENSE",
@@ -1194,8 +1194,8 @@
       "in": [
         "hardcharger-server"
       ],
-      "platforms": "all",
-      "note": "DuckLake's deletion vectors. Windows builds link vcpkg's.",
+      "platforms": "iOS",
+      "note": "DuckLake's deletion vectors.",
       "covers": {
         "vcpkg": [
           "roaring"
@@ -1224,8 +1224,8 @@
       "in": [
         "hardcharger-server"
       ],
-      "platforms": "all",
-      "note": "The postgres_scanner extension's connection to PostgreSQL, with the PostgreSQL common and port code it calls. Windows builds link vcpkg's.",
+      "platforms": "iOS",
+      "note": "The postgres_scanner extension's connection to PostgreSQL, with the PostgreSQL common and port code it calls.",
       "covers": {
         "vcpkg": [
           "libpq"
@@ -1254,8 +1254,8 @@
       "in": [
         "hardcharger-server"
       ],
-      "platforms": "Linux, Windows, iOS",
-      "note": "The httpfs extension's HTTP client. macOS builds use the system's libcurl instead (not shipped); Windows builds link vcpkg's; the iOS app links this version, built for iOS (iOS has no libcurl).",
+      "platforms": "iOS",
+      "note": "The iOS app statically links this HTTP client for its built-in httpfs extension. Native platforms use loadable optional extensions.",
       "covers": {
         "vcpkg": [
           "curl"

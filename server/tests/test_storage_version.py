@@ -30,8 +30,7 @@ def test_tag_reflects_pinned_older_storage_version(launcher, tmp_path):
 
 
 def test_pinned_storage_version_applies_to_new_attached_files(launcher, tmp_path):
-    # Also a file a plain ATTACH creates (and a new DuckLake metadata file:
-    # test_ducklake_duckdb_metadata.py); an existing file keeps its own.
+    # A file a plain ATTACH creates; DuckLake metadata follows its own upstream policy.
     server = launcher.start(args=["--database", str(tmp_path / "primary.duckdb"), "--storage-version", "v1.0.0"])
     session = server.admin()
     session.execute(sql=f"ATTACH '{(tmp_path / 'attached.duckdb').as_posix()}' AS attached_new")

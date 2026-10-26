@@ -78,8 +78,8 @@ for sdk in "$@"; do
     fi
     # DuckDB: the stamp names the pinned commit and the recipe files, so a bump rebuilds.
     duckdb_key=$( (sed -n 's/^DUCKDB_COMMIT=//p' "$ROOT/third_party/warp-sql/cpp/scripts/build-duckdb.sh";
-                   cat "$ROOT"/server/scripts/patch-duckdb*.cmake "$ROOT/server/scripts/duckdb-extensions.cmake" \
-                       $(find "$ROOT/server/scripts/extension-patches" -type f 2>/dev/null | sort) \
+                   cat "$ROOT"/server/scripts/patch-duckdb*.cmake "$ROOT/server/scripts/duckdb-extensions-ios.cmake" \
+                       "$ROOT/server/scripts/retire-ducklake-patch.cmake" \
                        "$ROOT/server/scripts/deps-duckdb.sh" "$ROOT/server/scripts/build-extension-deps.sh") \
                  | shasum -a 256 | cut -c1-16)
     if [ ! -f "$DEPS/duckdb-install/.ios-duckdb-$duckdb_key.stamp" ]; then

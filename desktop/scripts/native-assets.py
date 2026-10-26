@@ -35,6 +35,11 @@ servers = list(stage.glob(f"*/bin/hardcharger-server{suffix}"))
 if len(servers) != 1:
     raise SystemExit("Expected exactly one server in the native archive")
 server = servers[0].resolve()
+root = Path(__file__).resolve().parents[2]
+expected_version = json.loads((root / "desktop/src-tauri/tauri.conf.json").read_text())["version"]
+reported = subprocess.check_output([str(server), "--version"], text=True).strip()
+if reported != f"Hardcharger {expected_version}":
+    raise SystemExit(f"Native archive reports {reported!r}, expected Hardcharger {expected_version}")
 environment = {**os.environ, "HARDCHARGER_DESKTOP_SERVER": str(server), "HARDCHARGER_DESKTOP_TARGET": args.target}
 subprocess.run(["node", "scripts/prepare.mjs"], cwd=Path(__file__).resolve().parents[1], env=environment, check=True)
 if os.getenv("GITHUB_ENV"):

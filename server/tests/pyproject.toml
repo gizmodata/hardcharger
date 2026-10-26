@@ -5,7 +5,7 @@ description = "Tests for the Hardcharger server"
 requires-python = ">=3.12"
 dependencies = [
   "cryptography>=50.0.2",
-  # DuckDB 1.5 reads the DuckLakes the server writes to (test_ducklake_duckdb_metadata.py).
+  # Independent older reader verifies explicit metadata compatibility and upstream upgrades.
   "duckdb==1.5.6",
   "httpx>=0.28.1",
   "psycopg[binary]>=3.3.6",

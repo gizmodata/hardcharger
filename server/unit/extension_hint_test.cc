@@ -1,5 +1,5 @@
 // The hint a LOAD gets when the extension needs another one that isn't installed
-// (iceberg needs avro; Hardcharger never installs or loads an extension by itself).
+// (iceberg needs avro; an administrator may disable automatic installation/loading).
 #include <gtest/gtest.h>
 
 #include <string>

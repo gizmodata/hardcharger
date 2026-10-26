@@ -13,6 +13,13 @@ turned on by its own option.
 
 This page maps 1.x's names to Hardcharger's.
 
+In **v2.1.0+**, non-iOS extension installation/loading defaults match GizmoSQL: known
+extensions install and load automatically when needed. Optional extensions are runtime
+modules; administrators can select a compatible module/repository or disable automatic
+installation/loading through startup SQL. iOS retains its built-in set. See
+[Extensions](extensions.md), including DuckLake metadata compatibility after removing
+Hardcharger's former storage-version patch.
+
 ## Options
 
 Every option also has a YAML key: the flag without its leading `--`, with `_` for `-`

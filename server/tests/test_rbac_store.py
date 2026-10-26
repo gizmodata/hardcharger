@@ -121,14 +121,17 @@ def test_the_store_lives_in_its_own_schema_and_no_session_can_reach_it(launcher,
     assert "rbac_store" not in catalogs, catalogs
 
 
-def test_the_store_needs_no_extension_download_on_a_fresh_host(launcher, store, tmp_path):
-    # A host that never ran DuckDB: the private store instance uses the postgres scanner
-    # built into the server, so it works offline and downloads nothing.
+def test_fresh_host_installs_only_the_store_extension_when_needed(launcher, store, tmp_path):
+    # The file store needs no runtime module. PostgreSQL explicitly installs its signed
+    # scanner into a fresh server cache; it is no longer part of the native executable.
     home = tmp_path / "fresh-home"
     home.mkdir()
-    server = start_rbac_server(launcher=launcher, store_uri=store.new_database(), env=home_env(home=home))
+    uri = store.new_database()
+    server = start_rbac_server(launcher=launcher, store_uri=uri, env=home_env(home=home))
     expect_allowed(client=server.admin(), sql="CREATE ROLE installed")
-    assert not list(home.rglob("*.duckdb_extension*")), list(home.rglob("*"))[:20]
+    modules = list(home.rglob("*.duckdb_extension"))
+    expected = [] if uri.startswith("duckdb:") else ["postgres_scanner.duckdb_extension"]
+    assert sorted(p.name for p in modules) == expected
 
 
 def test_a_polling_server_exits_cleanly(launcher, store):

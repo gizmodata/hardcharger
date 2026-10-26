@@ -2,9 +2,8 @@
 # Builds DuckDB 2.0 into server/.deps/duckdb-install with warp-sql's build-duckdb.sh, after
 # patching it with every scripts/patch-duckdb*.cmake in name order (patch-duckdb.cmake: the
 # binder hook access control needs to check views with their owner's rights;
-# patch-duckdb-extensions.cmake: our own patches to the extensions, from
-# scripts/extension-patches), and with the extensions in scripts/duckdb-extensions.cmake
-# built in (their libraries: build-extension-deps.sh). OpenSSL comes from
+# Arrow HUGEINT export); native builds keep DuckDB’s four standard extensions, while
+# iOS keeps its optional extensions built in (duckdb-extensions-ios.cmake). OpenSSL comes from
 # $OPENSSL_ROOT_DIR, else server/.deps's own (the portable build's), else the system's.
 # `build-deps.sh duckdb` runs it.
 set -euo pipefail
@@ -21,28 +20,32 @@ COMMIT=$(sed -n 's/^DUCKDB_COMMIT=\([0-9a-f]*\)$/\1/p' "$WARP/build-duckdb.sh")
 [ -n "$COMMIT" ] || { echo "no DUCKDB_COMMIT in $WARP/build-duckdb.sh" >&2; exit 1; }
 SRC="$WARPSQL_DEPS_DIR/duckdb"
 mkdir -p "$WARPSQL_DEPS_DIR"
-if [ ! -d "$SRC/.git" ]; then
+if [ ! -e "$SRC/.git" ]; then
   git clone --quiet --filter=blob:none https://github.com/duckdb/duckdb.git "$SRC"
 fi
 git -C "$SRC" fetch --quiet --tags origin
 git -C "$SRC" checkout --quiet "$COMMIT"
+cmake -DDUCKDB_SOURCE_DIR="$SRC" -P "$HERE/scripts/retire-ducklake-patch.cmake"
 patches=("$HERE"/scripts/patch-duckdb*.cmake)
 [ -f "${patches[0]}" ] || { echo "no scripts/patch-duckdb*.cmake" >&2; exit 1; }
 for patch in "${patches[@]}"; do
   cmake -DDUCKDB_SOURCE_DIR="$SRC" -P "$patch"
 done
 
-# The out-of-tree extensions are pinned where DuckDB's own build of this commit pins them.
+# Only iOS builds the optional extensions and their transitive libraries. Native builds
+# retain DuckDB's base four; INSTALL/LOAD uses signed release-compatible modules.
 EXTENSIONS="$HERE/scripts/duckdb-extensions.cmake"
-for name in httpfs ducklake postgres_scanner; do
-  ours=$(awk -v n="$name" '$0 ~ "duckdb_extension_load\\(" n "$" {f = 1} f && /GIT_TAG/ {print $2; exit}' "$EXTENSIONS")
-  theirs=$(awk '/GIT_TAG/ {print $2; exit}' "$SRC/.github/config/extensions/$name.cmake")
-  [ -n "$ours" ] && [ "$ours" = "$theirs" ] \
-    || { echo "$name: duckdb-extensions.cmake pins '$ours', DuckDB $COMMIT pins '$theirs'" >&2; exit 1; }
-done
-"$HERE/scripts/build-extension-deps.sh"
-# (The environment variable is ':'-separated, like PATH.)
-export CMAKE_PREFIX_PATH="$WARPSQL_DEPS_DIR/roaring-install:$WARPSQL_DEPS_DIR/libpq-install:$WARPSQL_DEPS_DIR/curl-install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+if [ -n "${HARDCHARGER_IOS_SDK:-}" ]; then
+  EXTENSIONS="$HERE/scripts/duckdb-extensions-ios.cmake"
+  for name in httpfs ducklake postgres_scanner; do
+    ours=$(awk -v n="$name" '$0 ~ "duckdb_extension_load\\(" n "$" {f = 1} f && /GIT_TAG/ {print $2; exit}' "$EXTENSIONS")
+    theirs=$(awk '/GIT_TAG/ {print $2; exit}' "$SRC/.github/config/extensions/$name.cmake")
+    [ -n "$ours" ] && [ "$ours" = "$theirs" ] \
+      || { echo "$name: iOS pins '$ours', DuckDB $COMMIT pins '$theirs'" >&2; exit 1; }
+  done
+  "$HERE/scripts/build-extension-deps.sh"
+  export CMAKE_PREFIX_PATH="$WARPSQL_DEPS_DIR/roaring-install:$WARPSQL_DEPS_DIR/libpq-install:$WARPSQL_DEPS_DIR/curl-install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+fi
 if [ -z "${HARDCHARGER_IOS_SDK:-}" ]; then
   WARPSQL_DUCKDB_EXTENSION_CONFIGS="$EXTENSIONS" "$WARP/build-duckdb.sh"
 else
@@ -91,12 +94,14 @@ cp "$BUILD/src/main/extension/local_extension_repository/libduckdb_local_extensi
 # The static libraries the extensions link, kept with the install (it is what CI caches).
 STATIC_DEPS="$WARPSQL_DEPS_DIR/duckdb-install/lib/static-deps"
 rm -rf "$STATIC_DEPS" && mkdir -p "$STATIC_DEPS"
-cp "$WARPSQL_DEPS_DIR/libpq-install/lib/libpq.a" "$WARPSQL_DEPS_DIR/roaring-install/lib/libroaring.a" "$STATIC_DEPS/"
-if [ -f "$WARPSQL_DEPS_DIR/curl-install/lib/libcurl.a" ]; then cp "$WARPSQL_DEPS_DIR/curl-install/lib/libcurl.a" "$STATIC_DEPS/"; fi
+if [ -n "${HARDCHARGER_IOS_SDK:-}" ]; then
+  cp "$WARPSQL_DEPS_DIR/libpq-install/lib/libpq.a" "$WARPSQL_DEPS_DIR/roaring-install/lib/libroaring.a" "$STATIC_DEPS/"
+  cp "$WARPSQL_DEPS_DIR/curl-install/lib/libcurl.a" "$STATIC_DEPS/"
+fi
+if [ -z "${HARDCHARGER_IOS_SDK:-}" ]; then
+  cmake -DDUCKDB_INSTALL_DIR="$WARPSQL_DEPS_DIR/duckdb-install" -P "$HERE/scripts/prune-duckdb-install.cmake"
+fi
 grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_basetableref.cpp" \
   || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
 grep -q HardchargerDecimal38Converter "$SRC/src/common/arrow/arrow_appender.cpp" \
   || { echo "DuckDB lost the HUGEINT / UHUGEINT Arrow export patch" >&2; exit 1; }
-grep -q HardchargerMetadataStorageVersion \
-  "$WARPSQL_DEPS_DIR/duckdb-build/_deps/ducklake_extension_fc-src/src/storage/ducklake_initializer.cpp" \
-  || { echo "ducklake lost the metadata storage version patch (scripts/extension-patches)" >&2; exit 1; }

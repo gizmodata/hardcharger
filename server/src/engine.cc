@@ -90,17 +90,21 @@ warpduckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
   if (config.allow_unsigned_extensions) {
     options.instance_options.emplace_back("allow_unsigned_extensions", "true");
   }
-  // The extensions the server needs are built in (scripts/duckdb-extensions.cmake) and
-  // loaded at startup. Nothing else is downloaded or loaded behind a statement's back:
-  // another extension takes an explicit INSTALL and LOAD.
+  // Match GizmoSQL/DuckDB on native platforms: known extensions install/load on demand.
+  // Administrators can override either setting or the repository through init SQL.
+#ifdef HARDCHARGER_IOS
+  // iOS runs only the extensions signed into the app.
   options.instance_options.emplace_back("autoinstall_known_extensions", "false");
   options.instance_options.emplace_back("autoload_known_extensions", "false");
+#else
+  options.instance_options.emplace_back("autoinstall_known_extensions", "true");
+  options.instance_options.emplace_back("autoload_known_extensions", "true");
+#endif
   for (auto& option : DuckDBDirectories(config)) options.instance_options.push_back(std::move(option));
   if (!config.storage_version.empty()) {
     options.attach_options.emplace_back("STORAGE_VERSION", config.storage_version);
-    // Also the instance's default for every other new database file: a plain ATTACH, and
-    // a new DuckLake's DuckDB metadata file (scripts/extension-patches/ducklake). An
-    // existing file keeps the storage version it has.
+    // Also the default for a new plain ATTACH. DuckLake chooses its own metadata
+    // storage version upstream; this default does not override its metadata choice.
     options.instance_options.emplace_back("storage_compatibility_version", config.storage_version);
   }
   options.result_batch_rows = static_cast<std::size_t>(config.result_batch_rows);
@@ -878,10 +882,8 @@ void ExplainViewAmbiguity(std::string_view sql, const Error& error) {
               error.sqlstate());
 }
 
-// An extension that needs another one (iceberg needs avro) loads it itself, but only
-// once it is installed: Hardcharger turns DuckDB's autoinstall_known_extensions and
-// autoload_known_extensions off, so "LOAD iceberg" on a host without avro fails, and
-// DuckDB's reason is buried in its message. This says it first, with what to run.
+// An extension dependency can be missing when automatic loading is disabled or fails.
+// Put DuckDB's dependency reason first, with explicit installation instructions.
 void ExplainExtensionDependency(const Error& error) {
   if (auto hint = ExtensionDependencyHint(error.what())) {
     throw Error(error.code(), *hint + "\n" + error.what(), error.sqlstate());
@@ -898,8 +900,8 @@ std::optional<std::string> ExtensionDependencyHint(std::string_view message) {
   const std::string needed = match[2].str();
   return "Hardcharger: the " + extension + " extension needs the " + needed + " extension installed. Run INSTALL " +
          needed + "; then LOAD " + extension + " again (" + extension + " loads " + needed +
-         " itself once it is installed). Hardcharger never installs or loads an extension on its own "
-         "(DuckDB's autoinstall_known_extensions and autoload_known_extensions are off).";
+         " itself once it is installed). Check the extension repository and the "
+         "autoinstall_known_extensions / autoload_known_extensions settings.";
 }
 
 warpsql::StatementOutcome Session::Guarded(std::string_view sql, bool has_parameters,

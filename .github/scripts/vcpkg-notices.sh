@@ -30,8 +30,9 @@ cat <<EOF
 ## Windows: the libraries from vcpkg
 
 The Windows builds link the libraries below from vcpkg (triplet \`$triplet\`, statically) in place
-of the versions listed above for Linux and macOS (OpenSSL, libpq, libcurl, CRoaring and what they
-depend on). Each is listed with its version and the copyright file vcpkg installs with it.
+of the OpenSSL versions listed above for Linux and macOS. Optional extension dependencies
+are supplied separately by loadable modules. Each library below has its version and the
+copyright file vcpkg installs with it.
 
 | Library | Version |
 | --- | --- |

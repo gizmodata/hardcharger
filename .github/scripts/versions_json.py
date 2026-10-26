@@ -117,7 +117,7 @@ def extensions(root: Path, duckdb_version: str) -> dict:
     if sorted(linked) != sorted(names):
         raise Failure(f"duckdb_extension_statically_link({' '.join(linked)}) is not the loaded set ({' '.join(names)})")
     return {
-        "built_in": DUCKDB_CORE_EXTENSIONS + names,
+        "built_in": list(dict.fromkeys(DUCKDB_CORE_EXTENSIONS + names)),
         "pinned": pinned,
         "repository": f"https://extensions.duckdb.org/{duckdb_version}",
     }
