@@ -24,6 +24,7 @@ test("branded controller layouts and preferences stay usable in both themes", as
   await expect(about.getByRole("heading", { name: "Hardcharger™", exact: true })).toHaveCount(0);
   await expect(about.getByRole("link", { name: "Explore Hardcharger" })).toHaveAttribute("href", "https://gizmodata.com/hardcharger");
   await expect(about.getByRole("link", { name: "Visit GizmoData" })).toHaveAttribute("href", "https://gizmodata.com");
+  await expect(about.getByRole("link", { name: "Documentation", exact: true })).toHaveAttribute("href", "https://docs.hardcharger.gizmodata.com");
   await expect(page.getByRole("link", { name: "by GizmoData™", exact: true })).toHaveAttribute("href", "https://gizmodata.com");
   await page.setViewportSize({ width: 860, height: 640 });
   await page.getByRole("button", { name: "Local server", exact: true }).click();

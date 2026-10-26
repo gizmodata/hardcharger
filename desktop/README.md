@@ -62,6 +62,10 @@ x64/Arm64. Linux packaging and testing are follow-up work.
   DNS name/IP, and set the administrator user name and password. The password persists
   in the OS credential store. Save and start the server; the dashboard shows the actual
   endpoint, transport, listen address, and URLs for other computers.
+- **Connect from another computer** has Web UI, Python/ADBC, JDBC, CLI and JavaScript
+  tabs with copyable examples generated from the saved endpoint and TLS mode. Examples
+  use Hardcharger URI schemes and client credential environment variables; saved secrets
+  are never included. Private-CA guidance keeps certificate verification enabled.
 - Save settings stays visible at the top while scrolling. Unsaved edits survive screen
   changes and Start offers to save and start together. Incomplete setup shows errors at
   the required fields and blocks startup, including tray Start and launch at login.

@@ -7,6 +7,7 @@ import type { Theme } from "../lib/theme";
 import { errorMessage, useSession } from "../session";
 import { Wordmark } from "./Brand";
 import { StatementDetails } from "./StatementDetails";
+import { requestWindowClose } from "../lib/pageExit";
 
 /** An independent observer: its execution remains selected when the monitor's
  * filters change, its history window moves on, or the original workspace closes. */
@@ -73,7 +74,7 @@ export default function QueryDetailPage({ theme }: { theme: Theme }) {
           <button type="button" className="btn btn-ghost" onClick={theme.toggle} aria-label="Toggle color theme">
             {theme.name === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
-          <button type="button" className="btn btn-ghost" onClick={() => window.close()}>
+          <button type="button" className="btn btn-ghost" onClick={requestWindowClose}>
             <X size={14} /> Close window
           </button>
         </div>

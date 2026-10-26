@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { endSessionsOnExit, warnBeforeLeaving } from "../../src/lib/pageExit";
+import { endSessionsOnExit, requestWindowClose, warnBeforeLeaving } from "../../src/lib/pageExit";
 
 function pageEvent(type: string, persisted = false): Event {
   const e = new Event(type, { cancelable: true });
@@ -80,5 +80,46 @@ describe("endSessionsOnExit", () => {
     stop = endSessionsOnExit(() => undefined, reload);
     window.dispatchEvent(pageEvent("pagehide"));
     expect(fetches).toHaveLength(0);
+  });
+
+  it("awaits explicit session cleanup before the native close, once", async () => {
+    stop();
+    let finish!: () => void;
+    const cleaned = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const beforeClose = vi.fn(() => cleaned);
+    const close = vi.spyOn(window, "close").mockImplementation(() => {});
+    stop = endSessionsOnExit(() => ({ token: "tok", ids }), reload, beforeClose);
+    requestWindowClose();
+    requestWindowClose();
+    expect(beforeClose).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+    ids = []; // session close promises resolve only after their DELETEs
+    finish();
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+    expect(fetches).toHaveLength(0);
+    close.mockRestore();
+  });
+
+  it("finishes a native close even when a disconnected server never answers", async () => {
+    stop();
+    vi.useFakeTimers();
+    const close = vi.spyOn(window, "close").mockImplementation(() => {});
+    try {
+      stop = endSessionsOnExit(
+        () => ({ token: "tok", ids }),
+        reload,
+        () => new Promise(() => {}),
+      );
+      requestWindowClose();
+      expect(close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(fetches).toHaveLength(2); // keepalive fallback for any known sessions
+    } finally {
+      vi.useRealTimers();
+      close.mockRestore();
+    }
   });
 });

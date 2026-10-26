@@ -8,6 +8,13 @@
 
 import { warpBase } from "./warp";
 
+const closeRequest = "hardcharger:close-window";
+
+/** Native inspectors must finish session cleanup before their webview is destroyed. */
+export function requestWindowClose(): void {
+  window.dispatchEvent(new Event(closeRequest));
+}
+
 export interface OpenSessions {
   token: string;
   /** The Warp SQL session ids the page holds open. */
@@ -56,7 +63,11 @@ export function warnBeforeLeaving(): () => void {
  * page from automation does), so beforeunload ends them too, unless the page asks the user
  * first (warnBeforeLeaving): the user may stay, and then the sessions must still be there.
  */
-export function endSessionsOnExit(open: () => OpenSessions | undefined, reload = () => location.reload()): () => void {
+export function endSessionsOnExit(
+  open: () => OpenSessions | undefined,
+  reload = () => location.reload(),
+  beforeClose: () => Promise<void> = async () => {},
+): () => void {
   // The sessions already ended (a navigation beforeunload saw may not happen after all, and
   // the page then goes on with new ones, which a later exit ends).
   const ended = new Set<string>();
@@ -70,15 +81,38 @@ export function endSessionsOnExit(open: () => OpenSessions | undefined, reload =
   const beforeUnload = () => {
     if (warnings === 0) exit();
   };
+  let closing = false;
+  const close = () => {
+    if (closing) return;
+    closing = true;
+    let timeout: ReturnType<typeof setTimeout>;
+    // A disconnected server must not trap the user in a window. Normal closes await
+    // every session DELETE; page-exit keepalive remains the fallback if cleanup fails.
+    void Promise.race([
+      beforeClose(),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, 5000);
+      }),
+    ])
+      .catch(() => {})
+      .then(() => {
+        clearTimeout(timeout);
+        exit();
+        window.close();
+      });
+  };
   const show = (e: PageTransitionEvent) => {
     if (e.persisted && ended.size > 0) reload();
   };
   window.addEventListener("beforeunload", beforeUnload);
   window.addEventListener("pagehide", exit);
   window.addEventListener("pageshow", show);
+  window.addEventListener(closeRequest, close);
+  if ((window as Window & { __hardchargerCloseRequested?: boolean }).__hardchargerCloseRequested) close();
   return () => {
     window.removeEventListener("beforeunload", beforeUnload);
     window.removeEventListener("pagehide", exit);
     window.removeEventListener("pageshow", show);
+    window.removeEventListener(closeRequest, close);
   };
 }

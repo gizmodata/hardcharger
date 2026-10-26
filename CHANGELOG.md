@@ -9,6 +9,11 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Desktop About links directly to the Hardcharger documentation.
+- Desktop network sharing includes copyable Web UI, Python/ADBC, JDBC, CLI and JavaScript
+  examples using the saved address and Hardcharger URI schemes, with private-CA guidance
+  and credential environment variables instead of saved passwords.
+
 - Enforce server/PyPI package version alignment for 2.1.0+: a server release `X.Y.Z`
   uses `hardcharger==X.Y.Z`; Python-only fixes use `X.Y.Z.postN` while downloading the
   same base server. CI rejects version or tag drift; AGENTS.md and CLAUDE.md record the rule.
@@ -68,6 +73,9 @@ own changelog in `python/CHANGELOG.md`.
   upload Actions artifacts without publishing a release.
 
 ### Fixed
+
+- Native query-detail windows await their session cleanup before closing, including the
+  red window button and Cmd+W, preventing idle observer sessions from accumulating.
 
 - SQL Monitor and Sessions use in-page confirmation dialogs for ending sessions and
   cancelling work, so those actions also run in native webviews that suppress browser

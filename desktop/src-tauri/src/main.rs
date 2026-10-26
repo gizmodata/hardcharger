@@ -358,7 +358,14 @@ fn open_marketing_link(window: WebviewWindow, url: String) -> Result<(), String>
     controller(&window)?;
     if !matches!(
         url.as_str(),
-        "https://gizmodata.com" | "https://gizmodata.com/hardcharger"
+        "https://gizmodata.com"
+            | "https://gizmodata.com/hardcharger"
+            | "https://docs.hardcharger.gizmodata.com"
+            | "https://docs.hardcharger.gizmodata.com/guides/web-ui/"
+            | "https://docs.hardcharger.gizmodata.com/clients/python/"
+            | "https://docs.hardcharger.gizmodata.com/clients/jdbc/"
+            | "https://docs.hardcharger.gizmodata.com/clients/cli/"
+            | "https://docs.hardcharger.gizmodata.com/clients/javascript/"
     ) {
         return Err("This desktop link is not available.".into());
     }
@@ -571,6 +578,20 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label().starts_with("query-detail-") {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    if let Some(view) = window.app_handle().get_webview_window(window.label()) {
+                        // The red close button / Cmd+W takes the same awaited cleanup
+                        // path as the in-page Close window button. The final navigation
+                        // destroys only this inspector after its sessions have ended.
+                        if view.url().is_ok_and(|url| url.path() == "/ui/monitor/query")
+                            && view.eval("window.__hardchargerCloseRequested = true; window.dispatchEvent(new Event('hardcharger:close-window'));").is_ok()
+                        {
+                            api.prevent_close();
+                        }
+                    }
+                }
+            }
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();

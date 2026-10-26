@@ -169,6 +169,16 @@ footer { padding:14px 32px; border-top:1px solid var(--soft); display:flex; just
 .certificate-info { margin:18px 0; padding:16px; border:1px solid var(--border); border-radius:6px; overflow-wrap:anywhere; font-size:12px; line-height:1.7; }
 .trust-dialog { max-width:650px; width:calc(100% - 48px); padding:28px; border:1px solid var(--border); border-radius:9px; background:var(--panel); color:var(--text); box-shadow:0 16px 60px #0004; }
 .trust-dialog::backdrop { background:#07152c80; }
+.connection-uri { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:18px 0; }
+.connection-uri code { overflow-wrap:anywhere; }
+.connection-tabs { display:flex; gap:4px; flex-wrap:wrap; border-bottom:1px solid var(--border); }
+.connection-tabs button { border:0; border-bottom:2px solid transparent; background:transparent; color:var(--muted); padding:10px 12px; cursor:pointer; font:inherit; }
+.connection-tabs button[aria-selected="true"] { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+.connection-setup { white-space:pre-wrap; }
+.connection-code-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.connection-code-heading a { font-size:12px; }
+.connection-code { max-height:360px; overflow:auto; background:var(--bg); padding:16px; border:1px solid var(--border); border-radius:6px; font-size:12px; line-height:1.65; }
+.connection-copy-scratch { position:fixed; left:-10000px; top:0; opacity:0; }
 .trust-dialog h2 { font-size:20px; margin-top:0; }
 .trust-dialog p { line-height:1.8; font-size:12px; }
 .certificate-fingerprint { display:block; padding:12px; margin-top:8px; background:var(--bg); border:1px solid var(--border); border-radius:5px; overflow-wrap:anywhere; font-size:11px; }

@@ -62,20 +62,46 @@ export function App() {
   const queryPage = useRef<QueryPageHandle | undefined>(undefined);
   const pending = useRef<QueryRequest[]>([]);
   const extra = useRef(new Set<Connection>());
+  const opening = useRef(new Set<Promise<Connection>>());
+  const closingWindow = useRef(false);
   const current = useRef(phase);
   useEffect(() => {
     current.current = phase;
   });
 
+  // Track the base connection too, including opens that are still in progress when a
+  // native inspector is closed. Its webview must stay alive until those sessions end.
+  const openExtraConnection = useCallback(async (auth: SignedIn, options?: ConnectionOptions) => {
+    if (closingWindow.current) throw new Error("This window is closing.");
+    const pending = openConnection(auth, options).then((c) => {
+      extra.current.add(c);
+      return c;
+    });
+    opening.current.add(pending);
+    try {
+      return await pending;
+    } finally {
+      opening.current.delete(pending);
+    }
+  }, []);
+
   // Closing or leaving the page ends its sessions on the server now, not at their idle timeout.
   useEffect(
     () =>
-      endSessionsOnExit(() => {
-        const now = current.current;
-        if (now.kind !== "ready") return undefined;
-        const open = [now.connection, ...extra.current].filter((c) => !c.closed);
-        return { token: now.auth.token, ids: open.map((c) => c.sessionId) };
-      }),
+      endSessionsOnExit(
+        () => {
+          const now = current.current;
+          if (now.kind !== "ready") return undefined;
+          const open = [...new Set([now.connection, ...extra.current])].filter((c) => !c.closed);
+          return { token: now.auth.token, ids: open.map((c) => c.sessionId) };
+        },
+        undefined,
+        async () => {
+          closingWindow.current = true;
+          await Promise.allSettled([...opening.current]);
+          await Promise.allSettled([...extra.current].map((c) => c.close()));
+        },
+      ),
     [],
   );
 
@@ -105,7 +131,7 @@ export function App() {
     void (async () => {
       let connection: Connection | undefined;
       try {
-        connection = await openConnection(auth, { signal: controller.signal });
+        connection = await openExtraConnection(auth, { signal: controller.signal });
         const identity = await whoAmI(connection);
         if (controller.signal.aborted) {
           void connection.close();
@@ -120,7 +146,7 @@ export function App() {
       }
     })();
     return () => controller.abort();
-  }, [phase]);
+  }, [phase, openExtraConnection]);
 
   // The token's end: back to the sign-in page, before requests start failing.
   useEffect(() => {
@@ -129,12 +155,6 @@ export function App() {
     const t = window.setTimeout(() => signOut("Your sign-in has expired. Sign in again."), Math.max(0, left));
     return () => window.clearTimeout(t);
   }, [phase, signOut]);
-
-  const openExtraConnection = useCallback(async (auth: SignedIn, options?: ConnectionOptions) => {
-    const c = await openConnection(auth, options);
-    extra.current.add(c);
-    return c;
-  }, []);
 
   const requestQuery = useCallback(
     (request: QueryRequest) => {

@@ -71,8 +71,18 @@ do not survive a server restart.
 3. Keep **TLS — encrypted** selected. Supply certificate-chain and private-key PEM paths,
    or choose **Generate certificate and key**. Set the administrator user name and password.
 4. Choose **Save settings**, then start the server. The dashboard shows the SQL workspace
-   and Warp SQL URLs for other computers. Allow inbound TCP traffic on the selected port
+   and connection examples for other computers. Allow inbound TCP traffic on the selected port
    in your firewall if needed, and keep this computer awake.
+
+**Connect from another computer** has tabs for **Web UI**, **Python / ADBC**, **JDBC**,
+**CLI** and **JavaScript**. Each shows a text example with a clipboard button, populated
+with the saved DNS name/IP and port. Client examples use `hardcharger://` (JDBC uses
+`jdbc:hardcharger://`); the Web UI tab uses the matching HTTP(S) URL. TLS is detected from
+the server endpoint, so an HTTP server's examples explicitly disable encryption.
+Examples read the client's credentials from `HARDCHARGER_USER` and
+`HARDCHARGER_PASSWORD`; saved server passwords are never copied. For a private CA,
+set `HARDCHARGER_TLS_ROOTS` to its public PEM certificate on the client, or use the
+CLI's `--tls-roots` option. Browser clients need their own CA trust setup.
 
 A generated certificate covers the chosen name and current detected addresses and lasts
 one year. The app shows the public CA certificate and its SHA-256 fingerprint. Share only
@@ -101,3 +111,5 @@ The workspace includes the same administrator tabs as the server's browser-based
 Both require an unrestricted administrator. See the [SQL Monitor guide](sql-monitor.md)
 for status meanings, profiles, session controls and runtime-setting scopes. For building
 and signing the app, see [desktop/README.md](../desktop/README.md).
+
+**About Hardcharger** links to the documentation, product website and GizmoData.

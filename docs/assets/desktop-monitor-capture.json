@@ -1,18 +1,21 @@
 {
   "captured_at": "2026-10-26",
   "source_repository": "gizmodata/hardcharger",
-  "source_commit": "b29cdee1",
-  "source_note": "documentation-screenshots.spec.ts added on top of this commit; executable/UI report 2.0.0 while preparing the v2.1.0 feature branch",
+  "source_commit": "3107c128caf6b57f00b61a55e73c2aef76a9925a",
+  "source_note": "v2.1.0 feature preview; same UI capture test as committed source",
   "ui_capture_command": "npx playwright test test/e2e/documentation-screenshots.spec.ts",
   "desktop_capture_command": "npx playwright test test/preview.spec.ts",
   "desktop_note": "Design preview with sample status, labeled in the UI and captions; no live desktop credentials or user database used",
   "ui_note": "Real temporary servers and synthetic sales.orders data; Chromium captures, also verified in WebKit",
   "files": {
-    "desktop-preview-light.png": "818e7e9e0195b5cf9a1819a4d488c5040d7cf44891968227d33ba55dd363e998",
-    "desktop-preview-dark.png": "93ba2425893438ecb8b15f0fdadf371a8fab056cc93f6857ad857cffc7894efd",
-    "web-ui-monitor-dark.png": "3281826e57c1b18c63a31a3c6a55db4c01c44ceecd3e847f62479c21eac21491",
-    "web-ui-monitor-light.png": "cf6ab3579ec8151f8f64411adfab8427656417ca069d08ad2cfc6026dd83fc28",
-    "web-ui-configuration-dark.png": "38b391147684357320fcb4f3020205f29b5b19699bef0dd0ea6f89894af881d8",
-    "web-ui-configuration-light.png": "a27f3395fcf8bfaaf6b4813b233248abb5de072e391fd9560620b7745f822519"
-  }
+    "desktop-preview-light.png": "20fbba9705cda80f37f4d5cacbe7065f961a277312fc666e1c9750558eb28af3",
+    "desktop-preview-dark.png": "390ae704cfa6b96f68d9b987da41f913db1e984e9dc85fb29440c3e10a890440",
+    "web-ui-monitor-dark.png": "32e34b96a325bbdc0a6e86649060a3243fc07edf27508d01c43d06e7021dce66",
+    "web-ui-monitor-light.png": "1b05ac47a7d879bb80e0cb994e493e3b9a74fbe30635e867508d61980544fde5",
+    "web-ui-configuration-dark.png": "08ae44f316fd33b47b569b74d7e43c8a61f28485623a10f196826e848d4daae6",
+    "web-ui-configuration-light.png": "dc1c480a0c3f790d99e77e63947f10635b5124aae0f4d96a9061c1de4f8b63ed"
+  },
+  "server_version": "2.1.0",
+  "server_source_branch": "feature/loadable-extensions",
+  "server_binary_sha256": "9ec41d954ddc50d41e20a087d8a7bade96edf041145b939df4d1ddb26294c759"
 }
