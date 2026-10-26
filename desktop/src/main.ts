@@ -22,6 +22,7 @@ let error = "";
 let login = false;
 let schema: ServerOption[] = [];
 let settingsNotice = "";
+let settingsSearch = "";
 let pendingImport: Record<string, unknown> | null = null;
 let theme = localStorage.getItem("hardcharger-desktop:theme") ?? "system";
 document.documentElement.dataset.theme = theme;
@@ -109,6 +110,15 @@ function render() {
     const field = document.getElementById(`option:${input.dataset.override}`) as HTMLInputElement;
     if (field) field.disabled = !input.checked;
   }));
+  const search = document.querySelector<HTMLInputElement>("#settings-search");
+  search?.addEventListener("input", () => { settingsSearch = search.value; filterOptions(); });
+  search?.addEventListener("keydown", e => { if (e.key === "Enter") e.preventDefault(); });
+  document.querySelector("#clear-settings-search")?.addEventListener("click", () => {
+    settingsSearch = "";
+    if (search) { search.value = ""; search.focus(); }
+    filterOptions();
+  });
+  filterOptions();
   document.querySelector("#import-yaml")?.addEventListener("change", e => void importYaml((e.target as HTMLInputElement).files?.[0]));
   document.querySelector("#choose-import")?.addEventListener("click", () => document.querySelector<HTMLInputElement>("#import-yaml")?.click());
   document.querySelector("#export-yaml")?.addEventListener("click", exportYaml);
@@ -150,7 +160,10 @@ function settingsView(s: Status | null) {
       <label class="field"><span>Port</span><input name="port" type="number" min="1024" max="65535" required value="${s?.settings.port ?? 31337}" ${s?.running || !native ? "disabled" : ""}><small>The server accepts connections from this computer only.</small></label>
       <label class="check-row"><input name="start" type="checkbox" ${s?.settings.start_on_open ? "checked" : ""} ${s?.running || !native ? "disabled" : ""}><span><strong>Start server when Hardcharger opens</strong><small>Your database is ready when you need it.</small></span></label>
       <h3 class="options-heading">Server options</h3><p class="muted">Defaults come from this server build. Enable an override to change a value.</p>
+      <div class="settings-search"><label for="settings-search">Search setting names</label><div class="settings-search-input"><input id="settings-search" type="search" placeholder="e.g. memory_limit" value="${esc(settingsSearch)}" autocomplete="off" aria-controls="server-options" aria-describedby="settings-search-status"><button id="clear-settings-search" class="button" type="button" hidden>Clear</button></div><p id="settings-search-status" class="muted" role="status" aria-live="polite"></p></div>
+      <div id="server-options">
       ${optionGroups(s)}
+      </div>
       <button class="button primary save-settings" type="submit" ${s?.running || !native || busy ? "disabled" : ""}>Save settings</button>
     </form>
     <section class="card detail-card"><div class="section-heading"><div><h3>Application</h3><p>Keep Hardcharger close at hand.</p></div></div><label class="check-row"><input id="launch-login" type="checkbox" ${login ? "checked" : ""} ${!native ? "disabled" : ""}><span><strong>Launch at login</strong><small>Open quietly in the menu bar or system tray when you sign in.</small></span></label><p class="muted">The window can close while the server keeps running. Quit Hardcharger to stop it cleanly.</p></section>`;
@@ -158,7 +171,7 @@ function settingsView(s: Status | null) {
 
 function optionGroups(s: Status | null) {
   const groups = [...new Set(schema.map(o => o.group))];
-  return groups.map(group => `<details class="option-group"><summary>${esc(group)}<span>${schema.filter(o => o.group === group).length} options</span></summary>${schema.filter(o => o.group === group).map(option => {
+  return groups.map(group => `<details class="option-group"><summary>${esc(group)}<span></span></summary>${schema.filter(o => o.group === group).map(option => {
     if (option.name === "port") return "";
     const value = s?.settings.server_options[option.name];
     const custom = value !== undefined;
@@ -171,8 +184,40 @@ function optionGroups(s: Status | null) {
     else if (option.type === "boolean") input = `<select id="${id}" name="${id}" ${disabled || !custom ? "disabled" : ""}><option value="true" ${text === "true" ? "selected" : ""}>true</option><option value="false" ${text !== "true" ? "selected" : ""}>false</option></select>`;
     else if (option.type === "list") input = `<textarea id="${id}" name="${id}" rows="2" placeholder="One value per line" ${disabled || !custom ? "disabled" : ""}>${esc(text)}</textarea>`;
     else input = `<input id="${id}" name="${id}" type="${option.secret ? "password" : option.type === "integer" ? "number" : "text"}" value="${esc(text)}" placeholder="${stored ? "Saved in OS credential store" : "Server default"}" autocomplete="off" ${disabled || !custom ? "disabled" : ""}>`;
-    return `<div class="server-option"><div class="option-description"><label for="${id}">${esc(option.name)}</label><p>${esc(option.description)}</p>${option.secret && !option.managed ? '<small>Stored in your OS credential store.</small>' : ""}</div><div class="option-value">${!option.managed ? `<label class="override"><input name="use:${option.name}" data-override="${option.name}" type="checkbox" ${custom ? "checked" : ""} ${disabled ? "disabled" : ""}>Override</label>` : ""}${input}</div></div>`;
+    return `<div class="server-option" data-option-name="${esc(option.name)}"><div class="option-description"><label for="${id}">${esc(option.name)}</label><p>${esc(option.description)}</p>${option.secret && !option.managed ? '<small>Stored in your OS credential store.</small>' : ""}</div><div class="option-value">${!option.managed ? `<label class="override"><input name="use:${option.name}" data-override="${option.name}" type="checkbox" ${custom ? "checked" : ""} ${disabled ? "disabled" : ""}>Override</label>` : ""}${input}</div></div>`;
   }).join("")}</details>`).join("");
+}
+
+function filterOptions() {
+  const query = settingsSearch.trim().toLowerCase();
+  let total = 0, matches = 0;
+  // Hide existing rows instead of rebuilding the form, preserving unsaved values.
+  app.querySelectorAll<HTMLDetailsElement>(".option-group").forEach(group => {
+    const rows = Array.from(group.querySelectorAll<HTMLElement>("[data-option-name]"));
+    let visible = 0;
+    rows.forEach(row => {
+      row.hidden = !row.dataset.optionName!.toLowerCase().includes(query);
+      if (!row.hidden) visible++;
+    });
+    total += rows.length;
+    matches += visible;
+    group.hidden = visible === 0;
+    const count = group.querySelector("summary span");
+    if (count) count.textContent = query ? `${visible} of ${rows.length} options` : `${rows.length} options`;
+    if (query) {
+      group.dataset.beforeSearch ??= String(group.open);
+      group.open = visible > 0;
+    } else if (group.dataset.beforeSearch !== undefined) {
+      group.open = group.dataset.beforeSearch === "true";
+      delete group.dataset.beforeSearch;
+    }
+  });
+  const status = document.querySelector("#settings-search-status");
+  if (status) status.textContent = query
+    ? matches ? `${matches} of ${total} settings match.` : "No settings match. Try another name or clear the search."
+    : `${total} settings. Search by any part of a setting name.`;
+  const clear = document.querySelector<HTMLButtonElement>("#clear-settings-search");
+  if (clear) clear.hidden = settingsSearch.length === 0;
 }
 
 async function importYaml(file: File | undefined) {

@@ -122,6 +122,12 @@ footer { padding:14px 32px; border-top:1px solid var(--soft); display:flex; just
 .import-review { margin-top:22px; border-top:1px solid var(--border); padding-top:20px; }
 .import-review pre { padding:16px; background:var(--bg); border:1px solid var(--border); border-radius:5px; overflow:auto; font:12px/1.7 var(--mono); max-height:300px; }
 .options-heading { margin-top:30px; }
+.settings-search { margin:20px 0; }
+.settings-search > label { display:block; margin-bottom:8px; font-size:12px; font-weight:550; }
+.settings-search-input { display:flex; gap:10px; }
+.settings-search-input input { flex:1; min-width:0; padding:10px 12px; border:1px solid var(--border); border-radius:5px; background:var(--bg); color:var(--text); }
+.settings-search p { margin:8px 0 0; }
+.settings-search [hidden], .option-group[hidden], .server-option[hidden] { display:none; }
 .option-group { border-top:1px solid var(--border); }
 .option-group summary { display:flex; justify-content:space-between; cursor:pointer; padding:16px 0; font-size:12px; font-weight:550; }
 .option-group summary::before { content:"›"; margin-right:10px; color:var(--link); }

@@ -30,7 +30,8 @@ own changelog in `python/CHANGELOG.md`.
   running; Quit drains queries and stops it. The application icon places the bull head
   on a white tile for contrast in the Dock and taskbar. Includes launch at login, logs, server
   options from `--print-options-json`, reviewed YAML imports, exports without secrets,
-  and OS credential storage for sensitive options. Desktop packages use the existing
+  setting-name search that opens matching sections, and OS credential storage for
+  sensitive options. Desktop packages use the existing
   Apple Developer ID/notarization and Windows Azure signing credentials; branch previews
   upload Actions artifacts without publishing a release.
 
