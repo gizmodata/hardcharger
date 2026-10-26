@@ -204,7 +204,9 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
                     let app = close_app.clone();
                     let label = close_label.clone();
                     let _ = close_app.run_on_main_thread(move || {
-                        if let Some(window) = app.get_webview_window(&label) { let _ = window.close(); }
+                        // Cleanup has already completed in the page. Bypass
+                        // CloseRequested here, which starts that cleanup on native closes.
+                        if let Some(window) = app.get_webview_window(&label) { let _ = window.destroy(); }
                     });
                     return false;
                 }
