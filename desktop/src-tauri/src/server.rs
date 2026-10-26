@@ -66,6 +66,46 @@ pub struct Server {
 
 const REDACTED: &str = "__HARDCHARGER_STORED_SECRET__";
 
+// Fixed string domains validated by server/src/config.cc. Keep free-form strings
+// (paths, catalog names, roles, DuckDB memory/storage settings) as text fields.
+fn option_choices(name: &str) -> &'static [&'static str] {
+    match name {
+        "capture_query_profile" => &["off", "standard", "detailed"],
+        "log_level" | "query_log_level" | "auth_log_level" | "session_log_level" => {
+            &["debug", "info", "warning", "warn", "error"]
+        }
+        "log_format" => &["text", "json"],
+        "log_emoji" => &["auto", "always", "never"],
+        "mtls_identity_source" => &["san_email", "san_uri", "subject_cn"],
+        _ => &[],
+    }
+}
+
+fn choices_ignore_case(name: &str) -> bool {
+    matches!(
+        name,
+        "log_level" | "query_log_level" | "auth_log_level" | "session_log_level" | "log_emoji"
+    )
+}
+
+fn validate_option_choice(name: &str, value: &serde_json::Value) -> Result<(), String> {
+    let choices = option_choices(name);
+    if !choices.is_empty()
+        && !value.as_str().is_some_and(|v| {
+            choices.iter().any(|choice| {
+                if choices_ignore_case(name) {
+                    choice.eq_ignore_ascii_case(v)
+                } else {
+                    *choice == v
+                }
+            })
+        })
+    {
+        return Err(format!("{name} must be one of: {}.", choices.join(", ")));
+    }
+    Ok(())
+}
+
 fn is_secret(name: &str) -> bool {
     matches!(
         name,
@@ -407,6 +447,9 @@ impl Server {
             }
         }
         self.validate_options(&settings)?;
+        for (name, value) in &settings.server_options {
+            validate_option_choice(name, value)?;
+        }
         if self.status()?.running {
             return Err("Stop the server before changing its settings.".into());
         }
@@ -463,6 +506,11 @@ impl Server {
                 let name = option["name"].as_str().unwrap_or("").to_owned();
                 option["managed"] = managed(&name).into();
                 option["secret"] = is_secret(&name).into();
+                let choices = option_choices(&name);
+                if !choices.is_empty() {
+                    option["choices"] = serde_json::json!(choices);
+                    option["choices_ignore_case"] = choices_ignore_case(&name).into();
+                }
                 option
             })
             .collect()
@@ -574,6 +622,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fixed_choices_match_server_validation() {
+        for (name, values) in [
+            ("capture_query_profile", vec!["off", "standard", "detailed"]),
+            (
+                "log_level",
+                vec!["debug", "INFO", "warning", "warn", "error"],
+            ),
+            ("log_format", vec!["text", "json"]),
+            ("log_emoji", vec!["auto", "ALWAYS", "never"]),
+        ] {
+            for value in values {
+                assert!(validate_option_choice(name, &value.into()).is_ok());
+            }
+            assert!(validate_option_choice(name, &"bogus".into()).is_err());
+        }
+        assert!(validate_option_choice("capture_query_profile", &"Off".into()).is_err());
+        assert!(validate_option_choice("log_format", &"JSON".into()).is_err());
+        assert!(validate_option_choice("memory_limit", &"8GB".into()).is_ok());
+    }
+
+    #[test]
     fn native_settings_never_return_stored_secrets() {
         let mut settings = Settings::default();
         settings
@@ -615,7 +684,16 @@ mod tests {
         settings
             .server_options
             .insert("print_queries".into(), false.into());
+        settings
+            .server_options
+            .insert("capture_query_profile".into(), "detailed".into());
         server.save_settings(settings.clone()).unwrap();
+        for (name, value) in [("capture_query_profile", "Off"), ("print_queries", "yes")] {
+            let mut invalid = settings.clone();
+            invalid.server_options.insert(name.into(), value.into());
+            assert!(server.save_settings(invalid).is_err());
+            assert_eq!(server.settings.server_options, settings.server_options);
+        }
         let mut invalid = settings.clone();
         invalid
             .server_options

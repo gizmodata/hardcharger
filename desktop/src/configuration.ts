@@ -4,6 +4,16 @@ export interface ServerOption {
   name: string; yaml_key: string; group: string; description: string;
   type: "string" | "integer" | "boolean" | "list";
   default: string; managed: boolean; secret: boolean;
+  choices?: string[]; choices_ignore_case?: boolean;
+}
+
+export function optionChoices(option: ServerOption): string[] | undefined {
+  return option.type === "boolean" ? ["true", "false"] : option.choices;
+}
+
+export function choiceValue(option: ServerOption, value: string): string | undefined {
+  return optionChoices(option)?.find(choice => option.choices_ignore_case
+    ? choice.toLowerCase() === value.toLowerCase() : choice === value);
 }
 
 export function parseConfiguration(text: string, schema: ServerOption[]): Record<string, unknown> {
@@ -21,6 +31,8 @@ export function parseConfiguration(text: string, schema: ServerOption[]): Record
       : definition.type === "list" ? Array.isArray(value) && value.every(v => typeof v === "string")
       : typeof value === definition.type;
     if (!valid) throw new Error(`${key} must have type ${definition.type}.`);
+    if (optionChoices(definition)?.length && choiceValue(definition, String(value)) === undefined)
+      throw new Error(`${key} must be one of: ${optionChoices(definition)!.join(", ")}.`);
     if (key === "port" && (Number(value) < 1024 || Number(value) > 65535)) throw new Error("Choose a port between 1024 and 65535.");
   }
   return options;

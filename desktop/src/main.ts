@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { stringify } from "yaml";
-import { parseConfiguration, exportConfiguration, type ServerOption } from "./configuration";
+import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, type ServerOption } from "./configuration";
 import "./style.css";
 import "./palette.css";
 
@@ -93,6 +93,9 @@ function render() {
       for (const option of schema.filter(o => !o.managed && o.name !== "port")) {
         if (data.get(`use:${option.name}`) !== "on") continue;
         const text = String(data.get(`option:${option.name}`) ?? "");
+        const choices = optionChoices(option);
+        if (choices?.length && choiceValue(option, text) === undefined)
+          throw new Error(`${option.name} must be one of: ${choices.join(", ")}.`);
         if (option.secret && text === "" && current?.settings.server_options[option.name] === "__HARDCHARGER_STORED_SECRET__") {
           options[option.name] = "__HARDCHARGER_STORED_SECRET__";
         } else if (option.type === "integer") {
@@ -180,8 +183,10 @@ function optionGroups(s: Status | null) {
     const disabled = s?.running || !native || option.managed;
     let input = "";
     const id = `option:${option.name}`;
+    const choices = optionChoices(option);
+    const selected = choices?.length ? choiceValue(option, text) : undefined;
     if (option.managed) input = `<span class="managed-label">Managed by desktop app</span>`;
-    else if (option.type === "boolean") input = `<select id="${id}" name="${id}" ${disabled || !custom ? "disabled" : ""}><option value="true" ${text === "true" ? "selected" : ""}>true</option><option value="false" ${text !== "true" ? "selected" : ""}>false</option></select>`;
+    else if (choices?.length) input = `<select id="${id}" name="${id}" ${disabled || !custom ? "disabled" : ""}>${selected === undefined ? `<option value="" selected disabled>Choose a valid value${custom ? ` (saved: ${esc(text)})` : ""}</option>` : ""}${choices.map(choice => `<option value="${esc(choice)}" ${selected === choice ? "selected" : ""}>${esc(choice)}</option>`).join("")}</select>`;
     else if (option.type === "list") input = `<textarea id="${id}" name="${id}" rows="2" placeholder="One value per line" ${disabled || !custom ? "disabled" : ""}>${esc(text)}</textarea>`;
     else input = `<input id="${id}" name="${id}" type="${option.secret ? "password" : option.type === "integer" ? "number" : "text"}" value="${esc(text)}" placeholder="${stored ? "Saved in OS credential store" : "Server default"}" autocomplete="off" ${disabled || !custom ? "disabled" : ""}>`;
     return `<div class="server-option" data-option-name="${esc(option.name)}"><div class="option-description"><label for="${id}">${esc(option.name)}</label><p>${esc(option.description)}</p>${option.secret && !option.managed ? '<small>Stored in your OS credential store.</small>' : ""}</div><div class="option-value">${!option.managed ? `<label class="override"><input name="use:${option.name}" data-override="${option.name}" type="checkbox" ${custom ? "checked" : ""} ${disabled ? "disabled" : ""}>Override</label>` : ""}${input}</div></div>`;

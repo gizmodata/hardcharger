@@ -31,3 +31,44 @@ test("an ordinary browser never reports a live desktop server", async ({ page })
   await expect(page.getByRole("alert")).toContainText("Open the Hardcharger desktop app");
   await expect(page.getByRole("button", { name: "Start server", exact: true })).toBeDisabled();
 });
+
+test("fixed-choice settings survive filtering and save with their proper types", async ({ page }) => {
+  await page.addInitScript(() => {
+    const status = {
+      running: false, port: 31337, version: "Hardcharger 2.0.0", error: null,
+      settings: { port: 31337, start_on_open: true, server_options: {} },
+    };
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 1,
+        invoke: async (command: string, args: { settings: typeof status.settings }) => {
+          if (command === "server_options") return [
+            { name: "capture_query_profile", type: "string", group: "Catalog logging", default: "off", description: "Record a query profile", choices: ["off", "standard", "detailed"] },
+            { name: "print_queries", type: "boolean", group: "Statements", default: "true", description: "Log every statement" },
+          ];
+          if (command === "save_settings") status.settings = args.settings;
+          return command === "server_status" || command === "save_settings" ? status : false;
+        },
+      },
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const search = page.getByRole("searchbox", { name: "Search setting names" });
+  await search.fill("profile");
+  await page.getByRole("checkbox", { name: "Override", exact: true }).check();
+  const profile = page.getByRole("combobox", { name: "capture_query_profile" });
+  await expect(profile.locator("option")).toHaveText(["off", "standard", "detailed"]);
+  await profile.selectOption("detailed");
+  await search.fill("print_queries");
+  await page.getByRole("checkbox", { name: "Override", exact: true }).check();
+  await page.getByRole("combobox", { name: "print_queries" }).selectOption("false");
+  await page.getByRole("button", { name: "Save settings", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Settings saved" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "print_queries" })).toHaveValue("false");
+  await search.fill("profile");
+  await expect(profile).toHaveValue("detailed");
+  await profile.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "artifacts/desktop-setting-choices.png" });
+});
