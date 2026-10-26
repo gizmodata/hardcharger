@@ -1,0 +1,138 @@
+{
+  "io": {
+    "total_bytes_read": 0,
+    "total_bytes_written": 0
+  },
+  "operator": [
+    {
+      "extra_info": {},
+      "intermediate_rows": 0,
+      "intermediate_size_bytes": 0,
+      "timing": 0.000004209,
+      "type": "RESULT_COLLECTOR",
+      "children": [
+        {
+          "extra_info": {
+            "Aggregates": "sum(#0)",
+            "Estimated Cardinality": "1"
+          },
+          "intermediate_rows": 1,
+          "intermediate_size_bytes": 16,
+          "timing": 0.00029533900000000053,
+          "type": "UNGROUPED_AGGREGATE",
+          "children": [
+            {
+              "extra_info": {
+                "Projections": "i",
+                "Estimated Cardinality": "200000"
+              },
+              "intermediate_rows": 500000,
+              "intermediate_size_bytes": 4000000,
+              "timing": 0.000013041000000000052,
+              "type": "PROJECTION",
+              "children": [
+                {
+                  "extra_info": {
+                    "Expression": "((i % 2) = 0)",
+                    "Estimated Cardinality": "200000"
+                  },
+                  "intermediate_rows": 500000,
+                  "intermediate_size_bytes": 4000000,
+                  "timing": 0.0017019159999999997,
+                  "type": "FILTER",
+                  "children": [
+                    {
+                      "extra_info": {
+                        "Function": "RANGE",
+                        "Estimated Cardinality": "1000000"
+                      },
+                      "intermediate_rows": 1000000,
+                      "intermediate_size_bytes": 8000000,
+                      "row_groups_scanned": 0,
+                      "rows_scanned": 0,
+                      "timing": 0.00003779599999999996,
+                      "total_row_groups_to_scan": 0,
+                      "type": "TABLE_SCAN"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "optimizer": {
+    "aggregate_function_rewriter": 0.00000225,
+    "aggregate_reuse": 5.42e-7,
+    "build_side_probe_side": 6.67e-7,
+    "column_lifetime": 0.000001417,
+    "common_aggregate": 4.58e-7,
+    "common_subexpressions": 5e-7,
+    "common_subplan": 0.000002084,
+    "cte_filter_pusher": 1.25e-7,
+    "cte_inlining": 1.66e-7,
+    "deliminator": 2.08e-7,
+    "duplicate_groups": 8.33e-7,
+    "empty_result_pullup": 1.67e-7,
+    "expression_rewriter": 0.000018334,
+    "extension": 2.91e-7,
+    "filter_pullup": 1.67e-7,
+    "filter_pushdown": 0.00000925,
+    "grouping_sets": 1.66e-7,
+    "in_clause": 2.5e-7,
+    "join_elimination": 5.83e-7,
+    "join_filter_pushdown": 2.5e-7,
+    "join_order": 0.000007875,
+    "late_materialization": 2.09e-7,
+    "limit_pushdown": 1.25e-7,
+    "outer_join_simplification": 0.000001,
+    "partial_aggregate_pushdown": 4.58e-7,
+    "partitioned_execution": 2.09e-7,
+    "projection_placement": 7.08e-7,
+    "projection_pullup": 5.84e-7,
+    "redundant_order_keys": 1.25e-7,
+    "regex_range": 2.08e-7,
+    "reorder_filter": 2.92e-7,
+    "row_group_pruner": 8.4e-8,
+    "row_number_rewriter": 1.67e-7,
+    "sampling_pushdown": 4.1e-8,
+    "scalar_fn_pushdown": 1.67e-7,
+    "statistics_propagation": 0.000005209,
+    "top_n": 8.3e-8,
+    "top_n_window_elimination": 6.67e-7,
+    "total_time": 0.000088042,
+    "type_pushdown": 2.08e-7,
+    "unnest_rewriter": 8.3e-8,
+    "unused_columns": 0.000001333,
+    "window_self_join": 1.25e-7
+  },
+  "physical_planner": {
+    "column_binding": 7.91e-7,
+    "create_plan": 0.000005,
+    "resolve_types": 8.3e-8,
+    "total_time": 0.000008042
+  },
+  "planner": {
+    "binding_time": 0.000063042,
+    "total_time": 0.000091125
+  },
+  "query": {
+    "cpu_time": 0.0020523010000000003,
+    "sql": "SELECT sum(i) AS profile_plan_probe FROM range(1000000) t(i) WHERE i % 2 = 0",
+    "total_intermediate_rows": 2000001,
+    "total_intermediate_size_bytes": 16000016,
+    "total_row_groups_scanned": 0,
+    "total_row_groups_to_scan": 0,
+    "total_rows_scanned": 0,
+    "total_time": 0.002416584
+  },
+  "system": {
+    "blocked_thread_time": 0.001563,
+    "peak_buffer_memory": 2898944,
+    "peak_streaming_buffer_size": 17,
+    "peak_temp_dir_size": 0,
+    "total_memory_allocated": 0
+  }
+}

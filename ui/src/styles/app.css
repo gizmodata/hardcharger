@@ -982,11 +982,37 @@ select {
   cursor: pointer;
 }
 .monitor-status {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border-radius: 4px;
   padding: 4px 7px;
   font-weight: 600;
   background: var(--panel-2);
+}
+.monitor-status-icon {
+  padding: 6px;
+}
+.monitor-status-description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+@keyframes monitor-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.monitor-status-executing svg {
+  animation: monitor-spin 1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .monitor-status-executing svg {
+    animation: none;
+  }
 }
 .monitor-status-executing,
 .monitor-status-fetching {
@@ -1028,6 +1054,64 @@ select {
 .monitor-empty {
   padding: 20px 0;
   color: var(--muted);
+}
+.query-profile {
+  margin-top: 24px;
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+}
+.query-profile > .page-sub {
+  margin: 12px 0;
+}
+.query-profile h3,
+.query-profile h4 {
+  margin: 8px 0;
+}
+.profile-summary {
+  margin: 18px 0;
+}
+.query-profile .profile-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px 18px;
+}
+.profile-metrics > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border-soft);
+  padding: 8px 0;
+}
+.profile-metrics dt {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.profile-metrics dd {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.profile-plan details {
+  min-width: 180px;
+  max-width: 520px;
+  white-space: normal;
+}
+.profile-plan .profile-metrics {
+  display: block;
+}
+.profile-group {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.profile-group summary,
+.profile-plan summary {
+  cursor: pointer;
+  color: var(--link);
+  font-weight: 600;
 }
 .nav-item:disabled {
   opacity: 0.5;

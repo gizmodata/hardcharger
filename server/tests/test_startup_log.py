@@ -71,6 +71,10 @@ def test_the_banner_opens_a_text_log(launcher):
 @pytest.mark.web_ui
 def test_with_the_web_ui_the_banner_names_its_url(launcher):
     server = launcher.start(args=["--web-ui"])
+    # Health can answer while the startup thread is still writing its UI log line.
+    deadline = time.monotonic() + 10
+    while "the web UI is on" not in server.log() and time.monotonic() < deadline:
+        time.sleep(0.01)
     lines = banner_lines(server.log())
     assert any(line.startswith(f"  UI   http://127.0.0.1:{server.port}/ui/") for line in lines), lines
     assert not any("/warp" in line for line in lines), lines

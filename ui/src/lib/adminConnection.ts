@@ -24,6 +24,7 @@ export function useAdminConnection(page: string) {
         // Only an admin can request this. Monitoring must remain usable when every
         // ordinary slot is occupied, even if admin_bypass_queue_default is false.
         await conn.execute("SET hardcharger.bypass_queue = true");
+        await conn.execute("SET hardcharger.capture_query_profile = 'off'");
         if (!controller.signal.aborted) setConnection(conn);
       })
       .catch((err: unknown) => {

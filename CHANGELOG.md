@@ -13,6 +13,11 @@ own changelog in `python/CHANGELOG.md`.
   server instrumentation. Shows live queued, executing, and fetching statements regardless
   of age, recent outcomes (10 minutes by default), execution and queue timeouts, statement
   slots, queue capacity and wait limits, and instrumentation backlog/loss counters.
+- SQL Monitor statement details display the selected execution's captured instrumentation
+  profile: DuckDB 2.0 metrics, operator tree, actual/estimated rows, timings, memory, I/O,
+  planning/optimizer details, and original JSON download. Queries are never replayed.
+- SQL Monitor status icons or descriptions, with a remembered display preference,
+  accessible labels/tooltips, and a spinning circle for executing statements.
 - Read-only Server Configuration tab for unrestricted administrators, showing curated
   effective settings, runtime versus startup scope, and safe server/listener facts.
 

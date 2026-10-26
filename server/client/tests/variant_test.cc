@@ -28,7 +28,8 @@ TEST(VariantRendererTest, SharedEncodingExamples) {
   ASSERT_TRUE(in.good());
   std::stringstream contents;
   contents << in.rdbuf();
-  for (const auto& item : boost::json::parse(contents.str()).as_array()) {
+  const auto examples = boost::json::parse(contents.str());
+  for (const auto& item : examples.as_array()) {
     const auto& example = item.as_object();
     SCOPED_TRACE(std::string(example.at("name").as_string()));
     const auto decoded =

@@ -84,3 +84,20 @@ export function monitorSql(
     WHERE position = 1 AND ${visible} AND (status IN ('queued', 'executing', 'fetching') OR ${recent})
     ORDER BY status IN ('queued', 'executing', 'fetching') DESC, COALESCE(enqueue_time, execution_start_time) DESC`;
 }
+
+export type StatusDisplay = "icons" | "descriptions";
+const preferenceKey = "hardcharger-ui:monitor-status-display";
+export function storedStatusDisplay(): StatusDisplay {
+  try {
+    return localStorage.getItem(preferenceKey) === "descriptions" ? "descriptions" : "icons";
+  } catch {
+    return "icons";
+  }
+}
+export function saveStatusDisplay(value: StatusDisplay) {
+  try {
+    localStorage.setItem(preferenceKey, value);
+  } catch {
+    /* Preference is session-only if storage is blocked. */
+  }
+}

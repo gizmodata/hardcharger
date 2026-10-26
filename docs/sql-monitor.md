@@ -50,6 +50,29 @@ result's release. Streaming network delivery may continue after the server has f
 the rows. The monitor cannot measure how long a client spends using downloaded data.
 SQL text uses the same redaction and abbreviation rules as the query log.
 
+### Captured query profiles
+
+Select a statement to retrieve its existing `query_profile` from instrumentation for that
+execution ID and this server instance. The UI never reruns the statement or issues an
+`EXPLAIN ANALYZE`. With `hardcharger.capture_query_profile` set to `standard` or `detailed`
+for the original execution, its details show the operator tree, actual/estimated rows,
+operator times, scan counts, query and CPU times, memory and I/O, and every other captured
+metric group (optimizer, parser and planning metrics when present). Units come from the
+server's `duckdb_available_metrics()` metadata; missing metrics remain missing, while zero
+measurements are shown as zero. See [DuckDB 2.0 metrics](https://duckdb.org/docs/2.0/dev/metrics).
+
+Profiles are fetched only for the selected statement, after its result closes and the
+instrumentation writer records it. A pending profile is retried automatically. Completed
+executions without a profile are labeled clearly; changing capture settings cannot produce
+profiles retroactively. The current global capture setting is shown as context, since the
+execution's session may have overridden it. Operator times can overlap with parallel work
+and are not percentages of total elapsed time. All raw JSON can be inspected or downloaded
+verbatim. Observer sessions disable their own profile capture to avoid profiling the monitor.
+
+**Status display** chooses **Icons** (the default) or **Descriptions**, remembered in this
+browser. Every icon has a tooltip and accessible name. Executing statements have a spinning
+circle in both modes; reduced-motion preferences disable its animation.
+
 ## Server Configuration
 
 `/ui/configuration` displays `hardcharger_server_settings()` (the curated

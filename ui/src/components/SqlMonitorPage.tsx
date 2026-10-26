@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useAdminConnection } from "../lib/adminConnection";
 import { activeQuery, monitorSql, statusLabel, type MonitorInfo, type MonitoredQuery } from "../lib/sqlMonitor";
 import { errorMessage, useSession } from "../session";
+import { QueryProfile } from "./QueryProfile";
+import { QueryStatus } from "./QueryStatus";
+import { saveStatusDisplay, storedStatusDisplay, type StatusDisplay } from "../lib/sqlMonitor";
 
 const timestamp = (ms: number | null) => (ms == null ? "—" : new Date(ms).toLocaleString());
 const duration = (ms: number) =>
@@ -13,6 +16,7 @@ export default function SqlMonitorPage() {
   const session = useSession();
   const { connection, error: connectionError, allowed } = useAdminConnection("sql-monitor");
   const [minutes, setMinutes] = useState(10);
+  const [statusDisplay, setStatusDisplay] = useState(storedStatusDisplay);
   const [historyLimit, setHistoryLimit] = useState(1000);
   const [paused, setPaused] = useState(false);
   const [includeMonitor, setIncludeMonitor] = useState(false);
@@ -182,6 +186,21 @@ export default function SqlMonitorPage() {
                 ))}
               </select>
             </label>
+            <label>
+              Status display{" "}
+              <select
+                aria-label="Status display"
+                value={statusDisplay}
+                onChange={(e) => {
+                  const value = e.target.value as StatusDisplay;
+                  setStatusDisplay(value);
+                  saveStatusDisplay(value);
+                }}
+              >
+                <option value="icons">Icons</option>
+                <option value="descriptions">Descriptions</option>
+              </select>
+            </label>
             <input
               aria-label="Filter monitored queries"
               placeholder="Filter SQL, user, or execution ID"
@@ -243,7 +262,7 @@ export default function SqlMonitorPage() {
                 {rows.map((q) => (
                   <tr key={q.execution_id} className={q.execution_id === selected ? "row-current" : undefined}>
                     <td>
-                      <span className={`monitor-status monitor-status-${q.status}`}>{statusLabel(q)}</span>
+                      <QueryStatus query={q} display={statusDisplay} />
                     </td>
                     <td>{q.username}</td>
                     <td>
@@ -315,6 +334,7 @@ export default function SqlMonitorPage() {
                 <dd>{inspected.cancel_reason || "—"}</dd>
               </dl>
               {inspected.error_message && <pre className="result-error">{inspected.error_message}</pre>}
+              <QueryProfile key={inspected.execution_id} executionId={inspected.execution_id} />
             </section>
           )}
           <p className="page-sub">
