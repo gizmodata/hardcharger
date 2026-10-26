@@ -7,6 +7,18 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Bulk ingest in `append` mode (and `create_append` into a table that exists) binds the
+  upload's columns to the table's by name, whatever their order in the stream: a column the
+  upload omits takes its default, and a column the table lacks is refused with `400`
+  `sql_error`, nothing written. 2.0.0 bound by position, so an upload whose columns were not
+  in table order failed on a type cast or a column count, and two columns of one type
+  uploaded the other way round were stored crosswise with no error. Found by a customer
+  loading through the ADBC driver's `adbc_ingest`. The fix is Warp SQL 1.0.2's
+  (`third_party/warp-sql` moves from 1.0.1 to 1.0.2); `server/tests/test_bulk_ingest_py.py` covers it, and the
+  drivers' live suites have the same case.
+
 ## [2.0.0] - 2026-10-20
 
 The first general release of Hardcharger: a SQL server on DuckDB 2.0.0 that speaks Warp SQL
