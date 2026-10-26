@@ -6,11 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-26
+
 ### Changed
 
-- Prepare Python package 2.1.0 with the matching server 2.1.0 download pin. Future
-  Python-only fixes use `.postN` instead of an independent patch version. CI checks
-  metadata, runtime version, download pin and release tags against the server version.
+- The package installs Hardcharger server 2.1.0, including the fix for name-based bulk
+  ingestion reported in hardcharger-adbc#1. The ADBC driver does not need an update.
+- Python package versions match server releases. Python-only fixes use `.postN`
+  releases and continue downloading the same server version.
 
 ## [2.0.1] - 2026-10-22
 
