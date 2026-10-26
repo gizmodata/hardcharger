@@ -661,6 +661,10 @@ jobs:
         run: cp server/build/hardcharger "$RUNNER_TEMP/unsigned-proof"
       - name: Sign and notarize the client (macOS)
         if: matrix.name == 'macos-arm64' && needs.changes.outputs.sign == 'true'
+        # This action immediately looks up Apple's ticket after acceptance. The strict
+        # mandatory verifier below retries propagation and still fails closed on any
+        # missing/broken signature, wrong team, absent ticket or Gatekeeper rejection.
+        continue-on-error: true
         uses: toitlang/action-macos-sign-notarize@v1.3.0
         with:
           certificate: ${{ secrets.APPLE_CERTIFICATE }}
@@ -671,6 +675,7 @@ jobs:
           app-path: server/build/hardcharger
       - name: Sign and notarize the server (macOS)
         if: matrix.name == 'macos-arm64' && needs.changes.outputs.sign == 'true'
+        continue-on-error: true
         uses: toitlang/action-macos-sign-notarize@v1.3.0
         with:
           certificate: ${{ secrets.APPLE_CERTIFICATE }}
@@ -1075,6 +1080,9 @@ jobs:
       # access-control concurrency test makes 3 passes per client, not 10 (it took 42 min).
       HARDCHARGER_TEST_PERF_SCALE: "15"
       HARDCHARGER_TEST_CONCURRENCY_ROUNDS: "3"
+      # Only this unshipped fixture links optional extensions into instrumented DuckDB.
+      # Native and ASan jobs exercise the release's signed runtime module behavior.
+      HARDCHARGER_TEST_TSAN_EXTENSIONS: "1"
       TSAN_REPORTS: ${{ github.workspace }}/tsan-reports
     steps:
       - uses: actions/checkout@v7
@@ -1133,7 +1141,8 @@ jobs:
           dependency: duckdb
           platform: linux-amd64-tsan
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
-          build: server/scripts/build-deps.sh
+          build: server/scripts/build-tsan-duckdb.sh
+          extra-recipes: server/scripts/build-tsan-duckdb.sh server/scripts/duckdb-extensions-tsan.cmake server/scripts/duckdb-extensions-ios.cmake server/scripts/build-extension-deps.sh
       - uses: mozilla-actions/sccache-action@v0.0.11
       - name: sccache directory (restore)
         uses: ./.github/actions/sccache-dir

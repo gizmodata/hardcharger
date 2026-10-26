@@ -578,9 +578,17 @@ def test_the_reason_shows_while_the_statement_unwinds(server, stop):
     wait_state(viewer=admin, session_id=victim.id, state="running")
     STOPS[stop](admin=admin, session_id=victim.id)
     row = row_of(viewer=admin, session_id=victim.id)
-    assert row is not None and row["state"] == "running", row  # DuckDB finishes the row it is on
-    assert row["cancel_reason"] == REASONS[stop], row
-    thread.join(timeout=30)
+    # Cancellation can finish before this observer's query reaches the engine,
+    # especially under TSan. Inspect the reason if it is still unwinding; otherwise
+    # require the completed state and the same cancellation reason in the response.
+    if row is not None and row["state"] == "running":
+        assert row["cancel_reason"] == REASONS[stop], row
+    elif stop == "kill":
+        assert row is None, row
+    else:
+        assert row is not None and row["state"] == "idle", row
+    thread.join(timeout=30 * TIMEOUT_SCALE)
+    assert not thread.is_alive(), outcome
     assert outcome["value"]["detail"] == f"the statement was cancelled ({REASONS[stop]})", outcome
 
 

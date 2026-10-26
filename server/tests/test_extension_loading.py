@@ -5,6 +5,14 @@ import gzip
 import http.server
 import threading
 
+import pytest
+
+from conftest import TSAN_EXTENSIONS
+
+# These two tests specifically replace/download signed public modules. They run on
+# all native release targets and ASan; TSan's instrumented built-ins cannot be replaced.
+pytestmark = pytest.mark.skipif(TSAN_EXTENSIONS, reason="runtime replacement is covered by native and ASan jobs")
+
 
 def test_known_extensions_install_and_load_on_demand_then_work_offline(launcher, tmp_path):
     cache = tmp_path / "extensions"

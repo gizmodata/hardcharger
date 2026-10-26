@@ -37,6 +37,9 @@ TIMEOUT_SCALE = float(os.environ.get("HARDCHARGER_TEST_TIMEOUT_SCALE", "1"))
 # Only the TSan job sets it: instrumented code runs 5-15x slower, and there the workload is
 # run for its races and its results; the build jobs keep 1 and are where the limits count.
 PERF_SCALE = float(os.environ.get("HARDCHARGER_TEST_PERF_SCALE", "1"))
+# Unshipped sanitizer fixture: the same optional extension sources are instrumented
+# and linked into DuckDB. Release/native and ASan jobs verify signed runtime loading.
+TSAN_EXTENSIONS = os.environ.get("HARDCHARGER_TEST_TSAN_EXTENSIONS") == "1"
 UNIT_TEST_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_UNIT_BINARY",
                                                BUILD / f"hardcharger-unit-tests{EXE}")).resolve()
 CLIENT_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_CLIENT_BINARY", BUILD / f"hardcharger{EXE}")).resolve()

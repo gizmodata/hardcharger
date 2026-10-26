@@ -55,7 +55,20 @@ verify() {  # file entitlements-plist-or-empty
   grep -E '^(Authority=|Timestamp=|CodeDirectory )' <<< "$details" | sed 's/^/  /'
   [[ "$details" == *"(runtime)"* ]] || fail "$file" "signed without the hardened runtime"
   grep -q '^Timestamp=' <<< "$details" || fail "$file" "no secure timestamp"
-  if ! codesign --verify -R "=notarized" --check-notarization "$file"; then
+  # Apple can accept a submission before the online ticket reaches this runner.
+  # Retry only that lookup; a broken signature or wrong identity already failed above.
+  local notarized=false attempt
+  for attempt in {1..12}; do
+    if codesign --verify -R "=notarized" --check-notarization "$file"; then
+      notarized=true
+      break
+    fi
+    if [ "$attempt" -lt 12 ]; then
+      echo "Waiting for Apple's notarization ticket ($attempt/12): $file" >&2
+      sleep 10
+    fi
+  done
+  if [ "$notarized" != true ]; then
     fail "$file" "Apple has no notarization ticket for it"
   fi
   if ! spctl --assess --type open --context context:primary-signature --verbose=2 "$file"; then

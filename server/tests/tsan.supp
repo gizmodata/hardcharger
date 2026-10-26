@@ -42,6 +42,12 @@ race:duckdb::JoinHashTable::ScanStructure::NextRightSemiOrAntiJoin
 # opening pool connections to one DuckLake-on-PostgreSQL catalog at the same moment.
 race:pqSaveParameterStatus
 
+# The TSan-only fixture (scripts/build-tsan-duckdb.sh) instruments and links httpfs,
+# ducklake, postgres_scanner, tpch and autocomplete into libduckdb. Production builds
+# and ASan still test their signed runtime modules, including repository replacement.
+# Never suppress the races those modules would create by mixing uninstrumented atomic
+# synchronization with the instrumented engine.
+#
 # Not suppressed: extensions downloaded from DuckDB's repository (INSTALL spatial) are
 # prebuilt without TSan and carry their own copy of DuckDB's code. Loading one while
 # another thread plans a query reports a race between ExtensionCallbackManager::Register
