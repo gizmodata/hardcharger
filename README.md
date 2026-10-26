@@ -8,8 +8,11 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/gizmodata/hardcharger/actions/workflows/server.yml"><img src="https://github.com/gizmodata/hardcharger/actions/workflows/server.yml/badge.svg" alt="CI"></a>
+  <a href="https://pypi.org/project/hardcharger/"><img src="https://img.shields.io/pypi/v/hardcharger?logo=pypi&amp;label=PyPI%20server" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/hardcharger/"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&amp;logoColor=white" alt="Python 3.10 or later"></a>
+  <a href="https://pypi.org/project/hardcharger/"><img src="https://img.shields.io/pepy/dt/hardcharger.svg" alt="PyPI downloads"></a>
   <a href="https://docs.hardcharger.gizmodata.com"><img src="https://img.shields.io/badge/docs-Hardcharger-2563eb.svg" alt="Hardcharger documentation"></a>
-  <a href="https://pypi.org/project/hardcharger/"><img src="https://img.shields.io/pepy/dt/hardcharger.svg" alt="PyPI Downloads"></a>
   <a href="https://hub.docker.com/r/gizmodata/hardcharger"><img src="https://img.shields.io/badge/dockerhub-image-green.svg?logo=Docker" alt="Docker Hub image"></a>
   <a href="https://github.com/gizmodata/hardcharger/pkgs/container/hardcharger"><img src="https://img.shields.io/badge/github--package-container--image-green.svg?logo=Docker" alt="GitHub container image"></a>
   <a href="https://github.com/gizmodata/hardcharger/releases/latest"><img src="https://img.shields.io/badge/release-binaries-orange.svg?logo=GitHub" alt="Release binaries"></a>
@@ -17,7 +20,6 @@
   <a href="https://duckdb.org"><img src="https://img.shields.io/badge/engine-DuckDB%202.0-fff000.svg?logo=duckdb&logoColor=black" alt="DuckDB 2.0"></a>
   <a href="https://arrow.apache.org"><img src="https://img.shields.io/badge/wire%20format-Apache%20Arrow-f15a24.svg" alt="Apache Arrow"></a>
   <br>
-  <a href="https://pypi.org/project/hardcharger/"><img src="https://img.shields.io/badge/PyPI%20server-hardcharger-blue.svg?logo=PyPI" alt="PyPI: hardcharger (server)"></a>
   <a href="https://pypi.org/project/adbc-driver-hardcharger/"><img src="https://img.shields.io/badge/PyPI%20client-adbc--driver--hardcharger-blue.svg?logo=PyPI" alt="PyPI: adbc-driver-hardcharger (client)"></a>
   <a href="https://github.com/gizmodata/hardcharger-adbc"><img src="https://img.shields.io/badge/ADBC%20driver-hardcharger--adbc-blue.svg?logo=Python" alt="ADBC driver"></a>
   <a href="https://github.com/gizmodata/hardcharger-jdbc"><img src="https://img.shields.io/badge/JDBC%20driver-hardcharger--jdbc-red.svg?logo=openjdk" alt="JDBC driver"></a>
