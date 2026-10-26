@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod network;
 mod server;
 
 use server::{Server, Settings, Status};
@@ -115,6 +116,7 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
         if !server.status()?.running {
             return Err("Start the local server to open its workspace.".into());
         }
+        server.check_workspace_trust()?;
         Ok((server.endpoint(), server.sign_in()?))
     })
     .await?;
@@ -263,6 +265,58 @@ async fn server_options(
 }
 
 #[tauri::command]
+async fn settings_pending(
+    window: WebviewWindow,
+    state: tauri::State<'_, Shared>,
+    pending: bool,
+    network: Option<bool>,
+) -> Result<(), String> {
+    controller(&window)?;
+    work(state.inner().clone(), move |server| {
+        server.set_settings_pending(pending, network)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn network_info(window: WebviewWindow) -> Result<network::NetworkInfo, String> {
+    controller(&window)?;
+    tauri::async_runtime::spawn_blocking(network::info)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn generate_certificate(
+    window: WebviewWindow,
+    state: tauri::State<'_, Shared>,
+    server_name: String,
+) -> Result<network::GeneratedCertificate, String> {
+    controller(&window)?;
+    work(state.inner().clone(), move |server| {
+        if server.status()?.running {
+            return Err("Stop the server before generating a new certificate.".into());
+        }
+        network::generate(&server.directory, &server_name)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn show_certificate_folder(
+    window: WebviewWindow,
+    state: tauri::State<'_, Shared>,
+    certificate: String,
+) -> Result<(), String> {
+    controller(&window)?;
+    let folder = work(state.inner().clone(), move |server| {
+        network::certificate_folder(&server.directory, &certificate)
+    })
+    .await?;
+    open::that(folder).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn open_marketing_link(window: WebviewWindow, url: String) -> Result<(), String> {
     controller(&window)?;
     if !matches!(
@@ -346,6 +400,10 @@ fn main() {
             read_logs,
             save_settings,
             server_options,
+            settings_pending,
+            network_info,
+            generate_certificate,
+            show_certificate_folder,
             reveal_data,
             open_marketing_link,
             launch_at_login

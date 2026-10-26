@@ -9,6 +9,11 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Desktop network setup detects local addresses/hostname, labels required fields, and
+  generates a private server certificate/key with client trust instructions and fingerprint.
+  Save stays visible while scrolling; unsaved edits survive navigation and block tray or
+  automatic startup until saved or explicitly discarded. Invalid setup never falls back
+  to local-only mode.
 - SQL Monitor in the web SQL workspace for unrestricted administrators, enabled with
   server instrumentation. Shows live queued, executing, and fetching statements regardless
   of age, recent outcomes (10 minutes by default), execution and queue timeouts, statement
@@ -46,6 +51,7 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Keep API last in the web SQL workspace navigation, after the administrator tabs.
 - Query detail windows' Close window button now closes their native desktop window.
 
 - Web UI and CLI decode Arrow VARIANT values into readable scalars, objects, and arrays

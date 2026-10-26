@@ -19,10 +19,11 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "native-tls"] }
 getrandom = "0.3"
 open = "5"
-
-[dev-dependencies]
 rcgen = "0.14"
 time = "0.3"
+sha2 = "0.10"
+hostname = "0.4"
+if-addrs = "0.15"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }

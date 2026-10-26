@@ -152,6 +152,21 @@ footer { padding:14px 32px; border-top:1px solid var(--soft); display:flex; just
 .settings-notice { padding:12px; color:var(--green); background:var(--green-soft); border-radius:5px; font-size:12px; }
 .network-settings { margin:26px 0; padding:22px 0; border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
 .network-settings [hidden] { display:none; }
+.pending-settings[hidden], .field-error[hidden], .required-label[hidden] { display:none; }
+.pending-settings { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:16px; margin-bottom:18px; border:1px solid var(--accent); background:var(--accent-soft); border-radius:6px; }
+.pending-settings > div { flex:1; min-width:200px; }
+.pending-settings p { margin:6px 0 0; font-size:11px; line-height:1.7; }
+.save-settings-bar { position:sticky; top:12px; z-index:5; display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 16px; margin:0 0 18px; background:var(--panel); border:1px solid var(--accent); border-radius:6px; box-shadow:0 3px 12px #0001; font-size:11px; }
+.required-label { color:var(--link); font-size:10px; font-weight:600; margin-left:6px; }
+.field-error { color:#b42318 !important; }
+:root[data-theme="dark"] .field-error { color:#ffb4ab !important; }
+.network-settings [aria-invalid="true"] { border-color:#b42318; }
+.network-setup-steps { margin:18px 0; padding:14px 18px; border-radius:6px; background:var(--accent-soft); font-size:12px; line-height:1.8; }
+.network-setup-steps ol { margin:6px 0 0; padding-left:20px; }
+.detected-network { margin:18px 0; }
+.address-choices { display:flex; flex-wrap:wrap; gap:8px; }
+.certificate-actions { margin:22px 0 0; }
+.certificate-info { margin:18px 0; padding:16px; border:1px solid var(--border); border-radius:6px; overflow-wrap:anywhere; font-size:12px; line-height:1.7; }
 .network-settings .field { margin-top:18px; }
 .network-settings input, .network-settings select { width:100%; min-width:0; padding:9px 12px; border:1px solid var(--border); border-radius:5px; background:var(--bg); color:var(--text); font:inherit; }
 .network-settings input:disabled, .network-settings select:disabled { opacity:.6; }

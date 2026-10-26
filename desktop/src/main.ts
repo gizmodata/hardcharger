@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { stringify } from "yaml";
-import { defaultNetwork, validateNetwork, type NetworkSettings } from "./network";
+import { defaultNetwork, networkErrors, type NetworkSettings, type NetworkInfo, type GeneratedCertificate } from "./network";
 import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, type ServerOption } from "./configuration";
 import "./style.css";
 import "./palette.css";
@@ -11,6 +11,8 @@ interface Status {
   running: boolean; pid: number | null; port: number; endpoint: string;
   database: string; logFile: string; uptimeSeconds: number; databaseBytes: number;
   version: string; error: string | null; settings: Settings;
+  settingsPending?: boolean; generatedCertificate?: GeneratedCertificate | null;
+  pendingNetwork?: boolean | null;
 }
 
 const native = isTauri();
@@ -24,6 +26,13 @@ let login = false;
 let schema: ServerOption[] = [];
 let settingsNotice = "";
 let settingsSearch = "";
+let draft: Record<string, string> | null = null;
+let draftDirty = false;
+let pendingUpdate: Promise<void> = Promise.resolve();
+let markedNetwork: boolean | null = null;
+let detectedNetwork: NetworkInfo | null = null;
+let generatedCertificate: GeneratedCertificate | null = null;
+let fieldErrors: Record<string, string> = {};
 let pendingImport: Record<string, unknown> | null = null;
 let theme = localStorage.getItem("hardcharger-desktop:theme") ?? "system";
 document.documentElement.dataset.theme = theme;
@@ -51,7 +60,132 @@ function button(action: string, label: string, glyph: string, primary = false, d
   return `<button data-action="${action}" class="button ${primary ? "primary" : ""}" ${disabled || busy || !native ? "disabled" : ""}>${icon(glyph)}${label}</button>`;
 }
 
+function formValues(): Record<string, string> | null {
+  const form = document.querySelector<HTMLFormElement>("#settings-form");
+  if (!form) return null;
+  return Object.fromEntries(Array.from(form.elements).filter((e): e is HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement =>
+    (e instanceof HTMLInputElement || e instanceof HTMLSelectElement || e instanceof HTMLTextAreaElement) && !!e.name
+  ).map(e => [e.name, e instanceof HTMLInputElement && e.type === "checkbox" ? e.checked ? "on" : "" : e.value]));
+}
+
+function rememberDraft() { if (draftDirty) draft = formValues() ?? draft; }
+
+function restoreDraft() {
+  if (!draftDirty || !draft) return;
+  const form = document.querySelector<HTMLFormElement>("#settings-form");
+  for (const [name, value] of Object.entries(draft)) {
+    const field = form?.elements.namedItem(name);
+    if (field instanceof HTMLInputElement && field.type === "checkbox") field.checked = value === "on";
+    else if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement || field instanceof HTMLTextAreaElement) field.value = value;
+  }
+  form?.querySelectorAll<HTMLInputElement>("[data-override]").forEach(input => {
+    const field = document.getElementById(`option:${input.dataset.override}`) as HTMLInputElement | null;
+    if (field) field.disabled = !input.checked || !!current?.running || busy;
+  });
+}
+
+function markDirty() {
+  draftDirty = true;
+  draft = formValues() ?? draft;
+  const network = draft?.["network-mode"] === "network";
+  if (native && (!current?.settingsPending || markedNetwork !== network)) {
+    if (current) current.settingsPending = true;
+    markedNetwork = network;
+    pendingUpdate = pendingUpdate.then(() => invoke<void>("settings_pending", { pending: true, network }));
+    void pendingUpdate.catch(showFormError);
+  }
+  const notice = document.querySelector<HTMLElement>(".pending-settings");
+  if (notice) {
+    notice.hidden = false;
+    const text = notice.querySelector("p");
+    if (text) text.textContent = "Changes are not saved. Save before starting; network setup never falls back to local mode.";
+  }
+  document.querySelector<HTMLElement>("#save-state")?.replaceChildren(document.createTextNode("Unsaved changes"));
+}
+
+function readSettings(): Settings {
+  rememberDraft();
+  const data = formValues() ?? draft;
+  if (!data) throw new Error("Review and save your settings before starting.");
+  const port = Number(data.port);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("Choose a port between 1024 and 65535.");
+  const options: Record<string, unknown> = {};
+  for (const option of schema.filter(o => !o.managed && o.name !== "port")) {
+    if (data[`use:${option.name}`] !== "on") continue;
+    const text = data[`option:${option.name}`] ?? "";
+    const choices = optionChoices(option);
+    if (choices?.length && choiceValue(option, text) === undefined) throw new Error(`${option.name} must be one of: ${choices.join(", ")}.`);
+    if (option.secret && text === "" && current?.settings.server_options[option.name] === "__HARDCHARGER_STORED_SECRET__") options[option.name] = "__HARDCHARGER_STORED_SECRET__";
+    else if (option.type === "integer") {
+      const value = Number(text);
+      if (!text.trim() || !Number.isSafeInteger(value)) throw new Error(`${option.name} must be an integer.`);
+      options[option.name] = value;
+    } else if (option.type === "boolean") options[option.name] = text === "true";
+    else if (option.type === "list") options[option.name] = text.split("\n").filter(v => v !== "");
+    else options[option.name] = text;
+  }
+  const previous = current?.settings.network ?? defaultNetwork;
+  const network: NetworkSettings = {
+    enabled: data["network-mode"] === "network", listen_address: data["network-listen"].trim(),
+    server_name: data["network-name"].trim(), tls: data["network-transport"] === "tls",
+    tls_cert: data["network-cert"].trim(), tls_key: data["network-key"].trim(), username: data["network-user"].trim(),
+    password: data["network-password"] || (previous.password === "__HARDCHARGER_STORED_SECRET__" ? previous.password : ""),
+  };
+  fieldErrors = networkErrors(network);
+  if (Object.keys(fieldErrors).length) {
+    tab = "settings";
+    render();
+    throw new Error(`Network setup is incomplete. ${Object.values(fieldErrors).join(" ")}`);
+  }
+  return { port, start_on_open: data.start === "on", server_options: options, network };
+}
+
+function displayFieldErrors() {
+  for (const name of ["network-listen", "network-name", "network-user", "network-password", "network-cert", "network-key"]) {
+    const field = document.querySelector<HTMLInputElement>(`[name="${name}"]`);
+    const text = document.getElementById(`${name}-error`);
+    field?.setAttribute("aria-invalid", String(!!fieldErrors[name]));
+    field?.setAttribute("aria-describedby", `${name}-error`);
+    if (text) { text.textContent = fieldErrors[name] ?? ""; text.hidden = !fieldErrors[name]; }
+  }
+}
+
+async function discardSettings() {
+  if (busy) return;
+  try {
+    await pendingUpdate.catch(() => {});
+    if (native) await invoke("settings_pending", { pending: false });
+    if (current) { current.settingsPending = false; current.pendingNetwork = null; }
+    markedNetwork = null;
+    draft = null; draftDirty = false; fieldErrors = {}; generatedCertificate = null; error = "";
+    render();
+  } catch (e) { showError(e); }
+}
+
+async function detectNetwork() {
+  try { detectedNetwork = await invoke<NetworkInfo>("network_info"); render(); }
+  catch (e) { showFormError(e); }
+}
+
+async function generateCertificate() {
+  const name = (formValues()?.["network-name"] ?? "").trim();
+  if (!name) { fieldErrors["network-name"] = "Choose a detected address or enter the name clients will use first."; displayFieldErrors(); showFormError(fieldErrors["network-name"]); return; }
+  markDirty(); busy = true; error = ""; render();
+  try {
+    await pendingUpdate;
+    generatedCertificate = await invoke<GeneratedCertificate>("generate_certificate", { serverName: name });
+    draft!["network-cert"] = generatedCertificate.certificate;
+    draft!["network-key"] = generatedCertificate.privateKey;
+    const form = document.querySelector<HTMLFormElement>("#settings-form");
+    (form?.elements.namedItem("network-cert") as HTMLInputElement).value = generatedCertificate.certificate;
+    (form?.elements.namedItem("network-key") as HTMLInputElement).value = generatedCertificate.privateKey;
+    delete fieldErrors["network-cert"]; delete fieldErrors["network-key"];
+  } catch (e) { error = String(e); }
+  finally { busy = false; render(); }
+}
+
 function render() {
+  rememberDraft();
   const s = current;
   const running = s?.running ?? false;
   app.innerHTML = `
@@ -74,6 +208,7 @@ function render() {
       <header><span>Hardcharger <span class="slash">/</span> ${tab === "server" ? "Local server" : tab === "about" ? "About" : tab[0].toUpperCase() + tab.slice(1)}</span><div class="header-right"><span class="pill">${designPreview ? "Design preview · sample status" : "On this computer"}</span><button id="theme" class="theme-button" aria-label="Change color theme" title="Theme: ${theme}">${theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}</button></div></header>
       <div class="content">
         <div id="error" role="alert" ${error || s?.error ? "" : "hidden"}>${esc(error || s?.error || "")}</div>
+        <div class="pending-settings" role="status" ${draftDirty || s?.settingsPending ? "" : "hidden"}><div><strong>Unsaved server settings</strong><p>${draft ? draft["network-mode"] === "network" ? "Network access requested. Save and complete setup before starting; the server will not fall back to local mode." : "Save or explicitly discard your changes before starting." : "A previous setup was not saved. Review Settings or explicitly discard it before starting."}</p></div><button data-review-settings class="button">Review settings</button><button data-discard-settings class="button" ${busy ? "disabled" : ""}>Discard changes</button></div>
         ${tab === "server" ? serverView(s) : tab === "settings" ? settingsView(s) : tab === "logs" ? logsView() : aboutView()}
       </div>
       <footer><span>${esc(s?.version ?? "Hardcharger")} <span class="footer-dot">·</span> Warp SQL</span><span>Fast, secure, remote DuckDB.</span></footer>
@@ -94,42 +229,23 @@ function render() {
   document.querySelector("#settings-form")?.addEventListener("submit", e => {
     e.preventDefault();
     if (busy) return;
-    const data = new FormData(e.target as HTMLFormElement);
     try {
-      const options: Record<string, unknown> = {};
-      for (const option of schema.filter(o => !o.managed && o.name !== "port")) {
-        if (data.get(`use:${option.name}`) !== "on") continue;
-        const text = String(data.get(`option:${option.name}`) ?? "");
-        const choices = optionChoices(option);
-        if (choices?.length && choiceValue(option, text) === undefined)
-          throw new Error(`${option.name} must be one of: ${choices.join(", ")}.`);
-        if (option.secret && text === "" && current?.settings.server_options[option.name] === "__HARDCHARGER_STORED_SECRET__") {
-          options[option.name] = "__HARDCHARGER_STORED_SECRET__";
-        } else if (option.type === "integer") {
-          const value = Number(text);
-          if (!text.trim() || !Number.isSafeInteger(value)) throw new Error(`${option.name} must be an integer.`);
-          options[option.name] = value;
-        } else if (option.type === "boolean") options[option.name] = text === "true";
-        else if (option.type === "list") options[option.name] = text.split("\n").filter(v => v !== "");
-        else options[option.name] = text;
-      }
-      const previous = current?.settings.network ?? defaultNetwork;
-      const password = String(data.get("network-password") ?? "");
-      const network: NetworkSettings = {
-        enabled: data.get("network-mode") === "network",
-        listen_address: String(data.get("network-listen") ?? previous.listen_address).trim(),
-        server_name: String(data.get("network-name") ?? previous.server_name).trim(),
-        tls: data.get("network-transport") === "tls",
-        tls_cert: String(data.get("network-cert") ?? previous.tls_cert).trim(),
-        tls_key: String(data.get("network-key") ?? previous.tls_key).trim(),
-        username: String(data.get("network-user") ?? previous.username).trim(),
-        password: password || (previous.password === "__HARDCHARGER_STORED_SECRET__" ? previous.password : ""),
-      };
-      validateNetwork(network);
-      void saveSettings({ port: Number(data.get("port")), start_on_open: data.get("start") === "on", server_options: options, network });
+      void saveSettings(readSettings());
     } catch (e) { showFormError(e); }
   });
+  const form = document.querySelector<HTMLFormElement>("#settings-form");
+  const markChange = (e: Event) => {
+    if ((e.target as HTMLInputElement).name) markDirty();
+  };
+  form?.addEventListener("input", markChange);
+  form?.addEventListener("change", markChange);
+  restoreDraft();
+  document.querySelector("[data-review-settings]")?.addEventListener("click", () => { tab = "settings"; render(); });
+  document.querySelector("[data-discard-settings]")?.addEventListener("click", () => void discardSettings());
   const updateNetwork = () => {
+    const network = document.querySelector<HTMLSelectElement>("#network-mode")?.value === "network";
+    const name = form?.elements.namedItem("network-name") as HTMLInputElement | null;
+    if (network && name && !name.value && detectedNetwork?.addresses[0]) name.value = detectedNetwork.addresses[0].address;
     const fields = document.querySelector<HTMLElement>("#network-fields");
     if (fields) fields.hidden = document.querySelector<HTMLSelectElement>("#network-mode")?.value !== "network";
     const tls = document.querySelector<HTMLSelectElement>("#network-transport")?.value === "tls";
@@ -137,10 +253,29 @@ function render() {
     if (certificates) certificates.hidden = !tls;
     const plain = document.querySelector<HTMLElement>("#network-plaintext-note");
     if (plain) plain.hidden = tls;
+    for (const name of ["network-listen", "network-name", "network-user", "network-password", "network-cert", "network-key"]) {
+      const input = form?.elements.namedItem(name) as HTMLInputElement | null;
+      if (!input) continue;
+      input.required = network && (name !== "network-password" || !current?.settings.network?.password) && (!["network-cert", "network-key"].includes(name) || tls);
+      input.setAttribute("aria-required", String(input.required));
+      const required = document.querySelector<HTMLElement>(`[data-required="${name}"]`);
+      if (required) required.hidden = !input.required;
+    }
   };
   document.querySelector("#network-mode")?.addEventListener("change", updateNetwork);
   document.querySelector("#network-transport")?.addEventListener("change", updateNetwork);
   updateNetwork();
+  displayFieldErrors();
+  document.querySelectorAll<HTMLButtonElement>("[data-address]").forEach(b => b.addEventListener("click", () => {
+    const input = form?.elements.namedItem("network-name") as HTMLInputElement;
+    if (input) { input.value = b.dataset.address!; markDirty(); input.focus(); }
+  }));
+  document.querySelector("#detect-network")?.addEventListener("click", () => void detectNetwork());
+  document.querySelector("#generate-certificate")?.addEventListener("click", () => void generateCertificate());
+  document.querySelector("#show-certificate")?.addEventListener("click", () => {
+    const certificate = generatedCertificate ?? current?.generatedCertificate;
+    if (certificate) void invoke("show_certificate_folder", { certificate: certificate.certificate }).catch(showError);
+  });
   document.querySelectorAll<HTMLInputElement>("[data-override]").forEach(input => input.addEventListener("change", () => {
     const field = document.getElementById(`option:${input.dataset.override}`) as HTMLInputElement;
     if (field) field.disabled = !input.checked;
@@ -163,7 +298,8 @@ function render() {
     const port = "port" in options ? Number(options.port) : current.settings.port;
     delete options.port;
     const preserved = Object.fromEntries(Object.entries(current.settings.server_options).filter(([key]) => schema.find(o => o.name === key)?.secret));
-    void saveSettings({ ...current.settings, port, server_options: { ...preserved, ...options } });
+    try { void saveSettings({ ...readSettings(), port, server_options: { ...preserved, ...options } }); }
+    catch (e) { showFormError(e); }
   });
   document.querySelector("#cancel-import")?.addEventListener("click", () => { pendingImport = null; render(); });
   document.querySelector("#launch-login")?.addEventListener("change", e => {
@@ -179,7 +315,7 @@ function serverView(s: Status | null) {
       <div class="hero-content"><div class="status-label ${running ? "online" : "offline"}"><span class="nav-dot ${running ? "running" : ""}"></span>${busy ? "Working…" : running ? "RUNNING" : s ? "STOPPED" : "CONNECTING"}</div>
         <h2>${running ? "Ready for your next query." : "Your engine. Ready to go."}</h2>
         <p>${running ? "Your local Hardcharger server is up. Open the SQL workspace to query, import, and explore." : "Start Hardcharger to open your database and work with the full SQL workspace."}</p>
-        <div class="hero-actions">${running ? button("workspace", "Open SQL workspace", "arrow", true) : button("start", "Start server", "play", true, !s)}<span class="private-note">${icon("shield")}${s?.settings.network?.enabled ? s.settings.network.tls ? "Network access · TLS" : "Network access · HTTP" : "Local connections only"}</span></div>
+        <div class="hero-actions">${running ? button("workspace", "Open SQL workspace", "arrow", true) : button("start", draftDirty ? "Save settings and start" : "Start server", "play", true, !s)}<span class="private-note">${icon("shield")}${draftDirty || s?.settingsPending ? "Settings pending · start blocked until saved" : s?.settings.network?.enabled ? s.settings.network.tls ? "Network access · TLS" : "Network access · HTTP" : "Local connections only"}</span></div>
       </div>${picture("mascot", "Hardcharger charging bull mascot", "hero-mascot")}
     </section>
     <div class="stats"><section class="card stat"><span class="stat-label">SERVER ADDRESS</span><strong class="mono" title="${esc(s?.endpoint ?? "")}">${esc(s?.endpoint ?? "Loading…")}</strong><span>Warp SQL endpoint${s?.settings.network?.enabled ? ` · listening on ${esc(s.settings.network.listen_address)}` : ""}</span></section><section class="card stat"><span class="stat-label">UPTIME</span><strong>${running ? uptime(s!.uptimeSeconds) : "—"}</strong><span>${running ? "Since the last start" : "Server is stopped"}</span></section><section class="card stat"><span class="stat-label">DATABASE SIZE</span><strong>${s ? bytes(s.databaseBytes) : "—"}</strong><span>Stored on this computer</span></section></div>
@@ -190,45 +326,54 @@ function serverView(s: Status | null) {
 
 function settingsView(s: Status | null) {
   return `<div class="page-heading"><div><p class="eyebrow">MAKE IT YOURS</p><h1>Settings</h1><p>A few preferences for your local server.</p></div></div>
+    <div class="save-settings-bar"><span id="save-state">${draftDirty || s?.settingsPending ? "Unsaved changes" : s?.running ? "Stop the server to edit" : "Saved settings · changes apply at the next start"}</span><button form="settings-form" type="submit" class="button primary" ${s?.running || !native || busy ? "disabled" : ""}>Save settings</button></div>
     ${settingsNotice ? `<p class="settings-notice" role="status">${esc(settingsNotice)}</p>` : ""}
     <section class="card detail-card"><div class="section-heading"><div><h3>Configuration YAML</h3><p>Import server settings, or export a configuration for another machine.</p></div></div><div class="yaml-actions"><button id="choose-import" class="button" ${s?.running || !native || busy ? "disabled" : ""}>${icon("folder")}Import YAML</button><input id="import-yaml" type="file" accept=".yaml,.yml,.json" hidden><button id="export-yaml" class="button" ${!s ? "disabled" : ""}>Export YAML</button><span class="muted">Exports leave out passwords and other secrets.</span></div>${pendingImport ? `<div class="import-review"><h3>Review imported settings</h3><p class="muted">These settings replace your custom values. Existing stored secrets are kept unless the file supplies replacements. The server validates the configuration when it starts.</p><pre>${esc(stringify(Object.fromEntries(Object.entries(pendingImport).map(([key, value]) => [key, schema.find(o => o.name === key)?.secret ? "[secret supplied]" : value]))))}</pre><button id="apply-import" class="button primary">Apply imported settings</button> <button id="cancel-import" class="button">Cancel</button></div>` : ""}</section>
-    <form id="settings-form" class="card detail-card"><div class="section-heading"><div><h3>Local server</h3><p>${s?.running ? "Stop the server to change these settings." : "Changes apply the next time the server starts."}</p></div></div>
-      <label class="field"><span>Port</span><input name="port" type="number" min="1024" max="65535" required value="${s?.settings.port ?? 31337}" ${s?.running || !native ? "disabled" : ""}><small>Used by the SQL workspace and Warp SQL clients.</small></label>
-      <label class="check-row"><input name="start" type="checkbox" ${s?.settings.start_on_open ? "checked" : ""} ${s?.running || !native ? "disabled" : ""}><span><strong>Start server when Hardcharger opens</strong><small>Your database is ready when you need it.</small></span></label>
+    <form id="settings-form" novalidate class="card detail-card"><div class="section-heading"><div><h3>Local server</h3><p>${s?.running ? "Stop the server to change these settings." : "Changes apply the next time the server starts."}</p></div></div>
+      <label class="field"><span>Port</span><input name="port" type="number" min="1024" max="65535" required value="${s?.settings.port ?? 31337}" ${s?.running || !native || busy ? "disabled" : ""}><small>Used by the SQL workspace and Warp SQL clients.</small></label>
+      <label class="check-row"><input name="start" type="checkbox" ${s?.settings.start_on_open ? "checked" : ""} ${s?.running || !native || busy ? "disabled" : ""}><span><strong>Start server when Hardcharger opens</strong><small>Your database is ready when you need it.</small></span></label>
       ${networkView(s)}
       <h3 class="options-heading">Server options</h3><p class="muted">Defaults come from this server build. Enable an override to change a value.</p>
       <div class="settings-search"><label for="settings-search">Search setting names</label><div class="settings-search-input"><input id="settings-search" type="search" placeholder="e.g. memory_limit" value="${esc(settingsSearch)}" autocomplete="off" aria-controls="server-options" aria-describedby="settings-search-status"><button id="clear-settings-search" class="button" type="button" hidden>Clear</button></div><p id="settings-search-status" class="muted" role="status" aria-live="polite"></p></div>
       <div id="server-options">
       ${optionGroups(s)}
       </div>
-      <button class="button primary save-settings" type="submit" ${s?.running || !native || busy ? "disabled" : ""}>Save settings</button>
     </form>
     <section class="card detail-card"><div class="section-heading"><div><h3>Application</h3><p>Keep Hardcharger close at hand.</p></div></div><label class="check-row"><input id="launch-login" type="checkbox" ${login ? "checked" : ""} ${!native ? "disabled" : ""}><span><strong>Launch at login</strong><small>Open quietly in the menu bar or system tray when you sign in.</small></span></label><p class="muted">The window can close while the server keeps running. Quit Hardcharger to stop it cleanly.</p></section>`;
 }
 
 function networkView(s: Status | null) {
-  const n = s?.settings.network ?? defaultNetwork;
+  const saved = s?.settings.network ?? defaultNetwork;
+  const n = s?.settingsPending && s.pendingNetwork === true && !draft ? { ...saved, enabled: true } : saved;
   const disabled = s?.running || !native || busy ? "disabled" : "";
+  const required = (name: string) => `<span class="required-label" data-required="${name}">Required</span>`;
+  const fieldError = (name: string) => `<small id="${name}-error" class="field-error" hidden></small>`;
+  const certificate = generatedCertificate ?? s?.generatedCertificate;
+  const certificatePath = draftDirty ? draft?.["network-cert"] : n.tls_cert;
+  const generated = certificate && certificate.certificate === certificatePath ? certificate : null;
   return `<section class="network-settings" aria-label="Network access">
-    <h3>Network access</h3><p class="muted">Choose who can reach the server on this computer. Changes apply at the next server start.</p>
+    <h3>Network access</h3><p class="muted">Choose who can reach the server on this computer. Complete the required fields, then use <strong>Save settings</strong> above. Start uses the saved configuration and never falls back to local mode.</p>
     <label class="field"><span>Connections</span><select id="network-mode" name="network-mode" aria-label="Connections" ${disabled}><option value="local" ${!n.enabled ? "selected" : ""}>Only this computer</option><option value="network" ${n.enabled ? "selected" : ""}>Allow network connections</option></select></label>
     <div id="network-fields" ${!n.enabled ? "hidden" : ""}>
+      <div class="network-setup-steps"><strong>Network setup</strong><ol><li>Choose the address clients will use.</li><li>Generate a certificate or supply your own certificate and key.</li><li>Set an administrator password, save, then start the server.</li></ol></div>
+      <div class="detected-network"><button id="detect-network" class="button" type="button" ${disabled}>Detect this computer's addresses</button>${detectedNetwork ? `<p class="muted">Choose a LAN address reachable from your clients. A detected hostname still needs working DNS or mDNS on their network.</p><div class="address-choices">${detectedNetwork.addresses.map(a => `<button class="button" type="button" data-address="${esc(a.address)}" ${disabled}>Use ${esc(a.address)} <span class="muted">${esc(a.interface)}</span></button>`).join("")}${detectedNetwork.hostname ? `<button class="button" type="button" data-address="${esc(detectedNetwork.hostname)}" ${disabled}>Use ${esc(detectedNetwork.hostname)} (hostname)</button>` : ""}</div>${!detectedNetwork.addresses.length ? '<p class="muted">No LAN addresses detected. Check your network connection or enter an address below.</p>' : ""}` : ""}</div>
       <div class="network-grid">
-        <label class="field"><span>Listen IP address</span><input name="network-listen" aria-label="Listen IP address" value="${esc(n.listen_address)}" placeholder="0.0.0.0" ${disabled}><small>0.0.0.0 listens on all IPv4 interfaces; use a specific LAN IP to limit it.</small></label>
-        <label class="field"><span>Server DNS name or IP</span><input name="network-name" aria-label="Server DNS name or IP" value="${esc(n.server_name)}" placeholder="my-mac.local or 192.168.1.20" ${disabled}><small>The address clients use. It must resolve to this computer and match the TLS certificate.</small></label>
+        <label class="field"><span>Listen IP address ${required("network-listen")}</span><input name="network-listen" aria-label="Listen IP address" value="${esc(n.listen_address)}" placeholder="0.0.0.0" ${disabled}><small>0.0.0.0 listens on all IPv4 interfaces; use a specific LAN IP to limit it.</small>${fieldError("network-listen")}</label>
+        <label class="field"><span>Server DNS name or IP ${required("network-name")}</span><input name="network-name" aria-label="Server DNS name or IP" value="${esc(n.server_name)}" placeholder="Choose a detected address or enter your own" ${disabled}><small>The address clients use, for example 192.168.1.20. A DNS name must resolve to this computer. The TLS certificate must cover this address.</small>${fieldError("network-name")}</label>
         <label class="field"><span>Transport</span><select id="network-transport" name="network-transport" aria-label="Transport" ${disabled}><option value="tls" ${n.tls ? "selected" : ""}>TLS — encrypted (recommended)</option><option value="http" ${!n.tls ? "selected" : ""}>HTTP — unencrypted private network</option></select></label>
       </div>
       <p id="network-plaintext-note" class="network-warning" ${n.tls ? "hidden" : ""}>HTTP sends passwords, queries, and results without encryption. Use it only on a trusted private network.</p>
       <div id="network-tls-fields" ${!n.tls ? "hidden" : ""}>
+        <div class="certificate-actions"><button id="generate-certificate" class="button" type="button" ${disabled}>Generate certificate and key</button><p class="muted">Optional: generate a private certificate for this computer, valid for one year. Certificate paths below fill automatically. Regenerating creates a new trust certificate for clients.</p></div>
         <div class="network-grid">
-          <label class="field"><span>TLS certificate chain (PEM path)</span><input name="network-cert" aria-label="TLS certificate chain (PEM path)" value="${esc(n.tls_cert)}" placeholder="/path/to/server.pem" ${disabled}></label>
-          <label class="field"><span>TLS private key (PEM path)</span><input name="network-key" aria-label="TLS private key (PEM path)" value="${esc(n.tls_key)}" placeholder="/path/to/server.key" ${disabled}></label>
+          <label class="field"><span>TLS certificate chain (PEM path) ${required("network-cert")}</span><input name="network-cert" aria-label="TLS certificate chain (PEM path)" value="${esc(n.tls_cert)}" placeholder="/path/to/server.pem" ${disabled}>${fieldError("network-cert")}</label>
+          <label class="field"><span>TLS private key (PEM path) ${required("network-key")}</span><input name="network-key" aria-label="TLS private key (PEM path)" value="${esc(n.tls_key)}" placeholder="/path/to/server.key" ${disabled}>${fieldError("network-key")}</label>
         </div>
-        <p class="muted">Certificate verification stays enabled. For the desktop SQL workspace and client browsers, trust a private CA in the operating system, or use a certificate already trusted there. Private keys stay in their files.</p>
+        ${generated ? `<div class="certificate-info"><h3>Certificate generated · expires ${esc(generated.expires)}</h3><p class="muted">Covers: ${generated.names.map(esc).join(", ")}</p><p>Share only <strong>Hardcharger-local-CA.crt</strong> with clients. Never share <strong>server.key</strong>.</p><button id="show-certificate" class="button" type="button">Show trust certificate folder</button><p class="muted">Trust certificate SHA-256: <code>${esc(generated.fingerprint)}</code></p><p class="muted">For the desktop SQL workspace and browsers, import the public CA certificate into the operating system's trusted certificates. The app does not change your system trust automatically. On macOS use Keychain Access; on Windows use the certificate import wizard.</p><p class="muted">The CLI can use <code>--tls-roots /path/to/Hardcharger-local-CA.crt</code>. For a temporary test on a trusted network it also supports <code>--tls-skip-verify</code>; that keeps encryption but skips checking the server's identity. Certificate verification stays on by default.</p></div>` : '<p class="muted">Certificate verification stays enabled. For the desktop SQL workspace and client browsers, trust your private CA in the operating system, or use an already trusted certificate. Private keys stay in their files.</p>'}
       </div>
       <div class="network-grid">
-        <label class="field"><span>Administrator user name</span><input name="network-user" aria-label="Administrator user name" value="${esc(n.username)}" autocomplete="off" ${disabled}></label>
-        <label class="field"><span>Administrator password</span><input name="network-password" aria-label="Administrator password" type="password" autocomplete="new-password" placeholder="${n.password ? "Saved in OS credential store — leave blank to keep" : "Set a strong password"}" ${disabled}><small>Stored in the OS credential store. Other users can sign in through the server's configured access control or identity provider.</small></label>
+        <label class="field"><span>Administrator user name ${required("network-user")}</span><input name="network-user" aria-label="Administrator user name" value="${esc(n.username)}" autocomplete="off" ${disabled}>${fieldError("network-user")}</label>
+        <label class="field"><span>Administrator password ${required("network-password")}</span><input name="network-password" aria-label="Administrator password" type="password" autocomplete="new-password" placeholder="${n.password ? "Saved in OS credential store — leave blank to keep" : "Set a strong password"}" ${disabled}><small>${n.password ? "Already saved; leave blank to keep it. " : ""}Stored in the OS credential store. Other users can sign in through the server's configured access control or identity provider.</small>${fieldError("network-password")}</label>
       </div>
     </div>
   </section>`;
@@ -242,7 +387,7 @@ function optionGroups(s: Status | null) {
     const custom = value !== undefined;
     const stored = value === "__HARDCHARGER_STORED_SECRET__";
     const text = stored ? "" : value !== undefined ? Array.isArray(value) ? value.join("\n") : String(value) : option.default;
-    const disabled = s?.running || !native || option.managed;
+    const disabled = s?.running || !native || busy || option.managed;
     let input = "";
     const id = `option:${option.name}`;
     const choices = optionChoices(option);
@@ -347,6 +492,12 @@ async function refreshLogs() {
 
 async function action(name: string) {
   if (!native || busy) return;
+  if (["start", "restart"].includes(name) && (draftDirty || current?.settingsPending)) {
+    try {
+      if (!draftDirty) throw new Error("A previous setup was not saved. Review Settings and save, or explicitly discard the changes before starting.");
+      if (!await saveSettings(readSettings())) return;
+    } catch (e) { tab = "settings"; render(); showFormError(e); return; }
+  }
   busy = true; error = ""; render();
   try {
     if (["start", "stop", "restart"].includes(name)) current = await invoke<Status>("server_control", { action: name });
@@ -358,11 +509,18 @@ async function action(name: string) {
 }
 
 async function saveSettings(settings: Settings) {
-  busy = true; error = "";
-  try { current = await invoke<Status>("save_settings", { settings }); pendingImport = null; settingsNotice = "Settings saved. They take effect the next time the server starts."; }
-  catch (e) { busy = false; showFormError(e); return; }
+  busy = true; error = ""; render();
+  try {
+    await pendingUpdate;
+    current = await invoke<Status>("save_settings", { settings });
+    markedNetwork = null;
+    draft = null; draftDirty = false; fieldErrors = {}; pendingUpdate = Promise.resolve();
+    pendingImport = null; settingsNotice = "Settings saved. They take effect the next time the server starts.";
+  }
+  catch (e) { busy = false; render(); showFormError(e); return false; }
   finally { busy = false; }
   render();
+  return true;
 }
 
 if (designPreview) {
@@ -372,6 +530,7 @@ if (designPreview) {
 }
 render();
 if (native) {
+  void invoke<NetworkInfo>("network_info").then(info => { if (!info || !Array.isArray(info.addresses)) return; detectedNetwork = info; if (tab === "settings") render(); }).catch(() => {});
   void invoke<ServerOption[]>("server_options").then(options => { schema = options; if (tab === "settings") render(); }).catch(showError);
   void listen("server-changed", () => void refresh());
   void listen<string>("desktop-error", e => showError(e.payload));

@@ -114,6 +114,9 @@ pub struct Status {
     pub version: String,
     pub error: Option<String>,
     pub settings: Settings,
+    pub settings_pending: bool,
+    pub pending_network: Option<bool>,
+    pub generated_certificate: Option<crate::network::GeneratedCertificate>,
 }
 
 pub struct Server {
@@ -126,6 +129,8 @@ pub struct Server {
     error: Option<String>,
     version: String,
     schema: Vec<serde_json::Value>,
+    settings_pending: bool,
+    pending_network: Option<bool>,
 }
 
 const REDACTED: &str = "__HARDCHARGER_STORED_SECRET__";
@@ -242,7 +247,7 @@ fn settings_secrets(settings: &Settings) -> BTreeMap<String, serde_json::Value> 
     secrets
 }
 
-fn random_secret() -> Result<String, String> {
+pub(crate) fn random_secret() -> Result<String, String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(|e| e.to_string())?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
@@ -323,6 +328,11 @@ impl Server {
             .as_array()
             .ok_or("The server returned an invalid options schema.")?
             .clone();
+        let settings_pending = directory.join("settings-pending").exists();
+        let pending_network = fs::read(directory.join("settings-pending"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .and_then(|value| value["network"].as_bool());
         let result = Self {
             binary,
             directory,
@@ -333,6 +343,8 @@ impl Server {
             error: None,
             version,
             schema,
+            settings_pending,
+            pending_network,
         };
         result.validate_options(&result.settings)?;
         Ok(result)
@@ -383,12 +395,28 @@ impl Server {
     }
 
     fn http_client(&self) -> Result<reqwest::blocking::Client, String> {
+        self.http_client_for(&self.settings)
+    }
+
+    fn http_client_for(&self, settings: &Settings) -> Result<reqwest::blocking::Client, String> {
+        self.http_client_with_roots(settings, true)
+    }
+
+    fn http_client_with_roots(
+        &self,
+        settings: &Settings,
+        supplied_roots: bool,
+    ) -> Result<reqwest::blocking::Client, String> {
         let mut builder = reqwest::blocking::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(2));
-        if self.settings.network.enabled {
-            let listen = self.listen_address()?;
+        if settings.network.enabled {
+            let listen: IpAddr = settings
+                .network
+                .listen_address
+                .parse()
+                .map_err(|_| "Invalid listen address.")?;
             let control = if listen.is_unspecified() {
                 if listen.is_ipv4() {
                     IpAddr::from([127, 0, 0, 1])
@@ -398,8 +426,14 @@ impl Server {
             } else {
                 listen
             };
-            let endpoint =
-                tauri::Url::parse(&self.endpoint()).map_err(|_| "Invalid server address.")?;
+            let host = settings.network.server_name.trim_matches(['[', ']']);
+            let authority = if host.contains(':') {
+                format!("[{host}]")
+            } else {
+                host.into()
+            };
+            let endpoint = tauri::Url::parse(&format!("https://{authority}:{}", settings.port))
+                .map_err(|_| "Invalid server address.")?;
             let host = endpoint
                 .host_str()
                 .ok_or("Missing server address.")?
@@ -407,7 +441,7 @@ impl Server {
             // DNS names keep their TLS identity but control traffic always reaches
             // our own listener, even before the machine's DNS is configured.
             if host.parse::<IpAddr>().is_err() {
-                builder = builder.resolve(host, SocketAddr::new(control, self.settings.port));
+                builder = builder.resolve(host, SocketAddr::new(control, settings.port));
             } else {
                 let address: IpAddr = host.parse().map_err(|_| "Invalid server address.")?;
                 if (!listen.is_unspecified() && address != listen)
@@ -416,22 +450,35 @@ impl Server {
                     return Err("The server IP address must belong to this computer and match the listen address.".into());
                 }
             }
-            if self.settings.network.tls {
-                let pem = fs::read(&self.settings.network.tls_cert)
+            if settings.network.tls {
+                let pem = fs::read(&settings.network.tls_cert)
                     .map_err(|e| format!("Could not read TLS certificate: {e}"))?;
                 let certificates = reqwest::Certificate::from_pem_bundle(&pem)
                     .map_err(|e| format!("Invalid PEM certificate chain: {e}"))?;
                 if certificates.is_empty() {
                     return Err("The certificate file contains no PEM certificates.".into());
                 }
-                for cert in certificates {
-                    builder = builder.add_root_certificate(cert);
+                if supplied_roots {
+                    for cert in certificates {
+                        builder = builder.add_root_certificate(cert);
+                    }
                 }
-                File::open(&self.settings.network.tls_key)
+                File::open(&settings.network.tls_key)
                     .map_err(|e| format!("Could not read TLS private key: {e}"))?;
             }
         }
         builder.build().map_err(|e| e.to_string())
+    }
+
+    pub fn check_workspace_trust(&self) -> Result<(), String> {
+        if !self.settings.network.enabled || !self.settings.network.tls {
+            return Ok(());
+        }
+        self.http_client_with_roots(&self.settings, false)?.get(format!("{}/ui/", self.endpoint()))
+            .send().and_then(|r| r.error_for_status()).map_err(|_| {
+                "The server is running with TLS, but the SQL workspace cannot verify its certificate using system trust. In Settings, show the trust certificate folder and trust the public CA certificate in your operating system, then open the workspace again. CLI clients can use --tls-roots with that CA file.".to_string()
+            })?;
+        Ok(())
     }
 
     pub fn status(&mut self) -> Result<Status, String> {
@@ -457,10 +504,19 @@ impl Server {
             version: self.version.clone(),
             error: self.error.clone(),
             settings: public_settings(&self.settings),
+            settings_pending: self.settings_pending,
+            pending_network: self.pending_network,
+            generated_certificate: crate::network::generated(
+                &self.directory,
+                &self.settings.network.tls_cert,
+            ),
         })
     }
 
     pub fn start(&mut self) -> Result<Status, String> {
+        if self.settings_pending {
+            return Err("Server settings have unsaved changes. Save or explicitly discard them in Settings before starting. Network setup never falls back to local mode.".into());
+        }
         if self.status()?.running {
             return self.status();
         }
@@ -667,6 +723,23 @@ impl Server {
         if self.status()?.running {
             return Err("Stop the server before changing its settings.".into());
         }
+        // Validate addresses and certificate files before persisting any network settings.
+        // A failed validation leaves the pending marker in place, blocking tray/autostart too.
+        self.http_client_for(&settings)?;
+        if settings.network.enabled && settings.network.tls {
+            if let Some(certificate) =
+                crate::network::generated(&self.directory, &settings.network.tls_cert)
+            {
+                let host = settings.network.server_name.trim_matches(['[', ']']);
+                let covered = certificate
+                    .names
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(host));
+                if !covered {
+                    return Err("The generated certificate does not cover the selected server address. Generate a new certificate for this address before saving.".into());
+                }
+            }
+        }
         let secrets = settings_secrets(&settings);
         if !secrets.is_empty() || !settings_secrets(&self.settings).is_empty() {
             credential_store()?
@@ -680,7 +753,34 @@ impl Server {
             &serde_json::to_vec_pretty(&public_settings(&settings)).map_err(|e| e.to_string())?,
         )?;
         self.settings = settings;
+        self.set_settings_pending(false, None)?;
         self.status()
+    }
+
+    pub fn set_settings_pending(
+        &mut self,
+        pending: bool,
+        network: Option<bool>,
+    ) -> Result<(), String> {
+        let path = self.directory.join("settings-pending");
+        if pending {
+            self.settings_pending = true;
+            self.pending_network = network;
+            private_write(
+                &path,
+                &serde_json::to_vec(&serde_json::json!({"network": network}))
+                    .map_err(|e| e.to_string())?,
+            )?;
+        } else {
+            match fs::remove_file(path) {
+                Ok(()) => (),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                Err(e) => return Err(e.to_string()),
+            }
+            self.settings_pending = false;
+            self.pending_network = None;
+        }
+        Ok(())
     }
 
     pub fn logs(&self) -> Result<String, String> {
@@ -758,7 +858,7 @@ impl Drop for Server {
     }
 }
 
-fn private_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn private_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let staging = destination.with_extension("pending");
     let mut options = OpenOptions::new();
@@ -824,6 +924,113 @@ fn tail(path: &Path, maximum: u64) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsaved_setup_blocks_start_across_relaunch_until_save_or_explicit_discard() {
+        let Some(binary) = std::env::var_os("HARDCHARGER_DESKTOP_TEST_SERVER") else {
+            return;
+        };
+        let directory = std::env::temp_dir().join(format!(
+            "hardcharger-pending-test-{}",
+            random_secret().unwrap()
+        ));
+        let mut server = Server::new(binary.clone().into(), directory.clone()).unwrap();
+        server.set_settings_pending(true, Some(true)).unwrap();
+        assert!(server.start().err().unwrap().contains("unsaved changes"));
+        assert!(!server.status().unwrap().running);
+        drop(server);
+        let mut reloaded = Server::new(binary.into(), directory.clone()).unwrap();
+        assert_eq!(reloaded.status().unwrap().pending_network, Some(true));
+        assert!(reloaded.start().is_err());
+        let mut invalid = Settings::default();
+        invalid.network.enabled = true;
+        assert!(reloaded.save_settings(invalid).is_err());
+        assert!(reloaded.start().is_err()); // failed save cannot restore local-only startup
+        reloaded.save_settings(Settings::default()).unwrap(); // explicit valid local save
+        assert!(!reloaded.status().unwrap().settings_pending);
+        reloaded.set_settings_pending(true, Some(true)).unwrap();
+        reloaded.set_settings_pending(false, None).unwrap(); // explicit discard
+        assert!(!reloaded.status().unwrap().settings_pending);
+        drop(reloaded);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn generated_certificates_work_with_verified_tls_and_keep_private_keys_private() {
+        let Some(binary) = std::env::var_os("HARDCHARGER_DESKTOP_TEST_SERVER") else {
+            return;
+        };
+        let directory = std::env::temp_dir().join(format!(
+            "hardcharger-certificate-test-{}",
+            random_secret().unwrap()
+        ));
+        let mut server = Server::new(binary.into(), directory.clone()).unwrap();
+        let generated = crate::network::generate(&directory, "127.0.0.1").unwrap();
+        let record = serde_json::to_string(&generated).unwrap();
+        assert!(!record.contains("PRIVATE KEY"));
+        assert!(generated.names.contains(&"127.0.0.1".into()));
+        assert_eq!(generated.fingerprint.len(), 95);
+        assert_eq!(
+            fs::read_dir(Path::new(&generated.certificate).parent().unwrap())
+                .unwrap()
+                .count(),
+            4
+        ); // no CA private key
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&generated.private_key)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        let reservation = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        server.settings.port = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        server.settings.network = NetworkSettings {
+            enabled: true,
+            listen_address: "127.0.0.1".into(),
+            server_name: "127.0.0.1".into(),
+            tls: true,
+            tls_cert: generated.certificate.clone(),
+            tls_key: generated.private_key.clone(),
+            username: "certificate-test-admin".into(),
+            password: "synthetic-certificate-test-password".into(),
+        };
+        assert!(server.start().unwrap().running);
+        assert!(server.sign_in().is_ok()); // trusts this CA, verifies hostname and expiry
+        assert!(server.check_workspace_trust().is_err()); // no automatic change to OS trust
+        let client = server.binary.with_file_name("hardcharger");
+        let output = Command::new(client)
+            .args([
+                "--host",
+                "127.0.0.1",
+                "--port",
+                &server.settings.port.to_string(),
+                "--username",
+                "certificate-test-admin",
+                "--tls-roots",
+                &generated.trust_certificate,
+                "-c",
+                "SELECT 42 AS answer;",
+            ])
+            .env("HARDCHARGER_PASSWORD", &server.password)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
+        server.stop().unwrap();
+        drop(server);
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn network_defaults_migration_validation_and_secret_redaction() {

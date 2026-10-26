@@ -49,6 +49,14 @@ x64/Arm64. Linux packaging and testing are follow-up work.
   DNS name/IP, and set the administrator user name and password. The password persists
   in the OS credential store. Save and start the server; the dashboard shows the actual
   endpoint, transport, listen address, and URLs for other computers.
+- Save settings stays visible at the top while scrolling. Unsaved edits survive screen
+  changes and Start offers to save and start together. Incomplete setup shows errors at
+  the required fields and blocks startup, including tray Start and launch at login.
+  A nonsecret pending marker survives relaunch; review/save or explicitly discard it.
+  Invalid network configuration never silently selects local-only mode.
+- Local interface IPs and the OS hostname are detected, with a LAN IPv4 address filled
+  when sharing is enabled. Choose another detected address or enter your own DNS name.
+  Detection cannot create DNS records or guarantee reachability from another computer.
 - TLS is the default transport for network mode. Supply the PEM certificate-chain and
   private-key paths; the certificate must match the server DNS name/IP. The controller
   trusts the supplied chain and verifies its name and validity. The native SQL workspace
@@ -57,6 +65,15 @@ x64/Arm64. Linux packaging and testing are follow-up work.
   explicit alternative; it sends credentials and SQL without encryption. The app does
   not change firewall/router rules. Clients must be able to reach the configured TCP
   port, and this computer must stay awake.
+- **Generate certificate and key** creates a one-year server certificate and a private
+  local CA, covering the chosen name and current detected addresses. It fills the paths,
+  displays the public trust certificate's SHA-256 fingerprint, and offers its folder.
+  The server key stays in private app files; the CA signing key is not retained. Share
+  only `Hardcharger-local-CA.crt`, never `server.key`. Clients can trust that public CA;
+  the CLI also accepts `--tls-roots /path/to/Hardcharger-local-CA.crt`, or the explicit
+  `--tls-skip-verify` option for temporary development tests. System trust is never
+  changed automatically. A workspace whose CA is not trusted shows setup instructions
+  instead of opening a blank failed TLS page. Regeneration requires trusting the new CA.
 - **Open SQL workspace** opens the server's actual `/ui/` in its own window, automatically
   signed in using the same token handoff contract as iOS. The query interface is not
   duplicated. Its native privileges are restricted: it cannot call desktop commands.

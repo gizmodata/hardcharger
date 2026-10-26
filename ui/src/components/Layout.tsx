@@ -139,7 +139,6 @@ export function Layout({ theme, page, go }: Props) {
           <nav className="header-nav" aria-label="Pages">
             {nav("query", "Query", <Database size={15} />)}
             {nav("sessions", "Sessions", <Users size={15} />)}
-            {nav("api", "API", <Braces size={15} />)}
             {session.isAdmin && session.identity.fullAdmin !== false && (
               <>
                 {nav(
@@ -151,6 +150,7 @@ export function Layout({ theme, page, go }: Props) {
                 {nav("configuration", "Server Configuration", <Settings size={15} />)}
               </>
             )}
+            {nav("api", "API", <Braces size={15} />)}
           </nav>
         </div>
         <div className="header-right">
