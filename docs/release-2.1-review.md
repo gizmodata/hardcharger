@@ -1,7 +1,7 @@
 # v2.1.0 release review
 
-Keep the desktop work on review branches until Philip approves merging and releasing.
-Do not publish or tag the current preview as a release.
+Philip approved shipping v2.1.0 on 2026-10-26, explicitly gated on successful tests.
+Merge and tag only after the combined release commit passes the full signed matrix.
 
 ## Required ingestion fix
 
@@ -17,8 +17,8 @@ Do not publish or tag the current preview as a release.
 - Re-run the server, SDK and conformance suites after SDK/branch integration. The
   desktop preview's results against its older SDK do not validate this integration.
 
-The ingestion fix is already committed on local `main`; it is intentionally not
-cherry-picked into the desktop review branch during UI work. Before tagging the final
+The ingestion fix was merged from local `main` into `release/v2.1.0`, preserving
+its original commit ancestry. The newer SDK pin additionally contains upload limits. Before tagging the final
 `main` commit, verify `git merge-base --is-ancestor 9e95ef51 HEAD` succeeds and inspect
 the actual submodule pin. This keeps the customer-reported column-order fix in the
 release even if other branches or pins change before approval.
@@ -32,3 +32,10 @@ release even if other branches or pins change before approval.
   installation on supported architectures.
 - Publish server/Python package version 2.1.0 together; later Python-only fixes use
   `2.1.0.postN`. App-store distribution remains separate future work.
+
+## Backpressure scope
+
+v2.1.0 includes only Gap 3: per-message wire and expanded Arrow upload allocation limits.
+The worker scheduling change is tracked in [issue #4](https://github.com/gizmodata/hardcharger/issues/4).
+Aggregate retained/unretained memory budgets are tracked in [issue #5](https://github.com/gizmodata/hardcharger/issues/5).
+The existing broader limits branch is preserved; those budgets are excluded from this release.

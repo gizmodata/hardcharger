@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-26
+
 ### Added
 
 - Retry transient Apple ticket-service errors during final desktop notarization
@@ -101,6 +103,10 @@ own changelog in `python/CHANGELOG.md`.
   newer-server writes; compatibility controls follow the selected upstream extension.
 
 ### Fixed
+
+- Sensitive-path tests preinstall the dynamically loaded PostgreSQL extension in their
+  isolated home before starting the access-control store; repository downloads no
+  longer consume its connection deadline.
 
 - Reject oversized Arrow IPC ingest messages and expanded compressed buffers before
   allocation, with HTTP 413 `payload_too_large`. The configurable startup limit

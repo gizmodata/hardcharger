@@ -54,7 +54,7 @@ NO_AUTOLOAD = "SET GLOBAL autoload_known_extensions = false; SET GLOBAL autoinst
 
 
 @pytest.fixture(scope="module")
-def fake_home(tmp_path_factory) -> pathlib.Path:
+def fake_home(tmp_path_factory, store) -> pathlib.Path:
     home = tmp_path_factory.mktemp("fake-home").resolve()
     for relative, text in DUMMY_FILES.items():
         (home / relative).parent.mkdir(parents=True, exist_ok=True)
@@ -74,6 +74,17 @@ def fake_home(tmp_path_factory) -> pathlib.Path:
     os.link(home / ".aws" / "credentials", home / "data" / "credentials-link")
     # The operator's init SQL file: one of the server's credentials.
     (home / "init.sql").write_text(NO_AUTOLOAD)
+    if store.kind == "postgres":
+        # This isolated HOME has no extension cache. Install the signed PostgreSQL
+        # extension before opening the RBAC store: a repository download must not
+        # consume the store's 10-second connection deadline on a busy CI runner.
+        # The guarded servers still use this fake HOME and the default store timeout.
+        bootstrap = Launcher(tmp_path=home)
+        try:
+            running = bootstrap.start(env=home_env(home=home))
+            running.admin().query(sql="INSTALL postgres")
+        finally:
+            bootstrap.stop_all()
     return home
 
 
