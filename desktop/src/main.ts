@@ -202,7 +202,7 @@ function render() {
   const running = s?.running ?? false;
   app.innerHTML = `
     <aside class="sidebar">
-      <div class="identity">${picture("header", "Hardcharger™")}<span class="edition">DESKTOP PREVIEW</span></div>
+      <div class="identity">${picture("header", "Hardcharger™")}<span class="edition">DESKTOP</span></div>
       <div class="nav-label">WORKSPACE</div>
       <nav aria-label="Main navigation">
         <button data-tab="server" class="nav-item ${tab === "server" ? "active" : ""}">${icon("server")}Local server<span class="nav-dot ${running ? "running" : ""}"></span></button>
@@ -503,7 +503,7 @@ function logsView() {
 }
 
 function aboutView() {
-  return `<section class="card about-card" aria-label="About Hardcharger">${picture("mascot", "Hardcharger™", "about-mascot")}<p class="about-tagline">Fast, secure, remote DuckDB.</p><p>${esc(current?.version ?? "Desktop preview")} · by GizmoData™</p><div class="about-divider"></div><p>The Hardcharger server and its SQL workspace,<br>together on your desktop.</p><div class="marketing-links"><a class="button primary" data-marketing-link href="https://gizmodata.com/hardcharger" target="_blank" rel="noopener noreferrer">Explore Hardcharger ${icon("arrow")}</a><a class="button" data-marketing-link href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">Visit GizmoData ${icon("arrow")}</a></div><p><a data-marketing-link href="https://docs.hardcharger.gizmodata.com" target="_blank" rel="noopener noreferrer">Documentation</a></p><p class="muted">Apache License 2.0<br>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</p></section>`;
+  return `<section class="card about-card" aria-label="About Hardcharger">${picture("mascot", "Hardcharger™", "about-mascot")}<p class="about-tagline">Fast, secure, remote DuckDB.</p><p>${esc(current?.version ?? "Desktop app")} · by GizmoData™</p><div class="about-divider"></div><p>The Hardcharger server and its SQL workspace,<br>together on your desktop.</p><div class="marketing-links"><a class="button primary" data-marketing-link href="https://gizmodata.com/hardcharger" target="_blank" rel="noopener noreferrer">Explore Hardcharger ${icon("arrow")}</a><a class="button" data-marketing-link href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">Visit GizmoData ${icon("arrow")}</a></div><p><a data-marketing-link href="https://docs.hardcharger.gizmodata.com" target="_blank" rel="noopener noreferrer">Documentation</a></p><p class="muted">Apache License 2.0<br>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</p></section>`;
 }
 
 function showError(e: unknown) {
