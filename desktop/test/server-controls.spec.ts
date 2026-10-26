@@ -37,6 +37,7 @@ for (const action of ["Stop", "Restart"]) {
     expect(await calls()).toEqual([]);
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole("button", { name: action, exact: true })).toBeFocused();
     expect(await calls()).toEqual([]);
     await page.getByRole("button", { name: action, exact: true }).click();
     await page.keyboard.press("Escape");

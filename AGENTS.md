@@ -25,3 +25,10 @@ Non-iOS builds use automatic installation and loading of known DuckDB extensions
 default, matching GizmoSQL. Administrators can override those settings or repositories.
 Keep signature verification enabled. iOS retains statically included extensions and
 disables dynamic extension loading.
+
+For signed/notarized macOS artifacts, the actual `hardcharger-server` executable must
+retain `com.apple.security.cs.disable-library-validation=true` so DuckDB can load
+extensions signed outside GizmoData's Apple team. This applies inside the desktop app
+too: Tauri re-signs bundled sidecars. Verify it after bundling with
+`desktop/scripts/check-extension-entitlement.py`. Keep DuckDB's own extension-signature
+verification enabled; this entitlement does not replace it.

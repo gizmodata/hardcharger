@@ -152,6 +152,11 @@ and rejection of a mismatched TLS hostname. Test certificates never enter the OS
 
 ## Signing and release artifacts
 
+macOS's bundled server must retain `com.apple.security.cs.disable-library-validation`
+so it can load DuckDB extensions. Both signing plists declare it. CI inspects the actual
+server after Tauri re-signs sidecars, using `scripts/check-extension-entitlement.py`,
+alongside the existing signature/notarization checks. DuckDB still validates module signatures.
+
 `.github/workflows/desktop.yml` produces Actions artifacts for review; it never publishes a
 release. A feature-branch push builds unsigned/ad hoc previews. The dedicated
 `release/desktop-preview` branch requests signed previews using the existing `production`

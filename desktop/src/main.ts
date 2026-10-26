@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { stringify } from "yaml";
+import { version as appVersion } from "../package.json";
 import { defaultNetwork, networkErrors, type NetworkSettings, type NetworkInfo, type GeneratedCertificate, type WorkspaceTrust } from "./network";
 import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, type ServerOption } from "./configuration";
 import "./style.css";
@@ -226,7 +227,12 @@ function render() {
   const controlConfirmation = document.querySelector<HTMLDialogElement>("#server-control-confirmation");
   if (controlConfirmation) {
     controlConfirmation.showModal();
-    const cancel = () => { pendingControl = null; render(); };
+    const cancel = () => {
+      const requested = pendingControl;
+      pendingControl = null;
+      render();
+      (document.querySelector<HTMLButtonElement>(`[data-action="${requested}"]`) ?? document.querySelector<HTMLButtonElement>(`[data-tab="${tab}"]`))?.focus();
+    };
     controlConfirmation.addEventListener("cancel", e => { e.preventDefault(); cancel(); });
     document.querySelector("#cancel-server-control")?.addEventListener("click", cancel);
     document.querySelector("#confirm-server-control")?.addEventListener("click", () => {
@@ -582,7 +588,7 @@ function controlDialog() {
   if (!pendingControl) return "";
   const restart = pendingControl === "restart";
   const label = restart ? "Restart" : "Stop";
-  return `<dialog id="server-control-confirmation" class="trust-dialog" aria-labelledby="server-control-title" aria-describedby="server-control-description"><h2 id="server-control-title">${label} Hardcharger server?</h2><p id="server-control-description">This will close the SQL workspace and all query-detail windows. Active queries and uploads will be interrupted, client sessions will disconnect, and uncommitted transactions will be rolled back.</p><p>${restart ? "The server will then start again using your saved settings. Clients will need to reconnect." : "The server will stay stopped until you start it again."}</p><div class="trust-actions"><button id="cancel-server-control" class="button" autofocus>Cancel</button><button id="confirm-server-control" class="button control-${pendingControl}">${label} server</button></div></dialog>`;
+  return `<dialog id="server-control-confirmation" class="trust-dialog" aria-labelledby="server-control-title" aria-describedby="server-control-description"><h2 id="server-control-title">${label} Hardcharger server?</h2><p id="server-control-description">This will close the SQL workspace and all query-detail windows. Active queries and uploads may be interrupted, client sessions will disconnect, and uncommitted transactions will be rolled back.</p><p>${restart ? "The server will then start again using your saved settings. Clients will need to reconnect." : "The server will stay stopped until you start it again."}</p><div class="trust-actions"><button id="cancel-server-control" class="button" autofocus>Cancel</button><button id="confirm-server-control" class="button control-${pendingControl}">${label} server</button></div></dialog>`;
 }
 
 async function action(name: string, confirmed = false) {
@@ -626,7 +632,7 @@ async function saveSettings(settings: Settings) {
 }
 
 if (designPreview) {
-  current = { running: true, pid: 24781, port: 31337, endpoint: "http://127.0.0.1:31337", database: "~/Library/Application Support/Hardcharger/Hardcharger.duckdb", logFile: "server.log", uptimeSeconds: 165, databaseBytes: 122683392, version: "Hardcharger 2.0.0", error: null, settings: { port: 31337, start_on_open: true, server_options: {} } };
+  current = { running: true, pid: 24781, port: 31337, endpoint: "http://127.0.0.1:31337", database: "~/Library/Application Support/Hardcharger/Hardcharger.duckdb", logFile: "server.log", uptimeSeconds: 165, databaseBytes: 122683392, version: `Hardcharger ${appVersion}`, error: null, settings: { port: 31337, start_on_open: true, server_options: {} } };
 } else if (!native) {
   error = "Open the Hardcharger desktop app to control your server. Use ?preview=1 to view the design in a browser.";
 }
