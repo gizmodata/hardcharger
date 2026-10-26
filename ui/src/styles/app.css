@@ -1048,6 +1048,24 @@ select {
   margin: 0;
   overflow-wrap: anywhere;
 }
+.query-detail-window {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+.query-detail-window h1 {
+  margin: 0;
+  font-size: 16px;
+}
+.query-detail-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+}
+.query-detail-content .monitor-detail {
+  margin-top: 0;
+}
 .configuration-facts > div {
   display: contents;
 }

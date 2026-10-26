@@ -24,6 +24,9 @@ test("a non-admin cannot see admin tabs or enter their routes", async ({ page, h
   await expect(page.getByRole("button", { name: "Server Configuration", exact: true })).toHaveCount(0);
   await page.goto(`${harness.url}/ui/monitor`);
   await expect(page.getByText("Only unrestricted administrators can view SQL Monitor.")).toBeVisible();
+  await page.goto(`${harness.url}/ui/monitor/query?execution=q_test`);
+  await expect(page.getByText("Only unrestricted administrators can view query details.")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Statement details" })).toHaveCount(0);
 });
 
 test("SQL Monitor shows outcomes and slots and preserves the editor", async ({ page }, testInfo) => {
@@ -48,6 +51,7 @@ test("SQL Monitor shows outcomes and slots and preserves the editor", async ({ p
     await expect(page.locator(".monitor-page").getByRole("alert")).toHaveCount(0);
     await expect(page.getByLabel("Recent history")).toHaveValue("10");
     await page.getByLabel("Filter monitored queries").fill("monitor_completed");
+    await page.getByLabel("Query details", { exact: true }).selectOption("inline");
     await expect(table.locator("tbody tr")).toHaveCount(1);
     await table.getByRole("button", { name: /monitor_completed/ }).click();
     await expect(page.getByRole("region", { name: "Statement details" })).toContainText("Succeeded");
@@ -82,6 +86,7 @@ test("statement details render captured profile metrics without rerunning the qu
     await signIn(page, server.admin, server.url);
     await page.getByRole("button", { name: "SQL Monitor", exact: true }).click();
     const table = page.getByTestId("sql-monitor-table");
+    await page.getByLabel("Query details", { exact: true }).selectOption("inline");
     await table.getByRole("button", { name: /captured_profile_ui_probe/ }).click();
     const profile = page.getByRole("region", { name: "Captured query profile" });
     await expect(profile.getByTestId("query-profile-plan")).toContainText("UNGROUPED_AGGREGATE");

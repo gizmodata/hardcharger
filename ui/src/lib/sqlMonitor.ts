@@ -1,4 +1,4 @@
-import { quoteIdentifier } from "./sql";
+import { quoteIdentifier, quoteLiteral } from "./sql";
 
 export interface MonitorInfo {
   instrumentation_enabled: boolean;
@@ -61,6 +61,7 @@ export function monitorSql(
   minutes: number,
   includeMonitor: boolean,
   historyLimit = 1000,
+  executionId?: string,
 ): string {
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440)
     throw new Error("Choose between 1 minute and 24 hours");
@@ -69,20 +70,46 @@ export function monitorSql(
   const history = `${quoteIdentifier(catalog)}.${quoteIdentifier(schema)}.execution_details`;
   const columns =
     "execution_id, statement_id, session_id, username, sql_text, status, error_message, cancel_reason, rows_fetched, execution_start_time, execution_end_time, enqueue_time, fetch_start_time, fetch_end_time, cursor_close_time, CAST(query_tag AS VARCHAR) AS query_tag";
-  const recent = `COALESCE(cursor_close_time, fetch_end_time, execution_end_time) >= current_timestamp - INTERVAL '${minutes} minutes'`;
+  const recent = executionId
+    ? "true"
+    : `COALESCE(cursor_close_time, fetch_end_time, execution_end_time) >= current_timestamp - INTERVAL '${minutes} minutes'`;
+  const execution = executionId ? `execution_id = ${quoteLiteral(executionId)}` : "true";
   const visible = includeMonitor
     ? "true"
     : "COALESCE(json_extract_string(NULLIF(CAST(query_tag AS VARCHAR), ''), '$.page'), '') <> 'sql-monitor'";
-  return `WITH live AS (SELECT ${columns}, 1 AS priority FROM hardcharger_live_queries()),
+  return `WITH live AS (SELECT ${columns}, 1 AS priority FROM hardcharger_live_queries() WHERE ${execution}),
     history AS (SELECT ${columns}, 0 AS priority FROM ${history}
       WHERE instance_id = HARDCHARGER_CURRENT_INSTANCE()::UUID AND cursor_close_time IS NOT NULL
-        AND ${recent} AND ${visible}
+        AND ${execution} AND ${recent} AND ${visible}
       ORDER BY cursor_close_time DESC LIMIT ${historyLimit + 1}),
     merged AS (SELECT * FROM live UNION ALL SELECT * FROM history),
     ranked AS (SELECT *, row_number() OVER (PARTITION BY execution_id ORDER BY priority DESC) AS position FROM merged)
     SELECT * EXCLUDE (priority, position, query_tag) FROM ranked
     WHERE position = 1 AND ${visible} AND (status IN ('queued', 'executing', 'fetching') OR ${recent})
     ORDER BY status IN ('queued', 'executing', 'fetching') DESC, COALESCE(enqueue_time, execution_start_time) DESC`;
+}
+
+export function queryDetailSql(catalog: string, schema: string, executionId: string): string {
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(executionId))
+    throw new Error("This query detail link has an invalid execution ID.");
+  return monitorSql(catalog, schema, 10, true, 1, executionId);
+}
+
+export type DetailDisplay = "window" | "inline";
+const detailPreferenceKey = "hardcharger-ui:monitor-detail-display";
+export function storedDetailDisplay(): DetailDisplay {
+  try {
+    return localStorage.getItem(detailPreferenceKey) === "inline" ? "inline" : "window";
+  } catch {
+    return "window";
+  }
+}
+export function saveDetailDisplay(value: DetailDisplay) {
+  try {
+    localStorage.setItem(detailPreferenceKey, value);
+  } catch {
+    /* Storage is optional. */
+  }
 }
 
 export type StatusDisplay = "icons" | "descriptions";

@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { activeQuery, monitorSql, statusLabel, type MonitoredQuery } from "../../src/lib/sqlMonitor";
+import { activeQuery, monitorSql, queryDetailSql, statusLabel, type MonitoredQuery } from "../../src/lib/sqlMonitor";
 
 describe("SQL Monitor", () => {
+  it("follows one execution without the monitor's time cutoff", () => {
+    const id = "q_vliknitwm53b6hxtj2plxwch6dnemism";
+    const sql = queryDetailSql("instr", "main", id);
+    expect(sql).toContain(`execution_id = '${id}'`);
+    expect(sql).not.toContain("INTERVAL");
+    expect(sql).not.toContain("'$.page'");
+    expect(() => queryDetailSql("instr", "main", "invalid' OR true")).toThrow(/invalid execution ID/);
+  });
   it("keeps active work outside the completion-time window and the history cap", () => {
     const sql = monitorSql("instr", "main", 10, false);
     expect(sql).toContain("FROM hardcharger_live_queries()");

@@ -20,7 +20,8 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
 </p>
 
 - 🔭 **SQL Monitor** and **Server Configuration** for unrestricted administrators: query
-  lifecycle, recent history, timeouts, queue slots, session controls, and live session/global settings. Monitoring
+  lifecycle, recent history, timeouts, queue slots, independent query-detail windows,
+  session controls, and live session/global settings. Monitoring
   requires `--enable-instrumentation`; see [the operational guide](../docs/sql-monitor.md).
 - ✍️ **SQL editor** (Monaco), in tabs: up to 20, each with its own Warp SQL session, so one
   tab's long query or open transaction never touches another. New with **+** or Alt+N, close

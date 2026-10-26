@@ -3,7 +3,10 @@
 mod server;
 
 use server::{Server, Settings, Status};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -13,6 +16,7 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt;
 
 type Shared = Arc<Mutex<Server>>;
+static DETAIL_WINDOW: AtomicU64 = AtomicU64::new(1);
 
 // Custom application commands are available only to the bundled controller. A server's
 // web UI never receives native privileges, including when its content is compromised.
@@ -68,6 +72,11 @@ async fn control(app: &AppHandle, state: Shared, action: &str) -> Result<Status,
     // Destroy the query view before stopping its server, ending its sessions. The next
     // workspace receives a fresh token; an old webview never retains a stale credential.
     if action != "start" {
+        for (label, window) in app.webview_windows() {
+            if label.starts_with("query-detail-") {
+                window.destroy().map_err(|e| e.to_string())?;
+            }
+        }
         if let Some(window) = app.get_webview_window("workspace") {
             window.destroy().map_err(|e| e.to_string())?;
         }
@@ -138,12 +147,53 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
         .parse::<tauri::Url>()
         .map_err(|e| e.to_string())?;
     let allowed = url.origin();
+    let detail_origin = allowed.clone();
+    let detail_app = app.clone();
+    let detail_script = script.clone();
     WebviewWindowBuilder::new(&app, "workspace", WebviewUrl::External(url))
         .title("Hardcharger — SQL Workspace")
         .inner_size(1440.0, 940.0)
         .min_inner_size(880.0, 600.0)
         .initialization_script(script)
         .on_navigation(move |destination| destination.origin() == allowed)
+        .on_new_window(move |destination, features| {
+            // Server content can open query inspectors on its own exact origin.
+            // These views have no native command capabilities, just like the workspace.
+            if destination.origin() != detail_origin || destination.path() != "/ui/monitor/query" {
+                return tauri::webview::NewWindowResponse::Deny;
+            }
+            let allowed = detail_origin.clone();
+            let label = format!(
+                "query-detail-{}",
+                DETAIL_WINDOW.fetch_add(1, Ordering::Relaxed)
+            );
+            let result = WebviewWindowBuilder::new(
+                &detail_app,
+                label,
+                WebviewUrl::External("about:blank".parse().unwrap()),
+            )
+            // Retains the opener's webview configuration on macOS, environment
+            // on Windows, and related view on Linux for window.open support.
+            .window_features(features)
+            .title("Hardcharger — Query details")
+            .inner_size(1100.0, 850.0)
+            .min_inner_size(700.0, 500.0)
+            .initialization_script(detail_script.clone())
+            .on_navigation(move |url| url.as_str() == "about:blank" || url.origin() == allowed)
+            .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+            .disable_drag_drop_handler()
+            .build();
+            match result {
+                Ok(window) => tauri::webview::NewWindowResponse::Create { window },
+                Err(error) => {
+                    report(
+                        &detail_app,
+                        Err(format!("Could not open query details: {error}")),
+                    );
+                    tauri::webview::NewWindowResponse::Deny
+                }
+            }
+        })
         // File drops belong to the web UI's existing upload flow.
         .disable_drag_drop_handler()
         .build()

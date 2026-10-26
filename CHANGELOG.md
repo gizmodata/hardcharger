@@ -18,6 +18,9 @@ own changelog in `python/CHANGELOG.md`.
   planning/optimizer details, and original JSON download. Queries are never replayed.
 - SQL Monitor status icons or descriptions, with a remembered display preference,
   accessible labels/tooltips, and a spinning circle for executing statements.
+- SQL Monitor query details open in independent windows with live status and captured
+  profiles. A remembered layout choice keeps details below the monitor if preferred;
+  blocked pop-ups fall back to the inline view. Desktop inspectors use native windows.
 - Server Configuration for unrestricted administrators: effective session and global
   values, explicit overrides, live editing and resets at supported scopes, and safe
   server/listener facts. Startup settings stay read-only.

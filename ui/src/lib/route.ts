@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export type Page = "query" | "sessions" | "api" | "monitor" | "configuration" | "not-found";
+export type Page = "query" | "sessions" | "api" | "monitor" | "query-detail" | "configuration" | "not-found";
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -13,14 +13,20 @@ export function pageOf(pathname: string): Page {
   if (path === "" || path === "/query") return "query";
   if (path === "/sessions") return "sessions";
   if (path === "/monitor") return "monitor";
+  if (path === "/monitor/query") return "query-detail";
   if (path === "/configuration") return "configuration";
   if (path === "/api") return "api";
   return "not-found";
 }
 
 export function pathOf(page: Page): string {
+  if (page === "query-detail") return `${base}/monitor/query`;
   if (page === "sessions" || page === "api" || page === "monitor" || page === "configuration") return `${base}/${page}`;
   return `${base}/`;
+}
+
+export function queryDetailPath(executionId: string): string {
+  return `${pathOf("query-detail")}?execution=${encodeURIComponent(executionId)}`;
 }
 
 export function useRoute(): [Page, (page: Page) => void] {

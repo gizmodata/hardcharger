@@ -52,6 +52,20 @@ SQL text uses the same redaction and abbreviation rules as the query log.
 
 ### Captured query profiles
 
+Click SQL to open a separate **Query details** window by default. Each window follows
+that execution and refreshes every two seconds, independently of the monitor's filters,
+recent-history cutoff, and original workspace. Its captured profile and JSON download
+remain available after reloading the window. Choose **Query details → Below monitor**
+for the inline layout; its **Pop out** button moves the current inspection to a window.
+The layout preference is remembered. Browsers that block the pop-up show a notice and
+fall back to inline details. The desktop app opens native inspector windows; stopping
+or restarting its server closes the workspace and all inspectors.
+
+Each inspector opens its own observer sessions and enforces the same unrestricted
+administrator permission. It uses the existing short-lived sign-in in session storage;
+credentials are never put in the detail URL or local storage. Closing the inspector
+ends its own sessions without touching the monitored query or editor sessions.
+
 Select a statement to retrieve its existing `query_profile` from instrumentation for that
 execution ID and this server instance. The UI never reruns the statement or issues an
 `EXPLAIN ANALYZE`. With `hardcharger.capture_query_profile` set to `standard` or `detailed`

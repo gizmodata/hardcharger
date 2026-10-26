@@ -1,12 +1,14 @@
 import type { Connection, DiscoveryDocument } from "@gizmodata/warp-sql";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Layout } from "./components/Layout";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SignInPage } from "./components/SignInPage";
 import { type SignedIn, clearSignIn, loadSignIn, saveSignIn } from "./lib/auth";
 import { endSessionsOnExit } from "./lib/pageExit";
 import { useRoute } from "./lib/route";
 import { useTheme } from "./lib/theme";
+import { loadModule } from "./lib/stale";
 import { type ConnectionOptions, discover, openConnection } from "./lib/warp";
 import {
   type AppSession,
@@ -22,6 +24,8 @@ type Phase =
   | { kind: "signed-out"; notice?: string }
   | { kind: "connecting"; auth: SignedIn }
   | { kind: "ready"; auth: SignedIn; connection: Connection; identity: Identity };
+
+const QueryDetailPage = lazy(loadModule("query-detail", () => import("./components/QueryDetailPage")));
 
 async function whoAmI(connection: Connection): Promise<Identity> {
   const table = await connection.query(
@@ -186,7 +190,15 @@ export function App() {
   if (session) {
     return (
       <SessionContext value={session}>
-        <Layout theme={theme} page={page} go={go} />
+        {page === "query-detail" ? (
+          <ErrorBoundary scope="page">
+            <Suspense fallback={<p className="loading-line">Loading query details…</p>}>
+              <QueryDetailPage theme={theme} />
+            </Suspense>
+          </ErrorBoundary>
+        ) : (
+          <Layout theme={theme} page={page} go={go} />
+        )}
       </SessionContext>
     );
   }

@@ -1,10 +1,12 @@
-import { Activity, Pause, Play, RefreshCw, Square, XCircle } from "lucide-react";
+import { Activity, ExternalLink, Pause, Play, RefreshCw, Square, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useAdminConnection } from "../lib/adminConnection";
-import { activeQuery, monitorSql, statusLabel, type MonitorInfo, type MonitoredQuery } from "../lib/sqlMonitor";
+import { activeQuery, monitorSql, type MonitorInfo, type MonitoredQuery } from "../lib/sqlMonitor";
 import { errorMessage, useSession } from "../session";
-import { QueryProfile } from "./QueryProfile";
+import { StatementDetails } from "./StatementDetails";
+import { queryDetailPath } from "../lib/route";
+import { saveDetailDisplay, storedDetailDisplay, type DetailDisplay } from "../lib/sqlMonitor";
 import { quoteLiteral } from "../lib/sql";
 import { QueryStatus } from "./QueryStatus";
 import { saveStatusDisplay, storedStatusDisplay, type StatusDisplay } from "../lib/sqlMonitor";
@@ -27,6 +29,7 @@ export default function SqlMonitorPage() {
   const [liveSessions, setLiveSessions] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string>();
   const [updated, setUpdated] = useState<number>();
+  const [detailDisplay, setDetailDisplay] = useState(storedDetailDisplay);
   const [selected, setSelected] = useState<string>();
   const [filter, setFilter] = useState("");
   const [state, setState] = useState("all");
@@ -116,6 +119,27 @@ export default function SqlMonitorPage() {
       if (!session.checkSignIn(err)) setActionNotice(errorMessage(err));
     } finally {
       setActing(undefined);
+    }
+  };
+
+  const openDetails = (query: MonitoredQuery, forceWindow = false) => {
+    if (detailDisplay === "inline" && !forceWindow) {
+      setSelected(query.execution_id);
+      return;
+    }
+    const opened = window.open(
+      queryDetailPath(query.execution_id),
+      `hardcharger-query-${query.execution_id}`,
+      "popup,width=1100,height=850,resizable=yes,scrollbars=yes",
+    );
+    if (opened) {
+      opened.focus();
+      setSelected(undefined);
+    } else {
+      setSelected(query.execution_id);
+      setActionNotice(
+        "The detail window was blocked. Allow pop-ups for this server to open details in a separate window; showing details below for now.",
+      );
     }
   };
 
@@ -252,6 +276,21 @@ export default function SqlMonitorPage() {
                 <option value="descriptions">Descriptions</option>
               </select>
             </label>
+            <label>
+              Query details{" "}
+              <select
+                aria-label="Query details"
+                value={detailDisplay}
+                onChange={(e) => {
+                  const value = e.target.value as DetailDisplay;
+                  setDetailDisplay(value);
+                  saveDetailDisplay(value);
+                }}
+              >
+                <option value="window">Separate window</option>
+                <option value="inline">Below monitor</option>
+              </select>
+            </label>
             <input
               aria-label="Filter monitored queries"
               placeholder="Filter SQL, user, or execution ID"
@@ -321,7 +360,12 @@ export default function SqlMonitorPage() {
                       <button
                         type="button"
                         className="monitor-sql mono"
-                        onClick={() => setSelected(q.execution_id)}
+                        onClick={(event) => {
+                          // Monaco's WebKit clipboard workaround listens on the page
+                          // container; a popup consumes this gesture before it runs.
+                          event.stopPropagation();
+                          openDetails(q);
+                        }}
                         title="View statement details"
                       >
                         {q.sql_text || "(SQL unavailable)"}
@@ -385,41 +429,26 @@ export default function SqlMonitorPage() {
           </div>
           {queries && rows.length === 0 && <p className="monitor-empty">No statements match this window and filter.</p>}
           {inspected && (
-            <section className="monitor-detail" aria-label="Statement details">
-              <div className="page-head">
-                <h3>{statusLabel(inspected)}</h3>
-                <button type="button" className="btn btn-ghost" onClick={() => setSelected(undefined)}>
-                  Close details
-                </button>
-              </div>
-              <pre className="value-text">{inspected.sql_text}</pre>
-              <dl>
-                <dt>Execution / statement</dt>
-                <dd className="mono">
-                  {inspected.execution_id} / {inspected.statement_id}
-                </dd>
-                <dt>Session / user</dt>
-                <dd>
-                  {inspected.session_id} / {inspected.username}
-                </dd>
-                <dt>Enqueued</dt>
-                <dd>{timestamp(inspected.enqueue_time)}</dd>
-                <dt>Execution started / produced results</dt>
-                <dd>
-                  {timestamp(inspected.execution_start_time)} / {timestamp(inspected.execution_end_time)}
-                </dd>
-                <dt>Fetch started / ended</dt>
-                <dd>
-                  {timestamp(inspected.fetch_start_time)} / {timestamp(inspected.fetch_end_time)}
-                </dd>
-                <dt>Cursor closed</dt>
-                <dd>{timestamp(inspected.cursor_close_time)}</dd>
-                <dt>Cancellation reason</dt>
-                <dd>{inspected.cancel_reason || "—"}</dd>
-              </dl>
-              {inspected.error_message && <pre className="result-error">{inspected.error_message}</pre>}
-              <QueryProfile key={inspected.execution_id} executionId={inspected.execution_id} />
-            </section>
+            <StatementDetails
+              query={inspected}
+              actions={
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openDetails(inspected, true);
+                    }}
+                  >
+                    <ExternalLink size={14} /> Pop out
+                  </button>
+                  <button type="button" className="btn btn-ghost" onClick={() => setSelected(undefined)}>
+                    Close details
+                  </button>
+                </>
+              }
+            />
           )}
           <p className="page-sub">
             Fetching means the server is reading or retaining the result for the client; these timestamps measure server
