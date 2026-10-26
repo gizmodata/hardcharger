@@ -6,6 +6,8 @@ import subprocess
 
 import pytest
 
+from conftest import BASH
+
 VERIFIER = pathlib.Path(__file__).resolve().parents[2] / ".github/scripts/verify-macos-signature.sh"
 
 
@@ -58,7 +60,7 @@ exit 0
     binary = tmp_path / "signed-fixture"
     binary.touch()
     counter = tmp_path / "lookups"
-    result = subprocess.run(args=["bash", str(VERIFIER), str(binary)], capture_output=True, text=True,
+    result = subprocess.run(args=[BASH, str(VERIFIER), str(binary)], capture_output=True, text=True,
                             env={**os.environ, "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
                                  "APPLE_TEAM_ID": "test-team", "SIGNATURE_TEST_MODE": mode,
                                  "SIGNATURE_TEST_COUNTER": str(counter),

@@ -6,6 +6,13 @@ ThreadSanitizer jobs) gates everything, and only then are the images pushed and 
 Release created. The version arithmetic lives in `.github/scripts/release.sh`, which the
 workflows call and `.github/scripts/test-release.sh` tests on every run.
 
+The ThreadSanitizer job uses an unshipped DuckDB fixture with its optional extensions
+compiled with TSan and linked in (`server/scripts/build-tsan-duckdb.sh`). Public extension
+modules are not instrumented, so their atomic synchronization is invisible to TSan. Native
+release builds and ASan retain runtime loading, including signed-module repository replacement
+tests; only those two runtime replacement tests are omitted from the TSan fixture. All
+extension workloads still run there, and any unsuppressed sanitizer report fails the job.
+
 ## Versions
 
 Two forms, nothing else:
@@ -88,6 +95,9 @@ runs the install test on it. `SHA256SUMS` is computed over the signed files. The
 with `server/macos/entitlements.plist`, which turns off only library validation, so that DuckDB
 can load extensions a user `INSTALL`s (they aren't signed by our team); the client has no
 entitlements. Bare executables can't be stapled: Gatekeeper finds their notarization ticket online.
+Apple may accept a submission before that ticket is available to the runner. The mandatory
+verifier retries its online lookup for up to 110 seconds, then fails if no ticket appears.
+It does not retry or waive broken signatures, wrong signing identities or Gatekeeper rejection.
 
 **Checks.** `.github/scripts/verify-macos-signature.sh` (codesign `--verify --strict`, the
 Developer ID requirement for our Team ID, the hardened runtime, the timestamp, the notarization

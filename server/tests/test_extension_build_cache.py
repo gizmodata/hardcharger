@@ -4,11 +4,13 @@ import os
 import pathlib
 import subprocess
 
+from conftest import BASH
+
 SCRIPTS = pathlib.Path(__file__).resolve().parents[1] / "scripts"
 
 
 def test_tsan_extension_fixture_refuses_an_uninstrumented_build():
-    result = subprocess.run(args=["bash", str(SCRIPTS / "build-tsan-duckdb.sh"), "duckdb"],
+    result = subprocess.run(args=[BASH, str(SCRIPTS / "build-tsan-duckdb.sh"), "duckdb"],
                             env={**os.environ, "CXXFLAGS": "-O2"}, capture_output=True, text=True)
     assert result.returncode == 2
     assert "requires -fsanitize=thread" in result.stderr
