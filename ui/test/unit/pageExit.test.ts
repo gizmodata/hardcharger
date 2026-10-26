@@ -122,4 +122,45 @@ describe("endSessionsOnExit", () => {
       close.mockRestore();
     }
   });
+
+  it("keeps transaction sessions while confirmation is pending or cancelled, and can retry", async () => {
+    stop();
+    vi.useFakeTimers();
+    const stopWarning = warnBeforeLeaving();
+    const close = vi.spyOn(window, "close").mockImplementation(() => {});
+    const cleanup = vi.fn(async () => {});
+    let answer!: (close: boolean) => void;
+    const confirm = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    try {
+      stop = endSessionsOnExit(() => ({ token: "tok", ids }), reload, cleanup, confirm);
+      requestWindowClose();
+      requestWindowClose();
+      expect(confirm).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+      expect(fetches).toHaveLength(0);
+      answer(false);
+      await vi.advanceTimersByTimeAsync(0);
+      requestWindowClose();
+      expect(confirm).toHaveBeenCalledTimes(2);
+      answer(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(fetches).toHaveLength(2);
+      const leaving = pageEvent("beforeunload");
+      window.dispatchEvent(leaving);
+      expect(leaving.defaultPrevented).toBe(false); // do not ask twice after approval
+    } finally {
+      stopWarning();
+      vi.useRealTimers();
+      close.mockRestore();
+    }
+  });
 });

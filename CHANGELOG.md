@@ -93,6 +93,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Closing the native SQL Workspace waits for all of that window's session DELETEs
+  before destroying it, preventing idle sessions from accumulating on reopen. An open
+  transaction still requires confirmation; Cancel and Escape preserve its sessions.
 - Native query-detail windows await their session cleanup before closing, including the
   red window button and Cmd+W, preventing idle observer sessions from accumulating.
 

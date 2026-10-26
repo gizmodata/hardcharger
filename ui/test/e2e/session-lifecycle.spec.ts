@@ -1,6 +1,6 @@
 import { connect } from "@gizmodata/warp-sql";
 
-import { expect, runDone, signIn, test } from "./fixtures.ts";
+import { activeTab, expect, runDone, signIn, test } from "./fixtures.ts";
 import { startOwnServer } from "./harness.ts";
 
 test("administrator navigation and closed query inspectors return to the baseline session count", async ({ page }) => {
@@ -65,6 +65,112 @@ test("administrator navigation and closed query inspectors return to the baselin
       await expect.poll(ids).toEqual(monitorBaseline);
       await details.close();
     }
+  } finally {
+    await page.goto("about:blank");
+    await admin.close();
+    await server.stop();
+  }
+});
+
+test("native workspace close ends all tab sessions before destroying the view, across reopens", async ({ context }) => {
+  const server = await startOwnServer([]);
+  const admin = await connect({ url: `${server.url}/warp`, ...server.admin });
+  const ids = async () =>
+    [...(await admin.query("SELECT session_id FROM hardcharger_sessions()"))]
+      .map((row) => String(row.toJSON().session_id))
+      .sort();
+  try {
+    const baseline = await ids();
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const workspace = await context.newPage();
+      try {
+        await signIn(workspace, server.admin, server.url);
+        await runDone(workspace, "SELECT 42 AS workspace_close_probe");
+        await workspace.getByRole("button", { name: "New tab", exact: true }).click();
+        await runDone(workspace, "SELECT 43 AS second_session_probe");
+        expect((await ids()).length).toBeGreaterThanOrEqual(baseline.length + 3);
+        await workspace.evaluate(() => {
+          Object.assign(window, { nativeCloseCalled: false });
+          window.close = () => {
+            Object.assign(window, { nativeCloseCalled: true });
+          };
+        });
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let deletes = 0;
+        await workspace.route(/\/warp\/v1\/sessions\/[^/?]+$/, async (route) => {
+          if (route.request().method() === "DELETE") {
+            deletes++;
+            await gate;
+          }
+          await route.continue();
+        });
+        await workspace.evaluate(() => window.dispatchEvent(new Event("hardcharger:close-window")));
+        await expect.poll(() => deletes).toBeGreaterThanOrEqual(3);
+        expect(
+          await workspace.evaluate(() => (window as unknown as { nativeCloseCalled: boolean }).nativeCloseCalled),
+        ).toBe(false);
+        release();
+        await expect
+          .poll(() => workspace.evaluate(() => (window as unknown as { nativeCloseCalled: boolean }).nativeCloseCalled))
+          .toBe(true);
+        await expect.poll(ids).toEqual(baseline);
+      } finally {
+        await workspace.close();
+      }
+    }
+  } finally {
+    await admin.close();
+    await server.stop();
+  }
+});
+
+test("native workspace close asks before rolling back a transaction and cancellation keeps it usable", async ({
+  page,
+}) => {
+  const server = await startOwnServer([]);
+  const admin = await connect({ url: `${server.url}/warp`, ...server.admin });
+  const ids = async () =>
+    [...(await admin.query("SELECT session_id FROM hardcharger_sessions()"))]
+      .map((row) => String(row.toJSON().session_id))
+      .sort();
+  try {
+    const baseline = await ids();
+    await signIn(page, server.admin, server.url);
+    await runDone(page, "BEGIN");
+    await expect(activeTab(page).getByTestId("in-transaction")).toBeVisible();
+    const opened = await ids();
+    await page.evaluate(() => {
+      Object.assign(window, { nativeCloseCalled: false });
+      window.close = () => {
+        Object.assign(window, { nativeCloseCalled: true });
+      };
+      window.dispatchEvent(new Event("hardcharger:close-window"));
+    });
+    const dialog = page.getByRole("dialog", { name: "Close SQL workspace?", exact: true });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(await ids()).toEqual(opened);
+    await runDone(page, "SELECT 44 AS still_in_transaction");
+    await expect(activeTab(page).getByTestId("in-transaction")).toBeVisible();
+    await page.evaluate(() => window.dispatchEvent(new Event("hardcharger:close-window")));
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    expect(await ids()).toEqual(opened);
+    expect(await page.evaluate(() => (window as unknown as { nativeCloseCalled: boolean }).nativeCloseCalled)).toBe(
+      false,
+    );
+    await page.evaluate(() => window.dispatchEvent(new Event("hardcharger:close-window")));
+    await dialog.getByRole("button", { name: "Close workspace", exact: true }).click();
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { nativeCloseCalled: boolean }).nativeCloseCalled))
+      .toBe(true);
+    await expect.poll(ids).toEqual(baseline);
   } finally {
     await page.goto("about:blank");
     await admin.close();

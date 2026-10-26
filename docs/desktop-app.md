@@ -42,6 +42,12 @@ The desktop app runs as the signed-in user. Menu-bar/tray residency does not kee
 computer awake or make the app a system service. Use the server packages with your service
 manager when the server must operate independently of a desktop login.
 
+Closing the **SQL workspace** ends that window's sessions before closing. An open
+transaction requires confirmation; Cancel or Escape keeps the workspace and its sessions.
+Reopening starts fresh sessions and restores saved editor text. Independent query-detail
+windows keep their own observer sessions until those windows close. Closing the desktop
+dashboard still leaves the server running in the menu bar or system tray.
+
 ## Settings and logs
 
 **Settings** exposes options from the bundled server, grouped by category. Search setting

@@ -10,7 +10,7 @@ import { warpBase } from "./warp";
 
 const closeRequest = "hardcharger:close-window";
 
-/** Native inspectors must finish session cleanup before their webview is destroyed. */
+/** Native SQL windows must finish session cleanup before their webview is destroyed. */
 export function requestWindowClose(): void {
   window.dispatchEvent(new Event(closeRequest));
 }
@@ -36,6 +36,7 @@ export function endSessions(open: OpenSessions | undefined): number {
 
 /** How many reasons the page has now to ask before it is left (warnBeforeLeaving). */
 let warnings = 0;
+let closeApproved = false;
 
 /**
  * Has the browser ask before the page is closed or left (an open transaction would be lost),
@@ -43,7 +44,9 @@ let warnings = 0;
  * (the user may stay); pagehide ends them if the user leaves.
  */
 export function warnBeforeLeaving(): () => void {
-  const ask = (e: BeforeUnloadEvent) => e.preventDefault();
+  const ask = (e: BeforeUnloadEvent) => {
+    if (!closeApproved) e.preventDefault();
+  };
   window.addEventListener("beforeunload", ask);
   warnings++;
   let on = true;
@@ -67,7 +70,9 @@ export function endSessionsOnExit(
   open: () => OpenSessions | undefined,
   reload = () => location.reload(),
   beforeClose: () => Promise<void> = async () => {},
+  confirmClose: () => Promise<boolean> = () => Promise.resolve(true),
 ): () => void {
+  closeApproved = false;
   // The sessions already ended (a navigation beforeunload saw may not happen after all, and
   // the page then goes on with new ones, which a later exit ends).
   const ended = new Set<string>();
@@ -79,27 +84,43 @@ export function endSessionsOnExit(
     for (const id of ids) ended.add(id);
   };
   const beforeUnload = () => {
-    if (warnings === 0) exit();
+    if (warnings === 0 || closeApproved) exit();
   };
   let closing = false;
   const close = () => {
     if (closing) return;
     closing = true;
-    let timeout: ReturnType<typeof setTimeout>;
-    // A disconnected server must not trap the user in a window. Normal closes await
-    // every session DELETE; page-exit keepalive remains the fallback if cleanup fails.
-    void Promise.race([
-      beforeClose(),
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(resolve, 5000);
-      }),
-    ])
-      .catch(() => {})
-      .then(() => {
+    void (async () => {
+      try {
+        if (warnings > 0 && !(await confirmClose())) {
+          closing = false;
+          return;
+        }
+      } catch {
+        closing = false;
+        return;
+      }
+      // The native dialog already obtained consent. The final close navigation must
+      // not ask again through the browser's beforeunload warning.
+      closeApproved = true;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      // A disconnected server must not trap the user in a window. Start the deadline
+      // after confirmation, so time spent reviewing the dialog cannot close it.
+      try {
+        await Promise.race([
+          beforeClose(),
+          new Promise<void>((resolve) => {
+            timeout = setTimeout(resolve, 5000);
+          }),
+        ]);
+      } catch {
+        // Page-exit keepalive remains the fallback if cleanup fails.
+      } finally {
         clearTimeout(timeout);
         exit();
         window.close();
-      });
+      }
+    })();
   };
   const show = (e: PageTransitionEvent) => {
     if (e.persisted && ended.size > 0) reload();
@@ -108,11 +129,13 @@ export function endSessionsOnExit(
   window.addEventListener("pagehide", exit);
   window.addEventListener("pageshow", show);
   window.addEventListener(closeRequest, close);
-  if ((window as Window & { __hardchargerCloseRequested?: boolean }).__hardchargerCloseRequested) close();
+  Object.assign(window, { __hardchargerCloseReady: true });
   return () => {
     window.removeEventListener("beforeunload", beforeUnload);
     window.removeEventListener("pagehide", exit);
     window.removeEventListener("pageshow", show);
     window.removeEventListener(closeRequest, close);
+    Object.assign(window, { __hardchargerCloseReady: false });
+    closeApproved = false;
   };
 }

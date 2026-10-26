@@ -3,6 +3,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { Layout } from "./components/Layout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ConfirmWorkspaceCloseDialog } from "./components/ConfirmWorkspaceCloseDialog";
 import { SignInPage } from "./components/SignInPage";
 import { type SignedIn, clearSignIn, loadSignIn, saveSignIn } from "./lib/auth";
 import { endSessionsOnExit } from "./lib/pageExit";
@@ -64,6 +65,7 @@ export function App() {
   const extra = useRef(new Set<Connection>());
   const opening = useRef(new Set<Promise<Connection>>());
   const closingWindow = useRef(false);
+  const [closeConfirmation, setCloseConfirmation] = useState<{ resolve: (close: boolean) => void }>();
   const current = useRef(phase);
   useEffect(() => {
     current.current = phase;
@@ -101,6 +103,7 @@ export function App() {
           await Promise.allSettled([...opening.current]);
           await Promise.allSettled([...extra.current].map((c) => c.close()));
         },
+        () => new Promise<boolean>((resolve) => setCloseConfirmation({ resolve })),
       ),
     [],
   );
@@ -204,6 +207,15 @@ export function App() {
     };
   }, [phase, server, signOut, openExtraConnection, requestQuery, insertText, pointTabAt, registerQueryPage]);
 
+  const closeDialog = closeConfirmation && (
+    <ConfirmWorkspaceCloseDialog
+      onAnswer={(close) => {
+        closeConfirmation.resolve(close);
+        setCloseConfirmation(undefined);
+      }}
+    />
+  );
+
   // The session's functions read refs only when called (in handlers and effects), never while
   // rendering; the compiler's check can't tell them apart from a read of the ref itself.
   // eslint-disable-next-line react-hooks/refs
@@ -219,20 +231,24 @@ export function App() {
         ) : (
           <Layout theme={theme} page={page} go={go} />
         )}
+        {closeDialog}
       </SessionContext>
     );
   }
   return (
-    <SignInPage
-      server={server}
-      serverError={serverError}
-      busy={phase.kind !== "signed-out"}
-      notice={phase.kind === "signed-out" ? phase.notice : undefined}
-      theme={theme}
-      onSignedIn={(auth) => {
-        saveSignIn(auth);
-        setPhase({ kind: "connecting", auth });
-      }}
-    />
+    <>
+      <SignInPage
+        server={server}
+        serverError={serverError}
+        busy={phase.kind !== "signed-out"}
+        notice={phase.kind === "signed-out" ? phase.notice : undefined}
+        theme={theme}
+        onSignedIn={(auth) => {
+          saveSignIn(auth);
+          setPhase({ kind: "connecting", auth });
+        }}
+      />
+      {closeDialog}
+    </>
   );
 }

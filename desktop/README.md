@@ -102,6 +102,11 @@ x64/Arm64. Linux packaging and testing are follow-up work.
   duplicated. Its native privileges are restricted: it cannot call desktop commands.
   Query inspectors can request closing their own window through a dedicated navigation
   action; this grants no controller or general native access.
+- Closing the native SQL workspace or a query inspector waits for that window's
+  sessions to end before destroying its webview. Reopening a workspace starts fresh
+  sessions instead of accumulating idle ones. An open workspace transaction requires
+  confirmation; Cancel or Escape keeps its sessions usable. Independent inspectors
+  remain open when the workspace closes and retain their own observer sessions.
 - Closing the dashboard hides it and leaves the server and bull-head menu-bar/tray icon
   running. The icon and Dock/Start-menu shortcut reopen the app. **Quit Hardcharger** drains
   running queries and stops the child before exiting. Stop/restart closes the query window.

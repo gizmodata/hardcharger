@@ -18,6 +18,7 @@ use tauri_plugin_autostart::ManagerExt;
 
 type Shared = Arc<Mutex<Server>>;
 static DETAIL_WINDOW: AtomicU64 = AtomicU64::new(1);
+const SQL_CLOSE_PATH: &str = "/ui/__desktop_close_window";
 
 // Custom application commands are available only to the bundled controller. A server's
 // web UI never receives native privileges, including when its content is compromised.
@@ -109,6 +110,18 @@ fn reveal(app: &AppHandle) {
     }
 }
 
+// Called only by a SQL window's own same-origin close navigation after cleanup.
+// destroy() bypasses CloseRequested, which starts the cleanup on native closes.
+fn finish_sql_window_close(app: &AppHandle, label: &str) {
+    let owner = app.clone();
+    let label = label.to_owned();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = owner.get_webview_window(&label) {
+            let _ = window.destroy();
+        }
+    });
+}
+
 async fn workspace(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("workspace") {
         window.show().map_err(|e| e.to_string())?;
@@ -128,6 +141,9 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
     // the precise loopback origin. No password or token appears in a URL or native event.
     let script = format!(
         r#"(() => {{
+        window.close = () => {{
+            if (location.origin === {origin}) window.location.replace('{close_path}');
+        }};
         if (location.origin !== {origin}) return;
         const applyTheme = () => {{
             const style = document.createElement('style');
@@ -145,6 +161,7 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
         }}
     }})();"#,
         origin = serde_json::to_string(&origin).map_err(|e| e.to_string())?,
+        close_path = SQL_CLOSE_PATH,
         token = token,
         palette = serde_json::to_string(include_str!("../../src/palette.css"))
             .map_err(|e| e.to_string())?
@@ -156,12 +173,22 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
     let detail_origin = allowed.clone();
     let detail_app = app.clone();
     let detail_script = script.clone();
+    let workspace_app = app.clone();
     WebviewWindowBuilder::new(&app, "workspace", WebviewUrl::External(url))
         .title("Hardcharger — SQL Workspace")
         .inner_size(1440.0, 940.0)
         .min_inner_size(880.0, 600.0)
         .initialization_script(script)
-        .on_navigation(move |destination| destination.origin() == allowed)
+        .on_navigation(move |destination| {
+            if destination.origin() != allowed {
+                return false;
+            }
+            if destination.path() == SQL_CLOSE_PATH {
+                finish_sql_window_close(&workspace_app, "workspace");
+                return false;
+            }
+            true
+        })
         .on_new_window(move |destination, features| {
             // Server content can open query inspectors on its own exact origin.
             // These views have no native command capabilities, just like the workspace.
@@ -190,24 +217,21 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
             .initialization_script(detail_script.clone())
             .on_page_load(move |window, payload| {
                 if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
-                    && payload.url().origin() == close_origin {
+                    && payload.url().origin() == close_origin
+                {
                     // A related WebKit window inherits its opener's initial scripts;
                     // install the self-close hook after its actual page has loaded.
-                    let _ = window.eval("window.close = () => window.location.replace('/ui/__desktop_close_query');");
+                    let _ = window.eval(format!(
+                        "window.close = () => window.location.replace('{SQL_CLOSE_PATH}');"
+                    ));
                 }
             })
             .on_navigation(move |url| {
-                if url.origin() == allowed && url.path() == "/ui/__desktop_close_query" {
+                if url.origin() == allowed && url.path() == SQL_CLOSE_PATH {
                     // WebKit does not reliably close a Tauri-created window through
                     // JavaScript window.close(). This navigation can close only this
                     // inspector; it grants no IPC or controller capabilities.
-                    let app = close_app.clone();
-                    let label = close_label.clone();
-                    let _ = close_app.run_on_main_thread(move || {
-                        // Cleanup has already completed in the page. Bypass
-                        // CloseRequested here, which starts that cleanup on native closes.
-                        if let Some(window) = app.get_webview_window(&label) { let _ = window.destroy(); }
-                    });
+                    finish_sql_window_close(&close_app, &close_label);
                     return false;
                 }
                 url.as_str() == "about:blank" || url.origin() == allowed
@@ -580,14 +604,15 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label().starts_with("query-detail-") {
+            if window.label() == "workspace" || window.label().starts_with("query-detail-") {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     if let Some(view) = window.app_handle().get_webview_window(window.label()) {
-                        // The red close button / Cmd+W takes the same awaited cleanup
-                        // path as the in-page Close window button. The final navigation
-                        // destroys only this inspector after its sessions have ended.
-                        if view.url().is_ok_and(|url| url.path() == "/ui/monitor/query")
-                            && view.eval("window.__hardchargerCloseRequested = true; window.dispatchEvent(new Event('hardcharger:close-window'));").is_ok()
+                        // Keep the webview alive for session DELETEs. A page that has
+                        // not installed React's exit listener cannot have opened any
+                        // sessions yet, and can finish closing immediately.
+                        let script = format!("if (window.__hardchargerCloseReady) {{ window.dispatchEvent(new Event('hardcharger:close-window')); }} else {{ window.location.replace('{SQL_CLOSE_PATH}'); }}");
+                        if view.url().is_ok_and(|url| url.path().starts_with("/ui/"))
+                            && view.eval(&script).is_ok()
                         {
                             api.prevent_close();
                         }
