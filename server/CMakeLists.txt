@@ -221,7 +221,7 @@ target_link_libraries(hardcharger_core PUBLIC warpsql_duckdb OpenSSL::Crypto jwt
                       PRIVATE ZLIB::ZLIBSTATIC)
 target_compile_options(hardcharger_core PRIVATE ${HARDCHARGER_WARNINGS})
 if(WIN32)
-  target_link_libraries(hardcharger_core PUBLIC crypt32)  # the certificate store
+  target_link_libraries(hardcharger_core PUBLIC crypt32 iphlpapi)  # certificate store and local interface addresses
 endif()
 
 function(hardcharger_rpath target)

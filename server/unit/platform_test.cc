@@ -11,6 +11,28 @@
 
 using hardcharger::CpuModelFromCpuinfo;
 
+TEST(ClientIpAddress, StripsOnlyEndpointPortsAndNormalizesMappedIpv6) {
+  EXPECT_EQ(hardcharger::ClientIpAddress("127.0.0.1:43122"), "127.0.0.1");
+  EXPECT_EQ(hardcharger::ClientIpAddress("192.0.2.20"), "192.0.2.20");
+  EXPECT_EQ(hardcharger::ClientIpAddress("[::1]:43122"), "::1");
+  EXPECT_EQ(hardcharger::ClientIpAddress("[2001:db8::20]"), "2001:db8::20");
+  EXPECT_EQ(hardcharger::ClientIpAddress("[::ffff:127.0.0.1]:43122"), "127.0.0.1");
+  EXPECT_EQ(hardcharger::ClientIpAddress("::1"), "::1");
+  EXPECT_TRUE(hardcharger::ClientIpAddress("").empty());
+  EXPECT_TRUE(hardcharger::ClientIpAddress("not-an-ip").empty());
+}
+
+TEST(LocalIpAddresses, IncludesAnActiveLoopbackInterface) {
+  const auto addresses = hardcharger::LocalIpAddresses();
+  bool found = false;
+  for (const auto& text : addresses) {
+    boost::system::error_code ec;
+    const auto address = boost::asio::ip::make_address(text, ec);
+    if (!ec && address.is_loopback()) found = true;
+  }
+  EXPECT_TRUE(found);
+}
+
 TEST(CpuModelFromCpuinfo, X86ModelName) {
   EXPECT_EQ(CpuModelFromCpuinfo("processor\t: 0\nvendor_id\t: AuthenticAMD\nmodel\t\t: 17\n"
                                 "model name\t: AMD EPYC 9R14 96-Core Processor\nflags\t\t: fpu\n"),

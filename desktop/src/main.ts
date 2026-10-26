@@ -34,6 +34,12 @@ let detectedNetwork: NetworkInfo | null = null;
 let generatedCertificate: GeneratedCertificate | null = null;
 let fieldErrors: Record<string, string> = {};
 let workspaceTrust: WorkspaceTrust | null = null;
+let liveTail = localStorage.getItem("hardcharger-desktop:live-tail") !== "false";
+let logsText: string | null = null;
+let logsUpdated = "";
+let logsLoading = false;
+let logScroll = 0;
+let logFollowing = true;
 let pendingImport: Record<string, unknown> | null = null;
 let theme = localStorage.getItem("hardcharger-desktop:theme") ?? "system";
 document.documentElement.dataset.theme = theme;
@@ -58,7 +64,7 @@ const uptime = (n: number) => n < 60 ? `${n}s` : n < 3600 ? `${Math.floor(n / 60
 const bytes = (n: number) => n < 1024 * 1024 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
 function button(action: string, label: string, glyph: string, primary = false, disabled = false) {
-  return `<button data-action="${action}" class="button ${primary ? "primary" : ""}" ${disabled || busy || !native ? "disabled" : ""}>${icon(glyph)}${label}</button>`;
+  return `<button data-action="${action}" class="button ${["start", "stop", "restart"].includes(action) ? `control-${action}` : ""} ${primary ? "primary" : ""}" ${disabled || busy || !native ? "disabled" : ""}>${icon(glyph)}${label}</button>`;
 }
 
 function formValues(): Record<string, string> | null {
@@ -187,6 +193,8 @@ async function generateCertificate() {
 
 function render() {
   rememberDraft();
+  const previousLogs = document.querySelector<HTMLElement>("#log-output");
+  if (previousLogs) { logScroll = previousLogs.scrollTop; logFollowing = previousLogs.scrollHeight - previousLogs.scrollTop - previousLogs.clientHeight < 40; }
   const s = current;
   const running = s?.running ?? false;
   app.innerHTML = `
@@ -214,6 +222,14 @@ function render() {
       </div>
       <footer><span>${esc(s?.version ?? "Hardcharger")} <span class="footer-dot">·</span> Warp SQL</span><span>Fast, secure, remote DuckDB.</span></footer>
     </main>${trustDialog()}`;
+  const logOutput = document.querySelector<HTMLElement>("#log-output");
+  if (logOutput) logOutput.scrollTop = logFollowing ? logOutput.scrollHeight : logScroll;
+  document.querySelector("#live-tail")?.addEventListener("change", e => {
+    liveTail = (e.target as HTMLInputElement).checked;
+    localStorage.setItem("hardcharger-desktop:live-tail", String(liveTail));
+    render();
+    if (liveTail) void refreshLogs();
+  });
   const trust = document.querySelector<HTMLDialogElement>("#workspace-trust");
   if (trust) {
     trust.showModal();
@@ -462,7 +478,7 @@ function exportYaml() {
 }
 
 function logsView() {
-  return `<div class="page-heading"><div><p class="eyebrow">UNDER THE HOOD</p><h1>Server logs</h1><p>Startup, connections, and server activity.</p></div>${button("logs", "Refresh", "restart")}</div><section class="card log-card"><pre id="log-output" tabindex="0">${designPreview ? "Design preview. Live server logs appear in the desktop app." : "Loading logs…"}</pre></section>`;
+  return `<div class="page-heading"><div><p class="eyebrow">UNDER THE HOOD</p><h1>Server logs</h1><p>Startup, connections, and server activity.</p></div>${button("logs", "Refresh", "restart")}</div><div class="logs-toolbar"><label class="tail-toggle"><input id="live-tail" type="checkbox" ${liveTail ? "checked" : ""} ${!native ? "disabled" : ""}>Live tail</label><span id="log-tail-status" class="muted" role="status">${liveTail ? "Live · updates every 2 seconds" : "Paused · use Refresh for a snapshot"}${logsUpdated ? ` · Updated ${esc(logsUpdated)}` : ""}</span></div><p class="muted">Scroll up to read older lines without being moved back to the bottom. Turn off Live tail to pause updates.</p><section class="card log-card"><pre id="log-output" tabindex="0" aria-label="Server log output">${designPreview ? "Design preview. Live server logs appear in the desktop app." : esc(logsText ?? "Loading logs…")}</pre></section>`;
 }
 
 function aboutView() {
@@ -532,13 +548,21 @@ async function refresh() {
   } catch (e) { showError(e); }
 }
 
-async function refreshLogs() {
-  if (!native) return;
+async function refreshLogs(manual = true) {
+  if (!native || logsLoading || (!manual && !liveTail)) return;
+  logsLoading = true;
   try {
     const logs = await invoke<string>("read_logs");
-    const output = document.querySelector("#log-output");
-    if (output) { output.textContent = logs; output.scrollTop = output.scrollHeight; }
+    if (!manual && !liveTail) return;
+    const output = document.querySelector<HTMLElement>("#log-output");
+    const follow = logsText === null || !output || output.scrollHeight - output.scrollTop - output.clientHeight < 40;
+    const top = output?.scrollTop ?? 0;
+    logsText = logs; logsUpdated = new Date().toLocaleTimeString();
+    if (output) { output.textContent = logs; output.scrollTop = follow ? output.scrollHeight : top; }
+    const status = document.querySelector("#log-tail-status");
+    if (status) status.textContent = `${liveTail ? "Live · updates every 2 seconds" : "Paused · use Refresh for a snapshot"} · Updated ${logsUpdated}`;
   } catch (e) { showError(e); }
+  finally { logsLoading = false; }
 }
 
 async function action(name: string) {
@@ -556,7 +580,7 @@ async function action(name: string) {
     else if (name === "folder") await invoke("reveal_data");
     else if (name === "logs") await refreshLogs();
   } catch (e) { showError(e); }
-  finally { busy = false; render(); if (tab === "logs") void refreshLogs(); }
+  finally { busy = false; render(); if (tab === "logs" && name !== "logs") void refreshLogs(); }
 }
 
 async function saveSettings(settings: Settings) {
@@ -587,5 +611,5 @@ if (native) {
   void listen<string>("desktop-error", e => showError(e.payload));
   void invoke<boolean>("launch_at_login", { enabled: null }).then(v => { login = v; if (tab === "settings") render(); }).catch(showError);
   void refresh();
-  setInterval(() => { void refresh(); if (tab === "logs" && !busy) void refreshLogs(); }, 2000);
+  setInterval(() => { void refresh(); if (tab === "logs" && liveTail && !busy) void refreshLogs(false); }, 2000);
 }

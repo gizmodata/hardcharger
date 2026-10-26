@@ -346,9 +346,14 @@ const Session& RequireSession(const Session* session, const std::string& functio
 }
 
 std::shared_ptr<arrow::RecordBatch> SessionsTable(Runtime& runtime, const Session& session) {
-  arrow::StringBuilder id, user, role, method;
+  arrow::StringBuilder id, user, role, method, client_ip;
   arrow::TimestampBuilder started(arrow::timestamp(arrow::TimeUnit::MICRO, "UTC"), arrow::default_memory_pool());
-  arrow::BooleanBuilder running, current;
+  arrow::BooleanBuilder running, current, client_is_local;
+  std::map<std::string, std::string> clients;
+  if (runtime.server) {
+    for (const auto& activity : runtime.server->Sessions()) clients.emplace(activity.session_id, ClientIpAddress(activity.client_address));
+  }
+  const auto local_addresses = LocalIpAddresses();
   // Unrestricted admins see every session (to KILL one); everyone else, a restricted
   // admin included, its own principal's (SeesSession).
   for (const auto& s : runtime.sessions.List(session)) {
@@ -359,8 +364,20 @@ std::shared_ptr<arrow::RecordBatch> SessionsTable(Runtime& runtime, const Sessio
     (void)started.Append(s.started_at_us);
     (void)running.Append(s.running);
     (void)current.Append(s.session_id == session.id());
+    const auto found = clients.find(s.session_id);
+    if (found == clients.end() || found->second.empty()) {
+      (void)client_ip.AppendNull();
+      (void)client_is_local.AppendNull();
+    } else {
+      const auto& ip = found->second;
+      boost::system::error_code ec;
+      const auto address = boost::asio::ip::make_address(ip, ec);
+      (void)client_ip.Append(ip);
+      (void)client_is_local.Append((!ec && address.is_loopback()) ||
+                                   std::find(local_addresses.begin(), local_addresses.end(), ip) != local_addresses.end());
+    }
   }
-  std::vector<std::shared_ptr<arrow::Array>> columns(7);
+  std::vector<std::shared_ptr<arrow::Array>> columns(9);
   (void)id.Finish(&columns[0]);
   (void)user.Finish(&columns[1]);
   (void)role.Finish(&columns[2]);
@@ -368,10 +385,13 @@ std::shared_ptr<arrow::RecordBatch> SessionsTable(Runtime& runtime, const Sessio
   (void)started.Finish(&columns[4]);
   (void)running.Finish(&columns[5]);
   (void)current.Finish(&columns[6]);
+  (void)client_ip.Finish(&columns[7]);
+  (void)client_is_local.Finish(&columns[8]);
   auto schema = arrow::schema({arrow::field("session_id", arrow::utf8()), arrow::field("username", arrow::utf8()),
                                arrow::field("role", arrow::utf8()), arrow::field("auth_method", arrow::utf8()),
                                arrow::field("start_time", arrow::timestamp(arrow::TimeUnit::MICRO, "UTC")),
-                               arrow::field("running", arrow::boolean()), arrow::field("is_current", arrow::boolean())});
+                               arrow::field("running", arrow::boolean()), arrow::field("is_current", arrow::boolean()),
+                               arrow::field("client_ip", arrow::utf8()), arrow::field("client_is_local", arrow::boolean())});
   return arrow::RecordBatch::Make(schema, columns[0]->length(), columns);
 }
 

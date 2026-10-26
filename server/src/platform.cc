@@ -5,6 +5,7 @@
 #include <wincrypt.h>
 #include <psapi.h>
 #include <tlhelp32.h>
+#include <iphlpapi.h>
 
 #include <cwctype>
 #else
@@ -14,6 +15,8 @@
 #include <sys/time.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #if !TARGET_OS_IPHONE
@@ -31,6 +34,7 @@
 #include <openssl/x509.h>
 
 #include <cmath>
+#include <algorithm>
 #include <cstdio>
 #include <iterator>
 #include <random>
@@ -41,6 +45,66 @@
 #include <vector>
 
 namespace hardcharger {
+
+std::string ClientIpAddress(std::string_view peer) {
+  if (peer.starts_with('[')) {
+    const auto end = peer.find(']');
+    if (end == std::string_view::npos) return {};
+    peer = peer.substr(1, end - 1);
+  }
+  boost::system::error_code ec;
+  auto address = boost::asio::ip::make_address(peer, ec);
+  if (ec && peer.find(':') == peer.rfind(':') && peer.find(':') != std::string_view::npos) {
+    address = boost::asio::ip::make_address(peer.substr(0, peer.find(':')), ec);
+  }
+  if (ec) return {};
+  if (address.is_v6() && address.to_v6().is_v4_mapped()) {
+    const auto bytes = address.to_v6().to_bytes();
+    address = boost::asio::ip::address_v4({bytes[12], bytes[13], bytes[14], bytes[15]});
+  }
+  return address.to_string();
+}
+
+std::vector<std::string> LocalIpAddresses() {
+  std::vector<std::string> addresses;
+  const auto append = [&](const sockaddr* socket) {
+    if (!socket) return;
+    if (socket->sa_family == AF_INET) {
+      const auto* v4 = reinterpret_cast<const sockaddr_in*>(socket);
+      addresses.push_back(boost::asio::ip::address_v4(ntohl(v4->sin_addr.s_addr)).to_string());
+    } else if (socket->sa_family == AF_INET6) {
+      const auto* v6 = reinterpret_cast<const sockaddr_in6*>(socket);
+      boost::asio::ip::address_v6::bytes_type bytes;
+      std::copy_n(v6->sin6_addr.s6_addr, bytes.size(), bytes.begin());
+      addresses.push_back(ClientIpAddress(boost::asio::ip::address_v6(bytes, v6->sin6_scope_id).to_string()));
+    }
+  };
+#ifdef _WIN32
+  ULONG size = 16 * 1024;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    std::vector<uint64_t> storage((size + sizeof(uint64_t) - 1) / sizeof(uint64_t));
+    auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(storage.data());
+    const auto result = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                                             nullptr, adapters, &size);
+    if (result == ERROR_BUFFER_OVERFLOW) continue;
+    if (result != NO_ERROR) break;
+    for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
+      if (adapter->OperStatus != IfOperStatusUp) continue;
+      for (auto* ip = adapter->FirstUnicastAddress; ip; ip = ip->Next) append(ip->Address.lpSockaddr);
+    }
+    break;
+  }
+#else
+  ifaddrs* interfaces = nullptr;
+  if (getifaddrs(&interfaces) == 0) {
+    for (const auto* entry = interfaces; entry; entry = entry->ifa_next) {
+      if (entry->ifa_flags & IFF_UP) append(entry->ifa_addr);
+    }
+    freeifaddrs(interfaces);
+  }
+#endif
+  return addresses;
+}
 
 namespace {
 

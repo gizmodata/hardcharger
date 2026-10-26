@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { formatDate } from "../lib/format";
 import { quoteLiteral } from "../lib/sql";
 import { type AppSession, errorMessage, useSession } from "../session";
+import { ConfirmSessionDialog } from "./ConfirmSessionDialog";
 
 interface SessionRow {
   session_id: string;
@@ -13,6 +14,8 @@ interface SessionRow {
   start_time: number;
   running: boolean;
   is_current: boolean;
+  client_ip: string | null;
+  client_is_local: boolean | null;
 }
 
 function when(ms: number): string {
@@ -22,7 +25,7 @@ function when(ms: number): string {
 
 async function readSessions(session: AppSession): Promise<SessionRow[]> {
   const table = await session.connection.query(
-    "SELECT session_id, username, role, auth_method, start_time, running, is_current " +
+    "SELECT session_id, username, role, auth_method, start_time, running, is_current, client_ip, client_is_local " +
       "FROM hardcharger_sessions() ORDER BY start_time",
   );
   return [...table].map((r) => (r as unknown as { toJSON: () => SessionRow }).toJSON());
@@ -38,6 +41,8 @@ export default function SessionsPage() {
   const [error, setError] = useState<string | undefined>();
   const [busy, setBusy] = useState(true);
   const [notice, setNotice] = useState<string | undefined>();
+  const [confirmEnd, setConfirmEnd] = useState<SessionRow>();
+  const [ending, setEnding] = useState<string>();
 
   // Applies an answer (or a failure); called from promise callbacks, after the query.
   const apply = useCallback(
@@ -74,20 +79,33 @@ export default function SessionsPage() {
   };
 
   const kill = async (row: SessionRow) => {
-    if (!window.confirm(`End ${row.username}'s session ${row.session_id}? Its running statements are cancelled.`)) {
-      return;
-    }
+    if (ending) return;
+    setEnding(row.session_id);
     try {
       await session.connection.execute(`KILL SESSION ${quoteLiteral(row.session_id)}`);
       setNotice(`Ended session ${row.session_id}.`);
       await load();
     } catch (err) {
       if (!session.checkSignIn(err)) setNotice(errorMessage(err));
+    } finally {
+      setEnding(undefined);
     }
   };
 
   return (
     <div className="sessions-page">
+      {confirmEnd && (
+        <ConfirmSessionDialog
+          sessionId={confirmEnd.session_id}
+          username={confirmEnd.username}
+          end
+          onCancel={() => setConfirmEnd(undefined)}
+          onConfirm={() => {
+            setConfirmEnd(undefined);
+            void kill(confirmEnd);
+          }}
+        />
+      )}
       <div className="page-head">
         <h2>Sessions</h2>
         <p className="page-sub">
@@ -115,6 +133,7 @@ export default function SessionsPage() {
             <tr>
               <th>Session</th>
               <th>User</th>
+              <th>Client IP</th>
               <th>Role</th>
               <th>Sign-in</th>
               <th>Started</th>
@@ -130,6 +149,22 @@ export default function SessionsPage() {
                   {r.is_current && <span className="tree-tag">this page</span>}
                 </td>
                 <td>{r.username}</td>
+                <td
+                  className="mono"
+                  title={
+                    r.client_is_local ? `Connection from the computer running this server (${r.client_ip})` : undefined
+                  }
+                >
+                  {r.client_is_local ? (
+                    <>
+                      This computer
+                      <br />
+                      <small>{r.client_ip}</small>
+                    </>
+                  ) : (
+                    r.client_ip || "—"
+                  )}
+                </td>
                 <td>{r.role}</td>
                 <td>{r.auth_method}</td>
                 <td>{when(r.start_time)}</td>
@@ -140,7 +175,8 @@ export default function SessionsPage() {
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm btn-danger-text"
-                        onClick={() => void kill(r)}
+                        onClick={() => setConfirmEnd(r)}
+                        disabled={!!ending}
                         aria-label={`End session ${r.session_id}`}
                       >
                         <XCircle size={14} /> End

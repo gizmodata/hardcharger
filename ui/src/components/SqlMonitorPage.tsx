@@ -9,6 +9,7 @@ import { queryDetailPath } from "../lib/route";
 import { saveDetailDisplay, storedDetailDisplay, type DetailDisplay } from "../lib/sqlMonitor";
 import { quoteLiteral } from "../lib/sql";
 import { QueryStatus } from "./QueryStatus";
+import { ConfirmSessionDialog } from "./ConfirmSessionDialog";
 import { saveStatusDisplay, storedStatusDisplay, type StatusDisplay } from "../lib/sqlMonitor";
 
 const timestamp = (ms: number | null) => (ms == null ? "—" : new Date(ms).toLocaleString());
@@ -35,6 +36,7 @@ export default function SqlMonitorPage() {
   const [state, setState] = useState("all");
   const [acting, setActing] = useState<string>();
   const [actionNotice, setActionNotice] = useState<string>();
+  const [confirmAction, setConfirmAction] = useState<{ query: MonitoredQuery; end: boolean }>();
 
   const sampling = useRef(Promise.resolve());
   useEffect(() => {
@@ -85,10 +87,6 @@ export default function SqlMonitorPage() {
 
   const manageSession = async (query: MonitoredQuery, end: boolean) => {
     if (!connection || acting || query.session_id === connection.sessionId) return;
-    const description = end
-      ? `End ${query.username}'s session ${query.session_id}? This cancels its queued and in-flight work and disconnects it.`
-      : `Cancel all queued and in-flight work in ${query.username}'s session ${query.session_id}? The session will stay connected.`;
-    if (!window.confirm(description)) return;
     setActing(query.session_id);
     setActionNotice(undefined);
     const operation = sampling.current.then(async () => {
@@ -166,6 +164,18 @@ export default function SqlMonitorPage() {
   const terminalCount = queries?.filter((q) => !activeQuery(q)).length ?? 0;
   return (
     <div className="sessions-page monitor-page">
+      {confirmAction && (
+        <ConfirmSessionDialog
+          sessionId={confirmAction.query.session_id}
+          username={confirmAction.query.username}
+          end={confirmAction.end}
+          onCancel={() => setConfirmAction(undefined)}
+          onConfirm={() => {
+            setConfirmAction(undefined);
+            void manageSession(confirmAction.query, confirmAction.end);
+          }}
+        />
+      )}
       <div className="page-head">
         <h2>
           <Activity size={20} /> SQL Monitor
@@ -399,7 +409,7 @@ export default function SqlMonitorPage() {
                             Boolean(acting) || q.session_id === connection?.sessionId || !liveSessions.has(q.session_id)
                           }
                           title="Cancel all queued and in-flight work in this session; keep it connected"
-                          onClick={() => void manageSession(q, false)}
+                          onClick={() => setConfirmAction({ query: q, end: false })}
                           aria-label={`Cancel work in session ${q.session_id}`}
                         >
                           <Square size={13} /> Cancel work
@@ -416,7 +426,7 @@ export default function SqlMonitorPage() {
                             ? `End session ${q.session_id} and cancel its work`
                             : "This session has already ended"
                         }
-                        onClick={() => void manageSession(q, true)}
+                        onClick={() => setConfirmAction({ query: q, end: true })}
                         aria-label={`End session ${q.session_id}`}
                       >
                         <XCircle size={13} /> End session

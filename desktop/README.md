@@ -41,6 +41,10 @@ x64/Arm64. Linux packaging and testing are follow-up work.
 
 ## Behavior and boundaries
 
+- Server controls use green Start, red Stop and amber Restart buttons, with labels/icons
+  retained and disabled controls muted. Logs offers Live tail (every two seconds), a
+  remembered pause preference and manual Refresh. Reading older output preserves scroll
+  position instead of jumping to the end; log reads remain bounded by the server's tail.
 - The local server starts by default, bound to `127.0.0.1:31337`. The app refuses a port
   collision and never attaches to or stops an existing server.
 - **Settings → Network access** switches between **Only this computer** (the default)

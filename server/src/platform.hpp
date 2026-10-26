@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 struct ssl_ctx_st;
 
@@ -41,6 +42,10 @@ std::string MakePrivateTempDirectory(const std::string& prefix);
 std::tm UtcTime(std::time_t seconds);
 int64_t ProcessId();
 std::string HostName();
+// Current interface addresses; no DNS lookup. IPv4-mapped IPv6 is normalized to IPv4.
+std::vector<std::string> LocalIpAddresses();
+// An SDK client address (IPv4[:port] or [IPv6][:port]) without the port/brackets.
+std::string ClientIpAddress(std::string_view address);
 
 struct OsInfo {
   std::string system;   // uname's sysname: "Linux", "Darwin", "Windows"

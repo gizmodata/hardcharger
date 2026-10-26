@@ -9,6 +9,12 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Sessions in the web UI show the client IP and label connections from the server's
+  own loopback or LAN interfaces as "This computer". `hardcharger_sessions()` exposes
+  `client_ip` and `client_is_local`, following the existing session visibility rules.
+- Desktop logs have a remembered Live tail toggle, pause/manual refresh, and preserve
+  the scroll position while reading older output. Server controls use green for Start,
+  red for Stop and amber for Restart; disabled controls remain muted.
 - Desktop network setup detects local addresses/hostname, labels required fields, and
   generates a private server certificate/key with client trust instructions and fingerprint.
   Save stays visible while scrolling; unsaved edits survive navigation and block tray or
@@ -51,6 +57,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- SQL Monitor and Sessions use in-page confirmation dialogs for ending sessions and
+  cancelling work, so those actions also run in native webviews that suppress browser
+  `window.confirm` dialogs.
 - Desktop Open SQL workspace offers explicit approval to trust its generated local CA,
   then retries opening the workspace. macOS trust is scoped to the user and TLS server
   address; Windows uses the current-user certificate import wizard. Cancellation keeps
