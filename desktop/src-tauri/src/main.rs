@@ -64,8 +64,12 @@ async fn server_control(
     app: AppHandle,
     state: tauri::State<'_, Shared>,
     action: String,
+    confirmed: Option<bool>,
 ) -> Result<Status, String> {
     controller(&window)?;
+    if matches!(action.as_str(), "stop" | "restart") && confirmed != Some(true) {
+        return Err("Confirm stopping or restarting the server first.".into());
+    }
     control(&app, state.inner().clone(), &action).await
 }
 
@@ -405,7 +409,17 @@ fn menu_action(app: &AppHandle, id: &str) {
                 report(&app, workspace(app.clone()).await);
             });
         }
-        "start" | "stop" | "restart" => {
+        "stop" | "restart" => {
+            // Both the app menu and tray ask the controller to show its modal first.
+            // No server or workspace state changes until the user confirms there.
+            reveal(app);
+            report(
+                app,
+                app.emit_to("main", "server-control-requested", id)
+                    .map_err(|e| e.to_string()),
+            );
+        }
+        "start" => {
             let app = app.clone();
             let action = id.to_owned();
             tauri::async_runtime::spawn(async move {

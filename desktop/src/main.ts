@@ -34,6 +34,7 @@ let detectedNetwork: NetworkInfo | null = null;
 let generatedCertificate: GeneratedCertificate | null = null;
 let fieldErrors: Record<string, string> = {};
 let workspaceTrust: WorkspaceTrust | null = null;
+let pendingControl: "stop" | "restart" | null = null;
 let liveTail = localStorage.getItem("hardcharger-desktop:live-tail") !== "false";
 let logsText: string | null = null;
 let logsUpdated = "";
@@ -221,7 +222,19 @@ function render() {
         ${tab === "server" ? serverView(s) : tab === "settings" ? settingsView(s) : tab === "logs" ? logsView() : aboutView()}
       </div>
       <footer><span>${esc(s?.version ?? "Hardcharger")} <span class="footer-dot">·</span> Warp SQL</span><span>Fast, secure, remote DuckDB.</span></footer>
-    </main>${trustDialog()}`;
+    </main>${trustDialog()}${controlDialog()}`;
+  const controlConfirmation = document.querySelector<HTMLDialogElement>("#server-control-confirmation");
+  if (controlConfirmation) {
+    controlConfirmation.showModal();
+    const cancel = () => { pendingControl = null; render(); };
+    controlConfirmation.addEventListener("cancel", e => { e.preventDefault(); cancel(); });
+    document.querySelector("#cancel-server-control")?.addEventListener("click", cancel);
+    document.querySelector("#confirm-server-control")?.addEventListener("click", () => {
+      const requested = pendingControl;
+      pendingControl = null;
+      if (requested) void action(requested, true);
+    });
+  }
   const logOutput = document.querySelector<HTMLElement>("#log-output");
   if (logOutput) logOutput.scrollTop = logFollowing ? logOutput.scrollHeight : logScroll;
   document.querySelector("#live-tail")?.addEventListener("change", e => {
@@ -565,8 +578,22 @@ async function refreshLogs(manual = true) {
   finally { logsLoading = false; }
 }
 
-async function action(name: string) {
+function controlDialog() {
+  if (!pendingControl) return "";
+  const restart = pendingControl === "restart";
+  const label = restart ? "Restart" : "Stop";
+  return `<dialog id="server-control-confirmation" class="trust-dialog" aria-labelledby="server-control-title" aria-describedby="server-control-description"><h2 id="server-control-title">${label} Hardcharger server?</h2><p id="server-control-description">This will close the SQL workspace and all query-detail windows. Active queries and uploads will be interrupted, client sessions will disconnect, and uncommitted transactions will be rolled back.</p><p>${restart ? "The server will then start again using your saved settings. Clients will need to reconnect." : "The server will stay stopped until you start it again."}</p><div class="trust-actions"><button id="cancel-server-control" class="button" autofocus>Cancel</button><button id="confirm-server-control" class="button control-${pendingControl}">${label} server</button></div></dialog>`;
+}
+
+async function action(name: string, confirmed = false) {
   if (!native || busy) return;
+  if ((name === "stop" || name === "restart") && !confirmed) {
+    if (pendingControl || workspaceTrust) return;
+    pendingControl = name;
+    error = "";
+    render();
+    return;
+  }
   if (["start", "restart"].includes(name) && (draftDirty || current?.settingsPending)) {
     try {
       if (!draftDirty) throw new Error("A previous setup was not saved. Review Settings and save, or explicitly discard the changes before starting.");
@@ -575,7 +602,7 @@ async function action(name: string) {
   }
   busy = true; error = ""; render();
   try {
-    if (["start", "stop", "restart"].includes(name)) current = await invoke<Status>("server_control", { action: name });
+    if (["start", "stop", "restart"].includes(name)) current = await invoke<Status>("server_control", { action: name, confirmed });
     else if (name === "workspace") await invoke("open_workspace");
     else if (name === "folder") await invoke("reveal_data");
     else if (name === "logs") await refreshLogs();
@@ -608,6 +635,9 @@ if (native) {
   void invoke<NetworkInfo>("network_info").then(info => { if (!info || !Array.isArray(info.addresses)) return; detectedNetwork = info; if (tab === "settings") render(); }).catch(() => {});
   void invoke<ServerOption[]>("server_options").then(options => { schema = options; if (tab === "settings") render(); }).catch(showError);
   void listen("server-changed", () => void refresh());
+  void listen<string>("server-control-requested", e => {
+    if (e.payload === "stop" || e.payload === "restart") void action(e.payload);
+  });
   void listen<string>("desktop-error", e => showError(e.payload));
   void invoke<boolean>("launch_at_login", { enabled: null }).then(v => { login = v; if (tab === "settings") render(); }).catch(showError);
   void refresh();

@@ -27,7 +27,8 @@ follow-up work.
 1. Open **Hardcharger**. By default it starts its own server on `127.0.0.1:31337`.
 2. Choose **Open SQL workspace** to open the server's embedded web UI, signed in by the app.
 3. Use **Start**, **Stop** and **Restart** on the dashboard or in the menu bar/system tray.
-   Stopping or restarting closes the SQL workspace and its query-detail windows.
+   Stop and Restart ask for confirmation before closing SQL windows, interrupting active
+   work and disconnecting clients. Cancel or Escape leaves the server running.
 4. Close the dashboard to keep the server running. Choose **Quit Hardcharger** to shut down
    the server and app. **Launch at login** is optional, under Settings.
 

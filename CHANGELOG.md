@@ -9,6 +9,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Desktop Stop and Restart require a confirmation modal from the dashboard, app menu
+  and system tray, explaining interrupted work, disconnected sessions and closed SQL
+  windows. Cancel is the default; Escape dismisses without changing the server.
+
 - v2.1.0+ desktop app guide and README overview, with download/package comparisons,
   network/TLS setup, persistent versus runtime settings, and screenshots of the desktop
   preview, SQL Monitor and Server Configuration tabs in the SQL Editor web UI.

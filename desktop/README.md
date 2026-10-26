@@ -45,6 +45,11 @@ x64/Arm64. Linux packaging and testing are follow-up work.
 
 ## Behavior and boundaries
 
+- Stop and Restart show a modal confirmation before interrupting work and closing SQL
+  windows, including actions from the native app menu or system tray. Cancel receives
+  initial focus and Escape dismisses it. The native control command also requires the
+  controller's confirmation flag.
+
 - Server controls use green Start, red Stop and amber Restart buttons, with labels/icons
   retained and disabled controls muted. Logs offers Live tail (every two seconds), a
   remembered pause preference and manual Refresh. Reading older output preserves scroll
