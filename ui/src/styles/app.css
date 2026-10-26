@@ -1051,6 +1051,40 @@ select {
 .configuration-facts > div {
   display: contents;
 }
+.configuration-table td:last-child {
+  white-space: normal;
+  min-width: 220px;
+  max-width: 340px;
+}
+.configuration-table td:nth-child(2),
+.configuration-table td:nth-child(3) {
+  min-width: 135px;
+}
+.configuration-table td .btn {
+  display: block;
+  margin-top: 5px;
+}
+.setting-editor > label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+.setting-editor input,
+.setting-editor select {
+  min-width: 220px;
+  min-height: 32px;
+  padding: 6px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font: inherit;
+}
+.monitor-session-actions .btn {
+  display: block;
+  margin: 3px 0;
+}
 .monitor-empty {
   padding: 20px 0;
   color: var(--muted);

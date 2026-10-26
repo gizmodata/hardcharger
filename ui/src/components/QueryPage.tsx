@@ -307,8 +307,18 @@ export default function QueryPage({ theme }: Props) {
       schema: activeTab?.schema || defaults.schema,
       transaction: activeStatus?.transaction ?? "none",
       role: activeTab?.role ?? "",
+      sessionId: activeStatus?.sessionId ?? "",
+      title: activeTab?.title ?? "",
     });
-  }, [activeTab?.catalog, activeTab?.schema, activeTab?.role, activeStatus?.transaction, defaults]);
+  }, [
+    activeTab?.catalog,
+    activeTab?.schema,
+    activeTab?.role,
+    activeStatus?.transaction,
+    activeStatus?.sessionId,
+    activeTab?.title,
+    defaults,
+  ]);
   useEffect(() => () => resetActiveTab(), []);
 
   const select = (id: string) => setTabs((s) => ({ ...s, active: id }));
@@ -508,7 +518,8 @@ export default function QueryPage({ theme }: Props) {
                 old &&
                 old.running === status.running &&
                 old.failed === status.failed &&
-                old.transaction === status.transaction
+                old.transaction === status.transaction &&
+                old.sessionId === status.sessionId
               ) {
                 return s;
               }

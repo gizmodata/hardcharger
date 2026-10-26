@@ -18,8 +18,11 @@ own changelog in `python/CHANGELOG.md`.
   planning/optimizer details, and original JSON download. Queries are never replayed.
 - SQL Monitor status icons or descriptions, with a remembered display preference,
   accessible labels/tooltips, and a spinning circle for executing statements.
-- Read-only Server Configuration tab for unrestricted administrators, showing curated
-  effective settings, runtime versus startup scope, and safe server/listener facts.
+- Server Configuration for unrestricted administrators: effective session and global
+  values, explicit overrides, live editing and resets at supported scopes, and safe
+  server/listener facts. Startup settings stay read-only.
+- SQL Monitor session controls cancel queued/in-flight work while keeping its session
+  connected, or end a session and cancel all of its work, with confirmation.
 
 - Desktop preview in `desktop/`: a Tauri app that bundles the existing server and CLI,
   opens the server's web SQL workspace, and manages the local server from a branded

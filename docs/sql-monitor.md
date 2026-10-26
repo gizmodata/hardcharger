@@ -75,13 +75,40 @@ circle in both modes; reduced-motion preferences disable its animation.
 
 ## Server Configuration
 
-`/ui/configuration` displays `hardcharger_server_settings()` (the curated
-`hardcharger_settings()` metadata behind an unrestricted-admin permission check) and
-`hardcharger_server_info()`. It shows current global values, documented defaults, scopes,
-startup flags and descriptions. Session-only entries are labeled as observer session
-values. Runtime settings may be changed through authorized SQL; startup settings need a
-restart. This first version is read-only and is not a full configuration/YAML export.
-Credentials, private keys and secret-bearing connection strings are not included.
+`/ui/configuration` shows the selected session's effective value, explicit override
+versus inheritance, global value, documented default, allowed scopes, startup flag and
+description. Select the active editor's session or the workspace session; the session ID
+is always visible. Each editor tab owns a separate session. A tab becomes available here
+after its first query opens that session.
+
+**Edit session** changes only that session. **Edit global** changes the server-wide value
+used by sessions without an explicit override. **Reset session override** restores inheritance;
+**Reset to startup value** restores the server's configured startup value, which may differ
+from the built-in default. Only supported runtime scopes have editing controls. Startup
+settings remain read-only and need a restart. Runtime changes are not written to YAML and
+are lost on restart. Credentials, private keys and secret-bearing connection strings are
+not included; this is not a full YAML configuration export.
+
+Session reads and edits use `hardcharger_session_settings(session_id)`,
+`hardcharger_set_session_setting(session_id, name, value)` and
+`hardcharger_reset_session_setting(session_id, name)`. These require an unrestricted
+administrator and reuse the server's setting validators. They access the target's locked
+settings directly, without issuing SQL inside its transaction or waiting behind its active
+or queued statement. Mutation functions are volatile and do not act during PREPARE or
+EXPLAIN. Global changes use existing `SET GLOBAL` and `RESET GLOBAL` on the observer
+connection. Both caller and target are recorded in the session-change audit log.
+
+### Session controls in SQL Monitor
+
+**Cancel work** cancels all queued and in-flight work in the selected statement's session,
+including fetching, and keeps the session connected. It uses `hardcharger_cancel(session_id)`;
+it is deliberately a session-work action, not a promise to cancel only one execution ID.
+**End session** uses `KILL SESSION` to cancel work and disconnect that session (an open
+transaction is rolled back). Both actions ask for confirmation identifying the user and
+session. The monitor cannot cancel or end its own observer session, and ended sessions have
+disabled controls. A statement that finishes before cancellation produces a clear "no active
+work remained" response. The server enforces its existing session-control permissions.
+
 
 ## VARIANT display
 

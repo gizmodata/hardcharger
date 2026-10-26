@@ -1,10 +1,11 @@
-import { Activity, Pause, Play, RefreshCw } from "lucide-react";
+import { Activity, Pause, Play, RefreshCw, Square, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useAdminConnection } from "../lib/adminConnection";
 import { activeQuery, monitorSql, statusLabel, type MonitorInfo, type MonitoredQuery } from "../lib/sqlMonitor";
 import { errorMessage, useSession } from "../session";
 import { QueryProfile } from "./QueryProfile";
+import { quoteLiteral } from "../lib/sql";
 import { QueryStatus } from "./QueryStatus";
 import { saveStatusDisplay, storedStatusDisplay, type StatusDisplay } from "../lib/sqlMonitor";
 
@@ -23,11 +24,14 @@ export default function SqlMonitorPage() {
   const [refresh, setRefresh] = useState(0);
   const [info, setInfo] = useState<MonitorInfo>();
   const [queries, setQueries] = useState<MonitoredQuery[]>();
+  const [liveSessions, setLiveSessions] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string>();
   const [updated, setUpdated] = useState<number>();
   const [selected, setSelected] = useState<string>();
   const [filter, setFilter] = useState("");
   const [state, setState] = useState("all");
+  const [acting, setActing] = useState<string>();
+  const [actionNotice, setActionNotice] = useState<string>();
 
   const sampling = useRef(Promise.resolve());
   useEffect(() => {
@@ -50,6 +54,9 @@ export default function SqlMonitorPage() {
             monitorSql(at.catalog, at.schema, minutes, includeMonitor, historyLimit),
           );
           if (!live) return;
+          const sessions = await connection.query("SELECT session_id FROM hardcharger_sessions()");
+          if (!live) return;
+          setLiveSessions(new Set([...sessions.getChildAt(0)!] as string[]));
           setQueries([...result].map((r) => (r as unknown as { toJSON: () => MonitoredQuery }).toJSON()));
         }
         setError(undefined);
@@ -72,6 +79,45 @@ export default function SqlMonitorPage() {
       clearTimeout(timer);
     };
   }, [connection, session, minutes, includeMonitor, paused, refresh, historyLimit]);
+
+  const manageSession = async (query: MonitoredQuery, end: boolean) => {
+    if (!connection || acting || query.session_id === connection.sessionId) return;
+    const description = end
+      ? `End ${query.username}'s session ${query.session_id}? This cancels its queued and in-flight work and disconnects it.`
+      : `Cancel all queued and in-flight work in ${query.username}'s session ${query.session_id}? The session will stay connected.`;
+    if (!window.confirm(description)) return;
+    setActing(query.session_id);
+    setActionNotice(undefined);
+    const operation = sampling.current.then(async () => {
+      if (end) {
+        await connection.execute(`KILL SESSION ${quoteLiteral(query.session_id)}`);
+        return true;
+      }
+      const result = await connection.query(
+        `SELECT hardcharger_cancel(${quoteLiteral(query.session_id)}) AS cancelled`,
+      );
+      return result.getChildAt(0)?.get(0) === true;
+    });
+    sampling.current = operation.then(
+      () => {},
+      () => {},
+    );
+    try {
+      const changed = await operation;
+      setActionNotice(
+        end
+          ? `Ended session ${query.session_id}.`
+          : changed
+            ? `Cancelled work in session ${query.session_id}.`
+            : `No active work remained in session ${query.session_id}.`,
+      );
+      setRefresh((n) => n + 1);
+    } catch (err) {
+      if (!session.checkSignIn(err)) setActionNotice(errorMessage(err));
+    } finally {
+      setActing(undefined);
+    }
+  };
 
   if (!allowed)
     return (
@@ -112,6 +158,11 @@ export default function SqlMonitorPage() {
           <pre>{connectionError ?? error}</pre>
           {updated && <p>Showing the last successful sample from {timestamp(updated)}.</p>}
         </div>
+      )}
+      {actionNotice && (
+        <p className="results-notice" role="status">
+          {actionNotice}
+        </p>
       )}
       {disabled ? (
         <div className="monitor-empty">
@@ -256,6 +307,7 @@ export default function SqlMonitorPage() {
                   <th>Queue wait</th>
                   <th>Elapsed</th>
                   <th>Rows fetched</th>
+                  <th>Session actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -294,6 +346,38 @@ export default function SqlMonitorPage() {
                       )}
                     </td>
                     <td>{q.rows_fetched?.toLocaleString() ?? "—"}</td>
+                    <td className="monitor-session-actions">
+                      {activeQuery(q) && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={
+                            Boolean(acting) || q.session_id === connection?.sessionId || !liveSessions.has(q.session_id)
+                          }
+                          title="Cancel all queued and in-flight work in this session; keep it connected"
+                          onClick={() => void manageSession(q, false)}
+                          aria-label={`Cancel work in session ${q.session_id}`}
+                        >
+                          <Square size={13} /> Cancel work
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm btn-danger-text"
+                        disabled={
+                          Boolean(acting) || q.session_id === connection?.sessionId || !liveSessions.has(q.session_id)
+                        }
+                        title={
+                          liveSessions.has(q.session_id)
+                            ? `End session ${q.session_id} and cancel its work`
+                            : "This session has already ended"
+                        }
+                        onClick={() => void manageSession(q, true)}
+                        aria-label={`End session ${q.session_id}`}
+                      >
+                        <XCircle size={13} /> End session
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -1,3 +1,4 @@
+import { WarpSqlError } from "@gizmodata/warp-sql";
 import { type RecordBatch, Schema, tableFromArrays } from "apache-arrow";
 import { describe, expect, it } from "vitest";
 
@@ -56,6 +57,17 @@ const fake =
   };
 
 describe("runScript", () => {
+  it("recognizes a server-side administrator cancellation without a local abort", async () => {
+    const cancelled = new WarpSqlError({ code: "statement_cancelled", status: 409, cancelReason: "cancelled" });
+    const run = await runScript({
+      statements: ["SELECT long", "SELECT later"],
+      rowLimit: 100,
+      signal: new AbortController().signal,
+      execute: () => ({ ...rows(0), rowsAffected: () => Promise.reject(cancelled) }),
+    });
+    expect(run.statements.map((s) => s.status)).toEqual(["cancelled", "not-run"]);
+  });
+
   it("runs every statement in order, a result set each, and the counts", async () => {
     const ran: string[] = [];
     const run = await runScript({

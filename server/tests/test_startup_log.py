@@ -45,9 +45,19 @@ def banner_lines(log: str) -> list[str]:
     return lines[start:end]
 
 
+def startup_log(server, marker="Hardcharger is ready"):
+    # Health can answer before the startup thread has finished writing its log.
+    deadline = time.monotonic() + 10
+    log = server.log()
+    while marker not in log and time.monotonic() < deadline:
+        time.sleep(0.01)
+        log = server.log()
+    return log
+
+
 def test_the_banner_opens_a_text_log(launcher):
     server = launcher.start()
-    log = server.log()
+    log = startup_log(server)
     lines = banner_lines(log)
     assert lines, log
     # The art, byte for byte (pyfiglet's "slant"), then the versions, then the URL and the docs.
@@ -71,11 +81,8 @@ def test_the_banner_opens_a_text_log(launcher):
 @pytest.mark.web_ui
 def test_with_the_web_ui_the_banner_names_its_url(launcher):
     server = launcher.start(args=["--web-ui"])
-    # Health can answer while the startup thread is still writing its UI log line.
-    deadline = time.monotonic() + 10
-    while "the web UI is on" not in server.log() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    lines = banner_lines(server.log())
+    log = startup_log(server, "the web UI is on")
+    lines = banner_lines(log)
     assert any(line.startswith(f"  UI   http://127.0.0.1:{server.port}/ui/") for line in lines), lines
     assert not any("/warp" in line for line in lines), lines
     assert re.search(rf" info +the web UI is on url=http://127\.0\.0\.1:{server.port}/ui/ version=", server.log())
@@ -92,14 +99,14 @@ def test_the_banner_can_be_turned_off(launcher, tmp_path, off):
         server = launcher.start(env=off)
     else:
         server = launcher.start(args=off)
-    log = server.log()
+    log = startup_log(server)
     assert "Hardcharger is ready" in log
     assert ART[1] not in log and "| by GizmoData" not in log, log
 
 
 def test_a_flag_beats_hardcharger_no_banner(launcher):
     server = launcher.start(args=["--banner"], env={"HARDCHARGER_NO_BANNER": "true"})
-    assert banner_lines(server.log())[:6] == ART
+    assert banner_lines(startup_log(server))[:6] == ART
 
 
 def test_hardcharger_banner_and_no_banner_together_are_refused():
@@ -114,7 +121,7 @@ def test_hardcharger_banner_and_no_banner_together_are_refused():
 
 def test_never_in_a_json_log(launcher):
     server = launcher.start(args=["--log-format", "json", "--banner", "--log-emoji", "always"])
-    log = server.log()
+    log = startup_log(server)
     assert ART[1] not in log
     records = server.log_records()
     assert len(records) == len([line for line in log.splitlines() if line.strip()]), log  # every line is JSON
@@ -127,7 +134,7 @@ def test_never_in_a_json_log(launcher):
 
 def test_the_ready_line_has_a_url_to_open_and_the_bind_address(launcher):
     server = launcher.start()
-    line = next(line for line in server.log().splitlines() if "Hardcharger is ready" in line)
+    line = next(line for line in startup_log(server).splitlines() if "Hardcharger is ready" in line)
     assert f" url=http://127.0.0.1:{server.port}/warp listen=127.0.0.1:{server.port} " in line, line
 
 

@@ -785,6 +785,19 @@ std::shared_ptr<arrow::RecordBatch> LiveQueriesTable(Runtime& runtime, const Ses
   return arrow::RecordBatch::Make(arrow::schema(fields), count, arrays);
 }
 
+// Read a target's settings without running SQL inside its transaction or waiting on
+// its statement queue. The registry lock pins its lifetime; settings have their own lock.
+std::shared_ptr<arrow::RecordBatch> SessionSettingsTable(Runtime& runtime, const Session& viewer,
+                                                         const std::string& id) {
+  RequireFullAdmin(viewer);
+  std::shared_ptr<arrow::RecordBatch> result;
+  runtime.sessions.ForEach([&](Session& target) {
+    if (target.id() == id && !target.killed()) result = SettingsTable(target);
+  });
+  if (!result) throw Error(ErrorCode::kSqlError, "Session '" + id + "' not found", "42704");
+  return result;
+}
+
 // ---- hardcharger_cancel(session_id) ----
 
 struct CancelBinding {
@@ -869,6 +882,102 @@ void CancelExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_conte
       Call([&](auto* e) { return duckdb_v2_vector_set_value(output, row, out.get(), e); });
     }
   });
+}
+
+// Session setting mutations are volatile and run only during execution, never while
+// describing/preparing the statement. ApplySetting remains the type/scope validator.
+void SessionSettingExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_context_handle context,
+                        duckdb_v2_error_info_handle* err, bool reset) {
+  Guarded(err, [&] {
+    void* data = nullptr;
+    Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_bind_data(info, &data, e); });
+    const auto& binding = *static_cast<const CancelBinding*>(data);
+    RequireFullAdmin(*binding.session);
+    duckdb_v2_factory_handle factory = nullptr;
+    Call([&](auto* e) { return duckdb_v2_context_get_factory(context, &factory, e); });
+    idx_t rows = 0;
+    Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_row_count(info, &rows, e); });
+    duckdb_v2_vector_handle output = nullptr;
+    Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_result(info, &output, e); });
+    Call([&](auto* e) { return duckdb_v2_vector_set_size(output, rows, e); });
+    for (idx_t row = 0; row < rows; ++row) {
+      std::vector<std::string> args;
+      for (idx_t i = 0; i < (reset ? 2u : 3u); ++i) {
+        duckdb_v2_vector_handle input = nullptr;
+        Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_arg(info, i, &input, e); });
+        warpduckdb::Value value;
+        Call([&](auto* e) { return duckdb_v2_vector_get_value(input, row, value.out(), e); });
+        bool null = false;
+        Call([&](auto* e) { return duckdb_v2_value_is_null(value.get(), &null, e); });
+        if (null) throw Error(ErrorCode::kSqlError, "Session setting arguments must not be NULL", "22004");
+        duckdb_v2_str text{};
+        Call([&](auto* e) { return duckdb_v2_value_get_varchar(value.get(), &text, e); });
+        args.emplace_back(text.ptr, text.len);
+      }
+      std::string name = args[1];
+      if (name.starts_with("hardcharger.")) name.erase(0, 12);
+      bool found = false;
+      binding.runtime->sessions.ForEach([&](Session& target) {
+        if (target.id() != args[0] || target.killed()) return;
+        found = true;
+        ApplySetting(target, {.scope = SettingCommand::Scope::kSession,
+                              .reset = reset,
+                              .name = name,
+                              .value = reset ? "" : args[2]});
+      });
+      if (!found) throw Error(ErrorCode::kSqlError, "Session '" + args[0] + "' not found", "42704");
+      Log(LogLevel::kInfo, "administrator changed session setting",
+          {{"user", binding.session->principal().name},
+           {"session_id", binding.session->id()},
+           {"target", args[0]},
+           {"setting", name},
+           {"reset", reset ? "true" : "false"}});
+      warpduckdb::Value out;
+      Call([&](auto* e) { return duckdb_v2_value_create_bool(factory, true, out.out(), e); });
+      Call([&](auto* e) { return duckdb_v2_vector_set_value(output, row, out.get(), e); });
+    }
+  });
+}
+void SetSessionSettingExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_context_handle context,
+                           duckdb_v2_error_info_handle* err) {
+  SessionSettingExec(info, context, err, false);
+}
+void ResetSessionSettingExec(duckdb_v2_scalar_function_exec_info_handle info,
+                             duckdb_v2_context_handle context, duckdb_v2_error_info_handle* err) {
+  SessionSettingExec(info, context, err, true);
+}
+
+void RegisterSessionSetting(duckdb_v2_connection_handle connection, duckdb_v2_factory_handle factory,
+                            Runtime& runtime, bool reset) {
+  ScalarFunction function;
+  Call([&](auto* e) { return duckdb_v2_scalar_function_create(factory, function.out(), e); });
+  const auto name = Str(reset ? "hardcharger_reset_session_setting" : "hardcharger_set_session_setting");
+  Call([&](auto* e) { return duckdb_v2_scalar_function_set_name(function.get(), &name, e); });
+  duckdb_v2_function_signature_handle signature = nullptr;
+  Call([&](auto* e) { return duckdb_v2_scalar_function_get_signature(function.get(), &signature, e); });
+  auto varchar = Type(factory, "VARCHAR");
+  for (const auto parameter : {"session_id", "name", "value"}) {
+    if (reset && std::string_view(parameter) == "value") break;
+    const auto field = Str(parameter);
+    Call([&](auto* e) {
+      return duckdb_v2_function_signature_add_parameter(signature, &field, varchar.get(), nullptr,
+                                                        DUCKDB_V2_FUNCTION_PARAMETER_KIND_POSITIONAL_ONLY, e);
+    });
+  }
+  auto boolean = Type(factory, "BOOLEAN");
+  Call([&](auto* e) { return duckdb_v2_function_signature_set_return_type(signature, boolean.get(), e); });
+  Call([&](auto* e) {
+    return duckdb_v2_scalar_function_set_property(function.get(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+                                                  DUCKDB_V2_FUNCTION_PROPERTY_STABILITY_VOLATILE, e);
+  });
+  duckdb_v2_opaque user{&runtime, nullptr, nullptr};
+  Call([&](auto* e) { return duckdb_v2_scalar_function_set_user_data(function.get(), &user, e); });
+  Call([&](auto* e) { return duckdb_v2_scalar_function_set_bind_callback(function.get(), CancelBind, e); });
+  Call([&](auto* e) {
+    return duckdb_v2_scalar_function_set_exec_callback(
+        function.get(), reset ? ResetSessionSettingExec : SetSessionSettingExec, e);
+  });
+  Call([&](auto* e) { return duckdb_v2_connection_register_scalar_function(connection, function.get(), e); });
 }
 
 void RegisterCancel(duckdb_v2_connection_handle connection, duckdb_v2_factory_handle factory, Runtime& runtime) {
@@ -966,6 +1075,14 @@ void RegisterSqlFunctions(duckdb_v2_connection_handle connection, Runtime& runti
     RequireFullAdmin(viewer);
     return SettingsTable(viewer);
   });
+  RegisterTable(connection, factory, runtime, "hardcharger_session_settings",
+                [](Runtime& r, const Session* s, const TableArgs& args) {
+                  const auto& viewer = RequireSession(s, "hardcharger_session_settings");
+                  return SessionSettingsTable(r, viewer, !args.empty() && args[0] ? *args[0] : viewer.id());
+                },
+                {"session_id"});
+  RegisterSessionSetting(connection, factory, runtime, false);
+  RegisterSessionSetting(connection, factory, runtime, true);
   RegisterCancel(connection, factory, runtime);
 
   // Access-control introspection: what the session may see of the store's grants, roles,

@@ -82,7 +82,7 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   browser, Safari included); double-click or Enter shows a value in full, JSON pretty-printed.
 - 🔭 **SQL Monitor** for unrestricted administrators: live queued, executing and fetching
   statements, recent outcomes and timeouts, queue status and available concurrency slots
-  (`--enable-instrumentation`). **Server Configuration** shows safe, read-only settings
+  (`--enable-instrumentation`). **Server Configuration** shows session/global values and runtime setting controls
   and startup facts. See [SQL Monitor](docs/sql-monitor.md).
 - 🗂️ **Schema browser and autocomplete** that follow access control: each user sees only the
   catalogs, schemas, tables and columns their roles allow. Tables and Views in their own

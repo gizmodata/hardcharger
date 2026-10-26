@@ -19,6 +19,7 @@ export interface TabStatus {
   running: boolean;
   failed: boolean;
   transaction: TransactionState;
+  sessionId?: string;
 }
 
 /** What the query page can do to a tab: put text at its cursor, run SQL in it. */
@@ -116,8 +117,8 @@ export function EditorTab(props: Props) {
   const failed = run.kind === "done" && run.run.statements.some((s) => s.status === "error");
 
   useEffect(() => {
-    onStatus({ running, failed, transaction });
-  }, [running, failed, transaction, onStatus]);
+    onStatus({ running, failed, transaction, sessionId });
+  }, [running, failed, transaction, sessionId, onStatus]);
 
   // The tab's session ends with the tab (closing it, or signing out).
   useEffect(
