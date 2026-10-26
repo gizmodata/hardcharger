@@ -1039,6 +1039,30 @@ select {
   border-radius: 8px;
   background: var(--panel);
 }
+.monitor-sql-block {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.monitor-sql-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+}
+.monitor-sql-block .value-text {
+  padding: 14px 16px;
+}
+.monitor-sql-block .value-text:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: -2px;
+}
 .monitor-detail dl {
   display: grid;
   grid-template-columns: minmax(140px, auto) 1fr;

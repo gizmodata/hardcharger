@@ -1,12 +1,14 @@
 import { connect } from "@gizmodata/warp-sql";
 
-import { expect, signIn, test, watchPage } from "./fixtures.ts";
+import { expect, pasted, signIn, test, watchPage } from "./fixtures.ts";
 import { startOwnServer } from "./harness.ts";
 
 test("query windows retain profiles and refresh independently of the monitor", async ({ page }, testInfo) => {
   const server = await startOwnServer(["--enable-instrumentation"]);
   const connection = await connect({ url: `${server.url}/warp`, ...server.admin, resultPartitions: 1 });
-  const sql = "SELECT sum(i) AS popout_profile_probe FROM range(100000) t(i)";
+  const sql =
+    "SELECT sum(i) AS popout_profile_probe FROM range(100000) t(i)\n" +
+    Array.from({ length: 100 }, (_, i) => `-- Clipboard scroll line ${i}`).join("\n");
   try {
     await connection.execute("SET hardcharger.capture_query_profile = 'detailed'");
     await connection.query(sql);
@@ -22,6 +24,14 @@ test("query windows retain profiles and refresh independently of the monitor", a
     const check = await watchPage(details);
     await expect(details.getByRole("heading", { name: "Query details", exact: true })).toBeVisible();
     await expect(details.getByRole("region", { name: "Statement details" })).toContainText(sql);
+    const sqlBlock = details.getByLabel("SQL text", { exact: true });
+    expect(await sqlBlock.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    await sqlBlock.focus();
+    await details.keyboard.press("PageDown");
+    await expect.poll(() => sqlBlock.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    await details.getByRole("button", { name: "Copy SQL", exact: true }).click();
+    await expect(details.getByRole("status").filter({ hasText: "Copied to clipboard." })).toBeVisible();
+    expect(await pasted(details)).toBe(sql);
     await expect(details.getByTestId("query-profile-plan")).toContainText("UNGROUPED_AGGREGATE");
     await expect(page.getByRole("region", { name: "Statement details" })).toHaveCount(0);
     await page.getByLabel("Filter monitored queries").fill("no_match_popout");
@@ -35,6 +45,11 @@ test("query windows retain profiles and refresh independently of the monitor", a
     await expect(details.getByTestId("query-profile-plan")).toBeVisible();
     await details.screenshot({
       path: `../desktop/artifacts/sql-monitor/query-window-${testInfo.project.name}.png`,
+      fullPage: true,
+    });
+    await details.getByRole("button", { name: "Toggle color theme", exact: true }).click();
+    await details.screenshot({
+      path: `../desktop/artifacts/sql-monitor/query-window-dark-${testInfo.project.name}.png`,
       fullPage: true,
     });
     const count = await connection.query(

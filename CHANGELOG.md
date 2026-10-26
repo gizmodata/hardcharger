@@ -79,6 +79,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- Query details frame the SQL text with a subtle themed border and background, separating
+  it from execution metadata in both inline and pop-out views. The SQL scrolls independently,
+  supports keyboard scrolling and has a Copy SQL button for the complete captured statement.
 - Non-iOS builds retain DuckDB's four standard built-in extensions; httpfs, PostgreSQL,
   DuckLake, tpch and autocomplete are runtime modules that administrators can replace.
   Automatic installation/loading of known extensions defaults to enabled, matching

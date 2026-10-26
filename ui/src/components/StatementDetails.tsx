@@ -1,18 +1,42 @@
-import type { ReactNode } from "react";
+import { Copy } from "lucide-react";
+import { useState, type ReactNode } from "react";
 
+import { copyText } from "../lib/clipboard";
 import { statusLabel, type MonitoredQuery } from "../lib/sqlMonitor";
 import { QueryProfile } from "./QueryProfile";
 
 const timestamp = (ms: number | null) => (ms == null ? "—" : new Date(ms).toLocaleString());
 
 export function StatementDetails({ query, actions }: { query: MonitoredQuery; actions?: ReactNode }) {
+  const [copied, setCopied] = useState<{ executionId: string; message: string }>();
   return (
     <section className="monitor-detail" aria-label="Statement details">
       <div className="page-head">
         <h3>{statusLabel(query)}</h3>
         {actions}
       </div>
-      <pre className="value-text">{query.sql_text}</pre>
+      <div className="monitor-sql-block">
+        <div className="monitor-sql-head">
+          <span role="status">{copied?.executionId === query.execution_id ? copied.message : "SQL"}</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() =>
+              void copyText(query.sql_text).then((ok) =>
+                setCopied({
+                  executionId: query.execution_id,
+                  message: ok ? "Copied to clipboard." : "Copy failed; select the SQL and copy it with your keyboard.",
+                }),
+              )
+            }
+          >
+            <Copy size={14} /> Copy SQL
+          </button>
+        </div>
+        <pre className="value-text" tabIndex={0} aria-label="SQL text">
+          {query.sql_text}
+        </pre>
+      </div>
       <dl>
         <dt>Execution / statement</dt>
         <dd className="mono">

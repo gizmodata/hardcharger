@@ -68,6 +68,10 @@ The layout preference is remembered. Browsers that block the pop-up show a notic
 fall back to inline details. The desktop app opens native inspector windows; stopping
 or restarting its server closes the workspace and all inspectors.
 
+SQL text has a bordered, keyboard-focusable scroll area. Long lines wrap, and the
+execution metadata stays outside that area. **Copy SQL** copies the complete captured
+text, including content outside the visible scroll area.
+
 Each inspector opens its own observer sessions and enforces the same unrestricted
 administrator permission. It uses the existing short-lived sign-in in session storage;
 credentials are never put in the detail URL or local storage. Closing the inspector
