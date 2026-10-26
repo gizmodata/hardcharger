@@ -23,6 +23,8 @@ import {
   Type,
 } from "apache-arrow";
 
+import { isVariant, variantValue } from "./variant";
+
 export type Format = (value: unknown) => string;
 
 const pad = (n: number, width = 2) => String(Math.trunc(Math.abs(n))).padStart(width, "0");
@@ -233,7 +235,9 @@ function text(v: unknown): string {
 }
 
 /** How a value of `type` reads as text: NULL is `null` (the caller decides how to show it). */
-export function textFor(type: DataType): (value: unknown) => string | null {
+export function textFor(source: DataType | Field): (value: unknown) => string | null {
+  if (!(source instanceof DataType) && isVariant(source)) return (v) => (isNull(v) ? null : variantValue(v).text);
+  const type = source instanceof DataType ? source : typeOf(source);
   switch (type.typeId) {
     case Type.Null:
       return () => null;
@@ -271,7 +275,7 @@ export function textFor(type: DataType): (value: unknown) => string | null {
     case Type.FixedSizeList:
     case Type.LargeList: {
       const child = (type as DataType<Type.List>).children[0]!;
-      const inner = nestedText(typeOf(child));
+      const inner = nestedText(child);
       return (v) => {
         if (isNull(v)) return null;
         const items: string[] = [];
@@ -281,7 +285,7 @@ export function textFor(type: DataType): (value: unknown) => string | null {
     }
     case Type.Struct: {
       const fields = (type as DataType<Type.Struct>).children;
-      const inner = fields.map((f) => nestedText(typeOf(f)));
+      const inner = fields.map((f) => nestedText(f));
       return (v) => {
         if (isNull(v)) return null;
         const row = v as Record<string, unknown>;
@@ -290,8 +294,8 @@ export function textFor(type: DataType): (value: unknown) => string | null {
     }
     case Type.Map: {
       const entry = typeOf((type as DataType<Type.Map>).children[0]!) as DataType<Type.Struct>;
-      const key = nestedText(typeOf(entry.children[0]!));
-      const value = nestedText(typeOf(entry.children[1]!));
+      const key = nestedText(entry.children[0]!);
+      const value = nestedText(entry.children[1]!);
       return (v) => {
         if (isNull(v)) return null;
         const pairs: string[] = [];
@@ -313,7 +317,7 @@ function floatText(v: number): string {
   return String(v);
 }
 
-function nestedText(type: DataType): (v: unknown) => string {
+function nestedText(type: DataType | Field): (v: unknown) => string {
   const text = textFor(type);
   return (v) => text(v) ?? "NULL";
 }
@@ -324,7 +328,9 @@ function jsonSafe(_key: string, value: unknown): unknown {
 
 /** A value as JSON text: exact numbers (decimals and bigints keep every digit), and the
  * grid's text for dates, times, intervals and binary. */
-export function jsonFor(type: DataType): (value: unknown) => string {
+export function jsonFor(source: DataType | Field): (value: unknown) => string {
+  if (!(source instanceof DataType) && isVariant(source)) return (v) => (isNull(v) ? "null" : variantValue(v).json);
+  const type = source instanceof DataType ? source : typeOf(source);
   switch (type.typeId) {
     case Type.Dictionary:
       return jsonFor((type as Dictionary).dictionary as DataType);
@@ -340,7 +346,7 @@ export function jsonFor(type: DataType): (value: unknown) => string {
     case Type.List:
     case Type.FixedSizeList:
     case Type.LargeList: {
-      const inner = jsonFor(typeOf((type as DataType<Type.List>).children[0]!));
+      const inner = jsonFor((type as DataType<Type.List>).children[0]!);
       return (v) => {
         if (isNull(v)) return "null";
         const items: string[] = [];
@@ -350,7 +356,7 @@ export function jsonFor(type: DataType): (value: unknown) => string {
     }
     case Type.Struct: {
       const fields = (type as DataType<Type.Struct>).children;
-      const inner = fields.map((f) => jsonFor(typeOf(f)));
+      const inner = fields.map((f) => jsonFor(f));
       return (v) => {
         if (isNull(v)) return "null";
         const row = v as Record<string, unknown>;
@@ -360,7 +366,7 @@ export function jsonFor(type: DataType): (value: unknown) => string {
     case Type.Map: {
       const entry = typeOf((type as DataType<Type.Map>).children[0]!) as DataType<Type.Struct>;
       const key = textFor(typeOf(entry.children[0]!));
-      const value = jsonFor(typeOf(entry.children[1]!));
+      const value = jsonFor(entry.children[1]!);
       return (v) => {
         if (isNull(v)) return "null";
         const pairs: string[] = [];
@@ -381,6 +387,7 @@ export function jsonFor(type: DataType): (value: unknown) => string {
 
 /** The SQL type name to show in a column header: the server's, when its metadata says. */
 export function typeLabel(field: Field): string {
+  if (isVariant(field)) return "VARIANT";
   const named = field.metadata.get("ARROW:FLIGHT:SQL:TYPE_NAME");
   if (named) return named;
   return arrowTypeLabel(typeOf(field));
@@ -420,13 +427,13 @@ export function arrowTypeLabel(type: DataType): string {
       return arrowTypeLabel((type as Dictionary).dictionary as DataType);
     case Type.List:
     case Type.LargeList:
-      return `${arrowTypeLabel(typeOf((type as DataType<Type.List>).children[0]!))}[]`;
+      return `${typeLabel((type as DataType<Type.List>).children[0]!)}[]`;
     case Type.FixedSizeList: {
       const t = type as FixedSizeList;
-      return `${arrowTypeLabel(typeOf(t.children[0]!))}[${t.listSize}]`;
+      return `${typeLabel(t.children[0]!)}[${t.listSize}]`;
     }
     case Type.Struct:
-      return `STRUCT(${(type as DataType<Type.Struct>).children.map((f) => `${f.name} ${arrowTypeLabel(typeOf(f))}`).join(", ")})`;
+      return `STRUCT(${(type as DataType<Type.Struct>).children.map((f) => `${f.name} ${typeLabel(f)}`).join(", ")})`;
     case Type.Map:
       return "MAP";
     case Type.Null:
@@ -443,7 +450,7 @@ export function isNumeric(type: DataType): boolean {
 
 /** Text formatters for every column of a schema. */
 export function columnText(schema: Schema): ((value: unknown) => string | null)[] {
-  return schema.fields.map((f) => textFor(typeOf(f)));
+  return schema.fields.map((f) => textFor(f));
 }
 
 /** A session idle timeout in words: "15 minutes", "90 seconds", "2 hours" (0 is the caller's case). */

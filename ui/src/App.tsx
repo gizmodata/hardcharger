@@ -26,16 +26,20 @@ type Phase =
 async function whoAmI(connection: Connection): Promise<Identity> {
   const table = await connection.query(
     "SELECT HARDCHARGER_USER() AS u, HARDCHARGER_ROLE() AS r, HARDCHARGER_VERSION() AS v, " +
-      "HARDCHARGER_CURRENT_SESSION() AS s, HARDCHARGER_CURRENT_INSTANCE() AS i",
+      "HARDCHARGER_CURRENT_SESSION() AS s, HARDCHARGER_CURRENT_INSTANCE() AS i, " +
+      "HARDCHARGER_IS_FULL_ADMIN() AS a, HARDCHARGER_INSTRUMENTATION_ENABLED() AS m",
   );
   const first: unknown = table.get(0)?.toJSON();
-  const row = first as Record<string, string | null> | undefined;
+  const row = first as Record<string, string | boolean | null> | undefined;
+  const text = (key: string): string => (typeof row?.[key] === "string" ? row[key] : "");
   return {
-    user: row?.["u"] ?? "",
-    role: row?.["r"] ?? "",
-    version: row?.["v"] ?? "",
-    sessionId: row?.["s"] ?? connection.sessionId,
-    instanceId: row?.["i"] ?? null,
+    user: text("u"),
+    role: text("r"),
+    version: text("v"),
+    sessionId: text("s") || connection.sessionId,
+    instanceId: text("i") || null,
+    fullAdmin: row?.["a"] === true,
+    instrumentationEnabled: row?.["m"] === true,
   };
 }
 

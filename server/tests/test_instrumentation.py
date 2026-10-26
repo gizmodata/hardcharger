@@ -381,7 +381,8 @@ def test_stale_instance_cleanup(launcher, tmp_path):
     assert rows[0]["open_sessions"] == 0 and rows[0]["executing"] == 0 and rows[0]["failed"] >= 1, rows
 
 
-WRITER_UNIT_CASES = ["FailedWriteDoesNotAffectOtherWrites", "ABadRecordInABatchLosesOnlyItself",
+WRITER_UNIT_CASES = [
+    "LiveMonitorDoesNotDependOnHistoryWrites", "FailedWriteDoesNotAffectOtherWrites", "ABadRecordInABatchLosesOnlyItself",
                      "RowsOfEarlierBatchesAreUpdatedAndOneBatchFoldsThem", "AFullQueueDropsCountsAndReportsNewRecords",
                      "ShutdownWritesTheBacklog", "ShutdownGivesUpOnTheBacklogAtItsDeadline",
                      "InvalidUtf8IsStoredReplaced"]

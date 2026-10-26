@@ -480,7 +480,9 @@ struct Instrumentation::Batch {
 std::string_view Instrumentation::StatusOf(const ExecutionEvent& e) {
   switch (e.phase) {
     case Phase::kQueued: return "queued";
-    case Phase::kFinished: return e.record.status;
+    case Phase::kFinished:
+      if (e.record.cancel_reason == "timeout" || e.record.cancel_reason == "queue_timeout") return "timeout";
+      return e.record.status;
     default: return "executing";
   }
 }
@@ -503,7 +505,8 @@ std::size_t Instrumentation::Event::Bytes() const {
         } else {
           const ExecutionRecord& r = what.record;
           bytes += r.execution_id.capacity() + r.statement_id.capacity() + r.status.capacity() + r.error.capacity() +
-                   r.cancel_reason.capacity() + r.query_profile.capacity();
+                   r.cancel_reason.capacity() + r.query_profile.capacity() + r.session_id.capacity() + r.username.capacity() +
+                   r.sql.capacity() + r.query_tag.capacity();
         }
       },
       what);
@@ -1051,15 +1054,56 @@ void Instrumentation::StatementCreated(const Session& session, const std::string
 
 void Instrumentation::RecordStatement(StatementRecord record) { Enqueue(Event{std::move(record)}); }
 
-void Instrumentation::ExecutionStarted(const ExecutionRecord& r) { Enqueue(Event{ExecutionEvent{Phase::kStarted, r}}); }
+void Instrumentation::ExecutionStarted(const ExecutionRecord& r) {
+  ExecutionProgress(r);
+  Enqueue(Event{ExecutionEvent{Phase::kStarted, r}});
+}
 
-void Instrumentation::ExecutionQueued(const ExecutionRecord& r) { Enqueue(Event{ExecutionEvent{Phase::kQueued, r}}); }
+void Instrumentation::ExecutionQueued(const ExecutionRecord& r) {
+  auto queued = r; queued.status = "queued";
+  ExecutionProgress(queued);
+  Enqueue(Event{ExecutionEvent{Phase::kQueued, r}});
+}
 
 void Instrumentation::ExecutionAdmitted(const ExecutionRecord& r) {
+  ExecutionProgress(r);
   Enqueue(Event{ExecutionEvent{Phase::kAdmitted, r}});
 }
 
+void Instrumentation::ExecutionProgress(const ExecutionRecord& r) {
+  std::lock_guard lock(monitor_mutex_);
+  monitor_[r.execution_id] = r;
+  std::string{}.swap(monitor_[r.execution_id].query_profile);
+}
+
+std::vector<ExecutionRecord> Instrumentation::MonitorRecords() {
+  std::lock_guard lock(monitor_mutex_);
+  std::vector<ExecutionRecord> records;
+  records.reserve(monitor_.size());
+  for (const auto& [id, record] : monitor_) records.push_back(record);
+  return records;
+}
+
+static std::size_t MonitorBytes(const ExecutionRecord& r) {
+  return sizeof(r) + r.execution_id.capacity() + r.statement_id.capacity() + r.session_id.capacity() +
+         r.username.capacity() + r.sql.capacity() + r.query_tag.capacity() + r.error.capacity() + r.cancel_reason.capacity();
+}
+
 void Instrumentation::ExecutionFinished(const ExecutionRecord& r) {
+  {
+    std::lock_guard lock(monitor_mutex_);
+    monitor_[r.execution_id] = r;
+    std::string{}.swap(monitor_[r.execution_id].query_profile);
+    monitor_finished_bytes_ += MonitorBytes(monitor_[r.execution_id]);
+    monitor_finished_.push_back(r.execution_id);
+    // Active records are never evicted. The most recent 2,048 completions bridge
+    // history's write delay; history loss/backlog counters are shown by the UI.
+    while (monitor_finished_.size() > 2048 || monitor_finished_bytes_ > (16u << 20)) {
+      monitor_finished_bytes_ -= MonitorBytes(monitor_.at(monitor_finished_.front()));
+      monitor_.erase(monitor_finished_.front());
+      monitor_finished_.pop_front();
+    }
+  }
   Enqueue(Event{ExecutionEvent{Phase::kFinished, r}});
 }
 

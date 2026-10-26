@@ -58,6 +58,8 @@ class AdmissionController {
   // The wait used when a statement has no limit of its own; 0 or less: forever.
   void SetDefaultMaxQueueWaitSeconds(int64_t seconds);
 
+  struct Snapshot { int64_t limit, active, queued, max_queued, max_queue_wait_seconds; };
+  Snapshot GetSnapshot() const;
   int64_t Limit() const;
   int64_t MaxQueued() const;           // as set (-1 for 8 x the limit)
   int64_t EffectiveMaxQueued() const;  // the bound in force (0: unbounded)

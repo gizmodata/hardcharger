@@ -16,6 +16,7 @@ import {
 
 import { copyText } from "../lib/clipboard";
 import { comparatorFor, sortRows } from "../lib/compare";
+import { isVariant } from "../lib/variant";
 import { columnText, isNumeric, jsonFor, typeLabel } from "../lib/format";
 import { RowTexts } from "../lib/rowText";
 import {
@@ -288,7 +289,8 @@ export function ResultsGrid({ table, toolbar, onNotice }: Props) {
       type: labels[col]!,
       row: position + 1,
       text: rowText(r)[col] ?? null,
-      json: nested ? jsonFor(type)(raw) : undefined,
+      json: nested ? jsonFor(fields[col]!)(raw) : undefined,
+      raw: !isNull(raw) && isVariant(fields[col]!) ? jsonFor(type)(raw) : undefined,
     });
   };
 

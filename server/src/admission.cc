@@ -47,6 +47,11 @@ void AdmissionController::SetDefaultMaxQueueWaitSeconds(int64_t seconds) {
   default_wait_seconds_ = seconds < 0 ? 0 : seconds;
 }
 
+AdmissionController::Snapshot AdmissionController::GetSnapshot() const {
+  std::lock_guard lock(mutex_);
+  return {limit_, active_, static_cast<int64_t>(waiters_.size()), QueueBound(), default_wait_seconds_};
+}
+
 int64_t AdmissionController::Limit() const {
   std::lock_guard lock(mutex_);
   return limit_;

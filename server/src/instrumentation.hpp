@@ -33,6 +33,7 @@
 #include <string>
 #include <thread>
 #include <variant>
+#include <unordered_map>
 #include <vector>
 
 #include "duckdb_v2.hpp"
@@ -64,6 +65,8 @@ struct ExecutionRecord {
   // A cancelled execution's Warp SQL cancel_reason (client, timeout, killed, cancelled,
   // session_closed, server_shutdown), when the server knows it.
   std::string cancel_reason;
+  // Live SQL Monitor identity; not additional columns in the history tables.
+  std::string session_id, username, sql, query_tag;
   std::string query_profile;  // DuckDB's JSON profile, when captured
 };
 
@@ -133,6 +136,9 @@ class Instrumentation {
   void ExecutionQueued(const ExecutionRecord& record);
   void ExecutionAdmitted(const ExecutionRecord& record);
   void ExecutionFinished(const ExecutionRecord& record);
+  // Synchronous live progress, independent of the asynchronous history writer.
+  void ExecutionProgress(const ExecutionRecord& record);
+  std::vector<ExecutionRecord> MonitorRecords();
 
   // The same, from plain records (what the Session overloads build).
   void RecordSessionStarted(SessionRecord record);
@@ -193,6 +199,11 @@ class Instrumentation {
   std::string file_;
   std::string schema_;
   warpduckdb::Connection connection_;
+
+  std::mutex monitor_mutex_;
+  std::unordered_map<std::string, ExecutionRecord> monitor_;
+  std::size_t monitor_finished_bytes_ = 0;
+  std::deque<std::string> monitor_finished_;  // bounded bridge until history is written
 
   std::mutex mutex_;
   std::condition_variable wake_;

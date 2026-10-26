@@ -14,6 +14,8 @@ export interface Identity {
   version: string;
   sessionId: string;
   instanceId: string | null;
+  fullAdmin?: boolean;
+  instrumentationEnabled?: boolean;
 }
 
 export interface QueryRequest {

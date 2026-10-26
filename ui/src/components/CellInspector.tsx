@@ -13,6 +13,7 @@ export interface InspectedCell {
   text: string | null;
   /** A nested value (list, struct, map) as exact JSON. */
   json?: string | undefined;
+  raw?: string | undefined;
 }
 
 /**
@@ -56,6 +57,12 @@ export function CellInspector({ cell, onClose }: { cell: InspectedCell; onClose:
       <pre className={`value-text${cell.text === null ? " grid-null" : ""}`} data-testid="inspector-value">
         {text}
       </pre>
+      {cell.raw !== undefined && (
+        <details>
+          <summary>Raw Arrow storage</summary>
+          <pre className="value-text">{prettyJson(cell.raw)}</pre>
+        </details>
+      )}
       <div className="dialog-foot">
         <button
           type="button"

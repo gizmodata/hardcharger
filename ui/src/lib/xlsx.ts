@@ -3,9 +3,10 @@
 // decimals of up to 15 digits), booleans stay booleans, everything else is text as the grid
 // shows it (so `00123` keeps its zeros, and a 38-digit decimal its digits), NULL an empty cell.
 
-import { type DataType, type Table, Type } from "apache-arrow";
+import { type DataType, type Field, type Table, Type } from "apache-arrow";
 
 import { jsonFor, textFor } from "./format";
+import { isVariant } from "./variant";
 import { zip } from "./zip";
 
 const xmlHeader = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
@@ -39,9 +40,11 @@ type Cell =
   { kind: "number"; value: string } | { kind: "bool"; value: boolean } | { kind: "text"; value: string } | null;
 
 /** How a value of `type` goes into a cell. */
-function cellFor(type: DataType): (value: unknown) => Cell {
-  const text = textFor(type);
-  const json = jsonFor(type);
+function cellFor(field: Field): (value: unknown) => Cell {
+  const type = field.type as DataType;
+  const text = textFor(field);
+  const json = jsonFor(field);
+  if (isVariant(field)) return (v) => (v == null ? null : { kind: "text", value: text(v)! });
   switch (type.typeId) {
     case Type.Int:
     case Type.Float:
@@ -95,7 +98,7 @@ function cellXml(ref: string, cell: Cell, style = 0): string {
 export function sheetXml(table: Table, order?: readonly number[]): string {
   const fields = table.schema.fields;
   const vectors = fields.map((_, i) => table.getChildAt(i)!);
-  const cells = fields.map((f) => cellFor(f.type as DataType));
+  const cells = fields.map((f) => cellFor(f));
   const rows: string[] = [];
   rows.push(
     `<row r="1">${fields.map((f, c) => cellXml(`${columnName(c)}1`, { kind: "text", value: f.name }, 1)).join("")}</row>`,

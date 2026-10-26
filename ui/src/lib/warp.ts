@@ -32,6 +32,7 @@ export interface ConnectionOptions {
    * (an editor tab decides itself, since it knows whether a transaction was open).
    */
   reconnect?: boolean;
+  queryTag?: Record<string, string>;
 }
 
 /** A connection (one server session) signed in with the tab's access token. */
@@ -46,7 +47,7 @@ export function openConnection(auth: SignedIn, options: ConnectionOptions = {}):
     // One stream per result: the UI reads at most the row limit, and the browser's six
     // connections per host are shared by every tab of the app.
     resultPartitions: 1,
-    queryTag: { client: "hardcharger-ui" },
+    queryTag: { client: "hardcharger-ui", ...options.queryTag },
     logger: { warn: (message: string) => console.info(`[warp-sql] ${message}`) },
     ...(signal ? { signal } : {}),
   });

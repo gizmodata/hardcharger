@@ -1,4 +1,16 @@
-import { Braces, Database, Info, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Sun, Users } from "lucide-react";
+import {
+  Activity,
+  Settings,
+  Braces,
+  Database,
+  Info,
+  LogOut,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Sun,
+  Users,
+} from "lucide-react";
 import { Suspense, lazy, useMemo, useState } from "react";
 
 import { useActiveTab } from "../lib/activeTab";
@@ -46,6 +58,8 @@ function storedHidden(): boolean {
 // the app's size). A file that is gone after an upgrade becomes a StaleBuildError, which the
 // page's error boundary turns into reloads and, failing those, a "new version" notice.
 const QueryPage = lazy(loadModule("query", () => import("./QueryPage")));
+const SqlMonitorPage = lazy(loadModule("monitor", () => import("./SqlMonitorPage")));
+const ServerConfigurationPage = lazy(loadModule("configuration", () => import("./ServerConfigurationPage")));
 const SessionsPage = lazy(loadModule("sessions", () => import("./SessionsPage")));
 // The API page carries Swagger UI: loaded only when the page is first shown.
 const ApiPage = lazy(loadModule("api", () => import("./ApiPage")));
@@ -89,12 +103,14 @@ export function Layout({ theme, page, go }: Props) {
   const active = useActiveTab();
   const listings = useMemo(() => listingsFor(session, active.role), [session, active.role]);
 
-  const nav = (target: Page, label: string, icon: React.ReactNode) => (
+  const nav = (target: Page, label: string, icon: React.ReactNode, disabled = false) => (
     <button
       type="button"
       className={`nav-item${page === target ? " nav-item-active" : ""}`}
       aria-current={page === target ? "page" : undefined}
       aria-label={label}
+      disabled={disabled}
+      title={disabled ? "Start the server with --enable-instrumentation to enable SQL Monitor" : label}
       onClick={() => go(target)}
     >
       {icon}
@@ -124,6 +140,17 @@ export function Layout({ theme, page, go }: Props) {
             {nav("query", "Query", <Database size={15} />)}
             {nav("sessions", "Sessions", <Users size={15} />)}
             {nav("api", "API", <Braces size={15} />)}
+            {session.isAdmin && session.identity.fullAdmin !== false && (
+              <>
+                {nav(
+                  "monitor",
+                  "SQL Monitor",
+                  <Activity size={15} />,
+                  session.identity.instrumentationEnabled === false,
+                )}
+                {nav("configuration", "Server Configuration", <Settings size={15} />)}
+              </>
+            )}
           </nav>
         </div>
         <div className="header-right">
@@ -233,6 +260,15 @@ export function Layout({ theme, page, go }: Props) {
               <ErrorBoundary scope="page" resetKey="api">
                 <Suspense fallback={<div className="page-loading">Loading…</div>}>
                   <ApiPage theme={theme.name} />
+                </Suspense>
+              </ErrorBoundary>
+            </div>
+          )}
+          {(page === "monitor" || page === "configuration") && (
+            <div className="page">
+              <ErrorBoundary scope="page" resetKey={page}>
+                <Suspense fallback={<p className="loading-line">Loading…</p>}>
+                  {page === "monitor" ? <SqlMonitorPage /> : <ServerConfigurationPage />}
                 </Suspense>
               </ErrorBoundary>
             </div>

@@ -246,6 +246,7 @@ add_library(hardcharger_client STATIC
   client/command_processor.cc
   client/oauth_flow.cc
   client/output_renderer.cc
+  client/variant.cc
   client/pager.cc
   client/password_prompt.cc
   client/platform.cc
@@ -348,10 +349,12 @@ target_compile_options(hardcharger-client PRIVATE ${HARDCHARGER_WARNINGS})
 # HARDCHARGER_TEST_CLIENT_* variables (test_interactive_client.py and friends).
 add_executable(hardcharger-client-tests
   client/tests/client_config_test.cc
+  client/tests/variant_test.cc
   client/tests/interactive_client_test.cc)
 target_link_libraries(hardcharger-client-tests PRIVATE hardcharger_client GTest::gtest_main)
 target_compile_definitions(hardcharger-client-tests PRIVATE
-                           HARDCHARGER_CLIENT_BINARY="$<TARGET_FILE:hardcharger-client>")
+                           HARDCHARGER_CLIENT_BINARY="$<TARGET_FILE:hardcharger-client>"
+                           HARDCHARGER_VARIANT_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/client/tests/data/variant.json")
 add_dependencies(hardcharger-client-tests hardcharger-client)
 
 install(TARGETS hardcharger-server hardcharger-client RUNTIME DESTINATION bin)

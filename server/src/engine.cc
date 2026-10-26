@@ -355,10 +355,14 @@ class Execution {
   }
 
   // The engine has the outcome (rows to read, or the update done).
-  void Produced() { record_.end = std::chrono::system_clock::now(); }
+  void Produced() {
+    record_.end = std::chrono::system_clock::now();
+    if (auto* instrumentation = Instr()) instrumentation->ExecutionProgress(record_);
+  }
   void Batch(int64_t rows) {
     if (!record_.fetch_start) record_.fetch_start = std::chrono::system_clock::now();
     record_.rows += rows;
+    if (auto* instrumentation = Instr()) instrumentation->ExecutionProgress(record_);
   }
   // status: ok, error or cancelled.
   void End(std::string_view status, std::string_view error_class, std::string_view error) {
@@ -375,6 +379,8 @@ class Execution {
     if (status == "cancelled" && !record_.cancel_reason.empty()) {
       LogCancelled(session_, ids_, record_.cancel_reason, started_);
     }
+    if (record_.cancel_reason == "timeout") record_.status = "timeout";
+    if (auto* instrumentation = Instr()) instrumentation->ExecutionProgress(record_);
     slot_.Release();
     session_.FinishRunning();
     Runtime& runtime = session_.runtime();
@@ -1153,6 +1159,12 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
   ExecutionRecord record;
   record.execution_id = ids.execution;
   record.statement_id = ids.statement;
+  if (instrumentation) {
+    record.session_id = id_;
+    record.username = principal_.name;
+    record.sql = Abbreviate(sql);
+    record.query_tag = StatementQueryTag();
+  }
   LogFields id_fields = {{"statement_id", ids.execution}};
   if (ids.prepared) id_fields.push_back({"prepared_id", ids.statement});
   // What hardcharger_active_connections() shows, from the moment it waits in the queue.
@@ -1200,7 +1212,14 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
         record.end = record.cursor_close = std::chrono::system_clock::now();
         record.status = cancelled ? "cancelled" : "error";
         record.error = cancelled ? "cancelled while queued" : refused.message;
-        if (cancelled) record.cancel_reason = cancel_reason();
+        if (cancelled) {
+          record.cancel_reason = cancel_reason();
+          if (record.cancel_reason == "timeout") record.cancel_reason = "queue_timeout";
+        }
+        else if (refused.reason == AdmissionController::Refusal::kWaitedTooLong) {
+          record.status = "timeout";
+          record.cancel_reason = "queue_timeout";
+        }
         instrumentation->ExecutionFinished(record);
       }
       if (killed_) throw KilledError();

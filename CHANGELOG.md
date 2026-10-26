@@ -9,6 +9,13 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- SQL Monitor in the web SQL workspace for unrestricted administrators, enabled with
+  server instrumentation. Shows live queued, executing, and fetching statements regardless
+  of age, recent outcomes (10 minutes by default), execution and queue timeouts, statement
+  slots, queue capacity and wait limits, and instrumentation backlog/loss counters.
+- Read-only Server Configuration tab for unrestricted administrators, showing curated
+  effective settings, runtime versus startup scope, and safe server/listener facts.
+
 - Desktop preview in `desktop/`: a Tauri app that bundles the existing server and CLI,
   opens the server's web SQL workspace, and manages the local server from a branded
   dashboard and bull-head menu-bar/tray icon. Closing the dashboard keeps the server
@@ -18,6 +25,16 @@ own changelog in `python/CHANGELOG.md`.
   and OS credential storage for sensitive options. Desktop packages use the existing
   Apple Developer ID/notarization and Windows Azure signing credentials; branch previews
   upload Actions artifacts without publishing a release.
+
+### Fixed
+
+- Web UI and CLI decode Arrow VARIANT values into readable scalars, objects, and arrays
+  instead of exposing binary metadata/value structs (#2). Web headers show VARIANT;
+  clipboard, text exports, JSON, and Excel use decoded values and preserve exact numbers.
+  Arrow and Parquet downloads retain the original typed result. The web cell inspector
+  also offers raw Arrow storage. Ordinary structs remain ordinary structs.
+- Instrumentation records statement deadline and queue-wait timeouts as `timeout`, with
+  `queue_timeout` distinguishing time spent waiting for a statement slot.
 
 ## [2.0.0] - 2026-10-20
 

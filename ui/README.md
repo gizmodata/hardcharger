@@ -19,6 +19,9 @@ backend and no cross-origin access: the browser speaks [Warp SQL](https://github
   <img src="../docs/assets/web-ui-query-light.png" alt="The web UI: the schema browser, two editor tabs, a script's result tabs, and an open transaction" width="80%">
 </p>
 
+- 🔭 **SQL Monitor** and **Server Configuration** for unrestricted administrators: query
+  lifecycle, recent history, timeouts, queue slots, and safe read-only settings. Monitoring
+  requires `--enable-instrumentation`; see [the operational guide](../docs/sql-monitor.md).
 - ✍️ **SQL editor** (Monaco), in tabs: up to 20, each with its own Warp SQL session, so one
   tab's long query or open transaction never touches another. New with **+** or Alt+N, close
   with **×** or Alt+W (asking first when a transaction is open or text is unsaved),

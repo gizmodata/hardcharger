@@ -2,6 +2,7 @@
 
 #include "output_renderer.hpp"
 #include "sql_quoting.hpp"
+#include "variant.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -94,6 +95,81 @@ class OpaqueType : public arrow::ExtensionType {
   std::string vendor_name_;
 };
 
+// DuckDB uses a nullable `value` child (allowed by the current canonical format).
+// Arrow C++ 26's experimental implementation still rejects that storage on read.
+// Preserve it verbatim and decode at presentation time instead of failing the IPC.
+class VariantType : public arrow::ExtensionType {
+ public:
+  explicit VariantType(std::shared_ptr<arrow::DataType> storage) : arrow::ExtensionType(std::move(storage)) {}
+  std::string extension_name() const override { return "arrow.parquet.variant"; }
+  bool ExtensionEquals(const arrow::ExtensionType& other) const override {
+    return other.extension_name() == extension_name() && storage_type()->Equals(other.storage_type());
+  }
+  std::shared_ptr<arrow::Array> MakeArray(std::shared_ptr<arrow::ArrayData> data) const override {
+    return std::make_shared<arrow::ExtensionArray>(std::move(data));
+  }
+  arrow::Result<std::shared_ptr<arrow::DataType>> Deserialize(std::shared_ptr<arrow::DataType> storage,
+                                                            const std::string&) const override {
+    return std::make_shared<VariantType>(std::move(storage));
+  }
+  std::string Serialize() const override { return ""; }
+};
+
+bool IsVariant(const arrow::DataType& type) {
+  return type.id() == arrow::Type::EXTENSION &&
+         static_cast<const arrow::ExtensionType&>(type).extension_name() == "arrow.parquet.variant";
+}
+
+VariantValue VariantScalar(const arrow::Scalar& scalar) {
+  const auto& storage = *static_cast<const arrow::ExtensionScalar&>(scalar).value;
+  const VariantValue invalid = {"[VARIANT: unsupported storage]", "\"[VARIANT: unsupported storage]\""};
+  if (storage.type->id() != arrow::Type::STRUCT || storage.type->num_fields() != 2) return invalid;
+  const auto& row = static_cast<const arrow::StructScalar&>(storage);
+  const auto metadata = row.field("metadata");
+  const auto value = row.field("value");
+  if (!metadata.ok() || !value.ok() || !(*metadata)->is_valid || !(*value)->is_valid) return invalid;
+  const auto binary = [](const arrow::Scalar& s) { return s.type->id() == arrow::Type::BINARY || s.type->id() == arrow::Type::LARGE_BINARY; };
+  if (!binary(**metadata) || !binary(**value)) return invalid;
+  return DecodeVariant(static_cast<const arrow::BaseBinaryScalar&>(**metadata).view(),
+                       static_cast<const arrow::BaseBinaryScalar&>(**value).view());
+}
+
+bool ContainsVariant(const arrow::DataType& type) {
+  if (IsVariant(type)) return true;
+  for (const auto& field : type.fields()) if (ContainsVariant(*field->type())) return true;
+  return false;
+}
+
+// A VARIANT nested inside a list/struct must be decoded too. Other columns keep
+// their existing renderer. Nested strings are JSON quoted and numbers stay exact.
+std::string VariantJson(const arrow::Scalar& scalar) {
+  if (!scalar.is_valid) return "null";
+  if (IsVariant(*scalar.type)) return VariantScalar(scalar).json;
+  if (scalar.type->id() == arrow::Type::STRUCT) {
+    const auto& row = static_cast<const arrow::StructScalar&>(scalar);
+    std::string out = "{";
+    for (size_t i = 0; i < row.value.size(); ++i) {
+      if (i) out += ',';
+      out += boost::json::serialize(boost::json::value(scalar.type->field(i)->name())) + ':' + VariantJson(*row.value[i]);
+    }
+    return out + '}';
+  }
+  if (const auto* list = dynamic_cast<const arrow::BaseListScalar*>(&scalar)) {
+    std::string out = "[";
+    for (int64_t i = 0; i < list->value->length(); ++i) {
+      if (i) out += ',';
+      const auto child = list->value->GetScalar(i);
+      out += child.ok() ? VariantJson(**child) : "null";
+    }
+    return out + ']';
+  }
+  const auto type = scalar.type->id();
+  const std::string text = scalar.ToString();
+  if (arrow::is_integer(type) || arrow::is_decimal(type) || type == arrow::Type::BOOL) return text;
+  if (arrow::is_floating(type) && text != "nan" && text != "inf" && text != "-inf") return text;
+  return boost::json::serialize(boost::json::value(text));
+}
+
 // DuckDB's HUGEINT or UHUGEINT as its lossless Arrow type (the session option
 // arrow_lossless_conversion): arrow.opaque over 16 little-endian bytes. Sets `is_signed`.
 bool IsDuckDBWideInteger(const arrow::DataType& type, bool* is_signed) {
@@ -147,6 +223,9 @@ std::string WideIntegerText(const uint8_t* bytes, bool is_signed) {
 void RegisterArrowExtensionTypes() {
   static std::once_flag once;
   std::call_once(once, [] {
+    if (arrow::GetExtensionType("arrow.parquet.variant") == nullptr) {
+      (void)arrow::RegisterExtensionType(std::make_shared<VariantType>(arrow::null()));
+    }
     if (arrow::GetExtensionType("arrow.opaque") == nullptr) {
       (void)arrow::RegisterExtensionType(std::make_shared<OpaqueType>(arrow::null(), "", "", ""));
     }
@@ -170,7 +249,8 @@ std::string GetCellValue(const std::shared_ptr<arrow::ChunkedArray>& column,
       }
       auto scalar_result = chunk->GetScalar(offset);
       if (scalar_result.ok()) {
-        return (*scalar_result)->ToString();
+        if (IsVariant(*chunk->type())) return VariantScalar(**scalar_result).text;
+        return ContainsVariant(*chunk->type()) ? VariantJson(**scalar_result) : (*scalar_result)->ToString();
       }
       return null_value;
     }
@@ -242,6 +322,7 @@ std::string FriendlyTypeName(const std::shared_ptr<arrow::DataType>& type) {
     case arrow::Type::MAP:
       return type->ToString();
     case arrow::Type::EXTENSION: {
+      if (IsVariant(*type)) return "variant";
       bool is_signed = false;
       if (IsDuckDBWideInteger(*type, &is_signed)) return is_signed ? "hugeint" : "uhugeint";
       return type->ToString();
@@ -455,6 +536,7 @@ bool IsNumericType(const std::shared_ptr<arrow::DataType>& type) {
     case arrow::Type::DECIMAL256:
       return true;
     case arrow::Type::EXTENSION: {
+      if (IsVariant(*type)) return "variant";
       bool is_signed = false;
       return IsDuckDBWideInteger(*type, &is_signed);  // printed as exact integers
     }
@@ -878,7 +960,10 @@ class JsonRenderer : public OutputRenderer {
         } else {
           auto type = table.schema()->field(c)->type();
           std::string val = GetCellValue(table.column(c), r, null_value);
-          if (IsNumericType(type)) {
+          if (ContainsVariant(*type)) {
+            const auto scalar = table.column(c)->GetScalar(r);
+            out << (scalar.ok() ? VariantJson(**scalar) : "null");
+          } else if (IsNumericType(type)) {
             out << val;
           } else if (IsBooleanType(type)) {
             out << (val == "true" ? "true" : "false");
@@ -910,7 +995,10 @@ class JsonLinesRenderer : public OutputRenderer {
         } else {
           auto type = table.schema()->field(c)->type();
           std::string val = GetCellValue(table.column(c), r, null_value);
-          if (IsNumericType(type)) {
+          if (ContainsVariant(*type)) {
+            const auto scalar = table.column(c)->GetScalar(r);
+            out << (scalar.ok() ? VariantJson(**scalar) : "null");
+          } else if (IsNumericType(type)) {
             out << val;
           } else if (IsBooleanType(type)) {
             out << (val == "true" ? "true" : "false");
@@ -1095,7 +1183,10 @@ class InsertRenderer : public OutputRenderer {
         } else {
           auto type = table.schema()->field(c)->type();
           std::string val = GetCellValue(table.column(c), r, null_value);
-          if (IsNumericType(type)) {
+          if (IsVariant(*type)) {
+            const auto scalar = table.column(c)->GetScalar(r);
+            out << (scalar.ok() ? VariantScalar(**scalar).json : "null");
+          } else if (IsNumericType(type)) {
             out << val;
           } else {
             out << SqlEscape(val);

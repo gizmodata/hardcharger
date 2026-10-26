@@ -898,6 +898,149 @@ select {
 .row-current td {
   background: var(--accent-soft);
 }
+
+/* Administrative pages retain the editor's brand and theme, keeping status labels
+   explicit so color is never the only way to distinguish a statement's state. */
+.monitor-page > .page-sub,
+.configuration-page > .page-sub {
+  margin: 12px 0;
+}
+.monitor-page h2,
+.configuration-page h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.monitor-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 18px 0 12px;
+}
+.monitor-stats > div {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 14px;
+  border-top: 3px solid var(--hc-blue);
+}
+.monitor-stats span,
+.monitor-table small,
+.configuration-page small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin: 4px 0;
+}
+.monitor-stats strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 18px;
+}
+.monitor-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 18px 0 10px;
+}
+.monitor-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.monitor-controls input:not([type="checkbox"]) {
+  min-width: 220px;
+}
+.monitor-controls input:not([type="checkbox"]),
+.monitor-controls select {
+  min-height: 32px;
+  padding: 5px 9px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font: inherit;
+}
+.monitor-table-wrap {
+  overflow: auto;
+  max-height: 65vh;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+.monitor-sql {
+  display: block;
+  max-width: 440px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  text-align: left;
+  color: var(--link);
+  cursor: pointer;
+}
+.monitor-status {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 4px 7px;
+  font-weight: 600;
+  background: var(--panel-2);
+}
+.monitor-status-executing,
+.monitor-status-fetching {
+  color: var(--link);
+  background: var(--select);
+}
+.monitor-status-error,
+.monitor-status-timeout {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.monitor-status-queued,
+.monitor-status-cancelled {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.monitor-warning {
+  color: var(--danger);
+}
+.monitor-detail {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.monitor-detail dl {
+  display: grid;
+  grid-template-columns: minmax(140px, auto) 1fr;
+  gap: 8px 16px;
+}
+.monitor-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.configuration-facts > div {
+  display: contents;
+}
+.monitor-empty {
+  padding: 20px 0;
+  color: var(--muted);
+}
+.nav-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (min-width: 761px) and (max-width: 1250px) {
+  .header-title {
+    display: none;
+  }
+  .header-nav .nav-label {
+    font-size: 11px;
+  }
+}
 .mono {
   font-family: var(--mono);
 }

@@ -5,6 +5,7 @@
 // HARDCHARGER_TEST_UNIT_PG (a libpq conninfo) also runs the PostgreSQL case.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -133,6 +134,39 @@ void Finish(ExecutionRecord& r, int64_t rows) {
 }
 
 }  // namespace
+
+TEST(InstrumentationTest, LiveMonitorDoesNotDependOnHistoryWrites) {
+  Fixture f("live_monitor");
+  Instrumentation instrumentation(*f.runtime, f.db.instance.get(), "v2.0.0", {.max_queued_bytes = 1});
+  instrumentation.Attach();
+  instrumentation.Start();
+  ExecutionRecord active;
+  active.execution_id = active.statement_id = "q_old_active";
+  active.start = std::chrono::system_clock::now() - std::chrono::hours(3);
+  active.sql = "SELECT old_active";
+  instrumentation.ExecutionStarted(active);
+  ASSERT_GT(f.stats().dropped.load(), 0);
+  // No time window or completion cap may evict work still active.
+  for (int i = 0; i < 2050; ++i) {
+    ExecutionRecord finished;
+    finished.execution_id = finished.statement_id = "q_finished_" + std::to_string(i);
+    finished.start = std::chrono::system_clock::now();
+    Finish(finished, 1);
+    instrumentation.ExecutionFinished(finished);
+  }
+  auto records = instrumentation.MonitorRecords();
+  EXPECT_EQ(records.size(), 2049);
+  EXPECT_TRUE(std::any_of(records.begin(), records.end(), [](const auto& r) { return r.execution_id == "q_old_active"; }));
+  active.end = active.fetch_start = std::chrono::system_clock::now();
+  active.rows = 42;
+  instrumentation.ExecutionProgress(active);
+  records = instrumentation.MonitorRecords();
+  const auto found = std::find_if(records.begin(), records.end(), [](const auto& r) { return r.execution_id == "q_old_active"; });
+  ASSERT_NE(found, records.end());
+  EXPECT_EQ(found->rows, 42);
+  EXPECT_FALSE(found->fetch_end);
+  instrumentation.Stop();
+}
 
 TEST(InstrumentationTest, FailedWriteDoesNotAffectOtherWrites) {
   Fixture f("failed");

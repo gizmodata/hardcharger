@@ -2,7 +2,7 @@
 // and sort); Parquet (parquet-wasm, loaded only when asked for, see parquet.ts) and Arrow IPC
 // hold the whole result as it arrived, with the server's exact column types.
 
-import { type DataType, type Table, tableToIPC } from "apache-arrow";
+import { type Table, tableToIPC } from "apache-arrow";
 
 import { columnText, jsonFor } from "./format";
 
@@ -95,7 +95,7 @@ export function toDelimited(
 
 /** The rows (those in `order`, in that order) as a JSON array of objects, with exact numbers. */
 export function toJson(table: Table, order?: readonly number[]): string {
-  const json = table.schema.fields.map((f) => jsonFor(f.type as DataType));
+  const json = table.schema.fields.map((f) => jsonFor(f));
   const keys = table.schema.fields.map((f) => JSON.stringify(f.name));
   const vectors = table.schema.fields.map((_, i) => table.getChildAt(i)!);
   const rows: string[] = [];

@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export type Page = "query" | "sessions" | "api" | "not-found";
+export type Page = "query" | "sessions" | "api" | "monitor" | "configuration" | "not-found";
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -12,12 +12,14 @@ export function pageOf(pathname: string): Page {
   const path = rest.replace(/\/+$/, "");
   if (path === "" || path === "/query") return "query";
   if (path === "/sessions") return "sessions";
+  if (path === "/monitor") return "monitor";
+  if (path === "/configuration") return "configuration";
   if (path === "/api") return "api";
   return "not-found";
 }
 
 export function pathOf(page: Page): string {
-  if (page === "sessions" || page === "api") return `${base}/${page}`;
+  if (page === "sessions" || page === "api" || page === "monitor" || page === "configuration") return `${base}/${page}`;
   return `${base}/`;
 }
 

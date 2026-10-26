@@ -721,6 +721,70 @@ std::shared_ptr<arrow::RecordBatch> ServerInfoTable(Runtime& runtime, const Sess
   return arrow::RecordBatch::Make(arrow::schema(fields), 1, arrays);
 }
 
+// ---- SQL Monitor (unrestricted administrators only) ----
+void RequireFullAdmin(const Session& session) {
+  if (!session.full_admin())
+    throw Error(ErrorCode::kPermissionDenied, "Only unrestricted administrators can monitor SQL or view server configuration", "42501");
+}
+
+std::shared_ptr<arrow::RecordBatch> MonitorInfoTable(Runtime& runtime, const Session& viewer) {
+  RequireFullAdmin(viewer);
+  const auto queue = runtime.admission.GetSnapshot();
+  std::vector<std::shared_ptr<arrow::Field>> fields;
+  std::vector<std::shared_ptr<arrow::Array>> arrays;
+  auto add = [&](std::string name, const arrow::Scalar& scalar) {
+    fields.push_back(arrow::field(std::move(name), scalar.type));
+    arrays.push_back(arrow::MakeArrayFromScalar(scalar, 1).ValueOrDie());
+  };
+  add("instrumentation_enabled", arrow::BooleanScalar(runtime.instrumentation != nullptr));
+  add("queueing_enabled", arrow::BooleanScalar(queue.limit > 0));
+  add("concurrency_limit", arrow::Int64Scalar(queue.limit));
+  add("slots_in_use", arrow::Int64Scalar(queue.active));
+  add("slots_available", queue.limit > 0 ? arrow::Int64Scalar(std::max(int64_t(0), queue.limit - queue.active)) : arrow::Int64Scalar());
+  add("queued_statements", arrow::Int64Scalar(queue.queued));
+  add("queue_capacity", arrow::Int64Scalar(queue.max_queued));
+  add("max_queue_wait_seconds", arrow::Int64Scalar(queue.max_queue_wait_seconds));
+  add("admin_bypass_default", arrow::BooleanScalar(runtime.config.admin_bypass_queue_default));
+  add("history_backlog", arrow::Int64Scalar(runtime.instrumentation_stats.queued.load()));
+  add("history_dropped", arrow::UInt64Scalar(runtime.instrumentation_stats.dropped.load()));
+  add("history_failed", arrow::UInt64Scalar(runtime.instrumentation_stats.failed.load()));
+  return arrow::RecordBatch::Make(arrow::schema(fields), 1, arrays);
+}
+
+std::shared_ptr<arrow::RecordBatch> LiveQueriesTable(Runtime& runtime, const Session& viewer) {
+  RequireFullAdmin(viewer);
+  if (!runtime.instrumentation)
+    throw Error(ErrorCode::kSqlError, "SQL Monitor requires instrumentation: start the server with --enable-instrumentation");
+  arrow::StringBuilder id, statement, session, user, sql, status, error, reason, tag;
+  arrow::Int64Builder rows;
+  arrow::TimestampBuilder start(Timestamptz(), arrow::default_memory_pool()), end(Timestamptz(), arrow::default_memory_pool()),
+      enqueue(Timestamptz(), arrow::default_memory_pool()), fetch_start(Timestamptz(), arrow::default_memory_pool()),
+      fetch_end(Timestamptz(), arrow::default_memory_pool()), close(Timestamptz(), arrow::default_memory_pool());
+  auto time = [](auto& builder, const std::optional<WallTime>& value) { (void)(value ? builder.Append(ToMicros(*value)) : builder.AppendNull()); };
+  for (const auto& r : runtime.instrumentation->MonitorRecords()) {
+    (void)id.Append(r.execution_id); (void)statement.Append(r.statement_id);
+    (void)session.Append(r.session_id); (void)user.Append(r.username); (void)sql.Append(r.sql); (void)tag.Append(r.query_tag);
+    const bool timed_out = r.cancel_reason == "timeout" || r.cancel_reason == "queue_timeout";
+    (void)status.Append(timed_out ? "timeout" : r.fetch_start && !r.fetch_end && !r.cursor_close ? "fetching" : r.status);
+    (void)error.Append(r.error); (void)reason.Append(r.cancel_reason); (void)rows.Append(r.rows);
+    (void)start.Append(ToMicros(r.start)); time(end, r.end); time(enqueue, r.enqueue_time);
+    time(fetch_start, r.fetch_start); time(fetch_end, r.fetch_end); time(close, r.cursor_close);
+  }
+  std::vector<std::shared_ptr<arrow::Array>> arrays;
+  std::vector<std::shared_ptr<arrow::Field>> fields;
+  auto finish = [&](std::string name, auto& builder) {
+    auto array = builder.Finish().ValueOrDie();
+    fields.push_back(arrow::field(std::move(name), array->type())); arrays.push_back(std::move(array));
+  };
+  finish("execution_id", id); finish("statement_id", statement); finish("session_id", session); finish("username", user);
+  finish("query_tag", tag);
+  finish("sql_text", sql); finish("status", status); finish("error_message", error); finish("cancel_reason", reason);
+  finish("rows_fetched", rows); finish("execution_start_time", start); finish("execution_end_time", end);
+  finish("enqueue_time", enqueue); finish("fetch_start_time", fetch_start); finish("fetch_end_time", fetch_end); finish("cursor_close_time", close);
+  const auto count = arrays.front()->length();
+  return arrow::RecordBatch::Make(arrow::schema(fields), count, arrays);
+}
+
 // ---- hardcharger_cancel(session_id) ----
 
 struct CancelBinding {
@@ -851,6 +915,7 @@ void RegisterSqlFunctions(duckdb_v2_connection_handle connection, Runtime& runti
       {"ROLE", "VARCHAR", text([](Runtime&, const Session* s) -> std::optional<std::string> {
          return s ? std::optional(s->principal().role) : std::nullopt;
        })},
+      {"IS_FULL_ADMIN", "BOOLEAN", [](Runtime&, const Session* s) { return ContextValue{std::nullopt, s && s->full_admin()}; }},
       {"VERSION", "VARCHAR",
        text([](Runtime&, const Session*) -> std::optional<std::string> { return std::string(kVersion); })},
       {"CURRENT_SESSION", "VARCHAR", text([](Runtime&, const Session* s) -> std::optional<std::string> {
@@ -890,6 +955,17 @@ void RegisterSqlFunctions(duckdb_v2_connection_handle connection, Runtime& runti
                 [](Runtime& r, const Session* s, const TableArgs&) {
                   return ServerInfoTable(r, RequireSession(s, "hardcharger_server_info"));
                 });
+  RegisterTable(connection, factory, runtime, "hardcharger_monitor_info", [](Runtime& r, const Session* s, const TableArgs&) {
+    return MonitorInfoTable(r, RequireSession(s, "hardcharger_monitor_info"));
+  });
+  RegisterTable(connection, factory, runtime, "hardcharger_live_queries", [](Runtime& r, const Session* s, const TableArgs&) {
+    return LiveQueriesTable(r, RequireSession(s, "hardcharger_live_queries"));
+  });
+  RegisterTable(connection, factory, runtime, "hardcharger_server_settings", [](Runtime&, const Session* s, const TableArgs&) {
+    const auto& viewer = RequireSession(s, "hardcharger_server_settings");
+    RequireFullAdmin(viewer);
+    return SettingsTable(viewer);
+  });
   RegisterCancel(connection, factory, runtime);
 
   // Access-control introspection: what the session may see of the store's grants, roles,

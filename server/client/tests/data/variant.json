@@ -1,0 +1,177 @@
+[
+  {
+    "name": "int32",
+    "metadata": "010000",
+    "value": "142a000000",
+    "text": "42",
+    "json": "42"
+  },
+  {
+    "name": "int64 exact",
+    "metadata": "010000",
+    "value": "180100000000002000",
+    "text": "9007199254740993",
+    "json": "9007199254740993"
+  },
+  {
+    "name": "negative int64",
+    "metadata": "010000",
+    "value": "180000000000000080",
+    "text": "-9223372036854775808",
+    "json": "-9223372036854775808"
+  },
+  {
+    "name": "short string",
+    "metadata": "010000",
+    "value": "1568656c6c6f",
+    "text": "hello",
+    "json": "\"hello\""
+  },
+  {
+    "name": "long string",
+    "metadata": "010000",
+    "value": "4005000000776f726c64",
+    "text": "world",
+    "json": "\"world\""
+  },
+  {
+    "name": "null",
+    "metadata": "010000",
+    "value": "00",
+    "text": "null",
+    "json": "null"
+  },
+  {
+    "name": "true",
+    "metadata": "010000",
+    "value": "04",
+    "text": "true",
+    "json": "true"
+  },
+  {
+    "name": "false",
+    "metadata": "010000",
+    "value": "08",
+    "text": "false",
+    "json": "false"
+  },
+  {
+    "name": "double",
+    "metadata": "010000",
+    "value": "1c0000000000000c40",
+    "text": "3.5",
+    "json": "3.5"
+  },
+  {
+    "name": "float",
+    "metadata": "010000",
+    "value": "380000c03f",
+    "text": "1.5",
+    "json": "1.5"
+  },
+  {
+    "name": "decimal4",
+    "metadata": "010000",
+    "value": "2003c7cfffff",
+    "text": "-12.345",
+    "json": "-12.345"
+  },
+  {
+    "name": "decimal8",
+    "metadata": "010000",
+    "value": "24067b00000000000000",
+    "text": "0.000123",
+    "json": "0.000123"
+  },
+  {
+    "name": "decimal16",
+    "metadata": "010000",
+    "value": "28044ef338de509049c4133302f0f6b04909",
+    "text": "1234567890123456789012345678901234.5678",
+    "json": "1234567890123456789012345678901234.5678"
+  },
+  {
+    "name": "array",
+    "metadata": "010000",
+    "value": "0303000203040c2a0004",
+    "text": "[42,null,true]",
+    "json": "[42,null,true]"
+  },
+  {
+    "name": "object unordered storage",
+    "metadata": "01020001026162",
+    "value": "0202000109000e030300010203040008142a000000",
+    "text": "{\"a\":42,\"b\":[true,null,false]}",
+    "json": "{\"a\":42,\"b\":[true,null,false]}"
+  },
+  {
+    "name": "empty array",
+    "metadata": "010000",
+    "value": "030000",
+    "text": "[]",
+    "json": "[]"
+  },
+  {
+    "name": "empty object",
+    "metadata": "010000",
+    "value": "020000",
+    "text": "{}",
+    "json": "{}"
+  },
+  {
+    "name": "date",
+    "metadata": "010000",
+    "value": "2c00000000",
+    "text": "1970-01-01",
+    "json": "\"1970-01-01\""
+  },
+  {
+    "name": "negative timestamp",
+    "metadata": "010000",
+    "value": "34ffffffffffffffff",
+    "text": "1969-12-31 23:59:59.999999",
+    "json": "\"1969-12-31 23:59:59.999999\""
+  },
+  {
+    "name": "nanosecond timestamp",
+    "metadata": "010000",
+    "value": "4815cd5b0700000000",
+    "text": "1970-01-01 00:00:00.123456789+00",
+    "json": "\"1970-01-01 00:00:00.123456789+00\""
+  },
+  {
+    "name": "time",
+    "metadata": "010000",
+    "value": "44e019f0dd00000000",
+    "text": "01:02:03.5",
+    "json": "\"01:02:03.5\""
+  },
+  {
+    "name": "uuid",
+    "metadata": "010000",
+    "value": "50000102030405060708090a0b0c0d0e0f",
+    "text": "00010203-0405-0607-0809-0a0b0c0d0e0f",
+    "json": "\"00010203-0405-0607-0809-0a0b0c0d0e0f\""
+  },
+  {
+    "name": "binary",
+    "metadata": "010000",
+    "value": "3c0200000000ff",
+    "text": "\\x00ff",
+    "json": "\"\\\\x00ff\""
+  },
+  {
+    "name": "truncated int",
+    "metadata": "010000",
+    "value": "14",
+    "text": "[VARIANT: truncated value]",
+    "json": "\"[VARIANT: truncated value]\""
+  },
+  {
+    "name": "unknown version",
+    "metadata": "020000",
+    "value": "00",
+    "text": "[VARIANT: unsupported metadata version]",
+    "json": "\"[VARIANT: unsupported metadata version]\""
+  }
+]
