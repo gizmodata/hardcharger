@@ -9,6 +9,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Retry transient Apple ticket-service errors during final desktop notarization
+  validation; app and disk image must still pass before uploading artifacts.
+
 - Query details show elapsed queue, execution, fetch, cursor-release and total times,
   including live durations and compact same-day end timestamps.
 - The macOS Window menu lists open workspaces and query inspectors, making windows

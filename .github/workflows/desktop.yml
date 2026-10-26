@@ -197,8 +197,18 @@ jobs:
           codesign --verify -R='anchor apple generic and certificate leaf[subject.OU] = "XYB42X6NFX"' "$app"
           python3 desktop/scripts/check-extension-entitlement.py "$app/Contents/MacOS/hardcharger-server"
           spctl --assess --type execute --verbose=2 "$app"
-          xcrun stapler validate "$app"
-          xcrun stapler validate desktop/artifacts/Hardcharger-desktop-macos-arm64.dmg
+          # Ticket validation contacts Apple even for an already stapled artifact.
+          # Transient service failures must not discard an otherwise valid build;
+          # every artifact still has to pass validation within the bounded retry.
+          validate_ticket() {
+            for attempt in 1 2 3; do
+              if xcrun stapler validate "$1"; then return 0; fi
+              if [ "$attempt" -lt 3 ]; then sleep 10; fi
+            done
+            return 1
+          }
+          validate_ticket "$app"
+          validate_ticket desktop/artifacts/Hardcharger-desktop-macos-arm64.dmg
           spctl --assess --type open --context context:primary-signature --verbose=2 desktop/artifacts/Hardcharger-desktop-macos-arm64.dmg
       - name: Build the Windows installer
         if: runner.os == 'Windows'
