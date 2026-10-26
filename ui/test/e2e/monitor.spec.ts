@@ -29,6 +29,49 @@ test("a non-admin cannot see admin tabs or enter their routes", async ({ page, h
   await expect(page.getByRole("region", { name: "Statement details" })).toHaveCount(0);
 });
 
+test("navigation explicitly aborts an outstanding metadata request before replacing the page", async ({
+  page,
+  harness,
+}) => {
+  await page.addInitScript(() => {
+    const original = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/metadata/db-schemas")) {
+        init?.signal?.addEventListener("abort", () => sessionStorage.setItem("metadata-aborted-on-exit", "yes"), {
+          once: true,
+        });
+      }
+      return original(input, init);
+    };
+  });
+  let requested!: () => void;
+  const started = new Promise<void>((resolve) => {
+    requested = resolve;
+  });
+  let resume!: () => void;
+  const held = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  let first = true;
+  await page.route("**/metadata/db-schemas?*", async (route) => {
+    if (!first) return route.continue();
+    first = false;
+    requested();
+    await held;
+    await route.abort().catch(() => {});
+  });
+  try {
+    await signIn(page, harness.user);
+    await started;
+    await page.goto(`${harness.url}/ui/monitor`);
+    await expect(page.getByText("Only unrestricted administrators can view SQL Monitor.")).toBeVisible();
+    expect(await page.evaluate(() => sessionStorage.getItem("metadata-aborted-on-exit"))).toBe("yes");
+  } finally {
+    resume();
+  }
+});
+
 test("SQL Monitor shows outcomes and slots and preserves the editor", async ({ page }, testInfo) => {
   const server = await startOwnServer(["--enable-instrumentation", "--max-concurrent-statements", "2"]);
   const connection = await connect({ url: `${server.url}/warp`, ...server.admin, resultPartitions: 1 });

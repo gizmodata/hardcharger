@@ -137,7 +137,7 @@ export function App() {
         connection = await openExtraConnection(auth, { signal: controller.signal });
         const identity = await whoAmI(connection);
         if (controller.signal.aborted) {
-          void connection.close();
+          void connection.close().catch(() => {});
           return;
         }
         setPhase({ kind: "ready", auth, connection, identity });

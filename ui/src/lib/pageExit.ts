@@ -7,6 +7,7 @@
 // which starts new ones (and restores the tabs, kept in this browser).
 
 import { warpBase } from "./warp";
+import { pageRequests } from "./pageRequests";
 
 const closeRequest = "hardcharger:close-window";
 
@@ -77,6 +78,7 @@ export function endSessionsOnExit(
   // the page then goes on with new ones, which a later exit ends).
   const ended = new Set<string>();
   const exit = () => {
+    pageRequests.abort();
     const now = open();
     if (!now) return;
     const ids = now.ids.filter((id) => !ended.has(id));

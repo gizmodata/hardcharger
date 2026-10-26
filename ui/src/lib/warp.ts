@@ -3,6 +3,7 @@
 import { type Connection, type DiscoveryDocument, connect } from "@gizmodata/warp-sql";
 
 import type { SignedIn } from "./auth";
+import { pageRequests } from "./pageRequests";
 
 /** The protocol's base URL: this page's origin, /warp. */
 export function warpBase(): string {
@@ -11,7 +12,7 @@ export function warpBase(): string {
 
 /** The server's discovery document (§3.1); needs no sign-in. */
 export async function discover(signal?: AbortSignal): Promise<DiscoveryDocument> {
-  const resp = await fetch(warpBase(), {
+  const resp = await pageRequests.fetch(warpBase(), {
     headers: { Accept: "application/json" },
     cache: "no-store",
     signal: signal ?? null,
@@ -40,6 +41,7 @@ export function openConnection(auth: SignedIn, options: ConnectionOptions = {}):
   const { signal, catalog, schema, reconnect } = options;
   return connect({
     url: warpBase(),
+    fetch: pageRequests.fetch,
     token: auth.token,
     ...(catalog ? { catalog } : {}),
     ...(schema ? { schema } : {}),
