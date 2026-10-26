@@ -9,11 +9,14 @@
 
 # Hardcharger's web UI
 
-The browser UI that [Hardcharger](../README.md#️-built-in-web-ui) serves at `/ui` when started
+The browser UI that [Hardcharger](../README.md#built-in-web-ui) serves at `/ui` when started
 with `--web-ui`: a static single-page app (React 19, Vite, TypeScript) compiled into
 `hardcharger-server`, on the server's own port, origin and TLS certificate. There is no Node
 backend and no cross-origin access: the browser speaks [Warp SQL](https://github.com/gizmodata/warp-sql)
 (plain HTTP and Apache Arrow) to the server with [`@gizmodata/warp-sql`](https://github.com/gizmodata/warp-sql-js).
+
+For the v2.1.0+ administrator tabs, see [SQL Monitor and Server Configuration](../docs/sql-monitor.md).
+They are available in browser sessions and the [desktop app's SQL workspace](../docs/desktop-app.md).
 
 <p align="center">
   <img src="../docs/assets/web-ui-query-light.png" alt="The web UI: the schema browser, two editor tabs, a script's result tabs, and an open transaction" width="80%">

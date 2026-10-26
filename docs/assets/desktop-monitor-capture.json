@@ -1,0 +1,18 @@
+{
+  "captured_at": "2026-10-26",
+  "source_repository": "gizmodata/hardcharger",
+  "source_commit": "b29cdee1",
+  "source_note": "documentation-screenshots.spec.ts added on top of this commit; executable/UI report 2.0.0 while preparing the v2.1.0 feature branch",
+  "ui_capture_command": "npx playwright test test/e2e/documentation-screenshots.spec.ts",
+  "desktop_capture_command": "npx playwright test test/preview.spec.ts",
+  "desktop_note": "Design preview with sample status, labeled in the UI and captions; no live desktop credentials or user database used",
+  "ui_note": "Real temporary servers and synthetic sales.orders data; Chromium captures, also verified in WebKit",
+  "files": {
+    "desktop-preview-light.png": "818e7e9e0195b5cf9a1819a4d488c5040d7cf44891968227d33ba55dd363e998",
+    "desktop-preview-dark.png": "93ba2425893438ecb8b15f0fdadf371a8fab056cc93f6857ad857cffc7894efd",
+    "web-ui-monitor-dark.png": "3281826e57c1b18c63a31a3c6a55db4c01c44ceecd3e847f62479c21eac21491",
+    "web-ui-monitor-light.png": "cf6ab3579ec8151f8f64411adfab8427656417ca069d08ad2cfc6026dd83fc28",
+    "web-ui-configuration-dark.png": "38b391147684357320fcb4f3020205f29b5b19699bef0dd0ea6f89894af881d8",
+    "web-ui-configuration-light.png": "a27f3395fcf8bfaaf6b4813b233248abb5de072e391fd9560620b7745f822519"
+  }
+}

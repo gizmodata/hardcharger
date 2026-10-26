@@ -1,5 +1,10 @@
 # SQL Monitor and server configuration
 
+**Available in v2.1.0+.** Both tabs are part of the server's built-in SQL Editor web UI:
+they work in browser sessions served with `--web-ui` and in the [desktop app](desktop-app.md).
+Desktop users enable `enable_instrumentation` under Settings → Server options, save,
+and restart the server to enable SQL Monitor.
+
 Start the server with `--enable-instrumentation`, open `/ui/`, and sign in as an
 unrestricted administrator. **SQL Monitor** refreshes every two seconds. Without
 instrumentation its navigation item is disabled; `/ui/monitor` explains how to enable it.
@@ -13,6 +18,8 @@ so it stays usable when all normal statement slots are occupied and never enters
 editor's transaction. That session closes when the page is left.
 
 ## Reading SQL Monitor
+
+![SQL Monitor with recent outcomes, queue status, available slots, and filters](assets/web-ui-monitor-light.png)
 
 - **Queued**: waiting for a concurrency slot. **Executing**: admitted, before its first
   result batch. **Fetching**: the server has fetched a batch and still holds the result.
@@ -88,6 +95,8 @@ browser. Every icon has a tooltip and accessible name. Executing statements have
 circle in both modes; reduced-motion preferences disable its animation.
 
 ## Server Configuration
+
+![Session and global configuration values with supported edit and reset controls](assets/web-ui-configuration-light.png)
 
 `/ui/configuration` shows the selected session's effective value, explicit override
 versus inheritance, global value, documented default, allowed scopes, startup flag and

@@ -1,5 +1,9 @@
 # Hardcharger™ desktop preview
 
+The desktop app targets **v2.1.0+**. Start with the [user guide](../docs/desktop-app.md)
+for downloads, running the server, network setup, settings and logs. This page covers
+building, testing and signing review artifacts.
+
 The existing Hardcharger server and its embedded web UI in a Tauri desktop app. The server
 and command-line client remain independent tools; the desktop app bundles both. The bull
 head from the existing brand kit is the application and tray icon. The application icon

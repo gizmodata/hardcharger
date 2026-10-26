@@ -54,7 +54,33 @@ Enterprise in GizmoSQL is in every Hardcharger build.
 - 🌐 **Ready to scale out.** Results are already described as partitions with locations,
   so distributed query execution can arrive without a protocol change.
 
-## 🖥️ Built-in web UI
+## 🖥️ Desktop app (v2.1.0+)
+
+Run Hardcharger from a native macOS or Windows app: start and stop the server, open its
+SQL workspace, manage settings, and follow the logs. Closing the window leaves the server
+running in the macOS menu bar or Windows system tray; **Quit Hardcharger** stops it.
+
+<p align="center">
+  <img src="docs/assets/desktop-preview-light.png" alt="Hardcharger desktop dashboard design preview, light theme: server controls, database information and the SQL workspace button" width="49%">
+  <img src="docs/assets/desktop-preview-dark.png" alt="Hardcharger desktop dashboard design preview, dark theme" width="49%">
+</p>
+
+The dashboard images show the design preview with sample data. The app runs the same
+`hardcharger-server` executable shipped in the command-line packages and opens its built-in
+web UI in a separate window. It also bundles the `hardcharger` CLI. Pick the desktop app
+for an interactive computer, or the command-line packages for terminals, automation,
+containers and operating-system services. Both remain supported.
+
+For v2.1.0+, desktop release artifacts use the **`Hardcharger-desktop-…`** prefix:
+the macOS `.dmg` is signed and notarized, and the Windows `.msi` is signed. The existing
+Windows `Hardcharger-windows-…msi` installs the command-line tools. Linux users continue
+to use the command-line packages or Docker; a Linux desktop package is follow-up work.
+See the [desktop guide](docs/desktop-app.md) for installation, network sharing, certificates,
+settings import/export, and the difference between closing and quitting.
+
+<a id="built-in-web-ui"></a>
+
+## 🌐 Built-in web UI
 
 <p align="center">
   <img src="docs/assets/web-ui-query-light.png" alt="Hardcharger's web UI, light theme: the schema browser, two editor tabs, a script's result tabs, and an open transaction with Commit and Rollback" width="49%">
@@ -80,10 +106,13 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   filter, resize columns, and select cells, ranges or rows like a spreadsheet, with the full
   keyboard. Ctrl/⌘+C copies so a paste into Excel or Google Sheets lands as cells (in every
   browser, Safari included); double-click or Enter shows a value in full, JSON pretty-printed.
-- 🔭 **SQL Monitor** for unrestricted administrators: live queued, executing and fetching
+- 🔭 **SQL Monitor (v2.1.0+)** for unrestricted administrators: live queued, executing and fetching
   statements, recent outcomes and timeouts, queue status and available concurrency slots
-  (`--enable-instrumentation`). **Server Configuration** shows session/global values and runtime setting controls
-  and startup facts. See [SQL Monitor](docs/sql-monitor.md).
+  (`--enable-instrumentation`), captured query profiles, and separate query-detail windows.
+  **Server Configuration (v2.1.0+)** shows current session/global values, edits and resets
+  settings at supported runtime scopes, and identifies startup settings that need a restart.
+  Both tabs are available in a browser through `--web-ui` and in the desktop SQL workspace.
+  See [SQL Monitor and Server Configuration](docs/sql-monitor.md).
 - 🗂️ **Schema browser and autocomplete** that follow access control: each user sees only the
   catalogs, schemas, tables and columns their roles allow. Tables and Views in their own
   groups, columns with their types; double-click or drag a name into the editor (fully
@@ -129,6 +158,11 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
 </p>
 
 The UI's source is in [`ui/`](ui/README.md), built and tested with the server in the same CI run.
+
+<p align="center">
+  <img src="docs/assets/web-ui-monitor-light.png" alt="SQL Monitor: recent query outcomes, time-window and status filters, queue status and available statement slots" width="49%">
+  <img src="docs/assets/web-ui-configuration-light.png" alt="Server Configuration: selected editor session, session and global values, runtime edit controls and setting descriptions" width="49%">
+</p>
 
 ## 📱 iPhone and iPad app
 
@@ -302,6 +336,9 @@ platform on first use and runs it. The **client** is `adbc-driver-hardcharger` (
 connection. See [python/README.md](python/README.md).
 
 ### Binaries
+
+These packages contain the server and command-line client. For the graphical app in
+v2.1.0+, choose a `Hardcharger-desktop-…` artifact instead; see [Desktop app](docs/desktop-app.md).
 
 Linux (x86-64 and arm64), macOS (Apple silicon) and Windows (x64 and arm64) builds are
 attached to every [release](https://github.com/gizmodata/hardcharger/releases/latest):

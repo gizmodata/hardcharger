@@ -9,6 +9,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- v2.1.0+ desktop app guide and README overview, with download/package comparisons,
+  network/TLS setup, persistent versus runtime settings, and screenshots of the desktop
+  preview, SQL Monitor and Server Configuration tabs in the SQL Editor web UI.
+
 - Sessions in the web UI show the client IP and label connections from the server's
   own loopback or LAN interfaces as "This computer". `hardcharger_sessions()` exposes
   `client_ip` and `client_is_local`, following the existing session visibility rules.
