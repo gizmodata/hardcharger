@@ -72,8 +72,14 @@ x64/Arm64. Linux packaging and testing are follow-up work.
   only `Hardcharger-local-CA.crt`, never `server.key`. Clients can trust that public CA;
   the CLI also accepts `--tls-roots /path/to/Hardcharger-local-CA.crt`, or the explicit
   `--tls-skip-verify` option for temporary development tests. System trust is never
-  changed automatically. A workspace whose CA is not trusted shows setup instructions
-  instead of opening a blank failed TLS page. Regeneration requires trusting the new CA.
+  changed automatically. Open SQL workspace offers an approval prompt when its generated
+  CA is not yet trusted, showing the CA fingerprint and server address. **Trust CA and
+  open workspace** requests user-domain SSL trust for that address on macOS, or opens
+  Windows' current-user Root certificate import wizard, then retries the workspace.
+  Cancel leaves trust unchanged. Linux uses its certificate manager and a retry button.
+  Only the selected server's generated CA can be imported; its actual certificate bytes,
+  chain and fingerprint must match the prompt. Connection failures and invalid TLS names
+  or expiry do not offer a trust override. Regeneration requires trusting the new CA.
 - **Open SQL workspace** opens the server's actual `/ui/` in its own window, automatically
   signed in using the same token handoff contract as iOS. The query interface is not
   duplicated. Its native privileges are restricted: it cannot call desktop commands.

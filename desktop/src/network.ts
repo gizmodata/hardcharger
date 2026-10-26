@@ -19,6 +19,7 @@ export interface GeneratedCertificate {
   certificate: string; privateKey: string; trustCertificate: string;
   fingerprint: string; expires: string; names: string[];
 }
+export interface WorkspaceTrust { certificate: GeneratedCertificate; serverName: string; platform: string }
 
 export function networkErrors(network: NetworkSettings): Record<string, string> {
   const errors: Record<string, string> = {};

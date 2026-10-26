@@ -317,6 +317,39 @@ async fn show_certificate_folder(
 }
 
 #[tauri::command]
+async fn workspace_trust(
+    window: WebviewWindow,
+    state: tauri::State<'_, Shared>,
+) -> Result<network::WorkspaceTrust, String> {
+    controller(&window)?;
+    work(state.inner().clone(), |server| {
+        server.verify_workspace_endpoint()?;
+        network::workspace_trust(&server.directory, &server.settings)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn trust_workspace_ca(
+    window: WebviewWindow,
+    state: tauri::State<'_, Shared>,
+    fingerprint: String,
+    server_name: String,
+) -> Result<(), String> {
+    controller(&window)?;
+    work(state.inner().clone(), move |server| {
+        server.verify_workspace_endpoint()?;
+        network::trust_workspace_ca(
+            &server.directory,
+            &server.settings,
+            &fingerprint,
+            &server_name,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
 fn open_marketing_link(window: WebviewWindow, url: String) -> Result<(), String> {
     controller(&window)?;
     if !matches!(
@@ -404,6 +437,8 @@ fn main() {
             network_info,
             generate_certificate,
             show_certificate_folder,
+            workspace_trust,
+            trust_workspace_ca,
             reveal_data,
             open_marketing_link,
             launch_at_login

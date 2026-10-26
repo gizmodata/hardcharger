@@ -167,6 +167,12 @@ footer { padding:14px 32px; border-top:1px solid var(--soft); display:flex; just
 .address-choices { display:flex; flex-wrap:wrap; gap:8px; }
 .certificate-actions { margin:22px 0 0; }
 .certificate-info { margin:18px 0; padding:16px; border:1px solid var(--border); border-radius:6px; overflow-wrap:anywhere; font-size:12px; line-height:1.7; }
+.trust-dialog { max-width:650px; width:calc(100% - 48px); padding:28px; border:1px solid var(--border); border-radius:9px; background:var(--panel); color:var(--text); box-shadow:0 16px 60px #0004; }
+.trust-dialog::backdrop { background:#07152c80; }
+.trust-dialog h2 { font-size:20px; margin-top:0; }
+.trust-dialog p { line-height:1.8; font-size:12px; }
+.certificate-fingerprint { display:block; padding:12px; margin-top:8px; background:var(--bg); border:1px solid var(--border); border-radius:5px; overflow-wrap:anywhere; font-size:11px; }
+.trust-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; margin-top:22px; }
 .network-settings .field { margin-top:18px; }
 .network-settings input, .network-settings select { width:100%; min-width:0; padding:9px 12px; border:1px solid var(--border); border-radius:5px; background:var(--bg); color:var(--text); font:inherit; }
 .network-settings input:disabled, .network-settings select:disabled { opacity:.6; }

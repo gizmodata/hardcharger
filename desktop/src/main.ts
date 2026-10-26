@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { stringify } from "yaml";
-import { defaultNetwork, networkErrors, type NetworkSettings, type NetworkInfo, type GeneratedCertificate } from "./network";
+import { defaultNetwork, networkErrors, type NetworkSettings, type NetworkInfo, type GeneratedCertificate, type WorkspaceTrust } from "./network";
 import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, type ServerOption } from "./configuration";
 import "./style.css";
 import "./palette.css";
@@ -33,6 +33,7 @@ let markedNetwork: boolean | null = null;
 let detectedNetwork: NetworkInfo | null = null;
 let generatedCertificate: GeneratedCertificate | null = null;
 let fieldErrors: Record<string, string> = {};
+let workspaceTrust: WorkspaceTrust | null = null;
 let pendingImport: Record<string, unknown> | null = null;
 let theme = localStorage.getItem("hardcharger-desktop:theme") ?? "system";
 document.documentElement.dataset.theme = theme;
@@ -212,7 +213,18 @@ function render() {
         ${tab === "server" ? serverView(s) : tab === "settings" ? settingsView(s) : tab === "logs" ? logsView() : aboutView()}
       </div>
       <footer><span>${esc(s?.version ?? "Hardcharger")} <span class="footer-dot">·</span> Warp SQL</span><span>Fast, secure, remote DuckDB.</span></footer>
-    </main>`;
+    </main>${trustDialog()}`;
+  const trust = document.querySelector<HTMLDialogElement>("#workspace-trust");
+  if (trust) {
+    trust.showModal();
+    trust.addEventListener("cancel", e => { e.preventDefault(); if (!busy) { workspaceTrust = null; error = ""; render(); } });
+    document.querySelector("#cancel-workspace-trust")?.addEventListener("click", () => { workspaceTrust = null; error = ""; render(); });
+    document.querySelector("#approve-workspace-trust")?.addEventListener("click", () => void approveWorkspaceTrust());
+    document.querySelector("#retry-workspace-trust")?.addEventListener("click", () => void retryWorkspaceTrust());
+    document.querySelector("#show-workspace-certificate")?.addEventListener("click", () => {
+      if (workspaceTrust) void invoke("show_certificate_folder", { certificate: workspaceTrust.certificate.certificate }).catch(showError);
+    });
+  }
   app.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b => b.addEventListener("click", () => { tab = b.dataset.tab!; error = ""; render(); if (tab === "logs") void refreshLogs(); }));
   app.querySelectorAll<HTMLButtonElement>("[data-action]").forEach(b => b.addEventListener("click", () => void action(b.dataset.action!)));
   app.querySelectorAll<HTMLAnchorElement>("[data-marketing-link]").forEach(link => link.addEventListener("click", e => {
@@ -457,7 +469,46 @@ function aboutView() {
   return `<section class="card about-card" aria-label="About Hardcharger">${picture("mascot", "Hardcharger™", "about-mascot")}<p class="about-tagline">Fast, secure, remote DuckDB.</p><p>${esc(current?.version ?? "Desktop preview")} · by GizmoData™</p><div class="about-divider"></div><p>The Hardcharger server and its SQL workspace,<br>together on your desktop.</p><div class="marketing-links"><a class="button primary" data-marketing-link href="https://gizmodata.com/hardcharger" target="_blank" rel="noopener noreferrer">Explore Hardcharger ${icon("arrow")}</a><a class="button" data-marketing-link href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">Visit GizmoData ${icon("arrow")}</a></div><p class="muted">Apache License 2.0<br>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</p></section>`;
 }
 
-function showError(e: unknown) { error = String(e); render(); }
+function showError(e: unknown) {
+  if (String(e).includes("WORKSPACE_CA_TRUST_REQUIRED")) { void promptWorkspaceTrust(); return; }
+  error = String(e); render();
+}
+
+function trustDialog() {
+  if (!workspaceTrust) return "";
+  const t = workspaceTrust;
+  const supported = ["macos", "windows"].includes(t.platform);
+  const scope = t.platform === "macos"
+    ? `Adds this CA to your user account's trust settings for TLS connections to ${esc(t.serverName)}. macOS may ask you to approve the change.`
+    : t.platform === "windows" ? "Opens Windows' certificate import wizard for your current user's Trusted Root certificate store. Complete the wizard and approve its certificate warning."
+    : "Import the public CA certificate with your operating system's certificate manager, then try opening the workspace again.";
+  return `<dialog id="workspace-trust" class="trust-dialog" aria-labelledby="workspace-trust-title" aria-describedby="workspace-trust-description"><h2 id="workspace-trust-title">Trust Hardcharger certificate</h2><p id="workspace-trust-description">The server is running with TLS. The SQL workspace needs your permission to trust the local certificate authority Hardcharger generated for this server.</p><p><strong>Server:</strong> <code>${esc(t.serverName)}</code><br><strong>Certificate expires:</strong> ${esc(t.certificate.expires)}</p><p><strong>CA SHA-256 fingerprint</strong><code class="certificate-fingerprint">${esc(t.certificate.fingerprint)}</code></p><p>${scope}</p><p class="muted">This changes trust on this computer for your account. Other computers need their own approval. TLS hostname and expiry checks remain enabled.</p>${error ? `<p class="network-warning" role="alert">${esc(error)}</p>` : ""}${busy ? '<p role="status">Waiting for system approval…</p>' : ""}<div class="trust-actions"><button id="cancel-workspace-trust" class="button" autofocus ${busy ? "disabled" : ""}>Cancel</button><button id="show-workspace-certificate" class="button" ${busy ? "disabled" : ""}>Show certificate</button><button id="retry-workspace-trust" class="button" ${busy ? "disabled" : ""}>I already trusted it — retry</button>${supported ? `<button id="approve-workspace-trust" class="button primary" ${busy ? "disabled" : ""}>Trust CA and open workspace</button>` : ""}</div></dialog>`;
+}
+
+async function promptWorkspaceTrust() {
+  try { workspaceTrust = await invoke<WorkspaceTrust>("workspace_trust"); error = ""; render(); }
+  catch (e) { error = String(e); render(); }
+}
+
+async function retryWorkspaceTrust() {
+  if (busy) return;
+  busy = true; error = ""; render();
+  try { await invoke("open_workspace"); workspaceTrust = null; }
+  catch (e) { error = String(e).includes("WORKSPACE_CA_TRUST_REQUIRED") ? "The CA is not trusted yet. Approve certificate trust, then try again." : String(e); }
+  finally { busy = false; render(); }
+}
+
+async function approveWorkspaceTrust() {
+  if (busy || !workspaceTrust) return;
+  const approved = workspaceTrust;
+  busy = true; error = ""; render();
+  try {
+    await invoke("trust_workspace_ca", { fingerprint: approved.certificate.fingerprint, serverName: approved.serverName });
+    await invoke("open_workspace");
+    workspaceTrust = null;
+  } catch (e) { error = String(e).includes("WORKSPACE_CA_TRUST_REQUIRED") ? "The operating system has not accepted the CA yet. Finish its approval, then use retry." : String(e); }
+  finally { busy = false; render(); }
+}
 
 function showFormError(e: unknown) {
   error = String(e);
@@ -504,7 +555,7 @@ async function action(name: string) {
     else if (name === "workspace") await invoke("open_workspace");
     else if (name === "folder") await invoke("reveal_data");
     else if (name === "logs") await refreshLogs();
-  } catch (e) { error = String(e); }
+  } catch (e) { showError(e); }
   finally { busy = false; render(); if (tab === "logs") void refreshLogs(); }
 }
 

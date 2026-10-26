@@ -470,13 +470,33 @@ impl Server {
         builder.build().map_err(|e| e.to_string())
     }
 
+    pub fn verify_workspace_endpoint(&self) -> Result<(), String> {
+        if self.child.is_none() {
+            return Err("Start the server before opening its workspace.".into());
+        }
+        self.http_client()?
+            .get(format!("{}/ui/", self.endpoint()))
+            .send()
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| {
+                format!(
+                    "Could not reach the server's SQL workspace: {}",
+                    request_error(e)
+                )
+            })?;
+        Ok(())
+    }
+
     pub fn check_workspace_trust(&self) -> Result<(), String> {
         if !self.settings.network.enabled || !self.settings.network.tls {
             return Ok(());
         }
+        // A system-CA prompt is appropriate only after the supplied chain passes
+        // hostname/expiry checks and the owned server actually answers.
+        self.verify_workspace_endpoint()?;
         self.http_client_with_roots(&self.settings, false)?.get(format!("{}/ui/", self.endpoint()))
             .send().and_then(|r| r.error_for_status()).map_err(|_| {
-                "The server is running with TLS, but the SQL workspace cannot verify its certificate using system trust. In Settings, show the trust certificate folder and trust the public CA certificate in your operating system, then open the workspace again. CLI clients can use --tls-roots with that CA file.".to_string()
+                "WORKSPACE_CA_TRUST_REQUIRED: The SQL workspace needs your approval to trust this server's local certificate authority.".to_string()
             })?;
         Ok(())
     }
@@ -1003,7 +1023,16 @@ mod tests {
         };
         assert!(server.start().unwrap().running);
         assert!(server.sign_in().is_ok()); // trusts this CA, verifies hostname and expiry
-        assert!(server.check_workspace_trust().is_err()); // no automatic change to OS trust
+        assert!(server
+            .check_workspace_trust()
+            .err()
+            .unwrap()
+            .contains("WORKSPACE_CA_TRUST_REQUIRED"));
+        // A name mismatch must never offer a CA import as a substitute for verification.
+        server.settings.network.server_name = "wrong-certificate-name.test".into();
+        let invalid_name = server.check_workspace_trust().err().unwrap();
+        assert!(!invalid_name.contains("WORKSPACE_CA_TRUST_REQUIRED"));
+        server.settings.network.server_name = "127.0.0.1".into();
         let client = server.binary.with_file_name("hardcharger");
         let output = Command::new(client)
             .args([

@@ -51,6 +51,11 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Desktop Open SQL workspace offers explicit approval to trust its generated local CA,
+  then retries opening the workspace. macOS trust is scoped to the user and TLS server
+  address; Windows uses the current-user certificate import wizard. Cancellation keeps
+  verification enabled. Changed certificates and ordinary connection errors cannot
+  authorize CA imports.
 - Keep API last in the web SQL workspace navigation, after the administrator tabs.
 - Query detail windows' Close window button now closes their native desktop window.
 
