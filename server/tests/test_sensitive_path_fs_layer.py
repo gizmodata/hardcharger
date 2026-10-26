@@ -82,7 +82,7 @@ def fake_home(tmp_path_factory, store) -> pathlib.Path:
         bootstrap = Launcher(tmp_path=home)
         try:
             running = bootstrap.start(env=home_env(home=home))
-            running.admin().query(sql="INSTALL postgres")
+            running.admin().execute(sql="INSTALL postgres")
         finally:
             bootstrap.stop_all()
     return home
