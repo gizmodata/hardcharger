@@ -68,7 +68,7 @@ function render() {
         <button data-tab="settings" class="nav-item ${tab === "settings" ? "active" : ""}">${icon("settings")}Settings</button>
         <button data-tab="about" class="nav-item ${tab === "about" ? "active" : ""}">${icon("info")}About Hardcharger</button>
       </nav>
-      <div class="sidebar-bottom"><span class="connection"><span class="nav-dot ${running ? "running" : ""}"></span>${running ? "Local server running" : "Local server stopped"}</span><span>by <strong>GizmoData™</strong></span></div>
+      <div class="sidebar-bottom"><span class="connection"><span class="nav-dot ${running ? "running" : ""}"></span>${running ? "Local server running" : "Local server stopped"}</span><a class="by-marketing" data-marketing-link href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">by <strong>GizmoData™</strong></a></div>
     </aside>
     <main>
       <header><span>Hardcharger <span class="slash">/</span> ${tab === "server" ? "Local server" : tab === "about" ? "About" : tab[0].toUpperCase() + tab.slice(1)}</span><div class="header-right"><span class="pill">${designPreview ? "Design preview · sample status" : "On this computer"}</span><button id="theme" class="theme-button" aria-label="Change color theme" title="Theme: ${theme}">${theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}</button></div></header>
@@ -80,6 +80,11 @@ function render() {
     </main>`;
   app.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b => b.addEventListener("click", () => { tab = b.dataset.tab!; error = ""; render(); if (tab === "logs") void refreshLogs(); }));
   app.querySelectorAll<HTMLButtonElement>("[data-action]").forEach(b => b.addEventListener("click", () => void action(b.dataset.action!)));
+  app.querySelectorAll<HTMLAnchorElement>("[data-marketing-link]").forEach(link => link.addEventListener("click", e => {
+    if (!native) return;
+    e.preventDefault();
+    void invoke("open_marketing_link", { url: link.getAttribute("href") }).catch(showError);
+  }));
   document.querySelector("#theme")?.addEventListener("click", () => {
     theme = theme === "system" ? "dark" : theme === "dark" ? "light" : "system";
     localStorage.setItem("hardcharger-desktop:theme", theme);
@@ -304,7 +309,7 @@ function logsView() {
 }
 
 function aboutView() {
-  return `<section class="card about-card">${picture("mascot", "Hardcharger™", "about-mascot")}<h1>Hardcharger™</h1><p class="about-tagline">Fast, secure, remote DuckDB.</p><p>${esc(current?.version ?? "Desktop preview")} · by GizmoData™</p><div class="about-divider"></div><p>The Hardcharger server and its SQL workspace,<br>together on your desktop.</p><p class="muted">Apache License 2.0<br>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</p></section>`;
+  return `<section class="card about-card" aria-label="About Hardcharger">${picture("mascot", "Hardcharger™", "about-mascot")}<p class="about-tagline">Fast, secure, remote DuckDB.</p><p>${esc(current?.version ?? "Desktop preview")} · by GizmoData™</p><div class="about-divider"></div><p>The Hardcharger server and its SQL workspace,<br>together on your desktop.</p><div class="marketing-links"><a class="button primary" data-marketing-link href="https://gizmodata.com/hardcharger" target="_blank" rel="noopener noreferrer">Explore Hardcharger ${icon("arrow")}</a><a class="button" data-marketing-link href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">Visit GizmoData ${icon("arrow")}</a></div><p class="muted">Apache License 2.0<br>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</p></section>`;
 }
 
 function showError(e: unknown) { error = String(e); render(); }

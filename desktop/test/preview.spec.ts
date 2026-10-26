@@ -19,7 +19,12 @@ test("branded controller layouts and preferences stay usable in both themes", as
   await page.getByRole("button", { name: "Logs", exact: true }).click();
   await expect(page.getByText("Design preview. Live server logs appear in the desktop app.")).toBeVisible();
   await page.getByRole("button", { name: "About Hardcharger" }).click();
-  await expect(page.getByRole("heading", { name: "Hardcharger™", exact: true })).toBeVisible();
+  const about = page.getByRole("region", { name: "About Hardcharger", exact: true });
+  await expect(about).toBeVisible();
+  await expect(about.getByRole("heading", { name: "Hardcharger™", exact: true })).toHaveCount(0);
+  await expect(about.getByRole("link", { name: "Explore Hardcharger" })).toHaveAttribute("href", "https://gizmodata.com/hardcharger");
+  await expect(about.getByRole("link", { name: "Visit GizmoData" })).toHaveAttribute("href", "https://gizmodata.com");
+  await expect(page.getByRole("link", { name: "by GizmoData™", exact: true })).toHaveAttribute("href", "https://gizmodata.com");
   await page.setViewportSize({ width: 860, height: 640 });
   await page.getByRole("button", { name: "Local server", exact: true }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

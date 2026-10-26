@@ -29,6 +29,8 @@ own changelog in `python/CHANGELOG.md`.
 - Desktop Network access settings: opt-in shared listener, client-facing address, TLS
   certificates, and persistent administrator credentials in the OS credential store.
   Existing installations remain local-only. The dashboard shows connection URLs.
+- Desktop About links to GizmoData and the Hardcharger product page, plus a clickable
+  by-GizmoData badge. The About page uses the product name in the logo without a duplicate heading.
 
 - Desktop preview in `desktop/`: a Tauri app that bundles the existing server and CLI,
   opens the server's web SQL workspace, and manages the local server from a branded

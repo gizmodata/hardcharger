@@ -263,6 +263,18 @@ async fn server_options(
 }
 
 #[tauri::command]
+fn open_marketing_link(window: WebviewWindow, url: String) -> Result<(), String> {
+    controller(&window)?;
+    if !matches!(
+        url.as_str(),
+        "https://gizmodata.com" | "https://gizmodata.com/hardcharger"
+    ) {
+        return Err("This desktop link is not available.".into());
+    }
+    open::that(url).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn reveal_data(window: WebviewWindow, state: tauri::State<'_, Shared>) -> Result<(), String> {
     controller(&window)?;
     work(state.inner().clone(), |server| {
@@ -335,6 +347,7 @@ fn main() {
             save_settings,
             server_options,
             reveal_data,
+            open_marketing_link,
             launch_at_login
         ])
         .setup(|app| {
