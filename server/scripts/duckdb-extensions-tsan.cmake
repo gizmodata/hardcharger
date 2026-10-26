@@ -5,5 +5,9 @@ if(NOT CMAKE_CXX_FLAGS MATCHES "-fsanitize=thread")
 endif()
 # Reuse the pinned extension sources and static dependency linkage from iOS, but keep
 # native extension loading capabilities. Spatial still uses the signed runtime module.
+# Load the base extensions first: DuckLake asks for parquet_scan during initialization.
+# Otherwise its autoload can download Parquet and initialize HTTP/secrets before the
+# linked Parquet extension is reached, unlike the production native build.
+include("${CMAKE_CURRENT_LIST_DIR}/duckdb-extensions.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/duckdb-extensions-ios.cmake")
 set(DUCKDB_CAPABILITIES "httplib;loadable_extensions" CACHE STRING "" FORCE)

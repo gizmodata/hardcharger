@@ -10,11 +10,12 @@ and counts hardcharger_unclean_exits_total, and a clean stop clears the badge.
 """
 
 import socket
+import time
 
 import httpx
 import pytest
 
-from conftest import free_port
+from conftest import TIMEOUT_SCALE, free_port
 
 
 def port_closed(port: int) -> bool:
@@ -75,7 +76,13 @@ def test_metrics_enable_sql_and_optional_http(launcher, http_enabled):
 # explicit enable_metrics false still wins, and says so.
 
 def ready_line(server) -> str:
+    # The health listener can answer before the main thread emits its ready log.
+    # Instrumentation makes that small scheduling window visible.
+    deadline = time.monotonic() + 5 * TIMEOUT_SCALE
     lines = [line for line in server.log().splitlines() if "Hardcharger is ready" in line]
+    while not lines and time.monotonic() < deadline:
+        time.sleep(0.01)
+        lines = [line for line in server.log().splitlines() if "Hardcharger is ready" in line]
     assert len(lines) == 1, server.log()
     return lines[0]
 

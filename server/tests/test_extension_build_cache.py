@@ -16,6 +16,38 @@ def test_tsan_extension_fixture_refuses_an_uninstrumented_build():
     assert "requires -fsanitize=thread" in result.stderr
 
 
+def test_tsan_fixture_registers_parquet_before_ducklake_without_disabling_native_loading(tmp_path):
+    # DuckLake resolves parquet_scan during initialization. It must already be loaded
+    # or autoinstall can download an uninstrumented module and initialize HTTP/secrets.
+    project = tmp_path / "CMakeLists.txt"
+    project.write_text("""cmake_minimum_required(VERSION 3.20)
+project(extension_order NONE)
+set(CMAKE_CXX_FLAGS "-fsanitize=thread")
+function(duckdb_extension_load name)
+  set_property(GLOBAL APPEND PROPERTY registered_extensions "${name}")
+endfunction()
+function(duckdb_extension_statically_link)
+endfunction()
+function(find_package)
+endfunction()
+function(target_link_libraries)
+endfunction()
+include("${FIXTURE}")
+get_property(extensions GLOBAL PROPERTY registered_extensions)
+list(FIND extensions parquet parquet_index)
+list(FIND extensions ducklake ducklake_index)
+if(parquet_index LESS 0 OR ducklake_index LESS 0 OR NOT parquet_index LESS ducklake_index)
+  message(FATAL_ERROR "Parquet must load before DuckLake: ${extensions}")
+endif()
+if(NOT DUCKDB_CAPABILITIES STREQUAL "httplib;loadable_extensions")
+  message(FATAL_ERROR "The fixture must retain native runtime extension loading")
+endif()
+""")
+    subprocess.run(args=["cmake", "-S", str(tmp_path), "-B", str(tmp_path / "build"),
+                         f"-DFIXTURE={SCRIPTS / 'duckdb-extensions-tsan.cmake'}"],
+                   check=True, capture_output=True, text=True)
+
+
 def cmake(script, **definitions):
     subprocess.run(args=["cmake", *[f"-D{k}={v}" for k, v in definitions.items()], "-P", str(SCRIPTS / script)],
                    check=True, capture_output=True, text=True)
