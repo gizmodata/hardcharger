@@ -14,14 +14,21 @@ for (const theme of ["light", "dark"]) {
   await cp(resolve(root, `ui/src/assets/brand/head-horizontal-${theme}.svg`), resolve(desktop, `public/brand/header-${theme}.svg`));
   await cp(resolve(root, `ui/src/assets/brand/mascot-stacked-${theme}.webp`), resolve(desktop, `public/brand/mascot-${theme}.webp`));
 }
-for (const [source, target] of [
-  ["app-icons/Hardcharger-head.icns", "icon.icns"],
-  ["app-icons/Hardcharger-head.ico", "icon.ico"],
-  ["favicon/favicon-128.png", "icon.png"],
-  ["monochrome/white/hardcharger-32.png", "tray.png"],
-]) {
-  await cp(resolve(brand, source), resolve(desktop, "src-tauri/icons", target));
-}
+// The bull's navy outline needs contrast in the Dock and taskbar. Render the existing
+// artwork on a white tile for every desktop format, rather than using the kit's navy
+// ICNS/ICO. Keep this composition in SVG so the background and padding are deterministic.
+const iconDirectory = resolve(desktop, "src-tauri/icons");
+const head = await readFile(resolve(brand, "standalone/head/hardcharger-head-1024.png"));
+const iconSource = resolve(iconDirectory, "app-icon.svg");
+await writeFile(iconSource, `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="224" fill="#ffffff"/>
+  <image x="55" y="55" width="914" height="914" href="data:image/png;base64,${head.toString("base64")}"/>
+</svg>\n`);
+const icons = spawnSync(process.execPath, [
+  resolve(desktop, "node_modules/@tauri-apps/cli/tauri.js"), "icon", iconSource, "--output", iconDirectory,
+], { encoding: "utf8" });
+if (icons.status !== 0) throw new Error(`Could not generate desktop icons: ${icons.stderr || icons.error || icons.stdout}`);
+await cp(resolve(brand, "monochrome/white/hardcharger-32.png"), resolve(iconDirectory, "tray.png"));
 // The desktop and native server report the same version.
 const cmake = await readFile(resolve(root, "server/CMakeLists.txt"), "utf8");
 const version = cmake.match(/project\(hardcharger VERSION ([\d.]+)/)[1] + cmake.match(/set\(HARDCHARGER_VERSION_SUFFIX "([^"]*)"\)/)[1];

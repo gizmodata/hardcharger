@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "Hardcharger",
-      "width": 1180,
-      "height": 880,
+        "width": 1180,
+        "height": 880,
         "minWidth": 860,
         "minHeight": 640,
         "visible": false

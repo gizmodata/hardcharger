@@ -2,7 +2,9 @@
 
 The existing Hardcharger server and its embedded web UI in a Tauri desktop app. The server
 and command-line client remain independent tools; the desktop app bundles both. The bull
-head from the existing brand kit is the application and tray icon. The controller uses
+head from the existing brand kit is the application and tray icon. The application icon
+uses a white tile so the bull's navy outline stays clear in the Dock and taskbar; the macOS
+menu-bar icon uses the kit's monochrome head. The controller uses
 GizmoData's blue palette and the web UI's Inter typography and Hardcharger artwork.
 
 ## Build a local preview
