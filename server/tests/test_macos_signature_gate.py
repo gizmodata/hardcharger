@@ -49,13 +49,13 @@ else
 fi
 [ "$SIGNATURE_TEST_MODE" = no-timestamp ] || echo "Timestamp=Oct 26 2026"
 exit 0
-''')
+''', newline="\n")
     mock.chmod(0o755)
     spctl = tools / "spctl"
-    spctl.write_text('#!/bin/sh\n[ "$SIGNATURE_TEST_MODE" != gatekeeper-rejects ]\n')
+    spctl.write_text('#!/bin/sh\n[ "$SIGNATURE_TEST_MODE" != gatekeeper-rejects ]\n', newline="\n")
     spctl.chmod(0o755)
     sleep = tools / "sleep"
-    sleep.write_text("#!/bin/sh\nexit 0\n")
+    sleep.write_text("#!/bin/sh\nexit 0\n", newline="\n")
     sleep.chmod(0o755)
     binary = tmp_path / "signed-fixture"
     binary.touch()
