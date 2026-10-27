@@ -3,7 +3,9 @@
   "bundle": {
     "windows": {
       "wix": {
-        "upgradeCode": "18B3E785-96BE-4BFC-B24D-585B55278510"
+        "upgradeCode": "18B3E785-96BE-4BFC-B24D-585B55278510",
+        "bannerPath": "installer/banner.bmp",
+        "dialogImagePath": "installer/dialog.bmp"
       }
     }
   }

@@ -227,6 +227,10 @@ jobs:
           npm run desktop:build -- --target "$TARGET" --bundles msi --config "$config"
           mkdir -p artifacts
           cp src-tauri/target/"$TARGET"/release/bundle/msi/*.msi "artifacts/Hardcharger-desktop-${{ matrix.name }}.msi"
+      - name: Verify the installer artwork in the MSI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: desktop/scripts/check-msi-artwork.ps1 -Installer "desktop/artifacts/Hardcharger-desktop-${{ matrix.name }}.msi"
       - name: Verify the Windows application, bundled executables, and installer
         if: runner.os == 'Windows' && needs.plan.outputs.sign == 'true'
         shell: pwsh
