@@ -9,7 +9,8 @@ import sys
 platform = sys.argv[1]
 desktop = Path(__file__).resolve().parents[1]
 artifacts = desktop / "artifacts"
-assets = sorted(path for path in artifacts.iterdir() if path.suffix in {".dmg", ".msi", ".zip"})
+# Installers, the macOS app archive, and on signed builds the update packages and signatures.
+assets = sorted(path for path in artifacts.iterdir() if path.suffix in {".dmg", ".msi", ".zip", ".gz", ".sig"})
 if not assets:
     raise SystemExit("No desktop installers were built")
 checksums = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in assets}

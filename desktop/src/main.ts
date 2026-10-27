@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { stringify } from "yaml";
 import { version as appVersion } from "../package.json";
 import { connectionPanel, bindConnectionPanel } from "./connectionPanel";
+import { updateBadge, updateAbout, updateDialogs, bindUpdates, startUpdates } from "./updates";
 import { defaultNetwork, networkErrors, type NetworkSettings, type NetworkInfo, type GeneratedCertificate, type WorkspaceTrust } from "./network";
 import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, type ServerOption } from "./configuration";
 import "./style.css";
@@ -217,14 +218,14 @@ function render() {
       <div class="sidebar-bottom"><span class="connection"><span class="nav-dot ${running ? "running" : ""}"></span>${running ? "Local server running" : "Local server stopped"}</span><a class="by-marketing" data-marketing-link href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">by <strong>GizmoData™</strong></a></div>
     </aside>
     <main>
-      <header><span>Hardcharger <span class="slash">/</span> ${tab === "server" ? "Local server" : tab === "about" ? "About" : tab[0].toUpperCase() + tab.slice(1)}</span><div class="header-right"><span class="pill">${designPreview ? "Design preview · sample status" : "On this computer"}</span><button id="theme" class="theme-button" aria-label="Change color theme" title="Theme: ${theme}">${theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}</button></div></header>
+      <header><span>Hardcharger <span class="slash">/</span> ${tab === "server" ? "Local server" : tab === "about" ? "About" : tab[0].toUpperCase() + tab.slice(1)}</span><div class="header-right">${updateBadge()}<span class="pill">${designPreview ? "Design preview · sample status" : "On this computer"}</span><button id="theme" class="theme-button" aria-label="Change color theme" title="Theme: ${theme}">${theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}</button></div></header>
       <div class="content">
         <div id="error" role="alert" ${error || s?.error ? "" : "hidden"}>${esc(error || s?.error || "")}</div>
         <div class="pending-settings" role="status" ${draftDirty || s?.settingsPending ? "" : "hidden"}><div><strong>Unsaved server settings</strong><p>${draft ? draft["network-mode"] === "network" ? "Network access requested. Save and complete setup before starting; the server will not fall back to local mode." : "Save or explicitly discard your changes before starting." : "A previous setup was not saved. Review Settings or explicitly discard it before starting."}</p></div><button data-review-settings class="button">Review settings</button><button data-discard-settings class="button" ${busy ? "disabled" : ""}>Discard changes</button></div>
         ${tab === "server" ? serverView(s) : tab === "settings" ? settingsView(s) : tab === "logs" ? logsView() : aboutView()}
       </div>
       <footer><span>${esc(s?.version ?? "Hardcharger")} <span class="footer-dot">·</span> Warp SQL</span><span>Fast, secure, remote DuckDB.</span></footer>
-    </main>${trustDialog()}${controlDialog()}`;
+    </main>${trustDialog()}${controlDialog()}${updateDialogs(running, s?.settings.start_on_open ?? true)}`;
   const controlConfirmation = document.querySelector<HTMLDialogElement>("#server-control-confirmation");
   if (controlConfirmation) {
     controlConfirmation.showModal();
@@ -243,6 +244,7 @@ function render() {
     });
   }
   bindConnectionPanel(current, render);
+  bindUpdates(render, () => current?.running ?? false);
   const logOutput = document.querySelector<HTMLElement>("#log-output");
   if (logOutput) logOutput.scrollTop = logFollowing ? logOutput.scrollHeight : logScroll;
   document.querySelector("#live-tail")?.addEventListener("change", e => {
@@ -503,7 +505,7 @@ function logsView() {
 }
 
 function aboutView() {
-  return `<section class="card about-card" aria-label="About Hardcharger">${picture("mascot", "Hardcharger™", "about-mascot")}<p class="about-tagline">Fast, secure, remote DuckDB.</p><p>${esc(current?.version ?? "Desktop app")} · by GizmoData™</p><div class="about-divider"></div><p>The Hardcharger server and its SQL workspace,<br>together on your desktop.</p><div class="marketing-links"><a class="button primary" data-marketing-link href="https://gizmodata.com/hardcharger" target="_blank" rel="noopener noreferrer">Explore Hardcharger ${icon("arrow")}</a><a class="button" data-marketing-link href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">Visit GizmoData ${icon("arrow")}</a></div><p><a data-marketing-link href="https://docs.hardcharger.gizmodata.com" target="_blank" rel="noopener noreferrer">Documentation</a></p><p class="muted">Apache License 2.0<br>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</p></section>`;
+  return `<section class="card about-card" aria-label="About Hardcharger">${picture("mascot", "Hardcharger™", "about-mascot")}<p class="about-tagline">Fast, secure, remote DuckDB.</p>${updateAbout(current?.version) || `<p>${esc(current?.version ?? "Desktop app")} · by GizmoData™</p>`}<div class="about-divider"></div><p>The Hardcharger server and its SQL workspace,<br>together on your desktop.</p><div class="marketing-links"><a class="button primary" data-marketing-link href="https://gizmodata.com/hardcharger" target="_blank" rel="noopener noreferrer">Explore Hardcharger ${icon("arrow")}</a><a class="button" data-marketing-link href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">Visit GizmoData ${icon("arrow")}</a></div><p><a data-marketing-link href="https://docs.hardcharger.gizmodata.com" target="_blank" rel="noopener noreferrer">Documentation</a></p><p class="muted">Apache License 2.0<br>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</p></section>`;
 }
 
 function showError(e: unknown) {
@@ -647,6 +649,7 @@ if (native) {
     if (e.payload === "stop" || e.payload === "restart") void action(e.payload);
   });
   void listen<string>("desktop-error", e => showError(e.payload));
+  startUpdates(render);
   void invoke<boolean>("launch_at_login", { enabled: null }).then(v => { login = v; if (tab === "settings") render(); }).catch(showError);
   void refresh();
   setInterval(() => { void refresh(); if (tab === "logs" && liveTail && !busy) void refreshLogs(false); }, 2000);

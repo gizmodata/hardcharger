@@ -132,3 +132,24 @@ for status meanings, profiles, session controls and runtime-setting scopes. For 
 and signing the app, see [desktop/README.md](../desktop/README.md).
 
 **About Hardcharger** links to the documentation, product website and GizmoData.
+
+## Updates
+
+Hardcharger Desktop checks for a newer release shortly after it opens and every six hours,
+and shows **Update available** in the header when there is one. Click it to read the release
+notes, then **Download and restart** (or **Download and install** while the server is
+stopped). The download runs while the server keeps working. If the server is running, the
+app asks before stopping it, as **Stop** does: the SQL workspace closes, active queries are
+interrupted and clients disconnect. It then installs the update, restarts, and starts the
+server again if **Start server when Hardcharger opens** is on. **Skip this version** hides
+that release's badge; **Later** keeps it.
+
+**About Hardcharger** shows the app's own version, **Check for updates**, and two settings:
+**Check for updates automatically** (on by default) and **Include release candidates** (off).
+Updates are signed with GizmoData's update key, and the app installs only a package whose
+signature matches it and names the version being installed. On Windows, installing asks for
+administrator approval, as the original installation did. An offline computer or a failed
+check never affects the server.
+
+2.1.x releases can't update themselves: install the newest release once from the
+[downloads](#choose-a-download), and later releases update in-app.

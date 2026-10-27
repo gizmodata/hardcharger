@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod migrate;
 mod network;
 mod server;
 mod tray;
+mod updates;
 
 use server::{Server, Settings, Status};
 use std::sync::{
@@ -37,7 +39,7 @@ fn controller(window: &WebviewWindow) -> Result<(), String> {
     Err("Desktop controls are restricted to bundled content.".into())
 }
 
-async fn work<T: Send + 'static>(
+pub(crate) async fn work<T: Send + 'static>(
     state: Shared,
     action: impl FnOnce(&mut Server) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -75,7 +77,11 @@ async fn server_control(
     control(&app, state.inner().clone(), &action).await
 }
 
-async fn control(app: &AppHandle, state: Shared, action: &str) -> Result<Status, String> {
+pub(crate) async fn control(
+    app: &AppHandle,
+    state: Shared,
+    action: &str,
+) -> Result<Status, String> {
     // Destroy the query view before stopping its server, ending its sessions. The next
     // workspace receives a fresh token; an old webview never retains a stale credential.
     if action != "start" {
@@ -104,6 +110,51 @@ async fn control(app: &AppHandle, state: Shared, action: &str) -> Result<Status,
     }
     let _ = app.emit_to("main", "server-changed", ());
     result
+}
+
+#[tauri::command]
+fn update_state(
+    window: WebviewWindow,
+    updates: tauri::State<'_, updates::Updates>,
+) -> Result<updates::UpdateState, String> {
+    controller(&window)?;
+    Ok(updates.state())
+}
+
+#[tauri::command]
+async fn update_check(
+    window: WebviewWindow,
+    app: AppHandle,
+) -> Result<updates::UpdateState, String> {
+    controller(&window)?;
+    updates::check(&app).await
+}
+
+#[tauri::command]
+fn update_preferences(
+    window: WebviewWindow,
+    updates: tauri::State<'_, updates::Updates>,
+    preferences: updates::Preferences,
+) -> Result<updates::UpdateState, String> {
+    controller(&window)?;
+    updates.set_preferences(preferences)
+}
+
+/// Installing stops a running server, so like Stop and Restart it needs the user's
+/// confirmation, which the dashboard asks for before calling this.
+#[tauri::command]
+async fn update_install(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: tauri::State<'_, Shared>,
+    confirmed: Option<bool>,
+) -> Result<(), String> {
+    controller(&window)?;
+    let running = work(state.inner().clone(), Server::status).await?.running;
+    if running && confirmed != Some(true) {
+        return Err("Confirm stopping the server to install the update first.".into());
+    }
+    updates::install(&app, state.inner().clone()).await
 }
 
 fn reveal(app: &AppHandle) {
@@ -511,6 +562,7 @@ fn main() {
                 .args(["--background"])
                 .build(),
         )
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             server_status,
             server_control,
@@ -526,7 +578,11 @@ fn main() {
             trust_workspace_ca,
             reveal_data,
             open_marketing_link,
-            launch_at_login
+            launch_at_login,
+            update_state,
+            update_check,
+            update_preferences,
+            update_install
         ])
         .setup(|app| {
             let binary_name = if cfg!(windows) {
@@ -538,7 +594,12 @@ fn main() {
                 .parent()
                 .ok_or("Missing app executable directory")?
                 .join(binary_name);
-            let directory = app.path().app_data_dir()?;
+            // 2.1.x kept its data under the .preview identifier: move it first (migrate.rs).
+            let directory = migrate::data_directory(app.path().app_data_dir()?);
+            app.manage(updates::Updates::new(
+                &directory,
+                app.package_info().version.to_string(),
+            ));
             let server = Server::new(binary, directory).map_err(std::io::Error::other)?;
             let start = server.settings.start_on_open;
             app.manage(Arc::new(Mutex::new(server)));
@@ -657,6 +718,7 @@ fn main() {
             if !std::env::args().any(|a| a == "--background") {
                 reveal(app.handle());
             }
+            updates::schedule(app.handle().clone());
             if start {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
