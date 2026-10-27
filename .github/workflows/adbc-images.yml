@@ -1,6 +1,6 @@
-# Separate from server.yml: the first GA driver's live tests require the server
-# release first. Dispatch this after both releases; it can also rebuild just the
-# driver layer without re-releasing the server.
+# server.yml's downstream job dispatches this after each release is published (on the
+# release's tag, with the newest stable hardcharger-adbc release). Dispatch it by hand to
+# rebuild just the driver layer without re-releasing the server, or to retry.
 name: ADBC images
 on:
   workflow_dispatch:

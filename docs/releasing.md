@@ -54,8 +54,9 @@ Two places can't hold `-rc.N` and use numbers instead:
   `python-vX.Y.Z.postN`; `SERVER_VERSION` continues to point at server `X.Y.Z`.
   Keep package metadata, runtime `__version__`, and the download pin aligned, and run
   `.github/scripts/check_python_version.py`. Both server and Python CI enforce this;
-  a server release tag requires the base package without a post suffix. Publish the
-  server artifacts first, then the matching Python tag so its download tests can use them.
+  a server release tag requires the base package without a post suffix. The release
+  publishes the matching package itself (see [After the release](#after-the-release)); push a
+  `python-vX.Y.Z.postN` tag by hand only for a Python-only fix.
 
 ## What a tag publishes
 
@@ -150,6 +151,22 @@ nothing is published; the image job checks the tag again before it pushes, and t
 checks both. The next candidate is a new tag (`-rc.2`); a
 published tag is never moved.
 
+## After the release
+
+The tag's `downstream` job runs only once the `release` job has succeeded: every gate passed,
+the signatures checked and the GitHub Release published. It dispatches, on the same tag:
+
+- `workflow.yml` with `release: X.Y.Z`, which tests the package against the published server
+  and publishes `hardcharger` `X.Y.Z` (`X.Y.ZrcN` for a candidate) to PyPI, then creates
+  `python-vX.Y.Z` on the same commit. It refuses to publish unless it runs on the tag `vX.Y.Z`,
+  that GitHub Release is published, and the package is exactly the matching version.
+- `adbc-images.yml` with `publish=true`, the release's version and the newest stable
+  `hardcharger-adbc` release, which builds, tests and publishes `:X.Y.Z-adbc`.
+
+It waits for both and fails, with links to the runs, when either does, then checks that PyPI and
+both registries have them. A red `downstream` means the server release is out and something
+after it isn't: fix the cause and re-run that workflow by hand (the commands below), not the tag.
+
 ## Bundled ADBC images
 
 The `ADBC images` workflow (`adbc-images.yml`) publishes `:<server-version>-adbc`
@@ -159,9 +176,9 @@ Both native Linux architectures must build, load all 15 drivers and query the
 running server through the `hardcharger` manifest before the multi-architecture
 tags are published. The server image is resolved to a digest before building.
 
-Run this **after the server and hardcharger-adbc releases have both published**.
-The first GA driver needs the released server for its own tests, so this is a
-separate workflow rather than a dependency of the server release:
+A server release runs this itself ([After the release](#after-the-release)). Run it by hand to
+rebuild the driver layer (a new driver release, new native pins) without re-releasing the server,
+or to retry a failed run:
 
 ```bash
 # Build and test first without publishing.

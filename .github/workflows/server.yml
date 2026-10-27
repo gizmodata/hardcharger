@@ -1726,3 +1726,76 @@ jobs:
           files: dist/*
           prerelease: ${{ steps.notes.outputs.prerelease == 'true' }}
           make_latest: ${{ steps.notes.outputs.prerelease == 'true' && 'false' || 'true' }}
+
+  # What follows a published release: the matching `hardcharger` Python package (workflow.yml)
+  # and the bundled-driver images :X.Y.Z-adbc (adbc-images.yml). Only after the release job
+  # succeeded, so only for a v* tag whose every gate, signature check and GitHub Release did;
+  # each dispatched run runs its own tests on the tag before it publishes. This job waits for
+  # both and fails when either does, and checks PyPI and both registries afterwards: a release
+  # isn't done until its downstream publishes are confirmed.
+  downstream:
+    if: ${{ !cancelled() && needs.release.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Dispatch the Python package and the ADBC images
+        id: dispatch
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # The newest stable driver release (GitHub's latest is never a draft or pre-release).
+          driver=$(gh release view --repo gizmodata/hardcharger-adbc --json tagName --jq .tagName)
+          [[ "$driver" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "no stable hardcharger-adbc release ($driver)"; exit 1; }
+          echo "hardcharger-adbc driver: $driver"
+          # Prints the dispatched run's id: from gh's run URL, else the newest dispatch on this tag
+          # since the call.
+          dispatch() {
+            local workflow="$1" since url id
+            shift
+            since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            url=$(gh workflow run "$workflow" --ref "$GITHUB_REF_NAME" "$@" | grep -oE 'https://[^ ]+/actions/runs/[0-9]+' | tail -1 || true)
+            id="${url##*/}"
+            for _ in $(seq 1 30); do
+              [ -n "$id" ] && break
+              sleep 5
+              id=$(gh run list --workflow "$workflow" --event workflow_dispatch --branch "$GITHUB_REF_NAME" \
+                     --json databaseId,createdAt --jq "map(select(.createdAt >= \"$since\")) | .[0].databaseId // empty")
+            done
+            [ -n "$id" ] || { echo "no run of $workflow started" >&2; return 1; }
+            echo "$workflow: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$id" >&2
+            echo "$id"
+          }
+          python=$(dispatch workflow.yml -f release="$version")
+          adbc=$(dispatch adbc-images.yml -f server_version="$version" -f driver_tag="$driver" -f publish=true)
+          echo "python=$python" >> "$GITHUB_OUTPUT"
+          echo "adbc=$adbc" >> "$GITHUB_OUTPUT"
+      - name: Wait for both to publish
+        env:
+          PYTHON_RUN: ${{ steps.dispatch.outputs.python }}
+          ADBC_RUN: ${{ steps.dispatch.outputs.adbc }}
+        run: |
+          failed=0
+          gh run watch "$PYTHON_RUN" --exit-status --interval 30 > /dev/null || { echo "::error::the Python package run failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$PYTHON_RUN"; failed=1; }
+          gh run watch "$ADBC_RUN" --exit-status --interval 30 > /dev/null || { echo "::error::the ADBC images run failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$ADBC_RUN"; failed=1; }
+          exit "$failed"
+      - name: Confirm PyPI and the registries have them
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          package=$(python3 -c 'import tomllib; print(tomllib.load(open("python/pyproject.toml", "rb"))["project"]["version"])')
+          # PyPI's JSON API can trail the upload by a minute or two.
+          for i in $(seq 1 20); do
+            [ "$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/hardcharger/$package/json")" = 200 ] && break
+            [ "$i" -lt 20 ] || { echo "::error::PyPI has no hardcharger $package"; exit 1; }
+            sleep 15
+          done
+          echo "PyPI: hardcharger $package"
+          for image in "ghcr.io/gizmodata/hardcharger:$version-adbc" "docker.io/gizmodata/hardcharger:$version-adbc"; do
+            docker buildx imagetools inspect "$image" > /dev/null || { echo "::error::$image is missing"; exit 1; }
+            echo "image: $image"
+          done
