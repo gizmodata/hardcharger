@@ -7,6 +7,14 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-10-27
+
+Hardcharger Desktop now updates itself. 2.1.0 and 2.1.1 can't, so desktop users install 2.1.2
+once from the [release](https://github.com/gizmodata/hardcharger/releases/tag/v2.1.2) (its
+first launch moves the app's data to the final app identifier); every later release then
+arrives in-app. The tray shows whether the server is running, and the macOS installer shows
+where to drag the app.
+
 ### Added
 
 - **Hardcharger Desktop updates itself** ([#7](https://github.com/gizmodata/hardcharger/issues/7)).

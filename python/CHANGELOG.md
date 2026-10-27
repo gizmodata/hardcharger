@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-10-27
+
+### Changed
+
+- The package installs Hardcharger server 2.1.2. The server itself is unchanged from 2.1.1
+  apart from its web UI's DOMPurify update; 2.1.2's other changes are in the desktop app.
+
 ## [2.1.1] - 2026-10-27
 
 ### Changed
