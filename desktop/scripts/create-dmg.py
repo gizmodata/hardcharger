@@ -1,21 +1,23 @@
 """Make a drag-to-Applications disk image without sending Apple Events to Finder.
 
-Run with Python 3 and ds-store (uv run --with ds-store ...). The app must already be
-signed/notarized for a signed build. CI signs and notarizes the enclosing DMG too.
+Run with Python 3 and dmgbuild (uv run --with dmgbuild ...), which writes Finder's layout and
+the background picture (an arrow from the app to Applications, desktop/src-tauri/installer/
+dmg-background.png and @2x, from create-dmg-background.py) into the mounted image. The app
+must already be signed/notarized for a signed build. CI signs and notarizes the enclosing DMG
+too.
 """
 import argparse
 import base64
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import secrets
 import shlex
 import re
 import tempfile
 import time
-from ds_store import DSStore
+import dmgbuild
 
 parser = argparse.ArgumentParser()
 parser.add_argument("app", type=Path)
@@ -39,29 +41,26 @@ if os.getenv("DESKTOP_SIGNED") == "true":
     # Staple before copying the app into the disk image or the standalone app archive.
     staple_and_validate(args.app)
 
-with tempfile.TemporaryDirectory(prefix="hardcharger-dmg-") as directory:
-    stage = Path(directory)
-    subprocess.run(["ditto", str(args.app), str(stage / "Hardcharger.app")], check=True)
-    (stage / "Applications").symlink_to("/Applications")
-    shutil.copyfile(args.app / "Contents/Resources/icon.icns", stage / ".VolumeIcon.icns")
-    with DSStore.open(str(stage / ".DS_Store"), "w+") as store:
-        store["Hardcharger.app"]["Iloc"] = (180, 180)
-        store["Applications"]["Iloc"] = (480, 180)
-        # These keys have a built-in PlistCodec. Pass dictionaries directly: wrapping
-        # them in ("blob", bytes) encodes an array, which crashes Finder on allKeys.
-        store["."]["bwsp"] = {
-            "ShowStatusBar": False, "ShowSidebar": False, "ShowToolbar": False,
-            "ContainerShowSidebar": False, "WindowBounds": "{{200, 200}, {660, 400}}",
-        }
-        store["."]["icvp"] = {
-            "viewOptionsVersion": 1, "iconSize": 104.0, "gridSpacing": 100.0,
-            "textSize": 13.0, "labelOnBottom": True, "arrangeBy": "none",
-            "showIconPreview": True, "backgroundType": 1,
-            "backgroundColorRed": 0.96, "backgroundColorGreen": 0.98, "backgroundColorBlue": 1.0,
-        }
-        store["."]["vstl"] = ("type", b"icnv")
-        store["."]["vSrn"] = ("long", 1)
-    subprocess.run(["hdiutil", "create", "-ov", "-volname", "Hardcharger", "-fs", "HFS+", "-format", "UDZO", "-srcfolder", str(stage), str(args.destination)], check=True)
+# A background picture is an alias to a file on the mounted volume itself, so the layout
+# is written into the mounted image (dmgbuild), not into a staging folder. The window,
+# icon positions and size must match create-dmg-background.py's drawing.
+installer = Path(__file__).resolve().parents[1] / "src-tauri/installer"
+args.destination.unlink(missing_ok=True)
+dmgbuild.build_dmg(filename=str(args.destination), volume_name="Hardcharger", settings={
+    "format": "UDZO", "filesystem": "HFS+",
+    # dmgbuild copies with ditto, which keeps the signature and the stapled ticket.
+    "files": [(str(args.app), "Hardcharger.app")],
+    "symlinks": {"Applications": "/Applications"},
+    "icon": str(args.app / "Contents/Resources/icon.icns"),
+    # dmg-background@2x.png beside it makes this a Retina TIFF (tiffutil -cathidpicheck).
+    "background": str(installer / "dmg-background.png"),
+    "window_rect": ((200, 200), (660, 400)),
+    "default_view": "icon-view", "show_status_bar": False, "show_tab_view": False,
+    "show_toolbar": False, "show_pathbar": False, "show_sidebar": False,
+    "icon_size": 104, "text_size": 13, "grid_spacing": 100, "label_pos": "bottom",
+    "arrange_by": None, "show_icon_preview": True,
+    "icon_locations": {"Hardcharger.app": (180, 180), "Applications": (480, 180)},
+})
 if os.getenv("DESKTOP_SIGNED") == "true":
     def run_private(command, capture=False):
         # Never put credential-bearing command arguments into an exception traceback.

@@ -9,6 +9,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- **The macOS installer shows where to drag the app.** The disk image's window now has an arrow
+  from Hardcharger to the Applications shortcut, with "Drag Hardcharger to Applications"
+  underneath, in the app's own font and colours (Retina and standard resolutions).
+
 - **Releases publish the Python package and the ADBC images themselves.** Once a release's
   GitHub Release is published, its run publishes the matching `hardcharger` package to PyPI
   and the `:X.Y.Z-adbc` images, each after its own tests on the release tag, and fails if
