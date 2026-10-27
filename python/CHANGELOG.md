@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-10-27
+
+### Changed
+
+- The package installs Hardcharger server 2.1.1, which raises its open-file soft limit at
+  startup so queries over DuckLake tables with many partition files no longer fail with
+  "Too many open files" (gizmodata/hardcharger#8).
+
 ## [2.1.0] - 2026-10-26
 
 ### Changed

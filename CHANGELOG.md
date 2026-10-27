@@ -7,6 +7,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-10-27
+
+A patch release that fixes "Too many open files" on DuckLake tables with many partition files.
+
 ### Fixed
 
 - **"Too many open files" reading a partitioned DuckLake table** ([#8](https://github.com/gizmodata/hardcharger/issues/8)). A scan of a DuckLake
