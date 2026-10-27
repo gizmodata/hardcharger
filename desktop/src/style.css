@@ -76,7 +76,8 @@ h1 { margin:0; font-size:27px; letter-spacing:-1px; font-weight:650; }
 .button:hover:not(:disabled) { background:var(--panel-2); }
 .button svg { width:15px; height:15px; }
 .button.primary { background:var(--accent); color:var(--on-accent); border-color:var(--accent); }
-.button.primary:hover:not(:disabled) { filter:brightness(1.1); }
+/* Its own hover colour: .button:hover's light background would leave white text unreadable. */
+.button.primary:hover:not(:disabled) { background:var(--accent-hover, var(--accent)); border-color:var(--accent-hover, var(--accent)); }
 .private-note { display:flex; align-items:center; gap:6px; font-size:10px; color:var(--faint); }
 .private-note svg { width:13px; height:13px; }
 .hero-mascot { width:190px; margin-left:auto; padding:0 0 0 15px; }
@@ -203,3 +204,14 @@ footer { padding:14px 32px; border-top:1px solid var(--soft); display:flex; just
 .network-connection p { font-size:12px; line-height:1.7; }
 .stat strong.mono { overflow-wrap:anywhere; }
 @media(max-width:960px) { .sidebar { width:190px; padding-left:12px; padding-right:12px; } main { margin-left:190px; width:calc(100% - 190px); } header { padding:0 24px; } .content { padding:24px; } .hero { padding:24px; } .hero-mascot { width:140px; } .hero h2 { font-size:23px; } .hero-content { width:75%; } .control-note { display:none; } .stats { gap:10px; } .stat { padding:16px; } .stat strong.mono { font-size:13px; } }
+/* In-app updates (updates.ts): the header badge, the About section and the release notes dialog. */
+.update-badge { border:1px solid var(--accent); background:var(--accent-soft); color:var(--accent); border-radius:5px; padding:5px 9px; font-size:10px; font-weight:650; white-space:nowrap; margin-right:8px; cursor:pointer; }
+.update-badge:hover { filter:brightness(1.05); }
+.update-section { display:grid; gap:10px; justify-items:center; margin:14px auto 0; max-width:420px; }
+.update-section p { margin:0; }
+.update-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+.update-toggle { display:flex; align-items:center; gap:8px; font-weight:550; font-size:11px; color:var(--muted); }
+.update-toggle input { accent-color:var(--accent); }
+.release-notes { max-height:260px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.6; background:var(--panel-2); border:1px solid var(--border); border-radius:6px; padding:12px 14px; }
+.update-progress { display:grid; gap:6px; margin:12px 0; font-size:11px; color:var(--muted); }
+.update-progress progress { width:100%; accent-color:var(--accent); }

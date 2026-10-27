@@ -113,10 +113,21 @@ x64/Arm64. Linux packaging and testing are follow-up work.
   running. The icon and Dock/Start-menu shortcut reopen the app. **Quit Hardcharger** drains
   running queries and stops the child before exiting. Stop/restart closes the query window.
 - Launch at login is opt-in and starts quietly using `--background`.
-- The preview has its own application identifier and data directory:
-  `com.gizmodata.hardcharger.desktop.preview`. On macOS, its database, log, and preferences
-  live under `~/Library/Application Support/com.gizmodata.hardcharger.desktop.preview/`.
-  It never adopts an existing CLI database automatically.
+- The app's identifier is `com.gizmodata.hardcharger.desktop`, and its database, log, and
+  preferences live in that app-data folder (macOS:
+  `~/Library/Application Support/com.gizmodata.hardcharger.desktop/`). 2.1.x used
+  `com.gizmodata.hardcharger.desktop.preview`; the first launch of a newer release moves that
+  folder to the new name, rewrites the paths the app wrote into it, and leaves the old name as
+  a link to the new folder (`src-tauri/src/migrate.rs`). Saved credentials stay in the
+  credential store under the old service name. The identifier can't change again: in-app
+  updates match on it. The app never adopts an existing CLI database automatically.
+- In-app updates (`src-tauri/src/updates.rs`, `src/updates.ts`) read the `latest.json` each
+  release publishes and install only packages signed with the updater key in
+  `tauri.conf.json` for the announced version (`requireSignedVersion`). Signed release builds
+  sign the packages with the `TAURI_SIGNING_PRIVATE_KEY` secret (desktop.yml), and
+  `.github/scripts/updater_feed.py` verifies them before the release job writes the feed.
+  `HARDCHARGER_DESKTOP_UPDATE_FEED` points the app at another feed for testing; its packages
+  must still carry a valid signature.
 - Settings groups, option names, defaults, and descriptions come from the bundled server's
   `--print-options-json`. Custom values are type-checked before saving; the server performs
   semantic validation at its next start. Settings can change while the server is stopped.

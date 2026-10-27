@@ -248,6 +248,29 @@ jobs:
           $files = @($installer) + $executables.FullName
           & .github/scripts/verify-windows-signature.ps1 @files
           if ($LASTEXITCODE -ne 0) { throw "desktop signature verification failed" }
+      # The in-app updater's packages (gizmodata/hardcharger#7): on macOS the notarized and
+      # stapled app as a .app.tar.gz, on Windows the signed MSI exactly as shipped, each signed
+      # with the updater key for this version (the app requires version-bound signatures). The
+      # release job builds latest.json from them and verifies every signature again.
+      - name: Sign the update packages
+        if: needs.plan.outputs.sign == 'true'
+        working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          PLATFORM: ${{ matrix.name }}
+        run: |
+          [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set in the production environment"; exit 1; }
+          version=$(node -p 'require("./src-tauri/tauri.conf.json").version')
+          if [ "$RUNNER_OS" = macOS ]; then
+            package=artifacts/Hardcharger-desktop-macos-arm64.app.tar.gz
+            # create-dmg.py stapled the app in place; the updater wants it at the archive's root.
+            COPYFILE_DISABLE=1 tar -C "src-tauri/target/$TARGET/release/bundle/macos" -czf "$package" Hardcharger.app
+          else
+            package="artifacts/Hardcharger-desktop-$PLATFORM.msi"
+          fi
+          npx tauri signer sign --app-version "$version" "$package"
+          test -s "$package.sig"
       - name: Checksums and provenance
         env:
           PLATFORM: ${{ matrix.name }}

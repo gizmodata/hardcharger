@@ -212,6 +212,8 @@ jobs:
         run: |
           bash .github/scripts/test-release.sh
           python3 .github/scripts/test_versions_json.py
+          sudo apt-get install -y -q minisign > /dev/null
+          python3 .github/scripts/test_updater_feed.py
           python3 .github/scripts/check_python_version.py
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             python3 .github/scripts/check_python_version.py --server-tag "$GITHUB_REF_NAME"
@@ -1652,7 +1654,8 @@ jobs:
         working-directory: dist
         run: |
           shopt -s nullglob
-          assets=(hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi Hardcharger-desktop-*.dmg Hardcharger-desktop-*.app.zip)
+          # The desktop update package (.app.tar.gz) exists on signed runs only.
+          assets=(hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi Hardcharger-desktop-*.dmg Hardcharger-desktop-*.app.zip Hardcharger-desktop-*.app.tar.gz)
           # Three tarballs (Linux amd64/arm64, macOS), two Windows zips and two MSIs.
           [ ${#assets[@]} -ge 11 ] || { echo "expected native and desktop release assets, found: ${assets[*]}"; exit 1; }
           sha256sum "${assets[@]}" > SHA256SUMS
@@ -1715,9 +1718,20 @@ jobs:
         run: |
           sha256sum -c SHA256SUMS
           shopt -s nullglob
-          for asset in hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi Hardcharger-desktop-*.dmg Hardcharger-desktop-*.app.zip; do
+          for asset in hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi Hardcharger-desktop-*.dmg Hardcharger-desktop-*.app.zip Hardcharger-desktop-*.app.tar.gz; do
             grep -q "  $asset\$" SHA256SUMS || { echo "$asset is not in SHA256SUMS"; exit 1; }
           done
+      # The desktop app's update feed (gizmodata/hardcharger#7): every platform's update package
+      # must be here and verify with the updater key for exactly this version, or nothing is
+      # published. releases/latest/download/latest.json is what stable users' apps read.
+      - name: Build the desktop update feed
+        run: |
+          sudo apt-get install -y -q minisign > /dev/null
+          version="${GITHUB_REF_NAME#v}"
+          python3 .github/scripts/updater_feed.py --version "$version" --notes release-notes.md --dist dist \
+            --base-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME" \
+            --config desktop/src-tauri/tauri.conf.json > dist/latest.json
+          jq -e '.platforms | length == 3' dist/latest.json
       # A release candidate is a pre-release, which GitHub never makes the latest release
       # (what install.sh and releases/latest resolve); a release is made the latest.
       - uses: softprops/action-gh-release@v3
