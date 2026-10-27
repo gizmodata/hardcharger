@@ -2,6 +2,7 @@
 
 mod network;
 mod server;
+mod tray;
 
 use server::{Server, Settings, Status};
 use std::sync::{
@@ -16,7 +17,7 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt;
 
-type Shared = Arc<Mutex<Server>>;
+pub(crate) type Shared = Arc<Mutex<Server>>;
 static DETAIL_WINDOW: AtomicU64 = AtomicU64::new(1);
 const SQL_CLOSE_PATH: &str = "/ui/__desktop_close_window";
 
@@ -98,6 +99,9 @@ async fn control(app: &AppHandle, state: Shared, action: &str) -> Result<Status,
         _ => Err("Unknown server action.".into()),
     })
     .await;
+    if let Ok(status) = &result {
+        tray::show(app, status.running);
+    }
     let _ = app.emit_to("main", "server-changed", ());
     result
 }
@@ -539,15 +543,23 @@ fn main() {
             let start = server.settings.start_on_open;
             app.manage(Arc::new(Mutex::new(server)));
 
+            // Created disabled: tray::show enables them for the server's state below.
+            let stateful = |id: &str, label: &str, shortcut: Option<&str>| {
+                MenuItem::with_id(app, id, label, false, shortcut)
+            };
+            let tray_workspace = stateful("workspace", "Open SQL Workspace", None)?;
+            let tray_start = stateful("start", "Start Server", None)?;
+            let tray_stop = stateful("stop", "Stop Server", None)?;
+            let tray_restart = stateful("restart", "Restart Server", None)?;
             let menu = Menu::with_items(
                 app,
                 &[
                     &MenuItem::with_id(app, "show", "Open Hardcharger", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "workspace", "Open SQL Workspace", true, None::<&str>)?,
+                    &tray_workspace,
                     &PredefinedMenuItem::separator(app)?,
-                    &MenuItem::with_id(app, "start", "Start Server", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "stop", "Stop Server", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "restart", "Restart Server", true, None::<&str>)?,
+                    &tray_start,
+                    &tray_stop,
+                    &tray_restart,
                     &PredefinedMenuItem::separator(app)?,
                     &MenuItem::with_id(app, "quit", "Quit Hardcharger", true, None::<&str>)?,
                 ],
@@ -559,32 +571,47 @@ fn main() {
                     .ok_or("Missing bull head icon")?
                     .clone()
             };
-            TrayIconBuilder::with_id("hardcharger")
-                .icon(icon)
-                .icon_as_template(cfg!(target_os = "macos"))
+            // Drawn by tray::show with the status dot: never a template image, which macOS
+            // would tint in one colour, dot included.
+            TrayIconBuilder::with_id(tray::TRAY)
+                .icon(tray::status_icon(&icon, false, None))
+                .icon_as_template(false)
                 .tooltip("Hardcharger — local DuckDB server")
                 .menu(&menu)
                 .build(app)?;
 
+            let menu_workspace = stateful("workspace", "Open SQL Workspace", Some("CmdOrCtrl+1"))?;
+            let menu_start = stateful("start", "Start Server", None)?;
+            let menu_stop = stateful("stop", "Stop Server", None)?;
+            let menu_restart = stateful("restart", "Restart Server", None)?;
             let server_menu = Submenu::with_items(
                 app,
                 "Server",
                 true,
                 &[
-                    &MenuItem::with_id(
-                        app,
-                        "workspace",
-                        "Open SQL Workspace",
-                        true,
-                        Some("CmdOrCtrl+1"),
-                    )?,
+                    &menu_workspace,
                     &MenuItem::with_id(app, "show", "Server Dashboard", true, Some("CmdOrCtrl+2"))?,
                     &PredefinedMenuItem::separator(app)?,
-                    &MenuItem::with_id(app, "start", "Start Server", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "stop", "Stop Server", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "restart", "Restart Server", true, None::<&str>)?,
+                    &menu_start,
+                    &menu_stop,
+                    &menu_restart,
                 ],
             )?;
+            app.manage(tray::ServerMenus::new(
+                vec![
+                    tray_workspace,
+                    tray_start,
+                    tray_stop,
+                    tray_restart,
+                    menu_workspace,
+                    menu_start,
+                    menu_stop,
+                    menu_restart,
+                ],
+                Image::new_owned(icon.rgba().to_vec(), icon.width(), icon.height()),
+            ));
+            tray::show(app.handle(), false);
+            tray::watch(app.handle().clone());
             let application = Submenu::with_items(
                 app,
                 "Hardcharger",
@@ -659,6 +686,10 @@ fn main() {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     let _ = window.hide();
+                }
+                // The menu bar follows the system appearance: redraw the bull for it.
+                if let tauri::WindowEvent::ThemeChanged(_) = event {
+                    tray::redraw(window.app_handle());
                 }
             }
         })

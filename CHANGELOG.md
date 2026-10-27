@@ -16,6 +16,12 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- **The desktop tray shows the server's state.** The tray icon carries a green dot while the
+  server runs and a red one while it's stopped (drawn for light and dark menu bars on macOS),
+  and the tray and Server menus enable only what applies: Start while the server is stopped,
+  Stop, Restart and Open SQL Workspace while it runs. A server that exits on its own turns the
+  dot red within a second.
+
 - **The macOS installer shows where to drag the app.** The disk image's window now has an arrow
   from Hardcharger to the Applications shortcut, with "Drag Hardcharger to Applications"
   underneath, in the app's own font and colours (Retina and standard resolutions).
