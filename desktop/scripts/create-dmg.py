@@ -8,7 +8,6 @@ import base64
 import json
 import os
 from pathlib import Path
-import plistlib
 import shutil
 import subprocess
 import secrets
@@ -48,16 +47,19 @@ with tempfile.TemporaryDirectory(prefix="hardcharger-dmg-") as directory:
     with DSStore.open(str(stage / ".DS_Store"), "w+") as store:
         store["Hardcharger.app"]["Iloc"] = (180, 180)
         store["Applications"]["Iloc"] = (480, 180)
-        store["."]["bwsp"] = ("blob", plistlib.dumps({
+        # These keys have a built-in PlistCodec. Pass dictionaries directly: wrapping
+        # them in ("blob", bytes) encodes an array, which crashes Finder on allKeys.
+        store["."]["bwsp"] = {
             "ShowStatusBar": False, "ShowSidebar": False, "ShowToolbar": False,
             "ContainerShowSidebar": False, "WindowBounds": "{{200, 200}, {660, 400}}",
-        }))
-        store["."]["icvp"] = ("blob", plistlib.dumps({
+        }
+        store["."]["icvp"] = {
             "viewOptionsVersion": 1, "iconSize": 104.0, "gridSpacing": 100.0,
             "textSize": 13.0, "labelOnBottom": True, "arrangeBy": "none",
             "showIconPreview": True, "backgroundType": 1,
             "backgroundColorRed": 0.96, "backgroundColorGreen": 0.98, "backgroundColorBlue": 1.0,
-        }))
+        }
+        store["."]["vstl"] = ("type", b"icnv")
         store["."]["vSrn"] = ("long", 1)
     subprocess.run(["hdiutil", "create", "-ov", "-volname", "Hardcharger", "-fs", "HFS+", "-format", "UDZO", "-srcfolder", str(stage), str(args.destination)], check=True)
 if os.getenv("DESKTOP_SIGNED") == "true":
