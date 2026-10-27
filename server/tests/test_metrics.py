@@ -160,9 +160,15 @@ def test_instrumentation_writer_gauges(launcher, server, session):
 TEST_STARTED = time.time()
 
 
+# A scrape answers in milliseconds (at most 12 ms while test_spill_and_temporary_storage spills,
+# on an M-series Mac), but a loaded Windows runner once stalled one past httpx's 5 s default
+# (2026-10-27). The tests check the values, not the latency: wait as long as any other request.
+SCRAPE_TIMEOUT = 30 * TIMEOUT_SCALE
+
+
 def scrape(port: int) -> dict[str, float]:
     """The unlabelled samples of one /metrics scrape, by name."""
-    text = httpx.get(url=f"http://127.0.0.1:{port}/metrics").text
+    text = httpx.get(url=f"http://127.0.0.1:{port}/metrics", timeout=SCRAPE_TIMEOUT).text
     samples = {}
     for line in text.splitlines():
         if line and not line.startswith("#") and "{" not in line:
@@ -274,17 +280,21 @@ def test_spill_and_temporary_storage(launcher, tmp_path):
     worker = threading.Thread(target=sort)
     worker.start()
     peak = {"hardcharger_duckdb_spill_bytes": 0.0, "hardcharger_duckdb_spill_files": 0.0,
-            "hardcharger_duckdb_temp_storage_bytes": 0.0}
+            "hardcharger_duckdb_temp_storage_bytes": 0.0, "hardcharger_metrics_collection_duration_seconds": 0.0}
+    slowest = 0.0  # the slowest scrape, end to end: reported with any failure below
     while not done.is_set():
+        started = time.monotonic()
         scraped = scrape(port=port)
+        slowest = max(slowest, time.monotonic() - started)
         for name, highest in peak.items():
             peak[name] = max(highest, scraped[name])
         time.sleep(0.05)
     worker.join()
-    assert not failure, failure
-    assert peak["hardcharger_duckdb_spill_bytes"] > 0, peak
-    assert peak["hardcharger_duckdb_spill_files"] >= 1, peak
-    assert peak["hardcharger_duckdb_temp_storage_bytes"] > 0, peak
+    timings = f"slowest scrape {slowest:.3f} s; {peak}"
+    assert not failure, (failure, timings)
+    assert peak["hardcharger_duckdb_spill_bytes"] > 0, timings
+    assert peak["hardcharger_duckdb_spill_files"] >= 1, timings
+    assert peak["hardcharger_duckdb_temp_storage_bytes"] > 0, timings
     admin.execute(sql="DROP TABLE metrics_spilled")
     deadline = time.monotonic() + 10
     while scrape(port=port)["hardcharger_duckdb_spill_bytes"] > 0 and time.monotonic() < deadline:
