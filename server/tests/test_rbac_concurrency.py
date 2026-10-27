@@ -122,6 +122,10 @@ def test_access_control_does_not_cost_concurrency(launcher, store):
           f"{(median['rbac_multi'] / median['base_multi'] - 1) * 100:15.1f}%")
     # A shared lock or anything else that serializes sessions shows up as the concurrent
     # run slowing down far more than the single-client one, and as worse scaling. Allow
-    # for timing noise on a busy machine.
-    assert median["rbac_multi"] <= median["base_multi"] * 1.25 + 0.2, "access control slowed down concurrent clients"
-    assert rbac_scaling >= base_scaling * 0.8, "access control scales worse with concurrent clients than the baseline"
+    # for timing noise on a busy machine. Serialized sessions (--max-concurrent-statements 1
+    # and an unbounded queue on the governed server) scaled 1.37x against the baseline's
+    # 5.26x, a ratio of 0.26, and failed both checks; shared macOS runners measured 0.78 and
+    # 0.79 with no lock at all (2026-10-27), so the bar sits between the two at 0.6.
+    numbers = f"scaling {rbac_scaling:.2f}x vs baseline {base_scaling:.2f}x; medians {median}"
+    assert median["rbac_multi"] <= median["base_multi"] * 1.25 + 0.2, f"access control slowed down concurrent clients: {numbers}"
+    assert rbac_scaling >= base_scaling * 0.6, f"access control scales worse with concurrent clients than the baseline: {numbers}"
