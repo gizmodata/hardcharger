@@ -7,6 +7,13 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Security
+
+- **The web UI's SQL editor uses DOMPurify 3.4.17.** Monaco Editor 0.57.0 (the newest) pins
+  3.4.15, which has five published advisories (GHSA, one rated critical); an npm override in
+  `ui/package.json` lifts it. None of them could be reached: each needs a DOMPurify option
+  Monaco doesn't use (`SAFE_FOR_TEMPLATES`, `IN_PLACE` or the XHTML parser).
+
 ### Changed
 
 - **The macOS installer shows where to drag the app.** The disk image's window now has an arrow

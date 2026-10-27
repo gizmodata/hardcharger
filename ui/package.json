@@ -62,5 +62,10 @@
   },
   "scarfSettings": {
     "enabled": false
+  },
+  "overrides": {
+    "monaco-editor": {
+      "dompurify": "3.4.17"
+    }
   }
 }
