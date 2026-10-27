@@ -11,6 +11,7 @@
 #else
 #include <fnmatch.h>
 #include <pwd.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/utsname.h>
@@ -426,6 +427,8 @@ double ProcessThreads() {
   return count > 0 ? static_cast<double>(count) : NAN;
 }
 
+std::optional<OpenFileLimit> RaiseOpenFileLimit() { return std::nullopt; }
+
 void SetSocketTimeouts(boost::asio::ip::tcp::socket& socket, int seconds) {
   const DWORD millis = static_cast<DWORD>(seconds) * 1000;
   setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&millis), sizeof(millis));
@@ -689,6 +692,35 @@ double ProcessThreads() {
 #else
   return CountEntries("/proc/self/task");
 #endif
+}
+
+std::optional<OpenFileLimit> RaiseOpenFileLimit() {
+  rlimit limit{};
+  if (getrlimit(RLIMIT_NOFILE, &limit) != 0) return std::nullopt;
+  const auto value = [](rlim_t n) { return n == RLIM_INFINITY ? OpenFileLimit::kUnlimited : static_cast<uint64_t>(n); };
+  OpenFileLimit result{value(limit.rlim_cur), value(limit.rlim_cur), value(limit.rlim_max)};
+  rlim_t target = limit.rlim_max;
+#if defined(__APPLE__)
+  // macOS refuses a soft limit above kern.maxfilesperproc, and its usual hard limit is
+  // RLIM_INFINITY.
+  int per_process = 0;
+  std::size_t size = sizeof(per_process);
+  if (sysctlbyname("kern.maxfilesperproc", &per_process, &size, nullptr, 0) == 0 && per_process > 0) {
+    target = std::min(target, static_cast<rlim_t>(per_process));
+  }
+#else
+  // Linux refuses one above fs.nr_open, which an unlimited hard limit exceeds.
+  if (target == RLIM_INFINITY) {
+    const auto nr_open = WholeNumber(FirstLine("/proc/sys/fs/nr_open").value_or(""));
+    if (!nr_open || *nr_open <= 0) return result;
+    target = static_cast<rlim_t>(*nr_open);
+  }
+#endif
+  if (limit.rlim_cur != RLIM_INFINITY && target > limit.rlim_cur) {
+    limit.rlim_cur = target;
+    if (setrlimit(RLIMIT_NOFILE, &limit) == 0) result.after = value(target);
+  }
+  return result;
 }
 
 void SetSocketTimeouts(boost::asio::ip::tcp::socket& socket, int seconds) {

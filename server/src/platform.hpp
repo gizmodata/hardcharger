@@ -78,6 +78,21 @@ double ProcessOpenFds();
 // The process's operating-system threads.
 double ProcessThreads();
 
+// Raises the soft limit on open files (RLIMIT_NOFILE) to the hard limit, as Go programs
+// and most servers do at startup. Docker, systemd and Kubernetes start a process at 1024
+// (a macOS shell at 256), far below their hard limits, and DuckDB can hold more files open
+// than that at once: a DuckLake scan of a table with a thousand partition files failed
+// with "Too many open files" (issue #8). nullopt on Windows, which has no such limit on
+// the handles DuckDB opens, or when the limit can't be read. kUnlimited stands for
+// RLIM_INFINITY.
+struct OpenFileLimit {
+  static constexpr uint64_t kUnlimited = UINT64_MAX;
+  uint64_t before = 0;  // the soft limit the process started with
+  uint64_t after = 0;   // the soft limit now: before when it was already the most allowed
+  uint64_t hard = 0;
+};
+std::optional<OpenFileLimit> RaiseOpenFileLimit();
+
 // The container's limits from the cgroup file system mounted at `root`: cgroup v2's
 // memory.max and cpu.max, else v1's memory/memory.limit_in_bytes and
 // cpu/cpu.cfs_quota_us / cpu.cfs_period_us. NaN where there is no limit ("max", -1, v1's

@@ -802,6 +802,13 @@ your chosen upstream DuckLake version. DuckLake's catalog format and its
 `AUTOMATIC_MIGRATION` option are separate from the metadata database's storage format.
 PostgreSQL metadata has no DuckDB file storage version. See [Extensions](docs/extensions.md).
 
+**Open files.** A query over a DuckLake table holds many of its data files open at once, so
+a table with thousands of partition files needs more than the 1024 open files that
+containers and services usually start with. The server raises its soft limit to the hard
+limit at startup (v2.1.1+) and warns in its log when the hard limit is below 8192. Raise
+that with `ulimit -Hn`, `docker run --ulimit nofile=1048576:1048576`, Compose's
+`ulimits: nofile:`, or systemd's `LimitNOFILE=`.
+
 ### Logs
 
 The server logs to stderr (`log_file` for a file), at `log_level` (`info` by default), as

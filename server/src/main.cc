@@ -44,6 +44,10 @@ namespace hc = hardcharger;
 
 namespace {
 
+// Below this many open files after raising the soft limit, startup warns: the hard limit
+// itself is low.
+constexpr uint64_t kLowOpenFileLimit = 8192;
+
 // --licenses writes the embedded notices byte for byte, the same on every platform as the
 // THIRD_PARTY_NOTICES.md beside the binary: stdout in text mode (Windows) would turn each
 // \n into \r\n.
@@ -503,6 +507,24 @@ int main(int argc, char** argv) {
     hc::SetDefaultLogFields(identity);
     for (const auto& note : loaded.notes) {
       hc::Log(hc::LogLevel::kInfo, note);
+    }
+    // Before DuckDB opens anything: a scan of a DuckLake table with many files holds more
+    // open than the 1024 that containers and services start with (issue #8).
+    if (const auto files = hc::RaiseOpenFileLimit()) {
+      const auto text = [](uint64_t n) {
+        return n == hc::OpenFileLimit::kUnlimited ? std::string("unlimited") : std::to_string(n);
+      };
+      if (files->after != files->before) {
+        hc::Log(hc::LogLevel::kInfo, "raised the open-file limit",
+                {{"from", text(files->before)}, {"to", text(files->after)}});
+      }
+      if (files->after < kLowOpenFileLimit) {
+        hc::Log(hc::LogLevel::kWarning,
+                "the open-file limit is low: queries over many files (DuckLake tables with many "
+                "partitions) can fail with \"Too many open files\"; raise the hard limit (ulimit -Hn, "
+                "docker run --ulimit nofile=1048576:1048576, systemd LimitNOFILE=)",
+                {{"limit", text(files->after)}, {"hard", text(files->hard)}});
+      }
     }
     // Role-based access control: the store is opened (and must be reachable) before
     // anything else.

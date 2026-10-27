@@ -9,6 +9,10 @@
 
 #include "platform.hpp"
 
+#ifndef _WIN32
+#include <sys/resource.h>
+#endif
+
 using hardcharger::CpuModelFromCpuinfo;
 
 TEST(ClientIpAddress, StripsOnlyEndpointPortsAndNormalizesMappedIpv6) {
@@ -166,3 +170,33 @@ TEST(ProcessStats, AreKnownAndSane) {
   EXPECT_GE(hardcharger::ProcessOpenFds(), 3);  // stdin, stdout, stderr at least
 #endif
 }
+
+// Issue #8: a process started at a low soft limit (Docker's and systemd's 1024) is raised
+// to the hard limit; one already there is left alone.
+#ifdef _WIN32
+TEST(RaiseOpenFileLimit, IsNotApplicableOnWindows) { EXPECT_FALSE(hardcharger::RaiseOpenFileLimit()); }
+#else
+TEST(RaiseOpenFileLimit, RaisesALowSoftLimitToTheHardLimit) {
+  rlimit original{};
+  ASSERT_EQ(getrlimit(RLIMIT_NOFILE, &original), 0);
+  ASSERT_TRUE(original.rlim_max == RLIM_INFINITY || original.rlim_max > 256) << original.rlim_max;
+  rlimit low = original;
+  low.rlim_cur = 256;
+  ASSERT_EQ(setrlimit(RLIMIT_NOFILE, &low), 0);
+
+  const auto raised = hardcharger::RaiseOpenFileLimit();
+  rlimit now{};
+  ASSERT_EQ(getrlimit(RLIMIT_NOFILE, &now), 0);
+  ASSERT_TRUE(raised);
+  EXPECT_EQ(raised->before, 256u);
+  EXPECT_GT(raised->after, 256u);
+  EXPECT_EQ(static_cast<uint64_t>(now.rlim_cur), raised->after);
+  EXPECT_LE(raised->after, raised->hard);
+
+  const auto again = hardcharger::RaiseOpenFileLimit();
+  ASSERT_TRUE(again);
+  EXPECT_EQ(again->before, raised->after);
+  EXPECT_EQ(again->after, raised->after);
+  setrlimit(RLIMIT_NOFILE, &original);
+}
+#endif
