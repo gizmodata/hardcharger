@@ -12,7 +12,7 @@ own changelog in `python/CHANGELOG.md`.
 - **Releases publish the Python package and the ADBC images themselves.** Once a release's
   GitHub Release is published, its run publishes the matching `hardcharger` package to PyPI
   and the `:X.Y.Z-adbc` images, each after its own tests on the release tag, and fails if
-  either doesn't publish. See [Releasing](docs/releasing.md#after-the-release).
+  either doesn't publish. See "After the release" in `docs/releasing.md`.
 
 ## [2.1.1] - 2026-10-27
 
