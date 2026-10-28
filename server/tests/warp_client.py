@@ -5,6 +5,7 @@ session, run SQL, read rows, prepare, ingest, read metadata)."""
 
 import datetime
 import io
+import json
 import time
 
 import httpx
@@ -129,8 +130,25 @@ class Session:
 
     def query(self, sql: str, parameters=None, headers: dict[str, str] | None = None) -> pa.Table:
         """Runs SQL on the streamed path and returns its rows; raises WarpError with the
-        problem document's detail when the statement fails."""
-        response = self.submit(sql=sql, parameters=parameters, arrow=True, headers=headers)
+        problem document's detail when the statement fails. A statement that fails after
+        its result stream began ends the stream early (Warp SQL §6.6); as a conforming client
+        does, the statement's own document then says why."""
+        body: dict = {"sql": sql}
+        if parameters is not None:
+            body["parameters"] = parameters
+        request_headers = self.headers(**(headers or {}))
+        request_headers["Accept"] = ARROW_STREAM
+        with self.http.stream(method="POST", url=f"{self.url}/statements", headers=request_headers, json=body,
+                              timeout=120) as response:
+            try:
+                response.read()
+            except httpx.RemoteProtocolError:
+                statement_id = response.headers.get("Warp-Statement-Id")
+                if not statement_id:
+                    raise
+                doc = self.wait_done(statement_id=statement_id)
+                error = doc.get("error") or {}
+                raise WarpError(f"{error.get('status', 'stream ended early')}: {json.dumps(error)}")
         return self.table_of(response=response)
 
     def table_of(self, response: httpx.Response) -> pa.Table:

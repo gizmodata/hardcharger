@@ -58,6 +58,16 @@ touch, and database paths hidden from everyone but the administrator.
   before this release keep what they gave: `GRANT ALL` has always been stored as the separate
   privileges it stood for.
 
+### Fixed
+
+- **A statement that fails while its rows stream is logged and recorded like any other failure.**
+  Once the server has answered `200` and begun a result's Arrow stream, a failure can only end the
+  stream early; the statement's document holds the error (Warp SQL §6.6), which the `hardcharger`
+  CLI and the drivers read. The server's log, though, showed the statement starting and nothing
+  else, and its instrumentation record kept the raw error, a connection string's password
+  included. It now logs `statement failed` with the statement's id and the error, and records
+  that same loggable error.
+
 ### Security
 
 - **No user reads, writes, lists or globs an attached DuckLake catalog's storage directly,

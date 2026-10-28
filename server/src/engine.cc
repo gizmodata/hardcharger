@@ -439,16 +439,26 @@ namespace {
 // is, where a plain Arrow failure would become an execution_error.
 class TrackedReader : public arrow::RecordBatchReader {
  public:
+  // `failed` logs a statement that fails while its rows are read, with the error as it may
+  // be logged (`loggable`), as Session::Track logs one that fails before.
   TrackedReader(std::shared_ptr<arrow::RecordBatchReader> rows, std::shared_ptr<Execution> execution,
+                std::function<std::string(std::string_view)> loggable,
+                std::function<void(const std::string&)> failed,
                 std::function<void(const arrow::Status&)> translate)
-      : execution_(std::move(execution)), rows_(std::move(rows)), translate_(std::move(translate)) {}
+      : execution_(std::move(execution)),
+        rows_(std::move(rows)),
+        loggable_(std::move(loggable)),
+        failed_(std::move(failed)),
+        translate_(std::move(translate)) {}
 
   std::shared_ptr<arrow::Schema> schema() const override { return rows_->schema(); }
   arrow::Status ReadNext(std::shared_ptr<arrow::RecordBatch>* batch) override {
     auto status = rows_->ReadNext(batch);
     if (!status.ok()) {
       const std::string_view error_class = ClassifyStatementError(status.message());
-      execution_->End(error_class == "cancelled" ? "cancelled" : "error", error_class, status.message());
+      const std::string error = loggable_(status.message());
+      execution_->End(error_class == "cancelled" ? "cancelled" : "error", error_class, error);
+      if (error_class != "cancelled") failed_(error);
       if (translate_) translate_(status);
     } else if (*batch == nullptr) {
       execution_->End("ok", "", "");
@@ -464,6 +474,8 @@ class TrackedReader : public arrow::RecordBatchReader {
   // written) before the execution closes.
   std::shared_ptr<Execution> execution_;
   std::shared_ptr<arrow::RecordBatchReader> rows_;
+  std::function<std::string(std::string_view)> loggable_;
+  std::function<void(const std::string&)> failed_;
   std::function<void(const arrow::Status&)> translate_;
 };
 
@@ -1255,17 +1267,19 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
     const std::string_view error_class = ClassifyStatementError(error.what());
     const std::string logged_error = LoggableError(sql, error.what());
     execution->End(error.code() == ErrorCode::kStatementCancelled ? "cancelled" : "error", error_class, logged_error);
-    LogFields fields = {{"session_id", id_}, {"user", principal_.name}};
-    fields.insert(fields.end(), id_fields.begin(), id_fields.end());
-    fields.insert(fields.end(), {{"kind", "sql"}, {"status", "error"}, {"error", logged_error}, {"sql", Abbreviate(sql)}});
-    LogQuery(LogLevel::kInfo, "statement failed", fields);
+    LogFailed(id_fields, sql, logged_error);
     if (killed_) throw KilledError();
     throw;
   }
   execution->Produced();
   if (outcome.rows) {
-    outcome.rows = std::make_shared<TrackedReader>(std::move(outcome.rows), std::move(execution),
-                                                   [this](const arrow::Status& status) {
+    // A statement can fail after its first rows: the client sees the result stream end
+    // early and the statement's error in its document; the log and the record say why.
+    outcome.rows = std::make_shared<TrackedReader>(
+        std::move(outcome.rows), std::move(execution),
+        [sql = std::string(sql)](std::string_view error) { return LoggableError(sql, error); },
+        [this, id_fields, sql = std::string(sql)](const std::string& error) { LogFailed(id_fields, sql, error); },
+        [this](const arrow::Status& status) {
       if (killed_) throw KilledError();
       if (interrupted_ && ClassifyStatementError(status.message()) == "cancelled") {
         throw Error(ErrorCode::kStatementCancelled, status.message(), "57014");
@@ -1280,6 +1294,13 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
     execution->End("ok", "", "");
   }
   return outcome;
+}
+
+void Session::LogFailed(const LogFields& id_fields, std::string_view sql, const std::string& logged_error) {
+  LogFields fields = {{"session_id", id_}, {"user", principal_.name}};
+  fields.insert(fields.end(), id_fields.begin(), id_fields.end());
+  fields.insert(fields.end(), {{"kind", "sql"}, {"status", "error"}, {"error", logged_error}, {"sql", Abbreviate(sql)}});
+  LogQuery(LogLevel::kInfo, "statement failed", fields);
 }
 
 warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::value& parameters) {

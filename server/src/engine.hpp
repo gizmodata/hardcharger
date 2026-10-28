@@ -196,6 +196,8 @@ class Session : public warpduckdb::DuckDBSession {
   std::string StatementQueryTag() const;
   LogLevel QueryLogLevel() const;
   void LogQuery(LogLevel level, std::string_view message, const LogFields& fields) const;
+  // Logs "statement failed" for a statement of this session (`logged_error`: LoggableError's).
+  void LogFailed(const LogFields& id_fields, std::string_view sql, const std::string& logged_error);
   // A tracked execution ended (its Execution calls it).
   void FinishRunning();
 
