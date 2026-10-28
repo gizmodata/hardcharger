@@ -15,8 +15,11 @@
 //
 // Every store round trip is bounded (StoreOptions::timeout): a store that stops answering
 // (PostgreSQL paused, overloaded, or unreachable without a reset) fails the call with
-// "access control store unavailable: timed out after N s" instead of holding it. The
-// store's errors never carry its connection string's credentials.
+// "access control store unavailable: timed out after N s" instead of holding it. Callers
+// take turns at the store's one connection in the order they asked; one that waits its turn
+// gives up only when a store statement has been outstanding for the timeout, never because
+// the line ahead of it is long (many sessions creating tables at once). The store's errors
+// never carry its connection string's credentials.
 
 #pragma once
 
@@ -24,11 +27,13 @@
 #include <arrow/status.h>
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 
 #include "authz/model.hpp"
@@ -42,6 +47,20 @@ namespace hardcharger::authz {
 
 class StoreTransaction;
 class StoreLink;
+class RbacStore;
+
+// A caller's turn at the store's connection (RbacStore::Lock); ends with this object.
+class StoreTurn {
+ public:
+  StoreTurn() = default;
+  ~StoreTurn();
+  StoreTurn(const StoreTurn&) = delete;
+  StoreTurn& operator=(const StoreTurn&) = delete;
+
+ private:
+  RbacStore* store_ = nullptr;
+  friend class RbacStore;
+};
 
 // The version of the store's schema this server writes and reads. A store whose schema
 // is newer (a later server migrated it) is refused at startup.
@@ -101,6 +120,12 @@ class RbacStore {
   // replica is retried.
   arrow::Status Mutate(const std::function<arrow::Status(StoreTransaction&, const Snapshot&)>& fn);
 
+  // A write that needs nothing read first (an object's owner record): as Mutate, without
+  // reading the whole store inside the transaction. Returns the data version it committed,
+  // so the caller can apply the change to the snapshot it holds when that was the version
+  // before.
+  arrow::Result<int64_t> Write(const std::function<arrow::Status(StoreTransaction&)>& fn);
+
   const std::string& description() const { return description_; }
   // A DuckDB store's file, absolute; empty for any other store.
   const std::string& file_path() const { return file_path_; }
@@ -118,8 +143,15 @@ class RbacStore {
   arrow::Status CheckOwnership();
   void CheckpointFile();
   arrow::Result<std::shared_ptr<const Snapshot>> LoadLocked();
-  // Takes mutex_ within the timeout, or says the store is busy with a call that hangs.
-  arrow::Status Lock(std::unique_lock<std::timed_mutex>& lock);
+  // One store transaction: BEGIN, the data version bumped (and read into `version`, when
+  // given), `body`, COMMIT; a conflict with another replica is retried.
+  arrow::Status Transact(const std::function<arrow::Status(StoreTransaction&)>& body, int64_t* version);
+  // Waits for the caller's turn at the store's connection. Turns are given in the order
+  // callers asked (a mutex lets a caller barge ahead, so with many waiting one could wait
+  // past the timeout while the store answered everyone else). Gives up, saying the store is
+  // unavailable, once a store statement has been outstanding for the timeout: it hangs.
+  arrow::Status Lock(StoreTurn& turn);
+  void Unlock();
   arrow::Status Redacted(const arrow::Status& status) const;
   template <typename T>
   arrow::Result<T> Redacted(arrow::Result<T> result) const {
@@ -130,13 +162,20 @@ class RbacStore {
   StoreOptions options_;
   std::string connect_uri_;  // options_.uri with the timeouts libpq takes added
   std::shared_ptr<StoreLink> link_;
-  std::timed_mutex mutex_;
+  // Turns at link_ (Lock): tickets in the order asked, the one being served, and tickets
+  // whose callers gave up waiting.
+  std::mutex turn_mutex_;
+  std::condition_variable turn_cv_;
+  uint64_t next_ticket_ = 0;
+  uint64_t serving_ = 0;
+  std::set<uint64_t> abandoned_;
   std::string description_;  // for logs; never contains credentials
   std::string secret_dir_;   // the private instance's (empty) secret directory
   std::string file_path_;    // a DuckDB store's file
   std::string cluster_id_;
 
   friend class StoreTransaction;
+  friend class StoreTurn;
 };
 
 // Writes inside RbacStore::Mutate. Only valid inside the callback.

@@ -181,6 +181,11 @@ class RbacEngine {
   explicit RbacEngine(Options options) : options_(std::move(options)) {}
   void PollLoop();
   void Publish(std::shared_ptr<const Snapshot> snapshot);
+  // Writes one owner change (`record`, or nullptr to remove `object`'s) and publishes it:
+  // applied to the snapshot in memory when the store committed it right on top of that
+  // snapshot's version, else by reading the store again. A CREATE or DROP then costs a
+  // few store round trips, not two reads of the whole store.
+  arrow::Status WriteOwner(const ObjectPath& object, const OwnerRecord* record);
   // Notes whether a poll of the store answered; logs an outage (rate-limited) and its end.
   void NoteStoreAnswer(const arrow::Status& status);
 

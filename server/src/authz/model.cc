@@ -132,6 +132,21 @@ bool Snapshot::WouldCreateCycle(const std::string& role_id,
   return RoleClosure(role_id).count(member_role_id) > 0;
 }
 
+std::shared_ptr<const Snapshot> Snapshot::WithOwner(int64_t version, const ObjectPath& object,
+                                                    const OwnerRecord* owner) const {
+  const std::string key = ObjectKey(object);
+  std::vector<OwnerRecord> owners;
+  owners.reserve(owners_.size() + 1);
+  for (const auto& o : owners_) {
+    if (ObjectKey(o.object) != key) owners.push_back(o);
+  }
+  if (owner) owners.push_back(*owner);
+  return std::make_shared<const Snapshot>(version, users_, roles_, memberships_, grants_, std::move(owners),
+                                          system_privileges_, row_policies_, masking_policies_, mask_bindings_,
+                                          tenants_, principal_tenants_, catalog_tenants_, group_mappings_,
+                                          scoped_tokens_);
+}
+
 const OwnerRecord* Snapshot::FindOwner(const ObjectPath& object) const {
   const std::string key = ObjectKey(object);
   for (const auto& owner : owners_) {

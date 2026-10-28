@@ -367,34 +367,35 @@ bool RbacEngine::IsActive(const Principal& principal) const {
 
 arrow::Status RbacEngine::RecordOwner(const ObjectPath& object, ObjectType type,
                                       const Principal& owner, const std::string& definition_hash) {
-  ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot&) {
-    OwnerRecord record;
-    record.object = object;
-    record.type = type;
-    record.owner_kind = owner.superuser ? OwnerKind::kSystem : OwnerKind::kUser;
-    record.owner_id = owner.superuser ? "" : owner.user_id;
-    record.definition_hash = definition_hash;
-    return txn.UpsertOwner(record);
-  }));
-  ARROW_ASSIGN_OR_RAISE(auto snap, store_->Load());
-  Publish(std::move(snap));
-  return arrow::Status::OK();
+  OwnerRecord record;
+  record.object = object;
+  record.type = type;
+  record.owner_kind = owner.superuser ? OwnerKind::kSystem : OwnerKind::kUser;
+  record.owner_id = owner.superuser ? "" : owner.user_id;
+  record.definition_hash = definition_hash;
+  return WriteOwner(object, &record);
 }
 
-arrow::Status RbacEngine::PutOwner(const OwnerRecord& record) {
-  ARROW_RETURN_NOT_OK(
-      store_->Mutate([&](StoreTransaction& txn, const Snapshot&) { return txn.UpsertOwner(record); }));
-  ARROW_ASSIGN_OR_RAISE(auto snap, store_->Load());
-  Publish(std::move(snap));
-  return arrow::Status::OK();
-}
+arrow::Status RbacEngine::PutOwner(const OwnerRecord& record) { return WriteOwner(record.object, &record); }
 
 arrow::Status RbacEngine::ForgetOwner(const ObjectPath& object) {
   if (!snapshot()->FindOwner(object)) return arrow::Status::OK();
-  ARROW_RETURN_NOT_OK(store_->Mutate(
-      [&](StoreTransaction& txn, const Snapshot&) { return txn.DeleteOwner(object); }));
-  ARROW_ASSIGN_OR_RAISE(auto snap, store_->Load());
-  Publish(std::move(snap));
+  return WriteOwner(object, nullptr);
+}
+
+arrow::Status RbacEngine::WriteOwner(const ObjectPath& object, const OwnerRecord* record) {
+  ARROW_ASSIGN_OR_RAISE(auto version, store_->Write([&](StoreTransaction& txn) {
+    return record ? txn.UpsertOwner(*record) : txn.DeleteOwner(object);
+  }));
+  auto current = snapshot();
+  if (current->version() >= version) return arrow::Status::OK();  // a reload already has it
+  if (current->version() == version - 1) {
+    // Nothing else changed in between: the store now holds exactly this.
+    Publish(current->WithOwner(version, object, record));
+    return arrow::Status::OK();
+  }
+  ARROW_ASSIGN_OR_RAISE(auto fresh, store_->Load());
+  Publish(std::move(fresh));
   return arrow::Status::OK();
 }
 

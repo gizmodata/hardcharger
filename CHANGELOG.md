@@ -7,6 +7,28 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Concurrent DDL no longer fails with "access control store unavailable" while the store is
+  healthy.** Under access control, every `CREATE` and `DROP` records its object's owner in the
+  store. In a dbt run with several threads, some models failed with `the owner of what it
+  creates could not be recorded (Hardcharger access control store unavailable: timed out after
+  10 s (rbac_store_timeout_seconds))`, and the server logged the store as down, although the
+  store answered at once. Three causes, all fixed:
+  - Statements took turns at the store's connection under a mutex, which let callers barge
+    ahead; one that waited longer than `rbac_store_timeout_seconds` gave up with the outage
+    error. They now take turns in the order they asked, and one waiting its turn fails only
+    when a store statement has been outstanding for the timeout (a store that really doesn't
+    answer still fails statements in about the timeout, as before).
+  - Reading the store was quadratic in its rows (DuckDB rebuilds a view of every row of a
+    result for each value read), and every `CREATE` and `DROP` read the whole store twice:
+    with 5,000 owner records, one read of an in-memory store took 1.5 s; it now takes 6 ms.
+  - An owner change no longer rereads the store: it is applied to the grants the server
+    holds in memory when no other change came in between. A `CREATE TABLE` under access
+    control took 60 ms with 300 tables in the store and now takes 7 ms; 16 sessions creating
+    and dropping tables against PostgreSQL ran 5,800 statements in 30 s instead of 458, the
+    slowest in 0.16 s instead of six failing after 10 s.
+
 ## [2.1.2] - 2026-10-27
 
 Hardcharger Desktop now updates itself. 2.1.0 and 2.1.1 can't, so desktop users install 2.1.2

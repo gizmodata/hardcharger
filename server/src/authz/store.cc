@@ -72,6 +72,13 @@ class StoreLink {
 
   std::chrono::milliseconds timeout() const { return timeout_; }
 
+  // Whether a statement has run for the whole timeout (one a caller gave up on included):
+  // the store doesn't answer.
+  bool Hung() const {
+    std::lock_guard lock(state_->mutex);
+    return state_->busy && std::chrono::steady_clock::now() - state_->busy_since >= timeout_;
+  }
+
   // Runs `work` on the store's thread, waiting at most the timeout. Ok: its result.
   arrow::Result<dd::unique_ptr<dd::QueryResult>> Call(Work work) {
     auto task = std::make_shared<Task>();
@@ -242,8 +249,26 @@ arrow::Status Exec(StoreLink& conn, const std::string& sql) {
   return arrow::Status::OK();
 }
 
-arrow::Result<dd::unique_ptr<dd::QueryResult>> Run(StoreLink& conn, const std::string& sql,
-                                                   dd::vector<dd::Value> params = {}) {
+// A store query's rows. Cells are read through one row view of the result: DuckDB's
+// ColumnDataCollection::GetValue builds a view of every row for each cell it reads, which
+// made reading the store quadratic in its rows (5,000 owners: 1.5 s for one load, and each
+// CREATE TABLE loaded twice).
+class StoreRows {
+ public:
+  explicit StoreRows(dd::unique_ptr<dd::QueryResult> result)
+      : result_(std::move(result)), rows_(result_->Collection().GetRows()) {}
+  dd::idx_t size() const { return rows_.size(); }
+  dd::Value GetValue(dd::idx_t col, dd::idx_t row) const { return rows_.GetValue(col, row); }
+
+ private:
+  dd::unique_ptr<dd::QueryResult> result_;
+  dd::ColumnDataRowCollection rows_;
+};
+
+dd::idx_t RowCount(const StoreRows& rows) { return rows.size(); }
+
+arrow::Result<std::unique_ptr<StoreRows>> Run(StoreLink& conn, const std::string& sql,
+                                              dd::vector<dd::Value> params = {}) {
   auto result = conn.Call([sql, params = std::move(params)](dd::Connection& c) mutable -> dd::unique_ptr<dd::QueryResult> {
     auto stmt = c.Prepare(sql);
     if (stmt->HasError()) throw std::runtime_error("prepare failed: " + stmt->GetError());
@@ -252,7 +277,7 @@ arrow::Result<dd::unique_ptr<dd::QueryResult>> Run(StoreLink& conn, const std::s
     return out;
   });
   if (!result.ok()) return Refile(result.status(), "statement failed");
-  return result;
+  return std::make_unique<StoreRows>(std::move(*result));
 }
 
 dd::Value Text(const std::string& s) { return dd::Value(s); }
@@ -279,17 +304,17 @@ std::vector<std::string> FromJson(const std::string& text) {
   return out;
 }
 
-std::string GetString(dd::QueryResult& result, dd::idx_t col, dd::idx_t row) {
-  auto v = compat::ResultValue(result, col, row);
+std::string GetString(const StoreRows& result, dd::idx_t col, dd::idx_t row) {
+  auto v = result.GetValue(col, row);
   return v.IsNull() ? std::string() : v.ToString();
 }
-std::optional<std::string> GetOptString(dd::QueryResult& result, dd::idx_t col, dd::idx_t row) {
-  auto v = compat::ResultValue(result, col, row);
+std::optional<std::string> GetOptString(const StoreRows& result, dd::idx_t col, dd::idx_t row) {
+  auto v = result.GetValue(col, row);
   if (v.IsNull()) return std::nullopt;
   return v.ToString();
 }
-bool GetBool(dd::QueryResult& result, dd::idx_t col, dd::idx_t row) {
-  auto v = compat::ResultValue(result, col, row);
+bool GetBool(const StoreRows& result, dd::idx_t col, dd::idx_t row) {
+  auto v = result.GetValue(col, row);
   return !v.IsNull() && v.GetValue<bool>();
 }
 
@@ -632,10 +657,35 @@ arrow::Status RbacStore::Redacted(const arrow::Status& status) const {
   return arrow::Status(status.code(), Redact(status.message()));
 }
 
-arrow::Status RbacStore::Lock(std::unique_lock<std::timed_mutex>& lock) {
-  lock = std::unique_lock<std::timed_mutex>(mutex_, std::defer_lock);
-  if (lock.try_lock_for(options_.timeout)) return arrow::Status::OK();
-  return link_->TimedOut();
+StoreTurn::~StoreTurn() {
+  if (store_) store_->Unlock();
+}
+
+arrow::Status RbacStore::Lock(StoreTurn& turn) {
+  std::unique_lock lock(turn_mutex_);
+  const uint64_t ticket = next_ticket_++;
+  // Checked at every handover, and between them often enough to notice a hang well within
+  // the timeout. The callers ahead may take long (reading a large store is work of their
+  // own, not the store's), but a statement outstanding for the whole timeout is a store that
+  // doesn't answer, and the line behind it gives up.
+  const auto check = std::clamp<std::chrono::milliseconds>(options_.timeout / 10, std::chrono::milliseconds(10),
+                                                           std::chrono::milliseconds(250));
+  while (serving_ != ticket) {
+    if (link_->Hung()) {
+      abandoned_.insert(ticket);
+      return link_->TimedOut();
+    }
+    turn_cv_.wait_for(lock, check);
+  }
+  turn.store_ = this;
+  return arrow::Status::OK();
+}
+
+void RbacStore::Unlock() {
+  std::lock_guard lock(turn_mutex_);
+  ++serving_;
+  while (abandoned_.erase(serving_) > 0) ++serving_;
+  turn_cv_.notify_all();
 }
 
 // A DuckDB store keeps nothing in its WAL past a write: each change is checkpointed into
@@ -664,7 +714,7 @@ arrow::Status RbacStore::CheckOwnership() {
   auto& conn = *link_;
   auto read = [&]() -> arrow::Result<std::string> {
     ARROW_ASSIGN_OR_RAISE(auto r, Run(conn, "SELECT value FROM " + T("meta") + " WHERE key = 'cluster_id'"));
-    return compat::ResultRowCount(*r) == 0 ? std::string() : GetString(*r, 0, 0);
+    return RowCount(*r) == 0 ? std::string() : GetString(*r, 0, 0);
   };
   ARROW_ASSIGN_OR_RAISE(cluster_id_, read());
   if (cluster_id_.empty() && !options_.cluster_id.empty()) {
@@ -779,7 +829,7 @@ arrow::Status RbacStore::InitializeSchema() {
   ARROW_RETURN_NOT_OK(Exec(conn, ddl[0]));  // meta, which says the schema's version
   {
     ARROW_ASSIGN_OR_RAISE(auto r, Run(conn, "SELECT value FROM " + T("meta") + " WHERE key = 'schema_version'"));
-    if (compat::ResultRowCount(*r) == 1) {
+    if (RowCount(*r) == 1) {
       const std::string text = GetString(*r, 0, 0);
       int64_t version = 0;
       try {
@@ -819,17 +869,17 @@ arrow::Status RbacStore::InitializeSchema() {
 }
 
 arrow::Result<int64_t> RbacStore::CurrentVersion() {
-  std::unique_lock<std::timed_mutex> lock;
-  ARROW_RETURN_NOT_OK(Lock(lock));
+  StoreTurn turn;
+  ARROW_RETURN_NOT_OK(Lock(turn));
   auto result = Run(*link_, "SELECT value FROM " + T("meta") + " WHERE key = 'data_version'");
   if (!result.ok()) return Redacted(result.status());
-  if (compat::ResultRowCount(**result) != 1) return StoreError("corrupt store", "no data version");
+  if (RowCount(**result) != 1) return StoreError("corrupt store", "no data version");
   return std::stoll(GetString(**result, 0, 0));
 }
 
 arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::Load() {
-  std::unique_lock<std::timed_mutex> lock;
-  ARROW_RETURN_NOT_OK(Lock(lock));
+  StoreTurn turn;
+  ARROW_RETURN_NOT_OK(Lock(turn));
   return Redacted(LoadLocked());
 }
 
@@ -837,7 +887,7 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   auto& conn = *link_;
   ARROW_ASSIGN_OR_RAISE(auto version_result, Run(conn, "SELECT value FROM " + T("meta") +
                                                            " WHERE key = 'data_version'"));
-  if (compat::ResultRowCount(*version_result) != 1) {
+  if (RowCount(*version_result) != 1) {
     return StoreError("corrupt store", "no data version");
   }
   const int64_t version = std::stoll(GetString(*version_result, 0, 0));
@@ -845,13 +895,13 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   std::vector<UserRecord> users;
   ARROW_ASSIGN_OR_RAISE(auto u, Run(conn, "SELECT user_id, name, password_hash, enabled FROM " +
                                               T("users") + " ORDER BY name_key"));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*u); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*u); ++r) {
     users.push_back(
         {GetString(*u, 0, r), GetString(*u, 1, r), GetOptString(*u, 2, r), GetBool(*u, 3, r), {}});
   }
   ARROW_ASSIGN_OR_RAISE(auto ua,
                         Run(conn, "SELECT user_id, attribute, value FROM " + T("user_attributes")));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*ua); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*ua); ++r) {
     const std::string id = GetString(*ua, 0, r);
     for (auto& user : users) {
       if (user.id == id) user.attributes[GetString(*ua, 1, r)] = GetString(*ua, 2, r);
@@ -861,7 +911,7 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   std::vector<RoleRecord> roles;
   ARROW_ASSIGN_OR_RAISE(auto ro, Run(conn, "SELECT role_id, name, builtin FROM " + T("roles") +
                                                " ORDER BY name_key"));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*ro); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*ro); ++r) {
     roles.push_back({GetString(*ro, 0, r), GetString(*ro, 1, r), GetBool(*ro, 2, r)});
   }
 
@@ -870,7 +920,7 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
                                     "SELECT member_kind, member_id, role_id, admin_option, "
                                     "granted_by FROM " +
                                         T("memberships")));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*m); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*m); ++r) {
     memberships.push_back(
         {GetString(*m, 0, r) == "role" ? PrincipalKind::kRole : PrincipalKind::kUser,
          GetString(*m, 1, r), GetString(*m, 2, r), GetBool(*m, 3, r), GetString(*m, 4, r)});
@@ -882,7 +932,7 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
                   "SELECT grant_id, role_id, scope, catalog_name, schema_path, object_name, "
                   "privilege, columns, grant_option, granted_by FROM " +
                       T("object_grants") + " ORDER BY grant_id"));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*g); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*g); ++r) {
     auto privilege = PrivilegeFrom(GetString(*g, 6, r));
     if (!privilege) continue;  // written by a newer version; never widens access
     ObjectGrantRecord grant;
@@ -905,7 +955,7 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
                   "SELECT catalog_name, schema_path, object_name, object_type, owner_kind, "
                   "owner_id, definition_hash FROM " +
                       T("owners")));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*o); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*o); ++r) {
     OwnerRecord owner;
     owner.object.catalog = GetString(*o, 0, r);
     owner.object.schema_path = FromJson(GetString(*o, 1, r));
@@ -921,7 +971,7 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   ARROW_ASSIGN_OR_RAISE(
       auto sp, Run(conn, "SELECT role_id, privilege, admin_option, granted_by FROM " +
                              T("system_privileges") + " ORDER BY role_id, privilege, granted_by"));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*sp); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*sp); ++r) {
     auto privilege = SystemPrivilegeFromName(GetString(*sp, 1, r));
     if (!privilege) return StoreError("corrupt store", "unknown system privilege");
     system_privileges.push_back(
@@ -934,7 +984,7 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
                             "SELECT policy_id, name, catalog_name, schema_path, object_name, "
                             "permissive, role_ids, predicate FROM " +
                                 T("row_policies") + " ORDER BY policy_id"));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*rp); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*rp); ++r) {
     RowPolicyRecord p;
     p.id = GetString(*rp, 0, r);
     p.name = GetString(*rp, 1, r);
@@ -949,7 +999,7 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
                                      "SELECT policy_id, name, parameter, parameter_type, "
                                      "return_type, body FROM " +
                                          T("masking_policies") + " ORDER BY name_key"));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*mp); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*mp); ++r) {
     masking_policies.push_back({GetString(*mp, 0, r), GetString(*mp, 1, r), GetString(*mp, 2, r),
                                 GetString(*mp, 3, r), GetString(*mp, 4, r), GetString(*mp, 5, r)});
   }
@@ -958,7 +1008,7 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
                                      "SELECT catalog_name, schema_path, object_name, "
                                      "column_name, policy_id, exempt_role_ids FROM " +
                                          T("mask_bindings") + " ORDER BY table_key, column_key"));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*mb); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*mb); ++r) {
     mask_bindings.push_back(
         {{GetString(*mb, 0, r), FromJson(GetString(*mb, 1, r)), GetString(*mb, 2, r)},
          GetString(*mb, 3, r),
@@ -969,13 +1019,13 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   std::vector<TenantRecord> tenants;
   ARROW_ASSIGN_OR_RAISE(auto tn, Run(conn, "SELECT tenant_id, name, default_catalog FROM " +
                                                T("tenants") + " ORDER BY name_key"));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*tn); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*tn); ++r) {
     tenants.push_back({GetString(*tn, 0, r), GetString(*tn, 1, r), GetString(*tn, 2, r)});
   }
   std::vector<PrincipalTenantRecord> principal_tenants;
   ARROW_ASSIGN_OR_RAISE(auto pt, Run(conn, "SELECT principal_kind, principal_id, tenant_id FROM " +
                                                T("principal_tenants")));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*pt); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*pt); ++r) {
     principal_tenants.push_back(
         {GetString(*pt, 0, r) == "role" ? PrincipalKind::kRole : PrincipalKind::kUser,
          GetString(*pt, 1, r), GetString(*pt, 2, r)});
@@ -983,7 +1033,7 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   std::vector<CatalogTenantRecord> catalog_tenants;
   ARROW_ASSIGN_OR_RAISE(auto ct, Run(conn, "SELECT catalog_name, tenant_id FROM " +
                                                T("catalog_tenants") + " ORDER BY catalog_key"));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*ct); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*ct); ++r) {
     catalog_tenants.push_back({GetString(*ct, 0, r), GetString(*ct, 1, r)});
   }
 
@@ -991,7 +1041,7 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   ARROW_ASSIGN_OR_RAISE(
       auto gm, Run(conn, "SELECT mapping_id, issuer, group_name, role_id FROM " +
                              T("group_mappings") + " ORDER BY group_name, issuer, role_id"));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*gm); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*gm); ++r) {
     group_mappings.push_back(
         {GetString(*gm, 0, r), GetString(*gm, 1, r), GetString(*gm, 2, r), GetString(*gm, 3, r)});
   }
@@ -1001,7 +1051,7 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
                                      "SELECT token_id, name, user_id, parent_id, privileges, "
                                      "catalogs, expires_at, created_by FROM " +
                                          T("scoped_tokens") + " ORDER BY user_id, name_key"));
-  for (dd::idx_t r = 0; r < compat::ResultRowCount(*st); ++r) {
+  for (dd::idx_t r = 0; r < RowCount(*st); ++r) {
     ScopedTokenRecord t;
     t.id = GetString(*st, 0, r);
     t.name = GetString(*st, 1, r);
@@ -1026,8 +1076,24 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
 
 arrow::Status RbacStore::Mutate(
     const std::function<arrow::Status(StoreTransaction&, const Snapshot&)>& fn) {
-  std::unique_lock<std::timed_mutex> lock;
-  ARROW_RETURN_NOT_OK(Lock(lock));
+  return Transact(
+      [&](StoreTransaction& txn) -> arrow::Status {
+        ARROW_ASSIGN_OR_RAISE(auto snapshot, LoadLocked());
+        return fn(txn, *snapshot);
+      },
+      nullptr);
+}
+
+arrow::Result<int64_t> RbacStore::Write(const std::function<arrow::Status(StoreTransaction&)>& fn) {
+  int64_t version = 0;
+  ARROW_RETURN_NOT_OK(Transact(fn, &version));
+  return version;
+}
+
+arrow::Status RbacStore::Transact(const std::function<arrow::Status(StoreTransaction&)>& fn,
+                                  int64_t* version) {
+  StoreTurn turn;
+  ARROW_RETURN_NOT_OK(Lock(turn));
   auto& conn = *link_;
   arrow::Status last;
   // Replicas writing at once conflict on the version row; the loser retries.
@@ -1043,9 +1109,14 @@ arrow::Status RbacStore::Mutate(
                                         " SET value = CAST(CAST(value AS BIGINT) + 1 AS VARCHAR) "
                                         "WHERE key = 'data_version'")
                               .status());
-      ARROW_ASSIGN_OR_RAISE(auto snapshot, LoadLocked());
+      if (version) {
+        ARROW_ASSIGN_OR_RAISE(auto bumped,
+                              Run(conn, "SELECT value FROM " + T("meta") + " WHERE key = 'data_version'"));
+        if (RowCount(*bumped) != 1) return StoreError("corrupt store", "no data version");
+        *version = std::stoll(GetString(*bumped, 0, 0));
+      }
       StoreTransaction txn(*this, conn);
-      ARROW_RETURN_NOT_OK(fn(txn, *snapshot));
+      ARROW_RETURN_NOT_OK(fn(txn));
       auto commit = Exec(conn, "COMMIT");
       if (!commit.ok() && commit.message().find("timed out after") != std::string::npos) {
         return arrow::Status::IOError(commit.message(),

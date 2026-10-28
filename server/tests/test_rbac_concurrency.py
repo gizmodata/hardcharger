@@ -1,4 +1,6 @@
-"""Access control must not cost concurrency. The same TPC-H workload runs against two
+"""Access control must not cost concurrency. Many sessions creating, granting on and dropping
+tables at once (a dbt run) never fail on the access-control store while it answers. And the
+same TPC-H workload runs against two
 servers that differ only in access control: one without it, one where every client is a
 store user whose statements are checked and rewritten for a row policy and a mask. For
 each, one client and then many clients run every TPC-H query; the test fails if access
@@ -16,13 +18,80 @@ import time
 
 import pytest
 
-from rbac import Client, expect_allowed, mint, start_rbac_server
+from rbac import Client, expect_allowed, expect_blocked, mint, start_rbac_server
 
 CLIENTS = 10
 # Passes over the 22 queries per client (long enough runs for stable ratios).
 ROUNDS = int(os.environ.get("HARDCHARGER_TEST_CONCURRENCY_ROUNDS", "10"))
 TRIALS = 3  # medians over this many measurements per mode
 SCALE_FACTOR = os.environ.get("HARDCHARGER_TEST_CONCURRENCY_SF", "0.1")
+
+
+DDL_CLIENTS = 12
+DDL_ROUNDS = 8
+# Tables that already have owners: a dbt project's worth, so every read of the whole store
+# is a real one (2.1.2 read it in time quadratic in its rows, twice for every CREATE).
+DDL_EXISTING = 600
+
+
+def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
+    """A dbt run's shape: sessions that each create a table, grant on it and drop it, all at
+    once. On 2.1.2 some failed with "the owner of what it creates could not be recorded (...
+    access control store unavailable: timed out after 10 s ...)" against a healthy store
+    (customer report, 2026-10-28): every DDL waited for one store connection under a mutex,
+    and a caller that waited longer than the store timeout gave up although the store had
+    answered everyone ahead of it. With a 1 s store timeout none may fail, the server may not
+    report the store down, and each table's owner (who alone may grant on it) is right."""
+    server = start_rbac_server(launcher=launcher, store_uri=store.new_database(),
+                               env={"HARDCHARGER_RBAC_STORE_TIMEOUT_SECONDS": "1",
+                                    "HARDCHARGER_PRINT_QUERIES": "false"})
+    admin = server.admin()
+    for sql in ["CREATE ROLE builder", "GRANT CREATE TABLE, DROP TABLE ON SCHEMA main TO builder",
+                "CREATE ROLE readers"]:
+        expect_allowed(client=admin, sql=sql)
+    for c in range(DDL_CLIENTS):
+        expect_allowed(client=admin, sql=f"CREATE USER dbt{c}")
+        expect_allowed(client=admin, sql=f"GRANT builder TO USER dbt{c}")
+    for i in range(DDL_EXISTING):
+        expect_allowed(client=admin, sql=f"CREATE TABLE existing_{i} AS SELECT {i} AS x")
+    sessions = [Client(base_url=server.base_url, token=mint(user=f"dbt{c}")) for c in range(DDL_CLIENTS)]
+    failures: list[str] = []
+    slowest = [0.0]
+    lock = threading.Lock()
+
+    def work(c: int) -> None:
+        for r in range(DDL_ROUNDS):
+            name = f"model_{c}_{r}__dbt_tmp"
+            statements = [f"CREATE TABLE {name} AS SELECT {r} AS x", f"GRANT SELECT ON TABLE {name} TO readers"]
+            if r < DDL_ROUNDS - 1:
+                statements.append(f"DROP TABLE {name}")  # the last one stays, for the owner check
+            for sql in statements:
+                started = time.monotonic()
+                try:
+                    sessions[c].run(sql=sql)
+                except Exception as error:  # noqa: BLE001 - every failure is reported
+                    with lock:
+                        failures.append(f"dbt{c}: {sql}: {error}")
+                    return
+                with lock:
+                    slowest[0] = max(slowest[0], time.monotonic() - started)
+
+    threads = [threading.Thread(target=work, args=(c,)) for c in range(DDL_CLIENTS)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert failures == [], f"{len(failures)} statements failed, e.g. {failures[:3]}"
+    assert "does not answer" not in server.log(), "the server reported a healthy store as down"
+    # Owners as the store recorded them: dbt{c} may grant on its table, the next user may not.
+    for c in range(DDL_CLIENTS):
+        table = f"model_{c}_{DDL_ROUNDS - 1}__dbt_tmp"
+        expect_allowed(client=sessions[c], sql=f"GRANT SELECT ON TABLE {table} TO builder")
+        other = sessions[(c + 1) % DDL_CLIENTS]
+        expect_blocked(client=other, sql=f"GRANT SELECT ON TABLE {table} TO builder", why="may not grant")
+    print(f"\nconcurrent DDL: {DDL_CLIENTS} sessions x {DDL_ROUNDS} rounds, slowest statement {slowest[0]:.2f} s")
+    for session in sessions:
+        session.close()
 
 
 def prepare(admin, rbac: bool) -> list[str]:

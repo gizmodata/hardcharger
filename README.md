@@ -1070,7 +1070,11 @@ anything it has to write:
   store that doesn't answer in time fails the statement that needed it with `access control
   store unavailable: timed out after N s`, and what that statement was doing is rolled back
   as soon as the store answers again, so a `CREATE USER` the client was told failed never
-  appears later. (A timeout while committing says the change may have been applied.) For a
+  appears later. (A timeout while committing says the change may have been applied.)
+  Statements that need the store at the same time (many sessions creating tables, as a dbt
+  run does) take turns in the order they asked, and one waiting its turn fails only when a
+  store statement has been outstanding for the timeout, never because the line ahead of it
+  is long. For a
   PostgreSQL store the server also adds libpq's `connect_timeout`, TCP keepalives,
   `tcp_user_timeout` and a `statement_timeout` to the connection string, each unless the
   string sets it already.

@@ -273,6 +273,11 @@ class Snapshot {
 
   int64_t version() const { return version_; }
 
+  // This snapshot as `version`, with `object`'s owner record replaced by `owner` (nullptr:
+  // removed): what the store holds after one owner change committed on top of this one.
+  std::shared_ptr<const Snapshot> WithOwner(int64_t version, const ObjectPath& object,
+                                            const OwnerRecord* owner) const;
+
   const UserRecord* FindUserByName(const std::string& name) const;
   const UserRecord* FindUserById(const std::string& id) const;
   const RoleRecord* FindRoleByName(const std::string& name) const;
