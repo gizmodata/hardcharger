@@ -22,6 +22,7 @@
 #include <duckdb/parser/statement/delete_statement.hpp>
 #include <duckdb/parser/statement/drop_statement.hpp>
 #include <duckdb/parser/statement/explain_statement.hpp>
+#include <duckdb/parser/statement/export_statement.hpp>
 #include <duckdb/parser/statement/insert_statement.hpp>
 #include <duckdb/parser/statement/load_statement.hpp>
 #include <duckdb/parser/statement/merge_into_statement.hpp>
@@ -135,13 +136,76 @@ bool LooksLikePath(const std::string& name) {
   return false;
 }
 
+// The paths an argument writes as literals: a string, or a list of strings ('a', ['a', 'b']).
+// nullopt for anything DuckDB computes (an expression, a parameter, a cast).
+std::optional<std::vector<std::string>> LiteralPaths(const dd::ParsedExpression* expression) {
+  if (!expression) return std::nullopt;
+  auto literal = [](const dd::ParsedExpression& e) -> std::optional<std::string> {
+    if (e.GetExpressionClass() != dd::ExpressionClass::CONSTANT) return std::nullopt;
+    const auto value = ddb::ConstantValue(e.Cast<dd::ConstantExpression>());
+    if (value.IsNull() || value.type().id() != dd::LogicalTypeId::VARCHAR) return std::nullopt;
+    return value.ToString();
+  };
+  if (auto one = literal(*expression)) return std::vector<std::string>{*one};
+  if (expression->GetExpressionClass() == dd::ExpressionClass::CONSTANT) {
+    const auto value = ddb::ConstantValue(expression->Cast<dd::ConstantExpression>());
+    if (value.IsNull() || value.type().id() != dd::LogicalTypeId::LIST) return std::nullopt;
+    std::vector<std::string> paths;
+    for (const auto& child : dd::ListValue::GetChildren(value)) {
+      if (child.IsNull() || child.type().id() != dd::LogicalTypeId::VARCHAR) return std::nullopt;
+      paths.push_back(child.ToString());
+    }
+    return paths;
+  }
+  if (expression->GetExpressionClass() == dd::ExpressionClass::FUNCTION) {
+    const auto& function = expression->Cast<dd::FunctionExpression>();
+    const std::string name = Lower(Str(function.FunctionName()));
+    if (name != "list_value" && name != "array_value") return std::nullopt;
+    std::vector<std::string> paths;
+    for (const auto& argument : function.GetArguments()) {
+      if (argument.HasName()) return std::nullopt;
+      auto one = literal(argument.GetExpression());
+      if (!one) return std::nullopt;
+      paths.push_back(std::move(*one));
+    }
+    return paths;
+  }
+  return std::nullopt;
+}
+
+// The first positional argument of a call (the path, for the file-reading functions).
+const dd::ParsedExpression* FirstPositional(const dd::FunctionExpression& function) {
+  for (const auto& argument : function.GetArguments()) {
+    if (!argument.HasName()) return &argument.GetExpression();
+  }
+  return nullptr;
+}
+
+// The path a COPY names: its literal, or nullopt when it is an expression.
+std::optional<std::vector<std::string>> CopyPaths(const dd::CopyInfo& info) {
+  if (info.file_path_expression) return LiteralPaths(info.file_path_expression.get());
+  return std::vector<std::string>{info.file_path};
+}
+
 class Walker {
  public:
   Walker(const std::function<bool(const std::string&)>& permitted,
-         const NamedTableCallback& named_table, const TableFunctionCallback& table_function_allowed)
+         const NamedTableCallback& named_table, const TableFunctionCallback& table_function_allowed,
+         const StorageCallback& storage)
       : permitted_(permitted),
         named_table_(named_table),
-        table_function_allowed_(table_function_allowed) {}
+        table_function_allowed_(table_function_allowed),
+        storage_(storage) {}
+
+  // A read or write of storage: to the callback with its paths, or flagged as a category.
+  void Storage(StorageUse use, const std::string& category) {
+    if (violation) return;
+    if (storage_) {
+      storage_(use);
+      return;
+    }
+    Flag(category);
+  }
 
   void NamedTable(const dd::QualifiedName& name) {
     if (!named_table_ || name.Path().empty()) return;
@@ -188,7 +252,9 @@ class Walker {
           Flag("COPY");
           return;
         }
-        Flag(std::string(copy.info->is_from ? "COPY FROM" : "COPY TO") + " (files and URLs)");
+        Storage({copy.info->is_from ? "COPY ... FROM" : "COPY ... TO", !copy.info->is_from, CopyPaths(*copy.info),
+                 !copy.info->is_from},
+                std::string(copy.info->is_from ? "COPY FROM" : "COPY TO") + " (files and URLs)");
         if (copy.info->select_statement) WalkNode(*copy.info->select_statement);
         break;
       }
@@ -228,7 +294,8 @@ class Walker {
     } else if (ref.type == dd::TableReferenceType::BASE_TABLE) {
       const auto& name = ref.Cast<dd::BaseTableRef>().GetQualifiedName();
       if (name.Path().size() == 1 && LooksLikePath(Str(name.Name()))) {
-        Flag("reading files and URLs via FROM '" + Str(name.Name()) + "'");
+        Storage({"reading a path in FROM", false, std::vector<std::string>{Str(name.Name())}},
+                "reading files and URLs via FROM '" + Str(name.Name()) + "'");
         return;
       }
       NamedTable(name);
@@ -293,7 +360,8 @@ class Walker {
         name == "query_table") {
       Flag(name + "()");
     } else if (ddb::IsFileReadingTableFunction(name)) {
-      Flag(name + "() (files and URLs)");
+      Storage({name + "()", false, LiteralPaths(FirstPositional(ref.function->Cast<dd::FunctionExpression>()))},
+              name + "() (files and URLs)");
     } else if (name == "checkpoint" || name == "force_checkpoint") {
       Flag("CHECKPOINT");
     } else if (table_function_allowed_ && !table_function_allowed_({name})) {
@@ -304,14 +372,16 @@ class Walker {
   const std::function<bool(const std::string&)>& permitted_;
   const NamedTableCallback& named_table_;
   const TableFunctionCallback& table_function_allowed_;
+  const StorageCallback& storage_;
   int describing_ = 0;  // inside a DESCRIBE
 };
 
 std::optional<std::string> Classify(dd::SQLStatement& statement,
                                     const std::function<bool(const std::string&)>& permitted,
                                     const NamedTableCallback& named_table,
-                                    const TableFunctionCallback& table_function_allowed) {
-  Walker walker(permitted, named_table, table_function_allowed);
+                                    const TableFunctionCallback& table_function_allowed,
+                                    const StorageCallback& storage) {
+  Walker walker(permitted, named_table, table_function_allowed, storage);
   auto gate = [&](std::string category) -> std::optional<std::string> {
     if (permitted && permitted(category)) return std::nullopt;
     return category;
@@ -320,13 +390,13 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
     case dd::StatementType::PREPARE_STATEMENT: {
       auto& prepare = statement.Cast<dd::PrepareStatement>();
       return prepare.statement
-                 ? Classify(*prepare.statement, permitted, named_table, table_function_allowed)
+                 ? Classify(*prepare.statement, permitted, named_table, table_function_allowed, storage)
                  : std::nullopt;
     }
     case dd::StatementType::EXPLAIN_STATEMENT: {
       // EXPLAIN ANALYZE runs what it wraps.
       auto& explain = statement.Cast<dd::ExplainStatement>();
-      return explain.stmt ? Classify(*explain.stmt, permitted, named_table, table_function_allowed)
+      return explain.stmt ? Classify(*explain.stmt, permitted, named_table, table_function_allowed, storage)
                           : std::nullopt;
     }
     case dd::StatementType::ATTACH_STATEMENT:
@@ -398,7 +468,11 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
             name == "query_table") {
           return gate(name + "()");
         }
-        if (ddb::IsFileReadingTableFunction(name)) return gate(name + "() (files and URLs)");
+        if (ddb::IsFileReadingTableFunction(name)) {
+          if (!storage) return gate(name + "() (files and URLs)");
+          storage({name + "()", false, LiteralPaths(FirstPositional(call.function->Cast<dd::FunctionExpression>()))});
+          return std::nullopt;
+        }
         if (table_function_allowed && !table_function_allowed({name})) {
           return gate("the table function " + name);
         }
@@ -408,20 +482,38 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
     case dd::StatementType::COPY_STATEMENT: {
       auto& copy = statement.Cast<dd::CopyStatement>();
       if (!copy.info) return gate("COPY");
-      if (auto category = gate(std::string(copy.info->is_from ? "COPY FROM" : "COPY TO") +
-                               " (files and URLs)")) {
-        return category;
+      if (!storage) {
+        if (auto category = gate(std::string(copy.info->is_from ? "COPY FROM" : "COPY TO") +
+                                 " (files and URLs)")) {
+          return category;
+        }
+      } else {
+        storage({copy.info->is_from ? "COPY ... FROM" : "COPY ... TO", !copy.info->is_from, CopyPaths(*copy.info),
+                 !copy.info->is_from});
       }
       if (copy.info->select_statement) walker.WalkNode(*copy.info->select_statement);
       return walker.violation;
     }
-    case dd::StatementType::EXPORT_STATEMENT:
+    case dd::StatementType::EXPORT_STATEMENT: {
       // The whole database, not bounded by grants.
-      return gate("EXPORT DATABASE");
+      if (auto category = gate("EXPORT DATABASE")) return category;
+      auto& exported = statement.Cast<dd::ExportStatement>();
+      if (storage) {
+        storage({"EXPORT DATABASE", true,
+                 exported.info ? CopyPaths(*exported.info) : std::optional<std::vector<std::string>>{}, true});
+      }
+      return std::nullopt;
+    }
     case dd::StatementType::PRAGMA_STATEMENT: {
       auto& pragma = statement.Cast<dd::PragmaStatement>();
       if (pragma.info && Lower(Str(pragma.info->name)) == "import_database") {
-        return gate("IMPORT DATABASE");
+        if (auto category = gate("IMPORT DATABASE")) return category;
+        if (storage) {
+          storage({"IMPORT DATABASE", false,
+                   pragma.info->parameters.empty() ? std::optional<std::vector<std::string>>{}
+                                                   : LiteralPaths(pragma.info->parameters[0].get()),
+                   true});
+        }
       }
       return std::nullopt;
     }
@@ -461,8 +553,9 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
 std::optional<std::string> GatedCategory(dd::SQLStatement& statement,
                                          const std::function<bool(const std::string&)>& permitted,
                                          const NamedTableCallback& named_table,
-                                         const TableFunctionCallback& table_function_allowed) {
-  return Classify(statement, permitted, named_table, table_function_allowed);
+                                         const TableFunctionCallback& table_function_allowed,
+                                         const StorageCallback& storage) {
+  return Classify(statement, permitted, named_table, table_function_allowed, storage);
 }
 
 }  // namespace hardcharger::authz

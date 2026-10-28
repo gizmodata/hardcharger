@@ -189,7 +189,8 @@ def test_system_privileges_and_their_admin_option(world):
 
 
 @pytest.mark.parametrize(("sql", "why"), [
-    ("GRANT READ FILESYSTEM ON orders TO team", "no ON clause"),
+    ("GRANT READ FILESYSTEM ON orders TO team", "expected LOCATION"),
+    ("GRANT CHECKPOINT ON LOCATION '/tmp' TO team", "no ON clause"),
     ("GRANT MANAGE CATALOGS TO ann", "granted to roles, not users"),
     ("REVOKE GRANT OPTION FOR CHECKPOINT FROM team", "access control"),
 ])

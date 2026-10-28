@@ -245,7 +245,7 @@ def guarded(module_launcher, tmp_path_factory):
     decoy = store_dir(root, "decoy")
     server = start_rbac_server(launcher=module_launcher, store_uri=f"duckdb:{store / 'rbac.duckdb'}")
     admin = server.admin()
-    for sql in ["CREATE ROLE fs", "GRANT READ FILESYSTEM TO fs", "GRANT WRITE FILESYSTEM TO fs",
+    for sql in ["CREATE ROLE fs", "GRANT READ FILESYSTEM TO fs", "GRANT READ OBJECT STORAGE TO fs", "GRANT READ HTTP TO fs", "GRANT WRITE FILESYSTEM TO fs",
                 "GRANT MANAGE CATALOGS TO fs", "GRANT MANAGE CONFIG TO fs", "GRANT CREATE TABLE ON SCHEMA main TO fs",
                 "CREATE USER fay", "GRANT fs TO fay", "CREATE USER victim WITH PASSWORD 'hunter2'"]:
         expect_allowed(client=admin, sql=sql)
@@ -399,7 +399,7 @@ def attached(module_launcher, tmp_path_factory, store):
                                      "--enable-catalog-logging"])
     admin = server.admin()
     for sql in ["CREATE TABLE secret AS SELECT 'top secret' AS s", "CHECKPOINT", "CREATE ROLE fs",
-                "GRANT READ FILESYSTEM TO fs", "GRANT WRITE FILESYSTEM TO fs", "GRANT MANAGE CATALOGS TO fs",
+                "GRANT READ FILESYSTEM TO fs", "GRANT READ OBJECT STORAGE TO fs", "GRANT READ HTTP TO fs", "GRANT WRITE FILESYSTEM TO fs", "GRANT MANAGE CATALOGS TO fs",
                 "CREATE USER fay", "GRANT fs TO fay"]:
         expect_allowed(client=admin, sql=sql)
     # The decoys: DuckDB files with the same names, in a directory of their own (made by the
@@ -520,7 +520,7 @@ def sqlite_server(module_launcher, tmp_path_factory, store):
                                      "--enable-catalog-logging"])
     admin = server.admin()
     for sql in ["CREATE TABLE secret AS SELECT 'top secret' AS s", "CHECKPOINT", "CREATE ROLE fs",
-                "GRANT READ FILESYSTEM TO fs", "GRANT WRITE FILESYSTEM TO fs", "GRANT MANAGE CATALOGS TO fs",
+                "GRANT READ FILESYSTEM TO fs", "GRANT READ OBJECT STORAGE TO fs", "GRANT READ HTTP TO fs", "GRANT WRITE FILESYSTEM TO fs", "GRANT MANAGE CATALOGS TO fs",
                 "CREATE USER fay", "GRANT fs TO fay"]:
         expect_allowed(client=admin, sql=sql)
     decoy = directory / "decoy"

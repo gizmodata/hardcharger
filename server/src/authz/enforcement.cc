@@ -37,6 +37,8 @@
 #include <duckdb/planner/operator/logical_insert.hpp>
 #include <duckdb/planner/operator/logical_merge_into.hpp>
 #include <duckdb/planner/operator/logical_reset.hpp>
+#include <duckdb/planner/operator/logical_copy_to_file.hpp>
+#include <duckdb/planner/operator/logical_export.hpp>
 #include <duckdb/planner/operator/logical_set.hpp>
 #include <duckdb/planner/operator/logical_update.hpp>
 #include <duckdb/planner/parsed_data/bound_create_table_info.hpp>
@@ -48,6 +50,7 @@
 #include "logging.hpp"
 #include "authz/policies.hpp"
 #include "authz/resolver.hpp"
+#include "authz/storage_access.hpp"
 #include "authz/views.hpp"
 
 namespace hardcharger::authz {
@@ -390,7 +393,9 @@ class PlanChecker {
         // Session settings that make DuckDB write files wherever they point (every
         // statement's text, or its profile): writing files, as COPY TO is.
         if (WritesFiles(Lower(compat::Str(set.name)))) {
-          RequireSystem(SystemPrivilege::kWriteFilesystem, "SET " + compat::Str(set.name));
+          RequireStorage("SET " + compat::Str(set.name), StorageMode::kWrite,
+                         set.value.IsNull() ? std::nullopt
+                                            : std::optional<std::vector<std::string>>({set.value.ToString()}));
         }
         // USE c / SET schema / SET search_path: no catalog the user cannot see.
         const std::string setting = Lower(compat::Str(set.name));
@@ -436,14 +441,34 @@ class PlanChecker {
       case OpType::LOGICAL_CREATE_SECRET:
         RequireSystem(SystemPrivilege::kManageSecrets, "CREATE SECRET");
         return;
-      case OpType::LOGICAL_COPY_TO_FILE:
-        RequireSystem(SystemPrivilege::kWriteFilesystem, "COPY ... TO");
+      case OpType::LOGICAL_COPY_TO_FILE: {
+        const auto& copy = op.Cast<dd::LogicalCopyToFile>();
+        // A file name pattern can't step out of the directory COPY writes.
+        std::vector<std::string> literals{copy.filename_pattern.SerializeBase()};
+        for (const auto& segment : copy.filename_pattern.SerializeSegments()) literals.push_back(segment.data);
+        for (const auto& literal : literals) {
+          if (literal.find('/') != std::string::npos || literal.find('\\') != std::string::npos ||
+              literal.find("..") != std::string::npos) {
+            Deny(principal_, "COPY ... TO with a FILENAME_PATTERN that names a directory ('" + literal +
+                                 "') is not available under access control");
+          }
+        }
+        RequireStorage("COPY ... TO", StorageMode::kWrite, std::vector<std::string>{copy.file_path},
+                       copy.partition_output || copy.per_thread_output || copy.rotate ||
+                           copy.file_size_bytes.IsValid());
         VisitChildren(op, nullptr);  // and SELECT on what it copies
         return;
-      case OpType::LOGICAL_EXPORT:
+      }
+      case OpType::LOGICAL_EXPORT: {
         RequireSystem(SystemPrivilege::kExportDatabase, "EXPORT DATABASE");
+        const auto& exported = op.Cast<dd::LogicalExport>();
+        RequireStorage("EXPORT DATABASE", StorageMode::kWrite,
+                       exported.copy_info ? std::optional<std::vector<std::string>>({exported.copy_info->file_path})
+                                          : std::nullopt,
+                       /*directory=*/true);
         VisitChildren(op, nullptr);
         return;
+      }
 
       // ---- plain relational operators: check what they read --------------
       case OpType::LOGICAL_PROJECTION:
@@ -571,7 +596,7 @@ class PlanChecker {
       const std::string name = Lower(TableFunctionName(get));
       if (OnlySuperusers()) return;  // in a view an administrator owns
       if (ddb::IsFileReadingTableFunction(name)) {
-        RequireSystem(SystemPrivilege::kReadFilesystem, "reading files and URLs");
+        RequireStorage(name + "()", StorageMode::kRead, PathsOf(get));
         return;
       }
       if (name == "checkpoint" || name == "force_checkpoint") {
@@ -798,6 +823,45 @@ class PlanChecker {
       Deny(principal_, what + " needs the " + SystemPrivilegeName(privilege) +
                            " privilege, which user " + principal_.user_name + " does not hold");
     }
+  }
+
+  // The statement reads or writes `paths` (as DuckDB bound them): each principal whose rights
+  // apply needs the storage privilege there, and none of them may reach DuckLake's storage
+  // (storage_access.hpp).
+  void RequireStorage(const std::string& what, StorageMode mode, std::optional<std::vector<std::string>> paths,
+                      bool directory = false) {
+    if (paths) {
+      for (const auto& path : *paths) {
+        auto parsed = ParseStoragePath(path, {}, mode == StorageMode::kRead);
+        NoteAccess(SystemPrivilegeName(StoragePrivilege(parsed.ok() ? parsed->kind : StorageKind::kFilesystem, mode)),
+                   {});
+      }
+    }
+    std::vector<Principal> principals;
+    for (const auto& rights : rights_) principals.push_back(rights.principal);
+    if (!storage_) storage_.emplace(context_);
+    if (auto refusal = storage_->Refusal(snapshot_, principals, {what, mode, std::move(paths), directory},
+                                         principal_.user_name)) {
+      throw dd::PermissionException(*refusal);
+    }
+  }
+
+  // The paths a file-reading table function's first argument names (a string or a list of
+  // them), as bound; nullopt when it is anything else.
+  static std::optional<std::vector<std::string>> PathsOf(const dd::LogicalGet& get) {
+    if (get.parameters.empty()) return std::nullopt;
+    const auto& value = get.parameters[0];
+    if (value.IsNull()) return std::nullopt;
+    if (value.type().id() == dd::LogicalTypeId::VARCHAR) return std::vector<std::string>{value.ToString()};
+    if (value.type().id() == dd::LogicalTypeId::LIST) {
+      std::vector<std::string> paths;
+      for (const auto& child : dd::ListValue::GetChildren(value)) {
+        if (child.IsNull() || child.type().id() != dd::LogicalTypeId::VARCHAR) return std::nullopt;
+        paths.push_back(child.ToString());
+      }
+      return paths;
+    }
+    return std::nullopt;
   }
 
   bool OnlySuperusers() const {
@@ -1088,6 +1152,7 @@ class PlanChecker {
   std::vector<PendingOwnership> ownership_;
   std::set<std::string> accesses_;
   boost::json::array objects_;
+  std::optional<StorageAccess> storage_;  // made at the first path the statement reaches
 };
 
 }  // namespace
@@ -1508,10 +1573,6 @@ void UndoRecordedOwners(RbacEngine& engine, const std::vector<RecordedOwnership>
 
 std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(const std::string& category) {
   auto starts = [&](const char* prefix) { return category.rfind(prefix, 0) == 0; };
-  auto ends = [&](const std::string& suffix) {
-    return category.size() >= suffix.size() &&
-           category.compare(category.size() - suffix.size(), suffix.size(), suffix) == 0;
-  };
   if (category == "ATTACH" || category == "DETACH") return SystemPrivilege::kManageCatalogs;
   if (category == "INSTALL extension" || category == "LOAD extension" ||
       category == "CREATE EXTENSION REPOSITORY" || category == "DROP EXTENSION REPOSITORY") {
@@ -1525,18 +1586,8 @@ std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(const std::string
   if (category == "EXPORT DATABASE") return SystemPrivilege::kExportDatabase;
   if (category == "IMPORT DATABASE") return SystemPrivilege::kImportDatabase;
   if (category == "CHECKPOINT") return SystemPrivilege::kCheckpoint;
-  if (starts("COPY TO")) return SystemPrivilege::kWriteFilesystem;
-  if (starts("COPY FROM") || starts("reading files and URLs via FROM")) {
-    return SystemPrivilege::kReadFilesystem;
-  }
-  // read_csv() (files and URLs), glob() (local filesystem), ...
-  if (ends(" (files and URLs)") || ends(" (local filesystem)")) {
-    const auto paren = category.find("()");
-    if (paren != std::string::npos &&
-        ddb::IsFileReadingTableFunction(Lower(category.substr(0, paren)))) {
-      return SystemPrivilege::kReadFilesystem;
-    }
-  }
+  // Reading and writing files, URLs and object storage is checked by path, not by category
+  // (storage_access.hpp).
   return std::nullopt;
 }
 

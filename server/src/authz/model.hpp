@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "authz/locations.hpp"
 #include "authz/types.hpp"
 
 namespace hardcharger::authz {
@@ -149,12 +150,14 @@ struct MaskBindingRecord {
   std::vector<std::string> exempt_role_ids;
 };
 
-// A system privilege a role holds (one record per grantor).
+// A system privilege a role holds (one record per grantor and location).
 struct SystemPrivilegeRecord {
   std::string role_id;
   SystemPrivilege privilege = SystemPrivilege::kCheckpoint;
   bool admin_option = false;
   std::string granted_by;  // user id of the grantor; empty for the administrator
+  // A storage privilege's location, as ParseGrantLocation stores it; empty: everywhere.
+  std::string location = {};
 };
 
 // kSchema: the object is the schema itself (catalog + schema path, no name).
@@ -331,11 +334,17 @@ class Snapshot {
   std::vector<std::pair<std::string, const MaskingPolicyRecord*>> ApplicableMasks(
       const Principal& principal, const ObjectPath& table) const;
 
-  // Does the principal hold the system privilege through one of its roles?
-  // Always true for the administrator.
+  // Does the principal hold the system privilege through one of its roles (a storage
+  // privilege: everywhere)? Always true for the administrator.
   bool HasSystemPrivilege(const Principal& principal, SystemPrivilege privilege) const;
-  // May it grant and revoke it (it holds it WITH ADMIN OPTION)?
-  bool CanGrantSystemPrivilege(const Principal& principal, SystemPrivilege privilege) const;
+  // Does it hold the storage privilege `privilege` everywhere or on a location that covers
+  // `path`? Always true for the administrator.
+  bool HasStorageAccess(const Principal& principal, SystemPrivilege privilege, const StoragePath& path,
+                        const LocalPathContext& context) const;
+  // May it grant and revoke the privilege (on `location`, a stored location key; empty:
+  // everywhere)? It holds it WITH ADMIN OPTION there, or everywhere.
+  bool CanGrantSystemPrivilege(const Principal& principal, SystemPrivilege privilege,
+                               const std::string& location = {}) const;
 
   // Every role the user holds: PUBLIC, direct roles, and roles those roles
   // were granted, transitively.

@@ -92,14 +92,16 @@ struct ObjectPrivilegeCommand {
   bool cascade = true;  // REVOKE ... [CASCADE | RESTRICT]
 };
 
-// GRANT sys_priv, ... TO role, ... [WITH ADMIN OPTION]
-// REVOKE [ADMIN OPTION FOR] sys_priv, ... FROM role, ... [CASCADE | RESTRICT]
+// GRANT sys_priv, ... [ON LOCATION '<path or URL>'] TO role, ... [WITH ADMIN OPTION]
+// REVOKE [ADMIN OPTION FOR] sys_priv, ... [ON LOCATION '...'] FROM role, ... [CASCADE | RESTRICT]
 struct SystemPrivilegeCommand {
   bool grant = true;
   std::vector<SystemPrivilege> privileges;
   std::vector<Grantee> grantees;
   bool with_admin_option = false;  // REVOKE: only the admin option
   bool cascade = true;
+  // ON LOCATION '<path or URL>' (storage privileges only), as written; empty: everywhere.
+  std::optional<std::string> location;
 };
 
 // CREATE [OR REPLACE] ROW POLICY name ON table [AS PERMISSIVE | RESTRICTIVE]

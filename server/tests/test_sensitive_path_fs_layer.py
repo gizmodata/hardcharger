@@ -107,7 +107,7 @@ def start_server(home_launcher, fake_home, store, guarded: bool):
     canary = admin.run(sql="SELECT content FROM read_text('~/CANARY.txt')").column("content").to_pylist()
     if canary != [f"canary {fake_home}"]:
         pytest.fail(reason="the server's home is not the fake home: refusing to run")
-    for sql in ["CREATE ROLE fs", "GRANT READ FILESYSTEM TO fs", "GRANT WRITE FILESYSTEM TO fs",
+    for sql in ["CREATE ROLE fs", "GRANT READ FILESYSTEM TO fs", "GRANT READ OBJECT STORAGE TO fs", "GRANT READ HTTP TO fs", "GRANT WRITE FILESYSTEM TO fs",
                 "GRANT MANAGE CATALOGS TO fs", "GRANT CREATE TABLE ON SCHEMA main TO fs",
                 "GRANT CREATE VIEW ON SCHEMA main TO fs", "CREATE USER fay", "GRANT fs TO fay",
                 # A table macro of the administrator's (fay's calls are checked as the

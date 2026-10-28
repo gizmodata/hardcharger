@@ -34,11 +34,25 @@ namespace hardcharger::authz {
 // the families above may be called (by its name parts); binding one already runs it
 // (a remote database's scan connects, an unknown name autoloads an extension), so one
 // that is not allowed is refused here.
+//
+// `storage`, if set, is called for each read or write of files, URLs or object storage the
+// statement names (read_csv(...), FROM '<path>', COPY, EXPORT and IMPORT DATABASE), with
+// the paths as written: `paths` is nullopt when one is an expression or a parameter, known
+// only once DuckDB binds it. It may throw to refuse. Without it, those statements are
+// reported as categories ("read_csv() (files and URLs)", ...).
+struct StorageUse {
+  std::string what;  // "read_csv()", "COPY ... TO", ...
+  bool write = false;
+  std::optional<std::vector<std::string>> paths;
+  bool directory = false;  // writes (or reads) a directory of files
+};
 using NamedTableCallback = std::function<void(const std::vector<std::string>&, bool described)>;
 using TableFunctionCallback = std::function<bool(const std::vector<std::string>&)>;
+using StorageCallback = std::function<void(const StorageUse&)>;
 std::optional<std::string> GatedCategory(
     duckdb::SQLStatement& statement, const std::function<bool(const std::string&)>& permitted,
     const NamedTableCallback& named_table = nullptr,
-    const TableFunctionCallback& table_function_allowed = nullptr);
+    const TableFunctionCallback& table_function_allowed = nullptr,
+    const StorageCallback& storage = nullptr);
 
 }  // namespace hardcharger::authz

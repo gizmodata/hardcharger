@@ -366,9 +366,11 @@ std::shared_ptr<arrow::RecordBatch> Grants(const Snapshot& snapshot, const Visib
   if (visibility.kind() != ViewerKind::kRestrictedAdministrator) {
     for (const auto& r : snapshot.system_privileges()) {
       if (visibility.kind() == ViewerKind::kUser && !visibility.SeesRole(r.role_id)) continue;
-      rows.Add({names.Role(r.role_id), std::string("ROLE"), SystemPrivilegeName(r.privilege), std::string("SYSTEM"),
-                Cell{}, Cell{}, Cell{}, Cell{}, names.Grantor(r.granted_by), r.admin_option,
-                names.Tenant(PrincipalKind::kRole, r.role_id)});
+      // A location grant names its location where an object grant names its object.
+      const Cell location = r.location.empty() ? Cell{} : Text(r.location);
+      rows.Add({names.Role(r.role_id), std::string("ROLE"), SystemPrivilegeName(r.privilege),
+                std::string(r.location.empty() ? "SYSTEM" : "LOCATION"), Cell{}, Cell{}, location, Cell{},
+                names.Grantor(r.granted_by), r.admin_option, names.Tenant(PrincipalKind::kRole, r.role_id)});
     }
   }
   // An owner holds every privilege on what it owns, and may grant them.
@@ -645,12 +647,14 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
     }
   }
   for (const auto p : AllSystemPrivileges()) {
-    if (!snapshot.HasSystemPrivilege(who, p)) continue;
-    // The roles that give it.
+    // The roles that give it, everywhere or on a location.
+    const bool system = snapshot.HasSystemPrivilege(who, p);
+    if (!system && (!StorageOf(p) || who.catalog_rules || who.scope)) continue;
     for (const auto& r : snapshot.system_privileges()) {
-      if (r.privilege != p || !roles.count(r.role_id)) continue;
-      rows.Add({who.user_name, SystemPrivilegeName(p), std::string("SYSTEM"), Cell{}, Cell{}, Cell{}, Cell{},
-                names.Role(r.role_id), r.admin_option});
+      if (r.privilege != p || !roles.count(r.role_id) || (system && !r.location.empty())) continue;
+      const Cell location = r.location.empty() ? Cell{} : Text(r.location);
+      rows.Add({who.user_name, SystemPrivilegeName(p), std::string(r.location.empty() ? "SYSTEM" : "LOCATION"),
+                Cell{}, Cell{}, location, Cell{}, names.Role(r.role_id), r.admin_option});
     }
   }
   return rows.Finish();

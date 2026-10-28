@@ -84,9 +84,9 @@ def test_read_filesystem(server):
     assert expect_allowed(client=fay, sql=f"SELECT n FROM read_parquet('{file}')").num_rows == 1
     expect_allowed(client=fay, sql=f"SELECT * FROM '{file}'")
     expect_blocked(client=nob, sql=f"SELECT n FROM read_parquet('{file}')", why="read_parquet()")
-    expect_blocked(client=nob, sql=f"SELECT * FROM '{file}'", why="reading files and URLs")
+    expect_blocked(client=nob, sql=f"SELECT * FROM '{file}'", why="reading a path in FROM")
     # Reading files is not writing them, nor reading tables without a grant.
-    expect_blocked(client=fay, sql=f"COPY (SELECT 1) TO '{server.dir}/fay.csv'", why="COPY TO")
+    expect_blocked(client=fay, sql=f"COPY (SELECT 1) TO '{server.dir}/fay.csv'", why="COPY ... TO")
     expect_blocked(client=fay, sql=f"SELECT n, s FROM read_parquet('{file}'), hidden",
                    why="no SELECT privilege on table")
     # Every gated part of a statement must be covered: the file read is, the ATTACH
@@ -117,7 +117,7 @@ def test_write_filesystem(server):
     assert (server.dir / "wes.csv").exists()
     expect_blocked(client=wes, sql=f"COPY (SELECT * FROM hidden) TO '{server.dir}/wes2.csv'",
                    why="no SELECT privilege on table")
-    expect_blocked(client=nob, sql=f"COPY (SELECT 1) TO '{server.dir}/nob.csv'", why="COPY TO")
+    expect_blocked(client=nob, sql=f"COPY (SELECT 1) TO '{server.dir}/nob.csv'", why="COPY ... TO")
     # Writing is not reading: a COPY that reads a file needs READ FILESYSTEM too.
     expect_blocked(client=wes, sql=f"COPY (SELECT * FROM read_parquet('{server.dir}/in.parquet')) "
                                    f"TO '{server.dir}/wes3.csv'", why="read_parquet()")

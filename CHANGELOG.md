@@ -7,7 +7,48 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+A customer's security review of catalog isolation (GizmoSQL, October 2026) found ways for one
+tenant's token to reach another tenant's DuckLake catalog. Hardcharger already refused all four;
+this release adds a test suite that replays them, and closes what the review's paths led to here:
+storage privileges that can be narrowed to locations, DuckLake storage that only DuckLake may
+touch, and database paths hidden from everyone but the administrator.
+
+### Added
+
+- **Storage privileges by kind of storage: `READ` / `WRITE OBJECT STORAGE` and `READ` / `WRITE
+  HTTP`.** `READ` / `WRITE FILESYSTEM` now cover only the server's own files. Object storage
+  (`s3://`, `gs://`, `r2://`, `az://`, `abfss://`) and the web (`http://`, `https://`, `hf://`)
+  each need their own privilege, so a role that may read one bucket no longer reaches every URL
+  from the server's network position. A path with a scheme Hardcharger doesn't know is refused.
+- **Storage privileges on locations.** `GRANT READ OBJECT STORAGE ON LOCATION
+  's3://bucket/exports/' TO etl` covers that prefix and everything below it, and nothing else; the
+  same for the other five (a local location is an absolute directory or file). Paths are compared
+  as DuckDB opens them: scheme aliases folded (`s3a://` is `s3://`, `gcs://` is `gs://`), bucket
+  and host names in lower case, local paths with symlinks resolved, so no symlink leads out of a
+  location. A remote path that could name one object two ways is refused rather than compared:
+  `..` or `.` segments, `//`, backslashes, user information in the host, percent-escapes in object
+  storage (on the web, escaped `.`, `/` and `\`), and `?` or `#` in object storage (DuckDB reads
+  query parameters there as S3 settings, the endpoint and credentials among them). A path computed
+  by an expression or a parameter is refused unless the user holds the privilege for every kind of
+  storage everywhere, because DuckDB reads a path as it binds it. `WITH ADMIN OPTION` on a
+  location lets its holder grant that location or one below it. `SHOW GRANTS` and
+  `hardcharger_grants()` list location grants with object type `LOCATION`. Location grants and
+  the four new privileges are kept in a store table of their own, so a 2.1 server sharing the
+  store never reads them (it denies them); its `READ FILESYSTEM` grants keep working.
+- **Tenant-isolation test suite** (`server/tests/test_tenant_isolation.py`): two DuckLake
+  catalogs with PostgreSQL metadata and object-storage data, a `user` token and an
+  administrator's token each limited to one catalog, and every statement of the review: SQL into
+  the other catalog's metadata database (`postgres_query`, `postgres_execute`, `postgres_scan`,
+  the `__ducklake_metadata_*` catalog), writes into its storage, its `ducklake_*` functions, and
+  outbound HTTP. All refused, while each token keeps full read-write on its own catalog.
+
 ### Changed
+
+- **Upgrading: `READ` / `WRITE FILESYSTEM` holders keep their reach, once.** On its first start,
+  2.2 gives every role that holds `READ FILESYSTEM` everywhere `READ OBJECT STORAGE` and
+  `READ HTTP` everywhere as well (`WRITE FILESYSTEM`: the `WRITE` ones), with the same admin
+  option and grantor, because 2.1's privilege covered them. Revoke what a role doesn't need; a
+  revoke is not undone at the next start.
 
 - **`GRANT ALL` on a schema or catalog now includes its DDL privileges.** `GRANT ALL PRIVILEGES
   ON SCHEMA analytics TO loader` used to give only `SELECT`, `INSERT`, `UPDATE` and `DELETE` on
@@ -16,6 +57,22 @@ own changelog in `python/CHANGELOG.md`.
   `DROP SCHEMA`; on a table it is unchanged. `REVOKE ALL` takes back the same set. Grants made
   before this release keep what they gave: `GRANT ALL` has always been stored as the separate
   privileges it stood for.
+
+### Security
+
+- **No user reads, writes, lists or globs an attached DuckLake catalog's storage directly,
+  whatever its storage privileges.** Statements on the catalog's tables still read and write
+  there (DuckLake does, under the tables' grants), and the administrator still may. Before, a
+  user with `WRITE FILESYSTEM` could write a file into any lake's data path (where it could be
+  registered as a table's rows), and one with `READ FILESYSTEM` could read and list every lake's
+  files around its grants. A data path is compared like a location (aliases, symlinks, Azure's
+  two spellings of a container), and a glob or a directory write above it counts as reaching it.
+- **`duckdb_databases().path` is NULL for everyone but the administrator.** A catalog's path can
+  be its connection string, password included (`ATTACH 'postgres:... password=...'`), and every
+  user who could see the catalog could read it; it also showed the server's own file paths.
+- **`COPY ... TO` with a `FILENAME_PATTERN` that names a directory is refused under access
+  control**, so partition files can't be written outside the directory the statement was checked
+  for.
 
 ## [2.1.5] - 2026-10-28
 

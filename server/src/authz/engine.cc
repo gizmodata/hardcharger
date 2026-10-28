@@ -667,8 +667,8 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       const auto* role = snap->FindRoleById(role_id);
       for (const auto& r : snap->system_privileges()) {
         if (r.role_id != role_id) continue;
-        result.rows.push_back({SystemPrivilegeName(r.privilege), "SYSTEM", "", "",
-                               role ? role->name : role_id, "ROLE", r.admin_option ? "YES" : "NO",
+        result.rows.push_back({SystemPrivilegeName(r.privilege), r.location.empty() ? "SYSTEM" : "LOCATION",
+                               r.location, "", role ? role->name : role_id, "ROLE", r.admin_option ? "YES" : "NO",
                                grantor_name(r.granted_by)});
       }
     }
@@ -1158,16 +1158,32 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
 
   // ---- GRANT / REVOKE system privileges -----------------------------------
   if (const auto* c = std::get_if<SystemPrivilegeCommand>(&command)) {
+    // ON LOCATION: the key the location is stored and compared as; its kind must be each
+    // privilege's.
+    std::string location;
+    if (c->location) {
+      auto parsed = ParseGrantLocation(*c->location);
+      if (!parsed.ok()) return AccessControlError("Hardcharger blocked this location: " + parsed.status().message());
+      for (SystemPrivilege p : c->privileges) {
+        if (StorageOf(p)->first != parsed->first) {
+          return AccessControlError(SystemPrivilegeName(p) + " can't be granted on '" + *c->location +
+                                    "': it is a location in " + StorageKindName(parsed->first) + ", and " +
+                                    SystemPrivilegeName(p) + " covers " + StorageKindName(StorageOf(p)->first));
+        }
+      }
+      location = parsed->second;
+    }
+    const std::string where = location.empty() ? "" : " on location '" + location + "'";
     std::vector<std::string> done;
     ARROW_RETURN_NOT_OK(mutate_with(
         !c->grant && !c->cascade,
         [&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
           for (SystemPrivilege p : c->privileges) {
-            const std::string name = SystemPrivilegeName(p);
-            if (c->grant && !snap.CanGrantSystemPrivilege(actor, p)) {
+            const std::string name = SystemPrivilegeName(p) + where;
+            if (c->grant && !snap.CanGrantSystemPrivilege(actor, p, location)) {
               return AccessControlError(
                   "Hardcharger blocked GRANT: user " + actor.user_name + " may not grant " + name +
-                  " (only an administrator, or a holder of it WITH ADMIN OPTION)");
+                  " (only an administrator, or a holder of it WITH ADMIN OPTION there or everywhere)");
             }
             for (const auto& g : c->grantees) {
               ARROW_ASSIGN_OR_RAISE(auto grantee, ResolveGrantee(snap, g));
@@ -1186,13 +1202,13 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
               std::vector<SystemPrivilegeRecord> matching;
               const SystemPrivilegeRecord* own = nullptr;
               for (const auto& r : snap.system_privileges()) {
-                if (r.role_id == grantee.id && r.privilege == p) {
+                if (r.role_id == grantee.id && r.privilege == p && r.location == location) {
                   matching.push_back(r);
                   if (r.granted_by == grantor) own = &r;
                 }
               }
               if (c->grant) {
-                SystemPrivilegeRecord record{grantee.id, p, c->with_admin_option, grantor};
+                SystemPrivilegeRecord record{grantee.id, p, c->with_admin_option, grantor, location};
                 if (own && (own->admin_option || !c->with_admin_option)) {
                   done.push_back(grantee.name + " already has " + name);
                   continue;

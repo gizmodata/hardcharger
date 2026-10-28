@@ -141,6 +141,18 @@ class PrivateFiles {
 // The refusal of `path`, one of the PrivateFiles (`category`).
 std::string PrivateFileMessage(const std::string& path, const std::string& category);
 
+// Local paths, compared the way the guards above compare them (access control's storage
+// locations use these too).
+//
+// Whether DuckDB opens `path` with its local file system: no scheme, or file://.
+bool IsLocalFilePath(const std::string& path);
+// Every spelling of the local `path` to compare: absolute (a relative path is the server's
+// working directory's) and lexically normal, and, when `resolve`, with symlinks resolved as
+// far as the path exists; case-folded where the file system is. '~' is `home`.
+std::vector<std::string> LocalPathKeys(const std::string& path, const std::string& home, bool resolve);
+// Whether the key `candidate` is the key `entry` or something inside it.
+bool PathKeyCovers(const std::string& entry, const std::string& candidate);
+
 struct GuardContext {
   duckdb_v2_connection_handle connection;
   bool admin;

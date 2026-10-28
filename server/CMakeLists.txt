@@ -178,12 +178,14 @@ add_library(hardcharger_authz OBJECT
   src/authz/file_guard.cc
   src/authz/gate.cc
   src/authz/introspection.cc
+  src/authz/locations.cc
   src/authz/model.cc
   src/authz/opa.cc
   src/authz/password.cc
   src/authz/policies.cc
   src/authz/read_only.cc
   src/authz/resolver.cc
+  src/authz/storage_access.cc
   src/authz/store.cc
   src/authz/types.cc
   src/authz/views.cc)
@@ -333,6 +335,7 @@ add_executable(hardcharger-unit-tests
   unit/redaction_test.cc
   unit/store_test.cc
   unit/sensitive_paths_test.cc
+  unit/storage_locations_test.cc
   unit/sql_text_test.cc
   unit/startup_banner_test.cc
   unit/web_ui_test.cc)

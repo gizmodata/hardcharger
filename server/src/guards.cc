@@ -889,4 +889,15 @@ void CheckStatement(const GuardContext& context, const Piece& piece, DUCKDB_V2_S
   }
 }
 
+// ---- Local paths ----
+
+bool IsLocalFilePath(const std::string& path) { return IsLocalPath(path); }
+
+std::vector<std::string> LocalPathKeys(const std::string& path, const std::string& home, bool resolve) {
+  if (!IsLocalPath(path) || path.size() > 4096) return {};
+  return Keys(LocalSpelling(path, home), home, resolve);
+}
+
+bool PathKeyCovers(const std::string& entry, const std::string& candidate) { return KeyCovers(entry, candidate); }
+
 }  // namespace hardcharger

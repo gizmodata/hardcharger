@@ -235,7 +235,7 @@ def test_settings_that_write_files_need_write_filesystem(server, joe, tmp_path):
     target = tmp_path / "written-by-joe.log"
     for sql in [f"SET log_query_path = '{target}'", f"SET profiling_output = '{target}'",
                 f"PRAGMA profile_output = '{target}'"]:
-        expect_blocked(client=joe, sql=sql, why="needs the WRITE FILESYSTEM privilege")
+        expect_blocked(client=joe, sql=sql, why="needs the WRITE FILESYSTEM system privilege")
     expect_allowed(client=joe, sql="SELECT 1")
     assert not target.exists()
     # Positive twin: a role that holds WRITE FILESYSTEM may.
@@ -252,12 +252,12 @@ def test_settings_that_write_files_need_write_filesystem(server, joe, tmp_path):
 def test_table_functions_are_allow_listed(joe):
     # Files and URLs are refused before DuckDB binds them (binding already reaches the
     # network), so no request leaves the server on the user's behalf.
-    expect_blocked(client=joe, sql="SELECT * FROM read_parquet('s3://bucket/x.parquet')", why="files and URLs")
+    expect_blocked(client=joe, sql="SELECT * FROM read_parquet('s3://bucket/x.parquet')", why="READ OBJECT STORAGE")
     expect_blocked(client=joe, sql="SELECT * FROM read_csv('https://example.invalid/x.csv')",
-                   why="files and URLs")
-    expect_blocked(client=joe, sql="SELECT * FROM 'https://example.invalid/x.parquet'", why="files and URLs")
+                   why="READ HTTP")
+    expect_blocked(client=joe, sql="SELECT * FROM 'https://example.invalid/x.parquet'", why="READ HTTP")
     expect_blocked(client=joe, sql="COPY (SELECT * FROM orders) TO 's3://bucket/out.parquet'",
-                   why="files and URLs")
+                   why="WRITE OBJECT STORAGE")
     expect_blocked(client=joe, sql="SELECT * FROM duckdb_secrets()", why="duckdb_secrets()")
     # Refused before DuckDB binds them: binding a table function runs it (a remote
     # database's scan connects; an unknown name autoloads an extension).

@@ -825,6 +825,15 @@ arrow::Status RbacStore::InitializeSchema() {
           " (role_id VARCHAR NOT NULL, privilege VARCHAR NOT NULL, admin_option BOOLEAN "
           "NOT NULL, "
           "granted_by VARCHAR NOT NULL, PRIMARY KEY (role_id, privilege, granted_by))",
+      // The storage privileges that 2.1 and earlier don't know: READ / WRITE OBJECT STORAGE
+      // and HTTP, and any storage privilege granted ON LOCATION (location '' is everywhere).
+      // A table of their own, so that a server that predates them never reads them (it
+      // would take a location grant for one everywhere, or refuse the store for a name it
+      // doesn't know): to it, their holders simply lack them.
+      "CREATE TABLE IF NOT EXISTS " + T("storage_privileges") +
+          " (role_id VARCHAR NOT NULL, privilege VARCHAR NOT NULL, location VARCHAR NOT NULL, "
+          "admin_option BOOLEAN NOT NULL, granted_by VARCHAR NOT NULL, "
+          "PRIMARY KEY (role_id, privilege, location, granted_by))",
   };
   ARROW_RETURN_NOT_OK(Exec(conn, ddl[0]));  // meta, which says the schema's version
   {
@@ -858,6 +867,26 @@ arrow::Status RbacStore::InitializeSchema() {
                     "' WHERE NOT EXISTS (SELECT 1 FROM " + T("meta") +
                     " WHERE key = 'schema_version')")
           .status());
+  // Before 2.2, READ / WRITE FILESYSTEM also covered object storage and URLs: whoever held
+  // one everywhere keeps that reach, once, as the new privileges everywhere (with its
+  // admin option and grantor). An administrator can revoke them.
+  ARROW_RETURN_NOT_OK(
+      Run(conn,
+          "INSERT INTO " + T("storage_privileges") +
+              " SELECT s.role_id, m.new_privilege, '', s.admin_option, s.granted_by FROM " +
+              T("system_privileges") +
+              " s JOIN (VALUES ('READ FILESYSTEM', 'READ OBJECT STORAGE'), ('READ FILESYSTEM', 'READ HTTP'), "
+              "('WRITE FILESYSTEM', 'WRITE OBJECT STORAGE'), ('WRITE FILESYSTEM', 'WRITE HTTP')) "
+              "m(old_privilege, new_privilege) ON s.privilege = m.old_privilege "
+              "WHERE NOT EXISTS (SELECT 1 FROM " + T("meta") + " WHERE key = 'storage_privileges_split') "
+              "AND NOT EXISTS (SELECT 1 FROM " + T("storage_privileges") +
+              " t WHERE t.role_id = s.role_id AND t.privilege = m.new_privilege AND t.location = '' "
+              "AND t.granted_by = s.granted_by)")
+          .status());
+  ARROW_RETURN_NOT_OK(Run(conn, "INSERT INTO " + T("meta") +
+                                    " SELECT 'storage_privileges_split', '1' WHERE NOT EXISTS (SELECT 1 FROM " +
+                                    T("meta") + " WHERE key = 'storage_privileges_split')")
+                          .status());
   ARROW_RETURN_NOT_OK(
       Run(conn,
           "INSERT INTO " + T("roles") +
@@ -976,6 +1005,16 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
     if (!privilege) return StoreError("corrupt store", "unknown system privilege");
     system_privileges.push_back(
         {GetString(*sp, 0, r), *privilege, GetBool(*sp, 2, r), GetString(*sp, 3, r)});
+  }
+  ARROW_ASSIGN_OR_RAISE(
+      auto stp, Run(conn, "SELECT role_id, privilege, location, admin_option, granted_by FROM " +
+                              T("storage_privileges") + " ORDER BY role_id, privilege, location, granted_by"));
+  for (dd::idx_t r = 0; r < RowCount(*stp); ++r) {
+    // A privilege a later Hardcharger added: this server doesn't know it, so nobody holds it.
+    auto privilege = SystemPrivilegeFromName(GetString(*stp, 1, r));
+    if (!privilege || !StorageOf(*privilege)) continue;
+    system_privileges.push_back({GetString(*stp, 0, r), *privilege, GetBool(*stp, 3, r), GetString(*stp, 4, r),
+                                 GetString(*stp, 2, r)});
   }
 
   std::vector<RowPolicyRecord> row_policies;
@@ -1343,6 +1382,9 @@ arrow::Status StoreTransaction::DeleteRole(const std::string& role_id) {
   ARROW_RETURN_NOT_OK(
       Run(conn_, "DELETE FROM " + T("system_privileges") + " WHERE role_id = $1", {Text(role_id)})
           .status());
+  ARROW_RETURN_NOT_OK(
+      Run(conn_, "DELETE FROM " + T("storage_privileges") + " WHERE role_id = $1", {Text(role_id)})
+          .status());
   ARROW_RETURN_NOT_OK(SetPrincipalTenant(PrincipalKind::kRole, role_id, ""));
   ARROW_RETURN_NOT_OK(
       Run(conn_, "DELETE FROM " + T("group_mappings") + " WHERE role_id = $1", {Text(role_id)})
@@ -1402,8 +1444,23 @@ arrow::Status StoreTransaction::UpsertOwner(const OwnerRecord& o) {
       .status();
 }
 
+// A system privilege granted everywhere lives in system_privileges, where every server
+// reads it, unless it is one of the storage privileges 2.1 and earlier don't know; those,
+// and every location grant, live in storage_privileges.
+namespace {
+bool InStorageTable(const SystemPrivilegeRecord& r) {
+  return !r.location.empty() || !IsOriginalSystemPrivilege(r.privilege);
+}
+}  // namespace
+
 arrow::Status StoreTransaction::UpsertSystemPrivilege(const SystemPrivilegeRecord& r) {
   ARROW_RETURN_NOT_OK(DeleteSystemPrivilege(r));
+  if (InStorageTable(r)) {
+    return Run(conn_, "INSERT INTO " + T("storage_privileges") + " VALUES ($1, $2, $3, $4, $5)",
+               {Text(r.role_id), Text(SystemPrivilegeName(r.privilege)), Text(r.location), Bool(r.admin_option),
+                Text(r.granted_by)})
+        .status();
+  }
   return Run(conn_, "INSERT INTO " + T("system_privileges") + " VALUES ($1, $2, $3, $4)",
              {Text(r.role_id), Text(SystemPrivilegeName(r.privilege)), Bool(r.admin_option),
               Text(r.granted_by)})
@@ -1411,6 +1468,13 @@ arrow::Status StoreTransaction::UpsertSystemPrivilege(const SystemPrivilegeRecor
 }
 
 arrow::Status StoreTransaction::DeleteSystemPrivilege(const SystemPrivilegeRecord& r) {
+  if (InStorageTable(r)) {
+    return Run(conn_,
+               "DELETE FROM " + T("storage_privileges") +
+                   " WHERE role_id = $1 AND privilege = $2 AND location = $3 AND granted_by = $4",
+               {Text(r.role_id), Text(SystemPrivilegeName(r.privilege)), Text(r.location), Text(r.granted_by)})
+        .status();
+  }
   return Run(conn_,
              "DELETE FROM " + T("system_privileges") +
                  " WHERE role_id = $1 AND privilege = $2 AND granted_by = $3",

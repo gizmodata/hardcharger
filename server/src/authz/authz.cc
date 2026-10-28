@@ -21,6 +21,7 @@
 #include "authz/gate.hpp"
 #include "authz/introspection.hpp"
 #include "authz/resolver.hpp"
+#include "authz/storage_access.hpp"
 #include "duckdb_sql.hpp"
 #include "logging.hpp"
 
@@ -858,6 +859,17 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
   const TableFunctionCallback table_function_allowed = [&](const std::vector<std::string>& parts) {
     return IsAllowedTableFunction(parts.back()) || functions.IsTableMacro(QualifiedName{parts});
   };
+  // Files, URLs and object storage: checked by the paths the statement writes, before
+  // binding reads them (and again, as bound, by the plan check).
+  std::optional<StorageAccess> storage_access;
+  const StorageCallback storage = [&](const StorageUse& use) {
+    if (principal.superuser) return;
+    if (!storage_access) storage_access.emplace(*dd::capiv2::Convert(connection_)->context);
+    StorageRequest request{use.what, use.write ? StorageMode::kWrite : StorageMode::kRead, use.paths, use.directory};
+    if (auto refusal = storage_access->Refusal(*snapshot, {principal}, request, identity_.user_name)) {
+      throw Error(ErrorCode::kPermissionDenied, *refusal, "42501");
+    }
+  };
   for (auto& handle : statements) {
     auto& statement = *dd::capiv2::Convert(handle.get());
     // SHOW GRANTS parses as a SELECT and RESET ROLE as a SET: in a batch they would
@@ -867,7 +879,7 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
                   "Hardcharger access control: access-control statements run on their own, "
                   "not in a batch with other statements");
     }
-    if (auto category = GatedCategory(statement, permitted, named_table, table_function_allowed)) {
+    if (auto category = GatedCategory(statement, permitted, named_table, table_function_allowed, storage)) {
       if (auto privilege = SystemPrivilegeForGatedCategory(*category)) {
         if (principal.rules_administrator) {
           throw Error(ErrorCode::kPermissionDenied,

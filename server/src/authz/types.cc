@@ -120,6 +120,14 @@ std::string SystemPrivilegeName(SystemPrivilege privilege) {
       return "IMPORT DATABASE";
     case SystemPrivilege::kCheckpoint:
       return "CHECKPOINT";
+    case SystemPrivilege::kReadObjectStorage:
+      return "READ OBJECT STORAGE";
+    case SystemPrivilege::kWriteObjectStorage:
+      return "WRITE OBJECT STORAGE";
+    case SystemPrivilege::kReadHttp:
+      return "READ HTTP";
+    case SystemPrivilege::kWriteHttp:
+      return "WRITE HTTP";
   }
   return "UNKNOWN";
 }
@@ -130,7 +138,9 @@ const std::vector<SystemPrivilege>& AllSystemPrivileges() {
       SystemPrivilege::kManageSecrets,  SystemPrivilege::kManageConfig,
       SystemPrivilege::kReadFilesystem, SystemPrivilege::kWriteFilesystem,
       SystemPrivilege::kExportDatabase, SystemPrivilege::kImportDatabase,
-      SystemPrivilege::kCheckpoint};
+      SystemPrivilege::kCheckpoint,     SystemPrivilege::kReadObjectStorage,
+      SystemPrivilege::kWriteObjectStorage, SystemPrivilege::kReadHttp,
+      SystemPrivilege::kWriteHttp};
   return kAll;
 }
 

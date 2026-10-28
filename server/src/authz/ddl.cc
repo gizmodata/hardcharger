@@ -4,6 +4,8 @@
 #include <cctype>
 #include <cstring>
 
+#include "authz/locations.hpp"
+
 namespace hardcharger::authz {
 
 namespace {
@@ -724,21 +726,27 @@ class Parser {
     struct Phrase {
       const char* first;
       const char* second;
+      const char* third;  // or nullptr
       SystemPrivilege privilege;
     };
     static const Phrase kPhrases[] = {
-        {"MANAGE", "CATALOGS", SystemPrivilege::kManageCatalogs},
-        {"MANAGE", "EXTENSIONS", SystemPrivilege::kManageExtensions},
-        {"MANAGE", "SECRETS", SystemPrivilege::kManageSecrets},
-        {"MANAGE", "CONFIG", SystemPrivilege::kManageConfig},
-        {"READ", "FILESYSTEM", SystemPrivilege::kReadFilesystem},
-        {"WRITE", "FILESYSTEM", SystemPrivilege::kWriteFilesystem},
-        {"EXPORT", "DATABASE", SystemPrivilege::kExportDatabase},
-        {"IMPORT", "DATABASE", SystemPrivilege::kImportDatabase},
+        {"MANAGE", "CATALOGS", nullptr, SystemPrivilege::kManageCatalogs},
+        {"MANAGE", "EXTENSIONS", nullptr, SystemPrivilege::kManageExtensions},
+        {"MANAGE", "SECRETS", nullptr, SystemPrivilege::kManageSecrets},
+        {"MANAGE", "CONFIG", nullptr, SystemPrivilege::kManageConfig},
+        {"READ", "FILESYSTEM", nullptr, SystemPrivilege::kReadFilesystem},
+        {"WRITE", "FILESYSTEM", nullptr, SystemPrivilege::kWriteFilesystem},
+        {"READ", "OBJECT", "STORAGE", SystemPrivilege::kReadObjectStorage},
+        {"WRITE", "OBJECT", "STORAGE", SystemPrivilege::kWriteObjectStorage},
+        {"READ", "HTTP", nullptr, SystemPrivilege::kReadHttp},
+        {"WRITE", "HTTP", nullptr, SystemPrivilege::kWriteHttp},
+        {"EXPORT", "DATABASE", nullptr, SystemPrivilege::kExportDatabase},
+        {"IMPORT", "DATABASE", nullptr, SystemPrivilege::kImportDatabase},
     };
     for (const auto& phrase : kPhrases) {
-      if (PeekKeyword(phrase.first) && PeekKeyword(phrase.second, 1)) {
-        return std::make_pair(phrase.privilege, size_t{2});
+      if (PeekKeyword(phrase.first) && PeekKeyword(phrase.second, 1) &&
+          (!phrase.third || PeekKeyword(phrase.third, 2))) {
+        return std::make_pair(phrase.privilege, size_t{phrase.third ? 3u : 2u});
       }
     }
     return std::nullopt;
@@ -756,8 +764,19 @@ class Parser {
       cmd.privileges.push_back(found->first);
       pos_ += found->second;
     } while (PeekSymbol(",") && (++pos_, true));
-    if (PeekKeyword("ON")) {
-      return SyntaxError("system privileges apply to the whole server: no ON clause");
+    if (AcceptKeyword("ON")) {
+      // The storage privileges may be granted on a location: a path or URL prefix.
+      for (const auto p : cmd.privileges) {
+        if (!StorageOf(p)) {
+          return SyntaxError(SystemPrivilegeName(p) +
+                             " applies to the whole server: no ON clause (only the storage privileges, such "
+                             "as READ OBJECT STORAGE, take ON LOCATION)");
+        }
+      }
+      if (!AcceptKeyword("LOCATION")) {
+        return SyntaxError("expected LOCATION '<path or URL>' after ON, but found '" + Describe(Peek()) + "'");
+      }
+      ARROW_ASSIGN_OR_RAISE(cmd.location, ParseStringLiteral("a location, as a string ('s3://bucket/path/')"));
     }
     ARROW_RETURN_NOT_OK(ExpectKeyword(grant ? "TO" : "FROM"));
     ARROW_ASSIGN_OR_RAISE(cmd.grantees, ParseGranteeList());

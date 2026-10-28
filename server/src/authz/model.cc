@@ -589,17 +589,35 @@ bool Snapshot::HasSystemPrivilege(const Principal& principal, SystemPrivilege pr
   if (principal.scope) return false;  // a scoped token holds none
   const auto roles = RolesOf(principal);
   for (const auto& r : system_privileges_) {
-    if (r.privilege == privilege && roles.count(r.role_id)) return true;
+    if (r.privilege == privilege && r.location.empty() && roles.count(r.role_id)) return true;
   }
   return false;
 }
 
-bool Snapshot::CanGrantSystemPrivilege(const Principal& principal,
-                                       SystemPrivilege privilege) const {
+bool Snapshot::HasStorageAccess(const Principal& principal, SystemPrivilege privilege, const StoragePath& path,
+                                const LocalPathContext& context) const {
+  if (principal.superuser) return true;
+  // As HasSystemPrivilege: rules principals and scoped tokens hold no storage privilege.
+  if (principal.catalog_rules || principal.scope) return false;
+  const auto storage = StorageOf(privilege);
+  if (!storage || storage->first != path.kind) return false;
+  const auto roles = RolesOf(principal);
+  for (const auto& r : system_privileges_) {
+    if (r.privilege != privilege || !roles.count(r.role_id)) continue;
+    if (r.location.empty() || LocationCovers(path.kind, r.location, path, context)) return true;
+  }
+  return false;
+}
+
+bool Snapshot::CanGrantSystemPrivilege(const Principal& principal, SystemPrivilege privilege,
+                                       const std::string& location) const {
   if (principal.superuser) return true;
   const auto roles = RolesOf(principal);
   for (const auto& r : system_privileges_) {
-    if (r.privilege == privilege && r.admin_option && roles.count(r.role_id)) return true;
+    if (r.privilege == privilege && r.admin_option && roles.count(r.role_id) &&
+        LocationWithin(r.location, location)) {
+      return true;
+    }
   }
   return false;
 }
@@ -921,7 +939,7 @@ Snapshot::Fallen Snapshot::FallenDelegations() const {
       for (size_t j = 0; j < system_privileges_.size(); ++j) {
         const auto& h = system_privileges_[j];
         if (j != i && s_ok[j] && h.privilege == r.privilege && h.admin_option &&
-            roles.count(h.role_id)) {
+            roles.count(h.role_id) && LocationWithin(h.location, r.location)) {
           s_ok[i] = changed = true;
           break;
         }

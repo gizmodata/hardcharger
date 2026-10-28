@@ -349,6 +349,11 @@ class PolicyRewriter {
     const size_t original_columns = get.GetColumnIds().size();
     dd::vector<dd::unique_ptr<dd::Expression>> conditions;
 
+    // A database's path is where the server opened it: a server file, or a connection
+    // string with its password (ATTACH 'postgres:... password=...', 'md:?motherduck_token=').
+    // Only the administrator sees it; to everyone else it is NULL.
+    if (function == "duckdb_databases") MaskWithNull(get, "path", original_columns);
+
     static const std::unordered_set<std::string> kCatalogListing = {
         "duckdb_databases",   "duckdb_tables",    "duckdb_views",        "duckdb_columns",
         "duckdb_constraints", "duckdb_functions", "duckdb_indexes",      "duckdb_schemas",
@@ -388,6 +393,22 @@ class PolicyRewriter {
     filter->children.push_back(std::move(op));
     op = std::move(filter);
     policy_filters_.insert(op.get());
+  }
+
+  // Every use of the table function's column `column_name`, if the statement reads it,
+  // becomes NULL.
+  void MaskWithNull(dd::LogicalGet& get, const std::string& column_name, size_t original_columns) {
+    const auto& column_ids = get.GetColumnIds();
+    for (dd::idx_t column = 0; column < get.names.size(); ++column) {
+      if (!IdentifiersEqual(compat::Str(get.names[column]), column_name)) continue;
+      for (size_t p = 0; p < original_columns; ++p) {
+        if (!column_ids[p].IsRowIdColumn() && !column_ids[p].IsVirtualColumn() &&
+            column_ids[p].GetPrimaryIndex() == column) {
+          masks_[dd::ColumnBinding(get.table_index, dd::ProjectionIndex(p))] =
+              dd::make_uniq<dd::BoundConstantExpression>(dd::Value(get.returned_types[column]));
+        }
+      }
+    }
   }
 
   // A reference to one of the table function's text columns, read by the scan for the

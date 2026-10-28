@@ -33,19 +33,24 @@ std::string PrivilegeName(Privilege privilege);
 // The object privileges ALL stands for on a table or view.
 const std::vector<Privilege>& TableLevelPrivileges();
 
-// Server-wide capabilities, granted to roles with no ON clause
-// (GRANT READ FILESYSTEM TO etl). Each opens one family of statements that the
-// admin command gate otherwise keeps for the administrator.
+// Capabilities granted to roles with no object ON clause (GRANT READ FILESYSTEM TO etl).
+// Each opens one family of statements that the admin command gate otherwise keeps for
+// the administrator. The six storage privileges (locations.hpp) can also be granted on
+// locations only: GRANT READ OBJECT STORAGE ON LOCATION 's3://bucket/in/' TO etl.
 enum class SystemPrivilege {
-  kManageCatalogs,    // ATTACH, DETACH
-  kManageExtensions,  // INSTALL, LOAD, extension repositories
-  kManageSecrets,     // CREATE / DROP SECRET, duckdb_secrets()
-  kManageConfig,      // SET GLOBAL, instance-wide settings
-  kReadFilesystem,    // read_csv / read_parquet / ..., FROM 'file', COPY FROM: local and remote
-  kWriteFilesystem,   // COPY ... TO a file or URL
-  kExportDatabase,    // EXPORT DATABASE
-  kImportDatabase,    // IMPORT DATABASE
-  kCheckpoint,        // CHECKPOINT, FORCE CHECKPOINT
+  kManageCatalogs,      // ATTACH, DETACH
+  kManageExtensions,    // INSTALL, LOAD, extension repositories
+  kManageSecrets,       // CREATE / DROP SECRET, duckdb_secrets()
+  kManageConfig,        // SET GLOBAL, instance-wide settings
+  kReadFilesystem,      // read_csv / read_parquet / ..., FROM 'file', COPY FROM: local files
+  kWriteFilesystem,     // COPY ... TO a local file
+  kExportDatabase,      // EXPORT DATABASE
+  kImportDatabase,      // IMPORT DATABASE
+  kCheckpoint,          // CHECKPOINT, FORCE CHECKPOINT
+  kReadObjectStorage,   // reading s3://, gs://, r2://, az://, abfss://
+  kWriteObjectStorage,  // COPY ... TO object storage
+  kReadHttp,            // reading http://, https://, hf://
+  kWriteHttp,           // COPY ... TO http(s)
 };
 
 // "MANAGE CATALOGS", "READ FILESYSTEM", ...
