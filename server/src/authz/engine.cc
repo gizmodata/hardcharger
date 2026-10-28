@@ -45,9 +45,10 @@ std::string ScopeLabel(GrantScope scope) {
 
 bool SamePath(const ObjectPath& a, const ObjectPath& b) { return ObjectKey(a) == ObjectKey(b); }
 
-// Privileges that one GRANT row stands for (ALL expands to the DML set).
-std::vector<Privilege> Expand(Privilege p) {
-  if (p == Privilege::kAll) return TableLevelPrivileges();
+// The privileges one GRANT or REVOKE names, one record each (ALL: every privilege that
+// applies at the scope).
+std::vector<Privilege> Expand(Privilege p, GrantScope scope) {
+  if (p == Privilege::kAll) return PrivilegesOfAll(scope);
   return {p};
 }
 
@@ -1031,7 +1032,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
             grantees.push_back(std::move(grantee));
           }
           for (const auto& item : c->privileges) {
-            for (Privilege p : Expand(item.privilege)) {
+            for (Privilege p : Expand(item.privilege, c->scope)) {
               const auto columns =
                   p == Privilege::kSelect ? item.columns : std::vector<std::string>{};
               const std::string what = PrivilegeName(p) +

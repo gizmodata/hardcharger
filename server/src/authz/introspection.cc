@@ -520,7 +520,9 @@ std::shared_ptr<arrow::RecordBatch> Policies(const Snapshot& snapshot, const Pri
 
 // ---- hardcharger_effective_privileges() ----
 
-// The privileges a grant of `privilege` gives (ALL: each table-level one).
+// The privileges a stored grant of `privilege` gives. GRANT never stores ALL (it stores each
+// privilege ALL stands for); a record of ALL itself counts as the table-level ones, as the
+// plan check reads it.
 std::vector<Privilege> Expand(Privilege privilege) {
   if (privilege == Privilege::kAll) return TableLevelPrivileges();
   return {privilege};

@@ -7,6 +7,16 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- **`GRANT ALL` on a schema or catalog now includes its DDL privileges.** `GRANT ALL PRIVILEGES
+  ON SCHEMA analytics TO loader` used to give only `SELECT`, `INSERT`, `UPDATE` and `DELETE` on
+  the schema's tables. It now gives every privilege that applies to a schema: those four and
+  `CREATE`, `DROP` and `ALTER` `TABLE` and `VIEW`. On a catalog it also gives `CREATE SCHEMA` and
+  `DROP SCHEMA`; on a table it is unchanged. `REVOKE ALL` takes back the same set. Grants made
+  before this release keep what they gave: `GRANT ALL` has always been stored as the separate
+  privileges it stood for.
+
 ## [2.1.5] - 2026-10-28
 
 2.1.3 and 2.1.4 were tagged but never released. 2.1.3's release gate found a `CHECKPOINT` racing

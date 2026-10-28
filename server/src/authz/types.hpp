@@ -65,6 +65,11 @@ std::string HiddenObjectMessage(const std::string& user_name);
 // kCatalog grant on every present and future object in the container.
 enum class GrantScope { kObject, kSchema, kCatalog };
 
+// The object privileges GRANT ALL stands for at a scope: every one that applies there.
+// On a table or view the table-level ones; on a schema those and CREATE / DROP / ALTER
+// TABLE and VIEW; on a catalog all of those and CREATE / DROP SCHEMA.
+const std::vector<Privilege>& PrivilegesOfAll(GrantScope scope);
+
 // One identifier, compared case-insensitively (DuckDB's rule for both quoted
 // and unquoted identifiers) and stored as the user spelled it.
 std::string FoldIdentifier(const std::string& identifier);

@@ -42,6 +42,28 @@ const std::vector<Privilege>& TableLevelPrivileges() {
   return kPrivileges;
 }
 
+const std::vector<Privilege>& PrivilegesOfAll(GrantScope scope) {
+  static const std::vector<Privilege> kSchema = {
+      Privilege::kSelect,      Privilege::kInsert,     Privilege::kUpdate,    Privilege::kDelete,
+      Privilege::kCreateTable, Privilege::kCreateView, Privilege::kDropTable, Privilege::kDropView,
+      Privilege::kAlterTable,  Privilege::kAlterView};
+  static const std::vector<Privilege> kCatalog = [] {
+    auto all = kSchema;
+    all.push_back(Privilege::kCreateSchema);
+    all.push_back(Privilege::kDropSchema);
+    return all;
+  }();
+  switch (scope) {
+    case GrantScope::kObject:
+      return TableLevelPrivileges();
+    case GrantScope::kSchema:
+      return kSchema;
+    case GrantScope::kCatalog:
+      return kCatalog;
+  }
+  return TableLevelPrivileges();
+}
+
 // DuckDB compares identifiers case-insensitively by ASCII lowercasing, whether
 // or not they were quoted; anything outside ASCII compares byte for byte.
 std::string FoldIdentifier(const std::string& identifier) {

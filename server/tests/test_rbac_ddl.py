@@ -128,9 +128,9 @@ def test_schema_and_catalog_scopes(admin):
                 "GRANT CREATE TABLE, DROP VIEW ON SCHEMA main TO loader"]:
         expect_allowed(client=admin, sql=sql)
     kinds = {(row["privilege"], row["object_type"]) for row in admin.run(sql="SHOW GRANTS FOR loader").to_pylist()}
-    # ALL stands for every table privilege, each kept on its own.
-    assert {("SELECT", "SCHEMA"), ("DELETE", "SCHEMA"), ("CREATE SCHEMA", "CATALOG"), ("SELECT", "CATALOG"), ("CREATE TABLE", "SCHEMA"),
-            ("DROP VIEW", "SCHEMA")} <= kinds, kinds
+    # ALL stands for every privilege that applies to a schema, each kept on its own.
+    assert {("SELECT", "SCHEMA"), ("DELETE", "SCHEMA"), ("ALTER TABLE", "SCHEMA"), ("DROP VIEW", "SCHEMA"),
+            ("CREATE SCHEMA", "CATALOG"), ("SELECT", "CATALOG"), ("CREATE TABLE", "SCHEMA")} <= kinds, kinds
 
 
 def test_revoke_forms(admin):
