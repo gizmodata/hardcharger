@@ -398,7 +398,9 @@ def attached(module_launcher, tmp_path_factory, store):
                                args=["--database", str(directory / "srv.duckdb"), "--enable-instrumentation",
                                      "--enable-catalog-logging"])
     admin = server.admin()
-    for sql in ["CREATE TABLE secret AS SELECT 'top secret' AS s", "CHECKPOINT", "CREATE ROLE fs",
+    # FORCE: with instrumentation on, its writer may still be recording the CREATE, and a
+    # plain CHECKPOINT then refuses ("other write transactions active").
+    for sql in ["CREATE TABLE secret AS SELECT 'top secret' AS s", "FORCE CHECKPOINT", "CREATE ROLE fs",
                 "GRANT READ FILESYSTEM TO fs", "GRANT WRITE FILESYSTEM TO fs", "GRANT MANAGE CATALOGS TO fs",
                 "CREATE USER fay", "GRANT fs TO fay"]:
         expect_allowed(client=admin, sql=sql)
@@ -456,7 +458,7 @@ def test_the_attached_files_are_read_through_their_catalogs_only(attached, who, 
 def test_the_attached_files_keep_working(attached):
     admin = attached.principals["admin"]
     expect_allowed(client=admin, sql="INSERT INTO secret VALUES ('more')")
-    expect_allowed(client=admin, sql="CHECKPOINT")
+    expect_allowed(client=admin, sql="FORCE CHECKPOINT")  # see the fixture
     assert admin.run(sql="SELECT count(*) AS n FROM secret").column("n").to_pylist() == [2]
     assert admin.run(sql="SELECT count(*) AS n FROM _hardcharger_instr.main.sessions").column("n").to_pylist()[0] >= 1
     # fay reads none of it: no grant on the table, and the server's own catalogs are hidden.
@@ -519,7 +521,9 @@ def sqlite_server(module_launcher, tmp_path_factory, store):
                                args=["--database", str(directory / "srv.duckdb"), "--enable-instrumentation",
                                      "--enable-catalog-logging"])
     admin = server.admin()
-    for sql in ["CREATE TABLE secret AS SELECT 'top secret' AS s", "CHECKPOINT", "CREATE ROLE fs",
+    # FORCE: with instrumentation on, its writer may still be recording the CREATE, and a
+    # plain CHECKPOINT then refuses ("other write transactions active").
+    for sql in ["CREATE TABLE secret AS SELECT 'top secret' AS s", "FORCE CHECKPOINT", "CREATE ROLE fs",
                 "GRANT READ FILESYSTEM TO fs", "GRANT WRITE FILESYSTEM TO fs", "GRANT MANAGE CATALOGS TO fs",
                 "CREATE USER fay", "GRANT fs TO fay"]:
         expect_allowed(client=admin, sql=sql)

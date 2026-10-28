@@ -7,7 +7,11 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
-## [2.1.3] - 2026-10-28
+## [2.1.4] - 2026-10-28
+
+2.1.3 was tagged but never released: two tests failed in its release gate's thread-sanitizer
+job (a 1 s store timeout too short for an instrumented build, and a fixture's `CHECKPOINT`
+racing the instrumentation writer). 2.1.4 is the same server with those tests fixed.
 
 Concurrent DDL under access control no longer fails with "access control store unavailable"
 while the store is healthy: a multi-threaded dbt run lost models to it. `CREATE` and `DROP`

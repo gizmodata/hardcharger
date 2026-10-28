@@ -18,6 +18,7 @@ import time
 
 import pytest
 
+from conftest import TIMEOUT_SCALE
 from rbac import Client, expect_allowed, expect_blocked, mint, start_rbac_server
 
 CLIENTS = 10
@@ -32,6 +33,9 @@ DDL_ROUNDS = 8
 # Tables that already have owners: a dbt project's worth, so every read of the whole store
 # is a real one (2.1.2 read it in time quadratic in its rows, twice for every CREATE).
 DDL_EXISTING = 600
+# 1 s, stretched in sanitizer builds: there one store statement on its own can take a second
+# (TSan, 2026-10-28), and a statement that slow is what the timeout is for.
+DDL_STORE_TIMEOUT = str(max(1, round(TIMEOUT_SCALE)))
 
 
 def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
@@ -40,10 +44,11 @@ def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
     access control store unavailable: timed out after 10 s ...)" against a healthy store
     (customer report, 2026-10-28): every DDL waited for one store connection under a mutex,
     and a caller that waited longer than the store timeout gave up although the store had
-    answered everyone ahead of it. With a 1 s store timeout none may fail, the server may not
-    report the store down, and each table's owner (who alone may grant on it) is right."""
+    answered everyone ahead of it. With a 1 s store timeout (longer in sanitizer builds) none
+    may fail, the server may not report the store down, and each table's owner (who alone may
+    grant on it) is right."""
     server = start_rbac_server(launcher=launcher, store_uri=store.new_database(),
-                               env={"HARDCHARGER_RBAC_STORE_TIMEOUT_SECONDS": "1",
+                               env={"HARDCHARGER_RBAC_STORE_TIMEOUT_SECONDS": DDL_STORE_TIMEOUT,
                                     "HARDCHARGER_PRINT_QUERIES": "false"})
     admin = server.admin()
     for sql in ["CREATE ROLE builder", "GRANT CREATE TABLE, DROP TABLE ON SCHEMA main TO builder",
