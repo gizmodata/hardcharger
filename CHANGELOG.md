@@ -7,6 +7,12 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.1.3] - 2026-10-28
+
+Concurrent DDL under access control no longer fails with "access control store unavailable"
+while the store is healthy: a multi-threaded dbt run lost models to it. `CREATE` and `DROP`
+under access control are also several times faster, more so the more objects the store holds.
+
 ### Fixed
 
 - **Concurrent DDL no longer fails with "access control store unavailable" while the store is
