@@ -13,9 +13,10 @@ administrator's rules, and Hardcharger's deliberate deviations, each named.
 - An administrator WITHOUT rules (the password administrator, or a token without the
   claim) is unrestricted.
 - A restricted administrator keeps the administration that reaches no data, as in 1.x:
-  SET GLOBAL, CHECKPOINT, KILL SESSION, every session in hardcharger_sessions(), reading
-  the server's own catalogs. Deviations from 1.x, for security, because each reaches data
-  around the rules: no ATTACH/DETACH, files, extensions, secrets, EXPORT/IMPORT; no
+  CHECKPOINT. Deviations from 1.x, for security: no SET GLOBAL, KILL SESSION, other
+  sessions in hardcharger_sessions() or the server's own catalogs, which reach every other
+  tenant; and, because each reaches data around the rules, no ATTACH/DETACH, files,
+  extensions, secrets, EXPORT/IMPORT; no
   macros or types; only the table functions other rules principals get; sequences per the
   rules; a claim that isn't a non-empty list grants nothing; and under access control
   (RBAC) the rules narrow an administrator's token too, and it runs no access-control
@@ -240,9 +241,33 @@ RULES_ADMIN_REFUSAL = "which an administrator token with catalog_access rules do
 
 def test_a_restricted_admin_keeps_the_administration_that_reaches_no_data(server):
     session = admin_token(server=server, name="admin_commands", rules=x_read_rest_none())
-    session.execute(sql="SET GLOBAL hardcharger.query_timeout = 0")
-    session.execute(sql="SET GLOBAL threads = 4")
     session.execute(sql=f"CHECKPOINT {X}")
+    # Its own session's settings are its own.
+    session.execute(sql="SET TimeZone = 'UTC'")
+    assert session.scalar(sql="SELECT current_setting('TimeZone')") == "UTC"
+
+
+def test_a_restricted_admin_changes_nothing_for_the_whole_server(server):
+    # Deviation from 1.x: a global setting applies to every other tenant's sessions too.
+    # One tenant's token could starve the others (threads, memory_limit), cut every
+    # catalog off object storage until a restart (enable_external_access = false), or point
+    # extension installs at a repository of its choosing.
+    session = admin_token(server=server, name="admin_no_global", rules=x_read_rest_none())
+    before = session.scalar(sql="SELECT current_setting('threads')")
+    for sql in ["SET GLOBAL threads = 1", "SET threads = 1", "RESET GLOBAL threads", "SET GLOBAL memory_limit = '64MB'",
+                "SET GLOBAL enable_external_access = false",
+                "SET GLOBAL custom_extension_repository = 'http://127.0.0.1:1/repo'",
+                "SET GLOBAL autoinstall_extension_repository = 'http://127.0.0.1:1/repo'",
+                "SET GLOBAL allowed_directories = ['/']"]:
+        denied(session=session, sql=sql, why="MANAGE CONFIG")
+        assert RULES_ADMIN_REFUSAL in session.error(sql=sql)["detail"], sql
+    denied(session=session, sql="SET GLOBAL hardcharger.query_timeout = 0",
+           why="needs an administrator without catalog_access rules")
+    assert session.scalar(sql="SELECT current_setting('threads')") == before
+    # The positive twin: the unrestricted administrator still may.
+    admin = server.admin()
+    admin.execute(sql="SET GLOBAL hardcharger.query_timeout = 0")
+    admin.execute(sql=f"SET GLOBAL threads = {before}")
 
 
 def test_a_restricted_admin_holds_no_privilege_that_reaches_data(server, tmp_path):

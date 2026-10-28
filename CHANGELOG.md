@@ -73,6 +73,14 @@ touch, and database paths hidden from everyone but the administrator.
 - **`COPY ... TO` with a `FILENAME_PATTERN` that names a directory is refused under access
   control**, so partition files can't be written outside the directory the statement was checked
   for.
+- **An administrator's token with `catalog_access` rules changes no setting for the whole
+  server.** It could `SET GLOBAL` (and `SET` a global-only setting such as `threads`), as in
+  GizmoSQL 1.x, and so starve every other tenant (`threads = 1`, `memory_limit`), cut every
+  catalog off its object storage until a restart (`enable_external_access = false`), or point
+  extension installs at a repository of its choosing; `SET GLOBAL hardcharger.*` went through
+  too. Now it holds `CHECKPOINT` only of the system privileges: global settings, and reading the
+  settings that hold credentials, are the unrestricted administrator's. Its own session's
+  settings still work.
 
 ## [2.1.5] - 2026-10-28
 

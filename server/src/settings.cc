@@ -410,6 +410,13 @@ void ApplySetting(Session& session, const SettingCommand& command) {
     if (!session.admin()) {
       throw Error(ErrorCode::kPermissionDenied, "Only admin users can SET GLOBAL hardcharger." + setting.name, "42501");
     }
+    // A global setting applies to every session, other tenants' too: not for an
+    // administrator token limited to some catalogs.
+    if (!session.full_admin()) {
+      throw Error(ErrorCode::kPermissionDenied,
+                  "SET GLOBAL hardcharger." + setting.name + " needs an administrator without catalog_access rules",
+                  "42501");
+    }
     setting.set_global(runtime, value);
   } else {
     setting.set_session(session, value);

@@ -299,13 +299,13 @@ CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const
 }
 
 bool IsRulesAdministratorPrivilege(SystemPrivilege privilege) {
-  return privilege == SystemPrivilege::kManageConfig || privilege == SystemPrivilege::kCheckpoint;
+  return privilege == SystemPrivilege::kCheckpoint;
 }
 
 std::string RulesAdministratorRefusal(const std::string& what, SystemPrivilege privilege) {
   return what + " needs the " + SystemPrivilegeName(privilege) +
          " privilege, which an administrator token with catalog_access rules does not hold (it could reach "
-         "data its rules don't allow)";
+         "data its rules don't allow, or change the server for every other tenant)";
 }
 
 std::string CatalogAccessDenied(const std::string& catalog, CatalogAccessLevel needed, const std::string& user) {

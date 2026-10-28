@@ -187,8 +187,9 @@ struct CatalogRule {
 // The level the rules give `catalog`. DuckDB's system catalog (which holds
 // information_schema) and Hardcharger's _hardcharger_system are read for all.
 CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const std::string& catalog);
-// The system privileges an administrator's token with catalog_access rules holds:
-// MANAGE CONFIG and CHECKPOINT (the ones that reach no data).
+// The system privileges an administrator's token with catalog_access rules holds: CHECKPOINT
+// only. The others reach data its rules don't name, or (MANAGE CONFIG: SET GLOBAL, settings
+// that hold credentials) change the server for every other tenant.
 bool IsRulesAdministratorPrivilege(SystemPrivilege privilege);
 // The words of a refusal of one of the others to it.
 std::string RulesAdministratorRefusal(const std::string& what, SystemPrivilege privilege);
