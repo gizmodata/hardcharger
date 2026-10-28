@@ -7,11 +7,11 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
-## [2.1.4] - 2026-10-28
+## [2.1.5] - 2026-10-28
 
-2.1.3 was tagged but never released: two tests failed in its release gate's thread-sanitizer
-job (a 1 s store timeout too short for an instrumented build, and a fixture's `CHECKPOINT`
-racing the instrumentation writer). 2.1.4 is the same server with those tests fixed.
+2.1.3 and 2.1.4 were tagged but never released. 2.1.3's release gate found a `CHECKPOINT` racing
+the instrumentation writer (fixed below) and a test timeout too short for the thread-sanitizer
+build; 2.1.4 was withdrawn before its gate finished, to include the fix.
 
 Concurrent DDL under access control no longer fails with "access control store unavailable"
 while the store is healthy: a multi-threaded dbt run lost models to it. `CREATE` and `DROP`
@@ -43,6 +43,13 @@ under access control are also several times faster, more so the more objects the
   catalog attached or a schema created elsewhere (another session, a dbt run) appeared in the
   schema browser after Refresh but not in the pickers. An upload into a new table now refreshes
   them too.
+- **A `CHECKPOINT` right after a statement is no longer refused while instrumentation is on.**
+  The instrumentation writer records each statement on a connection of its own just after it
+  ends. That connection's current database was the server's, and DuckDB counts a write from
+  such a connection to another attached file (the instrumentation database) against the
+  current one, so a client's `CHECKPOINT` issued right after a statement failed with `Cannot
+  CHECKPOINT: there are other write transactions active` about half the time (2.1.2 included).
+  The instrumentation and catalog-log writers now work from their own catalogs.
 
 ## [2.1.2] - 2026-10-27
 

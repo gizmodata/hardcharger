@@ -22,7 +22,7 @@ server, from Python. The package has no dependencies: on first use it downloads 
 silicon), checks it, caches it, and runs it as a subprocess. That makes a real server one
 line away in tests, notebooks and scripts.
 
-Python package 2.1.4 downloads Hardcharger server 2.1.4 by default.
+Python package 2.1.5 downloads Hardcharger server 2.1.5 by default.
 
 | Package | What it is |
 |---|---|
@@ -64,9 +64,9 @@ The package also installs `hardcharger-server`, which runs the downloaded server
 
 ```console
 $ hardcharger-server --version
-Hardcharger 2.1.4
+Hardcharger 2.1.5
 $ python -m hardcharger download       # download (if needed) and print the binary's path
-/home/me/.cache/hardcharger/v2.1.4/linux-amd64/bin/hardcharger-server
+/home/me/.cache/hardcharger/v2.1.5/linux-amd64/bin/hardcharger-server
 ```
 
 ## The download

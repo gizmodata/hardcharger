@@ -6,14 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [2.1.4] - 2026-10-28
+## [2.1.5] - 2026-10-28
 
 ### Changed
 
-- The package installs Hardcharger server 2.1.4 (2.1.3 was tagged but never released), which fixes concurrent DDL under access
-  control failing with "access control store unavailable" while the store was healthy (a
-  multi-threaded dbt run), and refreshes the web UI editor's catalog and schema pickers on the
-  schema browser's Refresh.
+- The package installs Hardcharger server 2.1.5 (2.1.3 and 2.1.4 were tagged but never
+  released), which fixes concurrent DDL under access control failing with "access control store
+  unavailable" while the store was healthy (a multi-threaded dbt run), refuses no `CHECKPOINT`
+  right after a statement while instrumentation is on, and refreshes the web UI editor's catalog
+  and schema pickers on the schema browser's Refresh.
 
 ## [2.1.2] - 2026-10-27
 
