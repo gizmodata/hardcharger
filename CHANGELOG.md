@@ -28,6 +28,11 @@ own changelog in `python/CHANGELOG.md`.
     control took 60 ms with 300 tables in the store and now takes 7 ms; 16 sessions creating
     and dropping tables against PostgreSQL ran 5,800 statements in 30 s instead of 458, the
     slowest in 0.16 s instead of six failing after 10 s.
+- **Web UI: the schema browser's Refresh also lists the editor's catalogs and schemas again.**
+  The Catalog and Schema pickers of every editor tab kept what they had first listed, so a
+  catalog attached or a schema created elsewhere (another session, a dbt run) appeared in the
+  schema browser after Refresh but not in the pickers. An upload into a new table now refreshes
+  them too.
 
 ## [2.1.2] - 2026-10-27
 

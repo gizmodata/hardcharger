@@ -25,7 +25,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { currentActiveTab, subscribeActiveTab, useActiveTab } from "../lib/activeTab";
 import type { CatalogCache, ColumnEntry, SearchHit, TableEntry } from "../lib/catalogCache";
 import { searchMinChars } from "../lib/catalogCache";
-import { onCatalogsChanged } from "../lib/catalogs";
+import { clearCatalogCaches, onCatalogsChanged } from "../lib/catalogs";
 import { copyText } from "../lib/clipboard";
 import { sqlIdentifier } from "../lib/completionContext";
 import { sqlNameDragType } from "../lib/sqlNameDrag";
@@ -524,10 +524,8 @@ export function DataExplorer({ cache }: Props) {
         <button
           type="button"
           className="btn btn-ghost btn-icon btn-sm"
-          onClick={() => {
-            cache.clear();
-            relist(open);
-          }}
+          // Every role's listings, so the editor's catalog and schema pickers list again too.
+          onClick={() => clearCatalogCaches(session)}
           title="Refresh"
           aria-label="Refresh the schema browser"
         >

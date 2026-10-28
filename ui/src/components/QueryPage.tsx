@@ -2,7 +2,7 @@ import { HelpCircle, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { publishActiveTab, resetActiveTab } from "../lib/activeTab";
-import { clearCatalogCaches } from "../lib/catalogs";
+import { clearCatalogCaches, onCatalogsChanged } from "../lib/catalogs";
 import { warnBeforeLeaving } from "../lib/pageExit";
 import { grantedRoles } from "../lib/roles";
 import {
@@ -88,6 +88,10 @@ export default function QueryPage({ theme }: Props) {
     activeRef.current = active;
     saveTabs(user, { tabs, active });
   }, [tabs, active, user]);
+
+  // The tabs' catalog and schema pickers list again whenever the listings are cleared: after a
+  // run or an upload that may have changed the catalog, and on the schema browser's Refresh.
+  useEffect(() => onCatalogsChanged(() => setCatalogVersion((v) => v + 1)), []);
 
   // The user's own catalog and schema: what a tab that picked none starts on.
   useEffect(() => {
@@ -506,10 +510,7 @@ export default function QueryPage({ theme }: Props) {
           editorHeight={editorHeight}
           defaults={defaults}
           catalogVersion={catalogVersion}
-          onCatalogChanged={() => {
-            clearCatalogCaches(session);
-            setCatalogVersion((v) => v + 1);
-          }}
+          onCatalogChanged={() => clearCatalogCaches(session)}
           onChange={(patch) => patchTab(t.id, patch)}
           onStatus={(status) =>
             setStatuses((s) => {

@@ -1,6 +1,7 @@
 // The schema browser: a lazy tree of catalogs, schemas, Tables and Views, and columns; names
 // inserted fully qualified and quoted by double-click or drag; its menu; search; re-listing
 // after a change; and the side panel hidden or resized.
+import { connect } from "@gizmodata/warp-sql";
 import type { Page } from "@playwright/test";
 
 import {
@@ -131,6 +132,36 @@ test("the menu: preview, SELECT, column names, copy, a view's definition, use th
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
   await runDone(page, "ROLLBACK");
+});
+
+test("Refresh lists again in the editor's catalog and schema pickers too", async ({ page, harness }) => {
+  // Made elsewhere (another session), so nothing in this page knows about them until Refresh.
+  const suffix = Date.now().toString(36);
+  const schema = `refreshed_${suffix}`;
+  const attached = `refreshed_cat_${suffix}`;
+  const tab = activeTab(page);
+  await expect(tab.getByLabel("Catalog")).toBeEnabled();
+  await tab.getByLabel("Catalog").selectOption(harness.catalog);
+  await expect(tab.getByLabel("Schema")).toBeEnabled();
+  const other = await connect({ url: harness.serverUrl, ...harness.admin });
+  try {
+    await other.execute(`CREATE SCHEMA ${harness.catalog}.${schema}`);
+    await other.execute(`ATTACH ':memory:' AS ${attached}`);
+    await expect(tab.getByLabel("Schema").locator("option", { hasText: schema })).toHaveCount(0);
+    await expect(tab.getByLabel("Catalog").locator("option", { hasText: attached })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Refresh the schema browser" }).click();
+    await expect(tab.getByLabel("Schema").locator("option", { hasText: schema })).toHaveCount(1);
+    await expect(tab.getByLabel("Catalog").locator("option", { hasText: attached })).toHaveCount(1);
+    await expect(tree(page).getByRole("treeitem", { name: attached, exact: true })).toBeVisible();
+    await tab.getByLabel("Schema").selectOption(schema);
+    await runDone(page, "SELECT current_schema() AS s");
+    expect((await gridRows(page))[1]).toEqual([schema]);
+  } finally {
+    await other.execute(`DETACH DATABASE IF EXISTS ${attached}`);
+    await other.execute(`DROP SCHEMA IF EXISTS ${harness.catalog}.${schema}`);
+    await other.close();
+  }
 });
 
 test("search finds tables and views anywhere; a hit shows in the tree", async ({ page, harness }) => {
