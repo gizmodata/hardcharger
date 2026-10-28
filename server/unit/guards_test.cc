@@ -30,8 +30,10 @@ struct Db {
 };
 
 duckdb_v2_connection_handle Connection() {
-  static Db db;
-  return db.connection.get();
+  // Never destroyed: a DuckDB instance torn down by exit()'s static destructors can run after
+  // DuckDB's own statics are gone, and crashed in BlockAllocator's destructor about one run in five.
+  static Db* db = new Db;
+  return db->connection.get();
 }
 
 // The category of the first gated statement; nullopt when none is, or when DuckDB can't
