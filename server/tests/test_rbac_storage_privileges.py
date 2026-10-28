@@ -19,6 +19,9 @@ from services import S3_PORT, require
 
 BUCKET = "ducklake"  # the gateway's bucket (docker-compose.yml)
 
+# PostgreSQL and the S3 gateway run in Docker, on the Linux runners only.
+pytestmark = pytest.mark.services
+
 
 @pytest.fixture(scope="module")
 def web(tmp_path_factory):
@@ -48,7 +51,7 @@ def world(module_launcher, store, tmp_path_factory, web):
     (work / "shared" / "a.csv").write_text("x\n1\n")
     (work / "secret").mkdir()
     (work / "secret" / "s.csv").write_text("secret\nlocal\n")
-    os.symlink(work / "secret", work / "shared" / "link")
+    os.symlink(work / "secret", work / "shared" / "link", target_is_directory=True)
     for sql in [
         f"CREATE SECRET s3_test (TYPE s3, KEY_ID 'minioadmin', SECRET 'minioadmin', ENDPOINT '127.0.0.1:{S3_PORT}', "
         "USE_SSL false, URL_STYLE 'path', REGION 'us-east-1')",

@@ -119,7 +119,13 @@ TEST(StorageLocations, ALocationCoversItselfAndWhatIsBelowIt) {
 TEST(StorageLocations, GrantLocations) {
   EXPECT_EQ(GrantKey("s3://Bucket/in/"), "s3://bucket/in");
   EXPECT_EQ(GrantKey("https://h/api"), "https://h/api");
-  EXPECT_EQ(ParseGrantLocation("/data/in/")->first, StorageKind::kFilesystem);
+#ifdef _WIN32
+  const auto local = ParseGrantLocation("C:/data/in/");
+#else
+  const auto local = ParseGrantLocation("/data/in/");
+#endif
+  ASSERT_TRUE(local.ok()) << local.status().ToString();
+  EXPECT_EQ(local->first, StorageKind::kFilesystem);
   for (const char* bad : {"", "relative/dir", "~/data", "/data/*", "s3://b/in/*", "https://h/p?x=1", "s3://b/../x",
                           "ftp://h/x"}) {
     EXPECT_FALSE(ParseGrantLocation(bad).ok()) << bad;

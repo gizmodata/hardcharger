@@ -14,6 +14,9 @@ from services import PG_PORT, S3_PORT, pg_conninfo, require
 
 REFUSED = "only DuckLake itself reads and writes"
 
+# PostgreSQL and the S3 gateway run in Docker, on the Linux runners only.
+pytestmark = pytest.mark.services
+
 
 @pytest.fixture(scope="module")
 def world(module_launcher, store, tmp_path_factory):

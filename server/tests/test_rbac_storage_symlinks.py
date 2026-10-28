@@ -24,10 +24,10 @@ def world(module_launcher, store, tmp_path_factory):
         (work / directory).mkdir(parents=True)
     (work / "shared" / "a.csv").write_text("x\n1\n")
     (work / "secret" / "s.csv").write_text("x\n666\n")
-    os.symlink(work / "secret", work / "shared" / "link")  # a directory symlink out of the location
+    os.symlink(work / "secret", work / "shared" / "link", target_is_directory=True)  # a directory symlink out of the location
     os.symlink(work / "secret" / "s.csv", work / "shared" / "s_link.csv")  # a file symlink out of it
-    os.symlink(work / "lakes" / "local", work / "shared" / "lake_link")  # into a lake's storage
-    os.symlink(work / "out", work / "inbox" / "to_out")  # from a write location to elsewhere
+    os.symlink(work / "lakes" / "local", work / "shared" / "lake_link", target_is_directory=True)  # into a lake's storage
+    os.symlink(work / "out", work / "inbox" / "to_out", target_is_directory=True)  # from a write location to elsewhere
     for sql in [
         f"ATTACH 'ducklake:{work}/lakes/local.ducklake' AS lake (DATA_PATH '{work}/lakes/local/')",
         "CREATE TABLE lake.main.t AS SELECT range + 1000 AS x FROM range(100)",

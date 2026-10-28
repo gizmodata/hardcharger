@@ -15,6 +15,9 @@ from services import PG_PORT, S3_PORT, pg_conninfo, require
 A, B = "tenant_a", "tenant_b"
 RULES = [{"catalog": A, "access": "write"}, {"catalog": "*", "access": "none"}]
 
+# PostgreSQL and the S3 gateway run in Docker, on the Linux runners only.
+pytestmark = pytest.mark.services
+
 
 @pytest.fixture(scope="module")
 def world(module_launcher):
