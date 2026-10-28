@@ -77,6 +77,14 @@ touch, and database paths hidden from everyone but the administrator.
   registered as a table's rows), and one with `READ FILESYSTEM` could read and list every lake's
   files around its grants. A data path is compared like a location (aliases, symlinks, Azure's
   two spellings of a container), and a glob or a directory write above it counts as reaching it.
+- **A symlink doesn't lead a store user out of its location or into a DuckLake catalog's storage.**
+  The plan check compares the paths a statement names, symlinks resolved, but a glob below them
+  matches symlinks too: `read_csv('/srv/landing/**/*.csv')` read `/srv/landing/x.csv`, a
+  symlink to a file in a directory the user had no grant on. Once any role holds `READ` or `WRITE FILESYSTEM`, the file system's
+  guard checks every file a store user's statement opens, lists or globs: one spelled inside its
+  location must really be inside a location it holds for that access, and none may resolve into a
+  DuckLake catalog's storage unless it is spelled there (as DuckLake spells its own files), even
+  for a user holding `READ FILESYSTEM` everywhere. A glob lists the matches that pass only.
 - **`duckdb_databases().path` is NULL for everyone but the administrator.** A catalog's path can
   be its connection string, password included (`ATTACH 'postgres:... password=...'`), and every
   user who could see the catalog could read it; it also showed the server's own file paths.

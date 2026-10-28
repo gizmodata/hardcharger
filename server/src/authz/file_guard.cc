@@ -16,6 +16,13 @@
 //    above (/home/*/.ssh/*) lists its other matches only, as does a directory listing.
 //    DuckDB's secret manager reads its persistent secrets past this file system (its
 //    LocalDatabaseFileSystem), so they still load.
+//  - Where a store user's local files really are, once any role holds READ or WRITE
+//    FILESYSTEM (locations.hpp): the plan check sees the paths a statement names, but a glob
+//    below a location's fixed part walks into symlinked directories, and a file can be a
+//    symlink. So a path spelled inside one of the user's locations must lie, symlinks
+//    resolved, inside one it holds for that access (read or write), and no path the user
+//    reaches may resolve into a DuckLake catalog's storage unless it is spelled there (as
+//    DuckLake spells its own files). A glob lists the matches that pass only.
 
 #include <duckdb.hpp>
 #include <duckdb/common/exception.hpp>
@@ -26,6 +33,7 @@
 #include <duckdb/common/string_util.hpp>
 #include <duckdb/common/virtual_file_system.hpp>
 #include <duckdb/main/capi_v2/capi_v2_internal.hpp>
+#include <duckdb/main/client_context.hpp>
 #include <duckdb/main/config.hpp>
 #include <duckdb/main/database.hpp>
 #include <duckdb/main/database_path_and_type.hpp>
@@ -35,6 +43,9 @@
 #include <duckdb/planner/planner_extension.hpp>
 
 #include "authz/authz.hpp"
+#include "authz/enforcement.hpp"
+#include "authz/locations.hpp"
+#include "authz/storage_access.hpp"
 #include "guards.hpp"
 
 namespace hardcharger::authz {
@@ -61,7 +72,7 @@ class ServerFileGuard : public dd::FileSystem {
     // With the local file system disabled, nothing local opens at all.
     if (vfs_.SubSystemIsDisabled(local_name_)) return false;
     // Every local path, checked by each operation (which knows the opener, and so ~).
-    if (Sensitive()) return true;
+    if (Sensitive() || LocalFileGrantsExist()) return true;
     // ~ is the instance's home_directory, which only the opener knows: every such path
     // comes here, and Check expands it.
     if (path[0] == '~') return true;
@@ -72,7 +83,7 @@ class ServerFileGuard : public dd::FileSystem {
 
   dd::unique_ptr<dd::FileHandle> OpenFileExtended(const dd::OpenFileInfo& file, dd::FileOpenFlags flags,
                                                   dd::optional_ptr<dd::FileOpener> opener) override {
-    Check(file.path, opener);
+    Check(file.path, opener, flags.OpenForWriting());
     return Local().OpenFile(file, flags, opener);
   }
   bool SupportsOpenFileExtended() const override { return true; }
@@ -80,7 +91,7 @@ class ServerFileGuard : public dd::FileSystem {
   dd::unique_ptr<dd::MemoryMappedFile> MemoryMapFile(const dd::OpenFileInfo& file, dd::FileOpenFlags flags,
                                                      const dd::MMapOptions& options,
                                                      dd::optional_ptr<dd::FileOpener> opener) override {
-    Check(file.path, opener);
+    Check(file.path, opener, flags.OpenForWriting());
     return Local().MemoryMapFile(file, flags, options, opener);
   }
 
@@ -95,25 +106,25 @@ class ServerFileGuard : public dd::FileSystem {
     return Local().DirectoryExists(directory, opener);
   }
   void CreateDirectory(const std::string& directory, dd::optional_ptr<dd::FileOpener> opener) override {
-    Check(directory, opener);
+    Check(directory, opener, kWrite);
     Local().CreateDirectory(directory, opener);
   }
   bool CreateDirectoryExtended(const std::string& directory, const dd::CreateDirectoryOptions& options,
                                dd::optional_ptr<dd::FileOpener> opener) override {
-    Check(directory, opener);
+    Check(directory, opener, kWrite);
     return Local().CreateDirectoryExtended(directory, options, opener);
   }
   void CreateDirectoriesRecursive(const std::string& path, dd::optional_ptr<dd::FileOpener> opener) override {
-    Check(path, opener);
+    Check(path, opener, kWrite);
     Local().CreateDirectoriesRecursive(path, opener);
   }
   void RemoveDirectory(const std::string& directory, dd::optional_ptr<dd::FileOpener> opener) override {
-    Check(directory, opener);
+    Check(directory, opener, kWrite);
     Local().RemoveDirectory(directory, opener);
   }
   bool RemoveDirectoryExtended(const std::string& directory, const dd::RemoveDirectoryOptions& options,
                                dd::optional_ptr<dd::FileOpener> opener) override {
-    Check(directory, opener);
+    Check(directory, opener, kWrite);
     return Local().RemoveDirectoryExtended(directory, options, opener);
   }
 
@@ -138,13 +149,17 @@ class ServerFileGuard : public dd::FileSystem {
     // fixed part lies in a protected path (~/.ssh/*) is refused.
     Check(path, opener);
     auto matches = Local().Glob(path, input, opener);
-    if (!Sensitive() || !matches) return matches;
+    const bool confined = static_cast<bool>(Confinement(opener));
+    if ((!Sensitive() && !confined) || !matches) return matches;
     // One that reaches into a protected path from above (/home/*/.ssh/*, **/id_rsa, or
-    // a relative pattern under file_search_path) lists its other matches only. (Reading a
-    // match is checked again when it is opened.)
+    // a relative pattern under file_search_path), or through a symlink out of the user's
+    // location, lists its other matches only. (Reading a match is checked again when it is
+    // opened.)
     dd::vector<dd::OpenFileInfo> allowed;
     for (auto& file : matches->GetAllFiles()) {
-      if (!sensitive_->Check(file.path)) allowed.push_back(std::move(file));
+      if (Sensitive() && sensitive_->Check(file.path)) continue;
+      if (confined && Escape(file.path, opener, kRead)) continue;
+      allowed.push_back(std::move(file));
     }
     return dd::make_uniq<dd::SimpleMultiFileList>(std::move(allowed));
   }
@@ -154,8 +169,8 @@ class ServerFileGuard : public dd::FileSystem {
   // tmp_ twin onto the target, which is checked here too.
   void MoveFile(const std::string& source, const std::string& target,
                 dd::optional_ptr<dd::FileOpener> opener) override {
-    Check(source, opener);
-    Check(target, opener);
+    Check(source, opener, kWrite);
+    Check(target, opener, kWrite);
     Local().MoveFile(source, target, opener);
   }
   bool FileExists(const std::string& filename, dd::optional_ptr<dd::FileOpener> opener) override {
@@ -167,15 +182,15 @@ class ServerFileGuard : public dd::FileSystem {
     return Local().IsPipe(filename, opener);
   }
   void RemoveFile(const std::string& filename, dd::optional_ptr<dd::FileOpener> opener) override {
-    Check(filename, opener);
+    Check(filename, opener, kWrite);
     Local().RemoveFile(filename, opener);
   }
   bool TryRemoveFile(const std::string& filename, dd::optional_ptr<dd::FileOpener> opener) override {
-    Check(filename, opener);
+    Check(filename, opener, kWrite);
     return Local().TryRemoveFile(filename, opener);
   }
   void RemoveFiles(const dd::vector<std::string>& filenames, dd::optional_ptr<dd::FileOpener> opener) override {
-    for (const auto& filename : filenames) Check(filename, opener);
+    for (const auto& filename : filenames) Check(filename, opener, kWrite);
     Local().RemoveFiles(filenames, opener);
   }
 
@@ -205,7 +220,78 @@ class ServerFileGuard : public dd::FileSystem {
     return !path.empty() && path[0] == '~' ? dd::FileSystem::ExpandPath(path, opener) : path;
   }
 
-  void Check(const std::string& path, dd::optional_ptr<dd::FileOpener> opener) const {
+  static constexpr bool kRead = false;
+  static constexpr bool kWrite = true;
+
+  // The store user whose statement opens a file, and what it holds of the server's file
+  // system; nothing for the administrator, Hardcharger's own connections and DuckDB's own
+  // storage (no client).
+  struct Confined {
+    Principal principal;
+    std::shared_ptr<const Snapshot> snapshot;
+  };
+  static std::optional<Confined> Confinement(dd::optional_ptr<dd::FileOpener> opener) {
+    if (!LocalFileGrantsExist()) return std::nullopt;
+    auto context = dd::FileOpener::TryGetClientContext(opener);
+    if (!context) return std::nullopt;
+    auto state = context->registered_state->Get<RbacSessionState>(kRbacSessionStateName);
+    if (!state || state->unchecked()) return std::nullopt;
+    auto engine = state->engine();
+    if (!engine) return std::nullopt;
+    return Confined{state->principal(), engine->snapshot()};
+  }
+
+  // Why the store user may not reach `path` where it really is, if it may not: a path
+  // spelled inside one of its locations must resolve inside one it holds for `write` (or
+  // read), and a path must not resolve into a DuckLake catalog's storage unless it is spelled
+  // there.
+  static std::optional<std::string> Escape(const std::string& path, dd::optional_ptr<dd::FileOpener> opener,
+                                           bool write) {
+    auto confined = Confinement(opener);
+    if (!confined) return std::nullopt;
+    const auto keys = LocalPathKeys(Expanded(path, opener), "", /*resolve=*/true);
+    if (keys.size() < 2) return std::nullopt;  // no symlink on the way: the plan check saw where it is
+    const std::string& spelled = keys.front();
+    const std::string& resolved = keys.back();
+    const std::string verb = write ? "writing" : "reading";
+    for (const auto& lake : KnownLakeDataPaths()) {
+      const auto lake_keys = LocalPathKeys(lake, "", /*resolve=*/true);
+      auto in = [&](const std::string& key) {
+        return std::any_of(lake_keys.begin(), lake_keys.end(), [&](const std::string& l) { return PathKeyCovers(l, key); });
+      };
+      if (!lake_keys.empty() && in(resolved) && !in(spelled)) {
+        return "Hardcharger blocked " + verb + " '" + path + "': it leads (through a symlink) into a DuckLake catalog's "
+               "storage, which only DuckLake itself reads and writes";
+      }
+    }
+    const auto& snapshot = *confined->snapshot;
+    const auto reads = snapshot.StorageLocationsOf(confined->principal, SystemPrivilege::kReadFilesystem);
+    const auto writes = snapshot.StorageLocationsOf(confined->principal, SystemPrivilege::kWriteFilesystem);
+    const auto& mine = write ? writes : reads;
+    if (!mine) return std::nullopt;  // everywhere
+    auto covers = [&](const std::vector<std::string>& locations, const std::string& key) {
+      for (const auto& location : locations) {
+        for (const auto& spelling : LocalPathKeys(location, "", /*resolve=*/true)) {
+          if (PathKeyCovers(spelling, key)) return true;
+        }
+      }
+      return false;
+    };
+    std::vector<std::string> all = *mine;
+    if (const auto& other = write ? reads : writes; other) all.insert(all.end(), other->begin(), other->end());
+    if (!covers(all, spelled)) return std::nullopt;  // not spelled in a location: the plan check's
+    if (std::all_of(keys.begin(), keys.end(), [&](const std::string& key) { return covers(*mine, key); })) {
+      return std::nullopt;
+    }
+    const auto privilege = write ? SystemPrivilege::kWriteFilesystem : SystemPrivilege::kReadFilesystem;
+    return "Hardcharger blocked " + verb + " '" + path + "', which leads (through a symlink) to '" + resolved +
+           "' and so needs the " + SystemPrivilegeName(privilege) +
+           " system privilege, everywhere or on a location that covers it. User " + confined->principal.user_name +
+           " does not hold it (see SHOW GRANTS)";
+  }
+
+  void Check(const std::string& path, dd::optional_ptr<dd::FileOpener> opener, bool write = false) const {
+    if (auto escape = Escape(path, opener, write)) throw dd::PermissionException(*escape);
     const std::string expanded = Expanded(path, opener);
     if (files_->MayName(expanded)) {
       if (const auto entry = files_->Find(expanded)) {

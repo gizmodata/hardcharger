@@ -342,6 +342,10 @@ class Snapshot {
   // `path`? Always true for the administrator.
   bool HasStorageAccess(const Principal& principal, SystemPrivilege privilege, const StoragePath& path,
                         const LocalPathContext& context) const;
+  // The locations the principal holds the storage privilege `privilege` on, or nullopt
+  // when it holds it everywhere (the administrator does).
+  std::optional<std::vector<std::string>> StorageLocationsOf(const Principal& principal,
+                                                             SystemPrivilege privilege) const;
   // May it grant and revoke the privilege (on `location`, a stored location key; empty:
   // everywhere)? It holds it WITH ADMIN OPTION there, or everywhere.
   bool CanGrantSystemPrivilege(const Principal& principal, SystemPrivilege privilege,

@@ -76,6 +76,10 @@ Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users, std::vector<R
     role_by_id_[roles_[i].id] = i;
   }
   for (const auto& grant : grants_) grants_by_role_[grant.role_id].push_back(&grant);
+  for (const auto& r : system_privileges_) {
+    const auto storage = StorageOf(r.privilege);
+    if (storage && storage->first == StorageKind::kFilesystem) NoteLocalFileGrant();
+  }
 }
 
 const UserRecord* Snapshot::FindUserByName(const std::string& name) const {
@@ -607,6 +611,20 @@ bool Snapshot::HasStorageAccess(const Principal& principal, SystemPrivilege priv
     if (r.location.empty() || LocationCovers(path.kind, r.location, path, context)) return true;
   }
   return false;
+}
+
+std::optional<std::vector<std::string>> Snapshot::StorageLocationsOf(const Principal& principal,
+                                                                     SystemPrivilege privilege) const {
+  if (principal.superuser) return std::nullopt;
+  std::vector<std::string> locations;
+  if (principal.catalog_rules || principal.scope) return locations;
+  const auto roles = RolesOf(principal);
+  for (const auto& r : system_privileges_) {
+    if (r.privilege != privilege || !roles.count(r.role_id)) continue;
+    if (r.location.empty()) return std::nullopt;
+    locations.push_back(r.location);
+  }
+  return locations;
 }
 
 bool Snapshot::CanGrantSystemPrivilege(const Principal& principal, SystemPrivilege privilege,

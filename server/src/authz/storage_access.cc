@@ -189,4 +189,11 @@ std::optional<std::string> StorageAccess::Refusal(const Snapshot& snapshot, cons
   return std::nullopt;
 }
 
+std::vector<std::string> KnownLakeDataPaths() {
+  std::vector<std::string> paths;
+  std::lock_guard lock(CacheMutex());
+  for (const auto& [key, cached] : Cache()) paths.insert(paths.end(), cached.paths.begin(), cached.paths.end());
+  return paths;
+}
+
 }  // namespace hardcharger::authz

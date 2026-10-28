@@ -83,4 +83,11 @@ bool LocationWithin(const std::string& outer, const std::string& inner);
 // is a glob or `path_is_directory`, is `area` inside what `path` names?
 bool StorageOverlaps(const StoragePath& path, bool path_is_directory, const StoragePath& area);
 
+// Whether any snapshot this process loaded grants READ or WRITE FILESYSTEM (everywhere or on
+// a location). Until one does, no principal but the administrator opens local files, and the
+// file system's guard leaves local paths alone (file_guard.cc); once one has, it checks where
+// each file such a principal opens really is. It never goes back to false.
+void NoteLocalFileGrant();
+bool LocalFileGrantsExist();
+
 }  // namespace hardcharger::authz

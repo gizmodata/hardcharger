@@ -59,4 +59,8 @@ class StorageAccess {
   std::optional<arrow::Result<std::vector<LakeArea>>> lakes_;
 };
 
+// The data paths of the DuckLake catalogs the storage checks have looked up (however long
+// ago): for the file system's guard, which must not run queries of its own.
+std::vector<std::string> KnownLakeDataPaths();
+
 }  // namespace hardcharger::authz

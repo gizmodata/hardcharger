@@ -1,6 +1,7 @@
 #include "authz/locations.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <filesystem>
 
@@ -270,5 +271,12 @@ bool StorageOverlaps(const StoragePath& path, bool path_is_directory, const Stor
   }
   return false;
 }
+
+namespace {
+std::atomic<bool> local_file_grants{false};
+}  // namespace
+
+void NoteLocalFileGrant() { local_file_grants.store(true, std::memory_order_release); }
+bool LocalFileGrantsExist() { return local_file_grants.load(std::memory_order_acquire); }
 
 }  // namespace hardcharger::authz
