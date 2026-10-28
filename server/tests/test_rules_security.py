@@ -162,14 +162,15 @@ def test_the_user_keeps_its_rights(mallory):
 
 
 def test_admin_with_rules_keeps_only_the_administration_that_reaches_no_data(server, secret_file):
-    # An administrator's token with rules keeps MANAGE CONFIG (instance settings, the
-    # credential ones included) and CHECKPOINT, but not files: the database files are
-    # files, and reading them would reach data around the rules (test_catalog_access_admin.py).
+    # An administrator's token with rules keeps CHECKPOINT only: not files (the database
+    # files are files, and reading them would reach data around the rules), and not MANAGE
+    # CONFIG (a credential setting reaches storage around them; a global one changes the
+    # server for every other tenant) (test_catalog_access_admin.py).
     boss = server.as_role(role="admin", subject="boss", catalog_access=[{"catalog": "*", "access": "write"}])
-    assert boss.scalar(sql="SELECT current_setting('s3_secret_access_key')") == "global-shh"
-    refused(boss, f"SELECT * FROM read_csv('{secret_file}')",
-            "which an administrator token with catalog_access rules does not hold")
-    # The twin: the administrator without rules reads it.
+    for sql in ["SELECT current_setting('s3_secret_access_key')", f"SELECT * FROM read_csv('{secret_file}')"]:
+        refused(boss, sql, "which an administrator token with catalog_access rules does not hold")
+    # The twins: the administrator without rules reads both.
+    assert server.admin().scalar(sql="SELECT current_setting('s3_secret_access_key')") == "global-shh"
     assert server.admin().scalar(sql=f"SELECT * FROM read_csv('{secret_file}')") == "file-secret-word"
 
 
