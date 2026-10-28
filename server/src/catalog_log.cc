@@ -190,6 +190,9 @@ void CatalogLog::Start() {
                              "session ids are now the Warp SQL session ids clients hold (s_...). Drop or rename "
                              "the table (or use a new log database) and start the server again.");
   }
+  // Off the server's database, so writing log lines doesn't block its CHECKPOINT (see
+  // Instrumentation::Start).
+  warpduckdb::RunSql(connection_.get(), "USE " + SqlIdentifier(catalog_) + "." + SqlIdentifier(schema_));
   writer_ = std::thread([this] { WriterLoop(); });
   SetLogSink([this](const LogRecord& record) { Add(record); });
   Log(LogLevel::kInfo, "catalog logging on", {{"catalog", catalog_}, {"schema", schema_}, {"backend", type}});

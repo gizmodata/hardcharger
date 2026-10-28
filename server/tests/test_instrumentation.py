@@ -459,3 +459,23 @@ def test_sigterm_writes_the_backlog(launcher, tmp_path):
     assert rows == [{"done": sessions * statements, "total": sessions * statements}], rows
     log = server.log()
     assert "instrumentation stopped" in log and "dropped=0 failed=0" in log, log
+
+
+@pytest.mark.parametrize("flags", [[], ["--enable-catalog-logging"]], ids=["alone", "with-catalog-logging"])
+def test_a_checkpoint_right_after_a_statement_is_not_refused(launcher, tmp_path, flags):
+    """The writer records each statement on a connection of its own just after it ends. While
+    that connection's current database was the server's, its write to the instrumentation file
+    blocked the server database's CHECKPOINT, so a client's CHECKPOINT right after a
+    statement failed with "Cannot CHECKPOINT: there are other write transactions active" about a
+    third of the time (2026-10-28). Each round is a fast DDL statement and then a CHECKPOINT."""
+    server = start(launcher=launcher, args=[*flags, "--database", str(tmp_path / "checkpoint.duckdb")])
+    admin = server.admin()
+    admin.execute(sql="CREATE TABLE t (i INTEGER)")
+    refused = []
+    for i in range(300):
+        admin.execute(sql=f"ALTER TABLE t ADD COLUMN c{i} INTEGER")
+        try:
+            admin.execute(sql="CHECKPOINT")
+        except Exception as error:  # noqa: BLE001 - every refusal is reported
+            refused.append(f"round {i}: {error}")
+    assert refused == [], f"{len(refused)} of 300 refused, e.g. {refused[:2]}"

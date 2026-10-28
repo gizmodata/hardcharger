@@ -665,6 +665,11 @@ void Instrumentation::Start() {
       Nullable(i.os_version) + ", " + Nullable(i.cpu_arch) + ", " + Nullable(i.cpu_model) + ", " +
       std::to_string(i.cpu_count) + ", " + std::to_string(i.memory_total_bytes) + ", " + Time(i.start_time) +
       ", 'running', " + Json(i.instance_tag) + ")");
+  // The writer's statements name their tables in full, but a connection whose current
+  // database is the server's own blocks that database's CHECKPOINT while it writes to
+  // another one (DuckDB: "there are other write transactions active"), and it writes after
+  // every statement: a client's CHECKPOINT right after one failed about a third of the time.
+  warpduckdb::RunSql(connection_.get(), "USE " + Quoted(catalog_) + "." + Quoted(schema_));
   writer_ = std::thread([this] { WriterLoop(); });
   Log(LogLevel::kInfo, "instrumentation on",
       {{"catalog", catalog_}, {"schema", schema_}, {"backend", postgres_ ? "postgresql" : "duckdb"}});
