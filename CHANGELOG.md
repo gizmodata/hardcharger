@@ -7,11 +7,31 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-28
+
+2.1.5 was tagged but never released: its gate was stopped for this release, which includes all of
+it. So 2.2.0 also fixes concurrent DDL under access control failing with "access control store
+unavailable" while the store is healthy (a multi-threaded dbt run lost models to it), a
+`CHECKPOINT` right after a statement being refused while instrumentation is on, and the web UI
+editor's catalog and schema pickers not refreshing (2.1.5's notes, below, have the details).
+
 A customer's security review of catalog isolation (GizmoSQL, October 2026) found ways for one
 tenant's token to reach another tenant's DuckLake catalog. Hardcharger already refused all four;
 this release adds a test suite that replays them, and closes what the review's paths led to here:
 storage privileges that can be narrowed to locations, DuckLake storage that only DuckLake may
-touch, and database paths hidden from everyone but the administrator.
+touch, and database paths hidden from everyone but the administrator. `GRANT ALL` now means all.
+
+**Upgrading.** Nothing that worked through a grant stops working on its own: roles holding `READ`
+or `WRITE FILESYSTEM` keep their reach (below). What changes on purpose:
+
+- an administrator's token with `catalog_access` rules no longer changes server-wide settings
+  (`SET GLOBAL`) or reads the settings that hold credentials;
+- `duckdb_databases().path` is NULL for everyone but the administrator;
+- a file path computed by an expression or a parameter needs `READ` (or `WRITE`) on every kind of
+  storage everywhere; write it as a literal instead;
+- no store user reads or writes an attached DuckLake catalog's files directly;
+- `GRANT ALL` on a schema or catalog from now on includes its DDL privileges (grants made before
+  keep what they gave).
 
 ### Added
 

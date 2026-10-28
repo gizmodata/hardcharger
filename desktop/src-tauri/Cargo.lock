@@ -1577,7 +1577,7 @@ dependencies = [
 
 [[package]]
 name = "hardcharger-desktop"
-version = "2.1.5"
+version = "2.2.0"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",

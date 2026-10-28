@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-28
+
+### Changed
+
+- The package installs Hardcharger server 2.2.0 (2.1.5 was tagged but never released; 2.2.0
+  includes it): storage privileges by kind (`READ` / `WRITE
+  OBJECT STORAGE`, `READ` / `WRITE HTTP`) and on locations, DuckLake storage that only DuckLake
+  reads and writes, `GRANT ALL` on a schema or catalog including its DDL, and more refused for an
+  administrator's token with catalog access rules (see the server's CHANGELOG, "Upgrading").
+
 ## [2.1.5] - 2026-10-28
 
 ### Changed
