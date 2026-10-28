@@ -2,6 +2,7 @@
 some verbs on some catalogs until it expires, and never more than the user."""
 
 import time
+from datetime import UTC, datetime
 
 import pytest
 
@@ -140,18 +141,37 @@ def test_a_child_token_is_narrower_and_dies_with_its_parent(server, wes):
     assert raised.value.detail == "this scoped token was revoked", raised.value
 
 
+def short_lived_agent(server, client, name: str):
+    """A session on a scoped token that lives a few seconds, and the token's expiry.
+
+    A loaded runner can take longer than that to sign in and run a statement (windows-arm64,
+    2026-10-28: "the access token has expired" before the first statement), so a token that
+    expires first is replaced by one that lives twice as long."""
+    valid = max(2, int(2 * TIMEOUT_SCALE))
+    while True:
+        rows = expect_allowed(client=client,
+                              sql=f"CREATE SCOPED TOKEN {name} ALLOW SELECT VALID FOR '{valid} seconds'").to_pylist()
+        token, expires_at = rows[0]["token"], datetime.fromisoformat(rows[0]["expires_at"])
+        try:
+            bot = agent(server=server, token=token)
+            bot.run(sql="SELECT 1")
+            return token, bot, expires_at
+        except WarpError as raised:
+            if "expired" not in raised.detail or valid >= 64:
+                raise
+        expect_allowed(client=client, sql=f"DROP SCOPED TOKEN {name}")
+        valid *= 2
+
+
 def test_expiry_and_bookkeeping(server, admin, wes):
-    # 2 s to sign in and run a statement, stretched on a sanitizer build (under TSan the
-    # sign-in alone can take longer); then twice that, so it has certainly expired.
-    valid = int(2 * TIMEOUT_SCALE)
-    token = mint_scoped(client=wes, sql=f"CREATE SCOPED TOKEN brief ALLOW SELECT VALID FOR '{valid} seconds'")
-    bot = agent(server=server, token=token)
-    expect_allowed(client=bot, sql="SELECT 1")
-    time.sleep(2 * valid)
-    with pytest.raises(WarpError):
+    token, bot, expires_at = short_lived_agent(server=server, client=wes, name="brief")
+    # Until a second past the expiry the server recorded (whole seconds, on this machine's clock).
+    time.sleep(max(0.0, (expires_at - datetime.now(tz=UTC)).total_seconds()) + 1)
+    with pytest.raises(WarpError) as refused:
         agent(server=server, token=token)  # an expired token does not start a session
+    assert "expired" in refused.value.detail, str(refused.value)
     # A session that was open stops at the expiry too (its token carries the expiry).
-    assert error(client=bot, sql="SELECT 1") != ""
+    assert "expired" in error(client=bot, sql="SELECT 1")
     # SHOW SCOPED TOKENS lists a user's tokens and never the token itself.
     shown = str(expect_allowed(client=wes, sql="SHOW SCOPED TOKENS").to_pylist())
     assert "brief" in shown and token[:20] not in shown
