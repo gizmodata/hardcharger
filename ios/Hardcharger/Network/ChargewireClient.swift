@@ -57,6 +57,15 @@ enum BrowserSignInState: Sendable, Equatable {
     case failed(String)
 }
 
+/// The root a client found its server at, once known.
+private final class BaseCache: Sendable {
+    private let known = Mutex<URL?>(nil)
+    var value: URL? {
+        get { known.withLock { $0 } }
+        set { known.withLock { $0 = newValue } }
+    }
+}
+
 /// Where a Chargewire server is, and which certificate to trust when it is self-signed.
 struct ChargewireEndpoint: Sendable, Hashable, Codable {
     /// The server's origin: scheme, host and port (`https://db.example.com:31337`).
@@ -66,6 +75,7 @@ struct ChargewireEndpoint: Sendable, Hashable, Codable {
     var pinnedFingerprint: String?
 
     var chargewireBase: URL { origin.appending(path: "chargewire") }
+    var legacyBase: URL { origin.appending(path: LegacyProtocol.root) }
     var consoleURL: URL { origin.appending(path: "ui/", directoryHint: .isDirectory) }
 }
 
@@ -76,6 +86,7 @@ final class ChargewireClient: Sendable {
     let endpoint: ChargewireEndpoint
     private let session: URLSession
     private let trust: TrustEvaluator
+    private let base = BaseCache()
 
     init(endpoint: ChargewireEndpoint, timeout: TimeInterval = 30) {
         self.endpoint = endpoint
@@ -95,7 +106,7 @@ final class ChargewireClient: Sendable {
     var presentedCertificate: Data? { trust.lastPresented }
 
     func discovery() async throws -> Discovery {
-        let json = try await object(for: request(path: ""))
+        let json = try await object(for: await request(path: ""))
         let server = json["server"] as? [String: Any] ?? [:]
         let auth = json["auth"] as? [String: Any] ?? [:]
         let browser = auth["oauth_browser"] as? [String: Any]
@@ -109,12 +120,12 @@ final class ChargewireClient: Sendable {
 
     /// Whether the server says it serves (`200` from `/chargewire/v1/health`).
     func isServing() async -> Bool {
-        guard let (_, response) = try? await session.data(for: request(path: "v1/health")) else { return false }
+        guard let (_, response) = try? await session.data(for: await request(path: "v1/health")) else { return false }
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
 
     func signIn(username: String, password: String) async throws -> AccessToken {
-        var req = request(path: "v1/auth/token", method: "POST")
+        var req = await request(path: "v1/auth/token", method: "POST")
         req.httpBody = try JSONSerialization.data(withJSONObject: [
             "grant_type": "password", "username": username, "password": password,
         ])
@@ -122,7 +133,7 @@ final class ChargewireClient: Sendable {
     }
 
     func startBrowserSignIn() async throws -> BrowserSignInFlow {
-        var req = request(path: "v1/auth/oauth/flows", method: "POST")
+        var req = await request(path: "v1/auth/oauth/flows", method: "POST")
         req.httpBody = Data("{}".utf8)
         let json = try await object(for: req, expecting: [201, 200])
         guard let id = json["flow_id"] as? String, let secret = json["poll_secret"] as? String,
@@ -134,7 +145,7 @@ final class ChargewireClient: Sendable {
     }
 
     func poll(_ flow: BrowserSignInFlow) async throws -> BrowserSignInState {
-        var req = request(path: "v1/auth/oauth/flows/\(flow.flowID)", method: "POST")
+        var req = await request(path: "v1/auth/oauth/flows/\(flow.flowID)", method: "POST")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["poll_secret": flow.pollSecret])
         let json = try await object(for: req)
         switch json["state"] as? String {
@@ -151,16 +162,14 @@ final class ChargewireClient: Sendable {
     /// Runs one statement that returns no rows in a session of its own; returns the rows it
     /// changed, when the engine counts them (spec §6.2 `rows_affected`).
     func execute(_ sql: String, token: AccessToken) async throws -> Int? {
-        var open = request(path: "v1/sessions", method: "POST", token: token)
+        var open = await request(path: "v1/sessions", method: "POST", token: token)
         open.httpBody = Data("{}".utf8)
         guard let sessionID = try await object(for: open, expecting: [200, 201])["session_id"] as? String else {
             throw ChargewireError(status: 0, code: "client_protocol_error", detail: "The server opened no session.")
         }
-        defer {
-            let close = request(path: "v1/sessions/\(sessionID)", method: "DELETE", token: token)
-            Task { [session] in _ = try? await session.data(for: close) }
-        }
-        var submit = request(path: "v1/sessions/\(sessionID)/statements", method: "POST", token: token)
+        let close = await request(path: "v1/sessions/\(sessionID)", method: "DELETE", token: token)
+        defer { Task { [session] in _ = try? await session.data(for: close) } }
+        var submit = await request(path: "v1/sessions/\(sessionID)/statements", method: "POST", token: token)
         submit.setValue("wait=300", forHTTPHeaderField: "Prefer")
         submit.timeoutInterval = 330
         submit.httpBody = try JSONSerialization.data(withJSONObject: ["sql": sql])
@@ -168,7 +177,7 @@ final class ChargewireClient: Sendable {
         // Still running after the wait: follow it until it ends.
         while let state = document["state"] as? String, state == "queued" || state == "running",
               let id = document["statement_id"] as? String {
-            var status = request(path: "v1/sessions/\(sessionID)/statements/\(id)", token: token)
+            var status = await request(path: "v1/sessions/\(sessionID)/statements/\(id)", token: token)
             status.setValue("wait=30", forHTTPHeaderField: "Prefer")
             document = try await object(for: status)
         }
@@ -182,14 +191,39 @@ final class ChargewireClient: Sendable {
 
     // MARK: - HTTP
 
-    private func request(path: String, method: String = "GET", token: AccessToken? = nil) -> URLRequest {
-        var req = URLRequest(url: path.isEmpty ? endpoint.chargewireBase : endpoint.chargewireBase.appending(path: path))
+    private func request(path: String, method: String = "GET", token: AccessToken? = nil) async -> URLRequest {
+        let root = await resolvedBase()
+        var req = URLRequest(url: path.isEmpty ? root : root.appending(path: path))
         req.httpMethod = method
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if method != "GET" { req.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         if let token { req.setValue("Bearer \(token.token)", forHTTPHeaderField: "Authorization") }
         return req
+    }
+
+    /// Where the server answers: `/chargewire`, or for a server released before the
+    /// protocol's rename, its old root (LegacyProtocol). Asked once; a failure to ask is
+    /// not remembered, and the request that follows reports it.
+    private func resolvedBase() async -> URL {
+        if let known = base.value { return known }
+        if await protocolName(at: endpoint.chargewireBase) == "chargewire" {
+            base.value = endpoint.chargewireBase
+        } else if await protocolName(at: endpoint.legacyBase) == LegacyProtocol.name {
+            base.value = endpoint.legacyBase
+        }
+        return base.value ?? endpoint.chargewireBase
+    }
+
+    private func protocolName(at url: URL) async -> String? {
+        var req = URLRequest(url: url)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        guard let (data, response) = try? await session.data(for: req),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return nil }
+        return json["protocol"] as? String
     }
 
     private func object(for request: URLRequest, expecting: Set<Int> = [200]) async throws -> [String: Any] {
