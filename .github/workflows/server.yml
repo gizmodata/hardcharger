@@ -268,7 +268,7 @@ jobs:
 
   # The UI's lint (eslint, prettier), typecheck (every TypeScript project), unit tests, and
   # the vendored @gizmodata/chargewire against the commit it pins (rebuilt from
-  # gizmodata/chargewire-js with that repository's read-only deploy key).
+  # gizmodata/chargewire-js).
   ui-checks:
     name: web UI (lint, typecheck, unit tests, client provenance)
     needs: changes
@@ -291,22 +291,7 @@ jobs:
         run: npm run typecheck
       - name: Unit tests
         run: npm test
-      - name: Deploy key for gizmodata/chargewire-js
-        env:
-          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY_CHARGEWIRE_JS }}
-        run: |
-          if [ -z "$DEPLOY_KEY" ]; then
-            echo "::error::the DEPLOY_KEY_CHARGEWIRE_JS secret is not set: the private key of a read-only deploy key of gizmodata/chargewire-js"
-            exit 1
-          fi
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/chargewire_js && chmod 600 ~/.ssh/chargewire_js
-          printf 'Host github.com\n  IdentityFile ~/.ssh/chargewire_js\n  IdentitiesOnly yes\n' >> ~/.ssh/config
       - name: The vendored client is what its pinned commit builds
-        env:
-          # Private until GA: the deploy key above authenticates SSH, not HTTPS.
-          HARDCHARGER_UI_CHARGEWIRE_JS_GIT: git@github.com:gizmodata/chargewire-js.git
         run: node scripts/vendor-chargewire.mjs --verify --rebuild
 
   # The UI's browser tests, in Chromium and WebKit, against the Linux x86-64 server built in
@@ -413,20 +398,9 @@ jobs:
           ui=("$PWD"/server/.web-ui/hardcharger-ui-*.tar.gz)
           [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
           echo "HARDCHARGER_UI_TARBALL=${ui[0]}" >> "$GITHUB_ENV"
-      # The chargewire submodule is private: fetch it with its read-only deploy key (the
-      # key reaches only that repository, so the main checkout uses the usual token).
       - &build-submodule
         name: Fetch the chargewire submodule
-        env:
-          DEPLOY_KEY: ${{ secrets.CHARGEWIRE_DEPLOY_KEY }}
-        run: |
-          key="$RUNNER_TEMP/chargewire_key"
-          printf '%s\n' "$DEPLOY_KEY" > "$key"
-          chmod 600 "$key"
-          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-            git -c url.git@github.com:gizmodata/chargewire.git.insteadOf=https://github.com/gizmodata/chargewire.git \
-              submodule update --init --depth 1
-          rm -f "$key"
+        run: git submodule update --init --depth 1
       # THIRD_PARTY_NOTICES.md (which every release artifact ships) is what
       # server/third-party-notices/ generates, for exactly the versions the dependency
       # recipes pin: a bump without its licence review fails here. No network.
@@ -930,16 +904,7 @@ jobs:
           [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
           echo "HARDCHARGER_UI_TARBALL=${ui[0]}" >> "$GITHUB_ENV"
       - name: Fetch the chargewire submodule
-        env:
-          DEPLOY_KEY: ${{ secrets.CHARGEWIRE_DEPLOY_KEY }}
-        run: |
-          key="$RUNNER_TEMP/chargewire_key"
-          printf '%s\n' "$DEPLOY_KEY" > "$key"
-          chmod 600 "$key"
-          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-            git -c url.git@github.com:gizmodata/chargewire.git.insteadOf=https://github.com/gizmodata/chargewire.git \
-              submodule update --init --depth 1
-          rm -f "$key"
+        run: git submodule update --init --depth 1
       # Build tools for the native server; optional extension libraries load at runtime.
       - name: Install build tools
         run: |
@@ -1099,16 +1064,7 @@ jobs:
           [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
           echo "HARDCHARGER_UI_TARBALL=${ui[0]}" >> "$GITHUB_ENV"
       - name: Fetch the chargewire submodule
-        env:
-          DEPLOY_KEY: ${{ secrets.CHARGEWIRE_DEPLOY_KEY }}
-        run: |
-          key="$RUNNER_TEMP/chargewire_key"
-          printf '%s\n' "$DEPLOY_KEY" > "$key"
-          chmod 600 "$key"
-          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-            git -c url.git@github.com:gizmodata/chargewire.git.insteadOf=https://github.com/gizmodata/chargewire.git \
-              submodule update --init --depth 1
-          rm -f "$key"
+        run: git submodule update --init --depth 1
       - name: Install build tools
         run: |
           sudo apt-get update

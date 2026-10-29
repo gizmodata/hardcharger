@@ -86,19 +86,9 @@ jobs:
           ui=("$PWD"/server/.web-ui/hardcharger-ui-*.tar.gz)
           [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
           echo "HARDCHARGER_UI_TARBALL=$(cygpath -m "${ui[0]}")" >> "$GITHUB_ENV"
-      # The chargewire submodule is private: fetch it with its read-only deploy key.
       - &build-submodule
         name: Fetch the chargewire submodule
-        env:
-          DEPLOY_KEY: ${{ secrets.CHARGEWIRE_DEPLOY_KEY }}
-        run: |
-          key="$(cygpath -u "$RUNNER_TEMP")/chargewire_key"
-          printf '%s\n' "$DEPLOY_KEY" > "$key"
-          chmod 600 "$key"
-          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-            git -c url.git@github.com:gizmodata/chargewire.git.insteadOf=https://github.com/gizmodata/chargewire.git \
-              submodule update --init --depth 1
-          rm -f "$key"
+        run: git submodule update --init --depth 1
 
       # Passes the architecture to vcvarsall (arm64 on the arm64 runner selects the native
       # ARM64-hosted toolchain). Its environment reaches the bash steps too.

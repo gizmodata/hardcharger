@@ -339,7 +339,7 @@ CI ([`server.yml`](../.github/workflows/server.yml)) runs the lint, typecheck an
 client's provenance check, and the e2e tests in both browsers against the Linux x86-64 server
 built in the same run, whenever `ui/`, the server's web UI code or the chargewire submodule
 changes, and always on `main` and on tags; a release waits for them. The provenance check
-clones gizmodata/chargewire-js with a read-only deploy key, the `DEPLOY_KEY_CHARGEWIRE_JS` secret.
+clones gizmodata/chargewire-js anonymously.
 
 ## 📄 License
 
