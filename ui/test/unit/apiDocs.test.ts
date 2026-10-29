@@ -75,9 +75,9 @@ describe("where the document is", () => {
 
   it("is links.openapi on this origin, or the default path", () => {
     expect(openApiUrl({ capabilities: ["openapi"] }, origin)).toBe(`${origin}/chargewire/v1/openapi.json`);
-    expect(openApiUrl({ capabilities: ["openapi"], links: { openapi: "/db/chargewire/v1/openapi.json" } }, origin)).toBe(
-      `${origin}/db/chargewire/v1/openapi.json`,
-    );
+    expect(
+      openApiUrl({ capabilities: ["openapi"], links: { openapi: "/db/chargewire/v1/openapi.json" } }, origin),
+    ).toBe(`${origin}/db/chargewire/v1/openapi.json`);
     expect(
       openApiUrl({ capabilities: ["openapi"], links: { openapi: "https://evil.example.com/o.json" } }, origin),
     ).toBeUndefined();
@@ -115,7 +115,10 @@ describe("sameOriginSpec", () => {
       openapi: "3.1.1",
       servers: [{ url: "{origin}", variables: { origin: { default: "http://127.0.0.1:31337" } } }],
       paths: {
-        "/chargewire": { servers: [{ url: "https://elsewhere" }], get: { servers: [{ url: "https://x" }], responses: {} } },
+        "/chargewire": {
+          servers: [{ url: "https://elsewhere" }],
+          get: { servers: [{ url: "https://x" }], responses: {} },
+        },
       },
     };
     const out = sameOriginSpec(doc, origin);

@@ -224,7 +224,7 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
 | `/ui/` and any path under `/ui/` whose last segment has no dot      | `index.html` (the app's own routes, such as `/ui/sessions`)     |
 | an existing file                                                    | the file, with its content type (`.wasm` is `application/wasm`) |
 | a missing file (anything under `/ui/assets/`, or a name with a dot) | `404`, `Cache-Control: no-store`                                |
-| anything else outside `/ui` and `/chargewire`                             | not the UI's: the server's own `404`                            |
+| anything else outside `/ui` and `/chargewire`                       | not the UI's: the server's own `404`                            |
 
 `/ui/assets/*` is `Cache-Control: public, max-age=31536000, immutable`; everything else
 (`index.html` above all) is `no-cache`, so a new build is picked up at once. The server sends

@@ -105,6 +105,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   const server = createUiServer({ dist: values.dist, upstream: values.upstream });
   server.listen(Number(values.port), values.host, () => {
-    console.log(`Hardcharger UI on http://${values.host}:${server.address().port}/ui/ (Chargewire: ${values.upstream})`);
+    console.log(
+      `Hardcharger UI on http://${values.host}:${server.address().port}/ui/ (Chargewire: ${values.upstream})`,
+    );
   });
 }

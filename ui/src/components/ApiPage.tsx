@@ -119,8 +119,8 @@ export default function ApiPage({ theme }: { theme: ThemeName }) {
       <div className="page-head">
         <h2>API</h2>
         <p className="page-sub">
-          This server&apos;s Chargewire API, from <code>/chargewire/v1/openapi.json</code>. <b>Try it out</b> sends requests to
-          this server only, signed in as <b>{session.identity.user}</b>.
+          This server&apos;s Chargewire API, from <code>/chargewire/v1/openapi.json</code>. <b>Try it out</b> sends
+          requests to this server only, signed in as <b>{session.identity.user}</b>.
         </p>
       </div>
       {state.kind === "loading" && <div className="page-loading">Loading the API description…</div>}

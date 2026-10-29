@@ -135,7 +135,9 @@ export async function runScript(options: {
       }
     } catch (err) {
       run.status =
-        signal.aborted || (ChargewireError.is(err) && err.code === ErrorCode.statementCancelled) ? "cancelled" : "error";
+        signal.aborted || (ChargewireError.is(err) && err.code === ErrorCode.statementCancelled)
+          ? "cancelled"
+          : "error";
       run.error = err;
       stoppedAt = i;
     }
