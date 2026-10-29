@@ -174,8 +174,12 @@ def test_killed_while_queued_records_cancelled(server):
     assert outcome["problem"]["detail"] == "the statement was cancelled (killed)", outcome
     assert victim.error(sql="SELECT 1")["code"] == "session_ended"
     holders.release()
+    # Instrumentation records the statement as queued first and its end later, on its own
+    # writer: wait for the end, not the first row.
     row = recorded(server=server, sql="SELECT status, error_message, cancel_reason FROM "
-                                      "_hardcharger_instr.execution_details WHERE sql_text LIKE '%''nev' || 'er'' AS v%'")
+                                      "_hardcharger_instr.execution_details WHERE sql_text LIKE '%''nev' || 'er'' AS v%' "
+                                      "AND status <> 'queued'",
+                   timeout=30 * TIMEOUT_SCALE)
     assert row == {"status": "cancelled", "error_message": "cancelled while queued", "cancel_reason": "killed"}, row
 
 
