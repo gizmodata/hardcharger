@@ -444,10 +444,11 @@ impl Server {
                 builder = builder.resolve(host, SocketAddr::new(control, settings.port));
             } else {
                 let address: IpAddr = host.parse().map_err(|_| "Invalid server address.")?;
-                if (!listen.is_unspecified() && address != listen)
-                    || TcpListener::bind((address, 0)).is_err()
-                {
-                    return Err("The server IP address must belong to this computer and match the listen address.".into());
+                if !listen.is_unspecified() && address != listen {
+                    return Err(format!("The server address {address} must match the listen address {listen}. Change one of them in Settings > Network access, or listen on 0.0.0.0."));
+                }
+                if TcpListener::bind((address, 0)).is_err() {
+                    return Err(crate::network::missing_address(address));
                 }
             }
             if settings.network.tls {
@@ -543,6 +544,16 @@ impl Server {
         self.error = None;
         self.settings.validate()?;
         let client = self.http_client()?;
+        let network = &self.settings.network;
+        if network.enabled && network.tls {
+            // A certificate this app generated lists every name it covers; one made before the
+            // address changed would make every client, the SQL workspace included, refuse TLS.
+            if let Some(record) = crate::network::generated(&self.directory, &network.tls_cert) {
+                if !crate::network::covers(&record, &network.server_name) {
+                    return Err(format!("The TLS certificate doesn't cover {}: it was generated before the server address changed. Generate a new certificate in Settings > Network access.", network.server_name.trim()));
+                }
+            }
+        }
         // Refuse a collision; never attach to, authenticate to, or stop somebody else's server.
         let reservation =
             TcpListener::bind((self.listen_address()?, self.settings.port)).map_err(|e| {
@@ -972,6 +983,56 @@ mod tests {
         reloaded.set_settings_pending(false, None).unwrap(); // explicit discard
         assert!(!reloaded.status().unwrap().settings_pending);
         drop(reloaded);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn start_names_a_server_address_this_computer_lost_and_a_certificate_that_no_longer_covers_it()
+    {
+        let Some(binary) = std::env::var_os("HARDCHARGER_DESKTOP_TEST_SERVER") else {
+            return;
+        };
+        let directory = std::env::temp_dir().join(format!(
+            "hardcharger-address-change-test-{}",
+            random_secret().unwrap()
+        ));
+        let mut server = Server::new(binary.into(), directory.clone()).unwrap();
+        let reservation = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        server.settings.port = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        let certificate = crate::network::generate(&directory, "desktop.test").unwrap();
+        server.settings.network = NetworkSettings {
+            enabled: true,
+            listen_address: "0.0.0.0".into(),
+            server_name: "192.0.2.21".into(), // TEST-NET-1, never this computer's
+            tls: true,
+            username: "desktop-network-admin".into(),
+            password: "synthetic-network-test-password".into(),
+            tls_cert: certificate.certificate.clone(),
+            tls_key: certificate.private_key.clone(),
+        };
+        let error = server.start().err().unwrap();
+        assert!(
+            error.starts_with("192.0.2.21 is ") && error.contains("Settings > Network access"),
+            "{error}"
+        );
+        server.settings.network.listen_address = "127.0.0.1".into();
+        server.settings.network.server_name = "127.0.0.2".into();
+        let error = server.start().err().unwrap();
+        assert!(
+            error.contains("must match the listen address 127.0.0.1"),
+            "{error}"
+        );
+        server.settings.network.listen_address = "0.0.0.0".into();
+        server.settings.network.server_name = "renamed.test".into();
+        let error = server.start().err().unwrap();
+        assert!(
+            error.contains("doesn't cover renamed.test")
+                && error.contains("Generate a new certificate"),
+            "{error}"
+        );
+        assert!(!server.status().unwrap().running);
+        drop(server);
         fs::remove_dir_all(directory).unwrap();
     }
 

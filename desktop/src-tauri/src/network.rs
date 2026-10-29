@@ -64,6 +64,44 @@ pub fn info() -> Result<NetworkInfo, String> {
     })
 }
 
+/// Explains a server address that no longer belongs to this computer (DHCP handed it a new
+/// one, or it moved networks) and names the addresses it has now.
+pub fn missing_address(address: IpAddr) -> String {
+    let current: Vec<_> = info()
+        .map(|i| i.addresses)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| {
+            a.address
+                .parse::<IpAddr>()
+                .is_ok_and(|ip| ip.is_ipv4() == address.is_ipv4())
+        })
+        .map(|a| format!("{} ({})", a.address, a.interface))
+        .collect();
+    if current.is_empty() {
+        format!("{address} is not an address of this computer, and it has no other network address right now. Check its network connection, or choose another address in Settings > Network access.")
+    } else {
+        format!(
+            "{address} is no longer an address of this computer. It now has {}. Choose the new address in Settings > Network access.",
+            current.join(", ")
+        )
+    }
+}
+
+/// Whether a certificate this app generated lists the name clients use for the server.
+pub fn covers(record: &GeneratedCertificate, server_name: &str) -> bool {
+    let Ok(host) = host_name(server_name) else {
+        return false;
+    };
+    record.names.iter().any(
+        |name| match (name.parse::<IpAddr>(), host.parse::<IpAddr>()) {
+            (Ok(a), Ok(b)) => a == b,
+            (Err(_), Err(_)) => name.eq_ignore_ascii_case(&host),
+            _ => false,
+        },
+    )
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneratedCertificate {
@@ -421,6 +459,48 @@ mod tests {
         fs::write(&certificate.certificate, &ca).unwrap(); // not the generated leaf + CA chain
         assert!(verified_generated(&directory, &certificate.certificate).is_err());
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_generated_certificate_covers_only_the_names_it_lists() {
+        let record = GeneratedCertificate {
+            certificate: String::new(),
+            private_key: String::new(),
+            trust_certificate: String::new(),
+            fingerprint: String::new(),
+            expires: String::new(),
+            names: vec![
+                "192.168.4.21".into(),
+                "fd3d:5511::1".into(),
+                "My-Mac.local".into(),
+            ],
+        };
+        assert!(covers(&record, "192.168.4.21"));
+        assert!(covers(&record, " [FD3D:5511:0::1] "));
+        assert!(covers(&record, "my-mac.local"));
+        assert!(!covers(&record, "192.168.4.22"));
+        assert!(!covers(&record, "fd3d:5511::2"));
+        assert!(!covers(&record, "other.local"));
+        assert!(!covers(&record, ""));
+    }
+
+    #[test]
+    fn a_missing_server_address_is_named_with_this_computers_current_ones() {
+        // 192.0.2.0/24 is TEST-NET-1: never assigned to a real interface.
+        let message = missing_address("192.0.2.21".parse().unwrap());
+        assert!(message.starts_with("192.0.2.21 is "), "{message}");
+        assert!(message.contains("Settings > Network access"), "{message}");
+        if let Some(listed) = info()
+            .unwrap()
+            .addresses
+            .iter()
+            .find(|a| !a.address.contains(':'))
+        {
+            assert!(
+                message.contains(&format!("{} ({})", listed.address, listed.interface)),
+                "{message}"
+            );
+        }
     }
 
     #[test]

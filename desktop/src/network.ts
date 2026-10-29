@@ -39,6 +39,34 @@ export function networkErrors(network: NetworkSettings): Record<string, string> 
   return errors;
 }
 
+/** A host the way a URL compares it: brackets and case removed, IPv6 compressed. */
+export function normalHost(name: string): string {
+  const host = name.trim().replace(/^\[|\]$/g, "");
+  try { return new URL(`https://${host.includes(":") ? `[${host}]` : host}`).hostname.replace(/^\[|\]$/g, ""); }
+  catch { return host.toLowerCase(); }
+}
+
+const isIp = (host: string) => host.includes(":") || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+const isLoopback = (host: string) => host === "::1" || host.startsWith("127.");
+
+/** Whether a certificate this app generated lists the name clients use. */
+export function certificateCovers(certificate: GeneratedCertificate, serverName: string): boolean {
+  const host = normalHost(serverName);
+  return !!host && certificate.names.some(name => normalHost(name) === host);
+}
+
+/**
+ * The saved server address when it is an IP this computer no longer has (DHCP handed it a new one,
+ * or it moved networks), with the detected address of the same family to use instead.
+ */
+export function lostAddress(network: NetworkSettings | undefined, detected: NetworkInfo | null) {
+  if (!network?.enabled || !detected?.addresses.length) return null;
+  const saved = normalHost(network.server_name);
+  if (!saved || !isIp(saved) || isLoopback(saved) || detected.addresses.some(a => normalHost(a.address) === saved)) return null;
+  const replacement = detected.addresses.find(a => a.address.includes(":") === saved.includes(":"));
+  return replacement ? { saved, replacement } : null;
+}
+
 export function validateNetwork(network: NetworkSettings) {
   const errors = Object.values(networkErrors(network));
   if (errors.length) throw new Error(errors[0]);

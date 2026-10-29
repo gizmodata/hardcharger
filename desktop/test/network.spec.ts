@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { defaultNetwork, validateNetwork } from "../src/network";
+import { defaultNetwork, validateNetwork, certificateCovers, lostAddress } from "../src/network";
 
 test("network settings require an address, credentials, and complete TLS configuration", () => {
   expect(() => validateNetwork(defaultNetwork)).not.toThrow();
@@ -14,6 +14,31 @@ test("network settings require an address, credentials, and complete TLS configu
   expect(() => validateNetwork(network)).not.toThrow();
   for (const server_name of ["http://desktop.test", "user@desktop.test", "desktop.test:31337", "0.0.0.0"])
     expect(() => validateNetwork({ ...network, server_name })).toThrow();
+});
+
+test("a server address this computer lost is found, with a replacement of the same family", () => {
+  const detected = { hostname: "my-mac.local", addresses: [
+    { address: "192.168.4.22", interface: "en0" }, { address: "fd3d:5511::22", interface: "en0" }] };
+  const network = { ...defaultNetwork, enabled: true, server_name: "192.168.4.21" };
+  expect(lostAddress(network, detected)).toEqual({ saved: "192.168.4.21", replacement: detected.addresses[0] });
+  expect(lostAddress({ ...network, server_name: "[FD3D:5511:0::21]" }, detected)).toEqual({ saved: "fd3d:5511::21", replacement: detected.addresses[1] });
+  expect(lostAddress({ ...network, server_name: "192.168.4.22" }, detected)).toBeNull();
+  expect(lostAddress({ ...network, server_name: "FD3D:5511:0:0::22" }, detected)).toBeNull();
+  expect(lostAddress({ ...network, server_name: "my-mac.local" }, detected)).toBeNull(); // DNS names are the user's to keep
+  expect(lostAddress({ ...network, server_name: "127.0.0.1" }, detected)).toBeNull();
+  expect(lostAddress({ ...network, enabled: false }, detected)).toBeNull();
+  expect(lostAddress(network, { hostname: "", addresses: [] })).toBeNull(); // offline: nothing to offer
+  expect(lostAddress(network, { hostname: "", addresses: [detected.addresses[1]] })).toBeNull(); // no IPv4 to switch to
+});
+
+test("a generated certificate covers only the names it lists", () => {
+  const certificate = { certificate: "", privateKey: "", trustCertificate: "", fingerprint: "", expires: "",
+    names: ["192.168.4.21", "fd3d:5511::1", "My-Mac.local"] };
+  expect(certificateCovers(certificate, "192.168.4.21")).toBe(true);
+  expect(certificateCovers(certificate, " [FD3D:5511:0::1] ")).toBe(true);
+  expect(certificateCovers(certificate, "my-mac.local")).toBe(true);
+  expect(certificateCovers(certificate, "192.168.4.22")).toBe(false);
+  expect(certificateCovers(certificate, "")).toBe(false);
 });
 
 test("network controls keep local access as the default and preserve edits on validation errors", async ({ page }) => {

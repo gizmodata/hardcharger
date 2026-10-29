@@ -4,7 +4,7 @@ import { stringify } from "yaml";
 import { version as appVersion } from "../package.json";
 import { connectionPanel, bindConnectionPanel } from "./connectionPanel";
 import { updateBadge, updateAbout, updateDialogs, bindUpdates, startUpdates } from "./updates";
-import { defaultNetwork, networkErrors, type NetworkSettings, type NetworkInfo, type GeneratedCertificate, type WorkspaceTrust } from "./network";
+import { defaultNetwork, networkErrors, certificateCovers, lostAddress, normalHost, type NetworkSettings, type NetworkInfo, type GeneratedCertificate, type WorkspaceTrust } from "./network";
 import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, type ServerOption } from "./configuration";
 import "./style.css";
 import "./palette.css";
@@ -112,6 +112,40 @@ function markDirty() {
     if (text) text.textContent = "Changes are not saved. Save before starting; network setup never falls back to local mode.";
   }
   document.querySelector<HTMLElement>("#save-state")?.replaceChildren(document.createTextNode("Unsaved changes"));
+  // "Settings saved" no longer describes the form once it changes again.
+  settingsNotice = "";
+  document.querySelector(".settings-notice")?.remove();
+  if (!lostAddress(effectiveNetwork(), detectedNetwork)) document.querySelector(".address-change")?.remove();
+  updateCoverage();
+}
+
+/** The network settings the form currently describes: the unsaved draft, else the saved ones. */
+function effectiveNetwork(): NetworkSettings | undefined {
+  const saved = current?.settings.network;
+  if (!saved || !draftDirty || !draft) return saved;
+  return { ...saved, enabled: draft["network-mode"] === "network", server_name: draft["network-name"] ?? saved.server_name };
+}
+
+/** The certificate this app generated for the given certificate path, if it made that one. */
+function knownCertificate(path: string): GeneratedCertificate | null {
+  return [generatedCertificate, current?.generatedCertificate].find(c => c && c.certificate === path.trim()) ?? null;
+}
+
+/** Why the form's generated certificate won't work for its server address, or "". */
+function coverageProblem(values: Record<string, string> | null): string {
+  if (!values || values["network-mode"] !== "network" || values["network-transport"] !== "tls") return "";
+  const name = (values["network-name"] ?? "").trim();
+  const certificate = knownCertificate(values["network-cert"] ?? "");
+  if (!name || !certificate || certificateCovers(certificate, name)) return "";
+  return `This certificate doesn't cover ${name}: it was generated for an earlier address. Generate a new certificate, or clients will refuse the connection.`;
+}
+
+function updateCoverage() {
+  const warning = document.querySelector<HTMLElement>("#certificate-coverage");
+  if (!warning) return;
+  const problem = coverageProblem(formValues() ?? draft);
+  warning.textContent = problem;
+  warning.hidden = !problem;
 }
 
 function readSettings(): Settings {
@@ -143,6 +177,8 @@ function readSettings(): Settings {
     password: data["network-password"] || (previous.password === "__HARDCHARGER_STORED_SECRET__" ? previous.password : ""),
   };
   fieldErrors = networkErrors(network);
+  const coverage = coverageProblem(data);
+  if (coverage && !fieldErrors["network-cert"]) fieldErrors["network-cert"] = coverage;
   if (Object.keys(fieldErrors).length) {
     tab = "settings";
     render();
@@ -168,7 +204,7 @@ async function discardSettings() {
     if (native) await invoke("settings_pending", { pending: false });
     if (current) { current.settingsPending = false; current.pendingNetwork = null; }
     markedNetwork = null;
-    draft = null; draftDirty = false; fieldErrors = {}; generatedCertificate = null; error = "";
+    draft = null; draftDirty = false; fieldErrors = {}; generatedCertificate = null; error = ""; settingsNotice = "";
     render();
   } catch (e) { showError(e); }
 }
@@ -176,6 +212,57 @@ async function discardSettings() {
 async function detectNetwork() {
   try { detectedNetwork = await invoke<NetworkInfo>("network_info"); render(); }
   catch (e) { showFormError(e); }
+}
+
+/** Re-reads this computer's addresses in the background; renders only when they changed. */
+async function loadNetwork() {
+  try {
+    const info = await invoke<NetworkInfo>("network_info");
+    if (!info || !Array.isArray(info.addresses)) return;
+    const changed = JSON.stringify(info) !== JSON.stringify(detectedNetwork);
+    detectedNetwork = info;
+    // Never re-render under the user's cursor or a dialog; the next render shows it.
+    if (changed && !busy && !pendingControl && !workspaceTrust && !document.activeElement?.closest("#settings-form")) render();
+  } catch { /* the Detect button reports errors */ }
+}
+
+/**
+ * Moves a server whose saved IP address this computer lost (DHCP gave it a new one) to the
+ * detected one: also the listen address when it was pinned to the old one, and a new certificate
+ * when the old one was generated here (it can't cover the new address). Saves unless other
+ * unsaved changes are pending, which stay for the user to review.
+ */
+async function switchAddress(address: string) {
+  if (busy || current?.running) return;
+  const hadEdits = draftDirty;
+  tab = "settings"; error = ""; render();
+  const form = document.querySelector<HTMLFormElement>("#settings-form");
+  const field = (name: string) => form?.elements.namedItem(name) as HTMLInputElement | null;
+  const name = field("network-name"), listen = field("network-listen");
+  if (!name) return;
+  const lost = normalHost(name.value);
+  name.value = address;
+  if (listen && normalHost(listen.value) === lost) listen.value = address;
+  markDirty();
+  const values = formValues();
+  const regenerate = values?.["network-transport"] === "tls" && (!values["network-cert"]?.trim() || !!knownCertificate(values["network-cert"]));
+  if (regenerate) {
+    await generateCertificate();
+    if (error) return;
+  }
+  if (hadEdits) return; // the pending-settings banner asks for a review and save
+  try { if (!await saveSettings(readSettings())) return; }
+  catch (e) { showFormError(e); return; }
+  settingsNotice = `Now using ${address}.${regenerate ? " A new certificate was generated, so clients need its new trust certificate (Hardcharger-local-CA.crt, in the certificate folder below)." : " Make sure your TLS certificate covers this address."} Start the server when you're ready.`;
+  render();
+}
+
+function addressNotice(s: Status | null) {
+  const lost = lostAddress(effectiveNetwork(), detectedNetwork);
+  if (!lost) return "";
+  const { saved, replacement } = lost;
+  const running = s?.running ?? false;
+  return `<div class="pending-settings address-change" role="status"><div><strong>This computer's address changed</strong><p>The server is set up for ${esc(saved)}, which this computer no longer has. It now has ${esc(replacement.address)} (${esc(replacement.interface)}).${running ? " Stop the server to switch." : ""}</p></div><button data-switch-address="${esc(replacement.address)}" class="button primary" ${running || busy || !native ? "disabled" : ""}>Use ${esc(replacement.address)}</button></div>`;
 }
 
 async function generateCertificate() {
@@ -222,6 +309,7 @@ function render() {
       <div class="content">
         <div id="error" role="alert" ${error || s?.error ? "" : "hidden"}>${esc(error || s?.error || "")}</div>
         <div class="pending-settings" role="status" ${draftDirty || s?.settingsPending ? "" : "hidden"}><div><strong>Unsaved server settings</strong><p>${draft ? draft["network-mode"] === "network" ? "Network access requested. Save and complete setup before starting; the server will not fall back to local mode." : "Save or explicitly discard your changes before starting." : "A previous setup was not saved. Review Settings or explicitly discard it before starting."}</p></div><button data-review-settings class="button">Review settings</button><button data-discard-settings class="button" ${busy ? "disabled" : ""}>Discard changes</button></div>
+        ${tab === "server" || tab === "settings" ? addressNotice(s) : ""}
         ${tab === "server" ? serverView(s) : tab === "settings" ? settingsView(s) : tab === "logs" ? logsView() : aboutView()}
       </div>
       <footer><span>${esc(s?.version ?? "Hardcharger")} <span class="footer-dot">·</span> Chargewire</span><span>Fast, secure, remote DuckDB.</span></footer>
@@ -317,11 +405,13 @@ function render() {
   document.querySelector("#network-transport")?.addEventListener("change", updateNetwork);
   updateNetwork();
   displayFieldErrors();
+  updateCoverage();
   document.querySelectorAll<HTMLButtonElement>("[data-address]").forEach(b => b.addEventListener("click", () => {
     const input = form?.elements.namedItem("network-name") as HTMLInputElement;
     if (input) { input.value = b.dataset.address!; markDirty(); input.focus(); }
   }));
   document.querySelector("#detect-network")?.addEventListener("click", () => void detectNetwork());
+  document.querySelector<HTMLButtonElement>("[data-switch-address]")?.addEventListener("click", e => void switchAddress((e.currentTarget as HTMLButtonElement).dataset.switchAddress!));
   document.querySelector("#generate-certificate")?.addEventListener("click", () => void generateCertificate());
   document.querySelector("#show-certificate")?.addEventListener("click", () => {
     const certificate = generatedCertificate ?? current?.generatedCertificate;
@@ -416,6 +506,7 @@ function networkView(s: Status | null) {
       <p id="network-plaintext-note" class="network-warning" ${n.tls ? "hidden" : ""}>HTTP sends passwords, queries, and results without encryption. Use it only on a trusted private network.</p>
       <div id="network-tls-fields" ${!n.tls ? "hidden" : ""}>
         <div class="certificate-actions"><button id="generate-certificate" class="button" type="button" ${disabled}>Generate certificate and key</button><p class="muted">Optional: generate a private certificate for this computer, valid for one year. Certificate paths below fill automatically. Regenerating creates a new trust certificate for clients.</p></div>
+        <p id="certificate-coverage" class="network-warning" role="status" hidden></p>
         <div class="network-grid">
           <label class="field"><span>TLS certificate chain (PEM path) ${required("network-cert")}</span><input name="network-cert" aria-label="TLS certificate chain (PEM path)" value="${esc(n.tls_cert)}" placeholder="/path/to/server.pem" ${disabled}>${fieldError("network-cert")}</label>
           <label class="field"><span>TLS private key (PEM path) ${required("network-key")}</span><input name="network-key" aria-label="TLS private key (PEM path)" value="${esc(n.tls_key)}" placeholder="/path/to/server.key" ${disabled}>${fieldError("network-key")}</label>
@@ -616,7 +707,7 @@ async function action(name: string, confirmed = false) {
     else if (name === "workspace") await invoke("open_workspace");
     else if (name === "folder") await invoke("reveal_data");
     else if (name === "logs") await refreshLogs();
-  } catch (e) { showError(e); }
+  } catch (e) { showError(e); if (["start", "restart"].includes(name)) void loadNetwork(); }
   finally { busy = false; render(); if (tab === "logs" && name !== "logs") void refreshLogs(); }
 }
 
@@ -642,7 +733,7 @@ if (designPreview) {
 }
 render();
 if (native) {
-  void invoke<NetworkInfo>("network_info").then(info => { if (!info || !Array.isArray(info.addresses)) return; detectedNetwork = info; if (tab === "settings") render(); }).catch(() => {});
+  void loadNetwork();
   void invoke<ServerOption[]>("server_options").then(options => { schema = options; if (tab === "settings") render(); }).catch(showError);
   void listen("server-changed", () => void refresh());
   void listen<string>("server-control-requested", e => {
@@ -652,5 +743,10 @@ if (native) {
   startUpdates(render);
   void invoke<boolean>("launch_at_login", { enabled: null }).then(v => { login = v; if (tab === "settings") render(); }).catch(showError);
   void refresh();
-  setInterval(() => { void refresh(); if (tab === "logs" && liveTail && !busy) void refreshLogs(false); }, 2000);
+  let ticks = 0;
+  setInterval(() => {
+    void refresh();
+    if (tab === "logs" && liveTail && !busy) void refreshLogs(false);
+    if (++ticks % 15 === 0) void loadNetwork(); // DHCP can change the address while the app is open
+  }, 2000);
 }
