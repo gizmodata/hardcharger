@@ -48,7 +48,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 
 #: The hardcharger-server release this package runs by default.
-SERVER_VERSION = "2.3.1"
+SERVER_VERSION = "2.4.0"
 
 BINARY_ENV = "HARDCHARGER_SERVER_BINARY"
 VERSION_ENV = "HARDCHARGER_VERSION"

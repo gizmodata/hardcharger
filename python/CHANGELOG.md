@@ -6,11 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [2.3.1] - 2026-10-29
+## [2.4.0] - 2026-10-29
 
 ### Changed
 
-- The package installs Hardcharger server 2.3.1 (a desktop app fix; the server is unchanged).
+- The package installs Hardcharger server 2.4.0, whose init SQL can create users and grant access.
 
 ## [2.3.0] - 2026-10-29
 
