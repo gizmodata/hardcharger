@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hardcharger"
-version = "2.4.0"
+version = "2.4.1"
 description = "Run Hardcharger, GizmoData's DuckDB 2.0 server, from Python: downloads hardcharger-server on first use"
 readme = "README.md"
 license = "Apache-2.0"

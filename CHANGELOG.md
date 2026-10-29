@@ -7,6 +7,21 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-10-29
+
+### Changed
+
+- Chargewire 2.0.1. The startup banner, `versions.json` and every other place that reports the
+  Chargewire specification's version now say 2.0.1, the version Chargewire's releases carry,
+  instead of 1.0.2: one number everywhere. Protocol version 1 is unchanged.
+
+### Fixed
+
+- Desktop: the updater unpacks Windows updates with zip 9.1.3 (tauri-plugin-updater 2.14.1)
+  instead of zip 4.6.1, which has a critical advisory: two headers of one archive could be read
+  differently, overwriting files. Updates are signature-checked before they are unpacked, so a
+  malicious archive also needed GizmoData's update signing key.
+
 ## [2.4.0] - 2026-10-29
 
 ### Added
