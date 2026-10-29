@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(hardcharger VERSION 2.2.0 LANGUAGES C CXX)
+project(hardcharger VERSION 2.3.0 LANGUAGES C CXX)
 # The pre-release part of the version, after PROJECT_VERSION (which takes numbers only): ""
 # for a release (tag vX.Y.Z), "-rc.N" for a release candidate (tag vX.Y.Z-rc.N). Every
 # reported version is HARDCHARGER_VERSION, the two together. .github/scripts/release.sh
