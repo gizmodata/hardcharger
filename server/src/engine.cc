@@ -298,6 +298,21 @@ void RefuseAccessControlStatement(std::string_view sql) {
   }
 }
 
+// An init statement's error for the log. A credential statement (CREATE SECRET, CREATE USER
+// ... PASSWORD) loses the excerpt DuckDB quotes ("LINE 1: ...") and every string literal of
+// the statement wherever the error repeats it; any other statement's error stays whole.
+std::string WithoutLiterals(const Piece& piece, std::string error) {
+  if (!IsCredentialStatement(piece.text)) return error;
+  if (const auto at = error.find("\nLINE "); at != std::string::npos) error.resize(at);
+  for (const Token& token : piece.tokens) {
+    if (!token.Is(DUCKDB_V2_TOKEN_TYPE_STRING_LITERAL) || token.text.empty()) continue;
+    for (std::size_t at; (at = error.find(token.text)) != std::string::npos;) {
+      error.replace(at, token.text.size(), "'***'");
+    }
+  }
+  return error;
+}
+
 // A readonly session changes nothing, the access-control store included: of the
 // access-control statements it runs only SHOW ... and SET ROLE. (CREATE SCOPED TOKEN would
 // hand it a token that signs in as a user, outside readonly.)
@@ -639,13 +654,48 @@ void Backend::RunInitSql() {
   chargewire_duckdb::Call([&](auto* err) {
     return duckdb_v2_connection_create(instance(), connection.out(), err);
   });
+  // Statement by statement, in order: Hardcharger's own access-control statements (CREATE
+  // USER, GRANT, ...) aren't DuckDB's and run as the administrator, as an administrator's
+  // session would run them, on a connection of their own; everything else runs on DuckDB as
+  // it always has, unchecked, as the operator's configuration.
+  const auto pieces = SplitStatements(connection.get(), sql);
+  const bool rbac = access_ != nullptr && !access_->catalog_rules_only();
+  const Piece* current = nullptr;
+  chargewire_duckdb::Connection administrator_connection;
+  std::shared_ptr<authz::SessionGuard> administrator;
   try {
-    chargewire_duckdb::RunSql(connection.get(), sql);
+    // Without access control, its statements fail as a session's would, before anything runs.
+    if (!rbac) {
+      for (const Piece& piece : pieces) {
+        current = &piece;
+        RefuseAccessControlStatement(piece.text);
+      }
+    }
+    for (const Piece& piece : pieces) {
+      current = &piece;
+      if (rbac && authz::LooksLikeAccessControlStatement(piece.text)) {
+        if (!administrator) {
+          chargewire_duckdb::Call([&](auto* err) {
+            return duckdb_v2_connection_create(instance(), administrator_connection.out(), err);
+          });
+          administrator = access_->Bind(administrator_connection.get(),
+                                        authz::Identity{.user_name = config.admin_username, .superuser = true});
+        }
+        administrator->Execute(piece.text, /*has_parameters=*/false, [&] {
+          chargewire_duckdb::RunSql(administrator_connection.get(), piece.text);
+          return chargewire::StatementOutcome{};
+        });
+      } else {
+        chargewire_duckdb::RunSql(connection.get(), piece.text);
+      }
+    }
   } catch (const Error& error) {
-    // DuckDB quotes an ATTACH's connection string, password included, in its errors.
-    const auto hint = ExtensionDependencyHint(error.what());
+    // DuckDB quotes an ATTACH's connection string, password included, in its errors, and the
+    // failing line of a syntax error, a CREATE SECRET's or CREATE USER's literals included.
+    const std::string message = current != nullptr ? WithoutLiterals(*current, error.what()) : error.what();
+    const auto hint = ExtensionDependencyHint(message);
     throw std::runtime_error("init SQL failed: " + (hint ? *hint + "\n" : std::string()) +
-                             RedactCredentials(error.what()));
+                             RedactCredentials(message));
   }
   // Where the init SQL left its connection: a final USE there is where GizmoSQL 1.x's
   // sessions started (ResolveDefaultLocation). Read from the connection, not the text, so

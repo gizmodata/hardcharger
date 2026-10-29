@@ -102,4 +102,8 @@ std::string LoggableSql(std::string_view sql);
 // password or credential-setting value in another statement's error is removed.
 std::string LoggableError(std::string_view sql, std::string_view error);
 
+// Whether a statement carries credentials (CREATE SECRET, CREATE/ALTER USER, a credential
+// setting): what LoggableSql and LoggableError redact whole.
+bool IsCredentialStatement(std::string_view sql);
+
 }  // namespace hardcharger

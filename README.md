@@ -1033,6 +1033,28 @@ Each statement is checked inside DuckDB against its own plan, after binding and 
 before optimizing, so nested SQL, views and macros can't route around a grant. Anything the
 check can't classify is refused. Changes reach every replica within about a second.
 
+The init SQL (`init_sql_commands`, `init_sql_commands_file`) can hold these statements too.
+They run as the administrator, in order with the DuckDB statements around them, so a grant
+can name a table the init SQL has just created:
+
+```sql
+CREATE TABLE IF NOT EXISTS sales (amount DECIMAL(12, 2));
+CREATE ROLE IF NOT EXISTS readers;
+GRANT SELECT ON sales TO readers;
+CREATE USER IF NOT EXISTS analyst WITH PASSWORD '…';
+GRANT readers TO analyst;
+```
+
+The init SQL runs at every start, and on every replica of a cluster, against a store that
+keeps what earlier starts created: write `IF NOT EXISTS`, or the second start stops at
+`already exists`. `CREATE USER IF NOT EXISTS` leaves an existing user's password as it is
+(`ALTER USER … WITH PASSWORD` changes it). A failing statement stops the server like any init
+SQL error, and its log line leaves out the statement's passwords. Keep
+passwords in `init_sql_commands_file` rather than an environment variable: the server keeps
+that file out of SQL's reach (see below). Without `rbac_store_uri`, an access-control
+statement in the init SQL stops the server before anything runs (`access control is not
+enabled on this server`).
+
 Use PostgreSQL in production, and for any cluster of more than one replica. For
 development, or a server that will only ever run one replica, the store can be a DuckDB
 file instead:

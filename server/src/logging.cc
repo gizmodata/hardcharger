@@ -362,6 +362,8 @@ std::string LoggableSql(std::string_view sql) {
   return MaskCredentials(std::move(text));
 }
 
+bool IsCredentialStatement(std::string_view sql) { return SensitiveStatement(sql).has_value(); }
+
 std::string LoggableError(std::string_view sql, std::string_view error) {
   // DuckDB's parser errors and "LINE n: ..." excerpts echo the statement; the error of
   // a credential statement is dropped whole.
