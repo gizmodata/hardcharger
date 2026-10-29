@@ -1769,3 +1769,28 @@ jobs:
             docker buildx imagetools inspect "$image" > /dev/null || { echo "::error::$image is missing"; exit 1; }
             echo "image: $image"
           done
+
+  # One Slack message per release tag (gizmodata/.github's notify-slack, org secret
+  # SLACK_RELEASES_WEBHOOK_URL): released once PyPI and the images are confirmed, or what failed.
+  # It never fails the run.
+  notify:
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [release, downstream]
+    permissions: {}
+    uses: gizmodata/.github/.github/workflows/notify-slack.yml@fc54ee6c92379ae9cd1fecedabf8f382d1fdb2ed
+    with:
+      status: >-
+        ${{ needs.release.result == 'success' && needs.downstream.result == 'success' && 'success'
+        || (needs.release.result == 'cancelled' || needs.downstream.result == 'cancelled') && 'cancelled'
+        || 'failure' }}
+      title: >-
+        ${{ needs.release.result != 'success' && format('Hardcharger {0}: not released (the release gate did not pass)', github.ref_name)
+        || needs.downstream.result != 'success' && format('Hardcharger {0} released, but PyPI or the ADBC images did not publish', github.ref_name)
+        || format('Hardcharger {0} released', github.ref_name) }}
+      details: >-
+        ${{ needs.release.result == 'success' && needs.downstream.result == 'success'
+        && 'Published and checked: the GitHub Release, PyPI hardcharger, and the server and ADBC images on ghcr.io and Docker Hub.'
+        || '' }}
+      url: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+    secrets:
+      SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
