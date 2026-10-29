@@ -82,15 +82,15 @@ TEST(StartupBanner, TheDocsGoOnALineOfTheirOwnWhenAUrlIsLong) {
       {.version = "2.0.0", .chargewire_version = "1.0.0", .duckdb_version = "v2.0.0", .label = "Chargewire", .urls = {url}}));
   ASSERT_EQ(lines.size(), 9u);
   EXPECT_EQ(lines[7], "  Chargewire  " + url);
-  EXPECT_EQ(lines[8], "  Docs      https://docs.hardcharger.gizmodata.com");
+  EXPECT_EQ(lines[8], "  Docs        https://docs.hardcharger.gizmodata.com");
   // A short one keeps them together, with the docs' whole URL when it fits.
   const auto short_lines = Lines(Banner({.version = "2.0.0",
                                          .chargewire_version = "1.0.0",
                                          .duckdb_version = "v2.0.0",
                                          .label = "Chargewire",
-                                         .urls = {"http://h:1/chargewire"}}));
+                                         .urls = {"http://h:1/ui/"}}));
   ASSERT_EQ(short_lines.size(), 8u);
-  EXPECT_EQ(short_lines[7], "  Chargewire  http://h:1/chargewire      Docs  https://docs.hardcharger.gizmodata.com");
+  EXPECT_EQ(short_lines[7], "  Chargewire  http://h:1/ui/      Docs  https://docs.hardcharger.gizmodata.com");
 }
 
 TEST(LogEmoji, AutoNeedsATerminalAndAUtf8Locale) {
