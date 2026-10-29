@@ -20,7 +20,7 @@ subprocess::
 from hardcharger._install import SERVER_VERSION, InstallError, ensure_server
 from hardcharger.server import Server, ServerError
 
-__version__ = "2.3.0"
+__version__ = "2.3.1"
 
 __all__ = [
     "SERVER_VERSION",
