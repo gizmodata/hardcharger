@@ -304,6 +304,10 @@ class Server:
             try:
                 with urllib.request.urlopen(url, timeout=2, context=context if self.tls else None):
                     return
+            except urllib.error.HTTPError:
+                # Any HTTP answer means it is serving: a server released before the protocol's
+                # rename answers 404 here.
+                return
             except (urllib.error.URLError, OSError) as error:
                 last_error = error
             time.sleep(0.1)

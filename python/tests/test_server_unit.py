@@ -4,6 +4,7 @@ the missing-client error."""
 from __future__ import annotations
 
 import sys
+import textwrap
 
 import pytest
 
@@ -54,6 +55,42 @@ def test_a_server_that_exits_at_startup_reports_its_output(tmp_path):
     assert "exited while starting (exit code 7)" in str(error.value)
     assert "error: the port is taken (simulated)" in str(error.value)
     assert not server.is_running()
+
+
+def test_a_server_that_answers_404_has_started(tmp_path):
+    # A server released before the protocol's rename (a pinned older version) answers 404 at
+    # the root the readiness probe asks for; any HTTP answer means it is serving.
+    binary = tmp_path / "hardcharger-server"
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        + textwrap.dedent(
+            """
+            import http.server
+            import sys
+
+            port = int(sys.argv[sys.argv.index("--port") + 1])
+
+            class NotFound(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                    self.send_error(code=404)
+
+                def log_message(self, *args):
+                    pass
+
+            server = http.server.HTTPServer(
+                server_address=("127.0.0.1", port), RequestHandlerClass=NotFound
+            )
+            server.serve_forever()
+            """
+        )
+    )
+    binary.chmod(mode=0o755)
+    server = Server(binary=binary, host="127.0.0.1", startup_timeout=10.0)
+    server.start()
+    try:
+        assert server.is_running()
+    finally:
+        server.stop()
 
 
 def test_connect_without_the_client_says_how_to_install_it(monkeypatch):
