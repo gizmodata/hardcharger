@@ -4,7 +4,7 @@ An admin sees the instrumentation catalog everywhere (catalogs metadata,
 duckdb_databases(), tables metadata, hardcharger_settings()). A non-admin sees it nowhere
 and can't read it ("Only administrators").
 
-For non-admins: the catalogs, db-schemas and tables metadata requests (Warp SQL §10;
+For non-admins: the catalogs, db-schemas and tables metadata requests (Chargewire §10;
 1.x: GetCatalogs, GetDbSchemas, GetTables), the instrumentation rows of
 hardcharger_settings(), refusing any statement that names the catalog, and SQL's own catalog
 functions (duckdb_databases(), duckdb_schemas(), duckdb_tables(), information_schema,

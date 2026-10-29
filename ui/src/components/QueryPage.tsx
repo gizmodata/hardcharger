@@ -53,7 +53,7 @@ interface Props {
 }
 
 /**
- * The query page: editor tabs (up to 20), each with its own Warp SQL session. New with + or
+ * The query page: editor tabs (up to 20), each with its own Chargewire session. New with + or
  * Alt+N, close with × or Alt+W (asking first when a transaction is open or text is unsaved),
  * rename with a double-click, reorder by dragging.
  */

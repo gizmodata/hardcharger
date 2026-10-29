@@ -1,4 +1,4 @@
-"""Why a token stopped working (Warp SQL §4.2) and why a session ended (§5.6).
+"""Why a token stopped working (Chargewire §4.2) and why a session ended (§5.6).
 
 Changing a user's password, disabling or dropping the user, and revoking a scoped token
 end the user's sessions and the tokens they were opened with. The session's own token is
@@ -6,7 +6,7 @@ refused before the server looks at the session, so its holder learns why from th
 invalid_token refusal's `reason` (credentials_changed, principal_dropped, token_revoked,
 token_expired). A token that signs in again, used on the old session, gets session_ended
 with the same reason; the user's own token on a scoped token's session is another
-principal's (Warp SQL §9.2) and gets session_not_found. A token the server can't verify as one it signed (another key, a
+principal's (Chargewire §9.2) and gets session_not_found. A token the server can't verify as one it signed (another key, a
 changed signature) gets no reason, whatever user it names.
 """
 
@@ -18,7 +18,7 @@ import jwt
 import pytest
 
 from conftest import TIMEOUT_SCALE
-from rbac import SECRET_KEY, Client, WarpError, expect_allowed, mint, start_rbac_server
+from rbac import SECRET_KEY, Client, ChargewireError, expect_allowed, mint, start_rbac_server
 
 
 @pytest.fixture(scope="module")
@@ -79,7 +79,7 @@ def test_a_password_change_says_credentials_changed(server):
     assert_token_refused(response=until_refused(client=pat), reason="credentials_changed",
                          detail="the password of user pat changed since this access token was issued")
     # Every request with that token says so, a new session included.
-    assert_token_refused(response=pat.http.post(url="/warp/v1/sessions", headers=pat.headers(), json={}),
+    assert_token_refused(response=pat.http.post(url="/chargewire/v1/sessions", headers=pat.headers(), json={}),
                          reason="credentials_changed", detail="the password of user pat changed")
     # Signed in again, the old session is gone, for the same reason.
     assert_session_ended(response=on(client=pat, token=server.password_token(user="pat", password="pw-2")),
@@ -120,7 +120,7 @@ def test_a_revoked_scoped_token_says_token_revoked(server):
     expect_allowed(client=ray, sql="DROP SCOPED TOKEN job")
     assert_token_refused(response=until_refused(client=bot), reason="token_revoked",
                          detail="this scoped token was revoked")
-    # The user's own token on the scoped session: another principal's session (Warp SQL
+    # The user's own token on the scoped session: another principal's session (Chargewire
     # §9.2: a scoped token is another authority), so it is told nothing about it.
     assert_session_not_found(response=on(client=bot, token=ray.token))
     # The twins: the user's other scoped token and the user's own session still work.
@@ -182,6 +182,6 @@ def test_a_token_the_server_did_not_sign_gets_no_reason(server):
 def test_a_refused_token_has_no_reason_without_access_control(module_launcher):
     """A server without access control refuses only tokens it can't verify, or expired ones."""
     plain = module_launcher.start()
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         Client(base_url=plain.base_url, token="not-a-token")
     assert raised.value.code == "invalid_token" and raised.value.reason is None, raised.value

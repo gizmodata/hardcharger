@@ -1,4 +1,4 @@
-import { WarpSqlError } from "@gizmodata/warp-sql";
+import { ChargewireError } from "@gizmodata/chargewire";
 import { type RecordBatch, Schema, tableFromArrays } from "apache-arrow";
 import { describe, expect, it } from "vitest";
 
@@ -58,7 +58,7 @@ const fake =
 
 describe("runScript", () => {
   it("recognizes a server-side administrator cancellation without a local abort", async () => {
-    const cancelled = new WarpSqlError({ code: "statement_cancelled", status: 409, cancelReason: "cancelled" });
+    const cancelled = new ChargewireError({ code: "statement_cancelled", status: 409, cancelReason: "cancelled" });
     const run = await runScript({
       statements: ["SELECT long", "SELECT later"],
       rowLimit: 100,

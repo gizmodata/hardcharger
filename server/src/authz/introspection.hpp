@@ -31,7 +31,7 @@ struct Principal;
 
 // The rows of `table` that `viewer` may see. `user_name` is
 // hardcharger_effective_privileges()'s argument (nullopt: the viewer itself). Throws
-// warpsql::Error when the viewer may not ask (another user's privileges).
+// chargewire::Error when the viewer may not ask (another user's privileges).
 std::shared_ptr<arrow::RecordBatch> AccessTableRows(AccessTable table, const Snapshot& snapshot,
                                                     const Principal& viewer,
                                                     const std::optional<std::string>& user_name);

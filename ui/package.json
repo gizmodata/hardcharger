@@ -1,6 +1,6 @@
 {
   "name": "hardcharger-ui",
-  "description": "The web UI for Hardcharger: a static single-page app the server serves at /ui, talking Warp SQL to its own origin.",
+  "description": "The web UI for Hardcharger: a static single-page app the server serves at /ui, talking Chargewire to its own origin.",
   "author": "GizmoData LLC",
   "license": "Apache-2.0",
   "private": true,
@@ -23,10 +23,10 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "vendor:verify": "node scripts/vendor-warp-sql.mjs --verify && node scripts/vendor-sheetjs.mjs --verify"
+    "vendor:verify": "node scripts/vendor-chargewire.mjs --verify && node scripts/vendor-sheetjs.mjs --verify"
   },
   "dependencies": {
-    "@gizmodata/warp-sql": "file:vendor/gizmodata-warp-sql-1.0.0.tgz",
+    "@gizmodata/chargewire": "file:vendor/gizmodata-chargewire-1.0.0.tgz",
     "apache-arrow": "^21.2.0",
     "lucide-react": "^1.59.0",
     "monaco-editor": "^0.57.0",

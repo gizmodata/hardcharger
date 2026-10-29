@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds Arrow C++ (IPC only) into server/.deps/arrow-install with warp-sql's
+# Builds Arrow C++ (IPC only) into server/.deps/arrow-install with chargewire's
 # build-arrow.sh. `build-deps.sh arrow` runs it.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -12,7 +12,7 @@ if [ "$(uname)" = Linux ]; then
   # builds all C++ anyway.
   export CFLAGS="${CFLAGS:-} -D_GNU_SOURCE"
 fi
-WARPSQL_DEPS_DIR="$DEPS" "$HERE/../third_party/warp-sql/cpp/scripts/build-arrow.sh"
+CHARGEWIRE_DEPS_DIR="$DEPS" "$HERE/../third_party/chargewire/cpp/scripts/build-arrow.sh"
 # CMake installs libraries into lib64 on RPM-based systems; the server's CMake uses lib.
 if [ -d "$DEPS/arrow-install/lib64" ] && [ ! -e "$DEPS/arrow-install/lib" ]; then
   ln -s lib64 "$DEPS/arrow-install/lib"

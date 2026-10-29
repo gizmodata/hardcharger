@@ -15,7 +15,7 @@
 #include "metrics.hpp"
 #include "sessions.hpp"
 
-namespace warpsql {
+namespace chargewire {
 class Server;
 }
 
@@ -63,9 +63,9 @@ struct Runtime {
   Instrumentation* instrumentation = nullptr;  // set while instrumentation runs
   InstrumentationStats instrumentation_stats;  // kept after it stops
   CatalogLog* catalog_log = nullptr;           // set while catalog logging runs
-  // The Warp SQL server, for the SQL functions that see and cancel its sessions (set before
+  // The Chargewire server, for the SQL functions that see and cancel its sessions (set before
   // it starts; null in a process that serves nothing).
-  warpsql::Server* server = nullptr;
+  chargewire::Server* server = nullptr;
   // What this instance is and runs on, collected at startup (the backend fills it).
   InstanceInfo instance_info;
 

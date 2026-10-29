@@ -34,8 +34,8 @@ def test_bulk_ingest_lineitem(session):
 
 
 def test_append_binds_columns_by_name(session):
-    """Warp SQL §8.1: an upload into an existing table lands by column name, whatever the
-    stream's order; an omitted column takes its default. Before warp-sql 1.0.2 the server
+    """Chargewire §8.1: an upload into an existing table lands by column name, whatever the
+    stream's order; an omitted column takes its default. Before chargewire 1.0.2 the server
     bound by position, so two INTEGER columns uploaded the other way round were stored
     crosswise with no error (found by a customer)."""
     session.execute(sql="CREATE OR REPLACE TABLE ingest_by_name (a INTEGER, b INTEGER, c VARCHAR DEFAULT 'dflt')")

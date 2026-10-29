@@ -64,7 +64,7 @@ struct RemoteServersView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
-                        editing = RemoteServer(name: "", endpoint: WarpEndpoint(origin: URL(string: "https://localhost")!))
+                        editing = RemoteServer(name: "", endpoint: ChargewireEndpoint(origin: URL(string: "https://localhost")!))
                     } label: {
                         Label("Add Server", systemImage: "plus")
                     }
@@ -103,7 +103,7 @@ private struct RemoteRow: View {
     let name: String
     let detail: String
     let systemImage: String
-    var endpoint: WarpEndpoint?
+    var endpoint: ChargewireEndpoint?
     @State private var reachable: Bool?
 
     var body: some View {
@@ -130,7 +130,7 @@ private struct RemoteRow: View {
         .accessibilityElement(children: .combine)
         .task(id: endpoint) {
             guard let endpoint else { return }
-            reachable = await WarpClient(endpoint: endpoint, timeout: 5).isServing()
+            reachable = await ChargewireClient(endpoint: endpoint, timeout: 5).isServing()
         }
     }
 }
@@ -271,7 +271,7 @@ struct RemoteServerEditor: View {
         defer { testing = false }
         problem = nil
         discovery = nil
-        let client = WarpClient(endpoint: draft.endpoint, timeout: 10)
+        let client = ChargewireClient(endpoint: draft.endpoint, timeout: 10)
         do {
             let found = try await client.discovery()
             discovery = found

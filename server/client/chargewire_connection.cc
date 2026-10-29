@@ -1,4 +1,4 @@
-#include "warp_connection.hpp"
+#include "chargewire_connection.hpp"
 
 #include "plain_http_probe.hpp"
 #include "platform.hpp"
@@ -15,11 +15,11 @@
 
 namespace hardcharger::client {
 
-namespace wc = warpsql::client;
+namespace wc = chargewire::client;
 
 namespace {
 
-// What a Warp SQL reason means, for a person: why the server refused a token it issued
+// What a Chargewire reason means, for a person: why the server refused a token it issued
 // (§4.2) or ended a session (§5.6).
 std::string DescribeReason(const std::string& reason) {
   if (reason == "killed") return "an administrator ended it";
@@ -32,13 +32,13 @@ std::string DescribeReason(const std::string& reason) {
 
 }  // namespace
 
-WarpConnection::WarpConnection(WarpConnection&& other) noexcept
+ChargewireConnection::ChargewireConnection(ChargewireConnection&& other) noexcept
     : client_(std::move(other.client_)),
       session_(std::move(other.session_)),
       server_url_(std::move(other.server_url_)),
       cancel_requested_(other.cancel_requested_.load()) {}
 
-arrow::Status WarpConnection::ToStatus(const wc::Error& error) const {
+arrow::Status ChargewireConnection::ToStatus(const wc::Error& error) const {
   if (error.IsCancelled() || cancel_requested_.load(std::memory_order_relaxed)) {
     return arrow::Status::Cancelled("Query cancelled");
   }
@@ -50,7 +50,7 @@ arrow::Status WarpConnection::ToStatus(const wc::Error& error) const {
   return arrow::Status::IOError(error.what());
 }
 
-void WarpConnection::Disconnect() {
+void ChargewireConnection::Disconnect() {
   // Serialized with the interrupt thread before the session goes.
   std::lock_guard cancel_lock(cancel_mutex_);
   if (session_) {
@@ -61,14 +61,14 @@ void WarpConnection::Disconnect() {
   server_url_.clear();
 }
 
-void WarpConnection::SendCancelToServer() {
+void ChargewireConnection::SendCancelToServer() {
   std::lock_guard cancel_lock(cancel_mutex_);
   if (session_) session_->CancelRunning();
 }
 
-std::string WarpConnection::session_id() const { return session_ ? session_->id() : std::string(); }
+std::string ChargewireConnection::session_id() const { return session_ ? session_->id() : std::string(); }
 
-arrow::Status WarpConnection::Connect(const ClientConfig& config) {
+arrow::Status ChargewireConnection::Connect(const ClientConfig& config) {
   Disconnect();
   RegisterArrowExtensionTypes();  // before any result is read
 
@@ -98,7 +98,7 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
   const bool auth_attempted = config.auth_type_external || config.auth_type_mtls || !config.username.empty();
   // Turns the library's errors into what a person at the prompt can act on.
   auto friendly = [&](const wc::Error& e) -> arrow::Status {
-    // A TLS alert (or problem) refusing the client certificate (Warp SQL §4.4): the server
+    // A TLS alert (or problem) refusing the client certificate (Chargewire §4.4): the server
     // is running, and said why.
     if (e.code() == "certificate_revoked") {
       return arrow::Status::IOError("The server at " + origin + " refused the client certificate: certificate revoked");
@@ -165,7 +165,7 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
   std::unique_ptr<wc::Session> session;
   try {
     client = std::make_unique<wc::Client>(options);
-    // A Warp SQL server answers GET /warp; anything else (a GizmoSQL 1.x gRPC port, a web
+    // A Chargewire server answers GET /chargewire; anything else (a GizmoSQL 1.x gRPC port, a web
     // server) is refused here with a clear message.
     const wc::Discovery discovery = client->Discover();
     if (config.auth_type_external) {
@@ -191,7 +191,7 @@ arrow::Status WarpConnection::Connect(const ClientConfig& config) {
   return arrow::Status::OK();
 }
 
-std::optional<arrow::Status> WarpConnection::ConnectDeferred() {
+std::optional<arrow::Status> ChargewireConnection::ConnectDeferred() {
   if (!deferred_) return std::nullopt;
   const ClientConfig config = std::move(*deferred_);
   deferred_.reset();  // tried once
@@ -209,7 +209,7 @@ std::optional<arrow::Status> WarpConnection::ConnectDeferred() {
   return status;
 }
 
-bool RequireConnection(WarpConnection& conn) {
+bool RequireConnection(ChargewireConnection& conn) {
   if (conn.IsConnected()) return true;
   if (auto status = conn.ConnectDeferred()) {
     if (status->ok()) return true;
@@ -221,7 +221,7 @@ bool RequireConnection(WarpConnection& conn) {
   return false;
 }
 
-bool WarpConnection::Reopen(const wc::Error& error) {
+bool ChargewireConnection::Reopen(const wc::Error& error) {
   const bool lost = error.code() == "session_not_found";
   const bool ended = error.code() == "session_ended";
   if ((!lost && !ended) || !client_) return false;
@@ -259,7 +259,7 @@ bool WarpConnection::Reopen(const wc::Error& error) {
 }
 
 template <class Call>
-auto WarpConnection::WithSession(Call&& call) -> decltype(call()) {
+auto ChargewireConnection::WithSession(Call&& call) -> decltype(call()) {
   try {
     return call();
   } catch (const wc::Error& e) {
@@ -283,7 +283,7 @@ struct Executing {
 };
 }  // namespace
 
-arrow::Result<QueryResult> WarpConnection::ExecuteQuery(const std::string& sql, int64_t row_limit) {
+arrow::Result<QueryResult> ChargewireConnection::ExecuteQuery(const std::string& sql, int64_t row_limit) {
   cancel_requested_.store(false);
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
   Executing executing(executing_);
@@ -323,7 +323,7 @@ arrow::Result<QueryResult> WarpConnection::ExecuteQuery(const std::string& sql, 
   }
 }
 
-arrow::Result<int64_t> WarpConnection::ExecuteUpdate(const std::string& sql) {
+arrow::Result<int64_t> ChargewireConnection::ExecuteUpdate(const std::string& sql) {
   cancel_requested_.store(false);
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
   Executing executing(executing_);
@@ -342,7 +342,7 @@ arrow::Result<int64_t> WarpConnection::ExecuteUpdate(const std::string& sql) {
   }
 }
 
-arrow::Result<std::shared_ptr<arrow::Table>> WarpConnection::GetTables(const std::string& catalog,
+arrow::Result<std::shared_ptr<arrow::Table>> ChargewireConnection::GetTables(const std::string& catalog,
                                                                        const std::string& schema_pattern,
                                                                        const std::string& table_pattern,
                                                                        bool include_schema) {
@@ -359,7 +359,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> WarpConnection::GetTables(const std
   }
 }
 
-arrow::Result<std::shared_ptr<arrow::Table>> WarpConnection::GetDbSchemas(const std::string& catalog,
+arrow::Result<std::shared_ptr<arrow::Table>> ChargewireConnection::GetDbSchemas(const std::string& catalog,
                                                                           const std::string& schema_pattern) {
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
   try {
@@ -369,7 +369,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> WarpConnection::GetDbSchemas(const 
   }
 }
 
-arrow::Result<std::shared_ptr<arrow::Table>> WarpConnection::GetCatalogs() {
+arrow::Result<std::shared_ptr<arrow::Table>> ChargewireConnection::GetCatalogs() {
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
   try {
     return WithSession([&] { return session_->Catalogs(); });
@@ -378,7 +378,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> WarpConnection::GetCatalogs() {
   }
 }
 
-arrow::Result<boost::json::object> WarpConnection::GetServerInfo() {
+arrow::Result<boost::json::object> ChargewireConnection::GetServerInfo() {
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
   try {
     return WithSession([&] { return session_->ServerInfo(); });
@@ -387,7 +387,7 @@ arrow::Result<boost::json::object> WarpConnection::GetServerInfo() {
   }
 }
 
-arrow::Status WarpConnection::UploadLastResult(const std::shared_ptr<arrow::Table>& table,
+arrow::Status ChargewireConnection::UploadLastResult(const std::shared_ptr<arrow::Table>& table,
                                                const std::string& table_name) {
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
   if (!table || table->num_rows() == 0) return arrow::Status::Invalid("No result to upload");

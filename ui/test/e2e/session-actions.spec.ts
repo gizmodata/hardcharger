@@ -1,10 +1,10 @@
-import { connect } from "@gizmodata/warp-sql";
+import { connect } from "@gizmodata/chargewire";
 
 import { expect, signIn, test } from "./fixtures.ts";
 import { startOwnServer } from "./harness.ts";
 
 test("Sessions shows client IP and confirms ending a session without browser confirm", async ({ page, harness }) => {
-  const victim = await connect({ url: `${harness.serverUrl}/warp`, ...harness.admin });
+  const victim = await connect({ url: `${harness.serverUrl}/chargewire`, ...harness.admin });
   try {
     await page.addInitScript(() => {
       window.confirm = () => false;
@@ -32,7 +32,7 @@ test("Sessions shows client IP and confirms ending a session without browser con
 
 test("SQL Monitor End session disconnects its target after an in-page confirmation", async ({ page }) => {
   const server = await startOwnServer(["--enable-instrumentation"]);
-  const victim = await connect({ url: `${server.url}/warp`, ...server.admin });
+  const victim = await connect({ url: `${server.url}/chargewire`, ...server.admin });
   try {
     await victim.query("SELECT 1 AS end_session_monitor_probe");
     await page.addInitScript(() => {
@@ -64,7 +64,7 @@ test("SQL Monitor End session disconnects its target after an in-page confirmati
 
 test("SQL Monitor Cancel work confirms cancellation and keeps the session usable", async ({ page }) => {
   const server = await startOwnServer(["--enable-instrumentation"]);
-  const victim = await connect({ url: `${server.url}/warp`, ...server.admin });
+  const victim = await connect({ url: `${server.url}/chargewire`, ...server.admin });
   let running: Promise<unknown> | undefined;
   try {
     running = victim

@@ -1,6 +1,6 @@
 """Port of GizmoSQL 1.x tests/integration/test_session_options_probe.cpp (3 cases).
 
-Session options (Warp SQL §5.2: GET /sessions/{id}) report the current catalog. Once a
+Session options (Chargewire §5.2: GET /sessions/{id}) report the current catalog. Once a
 session is closed, a probe with the same token fails with 404 session_not_found and
 does not bring the session back (1.x: GetSessionOptions on an evicted session); a new
 session probes fine. All 3 apply.

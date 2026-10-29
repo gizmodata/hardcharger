@@ -4,7 +4,7 @@
 //   HARDCHARGER_UI_TEST_PASSWORD=… node test/unit/fixtures/make-types.mjs
 import { writeFileSync } from "node:fs";
 
-import { connect } from "@gizmodata/warp-sql";
+import { connect } from "@gizmodata/chargewire";
 import { tableToIPC } from "apache-arrow";
 
 const conn = await connect({

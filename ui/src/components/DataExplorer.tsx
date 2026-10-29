@@ -67,7 +67,7 @@ interface Props {
 
 /**
  * The schema browser: the catalogs the user may see, their schemas, then Tables and Views, and
- * each one's columns with their types, each level listed when it is opened (Warp SQL metadata,
+ * each one's columns with their types, each level listed when it is opened (Chargewire metadata,
  * as the active tab's role sees it). Double-click or drag a name into the editor; the menu (right
  * click or …) previews a table in a new tab, copies or inserts names, shows a view's definition,
  * and points the active tab at a catalog and schema. Search finds tables and views anywhere.

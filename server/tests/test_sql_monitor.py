@@ -93,7 +93,7 @@ def test_fetching_remains_live_and_completion_is_retained(launcher):
 def test_execution_deadline_is_a_timeout_not_a_generic_cancel(launcher):
     server = launcher.start(args=["--enable-instrumentation"])
     admin, victim = server.admin(), server.admin()
-    response = victim.submit(sql=CPU_BOUND, headers={"Prefer": "respond-async", "Warp-Statement-Timeout": "500"})
+    response = victim.submit(sql=CPU_BOUND, headers={"Prefer": "respond-async", "Chargewire-Statement-Timeout": "500"})
     victim.wait_done(statement_id=response.json()["statement_id"])
     rows = eventually(lambda: live(admin, victim), lambda rows: any(r["cursor_close_time"] for r in rows))
     assert rows[0]["status"] == "timeout" and rows[0]["cancel_reason"] == "timeout", rows

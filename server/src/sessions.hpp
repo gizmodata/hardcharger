@@ -1,4 +1,4 @@
-// The server's view of its client sessions, beside the Warp SDK's own session table:
+// The server's view of its client sessions, beside the Chargewire SDK's own session table:
 // session ids (UUIDs, as HARDCHARGER_CURRENT_SESSION() returns them), the
 // max-sessions cap and KILL SESSION.
 #pragma once
@@ -12,8 +12,8 @@
 
 #include <optional>
 
-#include "warpsql/backend.hpp"
-#include "warpsql/server.hpp"
+#include "chargewire/backend.hpp"
+#include "chargewire/server.hpp"
 
 namespace hardcharger {
 
@@ -27,14 +27,14 @@ struct Runtime;
 // decide by this.
 bool SeesSession(const Session& viewer, const Session& target);
 
-// Stops what session `id` runs, for `reason`, through Warp SQL's cancel: its statements
+// Stops what session `id` runs, for `reason`, through Chargewire's cancel: its statements
 // end cancelled with that cancel_reason (a queued one leaves the statement queue), result
 // readers get an incomplete stream, open partitioned ingests and ingest bodies still
 // arriving are aborted. The session lives on. The one implementation hardcharger_cancel()
 // and KILL SESSION share (KILL then ends the session). Returns how many statements and
 // ingests it stopped; nullopt when the server has no such session.
 std::optional<std::size_t> CancelSessionWork(Runtime& runtime, const std::string& id,
-                                             warpsql::SessionCancelReason reason);
+                                             chargewire::SessionCancelReason reason);
 
 struct SessionSummary {
   std::string session_id;
@@ -52,7 +52,7 @@ class SessionRegistry {
   // Takes a place for a new session of `principal`. Admins are never capped; anyone
   // else gets too_many_sessions once `max_sessions` non-admin sessions are open.
   // Returns whether the session holds a capped place (pass it to Add()).
-  bool Admit(const warpsql::Principal& principal);
+  bool Admit(const chargewire::Principal& principal);
   // Gives back a place Admit() took, for a session that could not be opened.
   void Unadmit(bool capped);
 

@@ -1,4 +1,4 @@
-// AuthorityKey (auth.hpp): what a principal may do, as the Warp SQL SDK compares it to bind
+// AuthorityKey (auth.hpp): what a principal may do, as the Chargewire SDK compares it to bind
 // sessions to their principal (spec §9.2). It must change with everything that changes the
 // principal's authority, and must not change with what changes on every sign-in, or a
 // client's new token couldn't reach its own sessions. tests/test_session_authority.py runs
@@ -8,12 +8,12 @@
 #include <string>
 
 #include "auth.hpp"
-#include "warpsql/backend.hpp"
+#include "chargewire/backend.hpp"
 
 namespace {
 
 using hardcharger::AuthorityKey;
-using warpsql::Principal;
+using chargewire::Principal;
 
 Principal Base() {
   Principal p;

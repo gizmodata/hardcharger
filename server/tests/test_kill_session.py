@@ -2,7 +2,7 @@
 
 KILL SESSION '<id>' (also "id" and bare, any case, trailing ;) ends another session:
 what it runs stops, and its next request fails with 401
-session_ended ("session has been killed ... re-authenticate", Warp SQL §5.6). An admin
+session_ended ("session has been killed ... re-authenticate", Chargewire §5.6). An admin
 can't kill its own session; an unknown id is "not found"; non-admins may not kill.
 
 Strengthened: 1.x's NonAdminCannotKillSession only had an admin kill itself; here it is
@@ -10,10 +10,10 @@ a real non-admin (role user) and asserts "Only admin users can execute KILL SESS
 and the "own session" case is its own test. The syntax case asserts "not found" only
 (1.x also accepted "Only admin"). Added: killing a running statement interrupts it, and
 every request naming a killed session, GET of the session (a liveness probe) included,
-gets session_ended with the structured reason (Warp SQL §5.6), as does a session access
+gets session_ended with the structured reason (Chargewire §5.6), as does a session access
 control ended.
 
-Hardcharger: a session has one id, the Warp SQL session id its client holds (s_..., from
+Hardcharger: a session has one id, the Chargewire session id its client holds (s_..., from
 the session document), where 1.x had a UUID: HARDCHARGER_CURRENT_SESSION(),
 hardcharger_sessions(), the instrumentation tables, the logs and KILL SESSION all use it.
 """
@@ -24,7 +24,7 @@ import time
 import pytest
 
 from rbac import expect_allowed, start_rbac_server
-from warp_client import mint_server_token
+from chargewire_client import mint_server_token
 
 UNKNOWN = "12345678-1234-1234-1234-123456789012"
 
@@ -44,7 +44,7 @@ def test_non_admin_cannot_kill_session(server):
 def test_admin_cannot_kill_own_session(server):
     session = server.admin()
     own = session.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
-    assert own == session.id and own.startswith("s_")  # Hardcharger: the Warp SQL session id, not a UUID
+    assert own == session.id and own.startswith("s_")  # Hardcharger: the Chargewire session id, not a UUID
     problem = session.error(sql=f"KILL SESSION '{own}'")
     assert problem["detail"] == "A session can't kill itself; disconnect (or close the connection) instead.", problem
     assert problem["sqlstate"] == "55000", problem  # object not in prerequisite state (was 42P01)
@@ -70,7 +70,7 @@ def test_killed_session_must_reauthenticate(server):
     problem = victim.error(sql="SELECT 1")
     assert problem["status"] == 401 and problem["code"] == "session_ended", problem
     assert "session has been killed" in problem["detail"] and "re-authenticate" in problem["detail"], problem
-    assert problem["reason"] == "killed", problem  # Warp SQL §5.6
+    assert problem["reason"] == "killed", problem  # Chargewire §5.6
     # Killing it again: it is gone.
     assert "not found" in server.admin().error(sql=f"KILL SESSION '{victim_id}'")["detail"]
 
@@ -95,7 +95,7 @@ def test_kill_interrupts_a_running_statement(server):
 
 
 def assert_ended(response, reason: str) -> dict:
-    """`response` is Warp SQL §5.6's session_ended, with `reason` as its own field."""
+    """`response` is Chargewire §5.6's session_ended, with `reason` as its own field."""
     assert response.status_code == 401, response.text
     problem = response.json()
     assert problem["code"] == "session_ended" and problem["reason"] == reason, problem
@@ -163,14 +163,14 @@ def test_one_session_id_everywhere(launcher):
     server = launcher.start(args=["--enable-instrumentation"])
     response = server.client().open_session()
     assert response.status_code == 201, response.text
-    warp_id = response.json()["session_id"]
-    from warp_client import Session
-    victim = Session(client=server.client(), session_id=warp_id)
-    assert victim.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()") == warp_id
+    chargewire_id = response.json()["session_id"]
+    from chargewire_client import Session
+    victim = Session(client=server.client(), session_id=chargewire_id)
+    assert victim.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()") == chargewire_id
     admin = server.admin()
     rows = admin.rows(sql="SELECT session_id, is_current FROM hardcharger_sessions() ORDER BY session_id")
-    assert {"session_id": warp_id, "is_current": False} in rows, rows
-    assert victim.rows(sql="SELECT session_id FROM hardcharger_sessions() WHERE is_current") == [{"session_id": warp_id}]
+    assert {"session_id": chargewire_id, "is_current": False} in rows, rows
+    assert victim.rows(sql="SELECT session_id FROM hardcharger_sessions() WHERE is_current") == [{"session_id": chargewire_id}]
 
     def eventually(sql: str) -> int:
         deadline = time.monotonic() + 10
@@ -178,21 +178,21 @@ def test_one_session_id_everywhere(launcher):
             time.sleep(0.05)
         return count
 
-    literal = "'" + warp_id + "'"
+    literal = "'" + chargewire_id + "'"
     assert eventually(f"SELECT count(*) FROM _hardcharger_instr.sessions WHERE session_id = {literal}") == 1
     assert eventually(f"SELECT count(*) FROM _hardcharger_instr.sql_statements WHERE session_id = {literal}") >= 1
     assert eventually(f"SELECT count(*) FROM _hardcharger_instr.execution_details WHERE session_id = {literal}") >= 1
     admin.execute(sql=f"KILL SESSION {literal}")
     problem = victim.error(sql="SELECT 1")
     assert problem["code"] == "session_ended" and problem["reason"] == "killed", problem
-    assert f"session_id={warp_id}" in server.log()
+    assert f"session_id={chargewire_id}" in server.log()
     victim.close()  # the SDK lets the killed session go; its record closes under the same id
     assert eventually(f"SELECT count(*) FROM _hardcharger_instr.sessions WHERE session_id = {literal} "
                       "AND status <> 'active'") == 1
 
 
 def test_instrumentation_from_0_3_0_is_refused_with_what_to_do(launcher, tmp_path):
-    """0.3.0's instrumentation tables keyed sessions by UUID, which can't hold a Warp SQL
+    """0.3.0's instrumentation tables keyed sessions by UUID, which can't hold a Chargewire
     session id: startup says so, rather than failing every insert."""
     path = tmp_path / "old_instrumentation.db"
     maker = launcher.start(args=["--database", str(path)])

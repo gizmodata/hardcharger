@@ -1,4 +1,4 @@
-import type { DiscoveryDocument } from "@gizmodata/warp-sql";
+import type { DiscoveryDocument } from "@gizmodata/chargewire";
 import { BadgeCheck, KeyRound, LogIn, Moon, Sun } from "lucide-react";
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
 
@@ -37,10 +37,10 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
   const passwordRef = useRef<HTMLInputElement>(null);
   const grants = server?.auth?.grant_types;
   const passwordGrant = grants?.includes("password") ?? true;
-  // Offered by a server with mutual TLS and certificate sign-in on (Warp SQL §4.4): the
+  // Offered by a server with mutual TLS and certificate sign-in on (Chargewire §4.4): the
   // browser has already presented its certificate to load this page.
   const certificateGrant = grants?.includes("client_certificate") ?? false;
-  // Browser sign-in with the server's identity provider (Warp SQL §4.3).
+  // Browser sign-in with the server's identity provider (Chargewire §4.3).
   const browserGrant = offersBrowserSignIn(server);
   const provider = browserSignInProvider(server);
 
@@ -126,7 +126,7 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
         <p className="signin-tagline">Fast, secure, remote DuckDB</p>
         <p className="signin-server" data-testid="server-version">
           {server
-            ? `${server.server?.name ?? "Warp SQL server"} ${server.server?.version ?? ""}`.trim()
+            ? `${server.server?.name ?? "Chargewire server"} ${server.server?.version ?? ""}`.trim()
             : serverError
               ? "Server not reachable"
               : "Connecting…"}

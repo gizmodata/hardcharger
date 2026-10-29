@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from conftest import TIMEOUT_SCALE
-from rbac import WarpError, expect_allowed, start_rbac_server
+from rbac import ChargewireError, expect_allowed, start_rbac_server
 
 
 @pytest.fixture(scope="module")
@@ -39,7 +39,7 @@ def error(client, sql: str) -> str:
     try:
         client.run(sql=sql)
         return ""
-    except WarpError as raised:
+    except ChargewireError as raised:
         return raised.detail
 
 
@@ -85,7 +85,7 @@ def test_a_readonly_session_cannot_mint_its_way_out_of_readonly(server):
     # store, and still reads it.
     readonly = server.user(name="wes", role="readonly")
     for sql in ["CREATE SCOPED TOKEN escape ALLOW SELECT, INSERT ON CATALOG sales_db", "CREATE ROLE planted"]:
-        with pytest.raises(WarpError) as refused:
+        with pytest.raises(ChargewireError) as refused:
             readonly.run(sql=sql)
         assert refused.value.code == "permission_denied", refused.value
         assert "has a readonly session and cannot run" in refused.value.detail, refused.value
@@ -134,9 +134,9 @@ def test_a_child_token_is_narrower_and_dies_with_its_parent(server, wes):
     expect_allowed(client=wes, sql="DROP SCOPED TOKEN parent")
     for client in (parent, child):
         assert error(client=client, sql="SELECT 1") != "", "a revoked token still works"
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         agent(server=server, token=child_token)
-    # Warp SQL §4.2: the refusal says why (its parent was revoked).
+    # Chargewire §4.2: the refusal says why (its parent was revoked).
     assert raised.value.code == "invalid_token" and raised.value.reason == "token_revoked", raised.value
     assert raised.value.detail == "this scoped token was revoked", raised.value
 
@@ -156,7 +156,7 @@ def short_lived_agent(server, client, name: str):
             bot = agent(server=server, token=token)
             bot.run(sql="SELECT 1")
             return token, bot, expires_at
-        except WarpError as raised:
+        except ChargewireError as raised:
             if "expired" not in raised.detail or valid >= 64:
                 raise
         expect_allowed(client=client, sql=f"DROP SCOPED TOKEN {name}")
@@ -167,7 +167,7 @@ def test_expiry_and_bookkeeping(server, admin, wes):
     token, bot, expires_at = short_lived_agent(server=server, client=wes, name="brief")
     # Until a second past the expiry the server recorded (whole seconds, on this machine's clock).
     time.sleep(max(0.0, (expires_at - datetime.now(tz=UTC)).total_seconds()) + 1)
-    with pytest.raises(WarpError) as refused:
+    with pytest.raises(ChargewireError) as refused:
         agent(server=server, token=token)  # an expired token does not start a session
     assert "expired" in refused.value.detail, str(refused.value)
     # A session that was open stops at the expiry too (its token carries the expiry).
@@ -199,11 +199,11 @@ def test_a_disabled_users_tokens_stop_working(server, admin):
     expect_allowed(client=admin, sql="GRANT worker TO vic")
     token = mint_scoped(client=server.user(name="vic"), sql="CREATE SCOPED TOKEN job ALLOW SELECT")
     expect_allowed(client=admin, sql="ALTER USER vic DISABLE")
-    with pytest.raises(WarpError):
+    with pytest.raises(ChargewireError):
         agent(server=server, token=token)
     # A token whose signature was tampered with is not a token.
     expect_allowed(client=admin, sql="ALTER USER vic ENABLE")
     agent(server=server, token=token)
-    with pytest.raises(WarpError) as forged:
+    with pytest.raises(ChargewireError) as forged:
         agent(server=server, token=token[:-4] + ("AAAA" if not token.endswith("AAAA") else "BBBB"))
     assert forged.value.code == "invalid_token"

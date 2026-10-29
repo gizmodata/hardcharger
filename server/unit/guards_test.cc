@@ -12,20 +12,20 @@
 #include "duckdb_v2.hpp"
 #include "guards.hpp"
 #include "sql_text.hpp"
-#include "warpsql/errors.hpp"
+#include "chargewire/errors.hpp"
 
 namespace {
 
 struct Db {
-  warpduckdb::Environment environment;
-  warpduckdb::Instance instance;
-  warpduckdb::Connection connection;
+  chargewire_duckdb::Environment environment;
+  chargewire_duckdb::Instance instance;
+  chargewire_duckdb::Connection connection;
   Db() {
-    warpduckdb::Call([&](auto* e) { return duckdb_v2_environment_create(environment.out(), e); });
-    warpduckdb::Call([&](auto* e) {
+    chargewire_duckdb::Call([&](auto* e) { return duckdb_v2_environment_create(environment.out(), e); });
+    chargewire_duckdb::Call([&](auto* e) {
       return duckdb_v2_instance_create_with_options(environment.get(), nullptr, nullptr, 0, instance.out(), e);
     });
-    warpduckdb::Call([&](auto* e) { return duckdb_v2_connection_create(instance.get(), connection.out(), e); });
+    chargewire_duckdb::Call([&](auto* e) { return duckdb_v2_connection_create(instance.get(), connection.out(), e); });
   }
 };
 
@@ -63,7 +63,7 @@ std::optional<std::string> ClassifyUnredactedSecretsSet(const std::string& sql) 
   for (const auto& piece : hardcharger::SplitStatements(Connection(), sql)) {
     try {
       hardcharger::CheckStatement({Connection(), true, true, nullptr}, piece, DUCKDB_V2_STATEMENT_TYPE_INVALID);
-    } catch (const warpsql::Error& error) {
+    } catch (const chargewire::Error& error) {
       return std::string(error.what());
     }
   }
@@ -82,7 +82,7 @@ CheckResult CheckNonAdminCommandAllowed(const std::string& sql) {
     try {
       hardcharger::CheckStatement({Connection(), false, false, nullptr}, piece,
                                   hardcharger::StatementType(Connection(), piece.text));
-    } catch (const warpsql::Error& error) {
+    } catch (const chargewire::Error& error) {
       return {false, error.what()};
     }
   }

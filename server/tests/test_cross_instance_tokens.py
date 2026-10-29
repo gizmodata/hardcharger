@@ -17,7 +17,7 @@ import uuid
 import pytest
 
 from conftest import problem
-from warp_client import mint_server_token
+from chargewire_client import mint_server_token
 
 SECRET = "cross-instance-test-secret-0123456789abcdef"
 

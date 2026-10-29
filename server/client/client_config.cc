@@ -187,13 +187,13 @@ std::string FormerParameterHint(const std::string& name) {
 
 }  // namespace
 
-// The URIs of the Hardcharger ADBC driver (hardcharger-adbc ToWarpURI, then warp-sql-adbc
+// The URIs of the Hardcharger ADBC driver (hardcharger-adbc ToChargewireURI, then chargewire-adbc
 // parseURI), exactly:
 //   hardcharger://host[:port][/prefix][?tls=false]  HTTPS unless ?tls=false; port 31337
-//   warp://host[:port][/prefix][?tls=false]         the same, port 443
+//   chargewire://host[:port][/prefix][?tls=false]         the same, port 443
 //   https://host[:port][/prefix], http://...        TLS, or plain HTTP; ports 443 and 80
 // tls takes true/false/1/0 (any case); no other parameter, no user info, and a host are
-// required. The base path is /warp unless the URI names one.
+// required. The base path is /chargewire unless the URI names one.
 bool ParseConnectionURI(const std::string& uri, ClientConfig& config) {
   const auto scheme_end = uri.find("://");
   if (scheme_end == std::string::npos || scheme_end == 0) {
@@ -206,7 +206,7 @@ bool ParseConnectionURI(const std::string& uri, ClientConfig& config) {
   if (scheme == "hardcharger") {
     tls_parameter = true;
     default_port = 31337;
-  } else if (scheme == "warp") {
+  } else if (scheme == "chargewire") {
     tls_parameter = true;
   } else if (scheme == "https") {
   } else if (scheme == "http") {
@@ -217,7 +217,7 @@ bool ParseConnectionURI(const std::string& uri, ClientConfig& config) {
                     ":// is not a Hardcharger URI scheme: use hardcharger://host:port for HTTPS, or "
                     "hardcharger://host:port?tls=false for plain HTTP");
   } else {
-    return UriError("invalid uri " + Redacted(uri) + ": the scheme must be hardcharger://, warp://, https:// or http://");
+    return UriError("invalid uri " + Redacted(uri) + ": the scheme must be hardcharger://, chargewire://, https:// or http://");
   }
 
   std::string rest = uri.substr(scheme_end + 3);
@@ -307,7 +307,7 @@ bool ParseConnectionURI(const std::string& uri, ClientConfig& config) {
   config.host = host;
   config.port = port;
   config.use_tls = tls;
-  config.base_path = path.empty() ? "/warp" : path;
+  config.base_path = path.empty() ? "/chargewire" : path;
   config.uri_given = true;
   return true;
 }
@@ -316,7 +316,7 @@ bool ParseConnectionURI(const std::string& uri, ClientConfig& config) {
 std::string BuildConnectionURI(const ClientConfig& config) {
   const bool v6 = config.host.find(':') != std::string::npos;
   std::string uri = "hardcharger://" + (v6 ? "[" + config.host + "]" : config.host) + ":" + std::to_string(config.port);
-  if (config.base_path != "/warp") uri += config.base_path;
+  if (config.base_path != "/chargewire") uri += config.base_path;
   if (!config.use_tls) uri += "?tls=false";
   return uri;
 }

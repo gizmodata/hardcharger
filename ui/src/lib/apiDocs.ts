@@ -15,7 +15,7 @@ export interface Discovery {
 
 /** Where a server serves its OpenAPI document when it doesn't say (spec §3.3). */
 export function defaultOpenApiUrl(origin: string): string {
-  return `${origin}/warp/v1/openapi.json`;
+  return `${origin}/chargewire/v1/openapi.json`;
 }
 
 /**
@@ -52,7 +52,7 @@ export async function loadOpenApi(
   signal?: AbortSignal,
 ): Promise<OpenApiDocument> {
   const url = openApiUrl(discovery, origin);
-  if (url === undefined) throw new NoOpenApiError("its discovery document (GET /warp) doesn't list one");
+  if (url === undefined) throw new NoOpenApiError("its discovery document (GET /chargewire) doesn't list one");
   const resp = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store", signal: signal ?? null });
   if (resp.status === 404) throw new NoOpenApiError(`${new URL(url).pathname} answered 404`);
   if (!resp.ok) throw new Error(`${new URL(url).pathname} answered ${resp.status}`);

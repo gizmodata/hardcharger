@@ -1,5 +1,5 @@
 // The console of embedded/hardcharger_embedded.h: the `hardcharger` command-line client's
-// own machinery (client/: WarpConnection, CommandProcessor, SqlProcessor, the renderers and
+// own machinery (client/: ChargewireConnection, CommandProcessor, SqlProcessor, the renderers and
 // RunNonInteractive, the path `hardcharger -c` takes), with what it writes to stdout and
 // stderr captured for the app.
 #include <cstdlib>
@@ -15,13 +15,13 @@
 #include "hardcharger_embedded.h"
 #include "shell_loop.hpp"
 #include "sql_processor.hpp"
-#include "warp_connection.hpp"
+#include "chargewire_connection.hpp"
 
 namespace hc = hardcharger::client;
 
 struct hardcharger_console {
   hc::ClientConfig config;
-  hc::WarpConnection connection;
+  hc::ChargewireConnection connection;
   std::unique_ptr<hc::CommandProcessor> commands;
 };
 

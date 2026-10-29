@@ -31,7 +31,7 @@ from cryptography.hazmat.primitives import serialization
 from conftest import BINARY, TIMEOUT_SCALE, clean_environment, run_unit_tests
 from rbac import expect_allowed, start_rbac_server
 from test_mtls_identity import Pki, start as start_tls, thumbprint_of
-from warp_client import ARROW_STREAM, ipc_bytes
+from chargewire_client import ARROW_STREAM, ipc_bytes
 
 # A statement that keeps every core busy for minutes, interruptible between chunks.
 CPU_BOUND = "SELECT count(*) FROM range(10000000000) a, range(1000) b"
@@ -104,7 +104,7 @@ def wait_until(predicate, timeout: float = 10 * TIMEOUT_SCALE, interval: float =
 
 def wait_state(viewer, session_id: str, state: str, shows_statement: bool = False) -> dict:
     """The session's row once it is in `state`. With shows_statement, once its statement
-    text shows too: Warp SQL reports a statement queued (accepted, not yet on the engine)
+    text shows too: Chargewire reports a statement queued (accepted, not yet on the engine)
     and then running (parsed and checked first) before the engine has recorded its text."""
     return wait_until(lambda: (row := row_of(viewer=viewer, session_id=session_id)) and row["state"] == state
                       and (row["statement"] is not None or not shows_statement) and row)
@@ -176,7 +176,7 @@ def cpu_used(pid: int, seconds: float) -> float:
 
 def read_to_end(reader: "StreamRead", deadline: float) -> bool:
     """Reads the rest of `reader`'s body; True when it ended with Arrow's end-of-stream
-    marker (complete), False when it was cut off (Warp SQL §6.6). Fails past `deadline`."""
+    marker (complete), False when it was cut off (Chargewire §6.6). Fails past `deadline`."""
     tail = b""
     try:
         for chunk in reader.chunks:
@@ -333,7 +333,7 @@ def test_a_queued_statement_shows_its_text_as_the_log_does(launcher):
     wait_state(viewer=admin, session_id=holder.id, state="running")
     secret = "CREATE SECRET queued_s3 (TYPE s3, KEY_ID 'AKIAQUEUEDEXAMPLE', SECRET 'hunter2-queued-secret')"
     queued, outcome = in_background(target=lambda: victim.execute(sql=secret))
-    # 'queued' twice over: first in Warp SQL's sense (accepted, not yet on the engine), with
+    # 'queued' twice over: first in Chargewire's sense (accepted, not yet on the engine), with
     # no text yet, then in the statement queue, with its text: this test is about the second.
     row = wait_state(viewer=admin, session_id=victim.id, state="queued", shows_statement=True)
     assert row["queued_since"] is not None and row["statement_started_at"] is None, row
@@ -357,8 +357,8 @@ def test_retained_results_and_result_partitions(server):
     assert (row["retained_results"], row["retained_rows"], row["state"]) == (1, 5000, "idle"), row
     # A result split for a client that reads partitions at once.
     with StreamRead(server=server, session=victim, url=f"{victim.url}/statements", method="POST",
-                    json_body={"sql": STREAM}, headers={"Warp-Result-Partitions": "4"}) as reader:
-        assert reader.response.headers["warp-result-partitions"] == "4", reader.response.headers
+                    json_body={"sql": STREAM}, headers={"Chargewire-Result-Partitions": "4"}) as reader:
+        assert reader.response.headers["chargewire-result-partitions"] == "4", reader.response.headers
         reader.first_chunk()
         row = wait_state(viewer=admin, session_id=victim.id, state="streaming")
         assert row["result_partitions"] == 4 and row["open_result_streams"] == 1, row
@@ -608,11 +608,11 @@ def test_a_streaming_result_is_cut_off(server, stop):
 def test_partitioned_results_are_cut_off(server, stop):
     admin, victim = server.admin(), server.admin()
     first = StreamRead(server=server, session=victim, url=f"{victim.url}/statements", method="POST",
-                       json_body={"sql": STREAM}, headers={"Warp-Result-Partitions": "3"})
+                       json_body={"sql": STREAM}, headers={"Chargewire-Result-Partitions": "3"})
     readers = [first]
     try:
-        assert first.response.headers["warp-result-partitions"] == "3", first.response.headers
-        statement_id = first.response.headers["warp-statement-id"]
+        assert first.response.headers["chargewire-result-partitions"] == "3", first.response.headers
+        statement_id = first.response.headers["chargewire-statement-id"]
         for partition in (1, 2):
             readers.append(StreamRead(server=server, session=victim,
                                       url=f"{victim.url}/statements/{statement_id}/result?partition={partition}"))
@@ -766,7 +766,7 @@ def test_result_retention_seconds_sets_expires_at_and_the_expiry(launcher, tmp_p
 
 def test_a_read_in_progress_when_the_result_expires_runs_to_the_end(launcher):
     """Expiry applies to reads that start afterwards (410 result_expired); one that has started
-    gets every batch and the end-of-stream marker (Warp SQL spec §6.5). Windows CI once saw a
+    gets every batch and the end-of-stream marker (Chargewire spec §6.5). Windows CI once saw a
     poll of a 2 s retention cut mid-body ("incomplete chunked read") by the sweep. Here the read
     stalls mid-stream (a result far larger than what the sockets buffer) until a new read gets 410,
     while the server still counts it as an open stream: the expiry happened during the read."""

@@ -3,7 +3,7 @@
 namespace hardcharger {
 
 inline constexpr const char* kVersion = "@HARDCHARGER_VERSION@";
-// The Warp SQL specification this build implements (its OpenAPI document's info.version).
-inline constexpr const char* kWarpSqlVersion = "@WARPSQL_SPEC_VERSION@";
+// The Chargewire specification this build implements (its OpenAPI document's info.version).
+inline constexpr const char* kChargewireVersion = "@CHARGEWIRE_SPEC_VERSION@";
 
 }  // namespace hardcharger

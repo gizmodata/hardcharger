@@ -8,14 +8,14 @@
 
 #include "authz/model.hpp"
 #include "authz/types.hpp"
-#include "warpsql/errors.hpp"
+#include "chargewire/errors.hpp"
 
 namespace hardcharger::authz {
 
 namespace {
 
-using warpsql::Error;
-using warpsql::ErrorCode;
+using chargewire::Error;
+using chargewire::ErrorCode;
 
 // ---- A small columnar builder ----
 

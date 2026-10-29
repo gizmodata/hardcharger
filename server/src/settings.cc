@@ -14,8 +14,8 @@ namespace hardcharger {
 
 namespace {
 
-using warpsql::Error;
-using warpsql::ErrorCode;
+using chargewire::Error;
+using chargewire::ErrorCode;
 
 std::string Upper(std::string text) {
   std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return std::toupper(c); });
@@ -112,7 +112,7 @@ std::vector<Setting> Build() {
                .input_type = "INTEGER",
                .option = "query_timeout_seconds",
                .default_value = number(kDefaults.query_timeout_seconds),
-               .description = "Statement timeout in seconds (0: none). A request's Warp-Statement-Timeout wins.",
+               .description = "Statement timeout in seconds (0: none). A request's Chargewire-Statement-Timeout wins.",
                .get_session = [](const Session& x) -> O {
                  auto v = x.settings().query_timeout;
                  return v ? O(std::to_string(*v)) : std::nullopt;

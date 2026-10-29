@@ -1,7 +1,7 @@
 # Runtime extension validation
 
 Local macOS ARM64 static Release build, 2026-10-26, preparing v2.1.0.
-DuckDB v2.0.0 d54cbbe; Warp SQL b74af00 (unchanged submodule pin).
+DuckDB v2.0.0 d54cbbe; Chargewire b74af00 (unchanged submodule pin).
 
 - A fresh dependency build links only core_functions, parquet, json and icu.
 - 18 targeted integration/build-cache checks passed: signed runtime modules; S3 and
@@ -17,7 +17,7 @@ DuckDB v2.0.0 d54cbbe; Warp SQL b74af00 (unchanged submodule pin).
 - Additional DuckDB-store access-control pass: 533 passed.
 - Server C++: 168 passed, one existing PostgreSQL instrumentation skip. Client C++
   cases ran through the server suite’s fixtures (a bare invocation has no test server).
-- Warp SQL C++: 74 SDK and 35 client tests passed.
+- Chargewire C++: 74 SDK and 35 client tests passed.
 - Hardcharger protocol conformance: 283 passed; all 38 OpenAPI operations checked.
 - Portable-library check: server/client link only macOS libraries/frameworks.
 - Python/server versions agree at 2.1.0; release arithmetic and version-manifest tests

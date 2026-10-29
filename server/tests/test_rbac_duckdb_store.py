@@ -24,7 +24,7 @@ import sys
 
 import pytest
 
-from rbac import WarpError, expect_allowed, rbac_env, start_rbac_server
+from rbac import ChargewireError, expect_allowed, rbac_env, start_rbac_server
 
 PRIVATE = "one of the server's own files"
 CASE_INSENSITIVE = sys.platform in ("darwin", "win32")
@@ -38,7 +38,7 @@ def store_dir(tmp_path: pathlib.Path, name: str = "store") -> pathlib.Path:
 
 def expect_private(client, sql: str, what: str) -> None:
     """`sql` must be refused by the private-file guard, naming `what`."""
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         client.run(sql=sql)
     detail = raised.value.detail
     assert "Hardcharger blocked access to" in detail and PRIVATE in detail, f"{sql}: {raised.value}"
@@ -128,9 +128,9 @@ def test_a_lost_or_forged_wal_undoes_nothing(launcher, tmp_path, wal):
     if log.exists():
         log.chmod(0o600)
     restarted = start_rbac_server(launcher=launcher, store_uri=f"duckdb:{file}", args=data)
-    with pytest.raises(WarpError, match="already exists"):
+    with pytest.raises(ChargewireError, match="already exists"):
         restarted.admin().run(sql="CREATE ROLE last_one")
-    assert "no SELECT privilege" in str(pytest.raises(WarpError, restarted.user(name="joe").run,
+    assert "no SELECT privilege" in str(pytest.raises(ChargewireError, restarted.user(name="joe").run,
                                                       sql="SELECT * FROM t").value)
 
 
@@ -148,7 +148,7 @@ def test_one_server_per_store_file(launcher, tmp_path):
     first.running.stop()
     third = start_rbac_server(launcher=launcher, store_uri=f"duckdb:{file}")
     for role in ("only_here", "still_here"):
-        with pytest.raises(WarpError, match="already exists"):
+        with pytest.raises(ChargewireError, match="already exists"):
             third.admin().run(sql=f"CREATE ROLE {role}")
 
 
@@ -269,7 +269,7 @@ def attack(guarded, who: str, sql_for) -> None:
     decoy_sql, store_sql = sql_for(guarded.targets["decoy"]), sql_for(guarded.targets["store"])
     try:
         client.run(sql=decoy_sql)
-    except WarpError as error:
+    except ChargewireError as error:
         pytest.fail(reason=f"the decoy twin failed, so the attack proves nothing: {decoy_sql} -> {error}")
     finally:
         if decoy_sql.startswith("ATTACH"):
@@ -347,7 +347,7 @@ def test_copy_from_the_store_is_refused(guarded, who, tmp_path):
                          "IGNORE_ERRORS true)")
     try:
         client.run(sql=sql_for(csv_decoy))
-    except WarpError as error:
+    except ChargewireError as error:
         pytest.fail(reason=f"the decoy twin failed, so the attack proves nothing: {sql_for(csv_decoy)} -> {error}")
     lines = client.run(sql=f"SELECT line FROM {who}_lines ORDER BY line").column("line").to_pylist()
     assert lines == ["decoy line one", "decoy line two"], lines
@@ -432,11 +432,11 @@ def test_the_attached_files_are_read_through_their_catalogs_only(attached, who, 
         twin = template.format(d=decoy, n=name)
         try:
             client.run(sql=twin)
-        except WarpError as error:
+        except ChargewireError as error:
             pytest.fail(reason=f"the decoy twin failed: {twin} -> {error}")
         (decoy / f"{name}.wal").unlink(missing_ok=True)
         sql = template.format(d=directory, n=name)
-        with pytest.raises(WarpError) as raised:
+        with pytest.raises(ChargewireError) as raised:
             client.run(sql=sql)
         assert "Hardcharger blocked access to" in raised.value.detail and PRIVATE in raised.value.detail, \
             f"{sql}: {raised.value}"
@@ -461,9 +461,9 @@ def test_the_attached_files_keep_working(attached):
     assert admin.run(sql="SELECT count(*) AS n FROM _hardcharger_instr.main.sessions").column("n").to_pylist()[0] >= 1
     # fay reads none of it: no grant on the table, and the server's own catalogs are hidden.
     fay = attached.principals["fay"]
-    with pytest.raises(WarpError):
+    with pytest.raises(ChargewireError):
         fay.run(sql="SELECT * FROM secret")
-    with pytest.raises(WarpError):
+    with pytest.raises(ChargewireError):
         fay.run(sql="SELECT * FROM _hardcharger_instr.main.sql_statements")
 
 
@@ -553,7 +553,7 @@ def expect_not_private(client, sql: str) -> None:
     try:
         client.run(sql=sql)
         client.run(sql="DETACH evil")  # it attached: clean up
-    except WarpError as error:
+    except ChargewireError as error:
         assert "Hardcharger blocked access to" not in error.detail, f"{sql}: unexpectedly blocked as private: {error}"
 
 
@@ -602,12 +602,12 @@ def test_sqlite_table_functions_cannot_reach_the_servers_files(sqlite_server):
                 expect_private(client=client, sql=f"CALL sqlite_attach('{directory}/srv.duckdb.wal')",
                                what="the server's database")
             else:
-                with pytest.raises(WarpError):
+                with pytest.raises(ChargewireError):
                     client.run(sql=f"CALL sqlite_attach('{directory}/srv.duckdb.wal')")
             # sqlite_scan / sqlite_query of a private file never succeed (they get no rows).
             for read in (f"SELECT * FROM sqlite_scan('{directory}/srv.duckdb', 'x')",
                          f"SELECT * FROM sqlite_query('{directory}/srv.duckdb', 'SELECT 1')"):
-                with pytest.raises(WarpError):
+                with pytest.raises(ChargewireError):
                     client.run(sql=read)
         else:
             # Offline: the functions can't bind at all; ATTACH TYPE sqlite still closes the

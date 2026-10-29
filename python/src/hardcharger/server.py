@@ -66,7 +66,7 @@ class Server:
     Args:
         database: DuckDB database file, or ``":memory:"`` (the default).
         host: Address to listen on (default loopback only).
-        port: Warp SQL port; ``None`` picks a free one.
+        port: Chargewire port; ``None`` picks a free one.
         health_port: Port answering ``/health``; ``None`` picks a free one.
         username: The administrator's user name (default ``hardcharger``).
         password: The administrator's password; ``None`` generates a random one
@@ -291,7 +291,7 @@ class Server:
         scheme = "https" if self.tls else "http"
         host = f"[{self._host}]" if ":" in self._host else self._host
         probe_host = "127.0.0.1" if self._host in ("0.0.0.0", "") else host
-        url = f"{scheme}://{probe_host}:{self._port}/warp"
+        url = f"{scheme}://{probe_host}:{self._port}/chargewire"
         deadline = time.monotonic() + self._startup_timeout
         last_error: Exception | None = None
         while time.monotonic() < deadline:

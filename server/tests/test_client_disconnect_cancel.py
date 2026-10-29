@@ -2,12 +2,12 @@
 
 A client that goes away must not leave its query running: the session runs one
 statement at a time, so a follow-up SELECT 1 on the same session finishing promptly
-proves the query was interrupted. 1.x's two ways to go away become Warp SQL's:
+proves the query was interrupted. 1.x's two ways to go away become Chargewire's:
 
 - CancelledDoGetInterruptsRunningQuery: the client closes the connection of a streamed,
   unretained result (§6.5); here both mid-stream and while the first batch is still
   being computed (1.x's long aggregate).
-- ClientDeadlineInterruptsRunningQuery: Warp-Statement-Timeout: 1000 ends it with
+- ClientDeadlineInterruptsRunningQuery: Chargewire-Statement-Timeout: 1000 ends it with
   cancel_reason "timeout" (§6.9).
 - ConsumedQueryCompletesNormally: the control.
 All 3 apply.
@@ -19,7 +19,7 @@ import time
 import httpx
 import pytest
 
-from warp_client import ARROW_STREAM, read_table
+from chargewire_client import ARROW_STREAM, read_table
 
 LONG_AGGREGATE = "SELECT sum(a.range * b.range) FROM range(100000000) a, range(100000) b"
 LONG_STREAM = "SELECT a.range * 2 AS v FROM range(100000000000) a"
@@ -68,7 +68,7 @@ def test_closing_the_connection_before_the_first_batch_interrupts_the_query(serv
 
 def test_statement_timeout_interrupts_running_query(server):
     session = server.admin()
-    response = session.submit(sql=LONG_AGGREGATE, headers={"Warp-Statement-Timeout": "1000",
+    response = session.submit(sql=LONG_AGGREGATE, headers={"Chargewire-Statement-Timeout": "1000",
                                                            "Prefer": "respond-async"})
     doc = session.wait_done(statement_id=response.json()["statement_id"], timeout=30)
     assert doc["state"] == "cancelled" and doc["cancel_reason"] == "timeout", doc

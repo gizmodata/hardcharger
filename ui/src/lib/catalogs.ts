@@ -2,11 +2,11 @@
 // all of the user's roles, through the session's own connection), shared by the schema browser
 // and autocomplete.
 
-import type { Connection } from "@gizmodata/warp-sql";
+import type { Connection } from "@gizmodata/chargewire";
 
 import { CatalogCache, type ConnectionSource } from "./catalogCache";
 import { RoleConnection } from "./roles";
-import type { ConnectionOptions } from "./warp";
+import type { ConnectionOptions } from "./chargewire";
 
 const bySession = new WeakMap<object, Map<string, CatalogCache>>();
 

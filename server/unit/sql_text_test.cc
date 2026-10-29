@@ -21,11 +21,11 @@ namespace {
 class SqlText : public ::testing::Test {
  protected:
   static void SetUpTestSuite() {
-    warpduckdb::Call([](auto* e) { return duckdb_v2_environment_create(environment_.out(), e); });
-    warpduckdb::Call([](auto* e) {
+    chargewire_duckdb::Call([](auto* e) { return duckdb_v2_environment_create(environment_.out(), e); });
+    chargewire_duckdb::Call([](auto* e) {
       return duckdb_v2_instance_create_with_options(environment_.get(), nullptr, nullptr, 0, instance_.out(), e);
     });
-    warpduckdb::Call([](auto* e) { return duckdb_v2_connection_create(instance_.get(), connection_.out(), e); });
+    chargewire_duckdb::Call([](auto* e) { return duckdb_v2_connection_create(instance_.get(), connection_.out(), e); });
   }
   static void TearDownTestSuite() {
     connection_.reset();
@@ -51,9 +51,9 @@ class SqlText : public ::testing::Test {
     return ParseKillSession(pieces[0]);
   }
 
-  static inline warpduckdb::Environment environment_;
-  static inline warpduckdb::Instance instance_;
-  static inline warpduckdb::Connection connection_;
+  static inline chargewire_duckdb::Environment environment_;
+  static inline chargewire_duckdb::Instance instance_;
+  static inline chargewire_duckdb::Connection connection_;
   std::string sql_;
 };
 

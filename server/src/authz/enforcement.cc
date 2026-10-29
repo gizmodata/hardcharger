@@ -75,11 +75,11 @@ const std::unordered_set<std::string>& AllowedTableFunctions() {
       // Bulk ingest reads the caller's own
       // upload through it; it reads nothing
       // else (the SDK refuses any other call).
-      "warp_upload",
+      "chargewire_upload",
       // A prepare describes its result by binding it (never run); it converts
       // the prepared statement's own columns, nothing else (the SDK refuses
       // any other call).
-      "warp_result_schema",
+      "chargewire_result_schema",
       // The server's own, which read only what the session may see (its own principal's
       // sessions, the settings rows that aren't admin-only, the server facts that aren't
       // the unrestricted administrator's, its own grants).
@@ -684,7 +684,7 @@ class PlanChecker {
     if (auto entry = LookUp(context_, dd::CatalogType::TABLE_ENTRY, parts)) {
       const ObjectPath path = PathOf(*entry);
       RequireVisible(path.catalog);
-      // Describing a table lists its columns: only one the user may access (Warp SQL
+      // Describing a table lists its columns: only one the user may access (Chargewire
       // §9.4), as its listings show it. Which columns, the plan rewrite narrows.
       if (!snapshot_.ObjectListed(principal_, path)) {
         if (principal_.catalog_rules) DenyByCatalogAccess(path.catalog, CatalogAccessLevel::kRead);

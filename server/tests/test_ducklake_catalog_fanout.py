@@ -2,7 +2,7 @@
 
 With 10 DuckLake catalogs on PostgreSQL metadata attached, working with one of them
 must not open PostgreSQL connections to the other nine: USE, the catalogs, db-schemas
-and tables metadata requests (Warp SQL §10; 1.x: Flight SQL GetCatalogs, GetDbSchemas,
+and tables metadata requests (Chargewire §10; 1.x: Flight SQL GetCatalogs, GetDbSchemas,
 GetTables with and without schemas) and a qualified SELECT each open at most 3 new
 backends (pg_stat_database.sessions), once with local data and once with data on S3.
 Needs server/tests/docker-compose.yml (PostgreSQL and an S3 gateway); fails without it.

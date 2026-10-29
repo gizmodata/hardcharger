@@ -11,7 +11,7 @@
 
 #include "logging.hpp"
 
-#include "warpsql/backend.hpp"
+#include "chargewire/backend.hpp"
 
 namespace hardcharger {
 
@@ -19,7 +19,7 @@ namespace authz {
 class AccessControl;
 }
 
-class JwtTokenService : public warpsql::TokenService {
+class JwtTokenService : public chargewire::TokenService {
  public:
   // `access`: access control, or null. With it, every token of a store user is checked
   // against the store on every request, so a dropped or disabled user, a changed
@@ -28,13 +28,13 @@ class JwtTokenService : public warpsql::TokenService {
                   bool allow_cross_instance, LogLevel log_level = LogLevel::kInfo,
                   std::shared_ptr<authz::AccessControl> access = nullptr);
 
-  Issued Issue(const warpsql::Principal& principal) override;
-  warpsql::Principal Validate(std::string_view token) override;
+  Issued Issue(const chargewire::Principal& principal) override;
+  chargewire::Principal Validate(std::string_view token) override;
   // A certificate-bound token (spec §4.4) carries RFC 8705's cnf claim,
   // {"x5t#S256": thumbprint}, signed with the rest; Validate() returns it.
   bool BindsCertificates() const override { return true; }
   // Logs a token's use (its first at INFO, later ones at DEBUG).
-  void Accepted(std::string_view token, const warpsql::Principal& principal) override;
+  void Accepted(std::string_view token, const chargewire::Principal& principal) override;
 
   // A scoped token (CREATE SCOPED TOKEN) for `user_name`: an access token limited by the
   // store's record `scope_id`, valid until `expires_at` (seconds since the epoch).

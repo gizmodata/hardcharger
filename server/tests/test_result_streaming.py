@@ -1,6 +1,6 @@
 """Port of GizmoSQL 1.x tests/integration/test_result_streaming.cpp (2 cases).
 
-A 100,000-row result arrives in many Arrow batches (Warp SQL §6.4), every column intact
+A 100,000-row result arrives in many Arrow batches (Chargewire §6.4), every column intact
 (types, ids contiguous across batches, every 7th value NULL, timestamps, booleans, sums
 in closed form), and no batch is larger than result_batch_rows: 2048 here, one DuckDB
 vector, as 1.x streamed (Hardcharger's default is 122,880, so the server is started with
@@ -14,7 +14,7 @@ import datetime
 import pyarrow as pa
 import pytest
 
-from warp_client import read_batches
+from chargewire_client import read_batches
 
 ROWS = 100_000
 INIT_SQL = ("CREATE TABLE stream_rows AS SELECT i AS id, 'row-' || i AS label, "

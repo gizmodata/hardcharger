@@ -52,7 +52,7 @@ final class AppModel {
         else { return nil }
         let fingerprint = items.first { $0.name == "fingerprint" }?.value
         let name = items.first { $0.name == "name" }?.value ?? origin.host() ?? "Hardcharger"
-        return RemoteServer(name: name, endpoint: WarpEndpoint(origin: origin, pinnedFingerprint: fingerprint),
+        return RemoteServer(name: name, endpoint: ChargewireEndpoint(origin: origin, pinnedFingerprint: fingerprint),
                             signIn: .password, username: LocalCredential.defaultUsername)
     }
 

@@ -1,4 +1,4 @@
-import type { Connection } from "@gizmodata/warp-sql";
+import type { Connection } from "@gizmodata/chargewire";
 import { useEffect, useState } from "react";
 
 import { errorMessage, useSession } from "../session";

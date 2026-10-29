@@ -1,4 +1,4 @@
-import type { Connection, DiscoveryDocument } from "@gizmodata/warp-sql";
+import type { Connection, DiscoveryDocument } from "@gizmodata/chargewire";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Layout } from "./components/Layout";
@@ -10,7 +10,7 @@ import { endSessionsOnExit } from "./lib/pageExit";
 import { useRoute } from "./lib/route";
 import { useTheme } from "./lib/theme";
 import { loadModule } from "./lib/stale";
-import { type ConnectionOptions, discover, openConnection } from "./lib/warp";
+import { type ConnectionOptions, discover, openConnection } from "./lib/chargewire";
 import {
   type AppSession,
   type Identity,

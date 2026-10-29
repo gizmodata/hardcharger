@@ -28,8 +28,8 @@
 namespace hardcharger::authz {
 
 namespace dd = duckdb;
-using warpsql::Error;
-using warpsql::ErrorCode;
+using chargewire::Error;
+using chargewire::ErrorCode;
 
 // An access-control statement, parsed: run at Execute, or kept by Prepare.
 struct ParsedCommand {
@@ -61,7 +61,7 @@ std::string Fingerprint(const std::optional<std::string>& password_hash) {
   return hex;
 }
 
-// An access-control failure as a Warp SQL error: refusals are permission_denied, the
+// An access-control failure as a Chargewire error: refusals are permission_denied, the
 // rest (unknown names, malformed statements) are SQL errors.
 Error FromStatus(const arrow::Status& status, const char* sqlstate = "") {
   const std::string& message = status.message();
@@ -118,27 +118,27 @@ std::shared_ptr<arrow::RecordBatchReader> Rows(const CommandResult& result) {
 
 // A client-prepared statement under access control: the DuckDB statement and what its
 // first successful run must record (who owns what it creates).
-class GuardedPrepared : public warpsql::PreparedStatement {
+class GuardedPrepared : public chargewire::PreparedStatement {
  public:
-  GuardedPrepared(std::unique_ptr<warpsql::PreparedStatement> inner,
+  GuardedPrepared(std::unique_ptr<chargewire::PreparedStatement> inner,
                   std::vector<PendingOwnership> ownership)
       : inner_(std::move(inner)), ownership_(std::move(ownership)) {}
   std::shared_ptr<arrow::Schema> ParameterSchema() override { return inner_->ParameterSchema(); }
   std::shared_ptr<arrow::Schema> ResultSchema() override { return inner_->ResultSchema(); }
 
-  warpsql::PreparedStatement& inner() { return *inner_; }
+  chargewire::PreparedStatement& inner() { return *inner_; }
   std::vector<PendingOwnership> TakeOwnership() { return std::move(ownership_); }
   // A run that failed: the next one records them.
   void GiveBackOwnership(std::vector<PendingOwnership> ownership) { ownership_ = std::move(ownership); }
 
  private:
-  std::unique_ptr<warpsql::PreparedStatement> inner_;
+  std::unique_ptr<chargewire::PreparedStatement> inner_;
   std::vector<PendingOwnership> ownership_;
 };
 
 // A prepared access-control statement: it runs when executed, as it runs when
 // prepared would run it twice for clients that prepare and then execute.
-class PreparedAccessControl : public warpsql::PreparedStatement {
+class PreparedAccessControl : public chargewire::PreparedStatement {
  public:
   explicit PreparedAccessControl(ParsedCommand command) : command_(std::move(command)) {}
   std::shared_ptr<arrow::Schema> ParameterSchema() override { return arrow::schema({}); }
@@ -217,7 +217,7 @@ std::string TextAt(const arrow::RecordBatch& batch, int column, int64_t row) {
   return scalar.ok() && (*scalar)->is_valid ? (*scalar)->ToString() : std::string();
 }
 
-// Tables metadata with schemas (Warp SQL §10: table_schema, an Arrow schema as an IPC
+// Tables metadata with schemas (Chargewire §10: table_schema, an Arrow schema as an IPC
 // message, in column 4): each table's schema with only the columns `listed` keeps.
 std::shared_ptr<arrow::RecordBatchReader> ListedColumnsOnly(
     std::shared_ptr<arrow::RecordBatchReader> tables,
@@ -409,7 +409,7 @@ std::optional<std::string> AccessControl::CertificateUser(const std::string& ide
   if (user == nullptr || !user->enabled) return std::nullopt;
   // User names compare ignoring ASCII case, but a URI identity (a SPIFFE ID, whose path is
   // case-sensitive) names that user only when it is spelled exactly the same.
-  if (!warpsql::CertificateIdentitiesMatch(user->name, identity)) {
+  if (!chargewire::CertificateIdentitiesMatch(user->name, identity)) {
     throw Error(ErrorCode::kUnknownCertificateIdentity,
                 "the client certificate's URI identity '" + identity + "' differs from user '" + user->name +
                     "' only in case; URI identities must match a user name exactly");
@@ -421,8 +421,8 @@ AccessControl::TokenStanding AccessControl::CheckToken(const Identity& who) cons
   if (who.superuser || catalog_rules_only_) return {};
   RequireFresh(*engine_);
   // Only for a token this server signed and verified (JwtTokenService::Validate), so each
-  // refusal says why (Warp SQL §4.2's reason): only the token's holder learns it.
-  namespace why = warpsql::reason;
+  // refusal says why (Chargewire §4.2's reason): only the token's holder learns it.
+  namespace why = chargewire::reason;
   auto snapshot = engine_->snapshot();
   const UserRecord* user = snapshot->FindUserByName(who.user_name);
   if (user == nullptr || !user->enabled) {
@@ -494,8 +494,8 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
       principal.scope = snapshot->ValidScope(who.scope_id, principal.user_id, NowSeconds());
       if (!principal.scope) {
         const auto refusal =
-            snapshot->ScopeRefusal(who.scope_id, principal.user_id, NowSeconds()).value_or(warpsql::reason::kTokenRevoked);
-        throw Error::InvalidToken(refusal, refusal == warpsql::reason::kTokenRevoked ? "this scoped token was revoked"
+            snapshot->ScopeRefusal(who.scope_id, principal.user_id, NowSeconds()).value_or(chargewire::reason::kTokenRevoked);
+        throw Error::InvalidToken(refusal, refusal == chargewire::reason::kTokenRevoked ? "this scoped token was revoked"
                                                                                     : "this scoped token has expired");
       }
     }
@@ -536,7 +536,7 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
     if (record && !record->default_catalog.empty()) {
       RbacSessionState::BypassScope internal(ContextOf(connection));
       try {
-        warpduckdb::RunSql(connection, "USE " + Quoted(record->default_catalog));
+        chargewire_duckdb::RunSql(connection, "USE " + Quoted(record->default_catalog));
         guard->started_in_tenant_catalog_ = true;
       } catch (const Error& error) {
         Log(LogLevel::kWarning, "a tenant's default catalog could not be used",
@@ -582,7 +582,7 @@ void AccessControl::OnSnapshot(const Snapshot& snapshot) {
     } else if (tenant_changed) {
       reason = "tenant's catalogs changed";
     } else if (scope_refusal) {
-      reason = *scope_refusal == warpsql::reason::kTokenRevoked ? "scoped token revoked" : "scoped token expired";
+      reason = *scope_refusal == chargewire::reason::kTokenRevoked ? "scoped token revoked" : "scoped token expired";
     }
     if (!reason.empty()) {
       guard->End(reason);
@@ -664,7 +664,7 @@ void SessionGuard::RequireLive() const {
   std::lock_guard lock(mutex_);
   if (ended_) {
     // Spec §5.6's reason for what access control saw.
-    namespace why = warpsql::reason;
+    namespace why = chargewire::reason;
     const char* reason = why::kCredentialsChanged;  // password changed, the tenant's catalogs changed
     if (*ended_ == "user dropped" || *ended_ == "user disabled") reason = why::kPrincipalDropped;
     if (*ended_ == "scoped token revoked") reason = why::kTokenRevoked;
@@ -673,12 +673,12 @@ void SessionGuard::RequireLive() const {
   }
   if (!unrestricted_ && !owner_.catalog_rules_only_) RequireFresh(*owner_.engine_);
   if (connection_ == nullptr) {
-    throw Error::SessionEnded(warpsql::reason::kKilled, "the session has ended");
+    throw Error::SessionEnded(chargewire::reason::kKilled, "the session has ended");
   }
   // A session opened with a scoped token ends with the scope: nothing could run in it any
   // more, whatever token a request on it carries.
   if (scope_expires_at_ != 0 && scope_expires_at_ <= NowSeconds()) {
-    throw Error::SessionEnded(warpsql::reason::kTokenExpired,
+    throw Error::SessionEnded(chargewire::reason::kTokenExpired,
                               "Hardcharger access control ended this session (scoped token expired)");
   }
 }
@@ -776,9 +776,9 @@ Error SessionGuard::ForTenant(const Error& error) const {
 }
 
 void SessionGuard::CheckBeforeBind(std::string_view sql) {
-  std::vector<warpduckdb::SqlStatement> statements;
+  std::vector<chargewire_duckdb::SqlStatement> statements;
   try {
-    statements = warpduckdb::Parse(connection_, sql);
+    statements = chargewire_duckdb::Parse(connection_, sql);
   } catch (const Error&) {
     return;  // DuckDB reports what it makes of the text when it runs it
   }
@@ -798,7 +798,7 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
   // A tenant's user may not even name what another tenant has: DuckDB binds some
   // statements without planning them (DESCRIBE, CREATE VIEW), so whether they bind
   // would say whether the name exists. And DESCRIBE lists a table's columns, which only
-  // a user who may see them all may read that way (Warp SQL §9.4).
+  // a user who may see them all may read that way (Chargewire §9.4).
   NamedTableCallback named_table;
   std::optional<SessionObjectResolver> resolver;
   const bool restricted = snapshot->RestrictsCatalogs(principal);
@@ -899,7 +899,7 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
   }
 }
 
-warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) {
+chargewire::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) {
   auto engine = owner_.engine_;
   auto state = StateOf(connection_);
   if (!state) {
@@ -915,7 +915,7 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
                     ": an administrator token with catalog_access rules cannot run access-control statements",
                 "42501");
   }
-  // A certificate-bound session's scoped tokens are bound to its certificate (Warp SQL §4.4),
+  // A certificate-bound session's scoped tokens are bound to its certificate (Chargewire §4.4),
   // so one minted FOR USER someone else would be usable only over this certificate: refused,
   // rather than handed to a user who can't use it (or who would then hold this key).
   if (const auto* scoped = std::get_if<ScopedTokenCommand>(&parsed.command);
@@ -946,7 +946,7 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
       throw Error(ErrorCode::kNotImplemented,
                   "Hardcharger access control: this server cannot sign scoped tokens");
     }
-    // A certificate-bound minter's tokens are bound to the same certificate (Warp SQL
+    // A certificate-bound minter's tokens are bound to the same certificate (Chargewire
     // §4.4): a scoped token can't carry a session's rights away from its certificate.
     const std::string token = owner_.signer_(result.minted->user_name, result.minted->token_id,
                                              result.minted->expires_at, identity_.certificate_thumbprint);
@@ -965,7 +965,7 @@ warpsql::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) 
          {"user", identity_.user_name},
          {"statement", parsed.kind},
          {"status", "success"}});
-  warpsql::StatementOutcome outcome;
+  chargewire::StatementOutcome outcome;
   outcome.rows = Rows(result);
   return outcome;
 }
@@ -983,9 +983,9 @@ std::optional<ParsedCommand> ParseCommand(std::string_view sql) {
 
 }  // namespace
 
-warpsql::StatementOutcome SessionGuard::Execute(
+chargewire::StatementOutcome SessionGuard::Execute(
     std::string_view sql, bool has_parameters,
-    const std::function<warpsql::StatementOutcome()>& run) {
+    const std::function<chargewire::StatementOutcome()>& run) {
   RequireLive();
   if (!owner_.catalog_rules_only_) {
     if (auto command = ParseCommand(sql)) {
@@ -1009,9 +1009,9 @@ warpsql::StatementOutcome SessionGuard::Execute(
   }
 }
 
-std::unique_ptr<warpsql::PreparedStatement> SessionGuard::Prepare(
+std::unique_ptr<chargewire::PreparedStatement> SessionGuard::Prepare(
     std::string_view sql,
-    const std::function<std::unique_ptr<warpsql::PreparedStatement>()>& prepare) {
+    const std::function<std::unique_ptr<chargewire::PreparedStatement>()>& prepare) {
   RequireLive();
   if (!owner_.catalog_rules_only_) {
     if (auto command = ParseCommand(sql)) {
@@ -1034,9 +1034,9 @@ std::unique_ptr<warpsql::PreparedStatement> SessionGuard::Prepare(
   }
 }
 
-warpsql::StatementOutcome SessionGuard::ExecutePrepared(
-    warpsql::PreparedStatement& statement, bool has_parameters,
-    const std::function<warpsql::StatementOutcome(warpsql::PreparedStatement&)>& run) {
+chargewire::StatementOutcome SessionGuard::ExecutePrepared(
+    chargewire::PreparedStatement& statement, bool has_parameters,
+    const std::function<chargewire::StatementOutcome(chargewire::PreparedStatement&)>& run) {
   RequireLive();
   if (auto* command = dynamic_cast<PreparedAccessControl*>(&statement)) {
     if (has_parameters) {
@@ -1068,7 +1068,7 @@ warpsql::StatementOutcome SessionGuard::ExecutePrepared(
                     "recorded (" + status.message() + ")");
       }
     }
-    warpsql::StatementOutcome outcome;
+    chargewire::StatementOutcome outcome;
     try {
       outcome = run(guarded->inner());
     } catch (...) {
@@ -1089,7 +1089,7 @@ warpsql::StatementOutcome SessionGuard::ExecutePrepared(
   }
 }
 
-int64_t SessionGuard::Ingest(const warpsql::IngestTarget& target,
+int64_t SessionGuard::Ingest(const chargewire::IngestTarget& target,
                              const std::function<int64_t()>& run) {
   RequireLive();
   auto busy = MarkBusy();
@@ -1104,8 +1104,8 @@ int64_t SessionGuard::Ingest(const warpsql::IngestTarget& target,
 }
 
 std::shared_ptr<arrow::RecordBatchReader> SessionGuard::Metadata(
-    warpsql::MetadataKind kind, const warpsql::MetadataFilter& filter,
-    const std::function<std::shared_ptr<arrow::RecordBatchReader>(const warpsql::MetadataFilter&)>&
+    chargewire::MetadataKind kind, const chargewire::MetadataFilter& filter,
+    const std::function<std::shared_ptr<arrow::RecordBatchReader>(const chargewire::MetadataFilter&)>&
         run,
     const std::function<std::shared_ptr<arrow::RecordBatchReader>(std::shared_ptr<arrow::RecordBatchReader>)>&
         describe) {
@@ -1117,9 +1117,9 @@ std::shared_ptr<arrow::RecordBatchReader> SessionGuard::Metadata(
                 "42501");
   }
   // Hardcharger's own lookup over DuckDB's catalog views, run unchecked; then only what
-  // the principal may access is kept (Warp SQL §9.4), by the snapshot's listing rules,
+  // the principal may access is kept (Chargewire §9.4), by the snapshot's listing rules,
   // which ask the same question SQL does.
-  using Kind = warpsql::MetadataKind;
+  using Kind = chargewire::MetadataKind;
   RbacSessionState::BypassScope internal(ContextOf(connection_));
   const Principal principal = state->principal();
   auto snapshot = owner_.engine_->snapshot();
@@ -1145,7 +1145,7 @@ std::shared_ptr<arrow::RecordBatchReader> SessionGuard::Metadata(
   }
   if (kind == Kind::kTables) {
     // Listed tables only, and only then their schemas: an unlisted table is never described.
-    warpsql::MetadataFilter names_only = filter;
+    chargewire::MetadataFilter names_only = filter;
     names_only.include_schema = false;
     auto rows = FilterRows(run(names_only), [&](const arrow::RecordBatch& batch, int64_t row) {
       return snapshot->ObjectListed(principal, object_at(batch, row, 0));

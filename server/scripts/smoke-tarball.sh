@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs a Linux release tarball and checks it runs: --version, outbound TLS against
 # the system's CA bundle (--verify-tls), then a server whose health endpoint answers and
-# which runs a query through the Warp SQL endpoints (sign-in, session, statement, Arrow
+# which runs a query through the Chargewire endpoints (sign-in, session, statement, Arrow
 # result), an HTTPS read inside DuckDB (httpfs), and the tarball's command-line client. Meant for a clean old-glibc container (CI: oraclelinux:8, glibc 2.28):
 #
 #   docker run --rm -v "$PWD/dist:/dist:ro" oraclelinux:8 \
@@ -38,7 +38,7 @@ for _ in $(seq 1 30); do curl -sf http://127.0.0.1:31338/health && break; sleep 
 echo
 curl -sf http://127.0.0.1:31338/health | grep -q serving
 
-base=http://127.0.0.1:31337/warp/v1
+base=http://127.0.0.1:31337/chargewire/v1
 token=$(curl -sf -X POST "$base/auth/token" -H 'Content-Type: application/json' \
           -d '{"grant_type": "password", "username": "smoke", "password": "smoke-password"}' | json access_token)
 auth=(-H "Authorization: Bearer $token" -H 'Content-Type: application/json')

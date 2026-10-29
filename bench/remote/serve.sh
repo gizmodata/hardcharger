@@ -16,8 +16,8 @@ THREADS=${THREADS:-32}
 MEMORY_LIMIT=${MEMORY_LIMIT:-40GB}
 TLS=${TLS:-1}
 export BENCH_PASSWORD=${BENCH_PASSWORD:-bench-password-not-secret}
-# WARPSQL_STREAM_STATS=1: Hardcharger logs each result stream's stage times.
-export WARPSQL_STREAM_STATS=${WARPSQL_STREAM_STATS:-0}
+# CHARGEWIRE_STREAM_STATS=1: Hardcharger logs each result stream's stage times.
+export CHARGEWIRE_STREAM_STATS=${CHARGEWIRE_STREAM_STATS:-0}
 
 # Each server's PID goes to $PIDFILE when it starts; stop kills that PID and waits for it,
 # never a process found by pattern (a pattern can match the shell running this, or the

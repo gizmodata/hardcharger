@@ -20,14 +20,14 @@
 #include "config.hpp"
 #include "jwks.hpp"
 #include "logging.hpp"
-#include "warpsql/backend.hpp"
+#include "chargewire/backend.hpp"
 
 namespace hardcharger {
 
 // Who a principal is to access control, from the claims its access token carries.
-authz::Identity IdentityOf(const warpsql::Principal& principal);
+authz::Identity IdentityOf(const chargewire::Principal& principal);
 
-// The principal's authority (warpsql::Principal::authority_key, Warp SQL §9.2): SHA-256 hex
+// The principal's authority (chargewire::Principal::authority_key, Chargewire §9.2): SHA-256 hex
 // of a canonical list of everything that changes what the principal may do. A session and
 // its handles answer only a token of the same name and the same key, so a readonly or
 // scoped token of a user, or one with catalog_access limits, can't act through a session
@@ -44,24 +44,24 @@ authz::Identity IdentityOf(const warpsql::Principal& principal);
 // one) still does: the old token already fails CheckToken; how the user signed in
 // (auth_method), which grants nothing by itself; and the certificate binding, which the SDK
 // compares on every session request itself (certificate_mismatch).
-std::string AuthorityKey(const warpsql::Principal& principal,
+std::string AuthorityKey(const chargewire::Principal& principal,
                          const authz::AccessControl::TokenStanding& standing = {});
 
-class Authenticator : public warpsql::Authenticator {
+class Authenticator : public chargewire::Authenticator {
  public:
   // `access`: access control, or null. `server_tokens` validates this server's own
   // access tokens (for scoped tokens sent as a password). `jwks`: the identity
   // provider's keys, or null to verify with the configured key only.
   explicit Authenticator(const Config& config,
                 std::shared_ptr<authz::AccessControl> access = nullptr,
-                std::function<warpsql::Principal(std::string_view)> server_tokens = nullptr,
+                std::function<chargewire::Principal(std::string_view)> server_tokens = nullptr,
                 std::shared_ptr<Jwks> jwks = nullptr);
 
-  warpsql::Principal AuthenticatePassword(std::string_view username,
+  chargewire::Principal AuthenticatePassword(std::string_view username,
                                           std::string_view password) override;
-  warpsql::Principal ExchangeToken(std::string_view subject_token) override;
-  warpsql::Principal AuthenticateCertificate(std::string_view identity,
-                                             const warpsql::ClientCertificate& certificate) override;
+  chargewire::Principal ExchangeToken(std::string_view subject_token) override;
+  chargewire::Principal AuthenticateCertificate(std::string_view identity,
+                                             const chargewire::ClientCertificate& certificate) override;
   boost::json::array GrantTypes() override;
 
  private:
@@ -83,7 +83,7 @@ class Authenticator : public warpsql::Authenticator {
   std::string auto_provision_issuer_;  // the issuer whose tokens provision users
   LogLevel log_level_;
   std::shared_ptr<authz::AccessControl> access_;
-  std::function<warpsql::Principal(std::string_view)> server_tokens_;
+  std::function<chargewire::Principal(std::string_view)> server_tokens_;
   bool mutual_tls_ = false;  // client certificates are verified (mtls_ca_cert)
   std::vector<std::string> certificate_admins_;
 };

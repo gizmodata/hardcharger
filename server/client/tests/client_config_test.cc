@@ -182,8 +182,8 @@ TEST(ClientConfigEnvTest, PasswordDoesNotFallBackToTheAdministratorsPassword) {
   EXPECT_EQ(mine.password, "mine");
 }
 
-// ---- Connection URIs: the Hardcharger ADBC driver's rules (hardcharger-adbc ToWarpURI,
-// warp-sql-adbc parseURI), every form it accepts and refuses. ----
+// ---- Connection URIs: the Hardcharger ADBC driver's rules (hardcharger-adbc ToChargewireURI,
+// chargewire-adbc parseURI), every form it accepts and refuses. ----
 
 namespace {
 
@@ -208,32 +208,32 @@ Parsed Parse(const std::string& uri) {
 TEST(ClientConnectionUriTest, AcceptedFormsAndWhatTheyMean) {
   // uri, host, port, tls, base path
   const std::vector<std::tuple<std::string, std::string, int, bool, std::string>> cases = {
-      {"hardcharger://db.example.com", "db.example.com", 31337, true, "/warp"},
-      {"hardcharger://db.example.com:8443", "db.example.com", 8443, true, "/warp"},
-      {"hardcharger://db.example.com:443", "db.example.com", 443, true, "/warp"},
-      {"hardcharger://localhost?tls=false", "localhost", 31337, false, "/warp"},
-      {"hardcharger://127.0.0.1:4000?tls=false", "127.0.0.1", 4000, false, "/warp"},
-      {"hardcharger://127.0.0.1:443?tls=false", "127.0.0.1", 443, false, "/warp"},
-      {"hardcharger://h?tls=0", "h", 31337, false, "/warp"},
-      {"hardcharger://h?tls=FALSE", "h", 31337, false, "/warp"},
-      {"hardcharger://h?tls=true", "h", 31337, true, "/warp"},
-      {"hardcharger://h?tls=1", "h", 31337, true, "/warp"},
-      {"hardcharger://h?tls=", "h", 31337, true, "/warp"},  // empty: the default, as in Go
-      {"hardcharger://h/", "h", 31337, true, "/warp"},
+      {"hardcharger://db.example.com", "db.example.com", 31337, true, "/chargewire"},
+      {"hardcharger://db.example.com:8443", "db.example.com", 8443, true, "/chargewire"},
+      {"hardcharger://db.example.com:443", "db.example.com", 443, true, "/chargewire"},
+      {"hardcharger://localhost?tls=false", "localhost", 31337, false, "/chargewire"},
+      {"hardcharger://127.0.0.1:4000?tls=false", "127.0.0.1", 4000, false, "/chargewire"},
+      {"hardcharger://127.0.0.1:443?tls=false", "127.0.0.1", 443, false, "/chargewire"},
+      {"hardcharger://h?tls=0", "h", 31337, false, "/chargewire"},
+      {"hardcharger://h?tls=FALSE", "h", 31337, false, "/chargewire"},
+      {"hardcharger://h?tls=true", "h", 31337, true, "/chargewire"},
+      {"hardcharger://h?tls=1", "h", 31337, true, "/chargewire"},
+      {"hardcharger://h?tls=", "h", 31337, true, "/chargewire"},  // empty: the default, as in Go
+      {"hardcharger://h/", "h", 31337, true, "/chargewire"},
       {"hardcharger://h:1/custom/prefix", "h", 1, true, "/custom/prefix"},
       {"hardcharger://h/custom/prefix/?tls=false", "h", 31337, false, "/custom/prefix"},
-      {"HARDCHARGER://h", "h", 31337, true, "/warp"},
-      {"hardcharger://[::1]", "::1", 31337, true, "/warp"},
-      {"hardcharger://[::1]:4000?tls=false", "::1", 4000, false, "/warp"},
-      {"hardcharger://h#fragment", "h", 31337, true, "/warp"},
-      // The Warp SQL spellings, with their own default ports.
-      {"warp://h:31337", "h", 31337, true, "/warp"},
-      {"warp://h", "h", 443, true, "/warp"},
-      {"warp://h:31337?tls=false", "h", 31337, false, "/warp"},
-      {"https://h:31337", "h", 31337, true, "/warp"},
-      {"https://h", "h", 443, true, "/warp"},
+      {"HARDCHARGER://h", "h", 31337, true, "/chargewire"},
+      {"hardcharger://[::1]", "::1", 31337, true, "/chargewire"},
+      {"hardcharger://[::1]:4000?tls=false", "::1", 4000, false, "/chargewire"},
+      {"hardcharger://h#fragment", "h", 31337, true, "/chargewire"},
+      // The Chargewire spellings, with their own default ports.
+      {"chargewire://h:31337", "h", 31337, true, "/chargewire"},
+      {"chargewire://h", "h", 443, true, "/chargewire"},
+      {"chargewire://h:31337?tls=false", "h", 31337, false, "/chargewire"},
+      {"https://h:31337", "h", 31337, true, "/chargewire"},
+      {"https://h", "h", 443, true, "/chargewire"},
       {"http://h:31337/custom", "h", 31337, false, "/custom"},
-      {"http://h", "h", 80, false, "/warp"},
+      {"http://h", "h", 80, false, "/chargewire"},
   };
   for (const auto& [uri, host, port, tls, base_path] : cases) {
     const Parsed parsed = Parse(uri);
@@ -249,7 +249,7 @@ TEST(ClientConnectionUriTest, AcceptedFormsAndWhatTheyMean) {
 
 // A URI sets TLS both ways: ?tls=true is never plain HTTP, whatever the config held.
 TEST(ClientConnectionUriTest, TlsTrueIsNeverPlainHttp) {
-  for (const std::string uri : {"hardcharger://h?tls=true", "hardcharger://h", "warp://h:1?tls=1", "https://h:1"}) {
+  for (const std::string uri : {"hardcharger://h?tls=true", "hardcharger://h", "chargewire://h:1?tls=1", "https://h:1"}) {
     ClientConfig config;
     config.use_tls = false;
     ASSERT_TRUE(ParseConnectionURI(uri, config)) << uri;
@@ -267,8 +267,8 @@ TEST(ClientConnectionUriTest, RefusedFormsSayWhy) {
       {"hardcharger+http://h", "hardcharger+http:// is not a Hardcharger URI scheme: use hardcharger://host:port for "
                                "HTTPS, or hardcharger://host:port?tls=false for plain HTTP"},
       {"HARDCHARGER+HTTPS://h", "is not a Hardcharger URI scheme"},
-      {"gizmosql://h:31337", "the scheme must be hardcharger://, warp://, https:// or http://"},
-      {"jdbc:hardcharger://h", "the scheme must be hardcharger://, warp://, https:// or http://"},
+      {"gizmosql://h:31337", "the scheme must be hardcharger://, chargewire://, https:// or http://"},
+      {"jdbc:hardcharger://h", "the scheme must be hardcharger://, chargewire://, https:// or http://"},
       {"h:31337", "it needs a scheme, e.g. hardcharger://host:31337"},
       {"", "it needs a scheme"},
       {"hardcharger://", "no host"},
@@ -278,7 +278,7 @@ TEST(ClientConnectionUriTest, RefusedFormsSayWhy) {
       {"hardcharger://h:abc", "invalid port \"abc\""},
       {"hardcharger://[::1", "unclosed [ in the host"},
       {"hardcharger://h?tls=maybe", "invalid value \"maybe\" for uri parameter tls: want \"true\" or \"false\""},
-      {"https://h?tls=false", "unknown parameter(s) tls"},  // only hardcharger:// and warp:// take tls
+      {"https://h?tls=false", "unknown parameter(s) tls"},  // only hardcharger:// and chargewire:// take tls
       {"http://h?tls=true", "unknown parameter(s) tls"},
       {"hardcharger://h?catalog=x&b=1", "unknown parameter(s) b, catalog"},
       // What 1.x's URIs took: refused, with the flag that does it now.

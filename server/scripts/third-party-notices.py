@@ -33,7 +33,7 @@ TEXTS = DATA / "texts"
 OUTPUT = ROOT / "THIRD_PARTY_NOTICES.md"
 
 # Where the build declares its dependencies: each must be some component's (or not shipped).
-FETCHCONTENT_FILES = ["server/CMakeLists.txt", "third_party/warp-sql/cpp/CMakeLists.txt"]
+FETCHCONTENT_FILES = ["server/CMakeLists.txt", "third_party/chargewire/cpp/CMakeLists.txt"]
 EXTENSIONS_FILE = "server/scripts/duckdb-extensions-ios.cmake"
 EXTENSION_DEPS_FILE = "server/scripts/build-extension-deps.sh"
 VCPKG_FILE = ".github/windows-vcpkg-packages.txt"

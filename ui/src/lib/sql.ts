@@ -151,7 +151,7 @@ export function quoteLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-/** A LIKE pattern that matches exactly `name` (Warp SQL metadata filters are LIKE patterns). */
+/** A LIKE pattern that matches exactly `name` (Chargewire metadata filters are LIKE patterns). */
 export function exactLike(name: string): string {
   return name.replace(/[\\%_]/g, (c) => `\\${c}`);
 }

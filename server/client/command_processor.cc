@@ -878,7 +878,7 @@ CommandResult CommandProcessor::Process(const std::string& line) {
         << "https://gizmodata.com\n"
         << "\n"
         << "Hardcharger is a high-performance SQL database server built on\n"
-        << "DuckDB. It speaks Warp SQL: SQL over plain HTTP, with results\n"
+        << "DuckDB. It speaks Chargewire: SQL over plain HTTP, with results\n"
         << "and bulk data as Apache Arrow streams.\n"
         << "\n"
         << "Licensed under the Apache License, Version 2.0\n";
@@ -1024,14 +1024,14 @@ void CommandProcessor::ShowSettings() {
       out << " instance_id: " << GetCellValue(table->column(1), 0, "") << "\n";
     }
 
-    // The engine and Arrow versions, from Warp SQL's server-info document.
+    // The engine and Arrow versions, from Chargewire's server-info document.
     auto info = conn_.GetServerInfo();
     if (info.ok()) {
       auto text = [&](const char* key) -> std::string {
         auto* value = info->if_contains(key);
         return value != nullptr && value->is_string() ? std::string(value->as_string()) : std::string();
       };
-      // The engine's own key (Warp SQL §2.7), else the server's version.
+      // The engine's own key (Chargewire §2.7), else the server's version.
       std::string engine = text("duckdb_version").empty() ? std::string() : "duckdb " + text("duckdb_version");
       if (engine.empty()) engine = text("server_version");
       if (!engine.empty()) out << "      engine: " << engine << "\n";
@@ -1125,7 +1125,7 @@ CommandResult CommandProcessor::HandleConnect(
         << "       .connect HOST PORT USERNAME [PASSWORD] [--no-tls | --tls]\n"
         << "\n"
         << "URI: hardcharger://HOST[:PORT][/PREFIX][?tls=false]\n"
-        << "     HTTPS unless ?tls=false; port 31337 by default; also warp://, https://, http://.\n"
+        << "     HTTPS unless ?tls=false; port 31337 by default; also chargewire://, https://, http://.\n"
         << "     The user is USERNAME, or the current one; the TLS roots, the client certificate\n"
         << "     and the sign-in type are the current ones (--tls-roots, --mtls-cert, --auth-type).\n"
         << "HOST PORT: TLS as now (on unless --no-tls was given); --no-tls for a server without\n"
@@ -1171,7 +1171,7 @@ CommandResult CommandProcessor::HandleConnect(
     }
 
     new_config.host = args[1];
-    new_config.base_path = "/warp";
+    new_config.base_path = "/chargewire";
     try {
       new_config.port = std::stoi(args[2]);
     } catch (...) {

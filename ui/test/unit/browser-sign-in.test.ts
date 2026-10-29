@@ -1,4 +1,4 @@
-// Browser sign-in (Warp SQL §4.3) in the page: the flow's poll secret stays in this tab's
+// Browser sign-in (Chargewire §4.3) in the page: the flow's poll secret stays in this tab's
 // sessionStorage, the return fragment is read once and removed, and only a flow this tab
 // started is collected. Each test loads the module afresh (it reads the fragment once per load).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,7 +35,7 @@ describe("startBrowserSignIn", () => {
     vi.stubGlobal("fetch", fetch);
     expect(await auth.startBrowserSignIn()).toBe(flow.authorize_url);
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toMatch(/\/warp\/v1\/auth\/oauth\/flows$/);
+    expect(url).toMatch(/\/chargewire\/v1\/auth\/oauth\/flows$/);
     expect(JSON.parse(init.body as string)).toEqual({ return_to: "/ui/?tab=1" });
     expect(sessionStorage.getItem("hardcharger-ui:browser-sign-in")).toContain(flow.poll_secret);
     expect(JSON.stringify(Object.keys(localStorage).map((k) => localStorage.getItem(k)))).not.toContain(
@@ -54,7 +54,7 @@ describe("startBrowserSignIn", () => {
 
 describe("returning from the identity provider", () => {
   it("reads the flow id from the fragment once and removes it from the address bar", async () => {
-    window.history.replaceState(null, "", "/ui/?tab=1#warp_oauth_flow=f_abc");
+    window.history.replaceState(null, "", "/ui/?tab=1#chargewire_oauth_flow=f_abc");
     const auth = await freshAuth();
     expect(auth.takeReturnedFlow()).toBe("f_abc");
     expect(window.location.hash).toBe("");
@@ -63,7 +63,7 @@ describe("returning from the identity provider", () => {
   });
 
   it("collects the token with the kept secret, once", async () => {
-    window.history.replaceState(null, "", "/ui/#warp_oauth_flow=f_abc");
+    window.history.replaceState(null, "", "/ui/#chargewire_oauth_flow=f_abc");
     const auth = await freshAuth();
     sessionStorage.setItem("hardcharger-ui:browser-sign-in", JSON.stringify({ flowId: "f_abc", pollSecret: "pss" }));
     const fetch = vi.fn(async () =>
@@ -76,7 +76,7 @@ describe("returning from the identity provider", () => {
     expect(b).toBe(a);
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toMatch(/\/warp\/v1\/auth\/oauth\/flows\/f_abc$/);
+    expect(url).toMatch(/\/chargewire\/v1\/auth\/oauth\/flows\/f_abc$/);
     expect(url).not.toContain("pss");
     expect(JSON.parse(init.body as string)).toEqual({ poll_secret: "pss" });
     expect(sessionStorage.getItem("hardcharger-ui:browser-sign-in")).toBeNull();
@@ -85,7 +85,7 @@ describe("returning from the identity provider", () => {
   });
 
   it("ignores a flow this tab didn't start", async () => {
-    window.history.replaceState(null, "", "/ui/#warp_oauth_flow=f_someone_elses");
+    window.history.replaceState(null, "", "/ui/#chargewire_oauth_flow=f_someone_elses");
     const auth = await freshAuth();
     sessionStorage.setItem("hardcharger-ui:browser-sign-in", JSON.stringify({ flowId: "f_mine", pollSecret: "pss" }));
     const fetch = vi.fn();
@@ -107,7 +107,7 @@ describe("returning from the identity provider", () => {
     });
   });
 
-  it("polls on through a flow state it doesn't know (Warp SQL §12)", async () => {
+  it("polls on through a flow state it doesn't know (Chargewire §12)", async () => {
     vi.useFakeTimers();
     try {
       const auth = await freshAuth();

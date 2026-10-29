@@ -32,14 +32,14 @@ struct Setting {
   bool admin_only = false;  // listed only to admins
   std::function<std::optional<std::string>(const Session&)> get_session;
   std::function<std::optional<std::string>(const Runtime&)> get_global;
-  // Both throw warpsql::Error for a bad value. A reset passes std::nullopt.
+  // Both throw chargewire::Error for a bad value. A reset passes std::nullopt.
   std::function<void(Session&, const std::optional<std::string>&)> set_session;
   std::function<void(Runtime&, const std::optional<std::string>&)> set_global;
 };
 
 const std::vector<Setting>& Settings();
 
-// Applies a SET or RESET; throws warpsql::Error when it may not or the value is bad.
+// Applies a SET or RESET; throws chargewire::Error when it may not or the value is bad.
 void ApplySetting(Session& session, const SettingCommand& command);
 
 // The settings `session` may see, as hardcharger_settings() returns them.

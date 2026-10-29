@@ -1,4 +1,4 @@
-"""Fetches a Warp SQL result over one raw (TLS) socket and drops the bytes: what one
+"""Fetches a Chargewire result over one raw (TLS) socket and drops the bytes: what one
 connection can carry from the server, with no Arrow decoding and no ADBC driver.
 
     python3 raw_fetch.py --url https://127.0.0.1:31337 --sql "SELECT * FROM sf1.lineitem" \
@@ -78,24 +78,24 @@ def main() -> None:
     context = None
     if url.scheme == "https":
         context = ssl.create_default_context(cafile=args.cacert)
-    token = api(args.url, context, "/warp/v1/auth/token",
+    token = api(args.url, context, "/chargewire/v1/auth/token",
                 {"grant_type": "password", "username": "bench", "password": PASSWORD})["access_token"]
-    session = api(args.url, context, "/warp/v1/sessions", {}, token)["session_id"]
+    session = api(args.url, context, "/chargewire/v1/sessions", {}, token)["session_id"]
     body = json.dumps({"sql": args.sql}).encode()
     for _ in range(args.times):
         started = time.perf_counter()
-        extra = f"Warp-Result-Partitions: {args.partitions}\r\n" if args.partitions > 1 else ""
-        request = (f"POST /warp/v1/sessions/{session}/statements HTTP/1.1\r\nHost: {url.hostname}\r\n"
+        extra = f"Chargewire-Result-Partitions: {args.partitions}\r\n" if args.partitions > 1 else ""
+        request = (f"POST /chargewire/v1/sessions/{session}/statements HTTP/1.1\r\nHost: {url.hostname}\r\n"
                    f"Authorization: Bearer {token}\r\nAccept: application/vnd.apache.arrow.stream\r\n"
                    f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n{extra}"
                    f"Connection: close\r\n\r\n").encode() + body
         sock, head, rest = open_request(url, context, request)
         lower = {k.lower(): v for k, v in (line.split(": ", 1) for line in head.decode().split("\r\n")[1:] if ": " in line)}
-        k = int(lower.get("warp-result-partitions", "1"))
+        k = int(lower.get("chargewire-result-partitions", "1"))
         results = []
 
         def fetch(i: int) -> None:
-            get = (f"GET /warp/v1/sessions/{session}/statements/{lower['warp-statement-id']}/result"
+            get = (f"GET /chargewire/v1/sessions/{session}/statements/{lower['chargewire-statement-id']}/result"
                    f"?partition={i} HTTP/1.1\r\nHost: {url.hostname}\r\nAuthorization: Bearer {token}\r\n"
                    f"Connection: close\r\n\r\n").encode()
             results.append(drain(*open_request(url, context, get)[::2]))

@@ -1,7 +1,7 @@
 import { expect, expectProblem, gridRows, runSql, signIn, test } from "./fixtures.ts";
 
 test("a wrong password is refused with the server's reason, and the form stays", async ({ page, harness }) => {
-  expectProblem(page, { status: 401, url: /\/warp\/v1\/auth\/token$/ });
+  expectProblem(page, { status: 401, url: /\/chargewire\/v1\/auth\/token$/ });
   await page.goto("/ui/");
   await expect(page.getByTestId("server-version")).toContainText("Hardcharger");
   await page.getByLabel("User name").fill(harness.admin.username);

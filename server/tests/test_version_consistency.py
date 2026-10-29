@@ -1,6 +1,6 @@
 """One version string everywhere the server reports it: `--version`, HARDCHARGER_VERSION(),
 hardcharger_settings(), the hardcharger_build_info metric, the instrumentation's instances
-table, the client's --version, and (followed by the DuckDB version) the /warp discovery
+table, the client's --version, and (followed by the DuckDB version) the /chargewire discovery
 document and server-info. It is the plain semantic version, as the CHANGELOG and the
 release tags' numbers have it ("0.2.0", never "v0.2.0"), and the full one server/CMakeLists.txt
 holds: a release candidate's suffix included ("2.0.0-rc.1").
@@ -52,7 +52,7 @@ def test_every_reported_version_is_the_same_semantic_version(launcher):
     assert admin.scalar(sql="SELECT hardcharger_version FROM _hardcharger_instr.instances "
                             "WHERE instance_id = HARDCHARGER_CURRENT_INSTANCE()::UUID") == version
     # Discovery and server-info carry the DuckDB version after it.
-    discovered = httpx.get(url=f"{server.base_url}/warp").json()["server"]["version"]
+    discovered = httpx.get(url=f"{server.base_url}/chargewire").json()["server"]["version"]
     assert discovered.startswith(f"{version} (DuckDB "), discovered
     info = admin.metadata(kind="server-info")
     assert info["server_version"].startswith(f"{version} (DuckDB "), info

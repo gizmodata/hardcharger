@@ -9,7 +9,7 @@
 
 #include "duckdb_sql.hpp"
 #include "platform.hpp"
-#include "warpsql/errors.hpp"
+#include "chargewire/errors.hpp"
 
 #ifndef _WIN32
 #include <sys/stat.h>
@@ -20,8 +20,8 @@ namespace hardcharger {
 namespace {
 
 namespace fs = std::filesystem;
-using warpsql::Error;
-using warpsql::ErrorCode;
+using chargewire::Error;
+using chargewire::ErrorCode;
 
 constexpr const char* kSystemAccounts = "system account files";
 constexpr const char* kProcFs = "process information (/proc)";
@@ -789,7 +789,7 @@ std::string PrivateFileMessage(const std::string& path, const std::string& categ
 // ---- Statements ----
 
 DUCKDB_V2_STATEMENT_TYPE StatementType(duckdb_v2_connection_handle connection, std::string_view sql) {
-  auto statements = warpduckdb::Parse(connection, sql);
+  auto statements = chargewire_duckdb::Parse(connection, sql);
   if (statements.empty()) return DUCKDB_V2_STATEMENT_TYPE_INVALID;
   DUCKDB_V2_STATEMENT_TYPE type = DUCKDB_V2_STATEMENT_TYPE_INVALID;
   duckdb_v2_sql_statement_get_type(statements.front().get(), &type, nullptr);

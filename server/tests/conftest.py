@@ -24,7 +24,7 @@ import time
 import httpx
 import pytest
 
-from warp_client import Client, mint_server_token
+from chargewire_client import Client, mint_server_token
 
 BUILD = pathlib.Path(__file__).resolve().parent.parent / "build"
 EXE = ".exe" if sys.platform == "win32" else ""
@@ -230,7 +230,7 @@ class Running:
         return records
 
     def token(self, username: str | None = None, password: str | None = None) -> str:
-        response = httpx.post(url=f"{self.base_url}/warp/v1/auth/token",
+        response = httpx.post(url=f"{self.base_url}/chargewire/v1/auth/token",
                               json={"grant_type": "password",
                                     "username": self.username if username is None else username,
                                     "password": self.password if password is None else password},
@@ -239,13 +239,13 @@ class Running:
         return response.json()["access_token"]
 
     def session(self, token: str) -> str:
-        response = httpx.post(url=f"{self.base_url}/warp/v1/sessions",
+        response = httpx.post(url=f"{self.base_url}/chargewire/v1/sessions",
                               headers={"Authorization": f"Bearer {token}"}, json={}, timeout=120)
         assert response.status_code == 201, response.text
         return response.json()["session_id"]
 
     def run(self, token: str, session_id: str, sql: str) -> httpx.Response:
-        return httpx.post(url=f"{self.base_url}/warp/v1/sessions/{session_id}/statements",
+        return httpx.post(url=f"{self.base_url}/chargewire/v1/sessions/{session_id}/statements",
                           headers={"Authorization": f"Bearer {token}"}, json={"sql": sql},
                           timeout=60)
 
@@ -281,7 +281,7 @@ class Launcher:
 
     def start(self, args: list[str] | None = None, env: dict[str, str] | None = None,
               password: str | None = None, expect_up: bool = True, username: str = "admin",
-              secret_key: str | None = None, binary: pathlib.Path | None = None, wait_for: str = "/warp",
+              secret_key: str | None = None, binary: pathlib.Path | None = None, wait_for: str = "/chargewire",
               startup_seconds: float = 30, port: int | None = None) -> Running:
         """Starts a server (the administrator `username` with `password`, by default a
         random one) on a free port, or `port`."""
@@ -322,7 +322,7 @@ class Launcher:
     def wait_healthy(running: "Running", timeout: float = 10) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if httpx.get(url=f"{running.base_url}/warp/v1/health", timeout=2).status_code == 200:
+            if httpx.get(url=f"{running.base_url}/chargewire/v1/health", timeout=2).status_code == 200:
                 return
             time.sleep(0.05)
         pytest.fail(reason=f"server never became healthy: {running.log()}")

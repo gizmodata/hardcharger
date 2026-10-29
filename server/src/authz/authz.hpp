@@ -35,7 +35,7 @@
 #include <string_view>
 #include <vector>
 
-#include "warpsql/backend.hpp"
+#include "chargewire/backend.hpp"
 
 namespace hardcharger::authz {
 
@@ -203,13 +203,13 @@ class AccessControl {
   };
 
   // Refuses a sign-in token's user when it is not one of the store's enabled users.
-  // Throws warpsql::Error(kInvalidCredentials).
+  // Throws chargewire::Error(kInvalidCredentials).
   TokenUser RequireStoreUser(const std::string& user_name) const;
 
   // RequireStoreUser for token_auto_provision_users: a user the store doesn't have is
   // created first, with no password and no grants, and the token's role ("user" or
   // "readonly") in its provisioned_role attribute. A disabled user stays disabled (and is
-  // refused). Throws warpsql::Error(kInvalidCredentials) when the user can't be created
+  // refused). Throws chargewire::Error(kInvalidCredentials) when the user can't be created
   // (its name is a role's, the administrator's, or an unknown tenant's) or is disabled.
   // Each creation, and each refusal to create, is an audit record naming `issuer`.
   TokenUser ProvisionStoreUser(const std::string& user_name, const std::string& token_role,
@@ -221,7 +221,7 @@ class AccessControl {
   // differs only in case). A user signs in this way with or without a password.
   std::optional<std::string> CertificateUser(const std::string& identity) const;
 
-  // Throws warpsql::Error(kInvalidToken), with Warp SQL §4.2's reason, when an access
+  // Throws chargewire::Error(kInvalidToken), with Chargewire §4.2's reason, when an access
   // token for `who` no longer stands: the user was dropped or disabled
   // (principal_dropped), the password it was issued against was changed
   // (credentials_changed), or its scoped token was revoked (token_revoked) or expired
@@ -235,7 +235,7 @@ class AccessControl {
   };
   TokenStanding CheckToken(const Identity& who) const;
 
-  // Binds a new session's connection to `who`. Throws warpsql::Error when the session
+  // Binds a new session's connection to `who`. Throws chargewire::Error when the session
   // is refused (unknown or disabled user, revoked scoped token, policy service).
   std::shared_ptr<SessionGuard> Bind(duckdb_v2_connection_handle connection, Identity who);
 
@@ -274,43 +274,43 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
  public:
   ~SessionGuard();
 
-  // Throws warpsql::Error(kSessionEnded) once an access-control change ended the session.
+  // Throws chargewire::Error(kSessionEnded) once an access-control change ended the session.
   void RequireLive() const;
 
   // Runs one statement text. An access-control statement (GRANT, CREATE USER, SHOW
   // GRANTS, ...) runs here; anything else passes the pre-bind gate and is run by `run`
   // (DuckDB), under the plan check.
-  warpsql::StatementOutcome Execute(std::string_view sql, bool has_parameters,
-                                    const std::function<warpsql::StatementOutcome()>& run);
+  chargewire::StatementOutcome Execute(std::string_view sql, bool has_parameters,
+                                    const std::function<chargewire::StatementOutcome()>& run);
 
   // Prepares one statement: an access-control statement is kept to run at execution;
   // anything else passes the pre-bind gate and is prepared by `prepare`.
-  std::unique_ptr<warpsql::PreparedStatement> Prepare(
+  std::unique_ptr<chargewire::PreparedStatement> Prepare(
       std::string_view sql,
-      const std::function<std::unique_ptr<warpsql::PreparedStatement>()>& prepare);
+      const std::function<std::unique_ptr<chargewire::PreparedStatement>()>& prepare);
 
   // Executes what Prepare returned; `run` executes the DuckDB statement it wraps.
-  warpsql::StatementOutcome ExecutePrepared(
-      warpsql::PreparedStatement& statement, bool has_parameters,
-      const std::function<warpsql::StatementOutcome(warpsql::PreparedStatement&)>& run);
+  chargewire::StatementOutcome ExecutePrepared(
+      chargewire::PreparedStatement& statement, bool has_parameters,
+      const std::function<chargewire::StatementOutcome(chargewire::PreparedStatement&)>& run);
 
   // A bulk ingest (one SQL statement inside `run`, under the plan check).
-  int64_t Ingest(const warpsql::IngestTarget& target, const std::function<int64_t()>& run);
+  int64_t Ingest(const chargewire::IngestTarget& target, const std::function<int64_t()>& run);
 
   // Metadata: `run` looks it up as Hardcharger's own (unchecked) query; only what the
-  // session's principal may access is kept (Warp SQL §9.4), by the rules SQL applies. For
+  // session's principal may access is kept (Chargewire §9.4), by the rules SQL applies. For
   // tables with schemas, `run` lists names only and `describe` adds the schemas of the
   // tables that are kept, which keep only the columns the principal may see.
   std::shared_ptr<arrow::RecordBatchReader> Metadata(
-      warpsql::MetadataKind kind, const warpsql::MetadataFilter& filter,
+      chargewire::MetadataKind kind, const chargewire::MetadataFilter& filter,
       const std::function<
-          std::shared_ptr<arrow::RecordBatchReader>(const warpsql::MetadataFilter&)>& run,
+          std::shared_ptr<arrow::RecordBatchReader>(const chargewire::MetadataFilter&)>& run,
       const std::function<std::shared_ptr<arrow::RecordBatchReader>(
           std::shared_ptr<arrow::RecordBatchReader>)>& describe);
 
   // An error as this session's user may see it: for a tenant's user, one that names
   // another tenant's objects reads exactly like one about something that does not exist.
-  warpsql::Error ForTenant(const warpsql::Error& error) const;
+  chargewire::Error ForTenant(const chargewire::Error& error) const;
 
   // Runs Hardcharger's own statements on the session's connection (its profiler
   // settings, ...) unchecked: they are the server's, not the user's.
@@ -345,11 +345,11 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   void End(const std::string& reason);
   void InterruptRunning();
   void CheckBeforeBind(std::string_view sql);
-  warpsql::StatementOutcome RunCommand(const ParsedCommand& command);
+  chargewire::StatementOutcome RunCommand(const ParsedCommand& command);
   std::shared_ptr<arrow::RecordBatchReader> Track(std::shared_ptr<arrow::RecordBatchReader> rows,
                                                   std::shared_ptr<void> busy);
   void AuditAllowed();
-  void AuditDenied(const warpsql::Error& error, std::string_view sql);
+  void AuditDenied(const chargewire::Error& error, std::string_view sql);
 
   AccessControl& owner_;
   const Identity identity_;

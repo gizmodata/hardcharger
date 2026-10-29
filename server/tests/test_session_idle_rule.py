@@ -1,8 +1,8 @@
-"""The idle-session rule, exactly (README, session_idle_timeout): the Warp SQL SDK sweeps
+"""The idle-session rule, exactly (README, session_idle_timeout): the Chargewire SDK sweeps
 every 5 s, and a session is evicted at the first sweep after session_idle_timeout seconds
 without a request, unless a statement of it is running, an ingest of it is in progress, a
 read of one of its results is under way, or it holds a retained result that hasn't expired
-(Warp SQL §5.7). An evicted session answers 404 session_not_found.
+(Chargewire §5.7). An evicted session answers 404 session_not_found.
 
 Each session here is probed once, at the moment the test is about: every request is
 activity that restarts its idle clock."""
@@ -43,7 +43,7 @@ def test_a_session_without_requests_is_gone_within_one_sweep_after_its_timeout(s
 def test_a_running_statement_keeps_the_session(server):
     session = server.admin()
     response = session.submit(sql="SELECT sleep_ms(12000) AS slept",
-                              headers={"Prefer": "respond-async", "Warp-Retain-Result": "false"})
+                              headers={"Prefer": "respond-async", "Chargewire-Retain-Result": "false"})
     assert response.status_code in (200, 201, 202), response.text
     statement_id = response.json()["statement_id"]
     time.sleep(IDLE + SWEEP + SLACK)  # no request at all meanwhile
@@ -71,7 +71,7 @@ def test_a_slow_read_keeps_the_session_to_the_end_of_its_stream(server):
     # sent; reading that takes longer than the idle timeout plus a sweep, and the stream
     # must still reach its end (2.0.0-rc.1 evicted the session and cut it).
     session = server.admin()
-    headers = session.headers(**{"Accept": ARROW_STREAM, "Warp-Retain-Result": "false"})
+    headers = session.headers(**{"Accept": ARROW_STREAM, "Chargewire-Retain-Result": "false"})
     received, failure = 0, None
     tail = b""
     checked_live = False

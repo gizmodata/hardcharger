@@ -1,11 +1,11 @@
-import { connect } from "@gizmodata/warp-sql";
+import { connect } from "@gizmodata/chargewire";
 
 import { expect, pasted, signIn, test, watchPage } from "./fixtures.ts";
 import { startOwnServer } from "./harness.ts";
 
 test("query windows retain profiles and refresh independently of the monitor", async ({ page }, testInfo) => {
   const server = await startOwnServer(["--enable-instrumentation"]);
-  const connection = await connect({ url: `${server.url}/warp`, ...server.admin, resultPartitions: 1 });
+  const connection = await connect({ url: `${server.url}/chargewire`, ...server.admin, resultPartitions: 1 });
   const sql =
     "SELECT sum(i) AS popout_profile_probe FROM range(100000) t(i)\n" +
     Array.from({ length: 100 }, (_, i) => `-- Clipboard scroll line ${i}`).join("\n");
@@ -71,7 +71,7 @@ test("query windows retain profiles and refresh independently of the monitor", a
 
 test("blocked windows fall back to inline details and the layout preference is remembered", async ({ page }) => {
   const server = await startOwnServer(["--enable-instrumentation"]);
-  const connection = await connect({ url: `${server.url}/warp`, ...server.admin });
+  const connection = await connect({ url: `${server.url}/chargewire`, ...server.admin });
   try {
     await connection.query("SELECT 42 AS blocked_query_window_probe");
     await signIn(page, server.admin, server.url);
@@ -98,8 +98,8 @@ test("blocked windows fall back to inline details and the layout preference is r
 
 test("a query window follows an executing statement through cancellation", async ({ page }, testInfo) => {
   const server = await startOwnServer(["--enable-instrumentation"]);
-  const target = await connect({ url: `${server.url}/warp`, ...server.admin });
-  const admin = await connect({ url: `${server.url}/warp`, ...server.admin });
+  const target = await connect({ url: `${server.url}/chargewire`, ...server.admin });
+  const admin = await connect({ url: `${server.url}/chargewire`, ...server.admin });
   let running: Promise<unknown> | undefined;
   try {
     running = target

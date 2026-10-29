@@ -149,8 +149,8 @@ def test_a_missing_file_is_404_and_never_cached(server):
 
 def test_no_path_leaves_the_ui(server):
     # httpx would normalize "..": these are sent percent-encoded, as a client may.
-    for path in ["/ui/%2e%2e/warp", "/ui/%2E%2E/%2E%2E/etc/passwd", "/ui/assets/%2e%2e/index.html",
-                 "/ui/..%2fwarp", "/ui/%2e/index.html", "/ui//index.html"]:
+    for path in ["/ui/%2e%2e/chargewire", "/ui/%2E%2E/%2E%2E/etc/passwd", "/ui/assets/%2e%2e/index.html",
+                 "/ui/..%2fchargewire", "/ui/%2e/index.html", "/ui//index.html"]:
         response = get(server=server, path=path)
         assert response.status_code == 404, f"{path}: {response.status_code} {response.text[:100]}"
 
@@ -222,12 +222,12 @@ def test_only_get_and_head_and_only_under_ui(server):
         assert "content-security-policy" not in response.headers, path
 
 
-def test_warp_sql_is_unchanged_beside_it(server):
-    discovery = get(server=server, path="/warp")
-    assert discovery.status_code == 200 and discovery.json()["protocol"] == "warp-sql"
+def test_chargewire_is_unchanged_beside_it(server):
+    discovery = get(server=server, path="/chargewire")
+    assert discovery.status_code == 200 and discovery.json()["protocol"] == "chargewire"
     token = server.token()
     session = server.session(token=token)
-    # Without Accept: Arrow, a submit answers with the statement document (Warp SQL §6.1).
+    # Without Accept: Arrow, a submit answers with the statement document (Chargewire §6.1).
     statement = server.run(token=token, session_id=session, sql="SELECT 1")
     assert statement.status_code == 201 and statement.json()["state"] in {"running", "succeeded"}, statement.text
 
@@ -287,7 +287,7 @@ def test_served_over_the_servers_own_tls(launcher, tmp_path):
     assert response.status_code == 200 and '<div id="root"></div>' in response.text
     assert response.headers["content-security-policy"] == CSP
     # The page's protocol calls go to the same origin, over the same certificate.
-    assert httpx.get(url=f"{url}/warp", verify=trust, timeout=5).json()["protocol"] == "warp-sql"
+    assert httpx.get(url=f"{url}/chargewire", verify=trust, timeout=5).json()["protocol"] == "chargewire"
 
 
 # ---- Under mutual TLS ----
@@ -318,9 +318,9 @@ def test_under_mtls_certificate_sign_in_works_from_the_pages_origin(launcher, tm
                         args=["--web-ui", "--mtls-certificate-sign-in", "--mtls-admin-identities", "ops@example.com"])
     with server.http(identity=ops) as http:
         assert http.get(url="/ui/").status_code == 200
-        discovery = http.get(url="/warp").json()
+        discovery = http.get(url="/chargewire").json()
         assert "client_certificate" in discovery["auth"]["grant_types"]
-        token = http.post(url="/warp/v1/auth/token", json={"grant_type": "client_certificate"}).json()["access_token"]
+        token = http.post(url="/chargewire/v1/auth/token", json={"grant_type": "client_certificate"}).json()["access_token"]
     # The page's later requests come over other connections of the same browser, presenting
     # the same certificate: the bound token works on them.
     session = server.client(identity=ops, token=token)
@@ -328,7 +328,7 @@ def test_under_mtls_certificate_sign_in_works_from_the_pages_origin(launcher, tm
     # Positive twin of the binding: another certificate can't use the token.
     other = pki.issue(name="other@example.com")
     with server.http(identity=other) as http:
-        refused = http.post(url="/warp/v1/sessions", headers={"Authorization": f"Bearer {token}"}, json={})
+        refused = http.post(url="/chargewire/v1/sessions", headers={"Authorization": f"Bearer {token}"}, json={})
     assert refused.status_code == 401 and refused.json()["code"] == "certificate_mismatch", refused.text
 
 
@@ -337,7 +337,7 @@ def test_with_optional_client_certificates_the_page_loads_without_one(launcher, 
     server = start_mtls(launcher=launcher, pki=pki, probe=None, args=["--web-ui", "--mtls-require-client-cert=false"])
     with server.http(identity=None) as http:
         assert http.get(url="/ui/").status_code == 200
-        token = http.post(url="/warp/v1/auth/token",
+        token = http.post(url="/chargewire/v1/auth/token",
                           json={"grant_type": "password", "username": server.running.username,
                                 "password": server.running.password})
     assert token.status_code == 200, token.text

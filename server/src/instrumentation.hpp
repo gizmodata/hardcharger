@@ -51,7 +51,7 @@ using WallTime = std::chrono::system_clock::time_point;
 
 // What one execution of a statement records.
 struct ExecutionRecord {
-  std::string execution_id;  // Warp SQL statement id of the request that ran it (q_..., q_....N in a script)
+  std::string execution_id;  // Chargewire statement id of the request that ran it (q_..., q_....N in a script)
   std::string statement_id;  // its sql_statements row (q_..., or a prepared statement's p_...)
   std::optional<WallTime> enqueue_time;  // when it joined the statement queue, if it did
   WallTime start;
@@ -62,7 +62,7 @@ struct ExecutionRecord {
   int64_t rows = 0;
   std::string status = "executing";  // success, error, cancelled
   std::string error;
-  // A cancelled execution's Warp SQL cancel_reason (client, timeout, killed, cancelled,
+  // A cancelled execution's Chargewire cancel_reason (client, timeout, killed, cancelled,
   // session_closed, server_shutdown), when the server knows it.
   std::string cancel_reason;
   // Live SQL Monitor identity; not additional columns in the history tables.
@@ -126,8 +126,8 @@ class Instrumentation {
   void SessionStarted(const Session& session);
   void SessionEnded(const Session& session, std::string_view reason);
   void SessionTagChanged(const Session& session, const std::string& tag);
-  // Records a statement under `id`, its Warp SQL id (q_..., or a prepared statement's
-  // p_...): its text, how it arrived (`kind` 'statement' or 'prepared', the Warp SQL
+  // Records a statement under `id`, its Chargewire id (q_..., or a prepared statement's
+  // p_...): its text, how it arrived (`kind` 'statement' or 'prepared', the Chargewire
   // endpoint), whether it was accepted.
   void StatementCreated(const Session& session, const std::string& id, std::string_view sql, std::string_view kind,
                         bool accepted, std::string_view error);
@@ -198,7 +198,7 @@ class Instrumentation {
   std::string catalog_;
   std::string file_;
   std::string schema_;
-  warpduckdb::Connection connection_;
+  chargewire_duckdb::Connection connection_;
 
   std::mutex monitor_mutex_;
   std::unordered_map<std::string, ExecutionRecord> monitor_;

@@ -1,4 +1,4 @@
-import { connect } from "@gizmodata/warp-sql";
+import { connect } from "@gizmodata/chargewire";
 import { expect, expectProblem, runDone, runSql, signIn, test } from "./fixtures.ts";
 import { startOwnServer } from "./harness.ts";
 
@@ -36,8 +36,8 @@ test("an admin cancels executing work and the editor session remains usable", as
 
 test("an admin cancels a queued statement and ends the session holding its slot", async ({ page }) => {
   const server = await startOwnServer(["--enable-instrumentation", "--max-concurrent-statements", "1"]);
-  const holder = await connect({ url: `${server.url}/warp`, ...server.admin, resultPartitions: 1 });
-  const queued = await connect({ url: `${server.url}/warp`, ...server.admin, resultPartitions: 1 });
+  const holder = await connect({ url: `${server.url}/chargewire`, ...server.admin, resultPartitions: 1 });
+  const queued = await connect({ url: `${server.url}/chargewire`, ...server.admin, resultPartitions: 1 });
   try {
     await holder.execute("SET hardcharger.bypass_queue = false");
     await queued.execute("SET hardcharger.bypass_queue = false");

@@ -55,7 +55,7 @@ std::string_view ContentType(std::string_view path) {
   return "application/octet-stream";
 }
 
-warpsql::PlainResponse WithHeaders(warpsql::PlainResponse response) {
+chargewire::PlainResponse WithHeaders(chargewire::PlainResponse response) {
   response.headers.emplace_back("Content-Security-Policy", std::string(kWebUiContentSecurityPolicy));
   response.headers.emplace_back("X-Content-Type-Options", "nosniff");
   response.headers.emplace_back("Referrer-Policy", "no-referrer");
@@ -65,8 +65,8 @@ warpsql::PlainResponse WithHeaders(warpsql::PlainResponse response) {
   return response;
 }
 
-warpsql::PlainResponse NotFound() {
-  warpsql::PlainResponse response;
+chargewire::PlainResponse NotFound() {
+  chargewire::PlainResponse response;
   response.status = 404;
   response.content_type = "text/plain; charset=utf-8";
   // Never cached: another replica, or the next build, may have the file.
@@ -151,11 +151,11 @@ bool AcceptsGzip(std::string_view accept_encoding) {
   return any && *any > 0;
 }
 
-std::optional<warpsql::PlainResponse> ServeWebUi(std::span<const WebUiFile> files,
-                                                 const warpsql::PlainRequest& request) {
+std::optional<chargewire::PlainResponse> ServeWebUi(std::span<const WebUiFile> files,
+                                                 const chargewire::PlainRequest& request) {
   const std::string_view path = request.path;
   if (path == "/ui") {
-    warpsql::PlainResponse response;
+    chargewire::PlainResponse response;
     response.status = 308;
     response.headers.emplace_back("Location", "/ui/");
     response.headers.emplace_back("Cache-Control", "no-cache");
@@ -188,7 +188,7 @@ std::optional<warpsql::PlainResponse> ServeWebUi(std::span<const WebUiFile> file
   const bool gzip = file->gzipped && AcceptsGzip(request.Header("Accept-Encoding"));
   const std::string etag =
       "\"" + std::string(file->sha256.substr(0, 32)) + (gzip ? "-gzip" : "") + "\"";
-  warpsql::PlainResponse response;
+  chargewire::PlainResponse response;
   response.headers.emplace_back("Cache-Control",
                                 name.starts_with("assets/") ? "public, max-age=31536000, immutable" : "no-cache");
   response.headers.emplace_back("ETag", etag);

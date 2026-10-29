@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs on each benchmark VM (Ubuntu 24.04 arm64): setup-vm.sh server|client
-# Expects in ~/bench: the adbc_driver_warpsql wheel (client), the Hardcharger tarball
+# Expects in ~/bench: the adbc_driver_chargewire wheel (client), the Hardcharger tarball
 # (server), and the scripts from bench/remote. No GitHub token is ever needed here: the
 # GizmoSQL release and every Python package are public downloads.
 set -euo pipefail
@@ -33,6 +33,6 @@ if [ "$ROLE" = server ]; then
   for t in hardcharger-*.tar.gz; do [ -f "$t" ] && tar -xzf "$t" -C ~/bench; done
 else
   # A driver built from source instead (build-from-source.sh client) brings its own.
-  for w in ~/bench/adbc_driver_warpsql-*.whl; do [ -f "$w" ] && ~/venv/bin/pip install -q "$w"; done
+  for w in ~/bench/adbc_driver_chargewire-*.whl; do [ -f "$w" ] && ~/venv/bin/pip install -q "$w"; done
 fi
 echo "setup $ROLE done"

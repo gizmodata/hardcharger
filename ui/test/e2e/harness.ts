@@ -1,7 +1,7 @@
 // Starts what the e2e tests run against: hardcharger-server (the binary named by
 // HARDCHARGER_UI_TEST_SERVER_BINARY) with access control on (PostgreSQL at
 // HARDCHARGER_UI_TEST_RBAC_STORE_URI), seeded with data, a tenant and a non-admin user;
-// and the built UI served at /ui/ on one origin with /warp passed through to the server.
+// and the built UI served at /ui/ on one origin with /chargewire passed through to the server.
 // Anything missing fails the run; nothing is skipped.
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -12,7 +12,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import { connect } from "@gizmodata/warp-sql";
+import { connect } from "@gizmodata/chargewire";
 
 import { createUiServer } from "../../scripts/serve.mjs";
 
@@ -223,7 +223,7 @@ async function startServer(o: {
   for (;;) {
     if (exited) throw new Error(`hardcharger-server exited at startup:\n${log.slice(-3000)}`);
     try {
-      const r = await fetch(`${url}/warp/v1/health`);
+      const r = await fetch(`${url}/chargewire/v1/health`);
       if (r.ok) break;
     } catch {
       // not listening yet
@@ -296,9 +296,9 @@ export interface OAuthServer {
 }
 
 /**
- * A server with browser sign-in (Warp SQL §4.3) through the mock identity provider `idp`,
+ * A server with browser sign-in (Chargewire §4.3) through the mock identity provider `idp`,
  * without access control: its users sign in as administrators. The server's public URL
- * (oauth_base_url) is the UI's origin, which passes /warp through, so the provider's
+ * (oauth_base_url) is the UI's origin, which passes /chargewire through, so the provider's
  * redirect reaches the server's callback there and the page comes back to the UI.
  */
 export async function startOAuthServer(idp: {

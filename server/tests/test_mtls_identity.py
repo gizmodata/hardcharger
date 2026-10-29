@@ -1,4 +1,4 @@
-"""Mutual TLS that carries identity (Warp SQL §4.4), as Hardcharger maps it: the
+"""Mutual TLS that carries identity (Chargewire §4.4), as Hardcharger maps it: the
 client_certificate grant signs in mtls_admin_identities as the administrator and, under
 access control, the store's users; tokens are bound to the certificate (a cnf claim);
 sign-ins are audited; the command-line client's --auth-type mtls; the options' checks.
@@ -23,7 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from conftest import BINARY, CLIENT_BINARY, TIMEOUT_SCALE, clean_environment, problem
-from rbac import Client, WarpError, expect_allowed, expect_blocked, expect_error, mint, rbac_env
+from rbac import Client, ChargewireError, expect_allowed, expect_blocked, expect_error, mint, rbac_env
 
 NOW = datetime.datetime.now(tz=datetime.UTC)
 AUDIT_KEY = "mtls-identity-audit-key"
@@ -100,7 +100,7 @@ class TlsServer:
 
     def certificate_grant(self, identity) -> httpx.Response:
         with self.http(identity=identity) as http:
-            return http.post(url="/warp/v1/auth/token", json={"grant_type": "client_certificate"})
+            return http.post(url="/chargewire/v1/auth/token", json={"grant_type": "client_certificate"})
 
     def certificate_token(self, identity) -> str:
         response = self.certificate_grant(identity=identity)
@@ -109,7 +109,7 @@ class TlsServer:
 
     def password_token(self, identity, user: str, password: str) -> str:
         with self.http(identity=identity) as http:
-            response = http.post(url="/warp/v1/auth/token",
+            response = http.post(url="/chargewire/v1/auth/token",
                                  json={"grant_type": "password", "username": user, "password": password})
         assert response.status_code == 200, response.text
         return response.json()["access_token"]
@@ -137,7 +137,7 @@ def start(launcher, pki: Pki, probe, args: list[str] | None = None, env: dict | 
             pytest.fail(reason=f"server exited: {running.log()}")
         try:
             with server.http(identity=probe) as http:
-                if http.get(url="/warp", timeout=2).status_code == 200:
+                if http.get(url="/chargewire", timeout=2).status_code == 200:
                     return server
         except httpx.HTTPError:
             time.sleep(0.2)
@@ -175,11 +175,11 @@ def test_any_other_identity_is_refused_without_access_control(launcher, pki):
     # Not offered at all without an identity that could use it.
     plain = start(launcher=launcher, pki=pki, probe=ops)
     with plain.http(identity=ops) as http:
-        assert "client_certificate" not in http.get(url="/warp").json()["auth"]["grant_types"]
-        problem(response=http.post(url="/warp/v1/auth/token", json={"grant_type": "client_certificate"}),
+        assert "client_certificate" not in http.get(url="/chargewire").json()["auth"]["grant_types"]
+        problem(response=http.post(url="/chargewire/v1/auth/token", json={"grant_type": "client_certificate"}),
                 status=400, code="unsupported_grant_type")
     with server.http(identity=ops) as http:
-        assert "client_certificate" in http.get(url="/warp").json()["auth"]["grant_types"]
+        assert "client_certificate" in http.get(url="/chargewire").json()["auth"]["grant_types"]
 
 
 def test_an_admin_identity_is_a_name_not_a_pattern(launcher, pki):
@@ -198,7 +198,7 @@ def test_a_bound_token_minted_with_a_broken_cnf_is_refused(launcher, pki):
     with server.http(identity=ops) as http:
         for cnf in [{"x5t#S256": ""}, {"x5t": good["cnf"]["x5t#S256"]}, "x", good["cnf"]]:
             token = jwt.encode(payload={**good, "cnf": cnf}, key=server.running.secret_key, algorithm="HS256")
-            response = http.post(url="/warp/v1/sessions", headers={"Authorization": f"Bearer {token}"}, json={})
+            response = http.post(url="/chargewire/v1/sessions", headers={"Authorization": f"Bearer {token}"}, json={})
             if cnf == good["cnf"]:
                 assert response.status_code == 201, response.text  # the twin: intact, it works
             else:
@@ -236,7 +236,7 @@ def test_a_store_user_signs_in_with_a_certificate_and_grants_decide(rbac, pki):
     rbac.client(identity=shouty, token=rbac.certificate_token(identity=shouty)).run(sql="SELECT id FROM ledger")
     # A user without a password cannot sign in with one.
     with rbac.http(identity=carol) as http:
-        response = http.post(url="/warp/v1/auth/token",
+        response = http.post(url="/chargewire/v1/auth/token",
                              json={"grant_type": "password", "username": "carol@example.com", "password": ""})
     problem(response=response, status=401, code="invalid_credentials")
 
@@ -263,8 +263,8 @@ def test_disabling_or_dropping_the_user_ends_certificate_sign_in(rbac, pki):
     while True:
         try:
             session.run(sql="SELECT 1")
-        except WarpError as error:
-            # Warp SQL §4.2: the token's refusal says why.
+        except ChargewireError as error:
+            # Chargewire §4.2: the token's refusal says why.
             assert error.code == "invalid_token" and error.reason == "principal_dropped", str(error)
             break
         assert time.monotonic() < deadline, "a disabled user's bound token kept working"
@@ -336,7 +336,7 @@ def test_scoped_tokens_inherit_the_minters_certificate_binding(rbac, pki):
     # Over another certificate (even one of hers) both are refused.
     with rbac.http(identity=carol_again) as http:
         for token in (scoped, exchanged):
-            response = http.post(url="/warp/v1/sessions", headers={"Authorization": f"Bearer {token}"}, json={})
+            response = http.post(url="/chargewire/v1/sessions", headers={"Authorization": f"Bearer {token}"}, json={})
             problem(response=response, status=401, code="certificate_mismatch")
     # The twin: a password-signed minter's scoped token is unbound, and works over any certificate.
     password_session = rbac.client(identity=carol, token=rbac.password_token(identity=carol, user="carol@example.com",
@@ -490,7 +490,7 @@ def test_certificate_sign_in_is_off_unless_enabled(launcher, store, pki):
     admin = server.admin(identity=ops)
     expect_allowed(client=admin, sql="CREATE USER \"alice@example.com\" PASSWORD 'S3cret:pw'")
     with server.http(identity=alice) as http:
-        assert "client_certificate" not in http.get(url="/warp").json()["auth"]["grant_types"]
+        assert "client_certificate" not in http.get(url="/chargewire").json()["auth"]["grant_types"]
     problem(response=server.certificate_grant(identity=alice), status=400, code="unsupported_grant_type")
     # The twin: the same store, with certificate sign-in turned on.
     if store.kind == "duckdb":
@@ -514,7 +514,7 @@ def test_certificate_refusals_are_security_events_and_audited(rbac, pki, tmp_pat
     jti = jwt.decode(jwt=token, options={"verify_signature": False})["jti"]
     with rbac.http(identity=carol_again) as http:  # a stolen token, replayed over another certificate
         for _ in range(2):
-            problem(response=http.post(url="/warp/v1/sessions", headers={"Authorization": f"Bearer {token}"}, json={}),
+            problem(response=http.post(url="/chargewire/v1/sessions", headers={"Authorization": f"Bearer {token}"}, json={}),
                     status=401, code="certificate_mismatch")
     problem(response=rbac.certificate_grant(identity=stranger), status=401, code="unknown_certificate_identity")
     time.sleep(0.5)
@@ -640,7 +640,7 @@ def test_the_handshake_refusing_a_certificate_is_audited(launcher, pki, tmp_path
                    env={"HARDCHARGER_AUDIT_CHAIN_KEY": AUDIT_KEY})
     with pytest.raises((httpx.HTTPError, ssl.SSLError)):
         with server.http(identity=dave) as http:
-            http.get(url="/warp")
+            http.get(url="/chargewire")
     time.sleep(0.5)
     records = [r for r in server.running.log_records() if r.get("message") == "the TLS handshake refused a client certificate"]
     assert len(records) == 1, server.running.log()
@@ -651,7 +651,7 @@ def test_the_handshake_refusing_a_certificate_is_audited(launcher, pki, tmp_path
     assert "audit_hash" in record
     # The twin: a certificate the handshake accepts writes no such record.
     with server.http(identity=ops) as http:
-        assert http.get(url="/warp").status_code == 200
+        assert http.get(url="/chargewire").status_code == 200
     time.sleep(0.3)
     assert len([r for r in server.running.log_records()
                 if r.get("message") == "the TLS handshake refused a client certificate"]) == 1
@@ -671,7 +671,7 @@ def test_a_flood_of_refusals_is_bounded_and_still_counted(launcher, pki):
         refused = 0
         with server.http(identity=None) as http:  # no certificate, no credentials
             for _ in range(count):
-                response = http.post(url="/warp/v1/auth/token", json={"grant_type": "client_certificate"})
+                response = http.post(url="/chargewire/v1/auth/token", json={"grant_type": "client_certificate"})
                 refused += response.status_code == 401
         return refused
 
@@ -737,7 +737,7 @@ def try_handshake(port: int, ca_path, cert_path, key_path) -> None:
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=10) as raw:
             with context.wrap_socket(raw, server_hostname="127.0.0.1") as tls:
-                tls.sendall(b"GET /warp HTTP/1.1\r\nHost: x\r\n\r\n")
+                tls.sendall(b"GET /chargewire HTTP/1.1\r\nHost: x\r\n\r\n")
                 tls.recv(1)  # TLS 1.3: the server's refusal arrives after the client's Finished
     except (ssl.SSLError, OSError):
         pass
@@ -799,7 +799,7 @@ def test_a_crl_reload_that_failed_is_retried(launcher, pki, tmp_path):
     path.write_bytes(crl(revoked=[]))
     server = start(launcher=launcher, pki=pki, probe=ops, args=["--mtls-crl-file", str(path)])
     with server.http(identity=dave) as http:
-        assert http.get(url="/warp").status_code == 200
+        assert http.get(url="/chargewire").status_code == 200
     # The server's key unusable for a moment, as mid-rotation (a garbage file, so this
     # holds on Windows too, where a mode of 0 doesn't stop the server reading it).
     key_file = pki.server[1]
@@ -809,7 +809,7 @@ def test_a_crl_reload_that_failed_is_retried(launcher, pki, tmp_path):
         path.write_bytes(crl(revoked=[dave[2].serial_number]))
         time.sleep(7)  # one look at the file (every 5 s): the reload fails
         with server.http(identity=ops) as http:  # a new connection makes it look
-            http.get(url="/warp")
+            http.get(url="/chargewire")
         time.sleep(1)
     finally:
         key_file.write_bytes(real_key)
@@ -818,12 +818,12 @@ def test_a_crl_reload_that_failed_is_retried(launcher, pki, tmp_path):
                for r in failed), [r.get("message") for r in failed]
     time.sleep(7)
     with server.http(identity=ops) as http:
-        http.get(url="/warp")
+        http.get(url="/chargewire")
     time.sleep(1)
     refused = False
     try:
         with server.http(identity=dave) as http:
-            http.get(url="/warp")
+            http.get(url="/chargewire")
     except (httpx.HTTPError, ssl.SSLError):
         refused = True
     assert refused, "dave's revocation never took effect: the failed reload was not retried"
@@ -838,7 +838,7 @@ def test_a_bound_scoped_token_cannot_be_exchanged_over_another_certificate(rbac,
     session = rbac.client(identity=carol, token=rbac.certificate_token(identity=carol))
     scoped = session.run(sql="CREATE SCOPED TOKEN job ALLOW SELECT").to_pylist()[0]["token"]
     with rbac.http(identity=mallory) as http:
-        response = http.post(url="/warp/v1/auth/token",
+        response = http.post(url="/chargewire/v1/auth/token",
                              json={"grant_type": "password", "username": "token", "password": scoped})
     print("exchange over another certificate:", response.status_code, response.text[:200])
     if response.status_code == 200:
@@ -899,7 +899,7 @@ def test_a_cert_sign_in_off_server_authenticates_no_one_with_a_certificate(launc
     # The handshake still requires a valid certificate.
     with pytest.raises((httpx.HTTPError, ssl.SSLError)):
         with server.http(identity=None) as http:
-            http.get(url="/warp")
+            http.get(url="/chargewire")
 
 
 def test_an_identity_mismatch_refusal_record_has_a_bounded_size(launcher, pki):
@@ -910,7 +910,7 @@ def test_an_identity_mismatch_refusal_record_has_a_bounded_size(launcher, pki):
                    args=["--mtls-require-identity-match"], env={"HARDCHARGER_AUDIT_CHAIN_KEY": AUDIT_KEY})
     before = len(server.running.log())
     with server.http(identity=ops) as http:
-        response = http.post(url="/warp/v1/auth/token",
+        response = http.post(url="/chargewire/v1/auth/token",
                              json={"grant_type": "password", "username": "x" * 1_000_000, "password": "y"})
     problem(response=response, status=401, code="certificate_identity_mismatch")
     time.sleep(0.5)
@@ -943,7 +943,7 @@ def test_a_refused_password_sign_in_logs_a_bounded_user_name(launcher, pki):
     server = start(launcher=launcher, pki=pki, probe=ops)
     before = len(server.running.log())
     with server.http(identity=ops) as http:
-        response = http.post(url="/warp/v1/auth/token",
+        response = http.post(url="/chargewire/v1/auth/token",
                              json={"grant_type": "password", "username": "x" * 1_000_000, "password": "y"})
     problem(response=response, status=401, code="invalid_credentials")
     time.sleep(0.5)

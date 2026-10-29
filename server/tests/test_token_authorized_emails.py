@@ -51,7 +51,7 @@ def exchange(server, signing_key, email: str) -> httpx.Response:
     token = jwt.encode(payload={"iss": ISSUER, "aud": AUDIENCE, "sub": email, "email": email, "role": "admin",
                                 "jti": f"test-token-{email}", "iat": now, "exp": now + datetime.timedelta(hours=1)},
                        key=signing_key[0], algorithm="RS256")
-    return httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
+    return httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token",
                       json={"grant_type": "token_exchange", "subject_token": token})
 
 

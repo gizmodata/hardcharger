@@ -1,15 +1,15 @@
 """Port of GizmoSQL 1.x tests/integration/test_reject_unknown_sessions.cpp (6 cases; 3 apply).
 
-Warp SQL never recreates a session implicitly: a closed, idle-ended or unknown session
+Chargewire never recreates a session implicitly: a closed, idle-ended or unknown session
 id answers 404 session_not_found (§5.6). There is no --reject-unknown-sessions option:
 it is always so (1.x's option to turn it on, and its refusal of turning it off, are
 not applicable: Hardcharger takes only its own names).
 
 Not applicable: ClosedSessionIsRecreatedByDefault and OtherInstancesSessionIsCreatedByDefault,
 1.x's default of silently starting a fresh session for an unknown one; that is the one
-deliberate behaviour change of Warp SQL (clients reopen a session; drivers retry).
+deliberate behaviour change of Chargewire (clients reopen a session; drivers retry).
 OtherInstancesSessionIsRefused: 1.x answered "belongs to GizmoSQL instance X" because its
-tokens named a session; Warp tokens don't, so another replica's session id is simply
+tokens named a session; Chargewire tokens don't, so another replica's session id is simply
 unknown here (404), and the token itself is checked as in test_cross_instance_tokens.
 """
 
@@ -53,7 +53,7 @@ def test_other_instances_session_is_refused(server, module_launcher):
     other = module_launcher.start(env={"HARDCHARGER_SECRET_KEY": server.secret_key,
                                        "HARDCHARGER_ALLOW_CROSS_INSTANCE_TOKENS": "true"}, password=server.password)
     foreign = other.admin()
-    from warp_client import Session
+    from chargewire_client import Session
     here = Session(client=server.client(token=foreign.client.token), session_id=foreign.id)
     gone(session=here)
 

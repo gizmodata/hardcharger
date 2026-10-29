@@ -13,7 +13,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from rbac import WarpError, expect_allowed, expect_blocked, start_rbac_server
+from rbac import ChargewireError, expect_allowed, expect_blocked, start_rbac_server
 
 ISSUER = "https://idp.example.test"
 OTHER_ISSUER = "https://other-idp.example.test"
@@ -48,11 +48,11 @@ def idp_env(idp, issuer: str | None = ISSUER, **extra: str) -> dict[str, str]:
 
 def exchange(server, subject_token: str):
     """Signs in with the identity provider's token; a client of the session's user."""
-    response = httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
+    response = httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token",
                           json={"grant_type": "token_exchange", "subject_token": subject_token}, timeout=120)
     if response.status_code != 200:
         body = response.json()
-        raise WarpError(status=response.status_code, code=body["code"], detail=body["detail"])
+        raise ChargewireError(status=response.status_code, code=body["code"], detail=body["detail"])
     return server.client(token=response.json()["access_token"])
 
 
@@ -73,7 +73,7 @@ def provisioning(module_launcher, store, idp):
 
 def test_off_a_token_user_the_store_lacks_is_refused(launcher, store, idp):
     server = start_rbac_server(launcher=launcher, store_uri=store.new_database(), env=idp_env(idp=idp))
-    with pytest.raises(WarpError) as refused:
+    with pytest.raises(ChargewireError) as refused:
         exchange(server=server, subject_token=idp["token"](sub="newcomer@example.com", role="user"))
     assert refused.value.code == "invalid_credentials", refused.value
     assert f"user newcomer@example.com {NOT_DEFINED}" in refused.value.detail, refused.value
@@ -98,7 +98,7 @@ def test_on_the_first_sign_in_creates_the_user_with_no_grants(provisioning, idp)
     assert again.run(sql="SELECT count(*) AS n FROM sales").to_pylist() == [{"n": 1}]
     assert list(users(admin=admin)).count("pat@example.com") == 1
     # No password was set, so there is no password sign-in.
-    response = httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
+    response = httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token",
                           json={"grant_type": "password", "username": "pat@example.com", "password": ""}, timeout=60)
     assert response.status_code in (400, 401), response.text
 
@@ -116,17 +116,17 @@ def test_a_readonly_token_provisions_a_readonly_user(provisioning, idp):
                 'GRANT sales_writer TO USER "rita@example.com"']:
         expect_allowed(client=admin, sql=sql)
     assert rita.run(sql="SELECT count(*) AS n FROM sales").to_pylist() == [{"n": 1}]
-    with pytest.raises(WarpError) as refused:
+    with pytest.raises(ChargewireError) as refused:
         rita.run(sql="INSERT INTO sales VALUES (2, 200)")
     assert READONLY in refused.value.detail, refused.value
     # Provisioned readonly, it stays readonly when a later token says "user".
     later = exchange(server=server, subject_token=idp["token"](email="rita@example.com", role="user"))
-    with pytest.raises(WarpError) as still:
+    with pytest.raises(ChargewireError) as still:
         later.run(sql="INSERT INTO sales VALUES (2, 200)")
     assert READONLY in still.value.detail, still.value
     # Nor can it leave readonly through a scoped token (one signs in as a user): a readonly
     # session changes nothing in the access-control store, and only reads it.
-    with pytest.raises(WarpError) as minted:
+    with pytest.raises(ChargewireError) as minted:
         later.run(sql="CREATE SCOPED TOKEN escape ALLOW SELECT, INSERT")
     assert minted.value.code == "permission_denied", minted.value
     assert "has a readonly session and cannot run CREATE SCOPED TOKEN" in minted.value.detail, minted.value
@@ -149,7 +149,7 @@ def test_a_disabled_user_is_not_re_enabled(provisioning, idp):
     server, admin = provisioning
     for sql in ['CREATE USER "dora@example.com"', 'ALTER USER "dora@example.com" DISABLE']:
         expect_allowed(client=admin, sql=sql)
-    with pytest.raises(WarpError) as refused:
+    with pytest.raises(ChargewireError) as refused:
         exchange(server=server, subject_token=idp["token"](email="dora@example.com", role="user"))
     assert refused.value.code == "invalid_credentials" and "is disabled" in refused.value.detail, refused.value
     dora = users(admin=admin)["dora@example.com"]
@@ -162,7 +162,7 @@ def test_a_disabled_user_is_not_re_enabled(provisioning, idp):
 def test_a_name_that_is_a_role_is_refused(provisioning, idp):
     server, admin = provisioning
     expect_allowed(client=admin, sql="CREATE ROLE analysts")
-    with pytest.raises(WarpError) as refused:
+    with pytest.raises(ChargewireError) as refused:
         exchange(server=server, subject_token=idp["token"](sub="analysts", role="user"))
     assert refused.value.code == "invalid_credentials" and "a role named analysts already exists" in refused.value.detail
     assert "analysts" not in users(admin=admin)
@@ -190,7 +190,7 @@ def test_only_the_provisioning_issuers_tokens_create_users(launcher, store, idp)
     server = start_rbac_server(launcher=launcher, store_uri=store.new_database(),
                                env=idp_env(idp=idp, issuer=None, HARDCHARGER_TOKEN_AUTO_PROVISION_USERS="true",
                                            HARDCHARGER_TOKEN_AUTO_PROVISION_ISSUER=ISSUER))
-    with pytest.raises(WarpError) as refused:
+    with pytest.raises(ChargewireError) as refused:
         exchange(server=server, subject_token=idp["token"](issuer=OTHER_ISSUER, email="eve@example.com", role="user"))
     assert refused.value.code == "invalid_credentials" and NOT_DEFINED in refused.value.detail, refused.value
     assert "eve@example.com" not in users(admin=server.admin())

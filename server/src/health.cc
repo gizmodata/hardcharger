@@ -8,7 +8,7 @@ namespace hardcharger {
 HealthChecker::HealthChecker(duckdb_v2_instance_handle instance, std::string query,
                              std::chrono::seconds interval, std::chrono::seconds staleness)
     : query_(std::move(query)), interval_(interval), staleness_(staleness) {
-  warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance, connection_.out(), err); });
+  chargewire_duckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance, connection_.out(), err); });
 }
 
 HealthChecker::~HealthChecker() { Stop(); }
@@ -19,7 +19,7 @@ void HealthChecker::RunOnce() {
   running_query_ = true;
   const auto started = std::chrono::steady_clock::now();
   try {
-    warpduckdb::RunSql(connection_.get(), query_);
+    chargewire_duckdb::RunSql(connection_.get(), query_);
   } catch (const std::exception& e) {
     ok = false;
     error = e.what();

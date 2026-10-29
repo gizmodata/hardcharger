@@ -110,7 +110,7 @@ struct ServerScreen: View {
                 Section("Versions") {
                     LabeledContent("Hardcharger™", value: server.versions.hardcharger)
                     LabeledContent("DuckDB", value: server.versions.duckdb)
-                    LabeledContent("Warp SQL", value: server.versions.warpSQL)
+                    LabeledContent("Chargewire", value: server.versions.chargewire)
                     LabeledContent("Web UI", value: server.versions.webUI)
                 }
             }

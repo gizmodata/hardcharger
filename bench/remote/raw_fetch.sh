@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Fetches a Warp SQL result with curl into /dev/null, with no ADBC driver involved, to tell
-# a slow server from a slow client (Warp SQL's one-round-trip path: POST the statement with
+# Fetches a Chargewire result with curl into /dev/null, with no ADBC driver involved, to tell
+# a slow server from a slow client (Chargewire's one-round-trip path: POST the statement with
 # Accept: application/vnd.apache.arrow.stream).
 #
 #   raw_fetch.sh "https://$SERVER_IP:31337" "SELECT * FROM sf1.lineitem" [times] [curl args...]
 #
 # SERVER_IP: the server VM's address as this machine reaches it (its private IP in the VPC).
 set -euo pipefail
-BASE=${1:?base URL}/warp/v1
+BASE=${1:?base URL}/chargewire/v1
 SQL=${2:?SQL}
 TIMES=${3:-3}
 shift 3 || shift $#

@@ -7,7 +7,7 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 
-from warp_client import ARROW_STREAM
+from chargewire_client import ARROW_STREAM
 
 
 def stream(table, compression=None, batches=1):

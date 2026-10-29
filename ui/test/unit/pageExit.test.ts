@@ -35,8 +35,8 @@ describe("endSessionsOnExit", () => {
   it("ends every open session with a keepalive DELETE carrying the token, once", () => {
     window.dispatchEvent(pageEvent("pagehide"));
     expect(fetches.map((f) => f.url)).toEqual([
-      `${window.location.origin}/warp/v1/sessions/s_one`,
-      `${window.location.origin}/warp/v1/sessions/s%2Ftwo`,
+      `${window.location.origin}/chargewire/v1/sessions/s_one`,
+      `${window.location.origin}/chargewire/v1/sessions/s%2Ftwo`,
     ]);
     for (const { init } of fetches) {
       expect(init.method).toBe("DELETE");
@@ -48,7 +48,7 @@ describe("endSessionsOnExit", () => {
     // A session opened since (the page went on after all) is ended at the next exit.
     ids = ["s_one", "s_three"];
     window.dispatchEvent(pageEvent("pagehide"));
-    expect(fetches.map((f) => f.url).at(-1)).toBe(`${window.location.origin}/warp/v1/sessions/s_three`);
+    expect(fetches.map((f) => f.url).at(-1)).toBe(`${window.location.origin}/chargewire/v1/sessions/s_three`);
   });
 
   it("ends them on beforeunload, unless the page asks the user first", () => {

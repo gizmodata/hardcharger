@@ -17,10 +17,10 @@ describe("which requests carry the token", () => {
   const intercept = authorizeRequests(() => token, origin);
 
   it.each([
-    `${origin}/warp/v1/health`,
-    `${origin}/warp/v1/sessions/s_1/metadata/server-info?x=1`,
-    "/warp/v1/sessions",
-    "warp/v1/sessions",
+    `${origin}/chargewire/v1/health`,
+    `${origin}/chargewire/v1/sessions/s_1/metadata/server-info?x=1`,
+    "/chargewire/v1/sessions",
+    "chargewire/v1/sessions",
   ])("adds Authorization for %s (this origin)", (url) => {
     expect(intercept({ url, headers: { Accept: "application/json" } }).headers).toEqual({
       Accept: "application/json",
@@ -29,13 +29,13 @@ describe("which requests carry the token", () => {
   });
 
   it.each([
-    "https://evil.example.com/warp/v1/health",
-    "https://db.example.com/warp/v1/health", // another port
-    "http://db.example.com:8443/warp/v1/health", // another scheme
-    "https://db.example.com:8444/warp",
-    "//evil.example.com/warp",
-    "https://db.example.com:8443@evil.example.com/warp",
-    "https://db.example.com:8443.evil.example.com/warp",
+    "https://evil.example.com/chargewire/v1/health",
+    "https://db.example.com/chargewire/v1/health", // another port
+    "http://db.example.com:8443/chargewire/v1/health", // another scheme
+    "https://db.example.com:8444/chargewire",
+    "//evil.example.com/chargewire",
+    "https://db.example.com:8443@evil.example.com/chargewire",
+    "https://db.example.com:8443.evil.example.com/chargewire",
     "javascript:alert(1)",
     "data:text/plain,hi",
     "http://[::1",
@@ -48,22 +48,22 @@ describe("which requests carry the token", () => {
   it("reads the token when the request is sent, and sends none without one", () => {
     const signIn: { token?: string } = {};
     const late = authorizeRequests(() => signIn.token, origin);
-    expect(late({ url: `${origin}/warp` }).headers).toEqual({});
+    expect(late({ url: `${origin}/chargewire` }).headers).toEqual({});
     signIn.token = "later";
-    expect(late({ url: `${origin}/warp` }).headers).toEqual({ Authorization: "Bearer later" });
+    expect(late({ url: `${origin}/chargewire` }).headers).toEqual({ Authorization: "Bearer later" });
   });
 
   it("replaces an Authorization header of any case on this origin", () => {
-    const out = intercept({ url: `${origin}/warp`, headers: { AUTHORIZATION: "Basic x" } });
+    const out = intercept({ url: `${origin}/chargewire`, headers: { AUTHORIZATION: "Basic x" } });
     expect(out.headers).toEqual({ Authorization: `Bearer ${token}` });
   });
 });
 
 describe("isSameOrigin", () => {
   it("compares scheme, host and port", () => {
-    expect(isSameOrigin("http://127.0.0.1:31337/warp", "http://127.0.0.1:31337")).toBe(true);
-    expect(isSameOrigin("http://localhost:31337/warp", "http://127.0.0.1:31337")).toBe(false);
-    expect(isSameOrigin("https://db.example.com:443/warp", "https://db.example.com")).toBe(true);
+    expect(isSameOrigin("http://127.0.0.1:31337/chargewire", "http://127.0.0.1:31337")).toBe(true);
+    expect(isSameOrigin("http://localhost:31337/chargewire", "http://127.0.0.1:31337")).toBe(false);
+    expect(isSameOrigin("https://db.example.com:443/chargewire", "https://db.example.com")).toBe(true);
   });
 });
 
@@ -74,9 +74,9 @@ describe("where the document is", () => {
   });
 
   it("is links.openapi on this origin, or the default path", () => {
-    expect(openApiUrl({ capabilities: ["openapi"] }, origin)).toBe(`${origin}/warp/v1/openapi.json`);
-    expect(openApiUrl({ capabilities: ["openapi"], links: { openapi: "/db/warp/v1/openapi.json" } }, origin)).toBe(
-      `${origin}/db/warp/v1/openapi.json`,
+    expect(openApiUrl({ capabilities: ["openapi"] }, origin)).toBe(`${origin}/chargewire/v1/openapi.json`);
+    expect(openApiUrl({ capabilities: ["openapi"], links: { openapi: "/db/chargewire/v1/openapi.json" } }, origin)).toBe(
+      `${origin}/db/chargewire/v1/openapi.json`,
     );
     expect(
       openApiUrl({ capabilities: ["openapi"], links: { openapi: "https://evil.example.com/o.json" } }, origin),
@@ -105,7 +105,7 @@ describe("loadOpenApi", () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ openapi: "3.1.1", paths: {} }));
     vi.stubGlobal("fetch", fetch);
     await expect(loadOpenApi({ capabilities: ["openapi"] }, origin)).resolves.toEqual({ openapi: "3.1.1", paths: {} });
-    expect(fetch.mock.calls[0]![0]).toBe(`${origin}/warp/v1/openapi.json`);
+    expect(fetch.mock.calls[0]![0]).toBe(`${origin}/chargewire/v1/openapi.json`);
   });
 });
 
@@ -115,13 +115,13 @@ describe("sameOriginSpec", () => {
       openapi: "3.1.1",
       servers: [{ url: "{origin}", variables: { origin: { default: "http://127.0.0.1:31337" } } }],
       paths: {
-        "/warp": { servers: [{ url: "https://elsewhere" }], get: { servers: [{ url: "https://x" }], responses: {} } },
+        "/chargewire": { servers: [{ url: "https://elsewhere" }], get: { servers: [{ url: "https://x" }], responses: {} } },
       },
     };
     const out = sameOriginSpec(doc, origin);
     expect(out.servers).toEqual([{ url: origin, description: "This server" }]);
     expect(JSON.stringify(out.paths)).not.toContain("servers");
-    expect(doc.paths["/warp"].servers).toHaveLength(1);
+    expect(doc.paths["/chargewire"].servers).toHaveLength(1);
   });
 });
 

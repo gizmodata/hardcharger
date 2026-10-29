@@ -677,7 +677,7 @@ impl Server {
         if self.child.is_none() {
             return Err("Start the local server first.".into());
         }
-        let response = client.post(format!("{}/warp/v1/auth/token", self.endpoint()))
+        let response = client.post(format!("{}/chargewire/v1/auth/token", self.endpoint()))
             .json(&serde_json::json!({"grant_type": "password", "username": self.username(), "password": self.password}))
             .send().and_then(|r| r.error_for_status()).map_err(|e| format!("Could not sign in to the desktop server: {}", request_error(e)))?;
         let token: serde_json::Value = response.json().map_err(|e| e.to_string())?;
@@ -1146,7 +1146,7 @@ mod tests {
             let token = server.sign_in().unwrap();
             assert_eq!(token["username"], "desktop-network-admin");
             assert!(token["token"].as_str().unwrap().len() > 20);
-            let rejected = server.http_client().unwrap().post(format!("{}/warp/v1/auth/token", server.endpoint()))
+            let rejected = server.http_client().unwrap().post(format!("{}/chargewire/v1/auth/token", server.endpoint()))
                 .json(&serde_json::json!({"grant_type":"password", "username":"desktop-network-admin", "password":"wrong"}))
                 .send().unwrap();
             assert_eq!(rejected.status(), reqwest::StatusCode::UNAUTHORIZED);

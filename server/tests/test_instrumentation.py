@@ -11,7 +11,7 @@ test, as are the batching writer's own cases (a full queue, the backlog at shutd
 
 Execution timeline: the engine-side times (start, end) are exact; fetch_start_time and
 fetch_end_time are when the server took the first and last batch from DuckDB, and
-cursor_close_time when it let the result go (the Warp SDK has no delivery callback, so
+cursor_close_time when it let the result go (the Chargewire SDK has no delivery callback, so
 these are not the moments the client received the bytes). The invariants 1.x asserts hold.
 """
 
@@ -110,7 +110,7 @@ def test_active_sessions_view(admin):
 
 def test_current_session_function(admin):
     sid = admin.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
-    assert sid == admin.id and sid.startswith("s_")  # Hardcharger: the Warp SQL session id (1.x: a UUID)
+    assert sid == admin.id and sid.startswith("s_")  # Hardcharger: the Chargewire session id (1.x: a UUID)
     recorded = eventually(admin, f"SELECT session_id::VARCHAR FROM _hardcharger_instr.sessions WHERE session_id = '{sid}'")
     assert recorded == sid
 
@@ -144,8 +144,8 @@ def test_timing_columns_are_timestamp_tz(admin):
     assert len(rows) == 7 and all(r["data_type"] == "TIMESTAMP WITH TIME ZONE" for r in rows), rows
 
 
-def test_statements_record_their_kind_in_warp_sql_terms(admin):
-    """sql_statements.statement_kind says which Warp SQL endpoint a statement came by
+def test_statements_record_their_kind_in_chargewire_terms(admin):
+    """sql_statements.statement_kind says which Chargewire endpoint a statement came by
     ('statement' or 'prepared'); 0.3.0 named it flight_method, after GizmoSQL's Flight SQL."""
     columns = [r["column_name"] for r in admin.rows(sql="SELECT column_name FROM information_schema.columns WHERE "
                                                         "table_catalog = '_hardcharger_instr' AND "
@@ -161,10 +161,10 @@ def test_statements_record_their_kind_in_warp_sql_terms(admin):
     assert kinds == "prepared,statement"
 
 
-# ---- Ids: a statement is recorded under the Warp SQL id its client holds ----
+# ---- Ids: a statement is recorded under the Chargewire id its client holds ----
 
 I = "_hardcharger_instr.main"
-WARP_ID = r"^[a-z]_[a-z2-7]{32}$"
+CHARGEWIRE_ID = r"^[a-z]_[a-z2-7]{32}$"
 
 
 def marker(name: str) -> str:
@@ -172,8 +172,8 @@ def marker(name: str) -> str:
 
 
 def statement_id_of(response) -> str:
-    statement_id = response.headers["Warp-Statement-Id"]
-    assert re.match(WARP_ID, statement_id) and statement_id.startswith("q_"), statement_id
+    statement_id = response.headers["Chargewire-Statement-Id"]
+    assert re.match(CHARGEWIRE_ID, statement_id) and statement_id.startswith("q_"), statement_id
     return statement_id
 
 
@@ -186,7 +186,7 @@ def executions(session, where: str, expected: int) -> list[dict]:
 
 
 def test_a_submitted_statement_is_recorded_under_the_id_its_client_holds(admin):
-    """The Warp-Statement-Id a client gets (also in errors and hardcharger_active_connections())
+    """The Chargewire-Statement-Id a client gets (also in errors and hardcharger_active_connections())
     finds the statement and its execution: they share it."""
     probe = marker("id_probe")
     response = admin.submit(sql=f"SELECT 42 AS {probe}", arrow=True)
@@ -203,7 +203,7 @@ def test_a_submitted_statement_is_recorded_under_the_id_its_client_holds(admin):
 def test_a_prepared_statement_is_one_p_row_with_an_execution_per_request(admin):
     probe = marker("prepared_probe")
     prepared = admin.prepare(sql=f"SELECT ? + 1 AS {probe}")["prepared_id"]
-    assert re.match(WARP_ID, prepared) and prepared.startswith("p_"), prepared
+    assert re.match(CHARGEWIRE_ID, prepared) and prepared.startswith("p_"), prepared
     ran = []
     for i in range(3):
         response = admin.execute_prepared(prepared_id=prepared, parameters=[i])
@@ -310,7 +310,7 @@ def test_a_table_with_uuid_statement_ids_is_refused_with_what_to_do(launcher, tm
     log = server.log()
     assert (f'Hardcharger can\'t use instrumentation table "_hardcharger_instr"."main"."{table}": its {column} '
             "is a UUID") in log, log
-    assert "Warp SQL ids clients hold (q_..." in log and "Drop the instrumentation tables" in log, log
+    assert "Chargewire ids clients hold (q_..." in log and "Drop the instrumentation tables" in log, log
 
 
 def test_non_admins_cannot_read_it(server):

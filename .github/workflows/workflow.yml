@@ -14,7 +14,7 @@
 # Server.connect() through adbc-driver-hardcharger from PyPI (the `client` job).
 #
 # The `client` job runs on python-v* tags only. It installs the `[adbc]` extra from PyPI,
-# where adbc-driver-hardcharger (and adbc-driver-warpsql under it) are not published yet,
+# where adbc-driver-hardcharger (and adbc-driver-chargewire under it) are not published yet,
 # so on every main push and pull request it could only fail at the install, and main was
 # red for that alone. On a tag it still runs and still gates the publish: a python-v* tag
 # can't ship until those drivers are on PyPI, which is the order they must be released in.

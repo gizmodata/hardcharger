@@ -64,10 +64,10 @@ def test_the_banner_opens_a_text_log(launcher):
     assert lines[:6] == ART
     # (One line when it fits in 80 columns; a long DuckDB version moves it to a second.)
     info = " ".join(" ".join(lines[6:]).split())
-    # The Warp SQL version is the specification's (third_party/warp-sql/spec/openapi.yaml).
-    assert re.search(rf"Hardcharger {re.escape(version())} \| Warp SQL \d+\.\d+\.\d+ \|? ?DuckDB v\S+ \| by GizmoData", info), \
+    # The Chargewire version is the specification's (third_party/chargewire/spec/openapi.yaml).
+    assert re.search(rf"Hardcharger {re.escape(version())} \| Chargewire \d+\.\d+\.\d+ \|? ?DuckDB v\S+ \| by GizmoData", info), \
         lines
-    assert any(line.startswith(f"  Warp SQL  http://127.0.0.1:{server.port}/warp") for line in lines), lines
+    assert any(line.startswith(f"  Chargewire  http://127.0.0.1:{server.port}/chargewire") for line in lines), lines
     assert "docs.hardcharger.gizmodata.com" in info
     assert len(lines) <= 10, lines
     for line in lines:
@@ -84,7 +84,7 @@ def test_with_the_web_ui_the_banner_names_its_url(launcher):
     log = startup_log(server, "the web UI is on")
     lines = banner_lines(log)
     assert any(line.startswith(f"  UI   http://127.0.0.1:{server.port}/ui/") for line in lines), lines
-    assert not any("/warp" in line for line in lines), lines
+    assert not any("/chargewire" in line for line in lines), lines
     assert re.search(rf" info +the web UI is on url=http://127\.0\.0\.1:{server.port}/ui/ version=", server.log())
 
 
@@ -127,7 +127,7 @@ def test_never_in_a_json_log(launcher):
     assert len(records) == len([line for line in log.splitlines() if line.strip()]), log  # every line is JSON
     ready = next(r for r in records if r["message"] == "Hardcharger is ready")
     assert ready["level"] == "info"
-    assert ready["url"] == f"http://127.0.0.1:{server.port}/warp"
+    assert ready["url"] == f"http://127.0.0.1:{server.port}/chargewire"
     assert ready["listen"] == f"127.0.0.1:{server.port}"
     assert not EMOJI.search(log), log
 
@@ -135,7 +135,7 @@ def test_never_in_a_json_log(launcher):
 def test_the_ready_line_has_a_url_to_open_and_the_bind_address(launcher):
     server = launcher.start()
     line = next(line for line in startup_log(server).splitlines() if "Hardcharger is ready" in line)
-    assert f" url=http://127.0.0.1:{server.port}/warp listen=127.0.0.1:{server.port} " in line, line
+    assert f" url=http://127.0.0.1:{server.port}/chargewire listen=127.0.0.1:{server.port} " in line, line
 
 
 # ---- log_emoji ----
@@ -219,7 +219,7 @@ def test_auto_marks_lines_at_a_utf8_terminal(locale):
         child.expect(f"{SUCCESS} info    Hardcharger is ready version=")
         # The banner is there too, at a terminal.
         assert ART[1] in child.before
-        child.expect(f" url=http://127.0.0.1:{port}/warp ")
+        child.expect(f" url=http://127.0.0.1:{port}/chargewire ")
     finally:
         child.kill(15)
         child.close()

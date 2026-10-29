@@ -7,7 +7,7 @@ import threading
 import pytest
 
 from conftest import BINARY
-from rbac import WarpError, expect_allowed, start_rbac_server
+from rbac import ChargewireError, expect_allowed, start_rbac_server
 
 KEY = "audit-chain-test-key"
 
@@ -32,7 +32,7 @@ def write_some_records(server) -> None:
     cleo = server.user(name="cleo")
     expect_allowed(client=cleo, sql="SELECT * FROM ledger")  # allowed
     for sql in ["SELECT * FROM vault", "GRANT SELECT ON vault TO clerks"]:  # denied, refused
-        with pytest.raises(WarpError):
+        with pytest.raises(ChargewireError):
             cleo.run(sql=sql)
     expect_allowed(client=admin, sql="GRANT SELECT ON vault TO clerks")  # an access-control statement
 

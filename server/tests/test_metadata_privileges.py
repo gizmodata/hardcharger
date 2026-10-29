@@ -1,4 +1,4 @@
-"""Metadata follows authorization (Warp SQL §9.4), object by object.
+"""Metadata follows authorization (Chargewire §9.4), object by object.
 
 Inside a catalog a principal can see, the metadata calls (catalogs, db-schemas, tables,
 primary-keys, imported-keys, ...) and every SQL way to list the catalog
@@ -30,7 +30,7 @@ import time
 import pyarrow as pa
 import pytest
 
-from rbac import WarpError, expect_allowed, expect_blocked, mint, start_rbac_server
+from rbac import ChargewireError, expect_allowed, expect_blocked, mint, start_rbac_server
 
 SCHEMA_TABLES = {"a", "b", "bv", "a_child", "b_child", "wide", "inbox"}
 

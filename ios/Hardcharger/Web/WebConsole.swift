@@ -62,7 +62,7 @@ final class WebConsole {
     }
 
     /// Loads the console of `endpoint`, signed in with `token`.
-    func load(endpoint: WarpEndpoint, token: AccessToken?) {
+    func load(endpoint: ChargewireEndpoint, token: AccessToken?) {
         errorMessage = nil
         coordinator.pinnedFingerprint = endpoint.pinnedFingerprint
         coordinator.origin = endpoint.origin

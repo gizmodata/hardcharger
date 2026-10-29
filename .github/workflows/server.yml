@@ -146,7 +146,7 @@ jobs:
           if-no-files-found: error
 
   # Whether this run touches the web UI: its own checks and browser tests (ui-checks,
-  # ui-e2e) run when ui/, the server's web UI code or the warp-sql submodule changed, and
+  # ui-e2e) run when ui/, the server's web UI code or the chargewire submodule changed, and
   # always on main, on tags and on a manual run.
   # And, on a push to main only (or a manual run with reuse_tested), whether this commit
   # already passed the whole workflow (.github/scripts/already-tested.sh): then every job
@@ -251,7 +251,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           paths=(ui server/src/web_ui.cc server/src/web_ui.hpp server/cmake/web_ui.cmake
-                 server/unit/web_ui_test.cc server/tests/test_web_ui.py third_party/warp-sql
+                 server/unit/web_ui_test.cc server/tests/test_web_ui.py third_party/chargewire
                  .github/workflows/server.yml)
           base=$([ "$EVENT" = pull_request ] && echo "$PR_BASE" || echo "$BEFORE")
           if [ "$GITHUB_REF" = refs/heads/main ] || [[ "$GITHUB_REF" == refs/tags/* ]] || [ "$EVENT" = workflow_dispatch ]; then
@@ -267,8 +267,8 @@ jobs:
           echo "web UI checks and browser tests: $ui"
 
   # The UI's lint (eslint, prettier), typecheck (every TypeScript project), unit tests, and
-  # the vendored @gizmodata/warp-sql against the commit it pins (rebuilt from
-  # gizmodata/warp-sql-js with that repository's read-only deploy key).
+  # the vendored @gizmodata/chargewire against the commit it pins (rebuilt from
+  # gizmodata/chargewire-js with that repository's read-only deploy key).
   ui-checks:
     name: web UI (lint, typecheck, unit tests, client provenance)
     needs: changes
@@ -291,23 +291,23 @@ jobs:
         run: npm run typecheck
       - name: Unit tests
         run: npm test
-      - name: Deploy key for gizmodata/warp-sql-js
+      - name: Deploy key for gizmodata/chargewire-js
         env:
-          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY_WARP_SQL_JS }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY_CHARGEWIRE_JS }}
         run: |
           if [ -z "$DEPLOY_KEY" ]; then
-            echo "::error::the DEPLOY_KEY_WARP_SQL_JS secret is not set: the private key of a read-only deploy key of gizmodata/warp-sql-js"
+            echo "::error::the DEPLOY_KEY_CHARGEWIRE_JS secret is not set: the private key of a read-only deploy key of gizmodata/chargewire-js"
             exit 1
           fi
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/warp_sql_js && chmod 600 ~/.ssh/warp_sql_js
-          printf 'Host github.com\n  IdentityFile ~/.ssh/warp_sql_js\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/chargewire_js && chmod 600 ~/.ssh/chargewire_js
+          printf 'Host github.com\n  IdentityFile ~/.ssh/chargewire_js\n  IdentitiesOnly yes\n' >> ~/.ssh/config
       - name: The vendored client is what its pinned commit builds
         env:
           # Private until GA: the deploy key above authenticates SSH, not HTTPS.
-          HARDCHARGER_UI_WARP_SQL_JS_GIT: git@github.com:gizmodata/warp-sql-js.git
-        run: node scripts/vendor-warp-sql.mjs --verify --rebuild
+          HARDCHARGER_UI_CHARGEWIRE_JS_GIT: git@github.com:gizmodata/chargewire-js.git
+        run: node scripts/vendor-chargewire.mjs --verify --rebuild
 
   # The UI's browser tests, in Chromium and WebKit, against the Linux x86-64 server built in
   # this run, which serves the UI it embeds (access control on, so PostgreSQL). They fail,
@@ -413,18 +413,18 @@ jobs:
           ui=("$PWD"/server/.web-ui/hardcharger-ui-*.tar.gz)
           [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
           echo "HARDCHARGER_UI_TARBALL=${ui[0]}" >> "$GITHUB_ENV"
-      # The warp-sql submodule is private: fetch it with its read-only deploy key (the
+      # The chargewire submodule is private: fetch it with its read-only deploy key (the
       # key reaches only that repository, so the main checkout uses the usual token).
       - &build-submodule
-        name: Fetch the warp-sql submodule
+        name: Fetch the chargewire submodule
         env:
-          DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
+          DEPLOY_KEY: ${{ secrets.CHARGEWIRE_DEPLOY_KEY }}
         run: |
-          key="$RUNNER_TEMP/warp_sql_key"
+          key="$RUNNER_TEMP/chargewire_key"
           printf '%s\n' "$DEPLOY_KEY" > "$key"
           chmod 600 "$key"
           GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-            git -c url.git@github.com:gizmodata/warp-sql.git.insteadOf=https://github.com/gizmodata/warp-sql.git \
+            git -c url.git@github.com:gizmodata/chargewire.git.insteadOf=https://github.com/gizmodata/chargewire.git \
               submodule update --init --depth 1
           rm -f "$key"
       # THIRD_PARTY_NOTICES.md (which every release artifact ships) is what
@@ -519,11 +519,11 @@ jobs:
         name: Build the server
         id: build
         run: |
-          # (warpsql-client-tests and warpsql-sdk-tests, Warp SQL's own tests, build on request.)
+          # (chargewire-client-tests and chargewire-sdk-tests, Chargewire's own tests, build on request.)
           if [ "$RUNNER_OS" = Linux ]; then
             server/scripts/in-manylinux.sh server server/build -DHARDCHARGER_STATIC=ON \
               -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL"
-            server/scripts/in-manylinux.sh build server/build --target warpsql-client-tests warpsql-sdk-tests
+            server/scripts/in-manylinux.sh build server/build --target chargewire-client-tests chargewire-sdk-tests
           else
             read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
             cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -531,7 +531,7 @@ jobs:
                   -DOPENSSL_ROOT_DIR="$PWD/server/.deps/openssl-install" -DOPENSSL_USE_STATIC_LIBS=TRUE \
                   "${launcher[@]}"
             cmake --build server/build
-            cmake --build server/build --target warpsql-client-tests warpsql-sdk-tests
+            cmake --build server/build --target chargewire-client-tests chargewire-sdk-tests
           fi
           server/build/hardcharger-server --version
           server/build/hardcharger-server --print-duckdb-version
@@ -600,42 +600,42 @@ jobs:
       # The 1.x client shell script, ported (test_client_shell.py runs it too, case by case).
       - name: Client shell tests
         run: bash server/tests/test_client_shell.sh
-      # The Warp SQL client library's own tests (unit, and live against warp-duckdb).
-      - name: Warp SQL client library tests
-        run: server/build/warp-sql/warpsql-client-tests
-      - name: Warp SQL SDK unit tests
-        run: server/build/warp-sql/warpsql-sdk-tests
-      - name: Warp SQL conformance suite
-        working-directory: third_party/warp-sql/conformance
+      # The Chargewire client library's own tests (unit, and live against chargewire-duckdb).
+      - name: Chargewire client library tests
+        run: server/build/chargewire/chargewire-client-tests
+      - name: Chargewire SDK unit tests
+        run: server/build/chargewire/chargewire-sdk-tests
+      - name: Chargewire conformance suite
+        working-directory: third_party/chargewire/conformance
         env:
-          WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build/hardcharger-server
-          WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
-          WARP_SQL_TEST_SERVER_USERNAME: warp
-          WARP_SQL_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
+          CHARGEWIRE_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build/hardcharger-server
+          CHARGEWIRE_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+          CHARGEWIRE_TEST_SERVER_USERNAME: chargewire
+          CHARGEWIRE_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
           # The flag naming the client CA in the mutual-TLS tests (test_mtls.py).
-          WARP_SQL_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
+          CHARGEWIRE_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
           # Hardcharger's flag for the CORS allow-list (test_http.py's credentials tests).
-          WARP_SQL_TEST_SERVER_CORS_FLAG: --cors-origins
+          CHARGEWIRE_TEST_SERVER_CORS_FLAG: --cors-origins
           # How test_oauth_browser.py configures browser sign-in on Hardcharger (a template).
-          WARP_SQL_TEST_SERVER_OAUTH_ARGS: >-
+          CHARGEWIRE_TEST_SERVER_OAUTH_ARGS: >-
             --token-allowed-issuer {issuer} --token-allowed-audience {client_id} --token-default-role admin
             --token-authorized-emails {identity} --oauth-client-id {client_id} --oauth-base-url {base_url}
             --oauth-provider-name {provider} --oauth-max-flows {max_flows}
-          WARP_SQL_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
+          CHARGEWIRE_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
           # One-signal draining (test_lifecycle.py) waits this long for running work.
-          WARP_SQL_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
+          CHARGEWIRE_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
           # Metadata and prepared statements under access control (test_authorization.py),
           # on a server of its own with the DuckDB access-control store; privileges go to roles.
-          WARP_SQL_TEST_AUTHZ_CREATE_USER: "CREATE ROLE {user}_role; CREATE USER {user} WITH PASSWORD '{password}'; GRANT {user}_role TO {user}"
-          WARP_SQL_TEST_AUTHZ_GRANT: "GRANT SELECT ON {table} TO {user}_role"
-          WARP_SQL_TEST_AUTHZ_REVOKE: "REVOKE SELECT ON {table} FROM {user}_role"
-          HARDCHARGER_ADMIN_USERNAME: warp
+          CHARGEWIRE_TEST_AUTHZ_CREATE_USER: "CREATE ROLE {user}_role; CREATE USER {user} WITH PASSWORD '{password}'; GRANT {user}_role TO {user}"
+          CHARGEWIRE_TEST_AUTHZ_GRANT: "GRANT SELECT ON {table} TO {user}_role"
+          CHARGEWIRE_TEST_AUTHZ_REVOKE: "REVOKE SELECT ON {table} FROM {user}_role"
+          HARDCHARGER_ADMIN_USERNAME: chargewire
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -e .
           key="$(openssl rand -hex 32)"
-          export WARP_SQL_TEST_AUTHZ_SERVER_ENV="HARDCHARGER_RBAC_STORE_URI=duckdb:{tmp}/rbac.duckdb HARDCHARGER_SECRET_KEY=$key"
+          export CHARGEWIRE_TEST_AUTHZ_SERVER_ENV="HARDCHARGER_RBAC_STORE_URI=duckdb:{tmp}/rbac.duckdb HARDCHARGER_SECRET_KEY=$key"
           .venv/bin/python -m pytest -q
       # On request (workflow_dispatch input failure_repro): every way a running statement
       # can fail before or during its answer (streamed, split, prepared), 200 times against
@@ -643,11 +643,11 @@ jobs:
       # stream, with the statement's own error.
       - name: Failed-statement answers, 200 times
         if: ${{ !cancelled() && steps.build.outcome == 'success' && inputs.failure_repro == true }}
-        working-directory: third_party/warp-sql/conformance
+        working-directory: third_party/chargewire/conformance
         env:
-          HARDCHARGER_ADMIN_USERNAME: warp
+          HARDCHARGER_ADMIN_USERNAME: chargewire
           HARDCHARGER_PRINT_QUERIES: "false"
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/failure-repro.sh" "$GITHUB_WORKSPACE/server/build/hardcharger-server" "$GITHUB_WORKSPACE/server/build/warp-sql/warp-duckdb" .venv/bin/python
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/failure-repro.sh" "$GITHUB_WORKSPACE/server/build/hardcharger-server" "$GITHUB_WORKSPACE/server/build/chargewire/chargewire-duckdb" .venv/bin/python
 
       # Code signing (macOS, on a signing run): the client and the server, signed with
       # GizmoData's Developer ID Application certificate and the hardened runtime, and
@@ -757,7 +757,7 @@ jobs:
           server/scripts/check-shipped-libs.sh "$stage"/bin/*
       # The macOS tarball on the runner (the Linux ones go to Oracle Linux 8 in `portable`):
       # it starts, verifies TLS with the system's CA bundle, reads HTTPS inside DuckDB and
-      # answers a query through the Warp SQL endpoints and its client.
+      # answers a query through the Chargewire endpoints and its client.
       - name: Smoke-test the tarball (macOS)
         if: runner.os == 'macOS'
         run: env -i HOME="$RUNNER_TEMP" PATH=/usr/bin:/bin bash server/scripts/smoke-tarball.sh "$PWD/dist/hardcharger-${{ matrix.name }}.tar.gz"
@@ -766,7 +766,7 @@ jobs:
           name: hardcharger-${{ matrix.name }}
           path: dist/hardcharger-${{ matrix.name }}.tar.gz
       # versions.json, which the release publishes for machines (GizmoData Cloud): this
-      # version and commit, Warp SQL's, DuckDB's version name and commit, and the built-in
+      # version and commit, Chargewire's, DuckDB's version name and commit, and the built-in
       # extensions' pins (.github/scripts/versions_json.py), checked against what the packaged
       # server says it is. Made on every run, so a tag never meets it first.
       - name: versions.json (Linux amd64)
@@ -876,7 +876,7 @@ jobs:
 
   # The Linux tarballs on the oldest glibc they claim (2.28): installed on Oracle Linux 8,
   # each starts, verifies TLS against the system's CA bundle and answers a query through
-  # the health and Warp SQL endpoints (server/scripts/smoke-tarball.sh).
+  # the health and Chargewire endpoints (server/scripts/smoke-tarball.sh).
   portable:
     name: install on glibc 2.28 (${{ matrix.name }})
     needs: build
@@ -903,7 +903,7 @@ jobs:
           docker run --rm -v "$PWD/dist:/dist:ro" oraclelinux:8 \
             bash /dist/smoke-tarball.sh "/dist/hardcharger-${{ matrix.name }}.tar.gz"
 
-  # The server and the Warp SQL conformance suite again, on an AddressSanitizer build: a
+  # The server and the Chargewire conformance suite again, on an AddressSanitizer build: a
   # use-after-free that only crashed now and then (borrowed DuckDB handles destroyed) fails
   # here every time. The suites fail when the server dies or exits non-zero.
   # On v* tags (the release gate: the image and the release need it to succeed there) and
@@ -929,15 +929,15 @@ jobs:
           ui=("$PWD"/server/.web-ui/hardcharger-ui-*.tar.gz)
           [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
           echo "HARDCHARGER_UI_TARBALL=${ui[0]}" >> "$GITHUB_ENV"
-      - name: Fetch the warp-sql submodule
+      - name: Fetch the chargewire submodule
         env:
-          DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
+          DEPLOY_KEY: ${{ secrets.CHARGEWIRE_DEPLOY_KEY }}
         run: |
-          key="$RUNNER_TEMP/warp_sql_key"
+          key="$RUNNER_TEMP/chargewire_key"
           printf '%s\n' "$DEPLOY_KEY" > "$key"
           chmod 600 "$key"
           GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-            git -c url.git@github.com:gizmodata/warp-sql.git.insteadOf=https://github.com/gizmodata/warp-sql.git \
+            git -c url.git@github.com:gizmodata/chargewire.git.insteadOf=https://github.com/gizmodata/chargewire.git \
               submodule update --init --depth 1
           rm -f "$key"
       # Build tools for the native server; optional extension libraries load at runtime.
@@ -1017,38 +1017,38 @@ jobs:
           echo "CPUs: $(getconf _NPROCESSORS_ONLN); pytest-xdist workers: $HARDCHARGER_TEST_XDIST_WORKERS"
           .venv/bin/python -m pytest -q -n "$HARDCHARGER_TEST_XDIST_WORKERS" -m "not serial" --durations=10
           .venv/bin/python -m pytest -q -m serial --durations=5
-      - name: Warp SQL conformance suite (ASan)
-        working-directory: third_party/warp-sql/conformance
+      - name: Chargewire conformance suite (ASan)
+        working-directory: third_party/chargewire/conformance
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
-          WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-server
-          WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
-          WARP_SQL_TEST_SERVER_USERNAME: warp
-          WARP_SQL_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
-          WARP_SQL_TEST_SERVER_LOG: ${{ runner.temp }}/conformance-server.log
-          WARP_SQL_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
+          CHARGEWIRE_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-server
+          CHARGEWIRE_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+          CHARGEWIRE_TEST_SERVER_USERNAME: chargewire
+          CHARGEWIRE_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
+          CHARGEWIRE_TEST_SERVER_LOG: ${{ runner.temp }}/conformance-server.log
+          CHARGEWIRE_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
           # Hardcharger's flag for the CORS allow-list (test_http.py's credentials tests).
-          WARP_SQL_TEST_SERVER_CORS_FLAG: --cors-origins
+          CHARGEWIRE_TEST_SERVER_CORS_FLAG: --cors-origins
           # How test_oauth_browser.py configures browser sign-in on Hardcharger (a template).
-          WARP_SQL_TEST_SERVER_OAUTH_ARGS: >-
+          CHARGEWIRE_TEST_SERVER_OAUTH_ARGS: >-
             --token-allowed-issuer {issuer} --token-allowed-audience {client_id} --token-default-role admin
             --token-authorized-emails {identity} --oauth-client-id {client_id} --oauth-base-url {base_url}
             --oauth-provider-name {provider} --oauth-max-flows {max_flows}
-          WARP_SQL_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
+          CHARGEWIRE_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
           # One-signal draining (test_lifecycle.py) waits this long for running work.
-          WARP_SQL_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
+          CHARGEWIRE_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
           # Metadata and prepared statements under access control (test_authorization.py),
           # on a server of its own with the DuckDB access-control store; privileges go to roles.
-          WARP_SQL_TEST_AUTHZ_CREATE_USER: "CREATE ROLE {user}_role; CREATE USER {user} WITH PASSWORD '{password}'; GRANT {user}_role TO {user}"
-          WARP_SQL_TEST_AUTHZ_GRANT: "GRANT SELECT ON {table} TO {user}_role"
-          WARP_SQL_TEST_AUTHZ_REVOKE: "REVOKE SELECT ON {table} FROM {user}_role"
-          HARDCHARGER_ADMIN_USERNAME: warp
+          CHARGEWIRE_TEST_AUTHZ_CREATE_USER: "CREATE ROLE {user}_role; CREATE USER {user} WITH PASSWORD '{password}'; GRANT {user}_role TO {user}"
+          CHARGEWIRE_TEST_AUTHZ_GRANT: "GRANT SELECT ON {table} TO {user}_role"
+          CHARGEWIRE_TEST_AUTHZ_REVOKE: "REVOKE SELECT ON {table} FROM {user}_role"
+          HARDCHARGER_ADMIN_USERNAME: chargewire
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -e .
           key="$(openssl rand -hex 32)"
-          export WARP_SQL_TEST_AUTHZ_SERVER_ENV="HARDCHARGER_RBAC_STORE_URI=duckdb:{tmp}/rbac.duckdb HARDCHARGER_SECRET_KEY=$key"
+          export CHARGEWIRE_TEST_AUTHZ_SERVER_ENV="HARDCHARGER_RBAC_STORE_URI=duckdb:{tmp}/rbac.duckdb HARDCHARGER_SECRET_KEY=$key"
           .venv/bin/python -m pytest -q
       - name: Server log
         if: failure()
@@ -1098,15 +1098,15 @@ jobs:
           ui=("$PWD"/server/.web-ui/hardcharger-ui-*.tar.gz)
           [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
           echo "HARDCHARGER_UI_TARBALL=${ui[0]}" >> "$GITHUB_ENV"
-      - name: Fetch the warp-sql submodule
+      - name: Fetch the chargewire submodule
         env:
-          DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
+          DEPLOY_KEY: ${{ secrets.CHARGEWIRE_DEPLOY_KEY }}
         run: |
-          key="$RUNNER_TEMP/warp_sql_key"
+          key="$RUNNER_TEMP/chargewire_key"
           printf '%s\n' "$DEPLOY_KEY" > "$key"
           chmod 600 "$key"
           GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-            git -c url.git@github.com:gizmodata/warp-sql.git.insteadOf=https://github.com/gizmodata/warp-sql.git \
+            git -c url.git@github.com:gizmodata/chargewire.git.insteadOf=https://github.com/gizmodata/chargewire.git \
               submodule update --init --depth 1
           rm -f "$key"
       - name: Install build tools
@@ -1159,7 +1159,7 @@ jobs:
             -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" \
             "${launcher[@]}"
           cmake --build server/build-tsan
-          cmake --build server/build-tsan --target warpsql-sdk-tests
+          cmake --build server/build-tsan --target chargewire-sdk-tests
       - name: sccache directory (save)
         if: always()
         uses: ./.github/actions/sccache-dir
@@ -1180,7 +1180,7 @@ jobs:
       # keeps going so one run collects every race; log_path gives each process its own
       # report file, which the step after the suites checks.
       # The SDK's unit tests, the security-event limiter's concurrent Admit/Flush among them.
-      - name: Warp SQL SDK unit tests (TSan)
+      - name: Chargewire SDK unit tests (TSan)
         env:
           TSAN_OPTIONS: >-
             halt_on_error=0 exitcode=66 second_deadlock_stack=1
@@ -1188,7 +1188,7 @@ jobs:
             log_path=${{ github.workspace }}/tsan-reports/tsan
         run: |
           mkdir -p "$TSAN_REPORTS"
-          server/build-tsan/warp-sql/warpsql-sdk-tests
+          server/build-tsan/chargewire/chargewire-sdk-tests
       - name: Hardcharger tests (TSan)
         working-directory: server/tests
         env:
@@ -1207,41 +1207,41 @@ jobs:
           echo "CPUs: $(getconf _NPROCESSORS_ONLN); pytest-xdist workers: $HARDCHARGER_TEST_XDIST_WORKERS"
           .venv/bin/python -m pytest -q -n "$HARDCHARGER_TEST_XDIST_WORKERS" -m "not serial" --durations=10
           .venv/bin/python -m pytest -q -m serial --durations=5
-      - name: Warp SQL conformance suite (TSan)
+      - name: Chargewire conformance suite (TSan)
         if: success() || failure()
-        working-directory: third_party/warp-sql/conformance
+        working-directory: third_party/chargewire/conformance
         env:
           TSAN_OPTIONS: >-
             halt_on_error=0 exitcode=66 second_deadlock_stack=1
             suppressions=${{ github.workspace }}/server/tests/tsan.supp
             log_path=${{ github.workspace }}/tsan-reports/tsan
-          WARP_SQL_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-tsan/hardcharger-server
-          WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
-          WARP_SQL_TEST_SERVER_USERNAME: warp
-          WARP_SQL_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
-          WARP_SQL_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
+          CHARGEWIRE_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-tsan/hardcharger-server
+          CHARGEWIRE_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+          CHARGEWIRE_TEST_SERVER_USERNAME: chargewire
+          CHARGEWIRE_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
+          CHARGEWIRE_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
           # Hardcharger's flag for the CORS allow-list (test_http.py's credentials tests).
-          WARP_SQL_TEST_SERVER_CORS_FLAG: --cors-origins
+          CHARGEWIRE_TEST_SERVER_CORS_FLAG: --cors-origins
           # How test_oauth_browser.py configures browser sign-in on Hardcharger (a template).
-          WARP_SQL_TEST_SERVER_OAUTH_ARGS: >-
+          CHARGEWIRE_TEST_SERVER_OAUTH_ARGS: >-
             --token-allowed-issuer {issuer} --token-allowed-audience {client_id} --token-default-role admin
             --token-authorized-emails {identity} --oauth-client-id {client_id} --oauth-base-url {base_url}
             --oauth-provider-name {provider} --oauth-max-flows {max_flows}
-          WARP_SQL_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
+          CHARGEWIRE_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
           # One-signal draining (test_lifecycle.py) waits this long for running work.
-          WARP_SQL_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
+          CHARGEWIRE_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
           # Metadata and prepared statements under access control (test_authorization.py),
           # on a server of its own with the DuckDB access-control store; privileges go to roles.
-          WARP_SQL_TEST_AUTHZ_CREATE_USER: "CREATE ROLE {user}_role; CREATE USER {user} WITH PASSWORD '{password}'; GRANT {user}_role TO {user}"
-          WARP_SQL_TEST_AUTHZ_GRANT: "GRANT SELECT ON {table} TO {user}_role"
-          WARP_SQL_TEST_AUTHZ_REVOKE: "REVOKE SELECT ON {table} FROM {user}_role"
-          HARDCHARGER_ADMIN_USERNAME: warp
+          CHARGEWIRE_TEST_AUTHZ_CREATE_USER: "CREATE ROLE {user}_role; CREATE USER {user} WITH PASSWORD '{password}'; GRANT {user}_role TO {user}"
+          CHARGEWIRE_TEST_AUTHZ_GRANT: "GRANT SELECT ON {table} TO {user}_role"
+          CHARGEWIRE_TEST_AUTHZ_REVOKE: "REVOKE SELECT ON {table} FROM {user}_role"
+          HARDCHARGER_ADMIN_USERNAME: chargewire
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -e .
           key="$(openssl rand -hex 32)"
-          export WARP_SQL_TEST_AUTHZ_SERVER_ENV="HARDCHARGER_RBAC_STORE_URI=duckdb:{tmp}/rbac.duckdb HARDCHARGER_SECRET_KEY=$key"
+          export CHARGEWIRE_TEST_AUTHZ_SERVER_ENV="HARDCHARGER_RBAC_STORE_URI=duckdb:{tmp}/rbac.duckdb HARDCHARGER_SECRET_KEY=$key"
           .venv/bin/python -m pytest -q
       # Any report file means an unsuppressed report: print them all and fail.
       - name: ThreadSanitizer reports
@@ -1376,7 +1376,7 @@ jobs:
             grep -q "^Hardcharger web UI .*: third-party software notices" THIRD_PARTY_NOTICES-web-ui.txt' 
           docker run -d --name hc -e HARDCHARGER_ADMIN_PASSWORD=smoke -p 31337:31337 -p 31338:31338 hc-smoke
           for _ in $(seq 1 30); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
-          curl -sf http://127.0.0.1:31337/warp
+          curl -sf http://127.0.0.1:31337/chargewire
           # The client in the image reaches the server it runs beside.
           docker exec -e HARDCHARGER_PASSWORD=smoke hc hardcharger --host 127.0.0.1 --tls=false --username hardcharger \
             --csv --no-header -c "SELECT 'image client'" | grep -qx 'image client'
@@ -1454,7 +1454,7 @@ jobs:
           path: |
             ios/build/iphonesimulator/deps/*-install
             ios/build/iphoneos/deps/*-install
-          key: ios-deps-${{ steps.ios-toolchain.outputs.xcode }}-${{ hashFiles('server/scripts/build-deps.sh', 'server/scripts/deps-*.sh', 'server/scripts/build-extension-deps.sh', 'server/scripts/build-replxx.sh', 'server/scripts/patch-duckdb*.cmake', 'server/scripts/retire-ducklake-patch.cmake', 'server/scripts/duckdb-extensions-ios.cmake', 'third_party/warp-sql/cpp/scripts/*.sh', 'ios/cmake/ios.toolchain.cmake') }}
+          key: ios-deps-${{ steps.ios-toolchain.outputs.xcode }}-${{ hashFiles('server/scripts/build-deps.sh', 'server/scripts/deps-*.sh', 'server/scripts/build-extension-deps.sh', 'server/scripts/build-replxx.sh', 'server/scripts/patch-duckdb*.cmake', 'server/scripts/retire-ducklake-patch.cmake', 'server/scripts/duckdb-extensions-ios.cmake', 'third_party/chargewire/cpp/scripts/*.sh', 'ios/cmake/ios.toolchain.cmake') }}
       - name: Cross-build the server for the simulator, smoke-test it in one
         run: ios/scripts/build-server-ios.sh iphonesimulator
       - name: Unit and UI tests

@@ -58,7 +58,7 @@ Every option also has a YAML key: the flag without its leading `--`, with `_` fo
 | `GIZMOSQL_OAUTH_CLIENT_ID` | `--oauth-client-id` | `HARDCHARGER_OAUTH_CLIENT_ID` |
 | `GIZMOSQL_OAUTH_CLIENT_SECRET` | `--oauth-client-secret` | `HARDCHARGER_OAUTH_CLIENT_SECRET` |
 | `GIZMOSQL_OAUTH_SCOPES` | `--oauth-scopes` | `HARDCHARGER_OAUTH_SCOPES` |
-| `GIZMOSQL_OAUTH_PORT` | (none: browser sign-in is on the main port, Warp SQL's `oauth_browser`; re-register the redirect URI with the identity provider as `<oauth_base_url>/warp/v1/auth/oauth/callback`) | (none) |
+| `GIZMOSQL_OAUTH_PORT` | (none: browser sign-in is on the main port, Chargewire's `oauth_browser`; re-register the redirect URI with the identity provider as `<oauth_base_url>/chargewire/v1/auth/oauth/callback`) | (none) |
 | `GIZMOSQL_OAUTH_BASE_URL` | `--oauth-base-url`: now the server's public URL (default `http(s)://localhost:PORT`), from which the redirect URI is built | `HARDCHARGER_OAUTH_BASE_URL` |
 | `GIZMOSQL_OAUTH_REDIRECT_URI` | `--oauth-redirect-uri` | `HARDCHARGER_OAUTH_REDIRECT_URI` |
 | `GIZMOSQL_OAUTH_INSTANCE_ID` | `--oauth-instance-id` | `HARDCHARGER_OAUTH_INSTANCE_ID` |
@@ -127,8 +127,8 @@ too.
 
 ## The command-line client
 
-GizmoSQL 1.x's `gizmosql_client` is `hardcharger`. It speaks Warp SQL (HTTP), so it
-connects to `hardcharger-server` (or any Warp SQL server), not to a GizmoSQL 1.x server.
+GizmoSQL 1.x's `gizmosql_client` is `hardcharger`. It speaks Chargewire (HTTP), so it
+connects to `hardcharger-server` (or any Chargewire server), not to a GizmoSQL 1.x server.
 Its options mean what they meant in 1.x; only the names of the environment variables,
 files and URI scheme change. It reads no `GIZMOSQL_*` variable.
 
@@ -142,7 +142,7 @@ files and URI scheme change. It reads no `GIZMOSQL_*` variable.
 | `--tls-roots` | `--tls-roots` | `GIZMOSQL_TLS_ROOTS` → `HARDCHARGER_TLS_ROOTS` |
 | `--tls-skip-verify` | `--tls-skip-verify` | |
 | `--mtls-cert`, `--mtls-key` | `--mtls-cert`, `--mtls-key` (also with `--tls-skip-verify`, which 1.x refused: Arrow Flight dropped the certificate then) | |
-| `--auth-type password\|external` | `--auth-type password\|external\|mtls` (`external`: the server's browser sign-in, Warp SQL `oauth_browser`, on the server's own port) | |
+| `--auth-type password\|external` | `--auth-type password\|external\|mtls` (`external`: the server's browser sign-in, Chargewire `oauth_browser`, on the server's own port) | |
 | `--oauth-port` | (none: the sign-in goes to the server's own port) | (none) |
 | `--command`, `-c`; `--file`, `-f`; `--output`, `-o` | the same | |
 | `--init` (default `~/.gizmosqlrc`), `--no-init` | `--init` (default `~/.hardchargerrc`), `--no-init` | |
@@ -167,7 +167,7 @@ The dot commands and output modes are 1.x's. What behaves differently, and why:
   at localhost:31337 speaks plain HTTP, not TLS. Add --no-tls (or --tls=false; in a
   hardcharger:// URI ?tls=false; after .connect HOST PORT USERNAME, --no-tls) to connect without
   encryption." It never falls back to plaintext by itself.
-- **Statements with rows show them.** Warp SQL answers rows or a statement document, so
+- **Statements with rows show them.** Chargewire answers rows or a statement document, so
   the server decides, not the statement's first word: `INSERT … RETURNING` shows its rows
   (1.x printed `OK`).
 - **No row-count line in machine-readable output.** 1.x printed `N rows (M columns)` after
@@ -178,14 +178,14 @@ The dot commands and output modes are 1.x's. What behaves differently, and why:
   and **`.read FILE`** runs the file (1.x answered that it was "handled by the shell loop").
 - **A dot command that fails** (unknown, or `.read` of a missing file) makes a script exit
   with status 1, as a failed statement does.
-- **Ctrl-C** cancels the running statement through Warp SQL's cancel, and the shell (or
+- **Ctrl-C** cancels the running statement through Chargewire's cancel, and the shell (or
   the script) goes on, as in 1.x. In a script that isn't running a statement, Ctrl-C stops
   the client (status 130); 1.x ignored it there.
 - **A lost session is reopened.** When the server no longer has the session (idle too
   long, restarted) or ended it (`KILL SESSION`), the client opens a new one, says so, and
   goes on; a statement that never ran is run in it. Temporary tables and session settings
   don't survive this, as the warning says.
-- **`.show`** reads the engine and Arrow versions from Warp SQL's server-info document and
+- **`.show`** reads the engine and Arrow versions from Chargewire's server-info document and
   has no `edition` line (Hardcharger has no editions).
 
 ## SQL
@@ -194,7 +194,7 @@ The dot commands and output modes are 1.x's. What behaves differently, and why:
 |---|---|
 | `SET [SESSION\|GLOBAL] gizmosql.<name>`, `RESET gizmosql.<name>` | `SET [SESSION\|GLOBAL] hardcharger.<name>`, `RESET hardcharger.<name>` |
 | `GIZMOSQL_USER()`, `GIZMOSQL_ROLE()`, `GIZMOSQL_VERSION()` | `HARDCHARGER_USER()`, `HARDCHARGER_ROLE()`, `HARDCHARGER_VERSION()` |
-| `GIZMOSQL_CURRENT_SESSION()`, `_CURRENT_INSTANCE()`, `_CURRENT_CLUSTER()` | `HARDCHARGER_CURRENT_SESSION()`, `_CURRENT_INSTANCE()`, `_CURRENT_CLUSTER()`; a session id is the Warp SQL session id (`s_...`), not a UUID, in `KILL SESSION`, `hardcharger_sessions()` and the instrumentation tables too |
+| `GIZMOSQL_CURRENT_SESSION()`, `_CURRENT_INSTANCE()`, `_CURRENT_CLUSTER()` | `HARDCHARGER_CURRENT_SESSION()`, `_CURRENT_INSTANCE()`, `_CURRENT_CLUSTER()`; a session id is the Chargewire session id (`s_...`), not a UUID, in `KILL SESSION`, `hardcharger_sessions()` and the instrumentation tables too |
 | `GIZMOSQL_INSTRUMENTATION_ENABLED()`, `_CATALOG()`, `_SCHEMA()` | `HARDCHARGER_INSTRUMENTATION_ENABLED()`, `_CATALOG()`, `_SCHEMA()` |
 | `GIZMOSQL_EDITION()`, `gizmosql.edition` | (none: no editions) |
 | `gizmosql.backend` | (none: DuckDB is the only engine) |
@@ -204,8 +204,8 @@ The dot commands and output modes are 1.x's. What behaves differently, and why:
 | `_gizmosql_instr` | `_hardcharger_instr` |
 | `_gizmosql_logs` | `_hardcharger_logs` |
 | `gizmosql_instrumentation.db`, `gizmosql_logs.db` (default files) | `hardcharger_instrumentation.db`, `hardcharger_logs.db` |
-| instrumentation `sql_statements.statement_id`, `sql_executions.execution_id` (UUIDs) | the Warp SQL ids clients hold (`VARCHAR`): a statement's `q_...` (its execution shares it; the statements of a one-request script are `q_....1`, `q_....2`, ...), a prepared statement's `p_...` with an execution per request under its own `q_...`; the query log's `statement_id` and `prepared_id` are the same ids |
-| instrumentation `sql_statements.flight_method`; log lines' `flight_method=ingest` | `sql_statements.statement_kind` (`statement` or `prepared`, the Warp SQL endpoint); log lines say `kind=ingest` (or `sql`) |
+| instrumentation `sql_statements.statement_id`, `sql_executions.execution_id` (UUIDs) | the Chargewire ids clients hold (`VARCHAR`): a statement's `q_...` (its execution shares it; the statements of a one-request script are `q_....1`, `q_....2`, ...), a prepared statement's `p_...` with an execution per request under its own `q_...`; the query log's `statement_id` and `prepared_id` are the same ids |
+| instrumentation `sql_statements.flight_method`; log lines' `flight_method=ingest` | `sql_statements.statement_kind` (`statement` or `prepared`, the Chargewire endpoint); log lines say `kind=ingest` (or `sql`) |
 | `instances.gizmosql_version`, `instances.gizmosql_edition` | `instances.hardcharger_version` (no edition column) |
 
 Hardcharger creates its own instrumentation and log tables; it does not migrate tables a
@@ -219,7 +219,7 @@ DuckLake.
 | GizmoSQL 1.x | Hardcharger |
 |---|---|
 | (none: 1.x has no users, roles or grants) | the access-control store, schema `hardcharger_rbac` |
-| table metadata key `GIZMOSQL:COLUMN_DEFAULT` | `WARP:SQL:COLUMN_DEFAULT` (Warp SQL's key) |
+| table metadata key `GIZMOSQL:COLUMN_DEFAULT` | `CHARGEWIRE:SQL:COLUMN_DEFAULT` (Chargewire's key) |
 | `gizmosql_*` Prometheus metrics (`gizmosql_statements_total`, ...) | `hardcharger_*` (`hardcharger_statements_total`, ...); `gizmosql_license_expiry_seconds` is gone |
 | server tokens with `iss=gizmosql` | only tokens this server signs (`iss=hardcharger`) |
 | the `.gizmosql-metrics-state` exit marker | `.hardcharger-metrics-state` |
@@ -230,7 +230,7 @@ DuckLake.
 GizmoSQL 1.x has no users, roles or grants: its `catalog_access` rules decide which
 catalogs a token sees, and inside a catalog it may see, every schema, table, view and
 column is listed. Under Hardcharger's access control, metadata follows each object's
-privileges, by the rules SELECT follows (Warp SQL §9.4):
+privileges, by the rules SELECT follows (Chargewire §9.4):
 
 | Listing | Hardcharger, for a non-administrator |
 |---|---|
@@ -285,7 +285,7 @@ Both arrive as Arrow decimal128(38, 0), as from DuckDB's own Arrow export. A val
 decimal128(38, 0) can't hold (10^38 or more in magnitude, which includes UHUGEINT's upper
 half) fails the statement with a conversion error rather than arriving wrong; CAST it to
 VARCHAR, or run `SET SESSION arrow_lossless_conversion = true` (DuckDB's 16-byte types;
-Warp SQL's session option of the same name does the same). A plain `SET` of that setting is
+Chargewire's session option of the same name does the same). A plain `SET` of that setting is
 DuckDB's `SET GLOBAL`: only an administrator may run it, and it changes the default of every
 session that has no value of its own, for HUGEINT, UUID and JSON results alike.
 

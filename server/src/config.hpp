@@ -83,12 +83,12 @@ struct Config {
   bool token_auto_provision_users = false;
   std::string token_auto_provision_issuer;
 
-  // Browser sign-in through the identity provider (Warp SQL §4.3), on the main port.
+  // Browser sign-in through the identity provider (Chargewire §4.3), on the main port.
   std::string oauth_client_id;  // set: browser sign-in is offered
   std::string oauth_client_secret;
   std::string oauth_scopes = "openid profile email";
   std::string oauth_base_url;       // the server's public URL; empty: http(s)://localhost:<port>
-  std::string oauth_redirect_uri;   // empty: <base url>/warp/v1/auth/oauth/callback
+  std::string oauth_redirect_uri;   // empty: <base url>/chargewire/v1/auth/oauth/callback
   std::string oauth_instance_id;    // routes a shared proxy's callbacks: state = <id>.<random>
   std::string oauth_provider_name;  // shown to people ("Sign in with ..."); empty: none
   int64_t oauth_max_flows = 10000;  // sign-ins in progress at once
@@ -96,7 +96,7 @@ struct Config {
   // Sessions
   int64_t max_sessions = 0;  // non-admin sessions at once; 0 = unlimited
   int64_t session_idle_timeout = 900;  // seconds; 0 = never
-  // How long a retained result (Warp SQL §6.5) can be read again, from its statement's end.
+  // How long a retained result (Chargewire §6.5) can be read again, from its statement's end.
   int64_t result_retention_seconds = 3600;
 
   // Statements

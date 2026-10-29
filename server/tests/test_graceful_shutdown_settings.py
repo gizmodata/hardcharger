@@ -46,7 +46,7 @@ def test_graceful_shutdown_rejects_invalid_value(admin):
 
 
 def test_non_admins_cannot_change_them(module_launcher, admin):
-    from warp_client import mint_server_token
+    from chargewire_client import mint_server_token
     server = module_launcher.started[0]
     user = server.client(token=mint_server_token(secret_key=server.secret_key, subject="u", role="user")).new_session()
     problem = user.error(sql="SET GLOBAL hardcharger.shutdown_grace_period_seconds = 1")

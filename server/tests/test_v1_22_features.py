@@ -1,7 +1,7 @@
 """Port of GizmoSQL 1.x tests/test_v1_22_features.py (2 cases).
 
 1.x ran these through the ADBC Flight SQL driver against a server on port 31337; here
-they run over Warp SQL against a server the test starts. Both apply as-is.
+they run over Chargewire against a server the test starts. Both apply as-is.
 """
 
 import pytest

@@ -6,11 +6,11 @@
 Prints one JSON document, read from the checkout (never from the network):
 
     hardcharger  version (.github/scripts/release.sh version) and the checkout's commit
-    warp_sql     the submodule's commit (the one the checkout records, which must be the one
+    chargewire     the submodule's commit (the one the checkout records, which must be the one
                  checked out), its SDK version (cpp/CMakeLists.txt) and its specification
                  version (spec/openapi.yaml info.version)
     duckdb       the version name the build reports (PRAGMA version; the extension
-                 repository's path) and the commit, from warp-sql's build-duckdb.sh
+                 repository's path) and the commit, from chargewire's build-duckdb.sh
     extensions   the extensions built into the server: DuckDB's own and in-tree ones by
                  name, the out-of-tree ones with the repository and commit
                  (server/scripts/duckdb-extensions.cmake), and the repository INSTALL
@@ -73,23 +73,23 @@ def hardcharger_version(root: Path) -> str:
     return out.stdout.strip()
 
 
-def warp_sql(root: Path) -> dict:
-    entry = git(root, "ls-tree", "HEAD", "third_party/warp-sql").split()
+def chargewire(root: Path) -> dict:
+    entry = git(root, "ls-tree", "HEAD", "third_party/chargewire").split()
     if len(entry) != 4 or entry[0] != "160000" or not SHA.match(entry[2]):
-        raise Failure("third_party/warp-sql is not a submodule in HEAD")
+        raise Failure("third_party/chargewire is not a submodule in HEAD")
     commit = entry[2]
-    checked_out = git(root / "third_party" / "warp-sql", "rev-parse", "HEAD")
+    checked_out = git(root / "third_party" / "chargewire", "rev-parse", "HEAD")
     if checked_out != commit:
-        raise Failure(f"third_party/warp-sql has {checked_out} checked out, HEAD records {commit}")
-    sdk = one(r"^project\(warpsql VERSION ([0-9]+\.[0-9]+\.[0-9]+)\b", read(root, "third_party/warp-sql/cpp/CMakeLists.txt"),
-              "warp-sql's project(warpsql VERSION ...)")
-    spec = one(r"^info:\n(?:  .*\n)*?  version: ([0-9]+\.[0-9]+\.[0-9]+)$", read(root, "third_party/warp-sql/spec/openapi.yaml"),
-               "warp-sql's spec/openapi.yaml info.version")
+        raise Failure(f"third_party/chargewire has {checked_out} checked out, HEAD records {commit}")
+    sdk = one(r"^project\(chargewire VERSION ([0-9]+\.[0-9]+\.[0-9]+)\b", read(root, "third_party/chargewire/cpp/CMakeLists.txt"),
+              "chargewire's project(chargewire VERSION ...)")
+    spec = one(r"^info:\n(?:  .*\n)*?  version: ([0-9]+\.[0-9]+\.[0-9]+)$", read(root, "third_party/chargewire/spec/openapi.yaml"),
+               "chargewire's spec/openapi.yaml info.version")
     return {"version": sdk, "spec_version": spec, "commit": commit}
 
 
 def duckdb(root: Path) -> dict:
-    script = read(root, "third_party/warp-sql/cpp/scripts/build-duckdb.sh")
+    script = read(root, "third_party/chargewire/cpp/scripts/build-duckdb.sh")
     commit = one(r"^DUCKDB_COMMIT=([0-9a-f]{40})$", script, "build-duckdb.sh's DUCKDB_COMMIT")
     name = one(r"^DUCKDB_VERSION_NAME=(v[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|rc|dev)[0-9]+)?)$", script,
                "build-duckdb.sh's DUCKDB_VERSION_NAME")
@@ -146,7 +146,7 @@ def build(root: Path, binary: Path | None, tag: str | None) -> dict:
     database = duckdb(root)
     versions = {
         "hardcharger": {"version": version, "commit": commit},
-        "warp_sql": warp_sql(root),
+        "chargewire": chargewire(root),
         "duckdb": database,
         "extensions": extensions(root, database["version"]),
     }

@@ -33,17 +33,17 @@ using std::chrono::milliseconds;
 constexpr const char* kInstance = "00000000-0000-0000-0000-0000000000aa";
 
 struct Db {
-  warpduckdb::Environment environment;
-  warpduckdb::Instance instance;
-  warpduckdb::Connection connection;
+  chargewire_duckdb::Environment environment;
+  chargewire_duckdb::Instance instance;
+  chargewire_duckdb::Connection connection;
   Db() {
-    warpduckdb::Call([&](auto* e) { return duckdb_v2_environment_create(environment.out(), e); });
-    warpduckdb::Call([&](auto* e) {
+    chargewire_duckdb::Call([&](auto* e) { return duckdb_v2_environment_create(environment.out(), e); });
+    chargewire_duckdb::Call([&](auto* e) {
       return duckdb_v2_instance_create_with_options(environment.get(), nullptr, nullptr, 0, instance.out(), e);
     });
-    warpduckdb::Call([&](auto* e) { return duckdb_v2_connection_create(instance.get(), connection.out(), e); });
+    chargewire_duckdb::Call([&](auto* e) { return duckdb_v2_connection_create(instance.get(), connection.out(), e); });
   }
-  std::string Query(const std::string& sql) { return warpduckdb::QueryText(connection.get(), sql); }
+  std::string Query(const std::string& sql) { return chargewire_duckdb::QueryText(connection.get(), sql); }
 };
 
 // The log messages the writer wrote (it logs from its own thread).
@@ -87,7 +87,7 @@ struct Fixture {
   }
   ~Fixture() {
     try {
-      warpduckdb::RunSql(db.connection.get(), "DETACH _hardcharger_instr");
+      chargewire_duckdb::RunSql(db.connection.get(), "DETACH _hardcharger_instr");
     } catch (const std::exception&) {
     }
     std::filesystem::remove(file);
@@ -405,12 +405,12 @@ TEST(InstrumentationTest, PostgresWritesUpdatesAndSkipsOrphans) {
   config.instrumentation_schema = std::format("hc_unit_{}", hardcharger::ProcessId());
   hardcharger::Runtime runtime(config, kInstance);
   Db db;
-  warpduckdb::RunSql(db.connection.get(), "INSTALL postgres; LOAD postgres");
-  warpduckdb::RunSql(db.connection.get(),
+  chargewire_duckdb::RunSql(db.connection.get(), "INSTALL postgres; LOAD postgres");
+  chargewire_duckdb::RunSql(db.connection.get(),
                      "ATTACH " + hardcharger::SqlLiteral(conninfo) + " AS pg_unit (TYPE postgres)");
   const std::string drop = "CALL postgres_execute('pg_unit', 'DROP SCHEMA IF EXISTS " + config.instrumentation_schema +
                            " CASCADE')";
-  warpduckdb::RunSql(db.connection.get(), drop);
+  chargewire_duckdb::RunSql(db.connection.get(), drop);
   ExecutionRecord kept;
   {
     Instrumentation instrumentation(runtime, db.instance.get(), "v2.0.0");
@@ -434,15 +434,15 @@ TEST(InstrumentationTest, PostgresWritesUpdatesAndSkipsOrphans) {
     instrumentation.ExecutionStarted(orphan);
     instrumentation.Stop();
   }
-  warpduckdb::RunSql(db.connection.get(), "CALL postgres_clear_cache()");
+  chargewire_duckdb::RunSql(db.connection.get(), "CALL postgres_clear_cache()");
   const std::string p = "pg_unit." + config.instrumentation_schema + ".";
-  EXPECT_EQ(warpduckdb::QueryText(db.connection.get(),
+  EXPECT_EQ(chargewire_duckdb::QueryText(db.connection.get(),
                                   "SELECT concat_ws('|', status, rows_fetched, duration_ms, total_duration_ms, "
                                   "execution_start_time = " + hardcharger::SqlTimestamp(kept.start) + ") FROM " + p +
                                       "sql_executions"),
             "success|7|3|9|true");
-  EXPECT_EQ(warpduckdb::QueryText(db.connection.get(), "SELECT count(*) FROM " + p + "sql_statements"), "1");
-  EXPECT_EQ(warpduckdb::QueryText(db.connection.get(), "SELECT count(*) FROM " + p + "sql_executions"), "1");
+  EXPECT_EQ(chargewire_duckdb::QueryText(db.connection.get(), "SELECT count(*) FROM " + p + "sql_statements"), "1");
+  EXPECT_EQ(chargewire_duckdb::QueryText(db.connection.get(), "SELECT count(*) FROM " + p + "sql_executions"), "1");
   EXPECT_EQ(runtime.instrumentation_stats.failed.load(), 0u);
-  warpduckdb::RunSql(db.connection.get(), drop);
+  chargewire_duckdb::RunSql(db.connection.get(), drop);
 }

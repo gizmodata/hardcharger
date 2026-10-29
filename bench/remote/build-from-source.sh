@@ -2,10 +2,10 @@
 # Builds what is under test from source on a benchmark VM (Ubuntu 24.04 arm64), for
 # trying changes between CI runs. The published numbers use CI's artifacts instead.
 #
-#   build-from-source.sh server   ~/src/hardcharger (with third_party/warp-sql) ->
+#   build-from-source.sh server   ~/src/hardcharger (with third_party/chargewire) ->
 #                                 ~/bench/hardcharger-linux-arm64/bin/hardcharger-server
-#   build-from-source.sh client   ~/src/warp-sql-adbc -> the Go driver's shared library,
-#                                 installed into ~/venv as adbc-driver-warpsql (editable)
+#   build-from-source.sh client   ~/src/chargewire-adbc -> the Go driver's shared library,
+#                                 installed into ~/venv as adbc-driver-chargewire (editable)
 #
 # The sources are copied there first (rsync from the operator's machine, without build
 # trees or .deps). Run setup-vm.sh before this.
@@ -31,8 +31,8 @@ else
     sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/go.tgz
   fi
   export PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local
-  make -C ~/src/warp-sql-adbc/go lib
-  ~/venv/bin/pip install -q -e ~/src/warp-sql-adbc/python
-  ~/venv/bin/python -c "import adbc_driver_warpsql._driver as d; print(d._driver_path())"
+  make -C ~/src/chargewire-adbc/go lib
+  ~/venv/bin/pip install -q -e ~/src/chargewire-adbc/python
+  ~/venv/bin/python -c "import adbc_driver_chargewire._driver as d; print(d._driver_path())"
 fi
 echo "built $ROLE"

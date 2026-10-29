@@ -1,12 +1,12 @@
 """Port of GizmoSQL 1.x tests/integration/test_max_sessions.cpp (4 cases).
 
 max_sessions (--max-sessions, HARDCHARGER_MAX_SESSIONS) caps non-admin sessions; the next
-one gets 429 too_many_sessions (Warp SQL §5.1) with 1.x's "max-sessions ... Unavailable"
+one gets 429 too_many_sessions (Chargewire §5.1) with 1.x's "max-sessions ... Unavailable"
 text. Admins are never capped, closing a session frees its place, and so does KILL
 SESSION. The settings case checks hardcharger_settings()'s
 cells for the startup settings and that SET can't change them.
 
-Differences from 1.x, on purpose: session_idle_timeout defaults to 900 s (the Warp SDK's
+Differences from 1.x, on purpose: session_idle_timeout defaults to 900 s (the Chargewire SDK's
 default; 1.x: 0, never), health_check_interval_seconds to 5 s (1.x: 0, on demand), and
 version is Hardcharger's ("0.x.y", as --version prints it).
 """
@@ -22,7 +22,7 @@ def server(launcher):
 
 
 def user_client(server, subject: str):
-    from warp_client import mint_server_token
+    from chargewire_client import mint_server_token
     return server.client(token=mint_server_token(secret_key=server.secret_key, subject=subject, role="user"))
 
 

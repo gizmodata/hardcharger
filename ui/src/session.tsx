@@ -1,12 +1,12 @@
-// The signed-in session the whole app shares: the access token, a Warp SQL connection for
+// The signed-in session the whole app shares: the access token, a Chargewire connection for
 // metadata and small queries, who the server says we are, and the way back to the sign-in
 // page when the token expires or an administrator ends the session.
 
-import { type Connection, type DiscoveryDocument, ErrorCode, WarpSqlError } from "@gizmodata/warp-sql";
+import { type Connection, type DiscoveryDocument, ErrorCode, ChargewireError } from "@gizmodata/chargewire";
 import { createContext, use } from "react";
 
 import type { SignedIn } from "./lib/auth";
-import type { ConnectionOptions } from "./lib/warp";
+import type { ConnectionOptions } from "./lib/chargewire";
 
 export interface Identity {
   user: string;
@@ -68,9 +68,9 @@ export function useSession(): AppSession {
   return session;
 }
 
-/** Why the sign-in no longer works, if `err` says so (Warp SQL §4.2, §5.6). */
+/** Why the sign-in no longer works, if `err` says so (Chargewire §4.2, §5.6). */
 export function signInLost(err: unknown): string | undefined {
-  if (!WarpSqlError.is(err)) return undefined;
+  if (!ChargewireError.is(err)) return undefined;
   if (err.code !== ErrorCode.invalidToken && err.code !== ErrorCode.sessionEnded) return undefined;
   // The reasons of §4.2 and §5.6; an unknown one (or none) reads as an expired sign-in.
   switch (err.reason) {
@@ -89,7 +89,7 @@ export function signInLost(err: unknown): string | undefined {
 
 /** The message to show for an error: the server's detail, without the client's suffix. */
 export function errorMessage(err: unknown): string {
-  if (WarpSqlError.is(err)) {
+  if (ChargewireError.is(err)) {
     if (err.code === ErrorCode.statementCancelled) return "The query was cancelled.";
     if (err.code === ErrorCode.statementTimeout) return "The query ran longer than its time limit.";
     if (err.code === ErrorCode.clientTransportError) return "The server could not be reached.";

@@ -1,4 +1,4 @@
-import { type Connection, WarpSqlError } from "@gizmodata/warp-sql";
+import { type Connection, ChargewireError } from "@gizmodata/chargewire";
 import { describe, expect, it } from "vitest";
 
 import { TabSession, TransactionLostError } from "../../src/lib/tabSession";
@@ -16,7 +16,7 @@ function opener() {
   const open = async (): Promise<Connection> => {
     const f: Fake = { id: `s_${made.length + 1}`, transaction: "none", gone: false, closed: false, ran: [] };
     made.push(f);
-    const gone = () => new WarpSqlError({ code: "session_not_found", status: 404 });
+    const gone = () => new ChargewireError({ code: "session_not_found", status: 404 });
     const conn = {
       sessionId: f.id,
       getSession: async () => {
@@ -94,7 +94,7 @@ describe("TabSession", () => {
   it("other errors pass through unchanged", async () => {
     const { open } = opener();
     const s = new TabSession(open);
-    const err = new WarpSqlError({ code: "sql_error", status: 400 });
+    const err = new ChargewireError({ code: "sql_error", status: 400 });
     await expect(s.run(here, () => Promise.reject(err))).rejects.toBe(err);
   });
 });

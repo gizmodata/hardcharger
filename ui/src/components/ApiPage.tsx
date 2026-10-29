@@ -52,7 +52,7 @@ const sameOriginOnly = () => ({
 type State = { kind: "loading" } | { kind: "ready"; doc: OpenApiDocument } | { kind: "none" | "error"; why: string };
 
 /**
- * The server's own API (GET /warp/v1/openapi.json), shown with Swagger UI. "Try it out"
+ * The server's own API (GET /chargewire/v1/openapi.json), shown with Swagger UI. "Try it out"
  * sends requests to this server only, with the signed-in user's token added as each request
  * leaves; the token is never handed to Swagger UI, shown, or kept anywhere new.
  */
@@ -119,7 +119,7 @@ export default function ApiPage({ theme }: { theme: ThemeName }) {
       <div className="page-head">
         <h2>API</h2>
         <p className="page-sub">
-          This server&apos;s Warp SQL API, from <code>/warp/v1/openapi.json</code>. <b>Try it out</b> sends requests to
+          This server&apos;s Chargewire API, from <code>/chargewire/v1/openapi.json</code>. <b>Try it out</b> sends requests to
           this server only, signed in as <b>{session.identity.user}</b>.
         </p>
       </div>

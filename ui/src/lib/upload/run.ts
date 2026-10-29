@@ -1,4 +1,4 @@
-// An upload's run on the server: its own Warp SQL session (acting with the tab's role), one
+// An upload's run on the server: its own Chargewire session (acting with the tab's role), one
 // transaction, and the file's batches sent one bulk-ingest request each (§8.1), in the file's
 // order: the first creates (or replaces) the table, the rest append. Nothing is visible to
 // anyone else until the commit, and a failure or a cancel rolls everything back, the table
@@ -16,7 +16,7 @@
 // sends them over several connections, which the browser's parsing, not the network, would
 // leave idle. The single-request ingest keeps the file's row order, as GizmoData Cloud does.
 
-import { type Connection, ErrorCode, WarpSqlError } from "@gizmodata/warp-sql";
+import { type Connection, ErrorCode, ChargewireError } from "@gizmodata/chargewire";
 
 import type { DataType } from "apache-arrow";
 
@@ -158,7 +158,7 @@ export async function runUpload(options: {
       try {
         await conn.ingest(table, chunk.table, { mode, catalog, schema, signal });
       } catch (err) {
-        if (target.mode === "append" && WarpSqlError.is(err) && err.code !== ErrorCode.statementCancelled) {
+        if (target.mode === "append" && ChargewireError.is(err) && err.code !== ErrorCode.statementCancelled) {
           throw new UploadRefused(
             `The file's columns don't fit ${shown} (append matches columns by name): ${err.detail ?? err.message}`,
           );

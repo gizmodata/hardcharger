@@ -7,7 +7,7 @@ import time
 import httpx
 import pytest
 
-from rbac import (ADMIN, WarpError, expect_allowed, mint, rbac_env, redact,
+from rbac import (ADMIN, ChargewireError, expect_allowed, mint, rbac_env, redact,
                   start_rbac_server)
 
 
@@ -27,7 +27,7 @@ def error(client, sql: str) -> str:
     try:
         client.run(sql=sql)
         return ""
-    except WarpError as raised:
+    except ChargewireError as raised:
         return raised.detail
 
 
@@ -61,7 +61,7 @@ def test_store_users_connect_with_tokens_and_cannot_grant(server, admin):
 
 def test_unknown_users_are_refused(server):
     for role in ["user", "readonly"]:  # an old-style token role does not help: only admin is special
-        with pytest.raises(WarpError) as raised:
+        with pytest.raises(ChargewireError) as raised:
             server.client(token=mint(user="nobody_here", role=role))
         assert raised.value.code == "invalid_token", str(raised.value)
         assert "is not defined on this server" in raised.value.detail, str(raised.value)
@@ -74,14 +74,14 @@ def test_disabling_a_user_ends_their_live_session_and_tokens(server, admin):
     finished = leo.submit(sql="SELECT 42 AS answer")
     assert leo.wait(statement_id=finished)["state"] == "succeeded"
     expect_allowed(client=admin, sql="ALTER USER leo DISABLE")
-    with pytest.raises(WarpError) as ended:
+    with pytest.raises(ChargewireError) as ended:
         leo.run(sql="SELECT 1")
     assert ended.value.status == 401 and "is disabled" in ended.value.detail, str(ended.value)
     # Results the session kept are gone with its token.
     kept = leo.http.get(url=f"{leo.url}/statements/{finished}/result", headers=leo.headers())
     assert kept.status_code == 401, kept.text
     # A brand-new session is refused too.
-    with pytest.raises(WarpError) as refused:
+    with pytest.raises(ChargewireError) as refused:
         server.client(token=mint(user="leo"))
     assert "is disabled" in refused.value.detail
     expect_allowed(client=admin, sql="ALTER USER leo ENABLE")
@@ -97,12 +97,12 @@ def test_store_users_sign_in_with_their_password(server, admin):
     # Every failure looks the same: wrong password, no password, unknown name.
     for user, password in [("pat", "wrong"), ("pat", "correct horse"), ("nopass", "anything"),
                            ("nobody_at_all", "x")]:
-        with pytest.raises(WarpError) as raised:
+        with pytest.raises(ChargewireError) as raised:
             server.password_token(user=user, password=password)
         assert (raised.value.code, raised.value.detail) == ("invalid_credentials",
                                                             "the user name or password is not correct"), user
     expect_allowed(client=admin, sql="ALTER USER pat DISABLE")
-    with pytest.raises(WarpError):
+    with pytest.raises(ChargewireError):
         server.password_token(user="pat", password="correct horse 1")
     expect_allowed(client=admin, sql="ALTER USER pat ENABLE")
     # (DISABLE ended pat's session: sign in again.)
@@ -110,10 +110,10 @@ def test_store_users_sign_in_with_their_password(server, admin):
     # A password change ends the sessions and tokens issued against the old one.
     expect_allowed(client=pat, sql="SELECT 1")
     expect_allowed(client=admin, sql="ALTER USER pat WITH PASSWORD 'battery staple 2'")
-    with pytest.raises(WarpError) as stale:
+    with pytest.raises(ChargewireError) as stale:
         pat.run(sql="SELECT 1")
     assert stale.value.status == 401 and "changed since this access token was issued" in stale.value.detail
-    with pytest.raises(WarpError):
+    with pytest.raises(ChargewireError):
         server.password_token(user="pat", password="correct horse 1")
     assert server.password_token(user="pat", password="battery staple 2")
     # The administrator's own sign-in is unchanged, and its name is not available.
@@ -152,7 +152,7 @@ def test_access_control_statements_need_the_store(launcher):
     assert plain.run(token=token, session_id=session, sql="CREATE TABLE grants (g INT)").status_code in (200, 201)
     assert plain.run(token=token, session_id=session, sql="SHOW GRANTS").status_code in (200, 201)
     # Without access control, a scoped token means nothing, so none is accepted.
-    response = httpx.post(url=f"{plain.base_url}/warp/v1/sessions", json={},
+    response = httpx.post(url=f"{plain.base_url}/chargewire/v1/sessions", json={},
                           headers={"Authorization": f"Bearer {mint(user='x', scope_id='s')}"})
     assert response.status_code == 401
 
@@ -223,7 +223,7 @@ def _connects(server, user: str) -> bool:
     try:
         server.user(name=user)
         return True
-    except WarpError:
+    except ChargewireError:
         return False
 
 

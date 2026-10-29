@@ -53,7 +53,7 @@ def main() -> int:
     deadline = time.time() + 60
     while True:
         try:
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/warp/v1/health", timeout=2)
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/chargewire/v1/health", timeout=2)
             break
         except Exception:
             if server.poll() is not None or time.time() > deadline:

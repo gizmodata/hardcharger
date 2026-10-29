@@ -1,5 +1,5 @@
 // What the schema browser and autocomplete list: catalogs, schemas, tables and views, columns,
-// and the SQL vocabulary (keywords, functions), read once through Warp SQL metadata (and
+// and the SQL vocabulary (keywords, functions), read once through Chargewire metadata (and
 // DuckDB's own catalog functions for the vocabulary) and kept for a few minutes. The server
 // lists only what the user's access control lets them see, through every one of these.
 //
@@ -7,7 +7,7 @@
 // own), shared by the browser and autocomplete, so whatever one has listed the other doesn't
 // fetch again. A run that may change the catalog (CREATE, DROP, ATTACH, ...) clears it.
 
-import type { Connection } from "@gizmodata/warp-sql";
+import type { Connection } from "@gizmodata/chargewire";
 
 import { exactLike } from "./sql";
 

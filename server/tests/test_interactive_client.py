@@ -3,8 +3,8 @@
 The 1.x file tests the client's classes directly, so its port stays C++
 (server/client/tests/interactive_client_test.cc, the same 115 cases against the
 hardcharger client's classes), run here against a real hardcharger-server started with
-the 1.x fixture's tables. All 115 apply; FlightConnection is WarpConnection. Two are
-re-expressed (see the .cc file's header): TlsSkipVerifyWithMtlsCertIsRejected (Warp SQL
+the 1.x fixture's tables. All 115 apply; FlightConnection is ChargewireConnection. Two are
+re-expressed (see the .cc file's header): TlsSkipVerifyWithMtlsCertIsRejected (Chargewire
 sends the client certificate with verification off, so the combination is allowed) and
 DotShow (no edition line: Hardcharger has no editions).
 """

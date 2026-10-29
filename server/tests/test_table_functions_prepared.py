@@ -7,7 +7,7 @@ execution returned nothing and every execution showed the rows of the moment it 
 """
 
 import pytest
-from warp_client import read_table
+from chargewire_client import read_table
 
 
 @pytest.fixture(scope="module")

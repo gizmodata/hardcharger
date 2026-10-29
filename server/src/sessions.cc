@@ -7,8 +7,8 @@
 
 namespace hardcharger {
 
-using warpsql::Error;
-using warpsql::ErrorCode;
+using chargewire::Error;
+using chargewire::ErrorCode;
 
 namespace {
 
@@ -26,7 +26,7 @@ bool SeesSession(const Session& viewer, const Session& target) {
 }
 
 std::optional<std::size_t> CancelSessionWork(Runtime& runtime, const std::string& id,
-                                             warpsql::SessionCancelReason reason) {
+                                             chargewire::SessionCancelReason reason) {
   if (runtime.server == nullptr) return std::nullopt;
   return runtime.server->CancelSession(id, reason);
 }
@@ -40,7 +40,7 @@ SessionRegistry::Lookup SessionRegistry::Find(const std::string& id, const Sessi
   return SeesSession(viewer, *it->second.session) ? Lookup::kVisible : Lookup::kHidden;
 }
 
-bool SessionRegistry::Admit(const warpsql::Principal& principal) {
+bool SessionRegistry::Admit(const chargewire::Principal& principal) {
   if (principal.role == "admin" || max_sessions_ <= 0) return false;
   std::lock_guard lock(mutex_);
   if (capped_in_use_ >= max_sessions_) {

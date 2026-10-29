@@ -7,7 +7,7 @@
 
 #include <replxx.hxx>
 
-#include "warp_connection.hpp"
+#include "chargewire_connection.hpp"
 
 namespace hardcharger::client {
 
@@ -25,7 +25,7 @@ struct SchemaEntry {
 
 class ShellCompleter {
  public:
-  explicit ShellCompleter(WarpConnection& conn);
+  explicit ShellCompleter(ChargewireConnection& conn);
 
   // Completion callback for replxx
   replxx::Replxx::completions_t Complete(const std::string& input,
@@ -61,7 +61,7 @@ class ShellCompleter {
   static std::string MatchCase(const std::string& candidate,
                                 const std::string& prefix);
 
-  WarpConnection& conn_;
+  ChargewireConnection& conn_;
   std::vector<TableEntry> tables_;
   std::vector<SchemaEntry> schemas_;
   bool cache_populated_ = false;

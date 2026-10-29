@@ -18,7 +18,7 @@
 #include <arrow/scalar.h>
 
 #include "hardcharger_embedded.h"
-#include "warpsql/client.hpp"
+#include "chargewire/client.hpp"
 
 namespace {
 
@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
   const std::string password = "smoke-test-only";  // a throwaway server on 127.0.0.1
 
   std::cout << "Hardcharger " << hardcharger_embedded_version() << ", DuckDB " << hardcharger_embedded_duckdb_version()
-            << ", Warp SQL " << hardcharger_embedded_warp_sql_version() << ", web UI '"
+            << ", Chargewire " << hardcharger_embedded_chargewire_version() << ", web UI '"
             << hardcharger_embedded_web_ui_version() << "'" << std::endl;
   const std::vector<std::string> run = {"hardcharger-server",
                                         "--host=127.0.0.1",
@@ -140,7 +140,7 @@ int main(int argc, char** argv) {
           "a second server is refused while one runs");
 
     try {
-      warpsql::client::Client client({.host = "127.0.0.1", .port = static_cast<uint16_t>(port)});
+      chargewire::client::Client client({.host = "127.0.0.1", .port = static_cast<uint16_t>(port)});
       client.SignInWithPassword("hardcharger", password);
       auto session = client.CreateSession();
       Check(Answer(session->Execute("SELECT 42 AS answer").reader->ToTable()) == 42, "SELECT 42 answers 42");

@@ -1,6 +1,6 @@
 # The Hardcharger server on Windows (x64 and arm64, MSVC): builds the dependencies, the
-# server, the client and the Warp SQL reference server, runs the unit tests, the server
-# and client suites and the Warp SQL conformance suite (against both servers), and
+# server, the client and the Chargewire reference server, runs the unit tests, the server
+# and client suites and the Chargewire conformance suite (against both servers), and
 # packages hardcharger-windows-{amd64,arm64}.zip and an MSI of each. server.yml calls it
 # (its `windows` job), on the same events as its other builds; its concurrency is
 # server.yml's (a called workflow's own would share the caller's group and cancel it).
@@ -86,17 +86,17 @@ jobs:
           ui=("$PWD"/server/.web-ui/hardcharger-ui-*.tar.gz)
           [ ${#ui[@]} -eq 1 ] || { echo "expected one hardcharger-ui tarball, found: ${ui[*]}"; exit 1; }
           echo "HARDCHARGER_UI_TARBALL=$(cygpath -m "${ui[0]}")" >> "$GITHUB_ENV"
-      # The warp-sql submodule is private: fetch it with its read-only deploy key.
+      # The chargewire submodule is private: fetch it with its read-only deploy key.
       - &build-submodule
-        name: Fetch the warp-sql submodule
+        name: Fetch the chargewire submodule
         env:
-          DEPLOY_KEY: ${{ secrets.WARP_SQL_DEPLOY_KEY }}
+          DEPLOY_KEY: ${{ secrets.CHARGEWIRE_DEPLOY_KEY }}
         run: |
-          key="$(cygpath -u "$RUNNER_TEMP")/warp_sql_key"
+          key="$(cygpath -u "$RUNNER_TEMP")/chargewire_key"
           printf '%s\n' "$DEPLOY_KEY" > "$key"
           chmod 600 "$key"
           GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-            git -c url.git@github.com:gizmodata/warp-sql.git.insteadOf=https://github.com/gizmodata/warp-sql.git \
+            git -c url.git@github.com:gizmodata/chargewire.git.insteadOf=https://github.com/gizmodata/chargewire.git \
               submodule update --init --depth 1
           rm -f "$key"
 
@@ -200,7 +200,7 @@ jobs:
             .github/windows-vcpkg-packages.txt
           build: server/scripts/windows-deps.sh
 
-      # The server's and warp-duckdb's own sources (and what they fetch: Boost.URL, yaml-cpp,
+      # The server's and chargewire-duckdb's own sources (and what they fetch: Boost.URL, yaml-cpp,
       # googletest, zlib) compile through sccache, as on Linux and macOS: about 25 minutes
       # cold, the longest part of the job. Its directory is one actions/cache entry per arch
       # and MSVC toolset (.github/actions/sccache-dir). Fail-open: when the action can't
@@ -248,22 +248,22 @@ jobs:
           server/build/hardcharger-server.exe --version
           server/build/hardcharger-server.exe --print-duckdb-version
           echo "server built in $(( SECONDS - start )) s"
-      # The Warp SQL reference server (warp-sql has no CI of its own), on the same deps.
-      - &build-warp
-        name: Build warp-duckdb
-        id: warp
+      # The Chargewire reference server (chargewire has no CI of its own), on the same deps.
+      - &build-chargewire
+        name: Build chargewire-duckdb
+        id: chargewire
         run: |
           start=$SECONDS
           openssl="/c/vcpkg/installed/$VCPKG_TRIPLET"
           deps="$(cygpath -m "$PWD/server/.deps")"
           read -ra launcher <<< "$HARDCHARGER_CMAKE_LAUNCHER"
-          cmake -S third_party/warp-sql/cpp -B build-warp -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          cmake -S third_party/chargewire/cpp -B build-chargewire -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_TOOLCHAIN_FILE="$(cygpath -m "$PWD/.github/cmake/windows-vcpkg.cmake")" \
                 -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE \
-                -DWARPSQL_ARROW_PREFIX="$deps/arrow-install" -DWARPSQL_DUCKDB_PREFIX="$deps/duckdb-install" \
-                -DWARPSQL_BUILD_TESTS=ON "${launcher[@]}"
-          cmake --build build-warp --target warp-duckdb warpsql-client-tests warpsql-sdk-tests
-          echo "warp-duckdb built in $(( SECONDS - start )) s"
+                -DCHARGEWIRE_ARROW_PREFIX="$deps/arrow-install" -DCHARGEWIRE_DUCKDB_PREFIX="$deps/duckdb-install" \
+                -DCHARGEWIRE_BUILD_TESTS=ON "${launcher[@]}"
+          cmake --build build-chargewire --target chargewire-duckdb chargewire-client-tests chargewire-sdk-tests
+          echo "chargewire-duckdb built in $(( SECONDS - start )) s"
       - name: sccache directory (save)
         if: always()
         uses: ./.github/actions/sccache-dir
@@ -280,8 +280,8 @@ jobs:
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'crash-dumps'
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          foreach ($exe in 'hardcharger-unit-tests.exe', 'warpsql-client-tests.exe', 'warpsql-sdk-tests.exe',
-                           'hardcharger-server.exe', 'warp-duckdb.exe', 'hardcharger.exe') {
+          foreach ($exe in 'hardcharger-unit-tests.exe', 'chargewire-client-tests.exe', 'chargewire-sdk-tests.exe',
+                           'hardcharger-server.exe', 'chargewire-duckdb.exe', 'hardcharger.exe') {
             $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$exe"
             New-Item -Force -Path $key | Out-Null
             Set-ItemProperty -Path $key -Name DumpFolder -Value $dir -Type ExpandString
@@ -291,14 +291,14 @@ jobs:
       - name: Unit tests
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: server/build/hardcharger-unit-tests.exe --gtest_brief=1
-      # The Warp SQL client library's own tests (unit, and live against warp-duckdb).
+      # The Chargewire client library's own tests (unit, and live against chargewire-duckdb).
       - name: Client library tests
-        if: ${{ !cancelled() && steps.warp.outcome == 'success' }}
-        run: build-warp/warpsql-client-tests.exe --gtest_brief=1
+        if: ${{ !cancelled() && steps.chargewire.outcome == 'success' }}
+        run: build-chargewire/chargewire-client-tests.exe --gtest_brief=1
       # The SDK's own unit tests (the security-event limiter).
       - name: SDK unit tests
-        if: ${{ !cancelled() && steps.warp.outcome == 'success' }}
-        run: build-warp/warpsql-sdk-tests.exe --gtest_brief=1
+        if: ${{ !cancelled() && steps.chargewire.outcome == 'success' }}
+        run: build-chargewire/chargewire-sdk-tests.exe --gtest_brief=1
 
       # PostgreSQL for the access-control grant store (the tests fail without it). The
       # x64 image ships PostgreSQL; elsewhere EnterpriseDB's x64 binaries (emulated on arm64).
@@ -329,7 +329,7 @@ jobs:
         with:
           cache-dependency-glob: |
             server/tests/pyproject.toml
-            third_party/warp-sql/conformance/pyproject.toml
+            third_party/chargewire/conformance/pyproject.toml
       # Everything, access control and the client included, on the one build, the one that
       # ships. Deselected by marker, visibly: the DuckLake suites (Docker's PostgreSQL and
       # S3 containers, which Windows runners can't run; as on macOS) and the client's
@@ -345,37 +345,37 @@ jobs:
           # In parallel (pytest-xdist, as server.yml), then the `serial` tests alone.
           .venv/Scripts/python.exe -m pytest -q -rfE -n 4 -m "not serial and not services and not pty" --durations=10
           .venv/Scripts/python.exe -m pytest -q -rfE -m "serial and not services and not pty" --durations=5
-      - name: Warp SQL conformance suite (Hardcharger)
+      - name: Chargewire conformance suite (Hardcharger)
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        working-directory: third_party/warp-sql/conformance
+        working-directory: third_party/chargewire/conformance
         env:
-          WARP_SQL_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
-          WARP_SQL_TEST_SERVER_USERNAME: warp
-          WARP_SQL_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
+          CHARGEWIRE_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+          CHARGEWIRE_TEST_SERVER_USERNAME: chargewire
+          CHARGEWIRE_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
           # The flag naming the client CA in the mutual-TLS tests (test_mtls.py).
-          WARP_SQL_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
+          CHARGEWIRE_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
           # Hardcharger's flag for the CORS allow-list (test_http.py's credentials tests).
-          WARP_SQL_TEST_SERVER_CORS_FLAG: --cors-origins
+          CHARGEWIRE_TEST_SERVER_CORS_FLAG: --cors-origins
           # How test_oauth_browser.py configures browser sign-in on Hardcharger (a template).
-          WARP_SQL_TEST_SERVER_OAUTH_ARGS: >-
+          CHARGEWIRE_TEST_SERVER_OAUTH_ARGS: >-
             --token-allowed-issuer {issuer} --token-allowed-audience {client_id} --token-default-role admin
             --token-authorized-emails {identity} --oauth-client-id {client_id} --oauth-base-url {base_url}
             --oauth-provider-name {provider} --oauth-max-flows {max_flows}
-          WARP_SQL_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
+          CHARGEWIRE_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
           # One-signal draining (test_lifecycle.py) waits this long for running work.
-          WARP_SQL_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
-          HARDCHARGER_ADMIN_USERNAME: warp
+          CHARGEWIRE_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
+          HARDCHARGER_ADMIN_USERNAME: chargewire
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
           uv venv .venv --python ${{ matrix.test_python }}
           uv pip install --python .venv/Scripts/python.exe -e .
-          WARP_SQL_TEST_SERVER_BINARY="$(cygpath -m "$GITHUB_WORKSPACE/server/build/hardcharger-server.exe")" \
+          CHARGEWIRE_TEST_SERVER_BINARY="$(cygpath -m "$GITHUB_WORKSPACE/server/build/hardcharger-server.exe")" \
             .venv/Scripts/python.exe -m pytest -q -rfE
-      - name: Warp SQL conformance suite (warp-duckdb)
-        if: ${{ !cancelled() && steps.warp.outcome == 'success' }}
-        working-directory: third_party/warp-sql/conformance
+      - name: Chargewire conformance suite (chargewire-duckdb)
+        if: ${{ !cancelled() && steps.chargewire.outcome == 'success' }}
+        working-directory: third_party/chargewire/conformance
         run: |
-          WARP_SQL_TEST_SERVER_BINARY="$(cygpath -m "$GITHUB_WORKSPACE/build-warp/warp-duckdb.exe")" \
+          CHARGEWIRE_TEST_SERVER_BINARY="$(cygpath -m "$GITHUB_WORKSPACE/build-chargewire/chargewire-duckdb.exe")" \
             .venv/Scripts/python.exe -m pytest -q -rfE
 
       # On request (server.yml's failure_repro input, or [stream-repro] in a pushed head
@@ -384,16 +384,16 @@ jobs:
       # acceptable answers are the error response or an incomplete stream, with the
       # statement's own error.
       - name: Failed-statement answers, 200 times
-        if: ${{ !cancelled() && steps.warp.outcome == 'success' && (inputs.failure_repro || contains(github.event.head_commit.message, '[stream-repro]')) }}
-        working-directory: third_party/warp-sql/conformance
+        if: ${{ !cancelled() && steps.chargewire.outcome == 'success' && (inputs.failure_repro || contains(github.event.head_commit.message, '[stream-repro]')) }}
+        working-directory: third_party/chargewire/conformance
         env:
           PYTHONUTF8: "1"
-          HARDCHARGER_ADMIN_USERNAME: warp
+          HARDCHARGER_ADMIN_USERNAME: chargewire
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
           bash "$GITHUB_WORKSPACE/.github/scripts/failure-repro.sh" \
             "$(cygpath -m "$GITHUB_WORKSPACE/server/build/hardcharger-server.exe")" \
-            "$(cygpath -m "$GITHUB_WORKSPACE/build-warp/warp-duckdb.exe")" .venv/Scripts/python.exe
+            "$(cygpath -m "$GITHUB_WORKSPACE/build-chargewire/chargewire-duckdb.exe")" .venv/Scripts/python.exe
 
       # The same layout as the other platforms' tarballs: bin/ (the server and the client,
       # single-file executables: every dependency and the C++ runtime linked in), LICENSE,
@@ -461,10 +461,10 @@ jobs:
             -ArgumentList "--database", "my.duckdb" -PassThru -RedirectStandardError server.log
           $up = $false
           foreach ($i in 1..60) {
-            try { if ((Invoke-WebRequest -UseBasicParsing http://127.0.0.1:31337/warp).StatusCode -eq 200) { $up = $true; break } } catch {}
+            try { if ((Invoke-WebRequest -UseBasicParsing http://127.0.0.1:31337/chargewire).StatusCode -eq 200) { $up = $true; break } } catch {}
             Start-Sleep -Seconds 1
           }
-          $token = (Invoke-RestMethod -Method Post -Uri http://127.0.0.1:31337/warp/v1/auth/token `
+          $token = (Invoke-RestMethod -Method Post -Uri http://127.0.0.1:31337/chargewire/v1/auth/token `
             -ContentType application/json -Body '{"grant_type":"password","username":"hardcharger","password":"change-me"}').access_token
           # The client in the zip, against it.
           $env:HARDCHARGER_PASSWORD = 'change-me'
@@ -707,7 +707,7 @@ jobs:
 
   # The compile-cache warm-up (server.yml's warm-* jobs explain why): the build job's steps up
   # to its sccache save (YAML anchors: same toolset, flags and launcher, the server and
-  # warp-duckdb), no tests and no packages, then main's sccache directory saved. One job per
+  # chargewire-duckdb), no tests and no packages, then main's sccache directory saved. One job per
   # platform, since a job's `if` can't see its matrix leg.
   warm-windows-amd64:
     name: warm compile cache (${{ matrix.name }})
@@ -748,7 +748,7 @@ jobs:
       - *build-sccache-restore
       - *build-launcher
       - *build-server
-      - *build-warp
+      - *build-chargewire
       # Only after a whole build (a cancelled one would look fresh to the next push), and
       # even when it added nothing: this entry is what tells the next push main is warm.
       - name: sccache directory (save)

@@ -1,9 +1,9 @@
 // Upload data: a CSV, TSV, Excel, Parquet, JSON or Arrow file into a table, read and converted
-// to Arrow in this browser (in a worker) and sent over Warp SQL's bulk ingest. Its fields,
+// to Arrow in this browser (in a worker) and sent over Chargewire's bulk ingest. Its fields,
 // labels and messages follow GizmoData Cloud's SQL editor (Upload data there), so the two read
 // the same; the preview with editable column types is this UI's own, folded away until opened.
 
-import { type Connection, ErrorCode, WarpSqlError } from "@gizmodata/warp-sql";
+import { type Connection, ErrorCode, ChargewireError } from "@gizmodata/chargewire";
 import { CheckCircle2, ChevronDown, ChevronRight, FileUp, Loader2, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -103,7 +103,7 @@ const scrollIntoView = (el: HTMLElement | null) => el?.scrollIntoView({ block: "
 
 function messageOf(err: unknown): string {
   if (err instanceof UploadRefused) return err.message;
-  if (WarpSqlError.is(err)) {
+  if (ChargewireError.is(err)) {
     if (err.code === ErrorCode.permissionDenied) return `Permission denied: ${err.detail ?? err.message}`;
     if (err.code === ErrorCode.statementCancelled) return "Upload cancelled.";
   }

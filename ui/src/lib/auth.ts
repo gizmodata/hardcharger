@@ -1,5 +1,5 @@
-// Signing in with Hardcharger's own flows (Warp SQL §4.1, §4.4): a user name and password,
-// sent to POST /warp/v1/auth/token once and then forgotten, or the client certificate the
+// Signing in with Hardcharger's own flows (Chargewire §4.1, §4.4): a user name and password,
+// sent to POST /chargewire/v1/auth/token once and then forgotten, or the client certificate the
 // browser presents (the client_certificate grant, on a server with mutual TLS that offers
 // it). The browser keeps only the short-lived access token, in memory and in this tab's
 // sessionStorage (so a reload stays signed in), never in localStorage or a cookie.
@@ -8,7 +8,7 @@
 // TLS the browser must present its client certificate on every connection to the server,
 // and an uncredentialed request goes without it. The server reads no cookies (§4.2).
 
-import { warpBase } from "./warp";
+import { chargewireBase } from "./chargewire";
 
 export interface SignedIn {
   username: string;
@@ -100,7 +100,7 @@ export async function signInWithCertificate(signal?: AbortSignal): Promise<Signe
 async function requestToken(grant: Record<string, string>, username: string, signal?: AbortSignal): Promise<SignedIn> {
   let resp: Response;
   try {
-    resp = await fetch(`${warpBase()}/v1/auth/token`, {
+    resp = await fetch(`${chargewireBase()}/v1/auth/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(grant),
@@ -126,17 +126,17 @@ async function requestToken(grant: Record<string, string>, username: string, sig
   return { username, token: body.access_token, expiresAt: Date.now() + lifetime * 1000 };
 }
 
-// ---- Browser sign-in (Warp SQL §4.3): the server's identity provider ----
+// ---- Browser sign-in (Chargewire §4.3): the server's identity provider ----
 //
 // The page creates a flow with return_to set to itself, keeps the flow's poll secret in this
 // tab's sessionStorage (never in a URL, localStorage or a cookie), and sends the browser to
 // the identity provider. The server's callback sends it back here with the flow id in the
-// URL fragment (#warp_oauth_flow=…); the page removes the fragment at once and polls the flow
+// URL fragment (#chargewire_oauth_flow=…); the page removes the fragment at once and polls the flow
 // with the secret it kept, which hands out the token once. A fragment naming a flow this tab
 // didn't start is ignored.
 
 const flowKey = "hardcharger-ui:browser-sign-in";
-const fragmentKey = "warp_oauth_flow";
+const fragmentKey = "chargewire_oauth_flow";
 
 interface StoredFlow {
   flowId: string;
@@ -163,7 +163,7 @@ export async function startBrowserSignIn(signal?: AbortSignal): Promise<string> 
   const returnTo = window.location.pathname + window.location.search;
   let resp: Response;
   try {
-    resp = await fetch(`${warpBase()}/v1/auth/oauth/flows`, {
+    resp = await fetch(`${chargewireBase()}/v1/auth/oauth/flows`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ return_to: returnTo }),
@@ -197,7 +197,7 @@ export async function startBrowserSignIn(signal?: AbortSignal): Promise<string> 
 }
 
 /**
- * The flow id this page was sent back with (the #warp_oauth_flow= fragment), removed from
+ * The flow id this page was sent back with (the #chargewire_oauth_flow= fragment), removed from
  * the address bar; null when there is none, or once that flow has been collected. The
  * fragment is read once per page load (React may ask twice).
  */
@@ -263,7 +263,7 @@ async function collectFlow(flowId: string): Promise<SignedIn | null> {
   for (let attempt = 0; attempt < 10; attempt++) {
     let resp: Response;
     try {
-      resp = await fetch(`${warpBase()}/v1/auth/oauth/flows/${encodeURIComponent(flowId)}`, {
+      resp = await fetch(`${chargewireBase()}/v1/auth/oauth/flows/${encodeURIComponent(flowId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ poll_secret: flow.pollSecret }),
@@ -297,7 +297,7 @@ async function collectFlow(flowId: string): Promise<SignedIn | null> {
       const detail = body.error?.detail ?? "the identity provider did not sign you in";
       throw new SignInError(`Sign-in failed: ${detail}`, code, resp.status);
     }
-    // "pending", or a state this page doesn't know, which is not an end either (Warp SQL §12).
+    // "pending", or a state this page doesn't know, which is not an end either (Chargewire §12).
     await new Promise((r) => setTimeout(r, 1000));
   }
   throw new SignInError("The sign-in did not finish. Sign in again.", "client_timeout", undefined);

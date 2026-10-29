@@ -6,7 +6,7 @@ Edit the rows below when a port changes, then run: python3 scoreboard.py BATTERY
 rows = [
  # Authentication and tokens
  ("integration/test_authentication.cpp", 30, 30, 0, 0, 0, "test_authentication.py", "every rejection asserts its problem code"),
- ("integration/test_credential_parsing.cpp", 5, 4, 0, 1, 0, "test_credential_parsing.py", "N/A: the ':'-in-user-name startup check (Warp sends JSON fields)"),
+ ("integration/test_credential_parsing.cpp", 5, 4, 0, 1, 0, "test_credential_parsing.py", "N/A: the ':'-in-user-name startup check (Chargewire sends JSON fields)"),
  ("integration/test_cross_instance_tokens.cpp", 7, 7, 0, 0, 0, "test_cross_instance_tokens.py", "wrong-secret case now asserts invalid_token"),
  ("integration/test_token_authorized_emails.cpp", 7, 7, 0, 0, 0, "test_token_authorized_emails.py", ""),
  ("integration/test_oauth_server.cpp", 9, 8, 0, 1, 0, "test_oauth_server.py", "N/A: the non-Enterprise stub (one build, no license); mock provider in Python; JWKS (RSA and EC) cases; +6"),
@@ -17,17 +17,17 @@ rows = [
  ("integration/test_active_session_count.cpp", 2, 2, 0, 0, 0, "test_active_session_count.py", "read through hardcharger_sessions()"),
  ("integration/test_session_idle.cpp", 5, 5, 0, 0, 0, "test_session_idle.py", "against servers, not a unit"),
  ("integration/test_max_sessions.cpp", 4, 4, 0, 0, 0, "test_max_sessions.py", ""),
- ("integration/test_reject_unknown_sessions.cpp", 6, 4, 0, 2, 0, "test_reject_unknown_sessions.py", "N/A: the two implicit-recreation cases (Warp never recreates); no option, it is always so"),
+ ("integration/test_reject_unknown_sessions.cpp", 6, 4, 0, 2, 0, "test_reject_unknown_sessions.py", "N/A: the two implicit-recreation cases (Chargewire never recreates); no option, it is always so"),
  ("integration/test_kill_session.cpp", 4, 4, 0, 0, 0, "test_kill_session.py", "a real non-admin case; +4 cases (session_ended's reason on every request, GET of the session included)"),
  ("integration/test_graceful_shutdown.cpp", 5, 5, 0, 0, 0, "test_graceful_shutdown.py", "real SIGTERM every case; +1"),
  ("integration/test_health_check.cpp", 8, 8, 0, 0, 0, "test_health_check.py", ""),
  ("integration/test_server_cli.cpp", 2, 2, 0, 0, 0, "test_server_cli.py", ""),
  ("integration/test_graceful_shutdown_settings.cpp", 4, 4, 0, 0, 0, "test_graceful_shutdown_settings.py", "+1"),
  # Statements, results and protocol
- ("integration/test_eager_execution.cpp", 15, 15, 0, 0, 0, "test_eager_execution.py", "2 re-expressed for Warp SQL"),
+ ("integration/test_eager_execution.cpp", 15, 15, 0, 0, 0, "test_eager_execution.py", "2 re-expressed for Chargewire"),
  ("integration/test_result_streaming.cpp", 2, 2, 0, 0, 0, "test_result_streaming.py", ""),
  ("integration/test_client_disconnect_cancel.cpp", 3, 3, 0, 0, 0, "test_client_disconnect_cancel.py", "+1"),
- ("integration/test_prepared_statement_params.cpp", 9, 9, 0, 0, 0, "test_prepared_statement_params.py", "3 re-expressed for Warp SQL"),
+ ("integration/test_prepared_statement_params.cpp", 9, 9, 0, 0, 0, "test_prepared_statement_params.py", "3 re-expressed for Chargewire"),
  ("integration/test_bulk_ingest.cpp", 8, 8, 0, 0, 0, "test_bulk_ingest.py", "day_time cases as C++ unit tests"),
  ("integration/test_table_column_metadata.cpp", 3, 3, 0, 0, 0, "test_table_column_metadata.py", ""),
  ("integration/test_session_options_probe.cpp", 3, 3, 0, 0, 0, "test_session_options_probe.py", ""),
@@ -70,7 +70,7 @@ rows = [
  ("integration/test_init_sql_splitting.cpp", 7, 7, 0, 0, 0, "test_init_sql_splitting.py", "splitter cases as C++ unit tests"),
  ("integration/test_inline_license_key.cpp", 10, 0, 0, 10, 0, "", "N/A: Hardcharger has no license (a license flag is an unknown option)"),
  # Client binary
- ("integration/test_interactive_client.cpp", 115, 115, 0, 0, 0, "test_interactive_client.py", "C++ against the client's classes (client/tests/interactive_client_test.cc); 8 re-expressed: --tls-skip-verify with mTLS is allowed (Warp SQL sends the certificate), .show has no edition, and the 6 URI cases follow the ADBC driver's URIs (HTTPS unless ?tls=false, only tls as a parameter)"),
+ ("integration/test_interactive_client.cpp", 115, 115, 0, 0, 0, "test_interactive_client.py", "C++ against the client's classes (client/tests/interactive_client_test.cc); 8 re-expressed: --tls-skip-verify with mTLS is allowed (Chargewire sends the certificate), .show has no edition, and the 6 URI cases follow the ADBC driver's URIs (HTTPS unless ?tls=false, only tls as a parameter)"),
  ("integration/test_client_cli.cpp", 18, 18, 0, 0, 0, "test_client_cli.py", "the hardcharger binary; +21: the shell at a terminal (pexpect: prompt, history, completion, pager, password prompt, Ctrl-C), Ctrl-C in scripts, TLS, mutual TLS, browser sign-in, session recovery, .once/.read, option errors"),
  ("integration/test_client_config.cpp", 5, 5, 0, 0, 0, "test_client_config.py", "HARDCHARGER_* names (C++, client/tests/client_config_test.cc); +2"),
 ]
@@ -82,9 +82,9 @@ scripts = [
  ("test_v1_22_1_features.py", 2, 2, 0, 0, 0, "test_v1_22_1_features.py", ""),
  ("test_client_shell.sh", 64, 64, 0, 0, 0, "test_client_shell.py", "ported as a script (test_client_shell.sh, also its own CI step), one case per assertion; 64 assertions (once miscounted as 67)"),
  ("drivers/test_metrics_configuration.py", 13, 8, 0, 5, 0, "test_metrics_configuration.py", "1.x never ran it in CI; N/A: the 5 license cases (no license)"),
- ("drivers/test_eager_adbc.py", 16, 0, 0, 8, 8, "", "N/A: the Flight SQL driver leg; not yet: the Warp SQL ADBC driver leg"),
- ("drivers/EagerJdbc.java", 20, 0, 0, 0, 20, "", "not yet: needs a Warp SQL JDBC driver (~20 checks)"),
- ("drivers/test_eager_odbc.py", 5, 0, 0, 5, 0, "", "N/A until a Warp SQL ODBC driver exists"),
+ ("drivers/test_eager_adbc.py", 16, 0, 0, 8, 8, "", "N/A: the Flight SQL driver leg; not yet: the Chargewire ADBC driver leg"),
+ ("drivers/EagerJdbc.java", 20, 0, 0, 0, 20, "", "not yet: needs a Chargewire JDBC driver (~20 checks)"),
+ ("drivers/test_eager_odbc.py", 5, 0, 0, 5, 0, "", "N/A until a Chargewire ODBC driver exists"),
  ("drivers/run_compatibility.py", 0, 0, 0, 0, 0, "", "N/A as written (runs Flight drivers); harness only"),
  ("quality/test_quality_scope.py", 4, 0, 0, 4, 0, "", "N/A: 1.x repository tooling"),
 ]
@@ -153,7 +153,7 @@ updated. Nothing is skipped; a missing dependency fails its test.
 - **Scripts and driver suites ({len(scripts)} files, {s[0]} cases or checks):** {s[1]} passing, {s[2]} failing, {s[3]} not applicable, {s[4]} not yet.
 - Hardcharger's own tests (`test_server.py`, `test_no_license.py`, the security and
   redaction suites, `test_metadata_privileges.py`, `test_wide_integers.py`,
-  `test_token_refusal_reasons.py`) and the Warp SQL conformance suite pass too.
+  `test_token_refusal_reasons.py`) and the Chargewire conformance suite pass too.
 - **Access control** (Hardcharger's own; GizmoSQL 1.x has none: `test_rbac_*.py`, {len(rbac)}
   files, {sum(n for _, n in rbac)} tests): all pass, on the same build, including `test_rbac_battery.py`,
   which checks the battery's features under access control (the server's own catalogs, SQL

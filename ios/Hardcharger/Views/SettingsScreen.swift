@@ -199,7 +199,7 @@ struct AboutScreen: View {
                         .scaledToFit()
                         .frame(maxWidth: 260)
                         .accessibilityLabel("Hardcharger™")
-                    Text("The Hardcharger™ server, on your \(UIDevice.current.localizedModel): DuckDB, Arrow and the Warp SQL protocol, with its web console.")
+                    Text("The Hardcharger™ server, on your \(UIDevice.current.localizedModel): DuckDB, Arrow and the Chargewire protocol, with its web console.")
                         .font(.callout)
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
@@ -212,7 +212,7 @@ struct AboutScreen: View {
                 LabeledContent("App", value: Self.appVersion)
                 LabeledContent("Hardcharger™ server", value: server.versions.hardcharger)
                 LabeledContent("DuckDB", value: server.versions.duckdb)
-                LabeledContent("Warp SQL", value: server.versions.warpSQL)
+                LabeledContent("Chargewire", value: server.versions.chargewire)
                 LabeledContent("Web UI", value: server.versions.webUI)
             }
             Section {

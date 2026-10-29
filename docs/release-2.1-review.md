@@ -6,14 +6,14 @@ Merge and tag only after the combined release commit passes the full signed matr
 ## Required ingestion fix
 
 - Include local `main` commit `9e95ef51e4f957742bc492e0eb5bd65e56bd2dd7`
-  (**Bulk ingest appends by name (Warp SQL 1.0.2)**) in the final release ancestry.
-- Preserve its Warp SQL pin `f0be6977d795fd84bba479fda2a42a80dbc47e0f` (v1.0.2),
+  (**Bulk ingest appends by name (Chargewire 1.0.2)**) in the final release ancestry.
+- Preserve its Chargewire pin `f0be6977d795fd84bba479fda2a42a80dbc47e0f` (v1.0.2),
   or a later pin that retains the fix. Do not overwrite it with the desktop preview's
   earlier SDK pin when integrating the branches.
 - Run `server/tests/test_bulk_ingest_py.py::test_append_binds_columns_by_name` on the
   final binaries: swapped same-type columns must land by name, omitted columns take
   defaults, and unknown columns fail without writing rows. Include `create_append`
-  coverage from Warp SQL's conformance suite.
+  coverage from Chargewire's conformance suite.
 - Re-run the server, SDK and conformance suites after SDK/branch integration. The
   desktop preview's results against its older SDK do not validate this integration.
 

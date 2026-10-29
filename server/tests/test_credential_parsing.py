@@ -2,7 +2,7 @@
 
 A password containing ':' signs in, and nothing that is a prefix or an extension of it
 does. Not applicable: UsernameWithColonIsRejectedAtStartup. 1.x split Basic-auth
-"user:password" on ':', so a ':' in the user name had to be refused; Warp SQL sends user
+"user:password" on ':', so a ':' in the user name had to be refused; Chargewire sends user
 name and password as separate JSON fields and splits nothing.
 """
 
@@ -13,7 +13,7 @@ from conftest import problem
 
 
 def sign_in(server, password: str) -> httpx.Response:
-    return httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
+    return httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token",
                       json={"grant_type": "password", "username": server.username, "password": password})
 
 

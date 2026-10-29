@@ -80,7 +80,7 @@ test.beforeAll(async () => {
   for (;;) {
     if (server.exitCode !== null) throw new Error(`hardcharger-server exited at startup:\n${log.slice(-3000)}`);
     try {
-      if ((await getWithCertificate(`${origin}/warp/v1/health`)) === 200) break;
+      if ((await getWithCertificate(`${origin}/chargewire/v1/health`)) === 200) break;
     } catch {
       // not up yet
     }

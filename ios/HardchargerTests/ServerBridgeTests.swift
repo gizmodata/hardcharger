@@ -36,7 +36,7 @@ final class ServerBridgeTests: XCTestCase {
             let port = try await engine.start(launch: launch) { exits.add($0) }
             XCTAssertGreaterThan(port, 0)
             XCTAssertTrue(engine.isRunning)
-            let client = WarpClient(endpoint: WarpEndpoint(origin: URL(string: "http://127.0.0.1:\(port)")!))
+            let client = ChargewireClient(endpoint: ChargewireEndpoint(origin: URL(string: "http://127.0.0.1:\(port)")!))
             let serving = await client.isServing()
             XCTAssertTrue(serving)
             let discovery = try await client.discovery()
@@ -61,11 +61,11 @@ final class ServerBridgeTests: XCTestCase {
 
     func testWrongPasswordIsRefused() async throws {
         let port = try await engine.start(launch: ServerLaunch(settings: settings(), paths: paths, credential: credential)) { _ in }
-        let client = WarpClient(endpoint: WarpEndpoint(origin: URL(string: "http://127.0.0.1:\(port)")!))
+        let client = ChargewireClient(endpoint: ChargewireEndpoint(origin: URL(string: "http://127.0.0.1:\(port)")!))
         do {
             _ = try await client.signIn(username: credential.username, password: "wrong")
             XCTFail("signed in with a wrong password")
-        } catch let error as WarpError {
+        } catch let error as ChargewireError {
             XCTAssertEqual(error.status, 401)
             XCTAssertEqual(error.code, "invalid_credentials")
         }
@@ -98,12 +98,12 @@ final class ServerBridgeTests: XCTestCase {
         let port = try await engine.start(launch: ServerLaunch(settings: settings(tls: true), paths: paths,
                                                                credential: credential)) { _ in }
         let origin = URL(string: "https://127.0.0.1:\(port)")!
-        let pinned = await WarpClient(endpoint: WarpEndpoint(origin: origin, pinnedFingerprint: certificate.fingerprint))
+        let pinned = await ChargewireClient(endpoint: ChargewireEndpoint(origin: origin, pinnedFingerprint: certificate.fingerprint))
             .isServing()
         XCTAssertTrue(pinned, "the pinned certificate is accepted")
-        let unpinned = await WarpClient(endpoint: WarpEndpoint(origin: origin)).isServing()
+        let unpinned = await ChargewireClient(endpoint: ChargewireEndpoint(origin: origin)).isServing()
         XCTAssertFalse(unpinned, "a self-signed certificate isn't trusted without the pin")
-        let other = await WarpClient(endpoint: WarpEndpoint(origin: origin, pinnedFingerprint: String(
+        let other = await ChargewireClient(endpoint: ChargewireEndpoint(origin: origin, pinnedFingerprint: String(
             repeating: "AB:", count: 31) + "AB")).isServing()
         XCTAssertFalse(other, "another fingerprint isn't accepted")
     }
@@ -139,7 +139,7 @@ final class ServerBridgeTests: XCTestCase {
         let versions = EmbeddedServer.versions
         XCTAssertFalse(versions.hardcharger.isEmpty)
         XCTAssertTrue(versions.duckdb.hasPrefix("v"))
-        XCTAssertFalse(versions.warpSQL.isEmpty)
+        XCTAssertFalse(versions.chargewire.isEmpty)
         XCTAssertFalse(versions.webUI.isEmpty, "the web UI is built in")
         XCTAssertTrue(EmbeddedServer.thirdPartyNotices.contains("DuckDB"))
     }

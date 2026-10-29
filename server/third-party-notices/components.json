@@ -2,12 +2,12 @@
   "about": "The third-party code Hardcharger's release binaries contain. server/scripts/third-party-notices.py writes THIRD_PARTY_NOTICES.md from this file and the texts/ it fetched; its --check (CI) fails when a recipe pins another version than `pins` records, when a dependency is in no component, or when THIRD_PARTY_NOTICES.md is not what this file generates.",
   "pins": {
     "duckdb_commit": {
-      "file": "third_party/warp-sql/cpp/scripts/build-duckdb.sh",
+      "file": "third_party/chargewire/cpp/scripts/build-duckdb.sh",
       "pattern": "^DUCKDB_COMMIT=([0-9a-f]{40})$",
       "value": "d54cbbe3df17e8e5ce68312f483b4155836112aa"
     },
     "duckdb_version": {
-      "file": "third_party/warp-sql/cpp/scripts/build-duckdb.sh",
+      "file": "third_party/chargewire/cpp/scripts/build-duckdb.sh",
       "pattern": "^DUCKDB_VERSION_NAME=(\\S+)$",
       "value": "v2.0.0"
     },
@@ -27,12 +27,12 @@
       "value": "c0f5a3c0c4b68b02afbf669d36d7f0e503985c88"
     },
     "arrow": {
-      "file": "third_party/warp-sql/cpp/scripts/build-arrow.sh",
+      "file": "third_party/chargewire/cpp/scripts/build-arrow.sh",
       "pattern": "^ARROW_TAG=apache-arrow-(\\S+)$",
       "value": "26.0.0"
     },
     "boost": {
-      "file": "third_party/warp-sql/cpp/CMakeLists.txt",
+      "file": "third_party/chargewire/cpp/CMakeLists.txt",
       "pattern": "boost-([0-9.]+)-cmake\\.tar\\.xz",
       "value": "1.92.0"
     },

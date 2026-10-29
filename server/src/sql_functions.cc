@@ -20,21 +20,21 @@
 #include "platform.hpp"
 #include "settings.hpp"
 #include "version.hpp"
-#include "warpsql/server.hpp"
+#include "chargewire/server.hpp"
 
 namespace hardcharger {
 
 namespace {
 
-using warpduckdb::Call;
-using warpduckdb::Str;
-using warpsql::Error;
-using warpsql::ErrorCode;
+using chargewire_duckdb::Call;
+using chargewire_duckdb::Str;
+using chargewire::Error;
+using chargewire::ErrorCode;
 
-using ScalarFunction = warpduckdb::Owned<duckdb_v2_scalar_function_handle, duckdb_v2_scalar_function_destroy>;
-using TableFunction = warpduckdb::Owned<duckdb_v2_table_function_handle, duckdb_v2_table_function_destroy>;
-using ArrowImporter = warpduckdb::Owned<duckdb_v2_arrow_importer_handle, duckdb_v2_arrow_importer_destroy>;
-using Schema = warpduckdb::Owned<duckdb_v2_schema_handle, duckdb_v2_schema_destroy>;
+using ScalarFunction = chargewire_duckdb::Owned<duckdb_v2_scalar_function_handle, duckdb_v2_scalar_function_destroy>;
+using TableFunction = chargewire_duckdb::Owned<duckdb_v2_table_function_handle, duckdb_v2_table_function_destroy>;
+using ArrowImporter = chargewire_duckdb::Owned<duckdb_v2_arrow_importer_handle, duckdb_v2_arrow_importer_destroy>;
+using Schema = chargewire_duckdb::Owned<duckdb_v2_schema_handle, duckdb_v2_schema_destroy>;
 
 constexpr idx_t kChunkRows = 2048;
 
@@ -56,8 +56,8 @@ void Guarded(duckdb_v2_error_info_handle* err, Fn&& fn) {
   }
 }
 
-warpduckdb::LogicalType Type(duckdb_v2_factory_handle factory, std::string_view name) {
-  warpduckdb::LogicalType type;
+chargewire_duckdb::LogicalType Type(duckdb_v2_factory_handle factory, std::string_view name) {
+  chargewire_duckdb::LogicalType type;
   const duckdb_v2_str text = Str(name);
   Call([&](auto* e) { return duckdb_v2_factory_create_type_from_text(factory, &text, type.out(), e); });
   return type;
@@ -101,7 +101,7 @@ void ScalarExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_conte
     const auto& value = *static_cast<const ContextValue*>(data);
     duckdb_v2_factory_handle factory = nullptr;
     Call([&](auto* e) { return duckdb_v2_context_get_factory(context, &factory, e); });
-    warpduckdb::Value out;
+    chargewire_duckdb::Value out;
     if (value.boolean) {
       Call([&](auto* e) { return duckdb_v2_value_create_bool(factory, *value.boolean, out.out(), e); });
     } else if (value.text) {
@@ -166,7 +166,7 @@ TableArgs ArgumentsOf(duckdb_v2_function_bind_info_handle info) {
   Call([&](auto* e) { return duckdb_v2_function_bind_get_arg_count(info, &count, nullptr, nullptr, nullptr, e); });
   TableArgs args;
   for (idx_t i = 0; i < count; i++) {
-    warpduckdb::Value value;
+    chargewire_duckdb::Value value;
     Call([&](auto* e) { return duckdb_v2_function_bind_get_arg_value(info, i, value.out(), e); });
     bool is_null = true;
     Call([&](auto* e) { return duckdb_v2_value_is_null(value.get(), &is_null, e); });
@@ -176,7 +176,7 @@ TableArgs ArgumentsOf(duckdb_v2_function_bind_info_handle info) {
     }
     duckdb_v2_str text{};
     Call([&](auto* e) { return duckdb_v2_value_get_varchar(value.get(), &text, e); });
-    args.emplace_back(warpduckdb::ToString(text));
+    args.emplace_back(chargewire_duckdb::ToString(text));
   }
   return args;
 }
@@ -270,7 +270,7 @@ void TableExec(duckdb_v2_table_function_exec_info_handle info, duckdb_v2_context
     duckdb_v2_data_chunk_handle output = nullptr;
     Call([&](auto* e) { return duckdb_v2_table_function_exec_get_output_chunk(info, &output, e); });
     for (;;) {
-      warpduckdb::DataChunk chunk;
+      chargewire_duckdb::DataChunk chunk;
       Call([&](auto* e) { return duckdb_v2_arrow_importer_next_chunk(scan.importer.get(), chunk.out(), e); });
       duckdb_v2_vector_handle first = nullptr;
       Call([&](auto* e) { return duckdb_v2_data_chunk_get_vector(output, 0, &first, e); });
@@ -320,7 +320,7 @@ void RegisterTable(duckdb_v2_connection_handle connection, duckdb_v2_factory_han
     Call([&](auto* e) { return duckdb_v2_table_function_get_signature(function.get(), &signature, e); });
     auto varchar = Type(factory, "VARCHAR");
     for (const auto& parameter : parameters) {
-      warpduckdb::Value null;
+      chargewire_duckdb::Value null;
       Call([&](auto* e) { return duckdb_v2_value_create_null(factory, varchar.get(), null.out(), e); });
       const duckdb_v2_identifier_t parameter_name = Str(parameter);
       Call([&](auto* e) {
@@ -448,7 +448,7 @@ struct ConnectionRow {
   bool is_current = false;
 };
 
-// A session's tags: the Warp SQL session_tag option's keys, then SET hardcharger.session_tag's
+// A session's tags: the Chargewire session_tag option's keys, then SET hardcharger.session_tag's
 // (which win). Text values as they are, any other value as JSON.
 std::vector<std::pair<std::string, std::string>> SessionTags(const std::string& option, const std::string& setting) {
   std::map<std::string, std::string> tags;
@@ -470,7 +470,7 @@ std::vector<std::pair<std::string, std::string>> SessionTags(const std::string& 
 }
 
 // idle, queued, running, streaming, idle_in_transaction or idle_in_transaction_aborted.
-std::string ConnectionState(const ConnectionRow& row, const warpsql::SessionActivity* sdk) {
+std::string ConnectionState(const ConnectionRow& row, const chargewire::SessionActivity* sdk) {
   if (row.activity.queued_since_us != 0) return "queued";
   if (sdk != nullptr && !sdk->statement_id.empty()) {
     if (sdk->statement_state == "queued") return "queued";
@@ -487,7 +487,7 @@ std::string ConnectionState(const ConnectionRow& row, const warpsql::SessionActi
 
 std::shared_ptr<arrow::RecordBatch> ActiveConnectionsTable(Runtime& runtime, const Session& viewer) {
   // The transport's side first (connections, statements, results), then the engine's.
-  std::map<std::string, warpsql::SessionActivity> transport;
+  std::map<std::string, chargewire::SessionActivity> transport;
   if (runtime.server != nullptr) {
     for (auto& activity : runtime.server->Sessions()) transport.emplace(activity.session_id, std::move(activity));
   }
@@ -500,7 +500,7 @@ std::shared_ptr<arrow::RecordBatch> ActiveConnectionsTable(Runtime& runtime, con
     row.role = s.principal().role.empty() ? "user" : s.principal().role;
     row.tenant = s.tenant();
     row.auth_method = s.principal().auth_method.empty() ? "token" : s.principal().auth_method;
-    row.transaction = std::string(warpsql::TransactionStateName(s.transaction()));
+    row.transaction = std::string(chargewire::TransactionStateName(s.transaction()));
     row.activity = s.activity();
     row.busy = s.running() || row.activity.ingesting;
     row.tags = SessionTags(row.activity.session_tag_option, s.settings().session_tag);
@@ -532,7 +532,7 @@ std::shared_ptr<arrow::RecordBatch> ActiveConnectionsTable(Runtime& runtime, con
   const std::string& cluster = runtime.config.cluster_id;
   for (const auto& row : rows) {
     const auto found = transport.find(row.session_id);
-    const warpsql::SessionActivity* sdk = found == transport.end() ? nullptr : &found->second;
+    const chargewire::SessionActivity* sdk = found == transport.end() ? nullptr : &found->second;
     (void)session_id.Append(row.session_id);
     (void)instance_id.Append(runtime.instance_id);
     text(cluster_id, cluster);
@@ -861,7 +861,7 @@ bool CancelFor(Runtime& runtime, Session& caller, std::string id) {
     case SessionRegistry::Lookup::kVisible:
       break;
   }
-  const auto stopped = CancelSessionWork(runtime, id, warpsql::SessionCancelReason::kCancelled);
+  const auto stopped = CancelSessionWork(runtime, id, chargewire::SessionCancelReason::kCancelled);
   if (!stopped) throw Error(ErrorCode::kSqlError, "Session '" + id + "' not found", "42704");
   Log(LogLevel::kInfo, "hardcharger_cancel()",
       {{"target", id}, {"user", caller.principal().name}, {"session_id", caller.id()},
@@ -886,11 +886,11 @@ void CancelExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_conte
     auto boolean = Type(factory, "BOOLEAN");
     Call([&](auto* e) { return duckdb_v2_vector_set_size(output, rows, e); });  // written row by row
     for (idx_t row = 0; row < rows; row++) {
-      warpduckdb::Value in;
+      chargewire_duckdb::Value in;
       Call([&](auto* e) { return duckdb_v2_vector_get_value(input, row, in.out(), e); });
       bool null = true;
       Call([&](auto* e) { return duckdb_v2_value_is_null(in.get(), &null, e); });
-      warpduckdb::Value out;
+      chargewire_duckdb::Value out;
       if (null) {
         Call([&](auto* e) { return duckdb_v2_value_create_null(factory, boolean.get(), out.out(), e); });
       } else {
@@ -925,7 +925,7 @@ void SessionSettingExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_
       for (idx_t i = 0; i < (reset ? 2u : 3u); ++i) {
         duckdb_v2_vector_handle input = nullptr;
         Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_arg(info, i, &input, e); });
-        warpduckdb::Value value;
+        chargewire_duckdb::Value value;
         Call([&](auto* e) { return duckdb_v2_vector_get_value(input, row, value.out(), e); });
         bool null = false;
         Call([&](auto* e) { return duckdb_v2_value_is_null(value.get(), &null, e); });
@@ -952,7 +952,7 @@ void SessionSettingExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_
            {"target", args[0]},
            {"setting", name},
            {"reset", reset ? "true" : "false"}});
-      warpduckdb::Value out;
+      chargewire_duckdb::Value out;
       Call([&](auto* e) { return duckdb_v2_value_create_bool(factory, true, out.out(), e); });
       Call([&](auto* e) { return duckdb_v2_vector_set_value(output, row, out.get(), e); });
     }

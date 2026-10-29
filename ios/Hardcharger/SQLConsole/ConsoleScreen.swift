@@ -301,7 +301,7 @@ enum ConsoleConnection {
             if let token = remotes.token(for: remote.id) {
                 options.accessToken = token.token
             } else {
-                let token = try await BrowserSignIn.signIn(client: WarpClient(endpoint: remote.endpoint),
+                let token = try await BrowserSignIn.signIn(client: ChargewireClient(endpoint: remote.endpoint),
                                                            presentation: presentation)
                 remotes.remember(token, for: remote.id)
                 options.accessToken = token.token

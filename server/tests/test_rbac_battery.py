@@ -13,7 +13,7 @@ import time
 import pytest
 
 from conftest import protected_system_file
-from rbac import BLOCKED, WarpError, expect_allowed, expect_blocked, start_rbac_server
+from rbac import BLOCKED, ChargewireError, expect_allowed, expect_blocked, start_rbac_server
 
 MANAGED = ("_hardcharger_instr", "_hardcharger_logs")
 
@@ -58,7 +58,7 @@ def eventually(client, sql: str, predicate, timeout: float = 10):
 def test_store_users_cannot_read_or_list_the_servers_catalogs(joe):
     assert expect_allowed(client=joe, sql="SELECT sum(amount) AS s FROM sales").to_pylist() == [{"s": 30}]
     for sql in ["SELECT count(*) FROM _hardcharger_instr.main.sessions", "SELECT count(*) FROM _hardcharger_logs.main.logs"]:
-        with pytest.raises(WarpError) as raised:
+        with pytest.raises(ChargewireError) as raised:
             joe.run(sql=sql)
         assert raised.value.code == "permission_denied" and "Only administrators can read" in raised.value.detail, \
             raised.value
@@ -75,7 +75,7 @@ def test_store_users_cannot_write_or_detach_them(joe):
     for sql in ["DELETE FROM _hardcharger_logs.main.logs", "DETACH _hardcharger_instr",
                 "INSERT INTO _hardcharger_instr.main.sessions SELECT * FROM _hardcharger_instr.main.sessions",
                 "USE _hardcharger_logs"]:
-        with pytest.raises(WarpError) as raised:
+        with pytest.raises(ChargewireError) as raised:
             joe.run(sql=sql)
         assert raised.value.code == "permission_denied", f"{sql}: {raised.value}"
 
@@ -89,7 +89,7 @@ def test_the_administrator_reads_them_and_cannot_write_them(admin, joe):
                lambda rows: rows[0]["n"] >= 1)
     for sql, why in [("DELETE FROM _hardcharger_logs.main.logs", "read-only"),
                      ("DETACH _hardcharger_instr", "Cannot DETACH")]:
-        with pytest.raises(WarpError) as raised:
+        with pytest.raises(ChargewireError) as raised:
             admin.run(sql=sql)
         assert raised.value.code == "permission_denied" and why in raised.value.detail, raised.value
 
@@ -112,7 +112,7 @@ def test_sql_functions_and_settings_for_store_users(joe):
                                               "WHERE name LIKE 'hardcharger.%instrumentation%'").to_pylist()
     assert settings == [], settings  # admin-only rows
     expect_allowed(client=joe, sql="SET hardcharger.query_tag = '{\"team\": \"finance\"}'")
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         joe.run(sql="SET GLOBAL hardcharger.query_timeout = 5")
     assert raised.value.code == "permission_denied", raised.value
 
@@ -120,11 +120,11 @@ def test_sql_functions_and_settings_for_store_users(joe):
 def test_the_admin_kills_a_store_users_session(server, admin, joe):
     session_id = joe.run(sql="SELECT HARDCHARGER_CURRENT_SESSION() AS s").to_pylist()[0]["s"]
     expect_allowed(client=admin, sql=f"KILL SESSION '{session_id}'")
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         joe.run(sql="SELECT 1")
     assert raised.value.code == "session_ended" and raised.value.reason == "killed", raised.value
     other = server.user(name="joe", password="joe-Secret-1")
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         other.run(sql=f"KILL SESSION '{admin.run(sql='SELECT HARDCHARGER_CURRENT_SESSION() AS s').to_pylist()[0]['s']}'")
     assert raised.value.code == "permission_denied" and "Only admin users" in raised.value.detail, raised.value
 
@@ -140,10 +140,10 @@ def test_system_privileges_decide_for_store_users_not_the_admin_guard(server, ad
     assert "READ FILESYSTEM" in error.detail or BLOCKED in error.detail, error
     expect_allowed(client=admin, sql="GRANT READ FILESYSTEM TO file_readers")
     reader = server.user(name="reader", password="reader-Secret-1")
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         reader.run(sql="SELECT * FROM read_csv('/tmp/hc-no-such.csv')")
     assert BLOCKED not in raised.value.detail and "No files found" in raised.value.detail, raised.value
     # The sensitive path guard holds for everyone, privilege or not.
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         reader.run(sql=f"SELECT * FROM read_csv('{protected_system_file(posix='/etc/shadow')}')")
     assert "blocked access to" in raised.value.detail, raised.value

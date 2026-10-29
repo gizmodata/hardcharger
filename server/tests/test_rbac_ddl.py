@@ -4,7 +4,7 @@ statement at a time."""
 
 import pytest
 
-from rbac import WarpError, expect_allowed, start_rbac_server
+from rbac import ChargewireError, expect_allowed, start_rbac_server
 
 PREFIX = "Hardcharger access control: "
 
@@ -30,7 +30,7 @@ def error(client, sql: str) -> str:
     try:
         client.run(sql=sql)
         return ""
-    except WarpError as raised:
+    except ChargewireError as raised:
         return raised.detail
 
 
@@ -73,11 +73,11 @@ def test_alter_user(server, admin):
     expect_allowed(client=admin, sql="ALTER USER al WITH PASSWORD 'n3w'")
     assert server.password_token(user="al", password="n3w")
     expect_allowed(client=admin, sql="ALTER USER al DISABLE")
-    with pytest.raises(WarpError):
+    with pytest.raises(ChargewireError):
         server.password_token(user="al", password="n3w")
     expect_allowed(client=admin, sql="ALTER USER al ENABLE")
     expect_allowed(client=admin, sql="ALTER USER al PASSWORD NULL")
-    with pytest.raises(WarpError):
+    with pytest.raises(ChargewireError):
         server.password_token(user="al", password="n3w")
 
 
@@ -180,7 +180,7 @@ def test_a_single_trailing_semicolon_is_fine(admin):
     ('GRANT SELECT "ON" t TO r', ""),  # a quoted keyword is a name, not the keyword
 ])
 def test_malformed_input_is_a_clear_error(admin, sql, why):
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         admin.run(sql=sql)
     assert raised.value.code == "sql_error" and raised.value.sqlstate == "42601", str(raised.value)
     assert raised.value.detail.startswith(PREFIX), raised.value.detail  # every error is branded

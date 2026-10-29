@@ -133,7 +133,7 @@ def test_writer_unit():
 
 
 def test_a_log_table_from_0_3_0_is_refused_with_what_to_do(launcher, tmp_path):
-    """0.3.0's logs table typed session_id UUID; session ids are now Warp SQL session ids
+    """0.3.0's logs table typed session_id UUID; session ids are now Chargewire session ids
     (s_...): startup says so instead of dropping every session's lines."""
     path = tmp_path / "old_logs.db"
     maker = launcher.start(args=["--database", str(path)])

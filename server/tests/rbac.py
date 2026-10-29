@@ -1,4 +1,4 @@
-"""Helpers for the access-control (RBAC) tests: a grant store per server and a small Warp
+"""Helpers for the access-control (RBAC) tests: a grant store per server and a small Chargewire
 SQL client with the methods the tests use.
 
 HARDCHARGER_TEST_RBAC_STORE picks the store the `store` fixture hands out:
@@ -108,12 +108,12 @@ def mint(user: str, role: str = "user", **claims) -> str:
 # ---- Client ----
 
 @dataclasses.dataclass
-class WarpError(Exception):
+class ChargewireError(Exception):
     status: int
     code: str
     detail: str
     sqlstate: str | None = None
-    reason: str | None = None  # session_ended's (Warp SQL §5.6), or invalid_token's (§4.2)
+    reason: str | None = None  # session_ended's (Chargewire §5.6), or invalid_token's (§4.2)
 
     def __str__(self) -> str:
         return f"{self.status} {self.code}: {self.detail}"
@@ -123,8 +123,8 @@ def raise_problem(response: httpx.Response) -> None:
     try:
         body = response.json()
     except ValueError:
-        raise WarpError(status=response.status_code, code="?", detail=response.text) from None
-    raise WarpError(status=response.status_code, code=body.get("code", "?"),
+        raise ChargewireError(status=response.status_code, code="?", detail=response.text) from None
+    raise ChargewireError(status=response.status_code, code=body.get("code", "?"),
                     detail=body.get("detail", ""), sqlstate=body.get("sqlstate"), reason=body.get("reason"))
 
 
@@ -136,18 +136,18 @@ def arrow_bytes(table: pa.Table) -> bytes:
 
 
 class Client:
-    """One Warp SQL session for one user."""
+    """One Chargewire session for one user."""
 
     def __init__(self, base_url: str, token: str, options: dict | None = None, verify=True):
         """`verify`: httpx's TLS setting (an ssl.SSLContext, for mutual TLS)."""
         self.http = httpx.Client(base_url=base_url, timeout=120, verify=verify)
         self.token = token
-        response = self.http.post(url="/warp/v1/sessions", headers=self.headers(),
+        response = self.http.post(url="/chargewire/v1/sessions", headers=self.headers(),
                                   json={"options": options or {}})
         if response.status_code != 201:
             raise_problem(response=response)
         self.session_id = response.json()["session_id"]
-        self.url = f"/warp/v1/sessions/{self.session_id}"
+        self.url = f"/chargewire/v1/sessions/{self.session_id}"
 
     def headers(self, **extra: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}", **extra}
@@ -163,7 +163,7 @@ class Client:
                                 headers=self.headers(Prefer="wait=5")).json()
         if doc["state"] != "succeeded":
             error = doc.get("error", {})
-            raise WarpError(status=error.get("status", 0), code=error.get("code", doc["state"]),
+            raise ChargewireError(status=error.get("status", 0), code=error.get("code", doc["state"]),
                             detail=error.get("detail", ""), sqlstate=error.get("sqlstate"))
         if doc["result"]["kind"] == "rows":
             result = self.http.get(url=f"{self.url}/statements/{doc['statement_id']}/result",
@@ -179,12 +179,12 @@ class Client:
             try:
                 response.read()
             except httpx.RemoteProtocolError:
-                statement_id = response.headers.get("Warp-Statement-Id")
+                statement_id = response.headers.get("Chargewire-Statement-Id")
                 if statement_id is None:
                     raise
                 doc = self.wait(statement_id=statement_id)
                 error = doc.get("error", {})
-                raise WarpError(status=error.get("status", 0), code=error.get("code", doc["state"]),
+                raise ChargewireError(status=error.get("status", 0), code=error.get("code", doc["state"]),
                                 detail=error.get("detail", ""), sqlstate=error.get("sqlstate")) from None
         return self._outcome(response=response)
 
@@ -240,7 +240,7 @@ class Client:
         return response.json()["rows_ingested"]
 
     def open_ingest(self, table: str, mode: str = "create_append") -> str:
-        """Opens a partitioned ingest (Warp SQL §8.3) and returns its URL."""
+        """Opens a partitioned ingest (Chargewire §8.3) and returns its URL."""
         response = self.http.post(url=f"{self.url}/ingests", json={"table": table, "mode": mode},
                                   headers=self.headers())
         if response.status_code >= 400:
@@ -267,9 +267,9 @@ class Client:
         self.http.close()
 
 
-def expect_blocked(client: Client, sql: str, why: str = "", code: str = "permission_denied") -> WarpError:
+def expect_blocked(client: Client, sql: str, why: str = "", code: str = "permission_denied") -> ChargewireError:
     """The statement must be refused by access control, saying `why`."""
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         client.run(sql=sql)
     error = raised.value
     assert error.code == code, f"{sql}: {error}"
@@ -283,13 +283,13 @@ def expect_blocked(client: Client, sql: str, why: str = "", code: str = "permiss
 def expect_allowed(client: Client, sql: str, parameters=None) -> pa.Table:
     try:
         return client.run(sql=sql, parameters=parameters)
-    except WarpError as error:
+    except ChargewireError as error:
         pytest.fail(reason=f"WRONGLY BLOCKED: {sql} -> {error}")
 
 
-def expect_error(call, code: str, why: str = "") -> WarpError:
-    """`call()` must fail with the Warp SQL error `code`, saying `why`."""
-    with pytest.raises(WarpError) as raised:
+def expect_error(call, code: str, why: str = "") -> ChargewireError:
+    """`call()` must fail with the Chargewire error `code`, saying `why`."""
+    with pytest.raises(ChargewireError) as raised:
         call()
     assert raised.value.code == code, str(raised.value)
     assert why in raised.value.detail, f"expected '{why}' in: {raised.value.detail}"
@@ -313,7 +313,7 @@ class RbacServer:
     def password_token(self, user: str, password: str) -> str:
         # The clients' own timeout (httpx's 5 s default is less than a sanitizer build's
         # password check takes on a loaded runner).
-        response = httpx.post(url=f"{self.base_url}/warp/v1/auth/token",
+        response = httpx.post(url=f"{self.base_url}/chargewire/v1/auth/token",
                               json={"grant_type": "password", "username": user, "password": password}, timeout=120)
         if response.status_code != 200:
             raise_problem(response=response)

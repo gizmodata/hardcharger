@@ -8,7 +8,7 @@
 
 #include "http_client.hpp"
 #include "logging.hpp"
-#include "warpsql/errors.hpp"
+#include "chargewire/errors.hpp"
 
 namespace hardcharger {
 
@@ -53,7 +53,7 @@ std::string OAuthBrowserSignIn::ExchangeCode(const Callback& callback) const {
   return std::string(id_token->as_string());
 }
 
-warpsql::Principal OAuthBrowserSignIn::CompleteSignIn(const Callback& callback) {
+chargewire::Principal OAuthBrowserSignIn::CompleteSignIn(const Callback& callback) {
   std::string id_token;
   try {
     id_token = ExchangeCode(callback);
@@ -69,14 +69,14 @@ warpsql::Principal OAuthBrowserSignIn::CompleteSignIn(const Callback& callback) 
     const auto decoded = jwt::decode<jwt::traits::boost_json>(id_token);
     if (decoded.has_payload_claim("nonce")) nonce = decoded.get_payload_claim("nonce").as_string();
   } catch (const std::exception&) {
-    throw warpsql::Error(warpsql::ErrorCode::kInvalidCredentials, "the identity provider's ID token is malformed");
+    throw chargewire::Error(chargewire::ErrorCode::kInvalidCredentials, "the identity provider's ID token is malformed");
   }
   if (nonce != callback.nonce) {
     Log(LogLevel::kWarning, "browser sign-in refused: the ID token's nonce is not this sign-in's",
         {{"method", "oauth_browser"}});
-    throw warpsql::Error(warpsql::ErrorCode::kInvalidCredentials, "the ID token's nonce is not this sign-in's");
+    throw chargewire::Error(chargewire::ErrorCode::kInvalidCredentials, "the ID token's nonce is not this sign-in's");
   }
-  warpsql::Principal principal = options_.sign_in(id_token);
+  chargewire::Principal principal = options_.sign_in(id_token);
   Log(LogLevel::kInfo, "browser sign-in completed", {{"user", principal.name}, {"method", "oauth_browser"}});
   return principal;
 }

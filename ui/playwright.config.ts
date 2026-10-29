@@ -1,6 +1,6 @@
 // End-to-end tests: the built UI in Chromium and WebKit against a real hardcharger-server
 // (with access control on, so a non-admin user's view is tested), served the way the server
-// serves it (scripts/serve.mjs, same origin as Warp SQL). test/e2e/global-setup.ts starts
+// serves it (scripts/serve.mjs, same origin as Chargewire). test/e2e/global-setup.ts starts
 // both and fails the run when it can't: these tests never skip.
 import { defineConfig, devices } from "@playwright/test";
 

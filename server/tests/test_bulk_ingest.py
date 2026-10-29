@@ -1,14 +1,14 @@
 """Port of GizmoSQL 1.x tests/integration/test_bulk_ingest.cpp (8 cases).
 
-Bulk ingest (Warp SQL §8.1: POST /sessions/{id}/ingest, an Arrow IPC stream). Modes map
-from 1.x's Flight table-definition options to Warp's mode parameter (create, append,
+Bulk ingest (Chargewire §8.1: POST /sessions/{id}/ingest, an Arrow IPC stream). Modes map
+from 1.x's Flight table-definition options to Chargewire's mode parameter (create, append,
 replace, create_append). Ingest works inside an open transaction and into temporary
 tables, repeatably; every Arrow type DuckDB can read gets the column type DuckDB's own
 ingest gives it, and one it can't is refused (415 unsupported_arrow_type) with the
 reason, never stored as text. The log contract (kind ingest, status attempt and success,
 user, session, catalog, schema, table, rows, duration) is read from JSON log lines; the
 Flight method name becomes "ingest". All 8 apply. Not ported: 1.x's Flight-only "ingest
-options" map, which has no Warp SQL equivalent.
+options" map, which has no Chargewire equivalent.
 """
 
 import datetime
@@ -89,7 +89,7 @@ def test_execute_ingest_logs_caller_target_and_row_count(server, session):
     assert attempt and success, records
     for record in (attempt[0], success[0]):
         assert record["level"] == "info" and record["user"] == "admin" and record["session_id"], record
-        # Hardcharger's and Warp SQL's naming: `kind`, no GizmoSQL-era (Flight SQL) flight_method.
+        # Hardcharger's and Chargewire's naming: `kind`, no GizmoSQL-era (Flight SQL) flight_method.
         assert record["table"] == "ingest_logging_table" and "flight_method" not in record, record
     assert success[0]["rows_ingested"] == "3" and success[0]["duration_ms"].isdigit(), success[0]
 
@@ -166,7 +166,7 @@ def test_unsupported_arrow_type_is_refused_not_stored_as_varchar(session):
                                   "struct_of_dense_union", "dictionary_of_decimal256"])
 def test_types_duckdb_cannot_keep_are_415_not_400(session, name):
     """Arrow types DuckDB's Arrow scan doesn't read were a 400 sql_error from inside the
-    engine ("Not implemented Error: Unsupported Internal Arrow Type"); Warp SQL §8.1 wants
+    engine ("Not implemented Error: Unsupported Internal Arrow Type"); Chargewire §8.1 wants
     415 unsupported_arrow_type, with nothing created."""
     columns = {
         "decimal256": lambda: pa.array([decimal.Decimal("1.25")], type=pa.decimal256(10, 2)),

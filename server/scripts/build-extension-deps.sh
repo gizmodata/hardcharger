@@ -16,7 +16,7 @@
 # Each is built once (a stamp names its version); build-deps.sh runs this.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEPS="${WARPSQL_DEPS_DIR:-$HERE/.deps}"
+DEPS="${CHARGEWIRE_DEPS_DIR:-$HERE/.deps}"
 JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
 ROARING_VERSION=5.2.4

@@ -11,7 +11,7 @@
 #include <arrow/table.h>
 
 #include "client_config.hpp"
-#include "warp_connection.hpp"
+#include "chargewire_connection.hpp"
 
 namespace hardcharger::client {
 
@@ -33,7 +33,7 @@ enum class CommandResult {
 
 class CommandProcessor {
  public:
-  CommandProcessor(WarpConnection& conn, ClientConfig& config)
+  CommandProcessor(ChargewireConnection& conn, ClientConfig& config)
       : conn_(conn), config_(config) {}
 
   // Returns true if the line starts with '.' (dot command)
@@ -64,7 +64,7 @@ class CommandProcessor {
   void ShowSettings();
   CommandResult HandleConnect(const std::vector<std::string>& args);
 
-  WarpConnection& conn_;
+  ChargewireConnection& conn_;
   ClientConfig& config_;
   std::ofstream* output_file_ = nullptr;
   bool once_mode_ = false;

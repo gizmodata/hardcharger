@@ -1,4 +1,4 @@
-"""A session and its handles belong to the principal's name AND its authority (Warp SQL §9.2).
+"""A session and its handles belong to the principal's name AND its authority (Chargewire §9.2).
 
 A session's DuckDB connection is bound, at creation, to the principal that opened it. Were
 handles bound to the user name alone, any credential of that name (a readonly token, a
@@ -22,7 +22,7 @@ import pytest
 from conftest import mint_server_token, run_unit_tests
 from rbac import (
     Client,
-    WarpError,
+    ChargewireError,
     expect_allowed,
     expect_blocked,
     mint,
@@ -41,7 +41,7 @@ class Attached(Client):
         self.http = httpx.Client(base_url=base_url, timeout=120)
         self.token = token
         self.session_id = session_id
-        self.url = f"/warp/v1/sessions/{session_id}"
+        self.url = f"/chargewire/v1/sessions/{session_id}"
 
 
 def owner_session(base_url: str, token: str) -> tuple[Client, str]:
@@ -54,7 +54,7 @@ def owner_session(base_url: str, token: str) -> tuple[Client, str]:
 
 def every_route(base_url: str, token: str, session_id: str, statement_id: str) -> dict[str, httpx.Response]:
     """What `token` gets on each route of session `session_id` (DELETE session last)."""
-    s = f"/warp/v1/sessions/{session_id}"
+    s = f"/chargewire/v1/sessions/{session_id}"
     q = f"{s}/statements/{statement_id}"
     auth = {"Authorization": f"Bearer {token}"}
     with httpx.Client(base_url=base_url, timeout=120) as http:
@@ -84,7 +84,7 @@ def assert_shut_out(base_url: str, owner: Client, statement_id: str, other_token
              if r.status_code != 404 or r.json().get("code") != "session_not_found"}
     assert not wrong, f"another authority reached the session: {wrong}"
     # The same answer as for a session that does not exist (spec §9.2: ids can't be probed).
-    missing = httpx.get(url=f"{base_url}/warp/v1/sessions/s_{'a' * 32}",
+    missing = httpx.get(url=f"{base_url}/chargewire/v1/sessions/s_{'a' * 32}",
                         headers={"Authorization": f"Bearer {other_token}"})
     assert missing.status_code == 404 and missing.json()["detail"] == answers["GET session"].json()["detail"]
     # The owner's retained result is still there: none of the requests above touched it.
@@ -128,12 +128,12 @@ def test_a_readonly_token_cannot_use_its_users_full_session(server):
     readonly = token(server=server, subject="tess", role="readonly")
     owner, statement_id = owner_session(base_url=server.base_url, token=full)
     # What the readonly token would gain: a write it is refused in a session of its own...
-    with pytest.raises(WarpError) as refused:
+    with pytest.raises(ChargewireError) as refused:
         Client(base_url=server.base_url, token=readonly).run(sql="CREATE TABLE ro_escalated AS SELECT 1 AS x")
     assert READONLY_REFUSED in refused.value.detail, refused.value
     # ... it can't get through the user's session either.
     attached = Attached(base_url=server.base_url, token=readonly, session_id=owner.session_id)
-    with pytest.raises(WarpError) as through:
+    with pytest.raises(ChargewireError) as through:
         attached.run(sql="CREATE TABLE ro_escalated AS SELECT 1 AS x")
     assert (through.value.status, through.value.code) == (404, "session_not_found"), through.value
     assert expect_allowed(client=owner, sql="SELECT count(*) AS n FROM duckdb_tables() "
@@ -186,7 +186,7 @@ def test_a_restricted_administrator_token_cannot_use_the_administrators_session(
     restricted = token(server=server, subject=server.username, role="admin",
                        catalog_access=[{"catalog": "session_authority", "access": "read"}])
     # What it would gain: a write the rules refuse in its own session.
-    with pytest.raises(WarpError) as refused:
+    with pytest.raises(ChargewireError) as refused:
         Client(base_url=server.base_url, token=restricted).run(sql="CREATE TABLE admin_escalated AS SELECT 1 AS x")
     assert "Access denied" in refused.value.detail, refused.value
     assert_shut_out(base_url=server.base_url, owner=owner, statement_id=statement_id, other_token=restricted)
@@ -217,7 +217,7 @@ def test_a_store_users_readonly_token_cannot_use_its_password_session(rbac_serve
                                         token=rbac_server.password_token(user="wes", password="wes-password-1"))
     readonly = mint(user="wes", role="readonly")
     attached = Attached(base_url=rbac_server.base_url, token=readonly, session_id=owner.session_id)
-    with pytest.raises(WarpError) as through:
+    with pytest.raises(ChargewireError) as through:
         attached.run(sql="INSERT INTO sales_db.main.orders VALUES (99)")
     assert (through.value.status, through.value.code) == (404, "session_not_found"), through.value
     assert expect_allowed(client=owner, sql="SELECT count(*) AS n FROM sales_db.main.orders "
@@ -274,7 +274,7 @@ def test_a_scoped_token_and_its_user_never_share_a_session(rbac_server):
     # What the scoped token would gain through its user's session: a write it may not do.
     expect_blocked(client=bot, sql="INSERT INTO sales_db.main.orders VALUES (98)", why="allows only SELECT")
     attached = Attached(base_url=rbac_server.base_url, token=scoped, session_id=wes.session_id)
-    with pytest.raises(WarpError) as through:
+    with pytest.raises(ChargewireError) as through:
         attached.run(sql="INSERT INTO sales_db.main.orders VALUES (98)")
     assert (through.value.status, through.value.code) == (404, "session_not_found"), through.value
     assert_shut_out(base_url=rbac_server.base_url, owner=wes, statement_id=wes_statement, other_token=scoped)

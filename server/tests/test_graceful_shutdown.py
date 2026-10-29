@@ -1,6 +1,6 @@
 """Port of GizmoSQL 1.x tests/integration/test_graceful_shutdown.cpp (5 cases).
 
-On SIGTERM a server with graceful_shutdown drains (Warp SQL §11.1): running statements
+On SIGTERM a server with graceful_shutdown drains (Chargewire §11.1): running statements
 finish, new ones get 503 server_draining ("the server is shutting down"), the health
 check reports not serving, and it stops once idle, when shutdown_grace_period_seconds
 runs out (cancelling what still runs), or at a second signal. 1.x drove most cases
@@ -23,7 +23,7 @@ import pyarrow as pa
 import pytest
 
 from conftest import STOP_SIGNAL, problem
-from warp_client import ARROW_STREAM, Client, ipc_bytes
+from chargewire_client import ARROW_STREAM, Client, ipc_bytes
 
 LONG = "SELECT count(*) FROM range(10000000000) a, range(100000) b"
 LONG_STREAM = "SELECT a.range * 2 AS v FROM range(100000000000) a"
@@ -74,7 +74,7 @@ def test_drains_in_flight_and_rejects_new_work(launcher):
     body = problem(response=probe.submit(sql="SELECT 1"), status=503, code="server_draining")
     assert time.monotonic() - started < 3
     assert "shutting down" in body["detail"], body
-    assert httpx.get(url=f"{server.base_url}/warp/v1/health").status_code == 503
+    assert httpx.get(url=f"{server.base_url}/chargewire/v1/health").status_code == 503
     outcome["thread"].join(timeout=30)
     assert outcome["response"].status_code in (200, 201), outcome  # the running statement finished
     assert_exits_cleanly(server=server, timeout=20)
@@ -226,7 +226,7 @@ class InFlight:
                           params={"table": "uploading", "mode": "create_append"})
 
     def partitioned_upload(self) -> None:
-        """A partitioned ingest (Warp SQL §8.3): one part uploaded, another arriving."""
+        """A partitioned ingest (Chargewire §8.3): one part uploaded, another arriving."""
         session = self.server.admin()
         opened = session.http.post(url=f"{session.url}/ingests", headers=session.headers(),
                                    json={"table": "uploading_parts", "mode": "create_append"})
@@ -242,7 +242,7 @@ class InFlight:
         """A prepared statement executing, and another one prepared and left open."""
         session = self.server.admin()
         session.prepare(sql="SELECT ? AS left_open")
-        # Preparing LONG runs nothing (warp-sql's prepare describes it by binding), so
+        # Preparing LONG runs nothing (chargewire's prepare describes it by binding), so
         # only the execution is long.
         running = session.prepare(sql=LONG)
         self._start(target=lambda: session.execute_prepared(prepared_id=running["prepared_id"]))

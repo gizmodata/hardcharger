@@ -47,7 +47,7 @@ def name(r: dict) -> str:
         )
         return f"Quack ({r['quack_mode']}{order})"
     if r.get("driver_defaults"):
-        return f"{HARDCHARGER} (Warp SQL, driver defaults)"
+        return f"{HARDCHARGER} (Chargewire, driver defaults)"
     extras = []
     if r["compression"] in ("zstd", "lz4_frame", "auto"):
         extras.append(r["compression"])
@@ -55,7 +55,7 @@ def name(r: dict) -> str:
         extras.append(f"{r['partitions']} partitions" + (", any order" if r.get("order") == "any" else ", in order"))
     if r["workload"] == "ingest" and r.get("ingest_parts", 1) > 1:
         extras.append(f"{r['ingest_parts']} upload parts")
-    return f"{HARDCHARGER} (Warp SQL{''.join(', ' + e for e in extras)})"
+    return f"{HARDCHARGER} (Chargewire{''.join(', ' + e for e in extras)})"
 
 
 HARDCHARGER = "Hardcharger"

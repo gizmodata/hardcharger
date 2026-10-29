@@ -102,12 +102,12 @@ std::string Banner(const BannerInfo& info) {
   std::string out(kBannerArt);
   auto line = [&](const std::string& text) { out += text + "\n"; };
 
-  const std::string versions = "  Hardcharger " + info.version + " | Warp SQL " + info.warp_sql_version +
+  const std::string versions = "  Hardcharger " + info.version + " | Chargewire " + info.chargewire_version +
                                " | DuckDB " + info.duckdb_version + " | by GizmoData";
   if (versions.size() <= kWidth) {
     line(versions);
   } else {
-    line("  Hardcharger " + info.version + " | Warp SQL " + info.warp_sql_version);
+    line("  Hardcharger " + info.version + " | Chargewire " + info.chargewire_version);
     line("  DuckDB " + info.duckdb_version + " | by GizmoData");
   }
 

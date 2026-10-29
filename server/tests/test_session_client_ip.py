@@ -19,7 +19,7 @@ def test_local_session_has_an_ip_without_an_ephemeral_port(launcher):
 def test_trusted_proxy_reports_effective_client_rather_than_local_proxy(launcher, address, expected, local):
     server = launcher.start(args=["--trusted-proxies", "127.0.0.1"])
     token = server.token()
-    opened = httpx.post(url=f"{server.base_url}/warp/v1/sessions",
+    opened = httpx.post(url=f"{server.base_url}/chargewire/v1/sessions",
                         headers={"Authorization": f"Bearer {token}", "X-Forwarded-For": address}, json={})
     assert opened.status_code == 201, opened.text
     session_id = opened.json()["session_id"]

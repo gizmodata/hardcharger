@@ -15,7 +15,7 @@ Same machine, same data, each server on loopback with no TLS. Each server loads
 Parquet files of the TPC-H-derived data at SF10 (lineitem: 59,986,052 rows) into its own
 DuckDB file through init SQL. Every query runs once to warm up, then five times; the figure is the median,
 measured at the client from submit to the last row in a `pyarrow.Table`. Hardcharger is
-called over Warp SQL's one-round-trip path (`Accept: application/vnd.apache.arrow.stream`,
+called over Chargewire's one-round-trip path (`Accept: application/vnd.apache.arrow.stream`,
 plain `httpx`); GizmoSQL through `adbc-driver-gizmosql` 2.0.15. Script: `bench/tpch.py`.
 
 Machine: Apple M5 Max, 18 cores, 64 GB, macOS 27. Hardcharger on DuckDB
@@ -53,7 +53,7 @@ Bulk transfer, `SELECT * FROM lineitem LIMIT 10000000` (1.73 GB of Arrow), media
 | | Seconds |
 |---|---:|
 | Hardcharger | 0.83 |
-| Hardcharger, `Warp-IPC-Compression: zstd` | 0.96 |
+| Hardcharger, `Chargewire-IPC-Compression: zstd` | 0.96 |
 | GizmoSQL 1.41 | 1.32 |
 | DuckDB 1.5.6 in-process | 0.88 |
 
@@ -88,7 +88,7 @@ running Q01, Q03, Q06, Q10, Q14 and Q19 six times (360 queries), same machine an
 Hardcharger finishes the 360 queries in 9.2 s against 16.5 s (1.8× the throughput), and its
 slowest queries wait far less (p95 2.8× lower).
 
-## Remote throughput: Flight SQL vs Quack vs Warp SQL (2026-10-17)
+## Remote throughput: Flight SQL vs Quack vs Chargewire (2026-10-17)
 
 Three DuckDB servers measured from a second machine over a real network: how fast each
 moves large results to a client and bulk-loads a client's Arrow table, on one LAN and one
@@ -101,7 +101,7 @@ harness, summarizer); raw results: `bench/remote/results/`.
 |---|---|---|---|
 | GizmoSQL | 1.42.0 release binary (`gizmosql_cli_linux_arm64.zip`), DuckDB v1.5.6 | Arrow Flight SQL over gRPC (HTTP/2) | `adbc-driver-gizmosql` 2.0.15 |
 | Quack | extension `e7a9be3f8c` (the commit DuckDB's `quack.cmake` pins), on DuckDB v2.0.0-alpha48624 (`ffe0b8b7a2`) from the `duckdb==2.0.0.dev2610161340` wheel | DuckDB's own protocol over HTTP/1.1 | the same DuckDB wheel: `ATTACH 'quack:host:9494'` |
-| Hardcharger | the `hardcharger-linux-arm64` CI artifact of `93a3ab2` (DuckDB v2.0.0-alpha48624, `ffe0b8b7a2`) | Warp SQL over HTTP/1.1, Arrow IPC | `adbc-driver-warpsql` from warp-sql-adbc `2b6d775`, built for linux-arm64 |
+| Hardcharger | the `hardcharger-linux-arm64` CI artifact of `93a3ab2` (DuckDB v2.0.0-alpha48624, `ffe0b8b7a2`) | Chargewire over HTTP/1.1, Arrow IPC | `adbc-driver-chargewire` from chargewire-adbc `2b6d775`, built for linux-arm64 |
 
 Quack and Hardcharger run the same DuckDB commit; GizmoSQL runs DuckDB 1.5.6, as every
 GizmoSQL 1.x release does. Client side: Python 3.12.3, pyarrow 26.0.0,
@@ -142,7 +142,7 @@ adbc-driver-manager 1.12.0.
   `quack_query()` and 0.26 s via `quack_query()` into a table.
 - **Ingest:** the client loads lineitem (generated client-side with the same `dbgen`) from
   an Arrow IPC file into memory first, in 122,880-row batches (SF1: 1.05 GB of Arrow,
-  SF10: 10.48 GB), then creates a new server table from it. Flight SQL and Warp SQL use
+  SF10: 10.48 GB), then creates a new server table from it. Flight SQL and Chargewire use
   `adbc_ingest(mode="create")`. Quack uses `CREATE TABLE remote.main.t AS SELECT * FROM
   <arrow table>` (its bulk path: the rows stream to the server), measured both with the
   default `preserve_insertion_order=true` and with `false`, which lets Quack insert in
@@ -163,8 +163,8 @@ adbc-driver-manager 1.12.0.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | GizmoSQL 1.42.0 (Flight SQL) | 1.743 | 1.712 | 1.824 | 3.4 | 595 | 1,050 | 1.1 | 1.2 |
 | Quack (attach) | 0.158 | 0.157 | 0.302 | 37.9 | 6,620 | 744 | 9.5 | 5.1 |
-| Hardcharger, commit 93a3ab2 (Warp SQL) | 2.136 | 2.123 | 2.148 | 2.8 | 486 | 1,049 | 0.5 | 1.7 |
-| Hardcharger, commit 93a3ab2 (Warp SQL, zstd) | 4.420 | 4.411 | 4.430 | 1.4 | 235 | 244 | 1.9 | 1.2 |
+| Hardcharger, commit 93a3ab2 (Chargewire) | 2.136 | 2.123 | 2.148 | 2.8 | 486 | 1,049 | 0.5 | 1.7 |
+| Hardcharger, commit 93a3ab2 (Chargewire, zstd) | 4.420 | 4.411 | 4.430 | 1.4 | 235 | 244 | 1.9 | 1.2 |
 
 #### LAN fetch sf10 (59,986,052 rows)
 
@@ -172,8 +172,8 @@ adbc-driver-manager 1.12.0.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | GizmoSQL 1.42.0 (Flight SQL) | 17.847 | 17.576 | 18.198 | 3.4 | 581 | 10,496 | 1.1 | 1.2 |
 | Quack (attach) | 0.895 | 0.783 | 0.985 | 67.0 | 11,719 | 7,427 | 16.2 | 9.7 |
-| Hardcharger, commit 93a3ab2 (Warp SQL) | 21.170 | 21.073 | 21.298 | 2.8 | 490 | 10,492 | 0.6 | 1.7 |
-| Hardcharger, commit 93a3ab2 (Warp SQL, zstd) | 43.107 | 43.075 | 43.261 | 1.4 | 240 | 2,516 | 1.9 | 1.2 |
+| Hardcharger, commit 93a3ab2 (Chargewire) | 21.170 | 21.073 | 21.298 | 2.8 | 490 | 10,492 | 0.6 | 1.7 |
+| Hardcharger, commit 93a3ab2 (Chargewire, zstd) | 43.107 | 43.075 | 43.261 | 1.4 | 240 | 2,516 | 1.9 | 1.2 |
 
 #### LAN fetch narrow (100,000,000 rows)
 
@@ -181,8 +181,8 @@ adbc-driver-manager 1.12.0.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | GizmoSQL 1.42.0 (Flight SQL) | 5.679 | 5.646 | 5.731 | 17.6 | 704 | 4,056 | 1.7 | 1.3 |
 | Quack (attach) | 0.400 | 0.380 | 0.755 | 249.9 | 10,122 | 4,039 | 14.0 | 10.4 |
-| Hardcharger, commit 93a3ab2 (Warp SQL) | 10.264 | 10.241 | 10.355 | 9.7 | 390 | 4,056 | 0.6 | 1.7 |
-| Hardcharger, commit 93a3ab2 (Warp SQL, zstd) | 19.030 | 19.006 | 19.095 | 5.3 | 210 | 888 | 2.5 | 1.2 |
+| Hardcharger, commit 93a3ab2 (Chargewire) | 10.264 | 10.241 | 10.355 | 9.7 | 390 | 4,056 | 0.6 | 1.7 |
+| Hardcharger, commit 93a3ab2 (Chargewire, zstd) | 19.030 | 19.006 | 19.095 | 5.3 | 210 | 888 | 2.5 | 1.2 |
 
 #### LAN ingest sf1 (6,001,215 rows)
 
@@ -191,8 +191,8 @@ adbc-driver-manager 1.12.0.
 | GizmoSQL 1.42.0 (Flight SQL) | 1.610 | 1.525 | 1.619 | 3.7 | 644 | 1,047 | 0.4 | 5.0 |
 | Quack (attach, insertion order kept) | 1.004 | 0.917 | 1.065 | 6.0 | 1,033 | 857 | 1.5 | 8.2 |
 | Quack (attach, unordered) | 0.623 | 0.542 | 0.719 | 9.6 | 1,666 | 854 | 2.4 | 14.8 |
-| Hardcharger, commit 93a3ab2 (Warp SQL) | 10.200 | 10.177 | 10.214 | 0.6 | 102 | 1,051 | 0.1 | 1.2 |
-| Hardcharger, commit 93a3ab2 (Warp SQL, zstd) | 8.159 | 7.710 | 9.393 | 0.7 | 127 | 283 | 0.5 | 1.1 |
+| Hardcharger, commit 93a3ab2 (Chargewire) | 10.200 | 10.177 | 10.214 | 0.6 | 102 | 1,051 | 0.1 | 1.2 |
+| Hardcharger, commit 93a3ab2 (Chargewire, zstd) | 8.159 | 7.710 | 9.393 | 0.7 | 127 | 283 | 0.5 | 1.1 |
 
 #### LAN ingest sf10 (59,986,052 rows)
 
@@ -201,8 +201,8 @@ adbc-driver-manager 1.12.0.
 | GizmoSQL 1.42.0 (Flight SQL) | 9.427 | 9.308 | 9.442 | 6.4 | 1,099 | 10,465 | 0.6 | 7.8 |
 | Quack (attach, insertion order kept) | 2.957 | 2.791 | 3.219 | 20.3 | 3,505 | 8,574 | 4.9 | 24.2 |
 | Quack (attach, unordered) | 2.671 | 2.645 | 2.773 | 22.5 | 3,880 | 8,552 | 6.5 | 27.7 |
-| Hardcharger, commit 93a3ab2 (Warp SQL) | 102.469 | 102.113 | 102.753 | 0.6 | 101 | 10,501 | 0.1 | 1.2 |
-| Hardcharger, commit 93a3ab2 (Warp SQL, zstd) | 74.681 | 74.565 | 74.844 | 0.8 | 139 | 2,883 | 0.5 | 1.2 |
+| Hardcharger, commit 93a3ab2 (Chargewire) | 102.469 | 102.113 | 102.753 | 0.6 | 101 | 10,501 | 0.1 | 1.2 |
+| Hardcharger, commit 93a3ab2 (Chargewire, zstd) | 74.681 | 74.565 | 74.844 | 0.8 | 139 | 2,883 | 0.5 | 1.2 |
 
 #### WAN fetch sf1 (6,001,215 rows)
 
@@ -210,8 +210,8 @@ adbc-driver-manager 1.12.0.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | GizmoSQL 1.42.0 (Flight SQL) | 12.298 | 12.276 | 12.308 | 0.5 | 84 | 1,081 | 0.2 | 0.2 |
 | Quack (attach) | 2.286 | 1.990 | 2.503 | 2.6 | 459 | 767 | 0.8 | 0.4 |
-| Hardcharger, commit 93a3ab2 (Warp SQL) | 4.905 | 4.679 | 5.091 | 1.2 | 211 | 1,081 | 0.3 | 0.8 |
-| Hardcharger, commit 93a3ab2 (Warp SQL, zstd) | 5.004 | 4.905 | 5.022 | 1.2 | 207 | 251 | 1.8 | 1.0 |
+| Hardcharger, commit 93a3ab2 (Chargewire) | 4.905 | 4.679 | 5.091 | 1.2 | 211 | 1,081 | 0.3 | 0.8 |
+| Hardcharger, commit 93a3ab2 (Chargewire, zstd) | 5.004 | 4.905 | 5.022 | 1.2 | 207 | 251 | 1.8 | 1.0 |
 
 #### WAN ingest sf1 (6,001,215 rows)
 
@@ -220,8 +220,8 @@ adbc-driver-manager 1.12.0.
 | GizmoSQL 1.42.0 (Flight SQL) | 12.894 | 12.803 | 13.095 | 0.5 | 80 | 1,087 | 0.1 | 0.6 |
 | Quack (attach, insertion order kept) | 11.272 | 10.169 | 13.889 | 0.5 | 92 | 889 | 0.1 | 0.7 |
 | Quack (attach, unordered) | 1.785 | 1.699 | 2.212 | 3.4 | 581 | 888 | 0.9 | 4.3 |
-| Hardcharger, commit 93a3ab2 (Warp SQL) | 15.027 | 14.988 | 15.225 | 0.4 | 69 | 1,088 | 0.1 | 0.8 |
-| Hardcharger, commit 93a3ab2 (Warp SQL, zstd) | 8.229 | 7.947 | 8.306 | 0.7 | 126 | 294 | 0.5 | 1.0 |
+| Hardcharger, commit 93a3ab2 (Chargewire) | 15.027 | 14.988 | 15.225 | 0.4 | 69 | 1,088 | 0.1 | 0.8 |
+| Hardcharger, commit 93a3ab2 (Chargewire, zstd) | 8.229 | 7.947 | 8.306 | 0.7 | 126 | 294 | 0.5 | 1.0 |
 
 ### Supplementary runs (LAN)
 
@@ -233,8 +233,8 @@ Plaintext instead of TLS, on all three, to see what TLS costs each:
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | GizmoSQL 1.42.0 (Flight SQL) | 14.744 | 14.573 | 14.937 | 4.1 | 703 | 10,479 | 1.1 | 1.1 |
 | Quack (attach) | 0.898 | 0.876 | 0.931 | 66.8 | 11,681 | 7,417 | 16.0 | 7.7 |
-| Hardcharger, commit 93a3ab2 (Warp SQL) | 8.725 | 8.725 | 8.726 | 6.9 | 1,188 | 10,461 | 0.9 | 1.8 |
-| Hardcharger, commit 93a3ab2 (Warp SQL, zstd) | 43.021 | 42.935 | 43.188 | 1.4 | 241 | 2,512 | 2.0 | 1.0 |
+| Hardcharger, commit 93a3ab2 (Chargewire) | 8.725 | 8.725 | 8.726 | 6.9 | 1,188 | 10,461 | 0.9 | 1.8 |
+| Hardcharger, commit 93a3ab2 (Chargewire, zstd) | 43.021 | 42.935 | 43.188 | 1.4 | 241 | 2,512 | 2.0 | 1.0 |
 
 #### LAN ingest sf1 (6,001,215 rows)
 
@@ -243,8 +243,8 @@ Plaintext instead of TLS, on all three, to see what TLS costs each:
 | GizmoSQL 1.42.0 (Flight SQL) | 1.606 | 1.601 | 1.612 | 3.7 | 646 | 1,046 | 0.2 | 4.9 |
 | Quack (attach, insertion order kept) | 0.997 | 0.985 | 1.023 | 6.0 | 1,040 | 853 | 0.8 | 7.7 |
 | Quack (attach, unordered) | 0.601 | 0.537 | 0.622 | 10.0 | 1,724 | 856 | 1.6 | 11.4 |
-| Hardcharger, commit 93a3ab2 (Warp SQL) | 21.687 | 21.666 | 21.751 | 0.3 | 48 | 1,049 | 0.0 | 1.5 |
-| Hardcharger, commit 93a3ab2 (Warp SQL, zstd) | 10.472 | 10.443 | 10.944 | 0.6 | 99 | 282 | 0.3 | 1.4 |
+| Hardcharger, commit 93a3ab2 (Chargewire) | 21.687 | 21.666 | 21.751 | 0.3 | 48 | 1,049 | 0.0 | 1.5 |
+| Hardcharger, commit 93a3ab2 (Chargewire, zstd) | 10.472 | 10.443 | 10.944 | 0.6 | 99 | 282 | 0.3 | 1.4 |
 
 Hardcharger with `--result-batch-rows 122880` instead of the default 2,048 (TLS):
 
@@ -252,22 +252,22 @@ Hardcharger with `--result-batch-rows 122880` instead of the default 2,048 (TLS)
 
 | System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Hardcharger, commit 93a3ab2 (Warp SQL) | 2.022 | 1.997 | 2.051 | 3.0 | 513 | 1,047 | 0.4 | 1.8 |
-| Hardcharger, commit 93a3ab2 (Warp SQL, zstd) | 1.378 | 1.374 | 1.394 | 4.4 | 752 | 248 | 1.5 | 2.4 |
+| Hardcharger, commit 93a3ab2 (Chargewire) | 2.022 | 1.997 | 2.051 | 3.0 | 513 | 1,047 | 0.4 | 1.8 |
+| Hardcharger, commit 93a3ab2 (Chargewire, zstd) | 1.378 | 1.374 | 1.394 | 4.4 | 752 | 248 | 1.5 | 2.4 |
 
 #### LAN fetch sf10 (59,986,052 rows)
 
 | System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Hardcharger, commit 93a3ab2 (Warp SQL) | 22.582 | 22.397 | 22.783 | 2.7 | 459 | 10,464 | 0.4 | 1.8 |
-| Hardcharger, commit 93a3ab2 (Warp SQL, zstd) | 13.454 | 13.403 | 13.812 | 4.5 | 770 | 2,560 | 1.5 | 2.9 |
+| Hardcharger, commit 93a3ab2 (Chargewire) | 22.582 | 22.397 | 22.783 | 2.7 | 459 | 10,464 | 0.4 | 1.8 |
+| Hardcharger, commit 93a3ab2 (Chargewire, zstd) | 13.454 | 13.403 | 13.812 | 4.5 | 770 | 2,560 | 1.5 | 2.9 |
 
 #### LAN fetch narrow (100,000,000 rows)
 
 | System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Hardcharger, commit 93a3ab2 (Warp SQL) | 7.103 | 7.090 | 7.128 | 14.1 | 563 | 4,037 | 0.4 | 1.6 |
-| Hardcharger, commit 93a3ab2 (Warp SQL, zstd) | 4.571 | 4.555 | 4.628 | 21.9 | 875 | 958 | 1.9 | 2.4 |
+| Hardcharger, commit 93a3ab2 (Chargewire) | 7.103 | 7.090 | 7.128 | 14.1 | 563 | 4,037 | 0.4 | 1.6 |
+| Hardcharger, commit 93a3ab2 (Chargewire, zstd) | 4.571 | 4.555 | 4.628 | 21.9 | 875 | 958 | 1.9 | 2.4 |
 
 ### Reading the numbers
 
@@ -352,7 +352,7 @@ was the limit in each case, not the client or the network.
 set -a; . <AWS credentials .env>; set +a
 bench/remote/provision.sh lan                 # server + LAN client (and `wan` for the WAN client)
 # copy bench/remote/*, the TLS cert/key, the Hardcharger tarball (server) and the
-# adbc_driver_warpsql wheel (clients) to ~/bench on each VM, then on each:
+# adbc_driver_chargewire wheel (clients) to ~/bench on each VM, then on each:
 bash ~/bench/setup-vm.sh server|client
 ~/venv15/bin/python ~/bench/gen_data.py --path ~/bench/base.duckdb     # server
 ~/venv/bin/python ~/bench/prepare_data.py --data-dir ~/bench/data      # clients
@@ -371,7 +371,7 @@ Cost: about 1.7 hours of two Spot c8gn.8xlarge (~$0.30/h each) plus 1 hour of a 
 The same benchmark as the section above, re-run on fresh VMs after five changes to
 Hardcharger's data path (each commit message has its own before/after numbers):
 
-1. **TLS and the result pipeline** (warp-sql "SDK: result streams overlap producing,
+1. **TLS and the result pipeline** (chargewire "SDK: result streams overlap producing,
    encoding and TLS writes"). Asio's `ssl::stream` wrote one 16 KB TLS record per socket
    write and completion handler; the SDK's own `TlsStream` encrypts a whole gathered write
    (up to 1 MiB) at once and sends it while it encrypts the next one. Results flow through
@@ -380,15 +380,15 @@ Hardcharger's data path (each commit message has its own before/after numbers):
    strand writes them in order in ~1 MiB writes.
 2. **122,880-row result batches** by default instead of 2,048 (hardcharger "Results come
    in 122,880-row batches by default").
-3. **Parallel ingest** (warp-sql "Ingest inserts in parallel"): the upload is a parallel
+3. **Parallel ingest** (chargewire "Ingest inserts in parallel"): the upload is a parallel
    DuckDB table function with batch indexes, so DuckDB's batch insert runs on many
    threads, in one transaction, keeping the upload's row order. Uploads are decoded and
    validated on those threads.
-4. **Uploads read in 1 MiB pieces** (warp-sql "SDK: uploads are read from the connection
+4. **Uploads read in 1 MiB pieces** (chargewire "SDK: uploads are read from the connection
    in 1 MiB pieces") straight from the socket instead of through Beast's 64 KB parser
    reads.
-5. **Partitioned results** (spec §6.10; warp-sql, warp-sql-adbc, warp-sql-jdbc and the
-   C++ client): a client that sends `Warp-Result-Partitions: n` may get the result split
+5. **Partitioned results** (spec §6.10; chargewire, chargewire-adbc, chargewire-jdbc and the
+   C++ client): a client that sends `Chargewire-Result-Partitions: n` may get the result split
    into up to n partitions (32 at most by default), which it reads at once, each over its
    own connection; `interleaved` partitions rebuild the result's order round robin, so
    `ORDER BY` holds. Without the header nothing changes.
@@ -403,10 +403,10 @@ iperf3 server to client, this time: 1 stream 9.5 Gbit/s, 8 streams 75.7, 16 and 
 streams 99.8 Gbit/s.
 
 - **Hardcharger**: the `hardcharger-linux-arm64` CI artifact of feature/throughput at
-  `2024a0a5` (warp-sql `28e1164`; the branch was rebased on main afterwards, which changed
+  `2024a0a5` (chargewire `28e1164`; the branch was rebased on main afterwards, which changed
   no data-path code), default settings (122,880-row batches, `max_result_partitions` 32).
-  Client: `adbc-driver-warpsql` from warp-sql-adbc feature/throughput (`b0c4359`), built
-  for linux-arm64. "n partitions" rows set `adbc.warp.statement.result_partitions` = n and
+  Client: `adbc-driver-chargewire` from chargewire-adbc feature/throughput (`b0c4359`), built
+  for linux-arm64. "n partitions" rows set `adbc.chargewire.statement.result_partitions` = n and
   `result_order` = `any` or `preserve` ("in order").
 - **GizmoSQL** 1.42.0 and **Quack** (DuckDB `2.0.0.dev2610161340`) exactly as above.
 - **5 measured repetitions** (7 above), one warm-up. Every fetch is now checked in full:
@@ -436,14 +436,14 @@ streams 99.8 Gbit/s.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | GizmoSQL 1.42.0 (Flight SQL) | 1.738 | 1.717 | 1.746 | 3.5 | 597 | 1,050 | 1.1 | 1.1 |
 | Quack (attach) | 0.167 | 0.154 | 0.256 | 36.0 | 6,287 | 743 | 9.4 | 4.1 |
-| Hardcharger (Warp SQL) | 0.900 | 0.898 | 0.912 | 6.7 | 1,152 | 1,045 | 0.7 | 2.1 |
-| Hardcharger (Warp SQL, zstd) | 1.409 | 1.402 | 1.418 | 4.3 | 736 | 248 | 1.4 | 2.3 |
-| Hardcharger (Warp SQL, 8 partitions, any order) | 0.181 | 0.176 | 0.183 | 33.2 | 5,741 | 1,045 | 3.9 | 11.0 |
-| Hardcharger (Warp SQL, 8 partitions, in order) | 0.183 | 0.174 | 0.208 | 32.8 | 5,670 | 1,046 | 4.2 | 10.8 |
-| Hardcharger (Warp SQL, 16 partitions, any order) | 0.210 | 0.207 | 0.213 | 28.6 | 4,940 | 1,046 | 4.2 | 9.8 |
-| Hardcharger (Warp SQL, 16 partitions, in order) | 0.195 | 0.191 | 0.199 | 30.8 | 5,325 | 1,046 | 4.5 | 10.6 |
-| Hardcharger (Warp SQL, 32 partitions, any order) | 0.148 | 0.138 | 0.175 | 40.6 | 7,016 | 1,046 | 6.4 | 17.2 |
-| Hardcharger (Warp SQL, 32 partitions, in order) | 0.168 | 0.148 | 0.177 | 35.8 | 6,187 | 1,046 | 6.2 | 11.5 |
+| Hardcharger (Chargewire) | 0.900 | 0.898 | 0.912 | 6.7 | 1,152 | 1,045 | 0.7 | 2.1 |
+| Hardcharger (Chargewire, zstd) | 1.409 | 1.402 | 1.418 | 4.3 | 736 | 248 | 1.4 | 2.3 |
+| Hardcharger (Chargewire, 8 partitions, any order) | 0.181 | 0.176 | 0.183 | 33.2 | 5,741 | 1,045 | 3.9 | 11.0 |
+| Hardcharger (Chargewire, 8 partitions, in order) | 0.183 | 0.174 | 0.208 | 32.8 | 5,670 | 1,046 | 4.2 | 10.8 |
+| Hardcharger (Chargewire, 16 partitions, any order) | 0.210 | 0.207 | 0.213 | 28.6 | 4,940 | 1,046 | 4.2 | 9.8 |
+| Hardcharger (Chargewire, 16 partitions, in order) | 0.195 | 0.191 | 0.199 | 30.8 | 5,325 | 1,046 | 4.5 | 10.6 |
+| Hardcharger (Chargewire, 32 partitions, any order) | 0.148 | 0.138 | 0.175 | 40.6 | 7,016 | 1,046 | 6.4 | 17.2 |
+| Hardcharger (Chargewire, 32 partitions, in order) | 0.168 | 0.148 | 0.177 | 35.8 | 6,187 | 1,046 | 6.2 | 11.5 |
 
 #### LAN fetch sf10 (59,986,052 rows)
 
@@ -451,15 +451,15 @@ streams 99.8 Gbit/s.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | GizmoSQL 1.42.0 (Flight SQL) | 15.217 | 15.174 | 15.233 | 3.9 | 681 | 10,489 | 1.2 | 1.3 |
 | Quack (attach) | 0.803 | 0.792 | 0.923 | 74.7 | 13,063 | 7,428 | 17.4 | 11.1 |
-| Hardcharger (Warp SQL) | 8.760 | 8.750 | 8.762 | 6.8 | 1,183 | 10,447 | 0.7 | 2.1 |
-| Hardcharger (Warp SQL, zstd) | 13.489 | 13.454 | 13.594 | 4.4 | 768 | 2,564 | 1.5 | 2.5 |
-| Hardcharger (Warp SQL, 8 partitions, any order) | 1.430 | 1.425 | 1.445 | 41.9 | 7,247 | 10,449 | 4.5 | 13.9 |
-| Hardcharger (Warp SQL, 8 partitions, in order) | 1.446 | 1.432 | 1.485 | 41.5 | 7,166 | 10,450 | 4.7 | 13.6 |
-| Hardcharger (Warp SQL, 16 partitions, any order) | 1.590 | 1.585 | 1.614 | 37.7 | 6,519 | 10,455 | 4.8 | 13.0 |
-| Hardcharger (Warp SQL, 16 partitions, in order) | 1.610 | 1.591 | 1.617 | 37.3 | 6,439 | 10,455 | 4.8 | 13.2 |
-| Hardcharger (Warp SQL, 32 partitions, any order) | 1.013 | 0.987 | 1.056 | 59.2 | 10,235 | 10,454 | 9.1 | 21.3 |
-| Hardcharger (Warp SQL, 32 partitions, in order) | 0.971 | 0.957 | 0.976 | 61.8 | 10,673 | 10,454 | 9.9 | 21.2 |
-| Hardcharger (Warp SQL, zstd, 32 partitions, any order) | 1.337 | 1.324 | 1.350 | 44.9 | 7,754 | 2,562 | 15.6 | 22.3 |
+| Hardcharger (Chargewire) | 8.760 | 8.750 | 8.762 | 6.8 | 1,183 | 10,447 | 0.7 | 2.1 |
+| Hardcharger (Chargewire, zstd) | 13.489 | 13.454 | 13.594 | 4.4 | 768 | 2,564 | 1.5 | 2.5 |
+| Hardcharger (Chargewire, 8 partitions, any order) | 1.430 | 1.425 | 1.445 | 41.9 | 7,247 | 10,449 | 4.5 | 13.9 |
+| Hardcharger (Chargewire, 8 partitions, in order) | 1.446 | 1.432 | 1.485 | 41.5 | 7,166 | 10,450 | 4.7 | 13.6 |
+| Hardcharger (Chargewire, 16 partitions, any order) | 1.590 | 1.585 | 1.614 | 37.7 | 6,519 | 10,455 | 4.8 | 13.0 |
+| Hardcharger (Chargewire, 16 partitions, in order) | 1.610 | 1.591 | 1.617 | 37.3 | 6,439 | 10,455 | 4.8 | 13.2 |
+| Hardcharger (Chargewire, 32 partitions, any order) | 1.013 | 0.987 | 1.056 | 59.2 | 10,235 | 10,454 | 9.1 | 21.3 |
+| Hardcharger (Chargewire, 32 partitions, in order) | 0.971 | 0.957 | 0.976 | 61.8 | 10,673 | 10,454 | 9.9 | 21.2 |
+| Hardcharger (Chargewire, zstd, 32 partitions, any order) | 1.337 | 1.324 | 1.350 | 44.9 | 7,754 | 2,562 | 15.6 | 22.3 |
 
 #### LAN fetch narrow (100,000,000 rows)
 
@@ -467,14 +467,14 @@ streams 99.8 Gbit/s.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | GizmoSQL 1.42.0 (Flight SQL) | 5.431 | 5.422 | 5.497 | 18.4 | 736 | 4,056 | 1.6 | 1.3 |
 | Quack (attach) | 0.548 | 0.447 | 0.559 | 182.4 | 7,385 | 4,039 | 10.3 | 9.2 |
-| Hardcharger (Warp SQL) | 3.368 | 3.368 | 3.370 | 29.7 | 1,188 | 4,033 | 0.7 | 1.5 |
-| Hardcharger (Warp SQL, zstd) | 4.522 | 4.505 | 4.539 | 22.1 | 885 | 958 | 1.9 | 2.1 |
-| Hardcharger (Warp SQL, 8 partitions, any order) | 0.586 | 0.550 | 0.591 | 170.7 | 6,830 | 4,033 | 4.7 | 11.6 |
-| Hardcharger (Warp SQL, 8 partitions, in order) | 0.554 | 0.543 | 0.568 | 180.6 | 7,226 | 4,032 | 4.9 | 12.5 |
-| Hardcharger (Warp SQL, 16 partitions, any order) | 0.656 | 0.618 | 0.659 | 152.5 | 6,098 | 4,035 | 5.1 | 11.0 |
-| Hardcharger (Warp SQL, 16 partitions, in order) | 0.654 | 0.634 | 0.659 | 152.9 | 6,115 | 4,034 | 5.2 | 10.8 |
-| Hardcharger (Warp SQL, 32 partitions, any order) | 0.452 | 0.403 | 0.498 | 221.0 | 8,841 | 4,034 | 8.2 | 16.8 |
-| Hardcharger (Warp SQL, 32 partitions, in order) | 0.479 | 0.442 | 0.513 | 208.8 | 8,353 | 4,034 | 7.7 | 16.3 |
+| Hardcharger (Chargewire) | 3.368 | 3.368 | 3.370 | 29.7 | 1,188 | 4,033 | 0.7 | 1.5 |
+| Hardcharger (Chargewire, zstd) | 4.522 | 4.505 | 4.539 | 22.1 | 885 | 958 | 1.9 | 2.1 |
+| Hardcharger (Chargewire, 8 partitions, any order) | 0.586 | 0.550 | 0.591 | 170.7 | 6,830 | 4,033 | 4.7 | 11.6 |
+| Hardcharger (Chargewire, 8 partitions, in order) | 0.554 | 0.543 | 0.568 | 180.6 | 7,226 | 4,032 | 4.9 | 12.5 |
+| Hardcharger (Chargewire, 16 partitions, any order) | 0.656 | 0.618 | 0.659 | 152.5 | 6,098 | 4,035 | 5.1 | 11.0 |
+| Hardcharger (Chargewire, 16 partitions, in order) | 0.654 | 0.634 | 0.659 | 152.9 | 6,115 | 4,034 | 5.2 | 10.8 |
+| Hardcharger (Chargewire, 32 partitions, any order) | 0.452 | 0.403 | 0.498 | 221.0 | 8,841 | 4,034 | 8.2 | 16.8 |
+| Hardcharger (Chargewire, 32 partitions, in order) | 0.479 | 0.442 | 0.513 | 208.8 | 8,353 | 4,034 | 7.7 | 16.3 |
 
 #### LAN ingest sf1 (6,001,215 rows)
 
@@ -483,8 +483,8 @@ streams 99.8 Gbit/s.
 | GizmoSQL 1.42.0 (Flight SQL) | 1.605 | 1.495 | 1.614 | 3.7 | 646 | 1,047 | 0.3 | 5.1 |
 | Quack (attach, insertion order kept) | 1.001 | 0.929 | 1.005 | 6.0 | 1,036 | 856 | 1.5 | 8.0 |
 | Quack (attach, unordered) | 0.529 | 0.501 | 0.592 | 11.4 | 1,962 | 855 | 3.0 | 14.6 |
-| Hardcharger (Warp SQL) | 1.299 | 1.292 | 1.484 | 4.6 | 798 | 1,048 | 0.5 | 6.0 |
-| Hardcharger (Warp SQL, zstd) | 3.081 | 3.055 | 3.109 | 1.9 | 337 | 283 | 1.2 | 2.5 |
+| Hardcharger (Chargewire) | 1.299 | 1.292 | 1.484 | 4.6 | 798 | 1,048 | 0.5 | 6.0 |
+| Hardcharger (Chargewire, zstd) | 3.081 | 3.055 | 3.109 | 1.9 | 337 | 283 | 1.2 | 2.5 |
 
 #### LAN ingest sf10 (59,986,052 rows)
 
@@ -493,8 +493,8 @@ streams 99.8 Gbit/s.
 | GizmoSQL 1.42.0 (Flight SQL) | 9.427 | 9.404 | 9.441 | 6.4 | 1,099 | 10,466 | 0.5 | 7.9 |
 | Quack (attach, insertion order kept) | 2.969 | 2.825 | 2.986 | 20.2 | 3,492 | 8,572 | 5.0 | 24.2 |
 | Quack (attach, unordered) | 2.648 | 2.632 | 2.736 | 22.7 | 3,914 | 8,545 | 6.5 | 27.5 |
-| Hardcharger (Warp SQL) | 9.342 | 9.257 | 9.431 | 6.4 | 1,110 | 10,476 | 0.6 | 8.1 |
-| Hardcharger (Warp SQL, zstd) | 27.663 | 27.386 | 27.996 | 2.2 | 375 | 2,882 | 1.4 | 2.6 |
+| Hardcharger (Chargewire) | 9.342 | 9.257 | 9.431 | 6.4 | 1,110 | 10,476 | 0.6 | 8.1 |
+| Hardcharger (Chargewire, zstd) | 27.663 | 27.386 | 27.996 | 2.2 | 375 | 2,882 | 1.4 | 2.6 |
 
 #### WAN fetch sf1 (6,001,215 rows)
 
@@ -502,12 +502,12 @@ streams 99.8 Gbit/s.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | GizmoSQL 1.42.0 (Flight SQL) | 12.260 | 12.252 | 12.265 | 0.5 | 85 | 1,081 | 0.2 | 0.2 |
 | Quack (attach) | 1.766 | 1.630 | 2.034 | 3.4 | 594 | 766 | 1.0 | 0.6 |
-| Hardcharger (Warp SQL) | 12.643 | 12.582 | 12.997 | 0.5 | 82 | 1,077 | 0.1 | 0.2 |
-| Hardcharger (Warp SQL, zstd) | 4.049 | 4.038 | 4.065 | 1.5 | 256 | 256 | 0.5 | 0.8 |
-| Hardcharger (Warp SQL, 8 partitions, any order) | 2.471 | 2.217 | 2.659 | 2.4 | 420 | 1,078 | 0.4 | 0.9 |
-| Hardcharger (Warp SQL, 8 partitions, in order) | 1.964 | 1.879 | 4.246 | 3.1 | 528 | 1,077 | 0.5 | 1.2 |
-| Hardcharger (Warp SQL, 32 partitions, any order) | 2.882 | 2.560 | 3.299 | 2.1 | 360 | 1,078 | 0.4 | 0.8 |
-| Hardcharger (Warp SQL, 32 partitions, in order) | 27.658 | 4.753 | 32.096 | 0.2 | 37 | 1,079 | 0.0 | 0.1 |
+| Hardcharger (Chargewire) | 12.643 | 12.582 | 12.997 | 0.5 | 82 | 1,077 | 0.1 | 0.2 |
+| Hardcharger (Chargewire, zstd) | 4.049 | 4.038 | 4.065 | 1.5 | 256 | 256 | 0.5 | 0.8 |
+| Hardcharger (Chargewire, 8 partitions, any order) | 2.471 | 2.217 | 2.659 | 2.4 | 420 | 1,078 | 0.4 | 0.9 |
+| Hardcharger (Chargewire, 8 partitions, in order) | 1.964 | 1.879 | 4.246 | 3.1 | 528 | 1,077 | 0.5 | 1.2 |
+| Hardcharger (Chargewire, 32 partitions, any order) | 2.882 | 2.560 | 3.299 | 2.1 | 360 | 1,078 | 0.4 | 0.8 |
+| Hardcharger (Chargewire, 32 partitions, in order) | 27.658 | 4.753 | 32.096 | 0.2 | 37 | 1,079 | 0.0 | 0.1 |
 
 #### WAN ingest sf1 (6,001,215 rows)
 
@@ -516,8 +516,8 @@ streams 99.8 Gbit/s.
 | GizmoSQL 1.42.0 (Flight SQL) | 12.852 | 12.820 | 13.063 | 0.5 | 81 | 1,087 | 0.1 | 0.6 |
 | Quack (attach, insertion order kept) | 2.013 | 1.821 | 2.063 | 3.0 | 515 | 888 | 0.8 | 3.7 |
 | Quack (attach, unordered) | 2.351 | 2.030 | 2.538 | 2.6 | 441 | 888 | 0.7 | 3.1 |
-| Hardcharger (Warp SQL) | 12.756 | 12.668 | 14.188 | 0.5 | 81 | 1,089 | 0.1 | 0.6 |
-| Hardcharger (Warp SQL, zstd) | 6.134 | 5.945 | 6.170 | 1.0 | 169 | 294 | 0.7 | 1.2 |
+| Hardcharger (Chargewire) | 12.756 | 12.668 | 14.188 | 0.5 | 81 | 1,089 | 0.1 | 0.6 |
+| Hardcharger (Chargewire, zstd) | 6.134 | 5.945 | 6.170 | 1.0 | 169 | 294 | 0.7 | 1.2 |
 
 
 ### Supplementary runs (LAN, plaintext)
@@ -528,8 +528,8 @@ streams 99.8 Gbit/s.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | GizmoSQL 1.42.0 (Flight SQL) | 13.477 | 13.364 | 13.672 | 4.5 | 769 | 10,477 | 1.2 | 1.2 |
 | Quack (attach) | 0.903 | 0.894 | 0.994 | 66.4 | 11,613 | 7,417 | 17.5 | 7.3 |
-| Hardcharger (Warp SQL) | 8.747 | 8.744 | 8.749 | 6.9 | 1,185 | 10,433 | 0.6 | 1.3 |
-| Hardcharger (Warp SQL, 32 partitions, any order) | 0.908 | 0.898 | 0.927 | 66.0 | 11,412 | 10,434 | 6.2 | 12.1 |
+| Hardcharger (Chargewire) | 8.747 | 8.744 | 8.749 | 6.9 | 1,185 | 10,433 | 0.6 | 1.3 |
+| Hardcharger (Chargewire, 32 partitions, any order) | 0.908 | 0.898 | 0.927 | 66.0 | 11,412 | 10,434 | 6.2 | 12.1 |
 
 #### LAN ingest sf1 (6,001,215 rows)
 
@@ -538,7 +538,7 @@ streams 99.8 Gbit/s.
 | GizmoSQL 1.42.0 (Flight SQL) | 1.608 | 1.598 | 1.613 | 3.7 | 645 | 1,046 | 0.2 | 4.6 |
 | Quack (attach, insertion order kept) | 1.000 | 0.951 | 1.038 | 6.0 | 1,037 | 854 | 0.8 | 8.0 |
 | Quack (attach, unordered) | 0.538 | 0.506 | 0.587 | 11.2 | 1,928 | 855 | 1.8 | 13.1 |
-| Hardcharger (Warp SQL) | 1.302 | 1.289 | 1.433 | 4.6 | 796 | 1,045 | 0.2 | 5.7 |
+| Hardcharger (Chargewire) | 1.302 | 1.289 | 1.433 | 4.6 | 796 | 1,045 | 0.2 | 5.7 |
 
 #### LAN ingest sf10 (59,986,052 rows)
 
@@ -546,14 +546,14 @@ streams 99.8 Gbit/s.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | GizmoSQL 1.42.0 (Flight SQL) | 9.431 | 9.359 | 9.477 | 6.4 | 1,099 | 10,453 | 0.3 | 7.5 |
 | Quack (attach, insertion order kept) | 2.837 | 2.789 | 2.942 | 21.1 | 3,654 | 8,600 | 2.9 | 25.3 |
-| Hardcharger (Warp SQL) | 9.407 | 9.186 | 9.417 | 6.4 | 1,102 | 10,453 | 0.3 | 8.1 |
+| Hardcharger (Chargewire) | 9.407 | 9.186 | 9.417 | 6.4 | 1,102 | 10,453 | 0.3 | 8.1 |
 
 
 ### Reading the numbers
 
 - **One TLS stream now runs at the network's per-flow limit, like plaintext.** SF10
   lineitem over TLS took 8.760 s (1.18 GB/s of Arrow, 9.5 Gbit/s on the wire), against
-  8.747 s over plaintext and 21.170 s before. With `WARPSQL_STREAM_STATS=1` the server
+  8.747 s over plaintext and 21.170 s before. With `CHARGEWIRE_STREAM_STATS=1` the server
   reported where each stream's time went: waiting for rows ~0 s (the engine thread mostly
   waited for room), encoding about 1 ms of CPU per stream (uncompressed encoding only
   frames batches and references their buffers), encrypting at 3.2 GB/s on the
@@ -607,7 +607,7 @@ streams 99.8 Gbit/s.
 - **SF10 fetch to Quack, by 21%** (0.971 s against 0.803 s with TLS): Quack's wire format
   is 30% smaller for lineitem, and its client spreads decoding over more cores.
 - **Ingest over the LAN, to Quack by 2.5-3.5x.** Quack's client splits one upload over
-  many connections (2.97 s for SF10); Warp SQL's ingest is one upload on one connection,
+  many connections (2.97 s for SF10); Chargewire's ingest is one upload on one connection,
   so SF10 can't beat the 9.5 Gbit/s flow limit (9.34 s). Partitioned uploads would need a
   protocol addition, as results got.
 - **WAN on one stream**: as slow as GizmoSQL, and slower than the earlier build (commit 93a3ab2), whenever the client
@@ -652,14 +652,14 @@ placement groups or Spot requests left.
 
 Two changes since the section above, measured on fresh VMs with the same scripts:
 
-1. **Partitioned ingest** (Warp SQL spec §8.3, capability `partitioned_ingest`): a client
+1. **Partitioned ingest** (Chargewire spec §8.3, capability `partitioned_ingest`): a client
    opens one ingest, sends its upload as N parts at once, each over its own connection,
    and commits them as one. The server reads every part through one reader, so DuckDB
    inserts from all of them in parallel, in one transaction, with each part's body in a
    bounded queue (4 MiB). All or nothing: any failed part, refused batch or broken
    connection fails the ingest and nothing is written. Rows land in no defined order;
    ordered ingest is one part (or §8.1's single stream). The Go/Python ADBC driver
-   (`adbc.warp.ingest.parts`, default 8) and the C++ client (`IngestOptions::parts`,
+   (`adbc.chargewire.ingest.parts`, default 8) and the C++ client (`IngestOptions::parts`,
    default 8) use it for uploads of two batches or more when the server offers it.
 2. **Split results by default**: the Go/Python ADBC driver, JDBC, the C++ client and the
    `hardcharger` CLI ask for up to 8 partitions, in order. The server keeps results of
@@ -675,9 +675,9 @@ with one self-signed P-256 certificate, `threads=32`, `memory_limit=40GB`, the d
 99.8; WAN 1 stream 0.5 Gbit/s, 8 streams 3.9, 16 streams 7.5.
 
 - **Hardcharger**: the `hardcharger-linux-arm64` CI artifact of feature/ingest-partitions
-  at `748961a5` (warp-sql `80cb327`), default settings. Client: `adbc-driver-warpsql` from
-  warp-sql-adbc feature/ingest-partitions (`b418e16`), built for linux-arm64. "N upload
-  parts" rows set `adbc.warp.ingest.parts` = N; plain "Warp SQL" rows set it, and
+  at `748961a5` (chargewire `80cb327`), default settings. Client: `adbc-driver-chargewire` from
+  chargewire-adbc feature/ingest-partitions (`b418e16`), built for linux-arm64. "N upload
+  parts" rows set `adbc.chargewire.ingest.parts` = N; plain "Chargewire" rows set it, and
   `result_partitions`, to 1.
 - **GizmoSQL** 1.42.0 and **Quack** (DuckDB `2.0.0.dev2610161340`) as before.
 - **5 measured repetitions**, one warm-up, `bench/remote/run_ingest_parts.sh lan|wan`.
@@ -704,16 +704,16 @@ with one self-signed P-256 certificate, `threads=32`, `memory_limit=40GB`, the d
 | System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Quack (attach) | 0.178 | 0.153 | 0.324 | 33.8 | 5,909 | 743 | 8.4 | 3.4 |
-| Hardcharger (Warp SQL) | 0.899 | 0.896 | 0.906 | 6.7 | 1,154 | 1,045 | 0.7 | 1.9 |
-| Hardcharger (Warp SQL, 8 partitions, in order) | 0.174 | 0.169 | 0.181 | 34.5 | 5,955 | 1,045 | 4.1 | 10.8 |
+| Hardcharger (Chargewire) | 0.899 | 0.896 | 0.906 | 6.7 | 1,154 | 1,045 | 0.7 | 1.9 |
+| Hardcharger (Chargewire, 8 partitions, in order) | 0.174 | 0.169 | 0.181 | 34.5 | 5,955 | 1,045 | 4.1 | 10.8 |
 
 #### LAN fetch sf10 (59,986,052 rows)
 
 | System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Quack (attach) | 0.855 | 0.842 | 0.983 | 70.1 | 12,258 | 7,427 | 17.0 | 9.3 |
-| Hardcharger (Warp SQL) | 8.758 | 8.749 | 8.768 | 6.8 | 1,184 | 10,447 | 0.7 | 2.1 |
-| Hardcharger (Warp SQL, 8 partitions, in order) | 1.384 | 1.376 | 1.394 | 43.4 | 7,491 | 10,450 | 4.5 | 14.2 |
+| Hardcharger (Chargewire) | 8.758 | 8.749 | 8.768 | 6.8 | 1,184 | 10,447 | 0.7 | 2.1 |
+| Hardcharger (Chargewire, 8 partitions, in order) | 1.384 | 1.376 | 1.394 | 43.4 | 7,491 | 10,450 | 4.5 | 14.2 |
 
 #### LAN ingest sf1 (6,001,215 rows)
 
@@ -722,9 +722,9 @@ with one self-signed P-256 certificate, `threads=32`, `memory_limit=40GB`, the d
 | Quack (attach, insertion order kept) | 0.976 | 0.846 | 0.984 | 6.2 | 1,063 | 855 | 1.5 | 7.8 |
 | Quack (attach, unordered) | 0.620 | 0.531 | 0.688 | 9.7 | 1,671 | 855 | 2.8 | 13.2 |
 | GizmoSQL 1.42.0 (Flight SQL) | 1.612 | 1.553 | 1.617 | 3.7 | 643 | 1,047 | 0.3 | 5.0 |
-| Hardcharger (Warp SQL) | 1.306 | 1.291 | 1.408 | 4.6 | 794 | 1,048 | 0.5 | 5.2 |
-| Hardcharger (Warp SQL, 8 upload parts) | 0.664 | 0.579 | 0.962 | 9.0 | 1,561 | 1,048 | 0.9 | 14.2 |
-| Hardcharger (Warp SQL, 16 upload parts) | 0.678 | 0.494 | 0.711 | 8.9 | 1,530 | 1,048 | 1.0 | 10.2 |
+| Hardcharger (Chargewire) | 1.306 | 1.291 | 1.408 | 4.6 | 794 | 1,048 | 0.5 | 5.2 |
+| Hardcharger (Chargewire, 8 upload parts) | 0.664 | 0.579 | 0.962 | 9.0 | 1,561 | 1,048 | 0.9 | 14.2 |
+| Hardcharger (Chargewire, 16 upload parts) | 0.678 | 0.494 | 0.711 | 8.9 | 1,530 | 1,048 | 1.0 | 10.2 |
 
 #### LAN ingest sf10 (59,986,052 rows)
 
@@ -733,17 +733,17 @@ with one self-signed P-256 certificate, `threads=32`, `memory_limit=40GB`, the d
 | Quack (attach, insertion order kept) | 2.873 | 2.719 | 3.013 | 20.9 | 3,608 | 8,569 | 4.9 | 25.8 |
 | Quack (attach, unordered) | 2.672 | 2.629 | 2.700 | 22.5 | 3,880 | 8,546 | 6.7 | 29.1 |
 | GizmoSQL 1.42.0 (Flight SQL) | 9.441 | 9.336 | 9.449 | 6.4 | 1,098 | 10,470 | 0.6 | 8.1 |
-| Hardcharger (Warp SQL) | 9.143 | 9.140 | 9.363 | 6.6 | 1,134 | 10,476 | 0.7 | 8.4 |
-| Hardcharger (Warp SQL, 8 upload parts) | 3.003 | 2.971 | 3.100 | 20.0 | 3,452 | 10,475 | 2.0 | 24.8 |
-| Hardcharger (Warp SQL, 16 upload parts) | 2.985 | 2.898 | 3.253 | 20.1 | 3,472 | 10,479 | 2.0 | 25.7 |
+| Hardcharger (Chargewire) | 9.143 | 9.140 | 9.363 | 6.6 | 1,134 | 10,476 | 0.7 | 8.4 |
+| Hardcharger (Chargewire, 8 upload parts) | 3.003 | 2.971 | 3.100 | 20.0 | 3,452 | 10,475 | 2.0 | 24.8 |
+| Hardcharger (Chargewire, 16 upload parts) | 2.985 | 2.898 | 3.253 | 20.1 | 3,472 | 10,479 | 2.0 | 25.7 |
 
 #### WAN fetch sf1 (6,001,215 rows)
 
 | System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Quack (attach) | 2.014 | 1.700 | 2.333 | 3.0 | 521 | 766 | 0.8 | 0.5 |
-| Hardcharger (Warp SQL) | 14.015 | 13.938 | 14.561 | 0.4 | 74 | 1,078 | 0.1 | 0.2 |
-| Hardcharger (Warp SQL, 8 partitions, in order) | 2.301 | 2.206 | 2.817 | 2.6 | 451 | 1,078 | 0.3 | 1.0 |
+| Hardcharger (Chargewire) | 14.015 | 13.938 | 14.561 | 0.4 | 74 | 1,078 | 0.1 | 0.2 |
+| Hardcharger (Chargewire, 8 partitions, in order) | 2.301 | 2.206 | 2.817 | 2.6 | 451 | 1,078 | 0.3 | 1.0 |
 
 #### WAN ingest sf1 (6,001,215 rows)
 
@@ -752,9 +752,9 @@ with one self-signed P-256 certificate, `threads=32`, `memory_limit=40GB`, the d
 | Quack (attach, insertion order kept) | 2.146 | 2.142 | 2.214 | 2.8 | 483 | 889 | 0.7 | 3.6 |
 | Quack (attach, unordered) | 2.547 | 2.419 | 3.950 | 2.4 | 407 | 890 | 0.6 | 3.1 |
 | GizmoSQL 1.42.0 (Flight SQL) | 13.935 | 13.912 | 14.003 | 0.4 | 74 | 1,087 | 0.1 | 0.5 |
-| Hardcharger (Warp SQL) | 13.989 | 13.961 | 14.061 | 0.4 | 74 | 1,089 | 0.1 | 0.6 |
-| Hardcharger (Warp SQL, 8 upload parts) | 2.906 | 2.680 | 3.498 | 2.1 | 357 | 1,088 | 0.3 | 2.8 |
-| Hardcharger (Warp SQL, 16 upload parts) | 2.570 | 2.091 | 3.023 | 2.3 | 404 | 1,088 | 0.3 | 3.0 |
+| Hardcharger (Chargewire) | 13.989 | 13.961 | 14.061 | 0.4 | 74 | 1,089 | 0.1 | 0.6 |
+| Hardcharger (Chargewire, 8 upload parts) | 2.906 | 2.680 | 3.498 | 2.1 | 357 | 1,088 | 0.3 | 2.8 |
+| Hardcharger (Chargewire, 16 upload parts) | 2.570 | 2.091 | 3.023 | 2.3 | 404 | 1,088 | 0.3 | 3.0 |
 
 ### Reading the numbers
 
@@ -765,7 +765,7 @@ with one self-signed P-256 certificate, `threads=32`, `memory_limit=40GB`, the d
   where one flow carries 0.5 Gbit/s, SF1 went from 14.0 s to 2.9 s (8 parts) and 2.6 s (16).
 - **The LAN SF10 load is now bound by DuckDB's insert, not the network.** The server used
   24.8 cores for Hardcharger's 8 parts and 25.7 for 16 (Quack: 25.8 and 29.1); 16 parts
-  were no faster than 8. Warp SQL sends 10.5 GB on the wire where Quack sends 8.5 GB.
+  were no faster than 8. Chargewire sends 10.5 GB on the wire where Quack sends 8.5 GB.
 - **The split-results default pays off on any link.** LAN SF1 fetch 0.90 s -> 0.17 s, SF10
   8.76 s -> 1.38 s, WAN SF1 14.0 s -> 2.30 s, with no option set. Small results are
   unchanged: the server keeps a result of fewer than two batches in one stream.
@@ -778,7 +778,7 @@ with one self-signed P-256 certificate, `threads=32`, `memory_limit=40GB`, the d
 ### Where Hardcharger still loses
 
 - **LAN SF10 ingest, to Quack by 5-12%** (3.00 s against 2.87 s ordered, 2.67 s
-  unordered): both are bound by DuckDB's insert on the server; Warp SQL's wire format is
+  unordered): both are bound by DuckDB's insert on the server; Chargewire's wire format is
   23% larger for lineitem.
 - **WAN SF1 ingest, to Quack by 20-35%** with 8 parts (2.91 s against 2.15 s); 16 parts
   come closer (2.57 s). Quack's client had 49 connections open after an SF1 load (95-128
@@ -802,8 +802,8 @@ or Spot requests left.
 The goal of this round was to beat Quack on every shape. Changes since the section above
 (each commit message has its own measurements):
 
-1. **`lz4_frame` Arrow buffer compression** beside `zstd` (Warp SQL spec §8.2, capability
-   `ipc_compression_lz4_frame`). `Warp-IPC-Compression` is now a list in the client's order
+1. **`lz4_frame` Arrow buffer compression** beside `zstd` (Chargewire spec §8.2, capability
+   `ipc_compression_lz4_frame`). `Chargewire-IPC-Compression` is now a list in the client's order
    of preference; each partition's request carries its own. The Go/Python driver's new
    default, `ipc_compression=auto`, picks `lz4_frame` when the discovery request's round
    trip is under 10 ms and `zstd` otherwise; JDBC got the same rule (default `auto` too),
@@ -823,7 +823,7 @@ The goal of this round was to beat Quack on every shape. Changes since the secti
 5. **Uploads in 16,384-row slices,** in about one part per two slices, up to 16 parts on a
    near link and 32 on a far one (`ingest.parts=auto`).
 6. **TCP_NODELAY on the server's connections.** Found while checking the run below: every
-   small response waited for the client's delayed ACK, so `GET /warp`, a status poll or
+   small response waited for the client's delayed ACK, so `GET /chargewire`, a status poll or
    `SELECT 1` took ~42 ms on Linux (curl from the LAN client: connect 0.14 ms, TLS 2.1 ms,
    first byte 42.4 ms; 2.5 ms after the fix). That also made the drivers' `auto` take the
    LAN for a far link and choose `zstd`.
@@ -838,13 +838,13 @@ Python 3.12.3, pyarrow 26.0.0, adbc-driver-manager 1.12.0. iperf3 server to clie
 1 stream 9.53 Gbit/s, 8 streams 76.3, 16 and 32 streams 99.8; WAN 1 stream 0.51 Gbit/s,
 8 streams 4.06, 16 streams 8.15, 32 streams 14.9.
 
-- **Hardcharger**: built on the server VM from perf/throughput-2 at `53ac8463` (warp-sql
+- **Hardcharger**: built on the server VM from perf/throughput-2 at `53ac8463` (chargewire
   `58082fa`) with `bench/remote/build-from-source.sh`, the same commit CI built and tested.
   A first pass with the CI artifact of `5b7b4520`, before the TCP_NODELAY fix, is kept in the
   raw results (label `final`): there the drivers' `auto` chose `zstd` on the LAN (SF10
-  fetch 1.268 s, SF1 ingest 0.763 s). Client: `adbc-driver-warpsql` from warp-sql-adbc
+  fetch 1.268 s, SF1 ingest 0.763 s). Client: `adbc-driver-chargewire` from chargewire-adbc
   `da6b4a6`, built on each client VM. Rows marked "driver defaults" set no compression,
-  partition or part option at all: what an application gets. "Warp SQL" rows are one
+  partition or part option at all: what an application gets. "Chargewire" rows are one
   stream, uncompressed, for reference.
 - **GizmoSQL** 1.42.0 (still the latest release) and **Quack** (DuckDB `2.0.0.dev2610161340`,
   the commit Hardcharger builds against) exactly as before.
@@ -877,7 +877,7 @@ VMs: 8 partitions and 8 upload parts; narrow from the feature/throughput section
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Quack (attach) | 0.164 | 0.156 | 0.169 | 36.5 | 6,386 | 743 | 10.0 | 4.0 |
 | GizmoSQL 1.42.0 (Flight SQL) | 1.484 | 1.481 | 1.544 | 4.0 | 699 | 1,049 | 1.3 | 1.3 |
-| Hardcharger (Warp SQL, driver defaults) | 0.126 | 0.123 | 0.151 | 47.5 | 8,207 | 594 | 6.4 | 12.7 |
+| Hardcharger (Chargewire, driver defaults) | 0.126 | 0.123 | 0.151 | 47.5 | 8,207 | 594 | 6.4 | 12.7 |
 
 #### LAN fetch sf10 (59,986,052 rows)
 
@@ -885,8 +885,8 @@ VMs: 8 partitions and 8 upload parts; narrow from the feature/throughput section
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Quack (attach) | 0.815 | 0.789 | 0.852 | 73.6 | 12,862 | 7,428 | 17.3 | 11.3 |
 | GizmoSQL 1.42.0 (Flight SQL) | 16.105 | 16.078 | 16.145 | 3.7 | 644 | 10,495 | 1.2 | 1.3 |
-| Hardcharger (Warp SQL, driver defaults) | 0.843 | 0.828 | 0.852 | 71.2 | 12,296 | 5,935 | 8.0 | 22.1 |
-| Hardcharger (Warp SQL) | 8.759 | 8.752 | 8.780 | 6.8 | 1,183 | 10,449 | 0.5 | 2.1 |
+| Hardcharger (Chargewire, driver defaults) | 0.843 | 0.828 | 0.852 | 71.2 | 12,296 | 5,935 | 8.0 | 22.1 |
+| Hardcharger (Chargewire) | 8.759 | 8.752 | 8.780 | 6.8 | 1,183 | 10,449 | 0.5 | 2.1 |
 
 #### LAN fetch narrow (100,000,000 rows)
 
@@ -894,7 +894,7 @@ VMs: 8 partitions and 8 upload parts; narrow from the feature/throughput section
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Quack (attach) | 0.390 | 0.387 | 0.398 | 256.1 | 10,373 | 4,039 | 14.4 | 11.9 |
 | GizmoSQL 1.42.0 (Flight SQL) | 5.333 | 5.317 | 5.442 | 18.7 | 750 | 4,055 | 1.7 | 1.3 |
-| Hardcharger (Warp SQL, driver defaults) | 0.453 | 0.432 | 0.477 | 221.0 | 8,839 | 2,827 | 6.1 | 16.7 |
+| Hardcharger (Chargewire, driver defaults) | 0.453 | 0.432 | 0.477 | 221.0 | 8,839 | 2,827 | 6.1 | 16.7 |
 
 #### LAN ingest sf1 (6,001,215 rows)
 
@@ -903,7 +903,7 @@ VMs: 8 partitions and 8 upload parts; narrow from the feature/throughput section
 | Quack (attach, insertion order kept) | 1.016 | 0.938 | 1.062 | 5.9 | 1,021 | 859 | 1.5 | 7.9 |
 | Quack (attach, unordered) | 0.600 | 0.500 | 0.742 | 10.0 | 1,729 | 854 | 3.0 | 11.9 |
 | GizmoSQL 1.42.0 (Flight SQL) | 1.607 | 1.600 | 1.614 | 3.7 | 645 | 1,047 | 0.3 | 4.8 |
-| Hardcharger (Warp SQL, driver defaults) | 0.538 | 0.322 | 0.555 | 11.2 | 1,928 | 407 | 3.6 | 14.4 |
+| Hardcharger (Chargewire, driver defaults) | 0.538 | 0.322 | 0.555 | 11.2 | 1,928 | 407 | 3.6 | 14.4 |
 
 #### LAN ingest sf10 (59,986,052 rows)
 
@@ -912,15 +912,15 @@ VMs: 8 partitions and 8 upload parts; narrow from the feature/throughput section
 | Quack (attach, insertion order kept) | 2.920 | 2.736 | 3.151 | 20.5 | 3,550 | 8,560 | 4.9 | 24.4 |
 | Quack (attach, unordered) | 2.667 | 2.643 | 2.731 | 22.5 | 3,886 | 8,558 | 6.7 | 27.9 |
 | GizmoSQL 1.42.0 (Flight SQL) | 9.416 | 9.399 | 9.509 | 6.4 | 1,101 | 10,466 | 0.6 | 7.8 |
-| Hardcharger (Warp SQL, driver defaults) | 2.835 | 2.805 | 2.993 | 21.2 | 3,656 | 4,116 | 6.5 | 26.2 |
-| Hardcharger (Warp SQL) | 9.992 | 9.809 | 10.061 | 6.0 | 1,037 | 10,481 | 0.7 | 8.9 |
+| Hardcharger (Chargewire, driver defaults) | 2.835 | 2.805 | 2.993 | 21.2 | 3,656 | 4,116 | 6.5 | 26.2 |
+| Hardcharger (Chargewire) | 9.992 | 9.809 | 10.061 | 6.0 | 1,037 | 10,481 | 0.7 | 8.9 |
 
 #### WAN fetch sf1 (6,001,215 rows)
 
 | System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Hardcharger (Warp SQL, driver defaults) | 0.383 | 0.365 | 0.401 | 15.7 | 2,705 | 256 | 4.2 | 7.6 |
-| Hardcharger (Warp SQL) | 14.674 | 13.911 | 15.313 | 0.4 | 71 | 1,078 | 0.0 | 0.2 |
+| Hardcharger (Chargewire, driver defaults) | 0.383 | 0.365 | 0.401 | 15.7 | 2,705 | 256 | 4.2 | 7.6 |
+| Hardcharger (Chargewire) | 14.674 | 13.911 | 15.313 | 0.4 | 71 | 1,078 | 0.0 | 0.2 |
 | Quack (attach) | 1.508 | 1.375 | 1.601 | 4.0 | 696 | 766 | 1.1 | 0.7 |
 | GizmoSQL 1.42.0 (Flight SQL) | 12.972 | 12.340 | 13.631 | 0.5 | 80 | 1,081 | 0.2 | 0.2 |
 
@@ -928,7 +928,7 @@ VMs: 8 partitions and 8 upload parts; narrow from the feature/throughput section
 
 | System | Median s | p10 s | p90 s | Mrows/s | MB/s (Arrow) | Wire MB | Client cores | Server cores |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Hardcharger (Warp SQL, driver defaults) | 1.107 | 1.012 | 1.143 | 5.4 | 937 | 293 | 6.2 | 7.0 |
+| Hardcharger (Chargewire, driver defaults) | 1.107 | 1.012 | 1.143 | 5.4 | 937 | 293 | 6.2 | 7.0 |
 | Quack (attach, insertion order kept) | 2.684 | 2.639 | 2.790 | 2.2 | 386 | 891 | 0.6 | 2.8 |
 | Quack (attach, unordered) | 1.801 | 1.727 | 1.917 | 3.3 | 576 | 889 | 0.9 | 4.1 |
 | GizmoSQL 1.42.0 (Flight SQL) | 13.802 | 13.765 | 13.829 | 0.4 | 75 | 1,087 | 0.1 | 0.6 |
@@ -940,7 +940,7 @@ VMs: 8 partitions and 8 upload parts; narrow from the feature/throughput section
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Quack (attach) | 0.962 | 0.906 | 0.997 | 62.4 | 10,904 | 7,417 | 15.8 | 7.4 |
 | GizmoSQL 1.42.0 (Flight SQL) | 13.216 | 13.156 | 13.510 | 4.5 | 784 | 10,477 | 1.2 | 1.2 |
-| Hardcharger (Warp SQL, driver defaults) | 0.746 | 0.726 | 0.747 | 80.4 | 13,892 | 5,922 | 6.0 | 18.2 |
+| Hardcharger (Chargewire, driver defaults) | 0.746 | 0.726 | 0.747 | 80.4 | 13,892 | 5,922 | 6.0 | 18.2 |
 
 #### LAN ingest sf10 (59,986,052 rows)
 
@@ -948,7 +948,7 @@ VMs: 8 partitions and 8 upload parts; narrow from the feature/throughput section
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Quack (attach, unordered) | 2.596 | 2.554 | 2.633 | 23.1 | 3,992 | 8,547 | 3.8 | 27.0 |
 | GizmoSQL 1.42.0 (Flight SQL) | 9.460 | 9.446 | 9.478 | 6.3 | 1,096 | 10,451 | 0.3 | 7.4 |
-| Hardcharger (Warp SQL, driver defaults) | 2.621 | 2.595 | 2.636 | 22.9 | 3,955 | 4,107 | 6.6 | 27.1 |
+| Hardcharger (Chargewire, driver defaults) | 2.621 | 2.595 | 2.636 | 22.9 | 3,955 | 4,107 | 6.6 | 27.1 |
 
 ### Reading the numbers
 
@@ -965,7 +965,7 @@ VMs: 8 partitions and 8 upload parts; narrow from the feature/throughput section
   0.348 s and 0.894 s; at 55%, 0.413 s and 0.834 s. No threshold wins both: narrow's
   integer columns lose 50% under LZ4 at about 1 GB/s, like lineitem's keys and free text,
   which cost the CPU more than their bytes cost the network at SF10.
-- **Most of the server's time on SF10 is DuckDB making Arrow.** With `WARPSQL_STREAM_STATS=1`
+- **Most of the server's time on SF10 is DuckDB making Arrow.** With `CHARGEWIRE_STREAM_STATS=1`
   the engine thread spent 0.57-0.64 s of a 0.77-0.83 s statement waiting for DuckDB's next
   batch, while the server averaged ~22 of 32 cores. DuckDB alone (Python, same commit, same
   file) produces the same result in 0.335 s on an idle machine; in Hardcharger it shares the

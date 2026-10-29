@@ -29,7 +29,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
   const capabilities = server.capabilities ?? [];
   const rows: [string, ReactNode][] = [
     ["Server", `${server.server?.name ?? ""} ${server.server?.version ?? ""}`.trim()],
-    ["Protocol", `Warp SQL ${server.protocol_versions.join(", ")}`],
+    ["Protocol", `Chargewire ${server.protocol_versions.join(", ")}`],
     [
       "Capabilities",
       capabilities.length ? (

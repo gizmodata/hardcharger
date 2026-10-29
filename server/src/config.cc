@@ -14,7 +14,7 @@
 #include <stdexcept>
 
 #include "authz/authz.hpp"
-#include "warpsql/server.hpp"
+#include "chargewire/server.hpp"
 
 namespace hardcharger {
 
@@ -212,7 +212,7 @@ const std::vector<Option>& Options() {
        TEXT(token_auto_provision_issuer)},
       // Browser sign-in
       {"oauth_client_id", Kind::kString,
-       "OAuth client id; set, browser sign-in is offered (Warp SQL oauth_browser)",
+       "OAuth client id; set, browser sign-in is offered (Chargewire oauth_browser)",
        TEXT(oauth_client_id)},
       {"oauth_client_secret", Kind::kString, "OAuth client secret (prefer the environment variable)",
        TEXT(oauth_client_secret)},
@@ -222,7 +222,7 @@ const std::vector<Option>& Options() {
        "the server's public URL, for the redirect URI (default http(s)://localhost:<port>)",
        TEXT(oauth_base_url)},
       {"oauth_redirect_uri", Kind::kString,
-       "redirect URI registered with the provider (default <base url>/warp/v1/auth/oauth/callback)",
+       "redirect URI registered with the provider (default <base url>/chargewire/v1/auth/oauth/callback)",
        TEXT(oauth_redirect_uri)},
       {"oauth_instance_id", Kind::kString,
        "prefix of the OAuth state, for a shared callback proxy", TEXT(oauth_instance_id)},
@@ -539,7 +539,7 @@ void Validate(Loaded& loaded) {
   if (c.oauth_max_flows < 1) throw std::invalid_argument("oauth_max_flows must be positive");
   for (const auto& proxy : c.trusted_proxies) {
     try {
-      warpsql::ParseIpNetwork(proxy);
+      chargewire::ParseIpNetwork(proxy);
     } catch (const std::invalid_argument& e) {
       throw std::invalid_argument(std::string("trusted_proxies: ") + e.what());
     }

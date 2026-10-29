@@ -3,18 +3,18 @@
 
 #include "client_config.hpp"
 #include "command_processor.hpp"
-#include "warp_connection.hpp"
+#include "chargewire_connection.hpp"
 #include "sql_processor.hpp"
 
 namespace hardcharger::client {
 
-int RunShellLoop(WarpConnection& conn, CommandProcessor& cmd_proc,
+int RunShellLoop(ChargewireConnection& conn, CommandProcessor& cmd_proc,
                  SqlProcessor& sql_proc, ClientConfig& config);
 
-int RunNonInteractive(WarpConnection& conn, CommandProcessor& cmd_proc,
+int RunNonInteractive(ChargewireConnection& conn, CommandProcessor& cmd_proc,
                       SqlProcessor& sql_proc, ClientConfig& config);
 
 // Sets config.main_prompt to the session's current catalog and schema (dynamic_prompt).
-void RefreshDynamicPrompt(WarpConnection& conn, ClientConfig& config);
+void RefreshDynamicPrompt(ChargewireConnection& conn, ClientConfig& config);
 
 }  // namespace hardcharger::client

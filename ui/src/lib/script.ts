@@ -3,7 +3,7 @@
 // holds every result in memory, so a script keeps at most `maxResultSets` result sets and
 // `maxResultBytes` of Arrow data in all; the rest still run, and are listed without rows.
 
-import { ErrorCode, WarpSqlError } from "@gizmodata/warp-sql";
+import { ErrorCode, ChargewireError } from "@gizmodata/chargewire";
 import { type RecordBatch, type Schema, Table } from "apache-arrow";
 
 export const maxResultSets = 50;
@@ -135,7 +135,7 @@ export async function runScript(options: {
       }
     } catch (err) {
       run.status =
-        signal.aborted || (WarpSqlError.is(err) && err.code === ErrorCode.statementCancelled) ? "cancelled" : "error";
+        signal.aborted || (ChargewireError.is(err) && err.code === ErrorCode.statementCancelled) ? "cancelled" : "error";
       run.error = err;
       stoppedAt = i;
     }

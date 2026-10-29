@@ -4,14 +4,14 @@
 // process's signals, and with HARDCHARGER_EMBEDDED into the hardcharger_embedded library
 // (main renamed hardcharger_server_main), where they report to the app and take its stop
 // requests instead of signals: an app can't have SIGINT/SIGTERM delivered to one thread
-// (warpsql::StopSignals::Wake() sends SIGTERM to the process, which would end the app).
+// (chargewire::StopSignals::Wake() sends SIGTERM to the process, which would end the app).
 #pragma once
 
 #include <cstdint>
 #include <string_view>
 
 #ifndef HARDCHARGER_EMBEDDED
-#include "warpsql/stop_signals.hpp"
+#include "chargewire/stop_signals.hpp"
 #endif
 
 namespace hardcharger::embedding {
@@ -39,7 +39,7 @@ using Stop = StopRequests;
 
 inline void Ready(uint16_t) {}
 inline void Failed(std::string_view) {}
-using Stop = warpsql::StopSignals;
+using Stop = chargewire::StopSignals;
 
 #endif
 

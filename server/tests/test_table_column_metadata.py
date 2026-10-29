@@ -1,10 +1,10 @@
 """Port of GizmoSQL 1.x tests/integration/test_table_column_metadata.cpp (3 cases).
 
-Table schemas from GET .../metadata/tables?include_schema=true (Warp SQL §10) carry what
+Table schemas from GET .../metadata/tables?include_schema=true (Chargewire §10) carry what
 Flight SQL drivers read: PRIMARY KEY and NOT NULL columns are not nullable,
 ARROW:FLIGHT:SQL:REMARKS holds a column comment, ARROW:FLIGHT:SQL:IS_AUTO_INCREMENT is
 1 for a sequence default, ARROW:FLIGHT:SQL:TYPE_NAME is the base type, and
-WARP:SQL:COLUMN_DEFAULT holds a default (Warp SQL's key; 1.x's GIZMOSQL:COLUMN_DEFAULT is
+CHARGEWIRE:SQL:COLUMN_DEFAULT holds a default (Chargewire's key; 1.x's GIZMOSQL:COLUMN_DEFAULT is
 not reported: Hardcharger takes only its own names). View
 columns are all nullable, and metadata comes from the requested catalog when two have a
 table of the same name. All 3 apply.
@@ -47,9 +47,9 @@ def test_table_columns_carry_constraints_comments_and_defaults(session):
     assert meta(schema, "note", "ARROW:FLIGHT:SQL:REMARKS") == ABSENT
     assert meta(schema, "id", "ARROW:FLIGHT:SQL:IS_AUTO_INCREMENT") == "1"
     assert meta(schema, "name", "ARROW:FLIGHT:SQL:IS_AUTO_INCREMENT") == "0"
-    assert "nextval" in meta(schema, "id", "WARP:SQL:COLUMN_DEFAULT")
-    assert "50000" in meta(schema, "salary", "WARP:SQL:COLUMN_DEFAULT")
-    assert meta(schema, "note", "WARP:SQL:COLUMN_DEFAULT") == ABSENT
+    assert "nextval" in meta(schema, "id", "CHARGEWIRE:SQL:COLUMN_DEFAULT")
+    assert "50000" in meta(schema, "salary", "CHARGEWIRE:SQL:COLUMN_DEFAULT")
+    assert meta(schema, "note", "CHARGEWIRE:SQL:COLUMN_DEFAULT") == ABSENT
     assert meta(schema, "id", "GIZMOSQL:COLUMN_DEFAULT") == ABSENT
     assert meta(schema, "salary", "ARROW:FLIGHT:SQL:TYPE_NAME") == "DECIMAL"
     assert meta(schema, "id", "ARROW:FLIGHT:SQL:TYPE_NAME") == "INTEGER"

@@ -124,7 +124,7 @@ def test_transaction_states_follow_the_session(server, session):
     assert session.scalar(sql="SELECT 42") == 42
     assert metric(watcher, "hardcharger_sessions", state="idle_in_transaction") == 1
     # DuckDB keeps a transaction usable after a syntax error: still open, not aborted, and
-    # the session document says the same (Warp SQL §5.2).
+    # the session document says the same (Chargewire §5.2).
     session.error(sql="SELEC 1")
     assert metric(watcher, "hardcharger_sessions", state="idle_in_transaction") == 1
     assert metric(watcher, "hardcharger_sessions", state="idle_in_transaction_aborted") == 0
@@ -359,7 +359,7 @@ def test_tls_certificate_expiry_follows_the_serving_certificate(launcher, tmp_pa
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         with server.http(identity=ops) as http:
-            http.get(url="/warp")
+            http.get(url="/chargewire")
         if scrape(port=port)["hardcharger_tls_certificate_expiry_seconds"] == renewed.not_valid_after_utc.timestamp():
             break
         time.sleep(0.5)

@@ -14,19 +14,19 @@
 namespace {
 
 struct Db {
-  warpduckdb::Environment environment;
-  warpduckdb::Instance instance;
-  warpduckdb::Connection connection;
+  chargewire_duckdb::Environment environment;
+  chargewire_duckdb::Instance instance;
+  chargewire_duckdb::Connection connection;
   Db() {
-    warpduckdb::Call([&](auto* e) { return duckdb_v2_environment_create(environment.out(), e); });
-    warpduckdb::Call([&](auto* e) {
+    chargewire_duckdb::Call([&](auto* e) { return duckdb_v2_environment_create(environment.out(), e); });
+    chargewire_duckdb::Call([&](auto* e) {
       return duckdb_v2_instance_create_with_options(environment.get(), nullptr, nullptr, 0, instance.out(), e);
     });
-    warpduckdb::Call([&](auto* e) { return duckdb_v2_connection_create(instance.get(), connection.out(), e); });
+    chargewire_duckdb::Call([&](auto* e) { return duckdb_v2_connection_create(instance.get(), connection.out(), e); });
   }
 };
 
-std::string Query(Db& db, const std::string& sql) { return warpduckdb::QueryText(db.connection.get(), sql); }
+std::string Query(Db& db, const std::string& sql) { return chargewire_duckdb::QueryText(db.connection.get(), sql); }
 
 }  // namespace
 
@@ -46,7 +46,7 @@ TEST(CatalogLogTest, LinesLandInTheirColumns) {
     log.Attach();
     log.Start();
     hardcharger::Log(hardcharger::LogLevel::kWarning, "it's a probe",
-                     {{"session_id", "s_abcdefghijklmnopqrstuvwxyz234567"},  // a Warp SQL session id
+                     {{"session_id", "s_abcdefghijklmnopqrstuvwxyz234567"},  // a Chargewire session id
                       {"user", "alice"},
                       {"role", "admin"},
                       {"kind", "sql"}});
@@ -69,6 +69,6 @@ TEST(CatalogLogTest, LinesLandInTheirColumns) {
   // Nothing logged after Stop reaches the table.
   hardcharger::Log(hardcharger::LogLevel::kInfo, "after stop");
   EXPECT_EQ(Query(db, "SELECT count(*) FROM _hardcharger_logs.main.logs WHERE message = 'after stop'"), "0");
-  warpduckdb::RunSql(db.connection.get(), "DETACH _hardcharger_logs");
+  chargewire_duckdb::RunSql(db.connection.get(), "DETACH _hardcharger_logs");
   std::filesystem::remove(file);
 }

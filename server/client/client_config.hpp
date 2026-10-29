@@ -33,7 +33,7 @@ struct ClientConfig {
   // Connection
   std::string host = "localhost";
   int port = 31337;
-  std::string base_path = "/warp";  // where the server mounts Warp SQL (a URI's path)
+  std::string base_path = "/chargewire";  // where the server mounts Chargewire (a URI's path)
   bool uri_given = false;           // host, port, TLS and base path came from a URI
   std::string username;
   std::string password;
@@ -47,7 +47,7 @@ struct ClientConfig {
   std::string mtls_cert;
   std::string mtls_key;
 
-  // Browser sign-in through the server's identity provider (Warp SQL oauth_browser).
+  // Browser sign-in through the server's identity provider (Chargewire oauth_browser).
   bool auth_type_external = false;
   // Sign in with the mTLS client certificate (the client_certificate grant), no password.
   bool auth_type_mtls = false;
@@ -85,7 +85,7 @@ struct ClientConfig {
   std::string query_tag;
 
   // Large results read in up to this many partitions at once, one connection each
-  // (Warp SQL §6.10); 0: not set (HARDCHARGER_RESULT_PARTITIONS, else 8). 1: one stream.
+  // (Chargewire §6.10); 0: not set (HARDCHARGER_RESULT_PARTITIONS, else 8). 1: one stream.
   int result_partitions = 0;
 
   // Dynamic prompt (show catalog.schema)
@@ -112,7 +112,7 @@ void ResolveEnvironmentVariables(ClientConfig& config);
 
 /// Parse a connection URI into host, port, TLS and base path, with the Hardcharger ADBC
 /// driver's rules: hardcharger://HOST[:PORT][/PREFIX][?tls=false] (HTTPS unless ?tls=false,
-/// port 31337), warp:// (the same, port 443), https:// and http://. Only `tls` is a
+/// port 31337), chargewire:// (the same, port 443), https:// and http://. Only `tls` is a
 /// parameter; credentials, other parameters and hardcharger+http:// are refused.
 /// Returns true on success, false on a refused URI (the reason goes to stderr).
 bool ParseConnectionURI(const std::string& uri, ClientConfig& config);

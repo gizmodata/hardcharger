@@ -1,4 +1,4 @@
-// One editor tab's Warp SQL session. It opens on the tab's first run, with the tab's catalog
+// One editor tab's Chargewire session. It opens on the tab's first run, with the tab's catalog
 // and schema, and lasts across runs (temporary tables, USE and SET carry over), until the tab
 // closes, the user asks for a new one, or the server ends it.
 //
@@ -8,13 +8,13 @@
 // gone, and running the rest on a new session would commit half a transaction. Without one,
 // a new session takes over and the run goes on, with a note that temporary state is gone.
 
-import { type Connection, ErrorCode, type TransactionState, WarpSqlError } from "@gizmodata/warp-sql";
+import { type Connection, ErrorCode, type TransactionState, ChargewireError } from "@gizmodata/chargewire";
 
 import { setRoleSql } from "./roles";
 import type { StatementStream } from "./script";
 
 export interface SessionInfo {
-  /** The Warp SQL session id. */
+  /** The Chargewire session id. */
   id: string;
   /** The server's own id for the session (its logs, audit records and KILL SESSION use it). */
   serverId: string | undefined;
@@ -50,7 +50,7 @@ export class TransactionLostError extends Error {
 }
 
 export function isSessionGone(err: unknown): boolean {
-  return WarpSqlError.is(err) && err.code === ErrorCode.sessionNotFound;
+  return ChargewireError.is(err) && err.code === ErrorCode.sessionNotFound;
 }
 
 const goneReason = "it was idle too long, or the server restarted";

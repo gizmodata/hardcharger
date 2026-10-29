@@ -1,13 +1,13 @@
 // Port of GizmoSQL 1.x tests/integration/test_interactive_client.cpp (115 cases), run by
 // server/tests/test_interactive_client.py against a real hardcharger-server. The client
-// classes keep their 1.x names and calls; FlightConnection is WarpConnection. Cases that
+// classes keep their 1.x names and calls; FlightConnection is ChargewireConnection. Cases that
 // differ from 1.x say how, at the case:
 //   - TlsSkipVerifyWithMtlsCertIsRejected: re-expressed. 1.x refused --tls-skip-verify with
 //     --mtls-cert because Arrow Flight dropped the client certificate when verification was
-//     off; over Warp SQL the certificate is sent either way, so the combination is allowed
+//     off; over Chargewire the certificate is sent either way, so the combination is allowed
 //     (test_client_cli.py proves it end to end against an mTLS server).
 //   - DotShow: no "edition:" line (Hardcharger has no editions); engine and arrow come
-//     from Warp SQL's server-info document.
+//     from Chargewire's server-info document.
 //   - Every connection to the test server sets use_tls = false: TLS is the client's default
 //     (1.x's was plaintext); the server under test is plain HTTP.
 //   - URI cases (ParseConnectionURI*, BuildConnectionURI*): re-expressed. The scheme is
@@ -33,7 +33,7 @@
 #include "signal_watcher.hpp"
 #include "sql_processor.hpp"
 #include "sql_quoting.hpp"
-#include "warp_connection.hpp"
+#include "chargewire_connection.hpp"
 
 using namespace hardcharger::client;
 
@@ -173,8 +173,8 @@ class InteractiveClientFixture : public ::testing::Test {
     return config;
   }
 
-  WarpConnection ConnectClient() {
-    WarpConnection conn;
+  ChargewireConnection ConnectClient() {
+    ChargewireConnection conn;
     auto status = conn.Connect(MakeConfig());
     EXPECT_TRUE(status.ok()) << "Connect failed: " << status.ToString();
     return conn;
@@ -182,7 +182,7 @@ class InteractiveClientFixture : public ::testing::Test {
 };
 
 // ============================================================================
-// WarpConnection Tests (1.x: WarpConnection)
+// ChargewireConnection Tests (1.x: ChargewireConnection)
 // ============================================================================
 
 TEST_F(InteractiveClientFixture, ConnectWithValidCredentials) {
@@ -260,11 +260,11 @@ TEST_F(InteractiveClientFixture, CancellationCanRaceWithDisconnectAndReconnect) 
 
 // 1.x: --tls-skip-verify with --mtls-cert was refused, because Arrow Flight's gRPC
 // transport silently dropped the client certificate when server verification was off.
-// Warp SQL's client presents the certificate either way, so the combination is allowed:
+// Chargewire's client presents the certificate either way, so the combination is allowed:
 // Connect gets past the configuration check and fails only on the files themselves
 // (which don't exist here), naming the certificate. test_client_cli.py connects with both
 // to a real mTLS server.
-TEST(WarpConnectionConfig, TlsSkipVerifyWithMtlsCertIsRejected) {
+TEST(ChargewireConnectionConfig, TlsSkipVerifyWithMtlsCertIsRejected) {
   ClientConfig config;
   config.host = "localhost";
   config.port = 31337;
@@ -273,18 +273,18 @@ TEST(WarpConnectionConfig, TlsSkipVerifyWithMtlsCertIsRejected) {
   config.mtls_cert = "/tmp/does-not-need-to-exist.crt";
   config.mtls_key = "/tmp/does-not-need-to-exist.key";
 
-  WarpConnection conn;
+  ChargewireConnection conn;
   auto status = conn.Connect(config);
   ASSERT_FALSE(status.ok()) << "The certificate files don't exist";
   EXPECT_EQ(status.message().find("cannot be combined"), std::string::npos)
-      << "The combination is allowed over Warp SQL: " << status.message();
+      << "The combination is allowed over Chargewire: " << status.message();
   EXPECT_NE(status.message().find("/tmp/does-not-need-to-exist.crt"), std::string::npos)
       << "The error names the missing certificate: " << status.message();
 }
 
 // Sanity check: --tls-skip-verify alone (no mTLS) must still be permitted —
 // the validation should only fire when both are present.
-TEST(WarpConnectionConfig, TlsSkipVerifyAloneIsPermittedAtConfigCheck) {
+TEST(ChargewireConnectionConfig, TlsSkipVerifyAloneIsPermittedAtConfigCheck) {
   ClientConfig config;
   config.host = "127.0.0.1";
   config.port = 1;  // unreachable port — Connect will fail at network step
@@ -292,7 +292,7 @@ TEST(WarpConnectionConfig, TlsSkipVerifyAloneIsPermittedAtConfigCheck) {
   config.tls_skip_verify = true;
   // No mtls_cert / mtls_key set.
 
-  WarpConnection conn;
+  ChargewireConnection conn;
   auto status = conn.Connect(config);
   // We expect it to fail (network), but NOT with the validation error.
   EXPECT_EQ(status.message().find("--tls-skip-verify cannot be combined"),
@@ -310,7 +310,7 @@ TEST_F(InteractiveClientFixture, ConnectWithInvalidCredentials) {
   config.password = "wrongpass";
   config.password_provided = true;
 
-  WarpConnection conn;
+  ChargewireConnection conn;
   auto status = conn.Connect(config);
   ASSERT_FALSE(status.ok()) << "Should fail with invalid credentials";
 }
@@ -1180,7 +1180,7 @@ TEST_F(InteractiveClientFixture, QuoteRendererOutput) {
 // ============================================================================
 
 TEST_F(InteractiveClientFixture, IsNotConnectedBeforeConnect) {
-  WarpConnection conn;
+  ChargewireConnection conn;
   ASSERT_FALSE(conn.IsConnected());
 }
 
@@ -1212,7 +1212,7 @@ TEST_F(InteractiveClientFixture, ReconnectAfterDisconnect) {
 }
 
 TEST_F(InteractiveClientFixture, DotCommandsRequireConnectionTables) {
-  WarpConnection conn;
+  ChargewireConnection conn;
   auto config = MakeConfig();
 
   std::ostringstream out;
@@ -1223,7 +1223,7 @@ TEST_F(InteractiveClientFixture, DotCommandsRequireConnectionTables) {
 }
 
 TEST_F(InteractiveClientFixture, DotCommandsRequireConnectionSchema) {
-  WarpConnection conn;
+  ChargewireConnection conn;
   auto config = MakeConfig();
 
   std::ostringstream out;
@@ -1234,7 +1234,7 @@ TEST_F(InteractiveClientFixture, DotCommandsRequireConnectionSchema) {
 }
 
 TEST_F(InteractiveClientFixture, DotCommandsRequireConnectionCatalogs) {
-  WarpConnection conn;
+  ChargewireConnection conn;
   auto config = MakeConfig();
 
   std::ostringstream out;
@@ -1246,7 +1246,7 @@ TEST_F(InteractiveClientFixture, DotCommandsRequireConnectionCatalogs) {
 
 TEST_F(InteractiveClientFixture, DotConnectEstablishesConnection) {
   ASSERT_TRUE(IsServerReady()) << "Server not ready";
-  WarpConnection conn;
+  ChargewireConnection conn;
   ASSERT_FALSE(conn.IsConnected());
 
   auto config = MakeConfig();
@@ -1269,7 +1269,7 @@ TEST_F(InteractiveClientFixture, DotConnectEstablishesConnection) {
 
 TEST_F(InteractiveClientFixture, DotConnectShowsConnected) {
   ASSERT_TRUE(IsServerReady()) << "Server not ready";
-  WarpConnection conn;
+  ChargewireConnection conn;
   auto config = MakeConfig();
   std::ostringstream out;
   config.output_stream = &out;
@@ -1295,7 +1295,7 @@ TEST_F(InteractiveClientFixture, DotConnectShowsConnected) {
 }
 
 TEST_F(InteractiveClientFixture, DotConnectInvalidArgs) {
-  WarpConnection conn;
+  ChargewireConnection conn;
   auto config = MakeConfig();
   CommandProcessor proc(conn, config);
 
@@ -1310,7 +1310,7 @@ TEST_F(InteractiveClientFixture, DotConnectInvalidArgs) {
 
 TEST_F(InteractiveClientFixture, DotConnectViaURI) {
   ASSERT_TRUE(IsServerReady()) << "Server not ready";
-  WarpConnection conn;
+  ChargewireConnection conn;
   ASSERT_FALSE(conn.IsConnected());
 
   auto config = MakeConfig();
@@ -1376,7 +1376,7 @@ TEST_F(InteractiveClientFixture, NonInteractiveReturnsZeroOnValidSQL) {
 }
 
 TEST_F(InteractiveClientFixture, NonInteractiveReturnsNonZeroWhenDisconnected) {
-  WarpConnection conn;
+  ChargewireConnection conn;
   ASSERT_FALSE(conn.IsConnected());
 
   auto config = MakeConfig();
@@ -2066,7 +2066,7 @@ TEST_F(InteractiveClientFixture, CompleterCacheInvalidation) {
 }
 
 TEST_F(InteractiveClientFixture, CompleterDisconnectedGraceful) {
-  WarpConnection conn;
+  ChargewireConnection conn;
   ASSERT_FALSE(conn.IsConnected());
 
   ShellCompleter completer(conn);

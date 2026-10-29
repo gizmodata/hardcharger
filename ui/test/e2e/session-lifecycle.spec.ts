@@ -1,11 +1,11 @@
-import { connect } from "@gizmodata/warp-sql";
+import { connect } from "@gizmodata/chargewire";
 
 import { activeTab, expect, runDone, signIn, test } from "./fixtures.ts";
 import { startOwnServer } from "./harness.ts";
 
 test("administrator navigation and closed query inspectors return to the baseline session count", async ({ page }) => {
   const server = await startOwnServer(["--enable-instrumentation"]);
-  const admin = await connect({ url: `${server.url}/warp`, ...server.admin });
+  const admin = await connect({ url: `${server.url}/chargewire`, ...server.admin });
   const ids = async () =>
     [...(await admin.query("SELECT session_id FROM hardcharger_sessions()"))]
       .map((row) => String(row.toJSON().session_id))
@@ -45,7 +45,7 @@ test("administrator navigation and closed query inspectors return to the baselin
         release = resolve;
       });
       let deletes = 0;
-      await details.route(/\/warp\/v1\/sessions\/[^/?]+$/, async (route) => {
+      await details.route(/\/chargewire\/v1\/sessions\/[^/?]+$/, async (route) => {
         if (route.request().method() === "DELETE") {
           deletes++;
           await gate;
@@ -74,7 +74,7 @@ test("administrator navigation and closed query inspectors return to the baselin
 
 test("native workspace close ends all tab sessions before destroying the view, across reopens", async ({ context }) => {
   const server = await startOwnServer([]);
-  const admin = await connect({ url: `${server.url}/warp`, ...server.admin });
+  const admin = await connect({ url: `${server.url}/chargewire`, ...server.admin });
   const ids = async () =>
     [...(await admin.query("SELECT session_id FROM hardcharger_sessions()"))]
       .map((row) => String(row.toJSON().session_id))
@@ -100,7 +100,7 @@ test("native workspace close ends all tab sessions before destroying the view, a
           release = resolve;
         });
         let deletes = 0;
-        await workspace.route(/\/warp\/v1\/sessions\/[^/?]+$/, async (route) => {
+        await workspace.route(/\/chargewire\/v1\/sessions\/[^/?]+$/, async (route) => {
           if (route.request().method() === "DELETE") {
             deletes++;
             await gate;
@@ -131,7 +131,7 @@ test("native workspace close asks before rolling back a transaction and cancella
   page,
 }) => {
   const server = await startOwnServer([]);
-  const admin = await connect({ url: `${server.url}/warp`, ...server.admin });
+  const admin = await connect({ url: `${server.url}/chargewire`, ...server.admin });
   const ids = async () =>
     [...(await admin.query("SELECT session_id FROM hardcharger_sessions()"))]
       .map((row) => String(row.toJSON().session_id))

@@ -2,7 +2,7 @@
 
 1.x capped gRPC metadata (--max-metadata-size). Hardcharger caps request header blocks
 (--max-header-bytes, HARDCHARGER_MAX_HEADER_BYTES, default 16 KiB; 1.x's names are not
-accepted); an oversized block gets 431 headers_too_large (Warp SQL §2.5).
+accepted); an oversized block gets 431 headers_too_large (Chargewire §2.5).
 Because the default is 16 KiB rather than gRPC's 8 KiB, the "raised" cases send 40 KiB.
 All 4 apply.
 """
@@ -14,7 +14,7 @@ from conftest import problem
 
 def probe(server, header_bytes: int) -> httpx.Response:
     token = server.token()
-    return httpx.post(url=f"{server.base_url}/warp/v1/sessions",
+    return httpx.post(url=f"{server.base_url}/chargewire/v1/sessions",
                       headers={"Authorization": f"Bearer {token}", "X-Custom-Header": "x" * header_bytes}, json={})
 
 

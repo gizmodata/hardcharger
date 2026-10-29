@@ -16,7 +16,7 @@
   <a href="https://hub.docker.com/r/gizmodata/hardcharger"><img src="https://img.shields.io/badge/dockerhub-image-green.svg?logo=Docker" alt="Docker Hub image"></a>
   <a href="https://github.com/gizmodata/hardcharger/pkgs/container/hardcharger"><img src="https://img.shields.io/badge/github--package-container--image-green.svg?logo=Docker" alt="GitHub container image"></a>
   <a href="https://github.com/gizmodata/hardcharger/releases/latest"><img src="https://img.shields.io/badge/release-binaries-orange.svg?logo=GitHub" alt="Release binaries"></a>
-  <a href="https://github.com/gizmodata/warp-sql"><img src="https://img.shields.io/badge/protocol-Warp%20SQL-31a8db.svg" alt="Warp SQL protocol"></a>
+  <a href="https://github.com/gizmodata/chargewire"><img src="https://img.shields.io/badge/protocol-Chargewire-31a8db.svg" alt="Chargewire protocol"></a>
   <a href="https://duckdb.org"><img src="https://img.shields.io/badge/engine-DuckDB%202.0-fff000.svg?logo=duckdb&logoColor=black" alt="DuckDB 2.0"></a>
   <a href="https://arrow.apache.org"><img src="https://img.shields.io/badge/wire%20format-Apache%20Arrow-f15a24.svg" alt="Apache Arrow"></a>
   <br>
@@ -35,7 +35,7 @@
 ## 🏎️ What is Hardcharger?
 
 **Hardcharger™** puts [DuckDB 2.0](https://duckdb.org) on the network. Clients connect over
-[**Warp SQL**](https://github.com/gizmodata/warp-sql), an open HTTP protocol that moves
+[**Chargewire**](https://github.com/gizmodata/chargewire), an open HTTP protocol that moves
 [Apache Arrow](https://arrow.apache.org) record batches straight from DuckDB to your
 application: no gRPC, no Flight, no sidecars.
 
@@ -44,7 +44,7 @@ scratch for DuckDB 2.0, and it is free: no editions, no license keys. Everything
 Enterprise in GizmoSQL is in every Hardcharger build.
 
 - 🦆 **DuckDB 2.0 inside.** A standalone server on DuckDB's v2 C API, not an extension.
-- ⚡ **Warp SQL on the wire.** A query and its first rows come back in one HTTP round trip.
+- ⚡ **Chargewire on the wire.** A query and its first rows come back in one HTTP round trip.
   Large results stream as Arrow IPC, compressed with LZ4 or zstd when asked, and can be resumed. Bulk ingest
   streams Arrow straight into a table.
 - 🔐 **Security in the core, not bolted on.** Token sign-in, TLS and mTLS, and role-based
@@ -127,7 +127,7 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   toolbar, the schema browser, or a file dropped on the page. The browser reads the file (an
   Excel workbook's sheets, dates in its own date system, numbers, text and blank cells; a CSV's
   delimiter, quotes and header row), shows the first rows with each column's type to change,
-  rename or skip, and sends it over Warp SQL's bulk ingest in pieces of a few megabytes, in
+  rename or skip, and sends it over Chargewire's bulk ingest in pieces of a few megabytes, in
   one transaction: a progress bar, Cancel, and a failed upload leaves the table unchanged.
   Large CSV, JSON-lines, Parquet and Arrow files upload at any size.
 - 💾 **Downloads** of the rows as shown (CSV, TSV, JSON, Excel) or the whole typed result
@@ -137,8 +137,8 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
 - 📐 A resizable editor and side panel (drag, keyboard, double-click to reset; kept in the
   browser), a short **How the editor works** help with the server's session idle timeout, and
   a layout for phone-sized screens.
-- 🧭 **API page**: the server's own Warp SQL API, from its OpenAPI description
-  (`/warp/v1/openapi.json`), in Swagger UI. **Try it out** sends requests to this server only,
+- 🧭 **API page**: the server's own Chargewire API, from its OpenAPI description
+  (`/chargewire/v1/openapi.json`), in Swagger UI. **Try it out** sends requests to this server only,
   signed in as you: the page adds your sign-in to each request as it leaves, so there is no
   token to paste, and it never goes to another origin or into storage. Arrow results come back
   as a file to download.
@@ -156,7 +156,7 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
 </p>
 
 <p align="center">
-  <img src="docs/assets/web-ui-api-light.png" alt="The web UI's API page, light theme: the server's Warp SQL operations in Swagger UI" width="49%">
+  <img src="docs/assets/web-ui-api-light.png" alt="The web UI's API page, light theme: the server's Chargewire operations in Swagger UI" width="49%">
   <img src="docs/assets/web-ui-api-dark.png" alt="The API page, dark theme: Try it out on Read a session, with the server's 200 answer" width="49%">
 </p>
 
@@ -261,7 +261,7 @@ flowchart LR
   threads, in one transaction: a failed load leaves nothing behind.
 - 📤 **Partitioned uploads.** The Go/Python driver sends a load in 16,384-row slices as up to
   16 parts over separate connections at once (32 on a high-latency link; fewer for a small
-  load; `adbc.warp.ingest.parts`), inserted from all of them in parallel and committed as
+  load; `adbc.chargewire.ingest.parts`), inserted from all of them in parallel and committed as
   one: all or nothing.
 
 Correctness is never traded for speed: a result is complete only when every partition has
@@ -280,7 +280,7 @@ docker run --rm -p 31337:31337 -p 31338:31338 \
 
 Images are multi-architecture (`linux/amd64`, `linux/arm64`) and published to both
 `ghcr.io/gizmodata/hardcharger` and `docker.io/gizmodata/hardcharger`. Port 31337 speaks
-Warp SQL; 31338 answers `/health`.
+Chargewire; 31338 answers `/health`.
 
 The `:2.0.0-adbc` and `:latest-adbc` variants on both registries include the same
 server and CLI plus 15 native ADBC drivers: BigQuery, Databricks, Exasol, Flight SQL,
@@ -385,7 +385,7 @@ with hardcharger.connect(uri="hardcharger://localhost?tls=false", username="hard
 
 `hardcharger://host` is HTTPS on port 31337; `?tls=false` is plain HTTP for local
 development. [hardcharger-adbc](https://github.com/gizmodata/hardcharger-adbc) is a native
-Go driver, on the [Warp SQL ADBC driver](https://github.com/gizmodata/warp-sql-adbc), with
+Go driver, on the [Chargewire ADBC driver](https://github.com/gizmodata/chargewire-adbc), with
 query and session tags, `hardcharger.*` settings and browser sign-in. Its library loads into
 any ADBC driver manager (C/C++, R, Rust, ...) as `driver = "hardcharger"`, with the same
 `hardcharger://` URIs, and Go programs import it directly.
@@ -406,7 +406,7 @@ try (Connection connection = DriverManager.getConnection("jdbc:hardcharger://loc
 
 [hardcharger-jdbc](https://github.com/gizmodata/hardcharger-jdbc) is a single jar for Java 17+,
 with no gRPC, Netty or protobuf: `jdbc:hardcharger://host[:port]` (port 31337 by default) on
-the [Warp SQL JDBC driver](https://github.com/gizmodata/warp-sql-jdbc). Its README shows how
+the [Chargewire JDBC driver](https://github.com/gizmodata/chargewire-jdbc). Its README shows how
 to add it to DBeaver and other BI tools.
 
 ### JavaScript
@@ -424,20 +424,20 @@ await conn.close();
 JavaScript client, takes the same `hardcharger://` URLs (port 31337 by default) and returns Arrow JS Tables or streams of record
 batches, in Node, browsers (allow the page's origin with `--cors-origins`), Deno, Bun and
 Cloudflare Workers. No native code, no gRPC. It is a thin layer on
-[`@gizmodata/warp-sql`](https://github.com/gizmodata/warp-sql-js), the generic JavaScript client
-for any Warp SQL server, which it re-exports.
+[`@gizmodata/chargewire`](https://github.com/gizmodata/chargewire-js), the generic JavaScript client
+for any Chargewire server, which it re-exports.
 
 ### Plain HTTP
 
-Warp SQL is plain HTTP, so `curl` works. Rows come back as an Arrow IPC stream (here read
+Chargewire is plain HTTP, so `curl` works. Rows come back as an Arrow IPC stream (here read
 with [`pyarrow`](https://pypi.org/project/pyarrow/), `pip install pyarrow`):
 
 ```bash
-TOKEN=$(curl -s localhost:31337/warp/v1/auth/token -H 'Content-Type: application/json' \
+TOKEN=$(curl -s localhost:31337/chargewire/v1/auth/token -H 'Content-Type: application/json' \
   -d '{"grant_type": "password", "username": "hardcharger", "password": "change-me"}' | jq -r .access_token)
-SESSION=$(curl -s localhost:31337/warp/v1/sessions -H "Authorization: Bearer $TOKEN" \
+SESSION=$(curl -s localhost:31337/chargewire/v1/sessions -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{}' | jq -r .session_id)
-curl -s localhost:31337/warp/v1/sessions/$SESSION/statements -H "Authorization: Bearer $TOKEN" \
+curl -s localhost:31337/chargewire/v1/sessions/$SESSION/statements -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -H 'Accept: application/vnd.apache.arrow.stream' \
   -d '{"sql": "SELECT 42 AS answer"}' |
   python3 -c 'import sys, pyarrow as pa; print(pa.ipc.open_stream(source=sys.stdin.buffer).read_all().to_pylist())'
@@ -449,7 +449,7 @@ curl -s localhost:31337/warp/v1/sessions/$SESSION/statements -H "Authorization: 
 
 Without that `Accept` header the answer is the statement's JSON document: its `state`, and
 in `result` its Arrow schema and partitions, whose rows `GET …/statements/{id}/result`
-returns (Warp SQL §6.3, §6.4).
+returns (Chargewire §6.3, §6.4).
 
 A session (and its statements, results, prepared statements and ingests) belongs to the token
 that opened it: its user and that token's authority, meaning its role, scoped token,
@@ -459,12 +459,12 @@ client that attaches to a session by its id runs with that session's own rights 
 all. A new token with the same authority, such as signing in again with the same password,
 reaches the session.
 
-The server describes its API in OpenAPI 3.1 at `GET /warp/v1/openapi.json` (no sign-in
-needed; discovery, `GET /warp`, lists it as capability `openapi`), for API tools and client
+The server describes its API in OpenAPI 3.1 at `GET /chargewire/v1/openapi.json` (no sign-in
+needed; discovery, `GET /chargewire`, lists it as capability `openapi`), for API tools and client
 generators; the web UI's API page shows it:
 
 ```bash
-curl -s localhost:31337/warp/v1/openapi.json | jq '{openapi, title: .info.title, paths: (.paths | length)}'
+curl -s localhost:31337/chargewire/v1/openapi.json | jq '{openapi, title: .info.title, paths: (.paths | length)}'
 ```
 
 ## 💻 Command-line client
@@ -545,7 +545,7 @@ certificate, and `--auth-type external` signs in through the server's browser si
 takes the place of `--host`, `--port` and `--tls`, with the Python driver's rules:
 `hardcharger://db.example.com` is HTTPS to port 31337, and
 `hardcharger 'hardcharger://localhost?tls=false' --username hardcharger` is plain HTTP. It is GizmoSQL's
-`gizmosql_client`, on Warp SQL:
+`gizmosql_client`, on Chargewire:
 [docs/migrating-from-gizmosql.md](docs/migrating-from-gizmosql.md#the-command-line-client)
 maps its options and lists what changed.
 
@@ -556,7 +556,7 @@ maps its options and lists what changed.
 | 🦆 DuckDB 2.0, DuckLake and DuckDB's extensions | ✅ |
 | 🖥️ Built-in web UI: SQL editor, results grid, schema browser, exports (`--web-ui`) | ✅ |
 | 📱 iPhone and iPad app: the server on the device, its web UI and a SQL console | ✅ |
-| ⚡ Warp SQL: streamed and resumable results, bind parameters, prepared statements, bulk ingest, lz4_frame and zstd | ✅ |
+| ⚡ Chargewire: streamed and resumable results, bind parameters, prepared statements, bulk ingest, lz4_frame and zstd | ✅ |
 | 🔐 TLS and mTLS, password and token sign-in, SSO via OIDC/JWKS, browser sign-in, authorized e-mail filters | ✅ |
 | 👥 Role-based access control: users, roles, grants, ownership, system privileges | ✅ |
 | 🛡️ Row policies, column masking, tenants, per-catalog access rules, Open Policy Agent | ✅ |
@@ -642,7 +642,7 @@ shows how.
 
 Measured on 2026-10-19 on AWS c8gn.8xlarge machines: server and client in one placement group
 (LAN), or the client in another region, about 46 ms away (WAN). TLS on every server unless the
-row says plaintext; median of five runs. Hardcharger at `2718a17e` with the Warp SQL ADBC
+row says plaintext; median of five runs. Hardcharger at `2718a17e` with the Chargewire ADBC
 driver's default settings, Quack `e7a9be3f8c` attached from DuckDB 2.0, GizmoSQL 1.42 for
 reference. The data is TPC-H-derived, as under [Performance](#-performance). These are the
 shapes where Hardcharger came out ahead;
@@ -680,8 +680,8 @@ init_sql_commands_file: /etc/hardcharger/init.sql
 ### Startup banner and logging
 
 Started with a text log (the default), the server opens it with a banner: the wordmark,
-its version, the Warp SQL and DuckDB versions, and where to go (the web UI's address when
-`--web-ui` is on, else the Warp SQL endpoint), then the documentation's:
+its version, the Chargewire and DuckDB versions, and where to go (the web UI's address when
+`--web-ui` is on, else the Chargewire endpoint), then the documentation's:
 
 ```text
     __  __               __     __
@@ -690,7 +690,7 @@ its version, the Warp SQL and DuckDB versions, and where to go (the web UI's add
  / __  / /_/ / /  / /_/ / /__/ / / / /_/ / /  / /_/ /  __/ /
 /_/ /_/\__,_/_/   \__,_/\___/_/ /_/\__,_/_/   \__, /\___/_/
                                              /____/
-  Hardcharger 2.0.0 | Warp SQL 1.0.0 | DuckDB v2.0.0 | by GizmoData
+  Hardcharger 2.0.0 | Chargewire 1.0.0 | DuckDB v2.0.0 | by GizmoData
   UI   http://localhost:31337/ui/      Docs  docs.hardcharger.gizmodata.com
        http://build-box:31337/ui/
 ```
@@ -728,7 +728,7 @@ default_catalog: lake     # flag: --default-catalog lake
 default_schema: sales     # flag: --default-schema sales
 ```
 
-- A client's own `catalog` / `schema` session options (Warp SQL `POST /warp/v1/sessions`) still
+- A client's own `catalog` / `schema` session options (Chargewire `POST /chargewire/v1/sessions`) still
   win, and `USE` still moves a session anywhere. A `schema` option alone is that schema in the
   default catalog. `default_schema` alone is that schema in the database's catalog;
   `default_catalog` alone starts in that catalog's default schema (`main`).
@@ -822,8 +822,8 @@ wait in the statement queue included):
 {"time":"2026-10-20T14:31:39.702Z","level":"info","message":"statement cancelled","session_id":"s_…","statement_id":"q_…","user":"joe","reason":"timeout","duration":"1.003"}
 ```
 
-`reason` is Warp SQL's `cancel_reason`: `client` (the client's cancel, or it closed the
-connection of a streamed result), `timeout` (`Warp-Statement-Timeout` or
+`reason` is Chargewire's `cancel_reason`: `client` (the client's cancel, or it closed the
+connection of a streamed result), `timeout` (`Chargewire-Statement-Timeout` or
 `query_timeout_seconds`), `killed` (`KILL SESSION`), `cancelled` (`hardcharger_cancel()`),
 `session_closed` (the session was deleted) or `server_shutdown`. A statement that
 ends on its own, or fails, gets none.
@@ -911,8 +911,8 @@ $ hardcharger --command "SELECT hardcharger_cancel(session_id) AS cancelled FROM
 └───────────┘
 ```
 
-A statement's `statement_id` is its Warp SQL id (`q_...`), the one its client got in
-`Warp-Statement-Id` and error responses. With instrumentation on (`--enable-instrumentation`),
+A statement's `statement_id` is its Chargewire id (`q_...`), the one its client got in
+`Chargewire-Statement-Id` and error responses. With instrumentation on (`--enable-instrumentation`),
 the same id finds it in the history once it is over: `sql_executions.execution_id`, and
 `sql_statements.statement_id` for a submitted statement (a prepared statement's row is its
 `p_...`, with an execution per request under each request's `q_...`; the statements of a
@@ -977,7 +977,7 @@ A session is evicted within 5 s (the server's sweep interval) after `session_idl
 seconds (default 900; 0 never evicts) without a request on it, unless one of its statements
 is still running, one of its ingests is in progress, one of its results is being read (a
 slow download keeps it to the end of the stream), or it holds a retained result that hasn't
-expired. That last one follows Warp SQL §5.7, so that a result kept for re-reading stays
+expired. That last one follows Chargewire §5.7, so that a result kept for re-reading stays
 readable until its `expires_at`: a session whose statement ran in JSON mode (a retained
 result) lives up to `result_retention_seconds` after the statement ended, then goes at the
 next sweep. To bound a session's life by the idle timeout alone, set
@@ -1169,7 +1169,7 @@ readonly token adds this to the user's grants: it never widens them.
 
 ## 🌐 Browser sign-in (SSO)
 
-People can sign in with your OpenID Connect identity provider in a browser: Warp SQL's
+People can sign in with your OpenID Connect identity provider in a browser: Chargewire's
 `oauth_browser` flow, on the server's own port and TLS. The `hardcharger` client
 (`--auth-type external`), the drivers and the web UI all use it. Hardcharger is the
 provider's confidential client: the client id and secret stay on the server, and clients get
@@ -1186,8 +1186,8 @@ oauth_base_url: https://db.example.com                           # this server's
 oauth_provider_name: Okta                                         # "Sign in with Okta"
 ```
 
-Register **`<oauth_base_url>/warp/v1/auth/oauth/callback`** with the identity provider as the
-client's redirect URI (here `https://db.example.com/warp/v1/auth/oauth/callback`; the server logs
+Register **`<oauth_base_url>/chargewire/v1/auth/oauth/callback`** with the identity provider as the
+client's redirect URI (here `https://db.example.com/chargewire/v1/auth/oauth/callback`; the server logs
 the one it uses at startup). `oauth_redirect_uri` overrides it. Earlier builds had a separate
 sign-in port (31339, `/oauth/callback`): that port and its options are gone, so a redirect URI
 registered for it must be replaced.
@@ -1198,7 +1198,7 @@ registered for it must be replaced.
 | `oauth_client_secret` | none | The client secret (prefer `HARDCHARGER_OAUTH_CLIENT_SECRET`) |
 | `oauth_scopes` | `openid profile email` | |
 | `oauth_base_url` | `http(s)://localhost:PORT` | The server's public URL, for the redirect URI; set, the web UI's return after sign-in is an absolute URL on it |
-| `oauth_redirect_uri` | `<oauth_base_url>/warp/v1/auth/oauth/callback` | The redirect URI, given whole |
+| `oauth_redirect_uri` | `<oauth_base_url>/chargewire/v1/auth/oauth/callback` | The redirect URI, given whole |
 | `oauth_provider_name` | none | The provider's name for people; without it the UI says "single sign-on" |
 | `oauth_instance_id` | none | Starts every `state` with `<id>.`, for a proxy on another origin that receives the provider's redirects for several servers and forwards each to its server's callback (set `oauth_redirect_uri` to the proxy and `oauth_base_url` to the server) |
 | `oauth_max_flows` | `10000` | Sign-ins in progress at once (also at most 100 per client address); beyond, `429` |
@@ -1285,7 +1285,7 @@ analyst | published    | daily      | SELECT
 ## 🔏 Client certificates as identity
 
 With mutual TLS (`mtls_ca_cert`), a client can sign in with its certificate and no
-password: Warp SQL's `client_certificate` grant, `--auth-type mtls` in the `hardcharger`
+password: Chargewire's `client_certificate` grant, `--auth-type mtls` in the `hardcharger`
 client. The certificate proves who the user is; grants decide what they may do.
 
 ```yaml
@@ -1310,7 +1310,7 @@ mtls_crl_file: /etc/hardcharger/client-ca.crl     # revocation, reloaded when it
 
 A browser page on another origin (one of `cors_origins`) can sign in with the user's
 certificate too: allowed origins get `Access-Control-Allow-Credentials: true`, and the page
-calls with `credentials: "include"` (`@gizmodata/warp-sql` does with `authType:
+calls with `credentials: "include"` (`@gizmodata/chargewire` does with `authType:
 "client_certificate"`). The browser's CORS preflight carries no credentials and may come
 without a certificate, so for such pages set `mtls_require_client_cert: false`: the
 handshake then admits the preflight, and the sign-in still needs the certificate. Pages on
@@ -1345,11 +1345,11 @@ flowchart LR
     H[Any HTTP client]
   end
   subgraph Hardcharger
-    W[Warp SQL SDK<br/>HTTP/1.1 + TLS, sessions,<br/>Arrow IPC streaming]
+    W[Chargewire SDK<br/>HTTP/1.1 + TLS, sessions,<br/>Arrow IPC streaming]
     S[Security<br/>sign-in, RBAC, audit]
     D[(DuckDB 2.0)]
   end
-  A & J & H -- "Warp SQL: HTTP + Arrow IPC" --> W
+  A & J & H -- "Chargewire: HTTP + Arrow IPC" --> W
   W --> S --> D
   S -. users, roles, grants .-> P[(PostgreSQL)]
   D -. instrumentation, logs .-> L[(DuckDB / PostgreSQL)]
@@ -1391,21 +1391,21 @@ uv venv .venv && uv pip install --python .venv/bin/python -r pyproject.toml
                                                                  # -m "not web_ui" on a build without the UI
 ```
 
-The Warp SQL conformance suite runs against the same build:
+The Chargewire conformance suite runs against the same build:
 
 ```bash
-cd third_party/warp-sql/conformance
+cd third_party/chargewire/conformance
 uv venv .venv && uv pip install --python .venv/bin/python -e .
-WARP_SQL_TEST_SERVER_BINARY=../../../server/build/hardcharger-server \
-WARP_SQL_TEST_SERVER_PASSWORD_ENV=HARDCHARGER_ADMIN_PASSWORD \
-WARP_SQL_TEST_SERVER_USERNAME=warp HARDCHARGER_ADMIN_USERNAME=warp \
-WARP_SQL_TEST_SERVER_MTLS_FLAG=--mtls-ca-cert WARP_SQL_TEST_SERVER_CORS_FLAG=--cors-origins \
-WARP_SQL_TEST_SERVER_IDLE_FLAG=--session-idle-timeout \
-WARP_SQL_TEST_SERVER_DRAIN_FLAG=--shutdown-grace-period-seconds \
+CHARGEWIRE_TEST_SERVER_BINARY=../../../server/build/hardcharger-server \
+CHARGEWIRE_TEST_SERVER_PASSWORD_ENV=HARDCHARGER_ADMIN_PASSWORD \
+CHARGEWIRE_TEST_SERVER_USERNAME=chargewire HARDCHARGER_ADMIN_USERNAME=chargewire \
+CHARGEWIRE_TEST_SERVER_MTLS_FLAG=--mtls-ca-cert CHARGEWIRE_TEST_SERVER_CORS_FLAG=--cors-origins \
+CHARGEWIRE_TEST_SERVER_IDLE_FLAG=--session-idle-timeout \
+CHARGEWIRE_TEST_SERVER_DRAIN_FLAG=--shutdown-grace-period-seconds \
   .venv/bin/python -m pytest -q
 ```
 
-Its access-control tests (`test_authorization.py`) need the `WARP_SQL_TEST_AUTHZ_*` variables
+Its access-control tests (`test_authorization.py`) need the `CHARGEWIRE_TEST_AUTHZ_*` variables
 that `.github/workflows/server.yml` sets (a DuckDB access-control store, privileges granted to a
 role); without them they skip, saying so.
 

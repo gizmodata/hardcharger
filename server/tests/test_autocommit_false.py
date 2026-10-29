@@ -1,6 +1,6 @@
 """Port of GizmoSQL 1.x tests/test_autocommit_false.py (3 cases; issue #155).
 
-DDL and DML with autocommit off (Warp SQL §5.5: the session option autocommit false),
+DDL and DML with autocommit off (Chargewire §5.5: the session option autocommit false),
 committed through the API (1.x: conn.commit(), here POST .../commit) or with SQL COMMIT,
 and discarded through the API's rollback, after which the table does not exist. 1.x ran
 these against a server on port 31337 through ADBC; here against a server the test starts.

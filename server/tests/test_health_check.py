@@ -2,11 +2,11 @@
 
 The health check runs health_check_query (HARDCHARGER_HEALTH_CHECK_QUERY, default SELECT 1)
 every health_check_interval_seconds on a background thread; a probe (GET
-/warp/v1/health, and /health on the plaintext health_port that GizmoData Cloud's kubelet
+/chargewire/v1/health, and /health on the plaintext health_port that GizmoData Cloud's kubelet
 probes) answers from the last outcome, so it never waits on the database. An outcome
 older than health_check_staleness_seconds counts as failed, so a hung query turns the
 check red. 1.x's three unit cases (stale, recover, shutdown with a hung check) run here
-against the server. 1.x's gRPC health service is HTTP here (Warp SQL §3.2: 200 serving,
+against the server. 1.x's gRPC health service is HTTP here (Chargewire §3.2: 200 serving,
 503 not_serving).
 """
 
@@ -20,7 +20,7 @@ from conftest import STOP_SIGNAL, free_port
 def health(server, health_port: int | None = None) -> httpx.Response:
     if health_port is not None:
         return httpx.get(url=f"http://127.0.0.1:{health_port}/health", timeout=5)
-    return httpx.get(url=f"{server.base_url}/warp/v1/health", timeout=5)
+    return httpx.get(url=f"{server.base_url}/chargewire/v1/health", timeout=5)
 
 
 def eventually(server, status: int, timeout: float = 15, health_port: int | None = None) -> float:
@@ -57,7 +57,7 @@ def test_serving_with_custom_query(launcher):
 def test_hung_query_reports_not_serving(launcher):
     port = free_port()
     server = start(launcher=launcher, query="SELECT sleep_ms(10000)", env={"HARDCHARGER_HEALTH_PORT": str(port)},
-                   wait_for="/warp")
+                   wait_for="/chargewire")
     assert eventually(server=server, status=503, health_port=port) < 15
     body = health(server=server).json()
     assert body["status"] == "not_serving", body

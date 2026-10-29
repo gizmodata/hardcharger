@@ -1,4 +1,4 @@
-// Editor tabs: each its own Warp SQL session; new, close, rename, reorder, the cap of 20,
+// Editor tabs: each its own Chargewire session; new, close, rename, reorder, the cap of 20,
 // shortcuts that act on the focused tab, and what survives a reload.
 import {
   activeTab,

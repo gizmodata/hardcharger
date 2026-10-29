@@ -61,7 +61,7 @@ test("an error shows the server's message", async ({ page }) => {
 });
 
 test("Cancel stops a running query on the server", async ({ page }) => {
-  // The server ends the cancelled statement's result stream without its last chunk (Warp SQL
+  // The server ends the cancelled statement's result stream without its last chunk (Chargewire
   // §6.6), and browsers log that cut as a failed load (Chromium: ERR_INCOMPLETE_CHUNKED_ENCODING;
   // WebKit on macOS: "The network connection was lost", on Linux: "Connection terminated
   // unexpectedly"). The UI handles it; the test checks how.

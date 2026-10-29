@@ -113,13 +113,13 @@ enum DataImport {
     static func run(_ source: URL, server: ServerController) async throws -> Result {
         guard let format = format(of: source) else { throw Unsupported(name: source.lastPathComponent) }
         guard let endpoint = server.localEndpoint else {
-            throw WarpError(status: 0, code: "client_not_running", detail: String(localized: "Start the server first."))
+            throw ChargewireError(status: 0, code: "client_not_running", detail: String(localized: "Start the server first."))
         }
         let paths = server.paths
         let file = try await Task.detached { try copyIntoImports(source, paths: paths) }.value
         let table = tableName(for: source)
         let token = try await server.accessToken()
-        let rows = try await WarpClient(endpoint: endpoint, timeout: 330)
+        let rows = try await ChargewireClient(endpoint: endpoint, timeout: 330)
             .execute(statement(table: table, file: file, format: format), token: token)
         return Result(file: source.lastPathComponent, table: table, rows: rows)
     }

@@ -21,13 +21,13 @@
 #include "settings.hpp"
 #include "sql_functions.hpp"
 #include "version.hpp"
-#include "warpsql/server.hpp"
+#include "chargewire/server.hpp"
 
 namespace hardcharger {
 
 namespace json = boost::json;
-using warpsql::Error;
-using warpsql::ErrorCode;
+using chargewire::Error;
+using chargewire::ErrorCode;
 
 namespace {
 
@@ -80,8 +80,8 @@ std::vector<std::pair<std::string, std::string>> DuckDBDirectories(const Config&
   return {{"extension_directory", extensions}, {"secret_directory", secrets}};
 }
 
-warpduckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
-  warpduckdb::DuckDBBackend::Options options;
+chargewire_duckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
+  chargewire_duckdb::DuckDBBackend::Options options;
   options.database = config.database.empty() ? ":memory:" : config.database;
   options.read_only = config.read_only;
   if (!config.memory_limit.empty()) {
@@ -163,7 +163,7 @@ int64_t NowMicros() {
 }
 
 Error KilledError() {
-  return Error::SessionEnded(warpsql::reason::kKilled,
+  return Error::SessionEnded(chargewire::reason::kKilled,
                              "This session has been killed by an administrator (reason: killed). Sign in again "
                              "and open a new session to re-authenticate.");
 }
@@ -301,7 +301,7 @@ void RefuseAccessControlStatement(std::string_view sql) {
 // A readonly session changes nothing, the access-control store included: of the
 // access-control statements it runs only SHOW ... and SET ROLE. (CREATE SCOPED TOKEN would
 // hand it a token that signs in as a user, outside readonly.)
-void RefuseStoreChangeWhenReadonly(const warpsql::Principal& principal, std::string_view sql) {
+void RefuseStoreChangeWhenReadonly(const chargewire::Principal& principal, std::string_view sql) {
   if (principal.role != "readonly") return;
   const auto kind = authz::AccessControlStatementKind(sql);
   if (!kind || kind->starts_with("SHOW") || *kind == "SET ROLE") return;
@@ -313,7 +313,7 @@ void RefuseStoreChangeWhenReadonly(const warpsql::Principal& principal, std::str
 
 // One info line for each statement a cancel stopped, whatever the statement log level (as
 // GizmoSQL 1.x's "SQL Statement was successfully canceled"): its ids, its user, why it was
-// stopped (Warp SQL's cancel_reason: client, timeout, killed, cancelled, session_closed,
+// stopped (Chargewire's cancel_reason: client, timeout, killed, cancelled, session_closed,
 // server_shutdown) and how long it had run, queue wait included, in seconds.
 static void LogCancelled(const Session& session, const LogFields& ids, std::string_view reason,
                   std::chrono::steady_clock::time_point started) {
@@ -435,7 +435,7 @@ namespace {
 // Rows of one tracked statement, driving its Execution.
 //
 // A read that fails because the session was killed (or the statement cancelled) throws
-// the Warp SQL error that says so: the SDK's reading loop reports a warpsql::Error as it
+// the Chargewire error that says so: the SDK's reading loop reports a chargewire::Error as it
 // is, where a plain Arrow failure would become an execution_error.
 class TrackedReader : public arrow::RecordBatchReader {
  public:
@@ -510,14 +510,14 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
   // startup is over (below), a sensitive path.
   if (access_) private_files_->Add(access_->store_file(), "the access-control store", /*attached=*/false);
   authz::InstallFileGuard(instance(), private_files_, sensitive_paths_);
-  warpduckdb::Connection connection;
-  warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), connection.out(), err); });
+  chargewire_duckdb::Connection connection;
+  chargewire_duckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), connection.out(), err); });
   // An attached file is registered under the path DuckDB recorded for it, which its
   // storage opens it (and its WAL) by: DuckDB makes a relative one absolute.
   const auto add_attached = [&](const std::string& catalog_sql, const std::string& given, const char* category) {
     std::string path;
     try {
-      path = warpduckdb::QueryText(connection.get(),
+      path = chargewire_duckdb::QueryText(connection.get(),
                                    "SELECT path FROM duckdb_databases() WHERE database_name = " + catalog_sql);
     } catch (const std::exception&) {
     }
@@ -568,7 +568,7 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
   }
   // Init SQL may move DuckDB's secret directory; wherever it ends up is protected.
   sensitive_paths_->AddSecretDirectory(
-      warpduckdb::QueryText(connection.get(), "SELECT current_setting('secret_directory')"));
+      chargewire_duckdb::QueryText(connection.get(), "SELECT current_setting('secret_directory')"));
   // From here on the file system refuses the sensitive paths to every statement. The
   // startup above (the server's own attaches and the operator's init SQL) is the
   // operator's configuration, as it always was: an init SQL may read a mounted secret.
@@ -601,14 +601,14 @@ void Backend::AttachSystemCatalog() {
   system_catalog_dir_ = base;
   runtime_.scratch_dir = base;
   const std::string file = system_catalog_dir_ + "/system.duckdb";
-  warpduckdb::Connection connection;
-  warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), connection.out(), err); });
+  chargewire_duckdb::Connection connection;
+  chargewire_duckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), connection.out(), err); });
   const std::string quoted = "'" + Replace(file, "'", "''") + "'";
-  warpduckdb::RunSql(connection.get(), "ATTACH " + quoted + " AS _hardcharger_system_build (READ_WRITE)");
-  warpduckdb::RunSql(connection.get(), Replace(Replace(kSystemViews, "{table_privileges}", kTablePrivileges), "{catalog}",
+  chargewire_duckdb::RunSql(connection.get(), "ATTACH " + quoted + " AS _hardcharger_system_build (READ_WRITE)");
+  chargewire_duckdb::RunSql(connection.get(), Replace(Replace(kSystemViews, "{table_privileges}", kTablePrivileges), "{catalog}",
                                                "_hardcharger_system_build"));
-  warpduckdb::RunSql(connection.get(), "DETACH _hardcharger_system_build");
-  warpduckdb::RunSql(connection.get(), "ATTACH " + quoted + " AS " + kSystemCatalog + " (READ_ONLY)");
+  chargewire_duckdb::RunSql(connection.get(), "DETACH _hardcharger_system_build");
+  chargewire_duckdb::RunSql(connection.get(), "ATTACH " + quoted + " AS " + kSystemCatalog + " (READ_ONLY)");
 }
 
 void Backend::RunInitSql() {
@@ -626,12 +626,12 @@ void Backend::RunInitSql() {
   if (sql.find_first_not_of(" \t\r\n;") == std::string::npos) {
     return;
   }
-  warpduckdb::Connection connection;
-  warpduckdb::Call([&](auto* err) {
+  chargewire_duckdb::Connection connection;
+  chargewire_duckdb::Call([&](auto* err) {
     return duckdb_v2_connection_create(instance(), connection.out(), err);
   });
   try {
-    warpduckdb::RunSql(connection.get(), sql);
+    chargewire_duckdb::RunSql(connection.get(), sql);
   } catch (const Error& error) {
     // DuckDB quotes an ATTACH's connection string, password included, in its errors.
     const auto hint = ExtensionDependencyHint(error.what());
@@ -643,8 +643,8 @@ void Backend::RunInitSql() {
   // a USE in any form (USE x, USE x.y, SET schema, a file that ends in one) counts, and
   // a USE that a later one undid doesn't.
   try {
-    init_sql_location_.emplace(warpduckdb::QueryText(connection.get(), "SELECT current_database()"),
-                               warpduckdb::QueryText(connection.get(), "SELECT current_schema()"));
+    init_sql_location_.emplace(chargewire_duckdb::QueryText(connection.get(), "SELECT current_database()"),
+                               chargewire_duckdb::QueryText(connection.get(), "SELECT current_schema()"));
   } catch (const std::exception&) {
     // A connection that can't say (an init SQL that left a failed transaction): nothing to adopt.
   }
@@ -653,11 +653,11 @@ void Backend::RunInitSql() {
 
 void Backend::ResolveDefaultLocation() {
   const Config& config = runtime_.config;
-  warpduckdb::Connection probe;
-  warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), probe.out(), err); });
+  chargewire_duckdb::Connection probe;
+  chargewire_duckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), probe.out(), err); });
   // Where a session starts without any of this: the database's catalog and schema.
-  const std::string base_catalog = warpduckdb::QueryText(probe.get(), "SELECT current_database()");
-  const std::string base_schema = warpduckdb::QueryText(probe.get(), "SELECT current_schema()");
+  const std::string base_catalog = chargewire_duckdb::QueryText(probe.get(), "SELECT current_database()");
+  const std::string base_schema = chargewire_duckdb::QueryText(probe.get(), "SELECT current_schema()");
   runtime_.default_catalog = base_catalog;
   runtime_.default_schema = base_schema;
 
@@ -696,13 +696,13 @@ void Backend::ResolveDefaultLocation() {
   const auto list = [&](const std::string& sql) {
     std::string names;
     try {
-      names = warpduckdb::QueryText(probe.get(), sql);
+      names = chargewire_duckdb::QueryText(probe.get(), sql);
     } catch (const std::exception&) {
     }
     return names.empty() ? std::string("none") : names;
   };
   try {
-    warpduckdb::RunSql(probe.get(), "USE " + SqlIdentifier(catalog));
+    chargewire_duckdb::RunSql(probe.get(), "USE " + SqlIdentifier(catalog));
   } catch (const std::exception&) {
     std::string excluded;
     for (const auto& name : reserved) excluded += ", " + SqlLiteral(name);
@@ -714,7 +714,7 @@ void Backend::ResolveDefaultLocation() {
   }
   if (!schema.empty()) {
     try {
-      warpduckdb::RunSql(probe.get(), "USE " + SqlIdentifier(catalog) + "." + SqlIdentifier(schema));
+      chargewire_duckdb::RunSql(probe.get(), "USE " + SqlIdentifier(catalog) + "." + SqlIdentifier(schema));
     } catch (const std::exception&) {
       throw std::runtime_error(
           source + "default_schema '" + schema + "' does not exist in catalog '" + catalog + "': its schemas are " +
@@ -724,8 +724,8 @@ void Backend::ResolveDefaultLocation() {
     }
   }
   // DuckDB's own spelling of the names, which every session's USE takes.
-  runtime_.default_catalog = warpduckdb::QueryText(probe.get(), "SELECT current_database()");
-  runtime_.default_schema = warpduckdb::QueryText(probe.get(), "SELECT current_schema()");
+  runtime_.default_catalog = chargewire_duckdb::QueryText(probe.get(), "SELECT current_database()");
+  runtime_.default_schema = chargewire_duckdb::QueryText(probe.get(), "SELECT current_schema()");
   start_sessions_elsewhere_ = runtime_.default_catalog != base_catalog || runtime_.default_schema != base_schema;
   const std::string where = runtime_.default_catalog + "." + runtime_.default_schema;
   if (configured) {
@@ -764,19 +764,19 @@ void Backend::CheckHealth() {
   }
 }
 
-warpsql::ServerIdentity Backend::Identity() {
+chargewire::ServerIdentity Backend::Identity() {
   return {"Hardcharger", std::string(kVersion) + " (DuckDB " + duckdb_version() + ")"};
 }
 
 json::object Backend::ServerInfo() {
   json::object info = DuckDBBackend::ServerInfo();
-  // Hardcharger's own keys take its prefix (Warp SQL §2.7).
+  // Hardcharger's own keys take its prefix (Chargewire §2.7).
   info["hardcharger_instance_id"] = runtime_.instance_id;
   info["hardcharger_access_control"] = access_ != nullptr && !access_->catalog_rules_only();
   return info;
 }
 
-std::unique_ptr<warpsql::EngineSession> Backend::NewSession(const warpsql::Principal& principal,
+std::unique_ptr<chargewire::EngineSession> Backend::NewSession(const chargewire::Principal& principal,
                                                           const std::string& session_id) {
   const bool capped = runtime_.sessions.Admit(principal);
   try {
@@ -794,7 +794,7 @@ std::unique_ptr<warpsql::EngineSession> Backend::NewSession(const warpsql::Princ
 // ---- Session ----
 
 Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb_v2_instance_handle instance,
-                 warpsql::Principal principal, std::string id, bool capped,
+                 chargewire::Principal principal, std::string id, bool capped,
                  authz::AccessControl* access)
     : DuckDBSession(instance, static_cast<std::size_t>(runtime.config.result_batch_rows)),
       runtime_(runtime),
@@ -841,7 +841,7 @@ bool Session::StartIn(const std::string& catalog, const std::string& schema) {
   try {
     // One statement, so the session moves to both or stays where it was. On a bound
     // connection it is the user's own USE to the plan check (no catalog they cannot see).
-    warpduckdb::RunSql(connection(), "USE " + SqlIdentifier(catalog) + "." + SqlIdentifier(schema));
+    chargewire_duckdb::RunSql(connection(), "USE " + SqlIdentifier(catalog) + "." + SqlIdentifier(schema));
     return true;
   } catch (const std::exception& error) {
     LogAt(runtime_.session_log_level, LogLevel::kDebug,
@@ -916,8 +916,8 @@ std::optional<std::string> ExtensionDependencyHint(std::string_view message) {
          "autoinstall_known_extensions / autoload_known_extensions settings.";
 }
 
-warpsql::StatementOutcome Session::Guarded(std::string_view sql, bool has_parameters,
-                                           const std::function<warpsql::StatementOutcome()>& run) {
+chargewire::StatementOutcome Session::Guarded(std::string_view sql, bool has_parameters,
+                                           const std::function<chargewire::StatementOutcome()>& run) {
   try {
     return guard_ ? guard_->Execute(sql, has_parameters, run) : run();
   } catch (const Error& error) {
@@ -942,9 +942,9 @@ std::string Session::PrepareProfile(const std::string& execution_id) {
   // (profiling_output names a file, which only an administrator may write).
   auto internal = [&](const std::string& sql) {
     if (guard_) {
-      guard_->RunInternal([&] { warpduckdb::RunSql(connection(), sql); });
+      guard_->RunInternal([&] { chargewire_duckdb::RunSql(connection(), sql); });
     } else {
-      warpduckdb::RunSql(connection(), sql);
+      chargewire_duckdb::RunSql(connection(), sql);
     }
   };
   if (mode != profile_mode_) {
@@ -1016,7 +1016,7 @@ void Session::SetQueryTag(const json::object* tag) {
 void Session::SetStatementId(std::string_view id) { request_statement_id_ = std::string(id); }
 
 std::string Session::RequestStatementId() const {
-  return request_statement_id_.empty() ? warpsql::NewId("x") : request_statement_id_;
+  return request_statement_id_.empty() ? chargewire::NewId("x") : request_statement_id_;
 }
 
 std::string Session::StatementQueryTag() const {
@@ -1121,7 +1121,7 @@ void Session::GuardManagedCatalog(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE t
   }
 }
 
-warpsql::StatementOutcome Session::RunCommand(const Piece& piece) {
+chargewire::StatementOutcome Session::RunCommand(const Piece& piece) {
   if (auto setting = ParseSettingCommand(piece)) {
     ApplySetting(*this, *setting);
     return {};
@@ -1156,7 +1156,7 @@ warpsql::StatementOutcome Session::RunCommand(const Piece& piece) {
   }
   // Everything hardcharger_cancel() does (one implementation), then the end: the session's
   // requests get session_ended (killed), and once its work has stopped it is torn down.
-  CancelSessionWork(runtime_, wanted, warpsql::SessionCancelReason::kKilled);
+  CancelSessionWork(runtime_, wanted, chargewire::SessionCancelReason::kKilled);
   if (runtime_.sessions.Kill(wanted, *this) != SessionRegistry::KillResult::kKilled) {
     throw Error(ErrorCode::kSqlError, "Session '" + target + "' not found", "42704");  // it closed meanwhile
   }
@@ -1165,8 +1165,8 @@ warpsql::StatementOutcome Session::RunCommand(const Piece& piece) {
   return {};
 }
 
-warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sql, const ExecutionIds& ids,
-                                         const std::function<warpsql::StatementOutcome()>& work,
+chargewire::StatementOutcome Session::Track(StatementKind kind, std::string_view sql, const ExecutionIds& ids,
+                                         const std::function<chargewire::StatementOutcome()>& work,
                                          std::string_view shown) {
   const auto started = std::chrono::steady_clock::now();
   Instrumentation* const instrumentation = ids.statement.empty() ? nullptr : runtime_.instrumentation;
@@ -1219,7 +1219,7 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
       const bool cancelled = killed_ || refused.reason == AdmissionController::Refusal::kAborted;
       if (cancelled) {
         std::string reason = cancel_reason();
-        if (reason.empty() && killed_) reason = warpsql::reason::kKilled;
+        if (reason.empty() && killed_) reason = chargewire::reason::kKilled;
         if (!reason.empty()) LogCancelled(*this, id_fields, reason, started);
       }
       if (record.enqueue_time) {
@@ -1260,7 +1260,7 @@ warpsql::StatementOutcome Session::Track(StatementKind kind, std::string_view sq
   auto execution = std::make_shared<Execution>(*this, kind, std::move(abbreviated), std::move(slot), started,
                                                std::move(record), instrumentation != nullptr, id_fields,
                                                std::move(profile));
-  warpsql::StatementOutcome outcome;
+  chargewire::StatementOutcome outcome;
   try {
     outcome = work();
   } catch (const Error& error) {
@@ -1303,7 +1303,7 @@ void Session::LogFailed(const LogFields& id_fields, std::string_view sql, const 
   LogQuery(LogLevel::kInfo, "statement failed", fields);
 }
 
-warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::value& parameters) {
+chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::value& parameters) {
   CheckAlive();
   SessionScope scope(this);
   BeginStatement();
@@ -1312,7 +1312,7 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
   }
   if (!rbac_) RefuseAccessControlStatement(sql);
   const bool has_parameters = !parameters.is_null();
-  // The statement's Warp SQL id (q_...): its sql_statements row, and its execution's.
+  // The statement's Chargewire id (q_...): its sql_statements row, and its execution's.
   const std::string statement_id = RequestStatementId();
   // An access-control statement (GRANT, CREATE USER, ...) is the guard's, text and all:
   // it runs one at a time, and the guard refuses anything riding along.
@@ -1388,7 +1388,7 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
   if (!parameters.is_null() && steps.size() > 1) {
     throw Error(ErrorCode::kSqlError, "bind parameters need a single SQL statement");
   }
-  warpsql::StatementOutcome outcome;
+  chargewire::StatementOutcome outcome;
   for (std::size_t i = 0; i < steps.size(); i++) {
     const Step& step = steps[i];
     if (step.command) {
@@ -1415,21 +1415,21 @@ warpsql::StatementOutcome Session::Execute(std::string_view sql, const json::val
   return outcome;
 }
 
-std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sql) {
+std::unique_ptr<chargewire::PreparedStatement> Session::Prepare(std::string_view sql) {
   CheckAlive();
   SessionScope scope(this);
   if (sql.find('\0') != std::string_view::npos) {
     throw Error(ErrorCode::kSqlError, "SQL text must not contain a NUL byte", "22021");
   }
   const auto pieces = SplitStatements(connection(), sql);
-  // The prepared statement's Warp SQL id (p_...), what its record and log lines carry.
+  // The prepared statement's Chargewire id (p_...), what its record and log lines carry.
   const std::string prepared_id = RequestStatementId();
   auto record = [&](bool accepted, std::string_view error) {
     if (runtime_.instrumentation != nullptr) {
       runtime_.instrumentation->StatementCreated(*this, prepared_id, Abbreviate(sql), "prepared", accepted, error);
     }
   };
-  std::unique_ptr<warpsql::PreparedStatement> prepared;
+  std::unique_ptr<chargewire::PreparedStatement> prepared;
   try {
     if (!rbac_) RefuseAccessControlStatement(sql);
     const bool access_control = rbac_ && authz::LooksLikeAccessControlStatement(sql);
@@ -1457,8 +1457,8 @@ std::unique_ptr<warpsql::PreparedStatement> Session::Prepare(std::string_view sq
   return prepared;
 }
 
-warpsql::StatementOutcome Session::ExecutePrepared(warpsql::PreparedStatement& statement,
-                                                   const warpsql::Parameters& parameters) {
+chargewire::StatementOutcome Session::ExecutePrepared(chargewire::PreparedStatement& statement,
+                                                   const chargewire::Parameters& parameters) {
   CheckAlive();
   SessionScope scope(this);
   BeginStatement();
@@ -1472,14 +1472,14 @@ warpsql::StatementOutcome Session::ExecutePrepared(warpsql::PreparedStatement& s
                [&] {
                  if (!guard_) return DuckDBSession::ExecutePrepared(statement, parameters);
                  const bool has_parameters = parameters.rows != nullptr || !parameters.json.is_null();
-                 return guard_->ExecutePrepared(statement, has_parameters, [&](warpsql::PreparedStatement& inner) {
+                 return guard_->ExecutePrepared(statement, has_parameters, [&](chargewire::PreparedStatement& inner) {
                    return DuckDBSession::ExecutePrepared(inner, parameters);
                  });
                },
                text == prepared_sql_.end() ? std::string_view() : std::string_view(text->second));
 }
 
-int64_t Session::Ingest(const warpsql::IngestTarget& target, std::shared_ptr<arrow::RecordBatchReader> rows) {
+int64_t Session::Ingest(const chargewire::IngestTarget& target, std::shared_ptr<arrow::RecordBatchReader> rows) {
   CheckAlive();
   SessionScope scope(this);
   if (principal_.role == "readonly") {
@@ -1533,8 +1533,8 @@ int64_t Session::Ingest(const warpsql::IngestTarget& target, std::shared_ptr<arr
   return ingested;
 }
 
-std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(warpsql::MetadataKind kind,
-                                                            const warpsql::MetadataFilter& filter) {
+std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(chargewire::MetadataKind kind,
+                                                            const chargewire::MetadataFilter& filter) {
   CheckAlive();
   SessionScope scope(this);
   if (runtime_.config.print_queries) {
@@ -1545,15 +1545,15 @@ std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(warpsql::MetadataKin
   }
   auto rows = guard_ ? guard_->Metadata(
                           kind, filter,
-                          [&](const warpsql::MetadataFilter& narrowed) { return DuckDBSession::Metadata(kind, narrowed); },
+                          [&](const chargewire::MetadataFilter& narrowed) { return DuckDBSession::Metadata(kind, narrowed); },
                           [&](std::shared_ptr<arrow::RecordBatchReader> tables) {
                             return TablesWithSchemas(std::move(tables));
                           })
                      : DuckDBSession::Metadata(kind, filter);
   // The server's own catalogs are invisible to non-admins in the catalog, schema and
   // table lists (their first column is the catalog).
-  const bool listing = kind == warpsql::MetadataKind::kCatalogs || kind == warpsql::MetadataKind::kDbSchemas ||
-                       kind == warpsql::MetadataKind::kTables;
+  const bool listing = kind == chargewire::MetadataKind::kCatalogs || kind == chargewire::MetadataKind::kDbSchemas ||
+                       kind == chargewire::MetadataKind::kTables;
   const auto managed = ManagedCatalogs();
   if (admin() || managed.empty() || !listing) return rows;
   std::vector<std::string> hidden;
@@ -1561,7 +1561,7 @@ std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(warpsql::MetadataKin
   return WithoutCatalogs(std::move(rows), hidden);
 }
 
-warpsql::OptionErrors Session::SetOptions(const json::object& options) {
+chargewire::OptionErrors Session::SetOptions(const json::object& options) {
   CheckAlive();
   SessionScope scope(this);
   if (const auto* catalog = options.if_contains("catalog"); catalog && catalog->is_string()) {
@@ -1613,9 +1613,9 @@ void Session::Rollback() {
 // The SDK's DuckDB session follows the transaction statements that ran and asks DuckDB
 // whether an open transaction is aborted (DuckDB forgives a syntax error, not a missing
 // table); the SDK reads this after every call that ran work in the session, for the
-// session document (Warp SQL §5.2), and the metrics read the copy kept here.
-warpsql::TransactionState Session::Transaction() {
-  const warpsql::TransactionState state = DuckDBSession::Transaction();
+// session document (Chargewire §5.2), and the metrics read the copy kept here.
+chargewire::TransactionState Session::Transaction() {
+  const chargewire::TransactionState state = DuckDBSession::Transaction();
   transaction_ = state;
   return state;
 }

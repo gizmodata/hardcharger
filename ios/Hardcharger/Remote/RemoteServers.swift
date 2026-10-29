@@ -20,7 +20,7 @@ struct RemoteServer: Codable, Identifiable, Hashable, Sendable {
 
     var id: UUID = UUID()
     var name: String
-    var endpoint: WarpEndpoint
+    var endpoint: ChargewireEndpoint
     var signIn: SignIn = .password
     var username: String = ""
     var password: String = ""

@@ -35,7 +35,7 @@ describe("signIn", () => {
     expect(s.token).toBe("abc");
     expect(s.expiresAt).toBeGreaterThanOrEqual(before + 60_000);
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toMatch(/\/warp\/v1\/auth\/token$/);
+    expect(url).toMatch(/\/chargewire\/v1\/auth\/token$/);
     expect(JSON.parse(init.body as string)).toEqual({ grant_type: "password", username: "joe", password: "p:a@ss" });
     // Default credentials mode: under mutual TLS the browser presents its client certificate.
     expect(init.credentials).toBeUndefined();

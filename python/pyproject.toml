@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [{ name = "GizmoData LLC", email = "info@gizmodata.com" }]
-keywords = ["hardcharger", "duckdb", "sql", "server", "warp-sql", "arrow", "test-fixture"]
+keywords = ["hardcharger", "duckdb", "sql", "server", "chargewire", "arrow", "test-fixture"]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Developers",

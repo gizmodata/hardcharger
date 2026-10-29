@@ -32,9 +32,9 @@ std::vector<std::string> UsableBaseUrls(std::string_view host, int port, bool tl
 
 struct BannerInfo {
   std::string version;           // Hardcharger's
-  std::string warp_sql_version;  // the specification's
+  std::string chargewire_version;  // the specification's
   std::string duckdb_version;
-  std::string label;             // "UI" or "Warp SQL"
+  std::string label;             // "UI" or "Chargewire"
   std::vector<std::string> urls;  // what the label names, most useful first
 };
 

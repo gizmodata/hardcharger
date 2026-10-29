@@ -60,14 +60,14 @@ TEST(UsableUrls, TlsPrefersTheCertificatesName) {
 
 TEST(StartupBanner, TheArtThenVersionsThenTheUrlsAndDocs) {
   const std::string banner = Banner({.version = "2.0.0-rc.2",
-                                     .warp_sql_version = "1.0.0",
+                                     .chargewire_version = "1.0.0",
                                      .duckdb_version = "v2.0.0",
                                      .label = "UI",
                                      .urls = {"http://localhost:31337/ui/", "http://build-box:31337/ui/"}});
   const auto lines = Lines(banner);
   ASSERT_TRUE(banner.starts_with(hardcharger::kBannerArt));
   ASSERT_EQ(lines.size(), 9u) << banner;
-  EXPECT_EQ(lines[6], "  Hardcharger 2.0.0-rc.2 | Warp SQL 1.0.0 | DuckDB v2.0.0 | by GizmoData");
+  EXPECT_EQ(lines[6], "  Hardcharger 2.0.0-rc.2 | Chargewire 1.0.0 | DuckDB v2.0.0 | by GizmoData");
   EXPECT_EQ(lines[7], "  UI   http://localhost:31337/ui/      Docs  docs.hardcharger.gizmodata.com");
   EXPECT_EQ(lines[8], "       http://build-box:31337/ui/");
   for (const auto& line : lines) {
@@ -77,20 +77,20 @@ TEST(StartupBanner, TheArtThenVersionsThenTheUrlsAndDocs) {
 }
 
 TEST(StartupBanner, TheDocsGoOnALineOfTheirOwnWhenAUrlIsLong) {
-  const std::string url = "https://a-rather-long-host-name.us-east-1.compute.example.com:31337/warp";
+  const std::string url = "https://a-rather-long-host-name.us-east-1.compute.example.com:31337/chargewire";
   const auto lines = Lines(Banner(
-      {.version = "2.0.0", .warp_sql_version = "1.0.0", .duckdb_version = "v2.0.0", .label = "Warp SQL", .urls = {url}}));
+      {.version = "2.0.0", .chargewire_version = "1.0.0", .duckdb_version = "v2.0.0", .label = "Chargewire", .urls = {url}}));
   ASSERT_EQ(lines.size(), 9u);
-  EXPECT_EQ(lines[7], "  Warp SQL  " + url);
+  EXPECT_EQ(lines[7], "  Chargewire  " + url);
   EXPECT_EQ(lines[8], "  Docs      https://docs.hardcharger.gizmodata.com");
   // A short one keeps them together, with the docs' whole URL when it fits.
   const auto short_lines = Lines(Banner({.version = "2.0.0",
-                                         .warp_sql_version = "1.0.0",
+                                         .chargewire_version = "1.0.0",
                                          .duckdb_version = "v2.0.0",
-                                         .label = "Warp SQL",
-                                         .urls = {"http://h:1/warp"}}));
+                                         .label = "Chargewire",
+                                         .urls = {"http://h:1/chargewire"}}));
   ASSERT_EQ(short_lines.size(), 8u);
-  EXPECT_EQ(short_lines[7], "  Warp SQL  http://h:1/warp      Docs  https://docs.hardcharger.gizmodata.com");
+  EXPECT_EQ(short_lines[7], "  Chargewire  http://h:1/chargewire      Docs  https://docs.hardcharger.gizmodata.com");
 }
 
 TEST(LogEmoji, AutoNeedsATerminalAndAUtf8Locale) {

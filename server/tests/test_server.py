@@ -1,4 +1,4 @@
-"""Hardcharger behaviour beyond the Warp SQL conformance suite: configuration, tokens,
+"""Hardcharger behaviour beyond the Chargewire conformance suite: configuration, tokens,
 sign-in, roles, init SQL and operations."""
 
 import datetime
@@ -106,7 +106,7 @@ def test_old_and_gizmosql_environment_names_are_not_read(launcher):
     for table in ("from_gizmosql", "from_bare"):
         assert "does not exist" in session.error(sql=f"SELECT * FROM {table}")["detail"]
     assert "GIZMOSQL" not in server.log() and "license" not in server.log().lower(), server.log()
-    response = httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
+    response = httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token",
                           json={"grant_type": "password", "username": "old-admin", "password": "old-Pass-1"})
     assert response.status_code == 401, response.text
     # HARDCHARGER_PASSWORD alone is no administrator password.
@@ -150,7 +150,7 @@ def test_other_instances_tokens_are_refused_by_default(launcher):
     env = {"HARDCHARGER_SECRET_KEY": "shared-secret-for-tests"}
     first = launcher.start(env=env)
     second = launcher.start(env=env, password=first.password)
-    response = httpx.post(url=f"{second.base_url}/warp/v1/sessions",
+    response = httpx.post(url=f"{second.base_url}/chargewire/v1/sessions",
                           headers={"Authorization": f"Bearer {first.token()}"}, json={})
     body = problem(response=response, status=401, code="invalid_token")
     assert "another server instance" in body["detail"]
@@ -162,7 +162,7 @@ def test_tokens_signed_with_another_key_are_refused(launcher):
     forged = jwt.encode(payload={"iss": "hardcharger", "sub": "admin", "role": "admin",
                                  "iat": now, "exp": now + datetime.timedelta(hours=1)},
                         key="wrong-key", algorithm="HS256")
-    response = httpx.post(url=f"{server.base_url}/warp/v1/sessions",
+    response = httpx.post(url=f"{server.base_url}/chargewire/v1/sessions",
                           headers={"Authorization": f"Bearer {forged}"}, json={})
     problem(response=response, status=401, code="invalid_token")
 
@@ -176,7 +176,7 @@ def test_tokens_of_another_issuer_are_refused(launcher):
         token = jwt.encode(payload={"iss": issuer, "sub": "reporting", "role": "user", "jti": f"{issuer}-1",
                                     "iat": now, "exp": now + datetime.timedelta(hours=1)},
                            key="the-cluster-secret", algorithm="HS256")
-        response = httpx.post(url=f"{server.base_url}/warp/v1/sessions", headers={"Authorization": f"Bearer {token}"},
+        response = httpx.post(url=f"{server.base_url}/chargewire/v1/sessions", headers={"Authorization": f"Bearer {token}"},
                               json={})
         assert (response.status_code == 201) == accepted, (issuer, response.text)
 
@@ -186,7 +186,7 @@ def test_expired_tokens_are_refused(launcher):
     past = datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(hours=2)
     token = jwt.encode(payload={"iss": "hardcharger", "sub": "admin", "role": "admin", "iat": past,
                                 "exp": past + datetime.timedelta(hours=1)}, key="k", algorithm="HS256")
-    response = httpx.post(url=f"{server.base_url}/warp/v1/sessions",
+    response = httpx.post(url=f"{server.base_url}/chargewire/v1/sessions",
                           headers={"Authorization": f"Bearer {token}"}, json={})
     problem(response=response, status=401, code="invalid_token")
 
@@ -215,7 +215,7 @@ def start_with_issuer(launcher, issuer):
 
 
 def exchange(server, subject_token: str) -> httpx.Response:
-    return httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
+    return httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token",
                       json={"grant_type": "token_exchange", "subject_token": subject_token})
 
 
@@ -227,7 +227,7 @@ def test_token_exchange_signs_users_in(launcher, issuer):
     session = server.session(token=token)
     doc = server.run(token=token, session_id=session, sql="SELECT 1 AS v").json()
     assert doc["state"] == "succeeded"
-    assert "token_exchange" in httpx.get(url=f"{server.base_url}/warp").json()["auth"]["grant_types"]
+    assert "token_exchange" in httpx.get(url=f"{server.base_url}/chargewire").json()["auth"]["grant_types"]
 
 
 def test_sign_in_token_as_password(launcher, issuer):
@@ -278,7 +278,7 @@ def test_server_info(launcher):
     server = launcher.start()
     token = server.token()
     session = server.session(token=token)
-    info = httpx.get(url=f"{server.base_url}/warp/v1/sessions/{session}/metadata/server-info",
+    info = httpx.get(url=f"{server.base_url}/chargewire/v1/sessions/{session}/metadata/server-info",
                      headers={"Authorization": f"Bearer {token}"}).json()
     assert info["server_name"] == "Hardcharger"
     assert "edition" not in info  # no license, no editions
@@ -292,8 +292,8 @@ def test_health_port_serves_only_health(launcher):
     server = launcher.start(env={"HARDCHARGER_HEALTH_PORT": str(health_port)})
     launcher.wait_healthy(running=server)
     assert httpx.get(url=f"http://127.0.0.1:{health_port}/health").json() == {"status": "serving"}
-    assert httpx.get(url=f"http://127.0.0.1:{health_port}/warp/v1/health").status_code == 200
-    assert httpx.get(url=f"http://127.0.0.1:{health_port}/warp").status_code == 404
+    assert httpx.get(url=f"http://127.0.0.1:{health_port}/chargewire/v1/health").status_code == 200
+    assert httpx.get(url=f"http://127.0.0.1:{health_port}/chargewire").status_code == 404
     assert server.process.poll() is None
 
 
@@ -301,13 +301,13 @@ def test_default_query_timeout(launcher):
     server = launcher.start(env={"HARDCHARGER_QUERY_TIMEOUT_SECONDS": "1"})
     token = server.token()
     session = server.session(token=token)
-    response = httpx.post(url=f"{server.base_url}/warp/v1/sessions/{session}/statements",
+    response = httpx.post(url=f"{server.base_url}/chargewire/v1/sessions/{session}/statements",
                           headers={"Authorization": f"Bearer {token}", "Prefer": "respond-async"},
                           json={"sql": "SELECT count(*) FROM range(100000000000)"})
     statement_id = response.json()["statement_id"]
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
-        doc = httpx.get(url=f"{server.base_url}/warp/v1/sessions/{session}/statements/{statement_id}",
+        doc = httpx.get(url=f"{server.base_url}/chargewire/v1/sessions/{session}/statements/{statement_id}",
                         headers={"Authorization": f"Bearer {token}", "Prefer": "wait=5"}, timeout=30).json()
         if doc["state"] in ("succeeded", "failed", "cancelled"):
             break

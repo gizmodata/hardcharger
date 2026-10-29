@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-// The JavaScript client, @gizmodata/warp-sql, is not on npm: the UI depends on the package
-// that `npm pack` makes from gizmodata/warp-sql-js at a pinned commit, kept in vendor/ (and
-// pinned again by package-lock.json's integrity hash). vendor/warp-sql-js.json names the
+// The JavaScript client, @gizmodata/chargewire, is not on npm: the UI depends on the package
+// that `npm pack` makes from gizmodata/chargewire-js at a pinned commit, kept in vendor/ (and
+// pinned again by package-lock.json's integrity hash). vendor/chargewire-js.json names the
 // commit and the tarball's SHA-256.
 //
-//   node scripts/vendor-warp-sql.mjs --verify             the tarball matches the pin
-//   node scripts/vendor-warp-sql.mjs --verify --rebuild   ...and is what the commit builds to
-//   node scripts/vendor-warp-sql.mjs --update <commit>    build <commit> and vendor it
+//   node scripts/vendor-chargewire.mjs --verify             the tarball matches the pin
+//   node scripts/vendor-chargewire.mjs --verify --rebuild   ...and is what the commit builds to
+//   node scripts/vendor-chargewire.mjs --update <commit>    build <commit> and vendor it
 //
-// --rebuild and --update clone HARDCHARGER_UI_WARP_SQL_JS_GIT (default
-// https://github.com/gizmodata/warp-sql-js.git; a local checkout's path works too).
+// --rebuild and --update clone HARDCHARGER_UI_CHARGEWIRE_JS_GIT (default
+// https://github.com/gizmodata/chargewire-js.git; a local checkout's path works too).
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -19,17 +19,17 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 const root = path.resolve(import.meta.dirname, "..");
-const pinFile = path.join(root, "vendor", "warp-sql-js.json");
+const pinFile = path.join(root, "vendor", "chargewire-js.json");
 const pin = JSON.parse(readFileSync(pinFile, "utf8"));
 const { values } = parseArgs({
   options: { verify: { type: "boolean" }, rebuild: { type: "boolean" }, update: { type: "string" } },
 });
-const source = process.env.HARDCHARGER_UI_WARP_SQL_JS_GIT ?? `https://github.com/${pin.repository}.git`;
+const source = process.env.HARDCHARGER_UI_CHARGEWIRE_JS_GIT ?? `https://github.com/${pin.repository}.git`;
 const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
 const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, stdio: ["ignore", "pipe", "inherit"] }).toString();
 
 function build(commit) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "warp-sql-js-"));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "chargewire-js-"));
   run("git", ["init", "-q", dir]);
   run("git", ["fetch", "-q", "--depth", "1", source, commit], dir);
   run("git", ["checkout", "-q", "FETCH_HEAD"], dir);
@@ -53,7 +53,7 @@ function files(dir, prefix = "") {
 }
 
 function unpack(tarball) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "warp-sql-pack-"));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "chargewire-pack-"));
   run("tar", ["-xzf", tarball, "-C", dir]);
   return files(dir);
 }
@@ -76,12 +76,12 @@ if (values.update) {
 }
 
 if (!values.verify) {
-  console.error("usage: vendor-warp-sql.mjs --verify [--rebuild] | --update <commit>");
+  console.error("usage: vendor-chargewire.mjs --verify [--rebuild] | --update <commit>");
   process.exit(2);
 }
 const actual = sha256(vendored);
 if (actual !== pin.sha256) {
-  console.error(`vendor/${pin.tarball} has SHA-256 ${actual}, but vendor/warp-sql-js.json pins ${pin.sha256}`);
+  console.error(`vendor/${pin.tarball} has SHA-256 ${actual}, but vendor/chargewire-js.json pins ${pin.sha256}`);
   process.exit(1);
 }
 console.log(`vendor/${pin.tarball} matches its pin (${pin.repository}@${pin.commit.slice(0, 12)})`);

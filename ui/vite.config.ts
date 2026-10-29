@@ -19,8 +19,8 @@ const buildYear = String(
   ).getUTCFullYear(),
 );
 
-// The UI is served by hardcharger-server at /ui on the same listener as Warp SQL, so every
-// asset path starts with /ui/ and the app talks to /warp on its own origin.
+// The UI is served by hardcharger-server at /ui on the same listener as Chargewire, so every
+// asset path starts with /ui/ and the app talks to /chargewire on its own origin.
 //
 // The build must work under the server's Content-Security-Policy (see README.md): no inline
 // scripts, no eval, no data: URIs, workers from files of their own.
@@ -52,6 +52,6 @@ export default defineConfig({
   worker: { format: "es", plugins: () => [notices.workerPlugin] },
   server: {
     // `npm run dev` against a local server: HARDCHARGER_UI_DEV_SERVER=http://127.0.0.1:31337
-    proxy: { "/warp": { target: process.env["HARDCHARGER_UI_DEV_SERVER"] ?? "http://127.0.0.1:31337" } },
+    proxy: { "/chargewire": { target: process.env["HARDCHARGER_UI_DEV_SERVER"] ?? "http://127.0.0.1:31337" } },
   },
 });

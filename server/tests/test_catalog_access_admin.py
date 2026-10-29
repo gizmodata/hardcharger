@@ -388,10 +388,10 @@ def rbac_server(module_launcher, store):
 
 
 def rbac_error(client, sql: str) -> str:
-    from rbac import WarpError
+    from rbac import ChargewireError
     try:
         client.run(sql=sql)
-    except WarpError as raised:
+    except ChargewireError as raised:
         return raised.detail
     pytest.fail(reason=f"{sql} was allowed")
 

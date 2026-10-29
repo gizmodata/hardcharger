@@ -10,7 +10,7 @@ column names of a table it can't read (test_rbac_views.py covers the owner's sid
 
 import pytest
 
-from rbac import WarpError, expect_allowed, expect_blocked, start_rbac_server
+from rbac import ChargewireError, expect_allowed, expect_blocked, start_rbac_server
 
 CREATOR_LACKS = "may create a view only over what it can SELECT itself"
 
@@ -74,7 +74,7 @@ def outcome(client, sql: str):
     try:
         client.run(sql=sql)
         return ("ok", "")
-    except WarpError as error:
+    except ChargewireError as error:
         return (error.code, error.detail)
 
 

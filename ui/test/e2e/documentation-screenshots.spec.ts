@@ -1,13 +1,13 @@
 // Public documentation captures: a throwaway server and synthetic data only. Never use a
 // user's running desktop database. Playwright keeps these images as review artifacts.
-import { connect } from "@gizmodata/warp-sql";
+import { connect } from "@gizmodata/chargewire";
 
 import { expect, runDone, signIn, test } from "./fixtures.ts";
 import { startOwnServer } from "./harness.ts";
 
 test("documentation screenshots of SQL Monitor and Server Configuration", async ({ page }, testInfo) => {
   const server = await startOwnServer(["--enable-instrumentation", "--max-concurrent-statements", "4"]);
-  const connection = await connect({ url: `${server.url}/warp`, ...server.admin });
+  const connection = await connect({ url: `${server.url}/chargewire`, ...server.admin });
   try {
     await connection.execute("CREATE SCHEMA sales");
     await connection.execute(

@@ -17,8 +17,8 @@ namespace hardcharger {
 namespace {
 
 using Traits = jwt::traits::boost_json;
-using warpsql::Error;
-using warpsql::ErrorCode;
+using chargewire::Error;
+using chargewire::ErrorCode;
 
 // The issuer of the tokens this server signs; it accepts no other.
 constexpr std::string_view kIssuer = "hardcharger";
@@ -65,7 +65,7 @@ JwtTokenService::JwtTokenService(std::string secret_key, std::chrono::seconds li
       log_level_(log_level),
       access_(std::move(access)) {}
 
-warpsql::TokenService::Issued JwtTokenService::Issue(const warpsql::Principal& principal) {
+chargewire::TokenService::Issued JwtTokenService::Issue(const chargewire::Principal& principal) {
   const auto now = std::chrono::system_clock::now();
   auto token = jwt::create<Traits>()
                    .set_type("JWT")
@@ -123,7 +123,7 @@ std::string JwtTokenService::IssueScoped(const std::string& user_name, const std
   return token.sign(jwt::algorithm::hs256{secret_key_});
 }
 
-warpsql::Principal JwtTokenService::Validate(std::string_view token) {
+chargewire::Principal JwtTokenService::Validate(std::string_view token) {
   auto invalid = [](std::string_view why) {
     return Error(ErrorCode::kInvalidToken, std::string(why));
   };
@@ -149,9 +149,9 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
         .verify(decoded, failed);
     // jwt-cpp checks the signature before any claim, so an expired token is one this
     // server signed and nobody altered: its holder may know why it no longer works
-    // (Warp SQL §4.2's reason).
+    // (Chargewire §4.2's reason).
     if (failed == jwt::error::token_verification_error::token_expired) {
-      throw Error::InvalidToken(warpsql::reason::kTokenExpired, "the access token has expired; sign in again");
+      throw Error::InvalidToken(chargewire::reason::kTokenExpired, "the access token has expired; sign in again");
     }
     if (failed) throw invalid("a valid access token is required");
   } catch (const Error&) {
@@ -167,7 +167,7 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
       throw invalid("this token was issued by another server instance");
     }
   }
-  warpsql::Principal principal;
+  chargewire::Principal principal;
   principal.name = decoded.get_subject();
   if (decoded.has_payload_claim("role")) principal.role = decoded.get_payload_claim("role").as_string();
   if (decoded.has_payload_claim("auth_method")) {
@@ -206,7 +206,7 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
     }
     standing = access_->CheckToken(IdentityOf(principal));
   }
-  // Handles belong to the name and this (Warp SQL §9.2): computed from the claims and the
+  // Handles belong to the name and this (Chargewire §9.2): computed from the claims and the
   // store, never carried in a token.
   principal.authority_key = AuthorityKey(principal, standing);
   // For the SDK's security events; Issue() never copies it into a token.
@@ -214,7 +214,7 @@ warpsql::Principal JwtTokenService::Validate(std::string_view token) {
   return principal;
 }
 
-void JwtTokenService::Accepted(std::string_view token, const warpsql::Principal& principal) {
+void JwtTokenService::Accepted(std::string_view token, const chargewire::Principal& principal) {
   // Only now: the SDK calls this once the token also passed its certificate checks, so a
   // replayed bound token is never logged as validated.
   bool first_use = false;

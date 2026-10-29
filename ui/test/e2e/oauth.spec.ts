@@ -1,4 +1,4 @@
-// Browser sign-in (Warp SQL §4.3) from the sign-in page, on a server of its own configured
+// Browser sign-in (Chargewire §4.3) from the sign-in page, on a server of its own configured
 // for a mock identity provider (idp.ts) that approves at once. The page goes to the
 // provider, comes back with the flow id in the fragment, collects the token with the poll
 // secret it kept in this tab, and is signed in; nothing of it stays in the URL.
@@ -31,7 +31,7 @@ test("Sign in with the provider comes back signed in, with nothing left in the U
   await button.click();
   await expect(page.getByTestId("header-user")).toContainText("alice@example.com");
   expect(new URL(page.url()).hash).toBe("");
-  expect(page.url()).not.toContain("warp_oauth_flow");
+  expect(page.url()).not.toContain("chargewire_oauth_flow");
   expect(await page.evaluate(() => sessionStorage.getItem("hardcharger-ui:browser-sign-in"))).toBeNull();
   // Only the access token is kept, in this tab.
   expect(await page.evaluate(() => sessionStorage.getItem("hardcharger-ui:sign-in"))).toContain("token");
@@ -65,7 +65,7 @@ test("a user the server doesn't authorize is refused, saying who", async ({ page
 });
 
 test("a link with someone else's flow id is ignored", async ({ page }) => {
-  await page.goto(`${server.url}/ui/#warp_oauth_flow=f_not_started_here`);
+  await page.goto(`${server.url}/ui/#chargewire_oauth_flow=f_not_started_here`);
   await expect(page.getByTestId("signin-browser")).toBeEnabled();
   await expect(page.getByTestId("signin-error")).toHaveCount(0);
   expect(new URL(page.url()).hash).toBe("");

@@ -66,7 +66,7 @@ Hardcharger's JavaScript client runs in browsers, for the origins listed in `--c
 | the same, after `SET disabled_optimizers = 'remote_pushdown'` | `SELECT #1, #2 FROM main.t` | `row 3`, filtered by the client |
 
 `quack_query(uri, 'SELECT ? AS x')` fails the same way and has no argument for values.
-Hardcharger takes values beside the SQL (Warp SQL §6.1): `{"sql": "SELECT s FROM t WHERE i = $i",
+Hardcharger takes values beside the SQL (Chargewire §6.1): `{"sql": "SELECT s FROM t WHERE i = $i",
 "parameters": {"i": 3}}` returns `row 3`.
 
 **Bulk ingest, cancellation.** Quack streams `CREATE TABLE remote.t AS SELECT …` and `INSERT`
@@ -115,8 +115,8 @@ and Windows (amd64 and arm64).
 
 **Protocol.** Client and server agree on a version at connection (`QUACK_VERSION = 3`; the server
 accepts exactly its own). DuckDB's docs say "the protocol, function names, settings, and defaults
-are still subject to change". Warp SQL has a written specification
-(`third_party/warp-sql/spec/warp-sql.md`, version 1.0.0, changed since only by addition) and a conformance suite that
+are still subject to change". Chargewire has a written specification
+(`third_party/chargewire/spec/chargewire.md`, version 1.0.0, changed since only by addition) and a conformance suite that
 CI runs against every Hardcharger build.
 
 **Licenses.** Quack: MIT. Hardcharger: Apache 2.0.

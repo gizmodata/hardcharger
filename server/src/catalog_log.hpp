@@ -65,7 +65,7 @@ class CatalogLog {
   std::string file_;
   std::string schema_;
   std::string table_;
-  warpduckdb::Connection connection_;
+  chargewire_duckdb::Connection connection_;
 
   std::mutex mutex_;
   std::condition_variable wake_;

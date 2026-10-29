@@ -12,7 +12,7 @@ namespace hardcharger {
 
 namespace {
 
-using TokenIterator = warpduckdb::Owned<duckdb_v2_token_iterator_handle, duckdb_v2_token_iterator_destroy>;
+using TokenIterator = chargewire_duckdb::Owned<duckdb_v2_token_iterator_handle, duckdb_v2_token_iterator_destroy>;
 
 std::string Lower(std::string_view text) {
   std::string out(text);
@@ -80,13 +80,13 @@ std::string Unquote(std::string_view literal) {
 std::vector<Token> Tokenize(duckdb_v2_connection_handle connection, std::string_view sql) {
   const duckdb_v2_str text{sql.data(), sql.size()};
   TokenIterator iterator;
-  warpduckdb::Call([&](auto* err) { return duckdb_v2_tokenize_sql(connection, &text, iterator.out(), err); });
+  chargewire_duckdb::Call([&](auto* err) { return duckdb_v2_tokenize_sql(connection, &text, iterator.out(), err); });
   std::vector<Token> tokens;
   for (;;) {
     DUCKDB_V2_TOKEN_TYPE type = DUCKDB_V2_TOKEN_TYPE_INVALID;
     idx_t start = 0;
     idx_t length = 0;
-    warpduckdb::Call([&](auto* err) {
+    chargewire_duckdb::Call([&](auto* err) {
       return duckdb_v2_token_iterator_next(iterator.get(), &type, &start, &length, err);
     });
     if (type == DUCKDB_V2_TOKEN_TYPE_END_OF_INPUT) return tokens;

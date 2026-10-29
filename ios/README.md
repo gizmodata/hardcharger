@@ -18,7 +18,7 @@ console, and a client for Hardcharger servers anywhere else.
   the administrator's password; a second QR code adds the server to another iPhone or iPad's
   Hardcharger app.
 - **Saved servers** (in the Keychain): user name and password, or the server's single sign-on
-  (Warp SQL browser sign-in, in an `ASWebAuthenticationSession`); a self-signed server is
+  (Chargewire browser sign-in, in an `ASWebAuthenticationSession`); a self-signed server is
   trusted by its fingerprint only when the person says so.
 
 iOS 18 or later. On iPad: a sidebar, keyboard shortcuts (⌘1–⌘6 screens, ⌘I import, ⌘⇧L
@@ -31,7 +31,7 @@ You need Xcode 26 or later (with an iOS simulator runtime), CMake, Ninja, xcodeg
 24 (`brew install cmake ninja xcodegen node`).
 
 ```bash
-git submodule update --init                         # third_party/warp-sql
+git submodule update --init                         # third_party/chargewire
 (cd ui && npm ci && npm run build && npm run package)    # the web UI the server embeds
 ios/scripts/build-server-ios.sh                     # the server, for the simulator and devices
 ios/scripts/generate-project.sh                     # ios/Hardcharger.xcodeproj
@@ -95,11 +95,11 @@ the release gate, and the `.ipa` artifact can then be uploaded by hand with Tran
 ┌──────────────────────── Hardcharger.app ─────────────────────────┐
 │ SwiftUI: Web UI · Console · Server · Settings · Logs · Servers    │
 │   WKWebView ── http(s)://127.0.0.1:<port>/ui/ ──┐                 │
-│   Console (ConsoleEngine) ── Warp SQL ──────────┤                 │
+│   Console (ConsoleEngine) ── Chargewire ──────────┤                 │
 │   ServerController / EmbeddedServer             │                 │
 │        │ C API: hardcharger_embedded.h          ▼                 │
 │ ┌──────▼──── HardchargerServer.xcframework ───────────────────┐   │
-│ │ hardcharger-server's main() on a thread, the Warp SQL SDK,  │   │
+│ │ hardcharger-server's main() on a thread, the Chargewire SDK,  │   │
 │ │ DuckDB 2.0 + built-in extensions, Arrow IPC, OpenSSL,       │   │
 │ │ the web UI (embedded), the `hardcharger` client's library   │   │
 │ └─────────────────────────────────────────────────────────────┘   │
@@ -120,7 +120,7 @@ the release gate, and the `.ipa` artifact can then be uploaded by hand with Tran
   `ENABLE_EXTENSION_LOAD=OFF` (iOS runs only the code the app was signed with; the extensions
   are built in) and its platform named; libcurl is built for iOS (it has none) and linked from
   the build; OpenSSL uses its own iOS targets; the client's `.shell` is refused (`system()` is
-  prohibited on iOS); warp-sql's build-time OpenAPI generator runs as a Mac build
+  prohibited on iOS); chargewire's build-time OpenAPI generator runs as a Mac build
   (`ios/scripts/run-host-tool.sh`). OpenSSL has no CA bundle on iOS, so the app bundles
   Mozilla's (`ios/scripts/update-ca-bundle.sh`) and names it in `SSL_CERT_FILE`.
 - **Files**: the database is `Documents/Hardcharger.duckdb`, with `Imports/` and `Exports/`
@@ -135,7 +135,7 @@ the release gate, and the `.ipa` artifact can then be uploaded by hand with Tran
   it (`sessionStorage`, `hardcharger-ui:sign-in`, `ui/src/lib/auth.ts`) on the server's
   origin only, once per token; never in a URL, a cookie or `localStorage`.
 - **The console** is the desktop client: `server/embedded/console.cc` drives its
-  `WarpConnection`, `CommandProcessor`, `SqlProcessor` and renderers exactly as
+  `ChargewireConnection`, `CommandProcessor`, `SqlProcessor` and renderers exactly as
   `hardcharger -c` does, and hands what it printed to the app. Return runs input that is
   complete as the client reads it; anything else gets a new line and the continuation prompt.
 - **Lifecycle**: iOS suspends apps that leave the screen; the app asks for the usual grace

@@ -103,7 +103,7 @@ const std::vector<std::string>& ShellCompleter::GetDotCommands() {
   return commands;
 }
 
-ShellCompleter::ShellCompleter(WarpConnection& conn) : conn_(conn) {}
+ShellCompleter::ShellCompleter(ChargewireConnection& conn) : conn_(conn) {}
 
 void ShellCompleter::InvalidateCache() {
   cache_populated_ = false;

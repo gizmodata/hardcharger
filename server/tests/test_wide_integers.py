@@ -21,7 +21,7 @@ import decimal
 import pyarrow as pa
 import pytest
 
-from warp_client import read_table
+from chargewire_client import read_table
 
 MAX_U = 2**128 - 1
 MIN_H = -(2**127)
@@ -72,7 +72,7 @@ def test_every_value_that_fits_arrives_exactly(session, type_name):
 @pytest.mark.parametrize("type_name, value", [("UHUGEINT", v) for v in TOO_WIDE_U] +
                          [("HUGEINT", v) for v in TOO_WIDE_H])
 def test_a_value_decimal128_cannot_hold_is_refused_never_sent_wrong(session, type_name, value):
-    # The statement's error response (Warp SQL §6.1: a statement that has failed by the time
+    # The statement's error response (Chargewire §6.1: a statement that has failed by the time
     # the server answers is its error, never a success status with a failed document).
     problem = session.error(sql=f"SELECT {lit(value, type_name)} AS x")
     assert problem["status"] == 422 and problem["code"] == "execution_error", problem
@@ -183,7 +183,7 @@ def test_bulk_ingest(session):
     response = session.ingest(table=pa.table({"u": pa.array([decimal.Decimal(MAX_U)], type=pa.decimal256(39, 0)),
                                               "h": pa.array([0], type=pa.decimal128(38, 0))}),
                               name="wide_in", mode="append")
-    # Warp SQL §8.1: 415 unsupported_arrow_type (it was DuckDB's own 400 sql_error).
+    # Chargewire §8.1: 415 unsupported_arrow_type (it was DuckDB's own 400 sql_error).
     assert response.status_code == 415 and response.json()["code"] == "unsupported_arrow_type", response.text
     assert "decimal256(39, 0) cannot be ingested" in response.json()["detail"], response.text
     assert session.scalar(sql="SELECT count(*) FROM wide_in") == 3

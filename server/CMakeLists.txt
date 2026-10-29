@@ -35,8 +35,8 @@ endif()
 
 # DuckDB 2.0 and Arrow C++ (IPC only), built by scripts/build-deps.sh.
 set(HARDCHARGER_DEPS "${CMAKE_CURRENT_SOURCE_DIR}/.deps" CACHE PATH "Pinned dependency builds")
-set(WARPSQL_ARROW_PREFIX "${HARDCHARGER_DEPS}/arrow-install" CACHE PATH "" FORCE)
-set(WARPSQL_DUCKDB_PREFIX "${HARDCHARGER_DEPS}/duckdb-install" CACHE PATH "" FORCE)
+set(CHARGEWIRE_ARROW_PREFIX "${HARDCHARGER_DEPS}/arrow-install" CACHE PATH "" FORCE)
+set(CHARGEWIRE_DUCKDB_PREFIX "${HARDCHARGER_DEPS}/duckdb-install" CACHE PATH "" FORCE)
 
 # HARDCHARGER_STATIC (the release builds): DuckDB, with its built-in extensions, links in
 # statically, as Arrow, Boost, yaml-cpp, replxx and (with OPENSSL_USE_STATIC_LIBS) OpenSSL
@@ -56,7 +56,7 @@ if(HARDCHARGER_STATIC)
   # DuckDB's generated loader registers every built-in extension before main() (in a
   # shared libduckdb, the library does that itself); as an interface source, it is
   # compiled into every program that links DuckDB.
-  set(_duckdb_lib "${WARPSQL_DUCKDB_PREFIX}/lib")
+  set(_duckdb_lib "${CHARGEWIRE_DUCKDB_PREFIX}/lib")
   if(IOS)
     file(GLOB _duckdb_extensions "${_duckdb_lib}/lib*_extension.a")
   else()
@@ -82,9 +82,9 @@ if(HARDCHARGER_STATIC)
   find_package(Threads REQUIRED)
   add_library(hardcharger_duckdb INTERFACE)
   target_sources(hardcharger_duckdb INTERFACE
-                 "${WARPSQL_DUCKDB_PREFIX}/share/duckdb-static/duckdb_static_extension_loader.c"
-                 "${WARPSQL_DUCKDB_PREFIX}/share/duckdb-static/static_extension_autoregister.cpp")
-  target_include_directories(hardcharger_duckdb INTERFACE "${WARPSQL_DUCKDB_PREFIX}/include")
+                 "${CHARGEWIRE_DUCKDB_PREFIX}/share/duckdb-static/duckdb_static_extension_loader.c"
+                 "${CHARGEWIRE_DUCKDB_PREFIX}/share/duckdb-static/static_extension_autoregister.cpp")
+  target_include_directories(hardcharger_duckdb INTERFACE "${CHARGEWIRE_DUCKDB_PREFIX}/include")
   if(IOS)
     # As macOS, with the build's libcurl (in the archives); libcurl also uses the
     # system's proxy settings (SystemConfiguration).
@@ -101,14 +101,14 @@ if(HARDCHARGER_STATIC)
                           "$<LINK_GROUP:RESCAN,${_duckdb_archives},${OPENSSL_SSL_LIBRARY},${OPENSSL_CRYPTO_LIBRARY}>"
                           OpenSSL::SSL OpenSSL::Crypto Threads::Threads ${CMAKE_DL_LIBS})
   endif()
-  # warp-sql links DuckDB through DUCKDB_LIBRARY; find_library leaves a set value alone.
+  # chargewire links DuckDB through DUCKDB_LIBRARY; find_library leaves a set value alone.
   set(DUCKDB_LIBRARY hardcharger_duckdb CACHE STRING "DuckDB, statically" FORCE)
 endif()
 
-# The Warp SQL server SDK and its DuckDB backend, and its client library (for the
-# command-line client). Its own tests (warpsql-client-tests) build on request only.
-set(WARPSQL_BUILD_TESTS ON)
-add_subdirectory(../third_party/warp-sql/cpp warp-sql EXCLUDE_FROM_ALL)
+# The Chargewire server SDK and its DuckDB backend, and its client library (for the
+# command-line client). Its own tests (chargewire-client-tests) build on request only.
+set(CHARGEWIRE_BUILD_TESTS ON)
+add_subdirectory(../third_party/chargewire/cpp chargewire EXCLUDE_FROM_ALL)
 
 # jwt-cpp 0.7.2 (header-only; Boost.JSON traits).
 set(JWT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -131,15 +131,15 @@ FetchContent_Declare(
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(yaml-cpp)
 
-# The Warp SQL specification's version (the startup banner names it): its OpenAPI
+# The Chargewire specification's version (the startup banner names it): its OpenAPI
 # document's info.version.
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/warp-sql/spec/openapi.yaml" _warpsql_openapi LIMIT 4096)
-if(NOT _warpsql_openapi MATCHES "\ninfo:\r?\n  title: Warp SQL\r?\n  version: ([0-9]+\\.[0-9]+\\.[0-9]+)\r?\n")
-  message(FATAL_ERROR "third_party/warp-sql/spec/openapi.yaml: no info.version for Warp SQL")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/chargewire/spec/openapi.yaml" _chargewire_openapi LIMIT 4096)
+if(NOT _chargewire_openapi MATCHES "\ninfo:\r?\n  title: Chargewire\r?\n  version: ([0-9]+\\.[0-9]+\\.[0-9]+)\r?\n")
+  message(FATAL_ERROR "third_party/chargewire/spec/openapi.yaml: no info.version for Chargewire")
 endif()
-set(WARPSQL_SPEC_VERSION "${CMAKE_MATCH_1}")
+set(CHARGEWIRE_SPEC_VERSION "${CMAKE_MATCH_1}")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-             "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/warp-sql/spec/openapi.yaml")
+             "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/chargewire/spec/openapi.yaml")
 configure_file(src/version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.hpp" @ONLY)
 
 # The web UI, embedded when HARDCHARGER_WEB_UI names a build of ui/ (cmake/web_ui.cmake).
@@ -191,8 +191,8 @@ add_library(hardcharger_authz OBJECT
   src/authz/views.cc)
 target_include_directories(hardcharger_authz PRIVATE src)
 target_include_directories(hardcharger_authz SYSTEM PRIVATE
-                           "${WARPSQL_DUCKDB_PREFIX}/include/duckdb_third_party")
-target_link_libraries(hardcharger_authz PUBLIC warpsql_duckdb OpenSSL::Crypto)
+                           "${CHARGEWIRE_DUCKDB_PREFIX}/include/duckdb_third_party")
+target_link_libraries(hardcharger_authz PUBLIC chargewire_duckdb OpenSSL::Crypto)
 target_compile_options(hardcharger_authz PRIVATE ${HARDCHARGER_AUTHZ_WARNINGS})
 
 # Everything but main(), shared by the server and the unit tests.
@@ -225,7 +225,7 @@ add_library(hardcharger_core STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/generated/web_ui_files.cc")
 target_include_directories(hardcharger_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_sources(hardcharger_core PRIVATE $<TARGET_OBJECTS:hardcharger_authz>)
-target_link_libraries(hardcharger_core PUBLIC warpsql_duckdb OpenSSL::Crypto jwt-cpp::jwt-cpp yaml-cpp::yaml-cpp
+target_link_libraries(hardcharger_core PUBLIC chargewire_duckdb OpenSSL::Crypto jwt-cpp::jwt-cpp yaml-cpp::yaml-cpp
                       PRIVATE ZLIB::ZLIBSTATIC)
 target_compile_options(hardcharger_core PRIVATE ${HARDCHARGER_WARNINGS})
 if(IOS)
@@ -239,15 +239,15 @@ function(hardcharger_rpath target)
   if(HARDCHARGER_STATIC)
     return()  # nothing to find at run time
   elseif(APPLE)
-    set_target_properties(${target} PROPERTIES BUILD_RPATH "${WARPSQL_DUCKDB_PREFIX}/lib"
+    set_target_properties(${target} PROPERTIES BUILD_RPATH "${CHARGEWIRE_DUCKDB_PREFIX}/lib"
                                                INSTALL_RPATH "@executable_path/../lib")
   else()
-    set_target_properties(${target} PROPERTIES BUILD_RPATH "${WARPSQL_DUCKDB_PREFIX}/lib"
+    set_target_properties(${target} PROPERTIES BUILD_RPATH "${CHARGEWIRE_DUCKDB_PREFIX}/lib"
                                                INSTALL_RPATH "\$ORIGIN/../lib")
   endif()
 endfunction()
 
-# The command-line client's library (client/), on the Warp SQL client library, with
+# The command-line client's library (client/), on the Chargewire client library, with
 # replxx for line editing (built by scripts/build-replxx.sh at its pinned release).
 set(HARDCHARGER_REPLXX_PREFIX "${HARDCHARGER_DEPS}/replxx-install" CACHE PATH "replxx install prefix")
 find_package(Threads REQUIRED)  # replxx's config names Threads::Threads
@@ -266,9 +266,9 @@ add_library(hardcharger_client STATIC
   client/shell_loop.cc
   client/sql_processor.cc
   client/syntax_highlighter.cc
-  client/warp_connection.cc)
+  client/chargewire_connection.cc)
 target_include_directories(hardcharger_client PUBLIC client "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(hardcharger_client PUBLIC warpsql_client replxx::replxx)
+target_link_libraries(hardcharger_client PUBLIC chargewire_client replxx::replxx)
 target_compile_options(hardcharger_client PRIVATE ${HARDCHARGER_WARNINGS})
 if(WIN32)
   # windows.h without GDI: its ERROR macro would replace CommandResult::ERROR.
@@ -278,13 +278,13 @@ if(HARDCHARGER_EMBEDDED)
   # The server for an app's process: main.cc as hardcharger_server_main, with the hooks of
   # src/embedding.hpp, behind embedded/hardcharger_embedded.h. The smoke test starts,
   # uses and stops a server through that API, twice, as an app would.
-  file(STRINGS ../third_party/warp-sql/cpp/CMakeLists.txt _warpsql_project REGEX "^project\\(warpsql VERSION ")
-  string(REGEX REPLACE "^project\\(warpsql VERSION ([0-9.]+).*" "\\1" HARDCHARGER_WARP_SQL_VERSION "${_warpsql_project}")
+  file(STRINGS ../third_party/chargewire/cpp/CMakeLists.txt _chargewire_project REGEX "^project\\(chargewire VERSION ")
+  string(REGEX REPLACE "^project\\(chargewire VERSION ([0-9.]+).*" "\\1" HARDCHARGER_CHARGEWIRE_VERSION "${_chargewire_project}")
   # With the console (embedded/console.cc): the `hardcharger` client's own statement
   # splitting, dot commands and output formatting, for an app's SQL console.
   add_library(hardcharger_embedded STATIC src/main.cc src/embedding.cc embedded/console.cc)
   target_compile_definitions(hardcharger_embedded PRIVATE HARDCHARGER_EMBEDDED main=hardcharger_server_main
-                             HARDCHARGER_WARP_SQL_VERSION="${HARDCHARGER_WARP_SQL_VERSION}")
+                             HARDCHARGER_CHARGEWIRE_VERSION="${HARDCHARGER_CHARGEWIRE_VERSION}")
   target_include_directories(hardcharger_embedded PUBLIC embedded)
   target_link_libraries(hardcharger_embedded PUBLIC hardcharger_core hardcharger_notices hardcharger_client)
   target_compile_options(hardcharger_embedded PRIVATE ${HARDCHARGER_WARNINGS})
@@ -292,7 +292,7 @@ if(HARDCHARGER_EMBEDDED)
     target_compile_definitions(hardcharger_embedded PRIVATE HARDCHARGER_STATIC_DUCKDB)
   endif()
   add_executable(hardcharger-embedded-smoke embedded/smoke_test.cc)
-  target_link_libraries(hardcharger-embedded-smoke PRIVATE hardcharger_embedded warpsql_client)
+  target_link_libraries(hardcharger-embedded-smoke PRIVATE hardcharger_embedded chargewire_client)
   target_compile_options(hardcharger-embedded-smoke PRIVATE ${HARDCHARGER_WARNINGS})
   hardcharger_rpath(hardcharger-embedded-smoke)
   return()

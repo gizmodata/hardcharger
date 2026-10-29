@@ -45,7 +45,7 @@ def exchange(server, key, user: str, role: str, catalog_access=None) -> httpx.Re
               "exp": now + datetime.timedelta(hours=1)}
     if catalog_access is not None:
         claims["catalog_access"] = catalog_access
-    return httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
+    return httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token",
                       json={"grant_type": "token_exchange", "subject_token": jwt.encode(payload=claims, key=key[0],
                                                                                         algorithm="RS256")})
 

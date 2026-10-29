@@ -1,7 +1,7 @@
 """Port of GizmoSQL 1.x tests/integration/test_set_query_log_level.cpp (2 cases).
 
 With the query log level at INFO, a client statement is logged ("is_internal": "false")
-and the SQL a metadata request runs (1.x: DoGetTables; Warp SQL: metadata/tables) is
+and the SQL a metadata request runs (1.x: DoGetTables; Chargewire: metadata/tables) is
 not; after SET hardcharger.query_log_level = DEBUG in the session it is, at DEBUG. SET
 GLOBAL from another session changes an existing session's level at once. Both apply;
 log lines are read from the server's JSON log.

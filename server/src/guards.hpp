@@ -165,7 +165,7 @@ struct GuardContext {
 std::optional<std::string> ClassifyGatedCommand(duckdb_v2_connection_handle connection, const Piece& piece,
                                                 DUCKDB_V2_STATEMENT_TYPE type);
 
-// Throws warpsql::Error(kPermissionDenied) when `piece` may not run.
+// Throws chargewire::Error(kPermissionDenied) when `piece` may not run.
 void CheckStatement(const GuardContext& context, const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type);
 
 // The type of the statement that actually runs: EXPLAIN ANALYZE runs the statement it

@@ -2,7 +2,7 @@
 // schema browser): its catalog and schema, its transaction, and its role. The page publishes
 // it; readers subscribe (useActiveTab).
 
-import type { TransactionState } from "@gizmodata/warp-sql";
+import type { TransactionState } from "@gizmodata/chargewire";
 import { useSyncExternalStore } from "react";
 
 export interface ActiveTab {

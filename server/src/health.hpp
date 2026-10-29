@@ -42,7 +42,7 @@ class HealthChecker {
   const std::string query_;
   const std::chrono::seconds interval_;
   const std::chrono::seconds staleness_;
-  warpduckdb::Connection connection_;
+  chargewire_duckdb::Connection connection_;
 
   mutable std::mutex mutex_;
   std::condition_variable wake_;

@@ -42,7 +42,7 @@ for system in "${SYSTEMS[@]}"; do
     gizmosql) variants=("") ;;
     quack) variants=("--preserve-order true" "--preserve-order false") ;;
     # One stream (with and without zstd), then results split into partitions read at
-    # once (Warp SQL §6.10; PARTITIONS lists the counts), then ingests sent in parts at
+    # once (Chargewire §6.10; PARTITIONS lists the counts), then ingests sent in parts at
     # once (§8.3; INGEST_PARTS lists the counts).
     hardcharger)
       variants=("--compression none" "--compression zstd")

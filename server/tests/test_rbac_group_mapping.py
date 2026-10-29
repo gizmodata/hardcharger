@@ -10,7 +10,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from rbac import RbacServer, WarpError, expect_allowed, start_rbac_server
+from rbac import RbacServer, ChargewireError, expect_allowed, start_rbac_server
 
 ISSUER = "https://idp.example.test"
 
@@ -47,7 +47,7 @@ def error(client, sql: str) -> str:
     try:
         client.run(sql=sql)
         return ""
-    except WarpError as raised:
+    except ChargewireError as raised:
         return raised.detail
 
 
@@ -76,7 +76,7 @@ def test_a_group_in_the_token_gives_its_role(server):
 
 
 def test_a_group_never_creates_a_user(server):
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         member(server=server, user="not_in_store", groups=["okta-analysts"])
     assert raised.value.code == "invalid_token" and "is not defined on this server" in raised.value.detail
 
@@ -155,10 +155,10 @@ def start_with_idp(launcher, store, idp, **env) -> RbacServer:
 
 
 def exchange(server, subject_token: str):
-    response = httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
+    response = httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token",
                           json={"grant_type": "token_exchange", "subject_token": subject_token})
     if response.status_code != 200:
-        raise WarpError(status=response.status_code, code=response.json()["code"], detail=response.json()["detail"])
+        raise ChargewireError(status=response.status_code, code=response.json()["code"], detail=response.json()["detail"])
     return server.client(token=response.json()["access_token"])
 
 
@@ -177,7 +177,7 @@ def test_the_sign_in_tokens_groups_reach_the_session(launcher, store, idp):
     without = exchange(server=server, subject_token=idp["token"](sub="gina", role="user", groups=["other"]))
     refused(detail=error(client=without, sql="SELECT * FROM sales"), table="sales")
     # Under access control a sign-in token signs in only the store's users.
-    with pytest.raises(WarpError) as stranger:
+    with pytest.raises(ChargewireError) as stranger:
         exchange(server=server, subject_token=idp["token"](sub="stranger", role="user", groups=["okta-analysts"]))
     assert stranger.value.code == "invalid_credentials" and "is not defined on this server" in stranger.value.detail
 

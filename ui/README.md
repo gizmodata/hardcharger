@@ -12,8 +12,8 @@
 The browser UI that [Hardcharger](../README.md#built-in-web-ui) serves at `/ui` when started
 with `--web-ui`: a static single-page app (React 19, Vite, TypeScript) compiled into
 `hardcharger-server`, on the server's own port, origin and TLS certificate. There is no Node
-backend and no cross-origin access: the browser speaks [Warp SQL](https://github.com/gizmodata/warp-sql)
-(plain HTTP and Apache Arrow) to the server with [`@gizmodata/warp-sql`](https://github.com/gizmodata/warp-sql-js).
+backend and no cross-origin access: the browser speaks [Chargewire](https://github.com/gizmodata/chargewire)
+(plain HTTP and Apache Arrow) to the server with [`@gizmodata/chargewire`](https://github.com/gizmodata/chargewire-js).
 
 For the v2.1.0+ administrator tabs, see [SQL Monitor and Server Configuration](../docs/sql-monitor.md).
 They are available in browser sessions and the [desktop app's SQL workspace](../docs/desktop-app.md).
@@ -26,7 +26,7 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   lifecycle, recent history, timeouts, queue slots, independent query-detail windows,
   session controls, and live session/global settings. Monitoring
   requires `--enable-instrumentation`; see [the operational guide](../docs/sql-monitor.md).
-- ✍️ **SQL editor** (Monaco), in tabs: up to 20, each with its own Warp SQL session, so one
+- ✍️ **SQL editor** (Monaco), in tabs: up to 20, each with its own Chargewire session, so one
   tab's long query or open transaction never touches another. New with **+** or Alt+N, close
   with **×** or Alt+W (asking first when a transaction is open or text is unsaved),
   double-click to rename, drag to reorder; a spinner, a red dot or an amber dot says a tab is
@@ -42,7 +42,7 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   (1,000 by default), with "truncated at … rows" when a result is cut.
 - 🔁 **Sessions and transactions**: `BEGIN` shows **In transaction** with Commit and
   Rollback, and a failed statement **Transaction failed — Rollback to continue**, as the server
-  reports them (the session document's `transaction`, Warp SQL §5.2); the pickers lock while
+  reports them (the session document's `transaction`, Chargewire §5.2); the pickers lock while
   one is open. The session chip shows the server's id for the session (its logs and
   `KILL SESSION` use it) and copies it; **New session** starts afresh. When the server has lost
   a tab's session (idle timeout, restart), the next run starts a new one and says so, unless a
@@ -72,7 +72,7 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   a script got and whether the transaction now needs a rollback.
 - 🗂️ **Schema browser** (the side panel; hide it with the panel button in the header, drag its
   edge to resize): the catalogs, their schemas, **Tables** and **Views** in separate groups,
-  and columns with their types, each level listed when opened through the Warp SQL metadata
+  and columns with their types, each level listed when opened through the Chargewire metadata
   calls, so it shows exactly what the server's access control lets the user see. The active
   tab's catalog starts open; `temp` (one session's own) is left out.
   - **Double-click** a name, or **drag** it into the editor: tables and views go in fully
@@ -146,7 +146,7 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
     value (formulas aren't calculated, macros never run); error cells NULL; empty rows left
     out; a merged range's value in its first cell; at most 32,767 characters a cell and
     1,048,576 rows, as Excel itself.
-  - **Sending**: its own Warp SQL session (as the tab's **Run as** role), one transaction, and
+  - **Sending**: its own Chargewire session (as the tab's **Run as** role), one transaction, and
     one bulk-ingest request (§8.1) per piece, in the file's order: the first creates or
     replaces the table, the rest append. Nothing is visible until the commit; an error or
     **Cancel upload** rolls back, and the table is as it was. A partitioned ingest (§8.3) isn't
@@ -177,10 +177,10 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   and its **×** hides it in this browser.
 - 👥 **Sessions**: an administrator sees every session on the server and can end one
   (`KILL SESSION`); everyone else sees their own.
-- 🧭 **API** (`/ui/api`): the server's Warp SQL API in [Swagger UI](https://github.com/swagger-api/swagger-ui)
+- 🧭 **API** (`/ui/api`): the server's Chargewire API in [Swagger UI](https://github.com/swagger-api/swagger-ui)
   (`swagger-ui-dist`, pinned, in the build: nothing comes from a CDN), from the OpenAPI
   document the server lists in discovery (capability `openapi`, `links.openapi`, normally
-  `GET /warp/v1/openapi.json`); a server without one gets a short note instead. The page's
+  `GET /chargewire/v1/openapi.json`); a server without one gets a short note instead. The page's
   code (about 1.7 MB, 435 KiB gzipped) loads only when the page is first opened. Every
   request goes to this origin: the document's `servers` are replaced by it and the server
   switcher and **Authorize** are gone. **Try it out** is signed in as you: a request
@@ -193,12 +193,12 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   with the page's token, an Arrow download, nothing sent to another origin, the dark theme,
   and a server without the document); unit: `apiDocs.test.ts` (which requests get the token).
 - 🔐 **Hardcharger's own sign-in and access control.** The password goes once to
-  `POST /warp/v1/auth/token`; the browser keeps only the short-lived access token, in memory
+  `POST /chargewire/v1/auth/token`; the browser keeps only the short-lived access token, in memory
   and this tab's `sessionStorage`, never in `localStorage` or a cookie. Under mutual TLS, the
   browser presents its client certificate to load `/ui` at all, and with
   `--mtls-certificate-sign-in` the page offers **Sign in with my certificate** (the UI uses
   fetch's default credentials mode, never `omit`, which would leave the certificate off).
-  With browser sign-in on the server (`oauth_client_id`, Warp SQL's `oauth_browser`), the page
+  With browser sign-in on the server (`oauth_client_id`, Chargewire's `oauth_browser`), the page
   offers **Sign in with <provider>** (or "single sign-on"): it starts a flow with `return_to`
   set to itself, keeps the flow's poll secret in this tab's `sessionStorage`, goes to the
   identity provider, and on its return (the flow id in the URL fragment, which it removes at
@@ -206,7 +206,7 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   fragment naming a flow this tab didn't start is ignored. e2e: `oauth.spec.ts`, against a
   mock identity provider (`test/e2e/idp.ts`).
 - 🎨 The Hardcharger™ bull logo (its light or dark variant to match the theme), GizmoData's
-  orange and Warp blue, light and dark themes (the system's choice until you pick one), Inter
+  orange and Chargewire blue, light and dark themes (the system's choice until you pick one), Inter
   embedded in the build (SIL Open Font License 1.1,
   served as `/ui/fonts/Inter-LICENSE.txt`).
 
@@ -224,7 +224,7 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
 | `/ui/` and any path under `/ui/` whose last segment has no dot      | `index.html` (the app's own routes, such as `/ui/sessions`)     |
 | an existing file                                                    | the file, with its content type (`.wasm` is `application/wasm`) |
 | a missing file (anything under `/ui/assets/`, or a name with a dot) | `404`, `Cache-Control: no-store`                                |
-| anything else outside `/ui` and `/warp`                             | not the UI's: the server's own `404`                            |
+| anything else outside `/ui` and `/chargewire`                             | not the UI's: the server's own `404`                            |
 
 `/ui/assets/*` is `Cache-Control: public, max-age=31536000, immutable`; everything else
 (`index.html` above all) is `no-cache`, so a new build is picked up at once. The server sends
@@ -281,7 +281,7 @@ Node 24 or later.
 
 ```bash
 npm ci
-HARDCHARGER_UI_DEV_SERVER=http://127.0.0.1:31337 npm run dev   # http://localhost:5173/ui/, /warp proxied to the server
+HARDCHARGER_UI_DEV_SERVER=http://127.0.0.1:31337 npm run dev   # http://localhost:5173/ui/, /chargewire proxied to the server
 npm run lint        # eslint (typed rules, React hooks) and prettier
 npm run typecheck   # the app, the unit tests, the e2e tests and the configs (a planted error fails it)
 npm test            # unit tests (vitest)
@@ -289,10 +289,10 @@ npm run build       # dist/, then checks it: no inline code, hashed assets, noth
 npm run package     # release/hardcharger-ui-<version>.tar.gz, SHA256SUMS, its CONTENT_SHA256
 ```
 
-The JavaScript client, `@gizmodata/warp-sql`, is not on npm. `vendor/` holds the package
-`npm pack` makes from [gizmodata/warp-sql-js](https://github.com/gizmodata/warp-sql-js) at the
-commit pinned in [`vendor/warp-sql-js.json`](vendor/warp-sql-js.json) (and
-`package-lock.json` pins its hash again). `node scripts/vendor-warp-sql.mjs --verify --rebuild`
+The JavaScript client, `@gizmodata/chargewire`, is not on npm. `vendor/` holds the package
+`npm pack` makes from [gizmodata/chargewire-js](https://github.com/gizmodata/chargewire-js) at the
+commit pinned in [`vendor/chargewire-js.json`](vendor/chargewire-js.json) (and
+`package-lock.json` pins its hash again). `node scripts/vendor-chargewire.mjs --verify --rebuild`
 rebuilds that commit and checks every file; `--update <commit>` moves the pin.
 
 SheetJS Community Edition (`xlsx`, Apache-2.0), which reads Excel workbooks for Upload data, is
@@ -337,9 +337,9 @@ sees only their tenant's catalog and is signed out when an administrator ends th
 
 CI ([`server.yml`](../.github/workflows/server.yml)) runs the lint, typecheck and unit tests, the
 client's provenance check, and the e2e tests in both browsers against the Linux x86-64 server
-built in the same run, whenever `ui/`, the server's web UI code or the warp-sql submodule
+built in the same run, whenever `ui/`, the server's web UI code or the chargewire submodule
 changes, and always on `main` and on tags; a release waits for them. The provenance check
-clones gizmodata/warp-sql-js with a read-only deploy key, the `DEPLOY_KEY_WARP_SQL_JS` secret.
+clones gizmodata/chargewire-js with a read-only deploy key, the `DEPLOY_KEY_CHARGEWIRE_JS` secret.
 
 ## 📄 License
 

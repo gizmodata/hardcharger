@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Serves the built UI (dist/) at /ui/ the way hardcharger-server does (scripts/ui-contract.mjs)
-// and passes /warp/… through to a Warp SQL server, so the page and the protocol share one
+// and passes /chargewire/… through to a Chargewire server, so the page and the protocol share one
 // origin, as in production. The e2e tests run against it; it also works by hand:
 //
 //   node scripts/serve.mjs --upstream http://127.0.0.1:31337 [--port 5180] [--dist dist]
@@ -25,7 +25,7 @@ export function createUiServer({ dist, upstream }) {
 
   return http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://placeholder");
-    if (url.pathname === "/warp" || url.pathname.startsWith("/warp/")) {
+    if (url.pathname === "/chargewire" || url.pathname.startsWith("/chargewire/")) {
       const upstreamReq = http.request(
         {
           host: target.hostname,
@@ -37,7 +37,7 @@ export function createUiServer({ dist, upstream }) {
         (upstreamRes) => {
           res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
           upstreamRes.pipe(res);
-          // A body the server cut short (a result stream ending without its last chunk, Warp
+          // A body the server cut short (a result stream ending without its last chunk, Chargewire
           // SQL §6.6) must reach the browser cut short too, never as a complete one.
           upstreamRes.on("close", () => {
             if (!upstreamRes.complete) res.destroy();
@@ -105,6 +105,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   const server = createUiServer({ dist: values.dist, upstream: values.upstream });
   server.listen(Number(values.port), values.host, () => {
-    console.log(`Hardcharger UI on http://${values.host}:${server.address().port}/ui/ (Warp SQL: ${values.upstream})`);
+    console.log(`Hardcharger UI on http://${values.host}:${server.address().port}/ui/ (Chargewire: ${values.upstream})`);
   });
 }

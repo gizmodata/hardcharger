@@ -3,7 +3,7 @@
 #
 # Every entry hides reports, so each names known-benign behaviour in third-party code
 # (DuckDB internals, OpenSSL, the C++ runtime) with the reason. Never a Hardcharger or
-# warp-sql symbol: a race there is a bug to fix, not to suppress. Syntax:
+# chargewire symbol: a race there is a bug to fix, not to suppress. Syntax:
 #   race:<symbol or file substring>   thread_leak:<...>   deadlock:<...>
 # https://github.com/google/sanitizers/wiki/ThreadSanitizerSuppressions
 
@@ -37,7 +37,7 @@ race:duckdb::JoinHashTable::ScanStructure::NextRightSemiOrAntiJoin
 # :1156, in pqSaveParameterStatus), so two threads connecting at once race on them. Only
 # the deprecated connection-less PQescapeString and PQescapeBytea read them (fe-exec.c:4229
 # and :4605; the source's comment: "at least in single-connection-using programs"); no
-# code in the server, warp-sql, DuckDB or its built-in extensions calls either, and every
+# code in the server, chargewire, DuckDB or its built-in extensions calls either, and every
 # connection keeps its own copy in its PGconn. Seen in TSan CI with two sessions' statements
 # opening pool connections to one DuckLake-on-PostgreSQL catalog at the same moment.
 race:pqSaveParameterStatus

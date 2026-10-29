@@ -12,7 +12,7 @@ SELECT ?::VARIANT advertises the extension.
 import pyarrow as pa
 import pytest
 
-from warp_client import read_table
+from chargewire_client import read_table
 
 EXTENSION = "arrow.parquet.variant"
 ROWS = ("SELECT * FROM (VALUES (1, 42::VARIANT), (2, 'hello'::VARIANT), (3, 3.5::DOUBLE::VARIANT), "

@@ -1,12 +1,12 @@
-// Leaving the page (closing the tab, reloading, navigating away) ends its Warp SQL sessions
+// Leaving the page (closing the tab, reloading, navigating away) ends its Chargewire sessions
 // on the server at once, instead of leaving them open until their idle timeout. The DELETEs
-// (Warp SQL §5.4) are keepalive fetches, which the browser finishes after the page is gone;
+// (Chargewire §5.4) are keepalive fetches, which the browser finishes after the page is gone;
 // sendBeacon can't send the Authorization header they need.
 //
 // A page kept in the back/forward cache comes back with its sessions ended: it loads again,
 // which starts new ones (and restores the tabs, kept in this browser).
 
-import { warpBase } from "./warp";
+import { chargewireBase } from "./chargewire";
 import { pageRequests } from "./pageRequests";
 
 const closeRequest = "hardcharger:close-window";
@@ -18,7 +18,7 @@ export function requestWindowClose(): void {
 
 export interface OpenSessions {
   token: string;
-  /** The Warp SQL session ids the page holds open. */
+  /** The Chargewire session ids the page holds open. */
   ids: string[];
 }
 
@@ -26,7 +26,7 @@ export interface OpenSessions {
 export function endSessions(open: OpenSessions | undefined): number {
   if (!open) return 0;
   for (const id of open.ids) {
-    fetch(`${warpBase()}/v1/sessions/${encodeURIComponent(id)}`, {
+    fetch(`${chargewireBase()}/v1/sessions/${encodeURIComponent(id)}`, {
       method: "DELETE",
       keepalive: true,
       headers: { Authorization: `Bearer ${open.token}` },

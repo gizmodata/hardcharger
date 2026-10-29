@@ -18,7 +18,7 @@ Every negative case has a positive twin that sees the row the other may not.
 
 import pytest
 
-from rbac import WarpError, expect_allowed, expect_blocked, mint, start_rbac_server
+from rbac import ChargewireError, expect_allowed, expect_blocked, mint, start_rbac_server
 
 SCHEMA = "_hardcharger_system.hardcharger_information_schema"
 ISSUER = "https://idp.example"
@@ -266,7 +266,7 @@ def test_effective_privileges_follow_inheritance_ownership_and_set_role(server, 
     assert not any(row[3] == "salaries" for row in mine)
     # The administrator asks for her: the same rows.
     assert effective(client=admin, sql="SELECT * FROM hardcharger_effective_privileges(user_name := 'alice')") == mine
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         admin.run(sql="SELECT * FROM hardcharger_effective_privileges('no_such_user')")
     assert "user no_such_user does not exist" in raised.value.detail, raised.value
     # SET ROLE narrows what she holds now, and enabled_roles; hardcharger_grants still shows

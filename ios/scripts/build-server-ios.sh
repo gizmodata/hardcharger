@@ -48,14 +48,14 @@ fi
   exit 1
 }
 
-# Build-time tools a cross build can't run: warp-sql's warpsql_openapi_json, compiled for
+# Build-time tools a cross build can't run: chargewire's chargewire_openapi_json, compiled for
 # the Mac; ios/scripts/run-host-tool.sh (CMAKE_CROSSCOMPILING_EMULATOR) runs it in place
 # of the iOS binary CMake builds.
 HOST_TOOLS="$BUILD/host-tools"
 mkdir -p "$HOST_TOOLS"
-OPENAPI_SRC="$ROOT/third_party/warp-sql/cpp/tools/openapi_json.cc"
-if [ ! -x "$HOST_TOOLS/warpsql_openapi_json" ] || [ "$OPENAPI_SRC" -nt "$HOST_TOOLS/warpsql_openapi_json" ]; then
-  xcrun --sdk macosx clang++ -std=c++20 -O2 "$OPENAPI_SRC" -o "$HOST_TOOLS/warpsql_openapi_json"
+OPENAPI_SRC="$ROOT/third_party/chargewire/cpp/tools/openapi_json.cc"
+if [ ! -x "$HOST_TOOLS/chargewire_openapi_json" ] || [ "$OPENAPI_SRC" -nt "$HOST_TOOLS/chargewire_openapi_json" ]; then
+  xcrun --sdk macosx clang++ -std=c++20 -O2 "$OPENAPI_SRC" -o "$HOST_TOOLS/chargewire_openapi_json"
 fi
 
 for sdk in "$@"; do
@@ -77,7 +77,7 @@ for sdk in "$@"; do
       touch "$DEPS/arrow-install/.ios-arrow.stamp"
     fi
     # DuckDB: the stamp names the pinned commit and the recipe files, so a bump rebuilds.
-    duckdb_key=$( (sed -n 's/^DUCKDB_COMMIT=//p' "$ROOT/third_party/warp-sql/cpp/scripts/build-duckdb.sh";
+    duckdb_key=$( (sed -n 's/^DUCKDB_COMMIT=//p' "$ROOT/third_party/chargewire/cpp/scripts/build-duckdb.sh";
                    cat "$ROOT"/server/scripts/patch-duckdb*.cmake "$ROOT/server/scripts/duckdb-extensions-ios.cmake" \
                        "$ROOT/server/scripts/retire-ducklake-patch.cmake" \
                        "$ROOT/server/scripts/deps-duckdb.sh" "$ROOT/server/scripts/build-extension-deps.sh") \

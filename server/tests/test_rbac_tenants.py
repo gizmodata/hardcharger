@@ -4,7 +4,7 @@ exactly like something that does not exist."""
 
 import pytest
 
-from rbac import WarpError, expect_allowed, mint, start_rbac_server
+from rbac import ChargewireError, expect_allowed, mint, start_rbac_server
 
 
 @pytest.fixture(scope="module")
@@ -62,7 +62,7 @@ def outcome(client, sql: str):
     try:
         client.run(sql=sql)
         return ("ok", "")
-    except WarpError as error:
+    except ChargewireError as error:
         return (error.code, error.detail)
 
 
@@ -114,7 +114,7 @@ def test_metadata_shows_only_the_tenants_catalogs(joe):
     # And the server's read-only system catalog, as for every user (its views list only
     # what the reader may see).
     assert column(table=databases) == {"acme_db", "_hardcharger_system"}
-    # The Warp SQL metadata calls too.
+    # The Chargewire metadata calls too.
     catalogs = joe.metadata(kind="catalogs")
     assert "beta_db" not in str(catalogs.to_pylist()) and "acme_db" in str(catalogs.to_pylist())
     tables = joe.metadata(kind="tables", include_schema="true")
@@ -142,7 +142,7 @@ def test_metadata_cannot_be_reached_another_way(admin, joe):
                 "SELECT * FROM pg_catalog.pg_class", "SELECT * FROM pg_catalog.pg_namespace"]:
         try:
             text = str(joe.run(sql=sql).to_pylist())
-        except WarpError as error:
+        except ChargewireError as error:
             # Refusing is fine; it must not say why in a way that names beta's objects.
             assert "beta" not in error.detail, f"{sql}: {error}"
             continue
@@ -235,7 +235,7 @@ def test_changing_a_tenants_catalogs_ends_its_sessions(server, admin):
 
 def test_session_options_say_no_more_than_a_missing_catalog(server):
     def refusal(catalog: str):
-        with pytest.raises(WarpError) as raised:
+        with pytest.raises(ChargewireError) as raised:
             server.client(token=mint(user="acme/joe"), options={"catalog": catalog})
         return raised.value.code, raised.value.detail
 

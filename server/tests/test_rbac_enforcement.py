@@ -1,4 +1,4 @@
-"""Access control on query plans, attacked over Warp SQL.
+"""Access control on query plans, attacked over Chargewire.
 
 Every negative test asserts why the statement failed (Hardcharger's refusal and the
 privilege it names), and has a positive twin showing the same user can do the
@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.ipc  # noqa: F401 (pa.ipc)
 import pytest
 
-from rbac import (ARROW_STREAM, WarpError, arrow_bytes, expect_allowed, expect_blocked, expect_error,
+from rbac import (ARROW_STREAM, ChargewireError, arrow_bytes, expect_allowed, expect_blocked, expect_error,
                   start_rbac_server)
 
 SECRET = "no SELECT privilege on table"
@@ -155,7 +155,7 @@ def test_prepared_statements_with_parameters_are_checked_when_prepared_and_run(j
     # prepared or, at the latest, when run.
     try:
         open_type = joe.prepare(sql="SELECT value FROM secrets WHERE ? IS NOT NULL")
-    except WarpError as error:
+    except ChargewireError as error:
         assert error.code == "permission_denied" and SECRET in error.detail, str(error)
     else:
         expect_error(call=lambda: joe.execute_prepared(prepared_id=open_type, parameters=[1]),
@@ -177,21 +177,21 @@ def described_and_executed(client, sql: str, parameters=None) -> tuple[pa.Schema
 
 def test_a_prepare_describes_its_result_without_running_it(joe):
     # The result schema comes from binding the statement and converting its columns
-    # with warp_result_schema() (bound, never run), which access control lets through:
+    # with chargewire_result_schema() (bound, never run), which access control lets through:
     # the same schema the execution then sends, for a user with grants.
     described, executed = described_and_executed(client=joe, sql="SELECT *, uuid() AS u FROM orders WHERE id = ?",
                                                  parameters=[1])
     assert described.equals(executed, check_metadata=True), f"{described}\n!=\n{executed}"
     assert described.names == ["id", "amount", "customer", "u"]
     # Called directly, it describes nothing (positive twin above).
-    expect_blocked(client=joe, sql="SELECT * FROM warp_result_schema()", code="sql_error",
+    expect_blocked(client=joe, sql="SELECT * FROM chargewire_result_schema()", code="sql_error",
                    why="only describes a prepared statement's result")
 
 
 def test_binding_a_statement_never_describes_a_denied_table(joe):
     # JSON null parameters make the backend bind the statement first, to learn the
     # parameter types (duckdb_v2_statement_bind): that bind is checked too.
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         joe.run(sql="SELECT * FROM secrets WHERE id = ? OR ? IS NULL", parameters=[1, None])
     assert raised.value.code == "permission_denied" and SECRET in raised.value.detail
     assert "value" not in raised.value.detail.replace("value FROM", "")  # no column names leak
@@ -319,13 +319,13 @@ def test_bulk_ingest_is_checked_like_insert(server, admin, wanda, joe, bob):
     expect_error(call=lambda: bob.ingest(table="orders", rows=rows, mode="replace"),
                  code="permission_denied", why="may not drop table")
     # The upload function reads only an ingest's own rows.
-    expect_blocked(client=joe, sql="SELECT * FROM warp_upload()", code="sql_error",
+    expect_blocked(client=joe, sql="SELECT * FROM chargewire_upload()", code="sql_error",
                    why="only reads the rows of a bulk ingest")
     expect_allowed(client=bob, sql="DROP TABLE bob_ingested")
 
 
 def test_partitioned_ingest_is_checked_like_insert(server, admin, wanda, joe, bob):
-    # A partitioned ingest (Warp SQL §8.3) is one ingest: checked like one, all or nothing.
+    # A partitioned ingest (Chargewire §8.3) is one ingest: checked like one, all or nothing.
     rows = pa.table({"id": pa.array([41, 42, 43, 44], type=pa.int32()),
                      "amount": pa.array([4, 4, 4, 4], type=pa.int32()), "customer": ["p1", "p2", "p3", "p4"]})
     before = expect_allowed(client=admin, sql="SELECT count(*) AS n FROM orders").column("n")[0].as_py()
@@ -496,7 +496,7 @@ def test_access_control_statements_run_alone(joe, admin):
     expect_blocked(client=admin, sql="SHOW GRANTS; SELECT 1", code="sql_error", why="one at a time")
     assert expect_allowed(client=joe, sql="SHOW GRANTS").num_rows >= 1
     # Bind parameters make no sense for them.
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         joe.run(sql="SHOW GRANTS", parameters=[1])
     assert raised.value.code == "sql_error" and "takes no bind parameters" in raised.value.detail
 

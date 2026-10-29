@@ -66,7 +66,7 @@ test("a lazily loaded page that is gone: reloads with backoff, then a 'new versi
     const host = new URL(harness.url).host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     expectProblem(page, {
       console: new RegExp(
-        `${host}/warp/v1/sessions/s_[a-z0-9]+/statements/q_[a-z0-9]+ due to access control checks\\.$`,
+        `${host}/chargewire/v1/sessions/s_[a-z0-9]+/statements/q_[a-z0-9]+ due to access control checks\\.$`,
       ),
       required: false,
     });

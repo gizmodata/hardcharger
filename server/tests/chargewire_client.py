@@ -1,4 +1,4 @@
-"""A small Warp SQL client for Hardcharger's tests: plain HTTP calls, so a failing test
+"""A small Chargewire client for Hardcharger's tests: plain HTTP calls, so a failing test
 points at the server, not at a driver. GizmoSQL 1.x's battery used a Flight SQL
 client; the ported tests use this one through the same few verbs (sign in, open a
 session, run SQL, read rows, prepare, ingest, read metadata)."""
@@ -22,7 +22,7 @@ def _arrow_body(content: bytes) -> io.BytesIO:
     # with a meaningless length ("Expected to read 1953702523 metadata bytes": '{"st');
     # say what it was instead.
     if content[:1] == b"{":
-        raise WarpError(f"expected an Arrow stream, got JSON: {content[:500].decode(errors='replace')}")
+        raise ChargewireError(f"expected an Arrow stream, got JSON: {content[:500].decode(errors='replace')}")
     return io.BytesIO(initial_bytes=content)
 
 
@@ -51,7 +51,7 @@ def mint_server_token(secret_key: str, subject: str = "admin", role: str = "admi
     return jwt.encode(payload=payload, key=secret_key, algorithm="HS256")
 
 
-class WarpError(AssertionError):
+class ChargewireError(AssertionError):
     pass
 
 
@@ -72,7 +72,7 @@ class Client:
     # ---- Sessions ----
 
     def open_session(self, options: dict | None = None) -> httpx.Response:
-        return self.http.post(url="/warp/v1/sessions", headers=self.headers(),
+        return self.http.post(url="/chargewire/v1/sessions", headers=self.headers(),
                               json={"options": options or {}})
 
     def new_session(self, options: dict | None = None) -> "Session":
@@ -85,7 +85,7 @@ class Session:
     def __init__(self, client: Client, session_id: str):
         self.client = client
         self.id = session_id
-        self.url = f"/warp/v1/sessions/{session_id}"
+        self.url = f"/chargewire/v1/sessions/{session_id}"
 
     @property
     def http(self) -> httpx.Client:
@@ -129,9 +129,9 @@ class Session:
                              headers=self.headers())
 
     def query(self, sql: str, parameters=None, headers: dict[str, str] | None = None) -> pa.Table:
-        """Runs SQL on the streamed path and returns its rows; raises WarpError with the
+        """Runs SQL on the streamed path and returns its rows; raises ChargewireError with the
         problem document's detail when the statement fails. A statement that fails after
-        its result stream began ends the stream early (Warp SQL §6.6); as a conforming client
+        its result stream began ends the stream early (Chargewire §6.6); as a conforming client
         does, the statement's own document then says why."""
         body: dict = {"sql": sql}
         if parameters is not None:
@@ -143,12 +143,12 @@ class Session:
             try:
                 response.read()
             except httpx.RemoteProtocolError:
-                statement_id = response.headers.get("Warp-Statement-Id")
+                statement_id = response.headers.get("Chargewire-Statement-Id")
                 if not statement_id:
                     raise
                 doc = self.wait_done(statement_id=statement_id)
                 error = doc.get("error") or {}
-                raise WarpError(f"{error.get('status', 'stream ended early')}: {json.dumps(error)}")
+                raise ChargewireError(f"{error.get('status', 'stream ended early')}: {json.dumps(error)}")
         return self.table_of(response=response)
 
     def table_of(self, response: httpx.Response) -> pa.Table:
@@ -157,22 +157,22 @@ class Session:
         the JSON document of a statement that hasn't finished (the server's wait for an
         outcome ran out: Prefer: wait, else its 60 s cap, e.g. while the statement waited
         its turn behind an open result stream) is followed to the statement's end, and its
-        result read. Raises WarpError for anything else (no rows, a failure, an error)."""
+        result read. Raises ChargewireError for anything else (no rows, a failure, an error)."""
         if response.status_code == 200 and response.headers.get("content-type", "").startswith(ARROW_STREAM):
             return read_table(content=response.content)
         if response.status_code == 200 and response.headers.get("content-type", "").startswith("application/json"):
             doc = response.json()
             if doc.get("state") == "succeeded":
-                raise WarpError(f"statement returned no rows: {doc}")
+                raise ChargewireError(f"statement returned no rows: {doc}")
             if "statement_id" in doc and doc.get("state") not in TERMINAL:
                 doc = self.wait_done(statement_id=doc["statement_id"])
                 if doc["state"] == "succeeded":
                     result = self.result(statement_id=doc["statement_id"])
                     if result.status_code != 200:
-                        raise WarpError(f"result of {doc['statement_id']}: {result.status_code}: {result.text}")
+                        raise ChargewireError(f"result of {doc['statement_id']}: {result.status_code}: {result.text}")
                     return read_table(content=result.content)
-                raise WarpError(f"statement {doc['state']}: {doc}")
-        raise WarpError(f"{response.status_code}: {response.text}")
+                raise ChargewireError(f"statement {doc['state']}: {doc}")
+        raise ChargewireError(f"{response.status_code}: {response.text}")
 
     def rows(self, sql: str, parameters=None) -> list[dict]:
         return self.query(sql=sql, parameters=parameters).to_pylist()
@@ -183,15 +183,15 @@ class Session:
         return table.column(0)[0].as_py()
 
     def execute(self, sql: str, parameters=None, headers: dict[str, str] | None = None) -> dict:
-        """Runs SQL to its end; returns the statement document. Raises WarpError on failure."""
+        """Runs SQL to its end; returns the statement document. Raises ChargewireError on failure."""
         response = self.submit(sql=sql, parameters=parameters, headers=headers)
         if response.status_code not in (200, 201):
-            raise WarpError(f"{response.status_code}: {response.text}")
+            raise ChargewireError(f"{response.status_code}: {response.text}")
         doc = response.json()
         if doc["state"] not in TERMINAL:
             doc = self.wait_done(statement_id=doc["statement_id"])
         if doc["state"] != "succeeded":
-            raise WarpError(f"statement {doc['state']}: {doc}")
+            raise ChargewireError(f"statement {doc['state']}: {doc}")
         return doc
 
     def error(self, sql: str, parameters=None) -> dict:
@@ -202,7 +202,7 @@ class Session:
             if doc["state"] not in TERMINAL:
                 doc = self.wait_done(statement_id=doc["statement_id"])
             if doc["state"] == "succeeded":
-                raise WarpError(f"expected {sql!r} to fail, but it succeeded")
+                raise ChargewireError(f"expected {sql!r} to fail, but it succeeded")
             problem = dict(doc.get("error") or {})
             problem["status"] = response.status_code
             problem.setdefault("detail", str(doc))

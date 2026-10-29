@@ -1,8 +1,8 @@
-"""Browser sign-in (Warp SQL §4.3, capability oauth_browser) against a mock OpenID Connect
+"""Browser sign-in (Chargewire §4.3, capability oauth_browser) against a mock OpenID Connect
 provider (mock_idp.py). Port of GizmoSQL 1.x tests/integration/test_oauth_server.cpp (9
 cases: 8, and a non-Enterprise stub), moved from 1.x's side port and routes to the
-protocol's flows on the main port: POST /warp/v1/auth/oauth/flows, the callback
-GET /warp/v1/auth/oauth/callback, and polls with the poll secret. The provider's ID token
+protocol's flows on the main port: POST /chargewire/v1/auth/oauth/flows, the callback
+GET /chargewire/v1/auth/oauth/callback, and polls with the poll secret. The provider's ID token
 never reaches the client: the flow hands out Hardcharger's own access token, once. 1.x's
 cases map to: a successful flow; the flow document; an invalid code (the provider refuses
 it); an unauthorized e-mail; polling an unknown flow; a pending flow; a duplicate callback
@@ -27,12 +27,12 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 from conftest import free_port
 from mock_idp import MockIdP
-from warp_client import Client
+from chargewire_client import Client
 
 AUDIENCE = "hardcharger-oauth-test"
 CLIENT_ID = "test-client-id"
 CLIENT_SECRET = "test-client-secret"
-FLOWS = "/warp/v1/auth/oauth/flows"
+FLOWS = "/chargewire/v1/auth/oauth/flows"
 
 
 @pytest.fixture(scope="module")
@@ -94,7 +94,7 @@ def test_successful_oauth_flow(server, idp):
     params = authorize.params
     assert params["client_id"] == CLIENT_ID and params["response_type"] == "code"
     redirect_uri = params["redirect_uri"]
-    assert redirect_uri == f"{server.base_url}/warp/v1/auth/oauth/callback"
+    assert redirect_uri == f"{server.base_url}/chargewire/v1/auth/oauth/callback"
 
     page = browse(server=server, flow=flow)
     assert page.status_code == 200 and "Signed in" in page.text, page.text
@@ -135,7 +135,7 @@ def test_flow_document(server):
     assert flow["poll_secret"] not in flow["authorize_url"]
     assert poll(server=server, flow=flow).json() == {"state": "pending"}
     # Discovery says so, with the provider's name.
-    doc = server.http.get(url="/warp").json()
+    doc = server.http.get(url="/chargewire").json()
     assert "oauth_browser" in doc["capabilities"] and doc["auth"]["oauth_browser"] == {"provider": "Mock IdP"}
 
 
@@ -143,7 +143,7 @@ def test_invalid_authorization_code(server, idp):
     flow = create(server=server)
     callback = urllib.parse.urlsplit(callback_url(flow=flow))
     state = dict(urllib.parse.parse_qsl(callback.query))["state"]
-    page = server.http.get(url="/warp/v1/auth/oauth/callback", params={"code": "bad-code", "state": state})
+    page = server.http.get(url="/chargewire/v1/auth/oauth/callback", params={"code": "bad-code", "state": state})
     assert "Sign-in failed" in page.text and "invalid_grant" in page.text, page.text
     body = poll(server=server, flow=flow).json()
     assert body["state"] == "failed" and body["error"]["code"] == "identity_provider_error", body
@@ -196,7 +196,7 @@ def test_duplicate_callback_rejected(server):
 
 
 def test_missing_state(server):
-    response = server.http.get(url="/warp/v1/auth/oauth/callback", params={"code": "x"})
+    response = server.http.get(url="/chargewire/v1/auth/oauth/callback", params={"code": "x"})
     assert response.status_code == 400 and "unknown or has expired" in response.text
 
 
@@ -226,7 +226,7 @@ def test_return_to_comes_back_with_the_flow_id(server):
     redirect = browse(server=server, flow=flow)
     # oauth_base_url is set, so the redirect is absolute on it.
     assert redirect.status_code == 303
-    assert redirect.headers["location"] == f"{server.base_url}/ui/#warp_oauth_flow={flow['flow_id']}"
+    assert redirect.headers["location"] == f"{server.base_url}/ui/#chargewire_oauth_flow={flow['flow_id']}"
     assert poll(server=server, flow=flow).json()["state"] == "complete"
 
 
@@ -242,12 +242,12 @@ def test_default_redirect_uri_and_relative_return(launcher, idp):
     http = httpx.Client(base_url=server.base_url, follow_redirects=False)
     flow = http.post(url=FLOWS, json={"return_to": "/ui/"}).json()
     params = httpx.URL(flow["authorize_url"]).params
-    assert params["redirect_uri"] == f"http://localhost:{server.port}/warp/v1/auth/oauth/callback"
+    assert params["redirect_uri"] == f"http://localhost:{server.port}/chargewire/v1/auth/oauth/callback"
     callback = urllib.parse.urlsplit(callback_url(flow=flow))
     redirect = http.get(url=f"{callback.path}?{callback.query}")
-    assert redirect.headers["location"] == f"/ui/#warp_oauth_flow={flow['flow_id']}"
+    assert redirect.headers["location"] == f"/ui/#chargewire_oauth_flow={flow['flow_id']}"
     # No provider name configured: discovery names none.
-    assert http.get(url="/warp").json()["auth"]["oauth_browser"] == {}
+    assert http.get(url="/chargewire").json()["auth"]["oauth_browser"] == {}
 
 
 def test_instance_id_prefixes_the_state(launcher, idp):
@@ -265,8 +265,8 @@ def test_instance_id_prefixes_the_state(launcher, idp):
     assert params["redirect_uri"] == "https://sign-in.example.test/callback"
     proxied = urllib.parse.urlsplit(callback_url(flow=flow))
     assert proxied.netloc == "sign-in.example.test"
-    redirect = http.get(url=f"/warp/v1/auth/oauth/callback?{proxied.query}")
-    assert redirect.headers["location"] == f"https://replica-7.example.test/ui/#warp_oauth_flow={flow['flow_id']}"
+    redirect = http.get(url=f"/chargewire/v1/auth/oauth/callback?{proxied.query}")
+    assert redirect.headers["location"] == f"https://replica-7.example.test/ui/#chargewire_oauth_flow={flow['flow_id']}"
     assert http.post(url=f"{FLOWS}/{flow['flow_id']}", json={"poll_secret": flow["poll_secret"]}).json()["state"] == \
         "complete"
 
@@ -283,7 +283,7 @@ def test_pending_sign_ins_are_bounded(launcher, idp):
 def test_without_oauth_client_id_there_is_no_browser_sign_in(launcher):
     server = launcher.start()
     http = httpx.Client(base_url=server.base_url)
-    assert "oauth_browser" not in http.get(url="/warp").json()["capabilities"]
+    assert "oauth_browser" not in http.get(url="/chargewire").json()["capabilities"]
     response = http.post(url=FLOWS, json={})
     assert response.status_code == 501 and response.json()["code"] == "not_implemented"
 
@@ -303,7 +303,7 @@ def test_needs_no_license(launcher, idp):
 
 
 def exchange(server, token: str) -> httpx.Response:
-    return httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
+    return httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token",
                       json={"grant_type": "token_exchange", "subject_token": token})
 
 
@@ -328,7 +328,7 @@ def test_jwks_verifies_provider_tokens(server, idp):
     for claims in ({"aud": "someone-else"}, {"iss": "http://127.0.0.1:1"}):
         assert exchange(server=server, token=idp.id_token(email="a@gizmodata.com", **claims)).status_code == 401
     # The discovery document advertises token_exchange.
-    assert "token_exchange" in httpx.get(url=f"{server.base_url}/warp").json()["auth"]["grant_types"]
+    assert "token_exchange" in httpx.get(url=f"{server.base_url}/chargewire").json()["auth"]["grant_types"]
 
 
 def test_jwks_with_ec_keys(launcher):

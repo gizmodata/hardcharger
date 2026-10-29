@@ -54,11 +54,11 @@ const WebUiFile kFiles[] = {
      "3333333333333333333333333333333333333333333333333333333333333333"},
 };
 
-warpsql::PlainRequest Get(const std::string& path, std::vector<std::pair<std::string, std::string>> headers = {}) {
+chargewire::PlainRequest Get(const std::string& path, std::vector<std::pair<std::string, std::string>> headers = {}) {
   return {"GET", path, std::move(headers)};
 }
 
-std::string Header(const warpsql::PlainResponse& r, std::string_view name) {
+std::string Header(const chargewire::PlainResponse& r, std::string_view name) {
   for (const auto& [k, v] : r.headers) {
     if (k == name) return v;
   }
@@ -148,7 +148,7 @@ TEST(WebUi, IfNoneMatchAnswers304ForThatRepresentationOnly) {
 }
 
 TEST(WebUi, MissingFilesAreNotFoundAndNeverCached) {
-  for (const char* path : {"/ui/assets/gone-1a2b3c4d.js", "/ui/assets/route", "/ui/missing.png", "/ui/../warp",
+  for (const char* path : {"/ui/assets/gone-1a2b3c4d.js", "/ui/assets/route", "/ui/missing.png", "/ui/../chargewire",
                            "/ui/assets/../index.html", "/ui/./index.html", "/ui//index.html"}) {
     auto r = ServeWebUi(kFiles, Get(path));
     ASSERT_TRUE(r) << path;

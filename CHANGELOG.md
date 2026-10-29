@@ -7,6 +7,20 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- Hardcharger's protocol is now named Chargewire: the server answers at `/chargewire` and
+  `/chargewire/v1/...`, with `Chargewire-*` headers and `urn:chargewire:error:*` error types, and the
+  web UI, CLI, Python tests and apps use those names. Drivers and clients released before the
+  rename keep working unchanged: the server answers them in the spelling they use.
+
+**Upgrading with single sign-on.** When `oauth_redirect_uri` isn't set, the redirect URI the
+server sends to the identity provider is now `<oauth_base_url>/chargewire/v1/auth/oauth/callback`.
+Before upgrading, add that URL to the application's allowed redirect URIs at the identity provider
+(Okta, Microsoft Entra ID and Google all accept several), or set `oauth_redirect_uri` to the URL
+registered there today. The server answers its callback at both, so either way sign-in keeps
+working through the upgrade.
+
 ## [2.2.0] - 2026-10-28
 
 2.1.5 was tagged but never released: its gate was stopped for this release, which includes all of
@@ -82,7 +96,7 @@ or `WRITE FILESYSTEM` keep their reach (below). What changes on purpose:
 
 - **A statement that fails while its rows stream is logged and recorded like any other failure.**
   Once the server has answered `200` and begun a result's Arrow stream, a failure can only end the
-  stream early; the statement's document holds the error (Warp SQL §6.6), which the `hardcharger`
+  stream early; the statement's document holds the error (Chargewire §6.6), which the `hardcharger`
   CLI and the drivers read. The server's log, though, showed the statement starting and nothing
   else, and its instrumentation record kept the raw error, a connection string's password
   included. It now logs `statement failed` with the statement's id and the error, and records
@@ -308,7 +322,7 @@ The existing server and command-line packages remain available.
 
 ## [2.0.0] - 2026-10-20
 
-The first general release of Hardcharger: a SQL server on DuckDB 2.0.0 that speaks Warp SQL
+The first general release of Hardcharger: a SQL server on DuckDB 2.0.0 that speaks Chargewire
 1.0.1 over plain HTTP, with access control (users, roles, grants, catalog access, scoped
 tokens, sign-in through an identity provider or a client certificate), a web UI embedded in
 the server (query editor, results, schema browser, uploads, sessions, API page), the
@@ -325,10 +339,10 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   workflow checks every driver loads and queries Hardcharger by manifest on both native
   architectures before publishing the multi-architecture tags.
 - Server: a startup banner in a text log: the "Hardcharger" wordmark (plain ASCII), the
-  server's, Warp SQL's and DuckDB's versions, the web UI's address (or the Warp SQL endpoint's
+  server's, Chargewire's and DuckDB's versions, the web UI's address (or the Chargewire endpoint's
   without `--web-ui`) and the documentation's, within 80 columns. Never in a JSON log.
   `--no-banner`, `--banner=false`, `HARDCHARGER_NO_BANNER=true`, `HARDCHARGER_BANNER=false` or
-  `banner: false` leaves it out; every boolean option now takes `--no-NAME`. The Warp SQL
+  `banner: false` leaves it out; every boolean option now takes `--no-NAME`. The Chargewire
   version is the specification's (`info.version` of its OpenAPI document, read at configure
   time). Tests: `test_startup_log.py` (the art byte for byte against
   `tests/fixtures/banner-art.txt`, each way to turn it off, JSON), `startup_banner_test.cc`.
@@ -362,7 +376,7 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   rename or skip; a value that wouldn't fit shows in red. An append warns where the file's
   types differ from the table's, and stops before it starts when the file has a column the
   table hasn't. The file is read and converted to Arrow in the browser, in a Web Worker (a
-  large or malformed file can't freeze the page), and sent over Warp SQL's bulk ingest in
+  large or malformed file can't freeze the page), and sent over Chargewire's bulk ingest in
   pieces of about 8 MB, one request each, in one transaction of the upload's own session (as
   the tab's **Run as** role): the server never stores the raw file, a progress bar counts
   rows and bytes, **Cancel upload** rolls everything back, and a failed upload leaves the
@@ -442,7 +456,7 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   is never used for authentication or TLS: client certificates and certificate-bound tokens
   stay tied to the connection. `hardcharger_active_connections()` has a new `proxy_address`
   column (the proxy's own `address:port` when the address was forwarded), and security log
-  and audit lines a `proxy` field. Warp SQL C++ SDK `ServerOptions::trusted_proxies`. Tests:
+  and audit lines a `proxy` field. Chargewire C++ SDK `ServerOptions::trusted_proxies`. Tests:
   `test_trusted_proxies.py`, the SDK's `forwarded_test.cc`.
 
 - **Users from the identity provider are created on first sign-in**, when asked:
@@ -459,7 +473,7 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   administrator creates the user.
 
 - One `info` log line for each cancelled statement, `statement cancelled`, with its
-  `session_id`, `statement_id` (`q_…`), `user`, `reason` (Warp SQL's `cancel_reason`:
+  `session_id`, `statement_id` (`q_…`), `user`, `reason` (Chargewire's `cancel_reason`:
   `client`, `timeout`, `killed`, `cancelled`, `session_closed`, `server_shutdown`) and
   `duration` in seconds, whatever `print_queries` and `query_log_level` say (GizmoSQL 1.x
   logged `SQL Statement was successfully canceled.`). A statement that ends on its own or
@@ -493,7 +507,7 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
 - **The idle rule is documented exactly** (README, `--help` for `session_idle_timeout`): a
   session is evicted within 5 s after `session_idle_timeout` seconds without a request, unless
   a statement of it is running, an ingest is in progress, a result is being read, or it holds a
-  retained result that hasn't expired. That last one is Warp SQL §5.7's rule, kept: a session
+  retained result that hasn't expired. That last one is Chargewire §5.7's rule, kept: a session
   whose statement ran in JSON mode lives up to `result_retention_seconds` after it ended. Set
   `result_retention_seconds` no higher than `session_idle_timeout` to bound sessions by the idle
   timeout alone.
@@ -507,7 +521,7 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
 
 ### Fixed
 
-- Web UI: update the embedded Warp SQL client so queries finishing during sign-out do not
+- Web UI: update the embedded Chargewire client so queries finishing during sign-out do not
   send statement-cleanup requests after their session has ended. Connection close releases
   those statements, avoiding spurious 404 errors while background queries finish.
 
@@ -518,7 +532,7 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   tests, signed device build and TestFlight upload. A manual run with `ios` and `sign`
   proves the signed device build before tagging, without uploading it. Trusted-proxy
   parsing also refuses abbreviated IPv4 addresses and ports on Windows consistently
-  with Unix (Warp SQL SDK update).
+  with Unix (Chargewire SDK update).
 - Server: a text log line leaves out a field with no value (`health check passing` printed
   an empty `error=`); JSON lines keep every key, and the passing health check's has no
   `error` at all. A health check that fails from the start is now logged too (only changes
@@ -583,7 +597,7 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   paste). Enter after a word typed out in full is a new line, not that word's suggestion taken
   again (`acceptSuggestionOnEnter: "smart"`; WebKit lost the line break). e2e in Chromium and
   WebKit: a 4-line indented statement typed and pasted arrives byte for byte.
-- Web UI: closing, reloading or leaving the page left its Warp SQL sessions open on the server
+- Web UI: closing, reloading or leaving the page left its Chargewire sessions open on the server
   until their idle timeout. It now ends them on `pagehide` (and on `beforeunload`, which some
   browsers send alone) with keepalive `DELETE`s carrying the token; with a transaction open the
   browser asks first, and the sessions stay if the user does. A page brought back from the
@@ -601,7 +615,7 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   comparable to published TPC-H results, and TPC-H™ a trademark of the Transaction Processing
   Performance Council (TPC).
 
-- The web UI's JavaScript client (`ui/vendor`, gizmodata/warp-sql-js) moves to cb563f9, which
+- The web UI's JavaScript client (`ui/vendor`, gizmodata/chargewire-js) moves to cb563f9, which
   fixes two things the first browser upload found: bulk ingest (and Arrow parameters) failed in
   any bundled app with `"throughDOM" not available in this environment` (apache-arrow installs
   that only as a side effect its `"sideEffects": false` lets bundlers drop), and `close()` could
@@ -636,7 +650,7 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   finished while the client was still reading its unretained result (up to 32 MB of it is
   sent after the statement finishes), cutting the stream mid-body; a reader slower than
   `session_idle_timeout` plus 5 s for that tail lost it. A read in progress now keeps the
-  session (the Warp SQL SDK; spec §5.7 says a request in progress counts as one).
+  session (the Chargewire SDK; spec §5.7 says a request in progress counts as one).
 
 - A `readonly` session could write through a data-modifying CTE
   (`WITH c AS (INSERT … RETURNING *) SELECT * FROM c`, also `UPDATE` / `DELETE`), which
@@ -672,8 +686,8 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   exchanging the same scoped token again) still reaches the session; the token's id,
   times, password fingerprint and sign-in method are not part of it, and the certificate
   binding is checked as before. A store user dropped and created again under the same
-  name no longer reaches the old user's sessions either. Warp SQL SDK
-  `Principal::authority_key` (warp-sql §9.2). Tests:
+  name no longer reaches the old user's sessions either. Chargewire SDK
+  `Principal::authority_key` (chargewire §9.2). Tests:
   `server/tests/test_session_authority.py`, `server/unit/authority_key_test.cc`.
 - Access-control store errors no longer carry the store's connection string. While a
   PostgreSQL store was unreachable, `CREATE USER`, `GRANT`, `REVOKE` and every other
@@ -728,10 +742,10 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   file reader, `third-party-notices.test.ts` (the allow-list, module-to-package mapping, the
   file's contents and its failures), `about.spec.ts` (Chromium and WebKit), the tarball smoke
   test and the image smoke test.
-- Web UI, **API** page (`/ui/api`, next to Query and Sessions): the server's Warp SQL API in
+- Web UI, **API** page (`/ui/api`, next to Query and Sessions): the server's Chargewire API in
   Swagger UI (swagger-ui-dist 5.33.3, in the build, loaded only when the page is opened:
   +1.7 MB, +435 KiB gzipped in the binary), from the OpenAPI 3.1 document the server now serves
-  at `GET /warp/v1/openapi.json` (no sign-in; discovery lists capability `openapi` and
+  at `GET /chargewire/v1/openapi.json` (no sign-in; discovery lists capability `openapi` and
   `links.openapi`). Every request goes to the server's own origin (no server switcher, no
   Authorize dialog); **Try it out** carries the signed-in user's token, added to each request
   to this origin as it leaves and never to another origin, stored, or shown in the Curl box.
@@ -792,7 +806,7 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
 
 - Web UI, the SQL editor's tabs, runs and sessions:
   up to 20 tabs (Alt+N, Alt+W asking first about an open transaction or unsaved text, rename,
-  drag to reorder, running/failed/transaction markers), each its own Warp SQL session; Run
+  drag to reorder, running/failed/transaction markers), each its own Chargewire session; Run
   runs the statement at the cursor (margin bar) or exactly the selection, and Run all
   (⇧+Ctrl/⌘+Enter) every statement, stopping at the first error, with a result tab per result
   set and Messages (at most 50 result sets and 64 MiB kept in the browser); Cancel notes how
@@ -807,11 +821,11 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   WebKit): `tabs.spec.ts`, `run.spec.ts`, `session.spec.ts`; unit tests for the tab store,
   the script runner and the session's loss handling.
 
-- Introspection without instrumentation or metrics (README, Introspection; warp-sql 64eb65c):
+- Introspection without instrumentation or metrics (README, Introspection; chargewire 64eb65c):
   `hardcharger_active_connections()`, a row per open session from the server's own session
-  tables: session_id (the Warp SQL `s_...` id), instance_id, cluster_id, username, role,
+  tables: session_id (the Chargewire `s_...` id), instance_id, cluster_id, username, role,
   tenant, auth_method; the latest request's client_address and client_info (User-Agent);
-  session_tags (`MAP(VARCHAR, VARCHAR)`, the Warp SQL `session_tag` option's keys, then
+  session_tags (`MAP(VARCHAR, VARCHAR)`, the Chargewire `session_tag` option's keys, then
   `SET hardcharger.session_tag`'s); tls, tls_version, certificate_identity,
   certificate_thumbprint, token_certificate_bound; state (`idle`, `queued`, `running`,
   `streaming`, `idle_in_transaction`, `idle_in_transaction_aborted`) and transaction; the
@@ -846,8 +860,8 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   `cancelled`, `session_closed`, `server_shutdown`). Tables from before get the column at
   startup.
 
-- The session document says where the session's transaction stands (Warp SQL §5.2,
-  warp-sql 6afe76d): `GET /warp/v1/sessions/{id}` and the session's creation answer carry
+- The session document says where the session's transaction stands (Chargewire §5.2,
+  chargewire 6afe76d): `GET /chargewire/v1/sessions/{id}` and the session's creation answer carry
   `transaction`, `none`, `open` or `aborted`, as the engine has it, read after every
   statement, ingest, option change, commit and rollback. `test_rbac_set_role.py` checks it
   for a store user through an allowed, a refused and a failed statement; the conformance
@@ -922,8 +936,8 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   updated.
 
 - **One id everywhere, for statements too**: instrumentation keys statements and executions
-  by the Warp SQL ids clients hold, not by UUIDs of the server's own, so a `q_...` from
-  `Warp-Statement-Id`, an error response or `hardcharger_active_connections()` finds the
+  by the Chargewire ids clients hold, not by UUIDs of the server's own, so a `q_...` from
+  `Chargewire-Statement-Id`, an error response or `hardcharger_active_connections()` finds the
   statement in `_hardcharger_instr`. `sql_executions.execution_id` is the id of the request
   that ran it (`q_...`); `sql_statements.statement_id` is that same `q_...` for a submitted
   statement (statement and execution share it) or the prepared statement's `p_...` (one row,
@@ -938,23 +952,23 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   tables, or use a new instrumentation database). The query log's lines carry the same ids:
   `statement_id` (`q_...`, or `q_....N`) on statement, success and failure lines, and
   `prepared_id` (`p_...`) on prepare lines and on a prepared statement's executions. The SDK
-  tells the engine these ids (warp-sql `feat/instrumentation-warp-ids`:
+  tells the engine these ids (chargewire `feat/instrumentation-chargewire-ids`:
   `EngineSession::SetStatementId()`, and the prepared id is chosen before preparing).
   `test_instrumentation.py` looks up a submitted statement, a prepared statement's three
   executions, a three-statement script, failed, refused and cancelled statements and the log
   lines by the ids the client got, and checks that both kinds of old table are refused; the
   same tests fail against the previous server.
 
-- **Browser sign-in moved into the Warp SQL protocol, on the main port** (Warp SQL §4.3,
-  capability `oauth_browser`; the SDK at warp-sql `feat/oauth-in-protocol`). Clients create a
-  flow (`POST /warp/v1/auth/oauth/flows`), the person signs in with the identity provider,
-  which redirects to `GET /warp/v1/auth/oauth/callback`, and the client collects
+- **Browser sign-in moved into the Chargewire protocol, on the main port** (Chargewire §4.3,
+  capability `oauth_browser`; the SDK at chargewire `feat/oauth-in-protocol`). Clients create a
+  flow (`POST /chargewire/v1/auth/oauth/flows`), the person signs in with the identity provider,
+  which redirects to `GET /chargewire/v1/auth/oauth/callback`, and the client collects
   Hardcharger's own access token once with the flow's poll secret (never in a URL); the
   provider's ID token no longer reaches clients. The server sends the provider `state`, PKCE
   (S256) and a `nonce` (checked in the ID token), exchanges the code as before, and signs the
   user in as `token_exchange` does (JWKS, issuer, audience, `token_authorized_emails`, role,
   store users); the session's `auth_method` is `oauth_browser`. **The redirect URI to register
-  with the identity provider is now `<oauth_base_url>/warp/v1/auth/oauth/callback`**:
+  with the identity provider is now `<oauth_base_url>/chargewire/v1/auth/oauth/callback`**:
   `oauth_base_url` is the server's public URL (default `http(s)://localhost:PORT`), and
   `oauth_redirect_uri` still overrides it. `oauth_instance_id` still prefixes the state for a
   shared callback proxy, and with `oauth_base_url` set the redirect back to a web page is
@@ -968,7 +982,7 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   when the server offers browser sign-in: the page starts a flow with `return_to` set to
   itself, keeps the poll secret in the tab, and on its return (the flow id in the URL
   fragment, removed at once) collects the token or shows why the sign-in failed.
-- **Warp SQL 1.0.0** (warp-sql `spec/v1.0`). The protocol's shape fixed for its first stable
+- **Chargewire 1.0.0** (chargewire `spec/v1.0`). The protocol's shape fixed for its first stable
   version, with no fallbacks for the drafts:
   - A statement that fails while running is `422 execution_error` (was `500`); `500` is now
     `internal_error`, for the server's own faults (an engine internal error, a result
@@ -981,21 +995,21 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
     (was `engine` and `engine_version`), and `server_read_only` says whether the server
     runs read-only; `protocol` and `protocol_version` are gone (discovery has them). The
     client's `.info` reads `duckdb_version`.
-  - The Warp SQL session option is `duckdb_arrow_lossless_conversion` (was
+  - The Chargewire session option is `duckdb_arrow_lossless_conversion` (was
     `arrow_lossless_conversion`; the SQL `SET SESSION arrow_lossless_conversion` is DuckDB's
     and keeps its name).
   - Discovery has no `draft` field, and no `result_retention` capability (retention is core);
     a partitioned ingest commits with `{"part_count": n}`; a partition the result doesn't have
     is `partition_not_found`; `client_certificate_required` is `certificate_required`.
-  - `Warp-Query-Tag` (an ASCII JSON object, at most 4 KiB) is recorded as a submitted
+  - `Chargewire-Query-Tag` (an ASCII JSON object, at most 4 KiB) is recorded as a submitted
     statement's query tag in the instrumentation tables, ahead of `SET hardcharger.query_tag`;
     a malformed one is refused with `400`.
   - The command-line client's own error codes take the protocol's `client_` prefix
     (`client_connection_failed`, `client_tls_failed`, `client_protocol_error`, …), and so do
     the web UI's (`client_transport_error`, `client_protocol_error`, `client_sign_in_failed`).
-  - Web UI: the vendored JavaScript client moves to warp-sql-js `4a27d4d` (Warp SQL 1.0.0, on
+  - Web UI: the vendored JavaScript client moves to chargewire-js `4a27d4d` (Chargewire 1.0.0, on
     browser sign-in); browser sign-in's own failures take the `client_` codes too, and a flow
-    state the page doesn't know is polled on (Warp SQL §12) rather than refused; the
+    state the page doesn't know is polled on (Chargewire §12) rather than refused; the
     About dialog drops the draft label, an `invalid_token` or `session_ended` with
     `token_revoked` says the sign-in was revoked, a reason the UI doesn't know reads as an
     expired sign-in, and a statement timeout says so.
@@ -1024,14 +1038,14 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   `hardcharger_sessions` metric's `idle_in_transaction` and `idle_in_transaction_aborted`
   states) is the one DuckDB has: a syntax error inside a transaction leaves it open
   (DuckDB forgives it), where any failure used to count as aborted. The server's own
-  tracking is gone; it reads the Warp SQL SDK's (`test_metrics.py` covers the syntax
+  tracking is gone; it reads the Chargewire SDK's (`test_metrics.py` covers the syntax
   error).
 
 - With `autocommit` false, a SQL `COMMIT` or `ROLLBACK` starts the next transaction, as
-  `POST .../commit` and `.../rollback` do (warp-sql §5.5); the session used to drop out of
+  `POST .../commit` and `.../rollback` do (chargewire §5.5); the session used to drop out of
   manual-commit mode after one.
 
-- Web UI: the vendored `@gizmodata/warp-sql` is warp-sql-js d2fb3b7 (was 2b96f0a), with
+- Web UI: the vendored `@gizmodata/chargewire` is chargewire-js d2fb3b7 (was 2b96f0a), with
   `transactionState()` and the session document's `transaction`, plus the client's changes
   in between: an explicit port 443 kept on plain HTTP, exact wide integers in JSON
   parameters, and client-certificate sign-in through the client.
@@ -1047,14 +1061,14 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   The version arithmetic is `.github/scripts/release.sh`, tested by `test-release.sh` on every
   run; docs/releasing.md describes the process.
 
-- Faster remote throughput (warp-sql d25f797, warp-sql-adbc da6b4a6; docs/benchmarks.md,
+- Faster remote throughput (chargewire d25f797, chargewire-adbc da6b4a6; docs/benchmarks.md,
   2026-10-19): compressed results compress only the buffers a sample shows are worth it
   and send the rest by reference; a split result's partition count follows its size; the
   Go/Python driver decompresses batches in parallel, defaults to `auto` compression
   (lz4_frame near, zstd far), up to 32 result partitions and `auto` ingest parts, and
   uploads in 16,384-row slices.
 
-- Connections set TCP_NODELAY (warp-sql 58082fa): every small request (discovery, a status
+- Connections set TCP_NODELAY (chargewire 58082fa): every small request (discovery, a status
   poll, `SELECT 1`) waited ~40 ms on Linux for the client's delayed ACK.
 
 - `bench/remote/serve.sh` stops each server by the PID it recorded, never by pattern.
@@ -1103,13 +1117,13 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   the binaries embedded those, and stdout in text mode then wrote `\r\r\n`. A
   `.gitattributes` keeps the file LF in every checkout, and both binaries write the notices
   with stdout in binary mode.
-- The server builds with clang against libstdc++ 14 (Ubuntu 24.04's): warp-sql's build-time
+- The server builds with clang against libstdc++ 14 (Ubuntu 24.04's): chargewire's build-time
   OpenAPI tool instantiated a `std::pair` of an incomplete type, which libstdc++ 14 refuses
-  (warp-sql `0e8dc87`; the served document is unchanged).
-- From the warp-sql 1.0.0 release branch (`third_party/warp-sql` at `release/v1.0.0`): a
-  retained result is expired from its `expires_at` on (Warp SQL §6.5), where the SDK refused
+  (chargewire `0e8dc87`; the served document is unchanged).
+- From the chargewire 1.0.0 release branch (`third_party/chargewire` at `release/v1.0.0`): a
+  retained result is expired from its `expires_at` on (Chargewire §6.5), where the SDK refused
   new reads only after its next sweep, up to 5 seconds later; and an idempotent replay of a
-  submit or execute (§6.7) carries `Warp-Statement-Id`, as every statement response does.
+  submit or execute (§6.7) carries `Chargewire-Statement-Id`, as every statement response does.
 - Web UI: once the editor's tabs no longer fit, clicks on them and on **New tab** work in
   Safari. The tab bar scrolled as a whole, and Safari's overlay scrollbar sat over the bottom
   of the tabs and the bottom-aligned **New tab** button and took their clicks (the e2e "at most
@@ -1126,8 +1140,8 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   dropped the batches at once, so a read in progress ended without the end-of-stream
   marker ("incomplete chunked read") for a statement that had succeeded; Windows CI hit it
   in `test_result_retention_seconds_sets_expires_at_and_the_expiry`. The batches are now
-  freed when the last read that started before the expiry ends. Warp SQL SDK fix (the
-  `third_party/warp-sql` bump); `test_a_read_in_progress_when_the_result_expires_runs_to_the_end`
+  freed when the last read that started before the expiry ends. Chargewire SDK fix (the
+  `third_party/chargewire` bump); `test_a_read_in_progress_when_the_result_expires_runs_to_the_end`
   stalls a 64 MB read across the expiry.
 
 - The sensitive-path guard no longer refuses harmless string literals. It used to scan the
@@ -1210,9 +1224,9 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   results, including the shapes where Quack is faster. Each median recomputed from
   `bench/remote/results/2026-10-19-throughput-2/`.
 
-- Bulk ingest answers `415 unsupported_arrow_type` (Warp SQL §8.1) for an Arrow type
+- Bulk ingest answers `415 unsupported_arrow_type` (Chargewire §8.1) for an Arrow type
   DuckDB can't keep, where `decimal256` (any precision) and dense unions, also nested in a
-  list, struct or dictionary, were a `400 sql_error` from inside DuckDB. warp-sql e354e97:
+  list, struct or dictionary, were a `400 sql_error` from inside DuckDB. chargewire e354e97:
   the DuckDB backend lets through only the types DuckDB's Arrow scan reads and refuses
   any other before a table is touched. `test_bulk_ingest.py` and the conformance suite's
   two new ingest tests cover it.
@@ -1226,13 +1240,13 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   only (`metrics_port` 0), and `oauth_port=off` without the OAuth server.
   `test_metrics_configuration.py` covers each source and case.
 
-- A session has one id: the Warp SQL session id its client holds (`s_...`, from the
+- A session has one id: the Chargewire session id its client holds (`s_...`, from the
   session document). `KILL SESSION '<id>'` with that id said "not found", because the
   server kept a UUID of its own, which only `HARDCHARGER_CURRENT_SESSION()` showed.
   `HARDCHARGER_CURRENT_SESSION()`, `hardcharger_sessions()`, `KILL SESSION`, the log
   lines' `session_id`, the instrumentation tables (`sessions`, `sql_statements` and the
-  views over them) and the catalog log's `session_id` all carry the Warp SQL id now
-  (warp-sql e1775b3: the SDK hands it to the engine). Those `session_id` columns are
+  views over them) and the catalog log's `session_id` all carry the Chargewire id now
+  (chargewire e1775b3: the SDK hands it to the engine). Those `session_id` columns are
   `VARCHAR`; an instrumentation or log table that Hardcharger 0.3.0 created with UUIDs is
   refused at startup, saying to drop it or use a new database (its rows' ids match no
   session anyone holds). `test_kill_session.py` checks one session's id in the session
@@ -1242,7 +1256,7 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
 - No GizmoSQL-era (Flight SQL) names in logs or instrumentation: bulk-ingest log lines
   carried `flight_method=ingest` beside `kind=ingest` (now only `kind`), and the
   instrumentation table `sql_statements` named its column `flight_method`; it is
-  `statement_kind` (`statement` or `prepared`, the Warp SQL endpoint a statement came by).
+  `statement_kind` (`statement` or `prepared`, the Chargewire endpoint a statement came by).
   A 0.3.0 instrumentation table is refused at startup in any case, as its session ids are
   UUIDs (above: drop it); so is one whose `session_id` is already `VARCHAR` but still has
   `flight_method`, as its statement ids are UUIDs (Changed: one id everywhere). No
@@ -1275,9 +1289,9 @@ and Windows, and the app for iPhone and iPad. This section lists what changed si
   the process exits) and still probes that nothing is bound, so two full suites run at once.
   (The server also logs its bound port in its ready line, for a run that lets the OS choose.)
 
-- `lz4_frame` Arrow buffer compression beside `zstd` (Warp SQL §8.2, capability
+- `lz4_frame` Arrow buffer compression beside `zstd` (Chargewire §8.2, capability
   `ipc_compression_lz4_frame`), with the client's codec preference list in
-  `Warp-IPC-Compression` (warp-sql d25f797).
+  `Chargewire-IPC-Compression` (chargewire d25f797).
 
 ## [0.3.0] - 2026-10-18
 
@@ -1290,7 +1304,7 @@ longer reach the server's own files (see Fixed).
 
 ### Added
 
-- A refused token says why (Warp SQL §4.2): after `ALTER USER ... WITH PASSWORD`, `ALTER
+- A refused token says why (Chargewire §4.2): after `ALTER USER ... WITH PASSWORD`, `ALTER
   USER ... DISABLE`, `DROP USER` or `DROP SCOPED TOKEN`, the session's own token gets `401
   invalid_token` with a `reason` (`credentials_changed`, `principal_dropped`,
   `token_revoked`), and an expired token `token_expired`. Before, only a token from a new
@@ -1312,13 +1326,13 @@ longer reach the server's own files (see Fixed).
   `hugeint`/`uhugeint`); they printed as raw bytes.
 
 - Allowed CORS origins (`cors_origins`) get `Access-Control-Allow-Credentials: true`, preflights
-  included (Warp SQL §9.5), so a page on another origin can sign in with the user's client
+  included (Chargewire §9.5), so a page on another origin can sign in with the user's client
   certificate (`credentials: "include"`). Other origins still get no CORS headers. The README's
   mTLS section says such pages need `mtls_require_client_cert: false` (a preflight carries no
-  certificate). From warp-sql `ec318ff`; CI runs the conformance suite's credentials tests with
-  `WARP_SQL_TEST_SERVER_CORS_FLAG=--cors-origins`.
+  certificate). From chargewire `ec318ff`; CI runs the conformance suite's credentials tests with
+  `CHARGEWIRE_TEST_SERVER_CORS_FLAG=--cors-origins`.
 
-- Client certificates as identity (Warp SQL §4.4): with `mtls_ca_cert`, the
+- Client certificates as identity (Chargewire §4.4): with `mtls_ca_cert`, the
   `client_certificate` grant signs a client in with its verified certificate and no
   password. `mtls_identity_source` (`san_email`, the default; `san_uri`; `subject_cn`) says
   where the identity comes from; a certificate with none or several values is refused.
@@ -1357,12 +1371,12 @@ longer reach the server's own files (see Fixed).
   CRL reload is retried. A scoped token bound to a certificate can't be exchanged (as user
   `token`'s password) over another one. URI identities (SPIFFE IDs) must match a user name
   exactly, case included; e-mail and CN identities still ignore ASCII case. CI runs
-  `warpsql-sdk-tests` (the limiter's unit tests), under TSan too.
+  `chargewire-sdk-tests` (the limiter's unit tests), under TSan too.
 - The `hardcharger` client: `--auth-type mtls` (or `authType=mtls` in a URI) signs in with
   the `--mtls-cert` certificate, and signs in again with it when the server ends the session.
 - The built-in web UI: `web_ui` (`--web-ui`, `HARDCHARGER_WEB_UI`, off by default) serves a
   browser UI at `/ui` on the server's own listener (same port, origin and TLS certificate as
-  Warp SQL): a SQL editor with tabs and cancel, a results grid that copies in every browser,
+  Chargewire): a SQL editor with tabs and cancel, a results grid that copies in every browser,
   a schema browser that follows access control, CSV/TSV/JSON/Parquet exports, the session
   list, and sign-in with a password or, under mutual TLS, a client certificate. Its source is
   in `ui/` (folded in from the hardcharger-ui repository with its history), styled in
@@ -1375,8 +1389,8 @@ longer reach the server's own files (see Fixed).
   UI's serving contract: `index.html` for the app's routes under `/ui/`, hashed assets
   immutable, everything else revalidated, 404 (never cached) for missing files, and a strict
   Content-Security-Policy and security headers on every answer; nothing at all when off.
-  A build without the UI refuses `web_ui`. The Warp SQL SDK gained `plain_handler`, through
-  which the server answers GET and HEAD outside `/warp`, with the request's headers. Under
+  A build without the UI refuses `web_ui`. The Chargewire SDK gained `plain_handler`, through
+  which the server answers GET and HEAD outside `/chargewire`, with the request's headers. Under
   mutual TLS the page needs a client certificate like any client, and offers certificate
   sign-in when `mtls_certificate_sign_in` is on. Tests: `test_web_ui.py` and
   `web_ui_test.cc` on the server; the UI's lint, typecheck, unit tests and Playwright e2e in
@@ -1384,14 +1398,14 @@ longer reach the server's own files (see Fixed).
   own tarball (`hardcharger-ui-<version>.tar.gz`) and its content SHA-256. The Windows
   builds embed it too.
 
-- `hardcharger`, the command-line SQL client: GizmoSQL 1.x's `gizmosql_client` on Warp
+- `hardcharger`, the command-line SQL client: GizmoSQL 1.x's `gizmosql_client` on Chargewire
   SQL, with the same options (in Hardcharger's names: `HARDCHARGER_HOST`, `_PORT`, `_USER`,
   `_PASSWORD`, `_TLS`, `_TLS_ROOTS`, `_OAUTH_PORT`, `_SESSION_TAG`, `_QUERY_TAG`;
   `hardcharger://` URIs; `~/.hardchargerrc`, `~/.hardcharger_history`), dot commands, output
   modes, heredoc/pipe/`-c`/`-f` scripting and exit codes, the pager, history, completion,
   syntax highlighting, query and session tags, TLS and mutual TLS, and the server's
   browser sign-in (`--auth-type external`). Ctrl-C cancels the running statement through
-  Warp SQL's cancel and the shell goes on. It ships in the tarballs' `bin/` next to
+  Chargewire's cancel and the shell goes on. It ships in the tarballs' `bin/` next to
   `hardcharger-server`, and the image has both on `PATH` (the entrypoint stays the server).
   docs/migrating-from-gizmosql.md maps the names and lists what behaves differently.
 - GizmoSQL 1.x's client tests, ported: `test_interactive_client.cpp` (115 cases, as C++
@@ -1402,8 +1416,8 @@ longer reach the server's own files (see Fixed).
 - replxx (release-0.0.4), the client's line editor, built by `scripts/build-deps.sh` and
   cached with DuckDB and Arrow.
 - Results split into partitions that a client reads at once over separate connections
-  (Warp SQL §6.10, capability `result_partitions`): `max_result_partitions` (default 32,
-  1 never splits) caps the split. With Warp SQL's drivers' `result_partitions` option,
+  (Chargewire §6.10, capability `result_partitions`): `max_result_partitions` (default 32,
+  1 never splits) caps the split. With Chargewire's drivers' `result_partitions` option,
   one large result uses several network flows and client cores.
 
 - `hardcharger-server --print-options-json`: every option with its group, flag,
@@ -1413,11 +1427,11 @@ longer reach the server's own files (see Fixed).
 
 - `hardcharger --result-partitions N` (`HARDCHARGER_RESULT_PARTITIONS`): the command-line
   client reads a large result over up to N connections at once, in the same order.
-- Partitioned ingest (Warp SQL §8.3, capability `partitioned_ingest`): one bulk load sent
+- Partitioned ingest (Chargewire §8.3, capability `partitioned_ingest`): one bulk load sent
   over several connections at once and inserted from all of them in parallel, in one
   transaction, all or nothing. Access control checks it like any ingest, and every part is
-  bound to its session. Warp SQL's drivers use it for large uploads by default.
-- `session_ended` errors carry their `reason` (Warp SQL §5.6): `killed` (KILL SESSION),
+  bound to its session. Chargewire's drivers use it for large uploads by default.
+- `session_ended` errors carry their `reason` (Chargewire §5.6): `killed` (KILL SESSION),
   `principal_dropped` (the user was dropped or disabled), `token_revoked` (a scoped token
   revoked), `token_expired` (a scoped token expired), `credentials_changed` (anything else
   access control revoked).
@@ -1516,7 +1530,7 @@ longer reach the server's own files (see Fixed).
 - `result_batch_rows` defaults to 122,880 (one DuckDB row group) instead of 2,048:
   SF10 lineitem over TLS 4.6 s -> 3.5 s, with zstd 26.4 s -> 6.3 s; small results are
   unchanged (one batch), a full scan's first batch takes 21 ms instead of 2 ms.
-- Data transfer, from the Warp SQL SDK: TLS result streams encrypt whole gathered writes
+- Data transfer, from the Chargewire SDK: TLS result streams encrypt whole gathered writes
   and overlap encrypting, encoding and producing (a TLS stream went from about a third
   of plaintext to the same speed on one AWS connection); uploads are read in 1 MiB pieces (plaintext
   ingest was slower than TLS); bulk ingest inserts on many DuckDB threads in one
@@ -1539,7 +1553,7 @@ longer reach the server's own files (see Fixed).
   `hardcharger://` URI without `useEncryption`, sent the sign-in (password included) as plain
   HTTP. The client's URIs now follow the Hardcharger ADBC driver's exactly:
   `hardcharger://HOST[:PORT][/PREFIX][?tls=false]` is HTTPS unless it says `?tls=false` (or
-  `tls=0`), to port 31337 unless it names one, under `/warp` unless it names a path; `warp://`
+  `tls=0`), to port 31337 unless it names one, under `/chargewire` unless it names a path; `chargewire://`
   (port 443), `https://` and `http://` are accepted as the ADBC driver accepts them. `tls` is the
   only parameter: `useEncryption`, `username`, `tlsRoots`, `disableCertificateVerification`,
   `authType` and any other are refused by name (the message names the flag that does it now),
@@ -1553,43 +1567,43 @@ longer reach the server's own files (see Fixed).
   form, in `client_config_test.cc` (`ClientConnectionUriTest`, 7 cases); end to end in
   `test_client_cli.py`, including that `?tls=true` (or no `tls` at all) to a listener puts a TLS
   ClientHello on the wire and never an HTTP request or the password, which the old client did.
-- Preparing a query no longer runs it (warp-sql: the DuckDB backend learned a prepared
+- Preparing a query no longer runs it (chargewire: the DuckDB backend learned a prepared
   SELECT's result schema by executing it, and now and then the dropped execution waited for
   the whole query: a JDBC, ADBC, JS or CLI prepare of an expensive query could hang for
   minutes). The schema now comes from binding the statement; access control lets the
-  backend's `warp_result_schema()` through (it converts only the statement's own columns),
+  backend's `chargewire_result_schema()` through (it converts only the statement's own columns),
   so store users' prepares still describe their results. Tests:
   `test_a_prepare_describes_its_result_without_running_it` (enforcement) and
   `test_a_masked_columns_described_type_is_the_one_sent` (policies).
   `test_graceful_shutdown.py`'s in-flight prepared statement prepares the long query itself
   again (it passed the row count as a parameter so that the prepare stayed short).
 - A prepared `INSERT`/`UPDATE`/`DELETE`/`MERGE` with `RETURNING` describes its rows'
-  schema too (warp-sql 088d03e: bound and converted, the write never executed); it
+  schema too (chargewire 088d03e: bound and converted, the write never executed); it
   answered rows with no schema.
 - `hardcharger`: a client certificate the server's handshake refused (revoked, or none
   sent where one is required) was reported as "Could not connect to ... is the server
   running?". It now says "The server at https://... refused the client certificate:
-  certificate revoked", or that the server requires a client certificate (from warp-sql's
-  client library, which reports these TLS alerts as Warp SQL §4.4's `certificate_revoked`
+  certificate revoked", or that the server requires a client certificate (from chargewire's
+  client library, which reports these TLS alerts as Chargewire §4.4's `certificate_revoked`
   and `client_certificate_required`).
 
 - `hardcharger`: "OK, 1 rows affected" is "OK, 1 row affected".
 
 - The session option `arrow_lossless_conversion` reported `false` after SQL had turned it
   on (`SET SESSION arrow_lossless_conversion = true`, or an administrator's plain `SET`);
-  it reports what the session's results use (from the Warp SQL SDK).
+  it reports what the session's results use (from the Chargewire SDK).
 
 - The answer to an ingest part or one-request upload sent again (same `Idempotency-Key`)
   reaches the client on Linux and macOS: the server answers it from the first upload without
   reading the body, and then reset the connection with the body unread, so the client saw a
-  broken pipe or a reset and sent it again (warp-sql-adbc's `TestIntegrationIngestPartAnswerLost`
+  broken pipe or a reset and sent it again (chargewire-adbc's `TestIntegrationIngestPartAnswerLost`
   counted a part sent three times). The connection now closes lingering, reading and dropping
   what the client still sends (up to 2 s, 256 MiB), as it already did on Windows. No row was
-  ever written twice. From warp-sql `2dbcd84`; its conformance tests
+  ever written twice. From chargewire `2dbcd84`; its conformance tests
   `test_the_answer_to_a_part_sent_again_arrives` and `test_the_answer_to_an_upload_sent_again_arrives`.
 
 - A query that failed within about 5 s, after it had produced some rows, could be answered
-  `200` with a `failed` statement document instead of its error (warp-sql: the SDK did so
+  `200` with a `failed` statement document instead of its error (chargewire: the SDK did so
   for a statement with buffered rows, and a request for partitions, which every driver
   sends by default, waits up to 5 s for the split decision). Every client shipped treats
   such a document as an error (Go ADBC, JDBC, JS, the C++ client), so no failure was
@@ -1659,7 +1673,7 @@ longer reach the server's own files (see Fixed).
   (administrators only, read-only), and the database is read through its catalog, under
   grants: the same file-system guard as the DuckDB store's lets only the instance's own
   storage open these files, under the path it attached them by.
-- Security: metadata follows authorization object by object (Warp SQL §9.4). Inside a
+- Security: metadata follows authorization object by object (Chargewire §9.4). Inside a
   catalog a user could see, the metadata calls and SQL's catalog listings showed every
   schema, table, view (with its definition) and column, whatever the user's privileges;
   only other tenants' catalogs were hidden. Now the db-schemas, tables (and their `table_schema`), primary-keys,
@@ -1689,12 +1703,12 @@ longer reach the server's own files (see Fixed).
   included. `test_wide_integers.py` round-trips every boundary value.
 - JSON bind parameters outside the 64-bit range were bound as rounded doubles
   (10^38 - 1 as 1e38); they now bind exactly as HUGEINT or UHUGEINT, and wider ones are
-  refused (from the Warp SQL SDK; Warp SQL §6.1 now requires it).
+  refused (from the Chargewire SDK; Chargewire §6.1 now requires it).
 - The `arrow_lossless_conversion` session option changed the instance-wide default, so
   any user switching it changed every other session's HUGEINT, UUID and JSON results; it
-  is now the session's own (from the Warp SQL SDK).
-- `GET /warp/v1/sessions/{id}` of a session that `KILL SESSION` or access control ended
-  answers `401` `session_ended` with its `reason` (Warp SQL §5.6), as every other request
+  is now the session's own (from the Chargewire SDK).
+- `GET /chargewire/v1/sessions/{id}` of a session that `KILL SESSION` or access control ended
+  answers `401` `session_ended` with its `reason` (Chargewire §5.6), as every other request
   for it does; it answered `200`, so a liveness probe saw the dead session as alive. (The
   structured `reason` field itself is on main since after 0.2.0, which sent the reason
   only in the detail text.)
@@ -1756,7 +1770,7 @@ longer reach the server's own files (see Fixed).
 - `HARDCHARGER_VERSION()`, `hardcharger.version` in `hardcharger_settings()`, the
   `hardcharger_build_info` metric's `version` label and the instrumentation `instances` table
   said `v0.2.0` while `--version` printed `0.2.0`. All say `0.2.0` (the CHANGELOG's semantic
-  version); `/warp` discovery and `server-info` already did (`0.2.0 (DuckDB ...)`).
+  version); `/chargewire` discovery and `server-info` already did (`0.2.0 (DuckDB ...)`).
 - The `hardcharger_build_info` metric's help text still mentioned an edition. Hardcharger has
   none; no other user-visible server string mentions editions or licenses.
 - The server's table functions (`hardcharger_settings()`, `hardcharger_sessions()`, ...) in a
@@ -1766,7 +1780,7 @@ longer reach the server's own files (see Fixed).
 - The sensitive-path guard missed `file:/path` (one slash), which DuckDB opens as `/path`:
   `read_text('file:/etc/passwd')` read the file. Every file URL form DuckDB accepts is now
   checked as the path it opens.
-- warp-sql 3aefd27: a request that reached a session just as the idle sweep closed it no
+- chargewire 3aefd27: a request that reached a session just as the idle sweep closed it no
   longer runs in the closed session (its streamed result was cut mid-body: a Windows
   conformance run's `incomplete chunked read`). The request now keeps the session or gets
   `404 session_not_found`.
@@ -1802,7 +1816,7 @@ longer reach the server's own files (see Fixed).
 
 - README: the JavaScript example uses `@gizmodata/hardcharger` (gizmodata/hardcharger-js:
   `import { connect } from "@gizmodata/hardcharger"`, `hardcharger://` URLs), the Hardcharger
-  client on `@gizmodata/warp-sql`, as the Python example uses `adbc-driver-hardcharger`.
+  client on `@gizmodata/chargewire`, as the Python example uses `adbc-driver-hardcharger`.
 - Access control is described as Hardcharger's own (GizmoSQL 1.x has none);
   docs/migrating-from-gizmosql.md maps no 1.x option to `--rbac-*`, `--token-groups-claim`
   or `--audit-chain-key`.
@@ -1971,8 +1985,8 @@ test battery, plus two security reviews of the result (see Fixed).
 
 - `drain_seconds` is now `shutdown_grace_period_seconds` (default 300, as in 1.x).
 - Table schemas from `metadata/tables?include_schema=true` carry nullability, column
-  comments, auto-increment and defaults (`WARP:SQL:COLUMN_DEFAULT`).
-- Warp SQL never recreates a session implicitly: an unknown session id is
+  comments, auto-increment and defaults (`CHARGEWIRE:SQL:COLUMN_DEFAULT`).
+- Chargewire never recreates a session implicitly: an unknown session id is
   `session_not_found`.
 
 ### Fixed
@@ -2017,24 +2031,24 @@ test battery, plus two security reviews of the result (see Fixed).
   encoded parameters bind; listing catalogs no longer opens every attached catalog; a
   stop with a request in flight no longer crashes.
 - Table schemas from metadata give PRECISION in decimal digits for every numeric type,
-  column comments (REMARKS) and defaults (`WARP:SQL:COLUMN_DEFAULT`).
-- (Warp SQL SDK) A server stopped with a request in flight no longer crashes;
+  column comments (REMARKS) and defaults (`CHARGEWIRE:SQL:COLUMN_DEFAULT`).
+- (Chargewire SDK) A server stopped with a request in flight no longer crashes;
   dictionary-encoded parameters bind; ingest turns null-typed columns into VARCHAR,
   converts day_time intervals and refuses types DuckDB can't store; parameter schemas
   carry DuckDB's own Arrow types (VARIANT, GEOMETRY and UUID extensions); listing
   catalogs no longer opens every attached catalog.
 - The `hardcharger_*()` table functions no longer destroy a column type DuckDB only lent them.
-- (Warp SQL SDK) Cancelling a statement just after submitting it no longer leaves it running:
+- (Chargewire SDK) Cancelling a statement just after submitting it no longer leaves it running:
   an interrupt that reached DuckDB before its query began was forgotten, so the cancel is
   now repeated until the statement ends.
 
 ### Known gaps
 
 - Not yet ported from GizmoSQL 1.x: OpenTelemetry export.
-- Browser sign-in has only 1.x's routes on `oauth_port`; Warp SQL's `oauth_browser` flow
-  (`/warp/v1/auth/oauth/flows`) needs the Warp SQL SDK to offer it.
+- Browser sign-in has only 1.x's routes on `oauth_port`; Chargewire's `oauth_browser` flow
+  (`/chargewire/v1/auth/oauth/flows`) needs the Chargewire SDK to offer it.
 - Instrumentation's fetch times are when the server took each batch from DuckDB, not when
-  the client received it (the Warp SQL SDK has no delivery callback); its `peer` column
+  the client received it (the Chargewire SDK has no delivery callback); its `peer` column
   is empty (the SDK's principal carries no peer address).
 - Listing the schemas or tables of one catalog still opens every attached catalog: the v2
   C API has no catalog-scoped listing.
@@ -2074,7 +2088,7 @@ running write (fixed here). 0.1.2 carries everything listed for it.
 
 ### Added
 
-- `POST /warp/v1/sessions/{id}/cancel` stops whatever the session is running.
+- `POST /chargewire/v1/sessions/{id}/cancel` stops whatever the session is running.
 - Primary and imported keys of every table in one metadata request.
 
 ## [0.1.1] - 2026-10-17 [not released]
@@ -2085,8 +2099,8 @@ See 0.1.2.
 
 ### Added
 
-- The Hardcharger server (`server/`): DuckDB 2.0 behind the Warp SQL protocol, built on
-  the Warp SQL server SDK (`third_party/warp-sql`). It passes the Warp SQL conformance
+- The Hardcharger server (`server/`): DuckDB 2.0 behind the Chargewire protocol, built on
+  the Chargewire server SDK (`third_party/chargewire`). It passes the Chargewire conformance
   suite.
 - Configuration from flags, environment variables (`HARDCHARGER_*`, plus GizmoSQL 1.x's
   names, so GizmoData Cloud's settings work unchanged) and a YAML file

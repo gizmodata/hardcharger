@@ -69,7 +69,7 @@ void hardcharger_server_free(hardcharger_server *server);
 /* Versions, as hardcharger-server reports them. Static strings. */
 const char *hardcharger_embedded_version(void);        /* Hardcharger: "2.0.0-rc.1" */
 const char *hardcharger_embedded_duckdb_version(void); /* the DuckDB library */
-const char *hardcharger_embedded_warp_sql_version(void); /* the Warp SQL SDK */
+const char *hardcharger_embedded_chargewire_version(void); /* the Chargewire SDK */
 const char *hardcharger_embedded_web_ui_version(void); /* "" when no web UI is built in */
 
 /* THIRD_PARTY_NOTICES.md as built in, then the web UI's notices (hardcharger-server
@@ -80,7 +80,7 @@ const char *hardcharger_embedded_third_party_notices(void);
  * The console: the `hardcharger` command-line client inside an app, for a SQL console
  * screen. The same statement splitting (a statement ends at a ';' outside strings, quoted
  * names, comments and dollar quotes), dot commands (.help, .tables, .schema, .mode, .timer,
- * .maxrows, ...) and output formatting as `hardcharger -c`, against any Warp SQL server.
+ * .maxrows, ...) and output formatting as `hardcharger -c`, against any Chargewire server.
  * A console is used by one thread at a time, except hardcharger_console_cancel.
  */
 typedef struct hardcharger_console hardcharger_console;

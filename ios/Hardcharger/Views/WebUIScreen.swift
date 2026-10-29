@@ -211,7 +211,7 @@ private struct RemoteConsole: View {
         }
         signingIn = true
         defer { signingIn = false }
-        let client = WarpClient(endpoint: remote.endpoint)
+        let client = ChargewireClient(endpoint: remote.endpoint)
         do {
             let token: AccessToken
             switch remote.signIn {

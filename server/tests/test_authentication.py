@@ -1,6 +1,6 @@
 """Port of GizmoSQL 1.x tests/integration/test_authentication.cpp (30 cases).
 
-Sign-in (Warp SQL §4.1: POST /warp/v1/auth/token, grant_type password) and bearer tokens
+Sign-in (Chargewire §4.1: POST /chargewire/v1/auth/token, grant_type password) and bearer tokens
 (§4.2). 1.x asserted a reason in only 3 of its 30 cases; here every rejection asserts
 the exact problem code (401 invalid_credentials for sign-in, 401 invalid_token for a
 bad bearer token, with WWW-Authenticate: Bearer), so a case can't pass for the wrong
@@ -27,7 +27,7 @@ def server(module_launcher):
 
 
 def sign_in(server, username: str, password: str) -> httpx.Response:
-    return httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
+    return httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token",
                       json={"grant_type": "password", "username": username, "password": password})
 
 
@@ -40,7 +40,7 @@ def refused(server, username: str, password: str) -> None:
 
 def open_session(server, authorization: str | None) -> httpx.Response:
     headers = {} if authorization is None else {"Authorization": authorization}
-    return httpx.post(url=f"{server.base_url}/warp/v1/sessions", headers=headers, json={})
+    return httpx.post(url=f"{server.base_url}/chargewire/v1/sessions", headers=headers, json={})
 
 
 def token_refused(server, authorization: str | None) -> None:
@@ -114,7 +114,7 @@ def test_random_jwt_rejected(server):
 def test_empty_bearer_token_rejected(server):
     # httpx won't send a header value with a trailing space, so this one goes raw.
     with socket.create_connection(address=("127.0.0.1", server.port), timeout=10) as sock:
-        sock.sendall(b"POST /warp/v1/sessions HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer \r\n"
+        sock.sendall(b"POST /chargewire/v1/sessions HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer \r\n"
                      b"Content-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
         reply = b""
         while chunk := sock.recv(65536):

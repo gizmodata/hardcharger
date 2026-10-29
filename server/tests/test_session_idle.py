@@ -1,6 +1,6 @@
 """Port of GizmoSQL 1.x tests/integration/test_session_idle.cpp (5 cases).
 
-1.x unit-tested its eviction rule; the rule is the Warp SDK's here (a session with no
+1.x unit-tested its eviction rule; the rule is the Chargewire SDK's here (a session with no
 request for session_idle_timeout seconds, nothing running and no retained result is
 ended, checked every 5 s), so each case runs against a server with
 session_idle_timeout (HARDCHARGER_SESSION_IDLE_TIMEOUT). An ended session answers 404

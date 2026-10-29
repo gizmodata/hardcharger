@@ -1,7 +1,7 @@
-// What About lists from the server-info document (Warp SQL §10).
+// What About lists from the server-info document (Chargewire §10).
 
 /**
- * The server-info keys (Warp SQL §10) the summary rows already show: Server is the server's
+ * The server-info keys (Chargewire §10) the summary rows already show: Server is the server's
  * name and version, Protocol the protocol's, Instance the instance id.
  */
 const summarized = new Set([

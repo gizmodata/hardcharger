@@ -1,4 +1,4 @@
-// Upload data: files read and converted in the browser (the upload worker) and sent over Warp
+// Upload data: files read and converted in the browser (the upload worker) and sent over Chargewire
 // SQL's bulk ingest, in both browsers, under the server's Content-Security-Policy (the
 // fixtures fail a test on any violation, console error or failed request it didn't declare).
 // Every upload is checked by reading the table back from the server: values, not counts.
@@ -8,7 +8,7 @@ import { once } from "node:events";
 import os from "node:os";
 import path from "node:path";
 
-import { type Connection, connect } from "@gizmodata/warp-sql";
+import { type Connection, connect } from "@gizmodata/chargewire";
 import type { Locator, Page, TestInfo } from "@playwright/test";
 import { tableFromArrays, tableToIPC } from "apache-arrow";
 import { Table as WasmTable, writeParquet } from "parquet-wasm";

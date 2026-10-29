@@ -83,7 +83,7 @@ std::string Row(const LogRecord& record) {
     } else if (key == "cluster_id") {
       id(cluster_id);
     } else if (key == "session_id") {
-      session_id = value;  // the Warp SQL session id (s_...)
+      session_id = value;  // the Chargewire session id (s_...)
     } else if (key == "user" || key == "username") {
       username = value;
     } else if (key == "role") {
@@ -125,7 +125,7 @@ CatalogLog::CatalogLog(Runtime& runtime, duckdb_v2_instance_handle instance)
       catalog_(external_ ? runtime.config.log_catalog : kLogCatalog),
       schema_(runtime.config.log_schema.empty() ? "main" : runtime.config.log_schema),
       table_(SqlIdentifier(catalog_) + "." + SqlIdentifier(schema_) + ".logs") {
-  warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance_, connection_.out(), err); });
+  chargewire_duckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance_, connection_.out(), err); });
 }
 
 CatalogLog::~CatalogLog() { Stop(); }
@@ -143,12 +143,12 @@ void CatalogLog::Attach() {
   }
   file_ = path;
   // READ_WRITE: an instance opened read-only would otherwise open it read-only too.
-  warpduckdb::RunSql(connection_.get(),
+  chargewire_duckdb::RunSql(connection_.get(),
                      "ATTACH " + SqlLiteral(path) + " AS " + SqlIdentifier(catalog_) + " (READ_WRITE)");
 }
 
 void CatalogLog::Start() {
-  const std::string type = warpduckdb::QueryText(
+  const std::string type = chargewire_duckdb::QueryText(
       connection_.get(), "SELECT type FROM duckdb_databases() WHERE database_name = " + SqlLiteral(catalog_));
   if (type.empty()) {
     throw std::runtime_error("log_catalog '" + catalog_ + "' is not attached: attach it in the init SQL");
@@ -163,36 +163,36 @@ void CatalogLog::Start() {
       ddl.push_back(std::string("CREATE INDEX IF NOT EXISTS idx_logs_") + column + " ON " + table + "(" + column + ")");
     }
     for (const auto& command : ddl) {
-      warpduckdb::RunSql(connection_.get(),
+      chargewire_duckdb::RunSql(connection_.get(),
                          "CALL postgres_execute(" + SqlLiteral(catalog_) + ", " + SqlLiteral(command) + ")");
     }
-    warpduckdb::RunSql(connection_.get(), "CALL postgres_clear_cache()");
+    chargewire_duckdb::RunSql(connection_.get(), "CALL postgres_clear_cache()");
   } else {
     if (schema_ != "main") {
-      warpduckdb::RunSql(connection_.get(),
+      chargewire_duckdb::RunSql(connection_.get(),
                          "CREATE SCHEMA IF NOT EXISTS " + SqlIdentifier(catalog_) + "." + SqlIdentifier(schema_));
     }
-    warpduckdb::RunSql(connection_.get(), Replace(Replace(kTableSql, "{T}", table_), "{J}", "JSON"));
+    chargewire_duckdb::RunSql(connection_.get(), Replace(Replace(kTableSql, "{T}", table_), "{J}", "JSON"));
     if (type != "ducklake") {
       for (const char* column : kIndexedColumns) {
-        warpduckdb::RunSql(connection_.get(), std::string("CREATE INDEX IF NOT EXISTS idx_logs_") + column + " ON " +
+        chargewire_duckdb::RunSql(connection_.get(), std::string("CREATE INDEX IF NOT EXISTS idx_logs_") + column + " ON " +
                                                   table_ + "(" + column + ")");
       }
     }
   }
-  // Hardcharger 0.3.0 kept session ids as UUIDs; they are now Warp SQL session ids (s_...).
-  const std::string session_type = warpduckdb::QueryText(
+  // Hardcharger 0.3.0 kept session ids as UUIDs; they are now Chargewire session ids (s_...).
+  const std::string session_type = chargewire_duckdb::QueryText(
       connection_.get(), "SELECT data_type FROM duckdb_columns() WHERE database_name = " + SqlLiteral(catalog_) +
                              " AND schema_name = " + SqlLiteral(schema_) +
                              " AND table_name = 'logs' AND column_name = 'session_id'");
   if (session_type == "UUID") {
     throw std::runtime_error("log table " + table_ + " is from Hardcharger 0.3.0, whose session ids were UUIDs; "
-                             "session ids are now the Warp SQL session ids clients hold (s_...). Drop or rename "
+                             "session ids are now the Chargewire session ids clients hold (s_...). Drop or rename "
                              "the table (or use a new log database) and start the server again.");
   }
   // Off the server's database, so writing log lines doesn't block its CHECKPOINT (see
   // Instrumentation::Start).
-  warpduckdb::RunSql(connection_.get(), "USE " + SqlIdentifier(catalog_) + "." + SqlIdentifier(schema_));
+  chargewire_duckdb::RunSql(connection_.get(), "USE " + SqlIdentifier(catalog_) + "." + SqlIdentifier(schema_));
   writer_ = std::thread([this] { WriterLoop(); });
   SetLogSink([this](const LogRecord& record) { Add(record); });
   Log(LogLevel::kInfo, "catalog logging on", {{"catalog", catalog_}, {"schema", schema_}, {"backend", type}});
@@ -225,7 +225,7 @@ void CatalogLog::Add(const LogRecord& record) {
 
 void CatalogLog::Write(const std::vector<LogRecord>& batch) {
   try {
-    warpduckdb::RunSql(connection_.get(), InsertSql(table_, batch));
+    chargewire_duckdb::RunSql(connection_.get(), InsertSql(table_, batch));
     return;
   } catch (const std::exception& e) {
     Log(LogLevel::kWarning, "catalog log batch write failed; retrying line by line",
@@ -235,7 +235,7 @@ void CatalogLog::Write(const std::vector<LogRecord>& batch) {
   std::size_t failed = 0;
   for (const auto& record : batch) {
     try {
-      warpduckdb::RunSql(connection_.get(), InsertSql(table_, {record}));
+      chargewire_duckdb::RunSql(connection_.get(), InsertSql(table_, {record}));
     } catch (const std::exception&) {
       failed++;
     }

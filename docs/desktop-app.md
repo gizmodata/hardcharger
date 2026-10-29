@@ -43,7 +43,7 @@ follow-up work.
    the server and app. **Launch at login** is optional, under Settings.
 
 The controller starts the same `hardcharger-server` executable as the command-line package,
-as a child process. The SQL workspace connects to it over Warp SQL. The app bundles the
+as a child process. The SQL workspace connects to it over Chargewire. The app bundles the
 `hardcharger` command-line client too. It owns a separate database and preferences directory;
 it does not automatically adopt an existing command-line database or server. A port conflict
 is reported instead of attaching to another server.

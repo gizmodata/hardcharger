@@ -11,13 +11,13 @@ namespace {
 constexpr auto kTimeout = std::chrono::seconds(300);
 }  // namespace
 
-arrow::Status SignInWithBrowser(warpsql::client::Client& client, const warpsql::client::Discovery& discovery) {
+arrow::Status SignInWithBrowser(chargewire::client::Client& client, const chargewire::client::Discovery& discovery) {
   if (!discovery.Has("oauth_browser")) {
     return arrow::Status::IOError(
         "The server does not offer browser sign-in (capability oauth_browser): its administrator turns it on "
         "with oauth_client_id and the identity provider's settings");
   }
-  const std::string provider = warpsql::client::Client::BrowserSignInProviderName(discovery);
+  const std::string provider = chargewire::client::Client::BrowserSignInProviderName(discovery);
   try {
     client.SignInWithBrowser(
         [&](const std::string& url) {
@@ -28,7 +28,7 @@ arrow::Status SignInWithBrowser(warpsql::client::Client& client, const warpsql::
                     << "... (press Ctrl+C to cancel)" << std::endl;
         },
         kTimeout);
-  } catch (const warpsql::client::Error& e) {
+  } catch (const chargewire::client::Error& e) {
     if (e.code() == "timeout") {
       return arrow::Status::IOError("The browser sign-in was not completed within ", kTimeout.count(), " seconds");
     }

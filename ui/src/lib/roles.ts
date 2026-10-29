@@ -4,7 +4,7 @@
 // own session. An administrator holds every right already (the server refuses SET ROLE for one), and
 // a server without access control has no roles: neither gets a picker.
 
-import { type Connection, ErrorCode, WarpSqlError } from "@gizmodata/warp-sql";
+import { type Connection, ErrorCode, ChargewireError } from "@gizmodata/chargewire";
 
 import { quoteIdentifier } from "./sql";
 
@@ -66,7 +66,7 @@ export class RoleConnection {
     try {
       return await work(await this.get());
     } catch (err) {
-      if (!(WarpSqlError.is(err) && err.code === ErrorCode.sessionNotFound)) throw err;
+      if (!(ChargewireError.is(err) && err.code === ErrorCode.sessionNotFound)) throw err;
       this.#conn = undefined;
       return work(await this.get());
     }

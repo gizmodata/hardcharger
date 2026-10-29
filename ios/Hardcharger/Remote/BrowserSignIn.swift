@@ -1,7 +1,7 @@
 import AuthenticationServices
 import Foundation
 
-/// Browser sign-in to a Warp SQL server (spec §4.3) from the app: the app creates the flow,
+/// Browser sign-in to a Chargewire server (spec §4.3) from the app: the app creates the flow,
 /// shows the identity provider in an ASWebAuthenticationSession, and polls the flow with
 /// the poll secret it kept, which hands out the token once. The browser never comes back
 /// to the app (the server's callback page says the sign-in is done), so the sheet is closed
@@ -21,7 +21,7 @@ enum BrowserSignIn {
     /// The scheme the session waits for, which no page ever opens: the poll finishes it.
     static let callbackScheme = "hardcharger-sign-in"
 
-    static func signIn(client: WarpClient, presentation: ASWebAuthenticationPresentationContextProviding)
+    static func signIn(client: ChargewireClient, presentation: ASWebAuthenticationPresentationContextProviding)
         async throws -> AccessToken
     {
         let flow = try await client.startBrowserSignIn()

@@ -1,4 +1,4 @@
-import type { TransactionState } from "@gizmodata/warp-sql";
+import type { TransactionState } from "@gizmodata/chargewire";
 import { Check, Copy, FileUp, Info, ListOrdered, Play, RotateCcw, Save, Square, Undo2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -68,7 +68,7 @@ function duration(ms: number): string {
 }
 
 /**
- * One editor tab: its editor, toolbar and results, and its own Warp SQL session (TabSession).
+ * One editor tab: its editor, toolbar and results, and its own Chargewire session (TabSession).
  * Tabs stay mounted while hidden, so a run in a background tab keeps going.
  */
 export function EditorTab(props: Props) {
@@ -130,7 +130,7 @@ export function EditorTab(props: Props) {
   );
 
   // The catalogs the user may see, and the schemas of the tab's catalog, for the pickers
-  // (Warp SQL metadata, as access control filters it).
+  // (Chargewire metadata, as access control filters it).
   const listings = useMemo(() => listingsFor(app, tab.role), [app, tab.role]);
   useEffect(() => {
     let live = true;
@@ -516,7 +516,7 @@ export function EditorTab(props: Props) {
               type="button"
               className="chip chip-button mono"
               data-testid="session-chip"
-              title={`Session ${sessionId}: the server's log lines, audit records and KILL SESSION name it so (Warp SQL session ${info.id}). Click to copy.`}
+              title={`Session ${sessionId}: the server's log lines, audit records and KILL SESSION name it so (Chargewire session ${info.id}). Click to copy.`}
               onClick={() =>
                 void copyText(sessionId).then((ok) =>
                   setNotice(ok ? "Session id copied." : "The browser refused the copy."),

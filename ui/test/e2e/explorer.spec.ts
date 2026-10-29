@@ -1,7 +1,7 @@
 // The schema browser: a lazy tree of catalogs, schemas, Tables and Views, and columns; names
 // inserted fully qualified and quoted by double-click or drag; its menu; search; re-listing
 // after a change; and the side panel hidden or resized.
-import { connect } from "@gizmodata/warp-sql";
+import { connect } from "@gizmodata/chargewire";
 import type { Page } from "@playwright/test";
 
 import {

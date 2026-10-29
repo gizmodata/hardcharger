@@ -1,6 +1,6 @@
 """Server against the real hardcharger-server (HARDCHARGER_PY_TEST_SERVER_BINARY).
 
-Sign-in is checked over plain Warp SQL HTTP, so these need no client; the ``client``
+Sign-in is checked over plain Chargewire HTTP, so these need no client; the ``client``
 tests go through Server.connect() and adbc-driver-hardcharger.
 """
 
@@ -23,7 +23,7 @@ pytestmark = pytest.mark.integration
 def sign_in(server: Server, password: str, context=None) -> tuple[int, dict]:
     scheme = "https" if server.tls else "http"
     request = urllib.request.Request(
-        url=f"{scheme}://127.0.0.1:{server.port}/warp/v1/auth/token",
+        url=f"{scheme}://127.0.0.1:{server.port}/chargewire/v1/auth/token",
         method="POST",
         data=json.dumps(
             obj={"grant_type": "password", "username": server.username, "password": password}
@@ -138,9 +138,9 @@ def test_tls_server(real_binary, certificates):
         assert server.uri == f"hardcharger://127.0.0.1:{server.port}"
         trusted = ssl.create_default_context(cafile=str(cert_file))
         assert sign_in(server=server, password=server.password, context=trusted)[0] == 200
-        # Plain HTTP to the TLS port doesn't get a Warp SQL answer.
+        # Plain HTTP to the TLS port doesn't get a Chargewire answer.
         with pytest.raises(expected_exception=(urllib.error.URLError, ConnectionError, OSError)):
-            urllib.request.urlopen(f"http://127.0.0.1:{server.port}/warp", timeout=5)
+            urllib.request.urlopen(f"http://127.0.0.1:{server.port}/chargewire", timeout=5)
 
 
 # ---- through the client ---------------------------------------------------------------

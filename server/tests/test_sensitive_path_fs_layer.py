@@ -24,7 +24,7 @@ import sys
 import pytest
 
 from conftest import Launcher, home_env, protected_system_file
-from rbac import WarpError, expect_allowed, start_rbac_server
+from rbac import ChargewireError, expect_allowed, start_rbac_server
 
 GUARD = "Hardcharger blocked access to"
 CREDENTIALS = "user credential store"
@@ -136,7 +136,7 @@ def refused(client, sql: str | list[str], category: str = CREDENTIALS) -> None:
         client.run(sql=setup)
     try:
         client.run(sql=statements[-1])
-    except WarpError as error:
+    except ChargewireError as error:
         assert error.code == "permission_denied", f"{statements[-1]}: {error}"
         assert GUARD in error.detail and f"({category})" in error.detail, f"{statements[-1]}: {error}"
         return
@@ -150,7 +150,7 @@ def reads(client, sql: str | list[str], text: str) -> None:
         client.run(sql=setup)
     try:
         table = client.run(sql=statements[-1])
-    except WarpError as error:
+    except ChargewireError as error:
         pytest.fail(reason=f"{statements[-1]} failed: {error}")
     if text not in str(table.to_pylist()):
         pytest.fail(reason=f"{statements[-1]}: no row holds {text!r}")
@@ -160,7 +160,7 @@ def not_guarded(client, sql: str) -> None:
     """`sql` is not refused by the sensitive-path guard (it may fail for another reason)."""
     try:
         client.run(sql=sql)
-    except WarpError as error:
+    except ChargewireError as error:
         assert GUARD not in error.detail, f"{sql}: refused by the guard with it off: {error}"
 
 
@@ -248,7 +248,7 @@ def test_a_prepared_statements_parameter_is_checked(guarded, open_server, fake_h
             continue
         try:
             client.execute_prepared(prepared_id=prepared, parameters=[key])
-        except WarpError as error:
+        except ChargewireError as error:
             assert GUARD in error.detail and f"({CREDENTIALS})" in error.detail, str(error)
         else:
             pytest.fail(reason="a prepared statement read the key")

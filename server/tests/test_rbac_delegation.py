@@ -4,7 +4,7 @@ and store."""
 
 import pytest
 
-from rbac import WarpError, expect_allowed, start_rbac_server
+from rbac import ChargewireError, expect_allowed, start_rbac_server
 
 
 class World:
@@ -24,7 +24,7 @@ class World:
         try:
             client.run(sql=sql)
             return ""
-        except WarpError as error:
+        except ChargewireError as error:
             return error.detail
 
     def can(self, user: str, privilege: str, columns: list[str] | None = None, table: str = "orders") -> bool:

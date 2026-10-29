@@ -12,7 +12,7 @@ import sys
 import pytest
 
 from conftest import BINARY
-from warp_client import read_table
+from chargewire_client import read_table
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Windows has no open-file soft limit (RLIMIT_NOFILE)")
 

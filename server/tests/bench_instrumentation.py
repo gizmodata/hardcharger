@@ -7,7 +7,7 @@ its writer takes to catch up once the clients stop.
     .venv/bin/python bench_instrumentation.py --backend ducklake
     .venv/bin/python bench_instrumentation.py --backend none      # the clients' own ceiling
 
-`--sessions` client processes (one Warp SQL session each) run `SELECT <n>` back to back
+`--sessions` client processes (one Chargewire session each) run `SELECT <n>` back to back
 until `--statements` have run. The backlog is drained when every execution of the run is
 recorded as finished (cursor_close_time set); "drain" is how long that took after the
 last client finished, "recorded/s" is the run's executions over the time from the first
@@ -156,10 +156,10 @@ def client(args: tuple) -> tuple[int, int]:
     port, token, count = args
     connection = http.client.HTTPConnection(host="127.0.0.1", port=port, timeout=120)
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    connection.request(method="POST", url="/warp/v1/sessions", body=json.dumps({"options": {}}), headers=headers)
+    connection.request(method="POST", url="/chargewire/v1/sessions", body=json.dumps({"options": {}}), headers=headers)
     response = connection.getresponse()
     session = json.loads(response.read())["session_id"]
-    url = f"/warp/v1/sessions/{session}/statements"
+    url = f"/chargewire/v1/sessions/{session}/statements"
     headers["Accept"] = ARROW_STREAM
     ok = failed = 0
     for i in range(count):
@@ -170,7 +170,7 @@ def client(args: tuple) -> tuple[int, int]:
             ok += 1
         else:
             failed += 1
-    connection.request(method="DELETE", url=f"/warp/v1/sessions/{session}", headers=headers)
+    connection.request(method="DELETE", url=f"/chargewire/v1/sessions/{session}", headers=headers)
     connection.getresponse().read()
     connection.close()
     return ok, failed

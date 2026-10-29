@@ -1,4 +1,4 @@
-"""Uploads an Arrow IPC stream to Warp SQL's ingest endpoint over one raw (TLS) socket, in
+"""Uploads an Arrow IPC stream to Chargewire's ingest endpoint over one raw (TLS) socket, in
 4 MiB writes: what the server's ingest path takes, with no ADBC driver encoding the upload.
 
     python3 raw_ingest.py --url https://127.0.0.1:31337 --file data/lineitem_sf1.arrow \
@@ -49,9 +49,9 @@ def main() -> None:
                 for batch in batches[p::args.parts]:
                     writer.write_batch(batch)
             part_bodies.append(memoryview(part_sink.getvalue()))
-    token = api(args.url, context, "/warp/v1/auth/token",
+    token = api(args.url, context, "/chargewire/v1/auth/token",
                 {"grant_type": "password", "username": "bench", "password": PASSWORD})["access_token"]
-    session = api(args.url, context, "/warp/v1/sessions", {}, token)["session_id"]
+    session = api(args.url, context, "/chargewire/v1/sessions", {}, token)["session_id"]
     def send(path: str, payload, content_type: str) -> bytes:
         sock = socket.create_connection((url.hostname, url.port))
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 << 20)
@@ -72,9 +72,9 @@ def main() -> None:
         import concurrent.futures
         for _ in range(args.times):
             started = time.perf_counter()
-            opened = api(args.url, context, f"/warp/v1/sessions/{session}/ingests",
+            opened = api(args.url, context, f"/chargewire/v1/sessions/{session}/ingests",
                          {"table": "bench_raw_ingest", "mode": "replace"}, token)
-            base = f"/warp/v1/sessions/{session}/ingests/{opened['ingest_id']}"
+            base = f"/chargewire/v1/sessions/{session}/ingests/{opened['ingest_id']}"
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.parts) as pool:
                 answers = list(pool.map(lambda p: send(f"{base}/parts/{p}", part_bodies[p],
                                                        "application/vnd.apache.arrow.stream"),
@@ -90,7 +90,7 @@ def main() -> None:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 << 20)
         if context is not None:
             sock = context.wrap_socket(sock, server_hostname=url.hostname)
-        head = (f"POST /warp/v1/sessions/{session}/ingest?table=bench_raw_ingest&mode=replace HTTP/1.1\r\n"
+        head = (f"POST /chargewire/v1/sessions/{session}/ingest?table=bench_raw_ingest&mode=replace HTTP/1.1\r\n"
                 f"Host: {url.hostname}\r\nAuthorization: Bearer {token}\r\n"
                 f"Content-Type: application/vnd.apache.arrow.stream\r\nContent-Length: {len(body)}\r\n"
                 f"Connection: close\r\n\r\n").encode()

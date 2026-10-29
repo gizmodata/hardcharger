@@ -7,7 +7,7 @@ describe("remainingServerInfo", () => {
     const rows = remainingServerInfo({
       server_name: "Hardcharger",
       server_version: "2.0.0",
-      protocol: "warp-sql",
+      protocol: "chargewire",
       protocol_version: "1",
       instance_id: "i",
       hardcharger_instance_id: "i",

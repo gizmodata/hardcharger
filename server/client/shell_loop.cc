@@ -127,7 +127,7 @@ void PrintFooter(const QueryResult& query_result, const RenderResult& render_res
   out << "\n";
 }
 
-bool ExecuteStatement(WarpConnection& conn, ClientConfig& config,
+bool ExecuteStatement(ChargewireConnection& conn, ClientConfig& config,
                       const std::string& sql,
                       std::shared_ptr<arrow::Table>* last_result = nullptr) {
   if (!RequireConnection(conn)) return false;
@@ -162,7 +162,7 @@ bool ExecuteStatement(WarpConnection& conn, ClientConfig& config,
   } else if (config.max_rows > 0) {
     row_limit = config.max_rows;
   }
-  // Whether a statement returns rows is the server's answer (Warp SQL streams rows, and
+  // Whether a statement returns rows is the server's answer (Chargewire streams rows, and
   // answers a statement document for one that has none), not a guess from its first word.
   auto result = conn.ExecuteQuery(effective_sql, row_limit);
   if (!result.ok()) {
@@ -227,14 +227,14 @@ bool ExecuteStatement(WarpConnection& conn, ClientConfig& config,
 }
 
 // A statement, then the end of a .once redirection.
-bool RunStatement(WarpConnection& conn, CommandProcessor& cmd_proc, ClientConfig& config, const std::string& sql,
+bool RunStatement(ChargewireConnection& conn, CommandProcessor& cmd_proc, ClientConfig& config, const std::string& sql,
                   std::shared_ptr<arrow::Table>* last_result) {
   const bool ok = ExecuteStatement(conn, config, sql, last_result);
   cmd_proc.AfterStatement();
   return ok;
 }
 
-int ProcessLines(WarpConnection& conn, CommandProcessor& cmd_proc,
+int ProcessLines(ChargewireConnection& conn, CommandProcessor& cmd_proc,
                  SqlProcessor& sql_proc, ClientConfig& config,
                  std::istream& input,
                  std::shared_ptr<arrow::Table>* last_result = nullptr) {
@@ -313,7 +313,7 @@ int ProcessLines(WarpConnection& conn, CommandProcessor& cmd_proc,
 }  // namespace
 
 // Refresh the dynamic prompt by querying the server for current catalog and schema
-void RefreshDynamicPrompt(WarpConnection& conn, ClientConfig& config) {
+void RefreshDynamicPrompt(ChargewireConnection& conn, ClientConfig& config) {
   if (!config.dynamic_prompt || !conn.IsConnected()) return;
   auto result = conn.ExecuteQuery("SELECT CURRENT_CATALOG(), CURRENT_SCHEMA()");
   if (result.ok() && result->table && result->table->num_rows() > 0) {
@@ -336,7 +336,7 @@ void RefreshDynamicPrompt(WarpConnection& conn, ClientConfig& config) {
   }
 }
 
-int RunShellLoop(WarpConnection& conn, CommandProcessor& cmd_proc,
+int RunShellLoop(ChargewireConnection& conn, CommandProcessor& cmd_proc,
                  SqlProcessor& sql_proc, ClientConfig& config) {
   replxx::Replxx rx;
   rx.set_max_history_size(kHistorySize);
@@ -489,7 +489,7 @@ int RunShellLoop(WarpConnection& conn, CommandProcessor& cmd_proc,
   return 0;
 }
 
-int RunNonInteractive(WarpConnection& conn, CommandProcessor& cmd_proc,
+int RunNonInteractive(ChargewireConnection& conn, CommandProcessor& cmd_proc,
                       SqlProcessor& sql_proc, ClientConfig& config) {
   // Last result cache — shared across statements in the same session
   std::shared_ptr<arrow::Table> last_result;

@@ -36,7 +36,7 @@ def where(session) -> tuple[str, str]:
 
 
 def document(session) -> tuple[str, str]:
-    """The session's catalog and schema, as GET /warp/v1/sessions/{id} reports them."""
+    """The session's catalog and schema, as GET /chargewire/v1/sessions/{id} reports them."""
     options = session.options()
     return options["catalog"], options["schema"]
 

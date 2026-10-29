@@ -5,7 +5,7 @@ working under another alias (Binder::BindCreateViewInfo, RemotePushdownOptimizer
 StripCatalogName), and binds what is left as a two-part name, with the ambiguity check
 for one: CREATE VIEW x.x.v AS SELECT * FROM x.x.t reads x.x.t as x.t and fails, "Ambiguous
 reference to catalog or schema", though the name was fully qualified. DuckDB 1.5 creates
-it. Plain DuckDB on the same build (the warp-duckdb reference server, none of
+it. Plain DuckDB on the same build (the chargewire-duckdb reference server, none of
 Hardcharger's checks) fails the same way, with access control on or off, so it is
 DuckDB's; Hardcharger adds what really happens and what works to DuckDB's message.
 
@@ -32,11 +32,11 @@ def admin(request, launcher, tmp_path):
         store = request.getfixturevalue("store")
         server = start_rbac_server(launcher=launcher, store_uri=store.new_database())
         client = server.admin()
-        from rbac import WarpError
+        from rbac import ChargewireError
         run = lambda sql: client.run(sql=sql)  # noqa: E731
 
         def fail(sql):
-            with pytest.raises(WarpError) as raised:
+            with pytest.raises(ChargewireError) as raised:
                 client.run(sql=sql)
             return raised.value.detail
 

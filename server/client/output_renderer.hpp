@@ -46,7 +46,7 @@ std::string FriendlyTypeName(const std::shared_ptr<arrow::DataType>& type);
 
 // Registers VARIANT and arrow.opaque readers: VARIANT is decoded for display and
 // JSON, and DuckDB HUGEINT/UHUGEINT retain exact integers with arrow_lossless_conversion.
-// Idempotent; WarpConnection::Connect calls it.
+// Idempotent; ChargewireConnection::Connect calls it.
 void RegisterArrowExtensionTypes();
 
 }  // namespace hardcharger::client

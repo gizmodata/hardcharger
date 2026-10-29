@@ -1,4 +1,4 @@
-// hardcharger: Hardcharger's command-line SQL client, over Warp SQL. Ported from GizmoSQL
+// hardcharger: Hardcharger's command-line SQL client, over Chargewire. Ported from GizmoSQL
 // 1.x's gizmosql_client (src/client/main.cpp): the same options, with Hardcharger's names
 // (docs/migrating-from-gizmosql.md maps them).
 #include <csignal>
@@ -30,7 +30,7 @@
 #include "sql_quoting.hpp"
 #include "third_party_notices.hpp"
 #include "version.hpp"
-#include "warp_connection.hpp"
+#include "chargewire_connection.hpp"
 
 using namespace hardcharger::client;
 
@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
   cl.Flag("password", 'W', "Force a password prompt (else env: HARDCHARGER_PASSWORD, or a prompt)", &password_prompt);
   cl.Value("uri", 0, "URI",
            "Connection URI: hardcharger://HOST[:PORT][/PREFIX][?tls=false], HTTPS unless it says "
-           "?tls=false, port 31337 by default; also warp://, https:// and http:// (also the one positional "
+           "?tls=false, port 31337 by default; also chargewire://, https:// and http:// (also the one positional "
            "argument; not with --host, --port or --tls)",
            &uri_flag);
   cl.Section("TLS");
@@ -295,11 +295,11 @@ int main(int argc, char** argv) {
   bool has_connection_params = host_explicit || user_explicit || where_explicit || config.auth_type_external ||
                                config.auth_type_mtls || uri_provided;
 
-  WarpConnection conn;
+  ChargewireConnection conn;
 
   std::signal(SIGTERM, SigtermHandler);
 
-  // Ctrl-C while a statement runs cancels it through Warp SQL's cancel and the shell
+  // Ctrl-C while a statement runs cancels it through Chargewire's cancel and the shell
   // goes on. At the prompt, replxx reads Ctrl-C as a key (it turns ISIG off), so no
   // signal arrives there. A script run (not interactive) that is not waiting on a
   // statement stops, as Ctrl-C would stop any other program.

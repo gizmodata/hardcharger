@@ -11,7 +11,7 @@ feature; Hardcharger has no license and enforces them on every server.
 DuckDB 2.0's SHOW DATABASES and catalogs metadata leave out system and temp for everyone,
 so the "always sees system and temp" checks read duckdb_databases().
 
-1.x's Flight SQL calls map to Warp SQL: GetCatalogs, GetDbSchemas and GetTables are the
+1.x's Flight SQL calls map to Chargewire: GetCatalogs, GetDbSchemas and GetTables are the
 catalogs, db-schemas and tables metadata requests; SetSessionOptions is the session's
 options. Refusals read as in 1.x ("Access denied: You do not have write access to
 catalog ...").

@@ -8,7 +8,7 @@ apply and keep their 1.x names (doc_quick_start_single_query is DocQuickStartSin
 
 Added (not in 1.x): the shell at a real terminal (pexpect, a pty): the banner and the
 dynamic prompt, multi-line statements, history, tab completion, the pager, the password
-prompt, Ctrl-C cancelling a running statement through Warp SQL's cancel while the shell
+prompt, Ctrl-C cancelling a running statement through Chargewire's cancel while the shell
 goes on; Ctrl-C in a script; .once and .read; option errors; TLS (verification, the host
 name, roots), mutual TLS (with --tls-skip-verify too, which 1.x refused), and the
 server's browser sign-in (--auth-type external) with a mock identity provider. Every
@@ -476,7 +476,7 @@ def test_a_killed_session_is_reported_and_reopened(server, tmp_path):
 
 def test_a_password_change_is_reported_with_its_reason(launcher, store, tmp_path):
     # Another session changes this user's password mid-script: the server refuses the
-    # session's token and says why (Warp SQL §4.2's reason), and the client says that, not
+    # session's token and says why (Chargewire §4.2's reason), and the client says that, not
     # the server's wording.
     from rbac import start_rbac_server
     rbac = start_rbac_server(launcher=launcher, store_uri=store.new_database())
@@ -903,7 +903,7 @@ def test_tls_verifies_the_server(launcher, tmp_path):
     assert "certificate verify failed" in wrong.stderr, wrong.stderr
     skipped = run_tls(server, "--tls-skip-verify", "--csv", "--no-header", "-c", "SELECT 2")
     assert skipped.returncode == 0 and skipped.stdout.strip() == "2", skipped.stderr
-    # Plain HTTP to a TLS port is no Warp SQL server.
+    # Plain HTTP to a TLS port is no Chargewire server.
     plain = run(server, "-c", "SELECT 1")
     assert plain.returncode == 1 and plain.stderr.startswith("Error: "), plain.stderr
 
@@ -995,11 +995,11 @@ def test_uri_with_tls_never_sends_plaintext(first_bytes, query):
 
 
 def test_uri_with_tls_false_is_plain_http_to_its_base_path(first_bytes):
-    # The twin: ?tls=false is plain HTTP, to /warp, or to the URI's own path.
+    # The twin: ?tls=false is plain HTTP, to /chargewire, or to the URI's own path.
     run_uri(f"hardcharger://127.0.0.1:{first_bytes.port}?tls=false")
     run_uri(f"hardcharger://127.0.0.1:{first_bytes.port}/custom/prefix/?tls=false")
     assert len(first_bytes.received) >= 2, first_bytes.received
-    assert first_bytes.received[0].startswith(b"GET /warp HTTP/1.1\r\n"), first_bytes.received[0][:80]
+    assert first_bytes.received[0].startswith(b"GET /chargewire HTTP/1.1\r\n"), first_bytes.received[0][:80]
     assert first_bytes.received[-1].startswith(b"GET /custom/prefix HTTP/1.1\r\n"), first_bytes.received[-1][:80]
 
 
@@ -1153,7 +1153,7 @@ def test_tls_false_is_plain_http(server, proxy):
                                   "--username", server.username, "--csv", "--no-header", "-c", "SELECT 'plain'"],
                             env=client_env(server=server), capture_output=True, text=True, timeout=60)
     assert result.returncode == 0 and result.stdout.strip() == "plain", result.stderr
-    assert proxy.sent and proxy.sent[0].startswith(b"GET /warp HTTP/1.1\r\n"), proxy.sent[:1]
+    assert proxy.sent and proxy.sent[0].startswith(b"GET /chargewire HTTP/1.1\r\n"), proxy.sent[:1]
 
 
 def test_hardcharger_tls_false_in_the_environment(server, first_bytes):
@@ -1269,7 +1269,7 @@ def test_the_old_oauth_port_option_is_gone():
     assert result.returncode != 0 and "oauth-port" in result.stderr, result.stderr
 
 
-# ---- Split results (Warp SQL §6.10) ----
+# ---- Split results (Chargewire §6.10) ----
 
 
 def test_result_partitions_read_a_large_result_in_order(server):

@@ -1,4 +1,4 @@
-"""Remote-throughput harness: Flight SQL (GizmoSQL) vs Quack vs Warp SQL (Hardcharger).
+"""Remote-throughput harness: Flight SQL (GizmoSQL) vs Quack vs Chargewire (Hardcharger).
 
 Runs on the client VM. One invocation measures one system on one workload and appends a
 JSON line per measured repetition to --out.
@@ -13,7 +13,7 @@ fetch:  SELECT * FROM <table>; the client drains the whole result as Arrow recor
         one pyarrow.Table.
 ingest: the client holds lineitem in memory as a pyarrow.Table (from prepare_data.py) and
         loads it into a new server table: adbc_ingest(mode="create") for Flight SQL and
-        Warp SQL, CREATE TABLE remote.t AS SELECT * FROM <arrow table> for Quack. Each
+        Chargewire, CREATE TABLE remote.t AS SELECT * FROM <arrow table> for Quack. Each
         repetition is verified afterwards (row count, sum(l_extendedprice),
         count(DISTINCT l_orderkey)) through the same protocol, outside the timing.
 
@@ -134,7 +134,7 @@ def cert_fingerprint(path: str) -> str:
 
 
 class AdbcSystem:
-    """GizmoSQL over Flight SQL, or Hardcharger over Warp SQL: both are ADBC DB-API drivers."""
+    """GizmoSQL over Flight SQL, or Hardcharger over Chargewire: both are ADBC DB-API drivers."""
 
     def __init__(
         self,
@@ -166,23 +166,23 @@ class AdbcSystem:
                 },
             )
         else:
-            from adbc_driver_warpsql import dbapi
+            from adbc_driver_chargewire import dbapi
 
             # Set both explicitly (the driver's defaults are 8 each): result partitions, which
-            # the driver fetches at once over separate connections (Warp SQL §6.10), and
+            # the driver fetches at once over separate connections (Chargewire §6.10), and
             # ingest parts, uploaded at once and committed as one (§8.3). 1: one stream.
             db_kwargs = {
-                "adbc.warp.ipc_compression": compression,
-                "adbc.warp.statement.result_partitions": str(partitions),
-                "adbc.warp.statement.result_order": order,
-                "adbc.warp.ingest.parts": str(ingest_parts),
+                "adbc.chargewire.ipc_compression": compression,
+                "adbc.chargewire.statement.result_partitions": str(partitions),
+                "adbc.chargewire.statement.result_order": order,
+                "adbc.chargewire.ingest.parts": str(ingest_parts),
             }
             if driver_defaults:
                 db_kwargs = {}  # what an application gets without setting anything
             # The driver refuses TLS options on a plaintext URI.
             tls_kwargs = {"tls_root_certs": cert} if tls else {}
             self.conn = dbapi.connect(
-                uri=f"warp://{host}:{port}" + ("" if tls else "?tls=false"),
+                uri=f"chargewire://{host}:{port}" + ("" if tls else "?tls=false"),
                 username="bench",
                 password=PASSWORD,
                 db_kwargs=db_kwargs,

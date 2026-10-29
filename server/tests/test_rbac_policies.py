@@ -8,7 +8,7 @@ import pyarrow as pa
 import pyarrow.ipc  # noqa: F401 (pa.ipc)
 import pytest
 
-from rbac import WarpError, expect_allowed, expect_blocked, start_rbac_server
+from rbac import ChargewireError, expect_allowed, expect_blocked, start_rbac_server
 
 
 @pytest.fixture(scope="module")
@@ -225,7 +225,7 @@ def test_policy_changes_reach_the_next_statement_and_prepared_ones(admin, bob):
     ("DROP MASKING POLICY hide", "unset it there first"),
 ])
 def test_policy_sql_is_checked_when_it_is_created(admin, sql, why):
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         admin.run(sql=sql)
     assert raised.value.code == "sql_error", str(raised.value)
     assert why in raised.value.detail, str(raised.value)
@@ -256,18 +256,18 @@ def test_an_error_in_the_users_own_predicate_does_not_reveal_hidden_rows(admin, 
                       "CAST(CASE WHEN region = 'EU' THEN '1' ELSE name END AS INTEGER) > 0"]:
             sql = f"SELECT id FROM {table} WHERE {where}"
             # The control: with the row visible, the predicate does reach it.
-            with pytest.raises(WarpError) as control:
+            with pytest.raises(ChargewireError) as control:
                 admin.run(sql=sql)
             assert "bob" in control.value.detail or "dan" in control.value.detail, sql
             try:
                 ann.run(sql=sql)
-            except WarpError as error:
+            except ChargewireError as error:
                 assert "bob" not in error.detail and "dan" not in error.detail, f"{sql} revealed a hidden row: {error}"
         having = (f"SELECT region FROM {table} GROUP BY region "
                   "HAVING max(CASE WHEN region <> 'EU' THEN CAST(name AS INTEGER) END) > 0")
         try:
             ann.run(sql=having)
-        except WarpError as error:
+        except ChargewireError as error:
             assert "bob" not in error.detail, f"{having}: {error}"
 
 

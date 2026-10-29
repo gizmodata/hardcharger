@@ -1,4 +1,4 @@
-"""Queries derived from TPC-H at SF10: Hardcharger (Warp SQL over HTTP) vs GizmoSQL 1.x
+"""Queries derived from TPC-H at SF10: Hardcharger (Chargewire over HTTP) vs GizmoSQL 1.x
 (Flight SQL over gRPC).
 
 Each server loads the same Parquet files into its own database file, then every
@@ -63,16 +63,16 @@ class HardchargerClient:
     def __init__(self, port: int):
         self.base = f"http://127.0.0.1:{port}"
         self.http = httpx.Client(base_url=self.base, timeout=600)
-        token = self.http.post(url="/warp/v1/auth/token", json={"grant_type": "password",
+        token = self.http.post(url="/chargewire/v1/auth/token", json={"grant_type": "password",
                                                                  "username": "bench", "password": PASSWORD}).json()["access_token"]
         self.headers = {"Authorization": f"Bearer {token}"}
-        self.session = self.http.post(url="/warp/v1/sessions", headers=self.headers, json={}).json()["session_id"]
+        self.session = self.http.post(url="/chargewire/v1/sessions", headers=self.headers, json={}).json()["session_id"]
 
     def query(self, sql: str, compression: str | None = None) -> pa.Table:
         headers = {**self.headers, "Accept": "application/vnd.apache.arrow.stream"}
         if compression:
-            headers["Warp-IPC-Compression"] = compression
-        response = self.http.post(url=f"/warp/v1/sessions/{self.session}/statements", headers=headers,
+            headers["Chargewire-IPC-Compression"] = compression
+        response = self.http.post(url=f"/chargewire/v1/sessions/{self.session}/statements", headers=headers,
                                   json={"sql": sql})
         response.raise_for_status()
         return ipc.open_stream(source=io.BytesIO(initial_bytes=response.content)).read_all()

@@ -63,10 +63,10 @@ final class ServerController {
     var usesTLS: Bool { runningSettings?.usesTLS ?? settings.usesTLS }
 
     /// How the app itself reaches the server: always over loopback.
-    var localEndpoint: WarpEndpoint? {
+    var localEndpoint: ChargewireEndpoint? {
         guard phase == .running, let port else { return nil }
         let scheme = usesTLS ? "https" : "http"
-        return WarpEndpoint(origin: URL(string: "\(scheme)://127.0.0.1:\(port)")!,
+        return ChargewireEndpoint(origin: URL(string: "\(scheme)://127.0.0.1:\(port)")!,
                             pinnedFingerprint: usesTLS ? certificate?.fingerprint : nil)
     }
 
@@ -159,7 +159,7 @@ final class ServerController {
     /// may be gone.
     func checkHealth() async -> Bool {
         guard let endpoint = localEndpoint else { return false }
-        return await WarpClient(endpoint: endpoint, timeout: 3).isServing()
+        return await ChargewireClient(endpoint: endpoint, timeout: 3).isServing()
     }
 
     /// Back in the foreground: restart a server that stopped answering while suspended.
@@ -199,10 +199,10 @@ final class ServerController {
     func accessToken() async throws -> AccessToken {
         if let token, token.isFresh() { return token }
         guard let endpoint = localEndpoint else {
-            throw WarpError(status: 0, code: "client_not_running", detail: String(localized: "The server isn't running."))
+            throw ChargewireError(status: 0, code: "client_not_running", detail: String(localized: "The server isn't running."))
         }
         let credential = try credential()
-        let fresh = try await WarpClient(endpoint: endpoint).signIn(
+        let fresh = try await ChargewireClient(endpoint: endpoint).signIn(
             username: credential.username, password: credential.password)
         token = fresh
         return fresh

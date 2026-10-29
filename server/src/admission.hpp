@@ -39,7 +39,7 @@ class AdmissionSlot {
 
 class AdmissionController {
  public:
-  // How an Acquire() that got no slot ended. Thrown as warpsql::Error by the server.
+  // How an Acquire() that got no slot ended. Thrown as chargewire::Error by the server.
   enum class Refusal { kQueueFull, kWaitedTooLong, kAborted };
   struct Refused {
     Refusal reason;

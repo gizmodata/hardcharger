@@ -1,4 +1,4 @@
-// The query page's editor tabs: several editors open at once, each with its own Warp SQL
+// The query page's editor tabs: several editors open at once, each with its own Chargewire
 // session (so a transaction open in one tab never touches another), its own catalog,
 // schema, row limit and results.
 //

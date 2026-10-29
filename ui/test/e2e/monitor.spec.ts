@@ -1,4 +1,4 @@
-import { connect } from "@gizmodata/warp-sql";
+import { connect } from "@gizmodata/chargewire";
 import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -74,7 +74,7 @@ test("navigation explicitly aborts an outstanding metadata request before replac
 
 test("SQL Monitor shows outcomes and slots and preserves the editor", async ({ page }, testInfo) => {
   const server = await startOwnServer(["--enable-instrumentation", "--max-concurrent-statements", "2"]);
-  const connection = await connect({ url: `${server.url}/warp`, ...server.admin, resultPartitions: 1 });
+  const connection = await connect({ url: `${server.url}/chargewire`, ...server.admin, resultPartitions: 1 });
   try {
     await connection.query("SELECT 42 AS monitor_completed");
     try {
@@ -119,7 +119,7 @@ test("SQL Monitor shows outcomes and slots and preserves the editor", async ({ p
 
 test("statement details render captured profile metrics without rerunning the query", async ({ page }, testInfo) => {
   const server = await startOwnServer(["--enable-instrumentation"]);
-  const connection = await connect({ url: `${server.url}/warp`, ...server.admin, resultPartitions: 1 });
+  const connection = await connect({ url: `${server.url}/chargewire`, ...server.admin, resultPartitions: 1 });
   const sql = "SELECT sum(i) AS captured_profile_ui_probe FROM range(100000) t(i) WHERE i % 2 = 0";
   try {
     await connection.execute("SET hardcharger.capture_query_profile = 'detailed'");

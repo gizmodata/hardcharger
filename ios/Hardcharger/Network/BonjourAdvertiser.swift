@@ -13,7 +13,7 @@ final class BonjourAdvertiser {
         stop()
         let service = NetService(domain: "local.", type: Self.serviceType, name: name, port: Int32(port))
         service.setTXTRecord(NetService.data(fromTXTRecord: [
-            "path": Data("/warp".utf8), "tls": Data("1".utf8), "ui": Data("/ui/".utf8),
+            "path": Data("/chargewire".utf8), "tls": Data("1".utf8), "ui": Data("/ui/".utf8),
         ]))
         service.publish()
         self.service = service

@@ -1,25 +1,25 @@
-// The Warp SQL connections the UI opens: always to its own origin, under /warp.
+// The Chargewire connections the UI opens: always to its own origin, under /chargewire.
 
-import { type Connection, type DiscoveryDocument, connect } from "@gizmodata/warp-sql";
+import { type Connection, type DiscoveryDocument, connect } from "@gizmodata/chargewire";
 
 import type { SignedIn } from "./auth";
 import { pageRequests } from "./pageRequests";
 
-/** The protocol's base URL: this page's origin, /warp. */
-export function warpBase(): string {
-  return `${window.location.origin}/warp`;
+/** The protocol's base URL: this page's origin, /chargewire. */
+export function chargewireBase(): string {
+  return `${window.location.origin}/chargewire`;
 }
 
 /** The server's discovery document (§3.1); needs no sign-in. */
 export async function discover(signal?: AbortSignal): Promise<DiscoveryDocument> {
-  const resp = await pageRequests.fetch(warpBase(), {
+  const resp = await pageRequests.fetch(chargewireBase(), {
     headers: { Accept: "application/json" },
     cache: "no-store",
     signal: signal ?? null,
   });
-  if (!resp.ok) throw new Error(`the server answered ${resp.status} at ${warpBase()}`);
+  if (!resp.ok) throw new Error(`the server answered ${resp.status} at ${chargewireBase()}`);
   const doc = (await resp.json()) as DiscoveryDocument;
-  if (doc.protocol !== "warp-sql") throw new Error(`${warpBase()} is not a Warp SQL server`);
+  if (doc.protocol !== "chargewire") throw new Error(`${chargewireBase()} is not a Chargewire server`);
   return doc;
 }
 
@@ -40,7 +40,7 @@ export interface ConnectionOptions {
 export function openConnection(auth: SignedIn, options: ConnectionOptions = {}): Promise<Connection> {
   const { signal, catalog, schema, reconnect } = options;
   return connect({
-    url: warpBase(),
+    url: chargewireBase(),
     fetch: pageRequests.fetch,
     token: auth.token,
     ...(catalog ? { catalog } : {}),
@@ -50,7 +50,7 @@ export function openConnection(auth: SignedIn, options: ConnectionOptions = {}):
     // connections per host are shared by every tab of the app.
     resultPartitions: 1,
     queryTag: { client: "hardcharger-ui", ...options.queryTag },
-    logger: { warn: (message: string) => console.info(`[warp-sql] ${message}`) },
+    logger: { warn: (message: string) => console.info(`[chargewire] ${message}`) },
     ...(signal ? { signal } : {}),
   });
 }

@@ -36,8 +36,8 @@
 #include "third_party_notices.hpp"
 #include "tokens.hpp"
 #include "version.hpp"
-#include "warpsql/server.hpp"
-#include "warpsql/stop_signals.hpp"
+#include "chargewire/server.hpp"
+#include "chargewire/stop_signals.hpp"
 #include "web_ui.hpp"
 
 namespace hc = hardcharger;
@@ -65,20 +65,20 @@ void WriteExactly(std::string_view text) {
 // reload loads the certificate chain again too; on_crl_reload below).
 std::atomic<double> g_tls_certificate_not_after = NAN;
 
-warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
-  warpsql::ServerOptions options;
+chargewire::ServerOptions ServerOptionsFrom(const hc::Config& config) {
+  chargewire::ServerOptions options;
   options.host = config.host;
   options.port = static_cast<uint16_t>(config.port);
   options.health_port = static_cast<uint16_t>(config.health_port);
   if (!config.tls_cert.empty()) {
-    warpsql::TlsOptions tls;
+    chargewire::TlsOptions tls;
     tls.certificate_chain_file = config.tls_cert;
     tls.private_key_file = config.tls_key;
     tls.client_ca_file = config.mtls_ca_cert;
     tls.require_client_certificate = config.mtls_require_client_cert;
     tls.client_crl_file = config.mtls_crl_file;
     tls.allow_missing_ca_crls = config.mtls_crl_allow_missing_ca_crls;
-    tls.client_identity_source = warpsql::ParseClientIdentitySource(config.mtls_identity_source);
+    tls.client_identity_source = chargewire::ParseClientIdentitySource(config.mtls_identity_source);
     tls.require_identity_match = config.mtls_require_identity_match;
     tls.on_crl_reload = [certificate = config.tls_cert](bool ok, const std::string& message) {
       // A successful (re)load built a new TLS context from the certificate file as it is now.
@@ -101,12 +101,12 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   options.default_statement_timeout = std::chrono::milliseconds(0);
   options.cors_allowed_origins = config.cors_origins;
   // Validated at startup (config.cc): only the address recorded for the client changes.
-  for (const auto& proxy : config.trusted_proxies) options.trusted_proxies.push_back(warpsql::ParseIpNetwork(proxy));
+  for (const auto& proxy : config.trusted_proxies) options.trusted_proxies.push_back(chargewire::ParseIpNetwork(proxy));
   // Certificate refusals (a replayed bound token, another identity's sign-in, a revoked
   // certificate, an unknown identity): a security warning and an audit record each.
   // The SDK rate-limits them per source: a summary (suppressed > 0) stands for the
   // refusals it didn't report one by one, so the audit stays truthful about volume.
-  options.on_security_event = [](const warpsql::SecurityEvent& event) {
+  options.on_security_event = [](const chargewire::SecurityEvent& event) {
     hc::LogFields fields{{"kind", "authentication"}, {"status", "denied"},
                          {"code", event.code},       {"user", event.user},
                          {"token_id", event.token_id}, {"certificate_thumbprint", event.presented_thumbprint},
@@ -127,7 +127,7 @@ warpsql::ServerOptions ServerOptionsFrom(const hc::Config& config) {
               std::move(fields));
   };
   if (config.web_ui) {
-    options.plain_handler = [](const warpsql::PlainRequest& request) {
+    options.plain_handler = [](const chargewire::PlainRequest& request) {
       return hc::ServeWebUi(hc::EmbeddedWebUiFiles(), request);
     };
   }
@@ -178,9 +178,9 @@ IdentityProvider DiscoverIdentityProvider(const hc::Config& c) {
   return provider;
 }
 
-// Browser sign-in (Warp SQL §4.3) on the main port: the SDK serves the flows and the
+// Browser sign-in (Chargewire §4.3) on the main port: the SDK serves the flows and the
 // callback; this provider talks to the identity provider. The redirect URI to register
-// with it is <oauth_base_url>/warp/v1/auth/oauth/callback (oauth_redirect_uri overrides).
+// with it is <oauth_base_url>/chargewire/v1/auth/oauth/callback (oauth_redirect_uri overrides).
 std::shared_ptr<hc::OAuthBrowserSignIn> MakeBrowserSignIn(const hc::Config& c, const IdentityProvider& provider,
                                                           std::shared_ptr<hc::Authenticator> authenticator) {
   if (c.oauth_client_id.empty()) return nullptr;
@@ -198,7 +198,7 @@ std::shared_ptr<hc::OAuthBrowserSignIn> MakeBrowserSignIn(const hc::Config& c, c
   options.client_id = c.oauth_client_id;
   options.client_secret = c.oauth_client_secret;
   options.scopes = c.oauth_scopes;
-  options.redirect_uri = !c.oauth_redirect_uri.empty() ? c.oauth_redirect_uri : base + "/warp/v1/auth/oauth/callback";
+  options.redirect_uri = !c.oauth_redirect_uri.empty() ? c.oauth_redirect_uri : base + "/chargewire/v1/auth/oauth/callback";
   options.instance_id = c.oauth_instance_id;
   options.provider_name = c.oauth_provider_name;
   if (!c.oauth_base_url.empty()) {
@@ -271,7 +271,7 @@ class ExitMarker {
 
 // Every column of the first row of `sql`, as text ("" for NULL); empty for no row.
 std::vector<std::string> QueryRow(duckdb_v2_connection_handle connection, std::string_view sql) {
-  auto table = warpduckdb::QueryArrow(connection, sql)->ToTable();
+  auto table = chargewire_duckdb::QueryArrow(connection, sql)->ToTable();
   std::vector<std::string> row;
   if (!table.ok() || (*table)->num_rows() == 0) return row;
   for (const auto& column : (*table)->columns()) {
@@ -290,8 +290,8 @@ double FileBytes(const std::string& path) {
 }
 
 void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMarker& marker) {
-  auto connection = std::make_shared<warpduckdb::Connection>();
-  warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(backend.instance(), connection->out(), err); });
+  auto connection = std::make_shared<chargewire_duckdb::Connection>();
+  chargewire_duckdb::Call([&](auto* err) { return duckdb_v2_connection_create(backend.instance(), connection->out(), err); });
   auto mutex = std::make_shared<std::mutex>();
   g_tls_certificate_not_after = hc::CertificateNotAfterSeconds(runtime.config.tls_cert);
   // Neither changes while the server runs. The main database's file is the one DuckDB
@@ -300,7 +300,7 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMar
   const double process_start = hc::ProcessStartTimeSeconds();
   std::string database_path;
   try {
-    database_path = warpduckdb::QueryText(
+    database_path = chargewire_duckdb::QueryText(
         connection->get(), "SELECT path FROM duckdb_databases() WHERE database_name = current_database()");
   } catch (const std::exception&) {
     database_path = runtime.config.database;
@@ -324,9 +324,9 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMar
       if (s.killed()) return;
       if (s.running()) {
         running++;
-      } else if (s.transaction() == warpsql::TransactionState::kOpen) {
+      } else if (s.transaction() == chargewire::TransactionState::kOpen) {
         in_transaction++;
-      } else if (s.transaction() == warpsql::TransactionState::kAborted) {
+      } else if (s.transaction() == chargewire::TransactionState::kAborted) {
         aborted++;
       } else {
         idle++;
@@ -416,7 +416,7 @@ void InstallCollectors(hc::Runtime& runtime, hc::Backend& backend, const ExitMar
 }  // namespace
 
 int main(int argc, char** argv) {
-  warpsql::InitializeProcess();  // first: before anything uses OpenSSL
+  chargewire::InitializeProcess();  // first: before anything uses OpenSSL
   hc::Loaded loaded;
   try {
     loaded = hc::LoadConfig(argc, argv);
@@ -634,10 +634,10 @@ int main(int argc, char** argv) {
       }
     }
 
-    warpsql::ServerOptions server_options = ServerOptionsFrom(config);
+    chargewire::ServerOptions server_options = ServerOptionsFrom(config);
     server_options.browser_sign_in = MakeBrowserSignIn(config, provider, authenticator);
     server_options.max_browser_sign_ins = static_cast<std::size_t>(config.oauth_max_flows);
-    warpsql::Server server(std::move(server_options), backend, authenticator, tokens);
+    chargewire::Server server(std::move(server_options), backend, authenticator, tokens);
     // For the SQL functions that see and cancel sessions; nothing calls them before Start(),
     // and every engine thread has stopped before `server` goes.
     runtime.server = &server;
@@ -664,13 +664,13 @@ int main(int argc, char** argv) {
     };
     if (config.banner) {
       hc::WriteToTextLog(hc::Banner({.version = hc::kVersion,
-                                     .warp_sql_version = hc::kWarpSqlVersion,
+                                     .chargewire_version = hc::kChargewireVersion,
                                      .duckdb_version = backend->duckdb_version(),
-                                     .label = config.web_ui ? "UI" : "Warp SQL",
-                                     .urls = config.web_ui ? urls("/ui/") : urls("/warp")}));
+                                     .label = config.web_ui ? "UI" : "Chargewire",
+                                     .urls = config.web_ui ? urls("/ui/") : urls("/chargewire")}));
     }
     hc::LogFields ready{{"version", hc::kVersion}, {"duckdb", backend->duckdb_version()}};
-    for (auto& field : url_fields("/warp")) ready.push_back(std::move(field));
+    for (auto& field : url_fields("/chargewire")) ready.push_back(std::move(field));
     const bool v6 = config.host.find(':') != std::string::npos && !config.host.starts_with('[');
     ready.emplace_back("listen", (v6 ? "[" + config.host + "]" : config.host) + ":" + std::to_string(server.port()));
     // "off": metrics are off; "none": metrics in SQL only (metrics_port 0).

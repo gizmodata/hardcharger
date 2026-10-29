@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests of .github/scripts/versions_json.py, against a small checkout it builds (a git
-repository with the files the script reads and a warp-sql submodule). server.yml's `changes`
+repository with the files the script reads and a chargewire submodule). server.yml's `changes`
 job runs it on every run (a few seconds); the build job runs the script itself on the real
 checkout, so a pin whose format changes fails there, not on a tag.
 
@@ -46,8 +46,8 @@ EXTENSIONS = textwrap.dedent(f"""\
     duckdb_extension_statically_link(tpch httpfs ducklake)
 """)
 BUILD_DUCKDB = f"#!/usr/bin/env bash\nDUCKDB_COMMIT={DUCKDB_COMMIT}\nDUCKDB_VERSION_NAME=v2.0.0\n"
-WARP_CMAKELISTS = "cmake_minimum_required(VERSION 3.25)\nproject(warpsql VERSION 1.0.1 LANGUAGES C CXX)\n"
-OPENAPI = "openapi: 3.1.1\ninfo:\n  title: Warp SQL\n  version: 1.0.1\n  summary: x\npaths: {}\n"
+CHARGEWIRE_CMAKELISTS = "cmake_minimum_required(VERSION 3.25)\nproject(chargewire VERSION 1.0.1 LANGUAGES C CXX)\n"
+OPENAPI = "openapi: 3.1.1\ninfo:\n  title: Chargewire\n  version: 1.0.1\n  summary: x\npaths: {}\n"
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -64,18 +64,18 @@ def write(path: Path, text: str) -> None:
 
 class Checkout:
     """A fake hardcharger checkout: release.sh, the files versions_json.py reads, and
-    third_party/warp-sql as a submodule (a gitlink to a commit of a nested repository)."""
+    third_party/chargewire as a submodule (a gitlink to a commit of a nested repository)."""
 
     def __init__(self, base: Path):
         self.root = base / "hardcharger"
-        warp = self.root / "third_party" / "warp-sql"
-        write(warp / "cpp" / "CMakeLists.txt", WARP_CMAKELISTS)
-        write(warp / "cpp" / "scripts" / "build-duckdb.sh", BUILD_DUCKDB)
-        write(warp / "spec" / "openapi.yaml", OPENAPI)
-        git(warp.parent, "init", "-q", str(warp))
-        git(warp, "add", "-A")
-        git(warp, "commit", "-q", "-m", "warp-sql")
-        self.warp_commit = git(warp, "rev-parse", "HEAD")
+        chargewire = self.root / "third_party" / "chargewire"
+        write(chargewire / "cpp" / "CMakeLists.txt", CHARGEWIRE_CMAKELISTS)
+        write(chargewire / "cpp" / "scripts" / "build-duckdb.sh", BUILD_DUCKDB)
+        write(chargewire / "spec" / "openapi.yaml", OPENAPI)
+        git(chargewire.parent, "init", "-q", str(chargewire))
+        git(chargewire, "add", "-A")
+        git(chargewire, "commit", "-q", "-m", "chargewire")
+        self.chargewire_commit = git(chargewire, "rev-parse", "HEAD")
         write(self.root / "server" / "CMakeLists.txt", CMAKELISTS)
         write(self.root / "server" / "scripts" / "duckdb-extensions.cmake", EXTENSIONS)
         (self.root / ".github" / "scripts").mkdir(parents=True)
@@ -83,7 +83,7 @@ class Checkout:
             shutil.copy(HERE / name, self.root / ".github" / "scripts" / name)
         git(self.root, "init", "-q")
         git(self.root, "add", "server", ".github")
-        git(self.root, "update-index", "--add", "--cacheinfo", f"160000,{self.warp_commit},third_party/warp-sql")
+        git(self.root, "update-index", "--add", "--cacheinfo", f"160000,{self.chargewire_commit},third_party/chargewire")
         git(self.root, "commit", "-q", "-m", "hardcharger")
         self.commit = git(self.root, "rev-parse", "HEAD")
 
@@ -133,7 +133,7 @@ class VersionsJson(unittest.TestCase):
     def test_the_document(self):
         self.assertEqual(self.ok(), {
             "hardcharger": {"version": "2.0.0", "commit": self.checkout.commit},
-            "warp_sql": {"version": "1.0.1", "spec_version": "1.0.1", "commit": self.checkout.warp_commit},
+            "chargewire": {"version": "1.0.1", "spec_version": "1.0.1", "commit": self.checkout.chargewire_commit},
             "duckdb": {"version": "v2.0.0", "commit": DUCKDB_COMMIT},
             "extensions": {
                 "built_in": ["core_functions", "parquet", "json", "icu", "tpch", "httpfs", "ducklake"],
@@ -159,19 +159,19 @@ class VersionsJson(unittest.TestCase):
                      str(self.checkout.fake_server(version="2.0.0", duckdb="v2.0.0-alpha48624")))
 
     def test_the_checked_out_submodule_must_be_the_recorded_one(self):
-        warp = self.checkout.root / "third_party" / "warp-sql"
-        (warp / "x").write_text("x", encoding="utf-8")
-        git(warp, "add", "x")
-        git(warp, "commit", "-q", "-m", "moved on")
-        self.refused("HEAD records " + self.checkout.warp_commit)
+        chargewire = self.checkout.root / "third_party" / "chargewire"
+        (chargewire / "x").write_text("x", encoding="utf-8")
+        git(chargewire, "add", "x")
+        git(chargewire, "commit", "-q", "-m", "moved on")
+        self.refused("HEAD records " + self.checkout.chargewire_commit)
 
     def test_a_malformed_or_missing_duckdb_pin_is_refused(self):
-        self.checkout.edit("third_party/warp-sql/cpp/scripts/build-duckdb.sh", f"DUCKDB_COMMIT={DUCKDB_COMMIT}",
+        self.checkout.edit("third_party/chargewire/cpp/scripts/build-duckdb.sh", f"DUCKDB_COMMIT={DUCKDB_COMMIT}",
                            "DUCKDB_COMMIT=d54cbbe3df")
         self.refused("build-duckdb.sh's DUCKDB_COMMIT: expected exactly one match, found 0")
 
     def test_a_malformed_duckdb_version_name_is_refused(self):
-        self.checkout.edit("third_party/warp-sql/cpp/scripts/build-duckdb.sh", "DUCKDB_VERSION_NAME=v2.0.0",
+        self.checkout.edit("third_party/chargewire/cpp/scripts/build-duckdb.sh", "DUCKDB_VERSION_NAME=v2.0.0",
                            "DUCKDB_VERSION_NAME=")
         self.refused("build-duckdb.sh's DUCKDB_VERSION_NAME: expected exactly one match, found 0")
 
@@ -184,8 +184,8 @@ class VersionsJson(unittest.TestCase):
                            "statically_link(tpch httpfs)")
         self.refused("is not the loaded set")
 
-    def test_a_missing_warp_sql_version_is_refused(self):
-        self.checkout.edit("third_party/warp-sql/spec/openapi.yaml", "  version: 1.0.1\n", "")
+    def test_a_missing_chargewire_version_is_refused(self):
+        self.checkout.edit("third_party/chargewire/spec/openapi.yaml", "  version: 1.0.1\n", "")
         self.refused("info.version: expected exactly one match, found 0")
 
 

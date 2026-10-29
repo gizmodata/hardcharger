@@ -231,7 +231,7 @@ const char* hardcharger_embedded_duckdb_version(void) {
   return version.c_str();
 }
 
-const char* hardcharger_embedded_warp_sql_version(void) { return HARDCHARGER_WARP_SQL_VERSION; }
+const char* hardcharger_embedded_chargewire_version(void) { return HARDCHARGER_CHARGEWIRE_VERSION; }
 
 const char* hardcharger_embedded_web_ui_version(void) {
   static const std::string version(hardcharger::EmbeddedWebUiVersion());

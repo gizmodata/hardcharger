@@ -1,8 +1,8 @@
 """One info line per cancelled statement (GizmoSQL 1.x logged "SQL Statement was
 successfully canceled"): message "statement cancelled" with session_id, statement_id (the
-statement's q_... id), user, reason (Warp SQL's cancel_reason) and duration in seconds, at
+statement's q_... id), user, reason (Chargewire's cancel_reason) and duration in seconds, at
 the default log level whatever the statement log level, for each way a statement is
-stopped: the client's cancel, a statement timeout (Warp-Statement-Timeout and
+stopped: the client's cancel, a statement timeout (Chargewire-Statement-Timeout and
 query_timeout_seconds), KILL SESSION, the session's deletion and the server's shutdown. A
 statement that ends normally, or fails, logs none.
 """
@@ -78,7 +78,7 @@ def test_client_cancel_logs_one_line(server):
 
 def test_statement_timeout_logs_one_line(server):
     session = server.admin()
-    response = session.submit(sql=LONG, headers={"Prefer": "respond-async", "Warp-Statement-Timeout": "1000"})
+    response = session.submit(sql=LONG, headers={"Prefer": "respond-async", "Chargewire-Statement-Timeout": "1000"})
     statement_id = response.json()["statement_id"]
     doc = session.wait_done(statement_id=statement_id, timeout=30)
     assert doc["state"] == "cancelled" and doc["cancel_reason"] == "timeout", doc

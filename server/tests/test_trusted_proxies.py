@@ -4,7 +4,7 @@ proxy. It shows in hardcharger_active_connections() (client_address, with the pr
 address in proxy_address), in security log and audit lines (peer, proxy) and in the
 per-address bound on browser sign-ins. Authentication and TLS never see it: sign-in works
 as before, and a certificate-bound token still needs the certificate on the connection.
-The header parsing itself (every form, malformed values) is the Warp SQL SDK's
+The header parsing itself (every form, malformed values) is the Chargewire SDK's
 forwarded_test.cc."""
 
 import json
@@ -18,14 +18,14 @@ from conftest import BINARY, problem
 from mock_idp import MockIdP
 from test_mtls_identity import Pki
 from test_mtls_identity import start as start_tls
-from warp_client import Client
+from chargewire_client import Client
 
 FORWARDED_CLIENT = "203.0.113.9"
 
 
 def sign_in(server, headers: dict[str, str]) -> Client:
     """A client of the administrator whose every request, the sign-in included, carries `headers`."""
-    response = httpx.post(url=f"{server.base_url}/warp/v1/auth/token", headers=headers, timeout=60,
+    response = httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token", headers=headers, timeout=60,
                           json={"grant_type": "password", "username": server.username, "password": server.password})
     assert response.status_code == 200, response.text
     client = Client(base_url=server.base_url, token=response.json()["access_token"])
@@ -119,7 +119,7 @@ def test_a_bad_network_stops_startup(launcher, value, message):
 def test_forwarding_headers_change_nothing_about_signing_in(launcher):
     server = launcher.start(args=["--trusted-proxies", "127.0.0.1"])
     headers = {"X-Forwarded-For": FORWARDED_CLIENT}
-    refused = httpx.post(url=f"{server.base_url}/warp/v1/auth/token", headers=headers, timeout=60,
+    refused = httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token", headers=headers, timeout=60,
                          json={"grant_type": "password", "username": server.username, "password": "wrong"})
     problem(response=refused, status=401, code="invalid_credentials")
     assert own_connection(server=server, headers=headers)["client_address"] == FORWARDED_CLIENT
@@ -141,15 +141,15 @@ def test_security_events_name_the_forwarded_client_and_the_proxy(launcher, pki):
                              "--mtls-require-client-cert=false"])
     headers = {"X-Forwarded-For": FORWARDED_CLIENT}
     with server.http(identity=ops) as http:
-        mismatch = http.post(url="/warp/v1/auth/token", headers=headers,
+        mismatch = http.post(url="/chargewire/v1/auth/token", headers=headers,
                              json={"grant_type": "password", "username": server.running.username,
                                    "password": server.running.password})
         problem(response=mismatch, status=401, code="certificate_identity_mismatch")
-        granted = http.post(url="/warp/v1/auth/token", headers=headers, json={"grant_type": "client_certificate"})
+        granted = http.post(url="/chargewire/v1/auth/token", headers=headers, json={"grant_type": "client_certificate"})
         assert granted.status_code == 200, granted.text
     token = granted.json()["access_token"]
     with server.http(identity=None) as http:  # the bound token without its certificate
-        replay = http.post(url="/warp/v1/sessions", json={},
+        replay = http.post(url="/chargewire/v1/sessions", json={},
                            headers={**headers, "Authorization": f"Bearer {token}"})
         problem(response=replay, status=401, code="certificate_mismatch")
     time.sleep(0.5)
@@ -170,7 +170,7 @@ def test_a_direct_clients_security_event_has_no_proxy(launcher, pki):
     server = start_tls(launcher=launcher, pki=pki, probe=ops,
                        args=["--trusted-proxies", "10.0.0.0/8", "--mtls-require-identity-match"])
     with server.http(identity=ops) as http:
-        refused = http.post(url="/warp/v1/auth/token", headers={"X-Forwarded-For": FORWARDED_CLIENT},
+        refused = http.post(url="/chargewire/v1/auth/token", headers={"X-Forwarded-For": FORWARDED_CLIENT},
                             json={"grant_type": "password", "username": server.running.username,
                                   "password": server.running.password})
     problem(response=refused, status=401, code="certificate_identity_mismatch")
@@ -204,7 +204,7 @@ def oauth_server(launcher, idp, trusted: str):
 
 
 def new_flow(http: httpx.Client, client: str) -> int:
-    return http.post(url="/warp/v1/auth/oauth/flows", json={}, headers={"X-Forwarded-For": client}).status_code
+    return http.post(url="/chargewire/v1/auth/oauth/flows", json={}, headers={"X-Forwarded-For": client}).status_code
 
 
 def test_browser_sign_ins_are_bounded_per_forwarded_client(launcher, idp):

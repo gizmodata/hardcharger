@@ -1,4 +1,4 @@
-// A tab's session: the transaction badges (from the session document's `transaction`, Warp
+// A tab's session: the transaction badges (from the session document's `transaction`, Chargewire
 // SQL §5.2), Commit and Rollback, the pickers locked in a transaction, the session chip,
 // New session, cancelling inside a transaction or a script, and a session the server lost.
 import type { Page } from "@playwright/test";
@@ -74,7 +74,7 @@ test("the session chip names the server's session and copies it; New session sta
   const tab = activeTab(page);
   const id = await value(page, "SELECT HARDCHARGER_CURRENT_SESSION()");
   const chip = tab.getByTestId("session-chip");
-  // One id since the server took the Warp SQL session's (s_...): the chip shows it without "s_".
+  // One id since the server took the Chargewire session's (s_...): the chip shows it without "s_".
   expect(id).toMatch(/^s_/);
   await expect(chip).toContainText(id.replace(/^s_/, "").slice(0, 8));
   await chip.click();
@@ -147,11 +147,11 @@ test("Cancel in a script says how far it got", async ({ page }) => {
 /** Ends the active tab's session behind its back, as an idle timeout or a restart would. */
 async function loseSession(page: Page): Promise<void> {
   const id = (await activeTab(page).getByTestId("session-chip").getAttribute("title"))!.match(
-    /Warp SQL session (s_[A-Za-z0-9]+)/,
+    /Chargewire session (s_[A-Za-z0-9]+)/,
   )![1]!;
   const status = await page.evaluate(async (sid) => {
     const saved = JSON.parse(sessionStorage.getItem("hardcharger-ui:sign-in") ?? "{}") as { token?: string };
-    const r = await fetch(`/warp/v1/sessions/${sid}`, {
+    const r = await fetch(`/chargewire/v1/sessions/${sid}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${saved.token ?? ""}` },
     });
@@ -164,7 +164,7 @@ test("a session the server lost: a new one takes over, or, with a transaction op
   // The next request in the lost session is answered session_not_found, and so is the
   // client's own DELETE of it as it lets the connection go.
   expectProblem(page, { status: 404, url: /\/statements$/ });
-  expectProblem(page, { status: 404, url: /\/warp\/v1\/sessions\/s_[A-Za-z0-9]+$/, required: false });
+  expectProblem(page, { status: 404, url: /\/chargewire\/v1\/sessions\/s_[A-Za-z0-9]+$/, required: false });
   const tab = activeTab(page);
   const first = await value(page, "SELECT HARDCHARGER_CURRENT_SESSION()");
   await loseSession(page);

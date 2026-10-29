@@ -13,7 +13,7 @@ final class EmbeddedServer: Sendable {
     struct Versions: Sendable, Equatable {
         let hardcharger: String
         let duckdb: String
-        let warpSQL: String
+        let chargewire: String
         let webUI: String
     }
 
@@ -32,7 +32,7 @@ final class EmbeddedServer: Sendable {
     static let versions = Versions(
         hardcharger: String(cString: hardcharger_embedded_version()),
         duckdb: String(cString: hardcharger_embedded_duckdb_version()),
-        warpSQL: String(cString: hardcharger_embedded_warp_sql_version()),
+        chargewire: String(cString: hardcharger_embedded_chargewire_version()),
         webUI: String(cString: hardcharger_embedded_web_ui_version()))
 
     /// THIRD_PARTY_NOTICES.md, as built into the server.

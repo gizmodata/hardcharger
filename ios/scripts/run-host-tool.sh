@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CMAKE_CROSSCOMPILING_EMULATOR of the iOS server build (build-server-ios.sh). CMake runs a
-# build-time tool the project builds itself (warp-sql's warpsql_openapi_json, which turns
+# build-time tool the project builds itself (chargewire's chargewire_openapi_json, which turns
 # the protocol's OpenAPI document into C++) as `<this script> <the tool, built for iOS>
 # <its arguments>`; an iOS binary doesn't run on the Mac, so this runs the Mac build of the
 # same tool, which build-server-ios.sh compiles into ios/build/host-tools first.

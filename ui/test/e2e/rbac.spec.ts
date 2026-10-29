@@ -64,7 +64,7 @@ test("an administrator ends a user's sessions; the user is sent to sign in again
   }
   await adminContext.close();
 
-  expectProblem(page, { status: 401, url: /\/warp\/v1\/sessions\// });
+  expectProblem(page, { status: 401, url: /\/chargewire\/v1\/sessions\// });
   await runSql(page, "SELECT 2 AS after");
   await expect(page.getByTestId("signin-notice")).toHaveText("An administrator ended your session. Sign in again.");
   await expect(page.getByLabel("User name")).toHaveValue(harness.user.username);

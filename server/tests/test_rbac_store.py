@@ -10,7 +10,7 @@ import urllib.parse
 import pytest
 
 from conftest import STOP_SIGNAL, TSAN_EXTENSIONS, home_env
-from rbac import WarpError, expect_allowed, rbac_env, start_rbac_server
+from rbac import ChargewireError, expect_allowed, rbac_env, start_rbac_server
 
 
 def test_concurrent_writers_on_two_replicas_serialize(launcher, pg_store):
@@ -23,7 +23,7 @@ def test_concurrent_writers_on_two_replicas_serialize(launcher, pg_store):
         for i in range(15):
             try:
                 admin.run(sql=f"CREATE ROLE {prefix}{i}")
-            except WarpError as error:
+            except ChargewireError as error:
                 failures.append(f"{prefix}{i}: {error}")
 
     threads = [threading.Thread(target=writer, args=(first, "a_role_")),
@@ -37,7 +37,7 @@ def test_concurrent_writers_on_two_replicas_serialize(launcher, pg_store):
     admin = first.admin()
     for prefix in ("a_role_", "b_role_"):
         for i in range(15):
-            with pytest.raises(WarpError) as raised:
+            with pytest.raises(ChargewireError) as raised:
                 admin.run(sql=f"CREATE ROLE {prefix}{i}")
             assert "already exists" in raised.value.detail
 
@@ -54,7 +54,7 @@ def test_the_same_name_raced_from_two_replicas_is_created_once(launcher, pg_stor
             try:
                 admin.run(sql=f"CREATE ROLE {name}")
                 outcomes.append(True)
-            except WarpError as error:
+            except ChargewireError as error:
                 assert "already exists" in error.detail, str(error)
                 outcomes.append(False)
 

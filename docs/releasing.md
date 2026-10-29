@@ -32,7 +32,7 @@ set(HARDCHARGER_VERSION_SUFFIX "-rc.1")   # "" for a release
 
 Everything reports the two together (`2.0.0-rc.1`): `hardcharger-server --version`,
 `hardcharger --version`, `HARDCHARGER_VERSION()`, `hardcharger_settings()`, the
-`hardcharger_build_info` metric, the `/warp` discovery document and server-info, the
+`hardcharger_build_info` metric, the `/chargewire` discovery document and server-info, the
 instrumentation's `instances` row, the web UI's About dialog and its tarball
 (`hardcharger-ui-2.0.0-rc.1.tar.gz`), and the Windows executable's version strings. CMake refuses
 any other suffix.

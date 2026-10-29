@@ -15,7 +15,7 @@ The same holds for a store user signed in with a readonly token under access con
 
 import pytest
 
-from rbac import WarpError, expect_allowed, start_rbac_server
+from rbac import ChargewireError, expect_allowed, start_rbac_server
 
 CATALOG = "readonly_session_test"
 REFUSED = "has a readonly session and cannot run statements that modify state"
@@ -269,7 +269,7 @@ def test_readonly_store_user_under_access_control(launcher, store):
     assert reader.run(sql="SELECT current_setting('TimeZone') AS z").column("z").to_pylist() == ["Asia/Tokyo"]
     # (SET VARIABLE is access control's to refuse, for every store user.)
     for sql in ["INSERT INTO ac_t VALUES (3)", "WITH c AS (INSERT INTO ac_t VALUES (3) RETURNING *) SELECT * FROM c"]:
-        with pytest.raises(WarpError) as raised:
+        with pytest.raises(ChargewireError) as raised:
             reader.run(sql=sql)
         assert raised.value.code == "permission_denied" and REFUSED in raised.value.detail, f"{sql}: {raised.value}"
     assert admin.run(sql="SELECT count(*) AS n FROM ac_t").column("n").to_pylist() == [2]

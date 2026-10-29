@@ -43,7 +43,7 @@ test("lists the server's operations, and Try it out runs as the signed-in user",
   await page.getByRole("button", { name: "API", exact: true }).click();
   await expect(page).toHaveURL(/\/ui\/api$/);
   const ui = page.getByTestId("api-swagger");
-  await expect(ui.locator(".info .title")).toContainText("Warp SQL");
+  await expect(ui.locator(".info .title")).toContainText("Chargewire");
   // Every endpoint group, and operations in each.
   for (const tag of ["Discovery", "Authentication", "Sessions", "Statements", "Metadata"]) {
     await expect(ui.locator(`#operations-tag-${tag}`)).toBeVisible();
@@ -60,7 +60,7 @@ test("lists the server's operations, and Try it out runs as the signed-in user",
   // Open a session: the request carries the page's token, which the user never typed.
   const create = await tryOut(page, "Sessions", "createSession");
   await create.locator("textarea.body-param__text").fill("{}");
-  const created = await execute(page, create, /^\/warp\/v1\/sessions$/);
+  const created = await execute(page, create, /^\/chargewire\/v1\/sessions$/);
   expect(
     (await created.headerValue("authorization")) === `Bearer ${token}`,
     "the request carries the page's token",
@@ -76,7 +76,7 @@ test("lists the server's operations, and Try it out runs as the signed-in user",
   // A GET with it: 200, as this user.
   const read = await tryOut(page, "Sessions", "getSession");
   await read.locator('tr[data-param-name="session_id"] input').fill(sessionId);
-  const got = await execute(page, read, /^\/warp\/v1\/sessions\/[^/]+$/);
+  const got = await execute(page, read, /^\/chargewire\/v1\/sessions\/[^/]+$/);
   expect((await got.headerValue("authorization")) === `Bearer ${token}`, "the request carries the page's token").toBe(
     true,
   );
@@ -97,7 +97,7 @@ test("lists the server's operations, and Try it out runs as the signed-in user",
   // Close the session again (204), so no test after this one finds it.
   const close = await tryOut(page, "Sessions", "closeSession");
   await close.locator('tr[data-param-name="session_id"] input').fill(sessionId);
-  await execute(page, close, /^\/warp\/v1\/sessions\/[^/]+$/);
+  await execute(page, close, /^\/chargewire\/v1\/sessions\/[^/]+$/);
   await expect(status(close)).toHaveText("204");
 
   // Nothing went anywhere but this page's origin.
@@ -155,7 +155,7 @@ test("Swagger UI's styles stay inside the API page, and the page's stay out of i
 
 test("says so when the server doesn't describe its API", async ({ page, harness }) => {
   // A server without the capability: discovery as this one's, minus `openapi`.
-  await page.route(/\/warp$/, async (route) => {
+  await page.route(/\/chargewire$/, async (route) => {
     const resp = await route.fetch();
     const doc = (await resp.json()) as { capabilities?: string[] };
     doc.capabilities = (doc.capabilities ?? []).filter((c) => c !== "openapi");
@@ -167,5 +167,5 @@ test("says so when the server doesn't describe its API", async ({ page, harness 
   await page.getByRole("button", { name: "API", exact: true }).click();
   await expect(page.getByTestId("api-missing")).toContainText("doesn't publish a description of its API");
   await expect(page.getByTestId("api-swagger")).toHaveCount(0);
-  expect(asked).not.toContain("/warp/v1/openapi.json");
+  expect(asked).not.toContain("/chargewire/v1/openapi.json");
 });

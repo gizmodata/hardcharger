@@ -191,7 +191,7 @@ final class HardchargerUITests: XCTestCase {
         let session = URLSession(configuration: .ephemeral, delegate: pin, delegateQueue: nil)
         let answered = expectation(description: "health")
         let status = Status()
-        session.dataTask(with: url.deletingLastPathComponent().appending(path: "warp/v1/health")) { _, response, _ in
+        session.dataTask(with: url.deletingLastPathComponent().appending(path: "chargewire/v1/health")) { _, response, _ in
             status.code = (response as? HTTPURLResponse)?.statusCode ?? 0
             answered.fulfill()
         }.resume()

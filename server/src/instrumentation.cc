@@ -524,9 +524,9 @@ Instrumentation::Instrumentation(Runtime& runtime, duckdb_v2_instance_handle ins
       external_(!runtime.config.instrumentation_catalog.empty()),
       catalog_(external_ ? runtime.config.instrumentation_catalog : kInstrumentationCatalog),
       schema_(runtime.config.instrumentation_schema.empty() ? "main" : runtime.config.instrumentation_schema) {
-  warpduckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance_, connection_.out(), err); });
+  chargewire_duckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance_, connection_.out(), err); });
   // Times are written as UTC literals.
-  warpduckdb::RunSql(connection_.get(), "SET TimeZone = 'UTC'");
+  chargewire_duckdb::RunSql(connection_.get(), "SET TimeZone = 'UTC'");
 }
 
 Instrumentation::~Instrumentation() { Stop(); }
@@ -550,14 +550,14 @@ void Instrumentation::Attach() {
   }
   file_ = path;
   // READ_WRITE: an instance opened read-only would otherwise open it read-only too.
-  warpduckdb::RunSql(connection_.get(), "ATTACH " + Literal(path) + " AS " + Quoted(catalog_) + " (READ_WRITE)");
+  chargewire_duckdb::RunSql(connection_.get(), "ATTACH " + Literal(path) + " AS " + Quoted(catalog_) + " (READ_WRITE)");
 }
 
 void Instrumentation::Start() {
   const std::string prefix = Quoted(catalog_) + "." + Quoted(schema_);
   if (external_) {
     // The two backends: the DuckDB file (no instrumentation_catalog) and PostgreSQL.
-    const std::string type = warpduckdb::QueryText(
+    const std::string type = chargewire_duckdb::QueryText(
         connection_.get(), "SELECT type FROM duckdb_databases() WHERE database_name = " + Literal(catalog_));
     if (type == "ducklake") {
       throw std::runtime_error(
@@ -584,43 +584,43 @@ void Instrumentation::Start() {
     for (std::size_t end = ddl.find(';'); end != std::string::npos; start = end + 1, end = ddl.find(';', start)) {
       const std::string command = ddl.substr(start, end - start);
       if (command.find_first_not_of(" \t\r\n") == std::string::npos) continue;
-      warpduckdb::RunSql(connection_.get(), "CALL postgres_execute(" + Literal(catalog_) + ", " + Literal(command) + ")");
+      chargewire_duckdb::RunSql(connection_.get(), "CALL postgres_execute(" + Literal(catalog_) + ", " + Literal(command) + ")");
     }
-    warpduckdb::RunSql(connection_.get(), "CALL postgres_clear_cache()");
+    chargewire_duckdb::RunSql(connection_.get(), "CALL postgres_clear_cache()");
   } else {
-    warpduckdb::RunSql(connection_.get(), Replace(kSchemaSql, "{P}", prefix));
+    chargewire_duckdb::RunSql(connection_.get(), Replace(kSchemaSql, "{P}", prefix));
   }
-  // Hardcharger 0.3.0 kept session ids as UUIDs; a session's id is now its Warp SQL id
+  // Hardcharger 0.3.0 kept session ids as UUIDs; a session's id is now its Chargewire id
   // (s_...), which such a table can't hold. Its rows can't be carried over (the old ids
   // match no session anyone holds), so startup says what to do instead of failing on
   // every insert.
   for (const char* table : {"sessions", "sql_statements"}) {
-    const std::string type = warpduckdb::QueryText(
+    const std::string type = chargewire_duckdb::QueryText(
         connection_.get(), "SELECT data_type FROM duckdb_columns() WHERE database_name = " + Literal(catalog_) +
                                " AND schema_name = " + Literal(schema_) + " AND table_name = " + Literal(table) +
                                " AND column_name = 'session_id'");
     if (type == "UUID") {
       throw std::runtime_error("instrumentation table " + Table(table) +
                                " is from Hardcharger 0.3.0, whose session ids were UUIDs; session ids are now the "
-                               "Warp SQL session ids clients hold (s_...). Drop the instrumentation tables (or use a "
+                               "Chargewire session ids clients hold (s_...). Drop the instrumentation tables (or use a "
                                "new instrumentation database) and start the server again.");
     }
   }
   // Earlier Hardcharger builds kept statement and execution ids as UUIDs of the server's
-  // own; they are now the Warp SQL ids clients hold (q_..., p_...), which such a table
+  // own; they are now the Chargewire ids clients hold (q_..., p_...), which such a table
   // can't hold. As above, startup says what to do rather than failing every insert. (The
   // tables that named statement_kind flight_method had UUID statement ids too.)
   for (const auto& [table, column] : {std::pair{"sql_statements", "statement_id"},
                                       std::pair{"sql_executions", "execution_id"},
                                       std::pair{"sql_executions", "statement_id"}}) {
-    const std::string type = warpduckdb::QueryText(
+    const std::string type = chargewire_duckdb::QueryText(
         connection_.get(), "SELECT data_type FROM duckdb_columns() WHERE database_name = " + Literal(catalog_) +
                                " AND schema_name = " + Literal(schema_) + " AND table_name = " + Literal(table) +
                                " AND column_name = " + Literal(column));
     if (type == "UUID") {
       throw std::runtime_error("Hardcharger can't use instrumentation table " + Table(table) + ": its " + column +
                                " is a UUID, from an earlier Hardcharger. Statement and execution ids are now the "
-                               "Warp SQL ids clients hold (q_... for a statement, p_... for a prepared "
+                               "Chargewire ids clients hold (q_... for a statement, p_... for a prepared "
                                "statement). Drop the instrumentation tables, or rename them to keep their rows "
                                "(ALTER TABLE ... RENAME TO ...), or use a new instrumentation database, and start "
                                "the server again.");
@@ -631,7 +631,7 @@ void Instrumentation::Start() {
   if (!external_) {
     const std::string stale = "SELECT instance_id FROM " + Table("instances") + " WHERE status = 'running'";
     const std::string sessions = "SELECT session_id FROM " + Table("sessions") + " WHERE instance_id IN (" + stale + ")";
-    warpduckdb::RunSql(connection_.get(),
+    chargewire_duckdb::RunSql(connection_.get(),
                        "UPDATE " + Table("sql_executions") +
                            " SET execution_end_time = now(), status = 'error', error_message = 'Server shutdown "
                            "unexpectedly' WHERE status IN ('executing', 'queued') AND statement_id IN (SELECT "
@@ -669,7 +669,7 @@ void Instrumentation::Start() {
   // database is the server's own blocks that database's CHECKPOINT while it writes to
   // another one (DuckDB: "there are other write transactions active"), and it writes after
   // every statement: a client's CHECKPOINT right after one failed about a third of the time.
-  warpduckdb::RunSql(connection_.get(), "USE " + Quoted(catalog_) + "." + Quoted(schema_));
+  chargewire_duckdb::RunSql(connection_.get(), "USE " + Quoted(catalog_) + "." + Quoted(schema_));
   writer_ = std::thread([this] { WriterLoop(); });
   Log(LogLevel::kInfo, "instrumentation on",
       {{"catalog", catalog_}, {"schema", schema_}, {"backend", postgres_ ? "postgresql" : "duckdb"}});
@@ -715,7 +715,7 @@ void Instrumentation::Enqueue(Event event) {
 
 void Instrumentation::Run(const std::string& sql) {
   try {
-    warpduckdb::RunSql(connection_.get(), sql);
+    chargewire_duckdb::RunSql(connection_.get(), sql);
   } catch (const std::exception& e) {
     // One failed write must not stop the others.
     Log(LogLevel::kWarning, "instrumentation write failed", {{"error", LoggableError("", e.what())}});
@@ -787,13 +787,13 @@ bool Instrumentation::TryWrite(std::vector<Event>& events, std::size_t first, st
   for (std::size_t i = first; i < last; i++) batch.Add(events[i]);
   try {
     const std::vector<std::string> statements = Render(batch);
-    warpduckdb::RunSql(connection_.get(), "BEGIN TRANSACTION");
+    chargewire_duckdb::RunSql(connection_.get(), "BEGIN TRANSACTION");
     try {
-      for (const std::string& sql : statements) warpduckdb::RunSql(connection_.get(), sql);
-      warpduckdb::RunSql(connection_.get(), "COMMIT");
+      for (const std::string& sql : statements) chargewire_duckdb::RunSql(connection_.get(), sql);
+      chargewire_duckdb::RunSql(connection_.get(), "COMMIT");
     } catch (...) {
       try {
-        warpduckdb::RunSql(connection_.get(), "ROLLBACK");
+        chargewire_duckdb::RunSql(connection_.get(), "ROLLBACK");
       } catch (const std::exception&) {
         // A failed COMMIT has ended the transaction already.
       }
@@ -811,7 +811,7 @@ bool Instrumentation::TryWrite(std::vector<Event>& events, std::size_t first, st
 bool Instrumentation::Reachable() {
   if (!postgres_) return true;  // the file is local: a failure is the record's
   try {
-    warpduckdb::RunSql(connection_.get(),
+    chargewire_duckdb::RunSql(connection_.get(),
                        "CALL postgres_execute(" + Literal(catalog_) + ", 'SELECT 1', prepare = FALSE)");
     return true;
   } catch (const std::exception&) {

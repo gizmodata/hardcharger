@@ -2,8 +2,8 @@
 
 PRIMARY KEY and UNIQUE constraints appear in hardcharger_index_info with NON_UNIQUE false
 (beside a CREATE INDEX), and a table's schema carries nullability, REMARKS,
-IS_AUTO_INCREMENT and WARP:SQL:COLUMN_DEFAULT (1.x's GIZMOSQL:COLUMN_DEFAULT; 1.x read it through ADBC's
-adbc_get_table_schema; here through Warp SQL's metadata/tables?include_schema=true). Both apply.
+IS_AUTO_INCREMENT and CHARGEWIRE:SQL:COLUMN_DEFAULT (1.x's GIZMOSQL:COLUMN_DEFAULT; 1.x read it through ADBC's
+adbc_get_table_schema; here through Chargewire's metadata/tables?include_schema=true). Both apply.
 """
 
 import pyarrow as pa
@@ -37,5 +37,5 @@ def test_table_schema_carries_column_metadata(session):
     assert schema.field("id").nullable is False
     assert schema.field("name").metadata[b"ARROW:FLIGHT:SQL:REMARKS"] == b"employee name"
     assert schema.field("id").metadata[b"ARROW:FLIGHT:SQL:IS_AUTO_INCREMENT"] == b"1"
-    assert schema.field("note").metadata[b"WARP:SQL:COLUMN_DEFAULT"] == b"'n/a'"
+    assert schema.field("note").metadata[b"CHARGEWIRE:SQL:COLUMN_DEFAULT"] == b"'n/a'"
     assert b"GIZMOSQL:COLUMN_DEFAULT" not in schema.field("note").metadata

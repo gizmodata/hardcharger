@@ -338,7 +338,7 @@ class PolicyRewriter {
   //  - a restricted user (tenant, catalog_access rules, the server's hidden catalogs)
   //    sees only the catalogs it may see;
   //  - every store user sees only the schemas, tables, views and columns the snapshot's
-  //    listing rules show it (Warp SQL §9.4: the same rules as SQL, as the protocol's
+  //    listing rules show it (Chargewire §9.4: the same rules as SQL, as the protocol's
   //    metadata calls apply);
   //  - without MANAGE CONFIG, duckdb_settings() leaves out the settings that hold
   //    credentials (the HTTP proxy's password, ...).

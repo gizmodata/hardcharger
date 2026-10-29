@@ -2,15 +2,15 @@
 
 Writes take effect when submitted, before (and without) any fetch; reading a result
 again never runs the statement again; transactions are honoured. 1.x expressed these with
-Flight tickets; here with Warp SQL statements (§6), prepared statements (§7) and session
+Flight tickets; here with Chargewire statements (§6), prepared statements (§7) and session
 transactions (§5.5). All 15 apply, two re-expressed:
 
 - EvictedTicketsFailWithoutRepeatingWrites: 1.x's per-session cache of 1024 results
-  evicted the oldest; Warp keeps statement documents until the session ends (results
+  evicted the oldest; Chargewire keeps statement documents until the session ends (results
   are bounded by a byte quota instead). The case asserts what matters: 1025 inserts run
   exactly once each.
 - RebindWhileStreamingIsRejectedAsBusy: 1.x refused a second execution of a prepared
-  statement while its first stream was open ("busy"). Warp SQL runs a session's
+  statement while its first stream was open ("busy"). Chargewire runs a session's
   statements one at a time, so the second execution waits its turn and then succeeds;
   the case asserts that (and that nothing is lost), not a "busy" error.
 """
@@ -22,7 +22,7 @@ import httpx
 import pyarrow as pa
 import pytest
 
-from warp_client import ARROW_STREAM, read_batches, read_table
+from chargewire_client import ARROW_STREAM, read_batches, read_table
 
 
 @pytest.fixture(scope="module")
@@ -232,7 +232,7 @@ def test_a_streamed_execution_still_waiting_its_turn_answers_its_document(sessio
             assert second.headers["content-type"].startswith("application/json"), second.headers
             doc = second.json()
             assert doc["state"] == "queued" and doc["result"] is None, doc
-            assert second.headers["warp-statement-id"] == doc["statement_id"]
+            assert second.headers["chargewire-statement-id"] == doc["statement_id"]
             for chunk in chunks:
                 body += chunk
         assert read_table(content=body).num_rows == 20000000

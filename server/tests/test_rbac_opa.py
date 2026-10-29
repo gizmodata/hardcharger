@@ -10,7 +10,7 @@ import time
 import pytest
 
 from conftest import TIMEOUT_SCALE, free_port
-from rbac import WarpError, expect_allowed, start_rbac_server
+from rbac import ChargewireError, expect_allowed, start_rbac_server
 
 
 class FakeOpa:
@@ -138,7 +138,7 @@ def error(client, sql: str) -> str:
     try:
         client.run(sql=sql)
         return ""
-    except WarpError as raised:
+    except ChargewireError as raised:
         return raised.detail
 
 
@@ -170,7 +170,7 @@ def test_no_answer_means_no(server, opa, mode):
     started = time.monotonic()
     try:
         ann = server.user(name="ann")
-    except WarpError as raised:
+    except ChargewireError as raised:
         raise AssertionError(f"a session was refused while the service was healthy, after "
                              f"{time.monotonic() - started:.2f}s: {raised}; the service's latest requests: "
                              f"{opa.recent()}") from raised
@@ -187,7 +187,7 @@ def test_no_answer_means_no(server, opa, mode):
 
 
 def test_the_service_can_refuse_a_session(server):
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         server.user(name="mallory")
     assert raised.value.code == "permission_denied"
     assert "the access policy service refused the session" in raised.value.detail

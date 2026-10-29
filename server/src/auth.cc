@@ -21,8 +21,8 @@ namespace hardcharger {
 namespace {
 
 using Traits = jwt::traits::boost_json;
-using warpsql::Error;
-using warpsql::ErrorCode;
+using chargewire::Error;
+using chargewire::ErrorCode;
 
 // User name under which a client sends a sign-in token as the password.
 constexpr std::string_view kTokenUser = "token";
@@ -69,7 +69,7 @@ Error TokenRefused() {
 
 }  // namespace
 
-authz::Identity IdentityOf(const warpsql::Principal& principal) {
+authz::Identity IdentityOf(const chargewire::Principal& principal) {
   authz::Identity who;
   who.user_name = principal.name;
   who.superuser = principal.role == "admin";
@@ -107,7 +107,7 @@ authz::Identity IdentityOf(const warpsql::Principal& principal) {
   return who;
 }
 
-std::string AuthorityKey(const warpsql::Principal& principal,
+std::string AuthorityKey(const chargewire::Principal& principal,
                          const authz::AccessControl::TokenStanding& standing) {
   const authz::Identity who = IdentityOf(principal);
   boost::json::value rules;  // null: no catalog_access claim
@@ -137,7 +137,7 @@ std::string AuthorityKey(const warpsql::Principal& principal,
 
 Authenticator::Authenticator(const Config& config,
                              std::shared_ptr<authz::AccessControl> access,
-                             std::function<warpsql::Principal(std::string_view)> server_tokens,
+                             std::function<chargewire::Principal(std::string_view)> server_tokens,
                              std::shared_ptr<Jwks> jwks)
     : username_(config.admin_username),
       password_(config.admin_password),
@@ -163,13 +163,13 @@ Authenticator::Authenticator(const Config& config,
   }
 }
 
-warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username,
+chargewire::Principal Authenticator::AuthenticatePassword(std::string_view username,
                                                        std::string_view password) {
   if (username == kTokenUser) {
     // A scoped token this server (or its cluster, sharing the secret key) handed out,
     // sent as the password of the user "token".
     if (access_ && server_tokens_) {
-      std::optional<warpsql::Principal> scoped;
+      std::optional<chargewire::Principal> scoped;
       try {
         auto principal = server_tokens_(password);
         if (principal.claims.contains("scope_id")) scoped = std::move(principal);
@@ -184,7 +184,7 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
   const bool password_ok = SameSecret(password, password_);
   if (user_ok && password_ok) {
     LogAt(log_level_, LogLevel::kInfo, "signed in", {{"user", LoggableName(username)}, {"method", "password"}});
-    return warpsql::Principal{std::string(username), "admin", "password", {}, {}};
+    return chargewire::Principal{std::string(username), "admin", "password", {}, {}};
   }
   // A user of the access-control store (never under the administrator's name). The
   // token carries a fingerprint of the password, so changing it ends the token.
@@ -196,7 +196,7 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
     if (store_user && !user_ok) {
       LogAt(log_level_, LogLevel::kInfo, "signed in",
             {{"user", store_user->user_name}, {"method", "password"}, {"role", "user"}});
-      return warpsql::Principal{store_user->user_name, "user", "password",
+      return chargewire::Principal{store_user->user_name, "user", "password",
                                 {{"credential", store_user->credential}}, {}};
     }
   }
@@ -205,7 +205,7 @@ warpsql::Principal Authenticator::AuthenticatePassword(std::string_view username
   throw Refused();
 }
 
-warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) {
+chargewire::Principal Authenticator::ExchangeToken(std::string_view subject_token) {
   if (!AcceptsTokens()) {
     throw Error(ErrorCode::kInvalidCredentials, "this server does not accept sign-in tokens");
   }
@@ -229,7 +229,7 @@ warpsql::Principal Authenticator::ExchangeToken(std::string_view subject_token) 
     throw TokenRefused();
   }
 
-  warpsql::Principal principal;
+  chargewire::Principal principal;
   principal.auth_method = "token";
   principal.name = decoded.has_payload_claim("email")
                        ? decoded.get_payload_claim("email").as_string()
@@ -325,8 +325,8 @@ void Authenticator::AllowSigningKey(const Decoded& decoded, Verifier& verifier) 
   }
 }
 
-warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view identity,
-                                                          const warpsql::ClientCertificate& certificate) {
+chargewire::Principal Authenticator::AuthenticateCertificate(std::string_view identity,
+                                                          const chargewire::ClientCertificate& certificate) {
   const std::string name(identity);
   LogFields audit{{"kind", "authentication"},
                   {"method", "client_certificate"},
@@ -335,7 +335,7 @@ warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view ident
                   {"certificate_issuer", certificate.issuer},
                   {"certificate_serial", certificate.serial},
                   {"certificate_thumbprint", certificate.thumbprint}};
-  auto signed_in = [&](const warpsql::Principal& principal) {
+  auto signed_in = [&](const chargewire::Principal& principal) {
     LogAt(log_level_, LogLevel::kInfo, "signed in",
           {{"user", principal.name}, {"method", "client_certificate"}, {"role", principal.role},
            {"certificate_identity", name}});
@@ -349,7 +349,7 @@ warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view ident
   // names are), with or without access control.
   for (const auto& admin : certificate_admins_) {
     // URI identities exactly, e-mail and CN ignoring ASCII case.
-    if (warpsql::CertificateIdentitiesMatch(admin, name)) {
+    if (chargewire::CertificateIdentitiesMatch(admin, name)) {
       // A store user of the same name would share the administrator's sessions (handles
       // belong to a principal by name): neither sign-in may be ambiguous.
       if (access_ && access_->CertificateUser(name)) {
@@ -358,12 +358,12 @@ warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view ident
                         "' is both one of mtls_admin_identities and a user of the access-control "
                         "store; an administrator drops the user or removes the identity");
       }
-      return signed_in(warpsql::Principal{admin, "admin", "client_certificate", {}, {}});
+      return signed_in(chargewire::Principal{admin, "admin", "client_certificate", {}, {}});
     }
   }
   // A URI identity differing from an administrator identity only in case is another
   // identity (URI paths are case-sensitive): refused, saying so.
-  if (warpsql::IsUriIdentity(name)) {
+  if (chargewire::IsUriIdentity(name)) {
     for (const auto& admin : certificate_admins_) {
       if (admin.size() == name.size() &&
           std::equal(admin.begin(), admin.end(), name.begin(), [](char a, char b) {
@@ -378,7 +378,7 @@ warpsql::Principal Authenticator::AuthenticateCertificate(std::string_view ident
   // Under access control, one of the store's enabled users (a password is not needed).
   if (access_) {
     if (auto user = access_->CertificateUser(name)) {
-      return signed_in(warpsql::Principal{*user, "user", "client_certificate", {}, {}});
+      return signed_in(chargewire::Principal{*user, "user", "client_certificate", {}, {}});
     }
   }
   // The SDK reports the refusal as a security event (logged and audited, rate-limited per

@@ -1,13 +1,13 @@
 """Port of GizmoSQL 1.x tests/integration/test_prepared_statement_params.cpp (9 cases).
 
-Prepared statements with Arrow parameters (Warp SQL §7: one execution per parameter
-row). All 9 apply; three are re-expressed where Warp SQL decided differently:
+Prepared statements with Arrow parameters (Chargewire §7: one execution per parameter
+row). All 9 apply; three are re-expressed where Chargewire decided differently:
 
 - MultiRowBatchIsRejectedForQuery: 1.x refused a 2-row batch on a query ("exactly one
-  row"); Warp SQL §7.2 runs it once per row and concatenates the rows, which is what
+  row"); Chargewire §7.2 runs it once per row and concatenates the rows, which is what
   the case asserts here.
 - UntypedPlaceholderResolvesAtExecution: 1.x reported VARCHAR schemas for SELECT ? at
-  prepare time; Warp SQL allows result_schema null until execution. The case asserts
+  prepare time; Chargewire allows result_schema null until execution. The case asserts
   the behaviour that matters: an int binds as an int result, a string as a string.
 - TypedPreparedQueryStillReportsSchemaInFlightInfo: the schema arrives with the result
   stream (§6.4) rather than in a separate FlightInfo; it is checked there.
@@ -19,7 +19,7 @@ import uuid
 import pyarrow as pa
 import pytest
 
-from warp_client import read_table
+from chargewire_client import read_table
 
 
 @pytest.fixture(scope="module")
@@ -91,7 +91,7 @@ def test_typed_parameters_keep_their_types(session):
 
 def test_untyped_placeholder_resolves_at_execution(session):
     prepared = session.prepare(sql="SELECT ? AS x")
-    from warp_client import ipc_bytes  # noqa: F401  (parameter schema is base64 Arrow IPC)
+    from chargewire_client import ipc_bytes  # noqa: F401  (parameter schema is base64 Arrow IPC)
     assert prepared["parameter_schema"], prepared
     as_int = session.execute_prepared(prepared_id=prepared["prepared_id"],
                                       arrow_parameters=pa.table({"x": pa.array([42], type=pa.int32())}))

@@ -13,7 +13,7 @@
 #include <string>
 #include <string_view>
 
-#include "warpsql/server.hpp"
+#include "chargewire/server.hpp"
 
 namespace hardcharger {
 
@@ -39,8 +39,8 @@ extern const std::string_view kWebUiContentSecurityPolicy;
 
 // The answer to a GET or HEAD from `files`, or nullopt when the path is not the UI's (not
 // /ui or under /ui/). Uses the request's Accept-Encoding and If-None-Match.
-std::optional<warpsql::PlainResponse> ServeWebUi(std::span<const WebUiFile> files,
-                                                 const warpsql::PlainRequest& request);
+std::optional<chargewire::PlainResponse> ServeWebUi(std::span<const WebUiFile> files,
+                                                 const chargewire::PlainRequest& request);
 
 // Whether an Accept-Encoding value accepts gzip (a q of 0 refuses it, `*` stands for it).
 bool AcceptsGzip(std::string_view accept_encoding);

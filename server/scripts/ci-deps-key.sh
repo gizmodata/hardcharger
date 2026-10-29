@@ -20,8 +20,8 @@ shift 3
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 case "$dep" in
-  arrow) recipes=(third_party/warp-sql/cpp/scripts/build-arrow.sh server/scripts/deps-arrow.sh) ;;
-  duckdb) recipes=(third_party/warp-sql/cpp/scripts/build-duckdb.sh server/scripts/deps-duckdb.sh
+  arrow) recipes=(third_party/chargewire/cpp/scripts/build-arrow.sh server/scripts/deps-arrow.sh) ;;
+  duckdb) recipes=(third_party/chargewire/cpp/scripts/build-duckdb.sh server/scripts/deps-duckdb.sh
                    server/scripts/patch-duckdb*.cmake server/scripts/duckdb-extensions.cmake
                    server/scripts/retire-ducklake-patch.cmake server/scripts/prune-duckdb-install.cmake) ;;
   replxx) recipes=(server/scripts/build-replxx.sh) ;;

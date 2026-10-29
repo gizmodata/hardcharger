@@ -2,7 +2,7 @@
 // its own whose sessions end after 2 s idle. With no transaction open the next run starts a
 // new session and says so; with one open the run is refused, nothing of it executes, and the
 // run after that works. The schema browser, which has a session of its own, carries on too.
-import { connect } from "@gizmodata/warp-sql";
+import { connect } from "@gizmodata/chargewire";
 
 import { type IdleServer, startIdleServer } from "./harness.ts";
 import { activeTab, editorFocused, expect, expectProblem, gridRows, runDone, signIn, test } from "./fixtures.ts";
@@ -51,7 +51,7 @@ test("a session the server ended for idling: a new one takes over, or, in a tran
   // The lost session's next request is answered session_not_found (404), and so is the
   // client's DELETE of it; the page's own session and the browser's are replaced the same way.
   expectProblem(page, { status: 404, url: /\/statements$/ });
-  expectProblem(page, { status: 404, url: /\/warp\/v1\/sessions\/s_[A-Za-z0-9]+(\/.*)?$/, required: false });
+  expectProblem(page, { status: 404, url: /\/chargewire\/v1\/sessions\/s_[A-Za-z0-9]+(\/.*)?$/, required: false });
   await signIn(page, idle.admin, idle.url);
   await editorFocused(page);
   const tab = activeTab(page);

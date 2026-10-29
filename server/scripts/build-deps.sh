@@ -2,8 +2,8 @@
 # Builds Hardcharger's pinned dependencies into server/.deps, each by its own recipe, so
 # each can be built (and cached) alone:
 #
-#   arrow   Arrow C++, IPC only            deps-arrow.sh (warp-sql's build-arrow.sh)
-#   duckdb  DuckDB 2.0, patched, with its  deps-duckdb.sh (warp-sql's build-duckdb.sh,
+#   arrow   Arrow C++, IPC only            deps-arrow.sh (chargewire's build-arrow.sh)
+#   duckdb  DuckDB 2.0, patched, with its  deps-duckdb.sh (chargewire's build-duckdb.sh,
 #           built-in extensions              patch-duckdb*.cmake, duckdb-extensions.cmake,
 #                                            build-extension-deps.sh)
 #   replxx  the client's line editor       build-replxx.sh

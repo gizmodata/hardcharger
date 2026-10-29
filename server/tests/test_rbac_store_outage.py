@@ -23,7 +23,7 @@ import httpx
 import pytest
 
 from conftest import free_port
-from rbac import WarpError, start_rbac_server
+from rbac import ChargewireError, start_rbac_server
 
 pytestmark = pytest.mark.services
 
@@ -85,14 +85,14 @@ def postgres():
     database.remove()
 
 
-def refused(call) -> WarpError:
-    with pytest.raises(WarpError) as caught:
+def refused(call) -> ChargewireError:
+    with pytest.raises(ChargewireError) as caught:
         call()
     return caught.value
 
 
-def bounded(call, seconds: float) -> tuple[WarpError | None, float]:
-    """Runs `call` (expected to fail with WarpError) on a thread; fails the test when it is
+def bounded(call, seconds: float) -> tuple[ChargewireError | None, float]:
+    """Runs `call` (expected to fail with ChargewireError) on a thread; fails the test when it is
     still waiting after `seconds` (the store holding the statement), else returns its error
     and how long it took."""
     outcome: list = []
@@ -102,7 +102,7 @@ def bounded(call, seconds: float) -> tuple[WarpError | None, float]:
         try:
             call()
             outcome.append((None, time.monotonic() - started))
-        except WarpError as error:
+        except ChargewireError as error:
             outcome.append((error, time.monotonic() - started))
         except Exception as error:  # noqa: BLE001 - reported below
             outcome.append((error, time.monotonic() - started))
@@ -113,7 +113,7 @@ def bounded(call, seconds: float) -> tuple[WarpError | None, float]:
     if thread.is_alive():
         pytest.fail(reason=f"the statement was still waiting for the store after {seconds} s")
     error, took = outcome[0]
-    if error is not None and not isinstance(error, WarpError):
+    if error is not None and not isinstance(error, ChargewireError):
         raise error
     return error, took
 
@@ -191,7 +191,7 @@ def _runs(client, sql: str) -> bool:
     try:
         client.run(sql=sql)
         return True
-    except WarpError:
+    except ChargewireError:
         return False
 
 
@@ -243,7 +243,7 @@ def test_a_stale_snapshot_is_reported_and_bounded(launcher, postgres):
     def reached() -> bool:
         try:
             return _runs(unlimited.user(name="ann", password="ann-pw-12345"), "SELECT a FROM t")
-        except WarpError:
+        except ChargewireError:
             return False
     wait_for(condition=reached, timeout=10, what="the grant to reach the second server")
     ann = limited.user(name="ann", password="ann-pw-12345")
@@ -262,7 +262,7 @@ def test_a_stale_snapshot_is_reported_and_bounded(launcher, postgres):
     assert age > 4, age
     error = refused(call=lambda: ann.run(sql="SELECT a FROM t"))
     assert "has not answered for" in error.detail and "rbac_max_snapshot_age_seconds (4)" in error.detail, error.detail
-    with pytest.raises(WarpError) as sign_in:
+    with pytest.raises(ChargewireError) as sign_in:
         limited.user(name="ann", password="ann-pw-12345")
     assert "rbac_max_snapshot_age_seconds" in sign_in.value.detail, sign_in.value.detail
     assert admin.run(sql="SELECT a FROM t").column("a").to_pylist() == [1]  # the administrator is not refused

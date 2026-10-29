@@ -3,7 +3,7 @@ RESET ROLE."""
 
 import pytest
 
-from rbac import WarpError, expect_allowed, start_rbac_server
+from rbac import ChargewireError, expect_allowed, start_rbac_server
 
 
 @pytest.fixture(scope="module")
@@ -41,7 +41,7 @@ def error_of(client, sql: str) -> str:
     try:
         client.run(sql=sql)
         return ""
-    except WarpError as error:
+    except ChargewireError as error:
         return error.detail
 
 
@@ -108,7 +108,7 @@ def test_prepared_statements_follow_the_active_role(sam):
     read_a = sam.prepare(sql="SELECT * FROM t_a")
     sam.execute_prepared(prepared_id=read_b)
     assert error_of(client=sam, sql="SET ROLE ra") == ""
-    with pytest.raises(WarpError) as raised:
+    with pytest.raises(ChargewireError) as raised:
         sam.execute_prepared(prepared_id=read_b)
     assert "no SELECT privilege on table" in raised.value.detail, "a statement prepared before SET ROLE kept the wider rights"
     sam.execute_prepared(prepared_id=read_a)  # positive twin
@@ -132,7 +132,7 @@ def test_a_tenants_user_names_its_roles_without_the_tenant(server):
 
 
 def test_a_store_users_session_document_reports_its_transaction(sam):
-    """Warp SQL §5.2 under access control: the transaction the session document reports is
+    """Chargewire §5.2 under access control: the transaction the session document reports is
     the one the engine has, after an allowed statement, a refused one and a failed one."""
     def transaction() -> str:
         response = sam.http.get(url=sam.url, headers=sam.headers())

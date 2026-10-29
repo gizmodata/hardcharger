@@ -4,7 +4,7 @@ own server and store."""
 
 import pytest
 
-from rbac import WarpError, expect_allowed, start_rbac_server
+from rbac import ChargewireError, expect_allowed, start_rbac_server
 
 SCHEMA_SETUP = [
     "CREATE TABLE orders (id INT, amount INT, customer VARCHAR)",
@@ -31,7 +31,7 @@ class World:
         try:
             client.run(sql=sql)
             return ""
-        except WarpError as error:
+        except ChargewireError as error:
             return error.detail
 
     def rows(self, sql: str, user: str = "admin") -> list[dict]:
@@ -164,18 +164,18 @@ def test_disabled_and_dropped_users_lose_everything(world):
     expect_allowed(client=joe, sql="SELECT * FROM orders")
     expect_allowed(client=world.admin, sql="ALTER USER joe DISABLE")
     # The live session ends, and the token and the password stop working.
-    with pytest.raises(WarpError) as ended:
+    with pytest.raises(ChargewireError) as ended:
         joe.run(sql="SELECT 1")
-    # The session's own token is refused first, saying why (Warp SQL §4.2).
+    # The session's own token is refused first, saying why (Chargewire §4.2).
     assert ended.value.code == "invalid_token" and ended.value.reason == "principal_dropped", ended.value
     assert ended.value.detail == "Hardcharger access control: user joe is disabled", ended.value
-    with pytest.raises(WarpError) as refused:
+    with pytest.raises(ChargewireError) as refused:
         world.server.password_token(user="joe", password="pw")
     assert refused.value.code == "invalid_credentials"
     expect_allowed(client=world.admin, sql="ALTER USER joe ENABLE")
     assert world.server.password_token(user="joe", password="pw")
     expect_allowed(client=world.admin, sql="DROP USER joe")
-    with pytest.raises(WarpError) as dropped:
+    with pytest.raises(ChargewireError) as dropped:
         world.server.password_token(user="joe", password="pw")
     assert dropped.value.code == "invalid_credentials"
 
@@ -188,13 +188,13 @@ def test_password_sign_in_failures_look_alike(world):
     assert joe.run(sql="SHOW GRANTS").num_rows == 0
     answers = set()
     for user, password in [("joe", "Correct horse"), ("nobody", "x"), ("token_only", ""), ("token_only", "x")]:
-        with pytest.raises(WarpError) as refused:
+        with pytest.raises(ChargewireError) as refused:
             world.server.password_token(user=user, password=password)
         answers.add((refused.value.status, refused.value.code, refused.value.detail))
     assert answers == {(401, "invalid_credentials", "the user name or password is not correct")}, answers
     # A password change takes effect at once.
     expect_allowed(client=world.admin, sql="ALTER USER joe WITH PASSWORD 'battery staple'")
-    with pytest.raises(WarpError):
+    with pytest.raises(ChargewireError):
         world.server.password_token(user="joe", password="correct horse")
     assert world.server.password_token(user="joe", password="battery staple")
 

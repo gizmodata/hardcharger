@@ -13,8 +13,8 @@ was the separate hardcharger-ui repository (never released).
 ### Added
 
 - The web UI for Hardcharger, a static single-page app (React 19, Vite, TypeScript) that the
-  server serves at `/ui` on its own origin and that speaks Warp SQL to it with
-  `@gizmodata/warp-sql` (vendored from gizmodata/warp-sql-js at a pinned commit, with a
+  server serves at `/ui` on its own origin and that speaks Chargewire to it with
+  `@gizmodata/chargewire` (vendored from gizmodata/chargewire-js at a pinned commit, with a
   provenance check that rebuilds it).
 - Sign-in with Hardcharger's password flow; only the short-lived access token is kept, in
   memory and the tab's `sessionStorage`. An expired token, or a session an administrator ended,
@@ -25,14 +25,14 @@ was the separate hardcharger-ui repository (never released).
   formatting of every type; cell, row and column selection; Ctrl/⌘+C copies as tab-separated
   text in every browser, Safari included; a whole value in a dialog on double-click.
 - Cancel that stops the statement on the server.
-- Schema browser over the Warp SQL metadata calls (catalogs, schemas, tables, views, columns
+- Schema browser over the Chargewire metadata calls (catalogs, schemas, tables, views, columns
   and their types), with table previews and name insertion.
 - Exports: CSV, TSV, JSON with exact numbers, and Parquet (parquet-wasm).
 - Sessions page (`hardcharger_sessions()`): administrators see and end (`KILL SESSION`) every
   session; other users see their own.
 - About dialog with the server, protocol, capabilities, session and sign-in expiry.
 - A session an administrator ended, a changed password or a dropped user each bring back the
-  sign-in page with that reason, from the `session_ended` problem's `reason` (Warp SQL §5.6).
+  sign-in page with that reason, from the `session_ended` problem's `reason` (Chargewire §5.6).
 - Mutual TLS: "Sign in with my certificate" on servers that offer the `client_certificate`
   grant, and every request in fetch's default credentials mode so the browser presents its
   client certificate on all of them. E2E in Chromium and WebKit against an embedded server

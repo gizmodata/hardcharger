@@ -102,13 +102,13 @@ def test_catalog_access_rules(server):
 
 
 def test_identity_provider_sign_in(server, idp):
-    response = httpx.post(url=f"{server.base_url}/warp/v1/auth/token",
+    response = httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token",
                           json={"grant_type": "token_exchange", "subject_token": idp.id_token(email="a@gizmodata.com")})
     assert response.status_code == 200, response.text
 
 
 def test_browser_sign_in(server):
-    response = httpx.post(url=f"{server.base_url}/warp/v1/auth/oauth/flows", json={})
+    response = httpx.post(url=f"{server.base_url}/chargewire/v1/auth/oauth/flows", json={})
     assert response.status_code == 201 and "flow_id" in response.json(), response.text
 
 

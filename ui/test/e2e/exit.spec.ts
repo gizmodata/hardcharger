@@ -1,7 +1,7 @@
-// Leaving the page ends its Warp SQL sessions on the server at once (keepalive DELETEs on
+// Leaving the page ends its Chargewire sessions on the server at once (keepalive DELETEs on
 // pagehide), instead of leaving them open until their idle timeout: closing the tab, and
 // navigating away. A page brought back with Back starts new sessions and works as before.
-import { type Connection, connect } from "@gizmodata/warp-sql";
+import { type Connection, connect } from "@gizmodata/chargewire";
 
 import { type HarnessState, harnessState } from "./harness.ts";
 import { activeTab, expect, gridRows, runDone, signIn, test, watchPage } from "./fixtures.ts";
