@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-29
+
+### Changed
+
+- The package installs Hardcharger server 2.3.0, whose protocol is now named Chargewire.
+- `Server` treats any HTTP answer at the protocol root as the server being up, so it also starts
+  servers released before the rename (`version="2.2.0"`), which answer that root with 404.
+
 ## [2.2.0] - 2026-10-28
 
 ### Changed

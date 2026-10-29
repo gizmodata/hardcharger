@@ -7,6 +7,11 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-29
+
+The protocol Hardcharger speaks is now named Chargewire. Clients released before the rename keep
+working unchanged; read the single sign-on note below before upgrading a server that uses it.
+
 ### Changed
 
 - Hardcharger's protocol is now named Chargewire: the server answers at `/chargewire` and
