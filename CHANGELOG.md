@@ -21,6 +21,16 @@ Before upgrading, add that URL to the application's allowed redirect URIs at the
 registered there today. The server answers its callback at both, so either way sign-in keeps
 working through the upgrade.
 
+### Fixed
+
+- The "statement cancelled" log line's `duration` now counts from when the server accepted the
+  statement, the instant its timeout counts from. It counted from when the engine took the
+  statement up, after the wait for the session and the statement's checks, so a statement its
+  1 s timeout stopped could log less than 1 s (0.575 s on a slow build). The time spent waiting
+  in the statement queue still counts, and a statement of a script counts from the script's
+  submission. The `hardcharger_statement_duration_seconds` and `hardcharger_queue_wait_seconds`
+  metrics are unchanged.
+
 ## [2.2.0] - 2026-10-28
 
 2.1.5 was tagged but never released: its gate was stopped for this release, which includes all of

@@ -314,12 +314,17 @@ void RefuseStoreChangeWhenReadonly(const chargewire::Principal& principal, std::
 // One info line for each statement a cancel stopped, whatever the statement log level (as
 // GizmoSQL 1.x's "SQL Statement was successfully canceled"): its ids, its user, why it was
 // stopped (Chargewire's cancel_reason: client, timeout, killed, cancelled, session_closed,
-// server_shutdown) and how long it had run, queue wait included, in seconds.
+// server_shutdown) and how long since it was submitted, in seconds. That is from when the
+// server accepted the request, the instant its timeout counts from, so a statement its
+// timeout stopped shows at least the timeout: the wait for the session, the checks and the
+// statement queue are included. A statement of a script counts from the script's
+// submission. Work that reached the engine without a submission time counts from when
+// Track() took it up.
 static void LogCancelled(const Session& session, const LogFields& ids, std::string_view reason,
-                  std::chrono::steady_clock::time_point started) {
+                  std::chrono::steady_clock::time_point submitted) {
   LogFields fields = {{"session_id", session.id()}};
   fields.insert(fields.end(), ids.begin(), ids.end());
-  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - submitted).count();
   fields.insert(fields.end(), {{"user", session.principal().name},
                                {"reason", std::string(reason)},
                                {"duration", std::format("{:.3f}", seconds)}});
@@ -332,15 +337,18 @@ static void LogCancelled(const Session& session, const LogFields& ids, std::stri
 class Execution {
  public:
   // `profile`: where DuckDB writes this execution's profile, when one is captured.
-  // `recorded`: in instrumentation; `ids`: the log fields naming it.
+  // `recorded`: in instrumentation; `ids`: the log fields naming it. `started`: when Track()
+  // took it up, what the duration metric counts from; `submitted`: what a cancel's log line
+  // counts from (LogCancelled).
   Execution(Session& session, StatementKind kind, std::string sql, AdmissionSlot slot,
-            std::chrono::steady_clock::time_point started, ExecutionRecord record, bool recorded, LogFields ids,
-            std::string profile)
+            std::chrono::steady_clock::time_point started, std::chrono::steady_clock::time_point submitted,
+            ExecutionRecord record, bool recorded, LogFields ids, std::string profile)
       : session_(session),
         kind_(kind),
         sql_(std::move(sql)),
         slot_(std::move(slot)),
         started_(started),
+        submitted_(submitted),
         record_(std::move(record)),
         recorded_(recorded),
         ids_(std::move(ids)),
@@ -381,7 +389,7 @@ class Execution {
     // Stopped by a cancel (the reason says which); a result abandoned without one, such as
     // a client that stopped reading, is no cancelled statement.
     if (status == "cancelled" && !record_.cancel_reason.empty()) {
-      LogCancelled(session_, ids_, record_.cancel_reason, started_);
+      LogCancelled(session_, ids_, record_.cancel_reason, submitted_);
     }
     if (record_.cancel_reason == "timeout") record_.status = "timeout";
     if (auto* instrumentation = Instr()) instrumentation->ExecutionProgress(record_);
@@ -422,6 +430,7 @@ class Execution {
   const std::string sql_;
   AdmissionSlot slot_;
   const std::chrono::steady_clock::time_point started_;
+  const std::chrono::steady_clock::time_point submitted_;
   ExecutionRecord record_;
   const bool recorded_;
   const LogFields ids_;
@@ -1015,6 +1024,10 @@ void Session::SetQueryTag(const json::object* tag) {
 
 void Session::SetStatementId(std::string_view id) { request_statement_id_ = std::string(id); }
 
+void Session::SetStatementSubmitted(std::chrono::steady_clock::time_point submitted) {
+  request_submitted_ = submitted;
+}
+
 std::string Session::RequestStatementId() const {
   return request_statement_id_.empty() ? chargewire::NewId("x") : request_statement_id_;
 }
@@ -1169,6 +1182,8 @@ chargewire::StatementOutcome Session::Track(StatementKind kind, std::string_view
                                          const std::function<chargewire::StatementOutcome()>& work,
                                          std::string_view shown) {
   const auto started = std::chrono::steady_clock::now();
+  // What a cancel's log line counts from: the submission, when the SDK said when that was.
+  const auto submitted = request_submitted_ == std::chrono::steady_clock::time_point{} ? started : request_submitted_;
   Instrumentation* const instrumentation = ids.statement.empty() ? nullptr : runtime_.instrumentation;
   ExecutionRecord record;
   record.execution_id = ids.execution;
@@ -1220,7 +1235,7 @@ chargewire::StatementOutcome Session::Track(StatementKind kind, std::string_view
       if (cancelled) {
         std::string reason = cancel_reason();
         if (reason.empty() && killed_) reason = chargewire::reason::kKilled;
-        if (!reason.empty()) LogCancelled(*this, id_fields, reason, started);
+        if (!reason.empty()) LogCancelled(*this, id_fields, reason, submitted);
       }
       if (record.enqueue_time) {
         record.end = record.cursor_close = std::chrono::system_clock::now();
@@ -1258,7 +1273,7 @@ chargewire::StatementOutcome Session::Track(StatementKind kind, std::string_view
   std::string profile;
   if (instrumentation != nullptr) profile = PrepareProfile(record.execution_id);
   auto execution = std::make_shared<Execution>(*this, kind, std::move(abbreviated), std::move(slot), started,
-                                               std::move(record), instrumentation != nullptr, id_fields,
+                                               submitted, std::move(record), instrumentation != nullptr, id_fields,
                                                std::move(profile));
   chargewire::StatementOutcome outcome;
   try {

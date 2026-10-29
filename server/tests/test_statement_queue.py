@@ -31,16 +31,6 @@ def queued_session(server):
     return session
 
 
-def hold_slots(server, count: int, ms: int) -> list[threading.Thread]:
-    threads = []
-    for _ in range(count):
-        session = queued_session(server=server)
-        thread = threading.Thread(target=lambda s=session: s.execute(sql=f"SELECT sleep_ms({ms})"))
-        thread.start()
-        threads.append(thread)
-    return threads
-
-
 class Holders:
     """`count` statements that hold the queue's slots until release(), however slow the
     build: a hold of fixed length can end before a slow (sanitizer) build has set up the
@@ -62,7 +52,7 @@ class Holders:
             assert session.wait_done(statement_id=statement_id, timeout=60 * TIMEOUT_SCALE)["state"] == "cancelled"
 
 
-def wait_until(predicate, timeout: float = 10) -> bool:
+def wait_until(predicate, timeout: float = 10 * TIMEOUT_SCALE) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -71,9 +61,13 @@ def wait_until(predicate, timeout: float = 10) -> bool:
     return False
 
 
-def active(server) -> float:
+def depth(server, state: str) -> float:
     return server.admin().scalar(sql="SELECT value FROM hardcharger_metrics() WHERE name = 'hardcharger_queue_depth' "
-                                     "AND labels['state'] = 'active'")
+                                     "AND labels['state'] = ?", parameters=[state])
+
+
+def active(server) -> float:
+    return depth(server=server, state="active")
 
 
 def test_admin_can_toggle_bypass_queue(server):
@@ -104,17 +98,20 @@ def test_settings_table_is_composable(server):
 
 
 def test_queue_serializes_concurrent_statements(server):
-    # The holders must still hold their slots when the probe arrives, however slow the
-    # build: they sleep 2 s (stretched by TIMEOUT_SCALE); the probe must wait 0.8 s.
-    holders = hold_slots(server=server, count=2, ms=int(2000 * TIMEOUT_SCALE))
-    assert wait_until(lambda: active(server) == 2)
+    # The holders keep their slots until released, however slow the build (a hold of fixed
+    # length counted from the holders' start, not from the probe's, could end first).
+    holders = Holders(server=server, count=2)
+    assert wait_until(lambda: active(server) == 2, timeout=30 * TIMEOUT_SCALE)
     probe = queued_session(server=server)
-    started = time.monotonic()
-    assert probe.scalar(sql="SELECT 1") == 1
-    waited = time.monotonic() - started
-    for thread in holders:
-        thread.join()
-    assert waited >= 0.8, f"the probe should have queued for a slot; waited {waited:.2f}s"
+    outcome = {}
+    worker = threading.Thread(target=lambda: outcome.setdefault("value", probe.scalar(sql="SELECT 1")))
+    worker.start()
+    assert wait_until(lambda: depth(server=server, state="queued") == 1), "the probe should have queued for a slot"
+    time.sleep(0.8)
+    assert worker.is_alive() and depth(server=server, state="queued") == 1, "the probe ran without a slot"
+    holders.release()
+    worker.join(timeout=30 * TIMEOUT_SCALE)
+    assert outcome == {"value": 1}
 
 
 def recorded(server, sql: str, timeout: float = 10):
@@ -156,17 +153,17 @@ def test_queued_execution_records_enqueue_time(server):
 
 
 def test_killed_while_queued_records_cancelled(server):
-    # The slots must stay held until after the kill: 3 s, stretched on a sanitizer build
-    # (under TSan the setup alone can outlast 3 s, and the victim then simply runs).
-    holders = hold_slots(server=server, count=2, ms=int(3000 * TIMEOUT_SCALE))
-    assert wait_until(lambda: active(server) == 2)
+    # The slots stay held until after the kill, however slow the build (under TSan the
+    # setup alone outlasted a fixed 3 s hold, and the victim then simply ran).
+    holders = Holders(server=server, count=2)
+    assert wait_until(lambda: active(server) == 2, timeout=30 * TIMEOUT_SCALE)
     victim = queued_session(server=server)
     victim_id = server.admin().scalar(sql="SELECT session_id FROM hardcharger_sessions() WHERE NOT is_current "
                                           "ORDER BY start_time DESC LIMIT 1")
     outcome = {}
     worker = threading.Thread(target=lambda: outcome.setdefault("problem", victim.error(sql="SELECT 'never' AS v")))
     worker.start()
-    time.sleep(0.5)
+    assert wait_until(lambda: depth(server=server, state="queued") == 1), "the victim never queued"
     started = time.monotonic()
     server.admin().execute(sql=f"KILL SESSION '{victim_id}'")
     worker.join(timeout=10)
@@ -176,8 +173,7 @@ def test_killed_while_queued_records_cancelled(server):
     assert outcome["problem"]["code"] == "statement_cancelled", outcome
     assert outcome["problem"]["detail"] == "the statement was cancelled (killed)", outcome
     assert victim.error(sql="SELECT 1")["code"] == "session_ended"
-    for thread in holders:
-        thread.join()
+    holders.release()
     row = recorded(server=server, sql="SELECT status, error_message, cancel_reason FROM "
                                       "_hardcharger_instr.execution_details WHERE sql_text LIKE '%''nev' || 'er'' AS v%'")
     assert row == {"status": "cancelled", "error_message": "cancelled while queued", "cancel_reason": "killed"}, row
@@ -200,5 +196,5 @@ def test_expired_queued_write_never_executes_after_slot_release(server):
             doc = writer.wait_done(statement_id=doc["statement_id"])
     assert doc["state"] == "cancelled" and doc["cancel_reason"] == "timeout", doc
     holders.release()
-    time.sleep(0.5)
+    time.sleep(0.5 * TIMEOUT_SCALE)  # time for the write to run, if it were going to
     assert writer.scalar(sql="SELECT count(*) FROM queue_expired") == 0, "the expired write ran after all"

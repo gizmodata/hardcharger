@@ -129,6 +129,9 @@ class Session : public chargewire_duckdb::DuckDBSession {
   // The Chargewire id the client holds for what is about to run (q_..., p_...): the id it
   // is logged and recorded in instrumentation under.
   void SetStatementId(std::string_view id) override;
+  // When the server accepted the statement about to run (the instant its timeout counts
+  // from): what a cancelled statement's logged duration counts from.
+  void SetStatementSubmitted(std::chrono::steady_clock::time_point submitted) override;
 
   // Moves the new session to catalog.schema (the server's default_catalog /
   // default_schema), before the client's own session options apply. Under access control
@@ -207,6 +210,7 @@ class Session : public chargewire_duckdb::DuckDBSession {
   void CheckAlive() const;
   std::string request_query_tag_;  // SetQueryTag()'s, as JSON text; engine thread only
   std::string request_statement_id_;  // SetStatementId()'s; engine thread only
+  std::chrono::steady_clock::time_point request_submitted_{};  // SetStatementSubmitted()'s; engine thread only
   // The id of what runs now: the client's (SetStatementId()), or, for work that reached
   // the engine without one, a new id of the server's own (x_...).
   std::string RequestStatementId() const;

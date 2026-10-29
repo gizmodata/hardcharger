@@ -330,7 +330,8 @@ def test_a_queued_statement_shows_its_text_as_the_log_does(launcher):
     victim = queued_server.admin()
     victim.execute(sql="SET SESSION hardcharger.bypass_queue = false")
     holding, _ = in_background(target=lambda: holder.error(sql=CPU_BOUND))
-    wait_state(viewer=admin, session_id=holder.id, state="running")
+    # Running with its text: it has the slot (Chargewire's "running" alone comes first).
+    wait_state(viewer=admin, session_id=holder.id, state="running", shows_statement=True)
     secret = "CREATE SECRET queued_s3 (TYPE s3, KEY_ID 'AKIAQUEUEDEXAMPLE', SECRET 'hunter2-queued-secret')"
     queued, outcome = in_background(target=lambda: victim.execute(sql=secret))
     # 'queued' twice over: first in Chargewire's sense (accepted, not yet on the engine), with
@@ -415,7 +416,7 @@ def test_a_user_sees_its_own_principals_sessions_and_never_anyone_elses_statemen
     running, _ = in_background(target=lambda: carol.error(sql=f"SELECT '{marker}' AS m, count(*) FROM "
                                                               "range(10000000000) a, range(1000) b"))
     admin = server.admin()
-    wait_state(viewer=admin, session_id=carol.id, state="running")
+    wait_state(viewer=admin, session_id=carol.id, state="running", shows_statement=True)
     for function in ("hardcharger_active_connections", "hardcharger_sessions"):
         rows = bob1.rows(sql=f"SELECT * FROM {function}()")
         assert {r["session_id"] for r in rows} == {bob1.id, bob2.id}, (function, rows)

@@ -23,6 +23,7 @@ import time
 
 import pytest
 
+from conftest import TIMEOUT_SCALE
 from rbac import expect_allowed, start_rbac_server
 from chargewire_client import mint_server_token
 
@@ -75,6 +76,17 @@ def test_killed_session_must_reauthenticate(server):
     assert "not found" in server.admin().error(sql=f"KILL SESSION '{victim_id}'")["detail"]
 
 
+def wait_running(server, session_id: str) -> None:
+    """Waits until the engine runs a statement of `session_id` (hardcharger_sessions()'s
+    running: out of the statement queue), not just until the client sent it."""
+    admin = server.admin()
+    deadline = time.monotonic() + 10 * TIMEOUT_SCALE
+    while not admin.scalar(sql="SELECT count(*) FROM hardcharger_sessions() WHERE session_id = ? AND running",
+                           parameters=[session_id]):
+        assert time.monotonic() < deadline, "the statement never reached the engine"
+        time.sleep(0.05)
+
+
 def test_kill_interrupts_a_running_statement(server):
     victim = server.client().new_session()
     victim_id = victim.scalar(sql="SELECT HARDCHARGER_CURRENT_SESSION()")
@@ -85,7 +97,7 @@ def test_kill_interrupts_a_running_statement(server):
 
     worker = threading.Thread(target=run)
     worker.start()
-    time.sleep(1)
+    wait_running(server=server, session_id=victim_id)
     started = time.monotonic()
     server.admin().execute(sql=f"KILL SESSION '{victim_id}'")
     worker.join(timeout=30)
@@ -109,7 +121,7 @@ def test_every_request_naming_a_killed_session_says_why(server):
     prepared = victim.prepare(sql="SELECT 1")["prepared_id"]
     running = victim.submit(sql="SELECT count(*) FROM range(10000000000) a, range(1000) b",
                             headers={"Prefer": "respond-async"}).json()["statement_id"]
-    time.sleep(0.5)
+    wait_running(server=server, session_id=victim_id)
     server.admin().execute(sql=f"KILL SESSION '{victim_id}'")
     # The statement it was running was cancelled first (KILL does what hardcharger_cancel()
     # does, then ends the session; test_introspection.py follows it), and its document is

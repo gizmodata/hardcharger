@@ -22,7 +22,7 @@ import httpx
 import pyarrow as pa
 import pytest
 
-from conftest import STOP_SIGNAL, problem
+from conftest import STOP_SIGNAL, TIMEOUT_SCALE, problem
 from chargewire_client import ARROW_STREAM, Client, ipc_bytes
 
 LONG = "SELECT count(*) FROM range(10000000000) a, range(100000) b"
@@ -53,7 +53,7 @@ def assert_exits_cleanly(server, timeout: float) -> None:
     assert code == 0, f"the server exited {code}; its log ends:\n{server.log()[-6000:]}"
 
 
-def wait_running(session, timeout: float = 10) -> None:
+def wait_running(session, timeout: float = 10 * TIMEOUT_SCALE) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if session.scalar(sql="SELECT count(*) FROM hardcharger_sessions() WHERE running AND NOT is_current") > 0:
