@@ -151,6 +151,14 @@ or the file's Properties > Digital Signatures on Windows.
    server it pins. Pushed together, main's run starts before the tag's has passed, so it tests
    the whole matrix a second time, and the Python run fails on a server that isn't published
    yet (2.4.1 did both, 2026-10-29).
+6. Check that `:main` is the release:
+   `docker run --rm --pull always ghcr.io/gizmodata/hardcharger:main --version`
+   prints `Hardcharger X.Y.Z`. Nothing else notices when it isn't: if main's run on the release
+   commit is cancelled, and the next push to main changes only documentation (which skips the
+   server workflow), `:main` stays on the previous release, and the docs' CI, which builds its
+   reference from `:main`, fails on the new version (2.4.1: `:main` said 2.4.0 for a day). Re-run
+   main's run on the release commit (`gh run rerun <id>`): it finds the tag's tested run and only
+   builds the image.
 
 A tag that isn't `v` plus the version in `server/CMakeLists.txt`, or that has no (or an empty)
 CHANGELOG section, fails in the workflow's first job (`changes`), before the matrix runs, and
