@@ -159,6 +159,7 @@ or the file's Properties > Digital Signatures on Windows.
    reference from `:main`, fails on the new version (2.4.1: `:main` said 2.4.0 for a day). Re-run
    main's run on the release commit (`gh run rerun <id>`): it finds the tag's tested run and only
    builds the image.
+7. Release the docs at the same version: [The docs](#the-docs).
 
 A tag that isn't `v` plus the version in `server/CMakeLists.txt`, or that has no (or an empty)
 CHANGELOG section, fails in the workflow's first job (`changes`), before the matrix runs, and
@@ -181,6 +182,39 @@ the signatures checked and the GitHub Release published. It dispatches, on the s
 It waits for both and fails, with links to the runs, when either does, then checks that PyPI and
 both registries have them. A red `downstream` means the server release is out and something
 after it isn't: fix the cause and re-run that workflow by hand (the commands below), not the tag.
+
+### The docs
+
+Every release gets a docs release of the same version
+([gizmodata/hardcharger-docs](https://github.com/gizmodata/hardcharger-docs); a docs-only fix
+later is `X.Y.Z.postN`). Nothing starts it: it is part of releasing, done once `:main` is the
+release (step 6 above), because the docs' CI builds its reference from `:main` and fails on any
+difference. Skipped, the docs say the previous version and their CI stays red (2.4.0 and 2.4.1
+went out without one; the site said 2.3.0 until 2026-10-30).
+
+1. In a new worktree of hardcharger-docs at `origin/main`, regenerate the reference from the
+   release's binaries and its sources:
+
+   ```bash
+   gh release download vX.Y.Z -R gizmodata/hardcharger -p hardcharger-macos-arm64.tar.gz -D "$tmp"
+   tar xzf "$tmp/hardcharger-macos-arm64.tar.gz" -C "$tmp"
+   HARDCHARGER_DOCS_BIN_DIR="$tmp/hardcharger-macos-arm64/bin" \
+   HARDCHARGER_DOCS_HARDCHARGER_SRC=<hardcharger checkout at vX.Y.Z> \
+   HARDCHARGER_DOCS_CHARGEWIRE_SRC=<chargewire checkout at main> \
+     python3 scripts/gen_reference.py
+   ```
+
+   That covers the version on every page, the release notes, the configuration, SQL and CLI
+   reference and the Chargewire page. It doesn't cover the guides.
+2. Go through the release's CHANGELOG section. Every added option, statement or behavior a user
+   would look for gets its guide section, with `test` examples, which the docs' CI runs against
+   the server (2.4.0's access-control statements in init SQL had none until 2.4.1's docs).
+3. `npm version X.Y.Z --no-git-tag-version`, and a `## [X.Y.Z] - YYYY-MM-DD` section in the docs'
+   `CHANGELOG.md`.
+4. Open a PR. When `build`, `links`, `browsers` and `examples` pass (and the new examples are
+   listed as `ok` in the examples log), merge it, tag the merge commit `vX.Y.Z` and push the tag.
+   Its run tests again, publishes the GitHub Release and deploys the site.
+5. Check that https://docs.hardcharger.gizmodata.com/reference/versions/ says `X.Y.Z`.
 
 ## Bundled ADBC images
 
