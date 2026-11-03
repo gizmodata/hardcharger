@@ -47,6 +47,7 @@
 #include <unordered_set>
 
 #include "authz/duckdb_internal.hpp"
+#include "authz/macros.hpp"
 #include "logging.hpp"
 #include "authz/policies.hpp"
 #include "authz/resolver.hpp"
@@ -350,22 +351,20 @@ class PlanChecker {
         if (create.info->temporary) return;  // session-local
         Deny(principal_, "creating sequences needs an administrator");
       }
-      // Not even temporary ones: a session's macro or type is found before the
-      // catalog's, also inside a view, and would change what the view computes.
-      // (catalog_access principals read no view with another's rights.)
+      // CREATE MACRO in a schema: the CREATE MACRO privilege (macros.hpp).
       case OpType::LOGICAL_CREATE_MACRO:
+        CheckCreateMacro(*op.Cast<dd::LogicalCreate>().info);
+        return;
+      // Not even temporary ones: a session's type is found before the catalog's, also
+      // inside a view, and would change what the view computes.
       case OpType::LOGICAL_CREATE_TYPE: {
-        // Never for a non-administrator, temporary ones included: a macro's or type's
-        // body runs unchecked when it is used (FROM m(), a column of the type), so it
-        // would be a way around the plan check. PIVOT without an IN list is the one
-        // exception: it creates its own temporary enum, which reads nothing.
+        // Never for a non-administrator, temporary ones included: a type's body runs
+        // unchecked when it is used (a column of the type), so it would be a way around
+        // the plan check. PIVOT without an IN list is the one exception: it creates its
+        // own temporary enum, which reads nothing.
         auto& create = op.Cast<dd::LogicalCreate>();
-        if (create.info->temporary && op.type == OpType::LOGICAL_CREATE_TYPE &&
-            PartsOf(*create.info).back().rfind("__pivot_enum_", 0) == 0) {
-          return;
-        }
-        Deny(principal_, op.type == OpType::LOGICAL_CREATE_MACRO ? "creating macros needs an administrator"
-                                                                 : "creating types needs an administrator");
+        if (create.info->temporary && PartsOf(*create.info).back().rfind("__pivot_enum_", 0) == 0) return;
+        Deny(principal_, "creating types needs an administrator");
       }
       case OpType::LOGICAL_DROP:
         CheckDrop(op);
@@ -437,6 +436,10 @@ class PlanChecker {
         return;
       case OpType::LOGICAL_LOAD:
         RequireSystem(SystemPrivilege::kManageExtensions, "INSTALL and LOAD");
+        return;
+      // FORCE INSTALL of every installed extension that has a newer build.
+      case OpType::LOGICAL_UPDATE_EXTENSIONS:
+        RequireSystem(SystemPrivilege::kManageExtensions, "UPDATE EXTENSIONS");
         return;
       case OpType::LOGICAL_CREATE_SECRET:
         RequireSystem(SystemPrivilege::kManageSecrets, "CREATE SECRET");
@@ -984,6 +987,55 @@ class PlanChecker {
     return true;
   }
 
+  // CREATE [OR REPLACE] MACRO by a user other than the administrator. Temporary macros
+  // never: a session's macro is found before every other function, also inside a view
+  // that reads with its owner's rights, so it would change what that view computes.
+  // Otherwise the CREATE MACRO privilege on the macro's schema (granted ON SCHEMA or ON
+  // CATALOG, or as the schema's owner), DROP MACRO as well to replace one, and a name
+  // that changes nothing else's meaning (MacroNameRefusal). Macros have no owner: what
+  // they read is checked, as part of each statement that calls them, with its rights.
+  void CheckCreateMacro(dd::CreateInfo& info) {
+    const auto parts = PartsOf(info);
+    if (info.temporary || (!parts.empty() && IsTempCatalog(parts[0]))) {
+      Deny(principal_,
+           "creating temporary macros needs an administrator: a session's macro is found before every other "
+           "function, also inside views that read with their owners' rights; create it in a schema instead");
+    }
+    // A catalog_access principal holds no grants, CREATE MACRO among them.
+    if (principal_.catalog_rules) {
+      Deny(principal_, "creating macros needs an administrator without catalog_access rules, or a user whose "
+                       "roles hold CREATE MACRO on the schema");
+    }
+    if (parts.size() < 3) Deny(principal_, "the new macro's schema could not be determined");
+    ObjectPath macro;
+    macro.catalog = parts[0];
+    macro.schema_path.assign(parts.begin() + 1, parts.end() - 1);
+    macro.object_name = parts.back();
+    const auto existing = LookUp(context_, info.type, parts);
+    if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return;
+    RequireMacroPrivilege(macro, Privilege::kCreateMacro, "create");
+    if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
+      RequireMacroPrivilege(macro, Privilege::kDropMacro, "replace");
+    }
+    if (auto refusal = MacroNameRefusal(context_, snapshot_, macro)) Deny(principal_, *refusal);
+  }
+
+  // CREATE MACRO and DROP MACRO are held on the macro's schema: granted ON SCHEMA or ON
+  // CATALOG, or as the schema's owner (asked of the schema itself, so that owning a table
+  // of the same name grants nothing). A catalog_access principal (which creates none)
+  // drops one with write access to the catalog, as before.
+  void RequireMacroPrivilege(const ObjectPath& macro, Privilege privilege, const std::string& verb) {
+    RequireVisible(macro.catalog);
+    if (principal_.catalog_rules) return RequireRuleWrite(macro.catalog);
+    ObjectPath schema = macro;
+    schema.object_name.clear();
+    if (!snapshot_.Check(principal_, AccessRequest{schema, ObjectType::kSchema, privilege, {}}).allowed) {
+      Deny(principal_, "user " + principal_.user_name + " may not " + verb + " macro " + macro.ToString() +
+                           " (it needs " + PrivilegeName(privilege) + " on schema " + schema.ToString() +
+                           " or its catalog, or to own the schema)");
+    }
+  }
+
   // A view's creator may create it only over what it could SELECT itself: the view's
   // query is bound as DuckDB binds it when it creates the view (in the view's schema)
   // and checked as the creator's own SELECT of it would be (every table and view it
@@ -1085,6 +1137,15 @@ class PlanChecker {
         auto entry = LookUp(context_, dd::CatalogType::TABLE_ENTRY, parts);
         if (!entry) return;  // DROP ... IF EXISTS of nothing; DuckDB reports a missing object
         CheckDropOf(*entry);
+        return;
+      }
+      case dd::CatalogType::MACRO_ENTRY:
+      case dd::CatalogType::TABLE_MACRO_ENTRY: {
+        auto entry = LookUp(context_, info.type, parts);
+        if (!entry) return;  // DROP MACRO IF EXISTS of nothing; DuckDB reports a missing macro
+        ObjectPath macro = PathOf(*entry);
+        if (IsTempCatalog(macro.catalog)) return;
+        RequireMacroPrivilege(macro, Privilege::kDropMacro, "drop");
         return;
       }
       case dd::CatalogType::SECRET_ENTRY:

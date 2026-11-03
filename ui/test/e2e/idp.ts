@@ -16,6 +16,8 @@ export interface Idp {
   email: string;
   /** Refuse the next sign-ins at the provider (error=access_denied). */
   deny: boolean;
+  /** How many times a browser has come to the authorization endpoint. */
+  authorizations: number;
   stop: () => Promise<void>;
 }
 
@@ -31,6 +33,7 @@ export async function startIdp(): Promise<Idp> {
     clientSecret: `${randomBytes(12).toString("hex")}+/=`,
     email: "alice@example.com",
     deny: false,
+    authorizations: 0,
     stop: async () => {},
   };
 
@@ -60,6 +63,7 @@ export async function startIdp(): Promise<Idp> {
     }
     if (url.pathname === "/jwks") return json(200, { keys: [jwk] });
     if (url.pathname === "/authorize") {
+      idp.authorizations++;
       const q = url.searchParams;
       const redirectUri = q.get("redirect_uri") ?? "";
       if (q.get("client_id") !== idp.clientId || !redirectUri) return json(400, { error: "invalid_request" });

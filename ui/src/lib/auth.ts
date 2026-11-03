@@ -226,6 +226,40 @@ function readReturnedFlow(): string | null {
 }
 
 /**
+ * The sign-in a link asked this page to start (`?sign_in=browser`), or null. The parameter is
+ * read on the first call of a page load and removed from the address bar at once, whatever
+ * its value, so a reload, Back or a failed flow can't start it again; the browser sign-in's
+ * return_to then no longer carries it either. It stays pending until the sign-in page settles
+ * it (starts it or decides to ignore it), and is never pending again in that page load.
+ */
+export function pendingSignInRequest(): "browser" | null {
+  if (signInRequest === undefined) signInRequest = readSignInRequest();
+  return signInRequest;
+}
+
+/** Marks the link's sign-in request as dealt with: started or ignored. */
+export function settleSignInRequest(): void {
+  signInRequest = null;
+}
+
+let signInRequest: "browser" | null | undefined;
+const signInParam = "sign_in";
+
+function readSignInRequest(): "browser" | null {
+  const params = new URLSearchParams(window.location.search);
+  const value = params.get(signInParam);
+  if (value === null) return null;
+  params.delete(signInParam);
+  const rest = params.toString();
+  window.history.replaceState(
+    window.history.state,
+    "",
+    window.location.pathname + (rest ? `?${rest}` : "") + window.location.hash,
+  );
+  return value === "browser" ? "browser" : null;
+}
+
+/**
  * Collects the token of the flow this tab started and the server sent it back from. Null
  * when this tab didn't start `flowId` (someone else's link): the page ignores it.
  */

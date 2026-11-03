@@ -29,7 +29,7 @@
     "arrow": {
       "file": "third_party/chargewire/cpp/scripts/build-arrow.sh",
       "pattern": "^ARROW_TAG=apache-arrow-(\\S+)$",
-      "value": "26.0.0"
+      "value": "26.0.1"
     },
     "boost": {
       "file": "third_party/chargewire/cpp/CMakeLists.txt",

@@ -5,6 +5,9 @@
 #include <duckdb/parser/expression/constant_expression.hpp>
 #include <duckdb/parser/expression/function_expression.hpp>
 #include <duckdb/parser/expression/subquery_expression.hpp>
+#include <duckdb/function/scalar_macro_function.hpp>
+#include <duckdb/function/table_macro_function.hpp>
+#include <duckdb/parser/parsed_data/create_macro_info.hpp>
 #include <duckdb/parser/parsed_data/create_table_info.hpp>
 #include <duckdb/parser/parsed_data/create_view_info.hpp>
 #include <duckdb/parser/parsed_data/drop_info.hpp>
@@ -240,6 +243,9 @@ class Walker {
         [this](dd::TableRef& ref) { CheckRef(ref); });
   }
 
+  // An expression (a scalar macro's body, a parameter's default) and what it reaches.
+  void WalkExpression(dd::ParsedExpression& expression) { CheckExpression(expression); }
+
  private:
   // DuckDB 2.0 parses COPY and DML as query nodes, and a CTE body may be any of them:
   // WITH x AS (COPY t TO '/file') SELECT 1.
@@ -364,8 +370,15 @@ class Walker {
               name + "() (files and URLs)");
     } else if (name == "checkpoint" || name == "force_checkpoint") {
       Flag("CHECKPOINT");
-    } else if (table_function_allowed_ && !table_function_allowed_({name})) {
-      Flag("the table function " + name);
+    } else if (table_function_allowed_) {
+      // With its qualification: a table macro in a schema (tools.first_n(3)) is found there.
+      std::vector<std::string> parts;
+      for (const auto& part : ref.function->Cast<dd::FunctionExpression>().GetQualifiedName().Path()) {
+        if (!Str(part).empty()) parts.push_back(Str(part));
+      }
+      if (parts.empty()) parts.push_back(name);
+      parts.back() = name;  // folded, as the allowed list holds it
+      if (!table_function_allowed_(parts)) Flag("the table function " + name);
     }
   }
 
@@ -426,6 +439,27 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       if (create.info && create.info->type == dd::CatalogType::VIEW_ENTRY) {
         auto& view = create.info->Cast<dd::CreateViewInfo>();
         if (view.query && view.query->node) walker.WalkNode(*view.query->node);
+      }
+      // A macro's body, as its creator could run it: DuckDB binds the body only where
+      // the macro is called, and binding a table function already reads (a CSV's
+      // sniffing), before the plan check of that statement sees it. So a body may call
+      // only what its creator may call: no query() or remote queries, and files, URLs
+      // and object storage only within the creator's storage privileges.
+      if (create.info && (create.info->type == dd::CatalogType::MACRO_ENTRY ||
+                          create.info->type == dd::CatalogType::TABLE_MACRO_ENTRY)) {
+        for (auto& macro : create.info->Cast<dd::CreateMacroInfo>().macros) {
+          if (!macro) continue;
+          for (auto& parameter : macro->default_parameters) {
+            if (parameter.second) walker.WalkExpression(*parameter.second);
+          }
+          if (macro->type == dd::MacroType::SCALAR_MACRO) {
+            auto& scalar = macro->Cast<dd::ScalarMacroFunction>();
+            if (scalar.expression) walker.WalkExpression(*scalar.expression);
+          } else if (macro->type == dd::MacroType::TABLE_MACRO) {
+            auto& table = macro->Cast<dd::TableMacroFunction>();
+            if (table.query_node) walker.WalkNode(*table.query_node);
+          }
+        }
       }
       return walker.violation;
     }

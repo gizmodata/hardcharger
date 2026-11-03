@@ -3,7 +3,7 @@ statements that access control otherwise keeps for the administrator."""
 
 import pytest
 
-from rbac import expect_allowed, expect_blocked, start_rbac_server
+from rbac import ChargewireError, expect_allowed, expect_blocked, start_rbac_server
 
 
 @pytest.fixture(scope="module")
@@ -70,6 +70,22 @@ def test_each_statement_family_needs_its_privilege(server, admin):
     check("MANAGE SECRETS", "DROP SECRET pat_s")
     check("MANAGE EXTENSIONS", "LOAD parquet")
     check("MANAGE CONFIG", "SET GLOBAL threads = 2")
+
+
+
+def test_update_extensions_needs_manage_extensions(server, admin):
+    pat = server.user(name="pat")
+    sql = "UPDATE EXTENSIONS (no_such_extension)"
+    expect_blocked(client=pat, sql=sql, why="UPDATE EXTENSIONS needs the MANAGE EXTENSIONS privilege")
+    # Twin: with the privilege the statement reaches DuckDB, which finds nothing to update
+    # (named so that it never goes to the network).
+    expect_allowed(client=admin, sql="GRANT MANAGE EXTENSIONS TO ops")
+    try:
+        with pytest.raises(ChargewireError) as raised:
+            pat.run(sql=sql)
+        assert "the extension is not installed" in raised.value.detail
+    finally:
+        expect_allowed(client=admin, sql="REVOKE MANAGE EXTENSIONS FROM ops")
 
 
 def test_one_privilege_does_not_cover_another(server):

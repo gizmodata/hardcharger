@@ -1,6 +1,6 @@
 import type { DiscoveryDocument } from "@gizmodata/chargewire";
 import { BadgeCheck, KeyRound, LogIn, Moon, Sun } from "lucide-react";
-import { type SyntheticEvent, useEffect, useRef, useState } from "react";
+import { type SyntheticEvent, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   type SignedIn,
@@ -9,6 +9,8 @@ import {
   finishBrowserSignIn,
   lastUsername,
   offersBrowserSignIn,
+  pendingSignInRequest,
+  settleSignInRequest,
   signIn,
   signInWithCertificate,
   startBrowserSignIn,
@@ -96,6 +98,26 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
       },
     );
   };
+
+  // A link that asks for it (?sign_in=browser, e.g. GizmoData Cloud's Connect) starts the
+  // browser sign-in as if its button had been clicked: once, only when the server offers it,
+  // nobody is signed in and this isn't the way back from a flow. The parameter has left the
+  // address bar before anything starts, so a reload, Back or a failed flow can't loop.
+  const startRequested = useEffectEvent(() => {
+    signInWithBrowser();
+  });
+  useEffect(() => {
+    if (pendingSignInRequest() === null) return;
+    if (busy || returned !== null) {
+      settleSignInRequest();
+      return;
+    }
+    if (!server) return; // known once discovery answers
+    settleSignInRequest();
+    // The link stands in for a click, so it sets the same state a click does (busy, no error).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (offersBrowserSignIn(server)) startRequested();
+  }, [server, busy, returned]);
 
   const submit = (e: SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault();

@@ -535,7 +535,8 @@ const std::vector<Privilege>& WritePrivileges() {
   static const std::vector<Privilege> kAll = {
       Privilege::kSelect,     Privilege::kInsert,     Privilege::kUpdate,       Privilege::kDelete,
       Privilege::kCreateTable, Privilege::kCreateView, Privilege::kCreateSchema, Privilege::kDropTable,
-      Privilege::kDropView,   Privilege::kDropSchema, Privilege::kAlterTable,   Privilege::kAlterView};
+      Privilege::kDropView,   Privilege::kDropSchema, Privilege::kAlterTable,   Privilege::kAlterView,
+      Privilege::kCreateMacro, Privilege::kDropMacro};
   return kAll;
 }
 

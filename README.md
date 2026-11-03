@@ -149,7 +149,8 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   load `/ui` at all, and with `--mtls-certificate-sign-in` the page offers **Sign in with my
   certificate**, no password needed.
 - 🌐 **Sign in with your identity provider**: with browser sign-in on (below), the page offers
-  **Sign in with <provider>** beside the user name and password, and comes back signed in.
+  **Sign in with <provider>** beside the user name and password, and comes back signed in. A
+  link to `/ui/?sign_in=browser` starts that sign-in without the click.
 - 🛡️ The server's own sign-in, a short-lived token kept only in the tab, and a strict
   Content-Security-Policy: nothing loads from another origin.
 
@@ -1036,6 +1037,14 @@ Each statement is checked inside DuckDB against its own plan, after binding and 
 before optimizing, so nested SQL, views and macros can't route around a grant. Anything the
 check can't classify is refused. Changes reach every replica within about a second.
 
+Users can share macros: `GRANT CREATE MACRO, DROP MACRO ON SCHEMA tools TO analyst` lets a role
+create and drop scalar and table macros in `tools` (replacing one needs both). A macro is expanded
+into the statement that calls it, so its body reads with the caller's rights. So that a user's
+macro can't change what anyone else's SQL computes, Hardcharger refuses temporary macros, the name
+of a built-in function or of one an extension autoloads, replacing or standing in for a function
+that a view, a row or masking policy (or a macro one of them uses) calls, and a body that calls
+what its creator may not (`query()`, files beyond their system privileges).
+
 The init SQL (`init_sql_commands`, `init_sql_commands_file`) can hold these statements too.
 They run as the administrator, in order with the DuckDB statements around them, so a grant
 can name a table the init SQL has just created:
@@ -1234,6 +1243,14 @@ the provider's JWKS, issuer, audience, `token_authorized_emails`, roles and, und
 control, the store's users (created on first sign-in with `token_auto_provision_users`). A sign-in is collected once by the client that started it, with a
 secret that is never in a URL; sign-ins expire after 10 minutes. `hardcharger_server_info()`
 has `oauth_enabled`.
+
+A link to the web UI can start the browser sign-in itself: `https://db.example.com/ui/?sign_in=browser`
+(any page under `/ui/`) goes straight to the identity provider, as if **Sign in with <provider>**
+had been clicked, and comes back signed in. The page does it once, only when the server offers
+browser sign-in and nobody is signed in in that tab; it takes the parameter out of the address
+bar first, so a reload, Back or a failed sign-in doesn't go to the provider again, and a failure
+shows the sign-in page with the reason. The flow is still the person's own, in their tab, and
+the provider still asks them to sign in or confirm.
 
 ### Who can do what
 

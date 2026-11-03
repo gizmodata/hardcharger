@@ -137,9 +137,9 @@ def test_wrapping_a_statement_does_not_hide_it(joe):
     expect_blocked(client=joe, sql="CREATE TEMP VIEW tv AS SELECT * FROM secrets", why=SECRET)
     expect_blocked(client=joe, sql="SELECT * FROM tv", code="sql_error", why="Table with name tv does not exist")
     # A session's macro would be found before the catalog's functions, inside a view
-    # too, so users may not create even temporary ones.
+    # too, so users may not create temporary ones (test_rbac_macros.py has the rest).
     expect_blocked(client=joe, sql="CREATE TEMP MACRO tm() AS TABLE SELECT * FROM secrets",
-                   why="creating macros needs an administrator")
+                   why="creating temporary macros needs an administrator")
 
 
 def test_prepared_statements_with_parameters_are_checked_when_prepared_and_run(joe):
@@ -447,7 +447,7 @@ def test_replacing_or_ignoring_another_owners_object(bob):
 
 def test_administrative_statements_stay_denied(joe):
     expect_blocked(client=joe, sql="CREATE SEQUENCE seq1", why="needs an administrator")
-    expect_blocked(client=joe, sql="CREATE MACRO m1(a) AS a + 1", why="needs an administrator")
+    expect_blocked(client=joe, sql="CREATE MACRO m1(a) AS a + 1", why="it needs CREATE MACRO on schema")
     # SQL-level PREPARE is checked on the statement it prepares.
     expect_blocked(client=joe, sql="PREPARE p_secret AS SELECT * FROM secrets", why="no SELECT")
     expect_blocked(client=joe, sql="ATTACH ':memory:' AS mine", why="MANAGE CATALOGS")

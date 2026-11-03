@@ -215,8 +215,12 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   set to itself, keeps the flow's poll secret in this tab's `sessionStorage`, goes to the
   identity provider, and on its return (the flow id in the URL fragment, which it removes at
   once) collects the access token with the secret, or shows why the sign-in failed. A
-  fragment naming a flow this tab didn't start is ignored. e2e: `oauth.spec.ts`, against a
-  mock identity provider (`test/e2e/idp.ts`).
+  fragment naming a flow this tab didn't start is ignored. A link with `?sign_in=browser` (as
+  GizmoData Cloud's Connect opens) starts that sign-in on its own, once: only when the server
+  offers it, nobody is signed in and the page isn't the way back from a flow; the parameter
+  leaves the address bar before the flow starts (so a reload, Back or a failure can't loop),
+  and a failure shows the reason as a failed click does. e2e: `oauth.spec.ts`, against a
+  mock identity provider (`test/e2e/idp.ts`); unit: `test/unit/sign-in-link.test.tsx`.
 - 🎨 The Hardcharger™ bull logo (its light or dark variant to match the theme), GizmoData's
   orange and Chargewire blue, light and dark themes (the system's choice until you pick one), Inter
   embedded in the build (SIL Open Font License 1.1,
