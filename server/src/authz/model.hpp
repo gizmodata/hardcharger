@@ -161,7 +161,8 @@ struct SystemPrivilegeRecord {
 };
 
 // kSchema: the object is the schema itself (catalog + schema path, no name).
-enum class ObjectType { kTable, kView, kSchema };
+// kSequence is asked of (USAGE), never recorded: sequences have no owner records.
+enum class ObjectType { kTable, kView, kSchema, kSequence };
 
 enum class OwnerKind { kSystem, kUser, kRole };
 
@@ -371,6 +372,8 @@ class Snapshot {
   // A table or view is listed when the principal holds SELECT on it or on any of its
   // columns, or INSERT, UPDATE or DELETE on it (owning it holds them all).
   bool ObjectListed(const Principal& principal, const ObjectPath& object) const;
+  // A sequence: listed to whoever may use it (USAGE) or drop it (DROP SEQUENCE on its schema).
+  bool SequenceListed(const Principal& principal, const ObjectPath& sequence) const;
   // A column, when the principal may SELECT it, or holds INSERT, UPDATE or DELETE on its table.
   bool ColumnListed(const Principal& principal, const ObjectPath& table, const std::string& column) const;
   // A schema, when the principal holds a grant on it, on a schema it is in or holds, or on

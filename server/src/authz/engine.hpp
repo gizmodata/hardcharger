@@ -40,6 +40,10 @@ class ObjectResolver {
  public:
   virtual ~ObjectResolver() = default;
   virtual arrow::Result<ResolvedObject> ResolveObject(const QualifiedName& name) = 0;
+  // A sequence, found as nextval('name') would find it.
+  virtual arrow::Result<ObjectPath> ResolveSequence(const QualifiedName& name) {
+    return arrow::Status::Invalid("sequence " + name.ToString() + " cannot be found here");
+  }
   // catalog.schema[.sub...] or schema (in the session's catalog)
   virtual arrow::Result<ObjectPath> ResolveSchema(const QualifiedName& name) = 0;
   virtual arrow::Result<std::string> ResolveCatalog(const std::string& name) = 0;

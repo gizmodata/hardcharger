@@ -340,7 +340,8 @@ std::optional<Privilege> PrivilegeFrom(const std::string& name) {
                  Privilege::kCreateTable, Privilege::kCreateView, Privilege::kCreateSchema,
                  Privilege::kDropTable, Privilege::kDropView, Privilege::kDropSchema,
                  Privilege::kAlterTable, Privilege::kAlterView, Privilege::kCreateMacro,
-                 Privilege::kDropMacro, Privilege::kAll}) {
+                 Privilege::kDropMacro, Privilege::kUsage, Privilege::kCreateSequence,
+                 Privilege::kDropSequence, Privilege::kAll}) {
     if (PrivilegeName(p) == name) return p;
   }
   return std::nullopt;
@@ -354,6 +355,8 @@ std::string ObjectTypeName(ObjectType t) {
       return "view";
     case ObjectType::kSchema:
       return "schema";
+    case ObjectType::kSequence:
+      return "sequence";  // never recorded
   }
   return "table";
 }

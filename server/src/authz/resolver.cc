@@ -97,6 +97,25 @@ arrow::Result<ResolvedObject> SessionObjectResolver::ResolveObject(const Qualifi
   return resolved;
 }
 
+arrow::Result<ObjectPath> SessionObjectResolver::ResolveSequence(const QualifiedName& name) {
+  ObjectPath resolved;
+  bool found = false;
+  ARROW_RETURN_NOT_OK(InTransaction(connection_, [&]() -> arrow::Status {
+    dd::vector<dd::Identifier> path;
+    for (const auto& part : name.parts) path.emplace_back(part);
+    auto entry = dd::Catalog::GetEntry(
+        *connection_.context,
+        dd::EntryLookupInfo(dd::CatalogType::SEQUENCE_ENTRY, dd::QualifiedName::FromPath(path)),
+        dd::OnEntryNotFound::RETURN_NULL);
+    if (!entry || entry->type != dd::CatalogType::SEQUENCE_ENTRY) return arrow::Status::OK();
+    found = true;
+    resolved = PathOfEntry(*entry);
+    return arrow::Status::OK();
+  }));
+  if (!found) return AccessControlError("sequence " + name.ToString() + " does not exist");
+  return resolved;
+}
+
 bool SessionObjectResolver::IsTableMacro(const QualifiedName& name) {
   bool found = false;
   auto status = InTransaction(connection_, [&]() -> arrow::Status {

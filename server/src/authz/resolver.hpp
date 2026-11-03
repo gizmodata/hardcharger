@@ -21,6 +21,7 @@ class SessionObjectResolver : public ObjectResolver {
  public:
   explicit SessionObjectResolver(duckdb::Connection& connection) : connection_(connection) {}
   arrow::Result<ResolvedObject> ResolveObject(const QualifiedName& name) override;
+  arrow::Result<ObjectPath> ResolveSequence(const QualifiedName& name) override;
   arrow::Result<ObjectPath> ResolveSchema(const QualifiedName& name) override;
   arrow::Result<std::string> ResolveCatalog(const std::string& name) override;
   arrow::Status CheckRowPredicate(const ResolvedObject& table,

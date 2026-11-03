@@ -16,7 +16,13 @@
 #include <duckdb/main/database_manager.hpp>
 #include <duckdb/main/prepared_statement_data.hpp>
 #include <duckdb/optimizer/optimizer_extension.hpp>
+#include <duckdb/catalog/catalog_entry/sequence_catalog_entry.hpp>
+#include <duckdb/parser/expression/constant_expression.hpp>
+#include <duckdb/parser/expression/function_expression.hpp>
 #include <duckdb/parser/parsed_data/alter_info.hpp>
+#include <duckdb/parser/parsed_data/alter_table_info.hpp>
+#include <duckdb/parser/parsed_expression_iterator.hpp>
+#include <duckdb/planner/operator/logical_update.hpp>
 #include <duckdb/parser/parsed_data/create_info.hpp>
 #include <duckdb/parser/parsed_data/create_table_info.hpp>
 #include <duckdb/parser/parsed_data/create_view_info.hpp>
@@ -169,6 +175,37 @@ dd::optional_ptr<dd::CatalogEntry> LookUp(dd::ClientContext& context, dd::Catalo
   }
 }
 
+bool IsSequenceFunction(const std::string& name_lower) {
+  return name_lower == "nextval" || name_lower == "currval" || name_lower == "setval";
+}
+
+// Every nextval / currval / setval call in a parsed expression (a column default):
+// the function, and the sequence's name when it is a constant string (as DuckDB requires
+// to bind the call), or nullopt.
+void ForEachSequenceCall(dd::ParsedExpression& expression,
+                         const std::function<void(const std::string&, const std::optional<std::string>&)>& call) {
+  if (expression.GetExpressionClass() == dd::ExpressionClass::FUNCTION) {
+    auto& function = expression.Cast<dd::FunctionExpression>();
+    const std::string name = Lower(compat::Str(function.FunctionName()));
+    if (IsSequenceFunction(name)) {
+      std::optional<std::string> sequence;
+      for (const auto& argument : function.GetArguments()) {
+        if (argument.HasName()) continue;
+        const auto& first = argument.GetExpression();
+        if (first.GetExpressionClass() == dd::ExpressionClass::CONSTANT) {
+          const auto value = compat::ConstantValue(first.Cast<dd::ConstantExpression>());
+          if (!value.IsNull()) sequence = value.ToString();
+        }
+        break;
+      }
+      call(name, sequence);
+    }
+  }
+  dd::ParsedExpressionIterator::EnumerateChildren(expression, [&](dd::ParsedExpression& child) {
+    ForEachSequenceCall(child, call);
+  });
+}
+
 ObjectType ObjectTypeOf(const dd::CatalogEntry& entry) {
   if (entry.type == dd::CatalogType::VIEW_ENTRY) return ObjectType::kView;
   if (entry.type == dd::CatalogType::SCHEMA_ENTRY) return ObjectType::kSchema;
@@ -183,6 +220,8 @@ std::string TypeWord(ObjectType type) {
       return "schema";
     case ObjectType::kTable:
       return "table";
+    case ObjectType::kSequence:
+      return "sequence";
   }
   return "object";
 }
@@ -276,6 +315,22 @@ class PlanChecker {
 
   void Visit(dd::LogicalOperator& op,
              dd::optional_ptr<dd::TableCatalogEntry> dml_target = nullptr) {
+    // A table's own column defaults (id DEFAULT nextval('s')) are part of writing it:
+    // INSERT (or UPDATE ... SET id = DEFAULT, MERGE) on the table covers the sequences
+    // they advance, also where DuckDB copies a default into the plan (VALUES (DEFAULT)).
+    // Who may write a default that names a sequence is checked where it is written
+    // (CREATE TABLE, ALTER TABLE ... DEFAULT): USAGE on the sequence.
+    const size_t defaults_before = default_sequences_.size();
+    dd::optional_ptr<dd::TableCatalogEntry> written;
+    if (op.type == OpType::LOGICAL_INSERT) written = &op.Cast<dd::LogicalInsert>().table;
+    if (op.type == OpType::LOGICAL_UPDATE) written = &op.Cast<dd::LogicalUpdate>().table;
+    if (op.type == OpType::LOGICAL_MERGE_INTO) written = &op.Cast<dd::LogicalMergeInto>().table;
+    if (written) CollectDefaultSequences(*written);
+    struct RestoreDefaults {
+      std::vector<const dd::CatalogEntry*>& list;
+      size_t size;
+      ~RestoreDefaults() { list.resize(size); }
+    } restore_defaults{default_sequences_, defaults_before};
     CheckSettingReads(op);
     switch (op.type) {
       // ---- reads ----------------------------------------------------------
@@ -319,6 +374,14 @@ class PlanChecker {
       // ---- DDL ------------------------------------------------------------
       case OpType::LOGICAL_CREATE_TABLE: {
         auto& create = op.Cast<dd::LogicalCreateTable>();
+        // Temporary tables too: their inserts advance what their defaults name.
+        if (!principal_.catalog_rules) {
+          for (auto& column : create.info->Base().columns.Logical()) {
+            if (!column.HasDefaultValue()) continue;
+            auto copy = column.DefaultValue().Copy();
+            CheckDefaultSequences(*copy);
+          }
+        }
         CheckCreate(*create.info->base, ObjectType::kTable, Privilege::kCreateTable);
         VisitChildren(op, nullptr);  // CREATE TABLE AS reads its source
         return;
@@ -349,7 +412,8 @@ class PlanChecker {
         auto& create = op.Cast<dd::LogicalCreate>();
         if (principal_.catalog_rules) return RequireRuleWrite(CatalogOf(*create.info, create.info->temporary));
         if (create.info->temporary) return;  // session-local
-        Deny(principal_, "creating sequences needs an administrator");
+        CheckCreateSequence(*create.info);
+        return;
       }
       // CREATE MACRO in a schema: the CREATE MACRO privilege (macros.hpp).
       case OpType::LOGICAL_CREATE_MACRO:
@@ -542,13 +606,27 @@ class PlanChecker {
   // nextval / setval change a sequence and currval reads it: for a catalog_access
   // principal they need write (read) access to the sequence's catalog. DuckDB binds
   // the sequence when it binds the call (its name must be a constant).
+  //
+  // For everyone else: nextval and currval need USAGE on the sequence (granted ON SEQUENCE,
+  // ON SCHEMA or ON CATALOG, or owning its schema), except where the table being written
+  // advances it through its own column default. setval resets a sequence, which dropping
+  // and recreating it would do too: it needs DROP SEQUENCE on the sequence's schema.
   void CheckSequenceUse(const dd::BoundFunctionExpression& call) {
-    if (!principal_.catalog_rules) return;
     const std::string name = Lower(compat::Str(call.Function().GetName()));
-    if (name != "nextval" && name != "currval" && name != "setval") return;
+    if (!IsSequenceFunction(name)) return;
     const auto& info = call.BindInfo();
     if (!info) return;  // a NULL sequence name: DuckDB returns NULL
-    const auto& sequence = info->Cast<dd::NextvalBindData>().sequence;
+    auto& sequence = info->Cast<dd::NextvalBindData>().sequence;
+    if (!principal_.catalog_rules) {
+      const ObjectPath path = PathOf(sequence);
+      if (IsTempCatalog(path.catalog)) return;  // the session's own
+      if (name == "setval") return RequireSchemaPrivilege(path, Privilege::kDropSequence, "setval() of sequence");
+      if (name == "nextval" && std::find(default_sequences_.begin(), default_sequences_.end(), &sequence) !=
+                                   default_sequences_.end()) {
+        return;
+      }
+      return RequireSequenceUsage(path);
+    }
     const std::string catalog = compat::Str(sequence.ParentCatalog().GetName());
     RequireVisible(catalog);
     const auto level = CatalogRuleLevel(*principal_.catalog_rules, catalog);
@@ -1025,15 +1103,110 @@ class PlanChecker {
   // of the same name grants nothing). A catalog_access principal (which creates none)
   // drops one with write access to the catalog, as before.
   void RequireMacroPrivilege(const ObjectPath& macro, Privilege privilege, const std::string& verb) {
-    RequireVisible(macro.catalog);
-    if (principal_.catalog_rules) return RequireRuleWrite(macro.catalog);
-    ObjectPath schema = macro;
+    RequireSchemaPrivilege(macro, privilege, verb + " macro");
+  }
+
+  // A privilege held on an object's schema (macros, sequences: objects without owner
+  // records), asked of the schema itself.
+  void RequireSchemaPrivilege(const ObjectPath& object, Privilege privilege, const std::string& action) {
+    RequireVisible(object.catalog);
+    if (principal_.catalog_rules) return RequireRuleWrite(object.catalog);
+    ObjectPath schema = object;
     schema.object_name.clear();
     if (!snapshot_.Check(principal_, AccessRequest{schema, ObjectType::kSchema, privilege, {}}).allowed) {
-      Deny(principal_, "user " + principal_.user_name + " may not " + verb + " macro " + macro.ToString() +
+      Deny(principal_, "user " + principal_.user_name + " may not " + action + " " + object.ToString() +
                            " (it needs " + PrivilegeName(privilege) + " on schema " + schema.ToString() +
                            " or its catalog, or to own the schema)");
     }
+  }
+
+  // CREATE [OR REPLACE] SEQUENCE in a schema: CREATE SEQUENCE there, DROP SEQUENCE as
+  // well to replace one, and a name no table default, view or macro calls nextval() /
+  // currval() / setval() by (it would hand out that sequence's numbers instead).
+  void CheckCreateSequence(dd::CreateInfo& info) {
+    const auto parts = PartsOf(info);
+    if (parts.size() < 3) Deny(principal_, "the new sequence's schema could not be determined");
+    ObjectPath sequence;
+    sequence.catalog = parts[0];
+    sequence.schema_path.assign(parts.begin() + 1, parts.end() - 1);
+    sequence.object_name = parts.back();
+    const auto existing = LookUp(context_, dd::CatalogType::SEQUENCE_ENTRY, parts);
+    if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return;
+    RequireSchemaPrivilege(sequence, Privilege::kCreateSequence, "create sequence");
+    if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
+      RequireSchemaPrivilege(sequence, Privilege::kDropSequence, "replace sequence");
+    }
+    if (auto refusal = SequenceNameRefusal(context_, sequence)) Deny(principal_, *refusal);
+  }
+
+  // The sequences an INSERT, UPDATE or MERGE target's own column defaults advance, as
+  // DuckDB would find them (the name as written, or in the table's schema or catalog).
+  // DuckDB moves a default's bound expression into the plan, so they are read from the
+  // table's definition; a name that can't be read covers nothing (fail closed).
+  void CollectDefaultSequences(dd::TableCatalogEntry& table) {
+    const std::string catalog = compat::Str(table.ParentCatalog().GetName());
+    const std::string schema = compat::Str(table.ParentSchema().name);
+    for (const auto& column : table.GetColumns().Logical()) {
+      if (!column.HasDefaultValue()) continue;
+      auto copy = column.DefaultValue().Copy();
+      ForEachSequenceCall(*copy, [&](const std::string& function, const std::optional<std::string>& name) {
+        if (function != "nextval" || !name) return;
+        std::vector<std::string> parts;
+        try {
+          for (const auto& part : dd::QualifiedName::ParseComponents(*name)) parts.push_back(compat::Str(part));
+        } catch (...) {
+          return;
+        }
+        std::vector<std::vector<std::string>> candidates{parts};
+        if (parts.size() == 1) {
+          candidates.push_back({catalog, schema, parts[0]});
+          candidates.push_back({catalog, DEFAULT_SCHEMA, parts[0]});
+        } else if (parts.size() == 2) {
+          candidates.push_back({catalog, parts[0], parts[1]});
+        }
+        for (const auto& candidate : candidates) {
+          if (auto entry = LookUp(context_, dd::CatalogType::SEQUENCE_ENTRY, candidate)) {
+            default_sequences_.push_back(entry.get());
+          }
+        }
+      });
+    }
+  }
+
+  // USAGE on a sequence (nextval, currval), with the rights the read is checked with: the
+  // caller's, or a view's owner's inside a view.
+  void RequireSequenceUsage(const ObjectPath& sequence) {
+    RequireVisible(sequence.catalog);
+    AccessRequest request{sequence, ObjectType::kSequence, Privilege::kUsage, {}};
+    NoteAccess("USAGE on sequence " + sequence.ToString(), {});
+    for (const auto& rights : rights_) {
+      if (snapshot_.Check(rights.principal, request).allowed) continue;
+      if (!rights.owner_of_view.empty()) {
+        Deny(principal_, "the view " + rights.owner_of_view +
+                             " cannot be read, because its owner lacks a privilege on an object the view reads");
+      }
+      Deny(principal_, "user " + principal_.user_name + " has no USAGE privilege on sequence " + sequence.ToString());
+    }
+  }
+
+  // A column default written by CREATE TABLE or ALTER TABLE: each sequence it names needs
+  // USAGE, so that a table can't be made to advance a sequence its creator may not use.
+  void CheckDefaultSequences(dd::ParsedExpression& expression) {
+    ForEachSequenceCall(expression, [&](const std::string& function, const std::optional<std::string>& name) {
+      if (!name) Deny(principal_, "a column default must name its sequence by a constant: " + function + "('name')");
+      std::vector<std::string> parts;
+      try {
+        for (const auto& part : dd::QualifiedName::ParseComponents(*name)) parts.push_back(compat::Str(part));
+      } catch (...) {
+        Deny(principal_, "the sequence name in a column default could not be read: " + *name);
+      }
+      auto entry = LookUp(context_, dd::CatalogType::SEQUENCE_ENTRY, parts);
+      if (!entry) return;  // DuckDB reports the missing sequence
+      const ObjectPath path = PathOf(*entry);
+      if (IsTempCatalog(path.catalog)) return;
+      if (function == "setval") Deny(principal_, "a column default may not call setval()");
+      RequireSequenceUsage(path);
+    });
   }
 
   // A view's creator may create it only over what it could SELECT itself: the view's
@@ -1139,6 +1312,14 @@ class PlanChecker {
         CheckDropOf(*entry);
         return;
       }
+      case dd::CatalogType::SEQUENCE_ENTRY: {
+        auto entry = LookUp(context_, info.type, parts);
+        if (!entry) return;  // DROP SEQUENCE IF EXISTS of nothing; DuckDB reports a missing sequence
+        ObjectPath sequence = PathOf(*entry);
+        if (IsTempCatalog(sequence.catalog)) return;
+        RequireSchemaPrivilege(sequence, Privilege::kDropSequence, "drop sequence");
+        return;
+      }
       case dd::CatalogType::MACRO_ENTRY:
       case dd::CatalogType::TABLE_MACRO_ENTRY: {
         auto entry = LookUp(context_, info.type, parts);
@@ -1164,6 +1345,22 @@ class PlanChecker {
       const std::string catalog = !parts.empty() && IsTempCatalog(parts[0]) ? TEMP_CATALOG : CatalogOf(info, false);
       RequireVisible(catalog);
       return RequireRuleWrite(catalog);
+    }
+    // A default that names a sequence (a temporary table's too): USAGE on it. (DuckDB
+    // binds ADD COLUMN ... DEFAULT nextval() with a NULL default and fills the column with
+    // an UPDATE, which is checked when it runs; SET DEFAULT is checked here.)
+    if (info.type == dd::AlterType::ALTER_TABLE) {
+      auto& table_info = info.Cast<dd::AlterTableInfo>();
+      if (table_info.alter_table_type == dd::AlterTableType::ADD_COLUMN) {
+        auto& column = table_info.Cast<dd::AddColumnInfo>().new_column;
+        if (column.HasDefaultValue()) {
+          auto copy = column.DefaultValue().Copy();
+          CheckDefaultSequences(*copy);
+        }
+      } else if (table_info.alter_table_type == dd::AlterTableType::SET_DEFAULT) {
+        auto& expression = table_info.Cast<dd::SetDefaultInfo>().expression;
+        if (expression) CheckDefaultSequences(*expression);
+      }
     }
     if (!parts.empty() && IsTempCatalog(parts[0])) return;
     const auto catalog_type = info.GetCatalogType();
@@ -1206,6 +1403,8 @@ class PlanChecker {
   const Principal& principal_;
   const ViewColumns& view_columns_;
   std::vector<Rights> rights_;
+  // The sequences the column defaults of the table being written advance (Visit).
+  std::vector<const dd::CatalogEntry*> default_sequences_;
   bool in_owned_view_ = false;
   std::string owned_view_;    // the innermost view read with its owner's rights
   std::string unowned_view_;  // the innermost view read with the caller's rights

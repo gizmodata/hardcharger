@@ -446,7 +446,7 @@ def test_replacing_or_ignoring_another_owners_object(bob):
 
 
 def test_administrative_statements_stay_denied(joe):
-    expect_blocked(client=joe, sql="CREATE SEQUENCE seq1", why="needs an administrator")
+    expect_blocked(client=joe, sql="CREATE SEQUENCE seq1", why="it needs CREATE SEQUENCE on schema")
     expect_blocked(client=joe, sql="CREATE MACRO m1(a) AS a + 1", why="it needs CREATE MACRO on schema")
     # SQL-level PREPARE is checked on the statement it prepares.
     expect_blocked(client=joe, sql="PREPARE p_secret AS SELECT * FROM secrets", why="no SELECT")

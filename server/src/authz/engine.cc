@@ -658,7 +658,11 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       const auto* role = snap->FindRoleById(role_id);
       for (const auto& g : snap->grants()) {
         if (g.role_id != role_id) continue;
-        result.rows.push_back({PrivilegeName(g.privilege), ScopeLabel(g.scope), g.target.ToString(),
+        // USAGE on one object is granted ON SEQUENCE (and no other object takes it).
+        const std::string label = g.scope == GrantScope::kObject && g.privilege == Privilege::kUsage
+                                      ? "SEQUENCE"
+                                      : ScopeLabel(g.scope);
+        result.rows.push_back({PrivilegeName(g.privilege), label, g.target.ToString(),
                                Join(g.columns), role ? role->name : role_id, "ROLE",
                                g.grant_option ? "YES" : "NO", grantor_name(g.granted_by)});
       }
@@ -985,6 +989,10 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
     std::vector<std::string> table_columns;
     switch (c->scope) {
       case GrantScope::kObject: {
+        if (c->sequence) {
+          ARROW_ASSIGN_OR_RAISE(target, resolver.ResolveSequence(c->target));
+          break;
+        }
         ARROW_ASSIGN_OR_RAISE(auto obj, resolver.ResolveObject(c->target));
         target = obj.path;
         table_columns = obj.columns;
@@ -1357,7 +1365,8 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                           Privilege::kDelete, Privilege::kCreateTable, Privilege::kCreateView,
                           Privilege::kCreateSchema, Privilege::kDropTable, Privilege::kDropView,
                           Privilege::kDropSchema, Privilege::kAlterTable, Privilege::kAlterView,
-                          Privilege::kCreateMacro, Privilege::kDropMacro}) {
+                          Privilege::kCreateMacro, Privilege::kDropMacro, Privilege::kUsage,
+                          Privilege::kCreateSequence, Privilege::kDropSequence}) {
         bool have = false;
         for (const auto& g : snap.grants()) {
           have = have ||
