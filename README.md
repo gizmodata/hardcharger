@@ -146,7 +146,8 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   load `/ui` at all, and with `--mtls-certificate-sign-in` the page offers **Sign in with my
   certificate**, no password needed.
 - 🌐 **Sign in with your identity provider**: with browser sign-in on (below), the page offers
-  **Sign in with <provider>** beside the user name and password, and comes back signed in.
+  **Sign in with <provider>** beside the user name and password, and comes back signed in. A
+  link to `/ui/?sign_in=browser` starts that sign-in without the click.
 - 🛡️ The server's own sign-in, a short-lived token kept only in the tab, and a strict
   Content-Security-Policy: nothing loads from another origin.
 
@@ -1231,6 +1232,14 @@ the provider's JWKS, issuer, audience, `token_authorized_emails`, roles and, und
 control, the store's users (created on first sign-in with `token_auto_provision_users`). A sign-in is collected once by the client that started it, with a
 secret that is never in a URL; sign-ins expire after 10 minutes. `hardcharger_server_info()`
 has `oauth_enabled`.
+
+A link to the web UI can start the browser sign-in itself: `https://db.example.com/ui/?sign_in=browser`
+(any page under `/ui/`) goes straight to the identity provider, as if **Sign in with <provider>**
+had been clicked, and comes back signed in. The page does it once, only when the server offers
+browser sign-in and nobody is signed in in that tab; it takes the parameter out of the address
+bar first, so a reload, Back or a failed sign-in doesn't go to the provider again, and a failure
+shows the sign-in page with the reason. The flow is still the person's own, in their tab, and
+the provider still asks them to sign in or confirm.
 
 ### Who can do what
 

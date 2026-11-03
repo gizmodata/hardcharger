@@ -7,6 +7,16 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- **Web UI: a link can start the browser sign-in (`/ui/?sign_in=browser`).** The sign-in page
+  then goes straight to the identity provider, as if **Sign in with <provider>** had been
+  clicked, so someone arriving from GizmoData Cloud's **Connect** no longer clicks it first
+  (gizmodata/hardcharger#16). It starts once, only when the server offers browser sign-in,
+  nobody is signed in and the page isn't the way back from a flow. The parameter leaves the
+  address bar before the flow starts, so a reload, Back or a failed sign-in can't loop back to
+  the provider, and a failure shows the sign-in page with the reason, as a failed click does.
+
 ## [2.4.1] - 2026-10-29
 
 ### Changed
