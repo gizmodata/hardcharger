@@ -26,6 +26,8 @@ export interface TabStatus {
 export interface TabHandle {
   insert: (text: string) => void;
   focus: () => void;
+  /** The editor's text now: the tab's copy follows it a render later. */
+  text: () => string;
 }
 
 type Run =
@@ -360,7 +362,11 @@ export function EditorTab(props: Props) {
             setEditorReady(!!api);
             // The tab on show starts with the cursor in its editor.
             if (api && latest.current.active) requestAnimationFrame(() => api.focus());
-            props.onReady(api ? { insert: (text) => api.insert(text), focus: () => api.focus() } : undefined);
+            props.onReady(
+              api
+                ? { insert: (text) => api.insert(text), focus: () => api.focus(), text: () => api.value() }
+                : undefined,
+            );
           }}
         />
       </div>

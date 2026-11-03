@@ -64,6 +64,30 @@ test("Alt+W closes a tab, asking first when its text isn't saved", async ({ page
   await expect(editorTabs(page).getByRole("tab")).toHaveCount(1);
 });
 
+test("Alt+W straight after typing still asks: it reads the editor, not the last render", async ({ page }) => {
+  await editorFocused(page);
+  await page.keyboard.press("Alt+N");
+  await expect(editorTabs(page).getByRole("tab")).toHaveCount(2);
+  await editorFocused(page);
+  let asked = "";
+  page.once("dialog", (d) => {
+    asked = d.message();
+    void d.dismiss();
+  });
+  // Type and press Alt+W in one task, so no render can come between them: under load (CI, a
+  // busy laptop) a real key can arrive just as early, and the tab closed without asking.
+  await page.evaluate(() => {
+    const input = document.activeElement as HTMLTextAreaElement;
+    // Typing as the browser does it (an input event the editor reads at once).
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    document.execCommand("insertText", false, "SELECT 'typed just now'");
+    const key = { key: "w", code: "KeyW", keyCode: 87, altKey: true, bubbles: true, cancelable: true };
+    input.dispatchEvent(new KeyboardEvent("keydown", key));
+  });
+  await expect.poll(() => asked).toContain("has text you haven't saved");
+  await expect(editorTabs(page).getByRole("tab")).toHaveCount(2);
+});
+
 test("at most 20 tabs", async ({ page }) => {
   const add = page.getByRole("button", { name: "New tab" });
   for (let i = 1; i < 20; i++) await add.click();

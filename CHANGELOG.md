@@ -52,6 +52,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Web UI: **Alt+W** pressed straight after typing could close a tab without asking about its
+  unsaved text: the check read the tab's text from the last render, which the keystroke could
+  beat (seen as a flaky test under load). It now reads the editor's text as it is.
 - Under access control, a table macro called with its schema (`FROM tools.first_rows(3)`) was
   refused to every user as an unknown table function: the check looked the macro up by its
   name alone.

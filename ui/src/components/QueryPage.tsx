@@ -161,8 +161,11 @@ export default function QueryPage({ theme }: Props) {
 
   const closeTab = useCallback(
     (id: string) => {
-      const tab = tabs.find((t) => t.id === id);
-      if (!tab) return;
+      // What the tab holds now: a key pressed straight after typing (Alt+W) can come before the
+      // render that brings the text into `tabs`, and the tab would close without asking.
+      const found = tabsNow.current.tabs.find((t) => t.id === id);
+      if (!found) return;
+      const tab = { ...found, sql: handles.current.get(id)?.text() ?? found.sql };
       const status = statuses[id];
       const why =
         status && status.transaction !== "none"
@@ -181,7 +184,7 @@ export default function QueryPage({ theme }: Props) {
         return { tabs: rest, active: nextActive };
       });
     },
-    [tabs, statuses],
+    [statuses],
   );
 
   // Requests from elsewhere (the schema browser's preview): a new tab, or the active one.
