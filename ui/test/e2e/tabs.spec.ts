@@ -44,6 +44,7 @@ test("Alt+W closes a tab, asking first when its text isn't saved", async ({ page
   await editorFocused(page); // the shown tab's editor takes the cursor
   await page.keyboard.press("Alt+N");
   await expect(editorTabs(page).getByRole("tab")).toHaveCount(2);
+  await editorFocused(page); // the new tab's editor: Alt+W must reach it, not the tab bar
   await setSql(page, "SELECT 'keep me'");
   let asked = "";
   page.once("dialog", (d) => {
