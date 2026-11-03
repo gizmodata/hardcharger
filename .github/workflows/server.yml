@@ -848,6 +848,97 @@ jobs:
     # (No build-env: it names the manylinux image, which a macOS leg has none of.)
     steps: *warm-steps
 
+  # The sanitizer jobs' dependency caches, kept on main. The sanitizer jobs run only on v*
+  # tags (and manual `full` runs), and a tag's caches can't be restored by any other ref, so
+  # every release gate rebuilt instrumented DuckDB and Arrow (v2.5.0: 35.6 min of the TSan job,
+  # 24.2 of ASan's) although they change only with a dependency or toolchain bump. A tag can
+  # restore main's entries: this job makes sure main has each one. It only looks the keys up
+  # when they exist (nothing is downloaded) and builds and saves only a missing one. Its steps
+  # match the `sanitize` (ASan) and `tsan` jobs' dependency steps: same tools, toolchain line,
+  # flags and recipes, so the keys are the ones those jobs look up. A change there must be
+  # made here too, or the tags miss again (and build, as before).
+  warm-sanitizer-deps:
+    name: warm sanitizer dependency caches (${{ matrix.name }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: asan
+            platform: linux-amd64
+            compiler: c++
+            packages: ninja-build libssl-dev flex bison
+            duckdb-build: server/scripts/build-deps.sh
+            duckdb-extra: ""
+          - name: tsan
+            platform: linux-amd64-tsan
+            compiler: clang
+            packages: clang ninja-build libssl-dev flex bison
+            duckdb-build: server/scripts/build-tsan-duckdb.sh
+            duckdb-extra: >-
+              server/scripts/build-tsan-duckdb.sh server/scripts/duckdb-extensions-tsan.cmake
+              server/scripts/duckdb-extensions-ios.cmake server/scripts/build-extension-deps.sh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      # The tsan job's compiler and flags (its job-level env); the ASan job sets none, and an
+      # empty CC is not the same as none, so only the tsan leg exports them.
+      - name: The ThreadSanitizer build environment
+        if: matrix.name == 'tsan'
+        run: |
+          {
+            echo "CC=clang"
+            echo "CXX=clang++"
+            echo "CFLAGS=-fsanitize=thread -gline-tables-only"
+            echo "CXXFLAGS=-fsanitize=thread -gline-tables-only"
+            echo "LDFLAGS=-fsanitize=thread"
+          } >> "$GITHUB_ENV"
+      - name: Fetch the chargewire submodule
+        run: git submodule update --init --depth 1
+      - name: Install build tools
+        env:
+          PACKAGES: ${{ matrix.packages }}
+        run: |
+          sudo apt-get update
+          read -r -a packages <<< "$PACKAGES"
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+      - name: Lower ASLR entropy for TSan
+        if: matrix.name == 'tsan'
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: Toolchain
+        id: toolchain
+        env:
+          COMPILER: ${{ matrix.compiler }}
+        run: echo "toolchain=$("$COMPILER" --version | head -1)" | tee -a "$GITHUB_OUTPUT"
+      - name: Arrow
+        uses: ./.github/actions/dep-cache
+        with:
+          dependency: arrow
+          platform: ${{ matrix.platform }}
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          build: server/scripts/build-deps.sh
+          lookup-only: "true"
+      - name: replxx
+        uses: ./.github/actions/dep-cache
+        with:
+          dependency: replxx
+          platform: ${{ matrix.platform }}
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          build: server/scripts/build-deps.sh
+          lookup-only: "true"
+      - name: DuckDB
+        uses: ./.github/actions/dep-cache
+        with:
+          dependency: duckdb
+          platform: ${{ matrix.platform }}
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          build: ${{ matrix.duckdb-build }}
+          extra-recipes: ${{ matrix.duckdb-extra }}
+          lookup-only: "true"
+
   # The Linux tarballs on the oldest glibc they claim (2.28): installed on Oracle Linux 8,
   # each starts, verifies TLS against the system's CA bundle and answers a query through
   # the health and Chargewire endpoints (server/scripts/smoke-tarball.sh).

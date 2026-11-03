@@ -19,6 +19,9 @@ inputs:
   build:
     description: the command that builds it (it gets the dependency's name as its last argument)
     required: true
+  lookup-only:
+    description: only check that the entry exists (download nothing); build and save it when it doesn't
+    default: "false"
 runs:
   using: composite
   steps:
@@ -42,6 +45,7 @@ runs:
       with:
         path: server/.deps/${{ inputs.dependency }}-install
         key: ${{ steps.key.outputs.key }}
+        lookup-only: ${{ inputs.lookup-only }}
     - name: Build ${{ inputs.dependency }}
       if: steps.restore.outputs.cache-hit != 'true'
       shell: bash
