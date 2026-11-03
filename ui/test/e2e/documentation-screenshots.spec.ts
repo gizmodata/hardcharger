@@ -55,3 +55,46 @@ test("documentation screenshots of SQL Monitor and Server Configuration", async 
     await server.stop();
   }
 });
+
+test("documentation screenshots of the results' Map view", async ({ page }, testInfo) => {
+  const server = await startOwnServer([]);
+  const connection = await connect({ url: `${server.url}/chargewire`, ...server.admin });
+  try {
+    await connection.execute(
+      `CREATE TABLE cities AS SELECT * FROM (VALUES
+        ('Charlotte', 'United States', 911311, 'POINT (-80.8431 35.2271)'),
+        ('New York', 'United States', 8258035, 'POINT (-74.006 40.7128)'),
+        ('Mexico City', 'Mexico', 9209944, 'POINT (-99.1332 19.4326)'),
+        ('São Paulo', 'Brazil', 11451999, 'POINT (-46.6333 -23.5505)'),
+        ('London', 'United Kingdom', 8866180, 'POINT (-0.1276 51.5072)'),
+        ('Paris', 'France', 2102650, 'POINT (2.3522 48.8566)'),
+        ('Lagos', 'Nigeria', 15388000, 'POINT (3.3792 6.5244)'),
+        ('Mumbai', 'India', 12442373, 'POINT (72.8777 19.076)'),
+        ('Tokyo', 'Japan', 14094034, 'POINT (139.6917 35.6895)'),
+        ('Sydney', 'Australia', 5450496, 'POINT (151.2093 -33.8688)')
+      ) t(name, country, population, wkt)`,
+    );
+    await signIn(page, server.admin, server.url);
+    await runDone(
+      page,
+      "SELECT name, country, population, wkt::GEOMETRY AS geom FROM cities\n" +
+        "UNION ALL SELECT 'Charlotte to London', 'route', NULL,\n" +
+        "  'LINESTRING (-80.8431 35.2271, -40 50, -0.1276 51.5072)'::GEOMETRY",
+    );
+    await page.getByRole("button", { name: "Hide the side panel", exact: true }).click();
+    await page.getByTestId("results-view-map").click();
+    const map = page.getByTestId("results-map");
+    await expect(map.getByTestId("map-legend")).toHaveText(
+      "11 geometries · No CRS on the column: drawn as longitude, latitude",
+    );
+    await expect(map.locator("path.map-land").first()).toBeAttached();
+    await page.screenshot({ path: testInfo.outputPath("web-ui-map-light.png") });
+    await page.getByRole("button", { name: "Dark theme" }).click();
+    await page.screenshot({ path: testInfo.outputPath("web-ui-map-dark.png") });
+    await page.getByRole("button", { name: "Light theme" }).click();
+  } finally {
+    await connection.close();
+    await page.goto("about:blank");
+    await server.stop();
+  }
+});
