@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-11-03
+
 ### Added
 
 - **Macros for users: the `CREATE MACRO` and `DROP MACRO` privileges.** Under access control,
