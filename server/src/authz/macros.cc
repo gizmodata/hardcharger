@@ -210,7 +210,12 @@ std::optional<std::string> SequenceNameRefusal(dd::ClientContext& context, const
     if (!HoldsDuckDbSql(catalog)) continue;
     const std::string catalog_name = compat::Str(database->GetName());
     try {
-      catalog.ScanSchemas(context, [&](dd::SchemaCatalogEntry& schema) {
+      // The schemas first, then each one's entries: scanning a schema inside ScanSchemas' callback
+      // starts its catalog transaction while the schema set's lock is held, the reverse of the
+      // order DuckDB takes those locks in elsewhere (ThreadSanitizer: lock-order inversion, a
+      // possible deadlock between two sessions; v2.5.0's gate).
+      for (auto& found : catalog.GetSchemas(context)) {
+        auto& schema = found.get();
         ReferenceCollector collector(catalog_name);
         schema.Scan(context, dd::CatalogType::TABLE_ENTRY, [&](dd::CatalogEntry& entry) {
           if (entry.type == dd::CatalogType::TABLE_ENTRY) {
@@ -237,7 +242,7 @@ std::optional<std::string> SequenceNameRefusal(dd::ClientContext& context, const
           });
         }
         named.insert(named.end(), collector.sequences.begin(), collector.sequences.end());
-      });
+      }
     } catch (...) {
       return "a sequence named " + QuoteIdentifierIfNeeded(path.object_name) +
              " could not be checked against the tables, views and macros of every catalog; ask an administrator";
@@ -292,7 +297,9 @@ std::optional<std::string> MacroNameRefusal(dd::ClientContext& context, const Sn
     if (!HoldsDuckDbSql(catalog)) continue;
     const std::string catalog_name = compat::Str(database->GetName());
     try {
-      catalog.ScanSchemas(context, [&](dd::SchemaCatalogEntry& schema) {
+      // The schemas first, then each one's entries (see SequenceNameRefusal).
+      for (auto& found : catalog.GetSchemas(context)) {
+        auto& schema = found.get();
         const std::string schema_name = compat::Str(schema.name);
         schema.Scan(context, dd::CatalogType::VIEW_ENTRY, [&](dd::CatalogEntry& entry) {
           if (entry.type != dd::CatalogType::VIEW_ENTRY) return;
@@ -321,7 +328,7 @@ std::optional<std::string> MacroNameRefusal(dd::ClientContext& context, const Sn
             macros.push_back(std::move(macro));
           });
         }
-      });
+      }
     } catch (...) {
       return what + " could not be checked against the views and macros of every catalog; ask an administrator";
     }
