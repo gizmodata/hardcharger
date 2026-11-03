@@ -8,6 +8,10 @@ import XCTest
 final class HardchargerUITests: XCTestCase {
     private var app: XCUIApplication!
 
+    /// How long the web UI may take to open signed in. On CI's simulator it takes ~25 s (a
+    /// passing 2.5.0 gate), too close to a 30 s wait: two release gates failed on it.
+    private let webUILoads: TimeInterval = 90
+
     override func setUp() async throws {
         continueAfterFailure = false
         app = XCUIApplication()
@@ -33,18 +37,21 @@ final class HardchargerUITests: XCTestCase {
     }
 
     func testSplashThenWebUIRunsSelect42() throws {
-        app.launchArguments = ["-HCResetState", "YES", "-HCPort", "0", "-HCSplashMinimum", "4", "-HCInitialTab", "web"]
+        app.launchArguments = ["-HCResetState", "YES", "-HCPort", "0", "-HCSplashMinimum", "10", "-HCInitialTab", "web"]
         app.launch()
         XCTAssertTrue(app.descendants(matching: .any)["splash"].firstMatch.waitForExistence(timeout: 5),
                       "the splash shows first")
-        XCTAssertTrue(app.images["Hardcharger™"].firstMatch.exists, "with the bull and the lettering")
-        XCTAssertTrue(app.descendants(matching: .any)["by GizmoData™"].firstMatch.exists, "and the GizmoData mark")
+        // (A slow simulator can take seconds per query, so the splash stays up 10 s and each
+        // part is waited for: a plain `exists` once found the splash already gone.)
+        XCTAssertTrue(app.images["Hardcharger™"].firstMatch.waitForExistence(timeout: 5), "with the bull and the lettering")
+        XCTAssertTrue(app.descendants(matching: .any)["by GizmoData™"].firstMatch.waitForExistence(timeout: 5),
+                      "and the GizmoData mark")
 
         let web = app.webViews.firstMatch
         XCTAssertTrue(web.waitForExistence(timeout: 30), "the web UI loads")
         // Signed in by the app: the editor's Run button, not the sign-in form.
         let run = web.buttons["Run"]
-        XCTAssertTrue(run.waitForExistence(timeout: 30), "the web UI opens signed in")
+        XCTAssertTrue(run.waitForExistence(timeout: webUILoads), "the web UI opens signed in")
         XCTAssertFalse(web.secureTextFields.firstMatch.exists, "no password form")
 
         // Replace the editor's text with SELECT 42 and run it. (Monaco's own input is a
@@ -81,12 +88,27 @@ final class HardchargerUITests: XCTestCase {
             // (Dynamic Type: every font is a text style; the audit's own check flags List rows
             // with long monospaced values alternately, so it is checked by eye at the largest
             // accessibility size instead, ios/README.md.)
-            try app.performAccessibilityAudit(for: [.sufficientElementDescription, .trait, .textClipped]) { issue in
-                // System controls the app doesn't draw (the tab bar's own items, keyboard).
-                let element = issue.element
-                print("AUDIT>>> \(tab): \(issue.auditType) \(issue.compactDescription) " +
-                      "[\(element?.elementType.rawValue ?? 0) \(element?.identifier ?? "") \(element?.label ?? "")]")
-                return false
+            try auditScreen(tab)
+        }
+    }
+
+    /// One accessibility audit of the screen shown. An audit that couldn't finish in time
+    /// (a slow simulator: Code=-56) runs again, twice at most; any issue it finds fails the test.
+    private func auditScreen(_ tab: String) throws {
+        for attempt in 1...3 {
+            do {
+                try app.performAccessibilityAudit(for: [.sufficientElementDescription, .trait, .textClipped]) { issue in
+                    // System controls the app doesn't draw (the tab bar's own items, keyboard).
+                    let element = issue.element
+                    print("AUDIT>>> \(tab): \(issue.auditType) \(issue.compactDescription) " +
+                          "[\(element?.elementType.rawValue ?? 0) \(element?.identifier ?? "") \(element?.label ?? "")]")
+                    return false
+                }
+                return
+            } catch let error as NSError
+                where error.domain == "com.apple.xcode.xctest.accessibilityAudit" && error.code == -56 && attempt < 3
+            {
+                print("AUDIT>>> \(tab): the audit didn't finish in time (attempt \(attempt)); again")
             }
         }
     }
@@ -97,7 +119,7 @@ final class HardchargerUITests: XCTestCase {
         waitForApp()
         let web = app.webViews.firstMatch
         let editor = web.textViews["SQL editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 30))
+        XCTAssertTrue(editor.waitForExistence(timeout: webUILoads))
         // After Run, WebKit brings the keyboard up for the page's editor.
         web.buttons["Run"].firstMatch.tap()
         XCTAssertTrue(web.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'version'")).firstMatch
@@ -202,7 +224,7 @@ final class HardchargerUITests: XCTestCase {
         // This device's own web UI and console, now over TLS with the same certificate.
         app.buttons["Done"].firstMatch.tap()
         open("Web UI")
-        XCTAssertTrue(app.webViews.firstMatch.buttons["Run"].waitForExistence(timeout: 30), "the web UI over TLS")
+        XCTAssertTrue(app.webViews.firstMatch.buttons["Run"].waitForExistence(timeout: webUILoads), "the web UI over TLS")
         open("Console")
         let input = app.textViews["sqlconsole.input"]
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Statements end with'"))

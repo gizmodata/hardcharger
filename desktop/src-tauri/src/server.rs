@@ -956,6 +956,22 @@ fn tail(path: &Path, maximum: u64) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// Starts `server` on a free port of `bind`. A port the test reserves and releases can be
+    /// taken by the tests running alongside (a client's own ephemeral port) before the server
+    /// binds it, so on that refusal pick another port.
+    fn start_on_a_free_port(server: &mut Server, bind: &str) -> Status {
+        for _ in 0..5 {
+            let reservation = TcpListener::bind((bind, 0)).unwrap();
+            server.settings.port = reservation.local_addr().unwrap().port();
+            drop(reservation);
+            match server.start() {
+                Err(error) if error.contains("is already in use") => continue,
+                result => return result.unwrap(),
+            }
+        }
+        panic!("no free port on {bind} after 5 tries");
+    }
+
     #[test]
     fn unsaved_setup_blocks_start_across_relaunch_until_save_or_explicit_discard() {
         let Some(binary) = std::env::var_os("HARDCHARGER_DESKTOP_TEST_SERVER") else {
@@ -1069,9 +1085,6 @@ mod tests {
                 0o600
             );
         }
-        let reservation = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        server.settings.port = reservation.local_addr().unwrap().port();
-        drop(reservation);
         server.settings.network = NetworkSettings {
             enabled: true,
             listen_address: "127.0.0.1".into(),
@@ -1082,7 +1095,7 @@ mod tests {
             username: "certificate-test-admin".into(),
             password: "synthetic-certificate-test-password".into(),
         };
-        assert!(server.start().unwrap().running);
+        assert!(start_on_a_free_port(&mut server, "127.0.0.1").running);
         assert!(server.sign_in().is_ok()); // trusts this CA, verifies hostname and expiry
         assert!(server
             .check_workspace_trust()
@@ -1190,9 +1203,6 @@ mod tests {
                 private_write(&directory.join("test.key"), key.serialize_pem().as_bytes()).unwrap();
             }
             let bind = if tls { "127.0.0.1" } else { "::1" };
-            let reservation = TcpListener::bind((bind, 0)).unwrap();
-            server.settings.port = reservation.local_addr().unwrap().port();
-            drop(reservation);
             server.settings.network = NetworkSettings {
                 enabled: true,
                 listen_address: bind.into(),
@@ -1203,7 +1213,7 @@ mod tests {
                 tls_cert: directory.join("test.pem").display().to_string(),
                 tls_key: directory.join("test.key").display().to_string(),
             };
-            assert!(server.start().unwrap().running);
+            assert!(start_on_a_free_port(&mut server, bind).running);
             let token = server.sign_in().unwrap();
             assert_eq!(token["username"], "desktop-network-admin");
             assert!(token["token"].as_str().unwrap().len() > 20);

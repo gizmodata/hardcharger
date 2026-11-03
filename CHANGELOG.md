@@ -7,6 +7,21 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Flaky tests from the 2.5.0 release gate, each fixed rather than re-run:
+  - The desktop test `network_listener_credentials_and_tls_with_real_server` (macOS arm64)
+    reserved a free port and released it, and a test running alongside took the port before
+    the server bound it ("Port 49228 is already in use"). The real-server tests now pick
+    another port when that happens.
+  - Three iOS UI tests ran into a slow CI simulator:
+    - `testShareOnLocalNetworkServesTLSOnTheLAN` gave the web UI 30 s to open, and a passing
+      gate measured it at about 25 s; the web UI now gets 90 s.
+    - `testSplashThenWebUIRunsSelect42` checked the splash's bull without waiting and found
+      the splash already gone; it now waits, and the splash stays up 10 s.
+    - `testAccessibilityAudit` fails on any issue the audit finds, but an audit that can't
+      finish in time (`Code=-56`) now runs again, twice at most.
+
 ## [2.5.0] - 2026-11-03
 
 ### Added
