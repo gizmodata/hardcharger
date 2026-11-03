@@ -182,6 +182,7 @@ add_library(hardcharger_authz OBJECT
   src/authz/model.cc
   src/authz/opa.cc
   src/authz/password.cc
+  src/authz/macros.cc
   src/authz/policies.cc
   src/authz/read_only.cc
   src/authz/resolver.cc

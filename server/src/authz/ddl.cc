@@ -711,6 +711,7 @@ class Parser {
         {"CREATE", "SCHEMA", Privilege::kCreateSchema}, {"DROP", "TABLE", Privilege::kDropTable},
         {"DROP", "VIEW", Privilege::kDropView},         {"DROP", "SCHEMA", Privilege::kDropSchema},
         {"ALTER", "TABLE", Privilege::kAlterTable},     {"ALTER", "VIEW", Privilege::kAlterView},
+        {"CREATE", "MACRO", Privilege::kCreateMacro},   {"DROP", "MACRO", Privilege::kDropMacro},
     };
     for (const auto& phrase : kPhrases) {
       if (PeekKeyword(phrase.verb) && PeekKeyword(phrase.object, 1)) {
@@ -922,6 +923,8 @@ class Parser {
         case Privilege::kDropView:
         case Privilege::kAlterTable:
         case Privilege::kAlterView:
+        case Privilege::kCreateMacro:
+        case Privilege::kDropMacro:
           if (cmd.scope == GrantScope::kObject) {
             return SyntaxError(PrivilegeName(item.privilege) +
                                " is granted ON SCHEMA or ON CATALOG, not on a single object");

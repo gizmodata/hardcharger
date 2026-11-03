@@ -24,6 +24,8 @@ enum class Privilege {
   kDropSchema,
   kAlterTable,
   kAlterView,
+  kCreateMacro,  // scalar and table macros, ON SCHEMA or ON CATALOG
+  kDropMacro,    // dropping or replacing one, ON SCHEMA or ON CATALOG
   kAll,  // every object privilege that applies to the target
 };
 

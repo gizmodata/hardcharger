@@ -30,6 +30,10 @@ std::string PrivilegeName(Privilege privilege) {
       return "ALTER TABLE";
     case Privilege::kAlterView:
       return "ALTER VIEW";
+    case Privilege::kCreateMacro:
+      return "CREATE MACRO";
+    case Privilege::kDropMacro:
+      return "DROP MACRO";
     case Privilege::kAll:
       return "ALL";
   }
@@ -46,7 +50,7 @@ const std::vector<Privilege>& PrivilegesOfAll(GrantScope scope) {
   static const std::vector<Privilege> kSchema = {
       Privilege::kSelect,      Privilege::kInsert,     Privilege::kUpdate,    Privilege::kDelete,
       Privilege::kCreateTable, Privilege::kCreateView, Privilege::kDropTable, Privilege::kDropView,
-      Privilege::kAlterTable,  Privilege::kAlterView};
+      Privilege::kAlterTable,  Privilege::kAlterView,  Privilege::kCreateMacro, Privilege::kDropMacro};
   static const std::vector<Privilege> kCatalog = [] {
     auto all = kSchema;
     all.push_back(Privilege::kCreateSchema);

@@ -1034,6 +1034,14 @@ Each statement is checked inside DuckDB against its own plan, after binding and 
 before optimizing, so nested SQL, views and macros can't route around a grant. Anything the
 check can't classify is refused. Changes reach every replica within about a second.
 
+Users can share macros: `GRANT CREATE MACRO, DROP MACRO ON SCHEMA tools TO analyst` lets a role
+create and drop scalar and table macros in `tools` (replacing one needs both). A macro is expanded
+into the statement that calls it, so its body reads with the caller's rights. So that a user's
+macro can't change what anyone else's SQL computes, Hardcharger refuses temporary macros, the name
+of a built-in function or of one an extension autoloads, replacing or standing in for a function
+that a view, a row or masking policy (or a macro one of them uses) calls, and a body that calls
+what its creator may not (`query()`, files beyond their system privileges).
+
 The init SQL (`init_sql_commands`, `init_sql_commands_file`) can hold these statements too.
 They run as the administrator, in order with the DuckDB statements around them, so a grant
 can name a table the init SQL has just created:

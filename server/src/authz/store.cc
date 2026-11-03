@@ -339,7 +339,8 @@ std::optional<Privilege> PrivilegeFrom(const std::string& name) {
   for (auto p : {Privilege::kSelect, Privilege::kInsert, Privilege::kUpdate, Privilege::kDelete,
                  Privilege::kCreateTable, Privilege::kCreateView, Privilege::kCreateSchema,
                  Privilege::kDropTable, Privilege::kDropView, Privilege::kDropSchema,
-                 Privilege::kAlterTable, Privilege::kAlterView, Privilege::kAll}) {
+                 Privilege::kAlterTable, Privilege::kAlterView, Privilege::kCreateMacro,
+                 Privilege::kDropMacro, Privilege::kAll}) {
     if (PrivilegeName(p) == name) return p;
   }
   return std::nullopt;

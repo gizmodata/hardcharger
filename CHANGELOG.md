@@ -9,6 +9,23 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- **Macros for users: the `CREATE MACRO` and `DROP MACRO` privileges.** Under access control,
+  `GRANT CREATE MACRO, DROP MACRO ON SCHEMA tools TO analyst` (or `ON CATALOG`) lets a role create
+  and drop scalar and table macros there; replacing one needs both, and a schema's owner holds
+  them. Until now only the administrator could create a macro. Anyone may call one: DuckDB expands
+  a macro into the statement that calls it, so its body is checked as part of that statement,
+  with the caller's rights. So that a user's macro can't change what anyone else's SQL computes,
+  Hardcharger refuses, to everyone but the administrator: temporary macros (a session's macro is
+  found first, also inside views that read with their owners' rights); the name of a built-in
+  function or of one an extension autoloads (`lower`, `read_csv`, `st_area`); replacing, or
+  standing in for, a function that a view, a row or masking policy, or a macro one of them uses
+  calls; and a body that calls what its creator may not (`query()`, `query_table()`, files, URLs
+  or object storage beyond their system privileges). `GRANT ALL ON SCHEMA` and `ON CATALOG` now
+  include both (grants made before keep what they were), and so do a tenant's `tenant_admin`
+  grants. Tokens with `catalog_access` rules still create no macros.
+- `UPDATE EXTENSIONS` runs for a user with the `MANAGE EXTENSIONS` system privilege; it was
+  refused to everyone but the administrator.
+
 - **Web UI: a link can start the browser sign-in (`/ui/?sign_in=browser`).** The sign-in page
   then goes straight to the identity provider, as if **Sign in with <provider>** had been
   clicked, so someone arriving from GizmoData Cloud's **Connect** no longer clicks it first
@@ -26,6 +43,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Under access control, a table macro called with its schema (`FROM tools.first_rows(3)`) was
+  refused to every user as an unknown table function: the check looked the macro up by its
+  name alone.
 - Desktop: the **DESKTOP** caption in the sidebar is centered under the Hardcharger logo; it sat
   at a fixed offset to the left of the logo's center.
 

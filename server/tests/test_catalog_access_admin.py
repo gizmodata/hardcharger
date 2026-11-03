@@ -309,8 +309,11 @@ def test_a_restricted_admin_cannot_reattach_a_denied_file_under_an_allowed_name(
 
 def test_deliberate_deviations_from_one_x(server):
     session = admin_token(server=server, name="admin_deviations", rules=x_read_rest_none())
-    # A macro's body runs unchecked where it is used: no macros or types.
-    denied(session=session, sql="CREATE TEMP MACRO m(a) AS a + 1", why="creating macros needs an administrator")
+    # A session's macro is found before every other function, inside views too: no temporary macros.
+    denied(session=session, sql="CREATE TEMP MACRO m(a) AS a + 1", why="creating temporary macros needs an administrator")
+    # It holds no grants, so no CREATE MACRO either.
+    denied(session=session, sql=f"CREATE MACRO {X}.main.m(a) AS a + 1",
+           why="creating macros needs an administrator without catalog_access rules")
     # Table functions that read catalogs around the plan check stay out of reach.
     denied(session=session, sql=f"SELECT * FROM pragma_storage_info('{Y}.main.t')", why="pragma_storage_info")
     # A sequence in a catalog the rules deny.

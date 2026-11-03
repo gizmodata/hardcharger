@@ -217,7 +217,7 @@ def test_session_macros_and_variables_are_refused(ann):
     # A session's macro is found before the catalog's functions, also inside a view: it
     # could make an administrator's view compute something else.
     expect_blocked(client=ann, sql="CREATE TEMP MACRO lower(x) AS (SELECT max(value) FROM secrets)",
-                   why="creating macros needs an administrator")
+                   why="creating temporary macros needs an administrator")
     expect_blocked(client=ann, sql="CREATE TEMP TYPE mood AS ENUM ('a', 'b')",
                    why="creating types needs an administrator")
     # SET VARIABLE runs a query of its own, and getvariable() hands the value to any view.

@@ -1,6 +1,6 @@
 """GRANT ALL means every privilege that applies where it is granted: on a table its
-SELECT, INSERT, UPDATE and DELETE; on a schema those and CREATE / DROP / ALTER TABLE and
-VIEW; on a catalog all of those and CREATE / DROP SCHEMA. REVOKE ALL takes back the same."""
+SELECT, INSERT, UPDATE and DELETE; on a schema those, CREATE / DROP / ALTER TABLE and
+VIEW, and CREATE / DROP MACRO; on a catalog all of those and CREATE / DROP SCHEMA. REVOKE ALL takes back the same."""
 
 import pytest
 
@@ -21,7 +21,8 @@ def kinds(admin, role: str) -> set[tuple[str, str]]:
     return {(row["privilege"], row["object_type"]) for row in admin.run(sql=f"SHOW GRANTS FOR {role}").to_pylist()}
 
 
-SCHEMA_DDL = ["CREATE TABLE", "CREATE VIEW", "DROP TABLE", "DROP VIEW", "ALTER TABLE", "ALTER VIEW"]
+SCHEMA_DDL = ["CREATE TABLE", "CREATE VIEW", "DROP TABLE", "DROP VIEW", "ALTER TABLE", "ALTER VIEW", "CREATE MACRO",
+              "DROP MACRO"]
 DML = ["SELECT", "INSERT", "UPDATE", "DELETE"]
 
 

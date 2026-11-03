@@ -1356,7 +1356,8 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       for (Privilege p : {Privilege::kSelect, Privilege::kInsert, Privilege::kUpdate,
                           Privilege::kDelete, Privilege::kCreateTable, Privilege::kCreateView,
                           Privilege::kCreateSchema, Privilege::kDropTable, Privilege::kDropView,
-                          Privilege::kDropSchema, Privilege::kAlterTable, Privilege::kAlterView}) {
+                          Privilege::kDropSchema, Privilege::kAlterTable, Privilege::kAlterView,
+                          Privilege::kCreateMacro, Privilege::kDropMacro}) {
         bool have = false;
         for (const auto& g : snap.grants()) {
           have = have ||
