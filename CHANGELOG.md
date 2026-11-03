@@ -17,6 +17,13 @@ own changelog in `python/CHANGELOG.md`.
   address bar before the flow starts, so a reload, Back or a failed sign-in can't loop back to
   the provider, and a failure shows the sign-in page with the reason, as a failed click does.
 
+### Changed
+
+- Arrow C++ 26.0.1 (Chargewire 2.0.2), Arrow's patch release of 2026-11-03, instead of 26.0.0.
+  Among its fixes, reading an invalid map array from an Arrow IPC stream no longer crashes
+  (apache/arrow GH-54936): the server reads clients' uploads as IPC streams. Arrow's bundled zstd,
+  LZ4, uriparser and xsimd are unchanged.
+
 ### Fixed
 
 - Desktop: the **DESKTOP** caption in the sidebar is centered under the Hardcharger logo; it sat
