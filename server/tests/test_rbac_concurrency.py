@@ -25,6 +25,7 @@ CLIENTS = 10
 # Passes over the 22 queries per client (long enough runs for stable ratios).
 ROUNDS = int(os.environ.get("HARDCHARGER_TEST_CONCURRENCY_ROUNDS", "10"))
 TRIALS = 3  # medians over this many measurements per mode
+MEASUREMENTS = 3  # a failed measurement is taken again, this many in all (noise, not a lock)
 SCALE_FACTOR = os.environ.get("HARDCHARGER_TEST_CONCURRENCY_SF", "0.1")
 
 
@@ -169,37 +170,53 @@ def test_access_control_does_not_cost_concurrency(launcher, store):
     run(base_url=baseline.base_url, rbac=False, clients=1, queries=queries, expected=expected)
     run(base_url=governed.base_url, rbac=True, clients=1, queries=queries, expected=expected)
 
-    # Alternate the servers so drift on the machine hits both alike.
-    timings = {"base_single": [], "rbac_single": [], "base_multi": [], "rbac_multi": []}
-    for _ in range(TRIALS):
-        timings["base_single"].append(run(base_url=baseline.base_url, rbac=False, clients=1, queries=queries,
-                                          expected=expected))
-        timings["rbac_single"].append(run(base_url=governed.base_url, rbac=True, clients=1, queries=queries,
-                                          expected=expected))
-        timings["base_multi"].append(run(base_url=baseline.base_url, rbac=False, clients=CLIENTS, queries=queries,
-                                         expected=expected))
-        timings["rbac_multi"].append(run(base_url=governed.base_url, rbac=True, clients=CLIENTS, queries=queries,
-                                         expected=expected))
-    median = {name: statistics.median(values) for name, values in timings.items()}
-
     def scaling(single: float, multi: float) -> float:
         per_client = 22.0 * ROUNDS
         return (per_client * CLIENTS / multi) / (per_client / single)
 
-    base_scaling = scaling(single=median["base_single"], multi=median["base_multi"])
-    rbac_scaling = scaling(single=median["rbac_single"], multi=median["rbac_multi"])
-    print(f"\n=== Concurrency, TPC-H SF {SCALE_FACTOR}, {CLIENTS} clients x {ROUNDS} passes, median of {TRIALS} ===\n"
-          f"               1 client (s)   {CLIENTS} clients (s)   scaling (x)\n"
-          f"baseline       {median['base_single']:10.2f}{median['base_multi']:16.2f}{base_scaling:14.2f}\n"
-          f"access control {median['rbac_single']:10.2f}{median['rbac_multi']:16.2f}{rbac_scaling:14.2f}\n"
-          f"overhead       {(median['rbac_single'] / median['base_single'] - 1) * 100:9.1f}%"
-          f"{(median['rbac_multi'] / median['base_multi'] - 1) * 100:15.1f}%")
-    # A shared lock or anything else that serializes sessions shows up as the concurrent
-    # run slowing down far more than the single-client one, and as worse scaling. Allow
-    # for timing noise on a busy machine. Serialized sessions (--max-concurrent-statements 1
-    # and an unbounded queue on the governed server) scaled 1.37x against the baseline's
-    # 5.26x, a ratio of 0.26, and failed both checks; shared macOS runners measured 0.78 and
-    # 0.79 with no lock at all (2026-10-27), so the bar sits between the two at 0.6.
-    numbers = f"scaling {rbac_scaling:.2f}x vs baseline {base_scaling:.2f}x; medians {median}"
-    assert median["rbac_multi"] <= median["base_multi"] * 1.25 + 0.2, f"access control slowed down concurrent clients: {numbers}"
-    assert rbac_scaling >= base_scaling * 0.6, f"access control scales worse with concurrent clients than the baseline: {numbers}"
+    def measure() -> list[str]:
+        """One measurement (medians of TRIALS alternating runs): what it got wrong, if anything."""
+        # Alternate the servers so drift on the machine hits both alike.
+        timings = {"base_single": [], "rbac_single": [], "base_multi": [], "rbac_multi": []}
+        for _ in range(TRIALS):
+            timings["base_single"].append(run(base_url=baseline.base_url, rbac=False, clients=1, queries=queries,
+                                              expected=expected))
+            timings["rbac_single"].append(run(base_url=governed.base_url, rbac=True, clients=1, queries=queries,
+                                              expected=expected))
+            timings["base_multi"].append(run(base_url=baseline.base_url, rbac=False, clients=CLIENTS,
+                                             queries=queries, expected=expected))
+            timings["rbac_multi"].append(run(base_url=governed.base_url, rbac=True, clients=CLIENTS,
+                                             queries=queries, expected=expected))
+        median = {name: statistics.median(values) for name, values in timings.items()}
+        base_scaling = scaling(single=median["base_single"], multi=median["base_multi"])
+        rbac_scaling = scaling(single=median["rbac_single"], multi=median["rbac_multi"])
+        print(f"\n=== Concurrency, TPC-H SF {SCALE_FACTOR}, {CLIENTS} clients x {ROUNDS} passes, median of {TRIALS} ===\n"
+              f"               1 client (s)   {CLIENTS} clients (s)   scaling (x)\n"
+              f"baseline       {median['base_single']:10.2f}{median['base_multi']:16.2f}{base_scaling:14.2f}\n"
+              f"access control {median['rbac_single']:10.2f}{median['rbac_multi']:16.2f}{rbac_scaling:14.2f}\n"
+              f"overhead       {(median['rbac_single'] / median['base_single'] - 1) * 100:9.1f}%"
+              f"{(median['rbac_multi'] / median['base_multi'] - 1) * 100:15.1f}%")
+        # A shared lock or anything else that serializes sessions shows up as the concurrent
+        # run slowing down far more than the single-client one, and as worse scaling. Allow
+        # for timing noise on a busy machine. Serialized sessions (--max-concurrent-statements 1
+        # and an unbounded queue on the governed server) scaled 1.37x against the baseline's
+        # 5.26x, a ratio of 0.26, and failed both checks; shared macOS runners measured 0.78 and
+        # 0.79 with no lock at all (2026-10-27), so the bar sits between the two at 0.6.
+        numbers = f"scaling {rbac_scaling:.2f}x vs baseline {base_scaling:.2f}x; medians {median}"
+        wrong = []
+        if median["rbac_multi"] > median["base_multi"] * 1.25 + 0.2:
+            wrong.append(f"access control slowed down concurrent clients: {numbers}")
+        if rbac_scaling < base_scaling * 0.6:
+            wrong.append(f"access control scales worse with concurrent clients than the baseline: {numbers}")
+        return wrong
+
+    # A shared runner's noise can sink one measurement (once each on two runs, 2026-10-27);
+    # a lock that serializes sessions sinks every one. So a failed measurement is taken again,
+    # up to MEASUREMENTS times, and the test fails only when every one of them fails.
+    failures = []
+    for _ in range(MEASUREMENTS):
+        wrong = measure()
+        if not wrong:
+            return
+        failures.append(wrong)
+    pytest.fail("every measurement failed:\n" + "\n".join(" / ".join(w) for w in failures))
