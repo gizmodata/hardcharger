@@ -1,8 +1,11 @@
+import type { Field } from "apache-arrow";
 import { Check, Copy, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { copyText } from "../lib/clipboard";
+import { type Geometry, geometryCrs, parseWkb, toGeoJson } from "../lib/geometry";
 import { looksLikeJson, prettyJson } from "../lib/prettyJson";
+import { GeometryPreview } from "./MapLoader";
 
 export interface InspectedCell {
   column: string;
@@ -14,6 +17,8 @@ export interface InspectedCell {
   /** A nested value (list, struct, map) as exact JSON. */
   json?: string | undefined;
   raw?: string | undefined;
+  /** A GEOMETRY value (WKB) and its column: shown on a map, and offered as GeoJSON. */
+  geometry?: { bytes: Uint8Array; field: Field } | undefined;
 }
 
 /**
@@ -32,6 +37,17 @@ export function CellInspector({ cell, onClose }: { cell: InspectedCell; onClose:
     if (cell.json !== undefined) return { text: prettyJson(cell.json), json: true };
     if (looksLikeJson(cell.text)) return { text: prettyJson(cell.text), json: true };
     return { text: cell.text, json: false };
+  }, [cell]);
+  const geometry = useMemo(() => {
+    if (!cell.geometry) return undefined;
+    let g: Geometry;
+    try {
+      g = parseWkb(cell.geometry.bytes);
+    } catch {
+      return undefined; // not WKB: the text is the bytes, as for any BLOB
+    }
+    const json = toGeoJson(g);
+    return { geometry: g, crs: geometryCrs(cell.geometry.field), geoJson: json && JSON.stringify(json, null, 2) };
   }, [cell]);
   return (
     <dialog
@@ -54,9 +70,16 @@ export function CellInspector({ cell, onClose }: { cell: InspectedCell; onClose:
         {cell.text === null ? "NULL" : `${cell.text.length.toLocaleString()} characters`}
         {json ? " · JSON" : ""}
       </p>
+      {geometry?.geoJson && <GeometryPreview geometry={geometry.geometry} crs={geometry.crs} />}
       <pre className={`value-text${cell.text === null ? " grid-null" : ""}`} data-testid="inspector-value">
         {text}
       </pre>
+      {geometry?.geoJson && (
+        <details data-testid="inspector-geojson">
+          <summary>GeoJSON</summary>
+          <pre className="value-text">{geometry.geoJson}</pre>
+        </details>
+      )}
       {cell.raw !== undefined && (
         <details>
           <summary>Raw Arrow storage</summary>

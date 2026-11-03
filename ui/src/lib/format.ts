@@ -23,6 +23,7 @@ import {
   Type,
 } from "apache-arrow";
 
+import { geometryCrs, isGeometry, parseWkb, toWkt } from "./geometry";
 import { isVariant, variantValue } from "./variant";
 
 export type Format = (value: unknown) => string;
@@ -234,9 +235,20 @@ function text(v: unknown): string {
   }
 }
 
+/** A geometry (WKB) as DuckDB's ST_AsText writes it; bytes that aren't WKB, as a BLOB. */
+export function geometryText(bytes: Uint8Array): string {
+  try {
+    return toWkt(parseWkb(bytes));
+  } catch {
+    return formatBinary(bytes);
+  }
+}
+
 /** How a value of `type` reads as text: NULL is `null` (the caller decides how to show it). */
 export function textFor(source: DataType | Field): (value: unknown) => string | null {
   if (!(source instanceof DataType) && isVariant(source)) return (v) => (isNull(v) ? null : variantValue(v).text);
+  if (!(source instanceof DataType) && isGeometry(source))
+    return (v) => (isNull(v) ? null : v instanceof Uint8Array ? geometryText(v) : text(v));
   const type = source instanceof DataType ? source : typeOf(source);
   switch (type.typeId) {
     case Type.Null:
@@ -330,6 +342,13 @@ function jsonSafe(_key: string, value: unknown): unknown {
  * grid's text for dates, times, intervals and binary. */
 export function jsonFor(source: DataType | Field): (value: unknown) => string {
   if (!(source instanceof DataType) && isVariant(source)) return (v) => (isNull(v) ? "null" : variantValue(v).json);
+  if (!(source instanceof DataType) && isGeometry(source)) {
+    const wkt = textFor(source);
+    return (v) => {
+      const t = wkt(v);
+      return t === null ? "null" : JSON.stringify(t);
+    };
+  }
   const type = source instanceof DataType ? source : typeOf(source);
   switch (type.typeId) {
     case Type.Dictionary:
@@ -388,6 +407,12 @@ export function jsonFor(source: DataType | Field): (value: unknown) => string {
 /** The SQL type name to show in a column header: the server's, when its metadata says. */
 export function typeLabel(field: Field): string {
   if (isVariant(field)) return "VARIANT";
+  if (isGeometry(field)) {
+    // As DuckDB's typeof names it (GEOMETRY, GEOMETRY('EPSG:4326')); a CRS given as PROJJSON
+    // with an id is named by that id rather than the whole definition.
+    const crs = geometryCrs(field).label;
+    return crs && /^[A-Za-z]+:[\w.-]+$/.test(crs) ? `GEOMETRY('${crs}')` : "GEOMETRY";
+  }
   const named = field.metadata.get("ARROW:FLIGHT:SQL:TYPE_NAME");
   if (named) return named;
   return arrowTypeLabel(typeOf(field));

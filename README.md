@@ -132,6 +132,9 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
   Large CSV, JSON-lines, Parquet and Arrow files upload at any size.
 - 💾 **Downloads** of the rows as shown (CSV, TSV, JSON, Excel) or the whole typed result
   (Parquet, Arrow IPC), made in the browser.
+- 🗺️ **GEOMETRY** values as WKT (as DuckDB's `ST_AsText` writes them), and a **Map** view of the
+  rows shown on a built-in world basemap (nothing loaded from other sites), with a map of a
+  single value in the cell inspector.
 - 📁 **Saved queries** in folders, kept in the browser, with export and import as a file;
   **Run as** one of your roles under access control.
 - 📐 A resizable editor and side panel (drag, keyboard, double-click to reset; kept in the

@@ -1,12 +1,14 @@
 import type { Table } from "apache-arrow";
-import { Copy, Download, Maximize2, Minimize2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Copy, Download, Map as MapIcon, Maximize2, Minimize2, Table2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { copyText } from "../lib/clipboard";
 import { exportName, saveFile } from "../lib/download";
 import { type ExportFormat, exportFormats, exportTable, toDelimited } from "../lib/export";
+import { isGeometry } from "../lib/geometry";
 import { errorMessage } from "../session";
 import { FloatingMenu } from "./FloatingMenu";
+import { ResultsMap } from "./MapLoader";
 import { ResultsGrid } from "./ResultsGrid";
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
@@ -25,6 +27,12 @@ export function ResultView({ table, truncatedAt, expanded = false, onExpand }: P
   const [notice, setNotice] = useState<string | undefined>();
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number; shown: readonly number[] } | undefined>();
   const [exporting, setExporting] = useState(false);
+  // GEOMETRY columns: with any, the results can be shown on a map (one column at a time).
+  const geometryColumns = useMemo(() => table.schema.fields.flatMap((f, i) => (isGeometry(f) ? [i] : [])), [table]);
+  const [view, setView] = useState<"grid" | "map">("grid");
+  const [mapColumn, setMapColumn] = useState(0);
+  const mapping = view === "map" && geometryColumns.length > 0;
+  const drawn = geometryColumns[Math.min(mapColumn, geometryColumns.length - 1)]!;
 
   useEffect(() => {
     if (!notice) return;
@@ -58,8 +66,47 @@ export function ResultView({ table, truncatedAt, expanded = false, onExpand }: P
       <ResultsGrid
         table={table}
         onNotice={setNotice}
+        alternate={mapping ? (shown) => <ResultsMap table={table} shown={shown} column={drawn} /> : undefined}
         toolbar={(shown) => (
           <>
+            {geometryColumns.length > 0 && (
+              <div className="view-switch" role="group" aria-label="Show the results as">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  aria-pressed={view === "grid"}
+                  onClick={() => setView("grid")}
+                  data-testid="results-view-grid"
+                >
+                  <Table2 size={14} /> Grid
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  aria-pressed={view === "map"}
+                  onClick={() => setView("map")}
+                  title="Draw the rows shown (filtered and sorted) on a map"
+                  data-testid="results-view-map"
+                >
+                  <MapIcon size={14} /> Map
+                </button>
+              </div>
+            )}
+            {mapping && geometryColumns.length > 1 && (
+              <select
+                className="map-column-select"
+                aria-label="Geometry column to draw"
+                value={mapColumn}
+                onChange={(e) => setMapColumn(Number(e.target.value))}
+                data-testid="map-column"
+              >
+                {geometryColumns.map((c, i) => (
+                  <option key={c} value={i}>
+                    {table.schema.fields[c]!.name}
+                  </option>
+                ))}
+              </select>
+            )}
             {truncatedAt !== undefined && (
               <span className="badge" data-testid="truncated">
                 truncated at {truncatedAt.toLocaleString()} rows

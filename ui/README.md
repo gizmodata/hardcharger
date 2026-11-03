@@ -68,6 +68,18 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
     JSON text are pretty-printed (every digit of a big number kept). **Copy value** copies it;
     Esc closes, and the selection is still there.
   - **Expand** fills the tab with the results; **Restore** brings the editor back.
+  - **GEOMETRY** columns (Arrow `geoarrow.wkb`) show as WKT, exactly as DuckDB's `ST_AsText`
+    writes it, with the type (and CRS) in the header, `GEOMETRY('EPSG:4326')`; the filter, Copy
+    and the text downloads use the same WKT, Parquet and Arrow keep the geometry. **Grid / Map**
+    in the toolbar draws the rows shown (filtered and sorted) from one geometry column (pick it
+    when there are several); hover a shape for its row, click it for the row's values. The
+    inspector maps the one value and gives it as GeoJSON. Longitude/latitude (a geographic CRS,
+    or no CRS with coordinates that fit) goes on a world basemap, Web Mercator (EPSG:3857) is
+    unprojected onto it, any other CRS is drawn as plain x, y. Nothing leaves the server's
+    origin: the basemap is Natural Earth's land and borders (1:110m, then 1:50m zoomed in),
+    files of the UI's own, loaded with the map's code only when a map opens (Leaflet). e2e:
+    `geometry.spec.ts`; unit: `geometry.test.ts`, against DuckDB's own text for every geometry
+    type and dimension (`test/unit/fixtures/make-geometry.mjs`).
 - 🛑 **Cancel** stops the statement on the server, not just the wait for it, and says how far
   a script got and whether the transaction now needs a rollback.
 - 🗂️ **Schema browser** (the side panel; hide it with the panel button in the header, drag its

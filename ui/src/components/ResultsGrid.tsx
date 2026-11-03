@@ -16,6 +16,7 @@ import {
 
 import { copyText } from "../lib/clipboard";
 import { comparatorFor, sortRows } from "../lib/compare";
+import { isGeometry } from "../lib/geometry";
 import { isVariant } from "../lib/variant";
 import { columnText, isNumeric, jsonFor, typeLabel } from "../lib/format";
 import { RowTexts } from "../lib/rowText";
@@ -58,6 +59,9 @@ interface Props {
   toolbar?: (shown: readonly number[]) => ReactNode;
   /** Something to tell the user (a copy, a failure), shown in the toolbar. */
   onNotice?: (text: string) => void;
+  /** Shown in place of the grid (the Map view) when it returns something: the rows shown,
+   * after the filter and the sort. The grid stays mounted (hidden), keeping its state. */
+  alternate?: (shown: readonly number[]) => ReactNode;
 }
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
@@ -76,7 +80,7 @@ const isNull = (v: unknown) => v === null || v === undefined;
  * the selection (full values, NULL as an empty cell) as text and as an HTML table, so it
  * pastes into Excel or Google Sheets as cells. Double-click or Enter shows a value in full.
  */
-export function ResultsGrid({ table, toolbar, onNotice }: Props) {
+export function ResultsGrid({ table, toolbar, onNotice, alternate }: Props) {
   const fields = table.schema.fields;
   const columns = fields.length;
   const vectors = useMemo(() => fields.map((_, i) => table.getChildAt(i)!), [table, fields]);
@@ -291,6 +295,10 @@ export function ResultsGrid({ table, toolbar, onNotice }: Props) {
       text: rowText(r)[col] ?? null,
       json: nested ? jsonFor(fields[col]!)(raw) : undefined,
       raw: !isNull(raw) && isVariant(fields[col]!) ? jsonFor(type)(raw) : undefined,
+      geometry:
+        !isNull(raw) && isGeometry(fields[col]!) && raw instanceof Uint8Array
+          ? { bytes: raw, field: fields[col]! }
+          : undefined,
     });
   };
 
@@ -400,6 +408,9 @@ export function ResultsGrid({ table, toolbar, onNotice }: Props) {
       : null;
   const focusDrawn = !!sel && sel.focus.row >= first && sel.focus.row <= last;
 
+  const replaced = alternate?.(shown);
+  const instead = replaced === undefined || replaced === null || replaced === false ? null : replaced;
+
   const body = [];
   for (let p = first; p <= last; p++) {
     const r = shown[p]!;
@@ -489,9 +500,11 @@ export function ResultsGrid({ table, toolbar, onNotice }: Props) {
         <span className="toolbar-spacer" />
         {toolbar?.(shown)}
       </div>
+      {instead}
       <div
         ref={scroller}
         className="grid"
+        style={instead ? { display: "none" } : undefined}
         role="grid"
         aria-label="Results"
         aria-rowcount={rowCount + 1}

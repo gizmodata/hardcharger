@@ -7,6 +7,19 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Web UI: GEOMETRY columns show as WKT (`POINT (-80.8431 35.2271)`), exactly as DuckDB's
+  `ST_AsText` writes it, instead of escaped WKB bytes, and the header names the type and its CRS
+  (`GEOMETRY('EPSG:4326')`). The filter, Copy and the CSV, TSV, JSON and Excel downloads use the
+  WKT; Parquet and Arrow downloads keep the geometry. Nested geometries (lists, structs) too.
+- Web UI: a **Map** view of a result with a GEOMETRY column: the rows shown (the grid's filter and
+  sort) on a world basemap, hover for a row, click for its values, and a choice of column when
+  there are several. The cell inspector maps a single geometry and gives it as GeoJSON. Web
+  Mercator (EPSG:3857) is unprojected onto the basemap; other projected CRSs are drawn as plain
+  x, y. The basemap (Natural Earth, public domain) ships with the UI and loads only when a map
+  opens: nothing is fetched from another site, and the Content-Security-Policy is unchanged.
+
 ## [2.4.1] - 2026-10-29
 
 ### Changed
