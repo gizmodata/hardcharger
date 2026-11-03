@@ -149,7 +149,7 @@ def ready_line(log: str) -> str:
 def test_no_emoji_off_a_terminal(launcher, mode):
     # The tests' servers log to a file: auto means none there, as under systemd, Docker or k8s.
     server = launcher.start(args=["--log-emoji", mode], env={"HARDCHARGER_SECRET_KEY": "", "LANG": "en_US.UTF-8"})
-    log = server.log()
+    log = startup_log(server)
     assert not EMOJI.search(log), log
     assert re.search(r"^\S+Z info    Hardcharger is ready ", log, flags=re.M), log
     assert re.search(r"^\S+Z warning no secret_key", log, flags=re.M), log
@@ -157,7 +157,7 @@ def test_no_emoji_off_a_terminal(launcher, mode):
 
 def test_always_marks_levels_and_outcomes(launcher, tmp_path):
     server = launcher.start(args=["--log-emoji", "always"], env={"HARDCHARGER_SECRET_KEY": ""})
-    log = server.log()
+    log = startup_log(server)
     assert re.search(rf"^\S+Z {SUCCESS} info    Hardcharger is ready ", log, flags=re.M), log
     assert re.search(rf"^\S+Z {WARNING} warning no secret_key", log, flags=re.M), log
     # An info line has no marker of its own: two spaces keep the columns.
@@ -248,7 +248,7 @@ def test_a_terminal_without_utf8_never_or_json_has_none(args, env):
 
 def test_a_text_line_leaves_out_fields_without_a_value(launcher):
     server = launcher.start()
-    log = server.log()
+    log = startup_log(server)
     passing = next(line for line in log.splitlines() if "health check passing" in line)
     assert passing.endswith("health check passing"), passing  # no "error="
     # No line of the text log has a field with nothing after its "=".
