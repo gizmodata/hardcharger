@@ -39,6 +39,10 @@ own changelog in `python/CHANGELOG.md`.
   the views over it) lists only the sequences a user may use or drop. `GRANT ALL ON SCHEMA` and `ON
   CATALOG`, and a tenant's `tenant_admin` grants, include the three; grants made before keep what
   they were.
+- **`COMMENT ON` for users.** What may change an object may describe it: a table, a column of one
+  or an index on one with `ALTER TABLE` (its owner holds it), a view or a column of one with `ALTER
+  VIEW`, a sequence with `DROP SEQUENCE` and a macro with `DROP MACRO` on its schema. Until now only
+  the administrator could comment. Types stay the administrator's.
 
 - **Web UI: a link can start the browser sign-in (`/ui/?sign_in=browser`).** The sign-in page
   then goes straight to the identity provider, as if **Sign in with <provider>** had been

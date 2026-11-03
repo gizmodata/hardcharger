@@ -16,7 +16,9 @@
 #include <duckdb/main/database_manager.hpp>
 #include <duckdb/main/prepared_statement_data.hpp>
 #include <duckdb/optimizer/optimizer_extension.hpp>
+#include <duckdb/catalog/catalog_entry/index_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/sequence_catalog_entry.hpp>
+#include <duckdb/parser/parsed_data/comment_on_column_info.hpp>
 #include <duckdb/parser/expression/constant_expression.hpp>
 #include <duckdb/parser/expression/function_expression.hpp>
 #include <duckdb/parser/parsed_data/alter_info.hpp>
@@ -1363,6 +1365,9 @@ class PlanChecker {
       }
     }
     if (!parts.empty() && IsTempCatalog(parts[0])) return;
+    if (info.type == dd::AlterType::SET_COMMENT || info.type == dd::AlterType::SET_COLUMN_COMMENT) {
+      return CheckComment(info, parts);
+    }
     const auto catalog_type = info.GetCatalogType();
     if (catalog_type != dd::CatalogType::TABLE_ENTRY &&
         catalog_type != dd::CatalogType::VIEW_ENTRY) {
@@ -1389,6 +1394,69 @@ class PlanChecker {
       return;
     }
     Deny(principal_, "this ALTER needs an administrator");
+  }
+
+  // COMMENT ON: what may change the object may describe it. A table, a column of one or
+  // an index on one: ALTER TABLE (its owner holds it); a view or a column of one: ALTER
+  // VIEW; a sequence or a macro (objects without owners): DROP SEQUENCE / DROP MACRO on
+  // its schema. Types stay the administrator's, as creating them does.
+  void CheckComment(dd::AlterInfo& info, const std::vector<std::string>& parts) {
+    dd::CatalogType type = dd::CatalogType::INVALID;
+    if (info.type == dd::AlterType::SET_COMMENT) {
+      type = info.Cast<dd::SetCommentInfo>().entry_catalog_type;
+    } else {
+      type = dd::CatalogType::TABLE_ENTRY;  // a column of a table or view, found below
+    }
+    const auto require_alter = [&](dd::CatalogEntry& entry, const std::string& what) {
+      ObjectPath path = PathOf(entry);
+      if (IsTempCatalog(path.catalog)) return;
+      RequireVisible(path.catalog);
+      const ObjectType object_type = ObjectTypeOf(entry);
+      const Privilege privilege = object_type == ObjectType::kView ? Privilege::kAlterView : Privilege::kAlterTable;
+      if (!snapshot_.Check(principal_, AccessRequest{path, object_type, privilege, {}}).allowed) {
+        Deny(principal_, "user " + principal_.user_name + " may not comment on " + what + " (only the " +
+                             TypeWord(object_type) + "'s owner, or a role granted " + PrivilegeName(privilege) +
+                             " on " + path.ToString() + ")");
+      }
+    };
+    switch (type) {
+      case dd::CatalogType::TABLE_ENTRY:
+      case dd::CatalogType::VIEW_ENTRY: {
+        auto entry = LookUp(context_, dd::CatalogType::TABLE_ENTRY, parts);
+        if (!entry) return;  // DuckDB reports the missing object
+        const std::string what = info.type == dd::AlterType::SET_COLUMN_COMMENT
+                                     ? "a column of " + PathOf(*entry).ToString()
+                                     : TypeWord(ObjectTypeOf(*entry)) + " " + PathOf(*entry).ToString();
+        return require_alter(*entry, what);
+      }
+      case dd::CatalogType::INDEX_ENTRY: {
+        auto entry = LookUp(context_, dd::CatalogType::INDEX_ENTRY, parts);
+        if (!entry) return;
+        auto& index = entry->Cast<dd::IndexCatalogEntry>();
+        auto table = LookUp(context_, dd::CatalogType::TABLE_ENTRY,
+                            {compat::Str(entry->ParentCatalog().GetName()), compat::Str(index.GetSchemaName()),
+                             compat::Str(index.GetTableName())});
+        if (!table) Deny(principal_, "the table of index " + PathOf(*entry).ToString() + " could not be found");
+        return require_alter(*table, "index " + PathOf(*entry).ToString());
+      }
+      case dd::CatalogType::SEQUENCE_ENTRY: {
+        auto entry = LookUp(context_, dd::CatalogType::SEQUENCE_ENTRY, parts);
+        if (!entry) return;
+        const ObjectPath path = PathOf(*entry);
+        if (IsTempCatalog(path.catalog)) return;
+        return RequireSchemaPrivilege(path, Privilege::kDropSequence, "comment on sequence");
+      }
+      case dd::CatalogType::MACRO_ENTRY:
+      case dd::CatalogType::TABLE_MACRO_ENTRY: {
+        auto entry = LookUp(context_, type, parts);
+        if (!entry) return;
+        const ObjectPath path = PathOf(*entry);
+        if (IsTempCatalog(path.catalog)) return;
+        return RequireSchemaPrivilege(path, Privilege::kDropMacro, "comment on macro");
+      }
+      default:
+        Deny(principal_, "commenting on this kind of object needs an administrator");
+    }
   }
 
   // Whose rights a read must satisfy, every one of them: the caller's, or a
