@@ -70,21 +70,34 @@ test("Alt+W straight after typing still asks: it reads the editor, not the last 
   await page.keyboard.press("Alt+N");
   await expect(editorTabs(page).getByRole("tab")).toHaveCount(2);
   await editorFocused(page);
+  // First the new editor must take input (a key typed and shown, then removed), and the tab's
+  // copy of its text must be empty again (two frames: React has rendered by then).
+  const lines = activeTab(page).locator(".monaco-editor .view-lines");
+  await page.keyboard.type("x");
+  await expect(lines).toHaveText("x");
+  await page.keyboard.press("Backspace");
+  await expect(lines).toHaveText("");
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   let asked = "";
   page.once("dialog", (d) => {
     asked = d.message();
     void d.dismiss();
   });
-  // Type and press Alt+W in one task, so no render can come between them: under load (CI, a
-  // busy laptop) a real key can arrive just as early, and the tab closed without asking.
-  await page.evaluate(() => {
-    const input = document.activeElement as HTMLTextAreaElement;
-    // Typing as the browser does it (an input event the editor reads at once).
-    // eslint-disable-next-line @typescript-eslint/no-deprecated
-    document.execCommand("insertText", false, "SELECT 'typed just now'");
+  // Paste and press Alt+W in one task, so no render can come between them: under load (CI, a
+  // busy laptop) a real key can arrive just as early, and the tab closed without asking. A
+  // paste reaches the editor in both engines (Chromium's EditContext and WebKit's textarea),
+  // and the editor takes it at once; it cancels the event's default when it has.
+  const typed = await page.evaluate(() => {
+    const target = document.activeElement!;
+    const data = new DataTransfer();
+    data.setData("text/plain", "SELECT 'typed just now'");
+    const paste = new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true });
+    target.dispatchEvent(paste);
     const key = { key: "w", code: "KeyW", keyCode: 87, altKey: true, bubbles: true, cancelable: true };
-    input.dispatchEvent(new KeyboardEvent("keydown", key));
+    target.dispatchEvent(new KeyboardEvent("keydown", key));
+    return paste.defaultPrevented;
   });
+  expect(typed, "the text went into the editor").toBe(true);
   await expect.poll(() => asked).toContain("has text you haven't saved");
   await expect(editorTabs(page).getByRole("tab")).toHaveCount(2);
 });
