@@ -25,16 +25,22 @@ parser.add_argument("destination", type=Path)
 args = parser.parse_args()
 args.destination.parent.mkdir(parents=True, exist_ok=True)
 
-def staple_and_validate(path):
-    # Apple's ticket-delivery service can drop a connection just after acceptance.
-    # A retry still requires a real ticket and successful validation; it never skips it.
-    for attempt in range(3):
+STAPLE_ATTEMPTS = 8
+
+
+def staple_and_validate(path, attempts=STAPLE_ATTEMPTS, sleep=time.sleep):
+    # Apple's ticket-delivery service (CloudKit) drops connections ("The network connection
+    # was lost", error 68), at times on every other request for minutes: v2.3.0's gate lost
+    # all three of an earlier 10 s-spaced retry's attempts. A retry still requires a real
+    # ticket and a successful validation; it never skips either. Waits grow 10, 20, ... 60 s
+    # (about 4.5 minutes in all).
+    for attempt in range(attempts):
         if subprocess.run(["xcrun", "stapler", "staple", str(path)]).returncode == 0:
             if subprocess.run(["xcrun", "stapler", "validate", str(path)]).returncode == 0:
                 return
-        if attempt < 2:
-            time.sleep(10)
-    raise SystemExit(f"Could not staple and validate {path.name} after three attempts")
+        if attempt < attempts - 1:
+            sleep(min(10 * (attempt + 1), 60))
+    raise SystemExit(f"Could not staple and validate {path.name} after {attempts} attempts")
 
 if os.getenv("DESKTOP_SIGNED") == "true":
     # Do not rely on a bundler's successful notarization log as proof of a local ticket.

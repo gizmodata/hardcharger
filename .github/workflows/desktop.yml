@@ -203,10 +203,11 @@ jobs:
           # Ticket validation contacts Apple even for an already stapled artifact.
           # Transient service failures must not discard an otherwise valid build;
           # every artifact still has to pass validation within the bounded retry.
+          # CloudKit can drop every other request for minutes (error 68): waits grow to 60 s.
           validate_ticket() {
-            for attempt in 1 2 3; do
+            for attempt in 1 2 3 4 5 6 7 8; do
               if xcrun stapler validate "$1"; then return 0; fi
-              if [ "$attempt" -lt 3 ]; then sleep 10; fi
+              if [ "$attempt" -lt 8 ]; then sleep $(( attempt * 10 < 60 ? attempt * 10 : 60 )); fi
             done
             return 1
           }
