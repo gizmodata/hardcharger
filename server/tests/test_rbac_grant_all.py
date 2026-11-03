@@ -1,6 +1,7 @@
 """GRANT ALL means every privilege that applies where it is granted: on a table its
-SELECT, INSERT, UPDATE and DELETE; on a schema those, CREATE / DROP / ALTER TABLE and
-VIEW, and CREATE / DROP MACRO; on a catalog all of those and CREATE / DROP SCHEMA. REVOKE ALL takes back the same."""
+SELECT, INSERT, UPDATE, DELETE and MAINTAIN; on a schema those, CREATE / DROP / ALTER TABLE and
+VIEW, CREATE / DROP MACRO, and USAGE, CREATE and DROP SEQUENCE; on a catalog all of those and
+CREATE / DROP SCHEMA. REVOKE ALL takes back the same."""
 
 import pytest
 
@@ -22,7 +23,7 @@ def kinds(admin, role: str) -> set[tuple[str, str]]:
 
 
 SCHEMA_DDL = ["CREATE TABLE", "CREATE VIEW", "DROP TABLE", "DROP VIEW", "ALTER TABLE", "ALTER VIEW", "CREATE MACRO",
-              "DROP MACRO"]
+              "DROP MACRO", "USAGE", "CREATE SEQUENCE", "DROP SEQUENCE", "MAINTAIN"]
 DML = ["SELECT", "INSERT", "UPDATE", "DELETE"]
 
 
@@ -56,7 +57,7 @@ def test_all_on_a_catalog_includes_schema_ddl(server):
 def test_all_on_a_table_is_its_table_privileges(server):
     admin = server.admin()
     expect_allowed(client=admin, sql="GRANT ALL ON analytics.orders TO loader")
-    assert kinds(admin=admin, role="loader") == {(p, "TABLE") for p in DML}
+    assert kinds(admin=admin, role="loader") == {(p, "TABLE") for p in DML + ["MAINTAIN"]}
     lou = server.user(name="lou")
     expect_allowed(client=lou, sql="INSERT INTO analytics.orders VALUES (2)")
     expect_blocked(client=lou, sql="CREATE TABLE analytics.events (id INT)", why="no CREATE TABLE privilege")

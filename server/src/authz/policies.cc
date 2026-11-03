@@ -461,7 +461,7 @@ class PolicyRewriter {
   // checked with (a prepared statement is checked again when the store changes).
   dd::unique_ptr<dd::Expression> ListedRows(dd::LogicalGet& get, const std::string& function) {
     if (principal_.superuser) return nullptr;
-    enum class Rule { kSchema, kObject, kColumn, kColumnOfArgument };
+    enum class Rule { kSchema, kObject, kSequence, kColumn, kColumnOfArgument };
     struct Listing {
       Rule rule;
       std::vector<std::string> columns;
@@ -472,6 +472,7 @@ class PolicyRewriter {
         {"duckdb_views", {Rule::kObject, {"database_name", "schema_name", "view_name"}}},
         {"duckdb_constraints", {Rule::kObject, {"database_name", "schema_name", "table_name"}}},
         {"duckdb_indexes", {Rule::kObject, {"database_name", "schema_name", "table_name"}}},
+        {"duckdb_sequences", {Rule::kSequence, {"database_name", "schema_name", "sequence_name"}}},
         {"duckdb_columns",
          {Rule::kColumn, {"database_name", "schema_name", "table_name", "column_name"}}},
         // The columns of the one table they describe (the plan check refuses one the
@@ -535,6 +536,16 @@ class PolicyRewriter {
                 const ObjectPath path{catalog.GetString(), {schema.GetString()}, name.GetString()};
                 return decide(ObjectKey(path),
                               [&] { return snapshot->ObjectListed(principal, path); });
+              });
+        };
+        break;
+      case Rule::kSequence:
+        body = [=](dd::DataChunk& args, dd::ExpressionState&, dd::Vector& result) {
+          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t, dd::string_t>(
+              args, result, [&](dd::string_t catalog, dd::string_t schema, dd::string_t name) {
+                const ObjectPath path{catalog.GetString(), {schema.GetString()}, name.GetString()};
+                return decide(ObjectKey(path),
+                              [&] { return snapshot->SequenceListed(principal, path); });
               });
         };
         break;

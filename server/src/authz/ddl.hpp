@@ -87,6 +87,7 @@ struct ObjectPrivilegeCommand {
   std::vector<PrivilegeItem> privileges;
   GrantScope scope = GrantScope::kObject;
   QualifiedName target;
+  bool sequence = false;  // ON SEQUENCE name
   std::vector<Grantee> grantees;
   bool with_grant_option = false;
   bool cascade = true;  // REVOKE ... [CASCADE | RESTRICT]

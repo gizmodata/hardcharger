@@ -332,6 +332,8 @@ std::string ScopeType(const Names& names, const ObjectGrantRecord& grant) {
     case GrantScope::kSchema:
       return "SCHEMA";
     case GrantScope::kObject:
+      // USAGE on one object is granted ON SEQUENCE (and no other object takes it).
+      if (grant.privilege == Privilege::kUsage) return "SEQUENCE";
       return names.ObjectType(grant.target);
   }
   return "TABLE";
@@ -536,7 +538,8 @@ const std::vector<Privilege>& WritePrivileges() {
       Privilege::kSelect,     Privilege::kInsert,     Privilege::kUpdate,       Privilege::kDelete,
       Privilege::kCreateTable, Privilege::kCreateView, Privilege::kCreateSchema, Privilege::kDropTable,
       Privilege::kDropView,   Privilege::kDropSchema, Privilege::kAlterTable,   Privilege::kAlterView,
-      Privilege::kCreateMacro, Privilege::kDropMacro};
+      Privilege::kCreateMacro, Privilege::kDropMacro, Privilege::kUsage, Privilege::kCreateSequence,
+      Privilege::kDropSequence, Privilege::kMaintain};
   return kAll;
 }
 

@@ -25,6 +25,30 @@ own changelog in `python/CHANGELOG.md`.
   grants. Tokens with `catalog_access` rules still create no macros.
 - `UPDATE EXTENSIONS` runs for a user with the `MANAGE EXTENSIONS` system privilege; it was
   refused to everyone but the administrator.
+- **Sequences: the `USAGE`, `CREATE SEQUENCE` and `DROP SEQUENCE` privileges.** `GRANT USAGE ON
+  SEQUENCE app.ids` (or `ON SCHEMA` / `ON CATALOG`) lets a role call `nextval()` and `currval()`;
+  `GRANT CREATE SEQUENCE, DROP SEQUENCE ON SCHEMA app` lets it create and drop sequences there
+  (replacing one needs both), and `setval()`, which resets a sequence, needs `DROP SEQUENCE`. A
+  schema's owner holds all three. A table's own column default is part of writing the table:
+  `INSERT` on `app.orders` covers the sequence its `id DEFAULT nextval('app.ids')` advances, also
+  through `VALUES (DEFAULT)`, so ordinary inserts need no new grant; writing such a default
+  (`CREATE TABLE`, temporary tables included, and `ALTER TABLE ... DEFAULT`) needs `USAGE` on the
+  sequence. Inside a view the view owner's `USAGE` counts; inside a macro, the caller's. A user may
+  not create (or replace) a sequence whose name a table default, a view or a macro gives
+  `nextval()`, since it would hand out that sequence's numbers instead. `duckdb_sequences()` (and
+  the views over it) lists only the sequences a user may use or drop. `GRANT ALL ON SCHEMA` and `ON
+  CATALOG`, and a tenant's `tenant_admin` grants, include the three; grants made before keep what
+  they were.
+- **`COMMENT ON` for users.** What may change an object may describe it: a table, a column of one
+  or an index on one with `ALTER TABLE` (its owner holds it), a view or a column of one with `ALTER
+  VIEW`, a sequence with `DROP SEQUENCE` and a macro with `DROP MACRO` on its schema. Until now only
+  the administrator could comment. Types stay the administrator's.
+- **`ANALYZE` and `VACUUM` for users: the `MAINTAIN` privilege**, as in PostgreSQL 17. `GRANT
+  MAINTAIN ON app.events` (or `ON SCHEMA` / `ON CATALOG`) lets a role run `ANALYZE` and `VACUUM`
+  of the table and nothing else (no `SELECT`, no writes); a table's owner holds it, and `GRANT ALL`
+  now includes it (grants made before keep what they were). `ANALYZE` or `VACUUM` with no table
+  stays the administrator's, since it would touch tables the user can't see. Both were refused to
+  every user until now.
 - **Web UI: a link can start the browser sign-in (`/ui/?sign_in=browser`).** The sign-in page
   then goes straight to the identity provider, as if **Sign in with <provider>** had been
   clicked, so someone arriving from GizmoData Cloud's **Connect** no longer clicks it first
@@ -45,6 +69,11 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- **Under access control, `nextval()` and `currval()` need `USAGE` on the sequence.** Until now
+  any user could advance (or read) any sequence in a catalog they could see, and `setval()` reset
+  one. Inserts that take an id from a table's own column default keep working with `INSERT` on the
+  table alone; a statement that calls `nextval()` itself needs `GRANT USAGE ON SEQUENCE` (or `ON
+  SCHEMA`). Tokens with `catalog_access` rules are unchanged (the catalog's read or write access).
 - Arrow C++ 26.0.1 (Chargewire 2.0.2), Arrow's patch release of 2026-11-03, instead of 26.0.0.
   Among its fixes, reading an invalid map array from an Arrow IPC stream no longer crashes
   (apache/arrow GH-54936): the server reads clients' uploads as IPC streams. Arrow's bundled zstd,

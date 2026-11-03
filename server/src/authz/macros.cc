@@ -3,6 +3,8 @@
 #include <duckdb/catalog/catalog.hpp>
 #include <duckdb/catalog/catalog_entry/macro_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
+#include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
+#include <duckdb/parser/expression/constant_expression.hpp>
 #include <duckdb/catalog/catalog_entry/view_catalog_entry.hpp>
 #include <duckdb/function/scalar_macro_function.hpp>
 #include <duckdb/function/table_macro_function.hpp>
@@ -45,6 +47,8 @@ class ReferenceCollector {
   explicit ReferenceCollector(std::string from_catalog) : from_catalog_(std::move(from_catalog)) {}
 
   std::vector<Reference> references;
+  // The sequences it names in nextval('s') / currval('s') / setval('s', n).
+  std::vector<Reference> sequences;
 
   void Node(dd::QueryNode& node) {
     if (++depth_ > 200) return;  // deeper than any SQL DuckDB parses
@@ -83,6 +87,29 @@ class ReferenceCollector {
       Reference reference{{path.begin(), path.end()}, from_catalog_};
       while (!reference.parts.empty() && reference.parts.front().empty()) {
         reference.parts.erase(reference.parts.begin());
+      }
+      const std::string name = reference.parts.empty() ? "" : FoldIdentifier(reference.parts.back());
+      const dd::ParsedExpression* first = nullptr;
+      for (const auto& argument : function.GetArguments()) {
+        if (!argument.HasName()) {
+          first = &argument.GetExpression();
+          break;
+        }
+      }
+      if ((name == "nextval" || name == "currval" || name == "setval") && first &&
+          first->GetExpressionClass() == dd::ExpressionClass::CONSTANT) {
+        const auto value = compat::ConstantValue(first->Cast<dd::ConstantExpression>());
+        if (!value.IsNull()) {
+          try {
+            Reference sequence{{}, from_catalog_};
+            for (const auto& part : dd::QualifiedName::ParseComponents(value.ToString())) {
+              sequence.parts.push_back(compat::Str(part));
+            }
+            if (!sequence.parts.empty()) sequences.push_back(std::move(sequence));
+          } catch (...) {
+            // a name DuckDB can't read names no sequence
+          }
+        }
       }
       if (!reference.parts.empty()) references.push_back(std::move(reference));
     }
@@ -174,6 +201,57 @@ bool HoldsDuckDbSql(dd::Catalog& catalog) {
 }
 
 }  // namespace
+
+std::optional<std::string> SequenceNameRefusal(dd::ClientContext& context, const ObjectPath& path) {
+  std::vector<Reference> named;
+  for (const auto& database : dd::DatabaseManager::Get(context).GetDatabases(context)) {
+    if (!database || database->IsSystem() || database->IsTemporary()) continue;
+    auto& catalog = database->GetCatalog();
+    if (!HoldsDuckDbSql(catalog)) continue;
+    const std::string catalog_name = compat::Str(database->GetName());
+    try {
+      catalog.ScanSchemas(context, [&](dd::SchemaCatalogEntry& schema) {
+        ReferenceCollector collector(catalog_name);
+        schema.Scan(context, dd::CatalogType::TABLE_ENTRY, [&](dd::CatalogEntry& entry) {
+          if (entry.type == dd::CatalogType::TABLE_ENTRY) {
+            for (const auto& column : entry.Cast<dd::TableCatalogEntry>().GetColumns().Logical()) {
+              if (!column.HasDefaultValue()) continue;
+              auto copy = column.DefaultValue().Copy();
+              collector.Expression(*copy);
+            }
+          } else if (entry.type == dd::CatalogType::VIEW_ENTRY) {
+            try {
+              auto query = entry.Cast<dd::ViewCatalogEntry>().GetQuery().Copy();
+              auto& select = query->Cast<dd::SelectStatement>();
+              if (select.node) collector.Node(*select.node);
+            } catch (...) {
+            }
+          }
+        });
+        for (const auto type : {dd::CatalogType::MACRO_ENTRY, dd::CatalogType::TABLE_MACRO_ENTRY}) {
+          schema.Scan(context, type, [&](dd::CatalogEntry& entry) {
+            if (entry.type != dd::CatalogType::MACRO_ENTRY && entry.type != dd::CatalogType::TABLE_MACRO_ENTRY) return;
+            for (const auto& function : entry.Cast<dd::MacroCatalogEntry>().macros) {
+              if (function) CollectMacro(*function, collector);
+            }
+          });
+        }
+        named.insert(named.end(), collector.sequences.begin(), collector.sequences.end());
+      });
+    } catch (...) {
+      return "a sequence named " + QuoteIdentifierIfNeeded(path.object_name) +
+             " could not be checked against the tables, views and macros of every catalog; ask an administrator";
+    }
+  }
+  for (const auto& reference : named) {
+    if (CouldMean(reference, path)) {
+      return "a sequence named " + QuoteIdentifierIfNeeded(path.object_name) +
+             " would change the numbers a table default, a view or a macro takes: it names a sequence by that "
+             "name. Only the administrator may create or replace it";
+    }
+  }
+  return std::nullopt;
+}
 
 std::optional<std::string> MacroNameRefusal(dd::ClientContext& context, const Snapshot& snapshot,
                                             const ObjectPath& path) {

@@ -37,4 +37,9 @@ class Snapshot;
 std::optional<std::string> MacroNameRefusal(duckdb::ClientContext& context, const Snapshot& snapshot,
                                             const ObjectPath& path);
 
+// The same for a sequence: nextval('s') finds a sequence by name in the search path as a
+// function call finds a macro, so a new sequence must not take (or stand in for) a name
+// that a table's column default, a view or a macro gives nextval(), currval() or setval().
+std::optional<std::string> SequenceNameRefusal(duckdb::ClientContext& context, const ObjectPath& path);
+
 }  // namespace hardcharger::authz

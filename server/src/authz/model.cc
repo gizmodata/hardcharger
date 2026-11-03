@@ -357,15 +357,19 @@ AccessDecision Snapshot::Check(const Principal& principal, const AccessRequest& 
 
   // The owner holds every privilege on the object (for a schema: on the schema
   // itself, which covers DROP SCHEMA).
-  if (const OwnerRecord* owner = FindOwner(request.object)) {
-    if (IsOwner(principal, *owner)) return {true, "owner", "owner"};
+  // (Sequences have no owner record: one at the same path is a table's or view's.)
+  if (request.type != ObjectType::kSequence) {
+    if (const OwnerRecord* owner = FindOwner(request.object)) {
+      if (IsOwner(principal, *owner)) return {true, "owner", "owner"};
+    }
   }
   // The owner of a schema may create objects in it and drop them, as in Postgres.
   switch (request.privilege) {
     case Privilege::kCreateTable:
     case Privilege::kCreateView:
     case Privilege::kDropTable:
-    case Privilege::kDropView: {
+    case Privilege::kDropView:
+    case Privilege::kUsage: {
       ObjectPath schema = request.object;
       schema.object_name.clear();
       if (request.type != ObjectType::kSchema && !schema.schema_path.empty()) {
@@ -430,6 +434,16 @@ bool Snapshot::ObjectListed(const Principal& principal, const ObjectPath& object
     if (Check(principal, AccessRequest{object, ObjectType::kTable, privilege, {}}).allowed) return true;
   }
   return false;
+}
+
+bool Snapshot::SequenceListed(const Principal& principal, const ObjectPath& sequence) const {
+  if (principal.superuser) return true;
+  if (!CatalogVisible(principal, sequence.catalog)) return false;
+  if (EngineCatalog(sequence.catalog) || principal.catalog_rules) return true;
+  if (Check(principal, AccessRequest{sequence, ObjectType::kSequence, Privilege::kUsage, {}}).allowed) return true;
+  ObjectPath schema = sequence;
+  schema.object_name.clear();
+  return Check(principal, AccessRequest{schema, ObjectType::kSchema, Privilege::kDropSequence, {}}).allowed;
 }
 
 bool Snapshot::ColumnListed(const Principal& principal, const ObjectPath& table, const std::string& column) const {

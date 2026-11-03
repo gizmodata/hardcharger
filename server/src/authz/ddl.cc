@@ -698,6 +698,8 @@ class Parser {
     if (PeekKeyword("INSERT")) return std::make_pair(Privilege::kInsert, size_t{1});
     if (PeekKeyword("UPDATE")) return std::make_pair(Privilege::kUpdate, size_t{1});
     if (PeekKeyword("DELETE")) return std::make_pair(Privilege::kDelete, size_t{1});
+    if (PeekKeyword("USAGE")) return std::make_pair(Privilege::kUsage, size_t{1});
+    if (PeekKeyword("MAINTAIN")) return std::make_pair(Privilege::kMaintain, size_t{1});
     if (PeekKeyword("ALL")) {
       return std::make_pair(Privilege::kAll, size_t{PeekKeyword("PRIVILEGES", 1) ? 2u : 1u});
     }
@@ -712,6 +714,7 @@ class Parser {
         {"DROP", "VIEW", Privilege::kDropView},         {"DROP", "SCHEMA", Privilege::kDropSchema},
         {"ALTER", "TABLE", Privilege::kAlterTable},     {"ALTER", "VIEW", Privilege::kAlterView},
         {"CREATE", "MACRO", Privilege::kCreateMacro},   {"DROP", "MACRO", Privilege::kDropMacro},
+        {"CREATE", "SEQUENCE", Privilege::kCreateSequence}, {"DROP", "SEQUENCE", Privilege::kDropSequence},
     };
     for (const auto& phrase : kPhrases) {
       if (PeekKeyword(phrase.verb) && PeekKeyword(phrase.object, 1)) {
@@ -851,6 +854,13 @@ class Parser {
         cmd.scope = GrantScope::kCatalog;
         ARROW_ASSIGN_OR_RAISE(auto catalog, ParseIdentifier("a catalog name"));
         cmd.target.parts.push_back(std::move(catalog));
+      } else if (PeekKeyword("SEQUENCE") && Peek(1).type != TokenType::kEnd &&
+                 !(Peek(1).type == TokenType::kWord &&
+                   (KeywordEquals(Peek(1).text, "TO") || KeywordEquals(Peek(1).text, "FROM")))) {
+        ++pos_;
+        cmd.scope = GrantScope::kObject;
+        cmd.sequence = true;
+        ARROW_ASSIGN_OR_RAISE(cmd.target, ParseQualifiedName("a sequence name"));
       } else {
         // [TABLE | VIEW] name — the keyword is optional, as in Postgres.
         // A following TO / FROM means TABLE or VIEW is itself the object name
@@ -916,6 +926,14 @@ class Parser {
   // Which privileges make sense on which kind of target.
   static arrow::Status ValidatePrivilegeScope(const ObjectPrivilegeCommand& cmd) {
     for (const auto& item : cmd.privileges) {
+      // ON SEQUENCE takes USAGE alone; USAGE on one object is a sequence's.
+      if (cmd.sequence && item.privilege != Privilege::kUsage) {
+        return SyntaxError("on a sequence only USAGE is granted (" + PrivilegeName(item.privilege) +
+                           " is not a sequence's)");
+      }
+      if (item.privilege == Privilege::kUsage && cmd.scope == GrantScope::kObject && !cmd.sequence) {
+        return SyntaxError("USAGE is granted ON SEQUENCE, ON SCHEMA or ON CATALOG");
+      }
       switch (item.privilege) {
         case Privilege::kCreateTable:
         case Privilege::kCreateView:
@@ -925,6 +943,8 @@ class Parser {
         case Privilege::kAlterView:
         case Privilege::kCreateMacro:
         case Privilege::kDropMacro:
+        case Privilege::kCreateSequence:
+        case Privilege::kDropSequence:
           if (cmd.scope == GrantScope::kObject) {
             return SyntaxError(PrivilegeName(item.privilege) +
                                " is granted ON SCHEMA or ON CATALOG, not on a single object");
