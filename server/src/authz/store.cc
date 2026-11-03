@@ -341,7 +341,7 @@ std::optional<Privilege> PrivilegeFrom(const std::string& name) {
                  Privilege::kDropTable, Privilege::kDropView, Privilege::kDropSchema,
                  Privilege::kAlterTable, Privilege::kAlterView, Privilege::kCreateMacro,
                  Privilege::kDropMacro, Privilege::kUsage, Privilege::kCreateSequence,
-                 Privilege::kDropSequence, Privilege::kAll}) {
+                 Privilege::kDropSequence, Privilege::kMaintain, Privilege::kAll}) {
     if (PrivilegeName(p) == name) return p;
   }
   return std::nullopt;

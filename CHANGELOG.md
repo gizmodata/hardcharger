@@ -43,6 +43,12 @@ own changelog in `python/CHANGELOG.md`.
   or an index on one with `ALTER TABLE` (its owner holds it), a view or a column of one with `ALTER
   VIEW`, a sequence with `DROP SEQUENCE` and a macro with `DROP MACRO` on its schema. Until now only
   the administrator could comment. Types stay the administrator's.
+- **`ANALYZE` and `VACUUM` for users: the `MAINTAIN` privilege**, as in PostgreSQL 17. `GRANT
+  MAINTAIN ON app.events` (or `ON SCHEMA` / `ON CATALOG`) lets a role run `ANALYZE` and `VACUUM`
+  of the table and nothing else (no `SELECT`, no writes); a table's owner holds it, and `GRANT ALL`
+  now includes it (grants made before keep what they were). `ANALYZE` or `VACUUM` with no table
+  stays the administrator's, since it would touch tables the user can't see. Both were refused to
+  every user until now.
 
 - **Web UI: a link can start the browser sign-in (`/ui/?sign_in=browser`).** The sign-in page
   then goes straight to the identity provider, as if **Sign in with <provider>** had been

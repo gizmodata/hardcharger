@@ -29,6 +29,7 @@ enum class Privilege {
   kUsage,           // nextval() / currval() of a sequence: ON SEQUENCE, ON SCHEMA or ON CATALOG
   kCreateSequence,  // ON SCHEMA or ON CATALOG
   kDropSequence,    // dropping one, or setval() of one: ON SCHEMA or ON CATALOG
+  kMaintain,        // ANALYZE and VACUUM of a table: ON TABLE, ON SCHEMA or ON CATALOG
   kAll,  // every object privilege that applies to the target
 };
 
@@ -76,7 +77,7 @@ std::string HiddenObjectMessage(const std::string& user_name);
 enum class GrantScope { kObject, kSchema, kCatalog };
 
 // The object privileges GRANT ALL stands for at a scope: every one that applies there.
-// On a table or view the table-level ones; on a schema those, CREATE / DROP / ALTER
+// On a table or view the table-level ones and MAINTAIN; on a schema those, CREATE / DROP / ALTER
 // TABLE and VIEW, CREATE / DROP MACRO, and USAGE, CREATE and DROP SEQUENCE; on a catalog
 // all of those and CREATE / DROP SCHEMA.
 const std::vector<Privilege>& PrivilegesOfAll(GrantScope scope);

@@ -24,7 +24,6 @@
 #include <duckdb/parser/parsed_data/alter_info.hpp>
 #include <duckdb/parser/parsed_data/alter_table_info.hpp>
 #include <duckdb/parser/parsed_expression_iterator.hpp>
-#include <duckdb/planner/operator/logical_update.hpp>
 #include <duckdb/parser/parsed_data/create_info.hpp>
 #include <duckdb/parser/parsed_data/create_table_info.hpp>
 #include <duckdb/parser/parsed_data/create_view_info.hpp>
@@ -49,6 +48,7 @@
 #include <duckdb/planner/operator/logical_export.hpp>
 #include <duckdb/planner/operator/logical_set.hpp>
 #include <duckdb/planner/operator/logical_update.hpp>
+#include <duckdb/planner/operator/logical_vacuum.hpp>
 #include <duckdb/planner/parsed_data/bound_create_table_info.hpp>
 #include <duckdb/planner/planner_extension.hpp>
 #include <set>
@@ -206,6 +206,21 @@ void ForEachSequenceCall(dd::ParsedExpression& expression,
   dd::ParsedExpressionIterator::EnumerateChildren(expression, [&](dd::ParsedExpression& child) {
     ForEachSequenceCall(child, call);
   });
+}
+
+// A scan of `table` and nothing else: a LogicalGet of it, under projections of its
+// columns only (what DuckDB plans under ANALYZE / VACUUM).
+bool IsPlainScanOf(dd::LogicalOperator& op, dd::TableCatalogEntry& table) {
+  if (op.type == dd::LogicalOperatorType::LOGICAL_GET) {
+    return op.Cast<dd::LogicalGet>().GetTable().get() == &table && op.children.empty();
+  }
+  if (op.type != dd::LogicalOperatorType::LOGICAL_PROJECTION || op.children.size() != 1 || !op.children[0]) {
+    return false;
+  }
+  for (const auto& expression : op.expressions) {
+    if (!expression || expression->GetExpressionClass() != dd::ExpressionClass::BOUND_COLUMN_REF) return false;
+  }
+  return IsPlainScanOf(*op.children[0], table);
 }
 
 ObjectType ObjectTypeOf(const dd::CatalogEntry& entry) {
@@ -503,6 +518,23 @@ class PlanChecker {
       case OpType::LOGICAL_LOAD:
         RequireSystem(SystemPrivilege::kManageExtensions, "INSTALL and LOAD");
         return;
+      // ANALYZE and VACUUM of one table: MAINTAIN on it (its owner holds it). Of every
+      // table at once: the administrator's (it would touch tables the user can't see).
+      case OpType::LOGICAL_VACUUM: {
+        auto& vacuum = op.Cast<dd::LogicalVacuum>();
+        if (!vacuum.HasTable()) {
+          Deny(principal_, "ANALYZE or VACUUM of every table needs an administrator; name a table you may maintain "
+                           "(ANALYZE t, VACUUM t)");
+        }
+        Require(vacuum.GetTable(), Privilege::kMaintain, {});
+        // DuckDB scans the table to gather its statistics, which reach no one: that scan is
+        // the maintenance, not a read. Anything else under it is checked as usual.
+        for (auto& child : op.children) {
+          if (child && IsPlainScanOf(*child, vacuum.GetTable())) continue;
+          if (child) Visit(*child, nullptr);
+        }
+        return;
+      }
       // FORCE INSTALL of every installed extension that has a newer build.
       case OpType::LOGICAL_UPDATE_EXTENSIONS:
         RequireSystem(SystemPrivilege::kManageExtensions, "UPDATE EXTENSIONS");

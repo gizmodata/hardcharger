@@ -539,7 +539,7 @@ const std::vector<Privilege>& WritePrivileges() {
       Privilege::kCreateTable, Privilege::kCreateView, Privilege::kCreateSchema, Privilege::kDropTable,
       Privilege::kDropView,   Privilege::kDropSchema, Privilege::kAlterTable,   Privilege::kAlterView,
       Privilege::kCreateMacro, Privilege::kDropMacro, Privilege::kUsage, Privilege::kCreateSequence,
-      Privilege::kDropSequence};
+      Privilege::kDropSequence, Privilege::kMaintain};
   return kAll;
 }
 

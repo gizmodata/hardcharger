@@ -699,6 +699,7 @@ class Parser {
     if (PeekKeyword("UPDATE")) return std::make_pair(Privilege::kUpdate, size_t{1});
     if (PeekKeyword("DELETE")) return std::make_pair(Privilege::kDelete, size_t{1});
     if (PeekKeyword("USAGE")) return std::make_pair(Privilege::kUsage, size_t{1});
+    if (PeekKeyword("MAINTAIN")) return std::make_pair(Privilege::kMaintain, size_t{1});
     if (PeekKeyword("ALL")) {
       return std::make_pair(Privilege::kAll, size_t{PeekKeyword("PRIVILEGES", 1) ? 2u : 1u});
     }
