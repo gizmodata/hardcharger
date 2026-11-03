@@ -37,7 +37,8 @@ svg { width: 18px; height: 18px; flex-shrink: 0; }
 @media(prefers-color-scheme: dark) { :root:not([data-theme="light"]) .brand-light { display:none; } :root:not([data-theme="light"]) .brand-dark { display:block !important; } }
 :root[data-theme="dark"] .brand-light { display:none; }
 :root[data-theme="dark"] .brand-dark { display:block !important; }
-.edition { display: block; color: var(--faint); font-size: 9px; letter-spacing: 1.7px; margin: 10px 0 0 42px; font-weight: 650; }
+/* Centered under the whole logo; the left padding balances the letter spacing after the last letter. */
+.edition { display: block; color: var(--faint); font-size: 9px; letter-spacing: 1.7px; margin: 10px 0 0; padding-left: 1.7px; text-align: center; font-weight: 650; }
 .nav-label { font-size: 9px; font-weight: 650; letter-spacing: 1.4px; color: var(--faint); padding: 0 12px; margin-bottom: 11px; }
 .nav-label.second { margin-top: 34px; }
 .nav-item { border: 0; background: transparent; color: var(--muted); width: 100%; display: flex; align-items: center; gap: 11px; padding: 12px; text-align: left; border-radius: 6px; margin: 3px 0; font-size: 12px; font-weight: 500; }

@@ -17,6 +17,11 @@ own changelog in `python/CHANGELOG.md`.
   address bar before the flow starts, so a reload, Back or a failed sign-in can't loop back to
   the provider, and a failure shows the sign-in page with the reason, as a failed click does.
 
+### Fixed
+
+- Desktop: the **DESKTOP** caption in the sidebar is centered under the Hardcharger logo; it sat
+  at a fixed offset to the left of the logo's center.
+
 ## [2.4.1] - 2026-10-29
 
 ### Changed
