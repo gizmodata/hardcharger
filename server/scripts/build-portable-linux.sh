@@ -67,6 +67,14 @@ if ! $installed; then
   /opt/python/cp312-cp312/bin/python -m pip install --quiet --retries 10 ninja
   ln -sf /opt/python/cp312-cp312/bin/ninja /usr/local/bin/ninja
 fi
+# Every container of a job must have ninja at the path CMake recorded when it configured the
+# build tree, whichever source gave it: dnf (/usr/bin) in one container and PyPI
+# (/usr/local/bin) in the next left "no such file or directory" (2.7.0's gate, a CentOS
+# baseos mirror outage). Put it at both.
+ninja_bin=$(command -v ninja || command -v ninja-build)
+for path in /usr/bin/ninja /usr/local/bin/ninja; do
+  [ -x "$path" ] || ln -sf "$ninja_bin" "$path"
+done
 
 # The dependencies build-deps.sh names (in CI: one per call, each cached on its own); the
 # static OpenSSL first, as DuckDB's extensions link it.
