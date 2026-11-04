@@ -1515,6 +1515,15 @@ jobs:
                       if d["name"].startswith("iPhone"):
                           print(d["udid"]); sys.exit()')
           [ -n "$device" ] || { echo "no iPhone simulator"; exit 1; }
+          # The keyboard's first-run "slide to type" introduction is modal system UI: on a
+          # fresh simulator it covered the app during 2.7.0's gate, so typing landed late and
+          # the web view showed no content to the tests. Mark it as seen before the tests.
+          xcrun simctl boot "$device" 2>/dev/null || true
+          xcrun simctl bootstatus "$device" -b >/dev/null
+          for key in DidShowContinuousPathIntroduction DidShowGestureKeyboardIntroduction; do
+            xcrun simctl spawn "$device" defaults write com.apple.keyboard.preferences "$key" -bool true
+          done
+          xcrun simctl spawn "$device" defaults write com.apple.keyboard.preferences KeyboardContinuousPathEnabled -bool false
           xcodebuild test -project ios/Hardcharger.xcodeproj -scheme Hardcharger \
             -destination "id=$device" -derivedDataPath ios/build/DerivedData \
             -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult"
