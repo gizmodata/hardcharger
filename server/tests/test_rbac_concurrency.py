@@ -13,6 +13,7 @@ the passes per client (default 10; the TSan job, 5-15x slower, runs 3)."""
 
 import os
 import statistics
+import sys
 import threading
 import time
 
@@ -35,8 +36,11 @@ DDL_ROUNDS = 8
 # is a real one (2.1.2 read it in time quadratic in its rows, twice for every CREATE).
 DDL_EXISTING = 600
 # 1 s, stretched in sanitizer builds: there one store statement on its own can take a second
-# (TSan, 2026-10-28), and a statement that slow is what the timeout is for.
-DDL_STORE_TIMEOUT = str(max(1, round(TIMEOUT_SCALE)))
+# (TSan, 2026-10-28), and a statement that slow is what the timeout is for. 3 s on Windows,
+# whose runners stall now and then: one of the 600 setup CREATEs, run one at a time with
+# nothing else going on, took over a second on windows-arm64 (2026-11-03, run 41759841773).
+# 1 s on Linux and macOS still fails the 2.1.2 bug, which timed out at 10 s.
+DDL_STORE_TIMEOUT = str(max(3 if sys.platform == "win32" else 1, round(TIMEOUT_SCALE)))
 
 
 def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
