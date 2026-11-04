@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-11-04
+
 ### Added
 
 - **`idle_in_transaction_session_timeout`, as PostgreSQL has it
