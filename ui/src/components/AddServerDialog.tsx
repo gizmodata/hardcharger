@@ -267,15 +267,18 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
         password,
       });
       // In the list only once signed in: a failed attempt leaves nothing behind.
-      const entry = session.servers.add({
-        name: label,
-        ...address,
-        trust: mode === "fingerprint",
-        ...(fingerprint ? { fingerprint } : {}),
-        username: username.trim(),
-        ...(timeoutS > 0 ? { timeout: timeoutS } : {}),
-        ...(save ? {} : { transient: true }),
-      });
+      const entry = session.servers.add(
+        {
+          name: label,
+          ...address,
+          trust: mode === "fingerprint",
+          ...(fingerprint ? { fingerprint } : {}),
+          username: username.trim(),
+          ...(timeoutS > 0 ? { timeout: timeoutS } : {}),
+          ...(save ? {} : { transient: true }),
+        },
+        selectedId,
+      );
       session.servers.signedIn(entry.id, registered, auth);
       // Prove the sign-in with a session, and learn who the server says we are.
       try {

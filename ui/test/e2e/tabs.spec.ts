@@ -1,6 +1,7 @@
 // Editor tabs: each its own Chargewire session; new, close, rename, reorder, the cap of 20,
 // shortcuts that act on the focused tab, and what survives a reload.
 import {
+  answerDialog,
   activeTab,
   editorFocused,
   expect,
@@ -46,16 +47,20 @@ test("Alt+W closes a tab, asking first when its text isn't saved", async ({ page
   await expect(editorTabs(page).getByRole("tab")).toHaveCount(2);
   await editorFocused(page); // the new tab's editor: Alt+W must reach it, not the tab bar
   await setSql(page, "SELECT 'keep me'");
-  let asked = "";
-  page.once("dialog", (d) => {
-    asked = d.message();
-    void d.dismiss();
-  });
   await page.keyboard.press("Alt+W");
-  await expect.poll(() => asked).toContain("has text you haven't saved");
+  await answerDialog(page, { accept: false, text: "has text you haven't saved" });
   await expect(editorTabs(page).getByRole("tab")).toHaveCount(2);
-  page.once("dialog", (d) => void d.accept());
+  // Esc cancels too; Enter confirms (the dialog's Close tab button has the focus).
+  await editorFocused(page);
   await page.keyboard.press("Alt+W");
+  await expect(page.getByTestId("app-dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("app-dialog")).toHaveCount(0);
+  await expect(editorTabs(page).getByRole("tab")).toHaveCount(2);
+  await editorFocused(page);
+  await page.keyboard.press("Alt+W");
+  await expect(page.getByTestId("app-dialog-ok")).toBeFocused();
+  await page.keyboard.press("Enter");
   await expect(editorTabs(page).getByRole("tab")).toHaveCount(1);
   // An empty tab closes without a question.
   await editorFocused(page);
@@ -78,11 +83,6 @@ test("Alt+W straight after typing still asks: it reads the editor, not the last 
   await page.keyboard.press("Backspace");
   await expect(lines).toHaveText("");
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  let asked = "";
-  page.once("dialog", (d) => {
-    asked = d.message();
-    void d.dismiss();
-  });
   // Paste and press Alt+W in one task, so no render can come between them: under load (CI, a
   // busy laptop) a real key can arrive just as early, and the tab closed without asking. A
   // paste reaches the editor in both engines (Chromium's EditContext and WebKit's textarea),
@@ -98,7 +98,7 @@ test("Alt+W straight after typing still asks: it reads the editor, not the last 
     return paste.defaultPrevented;
   });
   expect(typed, "the text went into the editor").toBe(true);
-  await expect.poll(() => asked).toContain("has text you haven't saved");
+  await answerDialog(page, { accept: false, text: "has text you haven't saved" });
   await expect(editorTabs(page).getByRole("tab")).toHaveCount(2);
 });
 

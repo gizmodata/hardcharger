@@ -3,12 +3,12 @@ import { connect } from "@gizmodata/chargewire";
 import { expect, signIn, test } from "./fixtures.ts";
 import { startOwnServer } from "./harness.ts";
 
-test("Sessions shows client IP and confirms ending a session without browser confirm", async ({ page, harness }) => {
+test("Sessions shows client IP and confirms ending a session in the page (the fixture removes native dialogs)", async ({
+  page,
+  harness,
+}) => {
   const victim = await connect({ url: `${harness.serverUrl}/chargewire`, ...harness.admin });
   try {
-    await page.addInitScript(() => {
-      window.confirm = () => false;
-    });
     await signIn(page, harness.admin);
     await page.getByRole("button", { name: "Sessions", exact: true }).click();
     const table = page.getByTestId("sessions-table");
@@ -35,9 +35,6 @@ test("SQL Monitor End session disconnects its target after an in-page confirmati
   const victim = await connect({ url: `${server.url}/chargewire`, ...server.admin });
   try {
     await victim.query("SELECT 1 AS end_session_monitor_probe");
-    await page.addInitScript(() => {
-      window.confirm = () => false;
-    });
     await signIn(page, server.admin, server.url);
     await page.getByRole("button", { name: "SQL Monitor", exact: true }).click();
     await page.getByLabel("Filter monitored queries").fill("end_session_monitor_probe");
@@ -70,9 +67,6 @@ test("SQL Monitor Cancel work confirms cancellation and keeps the session usable
     running = victim
       .query("SELECT sum(a.range*b.range) AS cancel_work_monitor_probe FROM range(100000000) a, range(100000) b")
       .catch((error: unknown) => error);
-    await page.addInitScript(() => {
-      window.confirm = () => false;
-    });
     await signIn(page, server.admin, server.url);
     await page.getByRole("button", { name: "SQL Monitor", exact: true }).click();
     await page.getByLabel("Filter monitored queries").fill("cancel_work_monitor_probe");

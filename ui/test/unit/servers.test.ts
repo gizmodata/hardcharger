@@ -10,8 +10,11 @@ import {
   relayFetch,
   saveRemoteSignIns,
   saveSavedServers,
+  loadDismissed,
   loadTabServers,
   normalizeSaved,
+  saveDismissed,
+  ServersStore,
   saveTabServers,
   serverKey,
   tlsModeOf,
@@ -217,5 +220,92 @@ describe("relayFetch", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("servers removed from the list", () => {
+  const handed = () => {
+    const storage = new MemoryStorage();
+    storage.setItem(
+      desktopServersKey,
+      JSON.stringify([
+        { id: "d1", name: "Vaden", host: "vaden.example.com", port: 31337, tls: true, prefix: "", trust: false },
+        { id: "d2", name: "Lab", host: "lab.local", port: 31337, tls: true, prefix: "/cw", trust: false },
+      ]),
+    );
+    return storage;
+  };
+
+  it("a dismissed desktop server isn't merged back in at the next load", () => {
+    const dismissed = new Set([
+      serverKey({ host: "VADEN.example.com", port: 31337, tls: true, prefix: "/chargewire" }),
+    ]);
+    const merged = mergeDesktopServers([], handed(), dismissed);
+    expect(merged.map((s) => s.id)).toEqual(["d2"]);
+    // Without the dismissal it comes in, as before.
+    expect(mergeDesktopServers([], handed()).map((s) => s.id)).toEqual(["d1", "d2"]);
+  });
+
+  it("keeps the dismissed keys per user, survives blocked storage, and forgets an empty set", () => {
+    const storage = new MemoryStorage();
+    saveDismissed("joe", new Set(["a|1|", "b|2|"]), storage);
+    expect([...loadDismissed("joe", storage)].sort()).toEqual(["a|1|", "b|2|"]);
+    expect(loadDismissed("ann", storage).size).toBe(0);
+    saveDismissed("joe", new Set(), storage);
+    expect(storage.getItem("hardcharger-ui:dismissed-servers:v1:joe")).toBeNull();
+    storage.setItem("hardcharger-ui:dismissed-servers:v1:joe", "{bad");
+    expect(loadDismissed("joe", storage).size).toBe(0);
+    expect(loadDismissed("joe", broken).size).toBe(0);
+    expect(() => saveDismissed("joe", new Set(["x"]), broken)).not.toThrow();
+  });
+});
+
+describe("ServersStore: removing a desktop server, and adding it back", () => {
+  it("stays removed across loads until the same server is added again", () => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    window.sessionStorage.setItem(
+      desktopServersKey,
+      JSON.stringify([
+        { id: "d1", name: "Vaden", host: "vaden.example.com", port: 31337, tls: true, prefix: "", trust: false },
+      ]),
+    );
+    const first = new ServersStore("joe", () => undefined);
+    expect(first.snapshot().servers.map((s) => s.saved.id)).toEqual(["d1"]);
+    first.remove("d1");
+    expect(first.snapshot().servers).toEqual([]);
+    // The next load (the hand-over still in sessionStorage) doesn't bring it back.
+    const second = new ServersStore("joe", () => undefined);
+    expect(second.snapshot().servers).toEqual([]);
+    // Adding it again clears the removal.
+    const added = second.add({
+      name: "Vaden",
+      host: "vaden.example.com",
+      port: 31337,
+      tls: true,
+      prefix: "",
+      trust: false,
+    });
+    expect(new ServersStore("joe", () => undefined).snapshot().servers.map((s) => s.saved.id)).toEqual([added.id]);
+  });
+
+  it("reuses the picked entry when its address was edited, so one server never shows twice", () => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    const store = new ServersStore("joe", () => undefined);
+    const picked = store.add({
+      name: "Vaden",
+      host: "vaden.example.com",
+      port: 443,
+      tls: true,
+      prefix: "",
+      trust: false,
+    });
+    const edited = store.add(
+      { name: "Vaden", host: "vaden.example.com", port: 31337, tls: true, prefix: "", trust: false },
+      picked.id,
+    );
+    expect(edited.id).toBe(picked.id);
+    expect(store.snapshot().servers.map((s) => [s.saved.id, s.saved.port])).toEqual([[picked.id, 31337]]);
   });
 });

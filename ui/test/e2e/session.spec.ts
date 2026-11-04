@@ -4,6 +4,7 @@
 import type { Page } from "@playwright/test";
 
 import {
+  answerDialog,
   activeTab,
   editorFocused,
   expect,
@@ -83,13 +84,8 @@ test("the session chip names the server's session and copies it; New session sta
   await runDone(page, "CREATE OR REPLACE TEMP TABLE only_here AS SELECT 1 AS v");
   await runDone(page, "BEGIN");
   await expect(tab.getByTestId("in-transaction")).toBeVisible();
-  let asked = "";
-  page.once("dialog", (d) => {
-    asked = d.message();
-    void d.accept();
-  });
   await tab.getByRole("button", { name: "New session" }).click();
-  await expect.poll(() => asked).toContain("The open transaction will be rolled back");
+  await answerDialog(page, { text: "The open transaction will be rolled back" });
   await expect(tab.getByTestId("tab-notice")).toHaveText("Session ended. The next run starts a new one.");
   await expect(tab.getByTestId("in-transaction")).toHaveCount(0);
   const next = await value(page, "SELECT HARDCHARGER_CURRENT_SESSION()");

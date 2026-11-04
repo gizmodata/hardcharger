@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronRight, FileCode2, FileUp, Folder, FolderPlus, MoreHorizontal } from "lucide-react";
+import { confirmDialog } from "../lib/dialogs";
 import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { saveFile } from "../lib/download";
@@ -141,8 +142,9 @@ export function SavedQueriesPanel() {
       item.kind === "folder"
         ? `Delete the folder "${item.name}"${inside ? ` and the ${inside.toLocaleString()} ${inside === 1 ? "item" : "items"} in it` : ""}?`
         : `Delete the saved query "${item.name}"?`;
-    if (!window.confirm(question)) return;
-    void act(() => store.remove(item.id), "Deleted.");
+    void confirmDialog(question, { title: "Delete?", okLabel: "Delete", danger: true }).then((ok) => {
+      if (ok) void act(() => store.remove(item.id), "Deleted.");
+    });
   };
 
   const openQuery = (q: Extract<SavedItem, { kind: "query" }>) =>

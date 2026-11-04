@@ -181,6 +181,54 @@ impl RemoteServer {
     }
 }
 
+/// A saved connection as the workspace names it when removing or renaming one: its id, and its
+/// address (the workspace may hold the same server under an id of its own).
+#[derive(Deserialize, Debug, Clone)]
+pub struct ServerRef {
+    pub id: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub prefix: String,
+}
+
+impl RemoteServer {
+    /// Whether this entry is the server `r` names: the same id, or the same address.
+    pub fn is(&self, r: &ServerRef) -> bool {
+        self.id == r.id
+            || (self.host.eq_ignore_ascii_case(r.host.trim())
+                && self.port == r.port
+                && self.prefix == normal_prefix(&r.prefix))
+    }
+}
+
+/// Removes the entries `r` names; returns their ids.
+pub fn remove_from(list: &mut Vec<RemoteServer>, r: &ServerRef) -> Vec<String> {
+    let removed: Vec<String> = list
+        .iter()
+        .filter(|s| s.is(r))
+        .map(|s| s.id.clone())
+        .collect();
+    list.retain(|s| !s.is(r));
+    removed
+}
+
+/// Renames the entries `r` names; returns whether any was.
+pub fn rename_in(list: &mut [RemoteServer], r: &ServerRef, name: &str) -> bool {
+    let mut any = false;
+    for s in list.iter_mut().filter(|s| s.is(r)) {
+        s.name = name.to_string();
+        any = true;
+    }
+    any
+}
+
+/// A name a person may give a server: not empty, one line, not absurdly long.
+pub fn valid_name(name: &str) -> bool {
+    let n = name.trim();
+    !n.is_empty() && n.len() <= 200 && !n.chars().any(char::is_control)
+}
+
 // ---- Remembered passwords ----
 
 /// Where remembered passwords live: the OS keychain, or (in tests) memory.
@@ -395,6 +443,42 @@ pub mod tests {
         assert!(written.get("url").is_none());
         assert_eq!(written["host"], "::1");
         assert_eq!(written["tls"], true);
+    }
+
+    #[test]
+    fn the_workspace_removes_and_renames_by_id_or_by_address() {
+        let mut list = vec![server("a1"), {
+            let mut s = server("b2");
+            s.host = "Lab.local".into();
+            s.prefix = "/cw".into();
+            s
+        }];
+        // By address, the workspace holding it under an id of its own.
+        let by_address = ServerRef {
+            id: "ui-own-id".into(),
+            host: "lab.local".into(),
+            port: DEFAULT_PORT,
+            prefix: "/cw/".into(),
+        };
+        assert!(rename_in(&mut list, &by_address, "Lab 2"));
+        assert_eq!(list[1].name, "Lab 2");
+        assert_eq!(remove_from(&mut list, &by_address), vec!["b2".to_string()]);
+        // By id.
+        let by_id = ServerRef {
+            id: "a1".into(),
+            host: "elsewhere".into(),
+            port: 1,
+            prefix: String::new(),
+        };
+        assert_eq!(remove_from(&mut list, &by_id), vec!["a1".to_string()]);
+        assert!(list.is_empty());
+        assert!(!rename_in(&mut list, &by_id, "x"));
+        assert!(
+            valid_name("Warehouse")
+                && !valid_name(" ")
+                && !valid_name("a\nb")
+                && !valid_name(&"x".repeat(201))
+        );
     }
 
     #[test]

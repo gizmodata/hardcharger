@@ -181,6 +181,20 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Desktop app: confirmations and questions in the SQL workspace did nothing. The workspace's
+  webview has no `window.confirm`, `prompt` or `alert` (confirm answers "no" at once), so
+  deleting a saved query or folder, closing a tab with unsaved text, ending a session with an
+  open transaction, and (new in 2.7.0) removing or renaming a remote server were silently
+  refused, and "this browser can't keep saved queries" never showed. They now ask in the page,
+  with the app's own dialogs (Enter confirms, Esc cancels), in the desktop app and browsers alike.
+  ESLint refuses the native dialogs, and the e2e suite makes them throw, so they can't come back.
+- Web UI: a remote server the desktop app handed over (its Settings > Remote servers) came back
+  after you removed it, at the next load. A removal sticks now (until you add that server again),
+  and in the desktop app removing or renaming a server in the workspace changes Settings > Remote
+  servers too.
+- Web UI: editing a saved connection's address in Add a server made a second entry with the same
+  name, one of them "not signed in" beside a tab on the other that worked. The edited connection
+  is updated instead, and two servers that do share a name show their addresses.
 - **The CLI printed GEOMETRY and BLOB columns as raw bytes
   ([#22](https://github.com/gizmodata/hardcharger/issues/22)).** A `GEOMETRY` value's WKB went
   straight to stdout in every output mode, as `blob`: control characters in the table, raw bytes

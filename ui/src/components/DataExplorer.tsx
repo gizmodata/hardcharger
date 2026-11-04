@@ -24,6 +24,7 @@ import {
   Type,
   X,
 } from "lucide-react";
+import { confirmDialog, promptDialog } from "../lib/dialogs";
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { currentActiveTab, subscribeActiveTab, useActiveTab } from "../lib/activeTab";
@@ -42,6 +43,7 @@ import {
   tlsModeOf,
   urlOf,
 } from "../lib/servers";
+import { addressLabel } from "../lib/serverAddress";
 import { sqlNameDragType } from "../lib/sqlNameDrag";
 import { requestUpload } from "../lib/upload/request";
 import { errorMessage, useSession } from "../session";
@@ -107,6 +109,8 @@ interface TreeServer {
   version: string;
   state?: ServerState;
   connected: boolean;
+  /** host:port, shown when another server in the list has the same name. */
+  address?: string;
 }
 
 export function DataExplorer() {
@@ -150,6 +154,12 @@ export function DataExplorer() {
         state,
         connected: state.status === "connected" && !!state.signIn,
       });
+    }
+    // Two servers with one name (a saved one and one added with another address) say which is which.
+    for (const server of out) {
+      if (server.state && out.filter((o) => o.label === server.label).length > 1) {
+        server.address = addressLabel(server.state.saved);
+      }
     }
     return out;
   }, [session.localServer, session.identity.version, snapshot]);
@@ -440,18 +450,22 @@ export function DataExplorer() {
       items.push({ label: "Copy URL", run: () => copy(urlOf(state.saved)) });
       items.push({
         label: "Rename…",
-        run: () => {
-          const name = window.prompt("Name for this server", state.saved.name);
-          if (name?.trim()) session.servers.rename(state.saved.id, name.trim());
-        },
+        run: () =>
+          void promptDialog("Name for this server", state.saved.name, {
+            title: "Rename server",
+            okLabel: "Rename",
+          }).then((name) => {
+            if (name?.trim()) session.servers.rename(state.saved.id, name.trim());
+          }),
       });
       items.push({
         label: "Remove from the list",
-        run: () => {
-          if (window.confirm(`Remove ${serverLabel(state)} from the list? Its tabs stay open but can't run.`)) {
-            session.servers.remove(state.saved.id);
-          }
-        },
+        run: () =>
+          void confirmDialog(`Its tabs stay open but can't run.`, {
+            title: `Remove ${serverLabel(state)} from the list?`,
+            okLabel: "Remove",
+            danger: true,
+          }).then((ok) => ok && session.servers.remove(state.saved.id)),
       });
     } else {
       items.push({ label: "Copy URL", run: () => copy(window.location.origin) });
@@ -777,6 +791,11 @@ export function DataExplorer() {
         {server.version && (
           <span className="tree-tag" title="Server version">
             {server.version.split(" ")[0]}
+          </span>
+        )}
+        {server.address && (
+          <span className="tree-type" data-testid="tree-server-address">
+            {server.address}
           </span>
         )}
         {state && !server.connected && (

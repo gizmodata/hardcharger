@@ -745,7 +745,9 @@ async function refresh() {
   if (!native || busy) return;
   try {
     const s = await invoke<Status>("server_status");
-    const changed = !current || current.running !== s.running || current.error !== s.error || current.leftover?.pid !== s.leftover?.pid;
+    // The workspace removed or renamed a remote server: Settings shows it, unless it holds edits.
+    const remotesChanged = !draftDirty && !remoteRows && JSON.stringify(current?.settings.remote_servers ?? []) !== JSON.stringify(s.settings.remote_servers ?? []);
+    const changed = !current || current.running !== s.running || current.error !== s.error || current.leftover?.pid !== s.leftover?.pid || remotesChanged;
     current = s;
     // Keep form focus, scroll position, and text selections while polling.
     if (changed) render();

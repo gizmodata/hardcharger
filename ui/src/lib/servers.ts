@@ -15,7 +15,7 @@ import { type Connection, type DiscoveryDocument, connect } from "@gizmodata/cha
 import { useSyncExternalStore } from "react";
 
 import { type SignedIn, SignInError } from "./auth";
-import { forgetRememberedPassword } from "./desktopBridge";
+import { forgetRememberedPassword, removeDesktopServer, renameDesktopServer } from "./desktopBridge";
 import {
   type ServerAddress,
   addressLabel,
@@ -240,9 +240,34 @@ export function saveSavedServers(
 }
 
 /** Servers the desktop app handed over, merged with the saved list by URL (the saved entry wins). */
+// Servers removed from the list, by serverKey(): the desktop app hands its saved list over
+// every time the workspace opens (and it stays in the tab's sessionStorage), so without this a
+// removed server would come back at the next load. Adding the server again clears it.
+const dismissedKey = (user: string) => `hardcharger-ui:dismissed-servers:v1:${user}`;
+
+export function loadDismissed(user: string, storage: Storage | undefined = local()): Set<string> {
+  try {
+    const raw = storage?.getItem(dismissedKey(user));
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function saveDismissed(user: string, keys: ReadonlySet<string>, storage: Storage | undefined = local()): void {
+  try {
+    if (keys.size === 0) storage?.removeItem(dismissedKey(user));
+    else storage?.setItem(dismissedKey(user), JSON.stringify([...keys]));
+  } catch {
+    // a removal lasts until the page reloads
+  }
+}
+
 export function mergeDesktopServers(
   saved: readonly SavedServer[],
   storage: Storage | undefined = session(),
+  dismissed: ReadonlySet<string> = new Set(),
 ): SavedServer[] {
   let handed: unknown;
   try {
@@ -259,7 +284,7 @@ export function mergeDesktopServers(
     const item = normalizeSaved(
       raw && typeof raw === "object" && !(raw as { id?: unknown }).id ? { ...raw, id: newServerId() } : raw,
     );
-    if (!item || known.has(serverKey(item))) continue;
+    if (!item || known.has(serverKey(item)) || dismissed.has(serverKey(item))) continue;
     known.add(serverKey(item));
     out.push(item);
   }
@@ -540,7 +565,7 @@ export class ServersStore {
     this.#user = user;
     this.#localToken = localToken;
     this.api = new RelayApi(() => this.relayAuth());
-    const saved = mergeDesktopServers(loadSavedServers(user));
+    const saved = mergeDesktopServers(loadSavedServers(user), undefined, loadDismissed(user));
     saveSavedServers(user, saved);
     const keys = new Set(saved.map(serverKey));
     for (const s of loadTabServers()) if (!keys.has(serverKey(s))) saved.push(s);
@@ -598,8 +623,18 @@ export class ServersStore {
   }
 
   /** Remembers a server (not yet signed in). Returns it (an existing one with the URL is reused). */
-  add(server: Omit<SavedServer, "id">): SavedServer {
-    const existing = this.#state.servers.find((s) => serverKey(s.saved) === serverKey(server));
+  /**
+   * Remembers a server (not yet signed in) and returns it. One entry per server: an entry with
+   * the same address is reused, and so is `replaceId` (the saved connection the dialog was
+   * filled from, whose address the person edited), so one server never shows twice.
+   */
+  add(server: Omit<SavedServer, "id">, replaceId?: string): SavedServer {
+    const key = serverKey(server);
+    const dismissed = loadDismissed(this.#user);
+    if (dismissed.delete(key)) saveDismissed(this.#user, dismissed);
+    const existing =
+      this.#state.servers.find((s) => serverKey(s.saved) === key) ??
+      (replaceId ? this.#state.servers.find((s) => s.saved.id === replaceId && !s.signIn) : undefined);
     if (existing) {
       const { transient: _was, ...kept } = existing.saved;
       const saved: SavedServer = { ...kept, ...server };
@@ -667,16 +702,30 @@ export class ServersStore {
     });
   }
 
-  /** Removes a server from the list, disconnecting it first (and forgetting a remembered password). */
+  /**
+   * Removes a server from the list, disconnecting it first, forgetting a remembered password and
+   * (in the desktop app) removing it from Settings > Remote servers. It stays removed: a desktop
+   * hand-over doesn't bring it back.
+   */
   remove(id: string): void {
+    const saved = this.find(id)?.saved;
+    if (saved) {
+      const dismissed = loadDismissed(this.#user);
+      dismissed.add(serverKey(saved));
+      saveDismissed(this.#user, dismissed);
+      void removeDesktopServer(saved).catch(() => {});
+    }
     this.disconnect(id);
     void forgetRememberedPassword(id).catch(() => {});
     this.#set({ ...this.#state, servers: this.#state.servers.filter((s) => s.saved.id !== id) });
   }
 
+  /** Renames a server (in the desktop app, in Settings > Remote servers too). */
   rename(id: string, name: string): void {
     const state = this.find(id);
-    if (state) this.#patch(id, { saved: { ...state.saved, name } });
+    if (!state) return;
+    this.#patch(id, { saved: { ...state.saved, name } });
+    void renameDesktopServer(state.saved, name).catch(() => {});
   }
 
   /** The server's own session for listings (opened once); throws when it isn't connected. */

@@ -70,6 +70,18 @@ export async function watchPage(page: Page): Promise<() => void> {
       problems.push(`HTTP ${resp.status()} for ${resp.request().method()} ${resp.url()}`);
     }
   });
+  // The desktop app's webview has no window.confirm, prompt or alert: here they throw, so a use
+  // the lint missed fails the test (as an uncaught error) in Chromium and WebKit alike.
+  await page.addInitScript(() => {
+    for (const name of ["confirm", "prompt", "alert"] as const) {
+      Object.defineProperty(window, name, {
+        configurable: true,
+        value: () => {
+          throw new Error(`window.${name}(): native dialogs don't exist in the desktop webview`);
+        },
+      });
+    }
+  });
   await page.addInitScript(() => {
     document.addEventListener("securitypolicyviolation", (e) => {
       console.error(`CSP violation: ${e.violatedDirective} blocked ${e.blockedURI || "inline code"}`);
@@ -226,4 +238,23 @@ export async function editorText(page: Page): Promise<string> {
         .map((l) => l.text),
     );
   return lines.join("\n").replaceAll("\u00a0", " ");
+}
+
+/**
+ * The page's own confirm / prompt / notice dialog (lib/dialogs.ts), once it shows: asserts its
+ * text (title and message) matches `text`, fills `value` into a prompt, then OKs it (or Cancels
+ * with `accept: false`). Returns the dialog's text.
+ */
+export async function answerDialog(
+  page: Page,
+  o: { accept?: boolean; text?: RegExp | string; value?: string } = {},
+): Promise<string> {
+  const dialog = page.getByTestId("app-dialog");
+  await expect(dialog).toBeVisible();
+  if (o.text !== undefined) await expect(dialog).toContainText(o.text);
+  const said = (await dialog.textContent()) ?? "";
+  if (o.value !== undefined) await dialog.getByTestId("app-dialog-input").fill(o.value);
+  await dialog.getByTestId(o.accept === false ? "app-dialog-cancel" : "app-dialog-ok").click();
+  await expect(dialog).toHaveCount(0);
+  return said;
 }

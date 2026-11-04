@@ -25,6 +25,19 @@ export default defineConfig(
       "@typescript-eslint/no-confusing-void-expression": "off",
       "@typescript-eslint/no-non-null-assertion": "off",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      // The desktop app's webview has no window.confirm, prompt or alert (confirm answers
+      // false at once): use lib/dialogs.ts, the page's own dialogs.
+      "no-alert": "error",
+      "no-restricted-properties": [
+        "error",
+        ...["confirm", "prompt", "alert"].flatMap((property) =>
+          ["window", "globalThis", "self"].map((object) => ({
+            object,
+            property,
+            message: "Native dialogs don't exist in the desktop app's webview: use lib/dialogs.ts.",
+          })),
+        ),
+      ],
     },
   },
   {

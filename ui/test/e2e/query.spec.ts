@@ -1,4 +1,15 @@
-import { editorText, expect, expectProblem, gridRows, runSql, setSql, signIn, test, editorTabs } from "./fixtures.ts";
+import {
+  answerDialog,
+  editorText,
+  expect,
+  expectProblem,
+  gridRows,
+  runSql,
+  setSql,
+  signIn,
+  test,
+  editorTabs,
+} from "./fixtures.ts";
 
 test.beforeEach(async ({ page, harness }) => {
   await signIn(page, harness.admin);
@@ -95,8 +106,8 @@ test("tabs keep their own SQL and results", async ({ page }) => {
   await editorTabs(page).getByRole("tab", { name: "Query 1" }).click();
   expect((await gridRows(page))[1]).toEqual(["one"]);
   // Its text isn't saved anywhere: closing it asks first.
-  page.once("dialog", (d) => void d.accept());
   await page.getByRole("button", { name: "Close Query 2" }).click();
+  await answerDialog(page, { text: "has text you haven't saved" });
   await expect(editorTabs(page).getByRole("tab")).toHaveCount(1);
 });
 

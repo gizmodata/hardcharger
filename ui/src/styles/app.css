@@ -1929,3 +1929,19 @@ select {
 .field-check input {
   width: auto;
 }
+
+/* The page's own confirm, prompt and notice dialogs (DialogHost) */
+.dialog-app {
+  width: min(440px, calc(100vw - 32px));
+}
+.dialog-app .dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  color: inherit;
+  font-size: inherit;
+}
+.app-dialog-message {
+  margin: 0;
+  line-height: 1.45;
+}

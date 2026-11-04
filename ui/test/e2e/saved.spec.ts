@@ -7,7 +7,17 @@ import { inflateRawSync } from "node:zlib";
 
 import type { Page } from "@playwright/test";
 
-import { activeTab, editorFocused, editorText, expect, setSql, signIn, test, editorTabs } from "./fixtures.ts";
+import {
+  answerDialog,
+  activeTab,
+  editorFocused,
+  editorText,
+  expect,
+  setSql,
+  signIn,
+  test,
+  editorTabs,
+} from "./fixtures.ts";
 
 test.beforeEach(async ({ page, harness }) => {
   await signIn(page, harness.admin);
@@ -76,8 +86,7 @@ test("Ctrl/⌘+S saves a tab's SQL; then it updates the same query; the dot show
   await savedTree(page).getByRole("button", { name: "Daily check", exact: true }).click();
   await expect(editorTabs(page).getByRole("tab", { selected: true })).toHaveText("Daily check");
   await expect(editorTabs(page).getByRole("tab")).toHaveCount(3);
-  page.once("dialog", (d) => void d.accept());
-  await page.keyboard.press("Alt+W");
+  await page.keyboard.press("Alt+W"); // a saved query's tab with nothing unsaved closes without asking
   await savedTree(page).getByRole("button", { name: "Daily check", exact: true }).click();
   await expect(editorTabs(page).getByRole("tab", { selected: true })).toHaveText("Daily check");
   await expect.poll(() => editorText(page)).toBe("SELECT 'second' AS v");
@@ -125,13 +134,12 @@ test("folders: new, rename, move by drag, download, delete; import .sql files", 
   await page.getByLabel("New name").fill("costs 2026");
   await page.getByLabel("New name").press("Enter");
   await expect(savedTree(page).getByRole("treeitem", { name: "costs 2026" })).toBeVisible();
-  let asked = "";
-  page.once("dialog", (d) => {
-    asked = d.message();
-    void d.accept();
-  });
+  // Cancel keeps it; Delete deletes it (the page's own dialog: the desktop webview has no confirm).
   await rowMenu(page, "Reports", "Delete");
-  await expect.poll(() => asked).toBe('Delete the folder "Reports" and the 1 item in it?');
+  await answerDialog(page, { accept: false, text: 'Delete the folder "Reports" and the 1 item in it?' });
+  await expect(reports).toHaveCount(1);
+  await rowMenu(page, "Reports", "Delete");
+  await answerDialog(page, { text: 'Delete the folder "Reports" and the 1 item in it?' });
   await expect(reports).toHaveCount(0);
 });
 

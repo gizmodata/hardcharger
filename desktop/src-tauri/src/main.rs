@@ -326,7 +326,7 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
         .parse::<tauri::Url>()
         .map_err(|e| e.to_string())?;
     let allowed = url.origin();
-    // Its Remember password: three keychain commands, for this window on this origin only.
+    // Its Remember password and its server list: a few commands, for this window on this origin only.
     workspace_passwords::grant(&app, &allowed.ascii_serialization())?;
     let detail_origin = allowed.clone();
     let detail_app = app.clone();
@@ -645,6 +645,7 @@ fn main() {
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(workspace_passwords::init())
+        .plugin(workspace_passwords::init_servers())
         .manage(workspace_passwords::WorkspaceOrigin::default())
         .invoke_handler(tauri::generate_handler![
             server_status,

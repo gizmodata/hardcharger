@@ -1,8 +1,11 @@
-//! The SQL workspace's remembered passwords for saved connections (its Add a server dialog's
-//! Remember password), kept in the OS keychain by remote_servers.rs.
+//! What the SQL workspace may ask the app: its remembered passwords for saved connections (the
+//! Add a server dialog's Remember password, kept in the OS keychain by remote_servers.rs), and
+//! removing or renaming a server in Settings > Remote servers, so the app's list follows the
+//! workspace's.
 //!
 //! The workspace is server content (the local server's /ui, or `hardcharger ui`'s), which gets
-//! no native privileges at all, except these three commands of an app-defined plugin. They are
+//! no native privileges at all, except these commands of two app-defined plugins
+//! (remote-passwords: get, set, delete; remote-servers: remove, rename). They are
 //! granted at run time to the window labelled "workspace" on the exact origin the app opened it
 //! on (Tauri refuses them anywhere else, and every command checks both again), and they read
 //! and write only `remote-server:<id>` entries of the app's own keychain service.
@@ -12,12 +15,13 @@ use std::sync::Mutex;
 use tauri::{
     ipc::CapabilityBuilder,
     plugin::{Builder, TauriPlugin},
-    AppHandle, Manager, Runtime, WebviewWindow,
+    AppHandle, Emitter, Manager, Runtime, WebviewWindow,
 };
 
-use crate::remote_servers::{self, Keychain};
+use crate::remote_servers::{self, Keychain, ServerRef};
 
 pub const PLUGIN: &str = "remote-passwords";
+pub const SERVERS_PLUGIN: &str = "remote-servers";
 
 /// The origin the workspace window was last opened on, and the origins granted so far.
 #[derive(Default)]
@@ -77,6 +81,64 @@ async fn delete<R: Runtime>(window: WebviewWindow<R>, id: String) -> Result<(), 
         .map_err(|e| e.to_string())?
 }
 
+/// Removes the server from Settings > Remote servers (by id or address), with its password.
+#[tauri::command]
+async fn remove<R: Runtime>(window: WebviewWindow<R>, server: ServerRef) -> Result<bool, String> {
+    check(&window)?;
+    if !remote_servers::valid_id(&server.id) {
+        return Err("Not a saved connection's id.".into());
+    }
+    let state = window.state::<crate::Shared>().inner().clone();
+    let removed = crate::work(state, move |s| {
+        let mut gone = Vec::new();
+        s.edit_remote_servers(|list| {
+            gone = remote_servers::remove_from(list, &server);
+            !gone.is_empty()
+        })?;
+        for id in &gone {
+            let _ = remote_servers::forget(&Keychain, id);
+        }
+        Ok(!gone.is_empty())
+    })
+    .await?;
+    if removed {
+        let _ = window.app_handle().emit_to("main", "server-changed", ());
+    }
+    Ok(removed)
+}
+
+/// Renames the server in Settings > Remote servers (by id or address).
+#[tauri::command]
+async fn rename<R: Runtime>(
+    window: WebviewWindow<R>,
+    server: ServerRef,
+    name: String,
+) -> Result<bool, String> {
+    check(&window)?;
+    if !remote_servers::valid_id(&server.id) {
+        return Err("Not a saved connection's id.".into());
+    }
+    if !remote_servers::valid_name(&name) {
+        return Err("A server's name is one line of at most 200 characters.".into());
+    }
+    let state = window.state::<crate::Shared>().inner().clone();
+    let name = name.trim().to_string();
+    let renamed = crate::work(state, move |s| {
+        s.edit_remote_servers(|list| remote_servers::rename_in(list, &server, &name))
+    })
+    .await?;
+    if renamed {
+        let _ = window.app_handle().emit_to("main", "server-changed", ());
+    }
+    Ok(renamed)
+}
+
+pub fn init_servers<R: Runtime>() -> TauriPlugin<R> {
+    Builder::new(SERVERS_PLUGIN)
+        .invoke_handler(tauri::generate_handler![remove, rename])
+        .build()
+}
+
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new(PLUGIN)
         .invoke_handler(tauri::generate_handler![get, set, delete])
@@ -114,7 +176,9 @@ pub fn grant<R: Runtime>(app: &AppHandle<R>, origin: &str) -> Result<(), String>
         .remote(format!("{origin}/*"))
         .permission(format!("{PLUGIN}:allow-get"))
         .permission(format!("{PLUGIN}:allow-set"))
-        .permission(format!("{PLUGIN}:allow-delete"));
+        .permission(format!("{PLUGIN}:allow-delete"))
+        .permission(format!("{SERVERS_PLUGIN}:allow-remove"))
+        .permission(format!("{SERVERS_PLUGIN}:allow-rename"));
     app.add_capability(capability)
         .map_err(|e| format!("Could not set up the workspace: {e}"))
 }
@@ -134,6 +198,7 @@ mod tests {
     fn only_the_workspace_on_its_origin_reaches_the_commands() {
         let app = mock_builder()
             .plugin(init())
+            .plugin(init_servers())
             .manage(WorkspaceOrigin::default())
             .build(tauri::generate_context!(test = true))
             .unwrap();
@@ -146,6 +211,11 @@ mod tests {
         .build()
         .unwrap();
         let call = |url: &str, cmd: &str| {
+            let body = if cmd.starts_with("plugin:remote-servers|") {
+                serde_json::json!({"server": {"id": "../not-an-id", "host": "h", "port": 1, "prefix": ""}, "name": "N"})
+            } else {
+                serde_json::json!({"id": "../not-an-id"})
+            };
             get_ipc_response(
                 &window,
                 InvokeRequest {
@@ -153,7 +223,7 @@ mod tests {
                     callback: CallbackFn(0),
                     error: CallbackFn(1),
                     url: url.parse().unwrap(),
-                    body: InvokeBody::Json(serde_json::json!({"id": "../not-an-id"})),
+                    body: InvokeBody::Json(body),
                     headers: Default::default(),
                     invoke_key: INVOKE_KEY.into(),
                 },
@@ -165,15 +235,22 @@ mod tests {
         let ran = "Not a saved connection's id.";
         let before = call(&page, "plugin:remote-passwords|delete");
         assert!(!before.contains(ran));
+        assert!(call(&page, "plugin:remote-servers|remove").contains("not allowed"));
         grant(app.handle(), origin).unwrap();
         grant(app.handle(), origin).unwrap(); // reopening on the same origin
-        for cmd in ["get", "delete"] {
-            assert!(
-                call(&page, &format!("plugin:remote-passwords|{cmd}")).contains(ran),
-                "{cmd}"
-            );
+        for cmd in [
+            "remote-passwords|get",
+            "remote-passwords|delete",
+            "remote-servers|remove",
+            "remote-servers|rename",
+        ] {
+            assert!(call(&page, &format!("plugin:{cmd}")).contains(ran), "{cmd}");
         }
         // Another origin in the same window, and an app command from the page: refused.
+        assert!(
+            call("http://127.0.0.1:6666/ui/", "plugin:remote-servers|rename")
+                .contains("not allowed on window")
+        );
         let other = call(
             "http://127.0.0.1:6666/ui/",
             "plugin:remote-passwords|delete",

@@ -1,4 +1,5 @@
 import { ChevronDown, HelpCircle, Plus, X } from "lucide-react";
+import { confirmDialog, notifyDialog } from "../lib/dialogs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { publishActiveTab, resetActiveTab } from "../lib/activeTab";
@@ -191,16 +192,24 @@ export default function QueryPage({ theme }: Props) {
           : hasUnsavedText(tab)
             ? `"${tab.title}" has text you haven't saved.`
             : undefined;
-      if (why && !window.confirm(`${why} Close it anyway?`)) return;
-      handles.current.delete(id);
-      setStatuses(({ [id]: _gone, ...rest }) => rest);
-      setTabs((s) => {
-        const index = s.tabs.findIndex((t) => t.id === id);
-        let rest = s.tabs.filter((t) => t.id !== id);
-        if (rest.length === 0) rest = [makeTab([])];
-        const nextActive = s.active === id ? rest[Math.max(0, index - 1)]!.id : s.active;
-        return { tabs: rest, active: nextActive };
-      });
+      const close = () => {
+        handles.current.delete(id);
+        setStatuses(({ [id]: _gone, ...rest }) => rest);
+        setTabs((s) => {
+          const index = s.tabs.findIndex((t) => t.id === id);
+          let rest = s.tabs.filter((t) => t.id !== id);
+          if (rest.length === 0) rest = [makeTab([])];
+          const nextActive = s.active === id ? rest[Math.max(0, index - 1)]!.id : s.active;
+          return { tabs: rest, active: nextActive };
+        });
+      };
+      if (!why) {
+        close();
+        return;
+      }
+      void confirmDialog(why, { title: `Close "${tab.title}" anyway?`, okLabel: "Close tab", danger: true }).then(
+        (ok) => ok && close(),
+      );
     },
     [statuses],
   );
@@ -250,7 +259,10 @@ export default function QueryPage({ theme }: Props) {
       try {
         items = await store.list();
       } catch {
-        window.alert("This browser doesn't let the page keep saved queries (a private window, or blocked site data).");
+        await notifyDialog(
+          "This browser doesn't let the page keep saved queries (a private window, or blocked site data).",
+          "Saved queries aren't available",
+        );
         return;
       }
       const existing = tab.savedQueryId

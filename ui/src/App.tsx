@@ -1,4 +1,5 @@
 import type { Connection, DiscoveryDocument } from "@gizmodata/chargewire";
+import { DialogHost } from "./components/DialogHost";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Layout } from "./components/Layout";
@@ -356,6 +357,7 @@ export function App() {
           <Layout theme={theme} page={page} go={go} />
         )}
         {closeDialog}
+        <DialogHost />
       </SessionContext>
     );
   }
@@ -375,6 +377,7 @@ export function App() {
         }}
       />
       {closeDialog}
+      <DialogHost />
     </>
   );
 }

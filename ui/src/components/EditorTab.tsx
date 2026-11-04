@@ -1,4 +1,5 @@
 import type { TransactionState } from "@gizmodata/chargewire";
+import { confirmDialog } from "../lib/dialogs";
 import { Check, Copy, FileUp, Info, ListOrdered, Play, RotateCcw, Save, Square, Undo2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -320,7 +321,16 @@ export function EditorTab(props: Props) {
   }, [where.catalog, where.schema, where.role, tabSession, app]);
 
   const newSession = async () => {
-    if (inTransaction && !window.confirm("End this session? The open transaction will be rolled back.")) return;
+    if (
+      inTransaction &&
+      !(await confirmDialog("The open transaction will be rolled back.", {
+        title: "End this session?",
+        okLabel: "End session",
+        danger: true,
+      }))
+    ) {
+      return;
+    }
     await tabSession.close();
     setInfo(undefined);
     setNotice("Session ended. The next run starts a new one.");

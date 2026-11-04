@@ -891,6 +891,28 @@ impl Server {
         }
     }
 
+    /// Changes the remote-server list alone (the workspace removed or renamed a server), and
+    /// saves it: unlike save_settings, the local server may be running. `edit` returns whether
+    /// it changed anything.
+    pub fn edit_remote_servers(
+        &mut self,
+        edit: impl FnOnce(&mut Vec<RemoteServer>) -> bool,
+    ) -> Result<bool, String> {
+        let mut settings = self.settings.clone();
+        if !edit(&mut settings.remote_servers) {
+            return Ok(false);
+        }
+        for remote in &settings.remote_servers {
+            remote.validate()?;
+        }
+        private_write(
+            &self.directory.join("settings.json"),
+            &serde_json::to_vec_pretty(&public_settings(&settings)).map_err(|e| e.to_string())?,
+        )?;
+        self.settings = settings;
+        Ok(true)
+    }
+
     pub fn save_settings(&mut self, settings: Settings) -> Result<Status, String> {
         settings.validate()?;
         let mut settings = settings;
@@ -1569,6 +1591,66 @@ mod tests {
         assert!(validate_option_choice("capture_query_profile", &"Off".into()).is_err());
         assert!(validate_option_choice("log_format", &"JSON".into()).is_err());
         assert!(validate_option_choice("memory_limit", &"8GB".into()).is_ok());
+    }
+
+    #[test]
+    fn the_workspace_removes_and_renames_remote_servers_while_the_server_may_run() {
+        let Some(binary) = std::env::var_os("HARDCHARGER_DESKTOP_TEST_SERVER") else {
+            return;
+        };
+        let directory = std::env::temp_dir().join(format!(
+            "hardcharger-remotes-test-{}",
+            random_secret().unwrap()
+        ));
+        let mut server = Server::new(binary.clone().into(), directory.clone()).unwrap();
+        let entry = |id: &str, host: &str| RemoteServer {
+            id: id.into(),
+            name: format!("Server {id}"),
+            host: host.into(),
+            ..RemoteServer::default()
+        };
+        assert!(server
+            .edit_remote_servers(|list| {
+                list.push(entry("a1", "a.example.com"));
+                list.push(entry("b2", "b.example.com"));
+                true
+            })
+            .unwrap());
+        let b = crate::remote_servers::ServerRef {
+            id: "ui-id".into(),
+            host: "B.example.com".into(),
+            port: crate::remote_servers::DEFAULT_PORT,
+            prefix: String::new(),
+        };
+        assert!(server
+            .edit_remote_servers(|list| crate::remote_servers::rename_in(list, &b, "Bee"))
+            .unwrap());
+        assert!(server
+            .edit_remote_servers(|list| !crate::remote_servers::remove_from(
+                list,
+                &crate::remote_servers::ServerRef {
+                    id: "a1".into(),
+                    host: "x".into(),
+                    port: 1,
+                    prefix: String::new()
+                }
+            )
+            .is_empty())
+            .unwrap());
+        // Nothing matched: nothing written.
+        assert!(!server.edit_remote_servers(|_| false).unwrap());
+        drop(server);
+        // Saved: the next launch reads it.
+        let again = Server::new(binary.into(), directory.clone()).unwrap();
+        let names: Vec<_> = again
+            .settings
+            .remote_servers
+            .iter()
+            .map(|s| (s.id.clone(), s.name.clone()))
+            .collect();
+        assert_eq!(names, vec![("b2".to_string(), "Bee".to_string())]);
+        drop(again);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

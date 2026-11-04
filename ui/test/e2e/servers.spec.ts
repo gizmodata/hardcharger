@@ -10,6 +10,7 @@ import type { Locator, Page } from "@playwright/test";
 import type { RemoteServer } from "./harness.ts";
 import {
   activeTab,
+  answerDialog,
   editorFocused,
   editorTabs,
   expect,
@@ -368,4 +369,57 @@ test("a connection not saved for later is this tab's only", async ({ page, harne
   await page.reload();
   await editorFocused(page);
   await expect(serverItem(page, "Once")).toHaveAttribute("data-connected", "true");
+});
+
+async function serverMenu(page: Page, name: string, item: string): Promise<void> {
+  const row = serverItem(page, name).locator(":scope > .tree-row-wrap");
+  await row.hover();
+  await row.getByRole("button", { name: `More for ${name}` }).click();
+  await page.getByRole("menuitem", { name: item }).click();
+}
+
+test("Rename… and Remove from the list ask in the page (the desktop webview has no prompt or confirm)", async ({
+  page,
+  harness,
+}) => {
+  await addServer(page, "Plain", harness.remotes.plain);
+  await serverMenu(page, "Plain", "Rename…");
+  await answerDialog(page, { text: "Name for this server", value: "Renamed" });
+  await expect(serverItem(page, "Renamed")).toBeVisible();
+  await expect(serverItem(page, "Plain")).toHaveCount(0);
+  // Cancel keeps it; Remove removes it, and a reload doesn't bring it back.
+  await serverMenu(page, "Renamed", "Remove from the list");
+  await answerDialog(page, { accept: false, text: "Remove Renamed from the list?" });
+  await expect(serverItem(page, "Renamed")).toBeVisible();
+  await serverMenu(page, "Renamed", "Remove from the list");
+  await answerDialog(page, { text: "Its tabs stay open but can't run." });
+  await expect(serverItem(page, "Renamed")).toHaveCount(0);
+  await page.reload();
+  await editorFocused(page);
+  await expect(serverItem(page, "Renamed")).toHaveCount(0);
+});
+
+test("a server the desktop app handed over stays removed, until it is added again", async ({ page, harness }) => {
+  const a = hostPort(harness.remotes.plain);
+  // What the desktop app's workspace gets at launch (its Settings > Remote servers), kept in
+  // the tab's sessionStorage, so every load merges it in again.
+  await page.addInitScript(
+    (server) => sessionStorage.setItem("hardcharger-ui:desktop-servers", JSON.stringify([server])),
+    { id: "desk-1", name: "From desktop", host: a.host, port: Number(a.port), tls: false, prefix: "", trust: false },
+  );
+  await page.reload();
+  await editorFocused(page);
+  await expect(serverItem(page, "From desktop")).toHaveAttribute("data-connected", "false");
+  await serverMenu(page, "From desktop", "Remove from the list");
+  await answerDialog(page);
+  await expect(serverItem(page, "From desktop")).toHaveCount(0);
+  await page.reload();
+  await editorFocused(page);
+  await expect(serverItem(page, "From desktop")).toHaveCount(0);
+  // Adding it again brings it back, and it stays at the next load.
+  await addServer(page, "Again", harness.remotes.plain);
+  await page.reload();
+  await editorFocused(page);
+  await expect(serverItem(page, "Again")).toBeVisible();
+  await expect(serverItem(page, "From desktop")).toHaveCount(0);
 });
