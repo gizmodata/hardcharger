@@ -123,7 +123,11 @@ test("with a client certificate: the page loads, certificate sign-in works, and 
   expect((await gridRows(page))[1]).toEqual(["ops@example.com", "42"]);
   // The schema browser's metadata calls carry the certificate too.
   await expect(page.getByRole("treeitem", { name: "memory", exact: true })).toBeVisible();
-  // A returning visitor: the bound token from sessionStorage, over new connections.
+  // A returning visitor: the bound token from sessionStorage, over new connections. The
+  // schema browser may still be listing (the tree opens the active catalog): a reload in the
+  // middle of a response aborts it, which WebKit behind Playwright's client-certificate proxy
+  // logs as "Connection terminated unexpectedly" (2.7.0's gate). Let the page settle first.
+  await page.waitForLoadState("networkidle");
   await page.reload();
   await expect(page.getByTestId("header-user")).toContainText("ops@example.com");
   // The password sign-in still works beside it (mtls_require_identity_match is off).
