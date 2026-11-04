@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-04
+
 ### Added
 
 - `hardcharger-server --verify-credentials`: a one-shot decision on a credential, made with the
