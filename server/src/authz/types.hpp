@@ -26,10 +26,15 @@ enum class Privilege {
   kAlterView,
   kCreateMacro,  // scalar and table macros, ON SCHEMA or ON CATALOG
   kDropMacro,    // dropping or replacing one, ON SCHEMA or ON CATALOG
+  kCreateType,   // enums, structs and aliases, ON SCHEMA or ON CATALOG
+  kDropType,     // dropping or replacing one, ON SCHEMA or ON CATALOG
+  kCreateTrigger,  // a trigger on a table the role owns, ON SCHEMA or ON CATALOG
+  kDropTrigger,    // dropping or replacing one not its own, ON SCHEMA or ON CATALOG
   kUsage,           // nextval() / currval() of a sequence: ON SEQUENCE, ON SCHEMA or ON CATALOG
   kCreateSequence,  // ON SCHEMA or ON CATALOG
   kDropSequence,    // dropping one, or setval() of one: ON SCHEMA or ON CATALOG
   kMaintain,        // ANALYZE and VACUUM of a table: ON TABLE, ON SCHEMA or ON CATALOG
+  kExecute,         // calling a table function: ON TABLE FUNCTION name (never part of ALL)
   kAll,  // every object privilege that applies to the target
 };
 
@@ -78,8 +83,8 @@ enum class GrantScope { kObject, kSchema, kCatalog };
 
 // The object privileges GRANT ALL stands for at a scope: every one that applies there.
 // On a table or view the table-level ones and MAINTAIN; on a schema those, CREATE / DROP / ALTER
-// TABLE and VIEW, CREATE / DROP MACRO, and USAGE, CREATE and DROP SEQUENCE; on a catalog
-// all of those and CREATE / DROP SCHEMA.
+// TABLE and VIEW, CREATE / DROP MACRO, TYPE and TRIGGER, USAGE, CREATE and DROP SEQUENCE,
+// and CREATE / DROP SCHEMA (on a schema: its child schemas); on a catalog all of those.
 const std::vector<Privilege>& PrivilegesOfAll(GrantScope scope);
 
 // One identifier, compared case-insensitively (DuckDB's rule for both quoted
@@ -95,11 +100,36 @@ struct ObjectPath {
   std::vector<std::string> schema_path;
   std::string object_name;
 
-  // `cat.sch.obj`, each part quoted when needed.
+  // `cat.sch.obj`, each part quoted when needed. A table function (no catalog, no
+  // schema) is its name alone.
   std::string ToString() const;
+  // A table function's path: no catalog, no schema, the function's name.
+  bool IsTableFunction() const { return catalog.empty() && schema_path.empty() && !object_name.empty(); }
 };
 
 // Quote an identifier for display only when it needs it.
 std::string QuoteIdentifierIfNeeded(const std::string& identifier);
+
+// An argument of a table function that names the files it reads, declared with the
+// EXECUTE grant (GRANT EXECUTE ON TABLE FUNCTION read_hl7 (PATH ARGUMENT 2) TO ...): the
+// call's value there goes through the storage privileges. By position (1-based) or by
+// a named parameter's name. Stored in the grant's column list as "argument:2" /
+// "parameter:files".
+struct PathArgument {
+  int position = 0;       // 0: a named parameter
+  std::string parameter;  // empty: a positional argument
+  // "argument 2" / "parameter files"
+  std::string Text() const;
+  std::string Stored() const;
+  static std::optional<PathArgument> FromStored(const std::string& stored);
+};
+
+// A schema path as one name: its parts joined with dots, a part written quoted when it
+// contains a dot or a double quote (so the nested `sales.payroll` and a top-level schema
+// named "sales.payroll" read differently, and the text goes into SQL between the catalog
+// and the table as it is). Chargewire metadata names schemas the same way.
+std::string SchemaPathText(const std::vector<std::string>& path);
+// The parts of a schema name written that way (the inverse of SchemaPathText).
+std::vector<std::string> ParseSchemaPathText(const std::string& text);
 
 }  // namespace hardcharger::authz

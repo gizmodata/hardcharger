@@ -22,6 +22,8 @@ export interface TabDoc {
   schema: string;
   /** The role the tab acts with (Run as); "" for all of the user's roles. */
   role: string;
+  /** The server the tab's session is on: a saved server's id, or "" for this server. */
+  server: string;
   rowLimit: number;
   /** The saved query this tab edits, and its text as last saved (for the unsaved dot). */
   savedQueryId?: string;
@@ -53,6 +55,7 @@ export function makeTab(tabs: readonly TabDoc[], init: Partial<TabDoc> = {}): Ta
     catalog: "",
     schema: "",
     role: "",
+    server: "",
     rowLimit: defaultRowLimit,
     ...init,
   };
@@ -83,6 +86,7 @@ function normalized(t: TabDoc): TabDoc {
     catalog: typeof t.catalog === "string" ? t.catalog : "",
     schema: typeof t.schema === "string" ? t.schema : "",
     role: typeof t.role === "string" ? t.role : "",
+    server: typeof t.server === "string" ? t.server : "",
     rowLimit: typeof limit === "number" && (rowLimits as readonly number[]).includes(limit) ? limit : defaultRowLimit,
   };
 }

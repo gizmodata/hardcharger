@@ -37,6 +37,15 @@ class Snapshot;
 std::optional<std::string> MacroNameRefusal(duckdb::ClientContext& context, const Snapshot& snapshot,
                                             const ObjectPath& path);
 
+// Why a type at `path` may not be created (`verb` "create"), replaced ("replace") or dropped
+// ("drop") by a user other than the administrator; nothing when it may. A type is found by
+// name where a body is bound (a view's query, a macro's or trigger's body, a policy, a
+// column default or CHECK constraint), so a user's type could stand in for one of those, and
+// dropping or replacing one they name changes what they compute: both are refused, as is a
+// built-in type's name or an extension's.
+std::optional<std::string> TypeNameRefusal(duckdb::ClientContext& context, const Snapshot& snapshot,
+                                           const ObjectPath& path, const std::string& verb);
+
 // The same for a sequence: nextval('s') finds a sequence by name in the search path as a
 // function call finds a macro, so a new sequence must not take (or stand in for) a name
 // that a table's column default, a view or a macro gives nextval(), currval() or setval().

@@ -21,6 +21,9 @@ struct Config {
   int64_t max_result_partitions = 32;    // most partitions a client may have a result split into
   int64_t max_ingest_message_bytes = 64 * 1024 * 1024;  // wire/expanded bytes per ingest IPC message
   bool web_ui = false;  // serve the embedded web UI at /ui on this listener
+  // The web UI may connect to other Hardcharger servers through this one (its Add server;
+  // the relay under /ui/v1/remotes). Off: the UI works with this server alone.
+  bool web_ui_remote_servers = true;
   // Reverse proxies (CIDRs, or single addresses) whose X-Forwarded-For / Forwarded headers
   // name the client in logs, audit, sessions and the per-address sign-in bound; never
   // used for authentication or TLS. Empty: trust none.
@@ -96,6 +99,11 @@ struct Config {
   // Sessions
   int64_t max_sessions = 0;  // non-admin sessions at once; 0 = unlimited
   int64_t session_idle_timeout = 900;  // seconds; 0 = never
+  // Seconds a session may hold a transaction open with nothing running and no request
+  // before it is ended and the transaction rolled back (PostgreSQL's
+  // idle_in_transaction_session_timeout); 0 = never. SET [GLOBAL]
+  // hardcharger.idle_in_transaction_session_timeout changes it at runtime.
+  int64_t idle_in_transaction_session_timeout = 0;
   // How long a retained result (Chargewire §6.5) can be read again, from its statement's end.
   int64_t result_retention_seconds = 3600;
 
@@ -134,6 +142,7 @@ struct Config {
   std::string auth_log_level = "info";
   std::string session_log_level = "info";
   bool graceful_shutdown = true;  // drain on the first stop signal
+  bool stop_on_stdin_close = false;  // a parent that holds stdin open stops the server by dying
   int64_t shutdown_grace_period_seconds = 300;  // 0 = wait for running work forever
   std::string health_check_query = "SELECT 1";
   int64_t health_check_interval_seconds = 5;

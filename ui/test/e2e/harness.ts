@@ -5,8 +5,9 @@
 // Anything missing fails the run; nothing is skipped.
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import https from "node:https";
 import type { Server } from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -15,6 +16,14 @@ import path from "node:path";
 import { connect } from "@gizmodata/chargewire";
 
 import { createUiServer } from "../../scripts/serve.mjs";
+import { makePki } from "./pki.ts";
+
+export interface RemoteServer {
+  url: string;
+  admin: { username: string; password: string };
+  /** The server's certificate's SHA-256 (aa:bb:…), for the ones with TLS. */
+  fingerprint?: string;
+}
 
 export interface HarnessState {
   url: string;
@@ -24,6 +33,16 @@ export interface HarnessState {
   user: { username: string; password: string; catalog: string; roles: string[] };
   hiddenCatalog: string;
   catalog: string;
+  /**
+   * Other servers the UI can add through the relay, each with a `remote` table of 3 rows:
+   * plain HTTP; TLS with a certificate the UI's server trusts (its CA is in SSL_CERT_FILE);
+   * and TLS with a self-signed certificate, to be trusted by its fingerprint.
+   */
+  remotes: { plain: RemoteServer; signed: RemoteServer; selfSigned: RemoteServer };
+  /** The CA file the UI's server trusts (for a standalone UI started with the same trust). */
+  caFile: string;
+  /** The `hardcharger` client binary beside the server's (for `hardcharger ui`). */
+  clientBinary: string;
 }
 
 export const stateVariable = "HARDCHARGER_UI_E2E_STATE";
@@ -81,9 +100,56 @@ export async function startHarness(): Promise<Harness> {
     process.env["HARDCHARGER_UI_TEST_RBAC_STORE_URI"] ??
     "postgresql://hardcharger:hardcharger@127.0.0.1:55460/hardcharger";
 
+  // The other servers (plain, TLS signed by a CA the UI's server trusts, TLS self-signed),
+  // started first so the UI's server can be given the CA as a trusted root.
+  const pkiDir = mkdtempSync(path.join(os.tmpdir(), "hardcharger-ui-e2e-pki-"));
+  const pki = await makePki(pkiDir);
+  const selfSigned = await makeSelfSigned(pkiDir);
+  const remoteSeed = ["CREATE TABLE remote AS SELECT range AS id, 'remote row ' || range AS note FROM range(3)"];
+  const remotePassword = () => `rm:${randomBytes(6).toString("hex")}@e2e`;
+  const plainPassword = remotePassword();
+  const plain = await startServer({
+    binary,
+    adminPassword: plainPassword,
+    extraArgs: ["--init-sql-commands", remoteSeed.join(";")],
+  });
+  const signedPassword = remotePassword();
+  const signed = await startServer({
+    binary,
+    adminPassword: signedPassword,
+    extraArgs: [
+      "--init-sql-commands",
+      remoteSeed.join(";"),
+      "--tls-cert",
+      pki.server.cert,
+      "--tls-key",
+      pki.server.key,
+    ],
+    tls: pki.ca,
+  });
+  const selfPassword = remotePassword();
+  const self = await startServer({
+    binary,
+    adminPassword: selfPassword,
+    extraArgs: [
+      "--init-sql-commands",
+      remoteSeed.join(";"),
+      "--tls-cert",
+      selfSigned.cert,
+      "--tls-key",
+      selfSigned.key,
+    ],
+    tls: selfSigned.ca,
+  });
+
   // A password with ':' and '@' in it: it must survive the sign-in form and the JSON body.
   const adminPassword = `ui:${randomBytes(6).toString("hex")}@e2e`;
-  const server = await startServer({ binary, adminPassword, extraArgs: ["--rbac-store-uri", storeUri] });
+  const server = await startServer({
+    binary,
+    adminPassword,
+    extraArgs: ["--rbac-store-uri", storeUri],
+    env: { SSL_CERT_FILE: pki.ca },
+  });
   const serverUrl = server.url;
 
   const suffix = randomBytes(3).toString("hex");
@@ -137,6 +203,9 @@ export async function startHarness(): Promise<Harness> {
   // Access-control changes reach the server's sessions within about a second (it polls).
   await new Promise((r) => setTimeout(r, 1500));
 
+  const clientBinary =
+    process.env["HARDCHARGER_UI_TEST_CLIENT_BINARY"] ??
+    path.join(path.dirname(binary), process.platform === "win32" ? "hardcharger.exe" : "hardcharger");
   const state: HarnessState = {
     url: uiUrl,
     serverUrl,
@@ -144,6 +213,21 @@ export async function startHarness(): Promise<Harness> {
     user,
     hiddenCatalog: beta,
     catalog,
+    remotes: {
+      plain: { url: plain.url, admin: { username: "admin", password: plainPassword } },
+      signed: {
+        url: signed.url,
+        admin: { username: "admin", password: signedPassword },
+        fingerprint: fingerprintOf(pki.server.cert),
+      },
+      selfSigned: {
+        url: self.url,
+        admin: { username: "admin", password: selfPassword },
+        fingerprint: fingerprintOf(selfSigned.cert),
+      },
+    },
+    caFile: pki.ca,
+    clientBinary,
   };
 
   return {
@@ -168,8 +252,27 @@ export async function startHarness(): Promise<Harness> {
       }
       if (ui) await new Promise<void>((resolve) => ui.close(() => resolve()));
       await server.stop();
+      await Promise.all([plain.stop(), signed.stop(), self.stop()]);
+      rmSync(pkiDir, { recursive: true, force: true });
     },
   };
+}
+
+/** A certificate's SHA-256 fingerprint as the relay shows it (aa:bb:…). */
+export function fingerprintOf(pemFile: string): string {
+  const pem = readFileSync(pemFile, "utf8");
+  const der = Buffer.from(pem.replace(/-----[A-Z ]+-----/g, "").replace(/\s+/g, ""), "base64");
+  return createHash("sha256").update(der).digest("hex").match(/.{2}/g)!.join(":");
+}
+
+/** A self-signed server certificate for 127.0.0.1 (nothing trusts it but its fingerprint). */
+async function makeSelfSigned(dir: string): Promise<{ cert: string; key: string; ca: string }> {
+  // A server certificate from a throwaway CA nothing trusts (the UI's server gets the other
+  // CA as its root): as good as self-signed to the relay, which can only trust it by its
+  // fingerprint. `ca` is for the harness's own health check of that server.
+  mkdirSync(path.join(dir, "self"), { recursive: true });
+  const own = await makePki(path.join(dir, "self"));
+  return { ...own.server, ca: own.ca };
 }
 
 interface RunningServer {
@@ -187,6 +290,8 @@ async function startServer(o: {
   extraArgs: string[];
   port?: number;
   env?: NodeJS.ProcessEnv;
+  /** A server with TLS: the PEM to trust when waiting for it (its URL is then https://). */
+  tls?: string;
 }): Promise<RunningServer> {
   const work = mkdtempSync(path.join(os.tmpdir(), "hardcharger-ui-e2e-"));
   const port = o.port ?? (await freePort());
@@ -205,7 +310,9 @@ async function startServer(o: {
     "false",
     "--print-queries",
     "false",
-    ...(embedded ? ["--web-ui"] : []),
+    // The UI's own endpoints (its contract, the relay to other servers) live on the server
+    // with the web UI on, whether the page comes from the server or from scripts/serve.mjs.
+    "--web-ui",
     ...o.extraArgs,
   ];
   const child: ChildProcess = spawn(o.binary, args, {
@@ -218,13 +325,22 @@ async function startServer(o: {
   let exited = false;
   child.on("exit", () => (exited = true));
 
-  const url = `http://127.0.0.1:${port}`;
+  const url = `${o.tls ? "https" : "http"}://127.0.0.1:${port}`;
+  const healthy = (): Promise<boolean> =>
+    o.tls
+      ? new Promise((resolve) => {
+          const req = https.get(`${url}/chargewire/v1/health`, { ca: readFileSync(o.tls!) }, (res) => {
+            res.resume();
+            resolve(res.statusCode === 200);
+          });
+          req.on("error", () => resolve(false));
+        })
+      : fetch(`${url}/chargewire/v1/health`).then((r) => r.ok);
   const deadline = Date.now() + 30_000;
   for (;;) {
     if (exited) throw new Error(`hardcharger-server exited at startup:\n${log.slice(-3000)}`);
     try {
-      const r = await fetch(`${url}/chargewire/v1/health`);
-      if (r.ok) break;
+      if (await healthy()) break;
     } catch {
       // not listening yet
     }

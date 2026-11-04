@@ -26,7 +26,7 @@
     "vendor:verify": "node scripts/vendor-chargewire.mjs --verify && node scripts/vendor-sheetjs.mjs --verify"
   },
   "dependencies": {
-    "@gizmodata/chargewire": "file:vendor/gizmodata-chargewire-1.0.0.tgz",
+    "@gizmodata/chargewire": "file:vendor/gizmodata-chargewire-2.1.0.tgz",
     "apache-arrow": "^21.2.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.59.0",

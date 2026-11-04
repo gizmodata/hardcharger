@@ -23,6 +23,7 @@ class SessionObjectResolver : public ObjectResolver {
   arrow::Result<ResolvedObject> ResolveObject(const QualifiedName& name) override;
   arrow::Result<ObjectPath> ResolveSequence(const QualifiedName& name) override;
   arrow::Result<ObjectPath> ResolveSchema(const QualifiedName& name) override;
+  arrow::Result<ObjectPath> ResolveTableFunction(const QualifiedName& name, bool granting) override;
   arrow::Result<std::string> ResolveCatalog(const std::string& name) override;
   arrow::Status CheckRowPredicate(const ResolvedObject& table,
                                   const std::string& predicate) override;
@@ -43,6 +44,8 @@ ObjectPath PathOfEntry(duckdb::CatalogEntry& entry);
 // SHA-256 (hex) of a view's query as DuckDB prints it back: the same for the
 // CREATE VIEW that made it and for the view DuckDB reads from any catalog.
 std::string ViewDefinitionHash(const duckdb::SelectStatement& query);
+// SHA-256 (hex) of any definition text (a trigger's CREATE statement as DuckDB prints it).
+std::string DefinitionTextHash(const std::string& text);
 
 // A bound view's output column names, as grants on the view name them (the
 // view's own column aliases, else the names its query gives them). Empty when

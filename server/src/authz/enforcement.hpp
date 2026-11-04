@@ -32,6 +32,11 @@ boost::json::object PolicyInput(const Snapshot& snapshot, const Principal& princ
 
 constexpr const char* kRbacSessionStateName = "hardcharger_authz";
 
+// Why EXECUTE on the table function `name_lower` can't be granted, if it can't: every user
+// may call it already, the storage privileges check it, or it stays the administrator's
+// (the server's own, the engine's internals, and the ones that run SQL or reach memory).
+std::optional<std::string> UngrantableTableFunction(const std::string& name_lower);
+
 // Ownership bookkeeping a statement asks for once it has run successfully.
 struct PendingOwnership {
   enum class Kind { kCreate, kDrop };
@@ -46,6 +51,7 @@ struct PendingOwnership {
 // the statement fails).
 struct RecordedOwnership {
   ObjectPath object;
+  ObjectType type = ObjectType::kTable;
   std::optional<OwnerRecord> previous;
 };
 

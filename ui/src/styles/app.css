@@ -1580,3 +1580,119 @@ select {
   display: inline-flex;
   gap: 2px;
 }
+
+/* Servers in the schema browser */
+.tree-server {
+  font-weight: 600;
+}
+.tls-lock {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+.tls-lock-verified {
+  color: var(--ok, #1a7f37);
+}
+.tls-lock-fingerprint {
+  color: var(--warn, #9a6a00);
+}
+.tls-lock-plaintext {
+  color: var(--danger, #b42318);
+}
+.tree-server-status {
+  font-family: inherit;
+  font-style: italic;
+}
+.tree-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px;
+}
+.search-group-head {
+  padding: 6px 8px 2px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.search-group > ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+/* A tab on another server, and the toolbar's reminder of it */
+.tab-server {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+.chip-server {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The Add server dialog */
+.dialog-server {
+  width: min(480px, 92vw);
+}
+.dialog-server .dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  color: inherit;
+  font-size: inherit;
+}
+.dialog-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.dialog-note svg {
+  flex: none;
+  margin-top: 2px;
+}
+.dialog-warning {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--warn-soft, #fff1cc);
+  color: var(--warn, #9a6a00);
+}
+.certificate-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0 0 10px;
+  font-size: 12.5px;
+}
+.certificate-facts dt {
+  color: var(--faint);
+}
+.certificate-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.certificate-fingerprint {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.field-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.field-check input {
+  width: auto;
+}

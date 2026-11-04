@@ -224,7 +224,7 @@ class StoreTransaction {
   // One record per (role, privilege, grantor).
   arrow::Status UpsertSystemPrivilege(const SystemPrivilegeRecord& record);
   arrow::Status DeleteSystemPrivilege(const SystemPrivilegeRecord& record);
-  arrow::Status DeleteOwner(const ObjectPath& object);
+  arrow::Status DeleteOwner(const ObjectPath& object, ObjectType type);
 
   // A fresh random id (UUID v4 text).
   static std::string NewId();

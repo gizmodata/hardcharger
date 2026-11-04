@@ -200,3 +200,20 @@ describe("cancelNote", () => {
     expect(ofStops(4, 3)).toBe("Statement 4 of 4 was cancelled; nothing from it was saved (statements 1 to 3 ran).");
   });
 });
+
+describe("batchBytes", () => {
+  it("counts an empty batch with a LIST column as 0 bytes instead of throwing (#23)", async () => {
+    const { Field, List, RecordBatchStreamWriter, Table, Utf8, tableFromIPC, vectorFromArray } =
+      await import("apache-arrow");
+    const { batchBytes } = await import("../../src/lib/script");
+    const list = new Table({ v: vectorFromArray([["a"], ["b", "c"]], new List(new Field("item", new Utf8()))) });
+    const writer = new RecordBatchStreamWriter();
+    writer.reset(undefined, list.schema);
+    writer.finish();
+    const empty = tableFromIPC(writer.toUint8Array(true));
+    expect(empty.numRows).toBe(0);
+    expect(() => empty.batches[0]!.data.byteLength).toThrow(); // Arrow's own count, the bug's cause
+    expect(batchBytes(empty.batches[0]!)).toBe(0);
+    expect(batchBytes(list.batches[0]!)).toBe(list.batches[0]!.data.byteLength);
+  });
+});

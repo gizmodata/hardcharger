@@ -1,4 +1,4 @@
-import { HelpCircle, Plus, X } from "lucide-react";
+import { ChevronDown, HelpCircle, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { publishActiveTab, resetActiveTab } from "../lib/activeTab";
@@ -16,8 +16,10 @@ import { useStoredSize } from "../lib/storedSize";
 import { type StoredTabs, type TabDoc, hasUnsavedText, loadTabs, makeTab, maxTabs, saveTabs } from "../lib/tabs";
 import type { Where } from "../lib/tabSession";
 import type { ThemeName } from "../lib/theme";
+import { localServerId, serverLabel, useServers } from "../lib/servers";
 import { type QueryRequest, useSession } from "../session";
 import { EditorTab, type TabHandle, type TabStatus } from "./EditorTab";
+import { FloatingMenu, type MenuItem } from "./FloatingMenu";
 import { HelpDialog } from "./HelpDialog";
 import { ResizeHandle } from "./ResizeHandle";
 import { SaveQueryDialog } from "./SaveQueryDialog";
@@ -69,6 +71,17 @@ export default function QueryPage({ theme }: Props) {
   const [editorHeight, setEditorHeight, resetEditorHeight] = useStoredSize(editorSize);
   const [help, setHelp] = useState(false);
   const [idleTimeoutS, setIdleTimeoutS] = useState<number | undefined>();
+  // The servers a new tab can open on, and each tab's server's name.
+  const servers = useServers(session.servers);
+  const serverName = useCallback(
+    (id: string): string | undefined => {
+      if (!id) return undefined;
+      const state = servers.servers.find((s) => s.saved.id === id);
+      return state ? serverLabel(state) : "a removed server";
+    },
+    [servers],
+  );
+  const [serverMenu, setServerMenu] = useState<{ x: number; y: number } | null>(null);
   // On a phone-sized screen a note says the editor is easier on a larger one (CSS shows it
   // only there); its × hides it in this browser.
   const [noteHidden, setNoteHidden] = useState(narrowNoteHidden);
@@ -118,6 +131,7 @@ export default function QueryPage({ theme }: Props) {
   const [roles, setRoles] = useState<string[]>([]);
   useEffect(() => {
     let live = true;
+    if (!session.localServer) return;
     grantedRoles(session.connection, user, session.isAdmin).then(
       (r) => live && setRoles(r),
       () => {},
@@ -148,9 +162,13 @@ export default function QueryPage({ theme }: Props) {
     const now = tabsNow.current;
     if (now.tabs.length >= maxTabs) return undefined;
     const current = now.tabs.find((t) => t.id === now.active);
+    // A tab opens on the active tab's server; on another server, with that server's own
+    // catalog and schema (the session's defaults there).
+    const sameServer = (init.server ?? current?.server ?? "") === (current?.server ?? "");
     const tab = makeTab(now.tabs, {
-      catalog: current?.catalog ?? "",
-      schema: current?.schema ?? "",
+      catalog: sameServer ? (current?.catalog ?? "") : "",
+      schema: sameServer ? (current?.schema ?? "") : "",
+      server: current?.server ?? "",
       rowLimit: current?.rowLimit ?? 1000,
       ...init,
     });
@@ -199,12 +217,15 @@ export default function QueryPage({ theme }: Props) {
           return;
         }
       }
-      if (r.newTab) {
+      // A request for another server than the active tab's opens a tab there.
+      const activeServer = tabsNow.current.tabs.find((t) => t.id === tabsNow.current.active)?.server ?? "";
+      if (r.newTab || (r.server !== undefined && r.server !== activeServer)) {
         const id = addTab({
           ...(r.saved ? { savedQueryId: r.saved.id, savedSql: r.saved.sql } : {}),
           sql: r.sql,
           ...(r.title ? { title: r.title } : {}),
           ...(r.catalog ? { catalog: r.catalog, schema: r.schema ?? "" } : {}),
+          ...(r.server !== undefined ? { server: r.server } : {}),
         });
         if (id && r.run) setRunOnOpen((s) => new Set(s).add(id));
       } else {
@@ -293,10 +314,14 @@ export default function QueryPage({ theme }: Props) {
       session.registerQueryPage({
         open,
         insert: (text) => handles.current.get(activeRef.current)?.insert(text),
-        pointTabAt: (catalog, schema) => {
+        pointTabAt: (catalog, schema, server) => {
           const id = activeRef.current;
           if ((statusesRef.current[id]?.transaction ?? "none") !== "none") {
             return "The active tab has an open transaction: commit or roll it back first.";
+          }
+          const tab = tabsNow.current.tabs.find((t) => t.id === id);
+          if (server !== undefined && (tab?.server ?? "") !== server) {
+            return "The active tab is on another server: open a tab on this server first (its menu has New tab).";
           }
           patchTab(id, { catalog, schema: schema ?? "" });
           return undefined;
@@ -314,6 +339,7 @@ export default function QueryPage({ theme }: Props) {
       schema: activeTab?.schema || defaults.schema,
       transaction: activeStatus?.transaction ?? "none",
       role: activeTab?.role ?? "",
+      server: activeTab?.server ?? "",
       sessionId: activeStatus?.sessionId ?? "",
       title: activeTab?.title ?? "",
     });
@@ -321,6 +347,7 @@ export default function QueryPage({ theme }: Props) {
     activeTab?.catalog,
     activeTab?.schema,
     activeTab?.role,
+    activeTab?.server,
     activeStatus?.transaction,
     activeStatus?.sessionId,
     activeTab?.title,
@@ -459,6 +486,15 @@ export default function QueryPage({ theme }: Props) {
                   >
                     {marker && <span className={`tab-marker tab-marker-${marker}`} data-marker={marker} aria-hidden />}
                     {t.title}
+                    {t.server && (
+                      <span
+                        className="tab-server"
+                        title={`On ${serverName(t.server) ?? "another server"}`}
+                        data-server={t.server}
+                      >
+                        {serverName(t.server)}
+                      </span>
+                    )}
                     {unsaved && (
                       <span className="tab-unsaved" title="Unsaved changes" aria-label="unsaved changes">
                         {" "}
@@ -491,6 +527,21 @@ export default function QueryPage({ theme }: Props) {
           >
             <Plus size={14} />
           </button>
+          {(servers.servers.some((s) => s.status === "connected") || !session.localServer) && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon btn-sm"
+              aria-label="New tab on a server"
+              title="New tab on… (pick the server)"
+              data-testid="new-tab-on"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                setServerMenu({ x: r.left, y: r.bottom });
+              }}
+            >
+              <ChevronDown size={14} />
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-ghost btn-icon btn-sm tabs-help"
@@ -503,6 +554,20 @@ export default function QueryPage({ theme }: Props) {
         </div>
       </div>
       {help && <HelpDialog idleTimeoutS={idleTimeoutS} onClose={() => setHelp(false)} />}
+      {serverMenu && (
+        <FloatingMenu
+          x={serverMenu.x}
+          y={serverMenu.y}
+          items={[
+            { label: "New tab on", heading: true },
+            ...(session.localServer ? [{ label: "This server", run: () => addTab({ server: localServerId }) }] : []),
+            ...servers.servers
+              .filter((s) => s.status === "connected")
+              .map((s): MenuItem => ({ label: serverLabel(s), run: () => addTab({ server: s.saved.id }) })),
+          ]}
+          onClose={() => setServerMenu(null)}
+        />
+      )}
 
       {tabs.map((t) => (
         <EditorTab
@@ -533,7 +598,8 @@ export default function QueryPage({ theme }: Props) {
           onNewTab={() => addTab()}
           onSave={(sql) => void save(t.id, false, sql)}
           onSaveAs={(sql) => void save(t.id, true, sql)}
-          roles={roles}
+          roles={t.server ? [] : roles}
+          {...(t.server ? { serverName: serverName(t.server) ?? "a removed server" } : {})}
           onCloseTab={() => closeTab(t.id)}
           onReady={(h) => {
             if (h) handles.current.set(t.id, h);

@@ -18,6 +18,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     dialog.current?.showModal();
     const controller = new AbortController();
+    if (!session.localServer) return () => controller.abort();
     session.connection.metadata.serverInfo({ signal: controller.signal }).then(setInfo, (err: unknown) => {
       if (controller.signal.aborted || session.checkSignIn(err)) return;
       setError(errorMessage(err));
@@ -42,10 +43,14 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
         "none"
       ),
     ],
-    ["Signed in as", `${identity.user} (${identity.role})`],
-    ["Session", identity.sessionId],
-    ["Instance", identity.instanceId ?? ""],
-    ["Sign-in expires", new Date(auth.expiresAt).toLocaleString()],
+    ...(session.localServer
+      ? ([
+          ["Signed in as", `${identity.user} (${identity.role})`],
+          ["Session", identity.sessionId],
+          ["Instance", identity.instanceId ?? ""],
+          ["Sign-in expires", new Date(auth.expiresAt).toLocaleString()],
+        ] as [string, ReactNode][])
+      : ([["Local server", "none: this UI works with the servers you add"]] as [string, ReactNode][])),
     ["Web UI", __UI_VERSION__],
   ];
   const more = info ? remainingServerInfo(info) : [];

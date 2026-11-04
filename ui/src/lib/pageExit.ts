@@ -18,8 +18,10 @@ export function requestWindowClose(): void {
 
 export interface OpenSessions {
   token: string;
-  /** The Chargewire session ids the page holds open. */
+  /** The Chargewire session ids the page holds open on this server. */
   ids: string[];
+  /** Sessions on other servers, each with the relay path and headers that reach it. */
+  remote?: { base: string; headers: Record<string, string>; ids: string[] }[];
 }
 
 /** Sends the DELETE of each session; returns how many it sent. */
@@ -32,7 +34,18 @@ export function endSessions(open: OpenSessions | undefined): number {
       headers: { Authorization: `Bearer ${open.token}` },
     }).catch(() => {});
   }
-  return open.ids.length;
+  let sent = open.ids.length;
+  for (const r of open.remote ?? []) {
+    for (const id of r.ids) {
+      fetch(`${r.base}/v1/sessions/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        keepalive: true,
+        headers: r.headers,
+      }).catch(() => {});
+      sent++;
+    }
+  }
+  return sent;
 }
 
 /** How many reasons the page has now to ask before it is left (warnBeforeLeaving). */
@@ -82,8 +95,10 @@ export function endSessionsOnExit(
     const now = open();
     if (!now) return;
     const ids = now.ids.filter((id) => !ended.has(id));
-    endSessions({ token: now.token, ids });
+    const remote = (now.remote ?? []).map((r) => ({ ...r, ids: r.ids.filter((id) => !ended.has(id)) }));
+    endSessions({ token: now.token, ids, remote });
     for (const id of ids) ended.add(id);
+    for (const r of remote) for (const id of r.ids) ended.add(id);
   };
   const beforeUnload = () => {
     if (warnings === 0 || closeApproved) exit();

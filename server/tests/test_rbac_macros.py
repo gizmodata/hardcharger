@@ -14,7 +14,7 @@ from rbac import ChargewireError, expect_allowed, expect_blocked, start_rbac_ser
 
 NEEDS_CREATE = "it needs CREATE MACRO on schema"
 NEEDS_DROP = "it needs DROP MACRO on schema"
-IN_USE = "would change what a view, a row or masking policy, or a macro one of them uses computes"
+IN_USE = "would change what a view, a trigger, a row or masking policy, or a macro one of them uses computes"
 BUILT_IN = "would replace the built-in function"
 
 

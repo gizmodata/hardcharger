@@ -40,7 +40,14 @@ follow-up work.
    Stop and Restart ask for confirmation before closing SQL windows, interrupting active
    work and disconnecting clients. Cancel or Escape leaves the server running.
 4. Close the dashboard to keep the server running. Choose **Quit Hardcharger** to shut down
-   the server and app. **Launch at login** is optional, under Settings.
+   the server and app. Quitting any other way (the Dock, a logout, a shutdown) stops the
+   server too, and if the app ever goes away without stopping it (a crash, a forced quit),
+   the server notices and stops on its own. **Launch at login** is optional, under Settings.
+
+If a server from a previous run of the app is still running when the app opens (one left by
+an older version, for example), the Local server page says so, with its process id and port,
+and offers **Stop it**. Until it is stopped, Start refuses with that message rather than
+"port already in use".
 
 The controller starts the same `hardcharger-server` executable as the command-line package,
 as a child process. The SQL workspace connects to it over Chargewire. The app bundles the

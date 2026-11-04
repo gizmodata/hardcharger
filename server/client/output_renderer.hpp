@@ -43,6 +43,9 @@ int GetTerminalWidth();
 
 // Map Arrow type to DuckDB-friendly display name (e.g., "varchar", "bigint")
 std::string FriendlyTypeName(const std::shared_ptr<arrow::DataType>& type);
+// The same for a table's column, which can name what the type alone can't: an ENUM's values
+// (ENUM('low', 'high'), from the column's dictionary), as DuckDB names the type.
+std::string ColumnTypeName(const arrow::Table& table, int column);
 
 // Registers VARIANT and arrow.opaque readers: VARIANT is decoded for display and
 // JSON, and DuckDB HUGEINT/UHUGEINT retain exact integers with arrow_lossless_conversion.

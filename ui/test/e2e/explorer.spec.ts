@@ -24,7 +24,7 @@ test.beforeEach(async ({ page, harness }) => {
 });
 
 function tree(page: Page) {
-  return page.getByRole("tree", { name: "Catalogs" });
+  return page.getByRole("tree", { name: "Servers" });
 }
 async function openSales(page: Page, catalog: string) {
   const sales = tree(page)

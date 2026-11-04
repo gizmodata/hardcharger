@@ -9,13 +9,16 @@ import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, ty
 import "./style.css";
 import "./palette.css";
 
-interface Settings { port: number; start_on_open: boolean; server_options: Record<string, unknown>; network?: NetworkSettings }
+interface RemoteServer { id: string; name: string; url: string; tls: "verified" | "fingerprint" | "plaintext"; fingerprint: string }
+interface Settings { port: number; start_on_open: boolean; server_options: Record<string, unknown>; network?: NetworkSettings; remote_servers?: RemoteServer[] }
 interface Status {
   running: boolean; pid: number | null; port: number; endpoint: string;
   database: string; logFile: string; uptimeSeconds: number; databaseBytes: number;
   version: string; error: string | null; settings: Settings;
   settingsPending?: boolean; generatedCertificate?: GeneratedCertificate | null;
   pendingNetwork?: boolean | null;
+  /** A server this app started in an earlier run that is still running (issue #28). */
+  leftover?: { pid: number; host: string; port: number } | null;
 }
 
 const native = isTauri();
@@ -33,6 +36,8 @@ let draft: Record<string, string> | null = null;
 let draftDirty = false;
 let pendingUpdate: Promise<void> = Promise.resolve();
 let markedNetwork: boolean | null = null;
+/** The remote servers as edited (rows added or removed since the last render); null: as saved. */
+let remoteRows: RemoteServer[] | null = null;
 let detectedNetwork: NetworkInfo | null = null;
 let generatedCertificate: GeneratedCertificate | null = null;
 let fieldErrors: Record<string, string> = {};
@@ -176,6 +181,7 @@ function readSettings(): Settings {
     tls_cert: data["network-cert"].trim(), tls_key: data["network-key"].trim(), username: data["network-user"].trim(),
     password: data["network-password"] || (previous.password === "__HARDCHARGER_STORED_SECRET__" ? previous.password : ""),
   };
+  const remote_servers = readRemoteServers(data);
   fieldErrors = networkErrors(network);
   const coverage = coverageProblem(data);
   if (coverage && !fieldErrors["network-cert"]) fieldErrors["network-cert"] = coverage;
@@ -184,7 +190,55 @@ function readSettings(): Settings {
     render();
     throw new Error(`Network setup is incomplete. ${Object.values(fieldErrors).join(" ")}`);
   }
-  return { port, start_on_open: data.start === "on", server_options: options, network };
+  return { port, start_on_open: data.start === "on", server_options: options, network, remote_servers };
+}
+
+/** The remote servers as the form holds them: a row per saved or added server, URL required. */
+function readRemoteServers(data: Record<string, string>): RemoteServer[] {
+  const rows = remoteRows ?? current?.settings.remote_servers ?? [];
+  const out: RemoteServer[] = [];
+  rows.forEach((row, i) => {
+    const url = (data[`remote-url-${i}`] ?? row.url).trim();
+    const name = (data[`remote-name-${i}`] ?? row.name).trim();
+    const tls = (data[`remote-tls-${i}`] ?? row.tls) as RemoteServer["tls"];
+    const fingerprint = (data[`remote-fingerprint-${i}`] ?? row.fingerprint).trim();
+    if (!url && !name) return; // an empty row is dropped
+    if (!url) throw new Error(`Remote server ${name || i + 1}: enter its URL (https://host:31337).`);
+    if (!/^(https?|chargewire):\/\//i.test(url)) throw new Error(`Remote server ${name || url}: the URL must start with https:// or http://.`);
+    if (tls === "fingerprint" && !/^[0-9a-f]{64}$/i.test(fingerprint.replace(/[:\s-]/g, ""))) throw new Error(`Remote server ${name || url}: trusting by fingerprint needs the certificate's SHA-256 fingerprint.`);
+    out.push({ id: row.id || crypto.randomUUID(), name: name || url.replace(/^\w+:\/\//, ""), url, tls, fingerprint: tls === "fingerprint" ? fingerprint : "" });
+  });
+  return out;
+}
+
+/** The remote-server rows as the form shows them now (edited values included). */
+function currentRemoteRows(): RemoteServer[] {
+  const rows = remoteRows ?? current?.settings.remote_servers ?? [];
+  const data = formValues() ?? {};
+  return rows.map((row, i) => ({
+    id: row.id,
+    name: data[`remote-name-${i}`] ?? row.name,
+    url: data[`remote-url-${i}`] ?? row.url,
+    tls: (data[`remote-tls-${i}`] ?? row.tls) as RemoteServer["tls"],
+    fingerprint: data[`remote-fingerprint-${i}`] ?? row.fingerprint,
+  }));
+}
+
+function remoteServersView(s: Status | null) {
+  const rows = remoteRows ?? s?.settings.remote_servers ?? [];
+  const disabled = !native || busy ? "disabled" : "";
+  // The section sits beside the settings form: its fields belong to the form by attribute.
+  const row = (r: RemoteServer, i: number) => `<div class="remote-row" data-remote-row="${i}">
+      <label class="field"><span>Name</span><input form="settings-form" name="remote-name-${i}" value="${esc(r.name)}" placeholder="Warehouse" ${disabled}></label>
+      <label class="field"><span>URL</span><input form="settings-form" name="remote-url-${i}" value="${esc(r.url)}" placeholder="https://db.example.com:31337" spellcheck="false" ${disabled}></label>
+      <label class="field"><span>Certificate</span><select form="settings-form" name="remote-tls-${i}" ${disabled}><option value="verified" ${r.tls === "verified" ? "selected" : ""}>Verified (trusted roots)</option><option value="fingerprint" ${r.tls === "fingerprint" ? "selected" : ""}>Trusted by fingerprint</option><option value="plaintext" ${r.tls === "plaintext" ? "selected" : ""}>None (plain http://)</option></select></label>
+      <label class="field"><span>SHA-256 fingerprint</span><input form="settings-form" name="remote-fingerprint-${i}" value="${esc(r.fingerprint)}" placeholder="aa:bb:…" spellcheck="false" ${disabled}><small>Only for Trusted by fingerprint: the workspace shows it when it first connects.</small></label>
+      <button type="button" class="button" data-remove-remote="${i}" ${disabled}>Remove</button>
+    </div>`;
+  return `<section class="card detail-card remote-servers" aria-label="Remote servers"><div class="section-heading"><div><h3>Remote servers</h3><p>Other Hardcharger servers the SQL workspace lists. Names, addresses and how each certificate is trusted; you sign in to each one in the workspace. Saved with the settings; the local server need not run.</p></div></div>
+    ${rows.length ? rows.map(row).join("") : '<p class="muted" data-no-remotes>No remote servers yet.</p>'}
+    <button type="button" class="button" id="add-remote" ${disabled}>Add a remote server</button>
+  </section>`;
 }
 
 function displayFieldErrors() {
@@ -197,13 +251,20 @@ function displayFieldErrors() {
   }
 }
 
+async function stopLeftover() {
+  busy = true; error = ""; render();
+  try { current = await invoke<Status>("stop_leftover"); }
+  catch (e) { showError(e); }
+  finally { busy = false; render(); }
+}
+
 async function discardSettings() {
   if (busy) return;
   try {
     await pendingUpdate.catch(() => {});
     if (native) await invoke("settings_pending", { pending: false });
     if (current) { current.settingsPending = false; current.pendingNetwork = null; }
-    markedNetwork = null;
+    markedNetwork = null; remoteRows = null;
     draft = null; draftDirty = false; fieldErrors = {}; generatedCertificate = null; error = ""; settingsNotice = "";
     render();
   } catch (e) { showError(e); }
@@ -294,7 +355,7 @@ function render() {
       <div class="nav-label">WORKSPACE</div>
       <nav aria-label="Main navigation">
         <button data-tab="server" class="nav-item ${tab === "server" ? "active" : ""}">${icon("server")}Local server<span class="nav-dot ${running ? "running" : ""}"></span></button>
-        <button data-action="workspace" class="nav-item" ${!running || !native || busy ? "disabled" : ""}>${icon("workspace")}SQL workspace<span class="external">↗</span></button>
+        <button data-action="workspace" class="nav-item" title="${running ? "Open the SQL workspace on the local server" : "Open the SQL workspace for your remote servers (the local server is stopped)"}" ${!native || busy ? "disabled" : ""}>${icon("workspace")}SQL workspace<span class="external">↗</span></button>
         <button data-tab="logs" class="nav-item ${tab === "logs" ? "active" : ""}">${icon("logs")}Logs</button>
       </nav>
       <div class="nav-label second">APPLICATION</div>
@@ -308,6 +369,7 @@ function render() {
       <header><span>Hardcharger <span class="slash">/</span> ${tab === "server" ? "Local server" : tab === "about" ? "About" : tab[0].toUpperCase() + tab.slice(1)}</span><div class="header-right">${updateBadge()}<span class="pill">${designPreview ? "Design preview · sample status" : "On this computer"}</span><button id="theme" class="theme-button" aria-label="Change color theme" title="Theme: ${theme}">${theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}</button></div></header>
       <div class="content">
         <div id="error" role="alert" ${error || s?.error ? "" : "hidden"}>${esc(error || s?.error || "")}</div>
+        <div class="pending-settings leftover-server" role="status" ${!running && s?.leftover ? "" : "hidden"}><div><strong>A server from a previous run is still running</strong><p>Hardcharger server PID ${s?.leftover?.pid ?? ""} kept running on port ${s?.leftover?.port ?? ""} after the app closed. Stop it to free the port, then start the server.</p></div><button data-stop-leftover class="button" ${busy ? "disabled" : ""}>Stop it</button></div>
         <div class="pending-settings" role="status" ${draftDirty || s?.settingsPending ? "" : "hidden"}><div><strong>Unsaved server settings</strong><p>${draft ? draft["network-mode"] === "network" ? "Network access requested. Save and complete setup before starting; the server will not fall back to local mode." : "Save or explicitly discard your changes before starting." : "A previous setup was not saved. Review Settings or explicitly discard it before starting."}</p></div><button data-review-settings class="button">Review settings</button><button data-discard-settings class="button" ${busy ? "disabled" : ""}>Discard changes</button></div>
         ${tab === "server" || tab === "settings" ? addressNotice(s) : ""}
         ${tab === "server" ? serverView(s) : tab === "settings" ? settingsView(s) : tab === "logs" ? logsView() : aboutView()}
@@ -381,6 +443,7 @@ function render() {
   restoreDraft();
   document.querySelector("[data-review-settings]")?.addEventListener("click", () => { tab = "settings"; render(); });
   document.querySelector("[data-discard-settings]")?.addEventListener("click", () => void discardSettings());
+  document.querySelector("[data-stop-leftover]")?.addEventListener("click", () => void stopLeftover());
   const updateNetwork = () => {
     const network = document.querySelector<HTMLSelectElement>("#network-mode")?.value === "network";
     const name = form?.elements.namedItem("network-name") as HTMLInputElement | null;
@@ -431,6 +494,22 @@ function render() {
   });
   filterOptions();
   document.querySelector("#import-yaml")?.addEventListener("change", e => void importYaml((e.target as HTMLInputElement).files?.[0]));
+  // Remote servers: rows added or removed re-render from the edited list (the form's other
+  // fields keep their draft values).
+  document.querySelector("#add-remote")?.addEventListener("click", () => {
+    rememberDraft();
+    remoteRows = [...currentRemoteRows(), { id: crypto.randomUUID(), name: "", url: "https://", tls: "verified", fingerprint: "" }];
+    markDirty(); render();
+    document.querySelector<HTMLInputElement>(`[name="remote-name-${remoteRows.length - 1}"]`)?.focus();
+  });
+  app.querySelectorAll<HTMLButtonElement>("[data-remove-remote]").forEach(b => b.addEventListener("click", () => {
+    rememberDraft();
+    const rows = currentRemoteRows();
+    rows.splice(Number(b.dataset.removeRemote), 1);
+    remoteRows = rows;
+    if (draft) for (const key of Object.keys(draft)) if (key.startsWith("remote-")) delete draft[key];
+    markDirty(); render();
+  }));
   document.querySelector("#choose-import")?.addEventListener("click", () => document.querySelector<HTMLInputElement>("#import-yaml")?.click());
   document.querySelector("#export-yaml")?.addEventListener("click", exportYaml);
   document.querySelector("#apply-import")?.addEventListener("click", () => {
@@ -455,8 +534,8 @@ function serverView(s: Status | null) {
     <section class="hero card">
       <div class="hero-content"><div class="status-label ${running ? "online" : "offline"}"><span class="nav-dot ${running ? "running" : ""}"></span>${busy ? "Working…" : running ? "RUNNING" : s ? "STOPPED" : "CONNECTING"}</div>
         <h2>${running ? "Ready for your next query." : "Your engine. Ready to go."}</h2>
-        <p>${running ? "Your local Hardcharger server is up. Open the SQL workspace to query, import, and explore." : "Start Hardcharger to open your database and work with the full SQL workspace."}</p>
-        <div class="hero-actions">${running ? button("workspace", "Open SQL workspace", "arrow", true) : button("start", draftDirty ? "Save settings and start" : "Start server", "play", true, !s)}<span class="private-note">${icon("shield")}${draftDirty || s?.settingsPending ? "Settings pending · start blocked until saved" : s?.settings.network?.enabled ? s.settings.network.tls ? "Network access · TLS" : "Network access · HTTP" : "Local connections only"}</span></div>
+        <p>${running ? "Your local Hardcharger server is up. Open the SQL workspace to query, import, and explore." : "Start Hardcharger to open your database and work with the full SQL workspace, or open the workspace now for the remote servers you saved in Settings."}</p>
+        <div class="hero-actions">${running ? button("workspace", "Open SQL workspace", "arrow", true) : button("start", draftDirty ? "Save settings and start" : "Start server", "play", true, !s) + button("workspace", "Open SQL workspace", "arrow", false, !s)}<span class="private-note">${icon("shield")}${draftDirty || s?.settingsPending ? "Settings pending · start blocked until saved" : s?.settings.network?.enabled ? s.settings.network.tls ? "Network access · TLS" : "Network access · HTTP" : "Local connections only"}</span></div>
       </div>${picture("mascot", "Hardcharger charging bull mascot", "hero-mascot")}
     </section>
     <div class="stats"><section class="card stat"><span class="stat-label">SERVER ADDRESS</span><strong class="mono" title="${esc(s?.endpoint ?? "")}">${esc(s?.endpoint ?? "Loading…")}</strong><span>Chargewire endpoint${s?.settings.network?.enabled ? ` · listening on ${esc(s.settings.network.listen_address)}` : ""}</span></section><section class="card stat"><span class="stat-label">UPTIME</span><strong>${running ? uptime(s!.uptimeSeconds) : "—"}</strong><span>${running ? "Since the last start" : "Server is stopped"}</span></section><section class="card stat"><span class="stat-label">DATABASE SIZE</span><strong>${s ? bytes(s.databaseBytes) : "—"}</strong><span>Stored on this computer</span></section></div>
@@ -480,6 +559,7 @@ function settingsView(s: Status | null) {
       ${optionGroups(s)}
       </div>
     </form>
+    ${remoteServersView(s)}
     <section class="card detail-card"><div class="section-heading"><div><h3>Application</h3><p>Keep Hardcharger close at hand.</p></div></div><label class="check-row"><input id="launch-login" type="checkbox" ${login ? "checked" : ""} ${!native ? "disabled" : ""}><span><strong>Launch at login</strong><small>Open quietly in the menu bar or system tray when you sign in.</small></span></label><p class="muted">The window can close while the server keeps running. Quit Hardcharger to stop it cleanly.</p></section>`;
 }
 
@@ -650,7 +730,7 @@ async function refresh() {
   if (!native || busy) return;
   try {
     const s = await invoke<Status>("server_status");
-    const changed = !current || current.running !== s.running || current.error !== s.error;
+    const changed = !current || current.running !== s.running || current.error !== s.error || current.leftover?.pid !== s.leftover?.pid;
     current = s;
     // Keep form focus, scroll position, and text selections while polling.
     if (changed) render();
@@ -716,7 +796,7 @@ async function saveSettings(settings: Settings) {
   try {
     await pendingUpdate;
     current = await invoke<Status>("save_settings", { settings });
-    markedNetwork = null;
+    markedNetwork = null; remoteRows = null;
     draft = null; draftDirty = false; fieldErrors = {}; pendingUpdate = Promise.resolve();
     pendingImport = null; settingsNotice = "Settings saved. They take effect the next time the server starts.";
   }

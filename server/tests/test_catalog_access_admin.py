@@ -314,6 +314,10 @@ def test_deliberate_deviations_from_one_x(server):
     # It holds no grants, so no CREATE MACRO either.
     denied(session=session, sql=f"CREATE MACRO {X}.main.m(a) AS a + 1",
            why="creating macros needs an administrator without catalog_access rules")
+    # Nor CREATE TYPE: a type of its own needs a grant it can't hold (triggers likewise: they
+    # need to own the table, and it owns nothing).
+    denied(session=session, sql=f"CREATE TYPE {X}.main.mood AS ENUM ('ok')",
+           why="creating types needs an administrator without catalog_access rules")
     # Table functions that read catalogs around the plan check stay out of reach.
     denied(session=session, sql=f"SELECT * FROM pragma_storage_info('{Y}.main.t')", why="pragma_storage_info")
     # A sequence in a catalog the rules deny.

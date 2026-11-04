@@ -117,6 +117,12 @@ class Session : public chargewire_duckdb::DuckDBSession {
   void Rollback() override;
   chargewire::TransactionState Transaction() override;
   std::optional<std::chrono::milliseconds> DefaultStatementTimeout() override;
+  // SET hardcharger.idle_in_transaction_session_timeout, else the server's (SET GLOBAL, or
+  // the idle_in_transaction_session_timeout option).
+  std::optional<std::chrono::seconds> IdleInTransactionTimeout() override;
+  // The Chargewire server ended this session itself ("idle", "idle_in_transaction"):
+  // recorded as the session's end reason (the log and the instrumentation sessions table).
+  void Ending(std::string_view reason) override;
   // Killed (KILL SESSION) or ended by access control: session_ended with its reason.
   void CheckEnded() override;
   // Also stops a statement waiting in the statement queue.
@@ -185,6 +191,7 @@ class Session : public chargewire_duckdb::DuckDBSession {
   // Settings chosen with SET [SESSION] hardcharger.*; unset ones follow the server's.
   struct Settings {
     std::optional<int64_t> query_timeout;
+    std::optional<int64_t> idle_in_transaction_session_timeout;  // seconds; 0 = never
     std::optional<LogLevel> query_log_level;
     std::optional<bool> bypass_queue;
     std::optional<int64_t> max_queue_wait;
@@ -251,6 +258,7 @@ class Session : public chargewire_duckdb::DuckDBSession {
   const int64_t started_at_us_;
   std::atomic<int> running_ = 0;
   std::atomic<bool> killed_ = false;
+  std::string end_reason_;  // Ending()'s, on the engine thread; empty: closed by its client
   std::atomic<bool> interrupted_ = false;  // the current statement was cancelled
   std::atomic<chargewire::TransactionState> transaction_ = chargewire::TransactionState::kNone;
   int profile_mode_ = 0;        // what the connection's profiler is set to

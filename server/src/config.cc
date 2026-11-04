@@ -112,6 +112,10 @@ const std::vector<Option>& Options() {
        NUMBER(max_ingest_message_bytes)},
       {"web_ui", Kind::kBool,
        "serve the web UI at /ui on this port (a build that embeds it)", FLAG(web_ui)},
+      {"web_ui_remote_servers", Kind::kBool,
+       "let the web UI connect to other Hardcharger servers through this one (its Add server); "
+       "off: the UI works with this server alone",
+       FLAG(web_ui_remote_servers)},
       {"trusted_proxies", Kind::kList,
        "reverse proxies (CIDRs such as 10.0.0.0/8 or fd00::/8, or single addresses) whose "
        "X-Forwarded-For or Forwarded header names the client; from them, the client's address in "
@@ -235,9 +239,20 @@ const std::vector<Option>& Options() {
        "most non-admin sessions at once (0: unlimited)", NUMBER(max_sessions)},
       {"session_idle_timeout", Kind::kInt,
        "a session is evicted within 5 s after this many seconds without requests (0: never), "
-       "unless a statement of it is running, an ingest of it is in progress, a result of it is "
-       "being read, or it holds a retained result that hasn't expired (result_retention_seconds)",
+       "unless an ingest of it is in progress, a result of it is being read, a request is "
+       "waiting on a statement of it, or it holds a retained result that hasn't expired "
+       "(result_retention_seconds); a statement still running is then cancelled and its "
+       "transaction rolled back, so a client that died mid-write doesn't hold the write's "
+       "transaction open for as long as it runs. With 0, a dead client's session and its open "
+       "transaction live until the server restarts (or KILL SESSION)",
        NUMBER(session_idle_timeout)},
+      {"idle_in_transaction_session_timeout", Kind::kInt,
+       "a session that holds a transaction open (BEGIN, or autocommit off) with nothing "
+       "running and no request for this many seconds is ended, within 5 s, and its transaction "
+       "rolled back (0: never), as PostgreSQL's setting of the same name does; its next request "
+       "gets session_ended with reason idle_in_transaction. SET [GLOBAL] "
+       "hardcharger.idle_in_transaction_session_timeout changes it at runtime",
+       NUMBER(idle_in_transaction_session_timeout)},
       {"result_retention_seconds", Kind::kInt,
        "seconds a retained result (resumable, readable again) is kept after its statement ends, "
        "from 1 to 2592000 (30 days); its statement document's expires_at says until when",
@@ -327,6 +342,10 @@ const std::vector<Option>& Options() {
       {"shutdown_grace_period_seconds", Kind::kInt,
        "how long a graceful shutdown waits for running work (0: forever)",
        NUMBER(shutdown_grace_period_seconds)},
+      {"stop_on_stdin_close", Kind::kBool,
+       "stop (as the first stop signal would) when standard input reaches its end: for a "
+       "parent process that holds the server's stdin open and may die without stopping it",
+       FLAG(stop_on_stdin_close)},
       {"health_check_query", Kind::kString,
        "SQL the health check runs", TEXT(health_check_query)},
       {"health_check_interval_seconds", Kind::kInt,
@@ -633,11 +652,11 @@ void Validate(Loaded& loaded) {
   }
   if (c.max_ingest_message_bytes < 1) throw std::invalid_argument("max_ingest_message_bytes must be positive");
   if (c.result_batch_rows < 1) throw std::invalid_argument("result_batch_rows must be positive");
-  if (c.max_sessions < 0 || c.session_idle_timeout < 0 || c.shutdown_grace_period_seconds < 0 ||
-      c.max_concurrent_statements < 0) {
+  if (c.max_sessions < 0 || c.session_idle_timeout < 0 || c.idle_in_transaction_session_timeout < 0 ||
+      c.shutdown_grace_period_seconds < 0 || c.max_concurrent_statements < 0) {
     throw std::invalid_argument(
-        "max_sessions, session_idle_timeout, shutdown_grace_period_seconds and "
-        "max_concurrent_statements cannot be negative");
+        "max_sessions, session_idle_timeout, idle_in_transaction_session_timeout, "
+        "shutdown_grace_period_seconds and max_concurrent_statements cannot be negative");
   }
   if (c.result_retention_seconds < 1 || c.result_retention_seconds > 30 * 24 * 3600) {
     throw std::invalid_argument("result_retention_seconds must be from 1 to 2592000 (30 days), not " +

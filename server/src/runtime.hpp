@@ -39,6 +39,7 @@ struct Runtime {
         instance_id(std::move(instance_id)),
         sessions(config.max_sessions),
         query_timeout_seconds(config.query_timeout_seconds),
+        idle_in_transaction_session_timeout(config.idle_in_transaction_session_timeout),
         query_log_level(ParseLogLevel(config.query_log_level)),
         auth_log_level(ParseLogLevel(config.auth_log_level)),
         session_log_level(ParseLogLevel(config.session_log_level)),
@@ -71,6 +72,7 @@ struct Runtime {
 
   // Live-adjustable with SET GLOBAL.
   std::atomic<int64_t> query_timeout_seconds;
+  std::atomic<int64_t> idle_in_transaction_session_timeout;  // seconds; 0 = never
   std::atomic<LogLevel> query_log_level;
   const LogLevel auth_log_level;
   const LogLevel session_log_level;

@@ -5,6 +5,7 @@
 #include <duckdb.hpp>
 #include <duckdb/catalog/catalog.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
+#include <duckdb/catalog/catalog_entry_retriever.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/view_catalog_entry.hpp>
 #include <duckdb/main/client_context.hpp>
@@ -12,7 +13,10 @@
 #include <duckdb/parser/statement/select_statement.hpp>
 #include <duckdb/planner/binder.hpp>
 
+#include <duckdb/main/extension_entries.hpp>
+
 #include "authz/duckdb_internal.hpp"
+#include "authz/enforcement.hpp"
 #include "authz/policies.hpp"
 
 namespace hardcharger::authz {
@@ -44,6 +48,48 @@ dd::optional_ptr<dd::Catalog> CatalogNamed(dd::ClientContext& context, const std
   return dd::Catalog::GetCatalogEntry(context, dd::Identifier(name));
 }
 
+dd::optional_ptr<dd::CatalogEntry> LookUpEntry(dd::ClientContext& context, dd::CatalogType type,
+                                               const dd::QualifiedName& name) {
+  try {
+    return dd::Catalog::GetEntry(context, dd::EntryLookupInfo(type, name), dd::OnEntryNotFound::RETURN_NULL);
+  } catch (const std::exception&) {
+    return nullptr;  // a catalog without that schema, say: nothing by that name
+  }
+}
+
+// The entry `name` means, found the way DuckDB binds a name in a statement: its first
+// part is a catalog when one by that name is attached (`cat.sch.obj`), else the whole
+// qualifier is a schema path in the session's catalog (`sales.payroll.obj`, DuckDB 2.0's
+// nested schemas). Nullptr when nothing has that name. A name that reads both ways is
+// refused rather than guessed: DuckDB takes the catalog, and a grant that landed on the
+// other object would be wrong without anyone noticing.
+arrow::Result<dd::optional_ptr<dd::CatalogEntry>> FindEntry(dd::ClientContext& context, dd::CatalogType type,
+                                                            const QualifiedName& name) {
+  dd::vector<dd::Identifier> path;
+  for (const auto& part : name.parts) path.emplace_back(part);
+  if (path.empty()) return nullptr;
+  dd::optional_ptr<dd::CatalogEntry> entry;
+  try {
+    dd::CatalogEntryRetriever retriever(context);
+    entry = LookUpEntry(context, type, dd::Binder::BindTableName(retriever, dd::QualifiedName::FromPath(path)));
+  } catch (const std::exception&) {
+    entry = nullptr;
+  }
+  if (name.parts.size() >= 3 && CatalogNamed(context, name.parts[0])) {
+    dd::vector<dd::Identifier> schema_path(path.begin(), path.end() - 1);
+    auto other = LookUpEntry(
+        context, type,
+        dd::QualifiedName::FromCatalogSchema(dd::DatabaseManager::GetDefaultDatabase(context), std::move(schema_path),
+                                             path.back()));
+    if (other && entry && other.get() != entry.get()) {
+      return AccessControlError(name.ToString() + " is ambiguous: it names " + PathOfEntry(*entry).ToString() +
+                                " (" + name.parts[0] + " is a catalog) and " + PathOfEntry(*other).ToString() +
+                                " (a schema path of the session's catalog); write the nested one with its catalog");
+    }
+  }
+  return entry;
+}
+
 }  // namespace
 
 ObjectPath PathOfEntry(dd::CatalogEntry& entry) {
@@ -63,13 +109,7 @@ arrow::Result<ResolvedObject> SessionObjectResolver::ResolveObject(const Qualifi
   bool found = false;
   ARROW_RETURN_NOT_OK(InTransaction(connection_, [&]() -> arrow::Status {
     auto& context = *connection_.context;
-    dd::optional_ptr<dd::CatalogEntry> entry;
-    dd::vector<dd::Identifier> path;
-    for (const auto& part : name.parts) path.emplace_back(part);
-    entry = dd::Catalog::GetEntry(
-        context,
-        dd::EntryLookupInfo(dd::CatalogType::TABLE_ENTRY, dd::QualifiedName::FromPath(path)),
-        dd::OnEntryNotFound::RETURN_NULL);
+    ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(context, dd::CatalogType::TABLE_ENTRY, name));
     if (!entry) return arrow::Status::OK();
     if (entry->type != dd::CatalogType::TABLE_ENTRY && entry->type != dd::CatalogType::VIEW_ENTRY) {
       return AccessControlError(name.ToString() + " is not a table or view");
@@ -101,12 +141,7 @@ arrow::Result<ObjectPath> SessionObjectResolver::ResolveSequence(const Qualified
   ObjectPath resolved;
   bool found = false;
   ARROW_RETURN_NOT_OK(InTransaction(connection_, [&]() -> arrow::Status {
-    dd::vector<dd::Identifier> path;
-    for (const auto& part : name.parts) path.emplace_back(part);
-    auto entry = dd::Catalog::GetEntry(
-        *connection_.context,
-        dd::EntryLookupInfo(dd::CatalogType::SEQUENCE_ENTRY, dd::QualifiedName::FromPath(path)),
-        dd::OnEntryNotFound::RETURN_NULL);
+    ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context, dd::CatalogType::SEQUENCE_ENTRY, name));
     if (!entry || entry->type != dd::CatalogType::SEQUENCE_ENTRY) return arrow::Status::OK();
     found = true;
     resolved = PathOfEntry(*entry);
@@ -119,12 +154,7 @@ arrow::Result<ObjectPath> SessionObjectResolver::ResolveSequence(const Qualified
 bool SessionObjectResolver::IsTableMacro(const QualifiedName& name) {
   bool found = false;
   auto status = InTransaction(connection_, [&]() -> arrow::Status {
-    dd::vector<dd::Identifier> path;
-    for (const auto& part : name.parts) path.emplace_back(part);
-    auto entry = dd::Catalog::GetEntry(
-        *connection_.context,
-        dd::EntryLookupInfo(dd::CatalogType::TABLE_MACRO_ENTRY, dd::QualifiedName::FromPath(path)),
-        dd::OnEntryNotFound::RETURN_NULL);
+    ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context, dd::CatalogType::TABLE_MACRO_ENTRY, name));
     found = entry && entry->type == dd::CatalogType::TABLE_MACRO_ENTRY;
     return arrow::Status::OK();
   });
@@ -155,6 +185,25 @@ arrow::Result<ObjectPath> SessionObjectResolver::ResolveSchema(const QualifiedNa
     schema = dd::Catalog::GetSchema(context, dd::Identifier(catalog), path,
                                     dd::OnEntryNotFound::RETURN_NULL);
     if (!schema) return arrow::Status::OK();
+    if (schema_path.size() < name.parts.size()) {
+      // The first part was taken as a catalog; the whole name may also be a schema path
+      // of the session's catalog (nested schemas). Refuse the name rather than guess.
+      dd::vector<dd::Identifier> whole;
+      for (const auto& part : name.parts) whole.emplace_back(part);
+      dd::optional_ptr<dd::SchemaCatalogEntry> nested;
+      try {
+        nested = dd::Catalog::GetSchema(context, dd::DatabaseManager::GetDefaultDatabase(context), whole,
+                                        dd::OnEntryNotFound::RETURN_NULL);
+      } catch (const std::exception&) {
+        nested = nullptr;
+      }
+      if (nested && nested.get() != schema.get()) {
+        return AccessControlError(name.ToString() + " is ambiguous: it names schema " +
+                                  PathOfEntry(*schema).ToString() + " (" + name.parts[0] +
+                                  " is a catalog) and schema " + PathOfEntry(*nested).ToString() +
+                                  " (a schema path of the session's catalog); write the nested one with its catalog");
+      }
+    }
     found = true;
     resolved.catalog = compat::Str(schema->ParentCatalog().GetName());
     resolved.schema_path = SchemaPathOf(*schema);
@@ -162,6 +211,45 @@ arrow::Result<ObjectPath> SessionObjectResolver::ResolveSchema(const QualifiedNa
   }));
   if (!found) return AccessControlError("schema " + name.ToString() + " does not exist");
   return resolved;
+}
+
+arrow::Result<ObjectPath> SessionObjectResolver::ResolveTableFunction(const QualifiedName& name, bool granting) {
+  if (name.parts.size() != 1 || name.parts[0].empty()) {
+    return AccessControlError("a table function is named by its name alone (" + name.ToString() +
+                              "): table functions live in no catalog or schema");
+  }
+  ObjectPath function;
+  function.object_name = FoldIdentifier(name.parts[0]);
+  if (!granting) return function;
+  if (auto refusal = UngrantableTableFunction(function.object_name)) return AccessControlError(*refusal);
+  bool found = false;
+  ARROW_RETURN_NOT_OK(InTransaction(connection_, [&]() -> arrow::Status {
+    dd::vector<dd::Identifier> lookup{dd::Identifier("system"), dd::Identifier(DEFAULT_SCHEMA),
+                                      dd::Identifier(function.object_name)};
+    try {
+      found = dd::Catalog::GetEntry(*connection_.context,
+                                    dd::EntryLookupInfo(dd::CatalogType::TABLE_FUNCTION_ENTRY,
+                                                        dd::QualifiedName::FromPath(lookup)),
+                                    dd::OnEntryNotFound::RETURN_NULL) != nullptr;
+    } catch (const std::exception&) {
+      found = false;
+    }
+    return arrow::Status::OK();
+  }));
+  if (!found) {
+    // One an extension would autoload when it is first called counts as present.
+    for (const auto& entry : dd::EXTENSION_FUNCTIONS) {
+      if (entry.type == dd::CatalogType::TABLE_FUNCTION_ENTRY && IdentifiersEqual(entry.name, function.object_name)) {
+        found = true;
+        break;
+      }
+    }
+  }
+  if (!found) {
+    return AccessControlError("table function " + function.object_name +
+                              " does not exist: load the extension that provides it first");
+  }
+  return function;
 }
 
 arrow::Result<std::string> SessionObjectResolver::ResolveCatalog(const std::string& name) {
@@ -249,7 +337,10 @@ arrow::Status SessionObjectResolver::CheckMaskBinding(const ResolvedObject& tabl
 }
 
 std::string ViewDefinitionHash(const dd::SelectStatement& query) {
-  const std::string text = compat::Str(query.ToString());
+  return DefinitionTextHash(compat::Str(query.ToString()));
+}
+
+std::string DefinitionTextHash(const std::string& text) {
   unsigned char digest[EVP_MAX_MD_SIZE];
   unsigned int length = 0;
   if (EVP_Digest(text.data(), text.size(), digest, &length, EVP_sha256(), nullptr) != 1) {

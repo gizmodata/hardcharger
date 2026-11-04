@@ -5,7 +5,7 @@ test("a non-admin user sees only what access control allows", async ({ page, har
   await expect(page.getByTestId("header-user")).toContainText("user");
 
   // The tenant's catalog only: not the other tenant's, not the server's own database.
-  const tree = page.getByRole("tree", { name: "Catalogs" });
+  const tree = page.getByRole("tree", { name: "Servers" });
   const mine = tree.getByRole("treeitem", { name: harness.user.catalog, exact: true });
   await expect(mine).toHaveAttribute("aria-expanded", "true");
   await mine.getByRole("button", { name: "main", exact: true }).click();

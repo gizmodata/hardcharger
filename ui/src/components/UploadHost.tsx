@@ -45,7 +45,7 @@ export function UploadHost() {
       const file = e.dataTransfer?.files[0];
       if (!file) return;
       const tab = currentActiveTab();
-      requestUpload({ catalog: tab.catalog, schema: tab.schema, role: tab.role, file });
+      requestUpload({ catalog: tab.catalog, schema: tab.schema, role: tab.role, server: tab.server, file });
     };
     // Capture: ahead of the editor's own drop handling, which would paste a file's name.
     window.addEventListener("dragenter", enter, true);

@@ -700,6 +700,7 @@ class Parser {
     if (PeekKeyword("DELETE")) return std::make_pair(Privilege::kDelete, size_t{1});
     if (PeekKeyword("USAGE")) return std::make_pair(Privilege::kUsage, size_t{1});
     if (PeekKeyword("MAINTAIN")) return std::make_pair(Privilege::kMaintain, size_t{1});
+    if (PeekKeyword("EXECUTE")) return std::make_pair(Privilege::kExecute, size_t{1});
     if (PeekKeyword("ALL")) {
       return std::make_pair(Privilege::kAll, size_t{PeekKeyword("PRIVILEGES", 1) ? 2u : 1u});
     }
@@ -714,6 +715,8 @@ class Parser {
         {"DROP", "VIEW", Privilege::kDropView},         {"DROP", "SCHEMA", Privilege::kDropSchema},
         {"ALTER", "TABLE", Privilege::kAlterTable},     {"ALTER", "VIEW", Privilege::kAlterView},
         {"CREATE", "MACRO", Privilege::kCreateMacro},   {"DROP", "MACRO", Privilege::kDropMacro},
+        {"CREATE", "TYPE", Privilege::kCreateType},     {"DROP", "TYPE", Privilege::kDropType},
+        {"CREATE", "TRIGGER", Privilege::kCreateTrigger}, {"DROP", "TRIGGER", Privilege::kDropTrigger},
         {"CREATE", "SEQUENCE", Privilege::kCreateSequence}, {"DROP", "SEQUENCE", Privilege::kDropSequence},
     };
     for (const auto& phrase : kPhrases) {
@@ -861,6 +864,19 @@ class Parser {
         cmd.scope = GrantScope::kObject;
         cmd.sequence = true;
         ARROW_ASSIGN_OR_RAISE(cmd.target, ParseQualifiedName("a sequence name"));
+      } else if (PeekKeyword("TABLE") && PeekKeyword("FUNCTION", 1) && Peek(2).type != TokenType::kEnd &&
+                 !(Peek(2).type == TokenType::kWord &&
+                   (KeywordEquals(Peek(2).text, "TO") || KeywordEquals(Peek(2).text, "FROM")))) {
+        // ON TABLE FUNCTION name [(PATH ARGUMENT 2, ...)]; ON TABLE function TO r is a table
+        // named function.
+        pos_ += 2;
+        cmd.scope = GrantScope::kObject;
+        cmd.table_function = true;
+        ARROW_ASSIGN_OR_RAISE(auto function, ParseIdentifier("a table function's name"));
+        cmd.target.parts.push_back(std::move(function));
+        if (PeekSymbol("(")) {
+          ARROW_ASSIGN_OR_RAISE(cmd.path_arguments, ParsePathArguments());
+        }
       } else {
         // [TABLE | VIEW] name — the keyword is optional, as in Postgres.
         // A following TO / FROM means TABLE or VIEW is itself the object name
@@ -907,7 +923,8 @@ class Parser {
       return SyntaxError("'" + cmd.roles.front() +
                          "' is not a privilege. Privileges are SELECT, INSERT, UPDATE, DELETE, "
                          "ALL, CREATE TABLE, CREATE VIEW, CREATE SCHEMA, DROP TABLE, DROP VIEW, "
-                         "DROP SCHEMA, ALTER TABLE and ALTER VIEW");
+                         "DROP SCHEMA, ALTER TABLE, ALTER VIEW, CREATE MACRO, DROP MACRO, USAGE, "
+                         "CREATE SEQUENCE, DROP SEQUENCE, MAINTAIN and EXECUTE");
     }
     ARROW_RETURN_NOT_OK(ExpectKeyword(grant ? "TO" : "FROM"));
     ARROW_ASSIGN_OR_RAISE(cmd.grantees, ParseGranteeList());
@@ -923,9 +940,59 @@ class Parser {
     return cmd;
   }
 
+  // (PATH ARGUMENT 2 | PATH ARGUMENTS 1, 2 | PATH PARAMETER files [, ...]): the arguments of a
+  // table function that name the files it reads, one declaration or several, comma-separated.
+  arrow::Result<std::vector<PathArgument>> ParsePathArguments() {
+    std::vector<PathArgument> arguments;
+    ARROW_RETURN_NOT_OK(ExpectSymbol("("));
+    while (true) {
+      ARROW_RETURN_NOT_OK(ExpectKeyword("PATH"));
+      if (AcceptKeyword("ARGUMENT") || AcceptKeyword("ARGUMENTS")) {
+        do {
+          const auto& t = Peek();
+          int position = 0;
+          if (t.type == TokenType::kNumber) {
+            try {
+              position = std::stoi(t.text);
+            } catch (const std::exception&) {
+              position = 0;
+            }
+          }
+          if (position < 1) {
+            return SyntaxError("expected an argument position (1 for the first) after PATH ARGUMENT but found '" +
+                               Describe(t) + "'");
+          }
+          ++pos_;
+          arguments.push_back(PathArgument{position, {}});
+        } while (PeekSymbol(",") && Peek(1).type == TokenType::kNumber && (++pos_, true));
+      } else if (AcceptKeyword("PARAMETER") || AcceptKeyword("PARAMETERS")) {
+        do {
+          ARROW_ASSIGN_OR_RAISE(auto name, ParseIdentifier("a parameter name"));
+          arguments.push_back(PathArgument{0, std::move(name)});
+        } while (PeekSymbol(",") && !PeekKeyword("PATH", 1) && (++pos_, true));
+      } else {
+        return SyntaxError("expected ARGUMENT or PARAMETER after PATH but found '" + Describe(Peek()) + "'");
+      }
+      if (PeekSymbol(",")) {
+        ++pos_;
+        continue;
+      }
+      ARROW_RETURN_NOT_OK(ExpectSymbol(")"));
+      return arguments;
+    }
+  }
+
   // Which privileges make sense on which kind of target.
   static arrow::Status ValidatePrivilegeScope(const ObjectPrivilegeCommand& cmd) {
     for (const auto& item : cmd.privileges) {
+      // EXECUTE is a table function's; a table function takes EXECUTE alone.
+      if (cmd.table_function && item.privilege != Privilege::kExecute) {
+        return SyntaxError("on a table function only EXECUTE is granted (" + PrivilegeName(item.privilege) +
+                           " is not a table function's)");
+      }
+      if (item.privilege == Privilege::kExecute && !cmd.table_function) {
+        return SyntaxError("EXECUTE is granted ON TABLE FUNCTION name");
+      }
       // ON SEQUENCE takes USAGE alone; USAGE on one object is a sequence's.
       if (cmd.sequence && item.privilege != Privilege::kUsage) {
         return SyntaxError("on a sequence only USAGE is granted (" + PrivilegeName(item.privilege) +
@@ -943,6 +1010,10 @@ class Parser {
         case Privilege::kAlterView:
         case Privilege::kCreateMacro:
         case Privilege::kDropMacro:
+        case Privilege::kCreateType:
+        case Privilege::kDropType:
+        case Privilege::kCreateTrigger:
+        case Privilege::kDropTrigger:
         case Privilege::kCreateSequence:
         case Privilege::kDropSequence:
           if (cmd.scope == GrantScope::kObject) {
@@ -952,8 +1023,9 @@ class Parser {
           break;
         case Privilege::kCreateSchema:
         case Privilege::kDropSchema:
-          if (cmd.scope != GrantScope::kCatalog) {
-            return SyntaxError(PrivilegeName(item.privilege) + " is granted ON CATALOG");
+          if (cmd.scope == GrantScope::kObject) {
+            return SyntaxError(PrivilegeName(item.privilege) +
+                               " is granted ON CATALOG, or ON SCHEMA for the schemas nested in it");
           }
           break;
         default:

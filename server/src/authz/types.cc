@@ -34,6 +34,14 @@ std::string PrivilegeName(Privilege privilege) {
       return "CREATE MACRO";
     case Privilege::kDropMacro:
       return "DROP MACRO";
+    case Privilege::kCreateType:
+      return "CREATE TYPE";
+    case Privilege::kDropType:
+      return "DROP TYPE";
+    case Privilege::kCreateTrigger:
+      return "CREATE TRIGGER";
+    case Privilege::kDropTrigger:
+      return "DROP TRIGGER";
     case Privilege::kUsage:
       return "USAGE";
     case Privilege::kCreateSequence:
@@ -42,6 +50,8 @@ std::string PrivilegeName(Privilege privilege) {
       return "DROP SEQUENCE";
     case Privilege::kMaintain:
       return "MAINTAIN";
+    case Privilege::kExecute:
+      return "EXECUTE";
     case Privilege::kAll:
       return "ALL";
   }
@@ -61,13 +71,10 @@ const std::vector<Privilege>& PrivilegesOfAll(GrantScope scope) {
       Privilege::kSelect,      Privilege::kInsert,     Privilege::kUpdate,    Privilege::kDelete,
       Privilege::kCreateTable, Privilege::kCreateView, Privilege::kDropTable, Privilege::kDropView,
       Privilege::kAlterTable,  Privilege::kAlterView,  Privilege::kCreateMacro, Privilege::kDropMacro,
-      Privilege::kUsage,       Privilege::kCreateSequence, Privilege::kDropSequence, Privilege::kMaintain};
-  static const std::vector<Privilege> kCatalog = [] {
-    auto all = kSchema;
-    all.push_back(Privilege::kCreateSchema);
-    all.push_back(Privilege::kDropSchema);
-    return all;
-  }();
+      Privilege::kCreateType,  Privilege::kDropType,   Privilege::kCreateTrigger, Privilege::kDropTrigger,
+      Privilege::kUsage,       Privilege::kCreateSequence, Privilege::kDropSequence, Privilege::kMaintain,
+      Privilege::kCreateSchema, Privilege::kDropSchema};  // on a schema: its child schemas
+  static const std::vector<Privilege> kCatalog = kSchema;
   switch (scope) {
     case GrantScope::kObject:
       return kObject;
@@ -108,7 +115,79 @@ std::string QuoteIdentifierIfNeeded(const std::string& identifier) {
   return quoted + "\"";
 }
 
+std::string PathArgument::Text() const {
+  return position > 0 ? "argument " + std::to_string(position) : "parameter " + parameter;
+}
+
+std::string PathArgument::Stored() const {
+  return position > 0 ? "argument:" + std::to_string(position) : "parameter:" + parameter;
+}
+
+std::optional<PathArgument> PathArgument::FromStored(const std::string& stored) {
+  PathArgument argument;
+  if (stored.starts_with("argument:")) {
+    try {
+      argument.position = std::stoi(stored.substr(9));
+    } catch (const std::exception&) {
+      return std::nullopt;
+    }
+    return argument.position > 0 ? std::optional(argument) : std::nullopt;
+  }
+  if (stored.starts_with("parameter:") && stored.size() > 10) {
+    argument.parameter = stored.substr(10);
+    return argument;
+  }
+  return std::nullopt;
+}
+
+std::string SchemaPathText(const std::vector<std::string>& path) {
+  std::string out;
+  for (const auto& part : path) {
+    if (!out.empty()) out += ".";
+    if (part.find('.') == std::string::npos && part.find('"') == std::string::npos) {
+      out += part;
+      continue;
+    }
+    out += '"';
+    for (char c : part) {
+      if (c == '"') out += '"';
+      out += c;
+    }
+    out += '"';
+  }
+  return out;
+}
+
+std::vector<std::string> ParseSchemaPathText(const std::string& text) {
+  std::vector<std::string> parts;
+  std::string part;
+  bool quoted = false;
+  for (size_t i = 0; i < text.size(); ++i) {
+    const char c = text[i];
+    if (quoted) {
+      if (c == '"' && i + 1 < text.size() && text[i + 1] == '"') {
+        part += '"';
+        ++i;
+      } else if (c == '"') {
+        quoted = false;
+      } else {
+        part += c;
+      }
+    } else if (c == '"') {
+      quoted = true;
+    } else if (c == '.') {
+      parts.push_back(part);
+      part.clear();
+    } else {
+      part += c;
+    }
+  }
+  parts.push_back(part);
+  return parts;
+}
+
 std::string ObjectPath::ToString() const {
+  if (IsTableFunction()) return QuoteIdentifierIfNeeded(object_name);
   std::string out = QuoteIdentifierIfNeeded(catalog);
   for (const auto& part : schema_path) out += "." + QuoteIdentifierIfNeeded(part);
   if (!object_name.empty()) out += "." + QuoteIdentifierIfNeeded(object_name);

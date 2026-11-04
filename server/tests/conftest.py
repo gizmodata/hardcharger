@@ -282,9 +282,10 @@ class Launcher:
     def start(self, args: list[str] | None = None, env: dict[str, str] | None = None,
               password: str | None = None, expect_up: bool = True, username: str = "admin",
               secret_key: str | None = None, binary: pathlib.Path | None = None, wait_for: str = "/chargewire",
-              startup_seconds: float = 30, port: int | None = None) -> Running:
+              startup_seconds: float = 30, port: int | None = None, stdin=None) -> Running:
         """Starts a server (the administrator `username` with `password`, by default a
-        random one) on a free port, or `port`."""
+        random one) on a free port, or `port`. `stdin` is Popen's (a pipe for a server that
+        stops when it closes)."""
         binary = binary or BINARY
         env = dict(env or {})
         if not binary.exists():
@@ -300,7 +301,7 @@ class Launcher:
             args=[str(binary), "--host", "127.0.0.1", "--port", str(port), *(args or [])],
             env={**clean_environment(), "HARDCHARGER_ADMIN_PASSWORD": password, "HARDCHARGER_ADMIN_USERNAME": username,
                  **env},
-            stdout=subprocess.DEVNULL, stderr=log_path.open("w"), cwd=self.tmp_path, **POPEN_FLAGS)
+            stdin=stdin, stdout=subprocess.DEVNULL, stderr=log_path.open("w"), cwd=self.tmp_path, **POPEN_FLAGS)
         running = Running(base_url=f"http://127.0.0.1:{port}", username=username, password=password,
                           secret_key=secret_key, process=process, log_path=log_path, port=port)
         self.started.append(running)

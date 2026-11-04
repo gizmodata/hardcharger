@@ -188,6 +188,7 @@ add_library(hardcharger_authz OBJECT
   src/authz/resolver.cc
   src/authz/storage_access.cc
   src/authz/store.cc
+  src/authz/triggers.cc
   src/authz/types.cc
   src/authz/views.cc)
 target_include_directories(hardcharger_authz PRIVATE src)
@@ -195,6 +196,24 @@ target_include_directories(hardcharger_authz SYSTEM PRIVATE
                            "${CHARGEWIRE_DUCKDB_PREFIX}/include/duckdb_third_party")
 target_link_libraries(hardcharger_authz PUBLIC chargewire_duckdb OpenSSL::Crypto)
 target_compile_options(hardcharger_authz PRIVATE ${HARDCHARGER_AUTHZ_WARNINGS})
+
+# The web UI and its relay, engine-free: the server and the `hardcharger ui` command both
+# link it (platform.cc is the operating-system helpers both need).
+add_library(hardcharger_web STATIC
+  src/platform.cc
+  src/web_relay.cc
+  src/web_ui.cc
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/web_ui_files.cc")
+target_include_directories(hardcharger_web PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(hardcharger_web PUBLIC chargewire Boost::url OpenSSL::SSL OpenSSL::Crypto
+                      PRIVATE ZLIB::ZLIBSTATIC)
+target_compile_options(hardcharger_web PRIVATE ${HARDCHARGER_WARNINGS})
+if(IOS)
+  target_compile_definitions(hardcharger_web PRIVATE HARDCHARGER_IOS)
+endif()
+if(WIN32)
+  target_link_libraries(hardcharger_web PUBLIC crypt32 iphlpapi)  # certificate store and local interface addresses
+endif()
 
 # Everything but main(), shared by the server and the unit tests.
 add_library(hardcharger_core STATIC
@@ -215,7 +234,6 @@ add_library(hardcharger_core STATIC
   src/metrics.cc
   src/oauth.cc
   src/patterns.cc
-  src/platform.cc
   src/redact.cc
   src/sessions.cc
   src/settings.cc
@@ -223,13 +241,11 @@ add_library(hardcharger_core STATIC
   src/sql_text.cc
   src/startup_banner.cc
   src/tokens.cc
-  src/verify_credentials.cc
-  src/web_ui.cc
-  "${CMAKE_CURRENT_BINARY_DIR}/generated/web_ui_files.cc")
+  src/verify_credentials.cc)
 target_include_directories(hardcharger_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_sources(hardcharger_core PRIVATE $<TARGET_OBJECTS:hardcharger_authz>)
-target_link_libraries(hardcharger_core PUBLIC chargewire_duckdb OpenSSL::Crypto jwt-cpp::jwt-cpp yaml-cpp::yaml-cpp
-                      PRIVATE ZLIB::ZLIBSTATIC)
+target_link_libraries(hardcharger_core PUBLIC hardcharger_web chargewire_duckdb OpenSSL::Crypto jwt-cpp::jwt-cpp
+                      yaml-cpp::yaml-cpp)
 target_compile_options(hardcharger_core PRIVATE ${HARDCHARGER_WARNINGS})
 if(IOS)
   target_compile_definitions(hardcharger_core PRIVATE HARDCHARGER_IOS)
@@ -258,6 +274,7 @@ find_package(replxx CONFIG REQUIRED PATHS "${HARDCHARGER_REPLXX_PREFIX}" NO_DEFA
 add_library(hardcharger_client STATIC
   client/client_config.cc
   client/command_processor.cc
+  client/geometry.cc
   client/oauth_flow.cc
   client/output_renderer.cc
   client/variant.cc
@@ -269,9 +286,10 @@ add_library(hardcharger_client STATIC
   client/shell_loop.cc
   client/sql_processor.cc
   client/syntax_highlighter.cc
+  client/ui_command.cc
   client/chargewire_connection.cc)
 target_include_directories(hardcharger_client PUBLIC client "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(hardcharger_client PUBLIC chargewire_client replxx::replxx)
+target_link_libraries(hardcharger_client PUBLIC chargewire_client hardcharger_web replxx::replxx)
 target_compile_options(hardcharger_client PRIVATE ${HARDCHARGER_WARNINGS})
 if(WIN32)
   # windows.h without GDI: its ERROR macro would replace CommandResult::ERROR.
@@ -356,7 +374,7 @@ set_target_properties(hardcharger-client PROPERTIES OUTPUT_NAME hardcharger)
 if(WIN32)
   target_sources(hardcharger-client PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/icon.rc")
 endif()
-target_link_libraries(hardcharger-client PRIVATE hardcharger_client hardcharger_notices)
+target_link_libraries(hardcharger-client PRIVATE hardcharger_client hardcharger_web hardcharger_notices)
 target_compile_options(hardcharger-client PRIVATE ${HARDCHARGER_WARNINGS})
 
 # The client's tests: GizmoSQL 1.x's client test files, ported (client/tests/). They run
@@ -364,6 +382,7 @@ target_compile_options(hardcharger-client PRIVATE ${HARDCHARGER_WARNINGS})
 # HARDCHARGER_TEST_CLIENT_* variables (test_interactive_client.py and friends).
 add_executable(hardcharger-client-tests
   client/tests/client_config_test.cc
+  client/tests/geometry_test.cc
   client/tests/variant_test.cc
   client/tests/interactive_client_test.cc)
 target_link_libraries(hardcharger-client-tests PRIVATE hardcharger_client GTest::gtest_main)

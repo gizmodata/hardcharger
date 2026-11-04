@@ -1,12 +1,13 @@
-// The catalog caches of a signed-in session: one per role the editor's tabs act with ("" for
-// all of the user's roles, through the session's own connection), shared by the schema browser
-// and autocomplete.
+// The catalog caches of a signed-in session: one per server and role the editor's tabs act
+// with ("" for this server, and "" for all of the user's roles, through the session's own
+// connection), shared by the schema browser and autocomplete.
 
 import type { Connection } from "@gizmodata/chargewire";
 
 import { CatalogCache, type ConnectionSource } from "./catalogCache";
 import { RoleConnection } from "./roles";
 import type { ConnectionOptions } from "./chargewire";
+import { localServerId } from "./servers";
 
 const bySession = new WeakMap<object, Map<string, CatalogCache>>();
 
@@ -44,17 +45,38 @@ export function onCatalogsChanged(listener: () => void): () => void {
 
 interface Signed {
   connection: Connection;
-  openConnection: (options?: ConnectionOptions) => Promise<Connection>;
+  openConnection: (options?: ConnectionOptions & { server?: string }) => Promise<Connection>;
+  servers: { connection: (id: string) => Promise<Connection>; forgetConnection: (id: string) => void };
 }
 
 /**
- * The listings `role` sees in a signed-in session: through the session's own connection for
- * "" (all of the user's roles), else through a connection of the role's own (SET ROLE).
+ * The listings `role` sees in a signed-in session on `server` ("" for this server): through
+ * the session's own connection for "" (all of the user's roles), else through a connection
+ * of the role's own (SET ROLE). On another server, through that server's own listing
+ * session (roles are this server's).
  */
-export function listingsFor(app: Signed, role: string): CatalogCache {
-  return catalogCache(app, role, () => {
+export function listingsFor(app: Signed, role: string, server: string = localServerId): CatalogCache {
+  const key = server ? `${server}\u0000${role}` : role;
+  return catalogCache(app, key, () => {
+    if (server) {
+      return {
+        run: async (work) => {
+          try {
+            return await work(await app.servers.connection(server));
+          } catch (err) {
+            // A listing session the remote lost (idle, a restart): the next call opens a new one.
+            if (sessionGone(err)) app.servers.forgetConnection(server);
+            throw err;
+          }
+        },
+      };
+    }
     if (!role) return { run: (work) => work(app.connection) };
     const conn = new RoleConnection(role, () => app.openConnection({ reconnect: false }));
     return { run: (work) => conn.run(work) };
   });
+}
+
+function sessionGone(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "session_not_found";
 }

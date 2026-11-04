@@ -82,12 +82,16 @@ struct RoleMembershipCommand {
 };
 
 // GRANT priv, ... ON [TABLE|VIEW] obj | SCHEMA s | CATALOG c TO role, ...
+// GRANT EXECUTE ON TABLE FUNCTION name [(PATH ARGUMENT n[, n ...] | PATH PARAMETER name[, ...] [, ...])]
+//   TO role, ...
 struct ObjectPrivilegeCommand {
   bool grant = true;
   std::vector<PrivilegeItem> privileges;
   GrantScope scope = GrantScope::kObject;
   QualifiedName target;
-  bool sequence = false;  // ON SEQUENCE name
+  bool sequence = false;        // ON SEQUENCE name
+  bool table_function = false;  // ON TABLE FUNCTION name
+  std::vector<PathArgument> path_arguments;  // ON TABLE FUNCTION: the arguments that name files
   std::vector<Grantee> grantees;
   bool with_grant_option = false;
   bool cascade = true;  // REVOKE ... [CASCADE | RESTRICT]

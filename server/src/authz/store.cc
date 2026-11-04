@@ -340,8 +340,10 @@ std::optional<Privilege> PrivilegeFrom(const std::string& name) {
                  Privilege::kCreateTable, Privilege::kCreateView, Privilege::kCreateSchema,
                  Privilege::kDropTable, Privilege::kDropView, Privilege::kDropSchema,
                  Privilege::kAlterTable, Privilege::kAlterView, Privilege::kCreateMacro,
-                 Privilege::kDropMacro, Privilege::kUsage, Privilege::kCreateSequence,
-                 Privilege::kDropSequence, Privilege::kMaintain, Privilege::kAll}) {
+                 Privilege::kDropMacro, Privilege::kCreateType, Privilege::kDropType,
+                 Privilege::kCreateTrigger, Privilege::kDropTrigger, Privilege::kUsage,
+                 Privilege::kCreateSequence, Privilege::kDropSequence, Privilege::kMaintain,
+                 Privilege::kExecute, Privilege::kAll}) {
     if (PrivilegeName(p) == name) return p;
   }
   return std::nullopt;
@@ -357,12 +359,17 @@ std::string ObjectTypeName(ObjectType t) {
       return "schema";
     case ObjectType::kSequence:
       return "sequence";  // never recorded
+    case ObjectType::kTableFunction:
+      return "table_function";  // never recorded
+    case ObjectType::kTrigger:
+      return "trigger";
   }
   return "table";
 }
 ObjectType ObjectTypeFrom(const std::string& s) {
   if (s == "view") return ObjectType::kView;
   if (s == "schema") return ObjectType::kSchema;
+  if (s == "trigger") return ObjectType::kTrigger;
   return ObjectType::kTable;
 }
 
@@ -1481,9 +1488,9 @@ arrow::Status StoreTransaction::DeleteGrant(const std::string& grant_id) {
 }
 
 arrow::Status StoreTransaction::UpsertOwner(const OwnerRecord& o) {
-  ARROW_RETURN_NOT_OK(DeleteOwner(o.object));
+  ARROW_RETURN_NOT_OK(DeleteOwner(o.object, o.type));
   return Run(conn_, "INSERT INTO " + T("owners") + " VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-             {Text(ObjectKey(o.object)), Text(o.object.catalog), Text(ToJson(o.object.schema_path)),
+             {Text(OwnerKey(o.type, o.object)), Text(o.object.catalog), Text(ToJson(o.object.schema_path)),
               Text(o.object.object_name), Text(ObjectTypeName(o.type)),
               Text(OwnerKindName(o.owner_kind)), Text(o.owner_id), Text(o.definition_hash)})
       .status();
@@ -1531,9 +1538,9 @@ arrow::Result<std::shared_ptr<const Snapshot>> StoreTransaction::Reload() {
   return store_.LoadLocked();
 }
 
-arrow::Status StoreTransaction::DeleteOwner(const ObjectPath& object) {
+arrow::Status StoreTransaction::DeleteOwner(const ObjectPath& object, ObjectType type) {
   return Run(conn_, "DELETE FROM " + T("owners") + " WHERE object_key = $1",
-             {Text(ObjectKey(object))})
+             {Text(OwnerKey(type, object))})
       .status();
 }
 

@@ -21,6 +21,7 @@
 #include <string>
 
 #include "authz/model.hpp"
+#include "authz/triggers.hpp"
 
 namespace duckdb {
 class ParsedExpression;
@@ -52,8 +53,11 @@ arrow::Result<duckdb::unique_ptr<duckdb::ParsedExpression>> PreparePolicyExpress
 // Rewrite a store user's checked plan for the row and masking policies that
 // apply to them, and narrow the catalog table functions it calls (duckdb_tables(), ...)
 // to what the user may see. Throws a PermissionException for a statement it cannot
-// rewrite safely.
+// rewrite safely. The body of a trigger a user owns (`trigger_bodies`) gets the owner's
+// policies, whoever runs the statement (a superuser's statement gets only those).
+// `body`: `plan` is a trigger body's root being rewritten for its owner.
 void ApplyPolicies(duckdb::ClientContext& context, const std::shared_ptr<const Snapshot>& snapshot,
-                   const Principal& principal, duckdb::unique_ptr<duckdb::LogicalOperator>& plan);
+                   const Principal& principal, duckdb::unique_ptr<duckdb::LogicalOperator>& plan,
+                   const TriggerBodies& trigger_bodies, bool body = false);
 
 }  // namespace hardcharger::authz

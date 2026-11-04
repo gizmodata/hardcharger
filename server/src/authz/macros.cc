@@ -1,10 +1,17 @@
 #include "authz/macros.hpp"
 
+#include "authz/resolver.hpp"
+
 #include <duckdb/catalog/catalog.hpp>
 #include <duckdb/catalog/catalog_entry/macro_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
+#include <duckdb/catalog/catalog_entry/trigger_catalog_entry.hpp>
+#include <duckdb/catalog/catalog_entry/type_catalog_entry.hpp>
+#include <duckdb/parser/constraints/check_constraint.hpp>
+#include <duckdb/parser/expression/cast_expression.hpp>
 #include <duckdb/parser/expression/constant_expression.hpp>
+#include <duckdb/parser/expression/type_expression.hpp>
 #include <duckdb/catalog/catalog_entry/view_catalog_entry.hpp>
 #include <duckdb/function/scalar_macro_function.hpp>
 #include <duckdb/function/table_macro_function.hpp>
@@ -21,6 +28,7 @@
 #include <duckdb/parser/statement/select_statement.hpp>
 #include <duckdb/parser/tableref/subqueryref.hpp>
 #include <duckdb/parser/tableref/table_function_ref.hpp>
+#include <functional>
 #include <vector>
 
 #include "authz/duckdb_internal.hpp"
@@ -49,6 +57,66 @@ class ReferenceCollector {
   std::vector<Reference> references;
   // The sequences it names in nextval('s') / currval('s') / setval('s', n).
   std::vector<Reference> sequences;
+  // The types it names: CAST targets, nested types included (resolved by name where the
+  // body is bound, so a type of that name earlier in the search path would be taken).
+  std::vector<Reference> types;
+
+  // A trigger's body, a DML query node (INSERT ... SELECT, UPDATE ... WHERE, ...).
+  void TriggerAction(const dd::TriggerCatalogEntry& trigger) {
+    if (!trigger.trigger_action) return;
+    auto copy = trigger.trigger_action->Copy();
+    Node(*copy);
+  }
+
+  // A type, as parsed: a name DuckDB's parser doesn't know is an UNBOUND type holding the
+  // type expression it will look up when the body is bound.
+  void Type(const dd::LogicalType& type) {
+    if (++depth_ > 200) {
+      --depth_;
+      return;
+    }
+    switch (type.id()) {
+      case dd::LogicalTypeId::UNBOUND:
+        if (type.HasParameters()) {
+          const auto& expression = dd::UnboundType::GetTypeExpression(type);
+          if (expression) TypeExpression(*expression);
+        }
+        break;
+      case dd::LogicalTypeId::LIST:
+        Type(dd::ListType::GetChildType(type));
+        break;
+      case dd::LogicalTypeId::ARRAY:
+        Type(dd::ArrayType::GetChildType(type));
+        break;
+      case dd::LogicalTypeId::MAP:
+        Type(dd::MapType::KeyType(type));
+        Type(dd::MapType::ValueType(type));
+        break;
+      case dd::LogicalTypeId::STRUCT:
+        for (const auto& child : dd::StructType::GetChildTypes(type)) Type(child.second);
+        break;
+      case dd::LogicalTypeId::UNION:
+        for (dd::idx_t i = 0; i < dd::UnionType::GetMemberCount(type); ++i) Type(dd::UnionType::GetMemberType(type, i));
+        break;
+      default:
+        break;
+    }
+    --depth_;
+  }
+
+  void TypeExpression(const dd::ParsedExpression& expression) {
+    if (expression.GetExpressionClass() != dd::ExpressionClass::TYPE) return;
+    auto& type = expression.Cast<dd::TypeExpression>();
+    Reference reference{{}, from_catalog_};
+    for (const auto& part : {type.GetCatalog(), type.GetSchema(), type.GetTypeName()}) {
+      const std::string name = compat::Str(part);
+      if (!name.empty()) reference.parts.push_back(name);
+    }
+    if (!reference.parts.empty()) types.push_back(std::move(reference));
+    for (const auto& child : type.GetChildren()) {
+      if (child) TypeExpression(*child);
+    }
+  }
 
   void Node(dd::QueryNode& node) {
     if (++depth_ > 200) return;  // deeper than any SQL DuckDB parses
@@ -81,6 +149,11 @@ class ReferenceCollector {
 
   void Expression(dd::ParsedExpression& expression) {
     if (++depth_ > 200) return;
+    if (expression.GetExpressionClass() == dd::ExpressionClass::CAST) {
+      if (const auto& target = expression.Cast<dd::CastExpression>().GetTargetType()) TypeExpression(*target);
+    } else if (expression.GetExpressionClass() == dd::ExpressionClass::TYPE) {
+      TypeExpression(expression);
+    }
     if (expression.GetExpressionClass() == dd::ExpressionClass::FUNCTION) {
       auto& function = expression.Cast<dd::FunctionExpression>();
       const auto path = compat::Strs(function.GetQualifiedName().Path());
@@ -167,24 +240,30 @@ void CollectExpressionText(const std::string& sql, ReferenceCollector& collector
   }
 }
 
+bool SameParts(const std::vector<std::string>& a, const std::vector<std::string>& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (!IdentifiersEqual(a[i], b[i])) return false;
+  }
+  return true;
+}
+
 // Could `reference`, written in an object of catalog `from_catalog`, mean the macro at
 // `macro`? DuckDB reads a two-part name as schema.name, or as catalog.name (its default
 // schema), so either counts; an unqualified name counts in the caller's catalog (a view
-// looks in its own schema, then its catalog's main).
+// looks in its own schema, then its catalog's main). A nested schema (DuckDB 2.0) is
+// reached only by its whole path, `sales.payroll.m` or `cat.sales.payroll.m`.
 bool CouldMean(const Reference& reference, const ObjectPath& macro) {
   const auto& parts = reference.parts;
   if (parts.empty() || !IdentifiersEqual(parts.back(), macro.object_name)) return false;
-  const std::string schema = macro.schema_path.empty() ? "" : macro.schema_path.back();
   const bool in_catalog = reference.from_catalog.empty() || IdentifiersEqual(reference.from_catalog, macro.catalog);
-  switch (parts.size()) {
-    case 1:
-      return in_catalog;
-    case 2:
-      return (in_catalog && IdentifiersEqual(parts[0], schema)) || IdentifiersEqual(parts[0], macro.catalog);
-    default:
-      return IdentifiersEqual(parts[parts.size() - 3], macro.catalog) &&
-             IdentifiersEqual(parts[parts.size() - 2], schema);
-  }
+  const std::vector<std::string> qualifier(parts.begin(), parts.end() - 1);
+  if (qualifier.empty()) return in_catalog;
+  if (in_catalog && SameParts(qualifier, macro.schema_path)) return true;
+  if (qualifier.size() == 1 && IdentifiersEqual(qualifier[0], macro.catalog)) return true;
+  std::vector<std::string> qualified{macro.catalog};
+  qualified.insert(qualified.end(), macro.schema_path.begin(), macro.schema_path.end());
+  return SameParts(qualifier, qualified);
 }
 
 struct MacroEntry {
@@ -198,6 +277,23 @@ struct MacroEntry {
 bool HoldsDuckDbSql(dd::Catalog& catalog) {
   if (catalog.IsDuckCatalog()) return true;
   return compat::Str(catalog.GetCatalogType()) == "ducklake";
+}
+
+// Every trigger of the schema's tables: triggers hang off their tables, not the schema.
+// The tables first, then each one's triggers, outside the schema scan's callback (see
+// SequenceNameRefusal on lock order).
+void ForEachTrigger(dd::ClientContext& context, dd::SchemaCatalogEntry& schema,
+                    const std::function<void(const dd::TriggerCatalogEntry&)>& fn) {
+  std::vector<dd::reference<dd::TableCatalogEntry>> tables;
+  schema.Scan(context, dd::CatalogType::TABLE_ENTRY, [&](dd::CatalogEntry& entry) {
+    if (entry.type == dd::CatalogType::TABLE_ENTRY) tables.push_back(entry.Cast<dd::TableCatalogEntry>());
+  });
+  for (auto& table : tables) {
+    auto txn = table.get().ParentCatalog().GetCatalogTransaction(context);
+    table.get().ScanTriggers(txn, [&](dd::CatalogEntry& trigger) {
+      if (trigger.type == dd::CatalogType::TRIGGER_ENTRY) fn(trigger.Cast<dd::TriggerCatalogEntry>());
+    });
+  }
 }
 
 }  // namespace
@@ -241,6 +337,7 @@ std::optional<std::string> SequenceNameRefusal(dd::ClientContext& context, const
             }
           });
         }
+        ForEachTrigger(context, schema, [&](const dd::TriggerCatalogEntry& trigger) { collector.TriggerAction(trigger); });
         named.insert(named.end(), collector.sequences.begin(), collector.sequences.end());
       }
     } catch (...) {
@@ -251,8 +348,8 @@ std::optional<std::string> SequenceNameRefusal(dd::ClientContext& context, const
   for (const auto& reference : named) {
     if (CouldMean(reference, path)) {
       return "a sequence named " + QuoteIdentifierIfNeeded(path.object_name) +
-             " would change the numbers a table default, a view or a macro takes: it names a sequence by that "
-             "name. Only the administrator may create or replace it";
+             " would change the numbers a table default, a view, a macro or a trigger takes: it names a sequence by "
+             "that name. Only the administrator may create or replace it";
     }
   }
   return std::nullopt;
@@ -300,7 +397,6 @@ std::optional<std::string> MacroNameRefusal(dd::ClientContext& context, const Sn
       // The schemas first, then each one's entries (see SequenceNameRefusal).
       for (auto& found : catalog.GetSchemas(context)) {
         auto& schema = found.get();
-        const std::string schema_name = compat::Str(schema.name);
         schema.Scan(context, dd::CatalogType::VIEW_ENTRY, [&](dd::CatalogEntry& entry) {
           if (entry.type != dd::CatalogType::VIEW_ENTRY) return;
           try {
@@ -313,13 +409,18 @@ std::optional<std::string> MacroNameRefusal(dd::ClientContext& context, const Sn
             // a view whose query can't be read calls nothing we can name
           }
         });
+        // A trigger's body is bound again each time the trigger fires, with its owner's
+        // rights: what it calls is pinned like what a view calls.
+        ForEachTrigger(context, schema, [&](const dd::TriggerCatalogEntry& trigger) {
+          ReferenceCollector collector(catalog_name);
+          collector.TriggerAction(trigger);
+          pinned.insert(pinned.end(), collector.references.begin(), collector.references.end());
+        });
         for (const auto type : {dd::CatalogType::MACRO_ENTRY, dd::CatalogType::TABLE_MACRO_ENTRY}) {
           schema.Scan(context, type, [&](dd::CatalogEntry& entry) {
             if (entry.type != dd::CatalogType::MACRO_ENTRY && entry.type != dd::CatalogType::TABLE_MACRO_ENTRY) return;
             MacroEntry macro;
-            macro.path.catalog = catalog_name;
-            macro.path.schema_path = {schema_name};
-            macro.path.object_name = compat::Str(entry.name);
+            macro.path = PathOfEntry(entry);  // the schema's whole path: nested schemas
             ReferenceCollector collector(catalog_name);
             for (const auto& function : entry.Cast<dd::MacroCatalogEntry>().macros) {
               if (function) CollectMacro(*function, collector);
@@ -361,9 +462,137 @@ std::optional<std::string> MacroNameRefusal(dd::ClientContext& context, const Sn
   }
   for (const auto& reference : pinned) {
     if (CouldMean(reference, path)) {
-      return what + " would change what a view, a row or masking policy, or a macro one of them uses computes: it calls a "
-             "function by that name. Only the administrator may create or replace it";
+      return what + " would change what a view, a trigger, a row or masking policy, or a macro one of them uses "
+             "computes: it calls a function by that name. Only the administrator may create or replace it";
     }
+  }
+  return std::nullopt;
+}
+
+// Every type name the catalogs' re-bound SQL uses: views' queries, macros' bodies, triggers'
+// bodies, tables' column defaults and CHECK constraints (bound when a row is written), and
+// the store's policies. A table's columns are not among them: DuckDB copies a type into the
+// column at CREATE TABLE, so dropping or replacing the type changes nothing there.
+std::optional<std::vector<Reference>> TypeReferences(dd::ClientContext& context, const Snapshot& snapshot,
+                                                     std::string& error) {
+  std::vector<Reference> named;
+  for (const auto& database : dd::DatabaseManager::Get(context).GetDatabases(context)) {
+    if (!database || database->IsSystem() || database->IsTemporary()) continue;
+    auto& catalog = database->GetCatalog();
+    if (!HoldsDuckDbSql(catalog)) continue;
+    const std::string catalog_name = compat::Str(database->GetName());
+    try {
+      // The schemas first, then each one's entries (see SequenceNameRefusal).
+      for (auto& found : catalog.GetSchemas(context)) {
+        auto& schema = found.get();
+        ReferenceCollector collector(catalog_name);
+        schema.Scan(context, dd::CatalogType::TABLE_ENTRY, [&](dd::CatalogEntry& entry) {
+          if (entry.type == dd::CatalogType::TABLE_ENTRY) {
+            auto& table = entry.Cast<dd::TableCatalogEntry>();
+            for (const auto& column : table.GetColumns().Logical()) {
+              if (!column.HasDefaultValue()) continue;
+              auto copy = column.DefaultValue().Copy();
+              collector.Expression(*copy);
+            }
+            for (const auto& constraint : table.GetConstraints()) {
+              if (!constraint || constraint->type != dd::ConstraintType::CHECK) continue;
+              auto& check = constraint->Cast<dd::CheckConstraint>();
+              if (!check.expression) continue;
+              auto copy = check.expression->Copy();
+              collector.Expression(*copy);
+            }
+          } else if (entry.type == dd::CatalogType::VIEW_ENTRY) {
+            try {
+              auto query = entry.Cast<dd::ViewCatalogEntry>().GetQuery().Copy();
+              auto& select = query->Cast<dd::SelectStatement>();
+              if (select.node) collector.Node(*select.node);
+            } catch (...) {
+            }
+          }
+        });
+        for (const auto type : {dd::CatalogType::MACRO_ENTRY, dd::CatalogType::TABLE_MACRO_ENTRY}) {
+          schema.Scan(context, type, [&](dd::CatalogEntry& entry) {
+            if (entry.type != dd::CatalogType::MACRO_ENTRY && entry.type != dd::CatalogType::TABLE_MACRO_ENTRY) return;
+            for (const auto& function : entry.Cast<dd::MacroCatalogEntry>().macros) {
+              if (function) CollectMacro(*function, collector);
+            }
+          });
+        }
+        ForEachTrigger(context, schema, [&](const dd::TriggerCatalogEntry& trigger) { collector.TriggerAction(trigger); });
+        named.insert(named.end(), collector.types.begin(), collector.types.end());
+      }
+    } catch (const std::exception& e) {
+      error = e.what();
+      return std::nullopt;
+    } catch (...) {
+      return std::nullopt;
+    }
+  }
+  for (const auto& policy : snapshot.row_policies()) {
+    ReferenceCollector collector("");  // resolved where the table is read: any catalog
+    CollectExpressionText(policy.predicate, collector);
+    named.insert(named.end(), collector.types.begin(), collector.types.end());
+  }
+  for (const auto& policy : snapshot.masking_policies()) {
+    ReferenceCollector collector("");
+    CollectExpressionText(policy.body, collector);
+    named.insert(named.end(), collector.types.begin(), collector.types.end());
+  }
+  return named;
+}
+
+std::optional<std::string> TypeNameRefusal(dd::ClientContext& context, const Snapshot& snapshot,
+                                           const ObjectPath& path, const std::string& verb) {
+  const std::string name = path.object_name;
+  const std::string what = "a type named " + QuoteIdentifierIfNeeded(name);
+  const bool creating = verb == "create";
+
+  if (creating) {
+    // A built-in type (DuckDB's own and every loaded extension's): a type of that name in
+    // the search path is found first, in every query and view.
+    bool found = false;
+    try {
+      dd::vector<dd::Identifier> lookup{dd::Identifier("system"), dd::Identifier(DEFAULT_SCHEMA), dd::Identifier(name)};
+      found = dd::Catalog::GetEntry(context, dd::EntryLookupInfo(dd::CatalogType::TYPE_ENTRY, dd::QualifiedName::FromPath(lookup)),
+                                    dd::OnEntryNotFound::RETURN_NULL) != nullptr;
+    } catch (...) {
+      found = false;
+    }
+    if (!found) {
+      try {
+        const auto parsed = dd::UnboundType::TryParseAndDefaultBind(name);
+        found = parsed.id() != dd::LogicalTypeId::INVALID && parsed.id() != dd::LogicalTypeId::UNBOUND;
+      } catch (...) {
+        found = false;
+      }
+    }
+    if (found) {
+      return what + " would replace the built-in type " + name +
+             " wherever it is named, in queries and views alike; give the type a name of its own";
+    }
+    // A type an extension provides when it is loaded (json, inet).
+    for (const auto& entry : dd::EXTENSION_TYPES) {
+      if (IdentifiersEqual(entry.name, name)) {
+        return what + " would replace the type " + name + " of the " + std::string(entry.extension) +
+               " extension wherever it is named; give the type a name of its own";
+      }
+    }
+  }
+
+  std::string error;
+  const auto named = TypeReferences(context, snapshot, error);
+  if (!named) {
+    return what + " could not be checked against the views, macros, triggers and tables of every catalog" +
+           (error.empty() ? std::string() : " (" + error + ")") + "; ask an administrator";
+  }
+  for (const auto& reference : *named) {
+    if (!CouldMean(reference, path)) continue;
+    if (creating) {
+      return what + " would change what a view, a macro, a trigger, a row or masking policy, or a column default or "
+                    "check constraint computes: it names a type by that name. Only the administrator may create it";
+    }
+    return "type " + path.ToString() + " is used by a view, a macro, a trigger, a row or masking policy, or a column "
+           "default or check constraint. Only the administrator may " + verb + " it";
   }
   return std::nullopt;
 }

@@ -978,16 +978,30 @@ setting with YAML, `--max-ingest-message-bytes` or `HARDCHARGER_MAX_INGEST_MESSA
 it is visible in Server Configuration and takes effect after restarting the server.
 
 A session is evicted within 5 s (the server's sweep interval) after `session_idle_timeout`
-seconds (default 900; 0 never evicts) without a request on it, unless one of its statements
-is still running, one of its ingests is in progress, one of its results is being read (a
-slow download keeps it to the end of the stream), or it holds a retained result that hasn't
-expired. That last one follows Chargewire §5.7, so that a result kept for re-reading stays
-readable until its `expires_at`: a session whose statement ran in JSON mode (a retained
-result) lives up to `result_retention_seconds` after the statement ended, then goes at the
-next sweep. To bound a session's life by the idle timeout alone, set
-`result_retention_seconds` no higher than `session_idle_timeout`, or have clients delete
-statements (or the session) they are done with. An evicted session answers
-`session_not_found`.
+seconds (default 900; 0 never evicts) without a request on it, unless a request is waiting
+on one of its statements (`Prefer: wait`), one of its ingests is in progress, one of its
+results is being read (a slow download keeps it to the end of the stream), or it holds a
+retained result that hasn't expired. A statement that is still running with no request
+waiting on it does not keep the session: a client that is there polls its statement and is
+heard from within the timeout, while one that died mid-write (a pod killed at its deadline)
+must not keep the session, and the write's open transaction, alive for the hours the write
+runs. The eviction cancels the statement (`cancel_reason` `session_closed`) and rolls its
+transaction back. With `session_idle_timeout` 0 a dead client's session and transaction live
+until the server restarts (or `KILL SESSION`). The retained-result rule follows Chargewire
+§5.7, so that a result kept for re-reading stays readable until its `expires_at`: a session
+whose statement ran in JSON mode (a retained result) lives up to `result_retention_seconds`
+after the statement ended, then goes at the next sweep. To bound a session's life by the
+idle timeout alone, set `result_retention_seconds` no higher than `session_idle_timeout`,
+or have clients delete statements (or the session) they are done with. An evicted session
+answers `session_not_found`.
+
+`idle_in_transaction_session_timeout` (default 0, off), as PostgreSQL has it, ends a session
+that holds a transaction open (`BEGIN`, or autocommit off) with nothing running and no
+request for that many seconds, and rolls the transaction back; its next request gets
+`session_ended` with reason `idle_in_transaction`. A startup option, and at runtime `SET
+hardcharger.idle_in_transaction_session_timeout = 300` for one session or `SET GLOBAL ...`
+(administrators) for every session that hasn't set its own. A retained result does not keep
+such a session: the transaction's locks are what the limit is for.
 
 With instrumentation on (`--enable-instrumentation`), the server keeps its history in
 tables: `instances`, `sessions`, `sql_statements` and `sql_executions`, and the views
@@ -1037,6 +1051,13 @@ Each statement is checked inside DuckDB against its own plan, after binding and 
 before optimizing, so nested SQL, views and macros can't route around a grant. Anything the
 check can't classify is refused. Changes reach every replica within about a second.
 
+Users can call an extension's table function: `GRANT EXECUTE ON TABLE FUNCTION read_hl7 (PATH
+ARGUMENT 2) TO analyst` opens it to a role, and the arguments the grant declares as paths go
+through the storage privileges as `read_csv()`'s path does. Nested schemas (DuckDB 2.0) are
+granted by their path: a grant on `sales.payroll` covers `sales.payroll.*` and nothing alike,
+one on `sales` covers its children, and `CREATE SCHEMA ON SCHEMA sales` lets a role nest
+schemas in it.
+
 Users can share macros: `GRANT CREATE MACRO, DROP MACRO ON SCHEMA tools TO analyst` lets a role
 create and drop scalar and table macros in `tools` (replacing one needs both). A macro is expanded
 into the statement that calls it, so its body reads with the caller's rights. So that a user's
@@ -1044,6 +1065,14 @@ macro can't change what anyone else's SQL computes, Hardcharger refuses temporar
 of a built-in function or of one an extension autoloads, replacing or standing in for a function
 that a view, a row or masking policy (or a macro one of them uses) calls, and a body that calls
 what its creator may not (`query()`, files beyond their system privileges).
+
+Types and triggers follow: `GRANT CREATE TYPE, DROP TYPE ON SCHEMA tools TO analyst` lets a role
+create enums, structs and aliases there (never a built-in or extension type's name, nor one a
+view, macro, trigger, policy, column default or check constraint names, and dropping or replacing
+such a type is refused too). `GRANT CREATE TRIGGER, DROP TRIGGER ON SCHEMA tools TO analyst` lets a
+role put triggers on the tables it owns. A user's trigger runs with its owner's rights, whoever
+writes the table, so an administrator's write lends it nothing; an administrator's trigger runs
+with the writer's rights, as DuckDB runs it.
 
 The init SQL (`init_sql_commands`, `init_sql_commands_file`) can hold these statements too.
 They run as the administrator, in order with the DuckDB statements around them, so a grant

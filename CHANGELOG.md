@@ -7,6 +7,228 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- **`idle_in_transaction_session_timeout`, as PostgreSQL has it
+  ([#26](https://github.com/gizmodata/hardcharger/issues/26)).** A session that holds a
+  transaction open (`BEGIN`, or autocommit off) with nothing running and no request for this
+  many seconds is ended, within 5 s, and its transaction rolled back; its next request gets
+  `session_ended` with the new reason `idle_in_transaction`, and the instrumentation sessions
+  table records `stop_reason` `idle_in_transaction`. Off (0) by default. A startup option
+  (`idle_in_transaction_session_timeout` in the configuration file,
+  `--idle-in-transaction-session-timeout`, `HARDCHARGER_IDLE_IN_TRANSACTION_SESSION_TIMEOUT`),
+  and at runtime `SET hardcharger.idle_in_transaction_session_timeout` for one session or
+  `SET GLOBAL` (administrators) for every session that hasn't set its own. The session document
+  shows a session's limit as `idle_in_transaction_timeout_s`. The web UI stays signed in when
+  one of its tabs' sessions ends this way; the statement that finds the session gone shows the
+  server's message.
+
+- **Table functions for users: the `EXECUTE` privilege**
+  ([#24](https://github.com/gizmodata/hardcharger/issues/24)). Under access control a table
+  function that reads no table and no file is every user's, one that reads files goes through
+  the storage privileges, and any other, an extension's say, was the administrator's. `GRANT
+  EXECUTE ON TABLE FUNCTION read_hl7 TO analyst` opens one to a role, and the grant declares which
+  arguments name the files it reads, `(PATH ARGUMENT 2)`, `(PATH ARGUMENTS 1, 2)` or
+  `(PATH PARAMETER files)`: their values are checked against the storage privileges (`READ
+  FILESYSTEM`, `READ OBJECT STORAGE`, `READ HTTP`, `ON LOCATION`) as written, before DuckDB opens
+  them, and again as bound; a computed path is refused. A table macro an administrator wraps
+  around the function works for the grantee. The grant is refused on a function every user may
+  call already, on one the storage privileges check, and on the ones that stay the
+  administrator's (`hardcharger_*()`, `query()`, `duckdb_secrets()`, `checkpoint()`, the engine's
+  internals). `EXECUTE` is never part of `GRANT ALL`; `hardcharger_grants()`,
+  `hardcharger_effective_privileges()` and `SHOW GRANTS` list it as `TABLE FUNCTION`, with the
+  declared path arguments where `SELECT` lists columns. A refusal of an ungranted function now
+  names the grant.
+
+- **Nested schemas (DuckDB 2.0) under access control**
+  ([#19](https://github.com/gizmodata/hardcharger/issues/19)). `CREATE SCHEMA` and `DROP SCHEMA`
+  are granted `ON SCHEMA` as well as `ON CATALOG`: `CREATE SCHEMA sales.child` needs `CREATE
+  SCHEMA` on `sales` (granted on it or its catalog, or owning `sales`), the creator owns the
+  child, and `GRANT ALL ON SCHEMA` includes both. The owner of a schema may drop the schemas
+  nested in it; `DROP SCHEMA ... CASCADE` needs the right to drop every schema below. A grant
+  on `sales.payroll` covers `sales.payroll.*` and nothing alike (not `hr.payroll`, not the
+  top-level `"sales.payroll"`), and one on `sales` covers its children, as before, now with
+  regression tests. The access-control guide documents it.
+
+- **Types for users: the `CREATE TYPE` and `DROP TYPE` privileges**
+  ([#18](https://github.com/gizmodata/hardcharger/issues/18)). Under access control,
+  `GRANT CREATE TYPE, DROP TYPE ON SCHEMA s TO r` (or `ON CATALOG`) lets a role create and drop
+  enums, structs and type aliases there; replacing one needs both, a schema's owner holds them,
+  and `GRANT ALL` and a tenant's admin role include them. An enum made from a query reads with its
+  creator's rights. So that a user's type can't change what anyone else's SQL means, these stay the
+  administrator's: temporary types; a built-in or extension type's name (`integer`, `json`: DuckDB
+  finds a schema's type first); a name that a view, a macro, a trigger, a row or masking policy, or
+  a column default or `CHECK` constraint resolves to another type; and dropping or replacing a type
+  one of those names. (A table's columns copy their type, so they pin nothing.) `duckdb_types()`
+  lists a user's own schemas' types and the built-in ones, and `COMMENT ON TYPE` needs `DROP TYPE`
+  on the schema.
+
+- **Triggers for users: the `CREATE TRIGGER` and `DROP TRIGGER` privileges**
+  ([#17](https://github.com/gizmodata/hardcharger/issues/17)). `GRANT CREATE TRIGGER, DROP TRIGGER
+  ON SCHEMA s TO r` (or `ON CATALOG`) lets a role create triggers on the tables it owns and drop
+  them (the owner always may). A user's trigger runs with its **owner's** rights, whoever writes
+  the table: DuckDB binds a trigger's body into the statement that fires it, and Hardcharger finds
+  the body in that plan and checks it, and applies row and masking policies, as the owner. A
+  writer who may only `INSERT` still fires a trigger that writes the owner's log table, and an
+  administrator's write lends the body no administrator rights: a body its owner may not run
+  refuses the write, naming the trigger and its owner. An administrator's trigger keeps running
+  with the writer's rights, as before. A body may call only what its creator may (no `query()`,
+  files beyond the creator's storage privileges), the functions it calls are pinned against users'
+  macros like a view's, and `duckdb_triggers()` lists the triggers of the tables a user may access.
+
+- **Other servers in the web UI.** The schema browser's root is now a list of servers: this
+  server first (with the admin pages, as before), then the Hardcharger servers you add with
+  **Add a server** (a name, the URL, and how its certificate is trusted). Each server shows a
+  lock beside its name: green when its certificate was verified against trusted roots, amber
+  when you trusted it by its SHA-256 fingerprint (shown to you first, like an SSH host key),
+  red and open for plain HTTP. Sign in with a password or a token; the schema browser, its
+  search, autocomplete, previews, uploads and editor tabs then work on that server (a tab is
+  bound to one server, shown on the tab; **New tab on…** picks it). The list of servers is
+  kept in the browser; sign-ins last for the tab only. A browser can't reach a second server
+  itself (Chargewire's CORS allow-list is exact by design), so the server serving the UI relays
+  the remote's Chargewire requests under `/ui/v1/remotes/<id>/chargewire/...`, streaming
+  results and uploads both ways; `web_ui_remote_servers: false` turns the relay off.
+
+- **`hardcharger ui`: the web UI on its own.** The command-line client serves the same web UI
+  (and the relay) on a port of its own, with no engine behind it, and opens it in the browser:
+  the UI then opens on Add a server and works with the servers you add. `--listen HOST:PORT`
+  (default `127.0.0.1:0`, a free loopback port), `--no-open`, `--tls-cert`/`--tls-key` to serve
+  HTTPS for others, and `--allow-plaintext` before it will serve plain HTTP on an address
+  other computers can reach. A client built without the UI says so and exits with code 2.
+
+- Desktop: **Open SQL workspace** no longer needs the local server. With it stopped, the app
+  starts `hardcharger ui` on a loopback port, opens the workspace on it with the remote servers
+  you saved in **Settings › Remote servers**, and stops it when the workspace closes. With the
+  server running, the workspace opens on it as before, with the same saved servers listed
+  ([#20](https://github.com/gizmodata/hardcharger/issues/20)).
+
+- Web UI: nested schemas (DuckDB 2.0's `CREATE SCHEMA a.b`) show as a tree under their parent,
+  a top-level schema whose name holds a dot (`"x.y"`) as its own node, and double-click or drag
+  inserts the full path, each part quoted as SQL needs; the search finds tables under their
+  path ([#19](https://github.com/gizmodata/hardcharger/issues/19)).
+
+- `stop_on_stdin_close`: the server stops, as the first stop signal would (draining under
+  `graceful_shutdown`), when its standard input reaches its end. A parent process that starts
+  the server with its stdin on a pipe and holds the other end then stops the server by
+  going away, however it goes: the kernel closes the pipe. Off by default, since a server
+  started with stdin on `/dev/null` would otherwise stop at once.
+
+### Changed
+
+- **A dead client's running write no longer keeps its session, and the write's open
+  transaction, alive ([#26](https://github.com/gizmodata/hardcharger/issues/26)).** A
+  replication loader's pod was killed at its deadline mid-`MERGE`; the server ran the `MERGE`
+  to its end 9 hours later and then kept the session, `idle_in_transaction` with the
+  uncommitted staging table, for 20+ hours, and every later run failed with "Catalog
+  write-write conflict on create" until an administrator ran `KILL SESSION`. A running
+  statement kept the session out of the idle sweep's reach. Now a request waiting on a
+  statement (`Prefer: wait`), a read of a result, a bulk ingest in progress or an unexpired
+  retained result keeps a session; a statement that runs with nobody waiting on it or reading
+  it does not. So with `session_idle_timeout` 900 (the default) a client that vanished
+  mid-write loses its session 15 minutes later: the statement is cancelled (`cancel_reason`
+  `session_closed`) and its transaction rolled back, while a client whose connection blipped
+  and that polls its statement within the window keeps everything. A client that polls a long
+  statement less often than `session_idle_timeout` loses its session; with
+  `session_idle_timeout` 0 a dead client's session and transaction still live until the server
+  restarts, which the option now says. The instrumentation sessions table records an idle
+  eviction's `stop_reason` as `idle` (it was `closed`).
+
+- The web UI uses the JavaScript client `@gizmodata/chargewire` 2.1.0. After the server ends a
+  session for an idle transaction, the client replaces it, and the statement that found it ended
+  fails instead of running again in autocommit on the new session: it would have committed on its
+  own while the transaction's earlier statements had been rolled back.
+
+- **Chargewire 2.1.0.** Its changes are the ones above: a running statement keeps an idle
+  session only while a request waits on it or reads it (spec §5.7), the idle-in-transaction
+  timeout with the session document's `idle_in_transaction_timeout_s` and the
+  `idle_in_transaction` reason (§5.6), nested schemas named by their path in metadata (§10),
+  and the C++ SDK's `ServerOptions::app_endpoints`, an application's own endpoints beside the
+  protocol's on the same listener with streamed request and response bodies (the web UI's
+  relay is one; `GET /ui/v1/app` tells the UI what serves it: `local_server`,
+  `remote_servers`, `version`). Protocol version 1 is unchanged.
+
+- Chargewire metadata (`db-schemas`, `tables`, the keys, the per-field
+  `ARROW:FLIGHT:SQL:DB_SCHEMA_NAME`) names a nested schema by its path, `sales.payroll`, a part
+  quoted when it contains a dot or a double quote (`"sales.payroll"` is a top-level schema of
+  that name), and the schema filters match that text (Chargewire spec §10). Top-level schemas
+  without a dot in their name are listed as before. `hardcharger_grants()`,
+  `hardcharger_policies()` and `hardcharger_effective_privileges()` write `schema_name` the same
+  way; `SHOW GRANTS` already did. The CLI's `.tables` reads the new form.
+
+- `parquet_full_metadata()` and `read_single_parquet_file()` read files: under access control
+  they go through the storage privileges like `parquet_metadata()`, instead of staying the
+  administrator's.
+
+- The refusal of a macro named like a function a view, policy or macro calls now names triggers
+  too ("would change what a view, a trigger, a row or masking policy, or a macro one of them uses
+  computes"), and `CREATE TEMP TYPE` by a user says "creating temporary types needs an
+  administrator" instead of "creating types needs an administrator".
+
+### Fixed
+
+- **The CLI printed GEOMETRY and BLOB columns as raw bytes
+  ([#22](https://github.com/gizmodata/hardcharger/issues/22)).** A `GEOMETRY` value's WKB went
+  straight to stdout in every output mode, as `blob`: control characters in the table, raw bytes
+  in the CSV, and `--json` output that was neither valid JSON nor valid UTF-8 (the docs' example
+  runner crashed decoding it). `GEOMETRY` now prints as Well-Known Text, exactly as DuckDB's
+  `ST_AsText` writes it and as the web UI shows it since 2.5.0 (the two share one number
+  format: `POINT (1e+20 -1e-07)`, `POINT Z EMPTY`, `MULTIPOINT (1 2, 3 4)`), with the column's
+  type named `GEOMETRY` or `GEOMETRY('EPSG:4326')` in the table and box headers and in
+  `.describe`. A `BLOB` prints as DuckDB's CLI prints it, printable ASCII as is and every other
+  byte as `\xHH`, so every mode's output is valid UTF-8 and the JSON modes valid JSON.
+  Geometries and blobs inside lists, structs and maps print the same way (`[POINT (1 2), NULL]`,
+  `{'g': POINT (1 2)}`). A value that isn't well-formed WKB prints a marker (`[invalid WKB: ends
+  early]`) instead of stopping the result.
+
+- **The CLI printed an ENUM as its Arrow dictionary and index.** An ENUM column arrives as an
+  Arrow dictionary, and every output mode printed Arrow's own text for it (`["low","high"][1]`,
+  and `dictionary<values=string, ...>` in the headers) instead of the value. It now prints the
+  value (`high`), as DuckDB's CLI does, inside lists, structs and maps too (`[low, NULL]`,
+  `{'m': low}`), and names the type `ENUM('low', 'high')` as DuckDB's `DESCRIBE` spells it.
+  Nested types in the `box` and `table` headers now read as DuckDB writes them (`bigint[]`,
+  `struct(m varchar)`, `map(varchar, bigint)`) instead of Arrow's `list<l: ...>`.
+
+- Access control and nested schemas ([#19](https://github.com/gizmodata/hardcharger/issues/19)):
+  - `GRANT SELECT ON sales.payroll.salaries TO r` read `sales` as a catalog and failed with
+    "does not exist", although `SELECT * FROM sales.payroll.salaries` works. `GRANT`, `REVOKE`,
+    the row and masking policy statements, `ALTER ... OWNER TO` and `GRANT USAGE ON SEQUENCE` now
+    read a name the way DuckDB binds it (a catalog first, else a schema path of the session's
+    catalog), and a name that reads both ways is refused rather than guessed.
+  - `duckdb_tables()`, `duckdb_schemas()`, `duckdb_columns()`, `information_schema` and the
+    drivers' metadata calls left out the nested objects a user may see: a user holding `SELECT ON
+    SCHEMA sales` saw `sales.orders` but not `sales.payroll.salaries`, which it can read. The
+    listings now match a schema's whole path (DuckDB's listings carry the leaf name and the
+    schema's oid).
+  - `hardcharger_grants()` showed the nested `sales.payroll` and the top-level `"sales.payroll"`
+    both as `sales.payroll`.
+  - The guards that keep a user's macro or sequence from replacing one a view, a policy or a
+    table default uses compared a macro in a nested schema by its leaf name only
+    (`tools.inner.m` as `inner.m`); they read the whole path now, and the quoted-dot and
+    same-leaf twins are tested.
+
+- Web UI: a query that returned no rows failed with "Cannot read properties of undefined
+  (reading 'byteLength')" when a column was a LIST (or a LIST of STRUCTs): apache-arrow makes
+  one empty batch of a stream with a schema and no record batches, and the byte counts of
+  both the client (chargewire-js) and the page's own result limit walked into the LIST's
+  missing child. It reads as 0 rows now
+  ([#23](https://github.com/gizmodata/hardcharger/issues/23)).
+
+- Web UI: an editor tab whose session the server ended because its transaction sat idle past
+  `idle_in_transaction_session_timeout` says so (the transaction was rolled back; the next run
+  starts a new session) instead of staying dead: chargewire-js treats `session_ended` with
+  reason `idle_in_transaction` like a session the server no longer has.
+
+- Desktop: the local server could outlive the app ([#28](https://github.com/gizmodata/hardcharger/issues/28)).
+  Quitting from the Dock, an AppleScript `quit`, a logout or a shutdown end the app through
+  macOS's own terminate path, which never reached the app's exit handler, so the server
+  kept running (one held port 31337 for 46 minutes after a quit). The app now stops the
+  server on that path too, before the termination goes on; its stop waits until the server
+  process is actually gone, asking it to stop now after 12 s and ending it after 45 s more,
+  with each step noted in Logs; the server is started with `stop_on_stdin_close` on a pipe
+  the app holds, so a crash or a kill of the app stops the server as well; and a server an
+  earlier run left behind is named on the Local server page with a **Stop it** button, and
+  Start's refusal names it instead of "port already in use".
+
 ## [2.6.0] - 2026-11-04
 
 ### Added

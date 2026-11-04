@@ -29,6 +29,7 @@
 #include "sql_processor.hpp"
 #include "sql_quoting.hpp"
 #include "third_party_notices.hpp"
+#include "ui_command.hpp"
 #include "version.hpp"
 #include "chargewire_connection.hpp"
 
@@ -62,6 +63,12 @@ int main(int argc, char** argv) {
   SetConsoleCP(CP_UTF8);
 #endif
   EnableTerminalColors();
+
+  // Subcommands: `hardcharger ui` serves the web UI on its own. Anything else is the SQL
+  // client's own flags, as before (a word that isn't a subcommand is its positional URI).
+  if (argc >= 2 && std::string_view(argv[1]) == "ui") {
+    return RunUiCommand(argc - 1, argv + 1);
+  }
 
   ClientConfig config;
   CommandLine cl;
@@ -139,7 +146,9 @@ int main(int argc, char** argv) {
   config.tls_given = cl.Given("tls");
 
   if (help) {
-    std::cout << "Usage: hardcharger [OPTIONS] [URI]" << std::endl << std::endl;
+    std::cout << "Usage: hardcharger [OPTIONS] [URI]\n       hardcharger ui [OPTIONS]      the web UI on its own (hardcharger ui --help)"
+              << std::endl
+              << std::endl;
     std::cout << "Examples:\n"
                  "  hardcharger --username admin             localhost:31337, over TLS (the default)\n"
                  "  hardcharger --no-tls --username admin    a server without TLS (plain HTTP)\n"

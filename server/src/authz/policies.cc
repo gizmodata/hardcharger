@@ -1,6 +1,7 @@
 #include "authz/policies.hpp"
 
 #include <duckdb/catalog/catalog.hpp>
+#include <duckdb/catalog/catalog_entry_retriever.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/common/vector_operations/variadic_executor.hpp>
 #include <duckdb/function/scalar_function.hpp>
@@ -264,15 +265,17 @@ std::vector<std::string> SensitiveSettingNames(dd::ClientContext& context) {
 class PolicyRewriter {
  public:
   PolicyRewriter(dd::ClientContext& context, std::shared_ptr<const Snapshot> snapshot,
-                 const Principal& principal)
+                 const Principal& principal, const TriggerBodies& trigger_bodies)
       : context_(context),
         snapshot_owner_(std::move(snapshot)),
         snapshot_(*snapshot_owner_),
         principal_(principal),
+        trigger_bodies_(trigger_bodies),
         policy_context_(PolicyContext::For(snapshot_, principal)),
         restricted_(snapshot_.RestrictsCatalogs(principal)) {}
 
-  void Rewrite(dd::unique_ptr<dd::LogicalOperator>& plan) {
+  void Rewrite(dd::unique_ptr<dd::LogicalOperator>& plan, bool body = false) {
+    entered_body_ = body;
     Walk(plan);
     if (masks_.empty()) return;
     SubstituteMasks(*plan);
@@ -299,6 +302,14 @@ class PolicyRewriter {
   }
 
   void Walk(dd::unique_ptr<dd::LogicalOperator>& op) {
+    // The body of a trigger a user owns: the owner's policies, not this principal's.
+    if (const TriggerBody* body = TriggerBodyAt(trigger_bodies_, *op); body && !body->base) {
+      if (body->definer && !entered_body_) {
+        ApplyPolicies(context_, snapshot_owner_, *body->definer, op, trigger_bodies_, true);
+        return;
+      }
+    }
+    entered_body_ = false;
     for (auto& child : op->children) {
       if (child) Walk(child);
     }
@@ -316,7 +327,8 @@ class PolicyRewriter {
         // DELETE ... RETURNING hands back whole rows, masked columns included.
         auto& del = op->Cast<dd::LogicalDelete>();
         const ObjectPath path = PathOfEntry(del.table);
-        if (del.return_chunk && !snapshot_.ApplicableMasks(principal_, path).empty()) {
+        if (del.return_chunk && !ReturningAddedForTriggers(trigger_bodies_, *op) &&
+            !snapshot_.ApplicableMasks(principal_, path).empty()) {
           Refuse("DELETE ... RETURNING on " + path.ToString() + ", which has masked columns");
         }
         break;
@@ -357,7 +369,7 @@ class PolicyRewriter {
     static const std::unordered_set<std::string> kCatalogListing = {
         "duckdb_databases",   "duckdb_tables",    "duckdb_views",        "duckdb_columns",
         "duckdb_constraints", "duckdb_functions", "duckdb_indexes",      "duckdb_schemas",
-        "duckdb_sequences",   "duckdb_types",     "pragma_database_size"};
+        "duckdb_sequences",   "duckdb_types",     "duckdb_triggers",     "pragma_database_size"};
     if (restricted_ && kCatalogListing.count(function)) {
       std::vector<std::string> visible;
       for (const auto& db : dd::DatabaseManager::Get(context_).GetDatabases()) {
@@ -461,20 +473,25 @@ class PolicyRewriter {
   // checked with (a prepared statement is checked again when the store changes).
   dd::unique_ptr<dd::Expression> ListedRows(dd::LogicalGet& get, const std::string& function) {
     if (principal_.superuser) return nullptr;
-    enum class Rule { kSchema, kObject, kSequence, kColumn, kColumnOfArgument };
+    enum class Rule { kSchema, kObject, kSequence, kColumn, kColumnOfArgument, kType };
     struct Listing {
       Rule rule;
       std::vector<std::string> columns;
     };
+    // The schema's oid comes along: DuckDB's listings show a schema by its leaf name only,
+    // and a nested schema (DuckDB 2.0) is named by its whole path (SchemaPathsByOid).
     static const std::map<std::string, Listing> kListings = {
-        {"duckdb_schemas", {Rule::kSchema, {"database_name", "schema_name"}}},
-        {"duckdb_tables", {Rule::kObject, {"database_name", "schema_name", "table_name"}}},
-        {"duckdb_views", {Rule::kObject, {"database_name", "schema_name", "view_name"}}},
-        {"duckdb_constraints", {Rule::kObject, {"database_name", "schema_name", "table_name"}}},
-        {"duckdb_indexes", {Rule::kObject, {"database_name", "schema_name", "table_name"}}},
-        {"duckdb_sequences", {Rule::kSequence, {"database_name", "schema_name", "sequence_name"}}},
+        {"duckdb_schemas", {Rule::kSchema, {"database_name", "schema_name", "oid"}}},
+        {"duckdb_tables", {Rule::kObject, {"database_name", "schema_name", "table_name", "schema_oid"}}},
+        {"duckdb_views", {Rule::kObject, {"database_name", "schema_name", "view_name", "schema_oid"}}},
+        {"duckdb_constraints", {Rule::kObject, {"database_name", "schema_name", "table_name", "schema_oid"}}},
+        {"duckdb_indexes", {Rule::kObject, {"database_name", "schema_name", "table_name", "schema_oid"}}},
+        {"duckdb_sequences", {Rule::kSequence, {"database_name", "schema_name", "sequence_name", "schema_oid"}}},
+        // A trigger is listed with its table; a type with its schema (built-in ones for everyone).
+        {"duckdb_triggers", {Rule::kObject, {"database_name", "schema_name", "table_name", "schema_oid"}}},
+        {"duckdb_types", {Rule::kType, {"database_name", "schema_name", "internal", "schema_oid"}}},
         {"duckdb_columns",
-         {Rule::kColumn, {"database_name", "schema_name", "table_name", "column_name"}}},
+         {Rule::kColumn, {"database_name", "schema_name", "table_name", "column_name", "schema_oid"}}},
         // The columns of the one table they describe (the plan check refuses one the
         // user may not access at all).
         {"pragma_table_info", {Rule::kColumnOfArgument, {"name"}}},
@@ -496,8 +513,19 @@ class PolicyRewriter {
     dd::vector<dd::LogicalType> types;
     for (const auto& column : listing->second.columns) {
       arguments.push_back(ColumnOf(get, function, column));
-      types.push_back(dd::LogicalType::VARCHAR);
+      types.push_back(column == "oid" || column == "schema_oid" ? dd::LogicalType::BIGINT
+                      : column == "internal"                     ? dd::LogicalType::BOOLEAN
+                                                                 : dd::LogicalType::VARCHAR);
     }
+    // The whole path of each nested schema, by catalog and oid; a schema not in the map
+    // is top-level, and its leaf name is its path.
+    const auto nested = std::make_shared<const std::unordered_map<std::string, std::vector<std::string>>>(
+        rule == Rule::kColumnOfArgument ? std::unordered_map<std::string, std::vector<std::string>>{}
+                                        : SchemaPathsByOid());
+    auto schema_path = [nested](dd::string_t catalog, int64_t oid, dd::string_t leaf) {
+      const auto it = nested->find(FoldIdentifier(catalog.GetString()) + "\x1f" + std::to_string(oid));
+      return it != nested->end() ? it->second : std::vector<std::string>{leaf.GetString()};
+    };
     // Answers by name: catalog listings repeat the same table on many rows.
     struct Answers {
       std::mutex mutex;
@@ -521,9 +549,9 @@ class PolicyRewriter {
     switch (rule) {
       case Rule::kSchema:
         body = [=](dd::DataChunk& args, dd::ExpressionState&, dd::Vector& result) {
-          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t>(
-              args, result, [&](dd::string_t catalog, dd::string_t schema) {
-                const ObjectPath path{catalog.GetString(), {schema.GetString()}, {}};
+          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t, int64_t>(
+              args, result, [&](dd::string_t catalog, dd::string_t schema, int64_t oid) {
+                const ObjectPath path{catalog.GetString(), schema_path(catalog, oid, schema), {}};
                 return decide(ObjectKey(path),
                               [&] { return snapshot->SchemaListed(principal, path); });
               });
@@ -531,9 +559,9 @@ class PolicyRewriter {
         break;
       case Rule::kObject:
         body = [=](dd::DataChunk& args, dd::ExpressionState&, dd::Vector& result) {
-          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t, dd::string_t>(
-              args, result, [&](dd::string_t catalog, dd::string_t schema, dd::string_t name) {
-                const ObjectPath path{catalog.GetString(), {schema.GetString()}, name.GetString()};
+          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t, dd::string_t, int64_t>(
+              args, result, [&](dd::string_t catalog, dd::string_t schema, dd::string_t name, int64_t oid) {
+                const ObjectPath path{catalog.GetString(), schema_path(catalog, oid, schema), name.GetString()};
                 return decide(ObjectKey(path),
                               [&] { return snapshot->ObjectListed(principal, path); });
               });
@@ -541,9 +569,9 @@ class PolicyRewriter {
         break;
       case Rule::kSequence:
         body = [=](dd::DataChunk& args, dd::ExpressionState&, dd::Vector& result) {
-          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t, dd::string_t>(
-              args, result, [&](dd::string_t catalog, dd::string_t schema, dd::string_t name) {
-                const ObjectPath path{catalog.GetString(), {schema.GetString()}, name.GetString()};
+          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t, dd::string_t, int64_t>(
+              args, result, [&](dd::string_t catalog, dd::string_t schema, dd::string_t name, int64_t oid) {
+                const ObjectPath path{catalog.GetString(), schema_path(catalog, oid, schema), name.GetString()};
                 return decide(ObjectKey(path),
                               [&] { return snapshot->SequenceListed(principal, path); });
               });
@@ -551,13 +579,24 @@ class PolicyRewriter {
         break;
       case Rule::kColumn:
         body = [=](dd::DataChunk& args, dd::ExpressionState&, dd::Vector& result) {
-          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t, dd::string_t, dd::string_t>(
+          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t, dd::string_t, dd::string_t, int64_t>(
               args, result,
-              [&](dd::string_t catalog, dd::string_t schema, dd::string_t name, dd::string_t column) {
-                const ObjectPath path{catalog.GetString(), {schema.GetString()}, name.GetString()};
+              [&](dd::string_t catalog, dd::string_t schema, dd::string_t name, dd::string_t column, int64_t oid) {
+                const ObjectPath path{catalog.GetString(), schema_path(catalog, oid, schema), name.GetString()};
                 const std::string column_name = column.GetString();
                 return decide(ObjectKey(path) + "\x1d" + FoldIdentifier(column_name),
                               [&] { return snapshot->ColumnListed(principal, path, column_name); });
+              });
+        };
+        break;
+      case Rule::kType:
+        body = [=](dd::DataChunk& args, dd::ExpressionState&, dd::Vector& result) {
+          dd::VariadicExecutor::Execute<bool, dd::string_t, dd::string_t, bool, int64_t>(
+              args, result, [&](dd::string_t catalog, dd::string_t schema, bool internal, int64_t oid) {
+                if (internal) return true;
+                const ObjectPath path{catalog.GetString(), schema_path(catalog, oid, schema), {}};
+                return decide(ObjectKey(path),
+                              [&] { return snapshot->SchemaListed(principal, path); });
               });
         };
         break;
@@ -577,6 +616,30 @@ class PolicyRewriter {
                                                       std::move(arguments), nullptr);
   }
 
+  // The whole path of every nested schema (DuckDB 2.0), keyed by its catalog and oid: the
+  // catalog listings carry a schema's leaf name and oid only. DuckDB's own catalogs nest
+  // schemas; attached databases of other kinds don't, and are not scanned (a remote one
+  // would be a round trip).
+  std::unordered_map<std::string, std::vector<std::string>> SchemaPathsByOid() {
+    std::unordered_map<std::string, std::vector<std::string>> paths;
+    try {
+      for (const auto& database : dd::DatabaseManager::Get(context_).GetDatabases(context_)) {
+        if (!database || database->IsSystem() || database->IsTemporary()) continue;
+        auto& catalog = database->GetCatalog();
+        if (!catalog.IsDuckCatalog()) continue;
+        const std::string key = FoldIdentifier(compat::Str(database->GetName())) + "\x1f";
+        for (auto& found : catalog.GetSchemas(context_)) {
+          auto& schema = found.get();
+          auto path = PathOfEntry(schema).schema_path;
+          if (path.size() > 1) paths.emplace(key + std::to_string(schema.oid), std::move(path));
+        }
+      }
+    } catch (const std::exception&) {
+      // A catalog that can't be listed has no nested schemas to name.
+    }
+    return paths;
+  }
+
   // The table pragma_table_info('...') / pragma_show('...') describes, as DuckDB finds it.
   dd::optional_ptr<dd::CatalogEntry> DescribedTable(const dd::Value& argument) {
     try {
@@ -585,10 +648,13 @@ class PolicyRewriter {
         path.emplace_back(compat::Str(part));
       }
       if (path.empty()) return nullptr;
-      return dd::Catalog::GetEntry(context_,
-                                   dd::EntryLookupInfo(dd::CatalogType::TABLE_ENTRY,
-                                                       dd::QualifiedName::FromPath(path)),
-                                   dd::OnEntryNotFound::RETURN_NULL);
+      // A catalog first, else a schema path of the session's catalog, as DuckDB binds it.
+      dd::CatalogEntryRetriever retriever(context_);
+      return dd::Catalog::GetEntry(
+          context_,
+          dd::EntryLookupInfo(dd::CatalogType::TABLE_ENTRY,
+                              dd::Binder::BindTableName(retriever, dd::QualifiedName::FromPath(path))),
+          dd::OnEntryNotFound::RETURN_NULL);
     } catch (...) {
       return nullptr;
     }
@@ -746,6 +812,9 @@ class PolicyRewriter {
   const std::shared_ptr<const Snapshot> snapshot_owner_;  // for the listing filters, which run later
   const Snapshot& snapshot_;
   const Principal& principal_;
+  const TriggerBodies& trigger_bodies_;
+  // Set for the one Walk of a body's root this rewriter was made for (ApplyPolicies).
+  bool entered_body_ = false;
   PolicyContext policy_context_;
   dd::column_binding_map_t<dd::unique_ptr<dd::Expression>> masks_;
   std::unordered_set<const dd::LogicalOperator*> policy_filters_;
@@ -780,16 +849,33 @@ arrow::Result<dd::unique_ptr<dd::ParsedExpression>> PreparePolicyExpression(
   return parsed;
 }
 
+// A superuser's statement is rewritten only where a user's trigger body sits in it.
+void ApplyDefinerPolicies(dd::ClientContext& context, const std::shared_ptr<const Snapshot>& snapshot,
+                          dd::unique_ptr<dd::LogicalOperator>& op, const TriggerBodies& trigger_bodies) {
+  if (const TriggerBody* body = TriggerBodyAt(trigger_bodies, *op); body && body->definer) {
+    ApplyPolicies(context, snapshot, *body->definer, op, trigger_bodies, true);
+    return;
+  }
+  for (auto& child : op->children) {
+    if (child) ApplyDefinerPolicies(context, snapshot, child, trigger_bodies);
+  }
+}
+
 void ApplyPolicies(dd::ClientContext& context, const std::shared_ptr<const Snapshot>& snapshot,
-                   const Principal& principal, dd::unique_ptr<dd::LogicalOperator>& plan) {
-  if (!plan || principal.superuser) return;
+                   const Principal& principal, dd::unique_ptr<dd::LogicalOperator>& plan,
+                   const TriggerBodies& trigger_bodies, bool body) {
+  if (!plan) return;
+  if (principal.superuser) {
+    if (HasDefinerBody(trigger_bodies)) ApplyDefinerPolicies(context, snapshot, plan, trigger_bodies);
+    return;
+  }
   // Most statements need no rewrite: no policies, no tenants, no catalog limits, and no
   // table function that lists the catalog or the settings.
   static const std::unordered_set<std::string> kListingFunctions = {
       "duckdb_databases", "duckdb_tables",    "duckdb_views",         "duckdb_columns",
       "duckdb_constraints", "duckdb_functions", "duckdb_indexes",     "duckdb_schemas",
       "duckdb_sequences", "duckdb_types",     "pragma_database_size", "duckdb_settings",
-      "pragma_table_info", "pragma_show"};
+      "pragma_table_info", "pragma_show",      "duckdb_triggers"};
   std::function<bool(const dd::LogicalOperator&)> lists = [&](const dd::LogicalOperator& op) {
     if (op.type == OpType::LOGICAL_GET &&
         kListingFunctions.count(Lower(compat::Str(op.Cast<dd::LogicalGet>().function.GetName())))) {
@@ -802,10 +888,10 @@ void ApplyPolicies(dd::ClientContext& context, const std::shared_ptr<const Snaps
   };
   if (snapshot->row_policies().empty() && snapshot->mask_bindings().empty() &&
       snapshot->catalog_tenants().empty() && !snapshot->RestrictsCatalogs(principal) &&
-      !lists(*plan)) {
+      !lists(*plan) && !HasDefinerBody(trigger_bodies)) {
     return;
   }
-  PolicyRewriter(context, snapshot, principal).Rewrite(plan);
+  PolicyRewriter(context, snapshot, principal, trigger_bodies).Rewrite(plan, body);
 }
 
 }  // namespace hardcharger::authz

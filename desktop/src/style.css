@@ -216,3 +216,10 @@ footer { padding:14px 32px; border-top:1px solid var(--soft); display:flex; just
 .release-notes { max-height:260px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.6; background:var(--panel-2); border:1px solid var(--border); border-radius:6px; padding:12px 14px; }
 .update-progress { display:grid; gap:6px; margin:12px 0; font-size:11px; color:var(--muted); }
 .update-progress progress { width:100%; accent-color:var(--accent); }
+
+/* Remote servers (Settings) */
+.remote-servers .remote-row { display:grid; grid-template-columns:1fr 1.6fr 1fr; gap:0 14px; align-items:end; padding:14px 0; border-top:1px solid var(--border); }
+.remote-servers .remote-row .field { margin-top:0; }
+.remote-servers .remote-row .field:nth-child(4) { grid-column:1 / 3; }
+.remote-servers .remote-row button { justify-self:start; margin-bottom:4px; }
+.remote-servers #add-remote { margin-top:14px; }

@@ -226,7 +226,7 @@ class Visibility {
       case ViewerKind::kAdministrator:
         return true;
       case ViewerKind::kRestrictedAdministrator:
-        return CatalogReached(grant.target.catalog);
+        return !grant.target.IsTableFunction() && CatalogReached(grant.target.catalog);
       case ViewerKind::kUser:
         return SeesRole(grant.role_id);
     }
@@ -275,12 +275,9 @@ class Visibility {
 
 constexpr const char* kAdministratorGrantor = "administrator";
 
-std::string SchemaText(const std::vector<std::string>& path) {
-  if (path.size() == 1) return path[0];
-  std::string out;
-  for (const auto& part : path) out += (out.empty() ? "" : ".") + QuoteIdentifierIfNeeded(part);
-  return out;
-}
+// A schema path as one name (types.hpp): `sales.payroll` nested, "sales.payroll" quoted
+// when that is a top-level schema's name.
+std::string SchemaText(const std::vector<std::string>& path) { return SchemaPathText(path); }
 
 Cell Text(const std::string& text) { return text.empty() ? Cell{} : Cell{text}; }
 
@@ -332,8 +329,10 @@ std::string ScopeType(const Names& names, const ObjectGrantRecord& grant) {
     case GrantScope::kSchema:
       return "SCHEMA";
     case GrantScope::kObject:
-      // USAGE on one object is granted ON SEQUENCE (and no other object takes it).
+      // USAGE on one object is granted ON SEQUENCE (and no other object takes it); EXECUTE
+      // on a table function.
       if (grant.privilege == Privilege::kUsage) return "SEQUENCE";
+      if (grant.privilege == Privilege::kExecute) return "TABLE FUNCTION";
       return names.ObjectType(grant.target);
   }
   return "TABLE";
@@ -349,6 +348,18 @@ std::vector<Cell> TargetCells(const ObjectPath& path) {
           Text(path.object_name)};
 }
 
+// A grant's column cells: SELECT's columns, or an EXECUTE grant's path declarations as
+// "path argument 2" / "path parameter files"; one empty cell when there are none.
+std::vector<std::string> ColumnCells(const ObjectGrantRecord& grant) {
+  if (grant.columns.empty()) return {""};
+  if (grant.privilege != Privilege::kExecute) return grant.columns;
+  std::vector<std::string> cells;
+  for (const auto& stored : grant.columns) {
+    if (auto argument = PathArgument::FromStored(stored)) cells.push_back("path " + argument->Text());
+  }
+  return cells.empty() ? std::vector<std::string>{""} : cells;
+}
+
 // ---- hardcharger_grants() ----
 
 std::shared_ptr<arrow::RecordBatch> Grants(const Snapshot& snapshot, const Visibility& visibility) {
@@ -357,8 +368,7 @@ std::shared_ptr<arrow::RecordBatch> Grants(const Snapshot& snapshot, const Visib
   for (const auto& g : snapshot.grants()) {
     if (!visibility.GrantVisible(g)) continue;
     const auto target = TargetCells(g.target);
-    const std::vector<std::string> columns = g.columns.empty() ? std::vector<std::string>{""} : g.columns;
-    for (const auto& column : columns) {
+    for (const auto& column : ColumnCells(g)) {
       rows.Add({names.Role(g.role_id), std::string("ROLE"), PrivilegeName(g.privilege), ScopeType(names, g),
                 target[0], target[1], target[2], Text(column), names.Grantor(g.granted_by), g.grant_option,
                 names.Tenant(PrincipalKind::kRole, g.role_id)});
@@ -538,7 +548,8 @@ const std::vector<Privilege>& WritePrivileges() {
       Privilege::kSelect,     Privilege::kInsert,     Privilege::kUpdate,       Privilege::kDelete,
       Privilege::kCreateTable, Privilege::kCreateView, Privilege::kCreateSchema, Privilege::kDropTable,
       Privilege::kDropView,   Privilege::kDropSchema, Privilege::kAlterTable,   Privilege::kAlterView,
-      Privilege::kCreateMacro, Privilege::kDropMacro, Privilege::kUsage, Privilege::kCreateSequence,
+      Privilege::kCreateMacro, Privilege::kDropMacro, Privilege::kCreateType, Privilege::kDropType,
+      Privilege::kCreateTrigger, Privilege::kDropTrigger, Privilege::kUsage, Privilege::kCreateSequence,
       Privilege::kDropSequence, Privilege::kMaintain};
   return kAll;
 }
@@ -615,6 +626,8 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
   }
   const auto roles = snapshot.RolesOf(who);
   auto allowed = [&](Privilege privilege, const std::string& catalog) {
+    // A table function is in no catalog; a scoped token holds no EXECUTE (as no system privilege).
+    if (privilege == Privilege::kExecute) return !who.scope;
     if (!snapshot.CatalogVisible(who, catalog)) return false;
     if (!who.scope) return true;
     if (!who.scope->privileges.count(privilege)) return false;
@@ -626,7 +639,7 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
     if (!roles.count(g.role_id)) continue;
     const auto target = TargetCells(g.target);
     const std::string type = ScopeType(names, g);
-    const std::vector<std::string> columns = g.columns.empty() ? std::vector<std::string>{""} : g.columns;
+    const std::vector<std::string> columns = ColumnCells(g);
     for (const auto p : Expand(g.privilege)) {
       if (!allowed(p, g.target.catalog)) continue;
       for (const auto& column : columns) {

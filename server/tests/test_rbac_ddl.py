@@ -172,7 +172,12 @@ def test_a_single_trailing_semicolon_is_fine(admin):
     ('GRANT r TO ""', "empty quoted identifier"),
     ("GRANT INSERT (a) ON t TO r", "only supported for SELECT"),
     ("GRANT CREATE TABLE ON t TO r", "ON SCHEMA or ON CATALOG"),
-    ("GRANT CREATE SCHEMA ON SCHEMA s TO r", "ON CATALOG"),
+    ("GRANT CREATE SCHEMA ON t TO r", "ON CATALOG, or ON SCHEMA for the schemas nested in it"),
+    ("GRANT SELECT ON TABLE FUNCTION range TO r", "on a table function only EXECUTE is granted"),
+    ("GRANT EXECUTE ON t TO r", "EXECUTE is granted ON TABLE FUNCTION name"),
+    ("GRANT EXECUTE ON TABLE FUNCTION f (ARGUMENT 2) TO r", "expected PATH"),
+    ("GRANT EXECUTE ON TABLE FUNCTION f (PATH ARGUMENT 0) TO r", "expected an argument position"),
+    ("GRANT EXECUTE ON TABLE FUNCTION f (PATH COLUMN 1) TO r", "expected ARGUMENT or PARAMETER after PATH"),
     ("GRANT analyst ON t TO r", "is not a privilege"),
     # Characters outside the grammar (e.g. $-quoting, backslashes) are refused, never skipped.
     ("CREATE USER joe2 PASSWORD $$x$$", "unexpected character"),

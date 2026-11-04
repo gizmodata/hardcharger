@@ -1,7 +1,7 @@
 """GRANT ALL means every privilege that applies where it is granted: on a table its
 SELECT, INSERT, UPDATE, DELETE and MAINTAIN; on a schema those, CREATE / DROP / ALTER TABLE and
-VIEW, CREATE / DROP MACRO, and USAGE, CREATE and DROP SEQUENCE; on a catalog all of those and
-CREATE / DROP SCHEMA. REVOKE ALL takes back the same."""
+VIEW, CREATE / DROP MACRO, TYPE and TRIGGER, USAGE, CREATE and DROP SEQUENCE, and CREATE / DROP
+SCHEMA (the schemas nested in it); on a catalog all of those. REVOKE ALL takes back the same."""
 
 import pytest
 
@@ -23,7 +23,8 @@ def kinds(admin, role: str) -> set[tuple[str, str]]:
 
 
 SCHEMA_DDL = ["CREATE TABLE", "CREATE VIEW", "DROP TABLE", "DROP VIEW", "ALTER TABLE", "ALTER VIEW", "CREATE MACRO",
-              "DROP MACRO", "USAGE", "CREATE SEQUENCE", "DROP SEQUENCE", "MAINTAIN"]
+              "DROP MACRO", "CREATE TYPE", "DROP TYPE", "CREATE TRIGGER", "DROP TRIGGER", "USAGE", "CREATE SEQUENCE",
+              "DROP SEQUENCE", "MAINTAIN", "CREATE SCHEMA", "DROP SCHEMA"]
 DML = ["SELECT", "INSERT", "UPDATE", "DELETE"]
 
 
@@ -35,11 +36,12 @@ def test_all_on_a_schema_includes_its_ddl(server):
     for sql in ["CREATE TABLE analytics.events (id INT)", "INSERT INTO analytics.orders VALUES (1)",
                 "SELECT * FROM analytics.orders", "ALTER TABLE analytics.orders ADD COLUMN note VARCHAR",
                 "CREATE VIEW analytics.v AS SELECT id FROM analytics.orders", "DROP VIEW analytics.v",
-                "DROP TABLE analytics.events"]:
+                "DROP TABLE analytics.events", "CREATE SCHEMA analytics.nested", "DROP SCHEMA analytics.nested"]:
         expect_allowed(client=lou, sql=sql)
-    # Only that schema, and no schema DDL (that is the catalog's).
+    # Only that schema, and its CREATE SCHEMA is for the schemas nested in it, not the
+    # catalog's top level.
     expect_blocked(client=lou, sql="CREATE TABLE main.mine (id INT)", why="no CREATE TABLE privilege")
-    expect_blocked(client=lou, sql="CREATE SCHEMA lous", why="no CREATE SCHEMA privilege")
+    expect_blocked(client=lou, sql="CREATE SCHEMA lous", why="no CREATE SCHEMA privilege on catalog")
     expect_blocked(client=lou, sql="SELECT * FROM main.other", why="no SELECT privilege")
 
 
@@ -47,7 +49,7 @@ def test_all_on_a_catalog_includes_schema_ddl(server):
     admin = server.admin()
     catalog = admin.run(sql="SELECT current_database() AS c").column("c").to_pylist()[0]
     expect_allowed(client=admin, sql=f"GRANT ALL ON CATALOG {catalog} TO loader")
-    assert kinds(admin=admin, role="loader") == {(p, "CATALOG") for p in DML + SCHEMA_DDL + ["CREATE SCHEMA", "DROP SCHEMA"]}
+    assert kinds(admin=admin, role="loader") == {(p, "CATALOG") for p in DML + SCHEMA_DDL}
     lou = server.user(name="lou")
     for sql in ["CREATE SCHEMA lous", "CREATE TABLE lous.t (id INT)", "SELECT * FROM main.other", "DROP TABLE lous.t",
                 "DROP SCHEMA lous"]:

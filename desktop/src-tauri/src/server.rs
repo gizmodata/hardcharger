@@ -3,7 +3,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom},
-    net::{IpAddr, SocketAddr, TcpListener},
+    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
@@ -16,6 +16,32 @@ pub struct Settings {
     pub start_on_open: bool,
     pub server_options: BTreeMap<String, serde_json::Value>,
     pub network: NetworkSettings,
+    /// Other Hardcharger servers the SQL workspace lists (name, URL, how the certificate is
+    /// trusted); never a password or token. Handed to the workspace when it opens.
+    pub remote_servers: Vec<RemoteServer>,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default, deny_unknown_fields)]
+pub struct RemoteServer {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    /// "verified" (trusted roots), "fingerprint" (the SHA-256 the person accepted), "plaintext".
+    pub tls: String,
+    pub fingerprint: String,
+}
+
+impl Default for RemoteServer {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            url: String::new(),
+            tls: "verified".into(),
+            fingerprint: String::new(),
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -53,6 +79,7 @@ impl Default for Settings {
             start_on_open: true,
             server_options: BTreeMap::new(),
             network: NetworkSettings::default(),
+            remote_servers: Vec::new(),
         }
     }
 }
@@ -96,6 +123,63 @@ impl Settings {
                 );
             }
         }
+        for remote in &self.remote_servers {
+            let url = tauri::Url::parse(remote.url.trim())
+                .map_err(|_| format!("Remote server {}: the URL is not a URL.", remote.name))?;
+            let https = match url.scheme() {
+                "https" | "chargewire" => true,
+                "http" => false,
+                _ => {
+                    return Err(format!(
+                        "Remote server {}: the URL must start with https:// or http://.",
+                        remote.name
+                    ))
+                }
+            };
+            if url.username() != "" || url.password().is_some() {
+                return Err(format!(
+                    "Remote server {}: the URL must not carry credentials.",
+                    remote.name
+                ));
+            }
+            match remote.tls.as_str() {
+                "verified" | "fingerprint" if !https => {
+                    return Err(format!(
+                        "Remote server {}: an http:// server has no certificate to verify.",
+                        remote.name
+                    ))
+                }
+                "plaintext" if https => {
+                    return Err(format!(
+                        "Remote server {}: an https:// server is not plaintext.",
+                        remote.name
+                    ))
+                }
+                "verified" | "fingerprint" | "plaintext" => {}
+                other => {
+                    return Err(format!(
+                        "Remote server {}: unknown certificate trust '{other}'.",
+                        remote.name
+                    ))
+                }
+            }
+            if remote.tls == "fingerprint" {
+                let hex: String = remote
+                    .fingerprint
+                    .chars()
+                    .filter(|c| !matches!(c, ':' | ' ' | '-'))
+                    .collect();
+                if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Err(format!(
+                        "Remote server {}: trusting by fingerprint needs the certificate's SHA-256 fingerprint.",
+                        remote.name
+                    ));
+                }
+            }
+            if remote.name.trim().is_empty() {
+                return Err("Every remote server needs a name.".into());
+            }
+        }
         Ok(())
     }
 }
@@ -117,12 +201,46 @@ pub struct Status {
     pub settings_pending: bool,
     pub pending_network: Option<bool>,
     pub generated_certificate: Option<crate::network::GeneratedCertificate>,
+    /// A server this app started in an earlier run that is still running (issue #28).
+    pub leftover: Option<Leftover>,
+}
+
+/// What the app records about the server it started (`sidecar.json` in its data folder),
+/// so the next launch can tell a server of its own that outlived it from somebody else's.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Leftover {
+    pub pid: u32,
+    pub host: String,
+    pub port: u16,
+}
+
+/// How long a stop waits at each step before it escalates: the stop request (the server's
+/// 5 s grace period plus a margin), then a second request (stop now: running work is
+/// cancelled, DuckDB still closes cleanly), then a kill.
+#[derive(Clone, Copy)]
+pub struct StopDeadlines {
+    pub drain: Duration,
+    pub stop_now: Duration,
+    pub kill: Duration,
+}
+
+impl Default for StopDeadlines {
+    fn default() -> Self {
+        Self {
+            drain: Duration::from_secs(12),
+            stop_now: Duration::from_secs(45),
+            kill: Duration::from_secs(5),
+        }
+    }
 }
 
 pub struct Server {
     binary: PathBuf,
     pub directory: PathBuf,
     child: Option<Child>,
+    /// The SQL workspace without the local server (ui_sidecar.rs), while its window is open.
+    pub ui: Option<crate::ui_sidecar::UiSidecar>,
     started: Option<Instant>,
     password: String,
     pub settings: Settings,
@@ -131,7 +249,11 @@ pub struct Server {
     schema: Vec<serde_json::Value>,
     settings_pending: bool,
     pending_network: Option<bool>,
+    leftover: Option<Leftover>,
+    pub stop_deadlines: StopDeadlines,
 }
+
+const SIDECAR_FILE: &str = "sidecar.json";
 
 const REDACTED: &str = "__HARDCHARGER_STORED_SECRET__";
 const NETWORK_PASSWORD: &str = "__desktop_network_password__";
@@ -333,10 +455,12 @@ impl Server {
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
             .and_then(|value| value["network"].as_bool());
+        let leftover = find_leftover(&directory);
         let result = Self {
             binary,
             directory,
             child: None,
+            ui: None,
             started: None,
             password: String::new(),
             settings,
@@ -345,9 +469,39 @@ impl Server {
             schema,
             settings_pending,
             pending_network,
+            leftover,
+            stop_deadlines: StopDeadlines::default(),
         };
         result.validate_options(&result.settings)?;
         Ok(result)
+    }
+
+    /// The `hardcharger` client beside the server binary (the UI sidecar runs it).
+    pub fn client_binary(&self) -> PathBuf {
+        self.binary.with_file_name(if cfg!(windows) {
+            "hardcharger.exe"
+        } else {
+            "hardcharger"
+        })
+    }
+
+    /// Starts the SQL workspace without the local server, or returns the one running.
+    pub fn ui_origin(&mut self) -> Result<String, String> {
+        if let Some(ui) = self.ui.as_mut() {
+            if ui.running() {
+                return Ok(ui.origin.clone());
+            }
+            self.ui = None;
+        }
+        let ui = crate::ui_sidecar::UiSidecar::start(&self.client_binary())?;
+        let origin = ui.origin.clone();
+        self.ui = Some(ui);
+        Ok(origin)
+    }
+
+    /// Stops the SQL workspace's own server, if it runs.
+    pub fn stop_ui(&mut self) {
+        self.ui = None;
     }
 
     pub fn endpoint(&self) -> String {
@@ -531,6 +685,7 @@ impl Server {
                 &self.directory,
                 &self.settings.network.tls_cert,
             ),
+            leftover: self.leftover.clone(),
         })
     }
 
@@ -558,10 +713,16 @@ impl Server {
         let reservation =
             TcpListener::bind((self.listen_address()?, self.settings.port)).map_err(|e| {
                 if e.kind() == std::io::ErrorKind::AddrInUse {
-                    format!(
-                        "Port {} is already in use. Choose another port in Settings.",
-                        self.settings.port
-                    )
+                    match &self.leftover {
+                        Some(leftover) if leftover.port == self.settings.port => format!(
+                            "Port {} is still used by the server from a previous run of this app (PID {}). Stop it with the button on the Local server page, then start again.",
+                            self.settings.port, leftover.pid
+                        ),
+                        _ => format!(
+                            "Port {} is already in use. Choose another port in Settings.",
+                            self.settings.port
+                        ),
+                    }
                 } else {
                     format!(
                         "Could not bind the listen address: {e}. Check Network access in Settings."
@@ -590,6 +751,10 @@ impl Server {
                 "--metrics-port=0",
                 "--graceful-shutdown=true",
                 "--shutdown-grace-period-seconds=5",
+                // The child's stdin is a pipe this process holds: when the app dies without
+                // stopping the server (a crash, a kill, a quit that never reached the
+                // controller), the kernel closes it and the server stops on its own (#28).
+                "--stop-on-stdin-close=true",
                 "--log-emoji=never",
             ])
             .arg(format!("--database={}", self.database()))
@@ -601,7 +766,7 @@ impl Server {
                 "--sensitive-paths={}",
                 self.directory.join("settings.json").display()
             ))
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
         if self.settings.network.enabled && self.settings.network.tls {
@@ -647,11 +812,20 @@ impl Server {
             command.creation_flags(0x00000200); // CREATE_NEW_PROCESS_GROUP
         }
         drop(reservation);
-        self.child = Some(
-            command
-                .spawn()
-                .map_err(|e| format!("Could not start server: {e}"))?,
-        );
+        let child = command
+            .spawn()
+            .map_err(|e| format!("Could not start server: {e}"))?;
+        // Recorded before anything can go wrong, so a launch after a crash finds it.
+        let record = Leftover {
+            pid: child.id(),
+            host: self.listen_address()?.to_string(),
+            port: self.settings.port,
+        };
+        private_write(
+            &self.directory.join(SIDECAR_FILE),
+            &serde_json::to_vec(&record).map_err(|e| e.to_string())?,
+        )?;
+        self.child = Some(child);
         self.started = Some(Instant::now());
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
@@ -703,6 +877,10 @@ impl Server {
         Ok(serde_json::json!({"username": self.username(), "token": access, "expiresAt": expires}))
     }
 
+    /// Stops the server and waits until its process is gone: a stop request (drain), then
+    /// after `stop_deadlines.drain` a second one (stop now), then after `stop_deadlines.stop_now`
+    /// a kill. Each escalation is written to the server log. Only a process that survives the
+    /// kill leaves this with an error and the child still held.
     pub fn stop(&mut self) -> Result<Status, String> {
         if let Some(mut child) = self.child.take() {
             if child.try_wait().map_err(|e| e.to_string())?.is_none() {
@@ -714,20 +892,78 @@ impl Server {
                             .into(),
                     );
                 }
-                let deadline = Instant::now() + Duration::from_secs(12);
-                while child.try_wait().map_err(|e| e.to_string())?.is_none() {
-                    if Instant::now() >= deadline {
-                        self.child = Some(child);
-                        return Err("The server is still stopping. Wait for running queries to finish, then try again.".into());
+                let deadlines = self.stop_deadlines;
+                if !wait_exit(&mut child, deadlines.drain)? {
+                    self.note(&format!(
+                        "desktop: the server has not stopped {} s after the stop request; asking it to stop now",
+                        deadlines.drain.as_secs()
+                    ));
+                    let _ = request_stop(child.id());
+                    if !wait_exit(&mut child, deadlines.stop_now)? {
+                        self.note(&format!(
+                            "desktop: the server has not stopped {} s after the second request; killing it",
+                            deadlines.stop_now.as_secs()
+                        ));
+                        let _ = child.kill();
+                        if !wait_exit(&mut child, deadlines.kill)? {
+                            self.child = Some(child);
+                            return Err("The server did not stop, even when killed. Check Activity Monitor or Task Manager for hardcharger-server.".into());
+                        }
                     }
-                    std::thread::sleep(Duration::from_millis(50));
                 }
             }
+            drop(child);
         }
+        let _ = fs::remove_file(self.directory.join(SIDECAR_FILE));
         self.started = None;
         self.password.clear();
         self.error = None;
         self.status()
+    }
+
+    /// Stops the server a previous run of this app left behind (status().leftover), the way
+    /// stop() stops this run's, and forgets it. Nothing happens when there is none.
+    pub fn stop_leftover(&mut self) -> Result<Status, String> {
+        if let Some(leftover) = self.leftover.clone() {
+            if process_alive(leftover.pid) {
+                request_stop_other(leftover.pid)?;
+                let deadlines = self.stop_deadlines;
+                if !wait_gone(leftover.pid, deadlines.drain) {
+                    self.note(&format!(
+                        "desktop: the leftover server (PID {}) has not stopped {} s after the stop request; asking it to stop now",
+                        leftover.pid,
+                        deadlines.drain.as_secs()
+                    ));
+                    let _ = request_stop_other(leftover.pid);
+                    if !wait_gone(leftover.pid, deadlines.stop_now) {
+                        self.note(&format!(
+                            "desktop: the leftover server (PID {}) has not stopped {} s after the second request; killing it",
+                            leftover.pid,
+                            deadlines.stop_now.as_secs()
+                        ));
+                        kill_other(leftover.pid)?;
+                        if !wait_gone(leftover.pid, deadlines.kill) {
+                            return Err(format!("The server from the previous run (PID {}) did not stop, even when killed. Check Activity Monitor or Task Manager for hardcharger-server.", leftover.pid));
+                        }
+                    }
+                }
+            }
+            let _ = fs::remove_file(self.directory.join(SIDECAR_FILE));
+            self.leftover = None;
+        }
+        self.status()
+    }
+
+    /// A line for the server log (the one Logs shows), about what the app did to the server.
+    fn note(&self, line: &str) {
+        use std::io::Write;
+        if let Ok(mut log) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.directory.join("server.log"))
+        {
+            let _ = writeln!(log, "{line}");
+        }
     }
 
     pub fn save_settings(&mut self, settings: Settings) -> Result<Status, String> {
@@ -885,6 +1121,7 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
+        self.ui = None;
         let _ = self.stop();
     }
 }
@@ -910,7 +1147,7 @@ pub(crate) fn private_write(destination: &Path, bytes: &[u8]) -> Result<(), Stri
 }
 
 #[cfg(unix)]
-fn request_stop(pid: u32) -> Result<(), String> {
+pub(crate) fn request_stop(pid: u32) -> Result<(), String> {
     if unsafe { libc::kill(pid as i32, libc::SIGTERM) } == 0 {
         Ok(())
     } else {
@@ -925,6 +1162,141 @@ fn request_stop(pid: u32) -> Result<(), String> {
         Ok(())
     } else {
         Err(std::io::Error::last_os_error().to_string())
+    }
+}
+
+/// Waits up to `limit` for `child` to exit; true when it did.
+fn wait_exit(child: &mut Child, limit: Duration) -> Result<bool, String> {
+    let deadline = Instant::now() + limit;
+    loop {
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Waits up to `limit` for a process that isn't this app's child to be gone; true when it is.
+fn wait_gone(pid: u32, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    loop {
+        if !process_alive(pid) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The server a previous run of this app started, if `sidecar.json` names one that is still
+/// alive and listening; a record of a server that is gone is removed.
+fn find_leftover(directory: &Path) -> Option<Leftover> {
+    let path = directory.join(SIDECAR_FILE);
+    let record: Leftover = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
+    let listening = record
+        .host
+        .parse::<IpAddr>()
+        .ok()
+        .and_then(|host| {
+            let host = if host.is_unspecified() {
+                if host.is_ipv4() {
+                    IpAddr::from([127, 0, 0, 1])
+                } else {
+                    IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])
+                }
+            } else {
+                host
+            };
+            TcpStream::connect_timeout(
+                &SocketAddr::new(host, record.port),
+                Duration::from_millis(500),
+            )
+            .ok()
+        })
+        .is_some();
+    if process_alive(record.pid) && listening {
+        Some(record)
+    } else {
+        let _ = fs::remove_file(&path);
+        None
+    }
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    unsafe {
+        // A child of this process that exited but was never waited for is a zombie, which
+        // kill(pid, 0) still reports as alive: reap it first. For a process that isn't a
+        // child of ours waitpid fails (ECHILD) and signal 0 decides.
+        let mut status = 0;
+        if libc::waitpid(pid as i32, &mut status, libc::WNOHANG) == pid as i32 {
+            return false;
+        }
+        libc::kill(pid as i32, 0) == 0
+    }
+}
+
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let alive = GetExitCodeProcess(handle, &mut code) != 0 && code == STILL_ACTIVE as u32;
+        CloseHandle(handle);
+        alive
+    }
+}
+
+/// Asks a server that isn't this app's child to stop, as request_stop asks a child. A process
+/// from an earlier run shares no console with this one on Windows, so there the request is
+/// the termination itself.
+#[cfg(unix)]
+fn request_stop_other(pid: u32) -> Result<(), String> {
+    request_stop(pid)
+}
+
+#[cfg(windows)]
+fn request_stop_other(pid: u32) -> Result<(), String> {
+    kill_other(pid)
+}
+
+#[cfg(unix)]
+fn kill_other(pid: u32) -> Result<(), String> {
+    if unsafe { libc::kill(pid as i32, libc::SIGKILL) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().to_string())
+    }
+}
+
+#[cfg(windows)]
+fn kill_other(pid: u32) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let ended = TerminateProcess(handle, 1) != 0;
+        CloseHandle(handle);
+        if ended {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error().to_string())
+        }
     }
 }
 
@@ -1379,6 +1751,263 @@ mod tests {
         assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
         server.stop().unwrap();
         assert!(server.logs().unwrap().contains("Hardcharger is ready"));
+        assert!(
+            !directory.join(SIDECAR_FILE).exists(),
+            "a clean stop forgets the sidecar record"
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn real_server() -> Option<(Server, PathBuf)> {
+        let binary = std::env::var_os("HARDCHARGER_DESKTOP_TEST_SERVER")?;
+        let directory = std::env::temp_dir().join(format!(
+            "hardcharger-desktop-test-{}",
+            random_secret().unwrap()
+        ));
+        let mut server = Server::new(binary.into(), directory.clone()).unwrap();
+        server
+            .save_settings(Settings {
+                start_on_open: false,
+                ..Settings::default()
+            })
+            .unwrap();
+        Some((server, directory))
+    }
+
+    /// Issue #28: stop() ends with the process gone, whatever the server does with the stop
+    /// request. A stopped (SIGSTOP) server never handles SIGTERM, so the stop escalates to a
+    /// second request and then a kill, each noted in the log.
+    #[cfg(unix)]
+    #[test]
+    fn stop_escalates_to_a_kill_when_the_server_never_handles_the_request() {
+        let Some((mut server, directory)) = real_server() else {
+            eprintln!("Set HARDCHARGER_DESKTOP_TEST_SERVER to exercise the real server lifecycle.");
+            return;
+        };
+        server.stop_deadlines = StopDeadlines {
+            drain: Duration::from_secs(1),
+            stop_now: Duration::from_secs(1),
+            kill: Duration::from_secs(5),
+        };
+        let status = start_on_a_free_port(&mut server, "127.0.0.1");
+        let pid = status.pid.unwrap();
+        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGSTOP) }, 0);
+        let started = Instant::now();
+        assert!(!server.stop().unwrap().running);
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
+        );
+        assert!(!process_alive(pid));
+        assert!(TcpListener::bind(("127.0.0.1", status.port)).is_ok());
+        let log = server.logs().unwrap();
+        assert!(
+            log.contains("1 s after the stop request; asking it to stop now"),
+            "{log}"
+        );
+        assert!(
+            log.contains("1 s after the second request; killing it"),
+            "{log}"
+        );
+        assert!(!directory.join(SIDECAR_FILE).exists());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Issue #28: an app that dies without stopping the server (a crash, a kill, a quit that
+    /// never reached the controller) closes the pipe on the server's stdin, and the server
+    /// stops on its own.
+    #[test]
+    fn the_server_stops_on_its_own_when_the_app_dies_without_stopping_it() {
+        let Some((mut server, directory)) = real_server() else {
+            eprintln!("Set HARDCHARGER_DESKTOP_TEST_SERVER to exercise the real server lifecycle.");
+            return;
+        };
+        let status = start_on_a_free_port(&mut server, "127.0.0.1");
+        let pid = status.pid.unwrap();
+        // What the kernel does to the pipe when this process dies.
+        drop(server.child.as_mut().unwrap().stdin.take().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while server.status().unwrap().running {
+            assert!(
+                Instant::now() < deadline,
+                "the server kept running after its stdin closed"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(!process_alive(pid));
+        let log = server.logs().unwrap();
+        assert!(
+            log.contains("standard input closed; stopping (stop_on_stdin_close)"),
+            "{log}"
+        );
+        // The record of it stays until something looks: the next launch finds it gone and
+        // forgets it.
+        assert!(directory.join(SIDECAR_FILE).exists());
+        let next = Server::new(server.binary.clone(), directory.clone()).unwrap();
+        assert_eq!(next.leftover, None);
+        assert!(!directory.join(SIDECAR_FILE).exists());
+        drop(next);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Issue #28: a server an earlier run of the app left running (an older app, or one whose
+    /// stop never completed) is found at the next launch from the app's own record, named in
+    /// Start's refusal, and stopped on request.
+    #[test]
+    fn a_server_left_behind_by_a_previous_run_is_found_and_stopped_at_the_next_launch() {
+        let Some((mut server, directory)) = real_server() else {
+            eprintln!("Set HARDCHARGER_DESKTOP_TEST_SERVER to exercise the real server lifecycle.");
+            return;
+        };
+        let status = start_on_a_free_port(&mut server, "127.0.0.1");
+        let pid = status.pid.unwrap();
+        let port = status.port;
+        let binary = server.binary.clone();
+        // The previous run goes away without stopping its server (and, as an older app, keeps
+        // the server's stdin open: the leaked child handle holds the pipe).
+        std::mem::forget(server);
+        let mut next = Server::new(binary, directory.clone()).unwrap();
+        next.stop_deadlines = StopDeadlines {
+            drain: Duration::from_secs(12),
+            stop_now: Duration::from_secs(5),
+            kill: Duration::from_secs(5),
+        };
+        let expected = Leftover {
+            pid,
+            host: "127.0.0.1".into(),
+            port,
+        };
+        assert_eq!(next.status().unwrap().leftover, Some(expected.clone()));
+        next.settings.port = port;
+        let refusal = next.start().err().unwrap();
+        assert!(refusal.contains("previous run of this app"), "{refusal}");
+        assert!(refusal.contains(&format!("PID {pid}")), "{refusal}");
+        assert!(!next.stop_leftover().unwrap().running);
+        assert_eq!(next.status().unwrap().leftover, None);
+        assert!(!process_alive(pid));
+        assert!(!directory.join(SIDECAR_FILE).exists());
+        assert!(TcpListener::bind(("127.0.0.1", port)).is_ok());
+        assert!(next.start().unwrap().running);
+        next.stop().unwrap();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Issue #28, the quit paths of the built app (macOS). Set HARDCHARGER_DESKTOP_TEST_APP to
+    /// a built Hardcharger.app (and HARDCHARGER_DESKTOP_TEST_SERVER as for the others): the
+    /// app is launched on a data folder of its own and quit the ways a user can, and after
+    /// each the server it started must be gone.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn every_way_of_quitting_the_app_ends_its_server() {
+        let Some(app) = std::env::var_os("HARDCHARGER_DESKTOP_TEST_APP") else {
+            eprintln!("Set HARDCHARGER_DESKTOP_TEST_APP to a built Hardcharger.app to exercise the quit paths.");
+            return;
+        };
+        let executable = PathBuf::from(app).join("Contents/MacOS/hardcharger-desktop");
+        assert!(executable.exists(), "{}", executable.display());
+        let directory = std::env::temp_dir().join(format!(
+            "hardcharger-desktop-test-{}",
+            random_secret().unwrap()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        let settings = Settings {
+            port,
+            start_on_open: true,
+            ..Settings::default()
+        };
+        private_write(
+            &directory.join("settings.json"),
+            &serde_json::to_vec_pretty(&settings).unwrap(),
+        )
+        .unwrap();
+        let launch = || {
+            let mut app = Command::new(&executable)
+                .arg("--background")
+                .env("HARDCHARGER_DESKTOP_DATA_DIR", &directory)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                // Not find_leftover(): the app writes its record before the server listens,
+                // and that would read the record as stale and remove it.
+                let record = fs::read(directory.join(SIDECAR_FILE))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<Leftover>(&bytes).ok());
+                if let Some(record) = record {
+                    if TcpStream::connect_timeout(
+                        &SocketAddr::new(IpAddr::from([127, 0, 0, 1]), record.port),
+                        Duration::from_millis(300),
+                    )
+                    .is_ok()
+                    {
+                        return (app, record);
+                    }
+                }
+                assert!(
+                    app.try_wait().unwrap().is_none(),
+                    "the app exited before starting its server"
+                );
+                assert!(
+                    Instant::now() < deadline,
+                    "the app never started its server"
+                );
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        };
+        let gone = |pid: u32, within: Duration| {
+            let deadline = Instant::now() + within;
+            while process_alive(pid) {
+                assert!(
+                    Instant::now() < deadline,
+                    "server {pid} is still running {within:?} after the app went"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        };
+        // The Dock's Quit, "tell application to quit", a logout: NSApplication's terminate:.
+        let (mut app, server) = launch();
+        let quit = Command::new("osascript")
+            .args([
+                "-e",
+                "tell application id \"com.gizmodata.hardcharger.desktop\" to quit",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            quit.status.success(),
+            "{}",
+            String::from_utf8_lossy(&quit.stderr)
+        );
+        let deadline = Instant::now() + Duration::from_secs(90);
+        while app.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "the app did not quit");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(
+            !process_alive(server.pid),
+            "the Dock's Quit left the server running"
+        );
+        assert!(
+            !directory.join(SIDECAR_FILE).exists(),
+            "the quit did not go through the controller's stop"
+        );
+        // A crash, or a kill: the app never stops anything; the server's stdin pipe does.
+        let (mut app, server) = launch();
+        app.kill().unwrap();
+        app.wait().unwrap();
+        gone(server.pid, Duration::from_secs(20));
+        // SIGTERM to the app (what a `kill` or a stuck-app helper sends).
+        let (mut app, server) = launch();
+        assert_eq!(unsafe { libc::kill(app.id() as i32, libc::SIGTERM) }, 0);
+        app.wait().unwrap();
+        gone(server.pid, Duration::from_secs(20));
         fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -119,8 +119,15 @@ interface Props {
 
 export default function UploadDialog({ request, serial, onClose }: Props) {
   const session = useSession();
-  const role = request.role ?? "";
-  const listings = useMemo(() => listingsFor(session, role), [session, role]);
+  const server = request.server ?? "";
+  // Roles are this server's (SET ROLE); an upload to another server acts as its sign-in.
+  const role = server ? "" : (request.role ?? "");
+  const listings = useMemo(() => listingsFor(session, role, server), [session, role, server]);
+  // The session the dialog reads its defaults and the target's columns through.
+  const baseConnection = useCallback(
+    () => (server ? session.servers.connection(server) : Promise.resolve(session.connection)),
+    [session, server],
+  );
   const dialog = useRef<HTMLDialogElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const reader = useMemo(() => new UploadReader(), []);
@@ -154,22 +161,24 @@ export default function UploadDialog({ request, serial, onClose }: Props) {
   const [defaults, setDefaults] = useState({ catalog: "", schema: "main" });
   useEffect(() => {
     let live = true;
-    session.connection.getSession().then(
-      (doc) => {
-        const o = doc.options ?? {};
-        if (live) {
-          setDefaults({
-            catalog: typeof o["catalog"] === "string" ? o["catalog"] : "",
-            schema: typeof o["schema"] === "string" && o["schema"] ? o["schema"] : "main",
-          });
-        }
-      },
-      () => {},
-    );
+    baseConnection()
+      .then((c) => c.getSession())
+      .then(
+        (doc) => {
+          const o = doc.options ?? {};
+          if (live) {
+            setDefaults({
+              catalog: typeof o["catalog"] === "string" ? o["catalog"] : "",
+              schema: typeof o["schema"] === "string" && o["schema"] ? o["schema"] : "main",
+            });
+          }
+        },
+        () => {},
+      );
     return () => {
       live = false;
     };
-  }, [session]);
+  }, [session, baseConnection]);
 
   useEffect(() => {
     dialog.current?.showModal();
@@ -277,22 +286,24 @@ export default function UploadDialog({ request, serial, onClose }: Props) {
     const [c, sch, t] = JSON.parse(appendKey) as [string, string, string];
     let live = true;
     const timer = window.setTimeout(() => {
-      tableColumns(session.connection, c, sch, t).then(
-        (columns) =>
-          live &&
-          setLoadedTarget({
-            key: appendKey,
-            target: { state: "done", columns: columns.map((col) => ({ name: col.name, type: col.type })) },
-          }),
-        (err: unknown) =>
-          live && setLoadedTarget({ key: appendKey, target: { state: "error", message: errorMessage(err) } }),
-      );
+      baseConnection()
+        .then((conn) => tableColumns(conn, c, sch, t))
+        .then(
+          (columns) =>
+            live &&
+            setLoadedTarget({
+              key: appendKey,
+              target: { state: "done", columns: columns.map((col) => ({ name: col.name, type: col.type })) },
+            }),
+          (err: unknown) =>
+            live && setLoadedTarget({ key: appendKey, target: { state: "error", message: errorMessage(err) } }),
+        );
     }, 300);
     return () => {
       live = false;
       window.clearTimeout(timer);
     };
-  }, [appendKey, session]);
+  }, [appendKey, session, baseConnection]);
   const target: TargetColumns = !appendKey
     ? { state: "none" }
     : loadedTarget?.key === appendKey
@@ -397,7 +408,7 @@ export default function UploadDialog({ request, serial, onClose }: Props) {
     setBusy(true);
     setProgress({ phase: "uploading", fraction: 0, rows: 0, bytes: 0 });
     try {
-      const c = await uploadConnection(session.openConnection, role);
+      const c = await uploadConnection((o) => session.openConnection({ ...o, server }), role);
       conn.current = c;
       const res = await runUpload({
         conn: c,

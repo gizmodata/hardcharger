@@ -46,6 +46,13 @@ class ObjectResolver {
   }
   // catalog.schema[.sub...] or schema (in the session's catalog)
   virtual arrow::Result<ObjectPath> ResolveSchema(const QualifiedName& name) = 0;
+  // A table function, for GRANT EXECUTE: its name in lower case, in no catalog. Granting
+  // one that doesn't exist, that every user may call already, that the storage
+  // privileges check, or that stays the administrator's is refused; a REVOKE names any.
+  virtual arrow::Result<ObjectPath> ResolveTableFunction(const QualifiedName& name, bool granting) {
+    (void)granting;
+    return arrow::Status::Invalid("table function " + name.ToString() + " cannot be found here");
+  }
   virtual arrow::Result<std::string> ResolveCatalog(const std::string& name) = 0;
 
   // Policy SQL tried against the real table before it is stored (a dry-run
@@ -157,7 +164,7 @@ class RbacEngine {
   // Ownership bookkeeping for objects created / dropped through Hardcharger.
   arrow::Status RecordOwner(const ObjectPath& object, ObjectType type, const Principal& owner,
                             const std::string& definition_hash = "");
-  arrow::Status ForgetOwner(const ObjectPath& object);
+  arrow::Status ForgetOwner(const ObjectPath& object, ObjectType type = ObjectType::kTable);
   // Puts an owner record back as it was.
   arrow::Status PutOwner(const OwnerRecord& record);
 
@@ -192,7 +199,7 @@ class RbacEngine {
   // applied to the snapshot in memory when the store committed it right on top of that
   // snapshot's version, else by reading the store again. A CREATE or DROP then costs a
   // few store round trips, not two reads of the whole store.
-  arrow::Status WriteOwner(const ObjectPath& object, const OwnerRecord* record);
+  arrow::Status WriteOwner(const ObjectPath& object, ObjectType type, const OwnerRecord* record);
   // Notes whether a poll of the store answered; logs an outage (rate-limited) and its end.
   void NoteStoreAnswer(const arrow::Status& status);
 

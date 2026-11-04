@@ -194,7 +194,9 @@ CommandResult CommandProcessor::Process(const std::string& line) {
           qualified = QuoteSqlIdentifier(all_boxes[i].catalog) + ".";
         }
         if (!all_boxes[i].schema.empty()) {
-          qualified += QuoteSqlIdentifier(all_boxes[i].schema) + ".";
+          // Already written as SQL takes it: a nested schema's path, a part quoted when it
+          // holds a dot or a quote (Chargewire spec §10).
+          qualified += all_boxes[i].schema + ".";
         }
         qualified += QuoteSqlIdentifier(all_boxes[i].name);
         // A generated index avoids embedding a table name as a string literal

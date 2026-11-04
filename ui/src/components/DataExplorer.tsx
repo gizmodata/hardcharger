@@ -12,70 +12,101 @@ import {
   FolderTree,
   Hash,
   Layers,
+  Lock,
+  LockOpen,
   MoreHorizontal,
+  Plus,
   RefreshCw,
   Search,
+  Server,
   Table2,
   ToggleLeft,
   Type,
   X,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { currentActiveTab, subscribeActiveTab, useActiveTab } from "../lib/activeTab";
 import type { CatalogCache, ColumnEntry, SearchHit, TableEntry } from "../lib/catalogCache";
 import { searchMinChars } from "../lib/catalogCache";
-import { clearCatalogCaches, onCatalogsChanged } from "../lib/catalogs";
+import { clearCatalogCaches, listingsFor, onCatalogsChanged } from "../lib/catalogs";
 import { copyText } from "../lib/clipboard";
 import { sqlIdentifier } from "../lib/completionContext";
+import { type SchemaNode, parseSchemaName, schemaSql, schemaTree, spellSchemaPath } from "../lib/schemaPath";
+import { type ServerState, type TlsMode, localServerId, serverLabel, useServers } from "../lib/servers";
 import { sqlNameDragType } from "../lib/sqlNameDrag";
 import { requestUpload } from "../lib/upload/request";
 import { errorMessage, useSession } from "../session";
+import { AddServerDialog } from "./AddServerDialog";
 import { FloatingMenu, type MenuItem } from "./FloatingMenu";
 
 type Load<T> = { state: "loading" } | { state: "error"; message: string } | { state: "done"; items: T };
 
-/** Node keys: the path, JSON-encoded so no name can collide with a separator. */
-const keyOf = (...path: string[]) => JSON.stringify(path);
+/** Node keys: the server, then the path, JSON-encoded so no name can collide with a separator. */
+const keyOf = (server: string, ...path: string[]) => JSON.stringify([server, ...path]);
 /** Catalogs the browser leaves out: `temp` belongs to one session, and the browser isn't a tab's session. */
 const hidden = new Set(["temp"]);
 const previewRows = 100;
 const searchDelayMs = 300;
 
-/** An icon for a DuckDB column type. */
 function columnIcon(type: string) {
   const t = type.toUpperCase();
-  if (/\[\]$|^(STRUCT|MAP|LIST|UNION|ARRAY|JSON)/.test(t)) return Braces;
-  if (
-    /^(TINYINT|SMALLINT|INTEGER|INT|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT|FLOAT|REAL|DOUBLE|DECIMAL|NUMERIC)/.test(
-      t,
-    )
-  ) {
-    return Hash;
-  }
-  if (/^(VARCHAR|TEXT|STRING|CHAR|BPCHAR|UUID|ENUM)/.test(t)) return Type;
-  if (/^(DATE|TIME|TIMESTAMP|INTERVAL)/.test(t)) return Calendar;
-  if (/^BOOL/.test(t)) return ToggleLeft;
-  if (/^(BLOB|BYTEA|BIT|VARBINARY)/.test(t)) return Binary;
+  if (/INT|DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL|HUGEINT/.test(t)) return Hash;
+  if (/VARCHAR|TEXT|STRING|CHAR|UUID|ENUM/.test(t)) return Type;
+  if (/BOOL/.test(t)) return ToggleLeft;
+  if (/DATE|TIME|INTERVAL/.test(t)) return Calendar;
+  if (/BLOB|BIT|BYTEA/.test(t)) return Binary;
+  if (/STRUCT|MAP|UNION|JSON|VARIANT/.test(t)) return Braces;
+  if (/LIST|ARRAY|\[\]/.test(t)) return Columns3;
   return CircleDot;
 }
 
-interface Props {
-  /** The listings the active tab's role sees. */
-  cache: CatalogCache;
+/** The lock beside a server: how its connection is protected. */
+function TlsLock({ mode, title }: { mode: TlsMode; title: string }) {
+  if (mode === "plaintext") {
+    return (
+      <span className="tls-lock tls-lock-plaintext" title={title} data-tls={mode}>
+        <LockOpen size={12} aria-label="Not encrypted" />
+      </span>
+    );
+  }
+  return (
+    <span className={`tls-lock tls-lock-${mode}`} title={title} data-tls={mode}>
+      <Lock
+        size={12}
+        aria-label={mode === "verified" ? "TLS, certificate verified" : "TLS, certificate trusted by its fingerprint"}
+      />
+    </span>
+  );
 }
 
-/**
- * The schema browser: the catalogs the user may see, their schemas, then Tables and Views, and
- * each one's columns with their types, each level listed when it is opened (Chargewire metadata,
- * as the active tab's role sees it). Double-click or drag a name into the editor; the menu (right
- * click or …) previews a table in a new tab, copies or inserts names, shows a view's definition,
- * and points the active tab at a catalog and schema. Search finds tables and views anywhere.
- */
-export function DataExplorer({ cache }: Props) {
+function lockTitle(mode: TlsMode): string {
+  switch (mode) {
+    case "verified":
+      return "TLS: the certificate was verified against trusted roots";
+    case "fingerprint":
+      return "TLS: the certificate is trusted by the fingerprint you accepted";
+    case "plaintext":
+      return "Plain HTTP: this connection is not encrypted";
+  }
+}
+
+/** A server as the tree shows it: this one (when there is one), then the saved ones. */
+interface TreeServer {
+  id: string;
+  label: string;
+  tls: TlsMode;
+  version: string;
+  state?: ServerState;
+  connected: boolean;
+}
+
+export function DataExplorer() {
   const session = useSession();
   const active = useActiveTab();
-  const [open, setOpen] = useState<Set<string>>(new Set());
+  const snapshot = useServers(session.servers);
+  // This server starts open (as the tree did before servers had a node).
+  const [open, setOpen] = useState<Set<string>>(() => new Set(session.localServer ? [keyOf(localServerId)] : []));
   const [loads, setLoads] = useState<Map<string, Load<unknown>>>(new Map());
   const [keywords, setKeywords] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
@@ -84,25 +115,70 @@ export function DataExplorer({ cache }: Props) {
   const [found, setFound] = useState<string | undefined>();
   const [term, setTerm] = useState("");
   const [searchResult, setSearchResult] = useState<
-    { term: string; load: Load<{ hits: SearchHit[]; more: boolean }> } | undefined
+    { term: string; load: Load<{ server: TreeServer; hits: SearchHit[]; more: boolean; error?: string }[]> } | undefined
   >();
   const [notice, setNotice] = useState<string | undefined>();
+  const [adding, setAdding] = useState<{ server?: ServerState } | null>(null);
   const tree = useRef<HTMLUListElement>(null);
   const [autoOpen] = useState(() => new Once());
+
+  const servers = useMemo((): TreeServer[] => {
+    const out: TreeServer[] = [];
+    if (session.localServer) {
+      out.push({
+        id: localServerId,
+        label: "This server",
+        tls: window.location.protocol === "https:" ? "verified" : "plaintext",
+        version: session.identity.version,
+        connected: true,
+      });
+    }
+    for (const state of snapshot.servers) {
+      out.push({
+        id: state.saved.id,
+        label: serverLabel(state),
+        tls: state.saved.tls,
+        version: state.signIn?.version ?? "",
+        state,
+        connected: state.status === "connected" && !!state.signIn,
+      });
+    }
+    return out;
+  }, [session.localServer, session.identity.version, snapshot]);
+  const serverOf = useCallback((id: string) => servers.find((s) => s.id === id), [servers]);
+
+  // This server lists what the active tab's role may see; another server, all its user may.
+  const cacheFor = useCallback(
+    (server: string): CatalogCache => listingsFor(session, server === localServerId ? active.role : "", server),
+    [session, active.role],
+  );
 
   // Names that need quotes (mixed case, spaces, keywords) are written quoted.
   useEffect(() => {
     let live = true;
-    cache.vocabulary().then(
-      (v) => live && setKeywords(new Set(v.keywords.map((k) => k.toUpperCase()))),
-      () => {},
-    );
+    const source = servers.find((s) => s.connected);
+    if (!source) return;
+    cacheFor(source.id)
+      .vocabulary()
+      .then(
+        (v) => live && setKeywords(new Set(v.keywords.map((k) => k.toUpperCase()))),
+        () => {},
+      );
     return () => {
       live = false;
     };
-  }, [cache]);
+  }, [cacheFor, servers]);
   const ident = useCallback((name: string) => sqlIdentifier(name, keywords), [keywords]);
-  const qualified = useCallback((...parts: string[]) => parts.map(ident).join("."), [ident]);
+  /** catalog.schema[.object], the schema in the server's spelling (nested ones are paths). */
+  const qualified = useCallback(
+    (catalog: string, schema?: string, ...rest: string[]) =>
+      [
+        ident(catalog),
+        ...(schema === undefined ? [] : [schemaSql(parseSchemaName(schema), ident)]),
+        ...rest.map(ident),
+      ].join("."),
+    [ident],
+  );
 
   const setLoad = (key: string, load: Load<unknown>) => setLoads((m) => new Map(m).set(key, load));
 
@@ -122,44 +198,49 @@ export function DataExplorer({ cache }: Props) {
     [session],
   );
 
-  // The first time it can, the browser opens the active tab's catalog.
+  // The first time it can, the browser opens the active tab's server and catalog.
   const openActive = useCallback(() => {
-    const catalog = currentActiveTab().catalog;
+    const tab = currentActiveTab();
+    const catalog = tab.catalog;
     if (!catalog) return;
-    cache.catalogs().then(
-      (names) => {
-        if (!names.includes(catalog) || !autoOpen.take()) return;
-        setOpen((o) => new Set(o).add(keyOf(catalog)));
-        load(keyOf(catalog), () => cache.schemas(catalog));
-      },
-      () => {},
-    );
-  }, [cache, load, autoOpen]);
+    cacheFor(tab.server)
+      .catalogs()
+      .then(
+        (names) => {
+          if (!names.includes(catalog) || !autoOpen.take()) return;
+          setOpen((o) => new Set(o).add(keyOf(tab.server)).add(keyOf(tab.server, catalog)));
+          load(keyOf(tab.server, catalog), () => cacheFor(tab.server).schemas(catalog));
+        },
+        () => {},
+      );
+  }, [cacheFor, load, autoOpen]);
   useEffect(() => subscribeActiveTab(openActive), [openActive]);
 
   const loadFor = useCallback(
-    (path: string[]) => {
-      const key = keyOf(...path);
+    (server: string, path: string[]) => {
+      const key = keyOf(server, ...path);
+      const cache = cacheFor(server);
       if (path.length === 0) load(key, () => cache.catalogs(), openActive);
       else if (path.length === 1) load(key, () => cache.schemas(path[0]!));
       else if (path.length === 2) load(key, () => cache.tables(path[0]!, path[1]!));
       else if (path.length === 3) load(key, () => cache.columns(path[0]!, path[1]!, path[2]!));
     },
-    [cache, load, openActive],
+    [cacheFor, load, openActive],
   );
 
-  // The catalogs, and everything open again: at the start, for a new role, and after a run
-  // that may have created, dropped or attached something.
+  // Everything open again: at the start, for a new role, after a run that may have created,
+  // dropped or attached something, and when a server connects.
   const relist = useCallback(
     (paths: Set<string>) => {
       setLoads(new Map());
-      loadFor([]);
+      for (const s of servers) if (s.connected && paths.has(keyOf(s.id))) loadFor(s.id, []);
       for (const key of paths) {
-        const path = JSON.parse(key) as string[];
-        if (path.length <= 3 && path[0] !== "group") loadFor(path);
+        const [server, ...path] = JSON.parse(key) as string[];
+        if (server === undefined || path[0] === "group" || path.length === 0 || path.length > 3) continue;
+        if (serverOf(server)?.connected) loadFor(server, path);
       }
     },
-    [loadFor],
+    [loadFor, servers, serverOf],
   );
   const openRef = useRef(open);
   useEffect(() => {
@@ -167,9 +248,8 @@ export function DataExplorer({ cache }: Props) {
   }, [open]);
   useEffect(() => relist(openRef.current), [relist]);
   useEffect(() => onCatalogsChanged(() => relist(openRef.current)), [relist]);
-
-  const toggle = (path: string[], group?: string) => {
-    const key = group ? keyOf("group", ...path, group) : keyOf(...path);
+  const toggle = (server: string, path: string[], group?: string) => {
+    const key = group ? keyOf(server, "group", ...path, group) : keyOf(server, ...path);
     const opening = !open.has(key);
     setOpen((o) => {
       const next = new Set(o);
@@ -178,13 +258,13 @@ export function DataExplorer({ cache }: Props) {
         next.add(key);
         // A schema opens with its Tables and Views groups open.
         if (!group && path.length === 2) {
-          next.add(keyOf("group", path[0]!, path[1]!, "tables"));
-          next.add(keyOf("group", path[0]!, path[1]!, "views"));
+          next.add(keyOf(server, "group", path[0]!, path[1]!, "tables"));
+          next.add(keyOf(server, "group", path[0]!, path[1]!, "views"));
         }
       }
       return next;
     });
-    if (opening && !group && !loads.has(key)) loadFor(path);
+    if (opening && !group && !loads.has(key) && serverOf(server)?.connected) loadFor(server, path);
   };
 
   // ── Search ────────────────────────────────────────────────────────────────────────────────
@@ -193,30 +273,40 @@ export function DataExplorer({ cache }: Props) {
     if (t.length < searchMinChars) return;
     let live = true;
     const timer = window.setTimeout(() => {
-      cache.search(t).then(
-        (r) => live && setSearchResult({ term: t, load: { state: "done", items: r } }),
-        (err: unknown) => {
-          if (live && !session.checkSignIn(err)) {
-            setSearchResult({ term: t, load: { state: "error", message: errorMessage(err) } });
-          }
-        },
-      );
+      const connected = servers.filter((s) => s.connected);
+      void Promise.all(
+        connected.map((server) =>
+          cacheFor(server.id)
+            .search(t)
+            .then(
+              (r) => ({ server, hits: r.hits, more: r.more }),
+              (err: unknown) => {
+                session.checkSignIn(err);
+                return { server, hits: [], more: false, error: errorMessage(err) };
+              },
+            ),
+        ),
+      ).then((results) => live && setSearchResult({ term: t, load: { state: "done", items: results } }));
     }, searchDelayMs);
     return () => {
       live = false;
       window.clearTimeout(timer);
     };
-  }, [term, cache, session]);
+  }, [term, cacheFor, session, servers]);
 
-  const reveal = (hit: SearchHit) => {
+  const reveal = (server: string, hit: SearchHit) => {
+    const schemaPath = parseSchemaName(hit.schema);
     const keys = [
-      keyOf(hit.catalog),
-      keyOf(hit.catalog, hit.schema),
-      keyOf("group", hit.catalog, hit.schema, hit.isView ? "views" : "tables"),
+      keyOf(server),
+      keyOf(server, hit.catalog),
+      ...schemaPath.map((_, i) => keyOf(server, hit.catalog, schemaSpelling(hit.schema, i + 1))),
+      keyOf(server, "group", hit.catalog, hit.schema, hit.isView ? "views" : "tables"),
     ];
     setOpen((o) => new Set([...o, ...keys]));
-    for (const path of [[hit.catalog], [hit.catalog, hit.schema]]) if (!loads.has(keyOf(...path))) loadFor(path);
-    const target = keyOf(hit.catalog, hit.schema, hit.name);
+    for (const path of [[], [hit.catalog], [hit.catalog, hit.schema]]) {
+      if (!loads.has(keyOf(server, ...path))) loadFor(server, path);
+    }
+    const target = keyOf(server, hit.catalog, hit.schema, hit.name);
     setFound(target);
     setTerm("");
     // Once drawn, bring it into view.
@@ -233,13 +323,13 @@ export function DataExplorer({ cache }: Props) {
   const insert = (text: string) => session.insertText(text);
   const useBlocked =
     active.transaction !== "none" ? "Commit or roll back the active tab's transaction first" : undefined;
-  const pointTabAt = (catalog: string, schema?: string) => {
-    const why = session.pointTabAt(catalog, schema);
+  const pointTabAt = (server: string, catalog: string, schema?: string) => {
+    const why = session.pointTabAt(catalog, schema, server);
     if (why) setNotice(why);
   };
   const copy = (text: string) =>
     void copyText(text).then((ok) => setNotice(ok ? `Copied ${text}` : "The browser refused the copy."));
-  const preview = (catalog: string, schema: string, name: string) =>
+  const preview = (server: string, catalog: string, schema: string, name: string) =>
     session.requestQuery({
       sql: `SELECT * FROM ${qualified(catalog, schema, name)} LIMIT ${previewRows};`,
       run: true,
@@ -247,70 +337,119 @@ export function DataExplorer({ cache }: Props) {
       title: name,
       catalog,
       schema,
+      server,
     });
-  const columnsOf = async (catalog: string, schema: string, name: string) =>
-    (await cache.columns(catalog, schema, name)).map((c) => ident(c.name));
-  const showDefinition = (catalog: string, schema: string, name: string) => {
+  const columnsOf = async (server: string, catalog: string, schema: string, name: string) =>
+    (await cacheFor(server).columns(catalog, schema, name)).map((c) => ident(c.name));
+  const showDefinition = (server: string, catalog: string, schema: string, name: string) => {
     setDefinition({ name: qualified(catalog, schema, name) });
-    cache.viewDefinition(catalog, schema, name).then(
-      (sql) =>
-        setDefinition({
-          name: qualified(catalog, schema, name),
-          ...(sql ? { sql } : { error: "The server has no definition for this view." }),
-        }),
-      (err: unknown) => setDefinition({ name: qualified(catalog, schema, name), error: errorMessage(err) }),
-    );
+    cacheFor(server)
+      .viewDefinition(catalog, schema, name)
+      .then(
+        (sql) =>
+          setDefinition({
+            name: qualified(catalog, schema, name),
+            ...(sql ? { sql } : { error: "The server has no definition for this view." }),
+          }),
+        (err: unknown) => setDefinition({ name: qualified(catalog, schema, name), error: errorMessage(err) }),
+      );
   };
 
-  const objectMenu = (catalog: string, schema: string, t: TableEntry): MenuItem[] => {
+  const objectMenu = (server: string, catalog: string, schema: string, t: TableEntry): MenuItem[] => {
     const name = qualified(catalog, schema, t.name);
     return [
       { label: "Insert name in editor", run: () => insert(name) },
       { label: "Copy name", run: () => copy(name) },
-      { label: "Preview data", run: () => preview(catalog, schema, t.name) },
+      { label: "Preview data", run: () => preview(server, catalog, schema, t.name) },
       {
         label: "Insert column names",
         run: () =>
-          void columnsOf(catalog, schema, t.name).then(
+          void columnsOf(server, catalog, schema, t.name).then(
             (cols) => insert(cols.join(", ")),
             () => {},
           ),
       },
       { label: "Insert SELECT statement", run: () => insert(`SELECT * FROM ${name} LIMIT ${previewRows};`) },
-      ...(t.isView ? [{ label: "Show definition", run: () => showDefinition(catalog, schema, t.name) }] : []),
-      { label: "Use this catalog and schema", run: () => pointTabAt(catalog, schema), disabled: useBlocked },
+      ...(t.isView ? [{ label: "Show definition", run: () => showDefinition(server, catalog, schema, t.name) }] : []),
+      { label: "Use this catalog and schema", run: () => pointTabAt(server, catalog, schema), disabled: useBlocked },
     ];
   };
-  const upload = (catalog?: string, schema?: string) =>
+  const upload = (server: string, catalog?: string, schema?: string) =>
     requestUpload({
-      catalog: catalog ?? active.catalog,
-      schema: schema ?? (catalog === undefined ? active.schema : ""),
-      role: active.role,
+      catalog: catalog ?? (server === active.server ? active.catalog : ""),
+      schema: schema ?? (catalog === undefined && server === active.server ? active.schema : ""),
+      role: server === localServerId ? active.role : "",
+      server,
     });
-  const schemaMenu = (catalog: string, schema: string): MenuItem[] => [
+  const schemaMenu = (server: string, catalog: string, schema: string): MenuItem[] => [
     { label: "Insert name in editor", run: () => insert(qualified(catalog, schema)) },
     { label: "Copy name", run: () => copy(qualified(catalog, schema)) },
-    { label: "Use this catalog and schema", run: () => pointTabAt(catalog, schema), disabled: useBlocked },
-    { label: "Upload data…", run: () => upload(catalog, schema) },
+    { label: "Use this catalog and schema", run: () => pointTabAt(server, catalog, schema), disabled: useBlocked },
+    { label: "Upload data…", run: () => upload(server, catalog, schema) },
   ];
-  const catalogMenu = (catalog: string): MenuItem[] => [
+  const catalogMenu = (server: string, catalog: string): MenuItem[] => [
     { label: "Insert name in editor", run: () => insert(ident(catalog)) },
     { label: "Copy name", run: () => copy(ident(catalog)) },
     {
       label: "Use this catalog",
       run: () =>
-        void cache.schemas(catalog).then(
-          (names) => pointTabAt(catalog, names.includes("main") ? "main" : (names[0] ?? "")),
-          (err: unknown) => setNotice(errorMessage(err)),
-        ),
+        void cacheFor(server)
+          .schemas(catalog)
+          .then(
+            (names) => pointTabAt(server, catalog, names.includes("main") ? "main" : (names[0] ?? "")),
+            (err: unknown) => setNotice(errorMessage(err)),
+          ),
       disabled: useBlocked,
     },
-    { label: "Upload data…", run: () => upload(catalog) },
+    { label: "Upload data…", run: () => upload(server, catalog) },
   ];
   const columnMenu = (column: ColumnEntry): MenuItem[] => [
     { label: "Insert name in editor", run: () => insert(ident(column.name)) },
     { label: "Copy name", run: () => copy(ident(column.name)) },
   ];
+  const serverMenu = (server: TreeServer): MenuItem[] => {
+    const state = server.state;
+    const items: MenuItem[] = [];
+    if (server.connected) {
+      items.push({
+        label: "New tab on this server",
+        run: () => session.requestQuery({ sql: "", run: false, newTab: true, server: server.id }),
+      });
+      items.push({ label: "Upload data…", run: () => upload(server.id) });
+    }
+    if (state) {
+      if (server.connected) {
+        items.push({
+          label: "Disconnect",
+          run: () => {
+            session.servers.disconnect(state.saved.id);
+            setNotice(`Disconnected from ${serverLabel(state)}.`);
+          },
+        });
+      } else {
+        items.push({ label: "Sign in…", run: () => setAdding({ server: state }) });
+      }
+      items.push({ label: "Copy URL", run: () => copy(state.saved.url) });
+      items.push({
+        label: "Rename…",
+        run: () => {
+          const name = window.prompt("Name for this server", state.saved.name);
+          if (name?.trim()) session.servers.rename(state.saved.id, name.trim());
+        },
+      });
+      items.push({
+        label: "Remove from the list",
+        run: () => {
+          if (window.confirm(`Remove ${serverLabel(state)} from the list? Its tabs stay open but can't run.`)) {
+            session.servers.remove(state.saved.id);
+          }
+        },
+      });
+    } else {
+      items.push({ label: "Copy URL", run: () => copy(window.location.origin) });
+    }
+    return items;
+  };
 
   const openMenu = (e: { clientX: number; clientY: number; preventDefault: () => void }, items: MenuItem[]) => {
     e.preventDefault();
@@ -327,14 +466,14 @@ export function DataExplorer({ cache }: Props) {
   const status = (l: Load<unknown> | undefined, depth: number, retry: () => void, empty = "Empty") => {
     if (!l || l.state === "loading") {
       return (
-        <li className={`tree-note depth-${depth}`} aria-busy="true">
+        <li className="tree-note" style={depthStyle(depth)} aria-busy="true">
           Loading…
         </li>
       );
     }
     if (l.state === "error") {
       return (
-        <li className={`tree-note tree-error depth-${depth}`} role="alert">
+        <li className="tree-note tree-error" style={depthStyle(depth)} role="alert">
           <span>{l.message}</span>{" "}
           <button type="button" className="btn btn-ghost btn-sm" onClick={retry}>
             Retry
@@ -342,7 +481,13 @@ export function DataExplorer({ cache }: Props) {
         </li>
       );
     }
-    if (Array.isArray(l.items) && l.items.length === 0) return <li className={`tree-note depth-${depth}`}>{empty}</li>;
+    if (Array.isArray(l.items) && l.items.length === 0) {
+      return (
+        <li className="tree-note" style={depthStyle(depth)}>
+          {empty}
+        </li>
+      );
+    }
     return null;
   };
   const items = (key: string): unknown => {
@@ -362,8 +507,22 @@ export function DataExplorer({ cache }: Props) {
     detail?: ReactNode;
     menu?: MenuItem[];
     title?: string;
+    className?: string;
   }) => {
-    const { key, depth, label, icon, expandable, expanded, onToggle, drag, detail, menu: m, title } = options;
+    const {
+      key,
+      depth,
+      label,
+      icon,
+      expandable,
+      expanded,
+      onToggle,
+      drag,
+      detail,
+      menu: m,
+      title,
+      className,
+    } = options;
     return (
       <div
         className={`tree-row-wrap${found === key ? " tree-found" : ""}`}
@@ -372,7 +531,8 @@ export function DataExplorer({ cache }: Props) {
       >
         <button
           type="button"
-          className={`tree-row depth-${depth}`}
+          className={`tree-row${className ? ` ${className}` : ""}`}
+          style={depthStyle(depth)}
           onClick={onToggle}
           onDoubleClick={
             drag
@@ -425,25 +585,32 @@ export function DataExplorer({ cache }: Props) {
     );
   };
 
-  const objects = (catalog: string, schema: string, list: TableEntry[], kind: "tables" | "views") => {
-    const groupKey = keyOf("group", catalog, schema, kind);
+  const objects = (
+    server: string,
+    catalog: string,
+    schema: string,
+    depth: number,
+    list: TableEntry[],
+    kind: "tables" | "views",
+  ) => {
+    const groupKey = keyOf(server, "group", catalog, schema, kind);
     const groupOpen = open.has(groupKey);
     const label = kind === "tables" ? "Tables" : "Views";
     return (
       <li key={groupKey} role="treeitem" aria-expanded={groupOpen} aria-label={label}>
         {row({
           key: groupKey,
-          depth: 2,
+          depth,
           label: `${label} (${list.length.toLocaleString()})`,
           icon: <Layers size={14} className="tree-icon" />,
           expandable: true,
           expanded: groupOpen,
-          onToggle: () => toggle([catalog, schema], kind),
+          onToggle: () => toggle(server, [catalog, schema], kind),
         })}
         {groupOpen && (
           <ul role="group">
             {list.map((t) => {
-              const tk = keyOf(catalog, schema, t.name);
+              const tk = keyOf(server, catalog, schema, t.name);
               const tOpen = open.has(tk);
               const cols = items(tk) as ColumnEntry[] | undefined;
               const name = qualified(catalog, schema, t.name);
@@ -451,7 +618,7 @@ export function DataExplorer({ cache }: Props) {
                 <li key={tk} role="treeitem" aria-expanded={tOpen} aria-label={t.name} data-table-type={t.type}>
                   {row({
                     key: tk,
-                    depth: 3,
+                    depth: depth + 1,
                     label: t.name,
                     icon: t.isView ? (
                       <Eye size={14} className="tree-icon" />
@@ -460,9 +627,9 @@ export function DataExplorer({ cache }: Props) {
                     ),
                     expandable: true,
                     expanded: tOpen,
-                    onToggle: () => toggle([catalog, schema, t.name]),
+                    onToggle: () => toggle(server, [catalog, schema, t.name]),
                     drag: name,
-                    menu: objectMenu(catalog, schema, t),
+                    menu: objectMenu(server, catalog, schema, t),
                   })}
                   {tOpen && (
                     <ul role="group">
@@ -471,8 +638,8 @@ export function DataExplorer({ cache }: Props) {
                         return (
                           <li key={c.name} role="treeitem" aria-label={c.name}>
                             {row({
-                              key: keyOf(catalog, schema, t.name, c.name),
-                              depth: 4,
+                              key: keyOf(server, catalog, schema, t.name, c.name),
+                              depth: depth + 2,
                               label: c.name,
                               icon: <Icon size={13} className="tree-icon" />,
                               drag: ident(c.name),
@@ -489,7 +656,7 @@ export function DataExplorer({ cache }: Props) {
                           </li>
                         );
                       })}
-                      {status(loads.get(tk), 4, () => loadFor([catalog, schema, t.name]))}
+                      {status(loads.get(tk), depth + 2, () => loadFor(server, [catalog, schema, t.name]))}
                     </ul>
                   )}
                 </li>
@@ -501,30 +668,194 @@ export function DataExplorer({ cache }: Props) {
     );
   };
 
-  const catalogs = ((items(keyOf()) as string[] | undefined) ?? []).filter((c) => !hidden.has(c));
+  // A schema, with its nested schemas (DuckDB 2.0) under it, then its Tables and Views.
+  const schemaItem = (server: string, catalog: string, node: SchemaNode, depth: number): ReactNode => {
+    const schema = node.spelled;
+    const sk = keyOf(server, catalog, schema);
+    const sOpen = open.has(sk);
+    const list = node.listed ? (items(sk) as TableEntry[] | undefined) : [];
+    return (
+      <li
+        key={sk}
+        role="treeitem"
+        aria-expanded={sOpen}
+        aria-label={node.name}
+        data-schema-path={JSON.stringify(node.path)}
+      >
+        {row({
+          key: sk,
+          depth,
+          label: node.name,
+          icon: <FolderTree size={14} className="tree-icon" />,
+          expandable: true,
+          expanded: sOpen,
+          onToggle: () => toggle(server, [catalog, schema]),
+          drag: qualified(catalog, schema),
+          menu: node.listed ? schemaMenu(server, catalog, schema) : undefined,
+          title: node.listed
+            ? undefined
+            : `${qualified(catalog, schema)}: a schema you may not list, with schemas under it you may`,
+        })}
+        {sOpen && (
+          <ul role="group">
+            {node.children.map((child) => schemaItem(server, catalog, child, depth + 1))}
+            {list &&
+              objects(
+                server,
+                catalog,
+                schema,
+                depth + 1,
+                list.filter((t) => !t.isView),
+                "tables",
+              )}
+            {list &&
+              objects(
+                server,
+                catalog,
+                schema,
+                depth + 1,
+                list.filter((t) => t.isView),
+                "views",
+              )}
+            {node.listed &&
+              status(loads.get(sk), depth + 1, () => loadFor(server, [catalog, schema]), "No tables or views")}
+          </ul>
+        )}
+      </li>
+    );
+  };
+
+  const catalogItems = (server: TreeServer) => {
+    const catalogs = ((items(keyOf(server.id)) as string[] | undefined) ?? []).filter((c) => !hidden.has(c));
+    return (
+      <>
+        {catalogs.map((catalog) => {
+          const ck = keyOf(server.id, catalog);
+          const cOpen = open.has(ck);
+          const schemas = items(ck) as string[] | undefined;
+          return (
+            <li key={ck} role="treeitem" aria-expanded={cOpen} aria-label={catalog}>
+              {row({
+                key: ck,
+                depth: 1,
+                label: catalog,
+                icon: <Database size={14} className="tree-icon" />,
+                expandable: true,
+                expanded: cOpen,
+                onToggle: () => toggle(server.id, [catalog]),
+                drag: ident(catalog),
+                menu: catalogMenu(server.id, catalog),
+              })}
+              {cOpen && (
+                <ul role="group">
+                  {schemas && schemaTree(schemas).map((node) => schemaItem(server.id, catalog, node, 2))}
+                  {status(loads.get(ck), 2, () => loadFor(server.id, [catalog]), "No schemas")}
+                </ul>
+              )}
+            </li>
+          );
+        })}
+        {status(loads.get(keyOf(server.id)), 1, () => loadFor(server.id, []), "No catalogs")}
+      </>
+    );
+  };
+
+  const serverItem = (server: TreeServer) => {
+    const key = keyOf(server.id);
+    const isOpen = open.has(key);
+    const state = server.state;
+    const detail = (
+      <>
+        {server.version && (
+          <span className="tree-tag" title="Server version">
+            {server.version.split(" ")[0]}
+          </span>
+        )}
+        {state && !server.connected && (
+          <span className="tree-type tree-server-status" data-status={state.status} title={state.error}>
+            {state.status === "error" ? "sign-in needed" : "not signed in"}
+          </span>
+        )}
+      </>
+    );
+    return (
+      <li
+        key={key}
+        role="treeitem"
+        aria-expanded={isOpen}
+        aria-label={server.label}
+        data-server={server.id || "local"}
+        data-connected={server.connected}
+      >
+        {row({
+          key,
+          depth: 0,
+          label: server.label,
+          className: "tree-server",
+          icon: (
+            <>
+              <Server size={14} className="tree-icon" />
+              <TlsLock mode={server.tls} title={lockTitle(server.tls)} />
+            </>
+          ),
+          expandable: true,
+          expanded: isOpen,
+          onToggle: () => {
+            if (state && !server.connected) {
+              setAdding({ server: state });
+              return;
+            }
+            toggle(server.id, []);
+          },
+          detail,
+          menu: serverMenu(server),
+          title: state
+            ? `${state.saved.url}${state.signIn ? ` as ${state.signIn.username}` : ""}`
+            : window.location.origin,
+        })}
+        {isOpen && server.connected && <ul role="group">{catalogItems(server)}</ul>}
+      </li>
+    );
+  };
+
   const searching = term.trim().length >= searchMinChars;
   const results = searchResult && searchResult.term === term.trim() ? searchResult.load : undefined;
-  const hits = results?.state === "done" ? results.items : undefined;
+  const groups = results?.state === "done" ? results.items : undefined;
+  const anyHit = groups?.some((g) => g.hits.length > 0) ?? false;
+  const canAdd = session.contract.remote_servers;
 
   return (
     <div className="schema-browser" data-testid="data-explorer">
       <div className="sidebar-head">
         <FolderTree size={15} />
         <span>Data</span>
+        {canAdd && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon btn-sm"
+            onClick={() => setAdding({})}
+            title="Add a server: connect to another Hardcharger server"
+            aria-label="Add a server"
+            data-testid="explorer-add-server"
+          >
+            <Plus size={14} />
+          </button>
+        )}
         <button
           type="button"
           className="btn btn-ghost btn-icon btn-sm"
-          onClick={() => upload()}
+          onClick={() => upload(active.server)}
           title="Upload data: a CSV, Excel, Parquet, JSON or Arrow file into a table"
           aria-label="Upload data"
           data-testid="explorer-upload"
+          disabled={!serverOf(active.server)?.connected}
         >
           <FileUp size={14} />
         </button>
         <button
           type="button"
           className="btn btn-ghost btn-icon btn-sm"
-          // Every role's listings, so the editor's catalog and schema pickers list again too.
+          // Every server's and role's listings, so the editor's catalog and schema pickers list again too.
           onClick={() => clearCatalogCaches(session)}
           title="Refresh"
           aria-label="Refresh the schema browser"
@@ -558,94 +889,67 @@ export function DataExplorer({ cache }: Props) {
       {searching && (
         <ul className="search-results" aria-label="Search results" data-testid="search-results">
           {results?.state === "loading" || !results ? <li className="tree-note">Searching…</li> : null}
-          {results?.state === "error" && (
-            <li className="tree-note tree-error" role="alert">
-              {results.message}
-            </li>
+          {groups && !anyHit && !groups.some((g) => g.error) && (
+            <li className="tree-note">No tables or views match.</li>
           )}
-          {hits?.hits.length === 0 && <li className="tree-note">No tables or views match.</li>}
-          {hits?.hits.map((h) => (
-            <li key={keyOf(h.catalog, h.schema, h.name)}>
-              <button type="button" className="search-hit" onClick={() => reveal(h)} title="Show it in the tree">
-                {h.isView ? <Eye size={13} className="tree-icon" /> : <Table2 size={13} className="tree-icon" />}
-                <span className="tree-name">{h.name}</span>
-                <span className="tree-type">
-                  {h.catalog}.{h.schema}
-                </span>
-              </button>
+          {groups?.map((g) => (
+            <li key={g.server.id} className="search-group">
+              {(servers.length > 1 || g.error) && <div className="search-group-head">{g.server.label}</div>}
+              {g.error && (
+                <div className="tree-note tree-error" role="alert">
+                  {g.error}
+                </div>
+              )}
+              <ul>
+                {g.hits.map((h) => (
+                  <li key={keyOf(g.server.id, h.catalog, h.schema, h.name)}>
+                    <button
+                      type="button"
+                      className="search-hit"
+                      onClick={() => reveal(g.server.id, h)}
+                      title="Show it in the tree"
+                    >
+                      {h.isView ? <Eye size={13} className="tree-icon" /> : <Table2 size={13} className="tree-icon" />}
+                      <span className="tree-name">{h.name}</span>
+                      <span className="tree-type">
+                        {h.catalog}.{h.schema}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+                {g.more && <li className="tree-note">More than 100 match: type more of the name.</li>}
+              </ul>
             </li>
           ))}
-          {hits?.more && <li className="tree-note">More than 100 match: type more of the name.</li>}
         </ul>
       )}
-      <ul className="side-tree" role="tree" aria-label="Catalogs" ref={tree}>
-        {catalogs.map((catalog) => {
-          const ck = keyOf(catalog);
-          const cOpen = open.has(ck);
-          return (
-            <li key={ck} role="treeitem" aria-expanded={cOpen} aria-label={catalog}>
-              {row({
-                key: ck,
-                depth: 0,
-                label: catalog,
-                icon: <Database size={14} className="tree-icon" />,
-                expandable: true,
-                expanded: cOpen,
-                onToggle: () => toggle([catalog]),
-                drag: ident(catalog),
-                menu: catalogMenu(catalog),
-              })}
-              {cOpen && (
-                <ul role="group">
-                  {(items(ck) as string[] | undefined)?.map((schema) => {
-                    const sk = keyOf(catalog, schema);
-                    const sOpen = open.has(sk);
-                    const list = items(sk) as TableEntry[] | undefined;
-                    return (
-                      <li key={sk} role="treeitem" aria-expanded={sOpen} aria-label={schema}>
-                        {row({
-                          key: sk,
-                          depth: 1,
-                          label: schema,
-                          icon: <FolderTree size={14} className="tree-icon" />,
-                          expandable: true,
-                          expanded: sOpen,
-                          onToggle: () => toggle([catalog, schema]),
-                          drag: qualified(catalog, schema),
-                          menu: schemaMenu(catalog, schema),
-                        })}
-                        {sOpen && (
-                          <ul role="group">
-                            {list &&
-                              objects(
-                                catalog,
-                                schema,
-                                list.filter((t) => !t.isView),
-                                "tables",
-                              )}
-                            {list &&
-                              objects(
-                                catalog,
-                                schema,
-                                list.filter((t) => t.isView),
-                                "views",
-                              )}
-                            {status(loads.get(sk), 2, () => loadFor([catalog, schema]), "No tables or views")}
-                          </ul>
-                        )}
-                      </li>
-                    );
-                  })}
-                  {status(loads.get(ck), 1, () => loadFor([catalog]), "No schemas")}
-                </ul>
-              )}
-            </li>
-          );
-        })}
-        {status(loads.get(keyOf()), 0, () => loadFor([]), "No catalogs")}
+      <ul className="side-tree" role="tree" aria-label="Servers" ref={tree}>
+        {servers.map(serverItem)}
+        {servers.length === 0 && (
+          <li className="tree-note tree-empty" data-testid="explorer-no-servers">
+            No servers yet.{" "}
+            {canAdd && (
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setAdding({})}>
+                <Plus size={13} /> Add a server
+              </button>
+            )}
+          </li>
+        )}
       </ul>
 
       {menu && <FloatingMenu x={menu.x} y={menu.y} items={menu.items} onClose={closeMenu} />}
+      {adding && (
+        <AddServerDialog
+          {...(adding.server ? { server: adding.server } : {})}
+          onConnected={(id) => {
+            setAdding(null);
+            setOpen((o) => new Set(o).add(keyOf(id)));
+            loadFor(id, []);
+            setNotice("Connected.");
+          }}
+          onClose={() => setAdding(null)}
+        />
+      )}
       {definition && (
         <DefinitionDialog
           name={definition.name}
@@ -660,6 +964,23 @@ export function DataExplorer({ cache }: Props) {
       )}
     </div>
   );
+}
+
+/** The spelling of the first `parts` parts of a nested schema's spelling (for its ancestors' keys). */
+function schemaSpelling(spelled: string, parts: number): string {
+  const path = parseSchemaName(spelled);
+  if (parts >= path.length) return spelled;
+  return spellSchemaPath(path.slice(0, parts));
+}
+
+/**
+ * Indentation by depth. With servers at the root, a column sits one level deeper than it did:
+ * the steps are a little smaller so a column row keeps the room it had (78 px in) in a narrow
+ * panel.
+ */
+function depthStyle(depth: number): CSSProperties {
+  const padding = [8, 22, 36, 50, 64, 78];
+  return { paddingLeft: padding[depth] ?? 78 + (depth - 5) * 14 };
 }
 
 function DefinitionDialog(props: {

@@ -68,6 +68,8 @@ inline bool IsFileReadingTableFunction(const std::string& name_lower) {
                                                          "read_text_auto",
                                                          "read_single_csv_file",
                                                          "read_single_json_file",
+                                                         "read_single_parquet_file",
+                                                         "parquet_full_metadata",
                                                          "read_duckdb",
                                                          "read_xlsx",
                                                          "parquet_bloom_probe",

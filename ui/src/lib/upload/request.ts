@@ -9,6 +9,8 @@ export interface UploadRequest {
   schema?: string;
   /** The role the upload acts with (the active tab's; "" for all of the user's roles). */
   role?: string;
+  /** The server the table goes to (a saved server's id; "" or absent: this server). */
+  server?: string;
   /** A file dropped on the page. */
   file?: File;
 }

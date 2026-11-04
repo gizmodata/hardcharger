@@ -52,6 +52,8 @@ interface Props {
   onSaveAs?: (sql: string) => void;
   /** The roles the user may act with (Run as); empty: no picker. */
   roles: readonly string[];
+  /** The name of the other server this tab is on (shown in the toolbar); absent: this server. */
+  serverName?: string;
   onReady: (handle: TabHandle | undefined) => void;
   /** Run the whole text once the editor is ready (a table preview), then call onRunStarted. */
   runOnOpen?: boolean;
@@ -79,14 +81,15 @@ export function EditorTab(props: Props) {
   const tabSession = useMemo(
     () =>
       new TabSession(
-        (where) => app.openConnection({ catalog: where.catalog, schema: where.schema, reconnect: false }),
+        (where) =>
+          app.openConnection({ catalog: where.catalog, schema: where.schema, reconnect: false, server: tab.server }),
         async (conn) => {
           const row: unknown = (await conn.query("SELECT HARDCHARGER_CURRENT_SESSION() AS s")).get(0)?.toJSON();
           const id = (row as { s?: unknown } | undefined)?.s;
           return typeof id === "string" ? id : undefined;
         },
       ),
-    [app],
+    [app, tab.server],
   );
   const [run, setRun] = useState<Run>({ kind: "idle" });
   // Runs finished in this tab (tests wait on it; data-runs).
@@ -133,7 +136,7 @@ export function EditorTab(props: Props) {
 
   // The catalogs the user may see, and the schemas of the tab's catalog, for the pickers
   // (Chargewire metadata, as access control filters it).
-  const listings = useMemo(() => listingsFor(app, tab.role), [app, tab.role]);
+  const listings = useMemo(() => listingsFor(app, tab.role, tab.server), [app, tab.role, tab.server]);
   useEffect(() => {
     let live = true;
     listings.catalogs().then(
@@ -447,13 +450,20 @@ export function EditorTab(props: Props) {
         <button
           type="button"
           className="btn btn-secondary"
-          onClick={() => requestUpload({ catalog: where.catalog, schema: where.schema, role: tab.role })}
+          onClick={() =>
+            requestUpload({ catalog: where.catalog, schema: where.schema, role: tab.role, server: tab.server })
+          }
           title="Load a CSV / Excel / Parquet / JSON / Arrow file into a table"
           data-testid="upload-button"
         >
           <FileUp size={14} /> Upload data
         </button>
-        {props.roles.length > 0 && (
+        {props.serverName && (
+          <span className="chip chip-server" title="The server this tab's session is on" data-testid="tab-server">
+            {props.serverName}
+          </span>
+        )}
+        {props.roles.length > 0 && !tab.server && (
           <label className="toolbar-field" title={lockedTitle ?? "The role this tab acts with (SET ROLE)"}>
             Run as
             <select

@@ -33,6 +33,7 @@ base64 = "0.22"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+objc2 = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }
@@ -43,4 +44,4 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 junction = "2.1"
 keyring = { version = "3", features = ["windows-native"] }
-windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging", "Win32_Security_Cryptography_UI"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Security_Cryptography_UI"] }

@@ -9,6 +9,7 @@
 
 import type { Connection } from "@gizmodata/chargewire";
 
+import { spellSchemaPartSql } from "./schemaPath";
 import { exactLike } from "./sql";
 
 const ttlMs = 5 * 60_000;
@@ -48,16 +49,28 @@ export const searchLimit = 100;
 
 const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
+/**
+ * Every schema with its path spelled as Chargewire metadata spells it (schemaPath.ts):
+ * DuckDB's own catalog functions name a nested schema by its leaf alone, with its parent's oid.
+ */
+const schemaPathsSql =
+  "WITH RECURSIVE schema_paths AS (" +
+  `SELECT oid, database_name, ${spellSchemaPartSql("schema_name")} AS path FROM duckdb_schemas() WHERE parent_schema_oid IS NULL ` +
+  "UNION ALL " +
+  `SELECT c.oid, c.database_name, p.path || '.' || ${spellSchemaPartSql("c.schema_name")} FROM duckdb_schemas() c ` +
+  "JOIN schema_paths p ON c.parent_schema_oid = p.oid AND c.database_name = p.database_name)";
+
 /** Tables and views whose name contains `term` (any case), in every catalog the user may see. */
 export function searchSql(term: string): string {
   const pattern = literal(`%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
   return (
-    "SELECT database_name, schema_name, name, is_view FROM (" +
-    "SELECT database_name, schema_name, table_name AS name, false AS is_view FROM duckdb_tables() " +
+    `${schemaPathsSql} SELECT o.database_name, p.path AS schema_name, name, is_view FROM (` +
+    "SELECT database_name, schema_oid, table_name AS name, false AS is_view FROM duckdb_tables() " +
     "WHERE NOT internal AND NOT temporary " +
-    "UNION ALL SELECT database_name, schema_name, view_name, true FROM duckdb_views() " +
+    "UNION ALL SELECT database_name, schema_oid, view_name, true FROM duckdb_views() " +
     "WHERE NOT internal AND NOT temporary" +
-    `) WHERE name ILIKE ${pattern} ESCAPE '\\' ORDER BY lower(name), database_name, schema_name LIMIT ${searchLimit + 1}`
+    ") o JOIN schema_paths p ON o.schema_oid = p.oid AND o.database_name = p.database_name " +
+    `WHERE name ILIKE ${pattern} ESCAPE '\\' ORDER BY lower(name), o.database_name, p.path LIMIT ${searchLimit + 1}`
   );
 }
 
@@ -177,15 +190,15 @@ export class CatalogCache {
     return { hits: hits.slice(0, searchLimit), more: hits.length > searchLimit };
   }
 
-  /** A view's CREATE VIEW statement, as the engine keeps it. */
+  /** A view's CREATE VIEW statement, as the engine keeps it (`schema` as the listings spell it). */
   async viewDefinition(catalog: string, schema: string, view: string): Promise<string | undefined> {
     const rows = records(
       await this.#source.run((conn) =>
-        conn.query("SELECT sql FROM duckdb_views() WHERE database_name = $1 AND schema_name = $2 AND view_name = $3", [
-          catalog,
-          schema,
-          view,
-        ]),
+        conn.query(
+          `${schemaPathsSql} SELECT v.sql FROM duckdb_views() v JOIN schema_paths p ON v.schema_oid = p.oid ` +
+            "AND v.database_name = p.database_name WHERE v.database_name = $1 AND p.path = $2 AND v.view_name = $3",
+          [catalog, schema, view],
+        ),
       ),
     );
     const sql = rows[0]?.["sql"];

@@ -9,6 +9,8 @@
 #include <duckdb/function/table_macro_function.hpp>
 #include <duckdb/parser/parsed_data/create_macro_info.hpp>
 #include <duckdb/parser/parsed_data/create_table_info.hpp>
+#include <duckdb/parser/parsed_data/create_trigger_info.hpp>
+#include <duckdb/parser/parsed_data/create_type_info.hpp>
 #include <duckdb/parser/parsed_data/create_view_info.hpp>
 #include <duckdb/parser/parsed_data/drop_info.hpp>
 #include <duckdb/parser/parsed_expression_iterator.hpp>
@@ -180,6 +182,22 @@ std::optional<std::vector<std::string>> LiteralPaths(const dd::ParsedExpression*
 const dd::ParsedExpression* FirstPositional(const dd::FunctionExpression& function) {
   for (const auto& argument : function.GetArguments()) {
     if (!argument.HasName()) return &argument.GetExpression();
+  }
+  return nullptr;
+}
+
+// The argument an EXECUTE grant declared as a path: the n-th positional one (1 is the
+// first), or the named one; nullptr when the call has no such argument.
+const dd::ParsedExpression* DeclaredArgument(const dd::FunctionExpression& function, const PathArgument& declared) {
+  int position = 0;
+  for (const auto& argument : function.GetArguments()) {
+    if (argument.HasName()) {
+      if (declared.position == 0 && IdentifiersEqual(Str(argument.GetName()), declared.parameter)) {
+        return &argument.GetExpression();
+      }
+      continue;
+    }
+    if (declared.position > 0 && ++position == declared.position) return &argument.GetExpression();
   }
   return nullptr;
 }
@@ -378,7 +396,18 @@ class Walker {
       }
       if (parts.empty()) parts.push_back(name);
       parts.back() = name;  // folded, as the allowed list holds it
-      if (!table_function_allowed_(parts)) Flag("the table function " + name);
+      const auto declared = table_function_allowed_(parts);
+      if (!declared) {
+        Flag("the table function " + name);
+        return;
+      }
+      // The paths an EXECUTE grant declared, as written, before binding opens them.
+      auto& function = ref.function->Cast<dd::FunctionExpression>();
+      for (const auto& argument : *declared) {
+        if (const auto* expression = DeclaredArgument(function, argument)) {
+          Storage({name + "()", false, LiteralPaths(expression)}, name + "() (files and URLs)");
+        }
+      }
     }
   }
 
@@ -439,6 +468,20 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       if (create.info && create.info->type == dd::CatalogType::VIEW_ENTRY) {
         auto& view = create.info->Cast<dd::CreateViewInfo>();
         if (view.query && view.query->node) walker.WalkNode(*view.query->node);
+      }
+      // A trigger's body, as its creator could run it: it is bound again inside every
+      // statement that fires the trigger, so it may call only what its creator may call,
+      // as a macro's body (below). A type's enum query runs when the type is created.
+      if (create.info && create.info->type == dd::CatalogType::TRIGGER_ENTRY) {
+        auto& trigger = create.info->Cast<dd::CreateTriggerInfo>();
+        if (trigger.trigger_action) walker.WalkNode(*trigger.trigger_action);
+      }
+      if (create.info && create.info->type == dd::CatalogType::TYPE_ENTRY) {
+        auto& type = create.info->Cast<dd::CreateTypeInfo>();
+        if (type.query && type.query->type == dd::StatementType::SELECT_STATEMENT) {
+          auto& select = type.query->Cast<dd::SelectStatement>();
+          if (select.node) walker.WalkNode(*select.node);
+        }
       }
       // A macro's body, as its creator could run it: DuckDB binds the body only where
       // the macro is called, and binding a table function already reads (a CSV's
@@ -507,8 +550,16 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
           storage({name + "()", false, LiteralPaths(FirstPositional(call.function->Cast<dd::FunctionExpression>()))});
           return std::nullopt;
         }
-        if (table_function_allowed && !table_function_allowed({name})) {
-          return gate("the table function " + name);
+        if (table_function_allowed) {
+          const auto declared = table_function_allowed({name});
+          if (!declared) return gate("the table function " + name);
+          auto& function = call.function->Cast<dd::FunctionExpression>();
+          for (const auto& argument : *declared) {
+            const auto* expression = DeclaredArgument(function, argument);
+            if (!expression) continue;
+            if (!storage) return gate(name + "() (files and URLs)");
+            storage({name + "()", false, LiteralPaths(expression)});
+          }
         }
       }
       return std::nullopt;

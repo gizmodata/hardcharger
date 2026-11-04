@@ -89,5 +89,11 @@ def test_sequences_and_macros_need_their_schema_privilege(server, admin, sql, wh
 
 def test_types_stay_the_administrators(server, admin):
     mona = server.user(name="mona")
-    expect_blocked(client=mona, sql="COMMENT ON TYPE mood IS 'x'", why="commenting on this kind of object needs an administrator")
+    # A type: DROP TYPE on its schema (mona holds it on app, not main).
+    expect_blocked(client=mona, sql="COMMENT ON TYPE mood IS 'x'", why="may not comment on type")
     expect_allowed(client=admin, sql="COMMENT ON TYPE mood IS 'x'")
+    expect_allowed(client=admin, sql="GRANT DROP TYPE ON SCHEMA main TO managers")
+    try:
+        expect_allowed(client=mona, sql="COMMENT ON TYPE mood IS 'monas'")
+    finally:
+        expect_allowed(client=admin, sql="REVOKE DROP TYPE ON SCHEMA main FROM managers")

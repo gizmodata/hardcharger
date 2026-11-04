@@ -2,8 +2,11 @@
 
 mod migrate;
 mod network;
+#[cfg(target_os = "macos")]
+mod quit;
 mod server;
 mod tray;
+mod ui_sidecar;
 mod updates;
 
 use server::{Server, Settings, Status};
@@ -174,6 +177,15 @@ fn finish_sql_window_close(app: &AppHandle, label: &str) {
         if let Some(window) = owner.get_webview_window(&label) {
             let _ = window.destroy();
         }
+        // The workspace without the local server ran its own UI process: it ends with the window.
+        if label == "workspace" {
+            let state = owner.state::<Shared>().inner().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Ok(mut server) = state.lock() {
+                    server.stop_ui();
+                }
+            });
+        }
     });
 }
 
@@ -211,23 +223,62 @@ fn finish_workspace_close(app: &AppHandle) {
     });
 }
 
+/// What the workspace opens on: the local server (signed in with a token minted for it), or,
+/// with the server stopped, the UI on its own (`hardcharger ui`, ui_sidecar.rs) with the
+/// saved remote servers alone.
+struct WorkspaceTarget {
+    origin: String,
+    token: Option<serde_json::Value>,
+    remote_servers: Vec<server::RemoteServer>,
+    local: bool,
+}
+
 async fn workspace(app: AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("workspace") {
-        window.show().map_err(|e| e.to_string())?;
-        window.unminimize().map_err(|e| e.to_string())?;
-        return window.set_focus().map_err(|e| e.to_string());
-    }
     let state = app.state::<Shared>().inner().clone();
-    let (origin, token) = work(state, |server| {
-        if !server.status()?.running {
-            return Err("Start the local server to open its workspace.".into());
+    let target = work(state.clone(), |server| {
+        let remote_servers = server.settings.remote_servers.clone();
+        if server.status()?.running {
+            server.check_workspace_trust()?;
+            Ok(WorkspaceTarget {
+                origin: server.endpoint(),
+                token: Some(server.sign_in()?),
+                remote_servers,
+                local: true,
+            })
+        } else {
+            Ok(WorkspaceTarget {
+                origin: server.ui_origin()?,
+                token: None,
+                remote_servers,
+                local: false,
+            })
         }
-        server.check_workspace_trust()?;
-        Ok((server.endpoint(), server.sign_in()?))
     })
     .await?;
+    if let Some(window) = app.get_webview_window("workspace") {
+        // A workspace opened on the other target (the server started or stopped since) is
+        // closed first; one on this target is brought to the front.
+        let same = window
+            .url()
+            .map(|url| url.origin().ascii_serialization() == target.origin)
+            .unwrap_or(false);
+        if same {
+            window.show().map_err(|e| e.to_string())?;
+            window.unminimize().map_err(|e| e.to_string())?;
+            return window.set_focus().map_err(|e| e.to_string());
+        }
+        for (label, child) in app.webview_windows() {
+            if label.starts_with("query-detail-") {
+                child.destroy().map_err(|e| e.to_string())?;
+            }
+        }
+        window.destroy().map_err(|e| e.to_string())?;
+    }
+    let origin = target.origin;
     // Match the web UI's existing iOS sign-in contract, once per access token and only on
     // the precise loopback origin. No password or token appears in a URL or native event.
+    // The saved remote servers go the same way (names and URLs, never a credential), and
+    // the workspace is told which kind it is, for its own notes.
     let script = format!(
         r#"(() => {{
         window.close = () => {{
@@ -241,9 +292,11 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
         }};
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', applyTheme, {{once:true}});
         else applyTheme();
+        sessionStorage.setItem('hardcharger-ui:desktop-servers', {servers});
+        sessionStorage.setItem('hardcharger-ui:desktop-mode', {mode});
         const signIn = {token};
         const marker = 'hardcharger-desktop:handed-token';
-        if (sessionStorage.getItem(marker) !== signIn.token) {{
+        if (signIn && sessionStorage.getItem(marker) !== signIn.token) {{
             sessionStorage.setItem('hardcharger-ui:sign-in', JSON.stringify(signIn));
             sessionStorage.setItem('hardcharger-ui:user-name', signIn.username);
             sessionStorage.setItem(marker, signIn.token);
@@ -251,7 +304,19 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
     }})();"#,
         origin = serde_json::to_string(&origin).map_err(|e| e.to_string())?,
         close_path = SQL_CLOSE_PATH,
-        token = token,
+        servers = serde_json::to_string(
+            &serde_json::to_string(&target.remote_servers).map_err(|e| e.to_string())?
+        )
+        .map_err(|e| e.to_string())?,
+        mode = if target.local {
+            "\"local\""
+        } else {
+            "\"ui-only\""
+        },
+        token = target
+            .token
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "null".into()),
         palette = serde_json::to_string(include_str!("../../src/palette.css"))
             .map_err(|e| e.to_string())?
     );
@@ -344,6 +409,18 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+async fn stop_leftover(
+    window: WebviewWindow,
+    state: tauri::State<'_, Shared>,
+) -> Result<Status, String> {
+    controller(&window)?;
+    let state = state.inner().clone();
+    let status = work(state, |server| server.stop_leftover()).await?;
+    let _ = window.app_handle().emit_to("main", "server-changed", ());
+    Ok(status)
 }
 
 #[tauri::command]
@@ -566,6 +643,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             server_status,
             server_control,
+            stop_leftover,
             open_workspace,
             read_logs,
             save_settings,
@@ -595,7 +673,11 @@ fn main() {
                 .ok_or("Missing app executable directory")?
                 .join(binary_name);
             // 2.1.x kept its data under the .preview identifier: move it first (migrate.rs).
-            let directory = migrate::data_directory(app.path().app_data_dir()?);
+            // Tests point the app at a folder of their own, away from the user's data.
+            let directory = match std::env::var_os("HARDCHARGER_DESKTOP_DATA_DIR") {
+                Some(path) => std::path::PathBuf::from(path),
+                None => migrate::data_directory(app.path().app_data_dir()?),
+            };
             app.manage(updates::Updates::new(
                 &directory,
                 app.package_info().version.to_string(),
@@ -603,6 +685,10 @@ fn main() {
             let server = Server::new(binary, directory).map_err(std::io::Error::other)?;
             let start = server.settings.start_on_open;
             app.manage(Arc::new(Mutex::new(server)));
+            // The Dock's Quit, an AppleScript quit, a logout or a shutdown terminate the app
+            // through NSApplication, which never reaches RunEvent::ExitRequested (#28).
+            #[cfg(target_os = "macos")]
+            quit::install(app.handle().clone());
 
             // Created disabled: tray::show enables them for the server's state below.
             let stateful = |id: &str, label: &str, shortcut: Option<&str>| {

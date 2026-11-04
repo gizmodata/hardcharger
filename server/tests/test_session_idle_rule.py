@@ -1,8 +1,11 @@
 """The idle-session rule, exactly (README, session_idle_timeout): the Chargewire SDK sweeps
 every 5 s, and a session is evicted at the first sweep after session_idle_timeout seconds
-without a request, unless a statement of it is running, an ingest of it is in progress, a
-read of one of its results is under way, or it holds a retained result that hasn't expired
-(Chargewire §5.7). An evicted session answers 404 session_not_found.
+without a request, unless an ingest of it is in progress, a read of one of its results is
+under way, a request is waiting on a statement of it, or it holds a retained result that
+hasn't expired (Chargewire §5.7). A statement that runs with no request waiting on it does
+not keep the session (issue #26: a dead client's write kept its session, and its open
+transaction, alive for the hours the write ran); the eviction cancels it. An evicted
+session answers 404 session_not_found.
 
 Each session here is probed once, at the moment the test is about: every request is
 activity that restarts its idle clock."""
@@ -40,15 +43,33 @@ def test_a_session_without_requests_is_gone_within_one_sweep_after_its_timeout(s
     problem(response=late.http.get(url=late.url, headers=late.headers()), status=404, code="session_not_found")
 
 
-def test_a_running_statement_keeps_the_session(server):
-    session = server.admin()
-    response = session.submit(sql="SELECT sleep_ms(12000) AS slept",
-                              headers={"Prefer": "respond-async", "Chargewire-Retain-Result": "false"})
+def test_a_running_statement_keeps_the_session_only_while_a_request_waits_on_it(server):
+    # Submitted and never asked about again: the client is gone, so the statement keeps
+    # nothing, and the eviction cancels it (its session's cancel reason).
+    gone = server.admin()
+    response = gone.submit(sql="SELECT sleep_ms(30000) AS slept",
+                           headers={"Prefer": "respond-async", "Chargewire-Retain-Result": "false"})
     assert response.status_code in (200, 201, 202), response.text
-    statement_id = response.json()["statement_id"]
-    time.sleep(IDLE + SWEEP + SLACK)  # no request at all meanwhile
-    assert session.status(statement_id=statement_id)["state"] == "running"
-    assert status_of(session=session) == 200
+    gone_id = response.json()["statement_id"]
+    # Submitted, then asked about with long-polls of IDLE + 1 s each: a request is always in
+    # flight (and each one is activity), so the session stays however long the statement runs.
+    polled = server.admin()
+    response = polled.submit(sql="SELECT sleep_ms(12000) AS slept",
+                             headers={"Prefer": "respond-async", "Chargewire-Retain-Result": "false"})
+    assert response.status_code in (200, 201, 202), response.text
+    polled_id = response.json()["statement_id"]
+    started = time.monotonic()
+    doc = polled.status(statement_id=polled_id, wait=IDLE + 1)
+    while doc["state"] == "running" and time.monotonic() - started < 60:
+        doc = polled.status(statement_id=polled_id, wait=IDLE + 1)
+    assert doc["state"] == "succeeded", doc
+    assert time.monotonic() - started > IDLE + SWEEP + SLACK, "the statement must outlast the timeout and a sweep"
+    assert status_of(session=polled) == 200
+    problem(response=gone.http.get(url=gone.url, headers=gone.headers()), status=404, code="session_not_found")
+    problem(response=gone.http.get(url=f"{gone.url}/statements/{gone_id}", headers=gone.headers()), status=404,
+            code="session_not_found")
+    watcher = server.admin()
+    assert watcher.scalar(sql=f"SELECT count(*) FROM hardcharger_active_connections() WHERE session_id = '{gone.id}'") == 0
 
 
 def test_a_retained_result_keeps_the_session_until_it_expires(server):

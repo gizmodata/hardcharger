@@ -240,7 +240,7 @@ std::shared_ptr<arrow::RecordBatchReader> ListedColumnsOnly(
       arrow::ipc::DictionaryMemo memo;
       auto table_schema = arrow::ipc::ReadSchema(&reader, &memo);
       if (!table_schema.ok()) fail(table_schema.status());
-      const ObjectPath table{TextAt(*batch, 0, row), {TextAt(*batch, 1, row)}, TextAt(*batch, 2, row)};
+      const ObjectPath table{TextAt(*batch, 0, row), ParseSchemaPathText(TextAt(*batch, 1, row)), TextAt(*batch, 2, row)};
       arrow::FieldVector kept;
       for (const auto& field : (*table_schema)->fields()) {
         if (listed(table, field->name())) kept.push_back(field);
@@ -863,8 +863,16 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
   // Table functions are bound (run, in effect) before the plan check sees them: refuse
   // the ones it would refuse first. A table macro is expanded and checked as what it is.
   SessionObjectResolver functions(*dd::capiv2::Convert(connection_));
-  const TableFunctionCallback table_function_allowed = [&](const std::vector<std::string>& parts) {
-    return IsAllowedTableFunction(parts.back()) || functions.IsTableMacro(QualifiedName{parts});
+  const TableFunctionCallback table_function_allowed =
+      [&](const std::vector<std::string>& parts) -> std::optional<std::vector<PathArgument>> {
+    if (IsAllowedTableFunction(parts.back())) return std::vector<PathArgument>{};
+    // One EXECUTE is granted on: its declared path arguments are checked here as written,
+    // and again by the plan check as bound.
+    if (parts.size() == 1) {
+      if (auto declared = snapshot->TableFunctionPathArguments(principal, parts.back())) return declared;
+    }
+    if (functions.IsTableMacro(QualifiedName{parts})) return std::vector<PathArgument>{};
+    return std::nullopt;
   };
   // Files, URLs and object storage: checked by the paths the statement writes, before
   // binding reads them (and again, as bound, by the plan check).
@@ -898,9 +906,14 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
                         identity_.user_name + " does not hold it (see SHOW GRANTS)",
                     "42501");
       }
+      std::string hint;
+      if (category->starts_with("the table function ")) {
+        const std::string name = category->substr(std::string("the table function ").size());
+        hint = ", or to a role granted EXECUTE ON TABLE FUNCTION " + name;
+      }
       throw Error(ErrorCode::kPermissionDenied,
                   "Hardcharger blocked " + *category +
-                      ": under access control it is available to the administrator only",
+                      ": under access control it is available to the administrator only" + hint,
                   "42501");
     }
   }
@@ -1141,13 +1154,16 @@ std::shared_ptr<arrow::RecordBatchReader> SessionGuard::Metadata(
       return snapshot->CatalogVisible(principal, TextAt(batch, 0, row));
     });
   }
-  // The object a row names from its catalog, schema and table columns.
+  // The object a row names from its catalog, schema and table columns (the schema is
+  // written as its path: a nested schema's parts, dotted; Chargewire spec §10).
   auto object_at = [](const arrow::RecordBatch& batch, int64_t row, int first) {
-    return ObjectPath{TextAt(batch, first, row), {TextAt(batch, first + 1, row)}, TextAt(batch, first + 2, row)};
+    return ObjectPath{TextAt(batch, first, row), ParseSchemaPathText(TextAt(batch, first + 1, row)),
+                      TextAt(batch, first + 2, row)};
   };
   if (kind == Kind::kDbSchemas) {
     return FilterRows(run(filter), [&](const arrow::RecordBatch& batch, int64_t row) {
-      return snapshot->SchemaListed(principal, ObjectPath{TextAt(batch, 0, row), {TextAt(batch, 1, row)}, {}});
+      return snapshot->SchemaListed(principal,
+                                    ObjectPath{TextAt(batch, 0, row), ParseSchemaPathText(TextAt(batch, 1, row)), {}});
     });
   }
   if (kind == Kind::kTables) {

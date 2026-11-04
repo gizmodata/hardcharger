@@ -887,9 +887,10 @@ Session::~Session() {
   // walks the sessions); it must not reach the connection once the base class closes it.
   if (guard_) guard_->Detach();
   runtime_.sessions.Remove(this);
-  if (runtime_.instrumentation != nullptr) runtime_.instrumentation->SessionEnded(*this, killed_ ? "killed" : "closed");
+  const std::string reason = killed_ ? "killed" : end_reason_.empty() ? "closed" : end_reason_;
+  if (runtime_.instrumentation != nullptr) runtime_.instrumentation->SessionEnded(*this, reason);
   LogAt(runtime_.session_log_level, LogLevel::kInfo, "session closed",
-        {{"session_id", id_}, {"user", principal_.name}, {"reason", killed_ ? "killed" : "closed"}});
+        {{"session_id", id_}, {"user", principal_.name}, {"reason", reason}});
 }
 
 bool Session::StartIn(const std::string& catalog, const std::string& schema) {
@@ -1110,6 +1111,17 @@ std::optional<std::chrono::milliseconds> Session::DefaultStatementTimeout() {
   }
   return std::chrono::milliseconds(1000 * seconds.value_or(runtime_.query_timeout_seconds.load()));
 }
+
+std::optional<std::chrono::seconds> Session::IdleInTransactionTimeout() {
+  std::optional<int64_t> seconds;
+  {
+    std::lock_guard lock(settings_mutex_);
+    seconds = settings_.idle_in_transaction_session_timeout;
+  }
+  return std::chrono::seconds(seconds.value_or(runtime_.idle_in_transaction_session_timeout.load()));
+}
+
+void Session::Ending(std::string_view reason) { end_reason_ = std::string(reason); }
 
 DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   const DUCKDB_V2_STATEMENT_TYPE type = StatementType(connection(), piece.text);

@@ -7,6 +7,7 @@ import { createContext, use } from "react";
 
 import type { SignedIn } from "./lib/auth";
 import type { ConnectionOptions } from "./lib/chargewire";
+import type { AppContract, ServersStore } from "./lib/servers";
 
 export interface Identity {
   user: string;
@@ -23,6 +24,8 @@ export interface QueryRequest {
   run: boolean;
   newTab: boolean;
   title?: string;
+  /** The server the tab is bound to (a saved server's id; "" or absent: this server). */
+  server?: string;
   /** The new tab's catalog and schema (a table preview opens where the table is). */
   catalog?: string;
   schema?: string;
@@ -35,17 +38,28 @@ export interface QueryPageHandle {
   open: (request: QueryRequest) => void;
   insert: (text: string) => void;
   /** Points the active tab at a catalog (and schema); says why not when it can't. */
-  pointTabAt: (catalog: string, schema?: string) => string | undefined;
+  pointTabAt: (catalog: string, schema?: string, server?: string) => string | undefined;
 }
 
 export interface AppSession {
+  /** The UI's own sign-in; a placeholder (empty token) without a local server. */
   auth: SignedIn;
   server: DiscoveryDocument;
+  /** The UI's own session on this server; rejects everything without a local server. */
   connection: Connection;
   identity: Identity;
   isAdmin: boolean;
-  /** Opens a new connection (one per editor tab, so one tab's query never waits for another's). */
-  openConnection: (options?: ConnectionOptions) => Promise<Connection>;
+  /** What serves the UI: a Hardcharger server to sign in to, or the UI alone (`hardcharger ui`). */
+  contract: AppContract;
+  /** False in the UI without a server: no "This server", no admin pages, remotes only. */
+  localServer: boolean;
+  /** The other servers this tab knows and is signed in to, and the way to reach them. */
+  servers: ServersStore;
+  /**
+   * Opens a new connection (one per editor tab, so one tab's query never waits for
+   * another's): on this server, or on the saved server `options.server` names.
+   */
+  openConnection: (options?: ConnectionOptions & { server?: string }) => Promise<Connection>;
   /** Ends the session and goes back to the sign-in page, saying why. */
   signOut: (why?: string) => void;
   /** Checks an error for an expired or ended sign-in; returns true when it handled it. */
@@ -55,7 +69,7 @@ export interface AppSession {
   /** Inserts text into the active editor at its cursor. */
   insertText: (text: string) => void;
   /** Points the active editor tab at a catalog (and schema); says why not when it can't. */
-  pointTabAt: (catalog: string, schema?: string) => string | undefined;
+  pointTabAt: (catalog: string, schema?: string, server?: string) => string | undefined;
   /** The query page registers itself while mounted; returns the way to unregister. */
   registerQueryPage: (handle: QueryPageHandle) => () => void;
 }
@@ -74,6 +88,11 @@ export function signInLost(err: unknown): string | undefined {
   if (err.code !== ErrorCode.invalidToken && err.code !== ErrorCode.sessionEnded) return undefined;
   // The reasons of §4.2 and §5.6; an unknown one (or none) reads as an expired sign-in.
   switch (err.reason) {
+    case "idle_in_transaction":
+      // The sign-in stands: the server ended this one session for holding a transaction open
+      // with nothing running (idle_in_transaction_session_timeout) and rolled it back. The
+      // error's own detail says so, next to the statement that found the session gone.
+      return undefined;
     case "killed":
       return "An administrator ended your session. Sign in again.";
     case "credentials_changed":

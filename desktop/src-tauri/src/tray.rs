@@ -1,5 +1,6 @@
 //! The tray menu and the app's Server menu follow the server: Start only while it is stopped;
-//! Stop, Restart and Open SQL Workspace only while it runs. The tray icon carries the state
+//! Stop and Restart only while it runs. Open SQL Workspace is always there: with the server
+//! stopped it opens the workspace for remote servers alone. The tray icon carries the state
 //! too: a green dot while the server runs, a red one while it is stopped.
 //!
 //! On macOS the bull is normally a template image, which the menu bar tints in one colour, so
@@ -17,7 +18,7 @@ const STOPPED: [u8; 3] = [0xff, 0x45, 0x3a]; // the system red
 pub fn enabled(id: &str, running: bool) -> bool {
     match id {
         "start" => !running,
-        "stop" | "restart" | "workspace" => running,
+        "stop" | "restart" => running,
         _ => true,
     }
 }
@@ -167,7 +168,7 @@ mod tests {
             ("restart", true, true),
             ("restart", false, false),
             ("workspace", true, true),
-            ("workspace", false, false),
+            ("workspace", false, true),
             ("show", false, true),
             ("quit", true, true),
         ] {

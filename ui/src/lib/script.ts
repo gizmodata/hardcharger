@@ -4,7 +4,7 @@
 // `maxResultBytes` of Arrow data in all; the rest still run, and are listed without rows.
 
 import { ErrorCode, ChargewireError } from "@gizmodata/chargewire";
-import { type RecordBatch, type Schema, Table } from "apache-arrow";
+import { type Data, type RecordBatch, type Schema, Table } from "apache-arrow";
 
 export const maxResultSets = 50;
 export const maxResultBytes = 64 * 1024 * 1024;
@@ -55,10 +55,23 @@ export interface Progress {
   rows: number;
 }
 
-/** The Arrow buffers' size of a batch (what the browser holds for it). */
+/**
+ * The Arrow buffers' size of a batch (what the browser holds for it). Counted here rather
+ * than by Arrow's own Data.byteLength: the one empty batch apache-arrow makes of a result
+ * with no rows has `undefined` where a LIST column's child would be, and Arrow's count
+ * walks into it (gizmodata/hardcharger#23).
+ */
 export function batchBytes(batch: RecordBatch): number {
-  const size = (batch.data as { byteLength?: unknown }).byteLength;
-  return typeof size === "number" ? size : 0;
+  return dataBytes(batch.data);
+}
+
+function dataBytes(data: Data): number {
+  let bytes = 0;
+  for (const buffer of [data.valueOffsets, data.values, data.nullBitmap, data.typeIds] as unknown[]) {
+    if (ArrayBuffer.isView(buffer)) bytes += buffer.byteLength;
+  }
+  for (const child of data.children) if (child) bytes += dataBytes(child);
+  return bytes;
 }
 
 export async function runScript(options: {

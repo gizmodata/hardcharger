@@ -11,10 +11,8 @@ import {
   Sun,
   Users,
 } from "lucide-react";
-import { Suspense, lazy, useMemo, useState } from "react";
+import { Suspense, lazy, useState } from "react";
 
-import { useActiveTab } from "../lib/activeTab";
-import { listingsFor } from "../lib/catalogs";
 import { useStoredSize } from "../lib/storedSize";
 import type { Page } from "../lib/route";
 import { loadModule } from "../lib/stale";
@@ -99,9 +97,7 @@ export function Layout({ theme, page, go }: Props) {
       // not remembered
     }
   };
-  // The schema browser lists what the active editor tab's role may see.
-  const active = useActiveTab();
-  const listings = useMemo(() => listingsFor(session, active.role), [session, active.role]);
+  const local = session.localServer;
 
   const nav = (target: Page, label: string, icon: React.ReactNode, disabled = false) => (
     <button
@@ -138,8 +134,8 @@ export function Layout({ theme, page, go }: Props) {
           </a>
           <nav className="header-nav" aria-label="Pages">
             {nav("query", "Query", <Database size={15} />)}
-            {nav("sessions", "Sessions", <Users size={15} />)}
-            {session.isAdmin && session.identity.fullAdmin !== false && (
+            {local && nav("sessions", "Sessions", <Users size={15} />)}
+            {local && session.isAdmin && session.identity.fullAdmin !== false && (
               <>
                 {nav(
                   "monitor",
@@ -150,17 +146,31 @@ export function Layout({ theme, page, go }: Props) {
                 {nav("configuration", "Server Configuration", <Settings size={15} />)}
               </>
             )}
-            {nav("api", "API", <Braces size={15} />)}
+            {local && nav("api", "API", <Braces size={15} />)}
           </nav>
         </div>
         <div className="header-right">
-          <span className="chip" title="Server version" data-testid="header-version">
+          <span
+            className="chip"
+            title={local ? "Server version" : "Hardcharger UI version (no server behind it)"}
+            data-testid="header-version"
+          >
             {session.identity.version}
           </span>
-          <span className="chip chip-user" title="Signed in as" data-testid="header-user">
-            {session.identity.user}
-            <span className="chip-role">{session.identity.role}</span>
-          </span>
+          {local ? (
+            <span className="chip chip-user" title="Signed in as" data-testid="header-user">
+              {session.identity.user}
+              <span className="chip-role">{session.identity.role}</span>
+            </span>
+          ) : (
+            <span
+              className="chip chip-user"
+              title="This UI has no server of its own: add servers in the schema browser"
+              data-testid="header-no-server"
+            >
+              No local server
+            </span>
+          )}
           <button
             type="button"
             className="btn btn-ghost btn-icon"
@@ -179,15 +189,17 @@ export function Layout({ theme, page, go }: Props) {
           >
             <Info size={16} />
           </button>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => session.signOut()}
-            title="Sign out"
-            aria-label="Sign out"
-          >
-            <LogOut size={15} /> <span className="nav-label">Sign out</span>
-          </button>
+          {local && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => session.signOut()}
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <LogOut size={15} /> <span className="nav-label">Sign out</span>
+            </button>
+          )}
         </div>
       </header>
       <div className="app-body">
@@ -217,7 +229,7 @@ export function Layout({ theme, page, go }: Props) {
                 <SavedQueriesPanel />
               </div>
               <div className="panel-body" hidden={panelTab !== "data"}>
-                <DataExplorer cache={listings} />
+                <DataExplorer />
               </div>
               <footer className="sidebar-foot">
                 <ByGizmoData />
@@ -246,7 +258,7 @@ export function Layout({ theme, page, go }: Props) {
               </ErrorBoundary>
             </div>
           )}
-          {page === "sessions" && (
+          {page === "sessions" && local && (
             <div className="page">
               <ErrorBoundary scope="page" resetKey="sessions">
                 <Suspense fallback={<div className="page-loading">Loading…</div>}>
@@ -255,7 +267,7 @@ export function Layout({ theme, page, go }: Props) {
               </ErrorBoundary>
             </div>
           )}
-          {visitedApi && (
+          {visitedApi && local && (
             <div className="page" hidden={page !== "api"}>
               <ErrorBoundary scope="page" resetKey="api">
                 <Suspense fallback={<div className="page-loading">Loading…</div>}>
@@ -264,7 +276,7 @@ export function Layout({ theme, page, go }: Props) {
               </ErrorBoundary>
             </div>
           )}
-          {(page === "monitor" || page === "configuration") && (
+          {(page === "monitor" || page === "configuration") && local && (
             <div className="page">
               <ErrorBoundary scope="page" resetKey={page}>
                 <Suspense fallback={<p className="loading-line">Loading…</p>}>
@@ -273,7 +285,7 @@ export function Layout({ theme, page, go }: Props) {
               </ErrorBoundary>
             </div>
           )}
-          {page === "not-found" && (
+          {(page === "not-found" || (!local && page !== "query")) && (
             <div className="page error-page error-page-page">
               <h2>No such page</h2>
               <button type="button" className="btn btn-primary" onClick={() => go("query")}>

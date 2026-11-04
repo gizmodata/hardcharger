@@ -50,10 +50,20 @@ export class TransactionLostError extends Error {
 }
 
 export function isSessionGone(err: unknown): boolean {
-  return ChargewireError.is(err) && err.code === ErrorCode.sessionNotFound;
+  return (
+    ChargewireError.is(err) &&
+    (err.code === ErrorCode.sessionNotFound ||
+      (err.code === ErrorCode.sessionEnded && err.reason === "idle_in_transaction"))
+  );
 }
 
-const goneReason = "it was idle too long, or the server restarted";
+/** Why the session went, for the notes: the server's reason when it gave one. */
+function goneReasonOf(err: unknown): string {
+  if (ChargewireError.is(err) && err.code === ErrorCode.sessionEnded && err.reason === "idle_in_transaction") {
+    return "the server ended it: its transaction sat idle past the server's idle_in_transaction_session_timeout";
+  }
+  return "it was idle too long, or the server restarted";
+}
 
 export class TabSession {
   readonly #open: Opener;
@@ -115,6 +125,7 @@ export class TabSession {
       return await work(conn);
     } catch (err) {
       if (!isSessionGone(err)) throw err;
+      const goneReason = goneReasonOf(err);
       this.#lost();
       if (this.#info && this.#info.transaction !== "none") {
         this.#info = undefined;

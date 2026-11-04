@@ -6,7 +6,7 @@ import type { Page } from "@playwright/test";
 import { activeTab, editorFocused, expect, expectProblem, gridRows, runDone, signIn, test } from "./fixtures.ts";
 
 const runAs = (page: Page) => activeTab(page).getByLabel("Run as");
-const tree = (page: Page) => page.getByRole("tree", { name: "Catalogs" });
+const tree = (page: Page) => page.getByRole("tree", { name: "Servers" });
 
 test("a user runs as one of their roles, or all of them", async ({ page, harness }) => {
   await signIn(page, harness.user);

@@ -18,6 +18,9 @@ describe("signInLost", () => {
     expect(signInLost(ended("token_revoked"))).toBe("Your sign-in was revoked. Sign in again.");
     // An unknown reason is a generic one (Chargewire §12).
     expect(signInLost(ended("some_later_reason"))).toBe("Your sign-in has expired. Sign in again.");
+    // A session the server ended for idling in a transaction (§5.7) is not a lost sign-in:
+    // the statement that found it gone shows the server's detail, and the app stays signed in.
+    expect(signInLost(ended("idle_in_transaction"))).toBeUndefined();
   });
 
   it("says why a token stopped working, from invalid_token's reason (Chargewire §4.2)", () => {

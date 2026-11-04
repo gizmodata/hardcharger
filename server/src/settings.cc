@@ -126,6 +126,31 @@ std::vector<Setting> Build() {
                .set_global = [](Runtime& r, const O& v) {
                  r.query_timeout_seconds = v ? ParseSetInt(v, "query_timeout") : r.config.query_timeout_seconds;
                }});
+  s.push_back({.name = "idle_in_transaction_session_timeout",
+               .scope = SettingScope::kSessionOrGlobal,
+               .input_type = "INTEGER",
+               .option = "idle_in_transaction_session_timeout",
+               .default_value = number(kDefaults.idle_in_transaction_session_timeout),
+               .description = "Seconds a session may hold a transaction open with nothing running and no "
+                              "request before it is ended and the transaction rolled back (0: never), as "
+                              "PostgreSQL's setting of the same name. SESSION sets this session's; GLOBAL "
+                              "every session that hasn't set its own.",
+               .get_session = [](const Session& x) -> O {
+                 auto v = x.settings().idle_in_transaction_session_timeout;
+                 return v ? O(std::to_string(*v)) : std::nullopt;
+               },
+               .get_global = [](const Runtime& r) -> O {
+                 return std::to_string(r.idle_in_transaction_session_timeout.load());
+               },
+               .set_session = [](Session& x, const O& v) {
+                 std::optional<int64_t> value;
+                 if (v) value = ParseSetInt(v, "idle_in_transaction_session_timeout");
+                 x.UpdateSettings([&](Session::Settings& s) { s.idle_in_transaction_session_timeout = value; });
+               },
+               .set_global = [](Runtime& r, const O& v) {
+                 r.idle_in_transaction_session_timeout = v ? ParseSetInt(v, "idle_in_transaction_session_timeout")
+                                                           : r.config.idle_in_transaction_session_timeout;
+               }});
   s.push_back({.name = "query_log_level",
                .scope = SettingScope::kSessionOrGlobal,
                .input_type = "VARCHAR",

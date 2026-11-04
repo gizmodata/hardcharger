@@ -45,6 +45,15 @@ std::string ScopeLabel(GrantScope scope) {
 
 bool SamePath(const ObjectPath& a, const ObjectPath& b) { return ObjectKey(a) == ObjectKey(b); }
 
+// "argument 2", "parameter files": an EXECUTE grant's stored path declarations, for people.
+std::vector<std::string> PathArgumentTexts(const std::vector<std::string>& stored) {
+  std::vector<std::string> texts;
+  for (const auto& s : stored) {
+    if (auto argument = PathArgument::FromStored(s)) texts.push_back(argument->Text());
+  }
+  return texts;
+}
+
 // The privileges one GRANT or REVOKE names, one record each (ALL: every privilege that
 // applies at the scope).
 std::vector<Privilege> Expand(Privilege p, GrantScope scope) {
@@ -383,25 +392,30 @@ arrow::Status RbacEngine::RecordOwner(const ObjectPath& object, ObjectType type,
   record.owner_kind = owner.superuser ? OwnerKind::kSystem : OwnerKind::kUser;
   record.owner_id = owner.superuser ? "" : owner.user_id;
   record.definition_hash = definition_hash;
-  return WriteOwner(object, &record);
+  return WriteOwner(object, type, &record);
 }
 
-arrow::Status RbacEngine::PutOwner(const OwnerRecord& record) { return WriteOwner(record.object, &record); }
-
-arrow::Status RbacEngine::ForgetOwner(const ObjectPath& object) {
-  if (!snapshot()->FindOwner(object)) return arrow::Status::OK();
-  return WriteOwner(object, nullptr);
+arrow::Status RbacEngine::PutOwner(const OwnerRecord& record) {
+  return WriteOwner(record.object, record.type, &record);
 }
 
-arrow::Status RbacEngine::WriteOwner(const ObjectPath& object, const OwnerRecord* record) {
+arrow::Status RbacEngine::ForgetOwner(const ObjectPath& object, ObjectType type) {
+  const auto current = snapshot();
+  if (!(type == ObjectType::kTrigger ? current->FindTriggerOwner(object) : current->FindOwner(object))) {
+    return arrow::Status::OK();
+  }
+  return WriteOwner(object, type, nullptr);
+}
+
+arrow::Status RbacEngine::WriteOwner(const ObjectPath& object, ObjectType type, const OwnerRecord* record) {
   ARROW_ASSIGN_OR_RAISE(auto version, store_->Write([&](StoreTransaction& txn) {
-    return record ? txn.UpsertOwner(*record) : txn.DeleteOwner(object);
+    return record ? txn.UpsertOwner(*record) : txn.DeleteOwner(object, type);
   }));
   auto current = snapshot();
   if (current->version() >= version) return arrow::Status::OK();  // a reload already has it
   if (current->version() == version - 1) {
     // Nothing else changed in between: the store now holds exactly this.
-    Publish(current->WithOwner(version, object, record));
+    Publish(current->WithOwner(version, object, type, record));
     return arrow::Status::OK();
   }
   ARROW_ASSIGN_OR_RAISE(auto fresh, store_->Load());
@@ -667,13 +681,19 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       const auto* role = snap->FindRoleById(role_id);
       for (const auto& g : snap->grants()) {
         if (g.role_id != role_id) continue;
-        // USAGE on one object is granted ON SEQUENCE (and no other object takes it).
-        const std::string label = g.scope == GrantScope::kObject && g.privilege == Privilege::kUsage
-                                      ? "SEQUENCE"
-                                      : ScopeLabel(g.scope);
-        result.rows.push_back({PrivilegeName(g.privilege), label, g.target.ToString(),
-                               Join(g.columns), role ? role->name : role_id, "ROLE",
-                               g.grant_option ? "YES" : "NO", grantor_name(g.granted_by)});
+        // USAGE on one object is granted ON SEQUENCE (and no other object takes it); EXECUTE
+        // on a table function, whose "columns" are the path arguments it declared.
+        const std::string label = g.scope == GrantScope::kObject && g.privilege == Privilege::kUsage ? "SEQUENCE"
+                                  : g.privilege == Privilege::kExecute                             ? "TABLE FUNCTION"
+                                                                                                   : ScopeLabel(g.scope);
+        std::vector<std::string> columns = g.columns;
+        if (g.privilege == Privilege::kExecute) {
+          columns.clear();
+          for (const auto& text : PathArgumentTexts(g.columns)) columns.push_back("path " + text);
+        }
+        result.rows.push_back({PrivilegeName(g.privilege), label, g.target.ToString(), Join(columns),
+                               role ? role->name : role_id, "ROLE", g.grant_option ? "YES" : "NO",
+                               grantor_name(g.granted_by)});
       }
     }
     for (const auto& role_id : role_ids) {
@@ -688,9 +708,10 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
     for (const auto& o : snap->owners()) {
       if (show->principal ? false : snap->IsOwner(actor, o)) {
         result.rows.push_back({"OWNERSHIP",
-                               o.type == ObjectType::kView     ? "VIEW"
-                               : o.type == ObjectType::kSchema ? "SCHEMA"
-                                                               : "TABLE",
+                               o.type == ObjectType::kView      ? "VIEW"
+                               : o.type == ObjectType::kSchema  ? "SCHEMA"
+                               : o.type == ObjectType::kTrigger ? "TRIGGER"
+                                                                : "TABLE",
                                o.object.ToString(), "", actor.user_name, "USER", "YES", ""});
       }
     }
@@ -1002,6 +1023,10 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
           ARROW_ASSIGN_OR_RAISE(target, resolver.ResolveSequence(c->target));
           break;
         }
+        if (c->table_function) {
+          ARROW_ASSIGN_OR_RAISE(target, resolver.ResolveTableFunction(c->target, c->grant));
+          break;
+        }
         ARROW_ASSIGN_OR_RAISE(auto obj, resolver.ResolveObject(c->target));
         target = obj.path;
         table_columns = obj.columns;
@@ -1039,8 +1064,10 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                   "role, then GRANT the role TO USER " +
                   grantee.name);
             }
+            // A table function is in no catalog: a tenant's role may hold EXECUTE on it (what the
+            // function reads is still the role's storage privileges' business).
             const std::string role_tenant = snap.TenantOf(PrincipalKind::kRole, grantee.id);
-            if (!role_tenant.empty() && snap.TenantOfCatalog(target.catalog) != role_tenant) {
+            if (!role_tenant.empty() && !target.IsTableFunction() && snap.TenantOfCatalog(target.catalog) != role_tenant) {
               return AccessControlError("role " + grantee.name + " belongs to " +
                                         TenantName(snap, role_tenant) +
                                         "; it can hold privileges "
@@ -1050,11 +1077,18 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
           }
           for (const auto& item : c->privileges) {
             for (Privilege p : Expand(item.privilege, c->scope)) {
-              const auto columns =
-                  p == Privilege::kSelect ? item.columns : std::vector<std::string>{};
-              const std::string what = PrivilegeName(p) +
-                                       (columns.empty() ? "" : " (" + Join(columns) + ")") +
-                                       " on " + target.ToString();
+              // EXECUTE keeps its path declarations where SELECT keeps its columns.
+              std::vector<std::string> columns;
+              if (p == Privilege::kSelect) columns = item.columns;
+              if (p == Privilege::kExecute) {
+                for (const auto& argument : c->path_arguments) columns.push_back(argument.Stored());
+              }
+              const std::string what =
+                  p == Privilege::kExecute
+                      ? "EXECUTE on table function " + target.object_name +
+                            (columns.empty() ? "" : " (path " + Join(PathArgumentTexts(columns)) + ")")
+                      : PrivilegeName(p) + (columns.empty() ? "" : " (" + Join(columns) + ")") + " on " +
+                            target.ToString();
               if (c->grant && !snap.CanGrant(actor, c->scope, target, p, columns)) {
                 return AccessControlError(
                     "Hardcharger blocked GRANT: user " + actor.user_name + " may not grant " +
@@ -1079,7 +1113,13 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                       updated.grant_option = true;
                       changed = true;
                     }
-                    if (!own->columns.empty() && columns.empty()) {
+                    if (p == Privilege::kExecute) {
+                      // The latest GRANT's declaration of the path arguments stands.
+                      if (own->columns != columns) {
+                        updated.columns = columns;
+                        changed = true;
+                      }
+                    } else if (!own->columns.empty() && columns.empty()) {
                       updated.columns.clear();  // widen a column grant to the whole table
                       changed = true;
                     } else if (!own->columns.empty()) {
@@ -1374,8 +1414,10 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                           Privilege::kDelete, Privilege::kCreateTable, Privilege::kCreateView,
                           Privilege::kCreateSchema, Privilege::kDropTable, Privilege::kDropView,
                           Privilege::kDropSchema, Privilege::kAlterTable, Privilege::kAlterView,
-                          Privilege::kCreateMacro, Privilege::kDropMacro, Privilege::kUsage,
-                          Privilege::kCreateSequence, Privilege::kDropSequence, Privilege::kMaintain}) {
+                          Privilege::kCreateMacro, Privilege::kDropMacro, Privilege::kCreateType,
+                          Privilege::kDropType, Privilege::kCreateTrigger, Privilege::kDropTrigger,
+                          Privilege::kUsage, Privilege::kCreateSequence, Privilege::kDropSequence,
+                          Privilege::kMaintain}) {
         bool have = false;
         for (const auto& g : snap.grants()) {
           have = have ||

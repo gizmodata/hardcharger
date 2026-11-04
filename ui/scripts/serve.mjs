@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Serves the built UI (dist/) at /ui/ the way hardcharger-server does (scripts/ui-contract.mjs)
-// and passes /chargewire/… through to a Chargewire server, so the page and the protocol share one
-// origin, as in production. The e2e tests run against it; it also works by hand:
+// and passes /chargewire/… (and the UI's own /ui/v1/… endpoints: its contract and the relay to
+// other servers) through to a Chargewire server, so the page and the protocol share one origin,
+// as in production. The e2e tests run against it; it also works by hand:
 //
 //   node scripts/serve.mjs --upstream http://127.0.0.1:31337 [--port 5180] [--dist dist]
 
@@ -25,7 +26,11 @@ export function createUiServer({ dist, upstream }) {
 
   return http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://placeholder");
-    if (url.pathname === "/chargewire" || url.pathname.startsWith("/chargewire/")) {
+    if (
+      url.pathname === "/chargewire" ||
+      url.pathname.startsWith("/chargewire/") ||
+      url.pathname.startsWith("/ui/v1/")
+    ) {
       const upstreamReq = http.request(
         {
           host: target.hostname,

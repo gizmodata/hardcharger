@@ -162,7 +162,11 @@ struct SystemPrivilegeRecord {
 
 // kSchema: the object is the schema itself (catalog + schema path, no name).
 // kSequence is asked of (USAGE), never recorded: sequences have no owner records.
-enum class ObjectType { kTable, kView, kSchema, kSequence };
+// kTableFunction is asked of (EXECUTE) and never recorded either: a table function is
+// the engine's, in no catalog (ObjectPath::IsTableFunction). kTrigger is recorded (a user's
+// trigger body runs with its owner's rights) in a key space of its own: a trigger may be
+// named like a table of its schema.
+enum class ObjectType { kTable, kView, kSchema, kSequence, kTableFunction, kTrigger };
 
 enum class OwnerKind { kSystem, kUser, kRole };
 
@@ -278,9 +282,10 @@ class Snapshot {
 
   int64_t version() const { return version_; }
 
-  // This snapshot as `version`, with `object`'s owner record replaced by `owner` (nullptr:
-  // removed): what the store holds after one owner change committed on top of this one.
-  std::shared_ptr<const Snapshot> WithOwner(int64_t version, const ObjectPath& object,
+  // This snapshot as `version`, with the owner record of `object` (of `type`) replaced by
+  // `owner` (nullptr: removed): what the store holds after one owner change committed on
+  // top of this one.
+  std::shared_ptr<const Snapshot> WithOwner(int64_t version, const ObjectPath& object, ObjectType type,
                                             const OwnerRecord* owner) const;
 
   const UserRecord* FindUserByName(const std::string& name) const;
@@ -360,7 +365,10 @@ class Snapshot {
   // Would granting `role_id` to role `member_role_id` create a cycle?
   bool WouldCreateCycle(const std::string& role_id, const std::string& member_role_id) const;
 
+  // The owner record of a table, view or schema at `object` (never a trigger's).
   const OwnerRecord* FindOwner(const ObjectPath& object) const;
+  // The owner record of the trigger at `object` (catalog, schema path, trigger name).
+  const OwnerRecord* FindTriggerOwner(const ObjectPath& object) const;
 
   // The question every statement asks. Superusers are always allowed.
   AccessDecision Check(const Principal& principal, const AccessRequest& request) const;
@@ -374,6 +382,12 @@ class Snapshot {
   bool ObjectListed(const Principal& principal, const ObjectPath& object) const;
   // A sequence: listed to whoever may use it (USAGE) or drop it (DROP SEQUENCE on its schema).
   bool SequenceListed(const Principal& principal, const ObjectPath& sequence) const;
+  // The path arguments declared by the EXECUTE grants the principal's roles hold on the
+  // table function `name` (every one of them, whichever grant declared it); nullopt when
+  // none of its roles holds EXECUTE on it. A scoped token holds none, as with system
+  // privileges; the administrator holds every function with nothing declared.
+  std::optional<std::vector<PathArgument>> TableFunctionPathArguments(const Principal& principal,
+                                                                      const std::string& name) const;
   // A column, when the principal may SELECT it, or holds INSERT, UPDATE or DELETE on its table.
   bool ColumnListed(const Principal& principal, const ObjectPath& table, const std::string& column) const;
   // A schema, when the principal holds a grant on it, on a schema it is in or holds, or on
@@ -449,5 +463,9 @@ class Snapshot {
 
 // Case-folded key for an object path, used for owner lookup and dedupe.
 std::string ObjectKey(const ObjectPath& path);
+
+// The key an owner record is stored and found under: ObjectKey for a table, view or
+// schema; a trigger's lives in a key space of its own.
+std::string OwnerKey(ObjectType type, const ObjectPath& path);
 
 }  // namespace hardcharger::authz

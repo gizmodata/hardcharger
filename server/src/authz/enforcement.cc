@@ -38,6 +38,12 @@
 #include <duckdb/planner/operator/logical_create.hpp>
 #include <duckdb/planner/operator/logical_create_index.hpp>
 #include <duckdb/planner/operator/logical_create_table.hpp>
+#include <duckdb/parser/parsed_data/create_trigger_info.hpp>
+#include <duckdb/parser/parsed_data/create_type_info.hpp>
+#include <duckdb/parser/parsed_data/extra_drop_info.hpp>
+#include <duckdb/parser/tableref/basetableref.hpp>
+#include <duckdb/planner/operator/logical_materialized_cte.hpp>
+#include <duckdb/planner/operator/logical_trigger.hpp>
 #include <duckdb/planner/operator/logical_delete.hpp>
 #include <duckdb/planner/operator/logical_drop.hpp>
 #include <duckdb/planner/operator/logical_get.hpp>
@@ -60,6 +66,7 @@
 #include "authz/policies.hpp"
 #include "authz/resolver.hpp"
 #include "authz/storage_access.hpp"
+#include "authz/triggers.hpp"
 #include "authz/views.hpp"
 
 namespace hardcharger::authz {
@@ -78,7 +85,7 @@ const std::unordered_set<std::string>& AllowedTableFunctions() {
       "test_all_types", "sql_auto_complete", "duckdb_tables", "duckdb_columns", "duckdb_views",
       "duckdb_schemas", "duckdb_databases", "duckdb_indexes", "duckdb_constraints",
       "duckdb_functions", "duckdb_types", "duckdb_keywords", "duckdb_settings", "duckdb_sequences",
-      "duckdb_dependencies", "duckdb_extensions", "duckdb_optimizers", "pragma_table_info",
+      "duckdb_dependencies", "duckdb_extensions", "duckdb_optimizers", "duckdb_triggers", "pragma_table_info",
       "pragma_show", "pragma_version", "pragma_platform", "pragma_database_size",
       "pragma_collations", "pragma_user_agent",
       // Bulk ingest reads the caller's own
@@ -100,6 +107,20 @@ const std::unordered_set<std::string>& AllowedTableFunctions() {
   return kNames;
 }
 
+// Table functions no grant opens to users: they run SQL of their own (the gate refuses
+// them by name), read arbitrary memory, change the engine, or show other sessions' data.
+const std::unordered_set<std::string>& AdministratorOnlyTableFunctions() {
+  static const std::unordered_set<std::string> kNames = {
+      "query", "query_table", "json_execute_serialized_sql", "arrow_scan", "arrow_scan_dumb", "seq_scan",
+      "checkpoint", "force_checkpoint", "duckdb_secrets", "which_secret", "duckdb_logs", "truncate_duckdb_logs",
+      "enable_logging", "disable_logging", "enable_profiling", "disable_profiling", "duckdb_prepared_statements",
+      "duckdb_temporary_files", "duckdb_memory", "duckdb_external_file_cache", "duckdb_external_resources",
+      "duckdb_external_resource_types", "register_external_resource", "register_external_resource_type",
+      "deregister_external_resource", "create_external_resource", "destroy_external_resource",
+      "pragma_storage_info", "pragma_metadata_info", "duckdb_table_sample", "dbgen", "dsdgen"};
+  return kNames;
+}
+
 // Session settings an access-controlled user may not change: turning the
 // optimizer (and with it the plan check) off, or switching the SQL grammar.
 const std::unordered_set<std::string>& BlockedSettings() {
@@ -115,6 +136,28 @@ std::string Lower(std::string s) {
 }
 
 bool IsTempCatalog(const std::string& catalog) { return IdentifiersEqual(catalog, TEMP_CATALOG); }
+
+}  // namespace
+
+std::optional<std::string> UngrantableTableFunction(const std::string& name_lower) {
+  if (AllowedTableFunctions().count(name_lower)) {
+    return "table function " + name_lower + " needs no grant: every user may call it";
+  }
+  if (ddb::IsFileReadingTableFunction(name_lower)) {
+    return "table function " + name_lower +
+           " reads files: the storage privileges decide who may call it (READ FILESYSTEM, READ OBJECT STORAGE, "
+           "READ HTTP, or ON LOCATION), not EXECUTE";
+  }
+  if (name_lower.starts_with("hardcharger_") || name_lower.starts_with("chargewire_") ||
+      AdministratorOnlyTableFunctions().count(name_lower)) {
+    return "table function " + name_lower +
+           " stays the administrator's: it runs SQL of its own, reaches memory or the engine's internals, or "
+           "shows other sessions' data";
+  }
+  return std::nullopt;
+}
+
+namespace {
 
 std::string TableFunctionName(const dd::LogicalGet& get) {
   return compat::Str(get.function.GetName());
@@ -177,6 +220,17 @@ dd::optional_ptr<dd::CatalogEntry> LookUp(dd::ClientContext& context, dd::Catalo
   }
 }
 
+// A table's trigger by name: triggers hang off their tables, not their schema's sets.
+dd::optional_ptr<dd::CatalogEntry> LookUpTrigger(dd::ClientContext& context, dd::TableCatalogEntry& table,
+                                                 const std::string& name) {
+  try {
+    auto txn = table.ParentCatalog().GetCatalogTransaction(context);
+    return table.GetTrigger(txn, dd::Identifier(name));
+  } catch (...) {
+    return nullptr;
+  }
+}
+
 bool IsSequenceFunction(const std::string& name_lower) {
   return name_lower == "nextval" || name_lower == "currval" || name_lower == "setval";
 }
@@ -226,8 +280,11 @@ bool IsPlainScanOf(dd::LogicalOperator& op, dd::TableCatalogEntry& table) {
 ObjectType ObjectTypeOf(const dd::CatalogEntry& entry) {
   if (entry.type == dd::CatalogType::VIEW_ENTRY) return ObjectType::kView;
   if (entry.type == dd::CatalogType::SCHEMA_ENTRY) return ObjectType::kSchema;
+  if (entry.type == dd::CatalogType::TRIGGER_ENTRY) return ObjectType::kTrigger;
   return ObjectType::kTable;
 }
+
+const TriggerBodies kNoTriggerBodies;
 
 std::string TypeWord(ObjectType type) {
   switch (type) {
@@ -239,6 +296,10 @@ std::string TypeWord(ObjectType type) {
       return "table";
     case ObjectType::kSequence:
       return "sequence";
+    case ObjectType::kTrigger:
+      return "trigger";
+    case ObjectType::kTableFunction:
+      return "table function";
   }
   return "object";
 }
@@ -323,15 +384,31 @@ class PlanChecker {
   using ViewColumns = std::unordered_map<const ViewMarker*, std::vector<std::string>>;
 
   PlanChecker(dd::ClientContext& context, const Snapshot& snapshot, const Principal& principal,
-              const ViewColumns& view_columns)
+              const ViewColumns& view_columns, const TriggerBodies& trigger_bodies)
       : context_(context),
         snapshot_(snapshot),
         principal_(principal),
         view_columns_(view_columns),
+        trigger_bodies_(trigger_bodies),
         rights_{Rights{principal, ""}} {}
+
+  // Checking a trigger's body with its owner's rights: prefixed to every refusal.
+  std::string trigger_context_;
+  // Set by CheckAsDefiner for the one Visit of the body's root, so the root is checked
+  // here rather than handed to yet another checker.
+  bool trigger_body_entered_ = false;
 
   void Visit(dd::LogicalOperator& op,
              dd::optional_ptr<dd::TableCatalogEntry> dml_target = nullptr) {
+    // A trigger's body, bound into the statement that fires it (triggers.hpp): checked with
+    // its owner's rights when a user owns the trigger, refused outright when its owner is
+    // gone or the trigger can't be told, else with the writer's, as DuckDB runs it.
+    if (const TriggerBody* body = TriggerBodyAt(trigger_bodies_, op); body && !body->base) {
+      if (!body->problem.empty()) Deny(principal_, body->problem);
+      if (body->definer && !trigger_body_entered_) return CheckAsDefiner(*body, op);
+      dml_target = nullptr;
+    }
+    trigger_body_entered_ = false;
     // A table's own column defaults (id DEFAULT nextval('s')) are part of writing it:
     // INSERT (or UPDATE ... SET id = DEFAULT, MERGE) on the table covers the sequences
     // they advance, also where DuckDB copies a default into the plan (VALUES (DEFAULT)).
@@ -359,21 +436,23 @@ class PlanChecker {
       case OpType::LOGICAL_INSERT: {
         auto& insert = op.Cast<dd::LogicalInsert>();
         Require(insert.table, Privilege::kInsert, {});
-        if (insert.return_chunk) RequireAllColumns(insert.table);
+        // RETURNING hands rows back: SELECT on every column (not for the RETURNING * the
+        // binder adds under a trigger for the transition tables, which the writer never sees).
+        if (insert.return_chunk && !ReturningAddedForTriggers(trigger_bodies_, op)) RequireAllColumns(insert.table);
         VisitChildren(op, nullptr);
         return;
       }
       case OpType::LOGICAL_UPDATE: {
         auto& update = op.Cast<dd::LogicalUpdate>();
         Require(update.table, Privilege::kUpdate, {});
-        if (update.return_chunk) RequireAllColumns(update.table);
+        if (update.return_chunk && !ReturningAddedForTriggers(trigger_bodies_, op)) RequireAllColumns(update.table);
         VisitChildren(op, &update.table);
         return;
       }
       case OpType::LOGICAL_DELETE: {
         auto& del = op.Cast<dd::LogicalDelete>();
         Require(del.table, Privilege::kDelete, {});
-        if (del.return_chunk) RequireAllColumns(del.table);
+        if (del.return_chunk && !ReturningAddedForTriggers(trigger_bodies_, op)) RequireAllColumns(del.table);
         VisitChildren(op, &del.table);
         return;
       }
@@ -436,17 +515,14 @@ class PlanChecker {
       case OpType::LOGICAL_CREATE_MACRO:
         CheckCreateMacro(*op.Cast<dd::LogicalCreate>().info);
         return;
-      // Not even temporary ones: a session's type is found before the catalog's, also
-      // inside a view, and would change what the view computes.
-      case OpType::LOGICAL_CREATE_TYPE: {
-        // Never for a non-administrator, temporary ones included: a type's body runs
-        // unchecked when it is used (a column of the type), so it would be a way around
-        // the plan check. PIVOT without an IN list is the one exception: it creates its
-        // own temporary enum, which reads nothing.
-        auto& create = op.Cast<dd::LogicalCreate>();
-        if (create.info->temporary && PartsOf(*create.info).back().rfind("__pivot_enum_", 0) == 0) return;
-        Deny(principal_, "creating types needs an administrator");
-      }
+      // CREATE TYPE in a schema: the CREATE TYPE privilege (and TypeNameRefusal).
+      case OpType::LOGICAL_CREATE_TYPE:
+        CheckCreateType(op);
+        return;
+      // CREATE TRIGGER on a table the user owns: the CREATE TRIGGER privilege (triggers.hpp).
+      case OpType::LOGICAL_CREATE_TRIGGER:
+        CheckCreateTrigger(op.Cast<dd::LogicalCreate>());
+        return;
       case OpType::LOGICAL_DROP:
         CheckDrop(op);
         return;
@@ -601,7 +677,6 @@ class PlanChecker {
       case OpType::LOGICAL_EXCEPT:
       case OpType::LOGICAL_INTERSECT:
       case OpType::LOGICAL_RECURSIVE_CTE:
-      case OpType::LOGICAL_MATERIALIZED_CTE:
       case OpType::LOGICAL_EXPLAIN:
       // A prepared statement's plan, and the re-planned statement an EXECUTE
       // carries after a rebind (without one, the check made when it was
@@ -609,6 +684,10 @@ class PlanChecker {
       case OpType::LOGICAL_PREPARE:
       case OpType::LOGICAL_EXECUTE:
       case OpType::LOGICAL_SECURE_VIEW:
+        VisitChildren(op, dml_target);
+        return;
+
+      case OpType::LOGICAL_MATERIALIZED_CTE:
       case OpType::LOGICAL_TRIGGER:
         VisitChildren(op, dml_target);
         return;
@@ -724,9 +803,41 @@ class PlanChecker {
       }
       // Only the ones that read no table and no file, the administrator with
       // catalog_access rules included: others (pragma_storage_info('c.t'), ...) read a
-      // catalog around its rules.
+      // catalog around its rules. Any other function needs EXECUTE on it (granted to
+      // a role; a catalog_access principal holds no grants), and the call's path
+      // arguments, as the grant declared them, go through the storage privileges.
       if (!AllowedTableFunctions().count(name)) {
-        Deny(principal_, "the table function " + name + " is not available under access control");
+        const auto declared = snapshot_.TableFunctionPathArguments(principal_, name);
+        if (!declared) {
+          Deny(principal_, "the table function " + name +
+                               " is not available under access control (an administrator can GRANT EXECUTE ON "
+                               "TABLE FUNCTION " + name + " to a role)");
+        }
+        std::vector<std::string> paths;
+        for (const auto& argument : *declared) {
+          std::optional<dd::Value> value;
+          if (argument.position > 0) {
+            if (get.parameters.size() < static_cast<size_t>(argument.position)) {
+              Deny(principal_, name + "() was called without its path " + argument.Text() +
+                                   ", which names the files it reads");
+            }
+            value = get.parameters[static_cast<size_t>(argument.position) - 1];
+          } else {
+            for (const auto& named : get.named_parameters) {
+              if (IdentifiersEqual(compat::Str(named.first), argument.parameter)) value = named.second;
+            }
+            if (!value) continue;  // a named parameter the call left out names no file
+          }
+          auto some = PathsOfValue(*value);
+          if (!some) {
+            Deny(principal_, "the path " + argument.Text() + " of " + name +
+                                 "() must be a string or a list of strings (the files it reads)");
+          }
+          paths.insert(paths.end(), some->begin(), some->end());
+        }
+        NoteAccess("EXECUTE " + name + "()", {});
+        if (!paths.empty()) RequireStorage(name + "()", StorageMode::kRead, paths);
+        return;
       }
       if ((name == "pragma_table_info" || name == "pragma_show") && !get.parameters.empty()) {
         RequireVisibleTableArgument(get.parameters[0]);
@@ -846,6 +957,7 @@ class PlanChecker {
   // Every refusal goes through here (it hides the namespace's Deny inside the class), so
   // a refusal of a CREATE VIEW's query says that it is the view's query that reads it.
   [[noreturn]] void Deny(const Principal& who, const std::string& what) {
+    if (!trigger_context_.empty()) ::hardcharger::authz::Deny(who, trigger_context_ + what);
     if (creating_view_.empty()) ::hardcharger::authz::Deny(who, what);
     ::hardcharger::authz::Deny(who, "user " + who.user_name +
                                         " may create a view only over what it can SELECT itself, "
@@ -965,7 +1077,11 @@ class PlanChecker {
   // them), as bound; nullopt when it is anything else.
   static std::optional<std::vector<std::string>> PathsOf(const dd::LogicalGet& get) {
     if (get.parameters.empty()) return std::nullopt;
-    const auto& value = get.parameters[0];
+    return PathsOfValue(get.parameters[0]);
+  }
+
+  // The paths a bound argument names: a string, or a list of strings; nullopt otherwise.
+  static std::optional<std::vector<std::string>> PathsOfValue(const dd::Value& value) {
     if (value.IsNull()) return std::nullopt;
     if (value.type().id() == dd::LogicalTypeId::VARCHAR) return std::vector<std::string>{value.ToString()};
     if (value.type().id() == dd::LogicalTypeId::LIST) {
@@ -1090,10 +1206,20 @@ class PlanChecker {
     AccessRequest request{target, type, privilege, {}};
     if (principal_.catalog_rules) RequireRuleWrite(target.catalog);
     if (!snapshot_.Check(principal_, request).allowed) {
+      // A nested schema is created in its parent: CREATE SCHEMA on the parent (ON SCHEMA
+      // or ON CATALOG), or owning the parent.
+      std::string where;
+      if (type != ObjectType::kSchema) {
+        where = "schema " + ContainerOf(target);
+      } else if (target.schema_path.size() > 1) {
+        ObjectPath parent = target;
+        parent.schema_path.pop_back();
+        where = "schema " + parent.ToString() + " (its parent)";
+      } else {
+        where = "catalog " + target.catalog;
+      }
       Deny(principal_, "user " + principal_.user_name + " has no " + PrivilegeName(privilege) +
-                           " privilege on " +
-                           (type == ObjectType::kSchema ? "catalog " + target.catalog
-                                                        : "schema " + ContainerOf(target)));
+                           " privilege on " + where);
     }
     ownership_.push_back({PendingOwnership::Kind::kCreate, target, type});
     return true;
@@ -1130,6 +1256,125 @@ class PlanChecker {
       RequireMacroPrivilege(macro, Privilege::kDropMacro, "replace");
     }
     if (auto refusal = MacroNameRefusal(context_, snapshot_, macro)) Deny(principal_, *refusal);
+  }
+
+  // CREATE [OR REPLACE] TYPE by a user other than the administrator: the CREATE TYPE
+  // privilege on the type's schema (granted ON SCHEMA or ON CATALOG, or as the schema's
+  // owner), DROP TYPE as well to replace one, and a name that changes nothing else's
+  // meaning (TypeNameRefusal: no built-in or extension type's name, none a view, macro,
+  // trigger, policy, column default or check constraint names). Temporary types never: a
+  // session's type is found before every other type, also inside views that read with
+  // their owners' rights. Types have no owner: a type is a definition, it reads nothing.
+  void CheckCreateType(dd::LogicalOperator& op) {
+    auto& create = op.Cast<dd::LogicalCreate>();
+    auto& info = *create.info;
+    const auto parts = PartsOf(info);
+    if (info.temporary || (!parts.empty() && IsTempCatalog(parts[0]))) {
+      // PIVOT without an IN list creates its own temporary enum, which reads nothing.
+      if (!parts.empty() && parts.back().rfind("__pivot_enum_", 0) == 0) return;
+      Deny(principal_,
+           "creating temporary types needs an administrator: a session's type is found before every other type, "
+           "also inside views that read with their owners' rights; create it in a schema instead");
+    }
+    if (principal_.catalog_rules) {
+      Deny(principal_, "creating types needs an administrator without catalog_access rules, or a user whose "
+                       "roles hold CREATE TYPE on the schema");
+    }
+    if (parts.size() < 3) Deny(principal_, "the new type's schema could not be determined");
+    ObjectPath type;
+    type.catalog = parts[0];
+    type.schema_path.assign(parts.begin() + 1, parts.end() - 1);
+    type.object_name = parts.back();
+    const auto existing = LookUp(context_, dd::CatalogType::TYPE_ENTRY, parts);
+    if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return;
+    RequireSchemaPrivilege(type, Privilege::kCreateType, "create type");
+    if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
+      RequireSchemaPrivilege(type, Privilege::kDropType, "replace type");
+      if (auto refusal = TypeNameRefusal(context_, snapshot_, type, "replace")) Deny(principal_, *refusal);
+    } else if (auto refusal = TypeNameRefusal(context_, snapshot_, type, "create")) {
+      Deny(principal_, *refusal);
+    }
+    VisitChildren(op, nullptr);  // CREATE TYPE ... AS ENUM (SELECT ...) reads its query
+  }
+
+  // CREATE [OR REPLACE] TRIGGER by a user other than the administrator: the trigger's
+  // table must be the user's own (its body runs inside everyone's writes of the table),
+  // and CREATE TRIGGER on the table's schema (granted ON SCHEMA or ON CATALOG, or as the
+  // schema's owner); replacing a trigger needs the right to drop it. The user becomes the
+  // trigger's owner, and its body runs with the owner's rights (triggers.hpp). What the
+  // body calls was checked by the gate as the creator could run it; what it reads and
+  // writes is checked, as the owner, each time it fires.
+  void CheckCreateTrigger(dd::LogicalCreate& create) {
+    auto& info = create.info->Cast<dd::CreateTriggerInfo>();
+    const auto parts = PartsOf(info);
+    if (info.temporary || (!parts.empty() && IsTempCatalog(parts[0]))) {
+      // On a session's own temporary table: session-local, like the table.
+      if (principal_.catalog_rules) RequireRuleWrite(TEMP_CATALOG);
+      return;
+    }
+    if (principal_.catalog_rules) {
+      Deny(principal_, "creating triggers needs an administrator without catalog_access rules, or a user whose "
+                       "roles hold CREATE TRIGGER on the schema");
+    }
+    if (parts.size() < 3 || !info.base_table) Deny(principal_, "the new trigger's table could not be determined");
+    ObjectPath trigger;
+    trigger.catalog = parts[0];
+    trigger.schema_path.assign(parts.begin() + 1, parts.end() - 1);
+    trigger.object_name = parts.back();
+    // The binder put the trigger in its table's schema.
+    std::vector<std::string> table_parts(parts.begin(), parts.end() - 1);
+    table_parts.push_back(compat::Str(info.base_table->GetQualifiedName().Name()));
+    auto table = LookUp(context_, dd::CatalogType::TABLE_ENTRY, table_parts);
+    if (!table || table->type != dd::CatalogType::TABLE_ENTRY) {
+      Deny(principal_, "the table of trigger " + QuoteIdentifierIfNeeded(trigger.object_name) + " could not be found");
+    }
+    const ObjectPath table_path = PathOf(*table);
+    auto existing = LookUpTrigger(context_, table->Cast<dd::TableCatalogEntry>(), trigger.object_name);
+    if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return;
+    RequireVisible(table_path.catalog);
+    const OwnerRecord* owner = snapshot_.FindOwner(table_path);
+    if (!owner || owner->type != ObjectType::kTable || !snapshot_.IsOwner(principal_, *owner)) {
+      Deny(principal_, "user " + principal_.user_name + " may not create a trigger on table " + table_path.ToString() +
+                           ": a trigger's body runs inside every write of its table, so only the table's owner may "
+                           "(with CREATE TRIGGER on the schema or its catalog, or owning the schema)");
+    }
+    RequireSchemaPrivilege(trigger, Privilege::kCreateTrigger, "create trigger");
+    if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
+      RequireTriggerDrop(table_path, trigger.object_name, "replace");
+    }
+    ownership_.push_back({PendingOwnership::Kind::kCreate, TriggerOwnerPath(table_path, trigger.object_name),
+                          ObjectType::kTrigger, TriggerDefinitionHash(info)});
+  }
+
+  // Dropping (or replacing) a trigger: its owner, or DROP TRIGGER on its schema.
+  void RequireTriggerDrop(const ObjectPath& table, const std::string& trigger_name, const std::string& verb) {
+    const ObjectPath trigger = TriggerOwnerPath(table, trigger_name);
+    RequireVisible(trigger.catalog);
+    if (principal_.catalog_rules) return RequireRuleWrite(trigger.catalog);
+    if (const OwnerRecord* owner = snapshot_.FindTriggerOwner(trigger)) {
+      if (snapshot_.IsOwner(principal_, *owner)) return;
+    }
+    ObjectPath schema = table;
+    schema.object_name.clear();
+    if (!snapshot_.Check(principal_, AccessRequest{schema, ObjectType::kSchema, Privilege::kDropTrigger, {}}).allowed) {
+      Deny(principal_, "user " + principal_.user_name + " may not " + verb + " trigger " +
+                           QuoteIdentifierIfNeeded(trigger_name) + " on table " + table.ToString() +
+                           " (only its owner, or a role granted DROP TRIGGER on schema " + schema.ToString() +
+                           " or its catalog, or owning the schema)");
+    }
+  }
+
+  // A trigger body a user owns: a checker of its own, with the owner's rights, visits it
+  // (entering the body's root operator itself, which this checker then skips).
+  void CheckAsDefiner(const TriggerBody& body, dd::LogicalOperator& plan) {
+    const auto view_columns = ViewColumnsUsed(plan);
+    PlanChecker checker(context_, snapshot_, *body.definer, view_columns, trigger_bodies_);
+    checker.trigger_context_ = body.describe + " cannot run, because its owner " + body.definer_name +
+                               " may not do what its body does: ";
+    checker.trigger_body_entered_ = true;
+    checker.Visit(plan);
+    for (auto& access : checker.accesses_) accesses_.insert(access);
+    for (auto& object : checker.objects_) objects_.push_back(std::move(object));
   }
 
   // CREATE MACRO and DROP MACRO are held on the macro's schema: granted ON SCHEMA or ON
@@ -1285,7 +1530,7 @@ class PlanChecker {
       view.object_name = parts.back();
     }
     const auto view_columns = ViewColumnsUsed(*bound.plan);
-    PlanChecker body(context_, snapshot_, principal_, view_columns);
+    PlanChecker body(context_, snapshot_, principal_, view_columns, kNoTriggerBodies);
     body.creating_view_ = view.ToString();
     body.Visit(*bound.plan);
     for (auto& access : body.accesses_) accesses_.insert(access);
@@ -1336,6 +1581,27 @@ class PlanChecker {
         auto entry = LookUpSchema(context_, SchemaTarget(context_, parts));
         if (!entry) return;  // DROP SCHEMA IF EXISTS of nothing; DuckDB reports a missing schema
         CheckDropOf(*entry);
+        // DROP SCHEMA ... CASCADE drops the schemas nested in it too (DuckDB refuses the
+        // drop without CASCADE while there are any): each one needs its own drop right.
+        if (info.cascade) {
+          auto& schema = entry->Cast<dd::SchemaCatalogEntry>();
+          std::vector<dd::reference<dd::SchemaCatalogEntry>> children;
+          bool listed = false;
+          try {
+            schema.ScanSchemaTree(schema.ParentCatalog().GetCatalogTransaction(context_),
+                                  [&](dd::SchemaCatalogEntry& found) {
+                                    if (&found != &schema) children.push_back(found);
+                                  });
+            listed = true;
+          } catch (const std::exception&) {
+            listed = false;
+          }
+          if (!listed) {
+            Deny(principal_, "the schemas nested in " + PathOf(*entry).ToString() +
+                                 " could not be listed, so DROP SCHEMA ... CASCADE can't check them; ask an administrator");
+          }
+          for (auto& child : children) CheckDropOf(child.get());
+        }
         return;
       }
       case dd::CatalogType::TABLE_ENTRY:
@@ -1361,6 +1627,36 @@ class PlanChecker {
         ObjectPath macro = PathOf(*entry);
         if (IsTempCatalog(macro.catalog)) return;
         RequireMacroPrivilege(macro, Privilege::kDropMacro, "drop");
+        return;
+      }
+      case dd::CatalogType::TYPE_ENTRY: {
+        auto entry = LookUp(context_, info.type, parts);
+        if (!entry) return;  // DROP TYPE IF EXISTS of nothing; DuckDB reports a missing type
+        ObjectPath type = PathOf(*entry);
+        if (IsTempCatalog(type.catalog)) return;
+        RequireSchemaPrivilege(type, Privilege::kDropType, "drop type");
+        // Also with CASCADE: what names the type keeps naming it, and would mean something
+        // else or nothing.
+        if (auto refusal = TypeNameRefusal(context_, snapshot_, type, "drop")) Deny(principal_, *refusal);
+        return;
+      }
+      case dd::CatalogType::TRIGGER_ENTRY: {
+        // DROP TRIGGER t ON s.x: the binder resolved the table and put the trigger's name in
+        // its schema; the trigger is found on the table.
+        if (!info.extra_drop_info) Deny(principal_, "DROP TRIGGER names no table");
+        auto& extra = info.extra_drop_info->Cast<dd::ExtraDropTriggerInfo>();
+        if (!extra.base_table) Deny(principal_, "DROP TRIGGER names no table");
+        auto table = LookUp(context_, dd::CatalogType::TABLE_ENTRY,
+                            NameParts(extra.base_table->Cast<dd::BaseTableRef>().GetQualifiedName()));
+        if (!table || table->type != dd::CatalogType::TABLE_ENTRY) return;  // DuckDB reports the missing table
+        if (parts.empty()) Deny(principal_, "the trigger's name could not be determined");
+        auto entry = LookUpTrigger(context_, table->Cast<dd::TableCatalogEntry>(), parts.back());
+        if (!entry) return;  // DROP TRIGGER IF EXISTS of nothing; DuckDB reports a missing trigger
+        const ObjectPath table_path = PathOf(*table);
+        if (IsTempCatalog(table_path.catalog)) return;
+        RequireTriggerDrop(table_path, compat::Str(entry->name), "drop");
+        ownership_.push_back({PendingOwnership::Kind::kDrop, TriggerOwnerPath(table_path, compat::Str(entry->name)),
+                              ObjectType::kTrigger});
         return;
       }
       case dd::CatalogType::SECRET_ENTRY:
@@ -1486,6 +1782,13 @@ class PlanChecker {
         if (IsTempCatalog(path.catalog)) return;
         return RequireSchemaPrivilege(path, Privilege::kDropMacro, "comment on macro");
       }
+      case dd::CatalogType::TYPE_ENTRY: {
+        auto entry = LookUp(context_, type, parts);
+        if (!entry) return;
+        const ObjectPath path = PathOf(*entry);
+        if (IsTempCatalog(path.catalog)) return;
+        return RequireSchemaPrivilege(path, Privilege::kDropType, "comment on type");
+      }
       default:
         Deny(principal_, "commenting on this kind of object needs an administrator");
     }
@@ -1502,6 +1805,7 @@ class PlanChecker {
   const Snapshot& snapshot_;
   const Principal& principal_;
   const ViewColumns& view_columns_;
+  const TriggerBodies& trigger_bodies_;
   std::vector<Rights> rights_;
   // The sequences the column defaults of the table being written advance (Visit).
   std::vector<const dd::CatalogEntry*> default_sequences_;
@@ -1514,6 +1818,27 @@ class PlanChecker {
   boost::json::array objects_;
   std::optional<StorageAccess> storage_;  // made at the first path the statement reaches
 };
+
+// A superuser's statement is not checked, but the bodies of users' triggers it fires are,
+// with their owners' rights (nested ones included: the checker handles those it meets).
+void CheckDefinerBodies(dd::ClientContext& context, const Snapshot& snapshot, dd::LogicalOperator& op,
+                        const TriggerBodies& bodies) {
+  if (const TriggerBody* body = TriggerBodyAt(bodies, op)) {
+    if (!body->problem.empty()) ::hardcharger::authz::Deny(Principal::Superuser("administrator"), body->problem);
+    if (body->definer) {
+      const auto view_columns = ViewColumnsUsed(op);
+      PlanChecker checker(context, snapshot, *body->definer, view_columns, bodies);
+      checker.trigger_context_ = body->describe + " cannot run, because its owner " + body->definer_name +
+                                 " may not do what its body does: ";
+      checker.trigger_body_entered_ = true;
+      checker.Visit(op);
+      return;
+    }
+  }
+  for (auto& child : op.children) {
+    if (child) CheckDefinerBodies(context, snapshot, *child, bodies);
+  }
+}
 
 }  // namespace
 
@@ -1593,12 +1918,34 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
                                  ObjectType::kView,
                                  DefinitionHashOf(*op.Cast<dd::LogicalCreate>().info)});
           }
+        } else if (op.type == OpType::LOGICAL_CREATE_TRIGGER) {
+          // An administrator's trigger (replacing a user's too) runs with the writer's rights.
+          auto& info = op.Cast<dd::LogicalCreate>().info->Cast<dd::CreateTriggerInfo>();
+          auto parts = PartsOf(info);
+          if (parts.size() >= 3 && !IsTempCatalog(parts[0]) && !info.temporary && info.base_table) {
+            const ObjectPath table{parts[0], {parts.begin() + 1, parts.end() - 1},
+                                   compat::Str(info.base_table->GetQualifiedName().Name())};
+            ownership.push_back({PendingOwnership::Kind::kCreate, TriggerOwnerPath(table, parts.back()),
+                                 ObjectType::kTrigger, TriggerDefinitionHash(info)});
+          }
         }
         for (auto& child : op.children) {
           if (child) collect(*child);
         }
       };
       collect(*plan);
+    }
+    // A user's trigger fired by this statement runs with the user's rights, not the
+    // administrator's: its body is checked, and its policies applied, as the owner.
+    if (plan && !state->bypassed()) {
+      const auto bodies = FindTriggerBodies(context, *snapshot, *plan);
+      if (HasDefinerBody(bodies)) {
+        CheckDefinerBodies(context, *snapshot, *plan, bodies);
+        RemoveViewMarkers(plan);
+        ApplyPolicies(context, snapshot, Principal::Superuser("administrator"), plan, FindTriggerBodies(context, *snapshot, *plan));
+        state->NoteChecked(snapshot->version(), std::move(ownership), plan->type == OpType::LOGICAL_PREPARE);
+        return;
+      }
     }
     RemoveViewMarkers(plan);
     state->NoteChecked(snapshot->version(), std::move(ownership),
@@ -1612,7 +1959,8 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
   }
   RequireActiveRole(*snapshot, principal);
   const auto view_columns = ViewColumnsUsed(*plan);
-  PlanChecker checker(context, *snapshot, principal, view_columns);
+  const auto trigger_bodies = FindTriggerBodies(context, *snapshot, *plan);
+  PlanChecker checker(context, *snapshot, principal, view_columns, trigger_bodies);
   checker.Visit(*plan);
   RemoveViewMarkers(plan);
   // The external policy service may refuse what passed.
@@ -1635,8 +1983,9 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
             "policy service, and refuses statements until it can");
     }
   }
-  // Row and masking policies apply to what passed the check.
-  ApplyPolicies(context, snapshot, principal, plan);
+  // Row and masking policies apply to what passed the check (a user's trigger body: the
+  // owner's policies).
+  ApplyPolicies(context, snapshot, principal, plan, FindTriggerBodies(context, *snapshot, *plan));
   state->NoteChecked(snapshot->version(), checker.TakeOwnership(),
                      plan->type == OpType::LOGICAL_PREPARE, checker.TakeAccesses());
 }
@@ -1663,7 +2012,8 @@ void PostBind(dd::PlannerExtensionInput& input, dd::BoundStatement& statement) {
   }
   RequireActiveRole(*snapshot, principal);
   const auto view_columns = ViewColumnsUsed(*statement.plan);
-  PlanChecker checker(input.context, *snapshot, principal, view_columns);
+  const auto trigger_bodies = FindTriggerBodies(input.context, *snapshot, *statement.plan);
+  PlanChecker checker(input.context, *snapshot, principal, view_columns, trigger_bodies);
   checker.Visit(*statement.plan);
   state->NoteBindChecked();
 }
@@ -1877,7 +2227,7 @@ void ApplyOwnership(RbacEngine& engine, const Principal& principal,
     // what the view reads.
     arrow::Status status;
     if ((principal.catalog_rules && !principal.superuser) || p.kind == PendingOwnership::Kind::kDrop) {
-      status = engine.ForgetOwner(p.object);
+      status = engine.ForgetOwner(p.object, p.type);
     } else {
       status = engine.RecordOwner(p.object, p.type, principal, p.definition_hash);
     }
@@ -1904,10 +2254,13 @@ arrow::Status RecordCreatedOwners(RbacEngine& engine, const Principal& principal
     }
     const auto snapshot = engine.snapshot();
     std::optional<OwnerRecord> previous;
-    if (const OwnerRecord* record = snapshot->FindOwner(p.object)) previous = *record;
+    if (const OwnerRecord* record = p.type == ObjectType::kTrigger ? snapshot->FindTriggerOwner(p.object)
+                                                                 : snapshot->FindOwner(p.object)) {
+      previous = *record;
+    }
     // See ApplyOwnership: a catalog_access principal's creations get no owner.
     const bool rules_only = principal.catalog_rules && !principal.superuser;
-    auto status = rules_only ? engine.ForgetOwner(p.object)
+    auto status = rules_only ? engine.ForgetOwner(p.object, p.type)
                              : engine.RecordOwner(p.object, p.type, principal, p.definition_hash);
     if (!status.ok()) {
       std::vector<RecordedOwnership> mine(undo.begin() + static_cast<std::ptrdiff_t>(first), undo.end());
@@ -1916,14 +2269,14 @@ arrow::Status RecordCreatedOwners(RbacEngine& engine, const Principal& principal
       return status;
     }
     p.recorded = true;
-    undo.push_back({p.object, std::move(previous)});
+    undo.push_back({p.object, p.type, std::move(previous)});
   }
   return arrow::Status::OK();
 }
 
 void UndoRecordedOwners(RbacEngine& engine, const std::vector<RecordedOwnership>& undo) {
   for (auto it = undo.rbegin(); it != undo.rend(); ++it) {
-    auto status = it->previous ? engine.PutOwner(*it->previous) : engine.ForgetOwner(it->object);
+    auto status = it->previous ? engine.PutOwner(*it->previous) : engine.ForgetOwner(it->object, it->type);
     if (!status.ok()) {
       Log(LogLevel::kWarning, "the owner record of an object a failed statement would have created could not be put back",
           {{"object", it->object.ToString()}, {"error", status.message()}});

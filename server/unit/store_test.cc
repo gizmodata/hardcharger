@@ -247,11 +247,11 @@ TEST(StoreWrite, AnOwnerChangeAppliedInMemoryMatchesAReload) {
   for (const OwnerRecord* change : {&created, &replaced, static_cast<const OwnerRecord*>(nullptr)}) {
     const ObjectPath object{"db", {"main"}, "t"};
     auto version = s.Write([&](StoreTransaction& txn) {
-      return change ? txn.UpsertOwner(*change) : txn.DeleteOwner(object);
+      return change ? txn.UpsertOwner(*change) : txn.DeleteOwner(object, hardcharger::authz::ObjectType::kTable);
     });
     ASSERT_TRUE(version.ok()) << version.status().ToString();
     EXPECT_EQ(*version, mine->version() + 1);
-    mine = mine->WithOwner(*version, object, change);
+    mine = mine->WithOwner(*version, object, hardcharger::authz::ObjectType::kTable, change);
     auto reloaded = s.Load();
     ASSERT_TRUE(reloaded.ok());
     EXPECT_EQ((*reloaded)->version(), mine->version());

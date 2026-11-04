@@ -1,10 +1,12 @@
 // Ported from GizmoSQL 1.x src/client/output_renderer.cpp.
 
 #include "output_renderer.hpp"
+#include "geometry.hpp"
 #include "sql_quoting.hpp"
 #include "variant.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
@@ -94,6 +96,120 @@ class OpaqueType : public arrow::ExtensionType {
   std::string type_name_;
   std::string vendor_name_;
 };
+
+// GeoArrow's WKB geometry (geoarrow.wkb, and ogc.wkb from older writers): binary storage,
+// each value a Well-Known Binary geometry, the column's CRS in the metadata. Registered so
+// the IPC reader hands the column over as this type and the renderers print WKT, as the
+// web UI does, instead of the raw bytes.
+class GeometryWkbType : public arrow::ExtensionType {
+ public:
+  GeometryWkbType(std::string name, std::shared_ptr<arrow::DataType> storage, std::string metadata)
+      : arrow::ExtensionType(std::move(storage)), name_(std::move(name)), metadata_(std::move(metadata)) {}
+  std::string extension_name() const override { return name_; }
+  const std::string& metadata() const { return metadata_; }
+  bool ExtensionEquals(const arrow::ExtensionType& other) const override {
+    const auto* geometry = dynamic_cast<const GeometryWkbType*>(&other);
+    return geometry != nullptr && geometry->name_ == name_ && geometry->metadata_ == metadata_ &&
+           storage_type()->Equals(*other.storage_type());
+  }
+  std::shared_ptr<arrow::Array> MakeArray(std::shared_ptr<arrow::ArrayData> data) const override {
+    return std::make_shared<arrow::ExtensionArray>(std::move(data));
+  }
+  arrow::Result<std::shared_ptr<arrow::DataType>> Deserialize(std::shared_ptr<arrow::DataType> storage,
+                                                              const std::string& metadata) const override {
+    if (storage->id() != arrow::Type::BINARY && storage->id() != arrow::Type::LARGE_BINARY &&
+        storage->id() != arrow::Type::BINARY_VIEW) {
+      return arrow::Status::Invalid(name_, " needs binary storage, not ", storage->ToString());
+    }
+    return std::make_shared<GeometryWkbType>(name_, std::move(storage), metadata);
+  }
+  std::string Serialize() const override { return metadata_; }
+
+ private:
+  std::string name_;
+  std::string metadata_;
+};
+
+bool IsGeometry(const arrow::DataType& type) {
+  return type.id() == arrow::Type::EXTENSION && dynamic_cast<const GeometryWkbType*>(&type) != nullptr;
+}
+
+bool IsBinary(const arrow::DataType& type) {
+  return type.id() == arrow::Type::BINARY || type.id() == arrow::Type::LARGE_BINARY ||
+         type.id() == arrow::Type::FIXED_SIZE_BINARY || type.id() == arrow::Type::BINARY_VIEW;
+}
+
+// Whether a value of `type` holds, at any depth, a geometry, a BLOB or an ENUM (an Arrow
+// dictionary): those print as text of their own (WKT, DuckDB's \xHH, the enum's value
+// rather than Arrow's dictionary-and-index), inside lists, structs and maps too.
+bool NeedsOwnText(const arrow::DataType& type) {
+  if (IsGeometry(type) || IsBinary(type) || type.id() == arrow::Type::DICTIONARY) return true;
+  if (type.id() == arrow::Type::EXTENSION) return false;  // VARIANT and the like print their own way
+  for (const auto& field : type.fields()) {
+    if (NeedsOwnText(*field->type())) return true;
+  }
+  return false;
+}
+
+std::string_view BinaryBytes(const arrow::Scalar& scalar) {
+  if (scalar.type->id() == arrow::Type::FIXED_SIZE_BINARY) {
+    const auto& fixed = static_cast<const arrow::FixedSizeBinaryScalar&>(scalar);
+    return fixed.value ? std::string_view(reinterpret_cast<const char*>(fixed.value->data()),
+                                         static_cast<std::size_t>(fixed.value->size()))
+                       : std::string_view();
+  }
+  return static_cast<const arrow::BaseBinaryScalar&>(scalar).view();
+}
+
+// A value with a geometry, BLOB or ENUM somewhere in it, as DuckDB prints nested values:
+// [a, b], {'k': v}, {k=v}; NULL for a null; leaves as their own text.
+std::string NestedText(const arrow::Scalar& scalar, const std::string& null_value) {
+  if (!scalar.is_valid) return null_value;
+  if (scalar.type->id() == arrow::Type::DICTIONARY) {
+    // An ENUM: the value the index stands for, never the dictionary and the index.
+    const auto value = static_cast<const arrow::DictionaryScalar&>(scalar).GetEncodedValue();
+    return value.ok() ? NestedText(**value, null_value) : null_value;
+  }
+  if (IsGeometry(*scalar.type)) {
+    return WkbText(BinaryBytes(*static_cast<const arrow::ExtensionScalar&>(scalar).value));
+  }
+  if (IsBinary(*scalar.type)) return BlobText(BinaryBytes(scalar));
+  if (scalar.type->id() == arrow::Type::STRUCT) {
+    const auto& row = static_cast<const arrow::StructScalar&>(scalar);
+    std::string out = "{";
+    for (size_t i = 0; i < row.value.size(); ++i) {
+      if (i) out += ", ";
+      out += "'" + scalar.type->field(static_cast<int>(i))->name() + "': " + NestedText(*row.value[i], null_value);
+    }
+    return out + "}";
+  }
+  if (scalar.type->id() == arrow::Type::MAP) {
+    // A map's storage is a list of {key, value} structs.
+    const auto& entries = *static_cast<const arrow::MapScalar&>(scalar).value;
+    std::string out = "{";
+    for (int64_t i = 0; i < entries.length(); ++i) {
+      if (i) out += ", ";
+      const auto entry = entries.GetScalar(i);
+      if (!entry.ok()) {
+        out += null_value;
+        continue;
+      }
+      const auto& pair = static_cast<const arrow::StructScalar&>(**entry);
+      out += NestedText(*pair.value[0], null_value) + "=" + NestedText(*pair.value[1], null_value);
+    }
+    return out + "}";
+  }
+  if (const auto* list = dynamic_cast<const arrow::BaseListScalar*>(&scalar)) {
+    std::string out = "[";
+    for (int64_t i = 0; i < list->value->length(); ++i) {
+      if (i) out += ", ";
+      const auto child = list->value->GetScalar(i);
+      out += child.ok() ? NestedText(**child, null_value) : null_value;
+    }
+    return out + "]";
+  }
+  return scalar.ToString();
+}
 
 // DuckDB uses a nullable `value` child (allowed by the current canonical format).
 // Arrow C++ 26's experimental implementation still rejects that storage on read.
@@ -229,6 +345,11 @@ void RegisterArrowExtensionTypes() {
     if (arrow::GetExtensionType("arrow.opaque") == nullptr) {
       (void)arrow::RegisterExtensionType(std::make_shared<OpaqueType>(arrow::null(), "", "", ""));
     }
+    for (const char* name : {"geoarrow.wkb", "ogc.wkb"}) {
+      if (arrow::GetExtensionType(name) == nullptr) {
+        (void)arrow::RegisterExtensionType(std::make_shared<GeometryWkbType>(name, arrow::binary(), ""));
+      }
+    }
   });
 }
 
@@ -250,13 +371,77 @@ std::string GetCellValue(const std::shared_ptr<arrow::ChunkedArray>& column,
       auto scalar_result = chunk->GetScalar(offset);
       if (scalar_result.ok()) {
         if (IsVariant(*chunk->type())) return VariantScalar(**scalar_result).text;
-        return ContainsVariant(*chunk->type()) ? VariantJson(**scalar_result) : (*scalar_result)->ToString();
+        if (ContainsVariant(*chunk->type())) return VariantJson(**scalar_result);
+        // GEOMETRY as WKT, BLOB as \xHH text (never raw bytes: a terminal, a CSV or a JSON
+        // document would get control characters and invalid UTF-8) and ENUM as its value,
+        // nested included.
+        if (NeedsOwnText(*chunk->type())) return NestedText(**scalar_result, null_value);
+        return (*scalar_result)->ToString();
       }
       return null_value;
     }
     offset -= chunk->length();
   }
   return null_value;
+}
+
+// The type name of `type`, with `array` (the column's first chunk, or a nested array of it;
+// may be null) naming what the type alone can't: an ENUM's values. Nested types read as
+// DuckDB writes them (bigint[], struct(m varchar), map(varchar, bigint)), not as Arrow's
+// list<l: ...>; ENUM('low', 'high') as DuckDB's DESCRIBE spells it.
+std::string TypeNameOf(const std::shared_ptr<arrow::DataType>& type, const arrow::Array* array) {
+  switch (type->id()) {
+    case arrow::Type::DICTIONARY: {
+      std::string out = "ENUM(";
+      if (array != nullptr) {
+        const auto& dictionary = *static_cast<const arrow::DictionaryArray&>(*array).dictionary();
+        for (int64_t i = 0; i < dictionary.length(); ++i) {
+          if (i) out += ", ";
+          const auto value = dictionary.GetScalar(i);
+          out += QuoteSqlLiteral(value.ok() ? (*value)->ToString() : "");
+        }
+      }
+      return out + ")";
+    }
+    case arrow::Type::LIST:
+    case arrow::Type::LARGE_LIST:
+    case arrow::Type::FIXED_SIZE_LIST: {
+      std::shared_ptr<arrow::Array> inner;
+      if (array != nullptr) {
+        if (type->id() == arrow::Type::FIXED_SIZE_LIST) inner = static_cast<const arrow::FixedSizeListArray&>(*array).values();
+        else if (type->id() == arrow::Type::LARGE_LIST) inner = static_cast<const arrow::LargeListArray&>(*array).values();
+        else inner = static_cast<const arrow::ListArray&>(*array).values();
+      }
+      return TypeNameOf(type->field(0)->type(), inner.get()) + "[]";
+    }
+    case arrow::Type::STRUCT: {
+      std::string out = "struct(";
+      for (int i = 0; i < type->num_fields(); ++i) {
+        if (i) out += ", ";
+        const auto field = array != nullptr ? static_cast<const arrow::StructArray&>(*array).field(i) : nullptr;
+        // A plain name as is, as DuckDB writes struct(m varchar); others quoted.
+        const std::string& name = type->field(i)->name();
+        const bool plain = !name.empty() && std::all_of(name.begin(), name.end(), [](unsigned char c) {
+          return std::islower(c) || std::isdigit(c) || c == '_';
+        }) && !std::isdigit(static_cast<unsigned char>(name.front()));
+        out += (plain ? name : QuoteSqlIdentifier(name)) + " " + TypeNameOf(type->field(i)->type(), field.get());
+      }
+      return out + ")";
+    }
+    case arrow::Type::MAP: {
+      const auto* map = array != nullptr ? static_cast<const arrow::MapArray*>(array) : nullptr;
+      const auto& map_type = static_cast<const arrow::MapType&>(*type);
+      return "map(" + TypeNameOf(map_type.key_type(), map ? map->keys().get() : nullptr) + ", " +
+             TypeNameOf(map_type.item_type(), map ? map->items().get() : nullptr) + ")";
+    }
+    default:
+      return FriendlyTypeName(type);
+  }
+}
+
+std::string ColumnTypeName(const arrow::Table& table, int column) {
+  const auto& chunks = table.column(column)->chunks();
+  return TypeNameOf(table.schema()->field(column)->type(), chunks.empty() ? nullptr : chunks.front().get());
 }
 
 // Map Arrow type to DuckDB-friendly display name
@@ -323,6 +508,9 @@ std::string FriendlyTypeName(const std::shared_ptr<arrow::DataType>& type) {
       return type->ToString();
     case arrow::Type::EXTENSION: {
       if (IsVariant(*type)) return "variant";
+      if (const auto* geometry = dynamic_cast<const GeometryWkbType*>(type.get())) {
+        return GeometryTypeName(geometry->metadata());
+      }
       bool is_signed = false;
       if (IsDuckDBWideInteger(*type, &is_signed)) return is_signed ? "hugeint" : "uhugeint";
       return type->ToString();
@@ -354,7 +542,7 @@ std::vector<int> ComputeColumnWidths(const arrow::Table& table,
   if (show_types) {
     for (int c = 0; c < num_cols; ++c) {
       int type_len =
-          static_cast<int>(FriendlyTypeName(table.schema()->field(c)->type()).size());
+          static_cast<int>(ColumnTypeName(table, c).size());
       widths[c] = std::max(widths[c], type_len);
     }
   }
@@ -819,7 +1007,7 @@ RenderResult RenderTabular(const arrow::Table& table, std::ostream& out,
     out << bs.v;
     for (int c = 0; c < cols_shown; ++c) {
       RenderCellCentered(out,
-                         FriendlyTypeName(table.schema()->field(c)->type()),
+                         ColumnTypeName(table, c),
                          widths[c], bs.v);
     }
     out << "\n";

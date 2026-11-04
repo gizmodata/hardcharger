@@ -41,6 +41,12 @@ std::string ObjectKey(const ObjectPath& path) {
   return key;
 }
 
+std::string OwnerKey(ObjectType type, const ObjectPath& path) {
+  // \x1d never starts an ObjectKey (a catalog name has no control characters).
+  if (type == ObjectType::kTrigger) return "\x1dtrigger\x1d" + ObjectKey(path);
+  return ObjectKey(path);
+}
+
 Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users, std::vector<RoleRecord> roles,
                    std::vector<MembershipRecord> memberships, std::vector<ObjectGrantRecord> grants,
                    std::vector<OwnerRecord> owners,
@@ -136,13 +142,13 @@ bool Snapshot::WouldCreateCycle(const std::string& role_id,
   return RoleClosure(role_id).count(member_role_id) > 0;
 }
 
-std::shared_ptr<const Snapshot> Snapshot::WithOwner(int64_t version, const ObjectPath& object,
+std::shared_ptr<const Snapshot> Snapshot::WithOwner(int64_t version, const ObjectPath& object, ObjectType type,
                                                     const OwnerRecord* owner) const {
-  const std::string key = ObjectKey(object);
+  const std::string key = OwnerKey(type, object);
   std::vector<OwnerRecord> owners;
   owners.reserve(owners_.size() + 1);
   for (const auto& o : owners_) {
-    if (ObjectKey(o.object) != key) owners.push_back(o);
+    if (OwnerKey(o.type, o.object) != key) owners.push_back(o);
   }
   if (owner) owners.push_back(*owner);
   return std::make_shared<const Snapshot>(version, users_, roles_, memberships_, grants_, std::move(owners),
@@ -154,7 +160,15 @@ std::shared_ptr<const Snapshot> Snapshot::WithOwner(int64_t version, const Objec
 const OwnerRecord* Snapshot::FindOwner(const ObjectPath& object) const {
   const std::string key = ObjectKey(object);
   for (const auto& owner : owners_) {
-    if (ObjectKey(owner.object) == key) return &owner;
+    if (OwnerKey(owner.type, owner.object) == key) return &owner;
+  }
+  return nullptr;
+}
+
+const OwnerRecord* Snapshot::FindTriggerOwner(const ObjectPath& object) const {
+  const std::string key = OwnerKey(ObjectType::kTrigger, object);
+  for (const auto& owner : owners_) {
+    if (OwnerKey(owner.type, owner.object) == key) return &owner;
   }
   return nullptr;
 }
@@ -342,7 +356,8 @@ AccessDecision Snapshot::Check(const Principal& principal, const AccessRequest& 
     if (!principal.scope->privileges.count(request.privilege)) {
       return {false, "scoped token: privilege not allowed", ""};
     }
-    if (!principal.scope->catalogs.empty() && !IdentifiersEqual(request.object.catalog, "temp")) {
+    if (!principal.scope->catalogs.empty() && !IdentifiersEqual(request.object.catalog, "temp") &&
+        request.type != ObjectType::kTableFunction) {
       bool reachable = false;
       for (const auto& c : principal.scope->catalogs) {
         reachable = reachable || IdentifiersEqual(c, request.object.catalog);
@@ -359,11 +374,13 @@ AccessDecision Snapshot::Check(const Principal& principal, const AccessRequest& 
   // itself, which covers DROP SCHEMA).
   // (Sequences have no owner record: one at the same path is a table's or view's.)
   if (request.type != ObjectType::kSequence) {
-    if (const OwnerRecord* owner = FindOwner(request.object)) {
-      if (IsOwner(principal, *owner)) return {true, "owner", "owner"};
-    }
+    const OwnerRecord* owner =
+        request.type == ObjectType::kTrigger ? FindTriggerOwner(request.object) : FindOwner(request.object);
+    if (owner && IsOwner(principal, *owner)) return {true, "owner", "owner"};
   }
-  // The owner of a schema may create objects in it and drop them, as in Postgres.
+  // The owner of a schema may create objects in it and drop them, as in Postgres. A
+  // child schema (DuckDB 2.0's nested schemas) is an object of its parent: the parent's
+  // owner may create and drop it.
   switch (request.privilege) {
     case Privilege::kCreateTable:
     case Privilege::kCreateView:
@@ -376,6 +393,20 @@ AccessDecision Snapshot::Check(const Principal& principal, const AccessRequest& 
         if (const OwnerRecord* owner = FindOwner(schema)) {
           if (owner->type == ObjectType::kSchema && IsOwner(principal, *owner)) {
             return {true, "owner of the schema", "owner"};
+          }
+        }
+      }
+      break;
+    }
+    case Privilege::kCreateSchema:
+    case Privilege::kDropSchema: {
+      if (request.type == ObjectType::kSchema && request.object.schema_path.size() > 1) {
+        ObjectPath parent = request.object;
+        parent.object_name.clear();
+        parent.schema_path.pop_back();
+        if (const OwnerRecord* owner = FindOwner(parent)) {
+          if (owner->type == ObjectType::kSchema && IsOwner(principal, *owner)) {
+            return {true, "owner of the parent schema", "owner"};
           }
         }
       }
@@ -434,6 +465,35 @@ bool Snapshot::ObjectListed(const Principal& principal, const ObjectPath& object
     if (Check(principal, AccessRequest{object, ObjectType::kTable, privilege, {}}).allowed) return true;
   }
   return false;
+}
+
+std::optional<std::vector<PathArgument>> Snapshot::TableFunctionPathArguments(const Principal& principal,
+                                                                                const std::string& name) const {
+  if (principal.superuser) return std::vector<PathArgument>{};
+  if (principal.catalog_rules || principal.scope) return std::nullopt;
+  bool granted = false;
+  std::vector<PathArgument> arguments;
+  for (const auto& role_id : RolesOf(principal)) {
+    auto it = grants_by_role_.find(role_id);
+    if (it == grants_by_role_.end()) continue;
+    for (const ObjectGrantRecord* grant : it->second) {
+      if (grant->privilege != Privilege::kExecute || !grant->target.IsTableFunction() ||
+          !IdentifiersEqual(grant->target.object_name, name)) {
+        continue;
+      }
+      granted = true;
+      for (const auto& stored : grant->columns) {
+        auto argument = PathArgument::FromStored(stored);
+        if (!argument) continue;
+        const bool known = std::any_of(arguments.begin(), arguments.end(), [&](const PathArgument& a) {
+          return a.position == argument->position && IdentifiersEqual(a.parameter, argument->parameter);
+        });
+        if (!known) arguments.push_back(*argument);
+      }
+    }
+  }
+  if (!granted) return std::nullopt;
+  return arguments;
 }
 
 bool Snapshot::SequenceListed(const Principal& principal, const ObjectPath& sequence) const {

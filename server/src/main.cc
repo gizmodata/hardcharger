@@ -40,6 +40,7 @@
 #include "version.hpp"
 #include "chargewire/server.hpp"
 #include "chargewire/stop_signals.hpp"
+#include "web_relay.hpp"
 #include "web_ui.hpp"
 
 namespace hc = hardcharger;
@@ -98,6 +99,10 @@ chargewire::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   options.session_idle_timeout = config.session_idle_timeout > 0
                                      ? std::chrono::seconds(config.session_idle_timeout)
                                      : std::chrono::seconds(std::chrono::hours(24 * 365 * 10));
+  // The engine supplies each session's idle-in-transaction timeout too (the setting
+  // below, which SET [GLOBAL] hardcharger.idle_in_transaction_session_timeout changes);
+  // this is what the SDK applies when the engine has no answer.
+  options.idle_in_transaction_timeout = std::chrono::seconds(config.idle_in_transaction_session_timeout);
   // The engine supplies each session's default timeout (query_timeout_seconds, which
   // SET [GLOBAL] hardcharger.query_timeout changes).
   options.default_statement_timeout = std::chrono::milliseconds(0);
@@ -469,6 +474,18 @@ int main(int argc, char** argv) {
   // (SIGINT/SIGTERM; on Windows, the console's Ctrl+C/Ctrl+Break/close/shutdown events;
   // embedded in an app, the app's stop requests: embedding.hpp).
   hc::embedding::Stop stop_signals;
+  // A parent that started this server with its stdin on a pipe stops it by closing the pipe,
+  // which the kernel does when the parent dies (the desktop app, issue #28). The thread blocks
+  // in a read until then; it is never joined, and a request made before the signal thread
+  // waits is kept (StopRequests counts them).
+  if (config.stop_on_stdin_close) {
+    std::thread([&stop_signals] {
+      while (std::fgetc(stdin) != EOF) {
+      }
+      hc::Log(hc::LogLevel::kInfo, "standard input closed; stopping (stop_on_stdin_close)");
+      stop_signals.Wake();
+    }).detach();
+  }
 
   try {
     hc::ConfigureLogging(config.log_level, config.log_format, config.log_file, config.log_emoji);
@@ -606,6 +623,22 @@ int main(int argc, char** argv) {
     }
 
     chargewire::ServerOptions server_options = ServerOptionsFrom(config);
+    // The web UI's contract and its relay to other servers (web_relay.hpp), on the UI's
+    // own origin; the Relay outlives the server.
+    std::unique_ptr<hc::web::Relay> relay;
+    if (config.web_ui) {
+      hc::web::RelayOptions relay_options;
+      relay_options.local_server = true;
+      relay_options.remote_servers = config.web_ui_remote_servers;
+      relay_options.version = hc::kVersion;
+      relay_options.log = [](bool warning, const std::string& message, const hc::web::RelayLogFields& fields) {
+        hc::LogFields out{{"component", "web_ui"}};
+        for (const auto& field : fields) out.push_back(field);
+        hc::Log(warning ? hc::LogLevel::kWarning : hc::LogLevel::kInfo, message, out);
+      };
+      relay = std::make_unique<hc::web::Relay>(std::move(relay_options));
+      server_options.app_endpoints = relay->Endpoints();
+    }
     server_options.browser_sign_in = MakeBrowserSignIn(config, provider, authenticator);
     server_options.max_browser_sign_ins = static_cast<std::size_t>(config.oauth_max_flows);
     chargewire::Server server(std::move(server_options), backend, authenticator, tokens);
@@ -653,6 +686,7 @@ int main(int argc, char** argv) {
     if (config.web_ui) {
       hc::LogFields ui = url_fields("/ui/");
       ui.emplace_back("version", std::string(hc::EmbeddedWebUiVersion()));
+      ui.emplace_back("remote_servers", config.web_ui_remote_servers ? "on" : "off");
       hc::Log(hc::LogLevel::kInfo, "the web UI is on", ui);
     }
     hc::embedding::Ready(server.port());

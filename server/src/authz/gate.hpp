@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include "authz/types.hpp"
+
 namespace duckdb {
 class SQLStatement;
 }
@@ -33,7 +35,10 @@ namespace hardcharger::authz {
 // `table_function_allowed`, if set, says whether a table function that is not one of
 // the families above may be called (by its name parts); binding one already runs it
 // (a remote database's scan connects, an unknown name autoloads an extension), so one
-// that is not allowed is refused here.
+// that is not allowed (nullopt) is refused here. One that is allowed comes with the
+// arguments that name the files it reads (an EXECUTE grant's declarations; none for the
+// functions everyone may call and for macros): their literal values go to `storage`
+// before binding opens them, as a file-reading function's first argument does.
 //
 // `storage`, if set, is called for each read or write of files, URLs or object storage the
 // statement names (read_csv(...), FROM '<path>', COPY, EXPORT and IMPORT DATABASE), with
@@ -47,7 +52,8 @@ struct StorageUse {
   bool directory = false;  // writes (or reads) a directory of files
 };
 using NamedTableCallback = std::function<void(const std::vector<std::string>&, bool described)>;
-using TableFunctionCallback = std::function<bool(const std::vector<std::string>&)>;
+using TableFunctionCallback =
+    std::function<std::optional<std::vector<PathArgument>>(const std::vector<std::string>&)>;
 using StorageCallback = std::function<void(const StorageUse&)>;
 std::optional<std::string> GatedCategory(
     duckdb::SQLStatement& statement, const std::function<bool(const std::string&)>& permitted,

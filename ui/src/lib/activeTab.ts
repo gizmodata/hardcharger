@@ -11,11 +11,13 @@ export interface ActiveTab {
   transaction: TransactionState;
   /** The role the tab acts with (SET ROLE); "" for all of the user's roles. */
   role: string;
+  /** The server the tab is on (a saved server's id; "" for this server). */
+  server: string;
   sessionId?: string;
   title?: string;
 }
 
-const none: ActiveTab = { catalog: "", schema: "", transaction: "none", role: "" };
+const none: ActiveTab = { catalog: "", schema: "", transaction: "none", role: "", server: "" };
 let current: ActiveTab = none;
 const listeners = new Set<() => void>();
 
@@ -25,6 +27,7 @@ export function publishActiveTab(next: ActiveTab): void {
     next.schema === current.schema &&
     next.transaction === current.transaction &&
     next.role === current.role &&
+    next.server === current.server &&
     next.sessionId === current.sessionId &&
     next.title === current.title
   ) {
