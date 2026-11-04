@@ -602,7 +602,12 @@ arrow::Status RbacStore::OpenStore() {
     ARROW_RETURN_NOT_OK(Exec(conn, "ATTACH ':memory:' AS rbac_store"));
   } else if (duckdb_file) {
     description_ = "DuckDB file " + file_path_ + " (one server only)";
-    ARROW_ASSIGN_OR_RAISE(auto attach, Query(conn, "ATTACH " + Quote(file_path_) + " AS rbac_store"));
+    if (options_.read_only && !std::filesystem::exists(file_path_, ec)) {
+      return arrow::Status::Invalid("Hardcharger access control: the access control store has not been initialized: "
+                                    "the DuckDB store file ", file_path_, " does not exist");
+    }
+    ARROW_ASSIGN_OR_RAISE(auto attach, Query(conn, "ATTACH " + Quote(file_path_) + " AS rbac_store" +
+                                                       (options_.read_only ? " (READ_ONLY)" : "")));
     if (attach->HasError()) {
       std::string error = attach->GetError();
       if (auto nl = error.find('\n'); nl != std::string::npos) error.resize(nl);
@@ -626,7 +631,8 @@ arrow::Status RbacStore::OpenStore() {
     connect_uri_ = WithTimeouts(uri, options_.timeout);
     // The connection string carries credentials: never log it (Redacted() takes it out of
     // every error, as given and as rewritten).
-    ARROW_ASSIGN_OR_RAISE(auto attach, Query(conn, "ATTACH " + Quote(connect_uri_) + " AS rbac_store (TYPE postgres)"));
+    ARROW_ASSIGN_OR_RAISE(auto attach, Query(conn, "ATTACH " + Quote(connect_uri_) + " AS rbac_store (TYPE postgres" +
+                                                       std::string(options_.read_only ? ", READ_ONLY)" : ")")));
     if (attach->HasError()) {
       std::string error = attach->GetError();
       if (auto nl = error.find('\n'); nl != std::string::npos) error.resize(nl);
@@ -639,6 +645,10 @@ arrow::Status RbacStore::OpenStore() {
         "(duckdb:/path/to/rbac.duckdb)");
   }
 
+  if (options_.read_only) {
+    ARROW_RETURN_NOT_OK(RequireSchema());
+    return CheckOwnership();
+  }
   // Two replicas starting at once can race on CREATE ... IF NOT EXISTS.
   arrow::Status init;
   for (int attempt = 0; attempt < 5; ++attempt) {
@@ -721,7 +731,8 @@ arrow::Status RbacStore::CheckOwnership() {
     return RowCount(*r) == 0 ? std::string() : GetString(*r, 0, 0);
   };
   ARROW_ASSIGN_OR_RAISE(cluster_id_, read());
-  if (cluster_id_.empty() && !options_.cluster_id.empty()) {
+  // A read-only opening never claims the store: a server does, when it first serves it.
+  if (cluster_id_.empty() && !options_.cluster_id.empty() && !options_.read_only) {
     ARROW_RETURN_NOT_OK(Run(conn,
                             "INSERT INTO " + T("meta") +
                                 " SELECT 'cluster_id', $1 WHERE NOT EXISTS (SELECT 1 FROM " + T("meta") +
@@ -738,6 +749,32 @@ arrow::Status RbacStore::CheckOwnership() {
         ". Grants name catalogs, so another cluster's grants would apply to this cluster's "
         "catalogs of the same names: give each cluster a store of its own, or set "
         "rbac_store_shared=true to share users, roles and grants between the clusters");
+  }
+  return arrow::Status::OK();
+}
+
+arrow::Status RbacStore::RequireSchema() {
+  auto& conn = *link_;
+  auto rows = Run(conn, "SELECT value FROM " + T("meta") + " WHERE key = 'schema_version'");
+  if (!rows.ok() && IsStoreUnavailable(rows.status())) return rows.status();
+  if (!rows.ok() || RowCount(**rows) == 0) {
+    return arrow::Status::Invalid(
+        "Hardcharger access control: the access control store has not been initialized (no ", kSchema,
+        " schema with a version): a server creates it when it first opens the store",
+        rows.ok() ? std::string() : " (" + rows.status().message() + ")");
+  }
+  const std::string text = GetString(**rows, 0, 0);
+  int64_t version = 0;
+  try {
+    version = std::stoll(text);
+  } catch (const std::exception&) {
+    return arrow::Status::Invalid("Hardcharger access control: the store's schema version '", text,
+                                  "' is not a number");
+  }
+  if (version > kStoreSchemaVersion) {
+    return arrow::Status::Invalid("Hardcharger access control: the access control store's schema is version ",
+                                  version, ", newer than this server's (", kStoreSchemaVersion,
+                                  "): a later Hardcharger has upgraded it. Run that version (or later)");
   }
   return arrow::Status::OK();
 }
@@ -1135,6 +1172,10 @@ arrow::Result<int64_t> RbacStore::Write(const std::function<arrow::Status(StoreT
 
 arrow::Status RbacStore::Transact(const std::function<arrow::Status(StoreTransaction&)>& fn,
                                   int64_t* version) {
+  if (options_.read_only) {
+    return arrow::Status::Invalid(
+        "Hardcharger access control: the access control store was opened read-only; nothing is written");
+  }
   StoreTurn turn;
   ARROW_RETURN_NOT_OK(Lock(turn));
   auto& conn = *link_;

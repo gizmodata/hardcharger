@@ -699,6 +699,12 @@ Loaded LoadConfig(int argc, char** argv) {
       loaded.audit_log_partial = true;
       continue;
     }
+    // Decides a credential as /chargewire/v1/auth/token would, with the rest of the
+    // configuration (the store, the keys, the administrator), writing nothing.
+    if (arg == "--verify-credentials") {
+      loaded.action = Action::kVerifyCredentials;
+      continue;
+    }
     if (arg == "--config") {
       if (!inline_value && i + 1 >= argc) throw std::invalid_argument("--config needs a file");
       loaded.config.config_file = inline_value ? *inline_value : argv[++i];
@@ -785,6 +791,9 @@ std::string Usage() {
       << "\n  --verify-tls URL  (fetch URL over HTTPS with the system's CA bundle, then exit)\n"
       << "  --verify-audit-log FILE [--verify-audit-log-partial]\n"
       << "      check the access-control audit records in a JSON log and exit (0: intact)\n"
+      << "  --verify-credentials  (with the server's configuration: read one JSON credential, as a client\n"
+      << "      sends it to /chargewire/v1/auth/token, on stdin; decide it as the server would, writing\n"
+      << "      nothing; print one JSON line; exit 0 verified, 1 refused, 2 bad input, 3 undecided)\n"
       << "  --print-options-json  (every option, with its flag, variable, YAML key and default, as JSON)\n"
       << "  --licenses  (the third-party software in this binary and its embedded web UI, and their licences)\n"
       << "  --version, --print-duckdb-version, --help\n";

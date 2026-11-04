@@ -79,6 +79,11 @@ struct StoreOptions {
   // that opens it and refuses another one, unless `shared`.
   std::string cluster_id;
   bool shared = false;  // rbac_store_shared: several clusters share users, roles and grants
+  // Open for reading only (hardcharger-server --verify-credentials): the store is attached
+  // read-only, its schema is neither created nor upgraded (a store without one is refused
+  // as not initialized), it is not claimed for cluster_id (another cluster's store is still
+  // refused), and every write fails.
+  bool read_only = false;
 };
 
 // The text "access control store unavailable" every error of an unreachable or hung
@@ -132,6 +137,7 @@ class RbacStore {
   // The cluster the store belongs to (its first cluster_id), or empty.
   const std::string& cluster_id() const { return cluster_id_; }
   std::chrono::milliseconds timeout() const { return options_.timeout; }
+  bool read_only() const { return options_.read_only; }
 
   // `text` without this store's connection string or any credential it may quote.
   std::string Redact(const std::string& text) const;
@@ -140,6 +146,8 @@ class RbacStore {
   RbacStore() = default;
   arrow::Status OpenStore();
   arrow::Status InitializeSchema();
+  // Read-only: the schema must already be there (and not be newer than this server's).
+  arrow::Status RequireSchema();
   arrow::Status CheckOwnership();
   void CheckpointFile();
   arrow::Result<std::shared_ptr<const Snapshot>> LoadLocked();

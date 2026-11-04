@@ -25,6 +25,7 @@
 #include "embedding.hpp"
 #include "engine.hpp"
 #include "http_client.hpp"
+#include "identity_provider.hpp"
 #include "instance_info.hpp"
 #include "jwks.hpp"
 #include "logging.hpp"
@@ -35,6 +36,7 @@
 #include "startup_banner.hpp"
 #include "third_party_notices.hpp"
 #include "tokens.hpp"
+#include "verify_credentials.hpp"
 #include "version.hpp"
 #include "chargewire/server.hpp"
 #include "chargewire/stop_signals.hpp"
@@ -145,43 +147,10 @@ std::string RedactUrl(const std::string& url) {
   return url.substr(0, scheme_end + 3) + "***@" + url.substr(at + 1);
 }
 
-// The identity provider's keys and endpoints. Its JWKS verifies ID tokens when named
-// (token_jwks_uri), or when tokens have an issuer and an audience but no configured key:
-// then the issuer's OpenID configuration names it. Browser sign-in needs the provider's
-// authorization and token endpoints, from the same document.
-struct IdentityProvider {
-  std::shared_ptr<hc::Jwks> jwks;
-  hc::OidcEndpoints endpoints;
-};
-
-IdentityProvider DiscoverIdentityProvider(const hc::Config& c) {
-  IdentityProvider provider;
-  const bool oauth = !c.oauth_client_id.empty();
-  const bool by_issuer =
-      !c.token_allowed_issuer.empty() && !c.token_allowed_audience.empty() && c.token_signature_verify_cert_path.empty();
-  if (oauth || (c.token_jwks_uri.empty() && by_issuer)) {
-    try {
-      provider.endpoints = hc::DiscoverOidc(c.token_allowed_issuer);
-    } catch (const std::exception& e) {
-      // Without OAuth this only costs JWKS sign-in; OAuth can't run.
-      if (oauth) throw std::runtime_error(std::string("OAuth sign-in needs the issuer's OpenID configuration: ") + e.what());
-      hc::Log(hc::LogLevel::kWarning, "OpenID discovery failed; identity provider tokens won't be accepted",
-              {{"issuer", c.token_allowed_issuer}, {"error", e.what()}});
-      return provider;
-    }
-  }
-  const std::string uri = !c.token_jwks_uri.empty() ? c.token_jwks_uri : provider.endpoints.jwks_uri;
-  if (!uri.empty() && (!c.token_jwks_uri.empty() || by_issuer || oauth)) {
-    provider.jwks = std::make_shared<hc::Jwks>(uri);
-    hc::Log(hc::LogLevel::kInfo, "identity provider tokens are verified with its JWKS", {{"jwks_uri", uri}});
-  }
-  return provider;
-}
-
 // Browser sign-in (Chargewire §4.3) on the main port: the SDK serves the flows and the
 // callback; this provider talks to the identity provider. The redirect URI to register
 // with it is <oauth_base_url>/chargewire/v1/auth/oauth/callback (oauth_redirect_uri overrides).
-std::shared_ptr<hc::OAuthBrowserSignIn> MakeBrowserSignIn(const hc::Config& c, const IdentityProvider& provider,
+std::shared_ptr<hc::OAuthBrowserSignIn> MakeBrowserSignIn(const hc::Config& c, const hc::IdentityProvider& provider,
                                                           std::shared_ptr<hc::Authenticator> authenticator) {
   if (c.oauth_client_id.empty()) return nullptr;
   if (c.token_allowed_issuer.empty() || c.token_allowed_audience.empty()) {
@@ -483,6 +452,8 @@ int main(int argc, char** argv) {
         return 1;
       }
     }
+    case hc::Action::kVerifyCredentials:
+      return hc::VerifyCredentials(loaded.config, std::cin, std::cout);
     case hc::Action::kServe:
       break;
   }
@@ -616,7 +587,7 @@ int main(int argc, char** argv) {
           });
     }
     auto backend = std::make_shared<hc::Backend>(runtime, access);
-    const IdentityProvider provider = DiscoverIdentityProvider(config);
+    const hc::IdentityProvider provider = hc::DiscoverIdentityProvider(config);
     auto authenticator = std::make_shared<hc::Authenticator>(
         config, store_access, [tokens](std::string_view token) { return tokens->Validate(token); },
         provider.jwks);

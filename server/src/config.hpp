@@ -173,7 +173,7 @@ inline int64_t EffectiveHealthCheckStaleness(const Config& config) {
 
 // What the command line asked for besides configuration.
 enum class Action { kServe, kHelp, kVersion, kPrintDuckDBVersion, kVerifyAuditLog, kVerifyTls,
-                    kPrintOptionsJson, kLicenses };
+                    kVerifyCredentials, kPrintOptionsJson, kLicenses };
 
 struct Loaded {
   Config config;

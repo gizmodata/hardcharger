@@ -69,6 +69,10 @@ struct Options {
   // non-administrator's limits. Users, roles and grants don't exist; access-control
   // statements are refused.
   bool catalog_rules_only = false;
+  // The store opened read-only, with no poller (hardcharger-server --verify-credentials): a
+  // one-shot check of a credential that writes nothing, a user a sign-in token would
+  // provision included (would_provision()).
+  bool read_only = false;
 };
 
 // One catalog_access rule of a sign-in token: a catalog name or glob ('*', '?') and
@@ -184,6 +188,9 @@ class AccessControl {
 
   // Without a store: catalog_access rules only (Options::catalog_rules_only).
   bool catalog_rules_only() const { return catalog_rules_only_; }
+  bool read_only() const { return read_only_; }
+  // Read-only: whether a sign-in checked so far would have provisioned its user.
+  bool would_provision() const { return would_provision_.load(); }
 
   // Password sign-in of a store user. nullopt for any failure (unknown user, wrong
   // password, disabled): the same answer, after the same work.
@@ -260,6 +267,8 @@ class AccessControl {
 
   std::shared_ptr<RbacEngine> engine_;
   bool catalog_rules_only_ = false;
+  bool read_only_ = false;
+  std::atomic<bool> would_provision_{false};
   std::vector<std::string> hidden_catalogs_;
   ScopedTokenSigner signer_;
   std::mutex sessions_mutex_;

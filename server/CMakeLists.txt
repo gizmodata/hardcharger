@@ -207,6 +207,7 @@ add_library(hardcharger_core STATIC
   src/guards.cc
   src/health.cc
   src/http_client.cc
+  src/identity_provider.cc
   src/instance_info.cc
   src/instrumentation.cc
   src/jwks.cc
@@ -222,6 +223,7 @@ add_library(hardcharger_core STATIC
   src/sql_text.cc
   src/startup_banner.cc
   src/tokens.cc
+  src/verify_credentials.cc
   src/web_ui.cc
   "${CMAKE_CURRENT_BINARY_DIR}/generated/web_ui_files.cc")
 target_include_directories(hardcharger_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")

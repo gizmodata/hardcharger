@@ -157,6 +157,66 @@ TEST(StoreOwnership, RecordsItsClusterAndRefusesAnother) {
   std::filesystem::remove_all(dir);
 }
 
+// Read-only (hardcharger-server --verify-credentials): a store without a schema is refused as
+// not initialized (and none is created), an unclaimed store stays unclaimed, another cluster's
+// store is still refused, and a write fails.
+TEST(StoreReadOnly, NeverCreatesClaimsOrWrites) {
+  const auto dir = PrivateDir();
+  const std::string uri = "duckdb:" + (dir / "rbac.duckdb").string();
+  const std::string a = "11111111-1111-4111-8111-111111111111";
+  const std::string b = "22222222-2222-4222-8222-222222222222";
+  {
+    StoreOptions options;  // no file yet: not initialized, and still no file afterwards
+    options.uri = uri;
+    options.read_only = true;
+    auto store = RbacStore::Open(options);
+    ASSERT_FALSE(store.ok());
+    EXPECT_TRUE(Has(store.status().message(), "has not been initialized")) << store.status();
+    EXPECT_FALSE(std::filesystem::exists(dir / "rbac.duckdb"));
+  }
+  {
+    StoreOptions options;  // "memory" has no schema either
+    options.uri = "memory";
+    options.read_only = true;
+    auto store = RbacStore::Open(options);
+    ASSERT_FALSE(store.ok());
+    EXPECT_TRUE(Has(store.status().message(), "has not been initialized")) << store.status();
+  }
+  ASSERT_TRUE(RbacStore::Open(uri).ok());  // a server creates the schema; no cluster_id recorded
+  {
+    StoreOptions options;  // a read-only opening under a cluster id does not claim the store
+    options.uri = uri;
+    options.cluster_id = a;
+    options.read_only = true;
+    auto store = RbacStore::Open(options);
+    ASSERT_TRUE(store.ok()) << store.status().ToString();
+    EXPECT_TRUE((*store)->read_only());
+    EXPECT_EQ((*store)->cluster_id(), "");
+    auto written = (*store)->Mutate([](StoreTransaction&, const Snapshot&) { return arrow::Status::OK(); });
+    ASSERT_FALSE(written.ok());
+    EXPECT_TRUE(Has(written.message(), "opened read-only")) << written;
+    EXPECT_TRUE((*store)->Load().ok());
+  }
+  {
+    StoreOptions options;  // still nobody's: a server with a cluster id takes it
+    options.uri = uri;
+    options.cluster_id = a;
+    auto store = RbacStore::Open(options);
+    ASSERT_TRUE(store.ok()) << store.status().ToString();
+    EXPECT_EQ((*store)->cluster_id(), a);
+  }
+  {
+    StoreOptions options;  // another cluster's store is refused read-only too
+    options.uri = uri;
+    options.cluster_id = b;
+    options.read_only = true;
+    auto store = RbacStore::Open(options);
+    ASSERT_FALSE(store.ok());
+    EXPECT_TRUE(Has(store.status().message(), "belongs to cluster " + a)) << store.status();
+  }
+  std::filesystem::remove_all(dir);
+}
+
 TEST(StoreOwnership, AStoreWithoutAClusterTakesTheFirstOne) {
   const auto dir = PrivateDir();
   const std::string uri = "duckdb:" + (dir / "rbac.duckdb").string();

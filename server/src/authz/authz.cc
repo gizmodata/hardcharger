@@ -284,7 +284,7 @@ bool LooksLikeAccessControlStatement(std::string_view sql) { return LooksLikeRba
 // ---- AccessControl ----
 
 AccessControl::AccessControl(const Options& options)
-    : catalog_rules_only_(options.catalog_rules_only) {
+    : catalog_rules_only_(options.catalog_rules_only), read_only_(options.read_only) {
   RbacEngine::Options engine_options;
   // Rules only: an empty store of the process's own, which no statement can change.
   engine_options.store_uri = catalog_rules_only_ ? "memory" : options.store_uri;
@@ -292,7 +292,9 @@ AccessControl::AccessControl(const Options& options)
   engine_options.certificate_administrators = options.certificate_administrators;
   engine_options.policy_service_url = options.policy_service_url;
   engine_options.policy_service_timeout = options.policy_service_timeout;
-  engine_options.poll_interval = catalog_rules_only_ ? std::chrono::milliseconds(0) : options.poll_interval;
+  engine_options.poll_interval =
+      catalog_rules_only_ || read_only_ ? std::chrono::milliseconds(0) : options.poll_interval;
+  engine_options.read_only = read_only_;
   engine_options.store_timeout = options.store_timeout;
   if (!catalog_rules_only_) {
     engine_options.cluster_id = options.cluster_id;
@@ -391,7 +393,12 @@ AccessControl::TokenUser AccessControl::ProvisionStoreUser(const std::string& us
     }
     throw Error(ErrorCode::kInvalidCredentials, principal.status().message());
   }
-  if (created) {
+  if (created && read_only_) {
+    // Nothing was written: not an audit record, which says what happened.
+    would_provision_ = true;
+    Log(LogLevel::kInfo, "a sign-in token would provision its user (read-only check; nothing written)",
+        {{"user", user_name}, {"issuer", issuer}, {"role", token_role}});
+  } else if (created) {
     Audit(LogLevel::kInfo, "provisioned a user on its first sign-in",
           {{"kind", "access_control"}, {"status", "success"}, {"statement", "CREATE USER"},
            {"method", "token_auto_provision"}, {"user", user_name}, {"issuer", issuer}, {"role", token_role}});

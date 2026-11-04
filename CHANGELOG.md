@@ -7,6 +7,22 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- `hardcharger-server --verify-credentials`: a one-shot decision on a credential, made with the
+  server's own sign-in code and configuration and nothing written anywhere. With the server's
+  usual configuration (the administrator, the access-control store, the token keys, the secret
+  key) it reads one JSON object on stdin, exactly what a client sends to
+  `/chargewire/v1/auth/token` (a password grant, a scoped token as the password of user `token`,
+  or a `token_exchange` grant), prints one JSON line on stdout (`verified`, `user`, `role`,
+  `method`, `would_provision`, or `reason` and `message`) and exits 0 verified, 1 refused, 2 bad
+  input, 3 undecided (the store unreachable or not initialized, or belonging to another cluster;
+  a configuration problem). The store is opened read-only: never claimed, created, upgraded or
+  written, a user `token_auto_provision_users` would create included (`would_provision: true`).
+  For a control plane that must know whether a credential would sign in before it starts a
+  stopped server (GizmoData Cloud's auto-resume), without holding a copy of the store's
+  credentials. Logs go to stderr whatever `log_file` says; the credential is never printed.
+
 ### Fixed
 
 - Flaky tests from the 2.5.0 release gate, each fixed rather than re-run:

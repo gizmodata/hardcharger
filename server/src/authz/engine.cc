@@ -168,6 +168,7 @@ arrow::Result<std::shared_ptr<RbacEngine>> RbacEngine::Create(const Options& opt
   store_options.timeout = options.store_timeout;
   store_options.cluster_id = options.cluster_id;
   store_options.shared = options.store_shared;
+  store_options.read_only = options.read_only;
   ARROW_ASSIGN_OR_RAISE(engine->store_, RbacStore::Open(store_options));
   if (!options.policy_service_url.empty()) {
     engine->policy_service_ =
@@ -176,7 +177,7 @@ arrow::Result<std::shared_ptr<RbacEngine>> RbacEngine::Create(const Options& opt
   ARROW_ASSIGN_OR_RAISE(auto snapshot, engine->store_->Load());
   engine->Publish(std::move(snapshot));
   engine->NoteStoreAnswer(arrow::Status::OK());
-  if (options.poll_interval.count() > 0) {
+  if (options.poll_interval.count() > 0 && !options.read_only) {
     engine->poller_ = std::thread([raw = engine.get()] { raw->PollLoop(); });
   }
   return engine;
@@ -330,6 +331,14 @@ arrow::Result<Principal> RbacEngine::ProvisionUser(const std::string& user_name,
                                                    bool* created) {
   *created = false;
   if (snapshot()->FindUserByName(user_name)) return PrincipalForUser(user_name);  // disabled stays disabled
+  if (options_.read_only) {
+    // The same checks a creation makes, with nothing written: the answer a server would give.
+    const auto snap = snapshot();
+    ARROW_RETURN_NOT_OK(CheckNewUserName(*snap, user_name, options_));
+    ARROW_RETURN_NOT_OK(TenantForName(*snap, user_name).status());
+    *created = true;
+    return Principal::User(StoreTransaction::NewId(), user_name);
+  }
   bool inserted = false;
   const auto written = store_->Mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
     inserted = false;

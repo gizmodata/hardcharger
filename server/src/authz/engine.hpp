@@ -104,6 +104,9 @@ class RbacEngine {
     // How old the snapshot may grow while the store does not answer before store users
     // are refused (rbac_max_snapshot_age_seconds); 0: no limit.
     std::chrono::seconds max_snapshot_age{0};
+    // The store opened read-only (StoreOptions::read_only), with no poller: for a one-shot
+    // check of credentials. ProvisionUser then decides as it would, without creating the user.
+    bool read_only = false;
   };
 
   static arrow::Result<std::shared_ptr<RbacEngine>> Create(const Options& options);
