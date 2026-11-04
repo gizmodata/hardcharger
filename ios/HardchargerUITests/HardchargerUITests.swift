@@ -24,6 +24,20 @@ final class HardchargerUITests: XCTestCase {
     }
 
     /// Waits until the splash is gone (the app is on screen).
+    /// Taps a switch and waits for its value to become `value`. A slow simulator reports the old
+    /// value for a moment after the tap (2.7.0's gate read "1" right after turning one off), and
+    /// can drop a tap that lands during a re-render, so it taps once more if nothing changed.
+    private func flip(_ toggle: XCUIElement, to value: String, file: StaticString = #filePath, line: UInt = #line) {
+        let target = NSPredicate(format: "value == %@", value)
+        for _ in 0..<2 {
+            toggle.switches.firstMatch.exists ? toggle.switches.firstMatch.tap() : toggle.tap()
+            if XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: target, object: toggle)], timeout: 10) == .completed {
+                return
+            }
+        }
+        XCTFail("\(toggle.identifier) is \(String(describing: toggle.value)), not \(value)", file: file, line: line)
+    }
+
     private func waitForApp() {
         let gone = NSPredicate(format: "exists == false")
         _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: gone, object: app.descendants(matching: .any)["splash"].firstMatch)],
@@ -169,14 +183,12 @@ final class HardchargerUITests: XCTestCase {
         let printQueries = app.switches["settings.printQueries"]
         XCTAssertTrue(printQueries.waitForExistence(timeout: 30))
         XCTAssertEqual(printQueries.value as? String, "1")
-        printQueries.switches.firstMatch.exists ? printQueries.switches.firstMatch.tap() : printQueries.tap()
-        XCTAssertEqual(printQueries.value as? String, "0")
+        flip(printQueries, to: "0")
         // A setting the running server started with: Settings offers the restart.
         XCTAssertTrue(app.buttons["settings.restart"].waitForExistence(timeout: 10))
 
         let autoStart = app.switches["settings.startAutomatically"]
-        autoStart.switches.firstMatch.exists ? autoStart.switches.firstMatch.tap() : autoStart.tap()
-        XCTAssertEqual(autoStart.value as? String, "0")
+        flip(autoStart, to: "0")
 
         // Again, without the reset: both stuck.
         app.terminate()
