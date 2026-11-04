@@ -108,10 +108,17 @@ export async function startHarness(): Promise<Harness> {
   const remoteSeed = ["CREATE TABLE remote AS SELECT range AS id, 'remote row ' || range AS note FROM range(3)"];
   const remotePassword = () => `rm:${randomBytes(6).toString("hex")}@e2e`;
   const plainPassword = remotePassword();
+  // The plain one has access control (a DuckDB-file store), so a test can mint a scoped token
+  // on it and sign in as user `token`.
   const plain = await startServer({
     binary,
     adminPassword: plainPassword,
-    extraArgs: ["--init-sql-commands", remoteSeed.join(";")],
+    extraArgs: [
+      "--init-sql-commands",
+      remoteSeed.join(";"),
+      "--rbac-store-uri",
+      `duckdb:${path.join(pkiDir, "plain-rbac.duckdb")}`,
+    ],
   });
   const signedPassword = remotePassword();
   const signed = await startServer({

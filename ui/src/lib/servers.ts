@@ -15,6 +15,15 @@ import { type Connection, type DiscoveryDocument, connect } from "@gizmodata/cha
 import { useSyncExternalStore } from "react";
 
 import { type SignedIn, SignInError } from "./auth";
+import { forgetRememberedPassword } from "./desktopBridge";
+import {
+  type ServerAddress,
+  addressLabel,
+  defaultPort,
+  normalPrefix,
+  parseServerUri,
+  serverUrl,
+} from "./serverAddress";
 import type { ConnectionOptions } from "./chargewire";
 import { pageRequests } from "./pageRequests";
 
@@ -23,14 +32,38 @@ export type TlsMode = "verified" | "fingerprint" | "plaintext";
 /** The UI's own server, as a server id ("" everywhere a server is named). */
 export const localServerId = "";
 
-/** A server the person added (what localStorage keeps). */
-export interface SavedServer {
+/**
+ * A server the person added (what localStorage keeps, and the shape the desktop app hands
+ * over from its Settings > Remote servers): its address, how its certificate is trusted, the
+ * user name to fill in and the query timeout. Never a password or token.
+ */
+export interface SavedServer extends ServerAddress {
   id: string;
   name: string;
-  url: string;
-  tls: TlsMode;
-  /** With tls "fingerprint": the SHA-256 the person trusted (aa:bb:...). */
+  /** Trust the certificate by its SHA-256 fingerprint (a private or self-signed one). */
+  trust: boolean;
+  /** With trust: the fingerprint the person accepted (aa:bb:...). */
   fingerprint?: string;
+  username?: string;
+  /** Seconds before the server cancels a statement; 0 or absent: none. */
+  timeout?: number;
+  /** Not saved for later (Save connection for later off): kept for this tab only. */
+  transient?: boolean;
+}
+
+/** How a saved server's connection is protected (the relay's TLS mode, and the lock). */
+export function tlsModeOf(saved: Pick<SavedServer, "tls" | "trust">): TlsMode {
+  return !saved.tls ? "plaintext" : saved.trust ? "fingerprint" : "verified";
+}
+
+/** The URL the relay is given for a saved server. */
+export function urlOf(saved: SavedServer): string {
+  return serverUrl(saved);
+}
+
+/** One server, however it was saved: host, port and base path. */
+export function serverKey(address: ServerAddress): string {
+  return `${address.host.toLowerCase()}|${address.port}|${normalPrefix(address.prefix)}`;
 }
 
 /** What the relay learned about a remote's certificate. */
@@ -106,6 +139,8 @@ export class RemoteError extends Error {
 const serversKey = (user: string) => `hardcharger-ui:servers:v1:${user}`;
 const signInsKey = "hardcharger-ui:remote-sign-ins:v1";
 const relaySessionKey = "hardcharger-ui:relay-session:v1";
+/** Servers added without Save connection for later: this tab only. */
+const tabServersKey = "hardcharger-ui:tab-servers:v1";
 /** The desktop app hands its saved servers to the workspace under this key (sessionStorage). */
 export const desktopServersKey = "hardcharger-ui:desktop-servers";
 
@@ -125,16 +160,47 @@ function session(): Storage | undefined {
   }
 }
 
-function isSaved(s: unknown): s is SavedServer {
-  if (s === null || typeof s !== "object") return false;
+/**
+ * A stored entry as a SavedServer, or undefined when it isn't one. Entries saved before the
+ * dialog took a host and port (a `url` and a `tls` of verified / fingerprint / plaintext, the
+ * first 2.7.0 builds) are read the same way.
+ */
+export function normalizeSaved(s: unknown): SavedServer | undefined {
+  if (s === null || typeof s !== "object") return undefined;
   const r = s as Record<string, unknown>;
-  return (
-    typeof r["id"] === "string" &&
-    typeof r["name"] === "string" &&
-    typeof r["url"] === "string" &&
-    (r["tls"] === "verified" || r["tls"] === "fingerprint" || r["tls"] === "plaintext") &&
-    (r["fingerprint"] === undefined || typeof r["fingerprint"] === "string")
-  );
+  if (typeof r["id"] !== "string" || typeof r["name"] !== "string") return undefined;
+  const text = (key: string): string | undefined => {
+    const value = r[key];
+    return typeof value === "string" ? value : undefined;
+  };
+  let address: ServerAddress;
+  let trust = r["trust"] === true;
+  if (typeof r["host"] === "string" && r["host"]) {
+    const port = typeof r["port"] === "number" ? r["port"] : defaultPort;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return undefined;
+    address = { host: r["host"], port, tls: r["tls"] !== false, prefix: normalPrefix(text("prefix") ?? "") };
+  } else if (typeof r["url"] === "string") {
+    const parsed = parseServerUri(r["url"]);
+    if (!parsed.ok) return undefined;
+    const mode = r["tls"];
+    if (mode !== "verified" && mode !== "fingerprint" && mode !== "plaintext") return undefined;
+    address = { ...parsed.address, tls: mode !== "plaintext", prefix: parsed.address.prefix };
+    trust = mode === "fingerprint";
+  } else {
+    return undefined;
+  }
+  const fingerprint = text("fingerprint");
+  const username = text("username");
+  const timeout = typeof r["timeout"] === "number" && r["timeout"] > 0 ? Math.floor(r["timeout"]) : undefined;
+  return {
+    id: r["id"],
+    name: r["name"],
+    ...address,
+    trust: address.tls && trust,
+    ...(fingerprint ? { fingerprint } : {}),
+    ...(username ? { username } : {}),
+    ...(timeout ? { timeout } : {}),
+  };
 }
 
 export function loadSavedServers(user: string, storage: Storage | undefined = local()): SavedServer[] {
@@ -142,7 +208,7 @@ export function loadSavedServers(user: string, storage: Storage | undefined = lo
     const raw = storage?.getItem(serversKey(user));
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isSaved) : [];
+    return Array.isArray(parsed) ? parsed.flatMap((item) => normalizeSaved(item) ?? []) : [];
   } catch {
     return [];
   }
@@ -155,14 +221,19 @@ export function saveSavedServers(
 ): void {
   try {
     // Only the fields the list is for: never anything a caller may have left on an entry.
-    const kept = servers.map(({ id, name, url, tls, fingerprint }) => ({
+    const kept = servers.map(({ id, name, host, port, tls, prefix, trust, fingerprint, username, timeout }) => ({
       id,
       name,
-      url,
+      host,
+      port,
       tls,
+      prefix,
+      trust,
       ...(fingerprint ? { fingerprint } : {}),
+      ...(username ? { username } : {}),
+      ...(timeout ? { timeout } : {}),
     }));
-    storage?.setItem(serversKey(user), JSON.stringify(kept));
+    storage?.setItem(serversKey(user), JSON.stringify(kept.filter((_, i) => !servers[i]!.transient)));
   } catch {
     // not remembered (a private window, or storage blocked)
   }
@@ -183,13 +254,38 @@ export function mergeDesktopServers(
   }
   if (!Array.isArray(handed)) return [...saved];
   const out = [...saved];
-  const known = new Set(saved.map((s) => normalUrl(s.url)));
-  for (const item of handed) {
-    if (!isSaved(item) || known.has(normalUrl(item.url))) continue;
-    known.add(normalUrl(item.url));
-    out.push({ ...item, id: item.id || newServerId() });
+  const known = new Set(saved.map((s) => serverKey(s)));
+  for (const raw of handed) {
+    const item = normalizeSaved(
+      raw && typeof raw === "object" && !(raw as { id?: unknown }).id ? { ...raw, id: newServerId() } : raw,
+    );
+    if (!item || known.has(serverKey(item))) continue;
+    known.add(serverKey(item));
+    out.push(item);
   }
   return out;
+}
+
+/** The servers this tab added without saving them. */
+export function loadTabServers(storage: Storage | undefined = session()): SavedServer[] {
+  try {
+    const raw = storage?.getItem(tabServersKey);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.flatMap((item) => normalizeSaved(item) ?? []).map((s) => ({ ...s, transient: true }))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveTabServers(servers: readonly SavedServer[], storage: Storage | undefined = session()): void {
+  try {
+    storage?.setItem(tabServersKey, JSON.stringify(servers.filter((s) => s.transient)));
+  } catch {
+    // they last until the page reloads
+  }
 }
 
 export function loadRemoteSignIns(storage: Storage | undefined = session()): RemoteSignIn[] {
@@ -243,18 +339,6 @@ export function newServerId(): string {
   return typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
     : `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
-export function normalUrl(url: string): string {
-  return url.trim().replace(/\/+$/, "").toLowerCase();
-}
-
-/** The TLS mode a URL calls for (its scheme), and whether it is a URL the relay takes. */
-export function urlTlsMode(url: string): TlsMode | undefined {
-  const u = url.trim().toLowerCase();
-  if (u.startsWith("https://") || u.startsWith("chargewire://")) return "verified";
-  if (u.startsWith("http://")) return "plaintext";
-  return undefined;
 }
 
 // ---- The relay's API ----
@@ -399,11 +483,14 @@ export function relayFetch(auth: () => { token?: string; relaySession?: string }
 export function openRemoteConnection(
   signIn: RemoteSignIn,
   relayAuth: () => { token?: string; relaySession?: string },
-  options: ConnectionOptions = {},
+  options: ConnectionOptions & { timeoutS?: number } = {},
 ): Promise<Connection> {
   const { signal, catalog, schema, reconnect } = options;
+  const timeoutS = options.timeoutS ?? 0;
   return connect({
     url: `${window.location.origin}${signIn.relayPath}`,
+    // The saved connection's query timeout: the server cancels a statement after it (§6.9).
+    ...(timeoutS > 0 ? { statementTimeoutMs: timeoutS * 1000 } : {}),
     fetch: relayFetch(relayAuth),
     token: signIn.token,
     ...(catalog ? { catalog } : {}),
@@ -455,6 +542,8 @@ export class ServersStore {
     this.api = new RelayApi(() => this.relayAuth());
     const saved = mergeDesktopServers(loadSavedServers(user));
     saveSavedServers(user, saved);
+    const keys = new Set(saved.map(serverKey));
+    for (const s of loadTabServers()) if (!keys.has(serverKey(s))) saved.push(s);
     const signIns = new Map(loadRemoteSignIns().map((s) => [s.serverId, s]));
     this.#state = {
       servers: saved.map((s) => {
@@ -486,6 +575,7 @@ export class ServersStore {
       this.#user,
       next.servers.map((s) => s.saved),
     );
+    saveTabServers(next.servers.map((s) => s.saved));
     saveRemoteSignIns(next.servers.flatMap((s) => (s.signIn ? [s.signIn] : [])));
     saveRelaySession(next.relaySession);
     for (const l of this.#listeners) l();
@@ -509,9 +599,10 @@ export class ServersStore {
 
   /** Remembers a server (not yet signed in). Returns it (an existing one with the URL is reused). */
   add(server: Omit<SavedServer, "id">): SavedServer {
-    const existing = this.#state.servers.find((s) => normalUrl(s.saved.url) === normalUrl(server.url));
+    const existing = this.#state.servers.find((s) => serverKey(s.saved) === serverKey(server));
     if (existing) {
-      const saved = { ...existing.saved, ...server };
+      const { transient: _was, ...kept } = existing.saved;
+      const saved: SavedServer = { ...kept, ...server };
       this.#patch(existing.saved.id, { saved });
       return saved;
     }
@@ -542,9 +633,7 @@ export class ServersStore {
           ? {
               saved: {
                 ...s.saved,
-                ...(registered.tls?.fingerprint && saved?.tls === "fingerprint"
-                  ? { fingerprint: registered.tls.fingerprint }
-                  : {}),
+                ...(registered.tls?.fingerprint && saved?.trust ? { fingerprint: registered.tls.fingerprint } : {}),
               },
               status: "connected",
               signIn,
@@ -567,7 +656,9 @@ export class ServersStore {
     void this.#closeConnections(id).finally(() => {
       if (relayId) void this.api.remove(relayId).catch(() => {});
     });
-    const { signIn: _gone, ...rest } = state ?? { saved: { id, name: "", url: "", tls: "verified" as const } };
+    const { signIn: _gone, ...rest } = state ?? {
+      saved: { id, name: "", host: "", port: defaultPort, tls: true, prefix: "", trust: false },
+    };
     this.#set({
       ...this.#state,
       servers: this.#state.servers.map((s) =>
@@ -576,9 +667,10 @@ export class ServersStore {
     });
   }
 
-  /** Removes a server from the list, disconnecting it first. */
+  /** Removes a server from the list, disconnecting it first (and forgetting a remembered password). */
   remove(id: string): void {
     this.disconnect(id);
+    void forgetRememberedPassword(id).catch(() => {});
     this.#set({ ...this.#state, servers: this.#state.servers.filter((s) => s.saved.id !== id) });
   }
 
@@ -611,7 +703,10 @@ export class ServersStore {
   openConnection(id: string, options: ConnectionOptions = {}): Promise<Connection> {
     const state = this.find(id);
     if (!state?.signIn) return Promise.reject(new RemoteError("Sign in to this server first.", "not_connected", 0));
-    return openRemoteConnection(state.signIn, () => this.relayAuth(), options).then((c) => {
+    return openRemoteConnection(state.signIn, () => this.relayAuth(), {
+      ...options,
+      timeoutS: state.saved.timeout ?? 0,
+    }).then((c) => {
       this.#extra.set(c, id);
       return c;
     });
@@ -659,16 +754,20 @@ export class ServersStore {
       const { signIn, saved } = state;
       try {
         await this.api.probe(
-          { url: saved.url, tls: saved.tls, ...(saved.fingerprint ? { fingerprint: saved.fingerprint } : {}) },
+          {
+            url: urlOf(saved),
+            tls: tlsModeOf(saved),
+            ...(saved.fingerprint ? { fingerprint: saved.fingerprint } : {}),
+          },
           signal,
         );
         const listed = await this.api.list(signal);
         if (listed.remotes.some((r) => r.id === signIn.relayId)) continue;
         const registered = await this.api.register(
           {
-            url: saved.url,
+            url: urlOf(saved),
             name: saved.name,
-            tls: saved.tls,
+            tls: tlsModeOf(saved),
             ...(saved.fingerprint ? { fingerprint: saved.fingerprint } : {}),
           },
           signal,
@@ -695,7 +794,7 @@ export function useServers(store: ServersStore): ServersSnapshot {
 
 /** A server's name for people: the saved name, else what it calls itself, else its URL. */
 export function serverLabel(state: ServerState): string {
-  return state.saved.name || state.signIn?.serverName || state.saved.url;
+  return state.saved.name || state.signIn?.serverName || addressLabel(state.saved);
 }
 
 /** How a discovery document's server shows (the local server's label). */

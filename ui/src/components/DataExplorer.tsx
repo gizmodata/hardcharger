@@ -33,7 +33,15 @@ import { clearCatalogCaches, listingsFor, onCatalogsChanged } from "../lib/catal
 import { copyText } from "../lib/clipboard";
 import { sqlIdentifier } from "../lib/completionContext";
 import { type SchemaNode, parseSchemaName, schemaSql, schemaTree, spellSchemaPath } from "../lib/schemaPath";
-import { type ServerState, type TlsMode, localServerId, serverLabel, useServers } from "../lib/servers";
+import {
+  type ServerState,
+  type TlsMode,
+  localServerId,
+  serverLabel,
+  useServers,
+  tlsModeOf,
+  urlOf,
+} from "../lib/servers";
 import { sqlNameDragType } from "../lib/sqlNameDrag";
 import { requestUpload } from "../lib/upload/request";
 import { errorMessage, useSession } from "../session";
@@ -137,7 +145,7 @@ export function DataExplorer() {
       out.push({
         id: state.saved.id,
         label: serverLabel(state),
-        tls: state.saved.tls,
+        tls: tlsModeOf(state.saved),
         version: state.signIn?.version ?? "",
         state,
         connected: state.status === "connected" && !!state.signIn,
@@ -429,7 +437,7 @@ export function DataExplorer() {
       } else {
         items.push({ label: "Sign in…", run: () => setAdding({ server: state }) });
       }
-      items.push({ label: "Copy URL", run: () => copy(state.saved.url) });
+      items.push({ label: "Copy URL", run: () => copy(urlOf(state.saved)) });
       items.push({
         label: "Rename…",
         run: () => {
@@ -810,7 +818,7 @@ export function DataExplorer() {
           detail,
           menu: serverMenu(server),
           title: state
-            ? `${state.saved.url}${state.signIn ? ` as ${state.signIn.username}` : ""}`
+            ? `${urlOf(state.saved)}${state.signIn ? ` as ${state.signIn.username}` : ""}`
             : window.location.origin,
         })}
         {isOpen && server.connected && <ul role="group">{catalogItems(server)}</ul>}

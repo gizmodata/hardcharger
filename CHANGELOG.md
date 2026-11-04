@@ -80,13 +80,22 @@ own changelog in `python/CHANGELOG.md`.
 
 - **Other servers in the web UI.** The schema browser's root is now a list of servers: this
   server first (with the admin pages, as before), then the Hardcharger servers you add with
-  **Add a server** (a name, the URL, and how its certificate is trusted). Each server shows a
+  **Add a server**, one page with everything on it: your saved connections to pick from (also
+  from the Display name field), the display name, Host and Port (31337 by default; pasting a
+  `hardcharger://`, `chargewire://`, `jdbc:hardcharger://` or `https://` URI fills them, and a
+  user name in it), the user name and password (a scoped token signs in as user `token` with
+  the token as the password; SSO to another server isn't supported yet and says so), **Use TLS**
+  and **Trust this server's certificate** (the certificate's fingerprint, subject, issuer and
+  expiry shown inline before it is pinned), a query timeout for that server's statements, and
+  **Save connection for later**. Errors show under the field they concern (unreachable, not a
+  Hardcharger server, wrong credentials, certificate untrusted or changed). Each server shows a
   lock beside its name: green when its certificate was verified against trusted roots, amber
-  when you trusted it by its SHA-256 fingerprint (shown to you first, like an SSH host key),
-  red and open for plain HTTP. Sign in with a password or a token; the schema browser, its
-  search, autocomplete, previews, uploads and editor tabs then work on that server (a tab is
-  bound to one server, shown on the tab; **New tab on…** picks it). The list of servers is
-  kept in the browser; sign-ins last for the tab only. A browser can't reach a second server
+  when you trusted it by its SHA-256 fingerprint, red and open for plain HTTP. The schema
+  browser, its search, autocomplete, previews, uploads and editor tabs then work on that server
+  (a tab is bound to one server, shown on the tab; **New tab on…** picks it). Saved connections
+  are kept in the browser (address, trust, user name, timeout; never a password); sign-ins last
+  for the tab only. **Remember password** keeps a password in the operating system's keychain in
+  the desktop app; in a browser it stays off, since browser storage is no place for one. A browser can't reach a second server
   itself (Chargewire's CORS allow-list is exact by design), so the server serving the UI relays
   the remote's Chargewire requests under `/ui/v1/remotes/<id>/chargewire/...`, streaming
   results and uploads both ways; `web_ui_remote_servers: false` turns the relay off.
@@ -100,8 +109,12 @@ own changelog in `python/CHANGELOG.md`.
 
 - Desktop: **Open SQL workspace** no longer needs the local server. With it stopped, the app
   starts `hardcharger ui` on a loopback port, opens the workspace on it with the remote servers
-  you saved in **Settings › Remote servers**, and stops it when the workspace closes. With the
-  server running, the workspace opens on it as before, with the same saved servers listed
+  you saved in **Settings › Remote servers** (the same Host, Port, Use TLS and Trust fields as
+  the workspace's Add a server dialog), and stops it when the workspace closes. With the server
+  running, the workspace opens on it as before, with the same saved servers listed. Remember
+  password in the workspace stores the password in the keychain (macOS Keychain, Windows
+  Credential Manager, the Secret Service), keyed by the saved connection, and forgets it with the
+  connection; the workspace window gets only those three keychain commands, on its own origin
   ([#20](https://github.com/gizmodata/hardcharger/issues/20)).
 
 - Web UI: nested schemas (DuckDB 2.0's `CREATE SCHEMA a.b`) show as a tree under their parent,

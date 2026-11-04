@@ -30,6 +30,8 @@ pem = "3"
 
 [dev-dependencies]
 base64 = "0.22"
+# The mock runtime, to prove the workspace's runtime capability (workspace_passwords.rs).
+tauri = { version = "2", features = ["tray-icon", "image-png", "test"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }

@@ -9,7 +9,8 @@ import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, ty
 import "./style.css";
 import "./palette.css";
 
-interface RemoteServer { id: string; name: string; url: string; tls: "verified" | "fingerprint" | "plaintext"; fingerprint: string }
+/** A remote server, as the SQL workspace's Add a server dialog saves it (never a password). */
+interface RemoteServer { id: string; name: string; host: string; port: number; tls: boolean; prefix: string; trust: boolean; fingerprint: string; username: string; timeout: number }
 interface Settings { port: number; start_on_open: boolean; server_options: Record<string, unknown>; network?: NetworkSettings; remote_servers?: RemoteServer[] }
 interface Status {
   running: boolean; pid: number | null; port: number; endpoint: string;
@@ -195,47 +196,54 @@ function readSettings(): Settings {
 
 /** The remote servers as the form holds them: a row per saved or added server, URL required. */
 function readRemoteServers(data: Record<string, string>): RemoteServer[] {
-  const rows = remoteRows ?? current?.settings.remote_servers ?? [];
   const out: RemoteServer[] = [];
-  rows.forEach((row, i) => {
-    const url = (data[`remote-url-${i}`] ?? row.url).trim();
-    const name = (data[`remote-name-${i}`] ?? row.name).trim();
-    const tls = (data[`remote-tls-${i}`] ?? row.tls) as RemoteServer["tls"];
-    const fingerprint = (data[`remote-fingerprint-${i}`] ?? row.fingerprint).trim();
-    if (!url && !name) return; // an empty row is dropped
-    if (!url) throw new Error(`Remote server ${name || i + 1}: enter its URL (https://host:31337).`);
-    if (!/^(https?|chargewire):\/\//i.test(url)) throw new Error(`Remote server ${name || url}: the URL must start with https:// or http://.`);
-    if (tls === "fingerprint" && !/^[0-9a-f]{64}$/i.test(fingerprint.replace(/[:\s-]/g, ""))) throw new Error(`Remote server ${name || url}: trusting by fingerprint needs the certificate's SHA-256 fingerprint.`);
-    out.push({ id: row.id || crypto.randomUUID(), name: name || url.replace(/^\w+:\/\//, ""), url, tls, fingerprint: tls === "fingerprint" ? fingerprint : "" });
+  currentRemoteRows(data).forEach((row, i) => {
+    const name = row.name.trim(), host = row.host.trim();
+    if (!name && !host) return; // an empty row is dropped
+    const label = name || host || String(i + 1);
+    if (!host) throw new Error(`Remote server ${label}: enter its host.`);
+    if (/[\s/\\@?#]/.test(host)) throw new Error(`Remote server ${label}: the host is a name or an address, without a scheme, path or spaces.`);
+    if (!Number.isInteger(row.port) || row.port < 1 || row.port > 65535) throw new Error(`Remote server ${label}: the port is a number from 1 to 65535.`);
+    const fingerprint = row.trust ? row.fingerprint.trim() : "";
+    if (fingerprint && !/^[0-9a-f]{64}$/i.test(fingerprint.replace(/[:\s-]/g, ""))) throw new Error(`Remote server ${label}: the fingerprint must be the certificate's SHA-256 (64 hex digits), or empty to see it when the workspace first connects.`);
+    out.push({ ...row, name: name || host, host, trust: row.tls && row.trust, fingerprint });
   });
   return out;
 }
 
 /** The remote-server rows as the form shows them now (edited values included). */
-function currentRemoteRows(): RemoteServer[] {
+function currentRemoteRows(data: Record<string, string> = formValues() ?? {}): RemoteServer[] {
   const rows = remoteRows ?? current?.settings.remote_servers ?? [];
-  const data = formValues() ?? {};
-  return rows.map((row, i) => ({
-    id: row.id,
-    name: data[`remote-name-${i}`] ?? row.name,
-    url: data[`remote-url-${i}`] ?? row.url,
-    tls: (data[`remote-tls-${i}`] ?? row.tls) as RemoteServer["tls"],
-    fingerprint: data[`remote-fingerprint-${i}`] ?? row.fingerprint,
-  }));
+  return rows.map((row, i) => {
+    const tls = data[`remote-tls-${i}`] !== undefined ? data[`remote-tls-${i}`] === "on" : row.tls;
+    return {
+      ...row,
+      name: data[`remote-name-${i}`] ?? row.name,
+      host: data[`remote-host-${i}`] ?? row.host,
+      port: data[`remote-port-${i}`] !== undefined ? Number(data[`remote-port-${i}`]) : row.port,
+      tls,
+      trust: tls && (data[`remote-trust-${i}`] !== undefined ? data[`remote-trust-${i}`] === "on" : row.trust),
+      fingerprint: data[`remote-fingerprint-${i}`] ?? row.fingerprint,
+    };
+  });
 }
 
 function remoteServersView(s: Status | null) {
-  const rows = remoteRows ?? s?.settings.remote_servers ?? [];
+  const rows = remoteRows ? currentRemoteRows() : s?.settings.remote_servers ?? [];
   const disabled = !native || busy ? "disabled" : "";
   // The section sits beside the settings form: its fields belong to the form by attribute.
+  // The same fields as the workspace's Add a server dialog: host and port, Use TLS, Trust.
   const row = (r: RemoteServer, i: number) => `<div class="remote-row" data-remote-row="${i}">
-      <label class="field"><span>Name</span><input form="settings-form" name="remote-name-${i}" value="${esc(r.name)}" placeholder="Warehouse" ${disabled}></label>
-      <label class="field"><span>URL</span><input form="settings-form" name="remote-url-${i}" value="${esc(r.url)}" placeholder="https://db.example.com:31337" spellcheck="false" ${disabled}></label>
-      <label class="field"><span>Certificate</span><select form="settings-form" name="remote-tls-${i}" ${disabled}><option value="verified" ${r.tls === "verified" ? "selected" : ""}>Verified (trusted roots)</option><option value="fingerprint" ${r.tls === "fingerprint" ? "selected" : ""}>Trusted by fingerprint</option><option value="plaintext" ${r.tls === "plaintext" ? "selected" : ""}>None (plain http://)</option></select></label>
-      <label class="field"><span>SHA-256 fingerprint</span><input form="settings-form" name="remote-fingerprint-${i}" value="${esc(r.fingerprint)}" placeholder="aa:bb:…" spellcheck="false" ${disabled}><small>Only for Trusted by fingerprint: the workspace shows it when it first connects.</small></label>
+      <label class="field remote-name"><span>Display name</span><input form="settings-form" name="remote-name-${i}" value="${esc(r.name)}" placeholder="Warehouse" ${disabled}></label>
+      <label class="field remote-host"><span>Host</span><input form="settings-form" name="remote-host-${i}" value="${esc(r.host)}" placeholder="db.example.com" spellcheck="false" ${disabled}></label>
+      <label class="field remote-port"><span>Port</span><input form="settings-form" name="remote-port-${i}" type="number" min="1" max="65535" value="${r.port}" ${disabled}></label>
+      <div class="remote-checks"><label class="check-row"><input form="settings-form" type="checkbox" name="remote-tls-${i}" ${r.tls ? "checked" : ""} ${disabled}><span>Use TLS</span></label>
+      <label class="check-row"><input form="settings-form" type="checkbox" name="remote-trust-${i}" ${r.trust ? "checked" : ""} ${disabled || !r.tls ? "disabled" : ""}><span>Trust this server's certificate</span></label>
+      <span class="remote-lock remote-lock-${!r.tls ? "plaintext" : r.trust ? "fingerprint" : "verified"}" title="${!r.tls ? "Plain HTTP: nothing is encrypted" : r.trust ? "TLS, the certificate trusted by its fingerprint" : "TLS, verified against trusted roots"}">${!r.tls ? "Not encrypted" : r.trust ? "Trusted by fingerprint" : "Verified"}</span></div>
+      <label class="field remote-fingerprint" ${r.trust ? "" : "hidden"}><span>SHA-256 fingerprint (optional)</span><input form="settings-form" name="remote-fingerprint-${i}" value="${esc(r.fingerprint)}" placeholder="aa:bb:… (empty: shown when the workspace first connects)" spellcheck="false" ${disabled}></label>
       <button type="button" class="button" data-remove-remote="${i}" ${disabled}>Remove</button>
     </div>`;
-  return `<section class="card detail-card remote-servers" aria-label="Remote servers"><div class="section-heading"><div><h3>Remote servers</h3><p>Other Hardcharger servers the SQL workspace lists. Names, addresses and how each certificate is trusted; you sign in to each one in the workspace. Saved with the settings; the local server need not run.</p></div></div>
+  return `<section class="card detail-card remote-servers" aria-label="Remote servers"><div class="section-heading"><div><h3>Remote servers</h3><p>Other Hardcharger servers the SQL workspace lists, with the same fields as its Add a server dialog. Addresses and how each certificate is trusted; you sign in to each one in the workspace, where Remember password keeps a password in your keychain. Saved with the settings; the local server need not run.</p></div></div>
     ${rows.length ? rows.map(row).join("") : '<p class="muted" data-no-remotes>No remote servers yet.</p>'}
     <button type="button" class="button" id="add-remote" ${disabled}>Add a remote server</button>
   </section>`;
@@ -498,10 +506,17 @@ function render() {
   // fields keep their draft values).
   document.querySelector("#add-remote")?.addEventListener("click", () => {
     rememberDraft();
-    remoteRows = [...currentRemoteRows(), { id: crypto.randomUUID(), name: "", url: "https://", tls: "verified", fingerprint: "" }];
+    remoteRows = [...currentRemoteRows(), { id: crypto.randomUUID(), name: "", host: "", port: 31337, tls: true, prefix: "", trust: false, fingerprint: "", username: "", timeout: 0 }];
     markDirty(); render();
     document.querySelector<HTMLInputElement>(`[name="remote-name-${remoteRows.length - 1}"]`)?.focus();
   });
+  // Use TLS and Trust change what the row shows (Trust needs TLS; the fingerprint goes with Trust).
+  app.querySelectorAll<HTMLInputElement>('[name^="remote-tls-"], [name^="remote-trust-"]').forEach(box => box.addEventListener("change", () => {
+    rememberDraft();
+    remoteRows = currentRemoteRows();
+    if (draft) for (const key of Object.keys(draft)) if (key.startsWith("remote-")) delete draft[key];
+    markDirty(); render();
+  }));
   app.querySelectorAll<HTMLButtonElement>("[data-remove-remote]").forEach(b => b.addEventListener("click", () => {
     rememberDraft();
     const rows = currentRemoteRows();

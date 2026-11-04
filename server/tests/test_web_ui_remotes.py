@@ -413,3 +413,31 @@ def test_web_ui_remote_servers_false_turns_the_relay_off(launcher, plain):
     problem(relay.probe(url=plain.base_url), 404, "not_found")
     # The UI itself is still served.
     assert httpx.get(url=f"{off.base_url}/ui/", timeout=10).status_code == 200
+
+
+# ---- A scoped token, as the dialog's hint has it: user `token`, the token as the password ----
+
+
+def test_a_scoped_token_signs_in_through_the_relay_as_user_token(ui, module_launcher, tmp_path_factory):
+    store = tmp_path_factory.mktemp("relay-token-store") / "rbac.duckdb"
+    remote = module_launcher.start(args=["--init-sql-commands", SEED, "--rbac-store-uri", f"duckdb:{store}"])
+    admin = Client(base_url=remote.base_url, token=remote.token()).new_session()
+    for sql in ["CREATE USER reader PASSWORD 'pw:reader-1'", "CREATE ROLE readers",
+                "GRANT SELECT ON t TO readers", "GRANT readers TO reader"]:
+        admin.execute(sql=sql)
+    scoped = admin.query(sql="CREATE SCOPED TOKEN relay_job FOR USER reader ALLOW SELECT").to_pylist()[0]["token"]
+    time.sleep(1.5 * TIMEOUT_SCALE)  # the store's grants reach the sessions within about a second
+    relay = Relay(ui, token=ui.token())
+    added = relay.add(url=remote.base_url, name="by token").json()
+    token = relay.sign_in(added["id"], "token", scoped)
+    session = relay.client(added["id"], token).new_session()
+    assert session.query(sql="SELECT HARDCHARGER_USER() AS u").to_pylist() == [{"u": "reader"}]
+    assert session.query(sql="SELECT count(*) AS n FROM t").to_pylist() == [{"n": 5}]
+    # The token's scope holds through the relay: it allows SELECT only.
+    refused = session.submit(sql="CREATE TABLE nope (i INTEGER)", headers={"Prefer": "wait=10"})
+    assert refused.status_code in (201, 403) and "nope" not in session.query(
+        sql="SELECT table_name FROM duckdb_tables()").column("table_name").to_pylist()
+    # A wrong token is the remote's refusal, passed through unchanged.
+    bad = relay.http.post(url=f"{added['relay_path']}/v1/auth/token", headers=relay.headers(),
+                          json={"grant_type": "password", "username": "token", "password": scoped[:-4] + "AAAA"})
+    assert bad.status_code == 401 and bad.json()["code"] == "invalid_credentials"

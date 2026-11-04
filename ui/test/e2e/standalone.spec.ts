@@ -70,12 +70,14 @@ test("a server added through the relay is signed in through it, listed and queri
   await open(page);
   await page.getByTestId("explorer-no-servers").getByRole("button", { name: "Add a server" }).click();
   const dialog = page.getByTestId("add-server-dialog");
-  await dialog.getByLabel("Name").fill("Signed");
-  await dialog.getByLabel("Server URL").fill(harness.remotes.signed.url);
-  await dialog.getByTestId("add-server-next").click();
-  await dialog.getByLabel("User name").fill(harness.remotes.signed.admin.username);
-  await dialog.getByLabel("Password").fill(harness.remotes.signed.admin.password);
-  await dialog.getByTestId("add-server-sign-in").click();
+  await dialog.getByLabel("Display name", { exact: true }).fill("Signed");
+  // An https:// URL pasted into Host fills host, port and TLS.
+  await dialog.getByLabel("Host", { exact: true }).fill(harness.remotes.signed.url);
+  await expect(dialog.getByLabel("Port", { exact: true })).toHaveValue(new URL(harness.remotes.signed.url).port);
+  await expect(dialog.getByLabel("Use TLS", { exact: true })).toBeChecked();
+  await dialog.getByLabel("Username", { exact: true }).fill(harness.remotes.signed.admin.username);
+  await dialog.getByLabel("Password", { exact: true }).fill(harness.remotes.signed.admin.password);
+  await dialog.getByTestId("add-server-connect").click();
   await expect(dialog).toHaveCount(0);
   const item = page.getByRole("tree", { name: "Servers" }).getByRole("treeitem", { name: "Signed", exact: true });
   await expect(item).toHaveAttribute("data-connected", "true");
@@ -83,7 +85,7 @@ test("a server added through the relay is signed in through it, listed and queri
   await expect(item.getByRole("treeitem", { name: "e2e", exact: true })).toBeVisible();
   // A tab opens on it (the only server), and runs there.
   await page.getByTestId("new-tab-on").click();
-  await page.getByRole("menuitem", { name: "Signed" }).click();
+  await page.getByRole("menuitem", { name: "Signed", exact: true }).click();
   await editorFocused(page);
   await runDone(page, "SELECT count(*) AS n FROM remote");
   expect((await gridRows(page))[1]).toEqual(["3"]);

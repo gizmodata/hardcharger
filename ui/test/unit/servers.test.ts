@@ -10,7 +10,12 @@ import {
   relayFetch,
   saveRemoteSignIns,
   saveSavedServers,
-  urlTlsMode,
+  loadTabServers,
+  normalizeSaved,
+  saveTabServers,
+  serverKey,
+  tlsModeOf,
+  urlOf,
 } from "../../src/lib/servers";
 
 class MemoryStorage implements Storage {
@@ -44,12 +49,25 @@ const broken = {
   },
 } as unknown as Storage;
 
-const warehouse = { id: "s1", name: "Warehouse", url: "https://wh.example.com:31337", tls: "verified" as const };
+const warehouse = {
+  id: "s1",
+  name: "Warehouse",
+  host: "wh.example.com",
+  port: 31337,
+  tls: true,
+  prefix: "",
+  trust: false,
+  username: "ann",
+  timeout: 30,
+};
 const lab = {
   id: "s2",
   name: "Lab",
-  url: "https://lab.local:31337",
-  tls: "fingerprint" as const,
+  host: "lab.local",
+  port: 31337,
+  tls: true,
+  prefix: "/cw",
+  trust: true,
   fingerprint: "aa:bb",
 };
 
@@ -61,13 +79,54 @@ describe("the saved list", () => {
     expect(loadSavedServers("ann", storage)).toEqual([]);
     storage.setItem(
       "hardcharger-ui:servers:v1:joe",
-      JSON.stringify([warehouse, { id: "x", name: "no url" }, { ...lab, tls: "banana" }, "junk"]),
+      JSON.stringify([warehouse, { id: "x", name: "no host" }, { ...lab, port: 99999 }, "junk"]),
     );
     expect(loadSavedServers("joe", storage)).toEqual([warehouse]);
     storage.setItem("hardcharger-ui:servers:v1:joe", "{not json");
     expect(loadSavedServers("joe", storage)).toEqual([]);
     expect(loadSavedServers("joe", broken)).toEqual([]);
     expect(() => saveSavedServers("joe", [warehouse], broken)).not.toThrow();
+  });
+
+  it("reads entries saved as a URL (the first 2.7.0 builds) as host, port and trust", () => {
+    expect(normalizeSaved({ id: "a", name: "A", url: "https://wh.example.com:31337", tls: "verified" })).toEqual({
+      id: "a",
+      name: "A",
+      host: "wh.example.com",
+      port: 31337,
+      tls: true,
+      prefix: "",
+      trust: false,
+    });
+    expect(
+      normalizeSaved({ id: "b", name: "B", url: "https://[::1]:4433/cw", tls: "fingerprint", fingerprint: "cc:dd" }),
+    ).toMatchObject({ host: "::1", port: 4433, prefix: "/cw", tls: true, trust: true, fingerprint: "cc:dd" });
+    expect(normalizeSaved({ id: "c", name: "C", url: "http://h:80", tls: "plaintext" })).toMatchObject({
+      tls: false,
+      trust: false,
+      port: 80,
+    });
+    expect(normalizeSaved({ id: "d", name: "D", url: "https://h", tls: "banana" })).toBeUndefined();
+    expect(normalizeSaved({ id: "e", name: "E", url: "not a url", tls: "verified" })).toBeUndefined();
+  });
+
+  it("derives the relay URL and TLS mode, and one key per server", () => {
+    expect(urlOf(lab)).toBe("https://lab.local:31337/cw");
+    expect(tlsModeOf(warehouse)).toBe("verified");
+    expect(tlsModeOf(lab)).toBe("fingerprint");
+    expect(tlsModeOf({ tls: false, trust: true })).toBe("plaintext");
+    expect(serverKey({ ...warehouse, host: "WH.example.com" })).toBe(serverKey(warehouse));
+    expect(serverKey({ ...warehouse, prefix: "/chargewire" })).toBe(serverKey(warehouse));
+  });
+
+  it("keeps a connection not saved for later out of localStorage, for this tab only", () => {
+    const storage = new MemoryStorage();
+    const tab = new MemoryStorage();
+    const once = { ...lab, id: "s3", transient: true };
+    saveSavedServers("joe", [warehouse, once], storage);
+    expect(loadSavedServers("joe", storage)).toEqual([warehouse]);
+    saveTabServers([warehouse, once], tab);
+    expect(loadTabServers(tab)).toEqual([{ ...lab, id: "s3", transient: true }]);
   });
 
   it("never holds a password or token", () => {
@@ -77,20 +136,39 @@ describe("the saved list", () => {
     expect(loadSavedServers("joe", storage)[0]).not.toHaveProperty("password");
   });
 
-  it("merges the desktop app's servers in by URL, the saved entry winning", () => {
+  it("merges the desktop app's servers in by host, port and prefix, the saved entry winning", () => {
     const handed = new MemoryStorage();
     handed.setItem(
       desktopServersKey,
       JSON.stringify([
-        { id: "", name: "Warehouse (desktop)", url: "https://WH.example.com:31337/", tls: "verified" },
-        { id: "d2", name: "Prod", url: "https://prod.example.com", tls: "fingerprint", fingerprint: "cc:dd" },
+        {
+          id: "",
+          name: "Warehouse (desktop)",
+          host: "WH.example.com",
+          port: 31337,
+          tls: true,
+          prefix: "",
+          trust: false,
+        },
+        {
+          id: "d2",
+          name: "Prod",
+          host: "prod.example.com",
+          port: 443,
+          tls: true,
+          prefix: "",
+          trust: true,
+          fingerprint: "cc:dd",
+        },
+        { id: "d3", name: "Old", url: "http://old.example.com:31337", tls: "plaintext" },
         { name: "broken" },
       ]),
     );
     const merged = mergeDesktopServers([warehouse], handed);
     expect(merged[0]).toEqual(warehouse);
-    expect(merged[1]).toMatchObject({ id: "d2", name: "Prod", fingerprint: "cc:dd" });
-    expect(merged).toHaveLength(2);
+    expect(merged[1]).toMatchObject({ id: "d2", name: "Prod", trust: true, fingerprint: "cc:dd" });
+    expect(merged[2]).toMatchObject({ id: "d3", host: "old.example.com", tls: false });
+    expect(merged).toHaveLength(3);
     expect(mergeDesktopServers([warehouse], broken)).toEqual([warehouse]);
   });
 });
@@ -112,15 +190,6 @@ describe("this tab's sign-ins", () => {
     saveRemoteSignIns([live, { ...live, serverId: "s2", expiresAt: Date.now() - 1 }], storage);
     expect(loadRemoteSignIns(storage)).toEqual([live]);
     expect(loadRemoteSignIns(broken)).toEqual([]);
-  });
-});
-
-describe("urlTlsMode", () => {
-  it("reads the scheme", () => {
-    expect(urlTlsMode("https://x")).toBe("verified");
-    expect(urlTlsMode("  HTTP://x ")).toBe("plaintext");
-    expect(urlTlsMode("chargewire://x")).toBe("verified");
-    expect(urlTlsMode("x.example.com")).toBeUndefined();
   });
 });
 

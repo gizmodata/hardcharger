@@ -21,28 +21,7 @@ pub struct Settings {
     pub remote_servers: Vec<RemoteServer>,
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default, deny_unknown_fields)]
-pub struct RemoteServer {
-    pub id: String,
-    pub name: String,
-    pub url: String,
-    /// "verified" (trusted roots), "fingerprint" (the SHA-256 the person accepted), "plaintext".
-    pub tls: String,
-    pub fingerprint: String,
-}
-
-impl Default for RemoteServer {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            name: String::new(),
-            url: String::new(),
-            tls: "verified".into(),
-            fingerprint: String::new(),
-        }
-    }
-}
+pub use crate::remote_servers::RemoteServer;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -124,61 +103,7 @@ impl Settings {
             }
         }
         for remote in &self.remote_servers {
-            let url = tauri::Url::parse(remote.url.trim())
-                .map_err(|_| format!("Remote server {}: the URL is not a URL.", remote.name))?;
-            let https = match url.scheme() {
-                "https" | "chargewire" => true,
-                "http" => false,
-                _ => {
-                    return Err(format!(
-                        "Remote server {}: the URL must start with https:// or http://.",
-                        remote.name
-                    ))
-                }
-            };
-            if url.username() != "" || url.password().is_some() {
-                return Err(format!(
-                    "Remote server {}: the URL must not carry credentials.",
-                    remote.name
-                ));
-            }
-            match remote.tls.as_str() {
-                "verified" | "fingerprint" if !https => {
-                    return Err(format!(
-                        "Remote server {}: an http:// server has no certificate to verify.",
-                        remote.name
-                    ))
-                }
-                "plaintext" if https => {
-                    return Err(format!(
-                        "Remote server {}: an https:// server is not plaintext.",
-                        remote.name
-                    ))
-                }
-                "verified" | "fingerprint" | "plaintext" => {}
-                other => {
-                    return Err(format!(
-                        "Remote server {}: unknown certificate trust '{other}'.",
-                        remote.name
-                    ))
-                }
-            }
-            if remote.tls == "fingerprint" {
-                let hex: String = remote
-                    .fingerprint
-                    .chars()
-                    .filter(|c| !matches!(c, ':' | ' ' | '-'))
-                    .collect();
-                if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return Err(format!(
-                        "Remote server {}: trusting by fingerprint needs the certificate's SHA-256 fingerprint.",
-                        remote.name
-                    ));
-                }
-            }
-            if remote.name.trim().is_empty() {
-                return Err("Every remote server needs a name.".into());
-            }
+            remote.validate()?;
         }
         Ok(())
     }
@@ -1019,6 +944,20 @@ impl Server {
             &self.directory.join("settings.json"),
             &serde_json::to_vec_pretty(&public_settings(&settings)).map_err(|e| e.to_string())?,
         )?;
+        // A remote server removed from the list takes its remembered password with it. The
+        // keychain being unavailable doesn't stop the save: nothing can be remembered then either.
+        if self
+            .settings
+            .remote_servers
+            .iter()
+            .any(|old| !settings.remote_servers.iter().any(|new| new.id == old.id))
+        {
+            let _ = crate::remote_servers::forget_removed(
+                &crate::remote_servers::Keychain,
+                &self.settings.remote_servers,
+                &settings.remote_servers,
+            );
+        }
         self.settings = settings;
         self.set_settings_pending(false, None)?;
         self.status()

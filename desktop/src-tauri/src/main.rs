@@ -4,10 +4,12 @@ mod migrate;
 mod network;
 #[cfg(target_os = "macos")]
 mod quit;
+mod remote_servers;
 mod server;
 mod tray;
 mod ui_sidecar;
 mod updates;
+mod workspace_passwords;
 
 use server::{Server, Settings, Status};
 use std::sync::{
@@ -324,6 +326,8 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
         .parse::<tauri::Url>()
         .map_err(|e| e.to_string())?;
     let allowed = url.origin();
+    // Its Remember password: three keychain commands, for this window on this origin only.
+    workspace_passwords::grant(&app, &allowed.ascii_serialization())?;
     let detail_origin = allowed.clone();
     let detail_app = app.clone();
     let detail_script = script.clone();
@@ -640,6 +644,8 @@ fn main() {
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(workspace_passwords::init())
+        .manage(workspace_passwords::WorkspaceOrigin::default())
         .invoke_handler(tauri::generate_handler![
             server_status,
             server_control,
