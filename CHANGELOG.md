@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-11-05
+
 ### Added
 
 - **The CLI waits for a server that is resuming.** A stopped server starting again, such as a

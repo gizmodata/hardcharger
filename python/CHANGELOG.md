@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-11-05
+
+### Changed
+
+- The package installs Hardcharger server 2.8.0 (Chargewire 2.2.3).
+
 ## [2.7.0] - 2026-11-04
 
 ### Changed
