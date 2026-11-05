@@ -111,15 +111,23 @@ impl UiSidecar {
         if self.child.try_wait().ok().flatten().is_some() {
             return;
         }
-        let _ = crate::server::request_stop(self.child.id());
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while self.child.try_wait().ok().flatten().is_none() {
-            if std::time::Instant::now() >= deadline {
-                let _ = self.child.kill();
-                break;
+        // A clean stop request, then a kill after a few seconds. On Windows the sidecar runs
+        // without a console (CREATE_NO_WINDOW), so no console control event can reach it, and
+        // it holds no data (the web UI and the relay only): it is killed at once.
+        #[cfg(unix)]
+        {
+            let _ = crate::server::request_stop(self.child.id());
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while self.child.try_wait().ok().flatten().is_none() {
+                if std::time::Instant::now() >= deadline {
+                    let _ = self.child.kill();
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(25));
             }
-            std::thread::sleep(Duration::from_millis(25));
         }
+        #[cfg(not(unix))]
+        let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
