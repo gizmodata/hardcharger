@@ -116,6 +116,11 @@ export async function signIn(page: Page, who: { username: string; password: stri
   await page.getByLabel("Password").fill(who.password);
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByTestId("header-user")).toContainText(who.username);
+  // The signed-in page goes on loading (the editor's lazy chunks, the schema browser's
+  // listings). A test that navigates at once cancels those, and WebKit reports a cancelled
+  // chunk's import as an uncaught "Importing a module script failed" (2.7.0's gate). Let it
+  // settle first; a page that never goes quiet just moves on after the bound.
+  await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
 }
 
 /** Replaces the active editor's text (Monaco) and puts the cursor at the end. */
