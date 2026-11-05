@@ -1908,7 +1908,16 @@ mod tests {
         assert_eq!(next.status().unwrap().leftover, None);
         assert!(!process_alive(pid));
         assert!(!directory.join(SIDECAR_FILE).exists());
-        assert!(TcpListener::bind(("127.0.0.1", port)).is_ok());
+        // Windows releases a killed process's listening socket a moment after the process is
+        // gone (2.7.0's gate found the port still taken): wait for it, bounded.
+        let freed = std::time::Instant::now() + Duration::from_secs(15);
+        while TcpListener::bind(("127.0.0.1", port)).is_err() {
+            assert!(
+                std::time::Instant::now() < freed,
+                "port {port} is still taken"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
         assert!(next.start().unwrap().running);
         next.stop().unwrap();
         fs::remove_dir_all(directory).unwrap();
