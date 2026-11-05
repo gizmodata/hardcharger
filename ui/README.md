@@ -19,7 +19,7 @@ For the v2.1.0+ administrator tabs, see [SQL Monitor and Server Configuration](.
 They are available in browser sessions and the [desktop app's SQL workspace](../docs/desktop-app.md).
 
 <p align="center">
-  <img src="../docs/assets/web-ui-query-light.png" alt="The web UI: the schema browser, two editor tabs, a script's result tabs, and an open transaction" width="80%">
+  <img src="../docs/assets/web-ui-query-light.png" alt="The web UI: the schema browser with the server and its catalogs, two editor tabs, and a query's results" width="80%">
 </p>
 
 - 🔭 **SQL Monitor** and **Server Configuration** for unrestricted administrators: query

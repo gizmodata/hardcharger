@@ -86,7 +86,7 @@ settings import/export, and the difference between closing and quitting.
 ## 🌐 Built-in web UI
 
 <p align="center">
-  <img src="docs/assets/web-ui-query-light.png" alt="Hardcharger's web UI, light theme: the schema browser, two editor tabs, a script's result tabs, and an open transaction with Commit and Rollback" width="49%">
+  <img src="docs/assets/web-ui-query-light.png" alt="Hardcharger's web UI, light theme: the schema browser with the server and its catalogs, two editor tabs, and a query's results" width="49%">
   <img src="docs/assets/web-ui-query-dark.png" alt="Hardcharger's web UI, dark theme" width="49%">
 </p>
 
