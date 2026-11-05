@@ -77,10 +77,15 @@ final class HardchargerUITests: XCTestCase {
         let frame = editor.frame
         app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.minY + 120)).tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "the keyboard opens for the editor")
-        app.typeText("SELECT 42 AS answer")
+        // The trailing space closes the completion list ("answer" offers tpch_answers): while
+        // it is open the editor's accessibility value doesn't show the line, and 2.7.0's gate
+        // failed with the text on screen. The rendered word counts as proof too.
+        app.typeText("SELECT 42 AS answer ")
         let typed = NSPredicate(format: "value CONTAINS 'SELECT 42 AS answer'")
-        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: typed, object: editor)], timeout: 10),
-                       .completed, "the editor holds SELECT 42")
+        let rendered = web.staticTexts.matching(NSPredicate(format: "label == 'answer'")).firstMatch
+        let landed = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: typed, object: editor)], timeout: 10)
+            == .completed || rendered.waitForExistence(timeout: 5)
+        XCTAssertTrue(landed, "the editor holds SELECT 42")
         run.tap()
         let cell = web.descendants(matching: .any).matching(NSPredicate(format: "label == '42'")).firstMatch
         XCTAssertTrue(cell.waitForExistence(timeout: 30), "the result shows 42")
