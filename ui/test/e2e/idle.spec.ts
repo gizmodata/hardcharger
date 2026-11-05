@@ -48,10 +48,14 @@ async function evicted(sessionId: string): Promise<void> {
 test("a session the server ended for idling: a new one takes over, or, in a transaction, the run is refused", async ({
   page,
 }) => {
-  // The lost session's next request is answered session_not_found (404), and so is the
-  // client's DELETE of it; the page's own session and the browser's are replaced the same way.
+  // A session evicted with no transaction open is gone: its next request is answered
+  // session_not_found (404), and so is the client's DELETE of it; the page's own session and
+  // the browser's are replaced the same way. One evicted while it held a transaction open ends
+  // with session_ended, reason idle_in_transaction (401, Chargewire §5.7, hardcharger#29).
   expectProblem(page, { status: 404, url: /\/statements$/ });
+  expectProblem(page, { status: 401, url: /\/statements$/ });
   expectProblem(page, { status: 404, url: /\/chargewire\/v1\/sessions\/s_[A-Za-z0-9]+(\/.*)?$/, required: false });
+  expectProblem(page, { status: 401, url: /\/chargewire\/v1\/sessions\/s_[A-Za-z0-9]+(\/.*)?$/, required: false });
   await signIn(page, idle.admin, idle.url);
   await editorFocused(page);
   const tab = activeTab(page);
@@ -71,8 +75,11 @@ test("a session the server ended for idling: a new one takes over, or, in a tran
   await evicted(second);
   await runDone(page, "INSERT INTO idle_tx VALUES (2)");
   await expect(tab.getByTestId("query-error")).toContainText(
-    "so the transaction was rolled back and nothing from this run executed",
+    "This tab's session on the server ended (the server ended it: it sat idle with a transaction open, past the server's timeout) while a transaction was open, so the transaction was rolled back and nothing from this run executed",
   );
+  // The sign-in stands: the editor is still there, not the sign-in page.
+  await expect(page.getByRole("button", { name: "Sign in" })).toHaveCount(0);
+  await expect(tab).toBeVisible();
   await expect(tab.getByTestId("in-transaction")).toHaveCount(0);
   // Neither insert is there; the next run works, on a new session.
   expect(await value(page, "SELECT count(*) FROM idle_tx")).toBe("0");

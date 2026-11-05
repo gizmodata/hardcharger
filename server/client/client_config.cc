@@ -7,7 +7,9 @@
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <sstream>
+#include <string_view>
 #include <vector>
 
 namespace hardcharger::client {
@@ -55,6 +57,16 @@ std::optional<OutputMode> OutputModeFromString(const std::string& name) {
   return std::nullopt;
 }
 
+bool IsGizmoDataCloudHost(std::string host) {
+  std::transform(host.begin(), host.end(), host.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  if (!host.empty() && host.back() == '.') host.pop_back();  // a fully qualified name
+  constexpr std::string_view kDomain = "gizmodata.com";
+  if (host == kDomain) return true;
+  return host.size() > kDomain.size() + 1 && host.ends_with(kDomain) &&
+         host[host.size() - kDomain.size() - 1] == '.';
+}
+
 void ResolveEnvironmentVariables(ClientConfig& config) {
   auto get_env = [](const char* name) -> const char* {
     const char* val = std::getenv(name);
@@ -68,14 +80,20 @@ void ResolveEnvironmentVariables(ClientConfig& config) {
     }
   }
 
-  if (config.port == 31337 && !config.uri_given) {
+  bool port_from_env = false;
+  if (config.port == 31337 && !config.port_given && !config.uri_given) {
     if (const char* val = get_env("HARDCHARGER_PORT")) {
       try {
         config.port = std::stoi(val);
+        port_from_env = true;
       } catch (...) {
         // ignore invalid port
       }
     }
+  }
+  // No port given anywhere, and a GizmoData Cloud host: its clusters answer on 443.
+  if (!config.port_given && !port_from_env && !config.uri_given && IsGizmoDataCloudHost(config.host)) {
+    config.port = 443;
   }
 
   if (config.username.empty()) {
@@ -131,17 +149,44 @@ void ResolveEnvironmentVariables(ClientConfig& config) {
     }
   }
 
+  // A whole number from the environment, or nullopt when the text isn't one (a typo must be
+  // said, not silently replaced by the default).
+  auto whole_number = [](const char* text) -> std::optional<int> {
+    std::string_view v(text);
+    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front()))) v.remove_prefix(1);
+    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.remove_suffix(1);
+    if (v.empty() || v.size() > 9 || !std::all_of(v.begin(), v.end(), [](unsigned char ch) { return std::isdigit(ch); }))
+      return std::nullopt;
+    return std::stoi(std::string(v));
+  };
+
   if (config.result_partitions == 0) {
     if (const char* val = get_env("HARDCHARGER_RESULT_PARTITIONS")) {
-      try {
-        config.result_partitions = std::stoi(val);
-      } catch (const std::exception&) {
-        config.result_partitions = 0;
+      if (auto n = whole_number(val)) {
+        config.result_partitions = *n;
+      } else if (config.invalid_option.empty()) {
+        config.invalid_option = std::string("HARDCHARGER_RESULT_PARTITIONS must be a whole number from 1 to 256, not '") +
+                                val + "'";
       }
     }
   }
   if (config.result_partitions == 0) config.result_partitions = 8;  // the default: split large results
   config.result_partitions = std::clamp(config.result_partitions, 1, 256);
+
+  if (config.resume_timeout == ClientConfig::kUnsetResumeTimeout) {
+    if (const char* val = get_env("HARDCHARGER_RESUME_TIMEOUT")) {
+      if (auto n = whole_number(val)) {
+        config.resume_timeout = *n;
+      } else if (config.invalid_option.empty()) {
+        config.invalid_option = std::string("HARDCHARGER_RESUME_TIMEOUT must be a whole number of seconds (0: don't "
+                                            "wait), not '") + val + "'";
+      }
+    }
+  } else if (config.resume_timeout < 0 && config.invalid_option.empty()) {
+    config.invalid_option = "--resume-timeout must be a whole number of seconds, 0 or more (0: don't wait), not " +
+                            std::to_string(config.resume_timeout);
+  }
+  if (config.resume_timeout < 0) config.resume_timeout = 600;  // Chargewire's default
 }
 
 std::string HomeDirectory() {
@@ -189,7 +234,8 @@ std::string FormerParameterHint(const std::string& name) {
 
 // The URIs of the Hardcharger ADBC driver (hardcharger-adbc ToChargewireURI, then chargewire-adbc
 // parseURI), exactly:
-//   hardcharger://host[:port][/prefix][?tls=false]  HTTPS unless ?tls=false; port 31337
+//   hardcharger://host[:port][/prefix][?tls=false]  HTTPS unless ?tls=false; port 31337 (443 for a
+//                                                   GizmoData Cloud host: gizmodata.com, *.gizmodata.com)
 //   chargewire://host[:port][/prefix][?tls=false]         the same, port 443
 //   https://host[:port][/prefix], http://...        TLS, or plain HTTP; ports 443 and 80
 // tls takes true/false/1/0 (any case); no other parameter, no user info, and a host are
@@ -255,6 +301,8 @@ bool ParseConnectionURI(const std::string& uri, ClientConfig& config) {
     if (colon != std::string::npos) port_text = authority.substr(colon + 1);
   }
   if (host.empty()) return UriError("invalid uri " + Redacted(uri) + ": no host");
+  // hardcharger:// to a GizmoData Cloud host without a port: its clusters answer on 443.
+  if (scheme == "hardcharger" && IsGizmoDataCloudHost(host)) default_port = 443;
   int port = default_port;
   if (!port_text.empty()) {
     const bool digits = port_text.size() <= 5 &&

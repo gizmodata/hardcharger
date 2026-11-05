@@ -1127,7 +1127,8 @@ CommandResult CommandProcessor::HandleConnect(
         << "       .connect HOST PORT USERNAME [PASSWORD] [--no-tls | --tls]\n"
         << "\n"
         << "URI: hardcharger://HOST[:PORT][/PREFIX][?tls=false]\n"
-        << "     HTTPS unless ?tls=false; port 31337 by default; also chargewire://, https://, http://.\n"
+        << "     HTTPS unless ?tls=false; port 31337 by default (443 for *.gizmodata.com);\n"
+        << "     also chargewire://, https://, http://.\n"
         << "     The user is USERNAME, or the current one; the TLS roots, the client certificate\n"
         << "     and the sign-in type are the current ones (--tls-roots, --mtls-cert, --auth-type).\n"
         << "HOST PORT: TLS as now (on unless --no-tls was given); --no-tls for a server without\n"
@@ -1176,6 +1177,7 @@ CommandResult CommandProcessor::HandleConnect(
     new_config.base_path = "/chargewire";
     try {
       new_config.port = std::stoi(args[2]);
+      new_config.port_given = true;
     } catch (...) {
       std::cerr << ErrorStyle() << "Error: invalid port '" << args[2] << "'" << ErrorStyleReset() << std::endl;
       return CommandResult::ERROR;

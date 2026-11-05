@@ -25,6 +25,14 @@ bool IsTerminal() {
 #endif
 }
 
+bool StderrIsTerminal() {
+#ifdef _WIN32
+  return _isatty(_fileno(stderr)) != 0;
+#else
+  return isatty(STDERR_FILENO) != 0;
+#endif
+}
+
 std::string PromptPassword(const std::string& prompt) {
   std::cerr << prompt;
 

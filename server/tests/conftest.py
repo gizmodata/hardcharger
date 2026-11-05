@@ -305,6 +305,8 @@ class Launcher:
         running = Running(base_url=f"http://127.0.0.1:{port}", username=username, password=password,
                           secret_key=secret_key, process=process, log_path=log_path, port=port)
         self.started.append(running)
+        _RECENT_SERVERS.append(running)
+        del _RECENT_SERVERS[:-8]
         if expect_up:
             # A sanitizer build starts several times slower (a DuckLake attach under TSan took 30 s).
             deadline = time.monotonic() + startup_seconds * TIMEOUT_SCALE
@@ -313,11 +315,46 @@ class Launcher:
                     pytest.fail(reason=f"server exited: {running.log()}")
                 try:
                     if httpx.get(url=f"{running.base_url}{wait_for}", timeout=1).status_code == 200:
+                        # The ready line is an info record on stderr: a log in a file, or a level
+                        # above info, has none to wait for.
+                        argv = list(args or [])
+                        level = env.get("HARDCHARGER_LOG_LEVEL", "")
+                        if "--log-level" in argv and argv.index("--log-level") + 1 < len(argv):
+                            level = argv[argv.index("--log-level") + 1]
+                        level = next((a.split("=", 1)[1] for a in argv if a.startswith("--log-level=")), level)
+                        logs_elsewhere = ("HARDCHARGER_LOG_FILE" in env or "--log-file" in argv
+                                          or level.lower() in ("warning", "warn", "error"))
+                        self._confirm_ours(running=running, deadline=deadline, logs_elsewhere=logs_elsewhere)
                         return running
                 except httpx.HTTPError:
                     time.sleep(0.1)
             pytest.fail(reason=f"server did not come up: {running.log()}")
         return running
+
+    @staticmethod
+    def _confirm_ours(running: "Running", deadline: float, logs_elsewhere: bool) -> None:
+        """The answer came from this server, not from another process on the port: on macOS a
+        listener on another address can hold the same port, and a server that then failed to
+        bind exits while the other one answers its tests (and drops their connections when its
+        owner stops it). This server logs that it is ready on its port; until then it is still
+        starting (slowly, under a sanitizer) or it has exited, which says the answer wasn't its.
+        A server whose log goes to a file can only be checked for still running."""
+        port = f":{running.port}"
+        if logs_elsewhere:
+            time.sleep(0.5)
+            if running.process.poll() is not None:
+                pytest.fail(reason=f"port {running.port} answered, but this server exited: {running.log()}")
+            return
+        while time.monotonic() < deadline:
+            log = running.log_path.read_text(errors="replace") if running.log_path.exists() else ""
+            if any("is ready" in line and port in line for line in log.splitlines()):
+                return
+            if running.process.poll() is not None:
+                pytest.fail(reason=f"port {running.port} answered, but by another process: this server "
+                                   f"exited: {running.log()}")
+            time.sleep(0.05)
+        pytest.fail(reason=f"port {running.port} answered, but this server never said it was ready there: "
+                           f"{running.log()}")
 
     @staticmethod
     def wait_healthy(running: "Running", timeout: float = 10) -> None:
@@ -422,6 +459,26 @@ def pg_store():
     databases = Store(kind="postgres")
     yield databases
     databases.drop_all()
+
+
+# The servers this worker started most recently, so a failure report can show what they logged
+# (pytest deletes all but its last three runs' directories, and agents' runs rotate them fast).
+_RECENT_SERVERS: list = []
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    if not report.failed or report.when not in ("setup", "call"):
+        return
+    for running in _RECENT_SERVERS[-4:]:
+        try:
+            tail = running.log_path.read_text(errors="replace").splitlines()[-30:]
+        except OSError:
+            continue
+        state = "running" if running.process.poll() is None else f"exited {running.process.returncode}"
+        report.sections.append((f"server :{running.port} ({state}), last {len(tail)} log lines", "\n".join(tail)))
 
 
 def pytest_collection_modifyitems(config, items):

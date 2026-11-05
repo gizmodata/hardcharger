@@ -41,27 +41,25 @@ test("an administrator ends a user's sessions; the user is sent to sign in again
   harness,
 }) => {
   await signIn(page, harness.user);
-  await runSql(page, "SELECT 1 AS before");
-  expect((await gridRows(page))[1]).toEqual(["1"]);
+  await runSql(page, "SELECT HARDCHARGER_CURRENT_SESSION() AS mine");
+  const mine = (await gridRows(page))[1]![0]!;
+  expect(mine).toMatch(/^s_/);
 
   const adminContext = await browser.newContext({ baseURL: harness.url });
   const admin = await adminContext.newPage();
   await signIn(admin, harness.admin);
   await admin.getByRole("button", { name: "Sessions" }).click();
-  const rows = admin.getByTestId("sessions-table").locator("tbody tr", { hasText: harness.user.username });
-  await expect(rows.first()).toBeVisible();
-  while ((await rows.count()) > 0) {
-    const before = await rows.count();
-    await rows
-      .first()
-      .getByRole("button", { name: /^End session/ })
-      .click();
-    await admin
-      .getByRole("dialog", { name: "End session?", exact: true })
-      .getByRole("button", { name: "End session", exact: true })
-      .click();
-    await expect(rows).toHaveCount(before - 1);
-  }
+  // The session this tab works in, by its id: other tests sign in as the same user alongside
+  // this one, so counting that user's sessions down raced them.
+  const row = admin.getByTestId("sessions-table").locator("tbody tr", { hasText: mine });
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText(harness.user.username);
+  await row.getByRole("button", { name: /^End session/ }).click();
+  await admin
+    .getByRole("dialog", { name: "End session?", exact: true })
+    .getByRole("button", { name: "End session", exact: true })
+    .click();
+  await expect(row).toHaveCount(0);
   await adminContext.close();
 
   expectProblem(page, { status: 401, url: /\/chargewire\/v1\/sessions\// });

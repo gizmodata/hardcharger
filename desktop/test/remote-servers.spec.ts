@@ -109,3 +109,21 @@ test("a remote server's host must be a host and its port a port", async ({ page 
     expect.objectContaining({ host: "wh.example.com", port: 8443, tls: false, trust: false }),
   ]);
 });
+
+test("a remote server's port follows a GizmoData Cloud host (443) until a port is typed", async ({ page }) => {
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const section = page.getByRole("region", { name: "Remote servers" });
+  await section.getByRole("button", { name: "Add a remote server" }).click();
+  const host = section.locator('[name="remote-host-1"]');
+  const port = section.locator('[name="remote-port-1"]');
+  await expect(port).toHaveValue("31337");
+  await host.fill("warehouse.us-east-1.aws.gizmodata.com");
+  await expect(port).toHaveValue("443");
+  await host.fill("evilgizmodata.com");
+  await expect(port).toHaveValue("31337");
+  await host.fill("lake.vaden.gizmodata.com");
+  await expect(port).toHaveValue("443");
+  await port.fill("8443");
+  await host.fill("db.example.com");
+  await expect(port).toHaveValue("8443"); // a typed port stays
+});

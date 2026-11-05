@@ -7,6 +7,110 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- **The CLI waits for a server that is resuming.** A stopped server starting again, such as a
+  GizmoData Cloud cluster with auto-resume, answers `server_resuming` (503 with `Retry-After`,
+  Chargewire 2.2.0 §11.2) while it starts. The CLI sends the sign-in, the session and the
+  statement again as the server asks, and shows where it stands while it waits: a countdown in a
+  terminal (`The server is resuming (…): retrying in 4 s, 0:21 so far. Ctrl-C stops waiting.`), a
+  line per answer in a log, nothing with `--quiet`. Ctrl-C stops waiting within a second.
+  `--resume-timeout SECONDS` (`HARDCHARGER_RESUME_TIMEOUT`) sets how long, 600 by default; `0`
+  reports the first answer.
+- **The web UI waits for a remote server that is resuming.** Signing in to a remote, or opening a
+  session on one, while its GizmoData Cloud holder answers `server_resuming` waits as the
+  server asks instead of failing: the Add a server dialog shows a countdown (`The server is
+  resuming (…): retrying in 4 s, 0:21 so far.`) with **Stop waiting**, and the server's row in
+  the tree shows `resuming… 0:21` while one of its sessions waits. Each saved connection has a
+  **Resume timeout** (600 s by default, 0 not to wait). The UI's client is chargewire-js 2.2.1.
+
+- **A GizmoData Cloud host needs no port.** A `hardcharger://` URI, or `--host`, naming
+  `gizmodata.com` or a `*.gizmodata.com` host without a port connects on 443, where GizmoData
+  Cloud's clusters answer, instead of 31337; an explicit port (or `HARDCHARGER_PORT`) still wins.
+  The web UI's and the desktop app's server forms switch Port to 443 when such a host is typed or
+  pasted, until a port is typed. The Hardcharger drivers (hardcharger-adbc, hardcharger-jdbc,
+  hardcharger-js, hardcharger-odbc-driver) do the same in their releases alongside 2.8.0.
+
+### Changed
+
+- **The dialog for other servers is "Add a Hardcharger server"**, its button too, so nobody takes
+  it for a general one: and a server that isn't Hardcharger is refused saying that only
+  Hardcharger servers can be added (not GizmoSQL or other Flight SQL servers).
+- Chargewire 2.2.3: `server_resuming` (2.2.0, §11.2) and the C++ client's wait for it, with a progress
+  callback; the tables listing and idle-in-transaction fixes above.
+
+### Fixed
+
+- **Table listings showed DuckDB's internal catalog.** In 2.7.0 the tables metadata
+  (`GET /chargewire/v1/metadata/tables`, which ADBC's `GetObjects`, JDBC's `getTables`, BI tools'
+  table browsers and the CLI's `.tables` use) also listed the `system` catalog's internal views:
+  `information_schema`, `pg_catalog` and the `duckdb_*` views. Chargewire 2.1.0 had built the
+  listing from `duckdb_tables()` and `duckdb_views()`, to name nested schemas by their path,
+  without the `internal` filter that `information_schema.tables` applies. It matches
+  `information_schema.tables` again (Chargewire 2.2.3).
+- **A session evicted as idle while it held a transaction open now says so** (#29). When
+  `session_idle_timeout` evicted a session that had run SQL `BEGIN`, its next request got
+  `session_not_found`, which doesn't say a transaction was rolled back, and a client that opens
+  a new session could run its next statement there alone, in autocommit, without the
+  transaction's earlier statements. Such a session now ends with `session_ended`, reason
+  `idle_in_transaction`, as the idle-in-transaction timeout ends one, and instrumentation
+  records `stop_reason` `idle_in_transaction`. A session with no transaction open still gets
+  `session_not_found`. Since 2.7.0 the sweep also evicts a session whose client stopped
+  polling a running statement, so this happened more often (Chargewire 2.2.3).
+- **The CLI signs in again after a server restart.** A server restarted without a fixed secret
+  key signs tokens with a new key, so the CLI's token was refused and it failed with "a valid access
+  token is required". It now signs in again with the password or client certificate it has and
+  sends the refused request once more (it never ran); a refusal with a reason (revoked, credentials
+  changed) is still reported for the person to act on.
+- **The CLI refuses a value it can't use instead of replacing it with the default.** A negative
+  `--resume-timeout`, or a `HARDCHARGER_RESUME_TIMEOUT` or `HARDCHARGER_RESULT_PARTITIONS` that
+  isn't a whole number, is an error at startup; they used to fall back to 600 and 8 silently. A
+  session ended for an idle transaction is described in words in the CLI's warning.
+- **A session read right after `BEGIN` could still say "no transaction".** A statement without
+  rows answered on the streamed path (as the CLI, the web UI and the drivers ask) was answered
+  before the server recorded what it did to the transaction, so a read of the session at once
+  could see `BEGIN` still "none" and `COMMIT` still "open"; a client deciding from it whether a lost
+  session's statement may run again could run it alone after a `BEGIN`. The server now records it
+  first (Chargewire 2.2.3). The CLI and the web UI also no longer trust a "none" read right after a
+  statement that may open a transaction, for servers before 2.8.0: only a read after one that ends
+  it clears that. Found by this release's own test on a CI runner; tests reproduce it with a
+  planted delay and with a stand-in that answers stale reads.
+- **After USE or SET, a lost session's statement is not run again on a new one.** The CLI and the
+  web UI open a new session when the server no longer has theirs, and ran the statement there when
+  no transaction was open; but a new session starts without what `USE`, `SET`, `RESET` or `PRAGMA`
+  set, so `USE other; INSERT INTO t …` could insert into `main.t` instead of `other.t`, with no
+  error. They now refuse and say why (run `USE`/`SET` again, then the statement).
+- **A new tab's editor no longer takes focus from the search box.** When a new tab's editor
+  finished getting ready, the page moved focus to it even if the person had already clicked into
+  another field, so a search typed right after opening a tab could land in the SQL editor. Focus
+  the page moves by itself now never leaves a field the person is typing in.
+- **A missing catalog or schema set in a transaction no longer aborts it.** Setting the session's
+  catalog or schema (a client's connection option) to one that doesn't exist, inside a
+  transaction, aborted the transaction and answered only "transaction is aborted"; it is now that
+  option's error, naming it, and the transaction stays open (Chargewire 2.2.3).
+- **The CLI connects over TLS to a fully qualified host name** (one written with its final dot,
+  `db.example.com.`); every such connection failed the certificate check (Chargewire 2.2.3).
+- **Previewing a table of the log or instrumentation catalog works.** The web UI opened the
+  preview's tab in the table's catalog, and the server never makes its own catalogs (catalog
+  logging's, instrumentation's) a session's catalog, so the preview failed with "Permission Denied"
+  before it ran. The tab now stays in its own catalog and runs the preview, which names the
+  catalog, with a note saying why; asking a tab to use such a catalog says the same and leaves the
+  pickers where they were. Works with servers of any version.
+- **The web UI no longer lists DuckDB's own `system` catalog** in the schema browser or a tab's
+  Catalog picker. It held nothing to browse (its `information_schema` and `pg_catalog` views are
+  the engine's internal ones, which no listing shows) and read as if it were part of the user's
+  data. Those views are still queried by name (`SELECT * FROM information_schema.tables`).
+- **The CLI ran a statement again after losing a session that held a transaction open.**
+  When the server no longer had the session (an idle eviction, or a restart), the CLI opened a
+  new one and ran the statement there, so after `BEGIN; INSERT …;` and a restart, the next
+  `INSERT` committed alone while the earlier one was rolled back. It now runs a statement again
+  only when it knows the old session held no transaction (it reads the session's state after
+  statements that can open or end one), and otherwise says the transaction was rolled back
+  and that the statement was not run. The web UI already did; the drivers' releases alongside 2.8.0
+  (chargewire-js, chargewire-adbc, chargewire-jdbc) do too, and chargewire-odbc never runs a
+  statement again.
+
+
 ## [2.7.0] - 2026-11-04
 
 ### Added

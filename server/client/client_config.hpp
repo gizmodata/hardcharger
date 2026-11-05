@@ -4,6 +4,7 @@
 
 #include <iostream>
 #include <optional>
+#include <limits>
 #include <string>
 
 namespace hardcharger::client {
@@ -35,6 +36,7 @@ struct ClientConfig {
   int port = 31337;
   std::string base_path = "/chargewire";  // where the server mounts Chargewire (a URI's path)
   bool uri_given = false;           // host, port, TLS and base path came from a URI
+  bool port_given = false;          // --port (or .connect's port) named it
   std::string username;
   std::string password;
   bool password_provided = false;
@@ -88,6 +90,17 @@ struct ClientConfig {
   // (Chargewire §6.10); 0: not set (HARDCHARGER_RESULT_PARTITIONS, else 8). 1: one stream.
   int result_partitions = 0;
 
+  // How long to keep sending a request again while the server answers that it is resuming
+  // (Chargewire §11.2: a stopped server starting again, such as a GizmoData Cloud cluster with
+  // auto-resume), in seconds; kUnsetResumeTimeout: not set (HARDCHARGER_RESUME_TIMEOUT, else 600).
+  // 0: don't wait.
+  static constexpr int kUnsetResumeTimeout = std::numeric_limits<int>::min();
+  int resume_timeout = kUnsetResumeTimeout;
+
+  // An option or environment variable with a value it can't take, said for the person to fix
+  // (ResolveEnvironmentVariables sets it; main reports it and exits). Empty: none.
+  std::string invalid_option;
+
   // Dynamic prompt (show catalog.schema)
   bool dynamic_prompt = true;
 
@@ -109,6 +122,10 @@ struct ClientConfig {
 // HARDCHARGER_SESSION_TAG,
 // HARDCHARGER_QUERY_TAG and HARDCHARGER_RESULT_PARTITIONS. No GIZMOSQL_* variable is read.
 void ResolveEnvironmentVariables(ClientConfig& config);
+
+/// Whether `host` is a GizmoData Cloud host (gizmodata.com or *.gizmodata.com, any case, a
+/// trailing dot allowed), whose Hardcharger clusters answer on port 443.
+bool IsGizmoDataCloudHost(std::string host);
 
 /// Parse a connection URI into host, port, TLS and base path, with the Hardcharger ADBC
 /// driver's rules: hardcharger://HOST[:PORT][/PREFIX][?tls=false] (HTTPS unless ?tls=false,

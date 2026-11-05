@@ -423,3 +423,172 @@ test("a server the desktop app handed over stays removed, until it is added agai
   await expect(serverItem(page, "Again")).toBeVisible();
   await expect(serverItem(page, "From desktop")).toHaveCount(0);
 });
+
+// ---- A server that is resuming (Chargewire §11.2) ----
+
+/**
+ * Answers the next `times` matching requests through the relay as a GizmoData Cloud
+ * auto-resume holder does while the server starts: 503 server_resuming with a Retry-After
+ * (-1: every one). The rest go through.
+ */
+async function holdAsResuming(page: Page, path: string, times: number, retryAfter: string): Promise<() => number> {
+  let held = 0;
+  await page.route(
+    (url) => url.pathname.startsWith("/ui/v1/remotes/") && url.pathname.endsWith(path),
+    async (route) => {
+      if (route.request().method() !== "POST" || (times >= 0 && held >= times)) return route.continue();
+      held += 1;
+      await route.fulfill({
+        status: 503,
+        contentType: "application/problem+json",
+        headers: { "Retry-After": retryAfter },
+        body: JSON.stringify({
+          type: "urn:chargewire:error:server_resuming",
+          title: "Server resuming",
+          status: 503,
+          code: "server_resuming",
+          detail: `the server is resuming; retry after ${retryAfter} s`,
+        }),
+      });
+    },
+  );
+  return () => held;
+}
+
+async function fillPlain(page: Page, name: string, remote: RemoteServer, resumeTimeout?: number): Promise<Locator> {
+  await page.getByTestId("explorer-add-server").click();
+  const dialog = dialogOf(page);
+  const a = hostPort(remote);
+  await dialog.getByLabel("Display name", { exact: true }).fill(name);
+  await dialog.getByLabel("Host", { exact: true }).fill(a.host);
+  await dialog.getByLabel("Port", { exact: true }).fill(a.port);
+  await dialog.getByLabel("Use TLS", { exact: true }).uncheck();
+  await dialog.getByLabel("Username", { exact: true }).fill(remote.admin.username);
+  await dialog.getByLabel("Password", { exact: true }).fill(remote.admin.password);
+  if (resumeTimeout !== undefined) await dialog.getByLabel("Resume timeout (seconds)").fill(String(resumeTimeout));
+  return dialog;
+}
+
+test("a resuming server: the sign-in waits with a countdown, then connects; the tree shows its session's wait", async ({
+  page,
+  harness,
+}) => {
+  expectProblem(page, { status: 503, url: /\/chargewire\/v1\/auth\/token$/ });
+  expectProblem(page, { status: 503, url: /\/chargewire\/v1\/sessions$/ });
+  const signIns = await holdAsResuming(page, "/chargewire/v1/auth/token", 2, "2");
+  const sessions = await holdAsResuming(page, "/chargewire/v1/sessions", 1, "2");
+  const dialog = await fillPlain(page, "Waking", harness.remotes.plain);
+  await expect(dialog.getByLabel("Resume timeout (seconds)")).toHaveValue("600");
+  await dialog.getByTestId("add-server-connect").click();
+  const status = dialog.getByTestId("resume-status");
+  await expect(status).toHaveText(/^The server is resuming: retrying in [12] s, 0:0\d so far\.$/);
+  await expect(dialog.getByTestId("add-server-connect")).toHaveText("Waiting for the server…");
+  await expect(dialog.getByTestId("add-server-stop-waiting")).toBeVisible();
+  // Set off from the dialog's edge like its other notes, not flush against it.
+  const statusBox = (await status.boundingBox())!;
+  const dialogBox = (await dialog.boundingBox())!;
+  expect(statusBox.x - dialogBox.x).toBeGreaterThanOrEqual(12);
+  // Signed in: the new session is held once too, and the tree says so while it waits.
+  const badge = serverItem(page, "Waking").getByTestId("tree-server-resuming");
+  await expect(badge).toHaveText(/^resuming… 0:0\d$/);
+  // Shown whole at the panel's default width (the name gives way, not the count).
+  expect(await badge.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await expect(dialog).toHaveCount(0, { timeout: 30_000 });
+  const item = serverItem(page, "Waking");
+  await expect(item).toHaveAttribute("data-connected", "true");
+  await expect(item.getByTestId("tree-server-resuming")).toHaveCount(0);
+  expect(signIns()).toBe(2);
+  expect(sessions()).toBe(1);
+  await expect(item.getByRole("treeitem", { name: "e2e", exact: true })).toBeVisible();
+});
+
+test("a resuming server: Stop waiting ends the wait, and nothing is added", async ({ page, harness }) => {
+  expectProblem(page, { status: 503, url: /\/chargewire\/v1\/auth\/token$/ });
+  await holdAsResuming(page, "/chargewire/v1/auth/token", -1, "30");
+  const dialog = await fillPlain(page, "Asleep", harness.remotes.plain);
+  await dialog.getByTestId("add-server-connect").click();
+  await expect(dialog.getByTestId("resume-status")).toContainText("retrying in");
+  await dialog.getByTestId("add-server-stop-waiting").click();
+  await expect(dialog.getByTestId("add-server-error")).toHaveText("Stopped waiting for the server to resume.");
+  await expect(dialog.getByTestId("resume-status")).toHaveCount(0);
+  await expect(dialog.getByTestId("add-server-connect")).toHaveText("Connect");
+  await expect(serverItem(page, "Asleep")).toHaveCount(0);
+});
+
+test("a resuming server: a resume timeout of 0 reports it at once; a bad value is refused", async ({
+  page,
+  harness,
+}) => {
+  expectProblem(page, { status: 503, url: /\/chargewire\/v1\/auth\/token$/ });
+  const signIns = await holdAsResuming(page, "/chargewire/v1/auth/token", -1, "5");
+  const dialog = await fillPlain(page, "Asleep", harness.remotes.plain, 0);
+  await dialog.getByTestId("add-server-connect").click();
+  await expect(dialog.getByTestId("add-server-error-resume")).toHaveText(
+    "the server is resuming; retry after 5 s. The server is still starting: try again in a moment, or raise the resume timeout.",
+  );
+  expect(signIns()).toBe(1);
+  await expect(dialog.getByTestId("resume-status")).toHaveCount(0);
+  await dialog.getByLabel("Resume timeout (seconds)").fill("-3");
+  await dialog.getByTestId("add-server-connect").click();
+  await expect(dialog.getByTestId("add-server-error-resume")).toHaveText(
+    "A resume timeout is a whole number of seconds, 0 not to wait.",
+  );
+  expect(signIns()).toBe(1);
+});
+
+test("a saved connection keeps its resume timeout", async ({ page, harness }) => {
+  const dialog = await fillPlain(page, "Kept", harness.remotes.plain, 90);
+  await dialog.getByTestId("add-server-connect").click();
+  await expect(dialog).toHaveCount(0);
+  const saved = await page.evaluate(() =>
+    Object.entries(localStorage)
+      .filter(([k]) => k.startsWith("hardcharger-ui:servers:v1:"))
+      .flatMap(([, v]) => JSON.parse(v) as { name: string; resumeTimeout?: number }[]),
+  );
+  expect(saved.find((s) => s.name === "Kept")?.resumeTimeout).toBe(90);
+});
+
+test("the dialog says it adds Hardcharger servers, and a server that isn't one is refused saying so", async ({
+  page,
+  harness,
+}) => {
+  await expect(page.getByTestId("explorer-add-server")).toHaveAccessibleName("Add a Hardcharger server");
+  await page.getByTestId("explorer-add-server").click();
+  const dialog = dialogOf(page);
+  await expect(dialog.getByRole("heading", { name: "Add a Hardcharger server" })).toBeVisible();
+  // Something that answers HTTP but isn't a Chargewire server: the remote under a path with nothing there.
+  expectProblem(page, { status: 502, url: /\/ui\/v1\/remotes\/probe$/ });
+  const a = hostPort(harness.remotes.plain);
+  await dialog.getByLabel("Host", { exact: true }).fill(`hardcharger://${a.host}:${a.port}/not-here?tls=false`);
+  await dialog.getByLabel("Username", { exact: true }).fill(harness.remotes.plain.admin.username);
+  await dialog.getByLabel("Password", { exact: true }).fill(harness.remotes.plain.admin.password);
+  await dialog.getByTestId("add-server-connect").click();
+  await expect(dialog.getByTestId("add-server-error-host")).toContainText(
+    "Only Hardcharger servers can be added here (not GizmoSQL or other Flight SQL servers): check the host, port and path prefix.",
+  );
+});
+
+test("a GizmoData Cloud host sets the port to 443 until a port is typed; a URI's own port wins", async ({ page }) => {
+  await page.getByTestId("explorer-add-server").click();
+  const dialog = dialogOf(page);
+  const host = dialog.getByLabel("Host", { exact: true });
+  const port = dialog.getByLabel("Port", { exact: true });
+  await expect(port).toHaveValue("31337");
+  await host.fill("warehouse.us-east-1.aws.gizmodata.com");
+  await expect(port).toHaveValue("443");
+  await expect(dialog.getByTestId("port-cloud-hint")).toHaveText("GizmoData Cloud");
+  await host.fill("db.example.com");
+  await expect(port).toHaveValue("31337");
+  await expect(dialog.getByTestId("port-cloud-hint")).toHaveCount(0);
+  // A pasted URI: no port means GizmoData Cloud's 443; its own port wins.
+  await host.fill("hardcharger://lake.vaden.gizmodata.com");
+  await expect(host).toHaveValue("lake.vaden.gizmodata.com");
+  await expect(port).toHaveValue("443");
+  await host.fill("hardcharger://lake.vaden.gizmodata.com:31337");
+  await expect(port).toHaveValue("31337");
+  // A typed port stays, whatever the host.
+  await port.fill("8443");
+  await host.fill("other.gizmodata.com");
+  await expect(port).toHaveValue("8443");
+  await expect(dialog.getByTestId("port-cloud-hint")).toHaveCount(0);
+});

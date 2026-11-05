@@ -47,6 +47,7 @@ import { addressLabel } from "../lib/serverAddress";
 import { sqlNameDragType } from "../lib/sqlNameDrag";
 import { requestUpload } from "../lib/upload/request";
 import { errorMessage, useSession } from "../session";
+import { ResumeBadge } from "./ResumeStatus";
 import { AddServerDialog } from "./AddServerDialog";
 import { FloatingMenu, type MenuItem } from "./FloatingMenu";
 
@@ -54,8 +55,12 @@ type Load<T> = { state: "loading" } | { state: "error"; message: string } | { st
 
 /** Node keys: the server, then the path, JSON-encoded so no name can collide with a separator. */
 const keyOf = (server: string, ...path: string[]) => JSON.stringify([server, ...path]);
-/** Catalogs the browser leaves out: `temp` belongs to one session, and the browser isn't a tab's session. */
-const hidden = new Set(["temp"]);
+/**
+ * Catalogs the browser leaves out: `temp` belongs to one session, and the browser isn't a tab's
+ * session; `system` is DuckDB's own (its information_schema and pg_catalog are internal views,
+ * which no listing shows; they are still queried by name, e.g. information_schema.tables).
+ */
+const hidden = new Set(["temp", "system"]);
 const previewRows = 100;
 const searchDelayMs = 300;
 
@@ -788,7 +793,7 @@ export function DataExplorer() {
     const state = server.state;
     const detail = (
       <>
-        {server.version && (
+        {server.version && !state?.resuming && (
           <span className="tree-tag" title="Server version">
             {server.version.split(" ")[0]}
           </span>
@@ -798,6 +803,7 @@ export function DataExplorer() {
             {server.address}
           </span>
         )}
+        {state?.resuming && <ResumeBadge progress={state.resuming} />}
         {state && !server.connected && (
           <span className="tree-type tree-server-status" data-status={state.status} title={state.error}>
             {state.status === "error" ? "sign-in needed" : "not signed in"}
@@ -861,8 +867,8 @@ export function DataExplorer() {
             type="button"
             className="btn btn-ghost btn-icon btn-sm"
             onClick={() => setAdding({})}
-            title="Add a server: connect to another Hardcharger server"
-            aria-label="Add a server"
+            title="Add a Hardcharger server: connect to another Hardcharger server"
+            aria-label="Add a Hardcharger server"
             data-testid="explorer-add-server"
           >
             <Plus size={14} />
@@ -957,7 +963,7 @@ export function DataExplorer() {
             No servers yet.{" "}
             {canAdd && (
               <button type="button" className="btn btn-primary btn-sm" onClick={() => setAdding({})}>
-                <Plus size={13} /> Add a server
+                <Plus size={13} /> Add a Hardcharger server
               </button>
             )}
           </li>

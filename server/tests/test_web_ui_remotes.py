@@ -22,6 +22,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from chargewire_client import Client, Session
 from conftest import TIMEOUT_SCALE, PERF_SCALE
+from resuming_holder import Holder
 
 pytestmark = pytest.mark.web_ui
 
@@ -289,6 +290,31 @@ def test_the_remotes_errors_come_back_as_they_are(ui, plain):
     assert failed.json()["code"] == direct.json()["code"] and "no_such_table" in failed.text
     # No remote token: the remote answers 401 (the relay forwards no Authorization of its own).
     problem(relay.client(added["id"], None).open_session(), 401, "invalid_token")
+
+
+def test_a_resuming_remotes_answer_reaches_the_browser_as_it_is(ui, plain):
+    """A remote behind an auto-resume holder (Chargewire §11.2): while it starts, the holder
+    answers 503 server_resuming with a Retry-After, and the relay hands that to the browser
+    unchanged, so the UI's client waits as the remote asks and shows it, then goes on."""
+    holder = Holder(upstream_port=plain.port, retry_after="2")
+    try:
+        relay = Relay(ui, token=ui.token())
+        added = relay.add(url=f"http://127.0.0.1:{holder.port}", name="resuming").json()
+        holder.resuming = 2  # the remote stops, and its holder answers for it
+        sign_in = {"grant_type": "password", "username": plain.username, "password": plain.password}
+        for _ in range(2):
+            held = relay.http.post(url=f"{added['relay_path']}/v1/auth/token", json=sign_in, headers=relay.headers())
+            body = problem(held, 503, "server_resuming")
+            assert held.headers["retry-after"] == "2", held.headers
+            assert held.headers["content-type"].startswith("application/problem+json")
+            assert body["detail"] == "the server is resuming; retry after 2 s", body
+        # Started: the same sign-in now goes through, and so does the rest.
+        token = relay.sign_in(added["id"], plain.username, plain.password)
+        session = relay.client(added["id"], token).new_session()
+        assert session.query("SELECT count(*) AS n FROM t").to_pylist()[0]["n"] >= 5
+        assert len(holder.held) == 2
+    finally:
+        holder.stop()
 
 
 def test_the_url_rules(ui, plain, signed):

@@ -18,6 +18,8 @@ import {
   type ServerAddress,
   addressLabel,
   defaultPort,
+  defaultPortFor,
+  isGizmoDataCloudHost,
   hostProblem,
   looksLikeUri,
   normalPrefix,
@@ -35,7 +37,9 @@ import {
   serverKey,
   useServers,
 } from "../lib/servers";
+import { defaultResumeTimeoutS, type ResumeProgress } from "../lib/resuming";
 import { useSession } from "../session";
+import { ResumeStatus } from "./ResumeStatus";
 
 interface Props {
   /** A server in the list to sign in to (the form starts filled with it); absent: a new one. */
@@ -45,13 +49,22 @@ interface Props {
 }
 
 /** Which field an error belongs under. */
-type Where = "host" | "auth" | "password" | "tls" | "timeout" | "general";
+type Where = "host" | "auth" | "password" | "tls" | "timeout" | "resume" | "general";
 type Problem = { where: Where; message: string };
 
 const tokenHint = "For a scoped token, use the user name token and the token as the password.";
 
 function problemOf(err: unknown, trustChecked: boolean, tls: boolean): Problem {
+  if (err instanceof DOMException && err.name === "AbortError") {
+    return { where: "general", message: "Stopped waiting for the server to resume." };
+  }
   if (err instanceof SignInError) {
+    if (err.code === "server_resuming") {
+      return {
+        where: "resume",
+        message: `${err.message}. The server is still starting: try again in a moment, or raise the resume timeout.`,
+      };
+    }
     if (err.code === "invalid_credentials" || err.status === 401) {
       return { where: "password", message: err.message || "The user name or password is wrong." };
     }
@@ -62,7 +75,10 @@ function problemOf(err: unknown, trustChecked: boolean, tls: boolean): Problem {
       case "remote_unreachable":
         return { where: "host", message: err.message };
       case "remote_not_chargewire":
-        return { where: "host", message: `${err.message}. Check the host, port and path prefix.` };
+        return {
+          where: "host",
+          message: `${err.message}. Only Hardcharger servers can be added here (not GizmoSQL or other Flight SQL servers): check the host, port and path prefix.`,
+        };
       case "remote_certificate_untrusted":
         return {
           where: "tls",
@@ -99,6 +115,9 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
   const [name, setName] = useState(server?.saved.name ?? "");
   const [host, setHost] = useState(server?.saved.host ?? "");
   const [port, setPort] = useState(String(server?.saved.port ?? defaultPort));
+  /** The port is still the dialog's default (nobody typed it, no saved connection or URI named
+   * it), so it follows the host: 443 for a GizmoData Cloud host, 31337 otherwise. */
+  const [portAuto, setPortAuto] = useState(!server);
   const [prefix, setPrefix] = useState(server?.saved.prefix ?? "");
   const [username, setUsername] = useState(server?.saved.username ?? server?.signIn?.username ?? "");
   const [password, setPassword] = useState("");
@@ -109,6 +128,12 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
     server?.saved.fingerprint ? { key: serverKey(server.saved), fingerprint: server.saved.fingerprint } : undefined,
   );
   const [timeout, setTimeoutS] = useState(String(server?.saved.timeout ?? 0));
+  const [resumeTimeout, setResumeTimeout] = useState(String(server?.saved.resumeTimeout ?? defaultResumeTimeoutS));
+  /** While the sign-in waits for the server to finish resuming: where that stands. */
+  const [resuming, setResuming] = useState<ResumeProgress | undefined>();
+  /** The server being connected (once signed in), whose own waits the store reports. */
+  const [connectingId, setConnectingId] = useState<string | undefined>();
+  const stopping = useRef<AbortController | undefined>(undefined);
   const [save, setSave] = useState(true);
   const [remember, setRemember] = useState(false);
   const [chooser, setChooser] = useState(false);
@@ -155,6 +180,7 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
     setName(s.name);
     setHost(s.host);
     setPort(String(s.port));
+    setPortAuto(false);
     setPrefix(s.prefix);
     setUsername(s.username ?? "");
     setPassword("");
@@ -162,6 +188,7 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
     setTrust(s.trust);
     setPinned(s.fingerprint ? { key: serverKey(s), fingerprint: s.fingerprint } : undefined);
     setTimeoutS(String(s.timeout ?? 0));
+    setResumeTimeout(String(s.resumeTimeout ?? defaultResumeTimeoutS));
     setSave(true);
     setRemember(false);
     setChooser(false);
@@ -191,6 +218,7 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
     setConfirming(undefined);
     if (!looksLikeUri(value)) {
       setHost(value);
+      if (portAuto) setPort(String(defaultPortFor(value)));
       return;
     }
     const parsed = parseServerUri(value);
@@ -202,6 +230,7 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
     const a = parsed.address;
     setHost(a.host);
     setPort(String(a.port));
+    setPortAuto(!a.portGiven);
     setUseTls(a.tls);
     if (!a.tls) setTrust(false);
     setPrefix(a.prefix);
@@ -217,6 +246,9 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
     const t = Number(timeout);
     if (!Number.isInteger(t) || t < 0)
       return { where: "timeout", message: "A timeout is a whole number of seconds, 0 for none." };
+    const r = Number(resumeTimeout);
+    if (resumeTimeout.trim() === "" || !Number.isInteger(r) || r < 0)
+      return { where: "resume", message: "A resume timeout is a whole number of seconds, 0 not to wait." };
     return undefined;
   };
 
@@ -261,11 +293,16 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
         ...(fingerprint ? { fingerprint } : {}),
       });
       session.servers.relaySessionIssued(registered.relay_session);
-      const auth = await api.signIn(registered.relay_path, {
-        grant_type: "password",
-        username: username.trim(),
-        password,
-      });
+      const resumeTimeoutS = Number(resumeTimeout);
+      const stop = new AbortController();
+      stopping.current = stop;
+      const auth = await api.signIn(
+        registered.relay_path,
+        { grant_type: "password", username: username.trim(), password },
+        stop.signal,
+        { resumeTimeoutS, onResuming: setResuming },
+      );
+      setResuming(undefined);
       // In the list only once signed in: a failed attempt leaves nothing behind.
       const entry = session.servers.add(
         {
@@ -275,11 +312,13 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
           ...(fingerprint ? { fingerprint } : {}),
           username: username.trim(),
           ...(timeoutS > 0 ? { timeout: timeoutS } : {}),
+          ...(resumeTimeoutS !== defaultResumeTimeoutS ? { resumeTimeout: resumeTimeoutS } : {}),
           ...(save ? {} : { transient: true }),
         },
         selectedId,
       );
       session.servers.signedIn(entry.id, registered, auth);
+      setConnectingId(entry.id);
       // Prove the sign-in with a session, and learn who the server says we are.
       try {
         const conn = await session.servers.connection(entry.id);
@@ -300,9 +339,15 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
     } catch (err) {
       setProblem(problemOf(err, trust, useTls));
     } finally {
+      stopping.current = undefined;
+      setResuming(undefined);
+      setConnectingId(undefined);
       setWorking(false);
     }
   };
+  // A wait for the server to resume: the sign-in's, or the new connection's (the store's).
+  const waiting =
+    resuming ?? (connectingId ? snapshot.servers.find((s) => s.saved.id === connectingId)?.resuming : undefined);
 
   const errorUnder = (where: Where): ReactNode =>
     problem?.where === where ? (
@@ -311,7 +356,7 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
       </p>
     ) : null;
 
-  const title = server ? `Sign in to ${server.saved.name || addressLabel(server.saved)}` : "Add a server";
+  const title = server ? `Sign in to ${server.saved.name || addressLabel(server.saved)}` : "Add a Hardcharger server";
   const savedRows = saved.map((s) => s.saved);
 
   return (
@@ -452,10 +497,16 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
                 onChange={(e) => {
                   clearProblem();
                   setPort(e.target.value);
+                  setPortAuto(false);
                 }}
                 aria-label="Port"
                 disabled={working || !!server}
               />
+              {portAuto && isGizmoDataCloudHost(host) && (
+                <span className="server-hint" data-testid="port-cloud-hint">
+                  GizmoData Cloud
+                </span>
+              )}
             </div>
           </div>
           {errorUnder("host")}
@@ -629,6 +680,28 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
             {errorUnder("timeout")}
           </div>
 
+          <div className="server-field">
+            <label className="server-label" htmlFor="server-resume-timeout">
+              Resume timeout (seconds)
+            </label>
+            <input
+              id="server-resume-timeout"
+              type="number"
+              min={0}
+              value={resumeTimeout}
+              onChange={(e) => {
+                clearProblem();
+                setResumeTimeout(e.target.value);
+              }}
+              aria-label="Resume timeout (seconds)"
+              disabled={working}
+            />
+            <span className="server-hint">
+              How long to wait for a stopped server that starts again on demand (auto-resume); 0 = don't wait
+            </span>
+            {errorUnder("resume")}
+          </div>
+
           <div className="server-row server-checks">
             <label className="server-check">
               <input
@@ -660,17 +733,33 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
             </label>
           </div>
         </div>
+        {waiting && <ResumeStatus progress={waiting} />}
         <div className="dialog-foot">
-          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={working}>
-            Cancel
-          </button>
+          {resuming ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => stopping.current?.abort()}
+              data-testid="add-server-stop-waiting"
+            >
+              Stop waiting
+            </button>
+          ) : (
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={working}>
+              Cancel
+            </button>
+          )}
           <button type="submit" className="btn btn-primary" disabled={working} data-testid="add-server-connect">
             {confirming?.key === key ? (
               <>
                 <BadgeCheck size={14} /> {working ? "Connecting…" : "Trust and connect"}
               </>
             ) : working ? (
-              "Connecting…"
+              waiting ? (
+                "Waiting for the server…"
+              ) : (
+                "Connecting…"
+              )
             ) : (
               "Connect"
             )}

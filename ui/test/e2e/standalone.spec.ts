@@ -68,7 +68,7 @@ test("opens without a sign-in, hides what needs a local server, and says to add 
 
 test("a server added through the relay is signed in through it, listed and queried", async ({ page, harness }) => {
   await open(page);
-  await page.getByTestId("explorer-no-servers").getByRole("button", { name: "Add a server" }).click();
+  await page.getByTestId("explorer-no-servers").getByRole("button", { name: "Add a Hardcharger server" }).click();
   const dialog = page.getByTestId("add-server-dialog");
   await dialog.getByLabel("Display name", { exact: true }).fill("Signed");
   // An https:// URL pasted into Host fills host, port and TLS.

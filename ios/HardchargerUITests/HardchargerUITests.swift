@@ -237,12 +237,19 @@ final class HardchargerUITests: XCTestCase {
         let status = Status()
         let deadline = Date().addingTimeInterval(90)
         while status.code != 200 && Date() < deadline {
-            let answered = expectation(description: "health")
-            session.dataTask(with: health) { _, response, _ in
+            // A semaphore, not an XCTest expectation: an attempt that doesn't answer in time (a
+            // TLS handshake can stall past the request timeout) is cancelled and tried again,
+            // where an unfulfilled expectation failed the whole test on the first slow try.
+            let answered = DispatchSemaphore(value: 0)
+            let task = session.dataTask(with: health) { _, response, _ in
                 status.code = (response as? HTTPURLResponse)?.statusCode ?? 0
-                answered.fulfill()
-            }.resume()
-            wait(for: [answered], timeout: 15)
+                answered.signal()
+            }
+            task.resume()
+            if answered.wait(timeout: .now() + 15) == .timedOut {
+                task.cancel()
+                _ = answered.wait(timeout: .now() + 5)  // the cancelled task's own answer
+            }
             if status.code != 200 { Thread.sleep(forTimeInterval: 2) }
         }
         XCTAssertEqual(status.code, 200, "the server answers on its LAN address")

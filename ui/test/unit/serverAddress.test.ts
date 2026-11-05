@@ -4,6 +4,8 @@ import {
   addressLabel,
   hostProblem,
   looksLikeUri,
+  defaultPortFor,
+  isGizmoDataCloudHost,
   normalPrefix,
   parseServerUri,
   portProblem,
@@ -23,7 +25,13 @@ const bad = (text: string) => {
 
 describe("parseServerUri", () => {
   it("reads hardcharger:// as the vanity drivers do: port 31337, TLS unless tls=false, a path prefix", () => {
-    expect(ok("hardcharger://db.example.com")).toEqual({ host: "db.example.com", port: 31337, tls: true, prefix: "" });
+    expect(ok("hardcharger://db.example.com")).toEqual({
+      host: "db.example.com",
+      port: 31337,
+      tls: true,
+      prefix: "",
+      portGiven: false,
+    });
     expect(ok("hardcharger://db.example.com:4433")).toMatchObject({ port: 4433, tls: true });
     expect(ok("hardcharger://db.example.com?tls=false")).toMatchObject({ port: 31337, tls: false });
     expect(ok("hardcharger://db.example.com?tls=0")).toMatchObject({ tls: false });
@@ -33,8 +41,29 @@ describe("parseServerUri", () => {
     expect(bad("hardcharger://h?tls=maybe")).toContain("tls=maybe");
   });
 
+  it("assumes port 443 for a GizmoData Cloud host when the URI names none (an explicit port wins)", () => {
+    expect(ok("hardcharger://warehouse.us-east-1.aws.gizmodata.com")).toMatchObject({ port: 443, portGiven: false });
+    expect(ok("hardcharger://W.VADEN.GizmoData.Com.")).toMatchObject({ port: 443 });
+    expect(ok("jdbc:hardcharger://w.gizmodata.com/sales")).toMatchObject({ port: 443, catalog: "sales" });
+    expect(ok("hardcharger://w.gizmodata.com:31337")).toMatchObject({ port: 31337, portGiven: true });
+    expect(ok("hardcharger://evilgizmodata.com")).toMatchObject({ port: 31337 });
+    expect(ok("hardcharger://gizmodata.com.example.org")).toMatchObject({ port: 31337 });
+    expect(isGizmoDataCloudHost("gizmodata.com")).toBe(true);
+    expect(isGizmoDataCloudHost(" a.b.gizmodata.com ")).toBe(true);
+    expect(isGizmoDataCloudHost(".gizmodata.com")).toBe(false);
+    expect(isGizmoDataCloudHost("")).toBe(false);
+    expect(defaultPortFor("x.gizmodata.com")).toBe(443);
+    expect(defaultPortFor("db.example.com")).toBe(31337);
+  });
+
   it("reads chargewire:// with the same rules", () => {
-    expect(ok("chargewire://10.0.0.5")).toEqual({ host: "10.0.0.5", port: 31337, tls: true, prefix: "" });
+    expect(ok("chargewire://10.0.0.5")).toEqual({
+      host: "10.0.0.5",
+      port: 31337,
+      tls: true,
+      prefix: "",
+      portGiven: false,
+    });
     expect(ok("chargewire://10.0.0.5:9000?tls=false")).toMatchObject({ port: 9000, tls: false });
   });
 
@@ -45,27 +74,53 @@ describe("parseServerUri", () => {
       tls: false,
       prefix: "",
       catalog: "lake",
+      portGiven: true,
     });
     expect(ok("jdbc:hardcharger://wh.example.com")).toEqual({
       host: "wh.example.com",
       port: 31337,
       tls: true,
       prefix: "",
+      portGiven: false,
     });
     expect(bad("jdbc:postgresql://h/db")).toContain("jdbc:hardcharger://");
   });
 
   it("reads https:// and http:// URLs with their own default ports", () => {
-    expect(ok("https://db.example.com")).toEqual({ host: "db.example.com", port: 443, tls: true, prefix: "" });
-    expect(ok("http://db.example.com")).toEqual({ host: "db.example.com", port: 80, tls: false, prefix: "" });
+    expect(ok("https://db.example.com")).toEqual({
+      host: "db.example.com",
+      port: 443,
+      tls: true,
+      prefix: "",
+      portGiven: false,
+    });
+    expect(ok("http://db.example.com")).toEqual({
+      host: "db.example.com",
+      port: 80,
+      tls: false,
+      prefix: "",
+      portGiven: false,
+    });
     expect(ok("https://db.example.com:31337/chargewire")).toMatchObject({ port: 31337, prefix: "" });
     // tls= is the vanity schemes' parameter, not a URL's.
     expect(ok("https://h?tls=false")).toMatchObject({ tls: true });
   });
 
   it("reads IPv6 addresses in brackets", () => {
-    expect(ok("hardcharger://[::1]:31400")).toEqual({ host: "::1", port: 31400, tls: true, prefix: "" });
-    expect(ok("https://[2001:db8::7]")).toEqual({ host: "2001:db8::7", port: 443, tls: true, prefix: "" });
+    expect(ok("hardcharger://[::1]:31400")).toEqual({
+      host: "::1",
+      port: 31400,
+      tls: true,
+      prefix: "",
+      portGiven: true,
+    });
+    expect(ok("https://[2001:db8::7]")).toEqual({
+      host: "2001:db8::7",
+      port: 443,
+      tls: true,
+      prefix: "",
+      portGiven: false,
+    });
     expect(bad("hardcharger://[::1")).toContain("IPv6");
     expect(bad("hardcharger://[::1]x")).toContain("IPv6");
   });

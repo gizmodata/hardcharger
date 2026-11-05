@@ -387,7 +387,7 @@ with hardcharger.connect(uri="hardcharger://localhost?tls=false", username="hard
         print(cur.fetch_arrow_table())
 ```
 
-`hardcharger://host` is HTTPS on port 31337; `?tls=false` is plain HTTP for local
+`hardcharger://host` is HTTPS on port 31337 (on 443 for a GizmoData Cloud host, `*.gizmodata.com`); `?tls=false` is plain HTTP for local
 development. [hardcharger-adbc](https://github.com/gizmodata/hardcharger-adbc) is a native
 Go driver, on the [Chargewire ADBC driver](https://github.com/gizmodata/chargewire-adbc), with
 query and session tags, `hardcharger.*` settings and browser sign-in. Its library loads into
@@ -506,6 +506,14 @@ History, tab completion, syntax highlighting, a pager for long results, dot comm
 shell goes on. A large result is read over up to 8 connections at once, in the same order;
 `--result-partitions N` (or `HARDCHARGER_RESULT_PARTITIONS`) changes that, and `1` reads every
 result over one connection.
+
+A server that is starting again after a stop (a GizmoData Cloud cluster with auto-resume)
+answers `server_resuming` while it starts, and the client waits for it and then goes on:
+sign-in, session and statement are sent again as the server asks. While it waits it says so,
+a countdown in a terminal (`The server is resuming (…): retrying in 4 s, 0:21 so far. Ctrl-C
+stops waiting.`) and a line per answer in a log; `--quiet` waits without a word, and Ctrl-C
+stops waiting. `--resume-timeout SECONDS` (or `HARDCHARGER_RESUME_TIMEOUT`) sets how long it
+waits, 600 by default; `0` reports the server's answer at once.
 
 One statement with `--command` (`-c`), in any output mode (`--csv`, `--json`,
 `--markdown`, `--table`, or `.mode` for the rest):

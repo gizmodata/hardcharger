@@ -91,6 +91,18 @@ describe("the saved list", () => {
     expect(() => saveSavedServers("joe", [warehouse], broken)).not.toThrow();
   });
 
+  it("keeps a resume timeout, 0 included (don't wait), and drops one that isn't a count of seconds", () => {
+    const storage = new MemoryStorage();
+    const waits = { ...warehouse, id: "r1", host: "a.example.com", resumeTimeout: 120 };
+    const never = { ...warehouse, id: "r2", host: "b.example.com", resumeTimeout: 0 };
+    saveSavedServers("joe", [waits, never, lab], storage);
+    const loaded = loadSavedServers("joe", storage);
+    expect(loaded.map((s) => s.resumeTimeout)).toEqual([120, 0, undefined]); // absent: the default, 600
+    expect(normalizeSaved({ ...warehouse, resumeTimeout: -5 })).not.toHaveProperty("resumeTimeout");
+    expect(normalizeSaved({ ...warehouse, resumeTimeout: "60" })).not.toHaveProperty("resumeTimeout");
+    expect(normalizeSaved({ ...warehouse, resumeTimeout: 90.7 })).toMatchObject({ resumeTimeout: 90 });
+  });
+
   it("reads entries saved as a URL (the first 2.7.0 builds) as host, port and trust", () => {
     expect(normalizeSaved({ id: "a", name: "A", url: "https://wh.example.com:31337", tls: "verified" })).toEqual({
       id: "a",

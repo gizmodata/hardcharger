@@ -4,7 +4,7 @@ import { stringify } from "yaml";
 import { version as appVersion } from "../package.json";
 import { connectionPanel, bindConnectionPanel } from "./connectionPanel";
 import { updateBadge, updateAbout, updateDialogs, bindUpdates, startUpdates } from "./updates";
-import { defaultNetwork, networkErrors, certificateCovers, lostAddress, normalHost, type NetworkSettings, type NetworkInfo, type GeneratedCertificate, type WorkspaceTrust } from "./network";
+import { defaultNetwork, networkErrors, certificateCovers, lostAddress, normalHost, isGizmoDataCloudHost, type NetworkSettings, type NetworkInfo, type GeneratedCertificate, type WorkspaceTrust } from "./network";
 import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, type ServerOption } from "./configuration";
 import "./style.css";
 import "./palette.css";
@@ -510,6 +510,16 @@ function render() {
     markDirty(); render();
     document.querySelector<HTMLInputElement>(`[name="remote-name-${remoteRows.length - 1}"]`)?.focus();
   });
+  // A row's port follows its host while it is a default (31337, or 443 for a GizmoData Cloud
+  // host, whose clusters answer there) and nobody typed one, as the workspace's dialog does.
+  app.querySelectorAll<HTMLInputElement>('[name^="remote-port-"]').forEach(port => port.addEventListener("input", () => {
+    port.dataset.typed = "1";
+  }));
+  app.querySelectorAll<HTMLInputElement>('[name^="remote-host-"]').forEach(host => host.addEventListener("input", () => {
+    const port = app.querySelector<HTMLInputElement>(`[name="remote-port-${host.name.slice("remote-host-".length)}"]`);
+    if (!port || port.dataset.typed === "1" || (port.value !== "31337" && port.value !== "443")) return;
+    port.value = isGizmoDataCloudHost(host.value) ? "443" : "31337";
+  }));
   // Use TLS and Trust change what the row shows (Trust needs TLS; the fingerprint goes with Trust).
   app.querySelectorAll<HTMLInputElement>('[name^="remote-tls-"], [name^="remote-trust-"]').forEach(box => box.addEventListener("change", () => {
     rememberDraft();

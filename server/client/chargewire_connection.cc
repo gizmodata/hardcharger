@@ -1,9 +1,11 @@
 #include "chargewire_connection.hpp"
 
 #include "plain_http_probe.hpp"
+#include "password_prompt.hpp"
 #include "platform.hpp"
 
 #include <iostream>
+#include <regex>
 #include <utility>
 
 #include <arrow/scalar.h>
@@ -27,6 +29,7 @@ std::string DescribeReason(const std::string& reason) {
   if (reason == "principal_dropped") return "the user was dropped or disabled";
   if (reason == "token_revoked") return "its access token was revoked";
   if (reason == "token_expired") return "its access token expired";
+  if (reason == "idle_in_transaction") return "it sat idle with a transaction open, which was rolled back";
   return reason;
 }
 
@@ -36,7 +39,9 @@ ChargewireConnection::ChargewireConnection(ChargewireConnection&& other) noexcep
     : client_(std::move(other.client_)),
       session_(std::move(other.session_)),
       server_url_(std::move(other.server_url_)),
-      cancel_requested_(other.cancel_requested_.load()) {}
+      cancel_requested_(other.cancel_requested_.load()),
+      transaction_maybe_open_(other.transaction_maybe_open_),
+      session_state_changed_(other.session_state_changed_) {}
 
 arrow::Status ChargewireConnection::ToStatus(const wc::Error& error) const {
   if (error.IsCancelled() || cancel_requested_.load(std::memory_order_relaxed)) {
@@ -92,6 +97,13 @@ arrow::Status ChargewireConnection::Connect(const ClientConfig& config) {
   options.tls.skip_verify = config.tls_skip_verify;
   options.tls.cert_file = config.mtls_cert;
   options.tls.key_file = config.mtls_key;
+  options.resume_timeout = std::chrono::seconds(std::max(0, config.resume_timeout));
+  resume_->quiet = config.quiet;
+  resume_->terminal = StderrIsTerminal();
+  resume_->stop.store(false);
+  options.on_resuming = [status = resume_](const wc::ResumeProgress& progress) {
+    return status->Report(progress.attempt, progress.retry_in, progress.elapsed, progress.detail);
+  };
 
   const std::string origin = std::string(config.use_tls ? "https://" : "http://") + config.host + ":" +
                              std::to_string(config.port);
@@ -188,6 +200,9 @@ arrow::Status ChargewireConnection::Connect(const ClientConfig& config) {
   config_.output_stream = &std::cout;
   client_ = std::move(client);
   session_ = std::move(session);
+  transaction_maybe_open_ = false;
+  session_state_changed_ = false;
+  resume_->Done();
   return arrow::Status::OK();
 }
 
@@ -206,6 +221,7 @@ std::optional<arrow::Status> ChargewireConnection::ConnectDeferred() {
       std::cerr << "Warning: failed to set " << name << ": " << result.status().message() << std::endl;
     }
   }
+  session_state_changed_ = false;  // its own tags: Reopen applies them again
   return status;
 }
 
@@ -221,21 +237,50 @@ bool RequireConnection(ChargewireConnection& conn) {
   return false;
 }
 
+bool ChargewireConnection::CanSignIn() const {
+  return client_ && (config_.auth_type_mtls || (!config_.auth_type_external && !config_.username.empty()));
+}
+
+void ChargewireConnection::SignIn() {
+  if (config_.auth_type_mtls) {
+    client_->SignInWithClientCertificate();
+  } else {
+    client_->SignInWithPassword(config_.username, config_.password);
+  }
+}
+
+bool ChargewireConnection::SignInAgain() {
+  if (!CanSignIn()) return false;
+  try {
+    SignIn();
+    return true;
+  } catch (const wc::Error&) {
+    return false;  // the original refusal is reported
+  }
+}
+
 bool ChargewireConnection::Reopen(const wc::Error& error) {
   const bool lost = error.code() == "session_not_found";
   const bool ended = error.code() == "session_ended";
   if ((!lost && !ended) || !client_) return false;
   try {
-    if (ended && config_.auth_type_mtls) {
-      client_->SignInWithClientCertificate();
-    } else if (ended && !config_.auth_type_external && !config_.username.empty()) {
-      client_->SignInWithPassword(config_.username, config_.password);
+    if (ended && CanSignIn()) SignIn();
+    std::unique_ptr<wc::Session> session;
+    try {
+      session = client_->CreateSession();
+    } catch (const wc::Error& e) {
+      // A restarted server that signs tokens with a new key (no fixed secret key) no longer
+      // accepts this sign-in's token: sign in again with what the client has, then retry once.
+      if (e.code() != "invalid_token" || !e.reason().empty() || !CanSignIn()) throw;
+      SignIn();
+      session = client_->CreateSession();
     }
-    auto session = client_->CreateSession();
     {
       std::lock_guard cancel_lock(cancel_mutex_);
       session_ = std::move(session);
     }
+    transaction_maybe_open_ = false;
+    session_state_changed_ = false;
   } catch (const wc::Error& e) {
     std::cerr << "Warning: the server "
               << (lost ? std::string("no longer has this session")
@@ -260,11 +305,47 @@ bool ChargewireConnection::Reopen(const wc::Error& error) {
 
 template <class Call>
 auto ChargewireConnection::WithSession(Call&& call) -> decltype(call()) {
+  struct ClearResumeLine {
+    ResumeStatus& status;
+    ~ClearResumeLine() { status.Done(); }
+  } clear{*resume_};
+  resume_->stop.store(cancel_requested_.load());
   try {
-    return call();
+    try {
+      return call();
+    } catch (const wc::Error& e) {
+      // The server refused the sign-in's token without a reason: it signs tokens with a key
+      // this one wasn't signed with (a server restarted without a fixed secret key). The
+      // request never ran: sign in again with what the client has and send it once more. A
+      // session lost along with it is then handled below. A refusal with a reason (revoked,
+      // credentials changed, ...) is the person's to act on, and is reported.
+      if (e.code() != "invalid_token" || !e.reason().empty() || !SignInAgain()) throw;
+      std::cerr << "Warning: the server no longer accepted this sign-in (restarted?); signed in again." << std::endl;
+      return call();
+    }
   } catch (const wc::Error& e) {
+    const bool transaction_maybe_lost = transaction_maybe_open_;
+    const bool state_lost = session_state_changed_;
     if (!Reopen(e)) throw;
-    if (e.code() == "session_not_found") return call();  // it never ran: the server had no session to run it in
+    if (e.code() == "session_not_found") {
+      // It never ran: the server had no session to run it in. Run it in the new one, unless
+      // the old one may have held a transaction (rolled back with it: this statement would
+      // commit alone, without the statements before it) or had USE or SET (gone with it: this
+      // statement would run against another schema or with other settings).
+      if (transaction_maybe_lost) {
+        throw wc::Error(e.status(), e.code(),
+                        "The statement did not run: the server no longer had this session, which may have held "
+                        "a transaction open, and anything it had not committed was rolled back. It was not run "
+                        "again; run the transaction again to run it in the new session.");
+      }
+      if (state_lost) {
+        throw wc::Error(e.status(), e.code(),
+                        "The statement did not run: the server no longer had this session, and what it was set to "
+                        "with USE or SET is gone with it, so the statement could run against another schema or with "
+                        "other settings. It was not run again; run USE or SET again, then the statement.");
+      }
+      return call();
+    }
     // session_ended: the server stopped the statement with its session (a kill can come
     // while it runs), so it isn't run again. The server's advice (sign in again, open a new
     // session) is what Reopen just did: say what became of the statement instead.
@@ -272,6 +353,126 @@ auto ChargewireConnection::WithSession(Call&& call) -> decltype(call()) {
                     "The statement did not complete: its session ended" +
                         (e.reason().empty() ? std::string() : " (" + e.reason() + ")") +
                         ". It was not run again; run it again to run it in the new session.");
+  }
+}
+
+bool ChargewireConnection::ResumeStatus::Report(int attempt, std::chrono::milliseconds retry_in,
+                                                std::chrono::milliseconds elapsed, const std::string& detail) {
+  if (stop.load()) return false;
+  std::lock_guard lock(mutex);
+  if (quiet) return true;
+  const auto seconds = [](std::chrono::milliseconds ms) { return static_cast<long long>((ms.count() + 999) / 1000); };
+  const long long spent = elapsed.count() / 1000;
+  char clock[32];
+  std::snprintf(clock, sizeof clock, "%lld:%02lld", spent / 60, spent % 60);
+  // The server's detail in parentheses, unless it only restates the sentence (the spec's
+  // "the server is resuming; retry after 5 s"): a holder's own words are worth showing.
+  static const std::regex kStock(R"(^\s*the server is resuming\b[^a-z]*(retry after \d+ s)?\.?\s*$)",
+                                 std::regex::icase);
+  const std::string aside = std::regex_match(detail, kStock) ? "" : " (" + detail + ")";
+  if (terminal) {
+    // One line, rewritten each second: the countdown, the time spent, and how to stop.
+    // Overwritten with spaces, not an escape sequence, so any console shows it.
+    const std::string line = "The server is resuming" + aside + ": retrying in " +
+                             std::to_string(seconds(retry_in)) + " s, " + clock + " so far. Ctrl-C stops waiting.";
+    std::cerr << '\r' << line << std::string(line_length > line.size() ? line_length - line.size() : 0, ' ')
+              << std::flush;
+    line_length = line.size();
+  } else if (attempt != attempt_shown) {
+    // A line per answer, not per second, in a log.
+    std::cerr << "The server is resuming" << aside << "; retrying in " << seconds(retry_in) << " s (" << clock
+              << " so far)." << std::endl;
+  }
+  attempt_shown = attempt;
+  return true;
+}
+
+void ChargewireConnection::ResumeStatus::Done() {
+  std::lock_guard lock(mutex);
+  if (line_length > 0) std::cerr << '\r' << std::string(line_length, ' ') << '\r' << std::flush;
+  line_length = 0;
+  attempt_shown = 0;
+}
+
+namespace {
+// What a statement's text can do to the session's transaction, by its words. A word in a
+// string or a comment counts too: that only errs on the safe side.
+struct TransactionWords {
+  bool opens = false;  // BEGIN, START [TRANSACTION], autocommit settings, EXECUTE of a prepared one
+  bool ends = false;   // COMMIT, ROLLBACK, END, ABORT
+};
+TransactionWords WordsOf(const std::string& sql) {
+  static constexpr std::array<std::string_view, 4> kOpens = {"BEGIN", "START", "AUTOCOMMIT", "EXECUTE"};
+  static constexpr std::array<std::string_view, 4> kEnds = {"COMMIT", "ROLLBACK", "END", "ABORT"};
+  TransactionWords out;
+  std::string word;
+  auto check = [&] {
+    if (std::find(kOpens.begin(), kOpens.end(), word) != kOpens.end()) out.opens = true;
+    if (std::find(kEnds.begin(), kEnds.end(), word) != kEnds.end()) out.ends = true;
+    word.clear();
+  };
+  for (const char c : sql) {
+    if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+      word.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+    } else if (!word.empty()) {
+      check();
+    }
+  }
+  if (!word.empty()) check();
+  return out;
+}
+}  // namespace
+
+namespace {
+// The statement's first word, upper-cased, after leading spaces and comments.
+std::string FirstWord(const std::string& sql) {
+  size_t i = 0;
+  while (i < sql.size()) {
+    if (std::isspace(static_cast<unsigned char>(sql[i]))) {
+      ++i;
+    } else if (sql.compare(i, 2, "--") == 0) {
+      while (i < sql.size() && sql[i] != '\n') ++i;
+    } else if (sql.compare(i, 2, "/*") == 0) {
+      const size_t end = sql.find("*/", i + 2);
+      i = end == std::string::npos ? sql.size() : end + 2;
+    } else {
+      break;
+    }
+  }
+  std::string word;
+  while (i < sql.size() && (std::isalnum(static_cast<unsigned char>(sql[i])) || sql[i] == '_')) {
+    word.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(sql[i]))));
+    ++i;
+  }
+  return word;
+}
+}  // namespace
+
+void ChargewireConnection::NoteStatement(const std::string& sql) {
+  if (!session_) return;
+  // Where and how statements run (USE, SET, RESET, PRAGMA): a new session starts without it,
+  // so a statement run again there could write to another schema's table or run with other
+  // settings, with no error.
+  const std::string first = FirstWord(sql);
+  if (first == "USE" || first == "SET" || first == "RESET" || first == "PRAGMA") session_state_changed_ = true;
+  const TransactionWords words = WordsOf(sql);
+  if (words.opens) {
+    // It may have opened a transaction. A read of the session right after it can't say
+    // otherwise: servers before Chargewire 2.2.1 answer such a statement before they record
+    // what it did, so the session can still say "none" right after a BEGIN. Only a later
+    // statement that ends the transaction (below) clears this.
+    transaction_maybe_open_ = true;
+    return;
+  }
+  if (!words.ends) return;  // nothing that changes the transaction: what we knew stands
+  try {
+    // A read can only lag toward "open" (the transaction it ended), which errs on the safe
+    // side; "none" is the truth.
+    const auto doc = session_->Get();
+    const auto* state = doc.if_contains("transaction");
+    transaction_maybe_open_ = !(state && state->is_string() && state->as_string() == "none");
+  } catch (const std::exception&) {
+    transaction_maybe_open_ = true;  // can't tell: assume the worst
   }
 }
 
@@ -295,6 +496,7 @@ arrow::Result<QueryResult> ChargewireConnection::ExecuteQuery(const std::string&
     if (!result.HasRows()) {
       out.update = true;
       if (result.document) out.rows_affected = result.document->rows_affected;
+      NoteStatement(sql);
       return out;
     }
     bool more = false;
@@ -317,8 +519,12 @@ arrow::Result<QueryResult> ChargewireConnection::ExecuteQuery(const std::string&
       } catch (const std::exception&) {
       }
     }
+    // Only once the result is read: a request on the session while its result streams would
+    // abandon the stream.
+    NoteStatement(sql);
     return out;
   } catch (const wc::Error& e) {
+    NoteStatement(sql);  // a failed COMMIT can still have ended the transaction
     return ToStatus(e);
   }
 }
@@ -334,10 +540,13 @@ arrow::Result<int64_t> ChargewireConnection::ExecuteUpdate(const std::string& sq
       // and reading it keeps the connection for the next statement.
       int64_t rows = 0;
       while (auto batch = result.reader->Next()) rows += batch->num_rows();
+      NoteStatement(sql);  // after the read, never while the result streams
       return rows;
     }
+    NoteStatement(sql);
     return result.document && result.document->rows_affected ? *result.document->rows_affected : 0;
   } catch (const wc::Error& e) {
+    NoteStatement(sql);
     return ToStatus(e);
   }
 }

@@ -40,6 +40,15 @@ export function networkErrors(network: NetworkSettings): Record<string, string> 
 }
 
 /** A host the way a URL compares it: brackets and case removed, IPv6 compressed. */
+/**
+ * Whether `host` is a GizmoData Cloud host (gizmodata.com or *.gizmodata.com, any case, a
+ * trailing dot allowed, on the domain boundary), whose Hardcharger clusters answer on 443.
+ */
+export function isGizmoDataCloudHost(host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/\.$/, "");
+  return h === "gizmodata.com" || (h.endsWith(".gizmodata.com") && h.length > ".gizmodata.com".length);
+}
+
 export function normalHost(name: string): string {
   const host = name.trim().replace(/^\[|\]$/g, "");
   try { return new URL(`https://${host.includes(":") ? `[${host}]` : host}`).hostname.replace(/^\[|\]$/g, ""); }

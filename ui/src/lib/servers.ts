@@ -26,6 +26,7 @@ import {
 } from "./serverAddress";
 import type { ConnectionOptions } from "./chargewire";
 import { pageRequests } from "./pageRequests";
+import { defaultResumeTimeoutS, type ResumeOptions, type ResumeProgress, sendWhileResuming } from "./resuming";
 
 export type TlsMode = "verified" | "fingerprint" | "plaintext";
 
@@ -47,6 +48,11 @@ export interface SavedServer extends ServerAddress {
   username?: string;
   /** Seconds before the server cancels a statement; 0 or absent: none. */
   timeout?: number;
+  /**
+   * Seconds to wait for the server while it is resuming (a stopped GizmoData Cloud cluster with
+   * auto-resume starting again, Chargewire §11.2); absent: 600, 0: don't wait.
+   */
+  resumeTimeout?: number;
   /** Not saved for later (Save connection for later off): kept for this tab only. */
   transient?: boolean;
 }
@@ -184,7 +190,8 @@ export function normalizeSaved(s: unknown): SavedServer | undefined {
     if (!parsed.ok) return undefined;
     const mode = r["tls"];
     if (mode !== "verified" && mode !== "fingerprint" && mode !== "plaintext") return undefined;
-    address = { ...parsed.address, tls: mode !== "plaintext", prefix: parsed.address.prefix };
+    const { host, port } = parsed.address; // only the address: not portGiven, username or catalog
+    address = { host, port, tls: mode !== "plaintext", prefix: parsed.address.prefix };
     trust = mode === "fingerprint";
   } else {
     return undefined;
@@ -192,6 +199,9 @@ export function normalizeSaved(s: unknown): SavedServer | undefined {
   const fingerprint = text("fingerprint");
   const username = text("username");
   const timeout = typeof r["timeout"] === "number" && r["timeout"] > 0 ? Math.floor(r["timeout"]) : undefined;
+  const resume = r["resumeTimeout"];
+  const resumeTimeout =
+    typeof resume === "number" && Number.isFinite(resume) && resume >= 0 ? Math.floor(resume) : undefined;
   return {
     id: r["id"],
     name: r["name"],
@@ -200,6 +210,7 @@ export function normalizeSaved(s: unknown): SavedServer | undefined {
     ...(fingerprint ? { fingerprint } : {}),
     ...(username ? { username } : {}),
     ...(timeout ? { timeout } : {}),
+    ...(resumeTimeout !== undefined ? { resumeTimeout } : {}),
   };
 }
 
@@ -221,18 +232,21 @@ export function saveSavedServers(
 ): void {
   try {
     // Only the fields the list is for: never anything a caller may have left on an entry.
-    const kept = servers.map(({ id, name, host, port, tls, prefix, trust, fingerprint, username, timeout }) => ({
-      id,
-      name,
-      host,
-      port,
-      tls,
-      prefix,
-      trust,
-      ...(fingerprint ? { fingerprint } : {}),
-      ...(username ? { username } : {}),
-      ...(timeout ? { timeout } : {}),
-    }));
+    const kept = servers.map(
+      ({ id, name, host, port, tls, prefix, trust, fingerprint, username, timeout, resumeTimeout }) => ({
+        id,
+        name,
+        host,
+        port,
+        tls,
+        prefix,
+        trust,
+        ...(fingerprint ? { fingerprint } : {}),
+        ...(username ? { username } : {}),
+        ...(timeout ? { timeout } : {}),
+        ...(resumeTimeout !== undefined ? { resumeTimeout } : {}),
+      }),
+    );
     storage?.setItem(serversKey(user), JSON.stringify(kept.filter((_, i) => !servers[i]!.transient)));
   } catch {
     // not remembered (a private window, or storage blocked)
@@ -419,17 +433,30 @@ export class RelayApi {
     await this.call<unknown>("DELETE", `/remotes/${encodeURIComponent(relayId)}`, undefined, undefined, true);
   }
 
-  /** Signs in to the remote through the relay (a password, or a token checked by a session). */
-  async signIn(relayPath: string, grant: Record<string, string>, signal?: AbortSignal): Promise<SignedIn> {
+  /**
+   * Signs in to the remote through the relay (a password, or a token checked by a session).
+   * While the remote is resuming (server_resuming, §11.2) the sign-in is sent again as it
+   * asks, until `resume.resumeTimeoutS` (default 600), telling `resume.onResuming` each wait.
+   */
+  async signIn(
+    relayPath: string,
+    grant: Record<string, string>,
+    signal?: AbortSignal,
+    resume: Omit<ResumeOptions, "signal"> = {},
+  ): Promise<SignedIn> {
     let resp: Response;
     try {
-      resp = await pageRequests.fetch(`${window.location.origin}${relayPath}/v1/auth/token`, {
-        method: "POST",
-        headers: this.headers({ "Content-Type": "application/json", Accept: "application/json" }),
-        body: JSON.stringify(grant),
-        cache: "no-store",
-        signal: signal ?? null,
-      });
+      resp = await sendWhileResuming(
+        () =>
+          pageRequests.fetch(`${window.location.origin}${relayPath}/v1/auth/token`, {
+            method: "POST",
+            headers: this.headers({ "Content-Type": "application/json", Accept: "application/json" }),
+            body: JSON.stringify(grant),
+            cache: "no-store",
+            signal: signal ?? null,
+          }),
+        { ...resume, signal },
+      );
     } catch (err) {
       if (signal?.aborted) throw err;
       throw new SignInError("The server could not be reached.", "client_transport_error", undefined);
@@ -508,14 +535,21 @@ export function relayFetch(auth: () => { token?: string; relaySession?: string }
 export function openRemoteConnection(
   signIn: RemoteSignIn,
   relayAuth: () => { token?: string; relaySession?: string },
-  options: ConnectionOptions & { timeoutS?: number } = {},
+  options: ConnectionOptions & {
+    timeoutS?: number;
+    resumeTimeoutS?: number | undefined;
+    onResuming?: ((progress: ResumeProgress) => void) | undefined;
+  } = {},
 ): Promise<Connection> {
-  const { signal, catalog, schema, reconnect } = options;
+  const { signal, catalog, schema, reconnect, onResuming } = options;
   const timeoutS = options.timeoutS ?? 0;
   return connect({
     url: `${window.location.origin}${signIn.relayPath}`,
     // The saved connection's query timeout: the server cancels a statement after it (§6.9).
     ...(timeoutS > 0 ? { statementTimeoutMs: timeoutS * 1000 } : {}),
+    // Waiting for a remote that is resuming (§11.2), and telling the page while it does.
+    resumeTimeout: options.resumeTimeoutS ?? defaultResumeTimeoutS,
+    ...(onResuming ? { onResuming: (e) => onResuming({ ...e, at: Date.now() }) } : {}),
     fetch: relayFetch(relayAuth),
     token: signIn.token,
     ...(catalog ? { catalog } : {}),
@@ -537,6 +571,8 @@ export interface ServerState {
   status: ServerStatus;
   error?: string;
   signIn?: RemoteSignIn;
+  /** While a request to it waits for it to finish resuming (§11.2): where that wait stands. */
+  resuming?: ResumeProgress;
 }
 
 export interface ServersSnapshot {
@@ -603,6 +639,24 @@ export class ServersStore {
     saveTabServers(next.servers.map((s) => s.saved));
     saveRemoteSignIns(next.servers.flatMap((s) => (s.signIn ? [s.signIn] : [])));
     saveRelaySession(next.relaySession);
+    for (const l of this.#listeners) l();
+  }
+
+  /**
+   * Shows (or, with undefined, clears) where a wait for the server to finish resuming stands.
+   * Not stored anywhere: it only tells the page.
+   */
+  resuming(id: string, progress: ResumeProgress | undefined): void {
+    const current = this.find(id);
+    if (!current || (!progress && !current.resuming)) return;
+    this.#state = {
+      ...this.#state,
+      servers: this.#state.servers.map((s) => {
+        if (s.saved.id !== id) return s;
+        const { resuming: _was, ...rest } = s;
+        return progress ? { ...rest, resuming: progress } : rest;
+      }),
+    };
     for (const l of this.#listeners) l();
   }
 
@@ -755,10 +809,19 @@ export class ServersStore {
     return openRemoteConnection(state.signIn, () => this.relayAuth(), {
       ...options,
       timeoutS: state.saved.timeout ?? 0,
-    }).then((c) => {
-      this.#extra.set(c, id);
-      return c;
-    });
+      resumeTimeoutS: state.saved.resumeTimeout,
+      onResuming: (progress) => this.resuming(id, progress),
+    }).then(
+      (c) => {
+        this.resuming(id, undefined);
+        this.#extra.set(c, id);
+        return c;
+      },
+      (err: unknown) => {
+        this.resuming(id, undefined);
+        throw err;
+      },
+    );
   }
 
   /** The open sessions on every server (to end them when the page goes). */

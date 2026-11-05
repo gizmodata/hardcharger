@@ -5,6 +5,7 @@ import { monaco } from "../lib/monaco";
 import { sqlNameDragType } from "../lib/sqlNameDrag";
 import { keepTypedIndentation } from "../lib/typedIndent";
 import { splitStatements, statementAt } from "../lib/sql";
+import { mayTakeFocus } from "../lib/focus";
 
 export interface EditorApi {
   /**
@@ -247,7 +248,11 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
       // would bring up the keyboard over the results of the next tap (Run). A tap on the
       // editor still focuses it.
       focus: () => {
-        if (!window.matchMedia?.("(pointer: coarse)").matches) ed.focus();
+        if (window.matchMedia?.("(pointer: coarse)").matches) return;
+        // Never away from a field the person is typing in (a search typed while this editor
+        // was still getting ready).
+        if (!mayTakeFocus(document.activeElement, host.current)) return;
+        ed.focus();
       },
       highlight: (range) => {
         running.clear();

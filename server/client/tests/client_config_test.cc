@@ -182,6 +182,55 @@ TEST(ClientConfigEnvTest, PasswordDoesNotFallBackToTheAdministratorsPassword) {
   EXPECT_EQ(mine.password, "mine");
 }
 
+// --host naming a GizmoData Cloud host, with no port anywhere: 443. --port or HARDCHARGER_PORT
+// wins, and any other host keeps 31337.
+TEST(ClientConfigEnvTest, AGizmoDataCloudHostDefaultsToPort443) {
+  ScopedEnv port("HARDCHARGER_PORT");
+  ScopedEnv host_env("HARDCHARGER_HOST");
+  {
+    ClientConfig config;
+    config.host = "warehouse.us-east-1.aws.gizmodata.com";
+    ResolveEnvironmentVariables(config);
+    EXPECT_EQ(config.port, 443);
+  }
+  {
+    ClientConfig config;
+    config.host = "warehouse.gizmodata.com";
+    config.port = 31337;
+    config.port_given = true;  // --port 31337
+    ResolveEnvironmentVariables(config);
+    EXPECT_EQ(config.port, 31337);
+  }
+  {
+    port.Set("8443");
+    ClientConfig config;
+    config.host = "warehouse.gizmodata.com";
+    ResolveEnvironmentVariables(config);
+    EXPECT_EQ(config.port, 8443);
+    port.Unset();
+  }
+  {
+    host_env.Set("w.gizmodata.com");  // the host from the environment counts too
+    ClientConfig config;
+    ResolveEnvironmentVariables(config);
+    EXPECT_EQ(config.host, "w.gizmodata.com");
+    EXPECT_EQ(config.port, 443);
+    host_env.Unset();
+  }
+  {
+    ClientConfig config;
+    config.host = "db.example.com";
+    ResolveEnvironmentVariables(config);
+    EXPECT_EQ(config.port, 31337);
+  }
+  EXPECT_TRUE(IsGizmoDataCloudHost("gizmodata.com"));
+  EXPECT_TRUE(IsGizmoDataCloudHost("A.B.GizmoData.Com."));
+  EXPECT_FALSE(IsGizmoDataCloudHost("evilgizmodata.com"));
+  EXPECT_FALSE(IsGizmoDataCloudHost("gizmodata.com.evil.net"));
+  EXPECT_FALSE(IsGizmoDataCloudHost(".gizmodata.com"));
+  EXPECT_FALSE(IsGizmoDataCloudHost(""));
+}
+
 // ---- Connection URIs: the Hardcharger ADBC driver's rules (hardcharger-adbc ToChargewireURI,
 // chargewire-adbc parseURI), every form it accepts and refuses. ----
 
@@ -223,6 +272,14 @@ TEST(ClientConnectionUriTest, AcceptedFormsAndWhatTheyMean) {
       {"hardcharger://h:1/custom/prefix", "h", 1, true, "/custom/prefix"},
       {"hardcharger://h/custom/prefix/?tls=false", "h", 31337, false, "/custom/prefix"},
       {"HARDCHARGER://h", "h", 31337, true, "/chargewire"},
+      // A GizmoData Cloud host without a port: its clusters answer on 443 (an explicit port wins).
+      {"hardcharger://warehouse.us-east-1.aws.gizmodata.com", "warehouse.us-east-1.aws.gizmodata.com", 443, true,
+       "/chargewire"},
+      {"hardcharger://W.VADEN.GIZMODATA.COM.", "W.VADEN.GIZMODATA.COM.", 443, true, "/chargewire"},
+      {"hardcharger://gizmodata.com", "gizmodata.com", 443, true, "/chargewire"},
+      {"hardcharger://w.gizmodata.com:31337", "w.gizmodata.com", 31337, true, "/chargewire"},
+      {"hardcharger://evilgizmodata.com", "evilgizmodata.com", 31337, true, "/chargewire"},
+      {"hardcharger://gizmodata.com.example.org", "gizmodata.com.example.org", 31337, true, "/chargewire"},
       {"hardcharger://[::1]", "::1", 31337, true, "/chargewire"},
       {"hardcharger://[::1]:4000?tls=false", "::1", 4000, false, "/chargewire"},
       {"hardcharger://h#fragment", "h", 31337, true, "/chargewire"},

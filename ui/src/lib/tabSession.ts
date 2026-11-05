@@ -11,6 +11,7 @@
 import { type Connection, ErrorCode, type TransactionState, ChargewireError } from "@gizmodata/chargewire";
 
 import { setRoleSql } from "./roles";
+import { firstKeyword } from "./sql";
 import type { StatementStream } from "./script";
 
 export interface SessionInfo {
@@ -37,6 +38,18 @@ export type Opener = (where: Where) => Promise<Connection>;
 /** Asks a new session for the server's own id of it, before anything else runs in it. */
 export type Identify = (conn: Connection) => Promise<string | undefined>;
 
+/** The server no longer had the session after USE or SET ran in it: nothing ran. */
+export class SettingsLostError extends Error {
+  override readonly name = "SettingsLostError";
+  constructor(readonly reason: string) {
+    super(
+      `This tab's session on the server ended (${reason}), and what USE or SET had set in it is gone ` +
+        "with it, so nothing from this run executed: it could have run against another schema or with " +
+        "other settings. Run USE or SET again, then your statements.",
+    );
+  }
+}
+
 /** The server no longer had the session while a transaction was open: nothing ran. */
 export class TransactionLostError extends Error {
   override readonly name = "TransactionLostError";
@@ -47,6 +60,30 @@ export class TransactionLostError extends Error {
         "(starting with BEGIN if you still want a transaction).",
     );
   }
+}
+
+/**
+ * The server refused a catalog as the session's catalog: Hardcharger's own instrumentation and
+ * log catalogs are for querying by name (catalog.schema.table), never a session's catalog.
+ */
+export function isCatalogRefused(err: unknown): boolean {
+  if (!ChargewireError.is(err) || err.code !== ErrorCode.permissionDenied) return false;
+  return /can't be the session's catalog|session option "catalog"/.test(err.message);
+}
+
+/** A catalog this tab can't make its own: what the tab did instead. */
+export class CatalogRefusedError extends Error {
+  override readonly name = "CatalogRefusedError";
+  constructor(readonly catalog: string) {
+    super(catalogNote(catalog));
+  }
+}
+
+function catalogNote(catalog: string): string {
+  return (
+    `${catalog} can't be a tab's catalog on this server: it is for querying by name ` +
+    `(${catalog}.schema.table). The tab stays in its own catalog.`
+  );
 }
 
 export function isSessionGone(err: unknown): boolean {
@@ -60,7 +97,9 @@ export function isSessionGone(err: unknown): boolean {
 /** Why the session went, for the notes: the server's reason when it gave one. */
 function goneReasonOf(err: unknown): string {
   if (ChargewireError.is(err) && err.code === ErrorCode.sessionEnded && err.reason === "idle_in_transaction") {
-    return "the server ended it: its transaction sat idle past the server's idle_in_transaction_session_timeout";
+    // Its idle timeout, or its idle-in-transaction timeout, ended it while a transaction was open
+    // (Chargewire §5.7: either way the reason is idle_in_transaction).
+    return "the server ended it: it sat idle with a transaction open, past the server's timeout";
   }
   return "it was idle too long, or the server restarted";
 }
@@ -72,6 +111,14 @@ export class TabSession {
   #serverId: string | undefined;
   #role = "";
   #info: SessionInfo | undefined;
+  /** A statement that may have opened a transaction ran, and none has been seen to end it. */
+  #maybeOpen = false;
+  /** A statement that may have ended the transaction ran since #maybeOpen was set. */
+  #endedSinceOpen = false;
+  /** USE, SET, RESET or PRAGMA ran in this session (a new one starts without what they set). */
+  #settingsChanged = false;
+  /** Why the session opened in another catalog than the tab asked for, until shown. */
+  #catalogNote: string | undefined;
   /** Why the last session was replaced (shown once as a note), if it was. */
   #replaced: string | undefined;
 
@@ -88,6 +135,13 @@ export class TabSession {
     return this.#conn !== undefined;
   }
 
+  /** Takes the note about a catalog the session couldn't open in, once. */
+  takeCatalogNote(): string | undefined {
+    const note = this.#catalogNote;
+    this.#catalogNote = undefined;
+    return note;
+  }
+
   /** Takes the note about a replaced session, once. */
   takeReplacedNote(): string | undefined {
     const note = this.#replaced;
@@ -97,7 +151,15 @@ export class TabSession {
 
   connection(where: Where): Promise<Connection> {
     if (!this.#conn) {
-      const opening = this.#open(where).then(async (conn) => {
+      // A catalog the server keeps for querying by name (its log or instrumentation catalog,
+      // as a preview of one of its tables asks for): the session opens in its own catalog,
+      // and the statement, which names the catalog, still runs.
+      const opened = this.#open(where).catch((err: unknown) => {
+        if (!where.catalog || !isCatalogRefused(err)) throw err;
+        this.#catalogNote = catalogNote(where.catalog);
+        return this.#open({ ...where, catalog: "", schema: "" });
+      });
+      const opening = opened.then(async (conn) => {
         this.#serverId = this.#identify ? await this.#identify(conn).catch(() => undefined) : undefined;
         this.#role = "";
         if (where.role) {
@@ -126,16 +188,42 @@ export class TabSession {
     } catch (err) {
       if (!isSessionGone(err)) throw err;
       const goneReason = goneReasonOf(err);
+      const maybeOpen = this.#maybeOpen || (this.#info !== undefined && this.#info.transaction !== "none");
+      const settingsLost = this.#settingsChanged;
       this.#lost();
-      if (this.#info && this.#info.transaction !== "none") {
+      if (maybeOpen) {
         this.#info = undefined;
         throw new TransactionLostError(goneReason);
+      }
+      if (settingsLost) {
+        this.#info = undefined;
+        throw new SettingsLostError(goneReason);
       }
       this.#info = undefined;
       this.#replaced =
         `A new session was started: the previous one ended (${goneReason}). ` +
         "Temporary tables and settings from it are gone.";
       return work(await this.connection(where));
+    }
+  }
+
+  /**
+   * Notes a statement this tab ran, once the server answered it: one that may open a
+   * transaction (BEGIN, START) makes the transaction possibly open, whatever a read right after
+   * it says (servers before Chargewire 2.2.1 could answer a BEGIN before recording it, so the
+   * session still said "none"); only a read that says "none" after one that ends it (COMMIT,
+   * END, ROLLBACK, ABORT) clears that.
+   */
+  noteStatement(sql: string): void {
+    const word = firstKeyword(sql);
+    // Where and how statements run: a new session starts without it, so a run that finds the
+    // session gone doesn't go again there (it could write to another schema's table).
+    if (word === "USE" || word === "SET" || word === "RESET" || word === "PRAGMA") this.#settingsChanged = true;
+    if (word === "BEGIN" || word === "START") {
+      this.#maybeOpen = true;
+      this.#endedSinceOpen = false;
+    } else if (word === "COMMIT" || word === "END" || word === "ROLLBACK" || word === "ABORT") {
+      this.#endedSinceOpen = true;
     }
   }
 
@@ -158,6 +246,7 @@ export class TabSession {
         await stream.close().catch(() => {});
         throw err;
       }
+      this.noteStatement(sql);
       return stream;
     });
     opening.catch(() => {}); // the caller sees the failure through the methods below
@@ -173,6 +262,12 @@ export class TabSession {
 
   async #read(conn: Connection): Promise<SessionInfo> {
     const doc = await conn.getSession();
+    // "none" after a statement that ended the transaction is the truth (a stale read lags toward
+    // "open"); right after one that opened it, it may be stale (noteStatement).
+    if (doc.transaction === "none" && this.#endedSinceOpen) {
+      this.#maybeOpen = false;
+      this.#endedSinceOpen = false;
+    }
     const options = doc.options ?? {};
     this.#info = {
       id: doc.session_id,
@@ -194,7 +289,17 @@ export class TabSession {
     if (where.schema) options["schema"] = where.schema;
     const role = where.role ?? "";
     await this.run(where, async (conn) => {
-      if (Object.keys(options).length) await conn.setOptions(options);
+      if (Object.keys(options).length) {
+        try {
+          await conn.setOptions(options);
+        } catch (err) {
+          if (where.catalog && isCatalogRefused(err)) {
+            await this.#read(conn);
+            throw new CatalogRefusedError(where.catalog);
+          }
+          throw err;
+        }
+      }
       if (role !== this.#role) {
         await conn.execute(setRoleSql(role));
         this.#role = role;
@@ -208,12 +313,18 @@ export class TabSession {
     const conn = this.#conn;
     this.#conn = undefined;
     this.#info = undefined;
+    this.#maybeOpen = false; // ending it rolls back what was open
+    this.#endedSinceOpen = false;
+    this.#settingsChanged = false;
     if (conn) await conn.then((c) => c.close()).catch(() => {});
   }
 
   #lost(): void {
     const conn = this.#conn;
     this.#conn = undefined;
+    this.#maybeOpen = false; // a new session starts in no transaction
+    this.#endedSinceOpen = false;
+    this.#settingsChanged = false;
     // The server has no session to end; this only releases the client's side.
     if (conn) void conn.then((c) => c.close()).catch(() => {});
   }

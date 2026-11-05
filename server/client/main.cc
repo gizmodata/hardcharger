@@ -80,14 +80,14 @@ int main(int argc, char** argv) {
 
   cl.Section("Connection");
   cl.Value("host", 'h', "HOST", "Server host (default: localhost; env: HARDCHARGER_HOST)", &config.host);
-  cl.Int("port", 'p', "PORT", "Server port (default: 31337; env: HARDCHARGER_PORT)", &config.port);
+  cl.Int("port", 'p', "PORT", "Server port (default: 31337, or 443 for a GizmoData Cloud host, *.gizmodata.com; env: HARDCHARGER_PORT)", &config.port);
   cl.Value("username", 'u', "USER",
            "Username (env: HARDCHARGER_USER, falls back to HARDCHARGER_ADMIN_USERNAME for parity with the server)",
            &config.username);
   cl.Flag("password", 'W', "Force a password prompt (else env: HARDCHARGER_PASSWORD, or a prompt)", &password_prompt);
   cl.Value("uri", 0, "URI",
            "Connection URI: hardcharger://HOST[:PORT][/PREFIX][?tls=false], HTTPS unless it says "
-           "?tls=false, port 31337 by default; also chargewire://, https:// and http:// (also the one positional "
+           "?tls=false, port 31337 by default (443 for *.gizmodata.com); also chargewire://, https:// and http:// (also the one positional "
            "argument; not with --host, --port or --tls)",
            &uri_flag);
   cl.Section("TLS");
@@ -119,6 +119,11 @@ int main(int argc, char** argv) {
          "Read large results in up to N partitions at once, over N connections (env: "
          "HARDCHARGER_RESULT_PARTITIONS; default 8; 1: one stream)",
          &config.result_partitions);
+  cl.Int("resume-timeout", 0, "SECONDS",
+         "Wait up to SECONDS for a stopped server that is starting again (a GizmoData Cloud cluster with "
+         "auto-resume), sending each request again as it asks (env: HARDCHARGER_RESUME_TIMEOUT; default 600; "
+         "0: don't wait)",
+         &config.resume_timeout);
   cl.Section("Output modes");
   cl.Flag("csv", 0, "Set output mode to CSV", &csv);
   cl.Flag("json", 0, "Set output mode to JSON", &json);
@@ -214,7 +219,12 @@ int main(int argc, char** argv) {
   }
 
   // Resolve environment variables for unset options
+  config.port_given = cl.Given("port");
   ResolveEnvironmentVariables(config);
+  if (!config.invalid_option.empty()) {
+    std::cerr << "Error: " << config.invalid_option << std::endl;
+    return 1;
+  }
 
   // Output mode shortcuts
   if (csv) config.output_mode = OutputMode::CSV;
@@ -339,6 +349,7 @@ int main(int argc, char** argv) {
         std::cerr << "Warning: failed to set query_tag: " << tag_result.status().message() << std::endl;
       }
     }
+    conn.OwnTagsApplied();
   }
   // else: start in disconnected state — user can use .connect later. A script (-c, -f, a
   // pipe) that runs SQL before any .connect connects then with the defaults, so a failure

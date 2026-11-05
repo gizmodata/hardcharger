@@ -133,7 +133,9 @@ def test_a_dead_clients_running_write_is_cancelled_and_rolled_back_with_its_sess
                                sql=f"/* {marker} */ INSERT INTO {table} {SLOW_COUNT}")
     wait_for_running(admin=admin, marker=marker)
     wait_gone(admin=admin, session=victim, what="the dead client's session evicted")
-    problem(response=victim.http.get(url=victim.url, headers=victim.headers()), status=404, code="session_not_found")
+    # It held a transaction open, so it says so (issue #29), rather than vanishing.
+    doc = problem(response=victim.http.get(url=victim.url, headers=victim.headers()), status=401, code="session_ended")
+    assert doc["reason"] == "idle_in_transaction", doc
     assert admin.scalar(sql=f"SELECT count(*) FROM {table}") == 0, "the transaction must be rolled back"
     assert statements_like(admin=admin, marker=marker) == 0, "the write stopped with its session"
     wait_until(lambda: admin.rows(sql="SELECT status, cancel_reason FROM _hardcharger_instr.execution_details "
@@ -141,13 +143,14 @@ def test_a_dead_clients_running_write_is_cancelled_and_rolled_back_with_its_sess
                == [{"status": "cancelled", "cancel_reason": "session_closed"}],
                what="instrumentation records the cancel", timeout=15 * TIMEOUT_SCALE)
     wait_until(lambda: admin.rows(sql=f"SELECT stop_reason FROM _hardcharger_instr.sessions WHERE session_id = '{victim.id}'")
-               == [{"stop_reason": "idle"}], what="instrumentation records why the session ended",
+               == [{"stop_reason": "idle_in_transaction"}], what="instrumentation records why the session ended",
                timeout=15 * TIMEOUT_SCALE)
 
 
 def test_a_dead_clients_autocommit_write_is_cancelled_too(idle_server):
     """Without an explicit transaction the write's own transaction rolls back: the table
-    the CTAS was making never exists."""
+    the CTAS was making never exists. The session held no transaction the client opened, so
+    it is simply gone (session_not_found)."""
     admin = idle_server.admin()
     table = f"dead_ctas_{uuid.uuid4().hex[:8]}"
     victim = idle_server.admin()
@@ -157,6 +160,36 @@ def test_a_dead_clients_autocommit_write_is_cancelled_too(idle_server):
     problem(response=victim.http.get(url=victim.url, headers=victim.headers()), status=404, code="session_not_found")
     assert statements_like(admin=admin, marker=table) == 0, "the CTAS stopped with its session"
     assert admin.scalar(sql=f"SELECT count(*) FROM duckdb_tables() WHERE table_name = '{table}'") == 0, "no table"
+
+
+def test_an_idle_session_that_held_a_transaction_ends_with_a_reason(idle_server):
+    """Issue #29: a session evicted as idle (session_idle_timeout; the idle-in-transaction
+    timeout is off here) while it held a transaction open from SQL BEGIN ends with
+    session_ended, reason idle_in_transaction, so its client learns the transaction was
+    rolled back. Before, it vanished (session_not_found), and a client that replaces lost
+    sessions ran its next statement alone. A session of the same age in no transaction still
+    gets session_not_found."""
+    admin = idle_server.admin()
+    table = f"idle_evicted_{uuid.uuid4().hex[:8]}"
+    admin.execute(sql=f"CREATE TABLE {table} (v BIGINT)")
+    in_tx = idle_server.admin()
+    in_tx.execute(sql="BEGIN")
+    in_tx.execute(sql=f"INSERT INTO {table} VALUES (1)")
+    assert session_state(in_tx)[1]["transaction"] == "open"
+    assert session_state(in_tx)[1]["idle_in_transaction_timeout_s"] == 0, "only the idle rule applies here"
+    no_tx = idle_server.admin()  # the same age, in no transaction (and no retained result to keep it)
+    wait_gone(admin=admin, session=in_tx, what="the session in a transaction evicted")
+    wait_gone(admin=admin, session=no_tx, what="the session in no transaction evicted")
+    doc = problem(response=in_tx.submit(sql=f"INSERT INTO {table} VALUES (2)"), status=401, code="session_ended")
+    assert doc["reason"] == "idle_in_transaction", doc
+    assert "session_idle_timeout" in doc["detail"] and "rolled back" in doc["detail"], doc
+    problem(response=no_tx.http.get(url=no_tx.url, headers=no_tx.headers()), status=404, code="session_not_found")
+    assert admin.scalar(sql=f"SELECT count(*) FROM {table}") == 0, "rolled back, and the refused insert never ran"
+    wait_until(lambda: admin.rows(sql="SELECT session_id, stop_reason FROM _hardcharger_instr.sessions "
+                                      f"WHERE session_id IN ('{in_tx.id}', '{no_tx.id}') ORDER BY session_id = '{no_tx.id}'")
+               == [{"session_id": in_tx.id, "stop_reason": "idle_in_transaction"},
+                   {"session_id": no_tx.id, "stop_reason": "idle"}],
+               what="instrumentation records each session's end", timeout=15 * TIMEOUT_SCALE)
 
 
 def test_a_client_that_comes_back_to_poll_keeps_its_running_write(idle_server):

@@ -1603,6 +1603,25 @@ select {
   font-family: inherit;
   font-style: italic;
 }
+/* A server waiting to finish resuming: the count stays readable; the name gives way. */
+.tree-server-status[data-status="resuming"] {
+  flex: 0 0 auto;
+  min-width: auto;
+  color: var(--warn);
+  font-variant-numeric: tabular-nums;
+}
+/* Where a wait for a resuming server stands, above the dialog's buttons. */
+.resume-status {
+  margin: 0 16px 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--warn);
+  border-radius: 7px;
+  background: var(--warn-soft);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
 .tree-empty {
   display: flex;
   flex-wrap: wrap;

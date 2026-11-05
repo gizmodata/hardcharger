@@ -3,7 +3,8 @@
 //
 // The URIs people paste (the forms Hardcharger's clients take):
 //
-//   hardcharger://HOST[:PORT][/PREFIX][?tls=false]   port 31337 by default, TLS unless tls=false
+//   hardcharger://HOST[:PORT][/PREFIX][?tls=false]   port 31337 by default (443 for a GizmoData Cloud
+//                                                    host), TLS unless tls=false
 //   chargewire://HOST[:PORT][/PREFIX][?tls=false]    the same
 //   jdbc:hardcharger://HOST[:PORT][/CATALOG][?k=v]   the JDBC driver's form: its path is a catalog
 //   https://HOST[:PORT][/PREFIX]                     port 443 by default
@@ -13,6 +14,23 @@
 // fills the user name; a password in a URI is dropped, never kept.
 
 export const defaultPort = 31337;
+
+/** The port GizmoData Cloud's Hardcharger clusters answer on. */
+export const gizmoDataCloudPort = 443;
+
+/**
+ * Whether `host` is a GizmoData Cloud host: gizmodata.com or *.gizmodata.com (any case, a
+ * trailing dot allowed), on the domain boundary (not evilgizmodata.com).
+ */
+export function isGizmoDataCloudHost(host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/\.$/, "");
+  return h === "gizmodata.com" || (h.endsWith(".gizmodata.com") && h.length > ".gizmodata.com".length);
+}
+
+/** The port to assume for `host` when none is given: 443 on GizmoData Cloud, else 31337. */
+export function defaultPortFor(host: string): number {
+  return isGizmoDataCloudHost(host) ? gizmoDataCloudPort : defaultPort;
+}
 
 export interface ServerAddress {
   host: string;
@@ -27,6 +45,8 @@ export interface ParsedAddress extends ServerAddress {
   username?: string;
   /** A JDBC URI's catalog, if any (a default catalog, not a path). */
   catalog?: string;
+  /** Whether the URI named the port (else it is the scheme's or the host's default). */
+  portGiven?: boolean;
 }
 
 export type ParseResult = { ok: true; address: ParsedAddress } | { ok: false; error: string };
@@ -115,6 +135,8 @@ export function parseServerUri(text: string): ParseResult {
       return fail(`Not a server URI: "${portText}" is not a port`);
     }
     port = Number(portText);
+  } else if ((jdbc || scheme === "hardcharger") && isGizmoDataCloudHost(host)) {
+    port = gizmoDataCloudPort; // GizmoData Cloud's clusters answer on 443
   }
   const params = new URLSearchParams(query);
   if (tlsParameter || jdbc) {
@@ -126,7 +148,7 @@ export function parseServerUri(text: string): ParseResult {
       else return fail(`Not a server URI: tls=${value} (want true or false)`);
     }
   }
-  const address: ParsedAddress = { host, port, tls, prefix: "" };
+  const address: ParsedAddress = { host, port, tls, prefix: "", portGiven: portText !== "" };
   if (jdbc) {
     const catalog = path.replace(/^\/+|\/+$/g, "");
     if (catalog) address.catalog = safeDecode(catalog);

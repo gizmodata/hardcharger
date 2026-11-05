@@ -31,7 +31,7 @@ def results():
 
 def test_every_1x_case_is_ported():
     assert [f"ClientConfigEnvTest.{case}" for case in PORTED] == CASES[:5]
-    assert len([case for case in CASES if case.startswith("ClientConfigEnvTest.")]) == 7  # +2
+    assert len([case for case in CASES if case.startswith("ClientConfigEnvTest.")]) == 8  # +3
     assert len([case for case in CASES if case.startswith("ClientConnectionUriTest.")]) == 7
     assert len([case for case in CASES if case.startswith("ClientTlsDefaultTest.")]) == 1
 

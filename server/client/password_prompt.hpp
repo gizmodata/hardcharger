@@ -7,6 +7,8 @@
 namespace hardcharger::client {
 
 bool IsTerminal();
+// Whether stderr is a terminal (a status line can be rewritten in place).
+bool StderrIsTerminal();
 std::string PromptPassword(const std::string& prompt = "Password: ");
 
 }  // namespace hardcharger::client

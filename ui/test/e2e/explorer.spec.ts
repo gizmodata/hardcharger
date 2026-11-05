@@ -47,9 +47,14 @@ test("catalogs, schemas, Tables and Views, columns with their types, each listed
   harness,
 }) => {
   const catalog = tree(page).getByRole("treeitem", { name: harness.catalog, exact: true });
-  // The active tab's catalog starts open; `temp` (a session's own) is left out.
+  // The active tab's catalog starts open; `temp` (a session's own) and `system` (DuckDB's own)
+  // are left out, here and in the tab's Catalog picker.
   await expect(catalog).toHaveAttribute("aria-expanded", "true");
   await expect(tree(page).getByRole("treeitem", { name: "temp", exact: true })).toHaveCount(0);
+  await expect(tree(page).getByRole("treeitem", { name: "system", exact: true })).toHaveCount(0);
+  const picker = activeTab(page).getByLabel("Catalog");
+  await expect(picker.locator("option", { hasText: harness.catalog })).toHaveCount(1);
+  await expect(picker.locator("option", { hasText: /^system$/ })).toHaveCount(0);
   const sales = await openSales(page, harness.catalog);
   await expect(sales.getByRole("treeitem", { name: "Tables" })).toContainText(/Tables \(\d+\)/);
   await expect(sales.getByRole("treeitem", { name: "Views" })).toContainText("Views (1)");

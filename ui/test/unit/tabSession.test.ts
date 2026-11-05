@@ -1,7 +1,7 @@
 import { type Connection, ChargewireError } from "@gizmodata/chargewire";
 import { describe, expect, it } from "vitest";
 
-import { TabSession, TransactionLostError } from "../../src/lib/tabSession";
+import { CatalogRefusedError, SettingsLostError, TabSession, TransactionLostError } from "../../src/lib/tabSession";
 
 interface Fake {
   id: string;
@@ -46,6 +46,15 @@ function opener() {
 
 const here = { catalog: "memory", schema: "main" };
 
+/** The server's refusal of its log catalog as a session's catalog (Hardcharger 2.5+). */
+const refusal = () =>
+  new ChargewireError({
+    code: "permission_denied",
+    status: 403,
+    message:
+      "catalog: the log catalog can't be the session's catalog (read access to catalog 'log_gizmosql_logs' is for administrators querying it by name)",
+  });
+
 describe("TabSession", () => {
   it("opens on first use and keeps one session across runs", async () => {
     const { made, open } = opener();
@@ -71,6 +80,102 @@ describe("TabSession", () => {
     expect(s.takeReplacedNote()).toBeUndefined();
   });
 
+  it("a catalog the server keeps for querying by name: the session opens in its own, with a note", async () => {
+    const { made, open } = opener();
+    const asked: string[] = [];
+    const s = new TabSession(async (where) => {
+      asked.push(where.catalog);
+      if (where.catalog === "log_gizmosql_logs") throw refusal();
+      return open();
+    });
+    const logs = { catalog: "log_gizmosql_logs", schema: "main" };
+    await s.run(logs, (c) => c.execute("SELECT * FROM log_gizmosql_logs.main.logs LIMIT 100"));
+    expect(asked).toEqual(["log_gizmosql_logs", ""]); // refused, then its own catalog
+    expect(made[0]!.ran).toEqual(["SELECT * FROM log_gizmosql_logs.main.logs LIMIT 100"]);
+    expect(s.takeCatalogNote()).toMatch(/^log_gizmosql_logs can't be a tab's catalog on this server/);
+    expect(s.takeCatalogNote()).toBeUndefined();
+    // Any other refusal is the error it was.
+    const t = new TabSession(async () => {
+      throw new ChargewireError({ code: "permission_denied", status: 403, message: "no access to catalog x" });
+    });
+    await expect(t.run({ catalog: "x", schema: "main" }, (c) => c.execute("SELECT 1"))).rejects.toThrow(
+      "no access to catalog x",
+    );
+  });
+
+  it("switching an open session to such a catalog is refused with a note, and the session stays put", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(async () => {
+      const conn = await open();
+      return Object.assign(conn, {
+        setOptions: async (options: Record<string, string>) => {
+          if (options["catalog"] === "log_gizmosql_logs") throw refusal();
+          return options;
+        },
+      });
+    });
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    await s.refresh(here);
+    const err = await s.setWhere({ catalog: "log_gizmosql_logs", schema: "main" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CatalogRefusedError);
+    expect((err as Error).message).toMatch(/is for querying by name \(log_gizmosql_logs\.schema\.table\)/);
+    expect(s.info?.catalog).toBe("memory");
+    expect(made).toHaveLength(1);
+  });
+
+  it("a stale 'none' right after BEGIN doesn't let a lost session's run go again", async () => {
+    // Servers before Chargewire 2.2.1 could answer BEGIN before recording it: the read right
+    // after says "none". The tab still treats the transaction as open.
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    await s.run(here, (c) => c.execute("BEGIN"));
+    s.noteStatement("BEGIN");
+    made[0]!.transaction = "none"; // the stale read
+    expect((await s.refresh(here))?.transaction).toBe("none");
+    made[0]!.gone = true;
+    await expect(s.run(here, (c) => c.execute("INSERT 1"))).rejects.toBeInstanceOf(TransactionLostError);
+    expect(made).toHaveLength(1); // nothing ran on a new session
+    // The next run starts afresh, in no transaction.
+    await s.run(here, (c) => c.execute("SELECT 2"));
+    expect(made).toHaveLength(2);
+  });
+
+  it("after USE or SET, a lost session's run doesn't go again on a new one", async () => {
+    for (const setting of ["USE other", "SET search_path = 'other'", "PRAGMA threads = 2"]) {
+      const { made, open } = opener();
+      const s = new TabSession(open);
+      await s.run(here, (c) => c.execute(setting));
+      s.noteStatement(setting);
+      made[0]!.gone = true;
+      await expect(
+        s.run(here, (c) => c.execute("INSERT 2")),
+        setting,
+      ).rejects.toBeInstanceOf(SettingsLostError);
+      expect(made, setting).toHaveLength(1); // nothing ran on a new session
+      // UPDATE ... SET is not a setting: a statement like it lets the run go again.
+      await s.run(here, (c) => c.execute("UPDATE t SET v = 1"));
+      s.noteStatement("UPDATE t SET v = 1");
+      made[1]!.gone = true;
+      await s.run(here, (c) => c.execute("INSERT 3"));
+      expect(made, setting).toHaveLength(3);
+    }
+  });
+
+  it("after COMMIT reads 'none', a lost session's run goes again on a new one", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run(here, (c) => c.execute("BEGIN"));
+    s.noteStatement("BEGIN");
+    await s.run(here, (c) => c.execute("COMMIT"));
+    s.noteStatement("COMMIT");
+    expect((await s.refresh(here))?.transaction).toBe("none");
+    made[0]!.gone = true;
+    await s.run(here, (c) => c.execute("INSERT 2"));
+    expect(made).toHaveLength(2);
+    expect(made[1]!.ran).toEqual(["INSERT 2"]);
+  });
+
   it("a session the server ended for an idle transaction says so, and a killed one is the error", async () => {
     const { made, open } = opener();
     const s = new TabSession(open);
@@ -79,7 +184,7 @@ describe("TabSession", () => {
     made[0]!.gone = true;
     made[0]!.endedReason = "idle_in_transaction";
     await expect(s.run(here, (c) => c.execute("INSERT 1"))).rejects.toThrow(
-      /idle past the server's idle_in_transaction_session_timeout/,
+      /the server ended it: it sat idle with a transaction open, past the server's timeout/,
     );
     expect(made).toHaveLength(1);
     // Without a transaction, a new session takes over, with the reason in the note.
@@ -88,7 +193,7 @@ describe("TabSession", () => {
     made[1]!.endedReason = "idle_in_transaction";
     await s.run(here, (c) => c.execute("SELECT 2"));
     expect(made).toHaveLength(3);
-    expect(s.takeReplacedNote()).toMatch(/idle_in_transaction_session_timeout/);
+    expect(s.takeReplacedNote()).toMatch(/it sat idle with a transaction open, past the server.s timeout/);
     // An administrator's kill is not something a new session cures: it is the error.
     made[2]!.gone = true;
     made[2]!.endedReason = "killed";

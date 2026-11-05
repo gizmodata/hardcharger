@@ -9,7 +9,14 @@ import type { monaco } from "../lib/monaco";
 import { type ScriptRun, cancelNote, messageFor, runScript } from "../lib/script";
 import { isTransactionStatement, mayChangeCatalog, splitStatements, statementPreview } from "../lib/sql";
 import { type TabDoc, rowLimits } from "../lib/tabs";
-import { type SessionInfo, TabSession, TransactionLostError, type Where } from "../lib/tabSession";
+import {
+  CatalogRefusedError,
+  type SessionInfo,
+  SettingsLostError,
+  TabSession,
+  TransactionLostError,
+  type Where,
+} from "../lib/tabSession";
 import type { ThemeName } from "../lib/theme";
 import { requestUpload } from "../lib/upload/request";
 import { errorMessage, useSession } from "../session";
@@ -143,7 +150,8 @@ export function EditorTab(props: Props) {
     listings.catalogs().then(
       (names) => {
         if (!live) return;
-        setCatalogs(names);
+        // DuckDB's own `system` catalog has nothing to work in (the schema browser hides it too).
+        setCatalogs(names.filter((n) => n !== "system"));
         setListingError(undefined);
       },
       (err: unknown) => {
@@ -187,7 +195,7 @@ export function EditorTab(props: Props) {
     } catch (err) {
       if (app.checkSignIn(err)) return;
       setInfo(undefined);
-      if (err instanceof TransactionLostError) setNotice(err.message);
+      if (err instanceof TransactionLostError || err instanceof SettingsLostError) setNotice(err.message);
     }
     // where is read when called; the tab's values are current then.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -233,6 +241,8 @@ export function EditorTab(props: Props) {
       const notes: string[] = [];
       const replaced = tabSession.takeReplacedNote();
       if (replaced) notes.push(replaced);
+      const catalogNote = tabSession.takeCatalogNote();
+      if (catalogNote) notes.push(catalogNote);
       if (stopped?.status === "cancelled") {
         notes.push(cancelNote(result));
         if (tabSession.info?.transaction === "aborted") {
@@ -313,7 +323,14 @@ export function EditorTab(props: Props) {
     tabSession.setWhere(where).then(
       () => setInfo(tabSession.info),
       (err: unknown) => {
-        if (!app.checkSignIn(err)) setNotice(errorMessage(err));
+        if (app.checkSignIn(err)) return;
+        setNotice(errorMessage(err));
+        // A catalog the server keeps for querying by name: the pickers go back to the session's.
+        const kept = tabSession.info;
+        if (err instanceof CatalogRefusedError && kept) {
+          setInfo(kept);
+          latest.current.onChange({ catalog: kept.catalog, schema: kept.schema });
+        }
       },
     );
     // where's parts are the dependencies.

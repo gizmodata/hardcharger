@@ -424,7 +424,7 @@ def test_a_session_the_server_lost_is_reopened(launcher, server):
     # statement finds it gone (session_not_found), and the client opens a new session,
     # says so, and runs it.
     idle = launcher.start(args=["--session-idle-timeout", "1"], username="testuser")
-    script = "SET VARIABLE x = 1;\n.shell sleep 7\nSELECT 'after the idle';"
+    script = "CREATE TABLE seen (v INTEGER);\n.shell sleep 7\nSELECT 'after the idle';"
     result = run(idle, "--csv", "--no-header", "--command", script)
     assert result.returncode == 0, result.stderr
     assert result.stdout == "OK\nafter the idle\n", result.stdout
@@ -433,6 +433,143 @@ def test_a_session_the_server_lost_is_reopened(launcher, server):
     # The positive twin: a server that keeps idle sessions, no warning.
     kept = run(server, "--csv", "--no-header", "--command", script)
     assert kept.returncode == 0 and kept.stderr == "" and kept.stdout == "OK\nafter the idle\n", kept.stderr
+
+
+@pytest.mark.parametrize(("before", "rows"), [
+    ("", [2]),  # no transaction: the statement runs in the new session
+    ("BEGIN;\nINSERT INTO t VALUES (1);\n", []),  # a transaction was open: not run again
+    ("BEGIN;\nINSERT INTO t VALUES (1);\nCOMMIT;\n", [1, 2]),  # committed: runs again
+], ids=["no-transaction", "transaction-open", "transaction-committed"])
+def test_a_lost_session_runs_the_statement_again_only_without_a_transaction(launcher, tmp_path, before, rows):
+    # The server restarts between two statements, so the next one finds its session gone
+    # (session_not_found). The client opens a new session and runs it there, but not when
+    # the old session may have held a transaction open: the restart rolled back its earlier
+    # statements, and this one alone would commit without them (the bug the drivers had too).
+    port = free_port()
+    database = tmp_path / "lost.duckdb"
+    # Both instances accept each other's tokens, as replicas behind one address do, so the
+    # client's sign-in stands and only its session is gone.
+    args = ["--database", str(database), "--allow-cross-instance-tokens"]
+    first = launcher.start(args=args, port=port, username="testuser")
+    ready, go = tmp_path / "ready", tmp_path / "go"
+    waiter = tmp_path / "wait.py"
+    waiter.write_text("import pathlib, sys, time\n"
+                      f"pathlib.Path({str(ready)!r}).touch()\n"
+                      f"for _ in range({int(600 * TIMEOUT_SCALE)}):\n"
+                      f"    if pathlib.Path({str(go)!r}).exists(): sys.exit(0)\n"
+                      "    time.sleep(0.1)\n"
+                      "sys.exit(1)\n")
+    script = (f"CREATE TABLE t (v INTEGER);\n{before}"
+              f'.shell "{sys.executable}" -I "{waiter}"\n'
+              "INSERT INTO t VALUES (2);\n"
+              "SELECT 'after the restart';\n")
+    client = subprocess.Popen(args=[binary(), *conn_args(first), "--csv", "--no-header", "--command", script],
+                              env=client_env(server=first), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 30 * TIMEOUT_SCALE
+        while not ready.exists():
+            assert client.poll() is None and time.monotonic() < deadline, client.communicate(timeout=5)
+            time.sleep(0.1)
+        first.stop()
+        second = launcher.start(args=args, port=port, username="testuser",
+                                password=first.password, secret_key=first.secret_key)
+        go.touch()
+        stdout, stderr = client.communicate(timeout=60 * TIMEOUT_SCALE)
+    finally:
+        if client.poll() is None:
+            client.kill()
+    assert "after the restart" in stdout, (stdout, stderr)
+    assert "Warning: the server no longer had this session" in stderr, stderr
+    refused = "It was not run again; run the transaction again" in stderr
+    assert refused == (rows == []), stderr
+    assert [row["v"] for row in second.admin().rows(sql="SELECT v FROM t ORDER BY v")] == rows, stderr
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT CASE WHEN i % 2 = 0 THEN 'even' ELSE 'odd' END AS parity FROM range(200000) t(i)",
+    "BEGIN; SELECT i FROM range(200000) t(i); COMMIT",
+], ids=["case-end", "in-a-transaction"])
+def test_a_statement_that_may_change_the_transaction_streams_its_whole_result(server, sql):
+    # After a statement whose text could open or end a transaction (BEGIN, COMMIT, or just a
+    # CASE ... END), the client reads the session's transaction state. It must do so after
+    # the result is read: a request on the session while the result streamed abandoned the
+    # stream ("ended early") in a 2.8.0 build before release.
+    result = run(server, "--csv", "--no-header", "--command", sql)
+    assert result.returncode == 0, result.stderr
+    assert "ended early" not in result.stderr, result.stderr
+    assert len([line for line in result.stdout.splitlines() if line and line != "OK"]) == 200000
+
+
+def test_a_session_ended_idle_in_a_transaction_says_so_in_words(launcher):
+    # The server ends a session idle past its timeout with a transaction open
+    # (session_ended, reason idle_in_transaction): the statement that finds it fails, and the
+    # warning describes the reason in words, not only its code.
+    idle = launcher.start(args=["--session-idle-timeout", "1"], username="testuser")
+    script = ("CREATE TABLE t (v INTEGER);\nBEGIN;\nINSERT INTO t VALUES (1);\n.shell sleep 7\n"
+              "INSERT INTO t VALUES (2);\nSELECT count(*) FROM t;")
+    result = run(idle, "--csv", "--no-header", "--command", script)
+    assert ("Warning: the server ended this session: it sat idle with a transaction open, which was rolled back "
+            "(idle_in_transaction); a new session is open.") in result.stderr, result.stderr
+    assert "It was not run again" in result.stderr, result.stderr
+    assert result.stdout.splitlines()[-1] == "0", result.stdout  # neither insert stands
+
+
+def test_a_restarted_server_with_a_new_key_is_signed_in_to_again(launcher, tmp_path):
+    # A server restarted without a fixed secret key signs tokens with a new one, so the
+    # client's token is refused (invalid_token) along with its session. The client signs in
+    # again with the password it has and runs the statement (no transaction was open), instead
+    # of failing with "a valid access token is required".
+    port = free_port()
+    database = tmp_path / "rekeyed.duckdb"
+    first = launcher.start(args=["--database", str(database)], port=port, username="testuser")
+    ready, go = tmp_path / "ready", tmp_path / "go"
+    waiter = tmp_path / "wait.py"
+    waiter.write_text("import pathlib, sys, time\n"
+                      f"pathlib.Path({str(ready)!r}).touch()\n"
+                      f"for _ in range({int(600 * TIMEOUT_SCALE)}):\n"
+                      f"    if pathlib.Path({str(go)!r}).exists(): sys.exit(0)\n"
+                      "    time.sleep(0.1)\n"
+                      "sys.exit(1)\n")
+    script = ("CREATE TABLE t (v INTEGER);\n"
+              f'.shell "{sys.executable}" -I "{waiter}"\n'
+              "INSERT INTO t VALUES (2);\n"
+              "SELECT 'after the restart';\n")
+    client = subprocess.Popen(args=[binary(), *conn_args(first), "--csv", "--no-header", "--command", script],
+                              env=client_env(server=first), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 30 * TIMEOUT_SCALE
+        while not ready.exists():
+            assert client.poll() is None and time.monotonic() < deadline, client.communicate(timeout=5)
+            time.sleep(0.1)
+        first.stop()
+        # A new secret key (the launcher's default): the old token is refused.
+        second = launcher.start(args=["--database", str(database)], port=port, username="testuser",
+                                password=first.password)
+        assert second.secret_key != first.secret_key
+        go.touch()
+        stdout, stderr = client.communicate(timeout=60 * TIMEOUT_SCALE)
+    finally:
+        if client.poll() is None:
+            client.kill()
+    assert client.returncode == 0, stderr
+    assert "after the restart" in stdout, (stdout, stderr)
+    assert "a valid access token is required" not in stderr, stderr
+    assert [row["v"] for row in second.admin().rows(sql="SELECT v FROM t")] == [2], stderr
+
+
+@pytest.mark.parametrize(("args", "env", "message"), [
+    (["--resume-timeout", "-5"], {},
+     "--resume-timeout must be a whole number of seconds, 0 or more (0: don't wait), not -5"),
+    ([], {"HARDCHARGER_RESUME_TIMEOUT": "ten"},
+     "HARDCHARGER_RESUME_TIMEOUT must be a whole number of seconds (0: don't wait), not 'ten'"),
+    ([], {"HARDCHARGER_RESULT_PARTITIONS": "eight"},
+     "HARDCHARGER_RESULT_PARTITIONS must be a whole number from 1 to 256, not 'eight'"),
+], ids=["negative-flag", "bad-env", "bad-partitions-env"])
+def test_a_bad_value_is_refused_not_replaced_by_the_default(server, args, env, message):
+    result = run(server, *args, "--command", "SELECT 1", env=client_env(server=server, **env))
+    assert result.returncode == 1
+    assert result.stderr.strip() == f"Error: {message}", result.stderr
+    assert result.stdout == ""
 
 
 def test_a_killed_session_is_reported_and_reopened(server, tmp_path):

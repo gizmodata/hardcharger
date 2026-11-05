@@ -77,3 +77,23 @@ def test_metadata_comes_from_the_requested_catalog(session):
     local = table_schema(session=session, catalog="memory", table="twin")
     assert local.field("x").nullable is True
     assert meta(local, "label", "ARROW:FLIGHT:SQL:REMARKS") == ABSENT
+
+
+def test_the_tables_listing_matches_information_schema_and_leaves_out_internal_objects(session):
+    # Chargewire 2.1.0 (Hardcharger 2.7.0) built the listing from duckdb_tables() and
+    # duckdb_views() without their `internal` filter, so every client's table browser showed
+    # DuckDB's own system catalog (information_schema, pg_catalog, the duckdb_* views).
+    session.execute(sql="CREATE OR REPLACE TABLE listed_table (x INT)")
+    session.execute(sql="CREATE OR REPLACE VIEW listed_view AS SELECT 1 AS x")
+    listed = session.metadata(kind="tables").to_pylist()
+    rows = {(r["catalog_name"], r["db_schema_name"], r["table_name"], r["table_type"]) for r in listed}
+    assert ("memory", "main", "listed_table", "BASE TABLE") in rows
+    assert ("memory", "main", "listed_view", "VIEW") in rows
+    assert not [r for r in rows if r[0] == "system"], sorted(r for r in rows if r[0] == "system")[:5]
+    expected = {
+        (r["table_catalog"], r["table_schema"], r["table_name"], r["table_type"])
+        for r in session.rows(
+            sql="SELECT table_catalog, table_schema, table_name, table_type FROM information_schema.tables"
+        )
+    }
+    assert rows == expected
