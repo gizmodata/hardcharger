@@ -474,25 +474,26 @@ int main(int argc, char** argv) {
   // (SIGINT/SIGTERM; on Windows, the console's Ctrl+C/Ctrl+Break/close/shutdown events;
   // embedded in an app, the app's stop requests: embedding.hpp).
   hc::embedding::Stop stop_signals;
-  // A parent that started this server with its stdin on a pipe stops it by closing the pipe,
-  // which the kernel does when the parent dies (the desktop app, issue #28). The thread blocks
-  // in a read until then; it is never joined, and a request made before the signal thread
-  // waits is kept (StopRequests counts them).
-  if (config.stop_on_stdin_close) {
-    std::thread([&stop_signals] {
-      while (std::fgetc(stdin) != EOF) {
-      }
-      hc::Log(hc::LogLevel::kInfo, "standard input closed; stopping (stop_on_stdin_close)");
-      stop_signals.Wake();
-    }).detach();
-  }
-
   try {
     hc::ConfigureLogging(config.log_level, config.log_format, config.log_file, config.log_emoji);
     const std::string instance_id = hc::RandomUuid();
     hc::LogFields identity = {{"instance_id", instance_id}};
     if (!config.cluster_id.empty()) identity.emplace_back("cluster_id", config.cluster_id);
     hc::SetDefaultLogFields(identity);
+    // A parent that started this server with its stdin on a pipe stops it by closing the pipe,
+    // which the kernel does when the parent dies (the desktop app, issue #28). The thread blocks
+    // in a read until then; it is never joined, and a request made before the signal thread
+    // waits is kept (StopRequests counts them). It starts once logging is configured: its log
+    // line read the level while ConfigureLogging wrote it when stdin was already at its end
+    // (a ThreadSanitizer report in 2.7.0's gate).
+    if (config.stop_on_stdin_close) {
+      std::thread([&stop_signals] {
+        while (std::fgetc(stdin) != EOF) {
+        }
+        hc::Log(hc::LogLevel::kInfo, "standard input closed; stopping (stop_on_stdin_close)");
+        stop_signals.Wake();
+      }).detach();
+    }
     for (const auto& note : loaded.notes) {
       hc::Log(hc::LogLevel::kInfo, note);
     }
