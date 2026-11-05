@@ -221,15 +221,25 @@ final class HardchargerUITests: XCTestCase {
         XCTAssertTrue(app.images.containing(NSPredicate(format: "label BEGINSWITH 'QR code for'")).firstMatch.exists)
 
         // Another device on the network: TLS with exactly that certificate.
+        // The app shows the address as the server restarts on every interface, so the first
+        // request can land before the new listener is up (2.7.0's gate: no answer, then
+        // "connection refused"). Ask again, each request bounded, until it answers or 90 s pass.
         let pin = Pin(fingerprint: fingerprint)
-        let session = URLSession(configuration: .ephemeral, delegate: pin, delegateQueue: nil)
-        let answered = expectation(description: "health")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 10
+        let session = URLSession(configuration: configuration, delegate: pin, delegateQueue: nil)
+        let health = url.deletingLastPathComponent().appending(path: "chargewire/v1/health")
         let status = Status()
-        session.dataTask(with: url.deletingLastPathComponent().appending(path: "chargewire/v1/health")) { _, response, _ in
-            status.code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            answered.fulfill()
-        }.resume()
-        wait(for: [answered], timeout: 20)
+        let deadline = Date().addingTimeInterval(90)
+        while status.code != 200 && Date() < deadline {
+            let answered = expectation(description: "health")
+            session.dataTask(with: health) { _, response, _ in
+                status.code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                answered.fulfill()
+            }.resume()
+            wait(for: [answered], timeout: 15)
+            if status.code != 200 { Thread.sleep(forTimeInterval: 2) }
+        }
         XCTAssertEqual(status.code, 200, "the server answers on its LAN address")
         XCTAssertTrue(pin.matched, "with the certificate the app shows")
 
