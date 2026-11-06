@@ -213,6 +213,7 @@ jobs:
           bash .github/scripts/test-release.sh
           python3 .github/scripts/test_versions_json.py
           python3 .github/scripts/test_codesign_retry.py
+          python3 .github/scripts/test_already_tested.py
           sudo apt-get install -y -q minisign > /dev/null
           python3 .github/scripts/test_updater_feed.py
           python3 .github/scripts/check_python_version.py
