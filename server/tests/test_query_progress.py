@@ -1,13 +1,14 @@
 """Progress is observable before execution completes, without issuing observer SQL."""
 import time
 
+from conftest import PERF_SCALE, TIMEOUT_SCALE
 
 
 def samples(session, sql, parameters=None):
     response = session.submit(sql=sql, parameters=parameters, headers={"Prefer": "respond-async"})
     assert response.status_code in (200, 201), response.text
     doc = response.json()
-    deadline = time.monotonic() + 45
+    deadline = time.monotonic() + 45 * PERF_SCALE
     seen = []
     while doc["state"] not in ("succeeded", "failed", "cancelled"):
         seen.append(doc)
@@ -48,7 +49,8 @@ def test_cli_progress_is_transient_and_never_written_to_pipes(launcher):
     process = subprocess.Popen(args=command, env=env, stdin=subprocess.DEVNULL, stdout=slave, stderr=slave)
     os.close(slave)
     output = b""
-    deadline = time.monotonic() + 30
+    # The query must finish under TSan too; preserve the workload and scale its wall-clock budget.
+    deadline = time.monotonic() + 30 * PERF_SCALE
     try:
         while time.monotonic() < deadline:
             if select.select([master], [], [], 0.1)[0]:
@@ -61,7 +63,7 @@ def test_cli_progress_is_transient_and_never_written_to_pipes(launcher):
                 output += chunk
             elif process.poll() is not None:
                 break
-        assert process.wait(timeout=5) == 0, output.decode(errors="replace")
+        assert process.wait(timeout=5 * TIMEOUT_SCALE) == 0, output.decode(errors="replace")
         assert b"% (estimated)" in output, output.decode(errors="replace")
         assert b"\r\x1b[2K" in output
         assert b"answer" in output
@@ -71,6 +73,6 @@ def test_cli_progress_is_transient_and_never_written_to_pipes(launcher):
             process.wait()
         os.close(master)
     # Same SQL path, with redirected output: no progress and no escape sequences.
-    result = subprocess.run(args=command, env=env, capture_output=True, timeout=30)
+    result = subprocess.run(args=command, env=env, capture_output=True, timeout=30 * PERF_SCALE)
     assert result.returncode == 0, result.stderr
     assert b"estimated" not in result.stderr and b"\x1b" not in result.stderr
