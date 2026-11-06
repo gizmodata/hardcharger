@@ -169,6 +169,35 @@ export function EditorTab(props: Props) {
     [tabSession],
   );
 
+  // A fresh remote tab uses that connection's defaults immediately, before its first run.
+  // Read the shared metadata session so this does not open the editor's own session.
+  const connected = props.connections.some((connection) => connection.id === tab.server);
+  useEffect(() => {
+    if (!tab.server || !connected || tab.catalog || tab.schema) return;
+    let live = true;
+    app.servers
+      .connection(tab.server)
+      .then((conn) => conn.getSession())
+      .then(
+        (doc) => {
+          const current = latest.current.tab;
+          // A run or a manual selection made while the request was pending takes precedence.
+          if (!live || tabSession.open || current.catalog || current.schema) return;
+          const options = doc.options ?? {};
+          latest.current.onChange({
+            catalog: typeof options["catalog"] === "string" ? options["catalog"] : "",
+            schema: typeof options["schema"] === "string" ? options["schema"] : "",
+          });
+        },
+        (err: unknown) => {
+          if (live) setListingError(errorMessage(err));
+        },
+      );
+    return () => {
+      live = false;
+    };
+  }, [app, tab.server, tab.catalog, tab.schema, connected, tabSession]);
+
   // The catalogs the user may see, and the schemas of the tab's catalog, for the pickers
   // (Chargewire metadata, as access control filters it).
   const listings = useMemo(() => listingsFor(app, tab.role, tab.server), [app, tab.role, tab.server]);

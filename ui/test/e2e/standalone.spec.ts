@@ -133,6 +133,11 @@ test("an existing tab switches connections while preserving SQL and protecting a
   await connection.selectOption({ label: "Analytics" });
   await editorFocused(page);
   await expect(tab).toHaveAttribute("data-tab-id", id!);
+  await expect(tab.getByLabel("Catalog", { exact: true })).toHaveValue("e2e");
+  await expect(tab.getByLabel("Schema", { exact: true })).toHaveValue("main");
+  await expect(
+    page.getByRole("tablist", { name: "Editor tabs" }).getByRole("tab", { selected: true }).locator(".tab-server"),
+  ).toHaveText("Analytics");
   await expect(tab.getByLabel("Row limit", { exact: true })).toHaveValue("5000");
   await expect(tab.getByTestId("results-grid")).toHaveCount(0);
   await expect(tab.getByTestId("session-chip")).toHaveCount(0);
