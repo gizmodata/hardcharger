@@ -246,7 +246,7 @@ test("Query result details and profiles follow the remote server even when local
     await row.hover();
     await row.getByRole("button", { name: /^More for/ }).click();
     await page.getByRole("menuitem", { name: "Preview data" }).click();
-    await expect(activeTab(page).getByTestId("tab-server")).toHaveText("Details remote");
+    await expect(activeTab(page).getByTestId("tab-connection").locator("option:checked")).toHaveText("Details remote");
     await expect(activeTab(page).getByTestId("results-grid")).toBeVisible();
     await runDone(page, "SET hardcharger.capture_query_profile = 'detailed'");
     await runDone(page, "SELECT sum(id) AS remote_details_probe FROM remote_details");
