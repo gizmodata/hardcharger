@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import type { Page } from "@playwright/test";
 
 import { cleanEnvironment, freePort } from "./harness.ts";
-import { editorFocused, expect, gridRows, runDone, test } from "./fixtures.ts";
+import { activeTab, editorFocused, expect, gridRows, runDone, setSql, test } from "./fixtures.ts";
 
 let ui: ChildProcess | undefined;
 let url: string;
@@ -92,4 +92,70 @@ test("a server added through the relay is signed in through it, listed and queri
   // The relay session the UI holds is the one the relay issued (no sign-in of its own).
   const relaySession = await page.evaluate(() => sessionStorage.getItem("hardcharger-ui:relay-session:v1"));
   expect(relaySession).toMatch(/^p-[0-9a-f]+$/);
+});
+
+test("an existing tab switches connections while preserving SQL and protecting an open transaction", async ({
+  page,
+  harness,
+}, testInfo) => {
+  await open(page);
+  for (const [name, remote] of [
+    ["Sandbox", harness.remotes.plain],
+    ["Analytics", harness.remotes.signed],
+  ] as const) {
+    await page.getByTestId("explorer-add-server").click();
+    const dialog = page.getByTestId("add-server-dialog");
+    await dialog.getByLabel("Display name", { exact: true }).fill(name);
+    await dialog.getByLabel("Host", { exact: true }).fill(remote.url);
+    await dialog.getByLabel("Username", { exact: true }).fill(remote.admin.username);
+    await dialog.getByLabel("Password", { exact: true }).fill(remote.admin.password);
+    await dialog.getByTestId("add-server-connect").click();
+    await expect(dialog).toHaveCount(0);
+  }
+  const tab = activeTab(page);
+  const id = await tab.getAttribute("data-tab-id");
+  const connection = tab.getByLabel("Connection", { exact: true });
+  await connection.selectOption({ label: "Sandbox" });
+  await editorFocused(page);
+  await runDone(
+    page,
+    "CREATE TEMP TABLE only_in_old_session AS SELECT 1; CREATE SCHEMA IF NOT EXISTS selector_schema; USE e2e.selector_schema;",
+    "ControlOrMeta+Shift+Enter",
+  );
+  await expect(tab.getByLabel("Schema", { exact: true })).toHaveValue("selector_schema");
+  await runDone(page, "BEGIN");
+  await expect(connection).toBeDisabled();
+  await runDone(page, "ROLLBACK");
+  await expect(connection).toBeEnabled();
+  await tab.getByLabel("Row limit", { exact: true }).selectOption("5000");
+  const sql = "SELECT id, note\nFROM remote\nORDER BY id;";
+  await setSql(page, sql);
+  await connection.selectOption({ label: "Analytics" });
+  await editorFocused(page);
+  await expect(tab).toHaveAttribute("data-tab-id", id!);
+  await expect(tab.getByLabel("Row limit", { exact: true })).toHaveValue("5000");
+  await expect(tab.getByTestId("results-grid")).toHaveCount(0);
+  await expect(tab.getByTestId("session-chip")).toHaveCount(0);
+  await expect(tab.locator(".monaco-editor")).toContainText("ORDER BY id;");
+  // Execute the preserved SQL, without replacing the editor text.
+  await tab.getByTestId("run-button").click();
+  await expect.poll(async () => Number(await tab.getAttribute("data-runs"))).toBe(1);
+  expect((await gridRows(page)).slice(1)).toEqual([
+    ["0", "remote row 0"],
+    ["1", "remote row 1"],
+    ["2", "remote row 2"],
+  ]);
+  await expect(tab.getByLabel("Schema", { exact: true })).toHaveValue("main");
+  if (process.env["HARDCHARGER_UI_SELECTOR_SCREENSHOT"]) {
+    await page.screenshot({ path: process.env["HARDCHARGER_UI_SELECTOR_SCREENSHOT"], fullPage: true });
+    await testInfo.attach("Connection selector", {
+      path: process.env["HARDCHARGER_UI_SELECTOR_SCREENSHOT"],
+      contentType: "image/png",
+    });
+  }
+  await page.reload();
+  await expect(activeTab(page).getByLabel("Connection", { exact: true }).locator("option:checked")).toHaveText(
+    "Analytics",
+  );
+  await expect(activeTab(page).locator(".monaco-editor")).toContainText("ORDER BY id;");
 });

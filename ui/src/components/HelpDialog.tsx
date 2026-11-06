@@ -36,6 +36,13 @@ export function HelpDialog({ idleTimeoutS, onClose }: { idleTimeoutS: number | u
           ends {idle}, or when the server restarts. If no transaction was open, the next run starts a new session and
           says so.
         </p>
+        <h3>Connections</h3>
+        <p>
+          Use Connection in the toolbar to move an existing tab to another connected server. Your SQL, tab name and row
+          limit stay with the tab. Its old session ends and its results clear; the next run uses a fresh session and the
+          new connection&apos;s default catalog, schema and roles. Finish or cancel a running query, and commit or roll
+          back an open transaction, before switching.
+        </p>
         <h3>Transactions</h3>
         <p>
           Every statement commits as it runs, until you run <code>BEGIN</code>. The transaction then stays open across

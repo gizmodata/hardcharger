@@ -11,6 +11,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Change an editor tab’s connection from its toolbar while preserving its SQL, name and row limit. Switching starts a fresh session and clears server-specific state; running queries and open transactions lock the selector.
+
 - Format SQL in the editor with Alt+Shift+F or its context menu, including selections and Undo. Query details offer Formatted/Original views and copy the selected view.
 - Open the exact execution's SQL details and profile from query results or script messages, including remote servers, without rerunning SQL.
 - Live estimated query progress in the Web UI and interactive CLI, with distinct execution and result-receiving states. Redirected and quiet CLI output stays clean.

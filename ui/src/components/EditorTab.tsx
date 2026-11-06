@@ -77,6 +77,8 @@ interface Props {
   roles: readonly string[];
   /** The name of the other server this tab is on (shown in the toolbar); absent: this server. */
   serverName?: string;
+  /** Connected servers this tab can switch to. */
+  connections: readonly { id: string; label: string }[];
   onReady: (handle: TabHandle | undefined) => void;
   /** Run the whole text once the editor is ready (a table preview), then call onRunStarted. */
   runOnOpen?: boolean;
@@ -362,6 +364,14 @@ export function EditorTab(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [where.catalog, where.schema, where.role, tabSession, app]);
 
+  const switchConnection = (server: string) => {
+    if (controller.current || inTransaction || server === tab.server) return;
+    if (!props.connections.some((connection) => connection.id === server)) return;
+    // QueryPage remounts this tab on its new server, closing the old session and clearing
+    // its results. Read Monaco directly so even the latest keystroke survives the switch.
+    onChange({ server, catalog: "", schema: "", role: "", sql: editor.current?.value() ?? tab.sql });
+  };
+
   const newSession = async () => {
     if (
       inTransaction &&
@@ -519,11 +529,34 @@ export function EditorTab(props: Props) {
         >
           <FileUp size={14} /> Upload data
         </button>
-        {props.serverName && (
-          <span className="chip chip-server" title="The server this tab's session is on" data-testid="tab-server">
-            {props.serverName}
-          </span>
-        )}
+        <label
+          className="toolbar-field"
+          title={
+            running
+              ? "Wait for the run to finish or cancel it before changing connection"
+              : (lockedTitle ?? "The connection this tab runs on")
+          }
+        >
+          Connection
+          <select
+            aria-label="Connection"
+            data-testid="tab-connection"
+            value={tab.server}
+            disabled={running || inTransaction}
+            onChange={(e) => switchConnection(e.target.value)}
+          >
+            {!props.connections.some((connection) => connection.id === tab.server) && (
+              <option value={tab.server} disabled>
+                {props.serverName ?? "Choose a connection"}
+              </option>
+            )}
+            {props.connections.map((connection) => (
+              <option key={connection.id} value={connection.id}>
+                {connection.label}
+              </option>
+            ))}
+          </select>
+        </label>
         {props.roles.length > 0 && !tab.server && (
           <label className="toolbar-field" title={lockedTitle ?? "The role this tab acts with (SET ROLE)"}>
             Run as

@@ -180,7 +180,7 @@ test("a plain server: a red open lock, sign-in, its catalogs, a tab on it, a pre
   await row.hover();
   await row.getByRole("button", { name: /^More for/ }).click();
   await page.getByRole("menuitem", { name: "Preview data" }).click();
-  await expect(activeTab(page).getByTestId("tab-server")).toHaveText("Plain");
+  await expect(activeTab(page).getByTestId("tab-connection").locator("option:checked")).toHaveText("Plain");
   await expect.poll(async () => (await gridRows(page)).length).toBe(4);
   expect((await gridRows(page))[1]).toEqual(["0", "remote row 0"]);
   await expect(editorTabs(page).locator(".tab-server").first()).toHaveText("Plain");
@@ -191,7 +191,7 @@ test("a plain server: a red open lock, sign-in, its catalogs, a tab on it, a pre
   await page.getByTestId("new-tab-on").click();
   await expect(page.getByRole("menuitem", { name: "This server" })).toBeVisible();
   await page.getByRole("menuitem", { name: "Plain", exact: true }).click();
-  await expect(activeTab(page).getByTestId("tab-server")).toHaveText("Plain");
+  await expect(activeTab(page).getByTestId("tab-connection").locator("option:checked")).toHaveText("Plain");
 
   await page.getByLabel("Search tables and views").fill("remote");
   const results = page.getByTestId("search-results");

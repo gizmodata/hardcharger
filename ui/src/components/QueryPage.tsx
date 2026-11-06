@@ -347,8 +347,8 @@ export default function QueryPage({ theme }: Props) {
   const activeStatus = statuses[active];
   useEffect(() => {
     publishActiveTab({
-      catalog: activeTab?.catalog || defaults.catalog,
-      schema: activeTab?.schema || defaults.schema,
+      catalog: activeTab?.catalog || (activeTab?.server ? "" : defaults.catalog),
+      schema: activeTab?.schema || (activeTab?.server ? "" : defaults.schema),
       transaction: activeStatus?.transaction ?? "none",
       role: activeTab?.role ?? "",
       server: activeTab?.server ?? "",
@@ -583,12 +583,12 @@ export default function QueryPage({ theme }: Props) {
 
       {tabs.map((t) => (
         <EditorTab
-          key={t.id}
+          key={`${t.id}:${t.server}`}
           tab={t}
           active={t.id === active}
           theme={theme}
           editorHeight={editorHeight}
-          defaults={defaults}
+          defaults={t.server ? { catalog: "", schema: "" } : defaults}
           catalogVersion={catalogVersion}
           onCatalogChanged={() => clearCatalogCaches(session)}
           onChange={(patch) => patchTab(t.id, patch)}
@@ -612,6 +612,12 @@ export default function QueryPage({ theme }: Props) {
           onBenchmarkQuery={(query) => addTab({ ...query, server: t.server, role: t.role, rowLimit: t.rowLimit })}
           onSave={(sql) => void save(t.id, false, sql)}
           onSaveAs={(sql) => void save(t.id, true, sql)}
+          connections={[
+            ...(session.localServer ? [{ id: localServerId, label: "This server" }] : []),
+            ...servers.servers
+              .filter((s) => s.status === "connected")
+              .map((s) => ({ id: s.saved.id, label: serverLabel(s) })),
+          ]}
           roles={t.server ? [] : roles}
           {...(t.server ? { serverName: serverName(t.server) ?? "a removed server" } : {})}
           onCloseTab={() => closeTab(t.id)}
