@@ -116,7 +116,7 @@ def test_a_declared_path_argument_goes_through_the_storage_privileges(server, fi
         expect_blocked(client=lou, sql=sql, why="needs the READ FILESYSTEM system privilege, everywhere or on a location that covers it")
     # A computed path can't be checked before it is read.
     expect_blocked(client=lou, sql=f"SELECT * FROM sqlite_scan(concat('{allowed}', ''), 't')",
-                   why="its path is an expression or a parameter, which Hardcharger can't check before DuckDB reads it")
+                   why="its path is an expression or a parameter without a known string value, which Hardcharger can't check before DuckDB reads it")
     # Nobody without the grant, whatever their storage privileges.
     expect_blocked(client=user(server, "nob"), sql=f"SELECT * FROM sqlite_scan('{allowed}', 't')", why=ADMIN_ONLY)
 
