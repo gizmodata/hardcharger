@@ -39,6 +39,9 @@ test("editor context menu formats SQL and supports Undo, selection and failure",
 });
 
 test("editor menu is opaque above SQL and results in both themes", async ({ page, harness }, testInfo) => {
+  // Keep the toolbar on one row so the menu overlaps the grid on every platform,
+  // including Linux WebKit whose menu is shorter than the macOS one.
+  await page.setViewportSize({ width: 1600, height: 900 });
   await signIn(page, harness.admin);
   await runDone(page, "SELECT range AS menu_background_probe FROM range(30)");
   await setSql(page, Array.from({ length: 12 }, (_, i) => `-- SQL behind the menu ${i}`).join("\n"));
