@@ -26,7 +26,7 @@ def codesign(args, *, run=subprocess.run, sleep=time.sleep, stdout=None, stderr=
     # Verification is always one attempt, even if an unusual invocation mixes flags.
     signing = signing and not any(arg in ("--verify", "-v") for arg in args)
     for attempt in range(len(DELAYS) + 1):
-        result = run(["/usr/bin/codesign", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result = run(args=["/usr/bin/codesign", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout.write(result.stdout)
         stdout.flush()
         stderr.write(result.stderr)
@@ -45,4 +45,4 @@ def codesign(args, *, run=subprocess.run, sleep=time.sleep, stdout=None, stderr=
 
 
 if __name__ == "__main__":
-    raise SystemExit(codesign(sys.argv[1:]))
+    raise SystemExit(codesign(args=sys.argv[1:]))
