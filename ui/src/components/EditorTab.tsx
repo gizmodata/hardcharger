@@ -139,6 +139,7 @@ export function EditorTab(props: Props) {
   const [listingError, setListingError] = useState<string | undefined>();
   const editor = useRef<EditorApi | undefined>(undefined);
   const controller = useRef<AbortController | undefined>(undefined);
+  const mounted = useRef(false);
   const latest = useRef(props);
   useEffect(() => {
     latest.current = props;
@@ -161,13 +162,14 @@ export function EditorTab(props: Props) {
   }, [running, failed, transaction, sessionId, onStatus]);
 
   // The tab's session ends with the tab (closing it, or signing out).
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       controller.current?.abort();
       void tabSession.close();
-    },
-    [tabSession],
-  );
+    };
+  }, [tabSession]);
 
   // A fresh remote tab uses that connection's defaults immediately, before its first run.
   // Read the shared metadata session so this does not open the editor's own session.
@@ -354,9 +356,10 @@ export function EditorTab(props: Props) {
     if (inTransaction) return;
     try {
       const names = await listSchemas(catalog);
+      if (!mounted.current) return;
       onChange({ catalog, schema: names.includes("main") ? "main" : (names[0] ?? "") });
     } catch (err) {
-      if (!app.checkSignIn(err)) setNotice(errorMessage(err));
+      if (mounted.current && !app.checkSignIn(err)) setNotice(errorMessage(err));
     }
   };
 
@@ -376,10 +379,13 @@ export function EditorTab(props: Props) {
       return;
     }
     if (now.transaction !== "none") return;
+    let live = true;
     tabSession.setWhere(where).then(
-      () => setInfo(tabSession.info),
+      () => {
+        if (live) setInfo(tabSession.info);
+      },
       (err: unknown) => {
-        if (app.checkSignIn(err)) return;
+        if (!live || app.checkSignIn(err)) return;
         setNotice(errorMessage(err));
         // A catalog the server keeps for querying by name: the pickers go back to the session's.
         const kept = tabSession.info;
@@ -389,6 +395,9 @@ export function EditorTab(props: Props) {
         }
       },
     );
+    return () => {
+      live = false;
+    };
     // where's parts are the dependencies.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [where.catalog, where.schema, where.role, tabSession, app]);

@@ -130,6 +130,25 @@ test("an existing tab switches connections while preserving SQL and protecting a
   await tab.getByLabel("Row limit", { exact: true }).selectOption("5000");
   const sql = "SELECT id, note\nFROM remote\nORDER BY id;";
   await setSql(page, sql);
+  // A schema listing started on the old server must not overwrite the new connection's
+  // defaults when its response arrives late.
+  let releaseListing!: () => void;
+  const heldListing = new Promise<void>((resolve) => {
+    releaseListing = resolve;
+  });
+  let listingStarted!: () => void;
+  const startedListing = new Promise<void>((resolve) => {
+    listingStarted = resolve;
+  });
+  await page.route("**/metadata/db-schemas?*", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("catalog") === "_hardcharger_system") {
+      listingStarted();
+      await heldListing;
+    }
+    await route.continue();
+  });
+  await tab.getByLabel("Catalog", { exact: true }).selectOption("_hardcharger_system");
+  await startedListing;
   await connection.selectOption({ label: "Analytics" });
   await editorFocused(page);
   await expect(tab).toHaveAttribute("data-tab-id", id!);
@@ -142,6 +161,10 @@ test("an existing tab switches connections while preserving SQL and protecting a
   await expect(tab.getByTestId("results-grid")).toHaveCount(0);
   await expect(tab.getByTestId("session-chip")).toHaveCount(0);
   await expect(tab.locator(".monaco-editor")).toContainText("ORDER BY id;");
+  releaseListing();
+  await page.waitForLoadState("networkidle");
+  await expect(tab.getByLabel("Catalog", { exact: true })).toHaveValue("e2e");
+  await expect(tab.getByLabel("Schema", { exact: true })).toHaveValue("main");
   // Execute the preserved SQL, without replacing the editor text.
   await tab.getByTestId("run-button").click();
   await expect.poll(async () => Number(await tab.getAttribute("data-runs"))).toBe(1);
