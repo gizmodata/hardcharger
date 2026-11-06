@@ -100,6 +100,13 @@ Apple may accept a submission before that ticket is available to the runner. The
 verifier retries its online lookup for up to 110 seconds, then fails if no ticket appears.
 It does not retry or waive broken signatures, wrong signing identities or Gatekeeper rejection.
 
+Signing also retries the specific `codesign` error "The timestamp service is not available."
+up to six attempts, waiting 10, 20, 40, 60 and 60 seconds. The server and desktop workflows
+install `.github/scripts/codesign-retry.py` as a PATH shim; it always invokes the system
+`/usr/bin/codesign` with the original arguments. Other signing errors and all verification
+calls return immediately. Certificate import, notarization submission and the mandatory
+signature/entitlement checks retain their existing behavior.
+
 **Checks.** `.github/scripts/verify-macos-signature.sh` (codesign `--verify --strict`, the
 Developer ID requirement for our Team ID, the hardened runtime, the timestamp, the notarization
 ticket, Gatekeeper's `spctl` assessment, the exact entitlements) and

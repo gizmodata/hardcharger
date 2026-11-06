@@ -7,6 +7,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Retry transient Apple timestamp-service failures with bounded exponential backoff when signing macOS server, CLI and desktop artifacts, retaining mandatory signature and notarization checks.
+
 ## [2.9.0] - 2026-11-06
 
 ### Added
