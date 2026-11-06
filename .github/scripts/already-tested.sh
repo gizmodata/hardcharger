@@ -88,7 +88,7 @@ in_list() {  # needle list...
 
 may_skip() {  # job name
   case "$1" in
-    "warm compile cache ("* | "windows / warm compile cache ("* | "windows / sign ("*) return 0 ;;
+    "warm compile cache ("* | "warm sanitizer dependency caches ("* | "windows / warm compile cache ("* | "windows / sign ("*) return 0 ;;
   esac
   in_list "$1" "${MAY_SKIP[@]}"
 }

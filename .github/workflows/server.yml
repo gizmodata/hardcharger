@@ -212,6 +212,8 @@ jobs:
         run: |
           bash .github/scripts/test-release.sh
           python3 .github/scripts/test_versions_json.py
+          python3 .github/scripts/test_codesign_retry.py
+          python3 .github/scripts/test_already_tested.py
           sudo apt-get install -y -q minisign > /dev/null
           python3 .github/scripts/test_updater_feed.py
           python3 .github/scripts/check_python_version.py
@@ -635,6 +637,9 @@ jobs:
       - name: Keep an unsigned copy (the signature check's proof)
         if: matrix.name == 'macos-arm64' && needs.changes.outputs.sign == 'true'
         run: cp server/build/hardcharger "$RUNNER_TEMP/unsigned-proof"
+      - name: Retry transient Apple timestamp service failures
+        if: matrix.name == 'macos-arm64' && needs.changes.outputs.sign == 'true'
+        uses: ./.github/actions/apple-signing-retry
       - name: Sign and notarize the client (macOS)
         if: matrix.name == 'macos-arm64' && needs.changes.outputs.sign == 'true'
         # This action immediately looks up Apple's ticket after acceptance. The strict

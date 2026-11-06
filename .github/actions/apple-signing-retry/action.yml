@@ -1,0 +1,10 @@
+name: Retry Apple timestamp service failures
+description: Add bounded exponential backoff to codesign signing calls only.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/apple-signing-tools"
+        ln -sf "$GITHUB_WORKSPACE/.github/scripts/codesign-retry.py" "$RUNNER_TEMP/apple-signing-tools/codesign"
+        echo "$RUNNER_TEMP/apple-signing-tools" >> "$GITHUB_PATH"

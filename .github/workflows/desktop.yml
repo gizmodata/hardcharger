@@ -165,6 +165,9 @@ jobs:
       - name: Install AzureSignTool
         if: runner.os == 'Windows' && needs.plan.outputs.sign == 'true'
         run: dotnet tool install --global AzureSignTool --version 7.0.1
+      - name: Retry transient Apple timestamp service failures
+        if: runner.os == 'macOS' && needs.plan.outputs.sign == 'true'
+        uses: ./.github/actions/apple-signing-retry
       - name: Build and sign the macOS application
         if: runner.os == 'macOS'
         working-directory: desktop
