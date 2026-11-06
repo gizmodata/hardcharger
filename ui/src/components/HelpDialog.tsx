@@ -49,6 +49,13 @@ export function HelpDialog({ idleTimeoutS, onClose }: { idleTimeoutS: number | u
           Shift+Ctrl/⌘+Enter runs them all in order and stops at the first error. Cancel stops the statement on the
           server; nothing of it is saved.
         </p>
+        <h3>Format SQL</h3>
+        <p>
+          Right-click in the editor and choose Format SQL, or press Alt+Shift+F. It formats the selection, or the whole
+          script when nothing is selected. Undo restores the previous text. The style uses leading commas, spaces,
+          lowercase unquoted identifiers and uppercase keywords. Quoted names and string values retain their spelling.
+          SQL details also offer Formatted and Original views.
+        </p>
         <h3>Results</h3>
         <p>
           Up to the row limit. Click a header to sort (NULLs last), type to filter, select cells like a spreadsheet and

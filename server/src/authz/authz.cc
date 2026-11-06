@@ -1,4 +1,5 @@
 #include "authz/authz.hpp"
+#include <charconv>
 
 #include <arrow/api.h>
 #include <arrow/io/memory.h>
@@ -121,12 +122,13 @@ std::shared_ptr<arrow::RecordBatchReader> Rows(const CommandResult& result) {
 class GuardedPrepared : public chargewire::PreparedStatement {
  public:
   GuardedPrepared(std::unique_ptr<chargewire::PreparedStatement> inner,
-                  std::vector<PendingOwnership> ownership)
-      : inner_(std::move(inner)), ownership_(std::move(ownership)) {}
+                  std::vector<PendingOwnership> ownership, std::string sql)
+      : inner_(std::move(inner)), ownership_(std::move(ownership)), sql_(std::move(sql)) {}
   std::shared_ptr<arrow::Schema> ParameterSchema() override { return inner_->ParameterSchema(); }
   std::shared_ptr<arrow::Schema> ResultSchema() override { return inner_->ResultSchema(); }
 
   chargewire::PreparedStatement& inner() { return *inner_; }
+  const std::string& sql() const { return sql_; }
   std::vector<PendingOwnership> TakeOwnership() { return std::move(ownership_); }
   // A run that failed: the next one records them.
   void GiveBackOwnership(std::vector<PendingOwnership> ownership) { ownership_ = std::move(ownership); }
@@ -134,6 +136,7 @@ class GuardedPrepared : public chargewire::PreparedStatement {
  private:
   std::unique_ptr<chargewire::PreparedStatement> inner_;
   std::vector<PendingOwnership> ownership_;
+  std::string sql_;
 };
 
 // A prepared access-control statement: it runs when executed, as it runs when
@@ -782,7 +785,7 @@ Error SessionGuard::ForTenant(const Error& error) const {
   return Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name), "42501");
 }
 
-void SessionGuard::CheckBeforeBind(std::string_view sql) {
+void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::value& parameters, bool preparing) {
   std::vector<chargewire_duckdb::SqlStatement> statements;
   try {
     statements = chargewire_duckdb::Parse(connection_, sql);
@@ -885,6 +888,27 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
       throw Error(ErrorCode::kPermissionDenied, *refusal, "42501");
     }
   };
+  const PathParameterCallback paths_of_parameter = [&](const std::string& name) -> std::optional<std::vector<std::string>> {
+    // Preparing a direct placeholder cannot open its unknown path. Its actual value
+    // must pass this gate on every execution, before DuckDB binds/opens the file.
+    if (preparing) return std::vector<std::string>{};
+    const boost::json::value* value = nullptr;
+    if (parameters.is_object()) {
+      for (const auto& item : parameters.as_object()) {
+        if (!IdentifiersEqual(std::string(item.key()), name)) continue;
+        if (value) return std::nullopt;  // ambiguous names must not authorize a different bind
+        value = &item.value();
+      }
+    } else if (parameters.is_array()) {
+      std::size_t position = 0;
+      const auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), position);
+      if (error == std::errc{} && end == name.data() + name.size() && position > 0 && position <= parameters.as_array().size())
+        value = &parameters.as_array()[position - 1];
+    }
+    // JSON binds are scalars. A list of placeholders is resolved one element at a time.
+    if (!value || !value->is_string()) return std::nullopt;
+    return std::vector<std::string>{std::string(value->as_string())};
+  };
   for (auto& handle : statements) {
     auto& statement = *dd::capiv2::Convert(handle.get());
     // SHOW GRANTS parses as a SELECT and RESET ROLE as a SET: in a batch they would
@@ -894,7 +918,7 @@ void SessionGuard::CheckBeforeBind(std::string_view sql) {
                   "Hardcharger access control: access-control statements run on their own, "
                   "not in a batch with other statements");
     }
-    if (auto category = GatedCategory(statement, permitted, named_table, table_function_allowed, storage)) {
+    if (auto category = GatedCategory(statement, permitted, named_table, table_function_allowed, storage, paths_of_parameter)) {
       if (auto privilege = SystemPrivilegeForGatedCategory(*category)) {
         if (principal.rules_administrator) {
           throw Error(ErrorCode::kPermissionDenied,
@@ -1005,7 +1029,7 @@ std::optional<ParsedCommand> ParseCommand(std::string_view sql) {
 
 chargewire::StatementOutcome SessionGuard::Execute(
     std::string_view sql, bool has_parameters,
-    const std::function<chargewire::StatementOutcome()>& run) {
+    const std::function<chargewire::StatementOutcome()>& run, const boost::json::value& parameters) {
   RequireLive();
   if (!owner_.catalog_rules_only_) {
     if (auto command = ParseCommand(sql)) {
@@ -1018,7 +1042,7 @@ chargewire::StatementOutcome SessionGuard::Execute(
   }
   auto busy = MarkBusy();
   try {
-    if (!unrestricted_) CheckBeforeBind(sql);
+    if (!unrestricted_) CheckBeforeBind(sql, parameters);
     auto outcome = run();
     AuditAllowed();
     if (outcome.rows) outcome.rows = Track(std::move(outcome.rows), std::move(busy));
@@ -1040,14 +1064,14 @@ std::unique_ptr<chargewire::PreparedStatement> SessionGuard::Prepare(
   }
   auto busy = MarkBusy();
   try {
-    if (!unrestricted_) CheckBeforeBind(sql);
+    if (!unrestricted_) CheckBeforeBind(sql, {}, true);
     auto inner = prepare();
     // What the statement creates or drops is recorded once it has run successfully.
     auto state = StateOf(connection_);
     std::vector<PendingOwnership> ownership;
     if (state) ownership = state->TakePreparedOwnership();
     AuditAllowed();
-    return std::make_unique<GuardedPrepared>(std::move(inner), std::move(ownership));
+    return std::make_unique<GuardedPrepared>(std::move(inner), std::move(ownership), std::string(sql));
   } catch (const Error& error) {
     AuditDenied(error, sql);
     throw ForTenant(error);
@@ -1056,7 +1080,7 @@ std::unique_ptr<chargewire::PreparedStatement> SessionGuard::Prepare(
 
 chargewire::StatementOutcome SessionGuard::ExecutePrepared(
     chargewire::PreparedStatement& statement, bool has_parameters,
-    const std::function<chargewire::StatementOutcome(chargewire::PreparedStatement&)>& run) {
+    const std::function<chargewire::StatementOutcome(chargewire::PreparedStatement&)>& run, const boost::json::value& parameters) {
   RequireLive();
   if (auto* command = dynamic_cast<PreparedAccessControl*>(&statement)) {
     if (has_parameters) {
@@ -1074,6 +1098,7 @@ chargewire::StatementOutcome SessionGuard::ExecutePrepared(
   }
   auto busy = MarkBusy();
   try {
+    if (!unrestricted_) CheckBeforeBind(guarded->sql(), parameters);
     // Its first successful run records who owns what it creates: before it runs, so that
     // nothing it creates can be left without an owner (put back if the run fails).
     auto ownership = guarded->TakeOwnership();

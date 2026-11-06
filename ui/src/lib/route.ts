@@ -25,8 +25,8 @@ export function pathOf(page: Page): string {
   return `${base}/`;
 }
 
-export function queryDetailPath(executionId: string): string {
-  return `${pathOf("query-detail")}?execution=${encodeURIComponent(executionId)}`;
+export function queryDetailPath(executionId: string, server = ""): string {
+  return `${pathOf("query-detail")}?execution=${encodeURIComponent(executionId)}${server ? `&server=${encodeURIComponent(server)}` : ""}`;
 }
 
 export function useRoute(): [Page, (page: Page) => void] {

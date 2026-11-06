@@ -6,8 +6,11 @@ default (the version, this process's id) are named, and checked for what they ar
 """
 
 import re
+import json
+import subprocess
+import yaml
 
-from conftest import BINARY
+from conftest import BINARY, free_port
 
 # Settings whose value on a fresh server is not a fixed default.
 NO_FIXED_DEFAULT = {
@@ -23,14 +26,16 @@ def settings(server) -> dict[str, dict]:
 
 
 def test_every_reported_default_is_the_live_value_on_a_fresh_server(launcher):
-    by_name = settings(server=launcher.start())
+    server = launcher.start()
+    by_name = settings(server=server)
+    fixture_overrides = {"hardcharger.host": "127.0.0.1", "hardcharger.port": str(server.port)}
     checked = []
     for name, row in by_name.items():
         if name in NO_FIXED_DEFAULT:
             continue
-        assert row["value"] == row["default_value"], row
+        assert row["value"] == fixture_overrides.get(name, row["default_value"]), row
         if row["global_value"] is not None:
-            assert row["global_value"] == row["default_value"], row
+            assert row["global_value"] == fixture_overrides.get(name, row["default_value"]), row
         checked.append(name)
     # Every setting but the named few was compared, and the named ones exist.
     assert len(checked) == len(by_name) - len(NO_FIXED_DEFAULT), (checked, sorted(by_name))
@@ -64,3 +69,39 @@ def test_a_changed_setting_differs_from_its_default(launcher):
     assert settings(server=server)["hardcharger.max_queued_statements"]["value"] == "5"
     admin.execute(sql="SET GLOBAL hardcharger.max_queued_statements = -1")
     assert settings(server=server)["hardcharger.max_queued_statements"]["value"] == "-1"
+
+
+def test_operational_settings_report_configuration_and_visibility(launcher, tmp_path):
+    config = {
+        "max_result_partitions": 4, "result_batch_rows": 4096, "result_retention_seconds": 120,
+        "default_catalog": "settings_catalog", "default_schema": "reports",
+        "host": "127.0.0.1", "port": free_port(), "health_port": free_port(),
+        "web_ui": False, "web_ui_remote_servers": False,
+        "metrics_port": 0, "metrics_bind_address": "127.0.0.1",
+        "block_sensitive_paths": False, "block_unredacted_secrets": False,
+    }
+    path = tmp_path / "operations.yaml"
+    path.write_text(yaml.safe_dump({**config, "enable_metrics": False,
+                                   "init_sql_commands": "ATTACH ':memory:' AS settings_catalog; CREATE SCHEMA settings_catalog.reports"}),
+                    encoding="utf-8")
+    server = launcher.start(args=["--config", str(path)], port=config["port"])
+    admin = server.admin()
+    rows = {r["name"]: r for r in admin.rows(sql="SELECT * FROM hardcharger_settings()")}
+    options = {o["name"]: o for o in json.loads(subprocess.check_output(args=[str(BINARY), "--print-options-json"]))["options"]}
+    for name, value in config.items():
+        row = rows[f"hardcharger.{name}"]
+        expected = json.dumps(value, separators=(",", ":")) if isinstance(value, (list, bool)) else str(value)
+        assert row["value"] == expected and row["global_value"] == expected, row
+        assert row["scope"] == "STARTUP" and row["settable"] is False and row["session_value"] is None, row
+        assert row["cli_flag"] == options[name]["flag"] and row["env_var"] == options[name]["env"], row
+        expected_default = options[name]["default"]
+        assert row["default_value"] == expected_default, row
+        for command in (f"SET GLOBAL hardcharger.{name} = 'changed'", f"RESET hardcharger.{name}"):
+            assert "fixed at server startup" in admin.error(sql=command)["detail"]
+    public = {"max_result_partitions", "result_batch_rows", "result_retention_seconds", "web_ui", "web_ui_remote_servers"}
+    user = server.as_role(role="readonly")
+    visible = {r["name"] for r in user.rows(sql="SELECT name FROM hardcharger_settings()")}
+    assert visible & {f"hardcharger.{name}" for name in config} == {f"hardcharger.{name}" for name in public}
+    # Credentials are not introduced into the inventory, even for administrators.
+    assert not {"hardcharger.admin_password", "hardcharger.secret_key", "hardcharger.oauth_client_secret",
+                "hardcharger.audit_chain_key", "hardcharger.rbac_store_uri"} & rows.keys()

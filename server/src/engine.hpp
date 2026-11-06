@@ -223,7 +223,8 @@ class Session : public chargewire_duckdb::DuckDBSession {
   std::string RequestStatementId() const;
   // Runs `run` (DuckDB) under access control when the session has it.
   chargewire::StatementOutcome Guarded(std::string_view sql, bool has_parameters,
-                                    const std::function<chargewire::StatementOutcome()>& run);
+                                    const std::function<chargewire::StatementOutcome()>& run,
+                                      const boost::json::value& parameters = {});
   // Refuses what the principal may not run; returns the statement's type.
   DUCKDB_V2_STATEMENT_TYPE Authorize(const Piece& piece);
   chargewire::StatementOutcome RunCommand(const Piece& piece);

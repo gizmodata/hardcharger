@@ -5,6 +5,9 @@
 #include "platform.hpp"
 
 #include <iostream>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
 #include <regex>
 #include <utility>
 
@@ -20,6 +23,34 @@ namespace hardcharger::client {
 namespace wc = chargewire::client;
 
 namespace {
+
+// Only interactive terminals get a transient progress line. Never mix it with data.
+class QueryProgress {
+ public:
+  ~QueryProgress() { if (shown_) std::cerr << "\r\033[2K" << std::flush; }
+  void Report(const wc::StatementDocument& doc) {
+    std::lock_guard lock(mutex_);
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
+    if (seconds < 0.5) return;
+    std::ostringstream line;
+      double fraction = -1;
+      if (const auto* p = doc.document.if_contains("progress"); p && p->is_object()) {
+        if (const auto* f = p->as_object().if_contains("fraction"); f && f->is_number()) fraction = f->to_number<double>();
+      }
+      if (std::isfinite(fraction) && fraction >= 0 && fraction <= 1) {
+        const int filled = static_cast<int>(fraction * 20);
+        line << '[' << std::string(filled, '=') << std::string(20 - filled, ' ') << "] "
+             << static_cast<int>(fraction * 100) << "% (estimated)";
+      } else line << (doc.state == "queued" ? "Queued" : doc.state == "succeeded" ? "Receiving results" : "Running");
+    line << " | " << std::fixed << std::setprecision(1) << seconds << "s";
+    std::cerr << "\r\033[2K" << line.str() << std::flush;
+    shown_ = true;
+  }
+ private:
+  std::chrono::steady_clock::time_point started_ = std::chrono::steady_clock::now();
+  std::mutex mutex_;
+  bool shown_ = false;
+};
 
 // What a Chargewire reason means, for a person: why the server refused a token it issued
 // (§4.2) or ended a session (§5.6).
@@ -489,7 +520,10 @@ arrow::Result<QueryResult> ChargewireConnection::ExecuteQuery(const std::string&
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
   Executing executing(executing_);
   try {
+    QueryProgress progress;
     wc::StatementOptions options;
+    if (!config_.quiet && IsOutputTerminal() && IsErrorTerminal())
+      options.on_progress = [&](const auto& doc) { progress.Report(doc); };
     options.result_partitions = config_.result_partitions;  // in order: rows show as the server sent them
     auto result = WithSession([&] { return session_->Execute(sql, options); });
     QueryResult out;

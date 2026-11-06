@@ -1,6 +1,6 @@
 import { connect } from "@gizmodata/chargewire";
 
-import { expect, pasted, signIn, test, watchPage } from "./fixtures.ts";
+import { activeTab, editorFocused, expect, pasted, runDone, signIn, test, watchPage } from "./fixtures.ts";
 import { startOwnServer } from "./harness.ts";
 
 test("query windows retain profiles and refresh independently of the monitor", async ({ page }, testInfo) => {
@@ -34,6 +34,14 @@ test("query windows retain profiles and refresh independently of the monitor", a
     await details.getByRole("button", { name: "Copy SQL", exact: true }).click();
     await expect(details.getByRole("status").filter({ hasText: "Copied to clipboard." })).toBeVisible();
     expect(await pasted(details)).toBe(sql);
+    await details.getByRole("button", { name: "Formatted", exact: true }).click();
+    const formatted = await sqlBlock.textContent();
+    expect(formatted).not.toBe(sql);
+    await details.getByRole("button", { name: "Copy SQL", exact: true }).click();
+    expect(await pasted(details)).toBe(formatted);
+    await details.getByRole("button", { name: "Original", exact: true }).click();
+    await expect(sqlBlock).toHaveText(sql);
+
     await expect(details.getByTestId("query-profile-plan")).toContainText("UNGROUPED_AGGREGATE");
     await expect(page.getByRole("region", { name: "Statement details" })).toHaveCount(0);
     await page.getByLabel("Filter monitored queries").fill("no_match_popout");
@@ -149,5 +157,114 @@ test("a query window follows an executing statement through cancellation", async
     await admin.close();
     await page.goto("about:blank");
     await server.stop();
+  }
+});
+
+test("Query results open the exact execution for each result set and update without rerunning SQL", async ({
+  page,
+}, testInfo) => {
+  const server = await startOwnServer(["--enable-instrumentation"]);
+  const conn = await connect({ url: `${server.url}/chargewire`, ...server.admin });
+  try {
+    await signIn(page, server.admin, server.url);
+    await runDone(page, "SET hardcharger.capture_query_profile = 'detailed'");
+    await runDone(
+      page,
+      "SELECT sum(i) AS result_details_first FROM range(10) t(i); SELECT 42 AS result_details_second",
+      "ControlOrMeta+Shift+Enter",
+    );
+    const secondLink = activeTab(page).getByRole("link", { name: "SQL details" });
+    const secondHref = await secondLink.getAttribute("href");
+    const opened = page.waitForEvent("popup");
+    await secondLink.click();
+    const details = await opened;
+    const check = await watchPage(details);
+    await expect(details.getByRole("region", { name: "Statement details" })).toContainText("result_details_second");
+    await expect(details.getByTestId("query-profile-plan")).toBeVisible();
+    await page.getByRole("tab", { name: /^Result 1/ }).click();
+    const firstLink = activeTab(page).getByRole("link", { name: "SQL details" });
+    expect(await firstLink.getAttribute("href")).not.toBe(secondHref);
+    const openedFirst = page.waitForEvent("popup");
+    await firstLink.click();
+    const firstDetails = await openedFirst;
+    const checkFirst = await watchPage(firstDetails);
+    await expect(firstDetails.getByRole("region", { name: "Statement details" })).toContainText("result_details_first");
+    await expect(firstDetails.getByTestId("query-profile-plan")).toContainText("UNGROUPED_AGGREGATE");
+    await page.screenshot({ path: testInfo.outputPath("result-sql-details.png"), fullPage: true });
+    await page.getByRole("tab", { name: "Messages", exact: true }).click();
+    await expect(activeTab(page).getByTestId("messages").getByRole("link", { name: "SQL details" })).toHaveCount(2);
+    await runDone(page, "CREATE TABLE result_details_update AS SELECT 1 AS value");
+    await expect(activeTab(page).getByRole("link", { name: "SQL details" })).toBeVisible();
+    await details.reload();
+    await expect(details.getByRole("region", { name: "Statement details" })).toContainText("result_details_second");
+    const counts = await conn.query(
+      "SELECT sql_text, count(*) AS n FROM _hardcharger_instr.execution_details WHERE sql_text LIKE 'SELECT%AS result_details_%' GROUP BY sql_text",
+    );
+    expect([...counts.getChild("n")!]).toEqual([1n, 1n]);
+    await details.close();
+    await firstDetails.close();
+    check();
+    checkFirst();
+  } finally {
+    await conn.close();
+    await page.goto("about:blank");
+    await server.stop();
+  }
+});
+
+test("Query result details and profiles follow the remote server even when local instrumentation is off", async ({
+  page,
+  harness,
+}) => {
+  const remote = await startOwnServer([
+    "--enable-instrumentation",
+    "--init-sql-commands",
+    "CREATE TABLE remote_details AS SELECT 1 AS id",
+  ]);
+  try {
+    await signIn(page, harness.admin);
+    await editorFocused(page);
+    await page.getByTestId("explorer-add-server").click();
+    const dialog = page.getByTestId("add-server-dialog");
+    const url = new URL(remote.url);
+    await dialog.getByLabel("Display name", { exact: true }).fill("Details remote");
+    await dialog.getByLabel("Host", { exact: true }).fill(url.hostname);
+    await dialog.getByLabel("Port", { exact: true }).fill(url.port);
+    await dialog.getByLabel("Use TLS", { exact: true }).uncheck();
+    await dialog.getByLabel("Username", { exact: true }).fill(remote.admin.username);
+    await dialog.getByLabel("Password", { exact: true }).fill(remote.admin.password);
+    await dialog.getByTestId("add-server-connect").click();
+    await expect(dialog).toHaveCount(0);
+    const item = page
+      .getByRole("tree", { name: "Servers" })
+      .getByRole("treeitem", { name: "Details remote", exact: true });
+    const catalog = item.getByRole("treeitem", { name: "e2e", exact: true });
+    await catalog.getByRole("button", { name: "e2e", exact: true }).click();
+    const main = catalog.getByRole("treeitem", { name: "main", exact: true });
+    await main.getByRole("button", { name: "main", exact: true }).click();
+    const row = main.getByRole("treeitem", { name: "remote_details", exact: true }).locator(":scope > .tree-row-wrap");
+    await row.hover();
+    await row.getByRole("button", { name: /^More for/ }).click();
+    await page.getByRole("menuitem", { name: "Preview data" }).click();
+    await expect(activeTab(page).getByTestId("tab-server")).toHaveText("Details remote");
+    await expect(activeTab(page).getByTestId("results-grid")).toBeVisible();
+    await runDone(page, "SET hardcharger.capture_query_profile = 'detailed'");
+    await runDone(page, "SELECT sum(id) AS remote_details_probe FROM remote_details");
+    const action = activeTab(page).getByRole("link", { name: "SQL details" });
+    await expect(action).toHaveAttribute("href", /&server=/);
+    const opened = page.waitForEvent("popup");
+    await action.click();
+    const details = await opened;
+    const check = await watchPage(details);
+    await expect(details.locator(".chip")).toContainText("Details remote");
+    await expect(details.getByRole("region", { name: "Statement details" })).toContainText("remote_details_probe");
+    await expect(details.getByTestId("query-profile-plan")).toContainText("UNGROUPED_AGGREGATE");
+    await details.reload();
+    await expect(details.getByRole("region", { name: "Statement details" })).toContainText("remote_details_probe");
+    await details.close();
+    check();
+  } finally {
+    await page.goto("about:blank");
+    await remote.stop();
   }
 });

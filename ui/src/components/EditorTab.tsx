@@ -1,4 +1,4 @@
-import type { TransactionState } from "@gizmodata/chargewire";
+import type { StatementDocument, TransactionState } from "@gizmodata/chargewire";
 import { confirmDialog } from "../lib/dialogs";
 import { Check, Copy, FileUp, Info, ListOrdered, Play, RotateCcw, Save, Square, Undo2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -20,6 +20,10 @@ import {
 import type { ThemeName } from "../lib/theme";
 import { requestUpload } from "../lib/upload/request";
 import { errorMessage, useSession } from "../session";
+import { BenchmarkQueries } from "./BenchmarkQueries";
+import { QueryProgress } from "./QueryProgress";
+import { internalQueryTag } from "../lib/queryTags";
+import { QueryDetailsLink } from "./QueryDetailsLink";
 import { ResultView } from "./ResultView";
 import { type EditorApi, SqlEditor } from "./SqlEditor";
 
@@ -40,8 +44,17 @@ export interface TabHandle {
 
 type Run =
   | { kind: "idle" }
-  | { kind: "running"; startedAt: number; statement: number; total: number; rows: number; cancelling: boolean }
-  | { kind: "done"; run: ScriptRun; startedAt: number };
+  | {
+      kind: "running";
+      startedAt: number;
+      statement: number;
+      total: number;
+      rows: number;
+      cancelling: boolean;
+      document?: StatementDocument;
+      receiving?: boolean;
+    }
+  | { kind: "done"; run: ScriptRun; startedAt: number; server: string };
 
 interface Props {
   tab: TabDoc;
@@ -53,6 +66,8 @@ interface Props {
   onChange: (patch: Partial<TabDoc>) => void;
   onStatus: (status: TabStatus) => void;
   onNewTab: () => void;
+  onBenchmarkQuery: (query: { title: string; sql: string; catalog: string; schema: string }) => void;
+  canOpenTab: boolean;
   onCloseTab: () => void;
   /** Ctrl/⌘+S and Save: the tab's saved query (asking a name the first time). */
   onSave?: (sql: string) => void;
@@ -90,9 +105,19 @@ export function EditorTab(props: Props) {
     () =>
       new TabSession(
         (where) =>
-          app.openConnection({ catalog: where.catalog, schema: where.schema, reconnect: false, server: tab.server }),
+          app.openConnection({
+            catalog: where.catalog,
+            schema: where.schema,
+            reconnect: false,
+            server: tab.server,
+            queryTag: null,
+          }),
         async (conn) => {
-          const row: unknown = (await conn.query("SELECT HARDCHARGER_CURRENT_SESSION() AS s")).get(0)?.toJSON();
+          const row: unknown = (
+            await conn.query("SELECT HARDCHARGER_CURRENT_SESSION() AS s", undefined, { queryTag: internalQueryTag })
+          )
+            .get(0)
+            ?.toJSON();
           const id = (row as { s?: unknown } | undefined)?.s;
           return typeof id === "string" ? id : undefined;
         },
@@ -217,8 +242,8 @@ export function EditorTab(props: Props) {
           statements,
           rowLimit: tab.rowLimit,
           signal: abort.signal,
-          execute: (sql, signal) => tabSession.stream(at, sql, signal),
-          onProgress: (p) => setRun((r) => (r.kind === "running" ? { ...r, statement: p.statement, rows: p.rows } : r)),
+          execute: (sql, signal, onProgress) => tabSession.stream(at, sql, signal, onProgress),
+          onProgress: (p) => setRun((r) => (r.kind === "running" ? { ...r, ...p } : r)),
           // A transaction statement or a failure changes the transaction: know it before the
           // next statement, in case the server loses the session in between.
           afterStatement: async (s) => {
@@ -234,7 +259,7 @@ export function EditorTab(props: Props) {
       }
       const stopped = result.stoppedAt === undefined ? undefined : result.statements[result.stoppedAt];
       if (stopped?.status === "error" && app.checkSignIn(stopped.error)) return;
-      setRun({ kind: "done", run: result, startedAt });
+      setRun({ kind: "done", run: result, startedAt, server: tab.server });
       setShown(result.resultSets.length > 0 ? result.resultSets.length - 1 : 0);
       if (result.resultSets.length === 0 && statements.length > 1) setShown("messages");
       await readSession();
@@ -474,6 +499,15 @@ export function EditorTab(props: Props) {
             ))}
           </select>
         </label>
+        <BenchmarkQueries
+          listings={listings}
+          catalog={where.catalog}
+          schema={where.schema}
+          version={props.catalogVersion}
+          active={active}
+          disabled={!props.canOpenTab}
+          onOpen={props.onBenchmarkQuery}
+        />
         <button
           type="button"
           className="btn btn-secondary"
@@ -631,6 +665,19 @@ export function EditorTab(props: Props) {
       <section className="results" aria-label="Query results">
         <div className="results-bar">
           <Status run={run} />
+          {done && (
+            <QueryDetailsLink
+              executionId={
+                (shownSet
+                  ? done.statements[shownSet.statement]
+                  : done.statements.length === 1
+                    ? done.statements[0]
+                    : undefined
+                )?.executionId
+              }
+              server={run.kind === "done" ? run.server : ""}
+            />
+          )}
         </div>
         {stopped?.status === "error" && (
           <div className="result-error" role="alert" data-testid="query-error">
@@ -685,6 +732,7 @@ export function EditorTab(props: Props) {
                     {messageFor(s)}
                     {s.status !== "not-run" ? ` · ${duration(s.elapsedMs)}` : ""}
                   </span>
+                  <QueryDetailsLink executionId={s.executionId} server={run.kind === "done" ? run.server : ""} />
                 </li>
               ))}
             </ol>
@@ -707,7 +755,12 @@ export function EditorTab(props: Props) {
           ) : run.kind === "idle" ? (
             <div className="result-message result-empty">Run a query to see its results here.</div>
           ) : run.kind === "running" ? (
-            <div className="result-message result-empty">Running…</div>
+            <QueryProgress
+              document={run.document}
+              rows={run.rows}
+              receiving={run.receiving}
+              cancelling={run.cancelling}
+            />
           ) : null}
         </div>
       </section>

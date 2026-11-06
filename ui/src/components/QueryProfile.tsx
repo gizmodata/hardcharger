@@ -21,9 +21,9 @@ function Metrics({ metrics }: { metrics: ProfileMetric[] }) {
 }
 
 /** Fetch only the selected execution's stored profile. No EXPLAIN or replay. */
-export function QueryProfile({ executionId }: { executionId: string }) {
+export function QueryProfile({ executionId, server = "" }: { executionId: string; server?: string }) {
   const session = useSession();
-  const { connection, error: connectionError } = useAdminConnection("sql-monitor");
+  const { connection, error: connectionError } = useAdminConnection("sql-monitor", server);
   const [raw, setRaw] = useState<string>();
   const [units, setUnits] = useState<ReadonlyMap<string, string>>(new Map());
   const [mode, setMode] = useState<string>();
@@ -71,12 +71,12 @@ export function QueryProfile({ executionId }: { executionId: string }) {
               timer = setTimeout(() => void poll(), 2000);
             }
           } catch (err) {
-            if (live && !session.checkSignIn(err)) setError(errorMessage(err));
+            if (live && (server || !session.checkSignIn(err))) setError(errorMessage(err));
           }
         };
         await poll();
       } catch (err) {
-        if (live && !session.checkSignIn(err)) setError(errorMessage(err));
+        if (live && (server || !session.checkSignIn(err))) setError(errorMessage(err));
       }
     };
     void load();
@@ -84,7 +84,7 @@ export function QueryProfile({ executionId }: { executionId: string }) {
       live = false;
       clearTimeout(timer);
     };
-  }, [connection, session, executionId, refresh]);
+  }, [connection, session, executionId, refresh, server]);
   const parsed = useMemo(() => {
     if (!raw) return undefined;
     try {

@@ -1,41 +1,28 @@
-import { Copy } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
-import { copyText } from "../lib/clipboard";
+import { SqlText } from "./SqlText";
 import { queryTimings, timingElapsed, timingTimestamp } from "../lib/queryTiming";
 import { statusLabel, type MonitoredQuery } from "../lib/sqlMonitor";
 import { QueryProfile } from "./QueryProfile";
 
-export function StatementDetails({ query, now, actions }: { query: MonitoredQuery; now: number; actions?: ReactNode }) {
-  const [copied, setCopied] = useState<{ executionId: string; message: string }>();
+export function StatementDetails({
+  query,
+  now,
+  actions,
+  server = "",
+}: {
+  query: MonitoredQuery;
+  now: number;
+  actions?: ReactNode;
+  server?: string;
+}) {
   return (
     <section className="monitor-detail" aria-label="Statement details">
       <div className="page-head">
         <h3>{statusLabel(query)}</h3>
         {actions}
       </div>
-      <div className="monitor-sql-block">
-        <div className="monitor-sql-head">
-          <span role="status">{copied?.executionId === query.execution_id ? copied.message : "SQL"}</span>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() =>
-              void copyText(query.sql_text).then((ok) =>
-                setCopied({
-                  executionId: query.execution_id,
-                  message: ok ? "Copied to clipboard." : "Copy failed; select the SQL and copy it with your keyboard.",
-                }),
-              )
-            }
-          >
-            <Copy size={14} /> Copy SQL
-          </button>
-        </div>
-        <pre className="value-text" tabIndex={0} aria-label="SQL text">
-          {query.sql_text}
-        </pre>
-      </div>
+      <SqlText key={query.execution_id} sql={query.sql_text} />
       <dl>
         <dt>Execution / statement</dt>
         <dd className="mono">
@@ -47,6 +34,8 @@ export function StatementDetails({ query, now, actions }: { query: MonitoredQuer
         </dd>
         <dt>Cancellation reason</dt>
         <dd>{query.cancel_reason || "—"}</dd>
+        <dt>Query tags</dt>
+        <dd className="mono">{query.query_tag || "—"}</dd>
       </dl>
       <div className="query-timings-scroll">
         <table className="query-timings" aria-label="Query step timings">
@@ -81,7 +70,7 @@ export function StatementDetails({ query, now, actions }: { query: MonitoredQuer
         enqueue or execution start through cursor close, rather than measuring client download time.
       </p>
       {query.error_message && <pre className="result-error">{query.error_message}</pre>}
-      <QueryProfile key={query.execution_id} executionId={query.execution_id} />
+      <QueryProfile key={`${server}:${query.execution_id}`} executionId={query.execution_id} server={server} />
     </section>
   );
 }

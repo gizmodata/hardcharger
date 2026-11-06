@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <duckdb/parser/expression/constant_expression.hpp>
+#include <duckdb/parser/expression/parameter_expression.hpp>
 #include <duckdb/parser/expression/function_expression.hpp>
 #include <duckdb/parser/expression/subquery_expression.hpp>
 #include <duckdb/function/scalar_macro_function.hpp>
@@ -141,10 +142,13 @@ bool LooksLikePath(const std::string& name) {
   return false;
 }
 
-// The paths an argument writes as literals: a string, or a list of strings ('a', ['a', 'b']).
-// nullopt for anything DuckDB computes (an expression, a parameter, a cast).
-std::optional<std::vector<std::string>> LiteralPaths(const dd::ParsedExpression* expression) {
+// Literal strings, direct bind values, or lists of those. Unknown parameters and
+// computed expressions (including casts) stay unresolved; never evaluate them here.
+std::optional<std::vector<std::string>> LiteralPaths(const dd::ParsedExpression* expression, const PathParameterCallback& parameters) {
   if (!expression) return std::nullopt;
+  if (expression->GetExpressionClass() == dd::ExpressionClass::PARAMETER) {
+    return parameters ? parameters(Str(expression->Cast<dd::ParameterExpression>().Identifier())) : std::nullopt;
+  }
   auto literal = [](const dd::ParsedExpression& e) -> std::optional<std::string> {
     if (e.GetExpressionClass() != dd::ExpressionClass::CONSTANT) return std::nullopt;
     const auto value = ddb::ConstantValue(e.Cast<dd::ConstantExpression>());
@@ -169,9 +173,9 @@ std::optional<std::vector<std::string>> LiteralPaths(const dd::ParsedExpression*
     std::vector<std::string> paths;
     for (const auto& argument : function.GetArguments()) {
       if (argument.HasName()) return std::nullopt;
-      auto one = literal(argument.GetExpression());
-      if (!one) return std::nullopt;
-      paths.push_back(std::move(*one));
+      auto some = LiteralPaths(&argument.GetExpression(), parameters);
+      if (!some) return std::nullopt;
+      paths.insert(paths.end(), some->begin(), some->end());
     }
     return paths;
   }
@@ -203,8 +207,8 @@ const dd::ParsedExpression* DeclaredArgument(const dd::FunctionExpression& funct
 }
 
 // The path a COPY names: its literal, or nullopt when it is an expression.
-std::optional<std::vector<std::string>> CopyPaths(const dd::CopyInfo& info) {
-  if (info.file_path_expression) return LiteralPaths(info.file_path_expression.get());
+std::optional<std::vector<std::string>> CopyPaths(const dd::CopyInfo& info, const PathParameterCallback& parameters) {
+  if (info.file_path_expression) return LiteralPaths(info.file_path_expression.get(), parameters);
   return std::vector<std::string>{info.file_path};
 }
 
@@ -212,11 +216,11 @@ class Walker {
  public:
   Walker(const std::function<bool(const std::string&)>& permitted,
          const NamedTableCallback& named_table, const TableFunctionCallback& table_function_allowed,
-         const StorageCallback& storage)
+         const StorageCallback& storage, const PathParameterCallback& parameters)
       : permitted_(permitted),
         named_table_(named_table),
         table_function_allowed_(table_function_allowed),
-        storage_(storage) {}
+        storage_(storage), parameters_(parameters) {}
 
   // A read or write of storage: to the callback with its paths, or flagged as a category.
   void Storage(StorageUse use, const std::string& category) {
@@ -276,7 +280,7 @@ class Walker {
           Flag("COPY");
           return;
         }
-        Storage({copy.info->is_from ? "COPY ... FROM" : "COPY ... TO", !copy.info->is_from, CopyPaths(*copy.info),
+        Storage({copy.info->is_from ? "COPY ... FROM" : "COPY ... TO", !copy.info->is_from, CopyPaths(*copy.info, parameters_),
                  !copy.info->is_from},
                 std::string(copy.info->is_from ? "COPY FROM" : "COPY TO") + " (files and URLs)");
         if (copy.info->select_statement) WalkNode(*copy.info->select_statement);
@@ -384,7 +388,7 @@ class Walker {
         name == "query_table") {
       Flag(name + "()");
     } else if (ddb::IsFileReadingTableFunction(name)) {
-      Storage({name + "()", false, LiteralPaths(FirstPositional(ref.function->Cast<dd::FunctionExpression>()))},
+      Storage({name + "()", false, LiteralPaths(FirstPositional(ref.function->Cast<dd::FunctionExpression>()), parameters_)},
               name + "() (files and URLs)");
     } else if (name == "checkpoint" || name == "force_checkpoint") {
       Flag("CHECKPOINT");
@@ -405,7 +409,7 @@ class Walker {
       auto& function = ref.function->Cast<dd::FunctionExpression>();
       for (const auto& argument : *declared) {
         if (const auto* expression = DeclaredArgument(function, argument)) {
-          Storage({name + "()", false, LiteralPaths(expression)}, name + "() (files and URLs)");
+          Storage({name + "()", false, LiteralPaths(expression, parameters_)}, name + "() (files and URLs)");
         }
       }
     }
@@ -415,6 +419,7 @@ class Walker {
   const NamedTableCallback& named_table_;
   const TableFunctionCallback& table_function_allowed_;
   const StorageCallback& storage_;
+  const PathParameterCallback& parameters_;
   int describing_ = 0;  // inside a DESCRIBE
 };
 
@@ -422,8 +427,8 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
                                     const std::function<bool(const std::string&)>& permitted,
                                     const NamedTableCallback& named_table,
                                     const TableFunctionCallback& table_function_allowed,
-                                    const StorageCallback& storage) {
-  Walker walker(permitted, named_table, table_function_allowed, storage);
+                                    const StorageCallback& storage, const PathParameterCallback& parameters) {
+  Walker walker(permitted, named_table, table_function_allowed, storage, parameters);
   auto gate = [&](std::string category) -> std::optional<std::string> {
     if (permitted && permitted(category)) return std::nullopt;
     return category;
@@ -432,13 +437,13 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
     case dd::StatementType::PREPARE_STATEMENT: {
       auto& prepare = statement.Cast<dd::PrepareStatement>();
       return prepare.statement
-                 ? Classify(*prepare.statement, permitted, named_table, table_function_allowed, storage)
+                 ? Classify(*prepare.statement, permitted, named_table, table_function_allowed, storage, parameters)
                  : std::nullopt;
     }
     case dd::StatementType::EXPLAIN_STATEMENT: {
       // EXPLAIN ANALYZE runs what it wraps.
       auto& explain = statement.Cast<dd::ExplainStatement>();
-      return explain.stmt ? Classify(*explain.stmt, permitted, named_table, table_function_allowed, storage)
+      return explain.stmt ? Classify(*explain.stmt, permitted, named_table, table_function_allowed, storage, parameters)
                           : std::nullopt;
     }
     case dd::StatementType::ATTACH_STATEMENT:
@@ -547,7 +552,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
         }
         if (ddb::IsFileReadingTableFunction(name)) {
           if (!storage) return gate(name + "() (files and URLs)");
-          storage({name + "()", false, LiteralPaths(FirstPositional(call.function->Cast<dd::FunctionExpression>()))});
+          storage({name + "()", false, LiteralPaths(FirstPositional(call.function->Cast<dd::FunctionExpression>()), parameters)});
           return std::nullopt;
         }
         if (table_function_allowed) {
@@ -558,7 +563,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
             const auto* expression = DeclaredArgument(function, argument);
             if (!expression) continue;
             if (!storage) return gate(name + "() (files and URLs)");
-            storage({name + "()", false, LiteralPaths(expression)});
+            storage({name + "()", false, LiteralPaths(expression, parameters)});
           }
         }
       }
@@ -573,7 +578,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
           return category;
         }
       } else {
-        storage({copy.info->is_from ? "COPY ... FROM" : "COPY ... TO", !copy.info->is_from, CopyPaths(*copy.info),
+        storage({copy.info->is_from ? "COPY ... FROM" : "COPY ... TO", !copy.info->is_from, CopyPaths(*copy.info, parameters),
                  !copy.info->is_from});
       }
       if (copy.info->select_statement) walker.WalkNode(*copy.info->select_statement);
@@ -585,7 +590,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       auto& exported = statement.Cast<dd::ExportStatement>();
       if (storage) {
         storage({"EXPORT DATABASE", true,
-                 exported.info ? CopyPaths(*exported.info) : std::optional<std::vector<std::string>>{}, true});
+                 exported.info ? CopyPaths(*exported.info, parameters) : std::optional<std::vector<std::string>>{}, true});
       }
       return std::nullopt;
     }
@@ -596,7 +601,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
         if (storage) {
           storage({"IMPORT DATABASE", false,
                    pragma.info->parameters.empty() ? std::optional<std::vector<std::string>>{}
-                                                   : LiteralPaths(pragma.info->parameters[0].get()),
+                                                   : LiteralPaths(pragma.info->parameters[0].get(), parameters),
                    true});
         }
       }
@@ -639,8 +644,8 @@ std::optional<std::string> GatedCategory(dd::SQLStatement& statement,
                                          const std::function<bool(const std::string&)>& permitted,
                                          const NamedTableCallback& named_table,
                                          const TableFunctionCallback& table_function_allowed,
-                                         const StorageCallback& storage) {
-  return Classify(statement, permitted, named_table, table_function_allowed, storage);
+                                         const StorageCallback& storage, const PathParameterCallback& parameters) {
+  return Classify(statement, permitted, named_table, table_function_allowed, storage, parameters);
 }
 
 }  // namespace hardcharger::authz

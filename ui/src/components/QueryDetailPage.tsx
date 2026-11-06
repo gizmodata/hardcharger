@@ -7,13 +7,17 @@ import type { Theme } from "../lib/theme";
 import { errorMessage, useSession } from "../session";
 import { Wordmark } from "./Brand";
 import { StatementDetails } from "./StatementDetails";
+import { useServers } from "../lib/servers";
 import { requestWindowClose } from "../lib/pageExit";
 
 /** An independent observer: its execution remains selected when the monitor's
  * filters change, its history window moves on, or the original workspace closes. */
 export default function QueryDetailPage({ theme }: { theme: Theme }) {
   const session = useSession();
-  const { connection, error: connectionError, allowed } = useAdminConnection("sql-monitor");
+  const server = new URLSearchParams(window.location.search).get("server") ?? "";
+  const snapshot = useServers(session.servers);
+  const remote = snapshot.servers.find((entry) => entry.saved.id === server);
+  const { connection, error: connectionError, allowed } = useAdminConnection("sql-monitor", server);
   const executionId = new URLSearchParams(window.location.search).get("execution") ?? "";
   const [query, setQuery] = useState<MonitoredQuery>();
   const [error, setError] = useState<string>();
@@ -46,7 +50,7 @@ export default function QueryDetailPage({ theme }: { theme: Theme }) {
         setError(undefined);
         setUpdated(Date.now());
       } catch (err) {
-        if (live && !session.checkSignIn(err)) setError(errorMessage(err));
+        if (live && (server || !session.checkSignIn(err))) setError(errorMessage(err));
       } finally {
         if (live) timer = setTimeout(sample, 2000);
       }
@@ -61,7 +65,7 @@ export default function QueryDetailPage({ theme }: { theme: Theme }) {
       live = false;
       clearTimeout(timer);
     };
-  }, [connection, session, executionId, refresh]);
+  }, [connection, session, executionId, refresh, server]);
   return (
     <div className="query-detail-window">
       <header className="app-header">
@@ -70,7 +74,7 @@ export default function QueryDetailPage({ theme }: { theme: Theme }) {
           <h1>Query details</h1>
         </div>
         <div className="header-right">
-          <span className="chip">{session.identity.user}</span>
+          <span className="chip">{server ? (remote?.saved.name ?? "Remote server") : session.identity.user}</span>
           <button type="button" className="btn btn-ghost" onClick={theme.toggle} aria-label="Toggle color theme">
             {theme.name === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
@@ -82,7 +86,7 @@ export default function QueryDetailPage({ theme }: { theme: Theme }) {
       <main className="query-detail-content">
         {!allowed ? (
           <p>Only unrestricted administrators can view query details.</p>
-        ) : session.identity.instrumentationEnabled === false ? (
+        ) : !server && session.identity.instrumentationEnabled === false ? (
           <p>Instrumentation is disabled on this server.</p>
         ) : (
           <>
@@ -115,7 +119,7 @@ export default function QueryDetailPage({ theme }: { theme: Theme }) {
                   : "Waiting for instrumentation; the history may have been removed or belong to another instance."}
               </p>
             )}
-            {query && <StatementDetails query={query} now={updated ?? query.execution_start_time} />}
+            {query && <StatementDetails query={query} now={updated ?? query.execution_start_time} server={server} />}
           </>
         )}
       </main>

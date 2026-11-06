@@ -26,7 +26,7 @@ struct StorageRequest {
   std::string what;  // "read_csv()", "COPY ... TO", ...: for messages
   StorageMode mode = StorageMode::kRead;
   // The paths, as written or bound; nullopt when the gate can't read them before binding
-  // (a computed path, a prepared statement's parameter).
+  // (a computed path or a parameter whose value has not been supplied to the gate).
   std::optional<std::vector<std::string>> paths;
   // It writes a directory of files (COPY ... TO with PARTITION_BY, EXPORT DATABASE).
   bool directory = false;

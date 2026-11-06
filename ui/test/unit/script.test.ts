@@ -57,6 +57,33 @@ const fake =
   };
 
 describe("runScript", () => {
+  it("retains each execution ID, including truncation, updates and errors, without inventing IDs for skipped SQL", async () => {
+    let rowId: string | undefined;
+    const run = await runScript({
+      statements: ["SELECT rows", "UPDATE rows", "SELECT failure", "SELECT skipped"],
+      rowLimit: 1,
+      signal: new AbortController().signal,
+      execute: fake({
+        "SELECT rows": () => ({
+          ...rows(2),
+          get statementId() {
+            return rowId;
+          },
+          rowsAffected: async () => {
+            rowId = "q_rows";
+            return undefined;
+          },
+        }),
+        "UPDATE rows": () => ({ ...update(5), statementId: "q_update" }),
+        "SELECT failure": () => ({
+          ...failing("failure"),
+          rowsAffected: () => Promise.reject(new ChargewireError({ code: "sql_error", statementId: "q_failed" })),
+        }),
+      }),
+    });
+    expect(run.statements.map((s) => s.executionId)).toEqual(["q_rows", "q_update", "q_failed", undefined]);
+    expect(run.statements[0]!.truncated).toBe(true);
+  });
   it("recognizes a server-side administrator cancellation without a local abort", async () => {
     const cancelled = new ChargewireError({ code: "statement_cancelled", status: 409, cancelReason: "cancelled" });
     const run = await runScript({

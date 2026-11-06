@@ -7,6 +7,24 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-11-06
+
+### Added
+
+- Format SQL in the editor with Alt+Shift+F or its context menu, including selections and Undo. Query details offer Formatted/Original views and copy the selected view.
+- Open the exact execution's SQL details and profile from query results or script messages, including remote servers, without rerunning SQL.
+- Live estimated query progress in the Web UI and interactive CLI, with distinct execution and result-receiving states. Redirected and quiet CLI output stays clean.
+- Detect TPC-H/TPC-DS tables and offer all 22/99 benchmark queries in new editor tabs.
+- Expose 14 operational startup settings in SQL and Server Configuration, covering result limits and defaults, listeners, Web UI, metrics and guard flags. Infrastructure settings remain administrator-only.
+- SQL Monitor shows Internal/Monitoring badges and expandable query tags, searchable by tag name and value. Explicit producer tags classify generated queries; independent include toggles reveal overlapping categories.
+
+### Fixed
+
+- Give the editor context menu an opaque, theme-aware surface even when it overlaps results.
+- Resolve bound file paths before storage authorization, including every prepared execution, preserving location grants and sensitive-file guards.
+- Update Chargewire to 2.3.0 for connection reuse, efficient C++ result reads, bounded progress observation and TLS certificate/key/CA reload without a restart. Update the JavaScript client to 2.3.0.
+
+
 ## [2.8.0] - 2026-11-05
 
 ### Added

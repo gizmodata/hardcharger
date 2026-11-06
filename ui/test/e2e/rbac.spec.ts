@@ -19,7 +19,8 @@ test("a non-admin user sees only what access control allows", async ({ page, har
   expect((await gridRows(page))[1]).toEqual(["5"]);
 
   // Another tenant's table reads exactly like one that does not exist.
-  expectProblem(page, { status: 403, url: /\/statements$/ });
+  // Async SQL failures arrive in statement documents; the UI error is asserted below.
+  expectProblem(page, { status: 403, url: /\/statements$/, required: false });
   await runSql(page, `SELECT * FROM ${harness.hiddenCatalog}.main.secrets`);
   await expect(page.getByTestId("query-error")).toContainText("permission denied");
   await expect(page.getByTestId("query-error")).toContainText("cannot see");

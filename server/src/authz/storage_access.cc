@@ -150,8 +150,8 @@ std::optional<std::string> StorageAccess::Refusal(const Snapshot& snapshot, cons
       for (const auto* principal : restricted) {
         if (snapshot.HasSystemPrivilege(*principal, privilege)) continue;
         if (principal->rules_administrator) return lacks(*principal, privilege, {});
-        return blocked + ": its path is an expression or a parameter, which Hardcharger can't check before DuckDB "
-                         "reads it. Write the path as a string literal (a computed path needs " +
+        return blocked + ": its path is an expression or a parameter without a known string value, which Hardcharger can't check before DuckDB "
+                         "reads it. Use a string literal or a direct JSON string bind (a computed path needs " +
                Joined({SystemPrivilegeName(StoragePrivilege(StorageKind::kFilesystem, request.mode)),
                        SystemPrivilegeName(StoragePrivilege(StorageKind::kObjectStorage, request.mode)),
                        SystemPrivilegeName(StoragePrivilege(StorageKind::kHttp, request.mode))}) +

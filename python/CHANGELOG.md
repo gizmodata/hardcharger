@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-11-06
+
+### Changed
+
+- Install Hardcharger server 2.9.0, with standalone query workflow improvements and Chargewire 2.3.0.
+
 ## [2.8.0] - 2026-11-05
 
 ### Changed

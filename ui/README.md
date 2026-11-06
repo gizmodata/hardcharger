@@ -370,3 +370,11 @@ outside the plugin's allow-list (MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.
 BlueOak-1.0.0, CC0-1.0, Unlicense, Python-2.0, MPL-2.0; a named exception for Inter's OFL-1.1),
 and it lists any copyleft one in its warnings. The release archives ship the file as
 `THIRD_PARTY_NOTICES-web-ui.txt`, beside the server's `THIRD_PARTY_NOTICES.md`.
+
+### Editing and example queries
+
+Format the document or selection using Alt+Shift+F or the editor context menu, with Undo.
+When the selected catalog/schema contains TPC-H or TPC-DS tables, the benchmark picker offers
+all 22 or 99 queries. Selection opens a new tab preserving server, role, catalog/schema and row
+limit; it neither runs SQL nor replaces the current tab. Query progress, execution-detail links
+and Monitor tag filters are described in [SQL Monitor](../docs/sql-monitor.md).

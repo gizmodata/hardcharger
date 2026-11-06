@@ -1964,3 +1964,45 @@ select {
   margin: 0;
   line-height: 1.45;
 }
+
+.sql-text-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sql-text-actions [aria-pressed="true"] {
+  background: var(--select);
+}
+.editor-format-notice {
+  position: absolute;
+  z-index: 5;
+  bottom: 8px;
+  right: 8px;
+  max-width: 90%;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+/* Monaco's context menu is portaled outside .monaco-editor (sometimes into a shadow
+   root), so it cannot inherit the editor's scoped theme variables. Supply the popup
+   palette on the document, where both portal variants inherit it. */
+:root {
+  --vscode-menu-background: var(--panel);
+  --vscode-menu-foreground: var(--text);
+  --vscode-menu-border: var(--border);
+  --vscode-editorWidget-border: var(--border);
+  --vscode-list-hoverBackground: var(--hover);
+  --vscode-list-hoverForeground: var(--text);
+  --vscode-menu-selectionBorder: transparent;
+  --vscode-menu-separatorBackground: var(--border);
+  --vscode-widget-shadow: #0003;
+  --vscode-shadow-lg: var(--shadow);
+  --vscode-cornerRadius-large: 6px;
+  --vscode-scrollbar-shadow: #0003;
+  --vscode-scrollbarSlider-background: var(--border);
+  --vscode-scrollbarSlider-hoverBackground: var(--faint);
+  --vscode-scrollbarSlider-activeBackground: var(--muted);
+}

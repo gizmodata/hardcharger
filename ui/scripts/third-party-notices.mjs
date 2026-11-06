@@ -274,7 +274,11 @@ export function thirdPartyNotices({ root, fileName = "third-party-notices.txt", 
       if (result.flagged.length > 0) {
         this.warn(`third-party notices: packages under a copyleft licence: ${result.flagged.join(", ")}`);
       }
-      this.emitFile({ type: "asset", fileName, source: result.text });
+      this.emitFile({
+        type: "asset",
+        fileName,
+        source: result.text + "\n" + readFileSync(path.join(root, "src/benchmarks/NOTICE.txt"), "utf8"),
+      });
     },
   };
   return { plugin, workerPlugin };

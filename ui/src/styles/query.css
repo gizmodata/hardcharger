@@ -773,3 +773,55 @@
   font-family: var(--mono);
   overflow-wrap: anywhere;
 }
+
+.query-progress {
+  padding: 24px;
+  max-width: 100%;
+}
+.query-progress-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.query-progress progress {
+  display: block;
+  width: min(100%, 560px);
+  height: 12px;
+  accent-color: var(--accent);
+}
+.query-progress details {
+  margin-top: 16px;
+}
+.query-progress summary {
+  cursor: pointer;
+}
+.query-kind-badges {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 3px 0;
+}
+.monitor-query-tags {
+  margin-top: 4px;
+  font-size: 12px;
+}
+.monitor-query-tags summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.monitor-query-tags code {
+  display: block;
+  max-width: 48ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.query-kind-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  margin: 3px 4px 3px 0;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 11px;
+}

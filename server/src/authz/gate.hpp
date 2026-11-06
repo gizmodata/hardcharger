@@ -37,13 +37,13 @@ namespace hardcharger::authz {
 // (a remote database's scan connects, an unknown name autoloads an extension), so one
 // that is not allowed (nullopt) is refused here. One that is allowed comes with the
 // arguments that name the files it reads (an EXECUTE grant's declarations; none for the
-// functions everyone may call and for macros): their literal values go to `storage`
+// functions everyone may call and for macros): their literal or bound values go to `storage`
 // before binding opens them, as a file-reading function's first argument does.
 //
 // `storage`, if set, is called for each read or write of files, URLs or object storage the
 // statement names (read_csv(...), FROM '<path>', COPY, EXPORT and IMPORT DATABASE), with
-// the paths as written: `paths` is nullopt when one is an expression or a parameter, known
-// only once DuckDB binds it. It may throw to refuse. Without it, those statements are
+// the paths as written or resolved by `parameters`: `paths` is nullopt for computed
+// expressions and unresolved parameters. It may throw to refuse. Without it, those statements are
 // reported as categories ("read_csv() (files and URLs)", ...).
 struct StorageUse {
   std::string what;  // "read_csv()", "COPY ... TO", ...
@@ -54,11 +54,14 @@ struct StorageUse {
 using NamedTableCallback = std::function<void(const std::vector<std::string>&, bool described)>;
 using TableFunctionCallback =
     std::function<std::optional<std::vector<PathArgument>>(const std::vector<std::string>&)>;
+// Resolve only actual bind values; never evaluate a SQL expression to discover a path.
+using PathParameterCallback = std::function<std::optional<std::vector<std::string>>(const std::string&)>;
 using StorageCallback = std::function<void(const StorageUse&)>;
 std::optional<std::string> GatedCategory(
     duckdb::SQLStatement& statement, const std::function<bool(const std::string&)>& permitted,
     const NamedTableCallback& named_table = nullptr,
     const TableFunctionCallback& table_function_allowed = nullptr,
-    const StorageCallback& storage = nullptr);
+    const StorageCallback& storage = nullptr,
+    const PathParameterCallback& parameters = nullptr);
 
 }  // namespace hardcharger::authz

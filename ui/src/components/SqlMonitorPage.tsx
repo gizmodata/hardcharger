@@ -23,6 +23,7 @@ export default function SqlMonitorPage() {
   const [statusDisplay, setStatusDisplay] = useState(storedStatusDisplay);
   const [historyLimit, setHistoryLimit] = useState(1000);
   const [paused, setPaused] = useState(false);
+  const [includeInternal, setIncludeInternal] = useState(false);
   const [includeMonitor, setIncludeMonitor] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [info, setInfo] = useState<MonitorInfo>();
@@ -56,7 +57,7 @@ export default function SqlMonitorPage() {
           if (!live) return;
           const at = location.get(0)!.toJSON() as { catalog: string; schema: string };
           const result = await connection.query(
-            monitorSql(at.catalog, at.schema, minutes, includeMonitor, historyLimit),
+            monitorSql(at.catalog, at.schema, minutes, includeMonitor, historyLimit, undefined, includeInternal),
           );
           if (!live) return;
           const sessions = await connection.query("SELECT session_id FROM hardcharger_sessions()");
@@ -83,7 +84,7 @@ export default function SqlMonitorPage() {
       live = false;
       clearTimeout(timer);
     };
-  }, [connection, session, minutes, includeMonitor, paused, refresh, historyLimit]);
+  }, [connection, session, minutes, includeMonitor, includeInternal, paused, refresh, historyLimit]);
 
   const manageSession = async (query: MonitoredQuery, end: boolean) => {
     if (!connection || acting || query.session_id === connection.sessionId) return;
@@ -157,7 +158,7 @@ export default function SqlMonitorPage() {
           : state === "timeout"
             ? q.status === "timeout" || q.cancel_reason === "timeout" || q.cancel_reason === "queue_timeout"
             : q.status === state)) &&
-      `${q.sql_text} ${q.username} ${q.execution_id}`.toLowerCase().includes(filter.toLowerCase()),
+      `${q.sql_text} ${q.username} ${q.execution_id} ${q.query_tag ?? ""}`.toLowerCase().includes(filter.toLowerCase()),
   );
   const inspected = queries?.find((q) => q.execution_id === selected);
   const now = updated ?? 0;
@@ -303,10 +304,14 @@ export default function SqlMonitorPage() {
             </label>
             <input
               aria-label="Filter monitored queries"
-              placeholder="Filter SQL, user, or execution ID"
+              placeholder="Search tags, SQL, users, or IDs"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />
+            <label title="Show queries tagged as internal by their producer">
+              <input type="checkbox" checked={includeInternal} onChange={(e) => setIncludeInternal(e.target.checked)} />{" "}
+              Include internal queries
+            </label>
             <label>
               <input type="checkbox" checked={includeMonitor} onChange={(e) => setIncludeMonitor(e.target.checked)} />{" "}
               Include monitor queries
@@ -320,7 +325,7 @@ export default function SqlMonitorPage() {
             {updated
               ? `${rows.length} statements · ${paused ? "Paused" : "Refreshes every 2 seconds"} · Updated ${timestamp(updated)}`
               : "Loading…"}{" "}
-            · Active statements always remain in the time window; status and text filters still apply.
+            · Active statements always remain in the time window; visibility, status and text filters still apply.
           </p>
           {info && (
             <p className={`page-sub${info.history_dropped > 0n || info.history_failed > 0n ? " monitor-warning" : ""}`}>
@@ -380,7 +385,25 @@ export default function SqlMonitorPage() {
                       >
                         {q.sql_text || "(SQL unavailable)"}
                       </button>
+                      <span className="query-kind-badges">
+                        {q.is_internal && (
+                          <span className="query-kind-badge" title="Tagged as internal by its producer">
+                            Internal
+                          </span>
+                        )}
+                        {q.is_monitoring && (
+                          <span className="query-kind-badge" title="Tagged as monitoring SQL">
+                            Monitoring
+                          </span>
+                        )}
+                      </span>
                       <small className="mono">{q.execution_id}</small>
+                      {q.query_tag && q.query_tag !== "{}" && (
+                        <details className="monitor-query-tags">
+                          <summary>Query tags</summary>
+                          <code>{q.query_tag}</code>
+                        </details>
+                      )}
                     </td>
                     <td>{timestamp(q.enqueue_time ?? q.execution_start_time)}</td>
                     <td>

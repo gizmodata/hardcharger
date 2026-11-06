@@ -290,7 +290,8 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // GRANTS, ...) runs here; anything else passes the pre-bind gate and is run by `run`
   // (DuckDB), under the plan check.
   chargewire::StatementOutcome Execute(std::string_view sql, bool has_parameters,
-                                    const std::function<chargewire::StatementOutcome()>& run);
+                                    const std::function<chargewire::StatementOutcome()>& run,
+                                    const boost::json::value& parameters = {});
 
   // Prepares one statement: an access-control statement is kept to run at execution;
   // anything else passes the pre-bind gate and is prepared by `prepare`.
@@ -301,7 +302,8 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // Executes what Prepare returned; `run` executes the DuckDB statement it wraps.
   chargewire::StatementOutcome ExecutePrepared(
       chargewire::PreparedStatement& statement, bool has_parameters,
-      const std::function<chargewire::StatementOutcome(chargewire::PreparedStatement&)>& run);
+      const std::function<chargewire::StatementOutcome(chargewire::PreparedStatement&)>& run,
+      const boost::json::value& parameters = {});
 
   // A bulk ingest (one SQL statement inside `run`, under the plan check).
   int64_t Ingest(const chargewire::IngestTarget& target, const std::function<int64_t()>& run);
@@ -353,7 +355,7 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   bool busy() const;
   void End(const std::string& reason);
   void InterruptRunning();
-  void CheckBeforeBind(std::string_view sql);
+  void CheckBeforeBind(std::string_view sql, const boost::json::value& parameters = {}, bool preparing = false);
   chargewire::StatementOutcome RunCommand(const ParsedCommand& command);
   std::shared_ptr<arrow::RecordBatchReader> Track(std::shared_ptr<arrow::RecordBatchReader> rows,
                                                   std::shared_ptr<void> busy);

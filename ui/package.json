@@ -26,7 +26,7 @@
     "vendor:verify": "node scripts/vendor-chargewire.mjs --verify && node scripts/vendor-sheetjs.mjs --verify"
   },
   "dependencies": {
-    "@gizmodata/chargewire": "file:vendor/gizmodata-chargewire-2.2.1.tgz",
+    "@gizmodata/chargewire": "file:vendor/gizmodata-chargewire-2.3.0.tgz",
     "apache-arrow": "^21.2.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.59.0",
@@ -34,6 +34,7 @@
     "parquet-wasm": "^0.9.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "sql-formatter": "15.9.0",
     "swagger-ui-dist": "5.33.3",
     "topojson-client": "^3.1.0",
     "world-atlas": "^2.0.2",

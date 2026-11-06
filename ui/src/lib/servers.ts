@@ -556,7 +556,7 @@ export function openRemoteConnection(
     ...(schema ? { schema } : {}),
     ...(reconnect === undefined ? {} : { reconnect }),
     resultPartitions: 1,
-    queryTag: { client: "hardcharger-ui", ...options.queryTag },
+    ...(options.queryTag === null ? {} : { queryTag: { client: "hardcharger-ui", ...options.queryTag } }),
     logger: { warn: (message: string) => console.info(`[chargewire] ${message}`) },
     ...(signal ? { signal } : {}),
   });

@@ -397,6 +397,71 @@ std::vector<Setting> Build() {
            .get_global = config_value([](const Runtime& r) {
              return r.catalog_log ? r.catalog_log->schema() : std::string();
            })});
+  startup({.name = "max_result_partitions", .input_type = "INTEGER", .option = "max_result_partitions",
+           .default_value = number(kDefaults.max_result_partitions),
+           .description = "Maximum result partitions offered to a client (1: never split).",
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.max_result_partitions); })});
+  startup({.name = "result_batch_rows", .input_type = "INTEGER", .option = "result_batch_rows",
+           .default_value = number(kDefaults.result_batch_rows),
+           .description = "Rows per Arrow result batch.",
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.result_batch_rows); })});
+  startup({.name = "result_retention_seconds", .input_type = "INTEGER", .option = "result_retention_seconds",
+           .default_value = number(kDefaults.result_retention_seconds),
+           .description = "Seconds a retained result remains readable after statement completion.",
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.result_retention_seconds); })});
+  startup({.name = "default_catalog", .input_type = "VARCHAR", .option = "default_catalog",
+           .default_value = kDefaults.default_catalog,
+           .description = "Configured starting catalog for new sessions (empty: inherit the startup SQL/database context).",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return r.config.default_catalog; })});
+  startup({.name = "default_schema", .input_type = "VARCHAR", .option = "default_schema",
+           .default_value = kDefaults.default_schema,
+           .description = "Configured starting schema for new sessions (empty: use the selected catalog's default schema).",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return r.config.default_schema; })});
+  startup({.name = "host", .input_type = "VARCHAR", .option = "host",
+           .default_value = kDefaults.host,
+           .description = "Configured client listener address.",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return r.config.host; })});
+  startup({.name = "port", .input_type = "INTEGER", .option = "port",
+           .default_value = number(kDefaults.port),
+           .description = "Configured client listener port.",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.port); })});
+  startup({.name = "health_port", .input_type = "INTEGER", .option = "health_port",
+           .default_value = number(kDefaults.health_port),
+           .description = "Configured plaintext health listener port (0: none).",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.health_port); })});
+  startup({.name = "web_ui", .input_type = "BOOLEAN", .option = "web_ui",
+           .default_value = Bool(kDefaults.web_ui),
+           .description = "Serve the embedded Web UI on the client listener.",
+           .get_global = config_value([](const Runtime& r) { return Bool(r.config.web_ui); })});
+  startup({.name = "web_ui_remote_servers", .input_type = "BOOLEAN", .option = "web_ui_remote_servers",
+           .default_value = Bool(kDefaults.web_ui_remote_servers),
+           .description = "Allow Web UI connections to other servers through this server's relay.",
+           .get_global = config_value([](const Runtime& r) { return Bool(r.config.web_ui_remote_servers); })});
+  startup({.name = "metrics_port", .input_type = "INTEGER", .option = "metrics_port",
+           .default_value = number(kDefaults.metrics_port),
+           .description = "Configured metrics HTTP port (0: no endpoint; requires enable_metrics).",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.metrics_port); })});
+  startup({.name = "metrics_bind_address", .input_type = "VARCHAR", .option = "metrics_bind_address",
+           .default_value = kDefaults.metrics_bind_address,
+           .description = "Configured metrics listener address; requires enable_metrics.",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return r.config.metrics_bind_address; })});
+  startup({.name = "block_sensitive_paths", .input_type = "BOOLEAN", .option = "block_sensitive_paths",
+           .default_value = Bool(kDefaults.block_sensitive_paths),
+           .description = "Protect credential and system files from SQL file access.",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return Bool(r.config.block_sensitive_paths); })});
+  startup({.name = "block_unredacted_secrets", .input_type = "BOOLEAN", .option = "block_unredacted_secrets",
+           .default_value = Bool(kDefaults.block_unredacted_secrets),
+           .description = "Refuse attempts to enable unredacted secret output.",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return Bool(r.config.block_unredacted_secrets); })});
   return s;
 }
 

@@ -47,7 +47,8 @@ test("BEGIN shows In transaction and locks the pickers; Commit ends it", async (
   await expect(page.locator('[data-marker="transaction"]')).toHaveCount(1); // the tab's amber dot
   await runDone(page, "INSERT INTO tx_ui VALUES (1), (2)");
   // A syntax error doesn't abort a DuckDB transaction: still In transaction.
-  expectProblem(page, { status: 400, url: /\/statements$/ });
+  // Async SQL failures arrive in statement documents; the UI error is asserted below.
+  expectProblem(page, { status: 400, url: /\/statements$/, required: false });
   await runDone(page, "SELEC 1");
   await expect(tab.getByTestId("query-error")).toBeVisible();
   await expect(tab.getByTestId("in-transaction")).toBeVisible();
@@ -59,7 +60,8 @@ test("BEGIN shows In transaction and locks the pickers; Commit ends it", async (
 });
 
 test("a failed statement aborts the transaction until Rollback", async ({ page }) => {
-  expectProblem(page, { status: 400, url: /\/statements$/ });
+  // Async SQL failures arrive in statement documents; the UI error is asserted below.
+  expectProblem(page, { status: 400, url: /\/statements$/, required: false });
   const tab = activeTab(page);
   await runDone(page, "BEGIN");
   await expect(tab.getByTestId("in-transaction")).toBeVisible();
@@ -91,7 +93,8 @@ test("the session chip names the server's session and copies it; New session sta
   const next = await value(page, "SELECT HARDCHARGER_CURRENT_SESSION()");
   expect(next).not.toBe(id);
   // Temporary tables belonged to the old session.
-  expectProblem(page, { status: 400, url: /\/statements$/ });
+  // Async SQL failures arrive in statement documents; the UI error is asserted below.
+  expectProblem(page, { status: 400, url: /\/statements$/, required: false });
   await runDone(page, "SELECT * FROM only_here");
   await expect(tab.getByTestId("query-error")).toContainText("only_here");
 });

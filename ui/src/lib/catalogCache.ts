@@ -11,6 +11,7 @@ import type { Connection } from "@gizmodata/chargewire";
 
 import { spellSchemaPartSql } from "./schemaPath";
 import { exactLike } from "./sql";
+import { internalQueryTag } from "./queryTags";
 
 const ttlMs = 5 * 60_000;
 
@@ -161,11 +162,15 @@ export class CatalogCache {
     return this.#cached("vocabulary", async () => {
       const [k, f] = await this.#source.run((conn) =>
         Promise.all([
-          conn.query("SELECT DISTINCT keyword_name FROM duckdb_keywords() ORDER BY 1"),
+          conn.query("SELECT DISTINCT keyword_name FROM duckdb_keywords() ORDER BY 1", undefined, {
+            queryTag: internalQueryTag,
+          }),
           conn.query(
             "SELECT DISTINCT function_name, function_type FROM duckdb_functions() " +
               "WHERE NOT internal OR function_type IN ('scalar', 'aggregate', 'table', 'macro', 'table_macro') " +
               "ORDER BY 1",
+            undefined,
+            { queryTag: internalQueryTag },
           ),
         ]),
       );
@@ -180,7 +185,9 @@ export class CatalogCache {
 
   /** Tables and views whose name contains `term` (at most searchLimit, and whether there were more). */
   async search(term: string): Promise<{ hits: SearchHit[]; more: boolean }> {
-    const rows = records(await this.#source.run((conn) => conn.query(searchSql(term))));
+    const rows = records(
+      await this.#source.run((conn) => conn.query(searchSql(term), undefined, { queryTag: internalQueryTag })),
+    );
     const hits = rows.map((r) => ({
       catalog: str(r["database_name"]),
       schema: str(r["schema_name"]),
@@ -198,6 +205,7 @@ export class CatalogCache {
           `${schemaPathsSql} SELECT v.sql FROM duckdb_views() v JOIN schema_paths p ON v.schema_oid = p.oid ` +
             "AND v.database_name = p.database_name WHERE v.database_name = $1 AND p.path = $2 AND v.view_name = $3",
           [catalog, schema, view],
+          { queryTag: internalQueryTag },
         ),
       ),
     );

@@ -7,7 +7,7 @@ describe("SQL Monitor", () => {
     const sql = queryDetailSql("instr", "main", id);
     expect(sql).toContain(`execution_id = '${id}'`);
     expect(sql).not.toContain("INTERVAL");
-    expect(sql).not.toContain("'$.page'");
+    expect(sql).toContain("AS is_monitoring");
     expect(() => queryDetailSql("instr", "main", "invalid' OR true")).toThrow(/invalid execution ID/);
   });
   it("keeps active work outside the completion-time window and the history cap", () => {
@@ -22,6 +22,19 @@ describe("SQL Monitor", () => {
     expect(monitorSql('my"catalog', "main", 30, true)).toContain('"my""catalog"."main".execution_details');
     expect(() => monitorSql("i", "s", NaN, false)).toThrow();
     expect(() => monitorSql("i", "s", 0, false)).toThrow();
+  });
+  it("filters internal traffic before the history cap and preserves direct detail links", () => {
+    const sql = monitorSql("instr", "main", 10, false);
+    expect(sql).toContain("'$.internal'");
+    expect(sql.indexOf("'$.internal'")).toBeLessThan(sql.indexOf("LIMIT 1001"));
+    expect(sql).not.toContain("regexp_matches");
+    expect(sql).not.toContain("EXPORT_STATE");
+    expect(sql).toContain("SELECT * EXCLUDE (priority, position)"); // retain searchable tags
+    const included = monitorSql("instr", "main", 10, true, 1000, undefined, true);
+    expect(included).toContain("AS is_internal");
+    expect(included).toContain("AS is_monitoring");
+    expect(included).not.toContain("NOT (");
+    expect(queryDetailSql("instr", "main", "internal_execution")).not.toContain("NOT (");
   });
   it("labels queue waits and execution timeouts distinctly", () => {
     expect(statusLabel({ status: "timeout", cancel_reason: "queue_timeout" })).toBe("Queue timed out");

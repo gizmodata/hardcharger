@@ -61,7 +61,8 @@ test("a statement that changes data reports its row count", async ({ page }) => 
 });
 
 test("an error shows the server's message", async ({ page }) => {
-  expectProblem(page, { status: 400, url: /\/statements$/ });
+  // Async SQL failures arrive in statement documents; the UI error is asserted below.
+  expectProblem(page, { status: 400, url: /\/statements$/, required: false });
   await runSql(page, "SELECT * FROM no_such_table_here");
   const error = page.getByTestId("query-error");
   await expect(error).toContainText("sql error");

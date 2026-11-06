@@ -56,7 +56,8 @@ test("Run all runs every statement: a result tab for each result set, and Messag
 });
 
 test("Run all stops at the first error; the rest don't run", async ({ page }) => {
-  expectProblem(page, { status: 400, url: /\/statements$/ });
+  // Async SQL failures arrive in statement documents; the UI error is asserted below.
+  expectProblem(page, { status: 400, url: /\/statements$/, required: false });
   const tab = activeTab(page);
   await setSql(
     page,

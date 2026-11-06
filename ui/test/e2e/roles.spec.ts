@@ -27,7 +27,8 @@ test("a user runs as one of their roles, or all of them", async ({ page, harness
   await runAs(page).selectOption(readers ?? "");
   await runDone(page, "SELECT count(*) FROM orders");
   expect((await gridRows(page))[1]).toEqual(["5"]);
-  expectProblem(page, { status: 403, url: /\/statements$/ });
+  // Async SQL failures arrive in statement documents; the UI error is asserted below.
+  expectProblem(page, { status: 403, url: /\/statements$/, required: false });
   await runDone(page, "SELECT count(*) FROM invoices");
   await expect(activeTab(page).getByTestId("query-error")).toContainText("permission denied");
   const main = tree(page)

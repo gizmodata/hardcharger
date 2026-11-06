@@ -608,6 +608,8 @@ export default function QueryPage({ theme }: Props) {
             })
           }
           onNewTab={() => addTab()}
+          canOpenTab={tabs.length < maxTabs}
+          onBenchmarkQuery={(query) => addTab({ ...query, server: t.server, role: t.role, rowLimit: t.rowLimit })}
           onSave={(sql) => void save(t.id, false, sql)}
           onSaveAs={(sql) => void save(t.id, true, sql)}
           roles={t.server ? [] : roles}

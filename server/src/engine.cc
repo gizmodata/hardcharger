@@ -873,6 +873,8 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb
   // User connections are created in exactly one place, the DuckDBSession constructor,
   // and bound here right after it, before any statement runs on them (and before the
   // session is listed anywhere, so a refused one leaves nothing behind).
+  // Enable estimates without printing progress bars in server logs.
+  chargewire_duckdb::RunSql(connection(), "SET enable_progress_bar = true; SET enable_progress_bar_print = false");
   if (access_controlled_) guard_ = access->Bind(connection(), IdentityOf(principal_));
   if (principal_.role == "readonly") authz::BindReadOnlySession(connection(), principal_.name);
   runtime_.sessions.Add(this, capped);
@@ -977,9 +979,9 @@ std::optional<std::string> ExtensionDependencyHint(std::string_view message) {
 }
 
 chargewire::StatementOutcome Session::Guarded(std::string_view sql, bool has_parameters,
-                                           const std::function<chargewire::StatementOutcome()>& run) {
+                                           const std::function<chargewire::StatementOutcome()>& run, const json::value& parameters) {
   try {
-    return guard_ ? guard_->Execute(sql, has_parameters, run) : run();
+    return guard_ ? guard_->Execute(sql, has_parameters, run, parameters) : run();
   } catch (const Error& error) {
     ExplainViewAmbiguity(sql, error);
     ExplainExtensionDependency(error);
@@ -1404,12 +1406,12 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
                 {"statement_id", statement_id}, {"kind", "sql"}, {"is_internal", "false"}, {"sql", Abbreviate(sql)}});
     }
     return Track(StatementKind::kOther, Abbreviate(sql), {.statement = statement_id, .execution = statement_id}, [&] {
-      return Guarded(sql, has_parameters, [&] { return DuckDBSession::Execute(sql, parameters); });
+      return Guarded(sql, has_parameters, [&] { return DuckDBSession::Execute(sql, parameters); }, parameters);
     });
   }
   const auto pieces = SplitStatements(connection(), sql);
   if (pieces.empty()) {
-    return Guarded(sql, has_parameters, [&] { return DuckDBSession::Execute(sql, parameters); });
+    return Guarded(sql, has_parameters, [&] { return DuckDBSession::Execute(sql, parameters); }, parameters);
   }
 
   // Check every statement of a batch before running any of them, so a refused one
@@ -1458,7 +1460,7 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
   // its place in the script (q_....1, q_....2, ...), commands included.
   if (steps.size() == 1 && !steps[0].command) {
     auto outcome = Track(ClassifyStatement(steps[0].type), sql, {.statement = statement_id, .execution = statement_id}, [&] {
-      return Guarded(sql, has_parameters, [&] { return DuckDBSession::Execute(sql, parameters); });
+      return Guarded(sql, has_parameters, [&] { return DuckDBSession::Execute(sql, parameters); }, parameters);
     });
     return outcome;
   }
@@ -1551,7 +1553,7 @@ chargewire::StatementOutcome Session::ExecutePrepared(chargewire::PreparedStatem
                  const bool has_parameters = parameters.rows != nullptr || !parameters.json.is_null();
                  return guard_->ExecutePrepared(statement, has_parameters, [&](chargewire::PreparedStatement& inner) {
                    return DuckDBSession::ExecutePrepared(inner, parameters);
-                 });
+                 }, parameters.json);
                },
                text == prepared_sql_.end() ? std::string_view() : std::string_view(text->second));
 }

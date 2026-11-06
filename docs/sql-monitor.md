@@ -162,3 +162,29 @@ shredded representations show explicit diagnostics instead of failing the whole 
 The implementations share encoding fixtures in `server/client/tests/data/variant.json`.
 The CLI uses a compatible extension reader because Arrow C++ 26's experimental VARIANT
 reader rejects DuckDB's nullable `value` field before any value can be displayed.
+
+## Query workflow shortcuts
+
+Query results and script messages link to the exact execution's SQL details, including the
+server selected by a remote editor tab. Details and profiles are read from recorded execution
+data; SQL is never rerun. Detail access requires an unrestricted administrator and instrumentation.
+
+Use **Formatted / Original** to choose the SQL display; Copy follows that view. In the editor,
+**Alt+Shift+F** or the context menu formats the selection or document, with Undo. Formatting
+preserves literals and quoted names and falls back to the original SQL when unsupported.
+
+The editor and interactive CLI show estimated DuckDB progress where available, and distinguish
+execution from receiving results. Unknown progress stays indeterminate. CLI quiet mode and
+redirected output do not contain progress bars.
+
+## Query tags and visibility
+
+SQL Monitor hides generated internal queries and its own monitoring queries by default. Tags,
+not SQL text, identify these categories. **Include internal queries** and **Include monitor
+queries** add their categories independently: either reveals a query tagged as both. Rows show
+matching badges and expandable query tags; search includes tag names and values. Editor session
+tags remain attached to user SQL.
+
+Server Configuration also exposes startup-only result limits/retention, default catalog/schema,
+listener addresses/ports, Web UI controls, metrics controls and guard flags. Infrastructure and
+guard settings are administrator-only; secret values are not added to the inventory.

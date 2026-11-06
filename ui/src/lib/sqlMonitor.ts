@@ -16,11 +16,14 @@ export interface MonitorInfo {
 }
 
 export interface MonitoredQuery {
+  is_internal?: boolean;
+  is_monitoring?: boolean;
   execution_id: string;
   statement_id: string;
   session_id: string;
   username: string;
   sql_text: string;
+  query_tag?: string | null;
   status: string;
   error_message: string | null;
   cancel_reason: string | null;
@@ -62,6 +65,7 @@ export function monitorSql(
   includeMonitor: boolean,
   historyLimit = 1000,
   executionId?: string,
+  includeInternal = false,
 ): string {
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440)
     throw new Error("Choose between 1 minute and 24 hours");
@@ -74,9 +78,15 @@ export function monitorSql(
     ? "true"
     : `COALESCE(cursor_close_time, fetch_end_time, execution_end_time) >= current_timestamp - INTERVAL '${minutes} minutes'`;
   const execution = executionId ? `execution_id = ${quoteLiteral(executionId)}` : "true";
-  const visible = includeMonitor
-    ? "true"
-    : "COALESCE(json_extract_string(NULLIF(CAST(query_tag AS VARCHAR), ''), '$.page'), '') <> 'sql-monitor'";
+  const tag = "NULLIF(CAST(query_tag AS VARCHAR), '')";
+  const monitorMatch = `COALESCE(json_extract_string(${tag}, '$.monitoring'), 'false') = 'true' OR COALESCE(json_extract_string(${tag}, '$.page'), '') = 'sql-monitor'`;
+  // Explicit producer tags, never SQL-text guesses. Apply before the history cap too.
+  const internalMatch = `COALESCE(json_extract_string(${tag}, '$.internal'), 'false') = 'true'`;
+  // These are additive categories: either checkbox reveals a query tagged as both.
+  const categories = [`(NOT (${internalMatch}) AND NOT (${monitorMatch}))`];
+  if (includeInternal) categories.push(`(${internalMatch})`);
+  if (includeMonitor) categories.push(`(${monitorMatch})`);
+  const visible = includeInternal && includeMonitor ? "true" : `(${categories.join(" OR ")})`;
   return `WITH live AS (SELECT ${columns}, 1 AS priority FROM hardcharger_live_queries() WHERE ${execution}),
     history AS (SELECT ${columns}, 0 AS priority FROM ${history}
       WHERE instance_id = HARDCHARGER_CURRENT_INSTANCE()::UUID AND cursor_close_time IS NOT NULL
@@ -84,7 +94,7 @@ export function monitorSql(
       ORDER BY cursor_close_time DESC LIMIT ${historyLimit + 1}),
     merged AS (SELECT * FROM live UNION ALL SELECT * FROM history),
     ranked AS (SELECT *, row_number() OVER (PARTITION BY execution_id ORDER BY priority DESC) AS position FROM merged)
-    SELECT * EXCLUDE (priority, position, query_tag) FROM ranked
+    SELECT * EXCLUDE (priority, position), (${internalMatch}) AS is_internal, (${monitorMatch}) AS is_monitoring FROM ranked
     WHERE position = 1 AND ${visible} AND (status IN ('queued', 'executing', 'fetching') OR ${recent})
     ORDER BY status IN ('queued', 'executing', 'fetching') DESC, COALESCE(enqueue_time, execution_start_time) DESC`;
 }
@@ -92,7 +102,7 @@ export function monitorSql(
 export function queryDetailSql(catalog: string, schema: string, executionId: string): string {
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(executionId))
     throw new Error("This query detail link has an invalid execution ID.");
-  return monitorSql(catalog, schema, 10, true, 1, executionId);
+  return monitorSql(catalog, schema, 10, true, 1, executionId, true);
 }
 
 export type DetailDisplay = "window" | "inline";

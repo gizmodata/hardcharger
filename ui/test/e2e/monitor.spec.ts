@@ -198,3 +198,45 @@ test("status icons animate executing queries and the display preference survives
     await server.stop();
   }
 });
+
+test("query tags control independent Monitor categories and search", async ({ page }) => {
+  const server = await startOwnServer(["--enable-instrumentation"]);
+  const connection = await connect({ url: `${server.url}/chargewire`, ...server.admin, resultPartitions: 1 });
+  try {
+    for (const [name, queryTag] of [
+      ["qol_plain", { job: "nightly-qol" }],
+      ["qol_internal", { internal: true }],
+      ["qol_monitor", { monitoring: true }],
+      ["qol_both", { internal: true, monitoring: true }],
+    ] as const)
+      await connection.query(`SELECT 1 AS ${name}`, undefined, { queryTag });
+    await signIn(page, server.admin, server.url);
+    await page.getByRole("button", { name: "SQL Monitor", exact: true }).click();
+    const table = page.getByTestId("sql-monitor-table");
+    const visible = async (internal: boolean, monitoring: boolean, both: boolean) => {
+      for (const [name, show] of [
+        ["qol_plain", true],
+        ["qol_internal", internal],
+        ["qol_monitor", monitoring],
+        ["qol_both", both],
+      ] as const)
+        await expect(table.getByRole("button", { name: `SELECT 1 AS ${name}`, exact: true })).toHaveCount(show ? 1 : 0);
+    };
+    await visible(false, false, false);
+    await page.getByLabel("Include internal queries").check();
+    await visible(true, false, true);
+    await page.getByLabel("Include monitor queries").check();
+    await visible(true, true, true);
+    await page.getByLabel("Include internal queries").uncheck();
+    await visible(false, true, true);
+    await page.getByLabel("Include monitor queries").uncheck();
+    await visible(false, false, false);
+    await page.getByLabel("Filter monitored queries").fill("nightly-qol");
+    await expect(table.locator("tbody tr")).toHaveCount(1);
+    await table.getByText("Query tags", { exact: true }).click();
+    await expect(table).toContainText('"job":"nightly-qol"');
+  } finally {
+    await connection.close();
+    await server.stop();
+  }
+});

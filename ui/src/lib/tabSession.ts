@@ -8,7 +8,13 @@
 // gone, and running the rest on a new session would commit half a transaction. Without one,
 // a new session takes over and the run goes on, with a note that temporary state is gone.
 
-import { type Connection, ErrorCode, type TransactionState, ChargewireError } from "@gizmodata/chargewire";
+import {
+  type Connection,
+  type StatementDocument,
+  ErrorCode,
+  type TransactionState,
+  ChargewireError,
+} from "@gizmodata/chargewire";
 
 import { setRoleSql } from "./roles";
 import { firstKeyword } from "./sql";
@@ -237,9 +243,21 @@ export class TabSession {
    * A statement on the session, as a stream. Its first answer (rows or a count) is awaited
    * inside run(), so a session the server lost is handled before any row is read.
    */
-  stream(where: Where, sql: string, signal: AbortSignal): StatementStream {
+  stream(
+    where: Where,
+    sql: string,
+    signal: AbortSignal,
+    onProgress?: (doc: StatementDocument) => void,
+  ): StatementStream {
+    let submitted: { readonly statementId: string | undefined } | undefined;
     const opening = this.run(where, async (conn) => {
-      const stream = conn.stream(sql, undefined, { signal });
+      const stream = conn.stream(sql, undefined, {
+        signal,
+        onProgress: (doc) => {
+          onProgress?.(doc);
+        },
+      });
+      submitted = stream;
       try {
         await stream.rowsAffected();
       } catch (err) {
@@ -251,6 +269,9 @@ export class TabSession {
     });
     opening.catch(() => {}); // the caller sees the failure through the methods below
     return {
+      get statementId() {
+        return submitted?.statementId;
+      },
       rowsAffected: async () => (await opening).rowsAffected(),
       schema: async () => (await opening).schema(),
       close: async () => (await opening).close(),

@@ -3,7 +3,7 @@
 // holds every result in memory, so a script keeps at most `maxResultSets` result sets and
 // `maxResultBytes` of Arrow data in all; the rest still run, and are listed without rows.
 
-import { ErrorCode, ChargewireError } from "@gizmodata/chargewire";
+import { type StatementDocument, ErrorCode, ChargewireError } from "@gizmodata/chargewire";
 import { type Data, type RecordBatch, type Schema, Table } from "apache-arrow";
 
 export const maxResultSets = 50;
@@ -11,14 +11,21 @@ export const maxResultBytes = 64 * 1024 * 1024;
 
 /** What running one statement gives back: the parts of the client's ResultStream used here. */
 export interface StatementStream extends AsyncIterable<RecordBatch> {
+  readonly statementId?: string;
   rowsAffected(): Promise<number | null | undefined>;
   schema(): Promise<Schema>;
   close(): Promise<void>;
 }
 
-export type Execute = (sql: string, signal: AbortSignal) => StatementStream;
+export type Execute = (
+  sql: string,
+  signal: AbortSignal,
+  onProgress?: (doc: StatementDocument) => void,
+) => StatementStream;
 
 export interface StatementRun {
+  /** Ad-hoc Chargewire statement ID: also this execution's instrumentation ID. */
+  executionId?: string;
   index: number;
   sql: string;
   status: "rows" | "update" | "error" | "cancelled" | "not-run";
@@ -51,6 +58,8 @@ export interface ScriptRun {
 }
 
 export interface Progress {
+  document?: StatementDocument;
+  receiving?: boolean;
   statement: number;
   rows: number;
 }
@@ -104,8 +113,20 @@ export async function runScript(options: {
     }
     const run = runs[i]!;
     const at = now();
+    let stream: StatementStream | undefined;
+    let document: StatementDocument | undefined;
+    let rows = 0;
+    let receiving = false;
+    let observing = true;
+    const report = () => {
+      if (observing && !signal.aborted) options.onProgress?.({ statement: i, rows, document, receiving });
+    };
+    report();
     try {
-      const stream = execute(statements[i]!, signal);
+      stream = execute(statements[i]!, signal, (doc) => {
+        document = doc;
+        report();
+      });
       const affected = await stream.rowsAffected();
       if (affected !== undefined) {
         run.status = "update";
@@ -114,7 +135,6 @@ export async function runScript(options: {
         const schema = await stream.schema();
         const keep = resultSets.length < capSets && bytes < capBytes;
         const batches: RecordBatch[] = [];
-        let rows = 0;
         let held = 0;
         let lastReport = 0;
         let truncated = false;
@@ -125,13 +145,14 @@ export async function runScript(options: {
             truncated = true;
           }
           rows += piece.numRows;
+          receiving = true;
           if (keep) {
             batches.push(piece);
             held += batchBytes(piece);
           }
           if (now() - lastReport > 200) {
             lastReport = now();
-            options.onProgress?.({ statement: i, rows });
+            report();
           }
           if (truncated) break; // closing the stream releases the statement on the server
         }
@@ -154,6 +175,9 @@ export async function runScript(options: {
       run.error = err;
       stoppedAt = i;
     }
+    observing = false;
+    const executionId = stream?.statementId ?? (ChargewireError.is(run.error) ? run.error.statementId : undefined);
+    if (executionId) run.executionId = executionId;
     run.elapsedMs = now() - at;
     await options.afterStatement?.(run);
     if (stoppedAt !== undefined) break;

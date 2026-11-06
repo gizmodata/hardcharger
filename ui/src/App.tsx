@@ -12,6 +12,7 @@ import { useRoute } from "./lib/route";
 import { useTheme } from "./lib/theme";
 import { loadModule } from "./lib/stale";
 import { type ConnectionOptions, discover, openConnection } from "./lib/chargewire";
+import { internalQueryTag } from "./lib/queryTags";
 import { type AppContract, RelayApi, ServersStore } from "./lib/servers";
 import {
   type AppSession,
@@ -43,6 +44,8 @@ async function whoAmI(connection: Connection): Promise<Identity> {
     "SELECT HARDCHARGER_USER() AS u, HARDCHARGER_ROLE() AS r, HARDCHARGER_VERSION() AS v, " +
       "HARDCHARGER_CURRENT_SESSION() AS s, HARDCHARGER_CURRENT_INSTANCE() AS i, " +
       "HARDCHARGER_IS_FULL_ADMIN() AS a, HARDCHARGER_INSTRUMENTATION_ENABLED() AS m",
+    undefined,
+    { queryTag: internalQueryTag },
   );
   const first: unknown = table.get(0)?.toJSON();
   const row = first as Record<string, string | boolean | null> | undefined;

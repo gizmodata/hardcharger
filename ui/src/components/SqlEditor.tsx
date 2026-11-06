@@ -1,10 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { type CompletionTarget, registerCompletionTarget, registerSqlCompletion } from "../lib/completion";
 import { monaco } from "../lib/monaco";
 import { sqlNameDragType } from "../lib/sqlNameDrag";
 import { keepTypedIndentation } from "../lib/typedIndent";
 import { splitStatements, statementAt } from "../lib/sql";
+import { formatSql } from "../lib/sqlFormat";
 import { mayTakeFocus } from "../lib/focus";
 
 export interface EditorApi {
@@ -46,6 +47,7 @@ interface Props extends EditorCommands {
  * in its own focused editor. Ctrl+… also works on macOS (other SQL tools' habit).
  */
 export function SqlEditor({ value, onChange, theme, onReady, completion, ...commands }: Props) {
+  const [formatNotice, setFormatNotice] = useState("");
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | undefined>(undefined);
   const latest = useRef({ onChange, commands, completion });
@@ -128,6 +130,7 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
     dom.addEventListener("drop", onDrop, true);
     const changes = ed.onDidChangeModelContent(() => {
       const text = ed.getValue();
+      setFormatNotice("");
       // Each is acknowledged at a later render. Many keys can come before one (a script types
       // a hundred in a few milliseconds); the cap only keeps memory bounded if none ever is.
       const e = echoes.current;
@@ -165,6 +168,29 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
       () => latest.current.commands.onRunAll(),
       true,
     );
+    action(
+      "hardcharger.formatSql",
+      "Format SQL",
+      [KeyMod.Alt | KeyMod.Shift | KeyCode.KeyF],
+      () => {
+        const selection = ed.getSelection();
+        const range = selection && !selection.isEmpty() ? selection : model.getFullModelRange();
+        const original = model.getValueInRange(range);
+        const result = formatSql(original);
+        if (result.error) {
+          setFormatNotice(result.error);
+          return;
+        }
+        setFormatNotice("");
+        if (result.text === original) return;
+        ed.pushUndoStop();
+        ed.executeEdits("format-sql", [{ range, text: result.text, forceMoveMarkers: true }]);
+        ed.pushUndoStop();
+        ed.focus();
+      },
+      true,
+    );
+
     // Alt+N / Alt+W: Ctrl/⌘+T and Ctrl/⌘+W belong to the browser.
     action("hardcharger.newTab", "New tab", [KeyMod.Alt | KeyCode.KeyN], () => latest.current.commands.onNewTab?.());
     action("hardcharger.closeTab", "Close tab", [KeyMod.Alt | KeyCode.KeyW], () =>
@@ -300,5 +326,17 @@ export function SqlEditor({ value, onChange, theme, onReady, completion, ...comm
     echoes.current = [];
   }, [value]);
 
-  return <div ref={host} className="editor-host" data-testid="sql-editor" />;
+  return (
+    <>
+      <div ref={host} className="editor-host" data-testid="sql-editor" />
+      {formatNotice && (
+        <div className="editor-format-notice" role="status">
+          {formatNotice}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setFormatNotice("")}>
+            Dismiss
+          </button>
+        </div>
+      )}
+    </>
+  );
 }
