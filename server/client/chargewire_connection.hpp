@@ -38,8 +38,14 @@ class ChargewireConnection {
   ChargewireConnection& operator=(const ChargewireConnection&) = delete;
 
   // Signs in (password, or the server's browser sign-in for auth_type_external) and opens
-  // a session.
+  // a session. A server whose discovery document says "state": "stopped" (a stand-in for a
+  // stopped server, Chargewire §11.2) is connected lazily: nothing is sent after discovery,
+  // and the sign-in and the session happen at the first request that does work (IsLazy).
   arrow::Status Connect(const ClientConfig& config);
+  // The CLI's own SET hardcharger.session_tag / query_tag from `config`, at connect. On a
+  // lazily connected session they wait for the first request that does work and run just
+  // before it. A refused SET is a warning; Reopen applies them again on any new session.
+  void ApplyOwnTags(const ClientConfig& config);
 
   // Runs a statement. Rows come back as a table (at most `row_limit` when > 0, with the
   // full count in total_rows, -1 if it can't be counted); a statement without rows comes
@@ -66,9 +72,6 @@ class ChargewireConnection {
   void Disconnect();
 
   /// Request cancellation (async-signal-safe: only sets an atomic flag).
-  // After the CLI's own SET hardcharger.session_tag / query_tag at connect: Reopen applies
-  // them again on any new session, so they don't stop a statement from running again there.
-  void OwnTagsApplied() { session_state_changed_ = false; }
   void RequestCancel() {
     cancel_requested_.store(true);
     resume_->stop.store(true);  // a wait on a resuming server ends within a second
@@ -78,6 +81,14 @@ class ChargewireConnection {
   void SendCancelToServer();
 
   bool IsConnected() const { return session_ != nullptr; }
+  // Connected lazily to a stopped server and not signed in yet: nothing that does work has
+  // been sent, so nothing has started the server. Checks, the prompt and completion leave
+  // such a connection alone; the first statement (or metadata, an ingest) signs in.
+  bool IsLazy() const { return session_ != nullptr && session_->id().empty(); }
+  // From the discovery document at connect (no request): the server's version, and its state
+  // ("stopped" from a stand-in for a stopped server; empty when it serves).
+  const std::string& server_version() const { return server_version_; }
+  const std::string& server_state() const { return server_state_; }
   // A script run without connection settings: Connect(config) is tried once, when something
   // first needs the server (RequireConnection), so a failure says why.
   void ConnectWhenNeeded(const ClientConfig& config) { deferred_ = config; }
@@ -92,7 +103,14 @@ class ChargewireConnection {
   std::string session_id() const;
 
  private:
+  // What a person reads for `error`. Before a lazily connected session has signed in, a
+  // refusal is the sign-in's (or the session's), said as Connect would have said it.
   arrow::Status ToStatus(const chargewire::client::Error& error) const;
+  // Before a request that does work: the tags ApplyOwnTags held back, which sign in and open
+  // the session first. The error that stops the request (the sign-in's), or OK.
+  arrow::Status BeforeWork();
+  // Runs one of the CLI's own SETs on the session.
+  void RunOwnSet(const std::string& name, const std::string& value);
   // After the server lost or ended the session (idle eviction, a restart, KILL SESSION):
   // opens a new one (signing in again first after session_ended), re-applies the tags,
   // and says so on stderr. Returns whether it did.
@@ -118,6 +136,8 @@ class ChargewireConnection {
   std::unique_ptr<chargewire::client::Client> client_;
   std::unique_ptr<chargewire::client::Session> session_;
   std::string server_url_;
+  std::string server_version_;
+  std::string server_state_;
   ClientConfig config_;  // what Connect was given, to sign in again
   std::optional<ClientConfig> deferred_;  // ConnectWhenNeeded's, until tried
   // Only cancellation and the connection's lifecycle take it; statements never do.
@@ -130,6 +150,8 @@ class ChargewireConnection {
   // Whether the session ran USE, SET, RESET or PRAGMA: a new session starts without what
   // they set, so a statement isn't run again there.
   bool session_state_changed_ = false;
+  // ApplyOwnTags held the tags back for a lazily connected session's first request.
+  bool tags_pending_ = false;
 
   // What the client shows while it waits for a server that is resuming (Chargewire §11.2).
   // Shared with the client's callback, so it outlives a move of this connection.
@@ -152,6 +174,10 @@ class ChargewireConnection {
 // Whether `conn` is connected, connecting it first when ConnectWhenNeeded asked to; when it
 // isn't, says why on stderr (the connection's error, or how to connect).
 bool RequireConnection(ChargewireConnection& conn);
+
+// Said after "Connected to ..." when the server is stopped (connected lazily).
+inline constexpr const char* kStoppedServerNote =
+    "The server is stopped; it starts when you run the first statement.";
 
 // The hint for a session without a server.
 inline constexpr const char* kNotConnectedHint =

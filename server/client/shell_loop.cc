@@ -315,6 +315,10 @@ int ProcessLines(ChargewireConnection& conn, CommandProcessor& cmd_proc,
 // Refresh the dynamic prompt by querying the server for current catalog and schema
 void RefreshDynamicPrompt(ChargewireConnection& conn, ClientConfig& config) {
   if (!config.dynamic_prompt || !conn.IsConnected()) return;
+  // A stopped server, not signed in yet: asking would start it. The prompt is read once the
+  // first statement has signed in (before the next prompt).
+  config.dynamic_prompt_pending = conn.IsLazy();
+  if (config.dynamic_prompt_pending) return;
   auto result = conn.ExecuteQuery("SELECT CURRENT_CATALOG(), CURRENT_SCHEMA()");
   if (result.ok() && result->table && result->table->num_rows() > 0) {
     std::string catalog = GetCellValue(result->table->column(0), 0, "");
@@ -397,6 +401,7 @@ int RunShellLoop(ChargewireConnection& conn, CommandProcessor& cmd_proc,
     if (conn.IsConnected()) {
       std::cout << "Connected to " << config.host << ":" << config.port
                 << std::endl;
+      if (conn.IsLazy()) std::cout << kStoppedServerNote << std::endl;
     } else {
       std::cout << "Not connected. " << kNotConnectedHint << std::endl;
     }
@@ -421,6 +426,8 @@ int RunShellLoop(ChargewireConnection& conn, CommandProcessor& cmd_proc,
   }
 
   while (true) {
+    // The first statement on a stopped server signed in: now the prompt can say where it is.
+    if (config.dynamic_prompt_pending && !sql_proc.IsAccumulating()) RefreshDynamicPrompt(conn, config);
     const char* prompt = sql_proc.IsAccumulating()
                              ? config.continuation_prompt.c_str()
                              : config.main_prompt.c_str();

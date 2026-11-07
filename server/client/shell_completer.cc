@@ -113,7 +113,8 @@ void ShellCompleter::InvalidateCache() {
 
 void ShellCompleter::EnsureCachePopulated() {
   if (cache_populated_) return;
-  if (!conn_.IsConnected()) return;
+  // Not on a stopped server before its first statement: listing tables would start it.
+  if (!conn_.IsConnected() || conn_.IsLazy()) return;
 
   // Fetch tables
   auto tables_result = conn_.GetTables();

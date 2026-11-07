@@ -103,6 +103,7 @@ struct ClientConfig {
 
   // Dynamic prompt (show catalog.schema)
   bool dynamic_prompt = true;
+  bool dynamic_prompt_pending = false;  // not read yet: the server is stopped (lazy connect)
 
   // Built-in pager
   bool pager_enabled = true;

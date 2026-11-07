@@ -17,6 +17,7 @@
 #include "oauth_flow.hpp"
 #include "output_renderer.hpp"
 #include "sql_quoting.hpp"
+#include "version.hpp"
 
 namespace hardcharger::client {
 
@@ -64,20 +65,95 @@ std::string DescribeReason(const std::string& reason) {
   return reason;
 }
 
+// A connect's failure (discovery, sign-in, session), as a person at the prompt can act on it.
+// Also a lazily connected session's first request's, which signs in then (Chargewire §11.2).
+arrow::Status ConnectFailure(const wc::Error& e, const ClientConfig& config) {
+  const std::string origin = std::string(config.use_tls ? "https://" : "http://") + config.host + ":" +
+                             std::to_string(config.port);
+  const bool auth_attempted = config.auth_type_external || config.auth_type_mtls || !config.username.empty();
+  // A TLS alert (or problem) refusing the client certificate (Chargewire §4.4): the server
+  // is running, and said why.
+  if (e.code() == "certificate_revoked") {
+    return arrow::Status::IOError("The server at " + origin + " refused the client certificate: certificate revoked");
+  }
+  if (e.code() == "certificate_required") {
+    return arrow::Status::IOError("The server at " + origin +
+                                  " refused the connection: it requires a client certificate (--mtls-cert and "
+                                  "--mtls-key)");
+  }
+  if (e.code() == "client_connection_failed") {
+    const std::string what = e.what();
+    if (what.find("could not resolve host") != std::string::npos) {
+      return arrow::Status::IOError("Could not resolve host '" + config.host + "'");
+    }
+    // The reason first (refused, timed out, reset), then what to check.
+    std::string reason = what;
+    if (what.find("refused") != std::string::npos) {
+      reason = "connection refused";
+    } else if (what.find("timed out") != std::string::npos) {
+      reason = "timed out";
+    } else if (what.find("reset") != std::string::npos || what.find("end of stream") != std::string::npos ||
+               what.find("closed") != std::string::npos) {
+      reason = "the server closed the connection";
+    }
+    std::string message = "Could not connect to " + origin + ": " + reason;
+    if (reason == "connection refused" || reason == "timed out") {
+      message += ". Is the server running" + std::string(config.port == 31337 ? "" : " on that port") + "?";
+    } else if (!config.use_tls) {
+      // Plain HTTP to a TLS server: it closes the connection without an HTTP answer.
+      message += ". If the server uses TLS, drop --no-tls (or --tls=false, ?tls=false).";
+    }
+    return arrow::Status::IOError(message);
+  }
+  // A TLS handshake that met a plain-HTTP server: say so, and how to connect without TLS. Never
+  // fall back to plaintext by itself.
+  if (e.code() == "client_tls_failed" && config.use_tls && std::string(e.what()).find("TLS handshake") != std::string::npos &&
+      AnswersTlsWithHttp(config.host, config.port)) {
+    const bool v6 = config.host.find(':') != std::string::npos;
+    return arrow::Status::IOError("The server at " + (v6 ? "[" + config.host + "]" : config.host) + ":" +
+                                  std::to_string(config.port) +
+                                  " speaks plain HTTP, not TLS. Add --no-tls (or --tls=false; in a "
+                                  "hardcharger:// URI ?tls=false; after .connect HOST PORT USERNAME, --no-tls) "
+                                  "to connect without encryption.");
+  }
+  // What the server said: its problem code, and its detail when it sent one. Nothing
+  // else (the request, the credentials) goes into the message.
+  const std::string refusal =
+      e.code() + (e.detail().empty() || e.detail() == e.code() ? std::string() : " (" + e.detail() + ")");
+  if (config.auth_type_mtls && e.status() == 401) {
+    return arrow::Status::IOError("Certificate sign-in to " + origin + " failed: " + refusal);
+  }
+  if (e.code() == "invalid_credentials" || (e.status() == 401 && auth_attempted)) {
+    return arrow::Status::IOError("Authentication failed for " + origin + ": " + refusal);
+  }
+  if (e.status() == 401) {
+    return arrow::Status::IOError("Connection to " + origin + " failed: " + refusal +
+                                  " — authentication required. Provide --username or set HARDCHARGER_USER "
+                                  "(or HARDCHARGER_ADMIN_USERNAME)");
+  }
+  return arrow::Status::IOError(e.what());
+}
+
 }  // namespace
 
 ChargewireConnection::ChargewireConnection(ChargewireConnection&& other) noexcept
     : client_(std::move(other.client_)),
       session_(std::move(other.session_)),
       server_url_(std::move(other.server_url_)),
+      server_version_(std::move(other.server_version_)),
+      server_state_(std::move(other.server_state_)),
       cancel_requested_(other.cancel_requested_.load()),
       transaction_maybe_open_(other.transaction_maybe_open_),
-      session_state_changed_(other.session_state_changed_) {}
+      session_state_changed_(other.session_state_changed_),
+      tags_pending_(other.tags_pending_) {}
 
 arrow::Status ChargewireConnection::ToStatus(const wc::Error& error) const {
   if (error.IsCancelled() || cancel_requested_.load(std::memory_order_relaxed)) {
     return arrow::Status::Cancelled("Query cancelled");
   }
+  // A lazily connected session's first request signed in, and that failed (a wrong password,
+  // a server that can't be reached): the connect's error, as connecting would have given it.
+  if (IsLazy()) return ConnectFailure(error, config_);
   // The server refused the sign-in's token and said why: its reason, not its wording.
   if (error.code() == "invalid_token" && !error.reason().empty()) {
     return arrow::Status::IOError("The server no longer accepts this sign-in: " + DescribeReason(error.reason()) +
@@ -95,6 +171,9 @@ void ChargewireConnection::Disconnect() {
   session_.reset();
   client_.reset();
   server_url_.clear();
+  server_version_.clear();
+  server_state_.clear();
+  tags_pending_ = false;
 }
 
 void ChargewireConnection::SendCancelToServer() {
@@ -122,7 +201,11 @@ arrow::Status ChargewireConnection::Connect(const ClientConfig& config) {
   options.host = config.host;
   options.port = static_cast<uint16_t>(config.port);
   options.base_path = config.base_path;
-  options.user_agent = "hardcharger-client";
+  // Names the CLI and its version, so a server's (or GizmoData Cloud's) session lists can tell it.
+  options.user_agent = std::string("hardcharger-client/") + hardcharger::kVersion;
+  // A stand-in for a stopped server (GizmoData Cloud's auto-resume holder) starts the server at
+  // a sign-in: connect without one, and sign in at the first request that does work (§11.2).
+  options.connect_lazily_when_stopped = true;
   options.tls.enabled = config.use_tls;
   options.tls.root_certs_file = config.tls_roots;
   options.tls.skip_verify = config.tls_skip_verify;
@@ -136,81 +219,14 @@ arrow::Status ChargewireConnection::Connect(const ClientConfig& config) {
     return status->Report(progress.attempt, progress.retry_in, progress.elapsed, progress.detail);
   };
 
-  const std::string origin = std::string(config.use_tls ? "https://" : "http://") + config.host + ":" +
-                             std::to_string(config.port);
-  const bool auth_attempted = config.auth_type_external || config.auth_type_mtls || !config.username.empty();
-  // Turns the library's errors into what a person at the prompt can act on.
-  auto friendly = [&](const wc::Error& e) -> arrow::Status {
-    // A TLS alert (or problem) refusing the client certificate (Chargewire §4.4): the server
-    // is running, and said why.
-    if (e.code() == "certificate_revoked") {
-      return arrow::Status::IOError("The server at " + origin + " refused the client certificate: certificate revoked");
-    }
-    if (e.code() == "certificate_required") {
-      return arrow::Status::IOError("The server at " + origin +
-                                    " refused the connection: it requires a client certificate (--mtls-cert and "
-                                    "--mtls-key)");
-    }
-    if (e.code() == "client_connection_failed") {
-      const std::string what = e.what();
-      if (what.find("could not resolve host") != std::string::npos) {
-        return arrow::Status::IOError("Could not resolve host '" + config.host + "'");
-      }
-      // The reason first (refused, timed out, reset), then what to check.
-      std::string reason = what;
-      if (what.find("refused") != std::string::npos) {
-        reason = "connection refused";
-      } else if (what.find("timed out") != std::string::npos) {
-        reason = "timed out";
-      } else if (what.find("reset") != std::string::npos || what.find("end of stream") != std::string::npos ||
-                 what.find("closed") != std::string::npos) {
-        reason = "the server closed the connection";
-      }
-      std::string message = "Could not connect to " + origin + ": " + reason;
-      if (reason == "connection refused" || reason == "timed out") {
-        message += ". Is the server running" + std::string(config.port == 31337 ? "" : " on that port") + "?";
-      } else if (!config.use_tls) {
-        // Plain HTTP to a TLS server: it closes the connection without an HTTP answer.
-        message += ". If the server uses TLS, drop --no-tls (or --tls=false, ?tls=false).";
-      }
-      return arrow::Status::IOError(message);
-    }
-    // A TLS handshake that met a plain-HTTP server: say so, and how to connect without TLS. Never
-    // fall back to plaintext by itself.
-    if (e.code() == "client_tls_failed" && config.use_tls && std::string(e.what()).find("TLS handshake") != std::string::npos &&
-        AnswersTlsWithHttp(config.host, config.port)) {
-      const bool v6 = config.host.find(':') != std::string::npos;
-      return arrow::Status::IOError("The server at " + (v6 ? "[" + config.host + "]" : config.host) + ":" +
-                                    std::to_string(config.port) +
-                                    " speaks plain HTTP, not TLS. Add --no-tls (or --tls=false; in a "
-                                    "hardcharger:// URI ?tls=false; after .connect HOST PORT USERNAME, --no-tls) "
-                                    "to connect without encryption.");
-    }
-    // What the server said: its problem code, and its detail when it sent one. Nothing
-    // else (the request, the credentials) goes into the message.
-    const std::string refusal =
-        e.code() + (e.detail().empty() || e.detail() == e.code() ? std::string() : " (" + e.detail() + ")");
-    if (config.auth_type_mtls && e.status() == 401) {
-      return arrow::Status::IOError("Certificate sign-in to " + origin + " failed: " + refusal);
-    }
-    if (e.code() == "invalid_credentials" || (e.status() == 401 && auth_attempted)) {
-      return arrow::Status::IOError("Authentication failed for " + origin + ": " + refusal);
-    }
-    if (e.status() == 401) {
-      return arrow::Status::IOError("Connection to " + origin + " failed: " + refusal +
-                                    " — authentication required. Provide --username or set HARDCHARGER_USER "
-                                    "(or HARDCHARGER_ADMIN_USERNAME)");
-    }
-    return arrow::Status::IOError(e.what());
-  };
-
   std::unique_ptr<wc::Client> client;
   std::unique_ptr<wc::Session> session;
+  wc::Discovery discovery;
   try {
     client = std::make_unique<wc::Client>(options);
     // A Chargewire server answers GET /chargewire; anything else (a GizmoSQL 1.x gRPC port, a web
     // server) is refused here with a clear message.
-    const wc::Discovery discovery = client->Discover();
+    discovery = client->Discover();
     if (config.auth_type_external) {
       ARROW_RETURN_NOT_OK(SignInWithBrowser(*client, discovery));
     } else if (config.auth_type_mtls) {
@@ -222,18 +238,75 @@ arrow::Status ChargewireConnection::Connect(const ClientConfig& config) {
     }
     session = client->CreateSession();
   } catch (const wc::Error& e) {
-    return friendly(e);
+    return ConnectFailure(e, config);
   }
 
   std::lock_guard cancel_lock(cancel_mutex_);
   server_url_ = wc::BaseUrl(options);
+  server_version_ = discovery.server_version;
+  server_state_ = discovery.state;
   config_ = config;
   config_.output_stream = &std::cout;
   client_ = std::move(client);
   session_ = std::move(session);
   transaction_maybe_open_ = false;
   session_state_changed_ = false;
+  tags_pending_ = false;
   resume_->Done();
+  return arrow::Status::OK();
+}
+
+void ChargewireConnection::RunOwnSet(const std::string& name, const std::string& value) {
+  auto result = session_->Execute(std::string("SET hardcharger.") + name + " = " + QuoteSqlLiteral(value));
+  if (result.HasRows()) {
+    while (result.reader->Next()) {
+    }
+  }
+}
+
+void ChargewireConnection::ApplyOwnTags(const ClientConfig& config) {
+  if (!session_) return;
+  if (config.session_tag.empty() && config.query_tag.empty()) return;
+  if (IsLazy()) {
+    tags_pending_ = true;  // a SET is work: it would sign in and start a stopped server
+    return;
+  }
+  for (const auto& [name, value] : {std::pair{"session_tag", config.session_tag},
+                                    std::pair{"query_tag", config.query_tag}}) {
+    if (value.empty()) continue;
+    try {
+      WithSession([&] {
+        RunOwnSet(name, value);
+        return 0;
+      });
+    } catch (const wc::Error& e) {
+      std::cerr << "Warning: failed to set " << name << ": " << ToStatus(e).message() << std::endl;
+    }
+  }
+  session_state_changed_ = false;  // its own tags: Reopen applies them again
+}
+
+arrow::Status ChargewireConnection::BeforeWork() {
+  if (!tags_pending_ || !session_) return arrow::Status::OK();
+  for (const auto& [name, value] : {std::pair{"session_tag", config_.session_tag},
+                                    std::pair{"query_tag", config_.query_tag}}) {
+    if (value.empty()) continue;
+    try {
+      // The first of them signs in and opens the session (and waits while the server resumes).
+      WithSession([&] {
+        RunOwnSet(name, value);
+        return 0;
+      });
+    } catch (const wc::Error& e) {
+      // Not signed in (a wrong password, Ctrl-C while the server resumed): the request fails
+      // with that, and the tags wait for the next one. Signed in, the server refused the SET:
+      // a warning, as at connect.
+      if (IsLazy()) return ToStatus(e);
+      std::cerr << "Warning: failed to set " << name << ": " << ToStatus(e).message() << std::endl;
+    }
+  }
+  tags_pending_ = false;
+  session_state_changed_ = false;  // its own tags: Reopen applies them again
   return arrow::Status::OK();
 }
 
@@ -243,16 +316,7 @@ std::optional<arrow::Status> ChargewireConnection::ConnectDeferred() {
   deferred_.reset();  // tried once
   arrow::Status status = Connect(config);
   if (!status.ok()) return status;
-  // The tags, as main() sets them after a connection at startup.
-  for (const auto& [name, value] : {std::pair{"session_tag", config.session_tag},
-                                    std::pair{"query_tag", config.query_tag}}) {
-    if (value.empty()) continue;
-    auto result = ExecuteUpdate(std::string("SET hardcharger.") + name + " = " + QuoteSqlLiteral(value));
-    if (!result.ok()) {
-      std::cerr << "Warning: failed to set " << name << ": " << result.status().message() << std::endl;
-    }
-  }
-  session_state_changed_ = false;  // its own tags: Reopen applies them again
+  ApplyOwnTags(config);  // as main() does after a connection at startup
   return status;
 }
 
@@ -323,6 +387,12 @@ bool ChargewireConnection::Reopen(const wc::Error& error) {
             << (lost ? std::string("no longer had this session (idle too long, or restarted)")
                      : "ended this session: " + DescribeReason(error.reason()) + " (" + error.reason() + ")")
             << "; a new session is open. Temporary tables and session settings are gone." << std::endl;
+  if (IsLazy()) {
+    // The new session opens at the next request that does work (the server was stopped when
+    // this connection was made): the tags go with that request, never on their own.
+    tags_pending_ = !config_.session_tag.empty() || !config_.query_tag.empty();
+    return true;
+  }
   for (const auto& [name, value] : {std::pair{"session_tag", config_.session_tag},
                                     std::pair{"query_tag", config_.query_tag}}) {
     if (value.empty()) continue;
@@ -375,6 +445,7 @@ auto ChargewireConnection::WithSession(Call&& call) -> decltype(call()) {
                         "with USE or SET is gone with it, so the statement could run against another schema or with "
                         "other settings. It was not run again; run USE or SET again, then the statement.");
       }
+      (void)BeforeWork();  // the tags first, on a session that opens now; a failure fails call() too
       return call();
     }
     // session_ended: the server stopped the statement with its session (a kill can come
@@ -480,7 +551,8 @@ std::string FirstWord(const std::string& sql) {
 }  // namespace
 
 void ChargewireConnection::NoteStatement(const std::string& sql) {
-  if (!session_) return;
+  // A lazily connected session that never opened ran nothing (and reading it would sign in).
+  if (!session_ || IsLazy()) return;
   // Where and how statements run (USE, SET, RESET, PRAGMA): a new session starts without it,
   // so a statement run again there could write to another schema's table or run with other
   // settings, with no error.
@@ -519,6 +591,7 @@ arrow::Result<QueryResult> ChargewireConnection::ExecuteQuery(const std::string&
   cancel_requested_.store(false);
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
   Executing executing(executing_);
+  ARROW_RETURN_NOT_OK(BeforeWork());
   try {
     QueryProgress progress;
     wc::StatementOptions options;
@@ -567,6 +640,7 @@ arrow::Result<int64_t> ChargewireConnection::ExecuteUpdate(const std::string& sq
   cancel_requested_.store(false);
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
   Executing executing(executing_);
+  ARROW_RETURN_NOT_OK(BeforeWork());
   try {
     auto result = WithSession([&] { return session_->Execute(sql); });
     if (result.HasRows()) {
@@ -590,6 +664,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> ChargewireConnection::GetTables(con
                                                                        const std::string& table_pattern,
                                                                        bool include_schema) {
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
+  ARROW_RETURN_NOT_OK(BeforeWork());
   try {
     wc::TablesRequest request;
     request.catalog = catalog;
@@ -605,6 +680,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> ChargewireConnection::GetTables(con
 arrow::Result<std::shared_ptr<arrow::Table>> ChargewireConnection::GetDbSchemas(const std::string& catalog,
                                                                           const std::string& schema_pattern) {
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
+  ARROW_RETURN_NOT_OK(BeforeWork());
   try {
     return WithSession([&] { return session_->DbSchemas(catalog, schema_pattern); });
   } catch (const wc::Error& e) {
@@ -614,6 +690,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> ChargewireConnection::GetDbSchemas(
 
 arrow::Result<std::shared_ptr<arrow::Table>> ChargewireConnection::GetCatalogs() {
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
+  ARROW_RETURN_NOT_OK(BeforeWork());
   try {
     return WithSession([&] { return session_->Catalogs(); });
   } catch (const wc::Error& e) {
@@ -623,6 +700,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> ChargewireConnection::GetCatalogs()
 
 arrow::Result<boost::json::object> ChargewireConnection::GetServerInfo() {
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
+  ARROW_RETURN_NOT_OK(BeforeWork());
   try {
     return WithSession([&] { return session_->ServerInfo(); });
   } catch (const wc::Error& e) {
@@ -634,6 +712,7 @@ arrow::Status ChargewireConnection::UploadLastResult(const std::shared_ptr<arrow
                                                const std::string& table_name) {
   if (!session_) return arrow::Status::Invalid("Not connected to a server");
   if (!table || table->num_rows() == 0) return arrow::Status::Invalid("No result to upload");
+  ARROW_RETURN_NOT_OK(BeforeWork());
   try {
     arrow::TableBatchReader reader(*table);
     wc::IngestOptions options;

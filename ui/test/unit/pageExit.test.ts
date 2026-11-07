@@ -51,6 +51,20 @@ describe("endSessionsOnExit", () => {
     expect(fetches.map((f) => f.url).at(-1)).toBe(`${window.location.origin}/chargewire/v1/sessions/s_three`);
   });
 
+  it("sends nothing for a connection that has no session yet (lazy connect to a stopped server)", () => {
+    stop();
+    stop = endSessionsOnExit(
+      () => ({
+        token: "tok",
+        ids: ["", "s_one"],
+        remote: [{ base: "https://ui.example/relay/r1", headers: {}, ids: [""] }],
+      }),
+      reload,
+    );
+    window.dispatchEvent(pageEvent("pagehide"));
+    expect(fetches.map((f) => f.url)).toEqual([`${window.location.origin}/chargewire/v1/sessions/s_one`]);
+  });
+
   it("ends them on beforeunload, unless the page asks the user first", () => {
     const stopWarning = warnBeforeLeaving();
     const asked = pageEvent("beforeunload");

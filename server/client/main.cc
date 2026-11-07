@@ -336,20 +336,9 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-    // Set tags if configured (can be overridden later via SET hardcharger.*)
-    if (!config.session_tag.empty()) {
-      auto tag_result = conn.ExecuteUpdate("SET hardcharger.session_tag = " + QuoteSqlLiteral(config.session_tag));
-      if (!tag_result.ok()) {
-        std::cerr << "Warning: failed to set session_tag: " << tag_result.status().message() << std::endl;
-      }
-    }
-    if (!config.query_tag.empty()) {
-      auto tag_result = conn.ExecuteUpdate("SET hardcharger.query_tag = " + QuoteSqlLiteral(config.query_tag));
-      if (!tag_result.ok()) {
-        std::cerr << "Warning: failed to set query_tag: " << tag_result.status().message() << std::endl;
-      }
-    }
-    conn.OwnTagsApplied();
+    // Set tags if configured (can be overridden later via SET hardcharger.*). On a stopped
+    // server they run just before the first statement, which starts it.
+    conn.ApplyOwnTags(config);
   }
   // else: start in disconnected state — user can use .connect later. A script (-c, -f, a
   // pipe) that runs SQL before any .connect connects then with the defaults, so a failure
