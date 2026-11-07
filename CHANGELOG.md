@@ -7,6 +7,11 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-11-07
+
+The server is unchanged; this release is for the CLI, the web UI and the Python package (lazy
+connect to a stopped auto-resume server).
+
 ### Added
 
 - **The CLI no longer starts a stopped GizmoData Cloud cluster unless you run SQL** (Chargewire 2.4.0

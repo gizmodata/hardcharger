@@ -6,8 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-11-07
+
 ### Changed
 
+- Install Hardcharger server 2.10.0 (the server is unchanged; the release is for the CLI and the
+  web UI, which connect lazily to a stopped auto-resume server).
 - The `[adbc]` extra needs `adbc-driver-hardcharger` 2.4.2 or later: connecting to a stopped
   GizmoData Cloud cluster signs in at the first request that does work, not at connect, and closing
   a connection never signs in (2.4.1), so neither starts a stopped cluster for nobody.
