@@ -94,8 +94,10 @@ export function endSessionsOnExit(
     pageRequests.abort();
     const now = open();
     if (!now) return;
-    const ids = now.ids.filter((id) => !ended.has(id));
-    const remote = (now.remote ?? []).map((r) => ({ ...r, ids: r.ids.filter((id) => !ended.has(id)) }));
+    // A connection made lazily to a stopped server has no session yet (its id is ""): nothing
+    // to end, and nothing is sent to that server.
+    const ids = now.ids.filter((id) => id && !ended.has(id));
+    const remote = (now.remote ?? []).map((r) => ({ ...r, ids: r.ids.filter((id) => id && !ended.has(id)) }));
     endSessions({ token: now.token, ids, remote });
     for (const id of ids) ended.add(id);
     for (const r of remote) for (const id of r.ids) ended.add(id);

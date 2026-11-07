@@ -26,8 +26,10 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# The client, so Server.connect() returns a connection.
-adbc = ["adbc-driver-hardcharger>=2.0.0"]
+# The client, so Server.connect() returns a connection. 2.4.2 or later: connecting to a stopped
+# GizmoData Cloud cluster (discovery "state": "stopped") signs in at the first request that does
+# work, not at connect, and closes never sign in (2.4.1), so neither starts a cluster for nobody.
+adbc = ["adbc-driver-hardcharger>=2.4.2"]
 
 [project.scripts]
 hardcharger-server = "hardcharger.__main__:server_main"

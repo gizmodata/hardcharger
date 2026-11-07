@@ -7,6 +7,29 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- **The CLI no longer starts a stopped GizmoData Cloud cluster unless you run SQL** (Chargewire 2.4.0
+  lazy connect). When the server's discovery says it is stopped (`"state": "stopped"`, from
+  GizmoData Cloud's auto-resume holder), `hardcharger` connects without signing in or opening a
+  session, and says so: "The server is stopped; it starts when you run the first statement." The
+  banner, the prompt, tab completion and `.show` send nothing more. The first statement (or dot
+  command that reads the server, such as `.tables`) signs in, opens the session, runs the
+  `--session-tag` / `--query-tag` SETs and then runs; a wrong password is reported by that
+  statement, as connecting would have reported it. A server that is serving is connected to as
+  before.
+- The CLI's User-Agent names its version (`hardcharger-client/<version>`), so session lists such as
+  GizmoData Cloud's Activity card can tell which client it is.
+
+### Changed
+
+- Update Chargewire to 2.4.0. Its C++ client never signs in to close or cancel: exiting the CLI, or
+  pressing Ctrl-C, late in a token's life no longer signs in again first (which started a stopped
+  auto-resume cluster for nobody, or undid a person's Stop).
+- Update the web UI's JavaScript client to chargewire-js 2.3.4: lazy connect to a stopped server, and
+  closes, cancels and a transaction's clean-up that never sign in. Leaving the page no longer sends a
+  session DELETE for a connection that never opened a session.
+
 ### Fixed
 
 - Read CLI progress-test terminal output through completion with a bounded, sanitizer-scaled timeout, including on loaded macOS CI hosts.

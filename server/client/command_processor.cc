@@ -1016,7 +1016,12 @@ void CommandProcessor::ShowSettings() {
   out << "     version: " << hardcharger::kVersion << "\n";
 
   // --- Server ---
-  if (conn_.IsConnected()) {
+  if (conn_.IsLazy()) {
+    // A stopped server, not signed in: what discovery said, without starting it.
+    out << "--- Server ---\n";
+    if (!conn_.server_version().empty()) out << "     version: " << conn_.server_version() << "\n";
+    out << "       state: stopped (it starts when you run the first statement)\n";
+  } else if (conn_.IsConnected()) {
     out << "--- Server ---\n";
 
     auto result = conn_.ExecuteQuery("SELECT HARDCHARGER_VERSION(), HARDCHARGER_CURRENT_INSTANCE()");
@@ -1049,7 +1054,7 @@ void CommandProcessor::ShowSettings() {
   out << "        port: " << config_.port << "\n";
   out << "         tls: " << (config_.use_tls ? "on" : "off") << "\n";
 
-  if (conn_.IsConnected()) {
+  if (conn_.IsConnected() && !conn_.IsLazy()) {
     auto session_result = conn_.ExecuteQuery(
         "SELECT HARDCHARGER_CURRENT_SESSION(), HARDCHARGER_ROLE(), "
         "CURRENT_CATALOG(), CURRENT_SCHEMA(), HARDCHARGER_USER()");
@@ -1217,6 +1222,7 @@ CommandResult CommandProcessor::HandleConnect(
 
   std::cout << "Connected to " << config_.host << ":" << config_.port
             << std::endl;
+  if (conn_.IsLazy()) std::cout << kStoppedServerNote << std::endl;
 
   if (refresh_callback_) refresh_callback_();
   if (prompt_refresh_callback_) prompt_refresh_callback_();

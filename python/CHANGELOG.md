@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The `[adbc]` extra needs `adbc-driver-hardcharger` 2.4.2 or later: connecting to a stopped
+  GizmoData Cloud cluster signs in at the first request that does work, not at connect, and closing
+  a connection never signs in (2.4.1), so neither starts a stopped cluster for nobody.
+
 ## [2.9.0] - 2026-11-06
 
 ### Changed

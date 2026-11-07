@@ -515,6 +515,12 @@ stops waiting.`) and a line per answer in a log; `--quiet` waits without a word,
 stops waiting. `--resume-timeout SECONDS` (or `HARDCHARGER_RESUME_TIMEOUT`) sets how long it
 waits, 600 by default; `0` reports the server's answer at once.
 
+The client never starts a stopped server for nothing. When the server says it is stopped, it
+connects without signing in (`The server is stopped; it starts when you run the first
+statement.`): the prompt, tab completion, `.show` and exiting send nothing, and the first
+statement (or a dot command that reads the server, such as `.tables`) signs in, starts it and
+runs. A wrong password is reported by that statement. Closing and Ctrl-C never sign in.
+
 One statement with `--command` (`-c`), in any output mode (`--csv`, `--json`,
 `--markdown`, `--table`, or `.mode` for the rest):
 
