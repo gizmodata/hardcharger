@@ -9,6 +9,7 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Read CLI progress-test terminal output through completion with a bounded, sanitizer-scaled timeout, including on loaded macOS CI hosts.
 - Retry transient Apple timestamp-service failures with bounded exponential backoff when signing macOS server, CLI and desktop artifacts, retaining mandatory signature and notarization checks.
 - Reuse a successful release's tested artifacts on main when sanitizer dependency cache warm-up was deliberately skipped, instead of repeating the native build matrix.
 

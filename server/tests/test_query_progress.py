@@ -32,6 +32,7 @@ def test_duckdb_progress_is_enabled_without_printing(launcher):
 
 
 def test_cli_progress_is_transient_and_never_written_to_pipes(launcher):
+    import errno
     import os
     import select
     import subprocess
@@ -49,15 +50,20 @@ def test_cli_progress_is_transient_and_never_written_to_pipes(launcher):
     process = subprocess.Popen(args=command, env=env, stdin=subprocess.DEVNULL, stdout=slave, stderr=slave)
     os.close(slave)
     output = b""
-    # The query must finish under TSan too; preserve the workload and scale its wall-clock budget.
-    deadline = time.monotonic() + 30 * PERF_SCALE
+    # Keep reading through completion, including on loaded CI hosts and under TSan.
+    # Waiting after the read deadline can otherwise miss a successful query's final rows.
+    query_timeout = 120 * PERF_SCALE
+    deadline = time.monotonic() + query_timeout
     try:
-        while time.monotonic() < deadline:
+        while True:
+            assert time.monotonic() < deadline, f"CLI did not finish: {output.decode(errors='replace')}"
             if select.select([master], [], [], 0.1)[0]:
                 try:
                     chunk = os.read(master, 65536)
-                except OSError:
-                    break
+                except OSError as error:
+                    if error.errno == errno.EIO:  # Linux PTYs signal EOF this way.
+                        break
+                    raise
                 if not chunk:
                     break
                 output += chunk
@@ -73,6 +79,7 @@ def test_cli_progress_is_transient_and_never_written_to_pipes(launcher):
             process.wait()
         os.close(master)
     # Same SQL path, with redirected output: no progress and no escape sequences.
-    result = subprocess.run(args=command, env=env, capture_output=True, timeout=30 * PERF_SCALE)
+    result = subprocess.run(args=command, env=env, capture_output=True, timeout=query_timeout)
     assert result.returncode == 0, result.stderr
+    assert b"answer" in result.stdout
     assert b"estimated" not in result.stderr and b"\x1b" not in result.stderr
