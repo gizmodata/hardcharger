@@ -7,6 +7,16 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- **Homebrew.** `brew install gizmodata/tap/hardcharger` installs `hardcharger-server` and the
+  `hardcharger` CLI on macOS 15+ (Apple silicon) and Linux (x86-64 and arm64), and
+  `brew install --cask gizmodata/tap/hardcharger-desktop` installs the desktop app on macOS.
+  Each release updates both: the release run bumps them in
+  [gizmodata/homebrew-tap](https://github.com/gizmodata/homebrew-tap) from the release's
+  `SHA256SUMS`, and nothing is pushed there until `brew install` and `brew test` (a server
+  started and queried through the CLI) passed on macOS and on both Linux architectures.
+
 ## [2.10.0] - 2026-11-07
 
 The server is unchanged; this release is for the CLI, the web UI and the Python package (lazy

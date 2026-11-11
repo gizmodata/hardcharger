@@ -1,0 +1,39 @@
+# server.yml's downstream job dispatches this after each stable release is published, on the
+# release's tag. It points gizmodata/homebrew-tap's `hardcharger` formula and `hardcharger-desktop`
+# cask at the release (`brew install gizmodata/tap/hardcharger`): the tap's own workflow bumps
+# them from the release's SHA256SUMS, installs and tests them with brew on macOS, Linux x86-64
+# and Linux arm64, and pushes to the tap only when all three passed.
+#
+# Dispatch it by hand to retry, or with `dry_run` to run everything but the push. Never for a
+# release candidate: Homebrew only carries releases. A version older than the tap's changes
+# nothing.
+#
+# HOMEBREW_TAP_DEPLOY_KEY is a deploy key with write access to gizmodata/homebrew-tap (that one
+# repository, no expiry). The tap's workflow is ours and is followed at its main, like the
+# formula it edits.
+name: Homebrew
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published release version (without v; never a release candidate)
+        required: true
+        type: string
+      dry_run:
+        description: Bump and test the formula and cask, but push nothing to the tap
+        type: boolean
+        default: false
+permissions:
+  contents: read
+# One at a time, in order: two bumps must not race for the tap's main.
+concurrency:
+  group: homebrew-tap
+  cancel-in-progress: false
+jobs:
+  bump:
+    uses: gizmodata/homebrew-tap/.github/workflows/bump-hardcharger.yml@main
+    with:
+      version: ${{ inputs.version }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets:
+      TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}

@@ -193,10 +193,19 @@ the signatures checked and the GitHub Release published. It dispatches, on the s
   that GitHub Release is published, and the package is exactly the matching version.
 - `adbc-images.yml` with `publish=true`, the release's version and the newest stable
   `hardcharger-adbc` release, which builds, tests and publishes `:X.Y.Z-adbc`.
+- `homebrew.yml` with `version: X.Y.Z`, for a release only (never a candidate). It calls
+  [gizmodata/homebrew-tap](https://github.com/gizmodata/homebrew-tap)'s `bump-hardcharger.yml`,
+  which points the `hardcharger` formula and the `hardcharger-desktop` cask at the release's
+  assets (from its `SHA256SUMS`), installs and tests them with brew on macOS, Linux x86-64 and
+  Linux arm64, and pushes to the tap only when all three passed. It pushes with the
+  `HOMEBREW_TAP_DEPLOY_KEY` secret, a deploy key for that one repository. A release older than
+  the tap's version (a patch to an earlier line) leaves the tap alone.
 
-It waits for both and fails, with links to the runs, when either does, then checks that PyPI and
-both registries have them. A red `downstream` means the server release is out and something
-after it isn't: fix the cause and re-run that workflow by hand (the commands below), not the tag.
+It waits for them all and fails, with links to the runs, when any does, then checks that PyPI,
+both registries and the tap have them. A red `downstream` means the server release is out and
+something after it isn't: fix the cause and re-run that workflow by hand, not the tag (for
+Homebrew: `gh workflow run homebrew.yml --ref vX.Y.Z -f version=X.Y.Z`; add `-f dry_run=true`
+to run everything but the push).
 
 ### The docs
 

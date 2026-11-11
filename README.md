@@ -346,6 +346,21 @@ platform on first use and runs it. The **client** is `adbc-driver-hardcharger` (
 `pip install "hardcharger[adbc]"` installs both, and `server.connect()` then returns a
 connection. See [python/README.md](python/README.md).
 
+### Homebrew
+
+On macOS 15+ (Apple silicon) and Linux (x86-64 and arm64):
+
+```bash
+brew install gizmodata/tap/hardcharger                  # hardcharger-server and the hardcharger CLI
+brew install --cask gizmodata/tap/hardcharger-desktop   # the desktop app (macOS)
+```
+
+```bash
+HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --database my.duckdb
+```
+
+The formula and the cask follow every release; `brew upgrade` brings the new one.
+
 ### Binaries
 
 These packages contain the server and command-line client. For the graphical app in

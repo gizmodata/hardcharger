@@ -51,6 +51,7 @@ on:
       - "!.github/ISSUE_TEMPLATE/**"
       - "!.github/workflows/workflow.yml"
       - "!.github/workflows/dockerhub-check.yml"
+      - "!.github/workflows/homebrew.yml"
       - "!.github/scripts/check_no_version_labels.py"
   pull_request:
     paths:
@@ -66,6 +67,7 @@ on:
       - "!.github/ISSUE_TEMPLATE/**"
       - "!.github/workflows/workflow.yml"
       - "!.github/workflows/dockerhub-check.yml"
+      - "!.github/workflows/homebrew.yml"
       - "!.github/scripts/check_no_version_labels.py"
   workflow_dispatch:
     inputs:
@@ -1802,12 +1804,14 @@ jobs:
           prerelease: ${{ steps.notes.outputs.prerelease == 'true' }}
           make_latest: ${{ steps.notes.outputs.prerelease == 'true' && 'false' || 'true' }}
 
-  # What follows a published release: the matching `hardcharger` Python package (workflow.yml)
-  # and the bundled-driver images :X.Y.Z-adbc (adbc-images.yml). Only after the release job
-  # succeeded, so only for a v* tag whose every gate, signature check and GitHub Release did;
-  # each dispatched run runs its own tests on the tag before it publishes. This job waits for
-  # both and fails when either does, and checks PyPI and both registries afterwards: a release
-  # isn't done until its downstream publishes are confirmed.
+  # What follows a published release: the matching `hardcharger` Python package (workflow.yml),
+  # the bundled-driver images :X.Y.Z-adbc (adbc-images.yml) and, for a release that is not a
+  # release candidate, the Homebrew formula and cask in gizmodata/homebrew-tap (homebrew.yml).
+  # Only after the release job succeeded, so only for a v* tag whose every gate, signature check
+  # and GitHub Release did; each dispatched run runs its own tests on the tag before it
+  # publishes. This job waits for them all and fails when any does, and checks PyPI, both
+  # registries and the tap afterwards: a release isn't done until its downstream publishes are
+  # confirmed.
   downstream:
     if: ${{ !cancelled() && needs.release.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
     needs: release
@@ -1820,7 +1824,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v7
-      - name: Dispatch the Python package and the ADBC images
+      - name: Dispatch the Python package, the ADBC images and Homebrew
         id: dispatch
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -1850,16 +1854,29 @@ jobs:
           adbc=$(dispatch adbc-images.yml -f server_version="$version" -f driver_tag="$driver" -f publish=true)
           echo "python=$python" >> "$GITHUB_OUTPUT"
           echo "adbc=$adbc" >> "$GITHUB_OUTPUT"
-      - name: Wait for both to publish
+          # Homebrew carries releases only: a release candidate never reaches the tap.
+          if [ "$(.github/scripts/release.sh prerelease "$version")" = false ]; then
+            homebrew=$(dispatch homebrew.yml -f version="$version")
+            echo "homebrew=$homebrew" >> "$GITHUB_OUTPUT"
+          else
+            echo "homebrew.yml: not dispatched for the release candidate $version"
+          fi
+      - name: Wait for them to publish
         env:
           PYTHON_RUN: ${{ steps.dispatch.outputs.python }}
           ADBC_RUN: ${{ steps.dispatch.outputs.adbc }}
+          HOMEBREW_RUN: ${{ steps.dispatch.outputs.homebrew }}
         run: |
           failed=0
+          if [ -n "$HOMEBREW_RUN" ]; then
+            gh run watch "$HOMEBREW_RUN" --exit-status --interval 30 > /dev/null || { echo "::error::the Homebrew run failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$HOMEBREW_RUN"; failed=1; }
+          fi
           gh run watch "$PYTHON_RUN" --exit-status --interval 30 > /dev/null || { echo "::error::the Python package run failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$PYTHON_RUN"; failed=1; }
           gh run watch "$ADBC_RUN" --exit-status --interval 30 > /dev/null || { echo "::error::the ADBC images run failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$ADBC_RUN"; failed=1; }
           exit "$failed"
-      - name: Confirm PyPI and the registries have them
+      - name: Confirm PyPI, the registries and the Homebrew tap have them
+        env:
+          HOMEBREW_RUN: ${{ steps.dispatch.outputs.homebrew }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           package=$(python3 -c 'import tomllib; print(tomllib.load(open("python/pyproject.toml", "rb"))["project"]["version"])')
@@ -1874,9 +1891,25 @@ jobs:
             docker buildx imagetools inspect "$image" > /dev/null || { echo "::error::$image is missing"; exit 1; }
             echo "image: $image"
           done
+          # The tap's main, read through the API (raw.githubusercontent.com caches for minutes).
+          # A patch to an older release line leaves the tap at its newer version.
+          if [ -n "$HOMEBREW_RUN" ]; then
+            for file in Formula/hardcharger.rb Casks/hardcharger-desktop.rb; do
+              tap=$(gh api -H "Accept: application/vnd.github.raw" "repos/gizmodata/homebrew-tap/contents/$file?ref=main" \
+                      | sed -n 's/^ *version "\(.*\)"$/\1/p') || tap=""
+              [ -n "$tap" ] || { echo "::error::could not read the version in gizmodata/homebrew-tap $file"; exit 1; }
+              newest=$(printf '%s\n%s\n' "$tap" "$version" | sort -V | tail -n 1)
+              if [ "$tap" != "$version" ] && [ "$newest" != "$tap" ]; then
+                echo "::error::gizmodata/homebrew-tap $file is at $tap, not $version"
+                exit 1
+              fi
+              echo "Homebrew: $file is at $tap"
+            done
+          fi
 
   # One Slack message per release tag (gizmodata/.github's notify-slack, org secret
-  # SLACK_RELEASES_WEBHOOK_URL): released once PyPI and the images are confirmed, or what failed.
+  # SLACK_RELEASES_WEBHOOK_URL): released once PyPI, the images and Homebrew are confirmed, or
+  # what failed.
   # It never fails the run.
   notify:
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
@@ -1890,11 +1923,11 @@ jobs:
         || 'failure' }}
       title: >-
         ${{ needs.release.result != 'success' && format('Hardcharger {0}: not released (the release gate did not pass)', github.ref_name)
-        || needs.downstream.result != 'success' && format('Hardcharger {0} released, but PyPI or the ADBC images did not publish', github.ref_name)
+        || needs.downstream.result != 'success' && format('Hardcharger {0} released, but PyPI, the ADBC images or Homebrew did not publish', github.ref_name)
         || format('Hardcharger {0} released', github.ref_name) }}
       details: >-
         ${{ needs.release.result == 'success' && needs.downstream.result == 'success'
-        && 'Published and checked: the GitHub Release, PyPI hardcharger, and the server and ADBC images on ghcr.io and Docker Hub.'
+        && 'Published and checked: the GitHub Release, PyPI hardcharger, the server and ADBC images on ghcr.io and Docker Hub, and (for a release, not a candidate) the Homebrew formula and cask.'
         || '' }}
       url: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
     secrets:
