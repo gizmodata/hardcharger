@@ -27,6 +27,8 @@ CURL_VERSION=8.23.0
 CURL_SHA256=8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5
 
 IOS="${HARDCHARGER_IOS_SDK:-}"
+ANDROID="${HARDCHARGER_ANDROID_ABI:-}"
+MOBILE="${IOS:-$ANDROID}"
 if [ -n "$IOS" ] && [ -z "${CMAKE_TOOLCHAIN_FILE:-}" ]; then
   echo "HARDCHARGER_IOS_SDK=$IOS needs CMAKE_TOOLCHAIN_FILE (ios/cmake/ios.toolchain.cmake)" >&2; exit 2
 fi
@@ -48,7 +50,7 @@ if [ ! -f "$ROARING/.roaring-$ROARING_VERSION.stamp" ]; then
   cmake -S "$src/roaring" -B "$src/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$ROARING" -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DENABLE_ROARING_TESTS=OFF -DROARING_USE_CPM=OFF \
-    ${IOS:+-DROARING_DISABLE_NATIVE=ON} >/dev/null
+    ${MOBILE:+-DROARING_DISABLE_NATIVE=ON} >/dev/null
   cmake --build "$src/build" >/dev/null
   cmake --install "$src/build" >/dev/null
   rm -rf "$src"
@@ -76,6 +78,12 @@ if [ ! -f "$LIBPQ/.libpq-$POSTGRES_VERSION.stamp" ]; then
     cross=(--host=aarch64-apple-darwin "CC=$(xcrun --sdk "$IOS" -f clang) -target $triple -isysroot $sysroot"
            "PG_SYSROOT=$sysroot")
   fi
+  if [ -n "$ANDROID" ]; then
+    case "$(uname)" in Darwin) ndk_host=darwin-x86_64 ;; *) ndk_host=linux-x86_64 ;; esac
+    bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$ndk_host/bin"
+    case "$ANDROID" in arm64-v8a) triple=aarch64-linux-android ;; x86_64) triple=x86_64-linux-android ;; esac
+    cross=(--host="$triple" "CC=$bin/${triple}28-clang" "AR=$bin/llvm-ar" "RANLIB=$bin/llvm-ranlib")
+  fi
   (cd "$src/postgres" \
      && CFLAGS="${CFLAGS:-} -O2 -fPIC" ./configure --prefix="$LIBPQ" --with-ssl=openssl ${ssl_flags[@]+"${ssl_flags[@]}"} \
           ${cross[@]+"${cross[@]}"} \
@@ -94,7 +102,10 @@ if [ ! -f "$LIBPQ/.libpq-$POSTGRES_VERSION.stamp" ]; then
     "$LIBPQ/include/"
   cp "$src/postgres/src/interfaces/libpq/libpq.a" "$LIBPQ/lib/libpq.a"
   combined="$src/libpq-combined.a"
-  if [ "$(uname)" = Darwin ]; then
+  if [ -n "$ANDROID" ]; then
+    printf 'create %s\naddlib %s\naddlib %s\naddlib %s\nsave\nend\n' "$combined" "$LIBPQ/lib/libpq.a" \
+      "$src/postgres/src/common/libpgcommon_shlib.a" "$src/postgres/src/port/libpgport_shlib.a" | "$bin/llvm-ar" -M
+  elif [ "$(uname)" = Darwin ]; then
     libtool -static -o "$combined" "$LIBPQ/lib/libpq.a" \
       "$src/postgres/src/common/libpgcommon_shlib.a" "$src/postgres/src/port/libpgport_shlib.a"
   else
@@ -106,7 +117,7 @@ if [ ! -f "$LIBPQ/.libpq-$POSTGRES_VERSION.stamp" ]; then
   touch "$LIBPQ/.libpq-$POSTGRES_VERSION.stamp"
 fi
 CURL="$DEPS/curl-install"
-if { [ "$(uname)" != Darwin ] || [ -n "$IOS" ]; } && [ ! -f "$CURL/.curl-$CURL_VERSION.stamp" ]; then
+if { [ "$(uname)" != Darwin ] || [ -n "$MOBILE" ]; } && [ ! -f "$CURL/.curl-$CURL_VERSION.stamp" ]; then
   src=$(mktemp -d)
   fetch "https://curl.se/download/curl-$CURL_VERSION.tar.xz" "$CURL_SHA256" "$src/curl"
   rm -rf "$CURL"

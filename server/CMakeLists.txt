@@ -48,6 +48,10 @@ option(HARDCHARGER_STATIC "Link DuckDB statically (release builds)" OFF)
 # ios/scripts/build-server-ios.sh, which cross-compiles with ios/cmake/ios.toolchain.cmake).
 # It builds that library and its smoke test instead of the programs and their tests.
 option(HARDCHARGER_EMBEDDED "Build the server as a library for an app (the iOS app)" OFF)
+option(HARDCHARGER_ANDROID_PLAY "Android distribution with bundled extensions only" OFF)
+if(HARDCHARGER_ANDROID_PLAY AND NOT (ANDROID AND HARDCHARGER_STATIC AND HARDCHARGER_EMBEDDED))
+  message(FATAL_ERROR "HARDCHARGER_ANDROID_PLAY requires an embedded, statically linked Android build")
+endif()
 if(HARDCHARGER_STATIC)
   # DuckDB's archives: the extensions first, then its vendored libraries and the engine,
   # with the libraries the extensions link (scripts/build-extension-deps.sh; deps-duckdb.sh
@@ -57,7 +61,7 @@ if(HARDCHARGER_STATIC)
   # shared libduckdb, the library does that itself); as an interface source, it is
   # compiled into every program that links DuckDB.
   set(_duckdb_lib "${CHARGEWIRE_DUCKDB_PREFIX}/lib")
-  if(IOS)
+  if(IOS OR ANDROID)
     file(GLOB _duckdb_extensions "${_duckdb_lib}/lib*_extension.a")
   else()
     # Explicitly limit native builds, even if an old install prefix contains extra archives.
@@ -68,8 +72,20 @@ if(HARDCHARGER_STATIC)
   endif()
   file(GLOB _duckdb_vendored "${_duckdb_lib}/libduckdb_*.a")
   list(REMOVE_ITEM _duckdb_vendored "${_duckdb_lib}/libduckdb_static.a")
+  set(_duckdb_loader "${CHARGEWIRE_DUCKDB_PREFIX}/share/duckdb-static/duckdb_static_extension_loader.c")
+  if(HARDCHARGER_ANDROID_PLAY)
+    # DuckDB 2.0 keeps executable extension installation/loading in separate archives.
+    # Exclude that code entirely, not just a setting an administrator could turn on.
+    list(REMOVE_ITEM _duckdb_vendored "${_duckdb_lib}/libduckdb_loadable_extensions.a"
+         "${_duckdb_lib}/libduckdb_httplib.a")
+    set(_duckdb_extensions)
+    foreach(_extension autocomplete tpch httpfs ducklake postgres_scanner core_functions parquet json icu)
+      list(APPEND _duckdb_extensions "${_duckdb_lib}/lib${_extension}_extension.a")
+    endforeach()
+    set(_duckdb_loader "${CMAKE_CURRENT_SOURCE_DIR}/../android/native/bundled_extensions.c")
+  endif()
   set(_duckdb_archives ${_duckdb_extensions} ${_duckdb_vendored} "${_duckdb_lib}/libduckdb_static.a")
-  if(IOS)
+  if(IOS OR ANDROID)
     list(APPEND _duckdb_archives "${_duckdb_lib}/static-deps/libpq.a"
          "${_duckdb_lib}/static-deps/libroaring.a" "${_duckdb_lib}/static-deps/libcurl.a")
   endif()
@@ -82,7 +98,7 @@ if(HARDCHARGER_STATIC)
   find_package(Threads REQUIRED)
   add_library(hardcharger_duckdb INTERFACE)
   target_sources(hardcharger_duckdb INTERFACE
-                 "${CHARGEWIRE_DUCKDB_PREFIX}/share/duckdb-static/duckdb_static_extension_loader.c"
+                 "${_duckdb_loader}"
                  "${CHARGEWIRE_DUCKDB_PREFIX}/share/duckdb-static/static_extension_autoregister.cpp")
   target_include_directories(hardcharger_duckdb INTERFACE "${CHARGEWIRE_DUCKDB_PREFIX}/include")
   if(IOS)
@@ -250,6 +266,9 @@ target_compile_options(hardcharger_core PRIVATE ${HARDCHARGER_WARNINGS})
 if(IOS)
   target_compile_definitions(hardcharger_core PRIVATE HARDCHARGER_IOS)
 endif()
+if(HARDCHARGER_ANDROID_PLAY)
+  target_compile_definitions(hardcharger_core PRIVATE HARDCHARGER_ANDROID_PLAY)
+endif()
 if(WIN32)
   target_link_libraries(hardcharger_core PUBLIC crypt32 iphlpapi)  # certificate store and local interface addresses
 endif()
@@ -311,6 +330,14 @@ if(HARDCHARGER_EMBEDDED)
   target_compile_options(hardcharger_embedded PRIVATE ${HARDCHARGER_WARNINGS})
   if(HARDCHARGER_STATIC)
     target_compile_definitions(hardcharger_embedded PRIVATE HARDCHARGER_STATIC_DUCKDB)
+  endif()
+  if(ANDROID)
+    add_library(hardcharger_android SHARED ../android/native/bridge.cc)
+    if(HARDCHARGER_ANDROID_PLAY)
+      target_compile_definitions(hardcharger_android PRIVATE HARDCHARGER_ANDROID_PLAY)
+    endif()
+    target_link_libraries(hardcharger_android PRIVATE hardcharger_embedded log)
+    target_link_options(hardcharger_android PRIVATE "-Wl,-z,max-page-size=16384")
   endif()
   add_executable(hardcharger-embedded-smoke embedded/smoke_test.cc)
   target_link_libraries(hardcharger-embedded-smoke PRIVATE hardcharger_embedded chargewire_client)

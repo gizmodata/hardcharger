@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Preserve the 471:376 artwork ratio and fill the adaptive mask without legacy-icon padding. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetLeft="18%" android:insetRight="18%"
+    android:insetTop="24.5%" android:insetBottom="24.5%">
+    <bitmap android:src="@drawable/head_mark" android:gravity="fill" />
+</inset>

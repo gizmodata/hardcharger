@@ -1,0 +1,3 @@
+First Android test release of Hardcharger.
+
+Run DuckDB on your device with a native SQL console and built-in web workspace. Import and export files, save remote server connections, and share the local server over TLS. Includes phone and tablet layouts, light and dark appearance, configurable resource limits, and bundled database extensions.

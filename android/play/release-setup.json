@@ -1,0 +1,23 @@
+{
+  "status": "signed-internal-test-candidate-local-not-submitted",
+  "application_id": "com.gizmodata.hardcharger",
+  "app_name": "Hardcharger",
+  "console_app": "created-owner-confirmed",
+  "developer": "GizmoData LLC",
+  "default_language": "en-US",
+  "app_or_game": "app",
+  "suggested_category": "Tools",
+  "pricing": null,
+  "support_email": "info@gizmodata.com",
+  "website": "https://gizmodata.com",
+  "privacy_policy_url": null,
+  "initial_track": "internal",
+  "release_source": "ci-candidate-preferred",
+  "ci_branch": "release/android-preview",
+  "ci_status": "authorized-first-run-signing-configured",
+  "organization_verification": "owner-to-confirm",
+  "upload_key": "created-locally-not-registered-with-play",
+  "first_build_number": 1,
+  "upload_certificate_sha256": "75:6E:20:41:91:66:D6:F5:E0:41:80:E1:37:CF:69:2E:3F:6A:54:7D:76:4F:A3:9D:E8:64:D5:59:1E:27:E2:6F",
+  "production_release": "not-authorized"
+}

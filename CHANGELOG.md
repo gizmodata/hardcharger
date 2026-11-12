@@ -7,6 +7,42 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Android app with the embedded server and built-in extensions, web workspace, native SQL
+  console, file import/export, saved remote connections, browser sign-in, TLS sharing and
+  Keystore-protected credentials. Includes ARM64 and 16 KB emulator validation, local build
+  and launch scripts, and an explicit acceptance record (`android/PARITY.md`).
+- Separate local Google Play build preparation with bundled-only native extensions,
+  verified native artifacts, store-listing drafts and an in-app Android privacy policy.
+  Local Android builds retain automatic installation/loading of signed extensions.
+- Android preview CI/CD for `release/android-preview`: native builds, emulator tests,
+  protected signing, traceable bundle artifacts and optional Google Play internal drafts.
+
+### Changed
+
+- Bring Android's native presentation closer to iOS: four floating phone tabs, large page
+  titles, a mascot/status card, grouped settings, blue accents, neutral light/dark surfaces,
+  a sharing sheet, and adaptive server controls on tablets.
+- Add the branded iOS-style About screen to Android Settings, with light/dark mascot art,
+  runtime component versions, third-party software notices and the GizmoData footer.
+  Align version rows, address/password copying, sharing controls, console history controls
+  and searchable, styled log rows with iOS; adapt detail rows for larger text.
+- Match iOS resource controls: Automatic memory (30% of device RAM, bounded to 256–4096 MB),
+  memory presets and One per core threads. Fresh installs default to these automatic limits
+  and enable statement logging, while upgrades retain saved explicit settings. Use an
+  adaptive launcher icon so the mascot fills Android's circular mask more fully.
+
+### Fixed
+
+- Correct the Android Gradle wrapper download checksum and verify the local signed Play
+  bundle workflow with upload credentials stored outside the repository.
+- Enable host-keyboard input when launching the local Android emulator.
+- Expose Android's persisted Emoji / Plain log-view preference in Settings and Logs,
+  matching iOS and applying immediately without restarting the server.
+- Keep floating menus, upload dialogs and result actions within narrow mobile WebView
+  screens, including toolbars whose contents exceed the viewport width.
+
 ## [2.11.0] - 2026-11-12
 
 ### Added

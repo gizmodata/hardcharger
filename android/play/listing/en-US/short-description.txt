@@ -1,0 +1,1 @@
+Run DuckDB on Android, query your files, and connect to your servers.
