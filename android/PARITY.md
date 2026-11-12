@@ -178,13 +178,18 @@ version 2.11.0/code 1 and non-debuggable release. All 139 payload entries have v
 digests and the expected upload certificate when read with Java's verifying JarFile API.
 The upload key and bundle have not been registered/uploaded to Play.
 
-## Android-only CI preparation
+## Android-only CI validation
 
 The local `release/android-preview` branch now includes `.github/workflows/android.yml`.
 Actionlint (including shell checks), shell syntax, nine offline release-control tests,
 and positive/negative bundle-signature verification passed locally. The workflow builds
 ARM64/x86_64 libraries, tests Play/local distributions on an x86_64 emulator, signs only
 after those gates pass, and optionally uploads the same candidate as an internal draft.
-It is not yet pushed or exercised on GitHub. Remote signing/OIDC configuration and the
-initial Console bootstrap remain pending; see `play/CI.md`. All-platform v2.12.0 release
-integration is deferred until this standalone pipeline has passed in CI.
+The branch is pushed and GitHub signing is configured. Run
+[43318844453](https://github.com/gizmodata/hardcharger/actions/runs/43318844453) passed
+both native builds, JVM tests, lint and both x86_64 emulator suites on 2026-11-12.
+Both dependency caches were saved. The signed ARM64/x86_64 candidate is version
+2.11.0/code 1401; its checksum, metadata and all 141 payload signatures were verified
+after download against the local upload certificate. Google Play upload was skipped.
+Google OIDC configuration and the initial Console bootstrap remain pending; see
+`play/CI.md`. All-platform v2.12.0 release integration remains a separate follow-up.

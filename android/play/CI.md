@@ -80,13 +80,21 @@ bump are intentionally not part of the preview work; server/Python remain 2.11.0
 
 Local validation covers workflow syntax, shell syntax, signed bundle verification and
 offline tests for branch/signing gates, version-code progression, checksum rejection,
-preserving existing active releases, draft-only upload and aborting failed edits. The
-Linux cross-build, x86_64 emulator and live Google API path still need their first CI run.
-The owner authorized pushing the preview branch and running its first CI build.
+preserving existing active releases, draft-only upload and aborting failed edits.
+
+[Run 43318844453](https://github.com/gizmodata/hardcharger/actions/runs/43318844453)
+passed on 2026-11-12 at source commit `bcacbc45ee2fce16e06041ef1e851162aafab702`.
+Both Linux native builds, JVM tests, release lint and the x86_64 Play/local emulator
+suites passed. Dependency-install caches were saved for both ABIs (about 500 MB each).
+The signed candidate is version 2.11.0, code **1401**, with ARM64 and x86_64 libraries.
+The downloaded bundle's SHA-256, source metadata and all 141 signed payload entries
+were independently verified against the local upload certificate.
+
 The GitHub `android-signing` environment now contains the four upload-key secrets and
 admits only `release/android-preview`; `ANDROID_PLAY_BOOTSTRAPPED=false` explicitly
 disables automatic uploads. Google authentication and the initial Console upload are
-still pending. Check the branch's Actions runs for the current build result.
+still pending; the live Google API upload path has not been exercised. The successful
+run skipped `play-draft` and did not upload anything to Google Play.
 
 References: [Google API setup](https://developers.google.com/android-publisher/getting_started),
 [initial upload and edit lifecycle](https://developers.google.com/android-publisher/edits),
