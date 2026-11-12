@@ -1221,7 +1221,7 @@ class PlanChecker {
       Deny(principal_, "user " + principal_.user_name + " has no " + PrivilegeName(privilege) +
                            " privilege on " + where);
     }
-    ownership_.push_back({PendingOwnership::Kind::kCreate, target, type});
+    ownership_.push_back({PendingOwnership::Kind::kCreate, target, type, {}, false, {}, !existing});
     return true;
   }
 
@@ -1618,6 +1618,7 @@ class PlanChecker {
         ObjectPath sequence = PathOf(*entry);
         if (IsTempCatalog(sequence.catalog)) return;
         RequireSchemaPrivilege(sequence, Privilege::kDropSequence, "drop sequence");
+        ownership_.push_back({PendingOwnership::Kind::kDrop, sequence, ObjectType::kSequence});
         return;
       }
       case dd::CatalogType::MACRO_ENTRY:
@@ -1885,6 +1886,41 @@ void RequireActiveRole(const Snapshot& snapshot, const Principal& principal) {
                                 "or RESET ROLE");
 }
 
+void CollectRename(dd::ClientContext& context, dd::LogicalOperator& op,
+                   std::vector<PendingOwnership>& changes) {
+  if (op.type == OpType::LOGICAL_ALTER) {
+    auto& info = *op.Cast<dd::LogicalAlter>().info;
+    std::string name;
+    if (info.type == dd::AlterType::ALTER_TABLE &&
+        info.Cast<dd::AlterTableInfo>().alter_table_type == dd::AlterTableType::RENAME_TABLE) {
+      name = compat::Str(info.Cast<dd::RenameTableInfo>().new_table_name);
+    } else if (info.type == dd::AlterType::ALTER_VIEW &&
+               info.Cast<dd::AlterViewInfo>().alter_view_type == dd::AlterViewType::RENAME_VIEW) {
+      name = compat::Str(info.Cast<dd::RenameViewInfo>().new_view_name);
+    }
+    if (!name.empty()) {
+      auto entry = LookUp(context, dd::CatalogType::TABLE_ENTRY, PartsOf(info));
+      if (entry) {
+        auto path = PathOfEntry(*entry);
+        if (!IsTempCatalog(path.catalog)) {
+          auto destination = path;
+          destination.object_name = name;
+          // An occupied destination makes the rename fail; never overwrite its
+          // permissions while preparing that failure. Case-only renames keep keys.
+          if (IdentifiersEqual(path.object_name, name)) return;
+          auto destination_parts = PartsOf(info);
+          destination_parts.back() = name;
+          if (LookUp(context, dd::CatalogType::TABLE_ENTRY, destination_parts)) return;
+          changes.push_back({PendingOwnership::Kind::kRename, path,
+                             entry->type == dd::CatalogType::VIEW_ENTRY ? ObjectType::kView : ObjectType::kTable,
+                             {}, false, destination});
+        }
+      }
+    }
+  }
+  for (auto& child : op.children) if (child) CollectRename(context, *child, changes);
+}
+
 void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalOperator>& plan) {
   auto& context = input.context;
   auto state = context.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
@@ -1905,18 +1941,55 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
       std::function<void(dd::LogicalOperator&)> collect = [&](dd::LogicalOperator& op) {
         if (op.type == OpType::LOGICAL_CREATE_TABLE) {
           auto parts = PartsOf(*op.Cast<dd::LogicalCreateTable>().info->base);
-          if (parts.size() >= 3 && !IsTempCatalog(parts[0])) {
+          auto& info = *op.Cast<dd::LogicalCreateTable>().info->base;
+          auto existing = LookUp(context, dd::CatalogType::TABLE_ENTRY, parts);
+          if (parts.size() >= 3 && !IsTempCatalog(parts[0]) &&
+              !(existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT)) {
             ownership.push_back({PendingOwnership::Kind::kCreate,
                                  {parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()},
-                                 ObjectType::kTable});
+                                 ObjectType::kTable, {}, false, {}, !existing});
           }
         } else if (op.type == OpType::LOGICAL_CREATE_VIEW) {
           auto parts = PartsOf(*op.Cast<dd::LogicalCreate>().info);
-          if (parts.size() >= 3 && !IsTempCatalog(parts[0])) {
+          auto& info = *op.Cast<dd::LogicalCreate>().info;
+          auto existing = LookUp(context, dd::CatalogType::TABLE_ENTRY, parts);
+          if (parts.size() >= 3 && !IsTempCatalog(parts[0]) &&
+              !(existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT)) {
             ownership.push_back({PendingOwnership::Kind::kCreate,
                                  {parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()},
-                                 ObjectType::kView,
-                                 DefinitionHashOf(*op.Cast<dd::LogicalCreate>().info)});
+                                 ObjectType::kView, DefinitionHashOf(info), false, {}, !existing});
+          }
+        } else if (op.type == OpType::LOGICAL_CREATE_SCHEMA) {
+          auto& info = *op.Cast<dd::LogicalCreate>().info;
+          auto target = SchemaTarget(context, PartsOf(info));
+          auto existing = LookUpSchema(context, target);
+          if (!IsTempCatalog(target.catalog) &&
+              !(existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT)) {
+            ownership.push_back({PendingOwnership::Kind::kCreate, target, ObjectType::kSchema,
+                                 {}, false, {}, !existing});
+          }
+        } else if (op.type == OpType::LOGICAL_DROP) {
+          auto& info = *op.Cast<dd::LogicalDrop>().info;
+          auto parts = PartsOf(info);
+          if (info.type == dd::CatalogType::SCHEMA_ENTRY) {
+            auto path = SchemaTarget(context, parts);
+            if (!path.catalog.empty() && !IsTempCatalog(path.catalog))
+              ownership.push_back({PendingOwnership::Kind::kDrop, path, ObjectType::kSchema});
+          } else if (info.type == dd::CatalogType::TABLE_ENTRY || info.type == dd::CatalogType::VIEW_ENTRY ||
+                     info.type == dd::CatalogType::SEQUENCE_ENTRY) {
+            auto entry = LookUp(context, info.type, parts);
+            if (entry && !IsTempCatalog(PathOfEntry(*entry).catalog)) {
+              ownership.push_back({PendingOwnership::Kind::kDrop, PathOfEntry(*entry),
+                                   info.type == dd::CatalogType::SEQUENCE_ENTRY ? ObjectType::kSequence :
+                                   info.type == dd::CatalogType::VIEW_ENTRY ? ObjectType::kView : ObjectType::kTable});
+            } else if (!entry && parts.size() >= 3 && !IsTempCatalog(parts[0])) {
+              // An administrator can repair legacy stale rows by repeating a fully
+              // qualified DROP ... IF EXISTS; no phantom object needs to be created.
+              ownership.push_back({PendingOwnership::Kind::kDrop,
+                                   {parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()},
+                                   info.type == dd::CatalogType::SEQUENCE_ENTRY ? ObjectType::kSequence :
+                                   info.type == dd::CatalogType::VIEW_ENTRY ? ObjectType::kView : ObjectType::kTable});
+            }
           }
         } else if (op.type == OpType::LOGICAL_CREATE_TRIGGER) {
           // An administrator's trigger (replacing a user's too) runs with the writer's rights.
@@ -1934,6 +2007,7 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
         }
       };
       collect(*plan);
+      CollectRename(context, *plan, ownership);
     }
     // A user's trigger fired by this statement runs with the user's rights, not the
     // administrator's: its body is checked, and its policies applied, as the owner.
@@ -1986,7 +2060,9 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
   // Row and masking policies apply to what passed the check (a user's trigger body: the
   // owner's policies).
   ApplyPolicies(context, snapshot, principal, plan, FindTriggerBodies(context, *snapshot, *plan));
-  state->NoteChecked(snapshot->version(), checker.TakeOwnership(),
+  auto ownership = checker.TakeOwnership();
+  CollectRename(context, *plan, ownership);
+  state->NoteChecked(snapshot->version(), std::move(ownership),
                      plan->type == OpType::LOGICAL_PREPARE, checker.TakeAccesses());
 }
 
@@ -2083,7 +2159,7 @@ dd::RebindQueryInfo RbacSessionState::OnFinalizePrepare(dd::ClientContext&,
     rebind = FinalizePrepareLocked(prepared, mode, runs_now);
     if (runs_now) {
       for (const auto& o : pending_ownership_) {
-        if (o.kind == PendingOwnership::Kind::kCreate && !o.recorded) to_record.push_back(o);
+        if (o.kind != PendingOwnership::Kind::kDrop && !o.recorded) to_record.push_back(o);
       }
     }
   }
@@ -2095,7 +2171,7 @@ dd::RebindQueryInfo RbacSessionState::OnFinalizePrepare(dd::ClientContext&,
     throw dd::PermissionException("Hardcharger blocked this statement: access control is shutting down");
   }
   std::vector<RecordedOwnership> undo;
-  auto status = RecordCreatedOwners(*engine, principal(), to_record, undo);
+  auto status = RecordOwnership(to_record, undo);
   std::lock_guard<std::mutex> lock(mutex_);
   for (auto& u : undo) recorded_ownership_.push_back(std::move(u));
   if (!status.ok()) {
@@ -2183,7 +2259,7 @@ dd::RebindQueryInfo RbacSessionState::OnRebindPreparedStatement(
   return RebindIfGrantsChanged(info.prepared_statement);
 }
 
-void RbacSessionState::QueryEnd(dd::ClientContext&, dd::optional_ptr<dd::ErrorData> error) {
+void RbacSessionState::QueryEnd(dd::ClientContext& context, dd::optional_ptr<dd::ErrorData> error) {
   std::vector<PendingOwnership> pending;
   std::vector<RecordedOwnership> recorded;
   {
@@ -2200,7 +2276,62 @@ void RbacSessionState::QueryEnd(dd::ClientContext&, dd::optional_ptr<dd::ErrorDa
     UndoRecordedOwners(*engine, recorded);
     return;
   }
-  if (!pending.empty()) ApplyOwnership(*engine, principal_, pending);
+  CompleteOwnership(context, pending, recorded);
+}
+
+namespace {
+struct MetadataUpdate {
+  explicit MetadataUpdate(std::atomic<bool>& flag) : flag(flag) { flag = true; }
+  ~MetadataUpdate() { flag = false; }
+  std::atomic<bool>& flag;
+};
+}  // namespace
+
+arrow::Status RbacSessionState::RecordOwnership(std::vector<PendingOwnership>& changes,
+                                                std::vector<RecordedOwnership>& undo) {
+  auto engine = engine_.lock();
+  if (!engine) return arrow::Status::Invalid("access control is shutting down");
+  MetadataUpdate updating(updating_metadata_);
+  return RecordCreatedOwners(*engine, principal(), changes, undo);
+}
+
+void RbacSessionState::CompleteOwnership(dd::ClientContext& context,
+                                         const std::vector<PendingOwnership>& pending,
+                                         const std::vector<RecordedOwnership>& recorded) {
+  auto engine = engine_.lock();
+  if (!engine) return;
+  MetadataUpdate updating(updating_metadata_);
+  if (context.transaction.HasActiveTransaction()) {
+    for (const auto& change : pending) {
+      if (change.kind == PendingOwnership::Kind::kRename) {
+        transaction_ownership_.push_back({PendingOwnership::Kind::kDrop, change.object, change.type});
+        transaction_ownership_.push_back({PendingOwnership::Kind::kCreate, change.destination,
+                                          change.type, {}, true});
+      } else {
+        transaction_ownership_.push_back(change);
+      }
+    }
+    for (const auto& record : recorded) transaction_recorded_.push_back(record);
+  } else if (!pending.empty()) {
+    ApplyOwnership(*engine, principal(), pending);
+  }
+}
+
+void RbacSessionState::TransactionCommit(dd::MetaTransaction&, dd::ClientContext&) {
+  MetadataUpdate updating(updating_metadata_);
+  if (auto engine = engine_.lock(); engine && !transaction_ownership_.empty())
+    ApplyOwnership(*engine, principal(), transaction_ownership_);
+  transaction_ownership_.clear();
+  transaction_recorded_.clear();
+}
+
+void RbacSessionState::TransactionRollback(dd::MetaTransaction&, dd::ClientContext&) {
+  MetadataUpdate updating(updating_metadata_);
+  if (auto engine = engine_.lock()) {
+    UndoRecordedOwners(*engine, transaction_recorded_);
+  }
+  transaction_ownership_.clear();
+  transaction_recorded_.clear();
 }
 
 bool IsAllowedTableFunction(const std::string& name_lower) {
@@ -2209,14 +2340,15 @@ bool IsAllowedTableFunction(const std::string& name_lower) {
 
 void ApplyOwnership(RbacEngine& engine, const Principal& principal,
                     const std::vector<PendingOwnership>& changes) {
-  for (const auto& p : changes) {
-    if (p.recorded) continue;
+  for (size_t index = 0; index < changes.size(); ++index) {
+    const auto& p = changes[index];
+    if (p.recorded && p.kind == PendingOwnership::Kind::kCreate) continue;
     // CREATE OR REPLACE drops and creates the same object: the creation's record, written
     // before the statement ran, is the one that stands.
     const bool replaced = p.kind == PendingOwnership::Kind::kDrop &&
-                          std::any_of(changes.begin(), changes.end(), [&](const PendingOwnership& c) {
+                          std::any_of(changes.begin() + static_cast<std::ptrdiff_t>(index + 1), changes.end(), [&](const PendingOwnership& c) {
                             return c.kind == PendingOwnership::Kind::kCreate && c.recorded &&
-                                   c.object.ToString() == p.object.ToString();
+                                   OwnerKey(c.type, c.object) == OwnerKey(p.type, p.object);
                           });
     if (replaced) continue;
     // A catalog_access principal (rules only, or an administrator's token with rules) is
@@ -2226,15 +2358,18 @@ void ApplyOwnership(RbacEngine& engine, const Principal& principal,
     // each reader's own rights, its creator's included, and fails when those don't reach
     // what the view reads.
     arrow::Status status;
-    if ((principal.catalog_rules && !principal.superuser) || p.kind == PendingOwnership::Kind::kDrop) {
+    if (p.kind == PendingOwnership::Kind::kRename || p.kind == PendingOwnership::Kind::kDrop) {
+      status = engine.ForgetObject(p.object, p.type);
+    } else if (principal.catalog_rules && !principal.superuser) {
       status = engine.ForgetOwner(p.object, p.type);
     } else {
       status = engine.RecordOwner(p.object, p.type, principal, p.definition_hash);
     }
     if (!status.ok()) {
-      Log(LogLevel::kWarning, "an object's owner record could not be updated",
+      Log(LogLevel::kWarning, "an object's access-control records could not be updated",
           {{"object", p.object.ToString()},
-           {"change", p.kind == PendingOwnership::Kind::kDrop ? "drop" : "create"},
+           {"change", p.kind == PendingOwnership::Kind::kDrop ? "drop" :
+                      p.kind == PendingOwnership::Kind::kRename ? "rename" : "create"},
            {"error", status.message()}});
     }
   }
@@ -2245,12 +2380,39 @@ arrow::Status RecordCreatedOwners(RbacEngine& engine, const Principal& principal
                                   std::vector<RecordedOwnership>& undo) {
   const std::size_t first = undo.size();
   for (auto& p : changes) {
-    if (p.kind != PendingOwnership::Kind::kCreate || p.recorded) continue;
+    if (p.kind == PendingOwnership::Kind::kDrop || p.recorded) continue;
+    if (p.kind == PendingOwnership::Kind::kRename) {
+      ObjectAccessRecords previous_access;
+      auto status = engine.CopyObjectAccess(p.object, p.type, p.destination, &previous_access);
+      if (!status.ok()) {
+        std::vector<RecordedOwnership> mine(undo.begin() + static_cast<std::ptrdiff_t>(first), undo.end());
+        UndoRecordedOwners(engine, mine);
+        undo.resize(first);
+        return status;
+      }
+      p.recorded = true;
+      undo.push_back({p.destination, p.type, std::nullopt, std::move(previous_access)});
+      continue;
+    }
     bool seen = false;  // the same object twice in one statement (a re-plan)
     for (std::size_t i = first; i < undo.size(); ++i) seen = seen || undo[i].object.ToString() == p.object.ToString();
     if (seen) {
       p.recorded = true;
       continue;
+    }
+    // A new name is a new object, including after an earlier drop whose store write
+    // failed or before upgrading from a server that left stale grants. Fail closed:
+    // without a successful cleanup, no new object is created under those grants.
+    std::optional<ObjectAccessRecords> previous_access;
+    if (p.fresh) {
+      previous_access.emplace();
+      auto status = engine.ForgetObject(p.object, p.type, &*previous_access);
+      if (!status.ok()) {
+        std::vector<RecordedOwnership> mine(undo.begin() + static_cast<std::ptrdiff_t>(first), undo.end());
+        UndoRecordedOwners(engine, mine);
+        undo.resize(first);
+        return status;
+      }
     }
     const auto snapshot = engine.snapshot();
     std::optional<OwnerRecord> previous;
@@ -2260,6 +2422,7 @@ arrow::Status RecordCreatedOwners(RbacEngine& engine, const Principal& principal
     }
     // See ApplyOwnership: a catalog_access principal's creations get no owner.
     const bool rules_only = principal.catalog_rules && !principal.superuser;
+    undo.push_back({p.object, p.type, std::move(previous), std::move(previous_access)});
     auto status = rules_only ? engine.ForgetOwner(p.object, p.type)
                              : engine.RecordOwner(p.object, p.type, principal, p.definition_hash);
     if (!status.ok()) {
@@ -2269,14 +2432,14 @@ arrow::Status RecordCreatedOwners(RbacEngine& engine, const Principal& principal
       return status;
     }
     p.recorded = true;
-    undo.push_back({p.object, p.type, std::move(previous)});
   }
   return arrow::Status::OK();
 }
 
 void UndoRecordedOwners(RbacEngine& engine, const std::vector<RecordedOwnership>& undo) {
   for (auto it = undo.rbegin(); it != undo.rend(); ++it) {
-    auto status = it->previous ? engine.PutOwner(*it->previous) : engine.ForgetOwner(it->object, it->type);
+    auto status = it->previous_access ? engine.RestoreObjectAccess(it->object, it->type, *it->previous_access)
+                  : it->previous ? engine.PutOwner(*it->previous) : engine.ForgetOwner(it->object, it->type);
     if (!status.ok()) {
       Log(LogLevel::kWarning, "the owner record of an object a failed statement would have created could not be put back",
           {{"object", it->object.ToString()}, {"error", status.message()}});

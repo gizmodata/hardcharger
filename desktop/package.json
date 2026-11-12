@@ -1,6 +1,6 @@
 {
   "name": "hardcharger-desktop",
-  "version": "2.10.0",
+  "version": "2.11.0",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -19,9 +19,9 @@
     "yaml": "^2.9.1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2",
+    "@playwright/test": "^1.65.0",
     "@tauri-apps/cli": "^2.10.1",
     "typescript": "~5.9.3",
-    "vite": "^7.3.1"
+    "vite": "^7.3.8"
   }
 }

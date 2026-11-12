@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hardcharger"
-version = "2.10.0"
+version = "2.11.0"
 description = "Run Hardcharger, GizmoData's DuckDB 2.0 server, from Python: downloads hardcharger-server on first use"
 readme = "README.md"
 license = "Apache-2.0"
@@ -26,10 +26,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# The client, so Server.connect() returns a connection. 2.4.2 or later: connecting to a stopped
-# GizmoData Cloud cluster (discovery "state": "stopped") signs in at the first request that does
-# work, not at connect, and closes never sign in (2.4.1), so neither starts a cluster for nobody.
-adbc = ["adbc-driver-hardcharger>=2.4.2"]
+# The client used by Server.connect(): includes revoked-token recovery after Stop,
+# ADBC conformance fixes and restricted native symbol exports.
+adbc = ["adbc-driver-hardcharger>=2.4.9"]
 
 [project.scripts]
 hardcharger-server = "hardcharger.__main__:server_main"

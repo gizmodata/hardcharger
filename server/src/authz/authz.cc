@@ -606,7 +606,10 @@ void AccessControl::OnSnapshot(const Snapshot& snapshot) {
       std::lock_guard lock(guard->mutex_);
       return guard->connection_ ? StateOf(guard->connection_) : nullptr;
     }();
-    if (state && snapshot.LostRightsSince(*previous, state->principal())) {
+    // This session's short DDL metadata update is not a running data query to
+    // revoke. Other sessions still get interrupted, and subsequent statements
+    // check the new snapshot.
+    if (state && !state->updating_metadata() && snapshot.LostRightsSince(*previous, state->principal())) {
       guard->InterruptRunning();
       Audit(LogLevel::kInfo, "stopped a running statement after its user lost access",
             {{"kind", "access_control"},
@@ -754,8 +757,22 @@ Error SessionGuard::ForTenant(const Error& error) const {
   // catalog, schema, table or view it cannot see reads exactly like one about one that
   // does not exist, and so does any error that names a catalog it cannot see (DuckDB's
   // suggestions and candidate lists can).
-  if (tenant_id_.empty()) return error;
+  if (unrestricted_) return error;
   const std::string message = error.what();
+  // DuckDB binds before the privilege hook. Its spelling suggestions search the
+  // whole catalog, including objects absent from this user's filtered metadata.
+  // Until the engine offers a visibility-aware candidate callback, omit hints for
+  // every restricted session (not only tenants). Keep the original error and SQLSTATE.
+  if (tenant_id_.empty()) {
+    size_t end = message.size();
+    for (const char* marker : {"Did you mean", "Candidate tables:", "Candidate bindings:"}) {
+      end = std::min(end, message.find(marker));
+    }
+    if (end == message.size()) return error;
+    auto safe = message.substr(0, end);
+    while (!safe.empty() && std::isspace(static_cast<unsigned char>(safe.back()))) safe.pop_back();
+    return Error(error.code(), safe, error.sqlstate());
+  }
   bool hide = false;
   for (const char* missing : {"does not exist", "cannot see", "access to catalog", "not found",
                               "No catalog", "No schema"}) {
@@ -1102,10 +1119,19 @@ chargewire::StatementOutcome SessionGuard::ExecutePrepared(
     // Its first successful run records who owns what it creates: before it runs, so that
     // nothing it creates can be left without an owner (put back if the run fails).
     auto ownership = guarded->TakeOwnership();
+    // Names may have become occupied since PREPARE. Leave them to the execution's
+    // rebind: neither an IF NOT EXISTS no-op nor a failing rename may overwrite
+    // the current object's access-control records using an old plan's metadata.
+    SessionObjectResolver resolver(*dd::capiv2::Convert(connection_));
+    std::erase_if(ownership, [&](const PendingOwnership& change) {
+      if (change.kind == PendingOwnership::Kind::kRename)
+        return resolver.ObjectExists(change.destination, change.type).value_or(true);
+      return change.fresh && resolver.ObjectExists(change.object, change.type).value_or(true);
+    });
     auto state = ownership.empty() ? nullptr : StateOf(connection_);
     std::vector<RecordedOwnership> recorded;
     if (state) {
-      auto status = RecordCreatedOwners(*owner_.engine_, state->principal(), ownership, recorded);
+      auto status = state->RecordOwnership(ownership, recorded);
       if (!status.ok()) {
         guarded->GiveBackOwnership(std::move(ownership));
         throw Error(ErrorCode::kExecutionError,
@@ -1124,7 +1150,7 @@ chargewire::StatementOutcome SessionGuard::ExecutePrepared(
       }
       throw;
     }
-    if (state) ApplyOwnership(*owner_.engine_, state->principal(), ownership);
+    if (state) state->CompleteOwnership(ContextOf(connection_), ownership, recorded);
     AuditAllowed();
     if (outcome.rows) outcome.rows = Track(std::move(outcome.rows), std::move(busy));
     return outcome;

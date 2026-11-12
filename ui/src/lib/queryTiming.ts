@@ -89,11 +89,6 @@ export function timingElapsed(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms)) return "—";
   const value = Math.max(0, ms);
   if (value > 0 && value < 0.01) return "<0.01 ms";
-  if (value < 1000) return `${Number(value.toFixed(2))} ms`;
-  if (value < 60_000) return `${(value / 1000).toFixed(2)} s`;
-  const seconds = Math.floor(value / 1000);
-  const minutes = Math.floor(seconds / 60);
-  return minutes < 60
-    ? `${minutes} min ${seconds % 60} s`
-    : `${Math.floor(minutes / 60)} h ${minutes % 60} min ${seconds % 60} s`;
+  // A shared unit and precision keep decimal points aligned across every step.
+  return `${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ms`;
 }

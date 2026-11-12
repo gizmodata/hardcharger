@@ -26,6 +26,15 @@
 
 namespace hardcharger::authz {
 
+// Records displaced by DDL, retained until its transaction commits. Rollback can
+// restore the original object's protections when a name was dropped and reused.
+struct ObjectAccessRecords {
+  std::vector<ObjectGrantRecord> grants;
+  std::vector<OwnerRecord> owners;
+  std::vector<RowPolicyRecord> policies;
+  std::vector<MaskBindingRecord> masks;
+};
+
 // A table or view as the engine (DuckDB) resolved it.
 struct ResolvedObject {
   ObjectPath path;
@@ -39,6 +48,9 @@ struct ResolvedObject {
 class ObjectResolver {
  public:
   virtual ~ObjectResolver() = default;
+  // A stale owner can be removed only when absence is certain in an attached
+  // catalog. nullopt means unavailable/unknown, including detached catalogs.
+  virtual std::optional<bool> ObjectExists(const ObjectPath&, ObjectType) { return std::nullopt; }
   virtual arrow::Result<ResolvedObject> ResolveObject(const QualifiedName& name) = 0;
   // A sequence, found as nextval('name') would find it.
   virtual arrow::Result<ObjectPath> ResolveSequence(const QualifiedName& name) {
@@ -165,6 +177,12 @@ class RbacEngine {
   arrow::Status RecordOwner(const ObjectPath& object, ObjectType type, const Principal& owner,
                             const std::string& definition_hash = "");
   arrow::Status ForgetOwner(const ObjectPath& object, ObjectType type = ObjectType::kTable);
+  // Object lifetime changes include grants and policy bindings, not just ownership.
+  // A schema includes its descendants; a table includes its trigger owner records.
+  arrow::Status ForgetObject(const ObjectPath& object, ObjectType type, ObjectAccessRecords* previous = nullptr);
+  arrow::Status CopyObjectAccess(const ObjectPath& object, ObjectType type, const ObjectPath& destination,
+                                 ObjectAccessRecords* previous = nullptr);
+  arrow::Status RestoreObjectAccess(const ObjectPath& object, ObjectType type, const ObjectAccessRecords& records);
   // Puts an owner record back as it was.
   arrow::Status PutOwner(const OwnerRecord& record);
 

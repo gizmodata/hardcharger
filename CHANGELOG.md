@@ -7,7 +7,13 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-11-12
+
 ### Added
+
+- SQL Monitor has clickable sort headers, including longest elapsed time first, and a
+  Reset sorting control. The default is start time descending, using queue time while
+  waiting; the selected sort stays in effect across monitor refreshes.
 
 - **Homebrew.** `brew install gizmodata/tap/hardcharger` installs `hardcharger-server` and the
   `hardcharger` CLI on macOS 15+ (Apple silicon) and Linux (x86-64 and arm64), and
@@ -16,6 +22,33 @@ own changelog in `python/CHANGELOG.md`.
   [gizmodata/homebrew-tap](https://github.com/gizmodata/homebrew-tap) from the release's
   `SHA256SUMS`, and nothing is pushed there until `brew install` and `brew test` (a server
   started and queried through the CLI) passed on macOS and on both Linux architectures.
+
+### Changed
+
+- Update Chargewire C++ to 2.4.1 and the vendored JavaScript client to 2.3.5: deferred
+  session options and empty transactions no longer wake a stopped cluster, and a new
+  browser connection can recover once from a cached token revoked by a cluster Stop.
+- Update zlib to 1.4 with upstream security and correctness fixes, and CRoaring to 5.5.5
+  for the iOS and ThreadSanitizer extension builds. Refresh dependency checksums and notices.
+- Update the desktop single-instance plugin to 2.5.5 for shutdown/startup race fixes,
+  and require ADBC driver 2.4.9 or newer in Python's optional client extra.
+- Refresh compatible UI and desktop JavaScript dependencies. Override the lint tools'
+  transitive minimatch to 11.0.8 to address its glob-expansion denial-of-service advisory.
+
+### Fixed
+
+- Access-control metadata follows table/view renames and schema cascade drops, including
+  administrator and prepared statements. New objects cannot inherit stale grants from a
+  previous object of the same name. `DROP USER` and `DROP ROLE` disregard stale ownership
+  only when the object is confirmed absent in an attached catalog.
+- Catalog spelling suggestions no longer disclose hidden object names to ordinary RBAC
+  users or catalog-restricted sessions.
+- Query profiles format estimated row counts with thousands separators, including large
+  integer estimates. Operator times now have gradient data bars colored by relative
+  duration, a slowest-first order, collapsible small subtrees, and large estimate-error
+  indicators. Operator times use aligned decimal points and consistent millisecond
+  precision. The timing summary also aligns elapsed decimals, retaining sub-0.01 ms
+  indicators and separating live-status labels. Query-detail headers fit phone widths.
 
 ## [2.10.0] - 2026-11-07
 

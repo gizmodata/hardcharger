@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-11-12
+
+### Changed
+
+- Install Hardcharger server 2.11.0, with access-control fixes and SQL Monitor improvements.
+
+- Require `adbc-driver-hardcharger>=2.4.9` for the `[adbc]` extra, including recovery
+  from cached revoked tokens after a cluster Stop, ADBC conformance fixes, and restricted
+  shared-library exports.
+
 ## [2.10.0] - 2026-11-07
 
 ### Changed

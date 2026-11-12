@@ -104,6 +104,41 @@ ObjectPath PathOfEntry(dd::CatalogEntry& entry) {
   return path;
 }
 
+std::optional<bool> SessionObjectResolver::ObjectExists(const ObjectPath& object, ObjectType type) {
+  std::optional<bool> exists;
+  auto status = InTransaction(connection_, [&]() -> arrow::Status {
+    auto& context = *connection_.context;
+    if (!CatalogNamed(context, object.catalog)) return arrow::Status::OK();
+    auto schema = object.schema_path;
+    std::string name = object.object_name;
+    if (type == ObjectType::kTrigger) {
+      if (schema.empty()) return arrow::Status::OK();
+      name = schema.back();
+      schema.pop_back();
+    }
+    dd::vector<dd::Identifier> path;
+    for (const auto& part : schema) path.emplace_back(part);
+    auto entry = dd::Catalog::GetSchema(context, dd::Identifier(object.catalog), path,
+                                        dd::OnEntryNotFound::RETURN_NULL);
+    if (!entry) {
+      exists = false;
+    } else if (type == ObjectType::kSchema) {
+      exists = true;
+    } else {
+      auto table = dd::Catalog::GetEntry(context,
+          dd::EntryLookupInfo(dd::CatalogType::TABLE_ENTRY,
+                             dd::QualifiedName::FromCatalogSchema(dd::Identifier(object.catalog),
+                                                                  std::move(path), dd::Identifier(name))),
+          dd::OnEntryNotFound::RETURN_NULL);
+      // A trigger whose table vanished is stale too; an existing table alone
+      // does not prove the trigger still exists, so leave that case untouched.
+      if (type != ObjectType::kTrigger || !table) exists = bool(table);
+    }
+    return arrow::Status::OK();
+  });
+  return status.ok() ? exists : std::nullopt;
+}
+
 arrow::Result<ResolvedObject> SessionObjectResolver::ResolveObject(const QualifiedName& name) {
   ResolvedObject resolved;
   bool found = false;

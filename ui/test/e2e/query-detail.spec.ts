@@ -43,6 +43,28 @@ test("query windows retain profiles and refresh independently of the monitor", a
     await expect(sqlBlock).toHaveText(sql);
 
     await expect(details.getByTestId("query-profile-plan")).toContainText("UNGROUPED_AGGREGATE");
+    const plan = details.getByTestId("query-profile-plan");
+    await expect(plan).toContainText("100,000");
+    await expect(plan.locator(".profile-time-track").first()).toBeVisible();
+    await expect(plan.locator(".profile-hot").first()).toContainText("Slow operator");
+    await expect(details.getByLabel("Operator timing colors")).toContainText("Long: ≥50% of slowest");
+    await expect(plan.locator(".profile-duration-long").first()).toBeVisible();
+    await expect(plan.locator(".profile-duration-short").first()).toBeVisible();
+    expect(
+      await plan
+        .locator(".profile-duration-long .profile-time-track > span")
+        .first()
+        .evaluate((el) => getComputedStyle(el).backgroundImage),
+    ).not.toBe(
+      await plan
+        .locator(".profile-duration-short .profile-time-track > span")
+        .first()
+        .evaluate((el) => getComputedStyle(el).backgroundImage),
+    );
+    await details.getByLabel("Operator order").selectOption("slow");
+    await expect(plan.locator("tbody tr").first()).toHaveClass(/profile-hot/);
+    await details.getByLabel("Operator order").selectOption("plan");
+
     await expect(page.getByRole("region", { name: "Statement details" })).toHaveCount(0);
     await page.getByLabel("Filter monitored queries").fill("no_match_popout");
     await details.reload();
@@ -62,6 +84,14 @@ test("query windows retain profiles and refresh independently of the monitor", a
       path: `../desktop/artifacts/sql-monitor/query-window-dark-${testInfo.project.name}.png`,
       fullPage: true,
     });
+
+    await details.setViewportSize({ width: 390, height: 844 });
+    await plan.scrollIntoViewIfNeeded();
+    await expect(plan.locator(".profile-time-track").first()).toBeVisible();
+    await details.screenshot({ path: `test-results/profile-phone-dark-${testInfo.project.name}.png` });
+    await details.getByRole("button", { name: "Toggle color theme", exact: true }).click();
+    await details.screenshot({ path: `test-results/profile-phone-light-${testInfo.project.name}.png` });
+    expect(await details.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     const count = await connection.query(
       `SELECT count(*) FROM _hardcharger_instr.execution_details WHERE sql_text = '${sql}'`,
     );

@@ -39,12 +39,14 @@ std::optional<std::string> UngrantableTableFunction(const std::string& name_lowe
 
 // Ownership bookkeeping a statement asks for once it has run successfully.
 struct PendingOwnership {
-  enum class Kind { kCreate, kDrop };
+  enum class Kind { kCreate, kDrop, kRename };
   Kind kind;
   ObjectPath object;
   ObjectType type;
   std::string definition_hash = {};  // a created view's (OwnerRecord::definition_hash)
-  bool recorded = false;  // a creation whose owner was recorded before the statement ran
+  bool recorded = false;  // creation/rename metadata installed before execution
+  ObjectPath destination = {};  // rename target
+  bool fresh = false;  // a creation, not a replacement of an existing object
 };
 
 // An owner record written before its statement ran, and what it replaced (to put back if
@@ -53,6 +55,7 @@ struct RecordedOwnership {
   ObjectPath object;
   ObjectType type = ObjectType::kTable;
   std::optional<OwnerRecord> previous;
+  std::optional<ObjectAccessRecords> previous_access;  // fresh name or rename destination, including policies
 };
 
 class RbacSessionState : public duckdb::ClientContextState {
@@ -115,6 +118,14 @@ class RbacSessionState : public duckdb::ClientContextState {
       duckdb::RebindQueryInfo current_rebind) override;
   void QueryEnd(duckdb::ClientContext& context,
                 duckdb::optional_ptr<duckdb::ErrorData> error) override;
+  arrow::Status RecordOwnership(std::vector<PendingOwnership>& changes,
+                                std::vector<RecordedOwnership>& undo);
+  // Post-execution bookkeeping also serves client-side prepared statements.
+  void CompleteOwnership(duckdb::ClientContext& context, const std::vector<PendingOwnership>& changes,
+                         const std::vector<RecordedOwnership>& recorded);
+  bool updating_metadata() const { return updating_metadata_.load(); }
+  void TransactionCommit(duckdb::MetaTransaction&, duckdb::ClientContext&) override;
+  void TransactionRollback(duckdb::MetaTransaction&, duckdb::ClientContext&) override;
 
  private:
   duckdb::RebindQueryInfo RebindIfGrantsChanged(const duckdb::PreparedStatementData& prepared);
@@ -145,6 +156,12 @@ class RbacSessionState : public duckdb::ClientContextState {
   std::vector<PendingOwnership> pending_ownership_;
   // Owners recorded for the statement now running, before it ran (undone if it fails).
   std::vector<RecordedOwnership> recorded_ownership_;
+  // Drops are committed with an explicit DuckDB transaction, never on a rolled-back
+  // statement. Renames keep the source protected until commit; rollback removes
+  // only the destination's preinstalled records.
+  std::atomic<bool> updating_metadata_{false};
+  std::vector<PendingOwnership> transaction_ownership_;
+  std::vector<RecordedOwnership> transaction_recorded_;
 };
 
 // The system privilege that lets a store user past the admin command gate for
@@ -157,10 +174,9 @@ std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(const std::string
 // and no file)? `name_lower`: the function's name, lower case.
 bool IsAllowedTableFunction(const std::string& name_lower);
 
-// Record what a statement that ran successfully created or dropped (but for creations
-// RecordCreatedOwners recorded already). A drop whose record can't be removed is logged:
-// the record of an object that no longer exists is replaced when one of its name is
-// created, and a creation can't run without the store.
+// Finish successful object lifetime changes. Failed cleanup is logged; new objects
+// must clear stale access records before they can reuse a name. Rename destinations
+// already have their protections before execution, so cleanup removes only the source.
 void ApplyOwnership(RbacEngine& engine, const Principal& principal,
                     const std::vector<PendingOwnership>& changes);
 

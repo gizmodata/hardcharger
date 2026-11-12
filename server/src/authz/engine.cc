@@ -156,10 +156,18 @@ std::string TenantName(const Snapshot& snap, const std::string& tenant_id) {
   return "tenant " + (t ? t->name : tenant_id);
 }
 
-std::vector<std::string> OwnedObjects(const Snapshot& snap, OwnerKind kind, const std::string& id) {
+arrow::Result<std::vector<std::string>> OwnedObjects(StoreTransaction& txn, const Snapshot& snap,
+                                                    OwnerKind kind, const std::string& id,
+                                                    ObjectResolver& resolver) {
   std::vector<std::string> owned;
-  for (const auto& o : snap.owners()) {
-    if (o.owner_kind == kind && o.owner_id == id) owned.push_back(o.object.ToString());
+  for (const auto& owner : snap.owners()) {
+    if (owner.owner_kind != kind || owner.owner_id != id) continue;
+    const auto exists = resolver.ObjectExists(owner.object, owner.type);
+    if (exists && !*exists) {
+      ARROW_RETURN_NOT_OK(txn.DeleteOwner(owner.object, owner.type));
+    } else {
+      owned.push_back(owner.object.ToString());
+    }
   }
   return owned;
 }
@@ -405,6 +413,145 @@ arrow::Status RbacEngine::ForgetOwner(const ObjectPath& object, ObjectType type)
     return arrow::Status::OK();
   }
   return WriteOwner(object, type, nullptr);
+}
+
+namespace {
+
+// Compare identifier components, never dotted strings: a schema named "a.b" is
+// distinct from a nested schema a.b. Trigger keys add the table to schema_path.
+bool InObject(const ObjectPath& path, const ObjectPath& object, ObjectType type,
+              bool trigger = false) {
+  if (!IdentifiersEqual(path.catalog, object.catalog)) return false;
+  if (path.schema_path.size() < object.schema_path.size()) return false;
+  for (size_t i = 0; i < object.schema_path.size(); ++i) {
+    if (!IdentifiersEqual(path.schema_path[i], object.schema_path[i])) return false;
+  }
+  if (type == ObjectType::kSchema) {
+    // Trigger keys append their table name; that last component is not a schema.
+    return !trigger || path.schema_path.size() > object.schema_path.size();
+  }
+  if (trigger && type == ObjectType::kTable) {
+    return path.schema_path.size() == object.schema_path.size() + 1 &&
+           IdentifiersEqual(path.schema_path.back(), object.object_name);
+  }
+  return path.schema_path.size() == object.schema_path.size() &&
+         IdentifiersEqual(path.object_name, object.object_name);
+}
+
+ObjectAccessRecords ObjectRecords(const Snapshot& snap, const ObjectPath& object, ObjectType type) {
+  ObjectAccessRecords records;
+  for (const auto& grant : snap.grants()) {
+    if (type != ObjectType::kTrigger && InObject(grant.target, object, type) &&
+        (type == ObjectType::kSchema || (type == ObjectType::kSequence) == (grant.privilege == Privilege::kUsage)))
+      records.grants.push_back(grant);
+  }
+  if (type == ObjectType::kSequence) return records;
+  for (const auto& owner : snap.owners()) {
+    if ((type != ObjectType::kTrigger || owner.type == type) &&
+        InObject(owner.object, object, type, owner.type == ObjectType::kTrigger)) records.owners.push_back(owner);
+  }
+  if (type == ObjectType::kTrigger) return records;
+  for (const auto& policy : snap.row_policies()) {
+    if (InObject(policy.table, object, type)) records.policies.push_back(policy);
+  }
+  for (const auto& mask : snap.mask_bindings()) {
+    if (InObject(mask.table, object, type)) records.masks.push_back(mask);
+  }
+  return records;
+}
+
+arrow::Status RemoveObject(StoreTransaction& txn, const Snapshot& snap,
+                           const ObjectPath& object, ObjectType type) {
+  if (type == ObjectType::kTrigger) return txn.DeleteOwner(object, type);
+  for (const auto& grant : snap.grants()) {
+    // Tables/views and sequences can share a name. USAGE is a sequence grant;
+    // only a schema drop removes both namespaces.
+    if (InObject(grant.target, object, type) &&
+        (type == ObjectType::kSchema || (type == ObjectType::kSequence) == (grant.privilege == Privilege::kUsage)))
+      ARROW_RETURN_NOT_OK(txn.DeleteGrant(grant.id));
+  }
+  if (type == ObjectType::kSequence) return arrow::Status::OK();
+  for (const auto& owner : snap.owners()) {
+    if (InObject(owner.object, object, type, owner.type == ObjectType::kTrigger))
+      ARROW_RETURN_NOT_OK(txn.DeleteOwner(owner.object, owner.type));
+  }
+  for (const auto& policy : snap.row_policies()) {
+    if (InObject(policy.table, object, type)) ARROW_RETURN_NOT_OK(txn.DeleteRowPolicy(policy.id));
+  }
+  for (const auto& binding : snap.mask_bindings()) {
+    if (InObject(binding.table, object, type)) ARROW_RETURN_NOT_OK(txn.SetMaskBinding(binding, true));
+  }
+  return arrow::Status::OK();
+}
+
+}  // namespace
+
+arrow::Status RbacEngine::ForgetObject(const ObjectPath& object, ObjectType type, ObjectAccessRecords* previous) {
+  ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot& snap) {
+    if (previous) *previous = ObjectRecords(snap, object, type);
+    return RemoveObject(txn, snap, object, type);
+  }));
+  ARROW_ASSIGN_OR_RAISE(auto fresh, store_->Load());
+  Publish(std::move(fresh));
+  return arrow::Status::OK();
+}
+
+arrow::Status RbacEngine::CopyObjectAccess(const ObjectPath& object, ObjectType type,
+                                      const ObjectPath& destination, ObjectAccessRecords* previous) {
+  ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot& snap) {
+    if (previous) *previous = ObjectRecords(snap, destination, type);
+    // Install the destination's protections before DuckDB exposes the new name.
+    // Keep the source protected until the rename commits (other transactions can
+    // still see it). A failed statement removes only the destination copy.
+    ARROW_RETURN_NOT_OK(RemoveObject(txn, snap, destination, type));
+    for (auto grant : snap.grants()) {
+      if (!InObject(grant.target, object, type) || grant.privilege == Privilege::kUsage) continue;
+      grant.target = destination;
+      grant.id = StoreTransaction::NewId();
+      ARROW_RETURN_NOT_OK(txn.InsertGrant(grant));
+    }
+    for (auto owner : snap.owners()) {
+      if (!InObject(owner.object, object, type, owner.type == ObjectType::kTrigger)) continue;
+      if (owner.type == ObjectType::kTrigger) {
+        owner.object.schema_path = destination.schema_path;
+        owner.object.schema_path.push_back(destination.object_name);
+        owner.object.catalog = destination.catalog;
+      } else {
+        owner.object = destination;
+      }
+      ARROW_RETURN_NOT_OK(txn.UpsertOwner(owner));
+    }
+    for (auto policy : snap.row_policies()) {
+      if (!InObject(policy.table, object, type)) continue;
+      policy.table = destination;
+      policy.id = StoreTransaction::NewId();
+      ARROW_RETURN_NOT_OK(txn.UpsertRowPolicy(policy));
+    }
+    for (auto binding : snap.mask_bindings()) {
+      if (!InObject(binding.table, object, type)) continue;
+      binding.table = destination;
+      ARROW_RETURN_NOT_OK(txn.SetMaskBinding(binding, false));
+    }
+    return arrow::Status::OK();
+  }));
+  ARROW_ASSIGN_OR_RAISE(auto fresh, store_->Load());
+  Publish(std::move(fresh));
+  return arrow::Status::OK();
+}
+
+arrow::Status RbacEngine::RestoreObjectAccess(const ObjectPath& object, ObjectType type,
+                                               const ObjectAccessRecords& records) {
+  ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot& snap) {
+    ARROW_RETURN_NOT_OK(RemoveObject(txn, snap, object, type));
+    for (const auto& grant : records.grants) ARROW_RETURN_NOT_OK(txn.InsertGrant(grant));
+    for (const auto& owner : records.owners) ARROW_RETURN_NOT_OK(txn.UpsertOwner(owner));
+    for (const auto& policy : records.policies) ARROW_RETURN_NOT_OK(txn.UpsertRowPolicy(policy));
+    for (const auto& mask : records.masks) ARROW_RETURN_NOT_OK(txn.SetMaskBinding(mask, false));
+    return arrow::Status::OK();
+  }));
+  ARROW_ASSIGN_OR_RAISE(auto fresh, store_->Load());
+  Publish(std::move(fresh));
+  return arrow::Status::OK();
 }
 
 arrow::Status RbacEngine::WriteOwner(const ObjectPath& object, ObjectType type, const OwnerRecord* record) {
@@ -868,7 +1015,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
         }
         return AccessControlError("user " + c->name + " does not exist");
       }
-      auto owned = OwnedObjects(snap, OwnerKind::kUser, user->id);
+      ARROW_ASSIGN_OR_RAISE(auto owned, OwnedObjects(txn, snap, OwnerKind::kUser, user->id, resolver));
       if (!owned.empty()) {
         return AccessControlError("user " + user->name + " owns " + Join(owned) +
                                   ". Change the owner first (ALTER TABLE|VIEW ... OWNER TO)");
@@ -912,7 +1059,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       }
       if (role->builtin)
         return AccessControlError("the built-in role " + role->name + " cannot be dropped");
-      auto owned = OwnedObjects(snap, OwnerKind::kRole, role->id);
+      ARROW_ASSIGN_OR_RAISE(auto owned, OwnedObjects(txn, snap, OwnerKind::kRole, role->id, resolver));
       if (!owned.empty()) {
         return AccessControlError("role " + role->name + " owns " + Join(owned) +
                                   ". Change the owner first (ALTER TABLE|VIEW ... OWNER TO)");

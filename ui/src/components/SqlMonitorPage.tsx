@@ -1,8 +1,32 @@
-import { Activity, ExternalLink, Pause, Play, RefreshCw, Square, XCircle } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  RotateCcw,
+  Activity,
+  ExternalLink,
+  Pause,
+  Play,
+  RefreshCw,
+  Square,
+  XCircle,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useAdminConnection } from "../lib/adminConnection";
-import { activeQuery, monitorSql, type MonitorInfo, type MonitoredQuery } from "../lib/sqlMonitor";
+import {
+  activeQuery,
+  defaultMonitorSort,
+  monitorElapsed,
+  monitorQueueWait,
+  monitorStartTime,
+  nextMonitorSort,
+  sortMonitoredQueries,
+  monitorSql,
+  type MonitorSortKey,
+  type MonitorInfo,
+  type MonitoredQuery,
+} from "../lib/sqlMonitor";
 import { errorMessage, useSession } from "../session";
 import { StatementDetails } from "./StatementDetails";
 import { queryDetailPath } from "../lib/route";
@@ -16,9 +40,20 @@ const timestamp = (ms: number | null) => (ms == null ? "—" : new Date(ms).toLo
 const duration = (ms: number) =>
   ms < 1000 ? `${Math.max(0, Math.round(ms))} ms` : `${(Math.max(0, ms) / 1000).toFixed(1)} s`;
 
+const sortColumns: { key: MonitorSortKey; label: string }[] = [
+  { key: "status", label: "Status" },
+  { key: "user", label: "User" },
+  { key: "sql", label: "SQL / Execution" },
+  { key: "started", label: "Started / Queued" },
+  { key: "queueWait", label: "Queue wait" },
+  { key: "elapsed", label: "Elapsed" },
+  { key: "rows", label: "Rows fetched" },
+];
+
 export default function SqlMonitorPage() {
   const session = useSession();
   const { connection, error: connectionError, allowed } = useAdminConnection("sql-monitor");
+  const [sort, setSort] = useState(defaultMonitorSort);
   const [minutes, setMinutes] = useState(10);
   const [statusDisplay, setStatusDisplay] = useState(storedStatusDisplay);
   const [historyLimit, setHistoryLimit] = useState(1000);
@@ -150,18 +185,24 @@ export default function SqlMonitorPage() {
       </div>
     );
   const disabled = info?.instrumentation_enabled === false || session.identity.instrumentationEnabled === false;
-  const rows = (queries ?? []).filter(
-    (q) =>
-      (state === "all" ||
-        (state === "active"
-          ? activeQuery(q)
-          : state === "timeout"
-            ? q.status === "timeout" || q.cancel_reason === "timeout" || q.cancel_reason === "queue_timeout"
-            : q.status === state)) &&
-      `${q.sql_text} ${q.username} ${q.execution_id} ${q.query_tag ?? ""}`.toLowerCase().includes(filter.toLowerCase()),
+  const now = updated ?? 0;
+  const rows = sortMonitoredQueries(
+    (queries ?? []).filter(
+      (q) =>
+        (state === "all" ||
+          (state === "active"
+            ? activeQuery(q)
+            : state === "timeout"
+              ? q.status === "timeout" || q.cancel_reason === "timeout" || q.cancel_reason === "queue_timeout"
+              : q.status === state)) &&
+        `${q.sql_text} ${q.username} ${q.execution_id} ${q.query_tag ?? ""}`
+          .toLowerCase()
+          .includes(filter.toLowerCase()),
+    ),
+    sort,
+    now,
   );
   const inspected = queries?.find((q) => q.execution_id === selected);
-  const now = updated ?? 0;
   const terminalCount = queries?.filter((q) => !activeQuery(q)).length ?? 0;
   return (
     <div className="sessions-page monitor-page">
@@ -316,6 +357,15 @@ export default function SqlMonitorPage() {
               <input type="checkbox" checked={includeMonitor} onChange={(e) => setIncludeMonitor(e.target.checked)} />{" "}
               Include monitor queries
             </label>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              title="Restore start time, newest first (queue time for waiting statements)"
+              disabled={sort.key === defaultMonitorSort.key && sort.direction === defaultMonitorSort.direction}
+              onClick={() => setSort(defaultMonitorSort)}
+            >
+              <RotateCcw size={14} /> Reset sorting
+            </button>
             <button type="button" className="btn btn-ghost" onClick={() => setPaused((v) => !v)}>
               {paused ? <Play size={14} /> : <Pause size={14} />}
               {paused ? "Resume" : "Pause"}
@@ -354,13 +404,31 @@ export default function SqlMonitorPage() {
             <table className="data-table monitor-table" data-testid="sql-monitor-table">
               <thead>
                 <tr>
-                  <th>Status</th>
-                  <th>User</th>
-                  <th>SQL / Execution</th>
-                  <th>Queued / Started</th>
-                  <th>Queue wait</th>
-                  <th>Elapsed</th>
-                  <th>Rows fetched</th>
+                  {sortColumns.map(({ key, label }) => (
+                    <th
+                      key={key}
+                      scope="col"
+                      aria-sort={sort.key === key ? (sort.direction === "asc" ? "ascending" : "descending") : undefined}
+                    >
+                      <button
+                        type="button"
+                        className="monitor-sort"
+                        title={`Sort by ${label.toLowerCase()} ${nextMonitorSort(sort, key).direction === "asc" ? "ascending" : "descending"}${key === "started" ? "; uses queue time while waiting" : ""}`}
+                        onClick={() => setSort((current) => nextMonitorSort(current, key))}
+                      >
+                        {label}
+                        {sort.key === key ? (
+                          sort.direction === "asc" ? (
+                            <ArrowUp size={13} aria-hidden="true" />
+                          ) : (
+                            <ArrowDown size={13} aria-hidden="true" />
+                          )
+                        ) : (
+                          <ArrowUpDown size={13} aria-hidden="true" />
+                        )}
+                      </button>
+                    </th>
+                  ))}
                   <th>Session actions</th>
                 </tr>
               </thead>
@@ -405,23 +473,9 @@ export default function SqlMonitorPage() {
                         </details>
                       )}
                     </td>
-                    <td>{timestamp(q.enqueue_time ?? q.execution_start_time)}</td>
-                    <td>
-                      {q.enqueue_time == null
-                        ? "—"
-                        : duration(
-                            (q.status === "queued"
-                              ? now
-                              : q.cancel_reason === "queue_timeout"
-                                ? (q.cursor_close_time ?? q.execution_end_time ?? now)
-                                : q.execution_start_time) - q.enqueue_time,
-                          )}
-                    </td>
-                    <td>
-                      {duration(
-                        (q.cursor_close_time ?? q.fetch_end_time ?? now) - (q.enqueue_time ?? q.execution_start_time),
-                      )}
-                    </td>
+                    <td>{timestamp(monitorStartTime(q))}</td>
+                    <td>{monitorQueueWait(q, now) == null ? "—" : duration(monitorQueueWait(q, now)!)}</td>
+                    <td>{duration(monitorElapsed(q, now))}</td>
                     <td>{q.rows_fetched?.toLocaleString() ?? "—"}</td>
                     <td className="monitor-session-actions">
                       {activeQuery(q) && (

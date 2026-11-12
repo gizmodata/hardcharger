@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(hardcharger VERSION 2.10.0 LANGUAGES C CXX)
+project(hardcharger VERSION 2.11.0 LANGUAGES C CXX)
 # The pre-release part of the version, after PROJECT_VERSION (which takes numbers only): ""
 # for a release (tag vX.Y.Z), "-rc.N" for a release candidate (tag vX.Y.Z-rc.N). Every
 # reported version is HARDCHARGER_VERSION, the two together. .github/scripts/release.sh
@@ -148,15 +148,15 @@ include(cmake/web_ui.cmake)
 # THIRD_PARTY_NOTICES.md, embedded in both binaries for --licenses (cmake/third_party_notices.cmake).
 include(cmake/third_party_notices.cmake)
 
-# zlib 1.3.2 (static), which inflates the embedded UI for a client that doesn't take gzip.
+# zlib 1.4 (static), which inflates the embedded UI for a client that doesn't take gzip.
 set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
 set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   zlib
-  URL https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz
-  URL_HASH SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+  URL https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.gz
+  URL_HASH SHA256=02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
   EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(zlib)

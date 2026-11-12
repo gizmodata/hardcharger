@@ -93,6 +93,28 @@ test("SQL Monitor shows outcomes and slots and preserves the editor", async ({ p
     await expect(table).toContainText("Failed");
     await expect(page.locator(".monitor-page").getByRole("alert")).toHaveCount(0);
     await expect(page.getByLabel("Recent history")).toHaveValue("10");
+    const resetSort = page.getByRole("button", { name: "Reset sorting", exact: true });
+    const startHeader = table.getByRole("columnheader", { name: "Started / Queued", exact: true });
+    const elapsedHeader = table.getByRole("columnheader", { name: "Elapsed", exact: true });
+    await expect(startHeader).toHaveAttribute("aria-sort", "descending");
+    await expect(resetSort).toBeDisabled();
+    await elapsedHeader.getByRole("button").click();
+    await expect(elapsedHeader).toHaveAttribute("aria-sort", "descending");
+    await connection.query("SELECT 1 AS monitor_sort_refresh_probe");
+    await expect(table).toContainText("monitor_sort_refresh_probe");
+    await expect(elapsedHeader).toHaveAttribute("aria-sort", "descending");
+    const durations = await table.locator("tbody tr td:nth-child(6)").allTextContents();
+    const millis = durations.map((text) => parseFloat(text) * (text.endsWith(" ms") ? 1 : 1000));
+    expect(millis).toEqual([...millis].sort((a, b) => b - a));
+    await elapsedHeader.getByRole("button").click();
+    await expect(elapsedHeader).toHaveAttribute("aria-sort", "ascending");
+    await resetSort.click();
+    await expect(startHeader).toHaveAttribute("aria-sort", "descending");
+    await expect(resetSort).toBeDisabled();
+    await startHeader.getByRole("button").click();
+    await expect(startHeader).toHaveAttribute("aria-sort", "ascending");
+    await resetSort.click();
+
     await page.getByLabel("Filter monitored queries").fill("monitor_completed");
     await page.getByLabel("Query details", { exact: true }).selectOption("inline");
     await expect(table.locator("tbody tr")).toHaveCount(1);

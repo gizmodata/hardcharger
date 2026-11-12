@@ -115,13 +115,13 @@ describe("query step timings", () => {
 
   it("keeps missing times distinct from zero and formats sub-ms and long durations", () => {
     expect(timingElapsed(null)).toBe("—");
-    expect(timingElapsed(0)).toBe("0 ms");
+    expect(timingElapsed(0)).toBe("0.00 ms");
     expect(timingElapsed(0.25)).toBe("0.25 ms");
     expect(timingElapsed(0.001)).toBe("<0.01 ms");
-    expect(timingElapsed(-10)).toBe("0 ms");
-    expect(timingElapsed(1234)).toBe("1.23 s");
-    expect(timingElapsed(62_000)).toBe("1 min 2 s");
-    expect(timingElapsed(3_662_000)).toBe("1 h 1 min 2 s");
+    expect(timingElapsed(-10)).toBe("0.00 ms");
+    expect(timingElapsed(1234)).toBe("1,234.00 ms");
+    expect(timingElapsed(62_000)).toBe("62,000.00 ms");
+    expect(timingElapsed(3_662_000)).toBe("3,662,000.00 ms");
   });
 });
 

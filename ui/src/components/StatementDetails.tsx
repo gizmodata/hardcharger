@@ -58,7 +58,7 @@ export function StatementDetails({
                 </td>
                 <td className="mono">
                   {timingElapsed(step.elapsed)}
-                  {step.live && " so far"}
+                  {step.live && <small className="query-timing-live"> so far</small>}
                 </td>
               </tr>
             ))}

@@ -20,6 +20,7 @@ namespace hardcharger::authz {
 class SessionObjectResolver : public ObjectResolver {
  public:
   explicit SessionObjectResolver(duckdb::Connection& connection) : connection_(connection) {}
+  std::optional<bool> ObjectExists(const ObjectPath& object, ObjectType type) override;
   arrow::Result<ResolvedObject> ResolveObject(const QualifiedName& name) override;
   arrow::Result<ObjectPath> ResolveSequence(const QualifiedName& name) override;
   arrow::Result<ObjectPath> ResolveSchema(const QualifiedName& name) override;

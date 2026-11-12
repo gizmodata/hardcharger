@@ -36,6 +36,12 @@ editor's transaction. That session closes when the page is left.
   automatic refresh, or click SQL for its full redacted text, identifiers, row count,
   timeline, cancellation reason, and error. Time filters always retain active work;
   explicit status and text filters still apply. Monitor queries are hidden by default.
+- Click a report column header to sort; click it again to reverse direction. **Elapsed**
+  initially sorts longest first. The default is **Started / Queued**, newest start first,
+  using queue time for statements still waiting. **Reset sorting** restores this default.
+  Sorting stays selected during refreshes and applies to all loaded, filtered rows;
+  missing values appear last. Active statements remain included without being pinned above
+  newer statements.
 - History starts with the most recent 1,000 recorded completions (plus a lookahead row
   and recent live completions); **Load 1,000 more completions** expands it. Active work is
   never subject to that cap. This page monitors this server instance, including with a
@@ -96,6 +102,17 @@ operator times, scan counts, query and CPU times, memory and I/O, and every othe
 metric group (optimizer, parser and planning metrics when present). Units come from the
 server's `duckdb_available_metrics()` metadata; missing metrics remain missing, while zero
 measurements are shown as zero. See [DuckDB 2.0 metrics](https://duckdb.org/docs/2.0/dev/metrics).
+
+The Time column shows an Excel-style gradient data bar behind each duration. Bar length is
+relative to the slowest operator in that plan: red at 50% or more of the maximum, amber from
+10% to below 50%, and blue below 10%. The legend, numbers and labels accompany the colors in
+both themes. These compare cumulative operator durations, not elapsed query time.
+**Slowest first** brings the expensive operators to the top; **Plan order** restores the tree.
+Each parent can be collapsed, and **Collapse small subtrees** collapses branches whose summed
+operator duration is at most 1% of the plan's summed operator durations. Branches with missing
+measurements are never automatically classified as small. Estimated cardinalities use locale
+thousands separators without rounding integer strings; estimates off by at least 10× have an
+explicit underestimate/overestimate label.
 
 Profiles are fetched only for the selected statement, after its result closes and the
 instrumentation writer records it. A pending profile is retried automatically. Completed

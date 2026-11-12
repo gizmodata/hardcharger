@@ -1310,6 +1310,21 @@ bar first, so a reload, Back or a failed sign-in doesn't go to the provider agai
 shows the sign-in page with the reason. The flow is still the person's own, in their tab, and
 the provider still asks them to sign in or confirm.
 
+### Object lifetimes and access-control records
+
+Dropping a schema removes its grants, ownership and policy bindings, including those on
+nested schemas and their objects. Table/view renames carry object grants, ownership and
+policy bindings to the new name; permissions are installed before the renamed object can
+be exposed. An existing name used with `CREATE ... IF NOT EXISTS` retains its owner.
+Creating a new object first removes stale records for that name, and fails if that cleanup
+cannot reach the access-control store.
+
+For ownership rows left by older versions, `DROP USER` and `DROP ROLE` check whether each
+owned object still exists. Confirmed missing objects in attached catalogs no longer block
+the operation. Detached catalogs and failed lookups are treated as unknown: attach the
+catalog and retry, or transfer ownership of existing objects. No new table needs to be
+created merely to remove a stale owner record.
+
 ### Who can do what
 
 `SHOW GRANTS` answers for one user or role. To query, join and filter grants, use the

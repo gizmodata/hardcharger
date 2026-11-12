@@ -962,6 +962,29 @@ select {
   border-radius: 5px;
   font: inherit;
 }
+.monitor-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.monitor-sort svg {
+  flex-shrink: 0;
+}
+.monitor-sort:hover,
+th[aria-sort] .monitor-sort {
+  color: var(--link);
+}
+.monitor-sort:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 3px;
+}
 .monitor-table-wrap {
   overflow: auto;
   max-height: 65vh;
@@ -1101,8 +1124,14 @@ select {
 .query-timings tbody th {
   font-weight: 500;
 }
-.query-timings td:last-child {
+.query-timings td:last-child,
+.query-timings thead th:last-child {
+  text-align: right;
   white-space: nowrap;
+}
+.query-timing-live {
+  display: block;
+  color: var(--muted);
 }
 .query-timings tbody tr:last-child {
   font-weight: 600;
@@ -2005,4 +2034,135 @@ select {
   --vscode-scrollbarSlider-background: var(--border);
   --vscode-scrollbarSlider-hoverBackground: var(--faint);
   --vscode-scrollbarSlider-activeBackground: var(--muted);
+}
+
+.profile-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 12px 0;
+}
+.profile-controls label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.profile-time {
+  position: relative;
+  min-width: 130px;
+  font-variant-numeric: tabular-nums;
+}
+.profile-plan .profile-time,
+.profile-plan .profile-time-heading {
+  text-align: right;
+  white-space: nowrap;
+}
+.profile-time-value {
+  position: relative;
+  z-index: 1;
+}
+.profile-time-track {
+  position: absolute;
+  inset: 4px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.profile-time-track > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--profile-time-color, var(--muted)) 35%, transparent),
+    color-mix(in srgb, var(--profile-time-color, var(--muted)) 10%, transparent)
+  );
+  border: 1px solid color-mix(in srgb, var(--profile-time-color, var(--muted)) 55%, transparent);
+  border-radius: 2px;
+}
+.profile-hot .profile-time,
+.profile-hot .profile-operator {
+  font-weight: 700;
+}
+.profile-small .profile-operator {
+  color: var(--muted);
+}
+.profile-badge {
+  display: block;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--link);
+  white-space: normal;
+}
+.profile-estimate-error {
+  font-weight: 700;
+  background: color-mix(in srgb, var(--link) 8%, transparent);
+}
+.profile-collapse {
+  color: var(--link);
+  background: transparent;
+  border: 0;
+  padding: 4px;
+  cursor: pointer;
+}
+.profile-operator {
+  min-width: 150px;
+  max-width: 240px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.profile-operator small {
+  display: block;
+  color: var(--muted);
+  font-weight: normal;
+}
+@media (max-width: 600px) {
+  .profile-plan .profile-operator {
+    padding-left: 10px !important;
+    min-width: 140px;
+    max-width: 180px;
+  }
+}
+
+.profile-duration-long {
+  --profile-time-color: var(--danger);
+}
+.profile-duration-medium {
+  --profile-time-color: var(--warn);
+}
+.profile-duration-short {
+  --profile-time-color: var(--link);
+}
+.profile-hot .profile-operator > .profile-badge {
+  color: var(--profile-time-color, var(--muted));
+}
+.profile-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 12px;
+}
+.profile-legend > span {
+  color: var(--profile-time-color);
+  font-weight: 600;
+}
+.profile-legend > span::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  border-radius: 2px;
+  background: currentColor;
+}
+@media (max-width: 600px) {
+  .query-detail-window .app-header {
+    height: auto;
+    min-height: 48px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+  }
+  .query-detail-window .header-right {
+    margin-left: auto;
+  }
 }

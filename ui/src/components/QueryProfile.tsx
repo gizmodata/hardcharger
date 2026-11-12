@@ -7,6 +7,8 @@ import { prettyJson } from "../lib/prettyJson";
 import { parseProfile, profileMetricText, profileSql, type ProfileMetric } from "../lib/queryProfile";
 import { errorMessage, useSession } from "../session";
 
+import { ProfilePlan } from "./ProfilePlan";
+
 function Metrics({ metrics }: { metrics: ProfileMetric[] }) {
   return (
     <dl className="profile-metrics">
@@ -152,55 +154,7 @@ export function QueryProfile({ executionId, server = "" }: { executionId: string
       )}
       {parsed?.profile && (
         <>
-          <h4>Execution plan</h4>
-          <p className="page-sub">
-            Operator timing and CPU measurements can overlap across parallel work; they are not percentages of total
-            elapsed time. Missing metrics are shown as —.
-          </p>
-          {parsed.profile.operators.length > 0 ? (
-            <div className="monitor-table-wrap">
-              <table className="data-table profile-plan" data-testid="query-profile-plan">
-                <thead>
-                  <tr>
-                    <th>Operator</th>
-                    <th>Time</th>
-                    <th>Actual rows</th>
-                    <th>Estimated rows</th>
-                    <th>Rows scanned</th>
-                    <th>Row groups scanned / total</th>
-                    <th>Details</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {parsed.profile.operators.map((op, i) => (
-                    <tr key={i}>
-                      <td className="mono" style={{ paddingLeft: 10 + Math.min(op.depth, 20) * 16 }}>
-                        {op.depth > 0 ? "↳ " : ""}
-                        {op.name}
-                      </td>
-                      <td>{op.timing === undefined ? "—" : profileMetricText(op.timing, "seconds")}</td>
-                      <td>{op.rows?.toLocaleString() ?? "—"}</td>
-                      <td>{op.estimatedRows ?? "—"}</td>
-                      <td>{op.scanned?.toLocaleString() ?? "—"}</td>
-                      <td>
-                        {op.rowGroups === undefined ? "—" : op.rowGroups.toLocaleString()} /{" "}
-                        {op.totalRowGroups?.toLocaleString() ?? "—"}
-                      </td>
-                      <td>
-                        <details>
-                          <summary>Operator details</summary>
-                          <Metrics metrics={op.metrics} />
-                          <pre className="value-text">{JSON.stringify(op.extra, null, 2)}</pre>
-                        </details>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p>No operator metrics were captured.</p>
-          )}
+          <ProfilePlan key={executionId} profile={parsed.profile} />
           {parsed.profile.operatorsTruncated && (
             <p>Showing the first 5,000 operators. Download the full profile to inspect the remainder.</p>
           )}

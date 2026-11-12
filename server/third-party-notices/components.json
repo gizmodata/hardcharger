@@ -54,7 +54,7 @@
     "zlib": {
       "file": "server/CMakeLists.txt",
       "pattern": "madler/zlib/releases/download/v([0-9.]+)/",
-      "value": "1.3.2"
+      "value": "1.4"
     },
     "replxx": {
       "file": "server/scripts/build-replxx.sh",
@@ -64,7 +64,7 @@
     "roaring": {
       "file": "server/scripts/build-extension-deps.sh",
       "pattern": "^ROARING_VERSION=(\\S+)$",
-      "value": "5.2.4"
+      "value": "5.5.5"
     },
     "postgres": {
       "file": "server/scripts/build-extension-deps.sh",

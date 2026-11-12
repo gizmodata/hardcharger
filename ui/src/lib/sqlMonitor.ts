@@ -39,6 +39,93 @@ export interface MonitoredQuery {
 export const activeQuery = (query: MonitoredQuery): boolean =>
   ["queued", "executing", "fetching"].includes(query.status);
 
+export type MonitorSortKey = "status" | "user" | "sql" | "started" | "queueWait" | "elapsed" | "rows";
+export interface MonitorSort {
+  key: MonitorSortKey;
+  direction: "asc" | "desc";
+}
+export const defaultMonitorSort: MonitorSort = { key: "started", direction: "desc" };
+
+export const monitorStartTime = (q: MonitoredQuery): number =>
+  q.status === "queued" ? (q.enqueue_time ?? q.execution_start_time) : q.execution_start_time;
+
+export const monitorElapsed = (q: MonitoredQuery, now: number): number =>
+  Math.max(0, (q.cursor_close_time ?? q.fetch_end_time ?? now) - (q.enqueue_time ?? q.execution_start_time));
+
+export const monitorQueueWait = (q: MonitoredQuery, now: number): number | null =>
+  q.enqueue_time == null
+    ? null
+    : Math.max(
+        0,
+        (q.status === "queued"
+          ? now
+          : q.cancel_reason === "queue_timeout"
+            ? (q.cursor_close_time ?? q.execution_end_time ?? now)
+            : q.execution_start_time) - q.enqueue_time,
+      );
+
+export function nextMonitorSort(current: MonitorSort, key: MonitorSortKey): MonitorSort {
+  return {
+    key,
+    direction:
+      current.key === key
+        ? current.direction === "asc"
+          ? "desc"
+          : "asc"
+        : ["status", "user", "sql"].includes(key)
+          ? "asc"
+          : "desc",
+  };
+}
+
+/** Sort the loaded sample using the same raw values as the displayed cells. */
+export function sortMonitoredQueries(
+  queries: readonly MonitoredQuery[],
+  sort: MonitorSort,
+  now: number,
+): MonitoredQuery[] {
+  const value = (q: MonitoredQuery) => {
+    switch (sort.key) {
+      case "status":
+        return statusLabel(q);
+      case "user":
+        return q.username;
+      case "sql":
+        return q.sql_text;
+      case "started":
+        return monitorStartTime(q);
+      case "queueWait":
+        return monitorQueueWait(q, now);
+      case "elapsed":
+        return monitorElapsed(q, now);
+      case "rows":
+        return q.rows_fetched;
+    }
+  };
+  return [...queries].sort((a, b) => {
+    const av = value(a);
+    const bv = value(b);
+    // Missing values stay last in either direction; retain bigint precision.
+    if (av == null && bv != null) return 1;
+    if (bv == null && av != null) return -1;
+    const comparison =
+      av == null || bv == null
+        ? 0
+        : typeof av === "string" && typeof bv === "string"
+          ? av.localeCompare(bv)
+          : av < bv
+            ? -1
+            : av > bv
+              ? 1
+              : 0;
+    return (
+      comparison * (sort.direction === "asc" ? 1 : -1) ||
+      monitorStartTime(b) - monitorStartTime(a) ||
+      a.execution_id.localeCompare(b.execution_id)
+    );
+  });
+}
+
 export function statusLabel(query: Pick<MonitoredQuery, "status" | "cancel_reason">): string {
   if (query.cancel_reason === "queue_timeout") return "Queue timed out";
   if (query.cancel_reason === "timeout" || query.status === "timeout") return "Execution timed out";

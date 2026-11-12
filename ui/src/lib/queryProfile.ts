@@ -102,3 +102,61 @@ export function profileSql(catalog: string, schema: string, executionId: string)
     FROM ${quoteIdentifier(catalog)}.${quoteIdentifier(schema)}.execution_details
     WHERE instance_id = HARDCHARGER_CURRENT_INSTANCE()::UUID AND execution_id = ${quoteLiteral(executionId)} LIMIT 1`;
 }
+
+/** Cardinalities arrive as decimal strings, sometimes beyond Number's exact range. */
+export function estimatedRowsText(value: string | undefined): string {
+  if (value === undefined) return "—";
+  if (/^\d+$/.test(value)) return BigInt(value).toLocaleString();
+  const numeric = Number(value);
+  return value.trim() !== "" && Number.isFinite(numeric) && numeric >= 0 ? numeric.toLocaleString() : value;
+}
+
+export function operatorInsights(operators: readonly ProfileOperator[]) {
+  const times = operators.map((op) => Math.max(0, op.timing ?? 0));
+  const maximum = Math.max(0, ...times);
+  const total = times.reduce((sum, time) => sum + time, 0);
+  const ends = operators.map((_, i) => i + 1);
+  const subtreeTimes = [...times];
+  const complete = operators.map((op) => op.timing !== undefined && op.timing >= 0);
+  const stack: number[] = [];
+  for (let i = operators.length - 1; i >= 0; --i) {
+    while (stack.length && operators[stack.at(-1)!]!.depth > operators[i]!.depth) {
+      const child = stack.pop()!;
+      ends[i] = ends[child]!;
+      subtreeTimes[i]! += subtreeTimes[child]!;
+      complete[i] = complete[i]! && complete[child]!;
+    }
+    stack.push(i);
+  }
+  const ranked = operators.map((_, index) => index).sort((a, b) => times[b]! - times[a]! || a - b);
+  const hot = new Set(ranked.filter((i) => maximum > 0 && times[i]! >= maximum * 0.25).slice(0, 3));
+  return operators.map((op, index) => {
+    const estimate = op.estimatedRows?.trim() ? Number(op.estimatedRows) : NaN;
+    const actual = op.rows;
+    let estimateError: string | undefined;
+    if (Number.isFinite(estimate) && estimate >= 0 && actual !== undefined && actual >= 0 && estimate !== actual) {
+      const ratio = Math.max(actual, estimate) / Math.min(actual, estimate);
+      if (ratio >= 10)
+        estimateError =
+          Math.min(actual, estimate) === 0
+            ? "Zero vs nonzero rows"
+            : `${ratio.toLocaleString(undefined, { maximumFractionDigits: 1 })}× ${actual > estimate ? "underestimate" : "overestimate"}`;
+    }
+    return {
+      index,
+      end: ends[index]!,
+      fraction: maximum > 0 ? times[index]! / maximum : 0,
+      durationBand:
+        op.timing === undefined || maximum === 0
+          ? "unknown"
+          : times[index]! >= maximum * 0.5
+            ? "long"
+            : times[index]! >= maximum * 0.1
+              ? "medium"
+              : "short",
+      hot: hot.has(index),
+      small: complete[index] && total > 0 && subtreeTimes[index]! <= total * 0.01,
+      estimateError,
+    };
+  });
+}
