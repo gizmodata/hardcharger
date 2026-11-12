@@ -15,6 +15,8 @@ set(CMAKE_LINK_GROUP_USING_RESCAN_SUPPORTED TRUE)
 set(CMAKE_LINK_GROUP_USING_RESCAN "LINKER:--start-group" "LINKER:--end-group")
 # NDK r28's LLVM crashes compiling Arrow's optional fixed-width SVE paths.
 # ARM64's baseline NEON remains enabled; runtime SVE dispatch is unnecessary on Android.
-set(ARROW_RUNTIME_SIMD_LEVEL NONE CACHE STRING "" FORCE)
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+  set(ARROW_RUNTIME_SIMD_LEVEL NONE CACHE STRING "" FORCE)
+endif()
 # Search our cross-built dependency prefixes without admitting host libraries.
 list(APPEND CMAKE_FIND_ROOT_PATH "$ENV{HARDCHARGER_DEPS_DIR}" "$ENV{CHARGEWIRE_DEPS_DIR}")
