@@ -92,9 +92,20 @@ were independently verified against the local upload certificate.
 
 The GitHub `android-signing` environment now contains the four upload-key secrets and
 admits only `release/android-preview`; `ANDROID_PLAY_BOOTSTRAPPED=false` explicitly
-disables automatic uploads. Google authentication and the initial Console upload are
-still pending; the live Google API upload path has not been exercised. The successful
-run skipped `play-draft` and did not upload anything to Google Play.
+disables automatic uploads. The owner uploaded build 1401 in Play Console; its preview
+showed only tester/deobfuscation/native-symbol warnings. Publication is not yet confirmed.
+The successful CI run skipped `play-draft` and did not upload anything to Google Play.
+
+On 2026-11-12, `gizmodata-infrastructure-terraform/gcp/core` provisioned the dedicated
+`hardcharger-play@gizmodata-core.iam.gserviceaccount.com` identity and GitHub federation
+in project `gizmodata-core` (8 additions, no changes/destroys; subsequent plan clean).
+The provider is
+`projects/462472414356/locations/global/workloadIdentityPools/hardcharger-play/providers/github`.
+Its trust checks Hardcharger's numeric repository and owner IDs, the exact Android
+workflow and preview branch, the Play environment and push/manual events. No private
+key was created. GitHub's `google-play-internal` environment now has the two variables,
+reviewer `prmoore77`, no administrator bypass and only the preview branch allowed.
+The separate Play Console app grant and first federated upload remain pending.
 
 References: [Google API setup](https://developers.google.com/android-publisher/getting_started),
 [initial upload and edit lifecycle](https://developers.google.com/android-publisher/edits),
