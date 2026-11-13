@@ -15,6 +15,9 @@ own changelog in `python/CHANGELOG.md`.
   schema after the schema and then the catalog were set. The UI's tabs were not affected (a tab
   sets catalog and schema in one step, or reads the session right after, and replaces a lost
   session itself); a test now holds that in place with the real client.
+- The Python package's `[adbc]` extra requires `adbc-driver-hardcharger` 2.5.0 or newer (was
+  2.4.9): `Server.connect()` then gets the driver that opens a connection in the catalog and
+  schema it is given.
 
 ### Fixed
 
