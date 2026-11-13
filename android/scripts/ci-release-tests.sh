@@ -18,6 +18,7 @@ adb shell am force-stop com.gizmodata.hardcharger
 adb install -r android/build/ci/release/app.apk
 adb install -r android/build/ci/release/test.apk
 for scenario in phone 1280x600:1.0 1280x600:2.0 1280x400:2.0; do
+  evidence_name=${scenario//:/-}
   method=optimizedTabletNavigation
   if [ "$scenario" = phone ]; then
     adb shell wm size reset
@@ -34,9 +35,9 @@ for scenario in phone 1280x600:1.0 1280x600:2.0 1280x400:2.0; do
   adb shell am instrument -w \
     -e class "com.gizmodata.hardcharger.releasetests.ReleaseWorkflowTest#$method" \
     com.gizmodata.hardcharger.releasetests/androidx.test.runner.AndroidJUnitRunner \
-    | tee "android/build/ci/release-$scenario.txt"
-  mkdir -p "android/build/ci/release-evidence/$scenario"
+    | tee "android/build/ci/release-$evidence_name.txt"
+  mkdir -p "android/build/ci/release-evidence/$evidence_name"
   adb pull /sdcard/Android/data/com.gizmodata.hardcharger.releasetests/files/. \
-    "android/build/ci/release-evidence/$scenario/" > /dev/null || true
-  grep -q '^OK (1 test)' "android/build/ci/release-$scenario.txt"
+    "android/build/ci/release-evidence/$evidence_name/" > /dev/null || true
+  grep -q '^OK (1 test)' "android/build/ci/release-$evidence_name.txt"
 done
