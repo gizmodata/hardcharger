@@ -8,7 +8,8 @@ reset_display() {
   adb shell settings put system font_scale 1.0
 }
 trap reset_display EXIT
-for distribution in play local; do
+for distribution in ${HARDCHARGER_TEST_DISTRIBUTIONS:-play local}; do
+  [[ "$distribution" == play || "$distribution" == local ]] || exit 1
   reset_display
   adb shell am force-stop com.gizmodata.hardcharger
   adb install -r "android/build/ci/$distribution/app.apk"

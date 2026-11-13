@@ -1,3 +1,1 @@
-Introducing Hardcharger for Android phones and tablets.
-
-Run DuckDB on your device with a native SQL console and built-in web workspace. Import and export files, save remote connections, and share over TLS. Includes bundled database extensions, light and dark appearance, automatic memory and thread limits, emoji logs, and our branded About screen. Adaptive tablet navigation supports short windows and larger text.
+Reduced app size through Android code and resource optimization. Improved crash diagnostics.

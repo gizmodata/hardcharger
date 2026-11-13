@@ -1,0 +1,199 @@
+# Temporary Android-only path. Do not merge this workflow into main.
+name: Android R8 one-off
+on:
+  push:
+    branches: [release/v2.12.0-android-r8]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: android-r8-oneoff
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+env:
+  NATIVE_RUN: '43354192490'
+  NATIVE_COMMIT: c10b04a336945e6ed5f45c8a3d3da68e4616b74b
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      code: ${{ steps.plan.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Verify immutable native source and reserve an Android-only version code
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$NATIVE_RUN" --jq .head_sha)" = "$NATIVE_COMMIT"
+          test "$(git rev-parse v2.12.0)" = "$NATIVE_COMMIT"
+          git diff --exit-code "$NATIVE_COMMIT" HEAD -- server ui android/native android/cmake android/scripts/build-native.sh third_party/chargewire
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$NATIVE_RUN/jobs?filter=latest&per_page=100" --jq '.jobs[] | {name,conclusion}' > native-jobs.jsonl
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          jobs = [json.loads(line) for line in Path('native-jobs.jsonl').read_text().splitlines()]
+          for name in ('android / native (arm64-v8a)', 'android / native (x86_64)', 'android / bundle', 'release'):
+              assert any(j['name'] == name and j['conclusion'] == 'success' for j in jobs), name
+          code = 33501 + int(os.environ['GITHUB_RUN_NUMBER']) * 10 + int(os.environ['GITHUB_RUN_ATTEMPT'])
+          assert 33501 < code < 33600, 'Exhausted reserved one-off build numbers'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out: out.write(f'code={code}\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as out: out.write(f'HARDCHARGER_ANDROID_BUILD_NUMBER={code}\n')
+          PY
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: android-native-*
+          merge-multiple: true
+          path: android/app/src/play/jniLibs
+          run-id: ${{ env.NATIVE_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build the optimized release and instrumentation APKs
+        run: |
+          android/gradlew --no-daemon -p android -PhardchargerDistribution=play -PhardchargerTestBuildType=release :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease :app:assembleReleaseAndroidTest :app:bundleRelease
+          mkdir -p android/build/ci/play
+          cp android/build/app-play/outputs/apk/release/app-release.apk android/build/ci/play/app.apk
+          cp android/build/app-play/outputs/apk/androidTest/release/app-release-androidTest.apk android/build/ci/play/test.apk
+          python3 android/scripts/check-play-bundle.py android/build/app-play/outputs/bundle/release/app-release.aab
+          python3 android/scripts/check-r8-bundle.py android/build/app-play/outputs/bundle/release/app-release.aab | tee android/build/ci/r8-report.json
+          python3 - <<'PY'
+          import hashlib, json, zipfile
+          from pathlib import Path
+          with zipfile.ZipFile('android/build/app-play/outputs/bundle/release/app-release.aab') as z:
+              hashes = {n: hashlib.sha256(z.read(n)).hexdigest() for n in z.namelist() if n.endswith('.dex') or n.startswith('base/lib/')}
+          Path('android/build/ci/tested-code.json').write_text(json.dumps(hashes, sort_keys=True))
+          PY
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Optimized release phone and tablet tests
+        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808
+        env:
+          HARDCHARGER_TEST_DISTRIBUTIONS: play
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save
+          script: bash android/scripts/ci-instrumentation.sh
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: android-r8-tests
+          path: |
+            android/build/ci/*.json
+            android/build/ci/*.txt
+            android/build/app-play/reports/
+          if-no-files-found: error
+  sign:
+    needs: test
+    runs-on: ubuntu-24.04
+    environment: android-signing
+    env:
+      HARDCHARGER_ANDROID_BUILD_NUMBER: ${{ needs.test.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: android-native-*
+          merge-multiple: true
+          path: android/app/src/play/jniLibs
+          run-id: ${{ env.NATIVE_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: android-r8-tests
+          path: tested
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Sign and verify the optimized candidate
+        env:
+          ANDROID_UPLOAD_KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
+          HARDCHARGER_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+          HARDCHARGER_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+          HARDCHARGER_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+          SIGNED: 'true'
+        run: |
+          export HARDCHARGER_ANDROID_KEYSTORE="$RUNNER_TEMP/hardcharger-upload.p12"
+          trap 'rm -f "$HARDCHARGER_ANDROID_KEYSTORE"' EXIT
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          os.umask(0o077)
+          Path(os.environ['HARDCHARGER_ANDROID_KEYSTORE']).write_bytes(base64.b64decode(os.environ['ANDROID_UPLOAD_KEYSTORE_B64'], validate=True))
+          PY
+          android/gradlew --no-daemon -p android -PhardchargerDistribution=play -PhardchargerTestBuildType=release :app:bundleRelease
+          python3 android/scripts/check-play-bundle.py android/build/app-play/outputs/bundle/release/app-release.aab --require-signed
+          python3 android/scripts/check-r8-bundle.py android/build/app-play/outputs/bundle/release/app-release.aab
+          python3 - <<'PY'
+          import hashlib, json, zipfile
+          from pathlib import Path
+          expected = list(Path('tested').rglob('tested-code.json'))
+          assert len(expected) == 1
+          with zipfile.ZipFile('android/build/app-play/outputs/bundle/release/app-release.aab') as z:
+              actual = {n: hashlib.sha256(z.read(n)).hexdigest() for n in z.namelist() if n.endswith('.dex') or n.startswith('base/lib/')}
+          assert actual == json.loads(expected[0].read_text()), 'Signed code differs from emulator-tested code'
+          PY
+          keytool -exportcert -rfc -keystore "$HARDCHARGER_ANDROID_KEYSTORE" -alias "$HARDCHARGER_ANDROID_KEY_ALIAS" -storepass:env HARDCHARGER_ANDROID_STORE_PASSWORD -file "$RUNNER_TEMP/upload-certificate.pem"
+          java android/scripts/VerifyBundle.java android/build/app-play/outputs/bundle/release/app-release.aab "$RUNNER_TEMP/upload-certificate.pem"
+          curl -fsSL -o "$RUNNER_TEMP/bundletool.jar" https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar
+          echo "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29  $RUNNER_TEMP/bundletool.jar" | sha256sum -c -
+          java -jar "$RUNNER_TEMP/bundletool.jar" validate --bundle=android/build/app-play/outputs/bundle/release/app-release.aab
+          java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=android/build/app-play/outputs/bundle/release/app-release.aab --module=base > android/build/bundle-manifest.xml
+          python3 android/scripts/ci-candidate.py
+          cp android/build/app-play/outputs/mapping/release/mapping.txt android/build/candidate/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-r8-candidate
+          path: android/build/candidate/
+          if-no-files-found: error
+  upload:
+    needs: sign
+    runs-on: ubuntu-24.04
+    environment: google-play-internal
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: android-r8-candidate
+          path: candidate
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: ${{ vars.GOOGLE_PLAY_WIF_PROVIDER }}
+          service_account: ${{ vars.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+          create_credentials_file: false
+          export_environment_variables: false
+      - name: Upload the verified internal draft
+        env:
+          GOOGLE_PLAY_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: python3 android/scripts/play-draft.py candidate

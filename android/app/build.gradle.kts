@@ -9,6 +9,8 @@ plugins {
 val serverCmake = rootProject.file("../server/CMakeLists.txt").readText()
 val serverVersion = Regex("project\\(hardcharger VERSION ([0-9.]+)").find(serverCmake)!!.groupValues[1]
 val distribution = providers.gradleProperty("hardchargerDistribution").orElse("local").get()
+val instrumentationBuildType = providers.gradleProperty("hardchargerTestBuildType").orElse("debug").get()
+require(instrumentationBuildType in listOf("debug", "release"))
 require(distribution in listOf("local", "play")) { "hardchargerDistribution must be local or play" }
 val nativeDirectory = "src/${if (distribution == "play") "play" else "main"}/jniLibs"
 val nativeAbis = listOf("arm64-v8a", "x86_64").filter { file("$nativeDirectory/$it/libhardcharger_android.so").isFile }
@@ -43,10 +45,15 @@ android {
     }
     buildTypes {
         release {
-            isMinifyEnabled = false
-            signingConfig = signingConfigs.findByName("release")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            testProguardFiles("proguard-test-rules.pro")
+            signingConfig = signingConfigs.findByName("release") ?: if (instrumentationBuildType == "release")
+                signingConfigs.getByName("debug") else null
         }
     }
+    testBuildType = instrumentationBuildType
 }
 kotlin { compilerOptions { jvmTarget.set(JvmTarget.JVM_17) } }
 dependencies {

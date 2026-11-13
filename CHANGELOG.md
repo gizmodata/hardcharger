@@ -9,6 +9,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Enable Android release code and resource optimization, preserve JNI entry points,
+  and verify the optimized app and its bundled crash mappings before upload.
 - Remove test-order and startup-log timing dependencies from the metrics and health
   logging integration tests.
 
