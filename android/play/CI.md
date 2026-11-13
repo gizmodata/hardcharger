@@ -21,7 +21,7 @@ back the repository's broader checks. Do not create a global `v*` tag for this p
    source commit, version code and notes as `hardcharger-android-candidate`.
 6. Once bootstrapped, authenticate with a short-lived Google token and upload that same
    candidate through the `google-play-internal` environment. Only an **internal draft**
-   is created; no production rollout or review submission is requested. An existing
+   is created; the operator controls rollout in Console. An existing
    internal draft must be reviewed/discarded before another can replace it.
 
 For an upload retry, manually dispatch this workflow on the preview branch with
@@ -105,8 +105,8 @@ The downloaded bundle's SHA-256, source metadata and all 141 signed payload entr
 were independently verified against the local upload certificate.
 
 The GitHub `android-signing` environment now contains the four upload-key secrets and
-admits only `release/android-preview`; `ANDROID_PLAY_BOOTSTRAPPED=false` explicitly
-disables automatic uploads. The owner uploaded build 1401 in Play Console; its preview
+admits only `release/android-preview`. Automatic uploads were disabled during bootstrap.
+The owner uploaded build 1401 in Play Console; its preview
 showed only tester/deobfuscation/native-symbol warnings. A subsequent Console screenshot
 confirmed build 1401 is active on the internal-testing track.
 The successful CI run skipped `play-draft` and did not upload anything to Google Play.
@@ -124,9 +124,19 @@ The owner confirmed sending the Play Console service-account invitation. Manual
 [run 43330352240](https://github.com/gizmodata/hardcharger/actions/runs/43330352240)
 produced build **1501** from `7f7c9140c53b65a666c0d238d4ce8a72ddf42ff1`. Both caches
 hit, both native jobs and emulator suites passed, and the signed bundle's metadata,
-SHA-256 and all 141 payload signatures were verified after download. The run is
-waiting for the `google-play-internal` environment approval; the first federated
-upload and actual Play API permission check remain pending.
+SHA-256 and all 141 payload signatures were verified after download. Its initial upload
+attempts exposed two integration issues: GitHub uses the immutable subject prefix
+`repo:gizmodata@181902052/hardcharger@1422890225`, and Google rejects the optional
+`changesNotSentForReview` flag for this internal edit. Terraform now matches that exact
+subject, and the uploader handles only that specific Google error as described above.
+
+Upload-only [run 43336845636](https://github.com/gizmodata/hardcharger/actions/runs/43336845636)
+passed all 16 release-control tests, verified the original candidate and build gates,
+authenticated through federation, and saved the unchanged build **1501** as an internal
+draft. A separate API read-back verified draft status, the original bundle SHA-256 and
+retained previous release statuses. Build 1401 remains active; no rollout was requested.
+`ANDROID_PLAY_BOOTSTRAPPED=true` now enables preview-push uploads after environment
+approval. Finish or discard the existing draft before approving another upload.
 
 References: [Google API setup](https://developers.google.com/android-publisher/getting_started),
 [initial upload and edit lifecycle](https://developers.google.com/android-publisher/edits),

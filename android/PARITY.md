@@ -194,6 +194,8 @@ after download against the local upload certificate. Google Play upload was skip
 The owner subsequently published build 1401 to internal testing, and Google OIDC plus
 the protected GitHub upload environment are configured. The owner sent the Play Console
 service-account invitation. CI run 43330352240 produced and verified signed build 1501
-with both dependency cache hits and passing emulator suites; upload awaits the GitHub
-environment review gate. The first federated upload remains pending; see `play/CI.md`. All-platform
+with both dependency cache hits and passing emulator suites. Upload-only run 43336845636
+then saved the unchanged build 1501 as an internal draft and read back its status/hash
+and retained previous releases. Preview-push uploads are enabled behind the GitHub
+environment approval gate; see `play/CI.md`. All-platform
 v2.12.0 release integration remains a separate follow-up.
