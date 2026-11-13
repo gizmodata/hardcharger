@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 export interface MenuItem {
   label: string;
@@ -28,6 +28,21 @@ export function FloatingMenu({
   align?: "left" | "right";
 }) {
   const menu = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const place = () => {
+      const element = menu.current;
+      if (!element) return;
+      // Mobile WebViews can include overflowing toolbars in innerWidth.
+      // Position against the actual viewport and the measured menu instead.
+      const width = document.documentElement.clientWidth;
+      const height = document.documentElement.clientHeight;
+      element.style.left = `${Math.max(8, Math.min(align === "right" ? x - element.offsetWidth : x, width - element.offsetWidth - 8))}px`;
+      element.style.top = `${Math.max(8, Math.min(y, height - element.offsetHeight - 8))}px`;
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [x, y, align, items.length]);
   useEffect(() => {
     const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     menu.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
@@ -62,12 +77,6 @@ export function FloatingMenu({
         ref={menu}
         className="menu menu-floating"
         role="menu"
-        style={{
-          ...(align === "right"
-            ? { right: Math.max(8, window.innerWidth - x) }
-            : { left: Math.min(x, window.innerWidth - 240) }),
-          top: Math.min(y, window.innerHeight - items.length * 30 - 16),
-        }}
         onKeyDown={(e) => {
           if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();

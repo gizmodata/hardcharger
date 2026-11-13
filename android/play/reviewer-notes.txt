@@ -1,0 +1,19 @@
+Hardcharger runs its database on the Android device. No account, subscription or remote
+server is needed to review the core functionality.
+
+1. Open the app. The embedded server starts automatically. Server shows Running.
+2. Open Console, enter SELECT 42 AS answer; and execute it. The result is 42.
+3. Return to Server and open Web UI to use the bundled browser workspace.
+4. Settings contains resource/logging preferences and About. About includes component
+   versions, third-party notices and the Privacy Policy.
+5. To test file import, create a small CSV in a document provider, choose Import from
+   Server and select that file. Query its table from Console or Web UI.
+
+Remote connections and browser sign-in are optional features for servers chosen by the
+user. The core on-device database is available without them. Local network sharing is
+off by default and requires enabling TLS; administrator credentials are generated on
+the device and are visible in the sharing controls.
+
+The app runs its server while foregrounded. After about 30 seconds in the background it
+stops gracefully and resumes when the app returns. The Play build supports its bundled
+extensions and does not download/install additional native extensions.

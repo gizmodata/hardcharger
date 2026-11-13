@@ -1,0 +1,282 @@
+name: android
+
+on:
+  pull_request:
+    paths: ['android/**', 'server/**', 'ui/**', 'third_party/chargewire', '.github/workflows/android.yml']
+  workflow_call:
+    inputs:
+      sign:
+        type: boolean
+        default: false
+      web_ui_artifact:
+        type: string
+        default: ''
+      warm_cache:
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Retry the internal draft upload from a successful server release build
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    if: inputs.candidate_run_id == ''
+    runs-on: ubuntu-24.04
+    outputs:
+      sign: ${{ steps.plan.outputs.sign }}
+      code: ${{ steps.plan.outputs.code }}
+      upload: ${{ steps.plan.outputs.upload }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -m unittest discover -s android/scripts -p 'test_ci_*.py'
+      - id: plan
+        env:
+          REQUEST_SIGN: ${{ inputs.sign || false }}
+          REQUEST_UPLOAD: 'false'
+        run: python3 android/scripts/ci-plan.py
+
+  ui:
+    if: inputs.web_ui_artifact == '' && !inputs.warm_cache
+    needs: plan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci && npm run build && npm run package
+        working-directory: ui
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-web-ui
+          path: ui/release/hardcharger-ui-*.tar.gz
+          if-no-files-found: error
+
+  native:
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.ui.result == 'success' || inputs.web_ui_artifact != '' || inputs.warm_cache) }}
+    needs: [plan, ui]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      HARDCHARGER_ANDROID_BUILD_NUMBER: ${{ needs.plan.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: git submodule update --init --depth 1
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake bison flex libperl-dev
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        if: ${{ !inputs.warm_cache }}
+        with:
+          name: ${{ inputs.web_ui_artifact || 'android-web-ui' }}
+          path: ui/release
+      - uses: actions/cache@v5
+        id: deps
+        with:
+          path: android/build/${{ matrix.abi }}/deps/*-install
+          key: android-linux-ndk28.2-${{ matrix.abi }}-${{ hashFiles('android/cmake/**', 'android/scripts/build-native.sh', 'server/scripts/*.sh', 'server/scripts/*.cmake', 'third_party/chargewire/cpp/scripts/*.sh') }}
+      - name: Warm dependency caches on main
+        if: inputs.warm_cache && steps.deps.outputs.cache-hit != 'true'
+        env:
+          HARDCHARGER_ANDROID_DEPS_ONLY: '1'
+          ABI: ${{ matrix.abi }}
+        run: android/scripts/build-native.sh "$ABI" play
+      - name: Build and check the Play distribution
+        if: ${{ !inputs.warm_cache }}
+        env:
+          ABI: ${{ matrix.abi }}
+        run: |
+          python3 server/scripts/third-party-notices.py --check
+          android/scripts/build-native.sh "$ABI" play
+          android/gradlew -p android -PhardchargerDistribution=play -PhardchargerSignReleaseForTesting=true :app:testReleaseUnitTest :app:lintRelease :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease :release-tests:assembleRelease
+          mkdir -p android/build/ci/play android/build/ci/release
+          cp android/build/app-play/outputs/apk/debug/app-debug.apk android/build/ci/play/app.apk
+          cp android/build/app-play/outputs/apk/release/app-release.apk android/build/ci/release/app.apk
+          cp android/release-tests/build/outputs/apk/release/release-tests-release.apk android/build/ci/release/test.apk
+          cp android/build/app-play/outputs/apk/androidTest/debug/app-debug-androidTest.apk android/build/ci/play/test.apk
+      - name: Build the regular local distribution for regression tests
+        if: matrix.abi == 'x86_64' && !inputs.warm_cache
+        run: |
+          android/scripts/build-native.sh x86_64 local
+          android/gradlew -p android :app:assembleDebug :app:assembleDebugAndroidTest
+          mkdir -p android/build/ci/local
+          cp android/app/build/outputs/apk/debug/app-debug.apk android/build/ci/local/app.apk
+          cp android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk android/build/ci/local/test.apk
+      - name: Enable KVM
+        if: matrix.abi == 'x86_64' && !inputs.warm_cache
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Native and UI instrumentation, both distributions
+        if: matrix.abi == 'x86_64' && !inputs.warm_cache
+        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save
+          script: |
+            bash android/scripts/ci-instrumentation.sh
+            bash android/scripts/ci-release-tests.sh
+      - uses: actions/upload-artifact@v7
+        if: ${{ !inputs.warm_cache }}
+        with:
+          name: android-native-${{ matrix.abi }}
+          path: android/app/src/play/jniLibs/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: android-checks-${{ matrix.abi }}
+          path: |
+            android/build/app-play/reports/
+            android/build/ci/*.txt
+            android/build/ci/release-evidence/
+          if-no-files-found: ignore
+
+  bundle:
+    if: ${{ !cancelled() && !inputs.warm_cache && needs.plan.result == 'success' && needs.native.result == 'success' }}
+    needs: [plan, native]
+    runs-on: ubuntu-24.04
+    environment: ${{ needs.plan.outputs.sign == 'true' && 'android-signing' || '' }}
+    env:
+      HARDCHARGER_ANDROID_BUILD_NUMBER: ${{ needs.plan.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: android-native-*
+          merge-multiple: true
+          path: android/app/src/play/jniLibs
+      - name: Unsigned review bundle
+        if: needs.plan.outputs.sign != 'true'
+        run: android/gradlew -p android -PhardchargerDistribution=play :app:bundleRelease
+      - name: Sign the tested native artifacts
+        if: needs.plan.outputs.sign == 'true'
+        env:
+          ANDROID_UPLOAD_KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
+          HARDCHARGER_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+          HARDCHARGER_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+          HARDCHARGER_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+        run: |
+          export HARDCHARGER_ANDROID_KEYSTORE="$RUNNER_TEMP/hardcharger-upload.p12"
+          trap 'rm -f "$HARDCHARGER_ANDROID_KEYSTORE"' EXIT
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          for name in ('ANDROID_UPLOAD_KEYSTORE_B64', 'HARDCHARGER_ANDROID_STORE_PASSWORD', 'HARDCHARGER_ANDROID_KEY_PASSWORD', 'HARDCHARGER_ANDROID_KEY_ALIAS'):
+              if not os.environ.get(name): raise SystemExit(f'Missing signing secret: {name}')
+          os.umask(0o077)
+          Path(os.environ['HARDCHARGER_ANDROID_KEYSTORE']).write_bytes(base64.b64decode(os.environ['ANDROID_UPLOAD_KEYSTORE_B64'], validate=True))
+          PY
+          android/gradlew --no-daemon -p android -PhardchargerDistribution=play :app:bundleRelease
+          python3 android/scripts/check-play-bundle.py android/build/app-play/outputs/bundle/release/app-release.aab --require-signed
+          jarsigner -verify android/build/app-play/outputs/bundle/release/app-release.aab
+          keytool -exportcert -rfc -keystore "$HARDCHARGER_ANDROID_KEYSTORE" -alias "$HARDCHARGER_ANDROID_KEY_ALIAS" -storepass:env HARDCHARGER_ANDROID_STORE_PASSWORD -file "$RUNNER_TEMP/upload-certificate.pem"
+          java android/scripts/VerifyBundle.java android/build/app-play/outputs/bundle/release/app-release.aab "$RUNNER_TEMP/upload-certificate.pem"
+      - name: Validate the bundle and its release manifest
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/bundletool.jar" https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar
+          echo "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29  $RUNNER_TEMP/bundletool.jar" | sha256sum -c -
+          java -jar "$RUNNER_TEMP/bundletool.jar" validate --bundle=android/build/app-play/outputs/bundle/release/app-release.aab
+          java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=android/build/app-play/outputs/bundle/release/app-release.aab --module=base > android/build/bundle-manifest.xml
+      - name: Record the exact candidate and source commit
+        env:
+          SIGNED: ${{ needs.plan.outputs.sign }}
+        run: |
+          python3 android/scripts/check-play-bundle.py android/build/app-play/outputs/bundle/release/app-release.aab
+          python3 android/scripts/check-r8-bundle.py android/build/app-play/outputs/bundle/release/app-release.aab
+          python3 android/scripts/ci-candidate.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-play-candidate
+          path: android/build/candidate/
+          if-no-files-found: error
+      - name: Prepare public Android release assets
+        run: |
+          mkdir -p android/build/public-release
+          cp android/build/candidate/hardcharger-play.aab android/build/public-release/Hardcharger-android.aab
+          cp android/build/candidate/candidate.json android/build/public-release/android-candidate.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hardcharger-android
+          path: android/build/public-release/
+          if-no-files-found: error
+
+  upload-existing:
+    if: github.event_name == 'workflow_dispatch' && inputs.candidate_run_id != ''
+    runs-on: ubuntu-24.04
+    environment: google-play-internal
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -m unittest discover -s android/scripts -p 'test_ci_*.py'
+      - uses: actions/download-artifact@v8
+        with:
+          name: android-play-candidate
+          path: candidate
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify original build gates and exact candidate
+        env:
+          SOURCE_RUN_ID: ${{ inputs.candidate_run_id }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 android/scripts/ci-verify-upload-source.py
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GOOGLE_PLAY_WIF_PROVIDER }}
+          service_account: ${{ vars.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+          create_credentials_file: false
+          export_environment_variables: false
+      - name: Retry the same candidate as an internal draft
+        env:
+          GOOGLE_PLAY_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: python3 android/scripts/play-draft.py candidate

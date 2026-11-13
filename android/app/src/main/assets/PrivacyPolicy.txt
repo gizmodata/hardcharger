@@ -1,0 +1,38 @@
+Hardcharger for Android — Privacy Policy
+
+GizmoData LLC
+Last updated: November 12, 2026
+
+Hardcharger lets you run a database on your Android device and connect to servers you choose. A GizmoData account is not required to use the on-device database. This policy covers the Android application; services you connect to have their own operators and privacy policies.
+
+Data on your device
+
+The app stores your database, imported files, server logs, settings and saved server connections in its private Android storage. The native console keeps its current transcript and recent commands in memory; the web workspace can retain editor state in the app's WebView storage. Query logging can include SQL text and values you put in statements. Exported files are also kept locally until you choose to save or share a copy.
+
+Administrator credentials and saved connection passwords are encrypted using a key held in Android Keystore. The app does not separately encrypt database files, SQL history or logs. App backup and device-transfer backup are disabled.
+
+Network connections you choose
+
+Connecting to another server sends connection information, credentials or sign-in tokens, SQL statements and any uploaded data to that server. The server sends query results back to the app. Browser sign-in opens the identity provider configured by the selected server. Those services may retain account information, queries, logs and uploaded data under their own policies.
+
+SQL can read from or write to network services when you use a bundled extension and provide addresses or credentials. The app's website link opens GizmoData's website. Opening links, using a cloud file provider, or sharing a file or address invokes the services you select; their privacy policies apply.
+
+Local network sharing
+
+Sharing is off by default. When enabled, the device advertises its Hardcharger service on the local network and accepts encrypted TLS connections. People with the administrator credentials can access and change the database. Keep those credentials private and turn sharing off when it is no longer needed.
+
+Advertising, analytics and diagnostics
+
+The app does not contain advertising, analytics or an automatic crash-reporting service operated by GizmoData. It does not automatically upload your local database or query history to GizmoData. Android, Google Play, your browser, and servers or identity providers you choose may process diagnostic or network information under their own policies.
+
+Retention and deletion
+
+Persistent local app data remains on the device until you remove it. Android's Clear storage action or uninstalling the app removes its private database, imported files, logs and saved connections. Copies exported to other folders, cloud storage, or other apps remain there until you delete them separately. Deleting local app data does not delete data or accounts on remote servers; use the remote service's controls or contact its operator.
+
+Permissions and controls
+
+The app uses internet and network-state access for its server and connection features. It accesses documents you select through Android's document picker or share menu. You can delete saved connections, change local administrator credentials, disable sharing and control query logging from the app.
+
+Contact
+
+For questions about this application and its handling of data, contact GizmoData LLC at info@gizmodata.com.

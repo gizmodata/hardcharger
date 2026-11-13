@@ -1,0 +1,8 @@
+.gradle/
+.kotlin/
+build/
+app/build/
+local.properties
+app/src/main/jniLibs/
+app/src/play/jniLibs/
+__pycache__/

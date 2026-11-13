@@ -248,7 +248,7 @@ def test_a_terminal_without_utf8_never_or_json_has_none(args, env):
 
 def test_a_text_line_leaves_out_fields_without_a_value(launcher):
     server = launcher.start()
-    log = startup_log(server)
+    log = startup_log(server=server, marker="health check passing")
     passing = next(line for line in log.splitlines() if "health check passing" in line)
     assert passing.endswith("health check passing"), passing  # no "error="
     # No line of the text log has a field with nothing after its "=".
@@ -271,5 +271,7 @@ def test_a_failing_health_check_names_its_error(launcher):
 
 def test_a_json_line_of_a_passing_health_check_has_no_error(launcher):
     server = launcher.start(args=["--log-format", "json"])
+    # The health endpoint can answer before its worker writes the first passing log.
+    assert "health check passing" in startup_log(server=server, marker="health check passing"), server.log()
     passing = next(r for r in server.log_records() if r["message"] == "health check passing")
     assert "error" not in passing, passing

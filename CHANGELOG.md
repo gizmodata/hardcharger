@@ -7,6 +7,43 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Enable Android release code and resource optimization, preserve JNI entry points,
+  and verify the optimized app and its bundled crash mappings before upload.
+- Remove test-order and startup-log timing dependencies from the metrics and health
+  logging integration tests.
+
+## [2.12.0] - 2026-11-12
+
+Hardcharger comes to Android for the first time, bringing the server, DuckDB and the
+SQL workspace to phones and tablets. Google Play availability is coming soon; initial
+builds are available through internal testing.
+
+### Added
+
+- **Hardcharger for Android**: run the embedded server on your device, query through
+  the built-in web workspace or native SQL console, and start, stop or restart the
+  server from a native dashboard. Supports Android 9 and later, ARM64 and x86_64.
+- **Built-in database extensions**: DuckLake, PostgreSQL connectivity, HTTP/S3 access,
+  Parquet, JSON, ICU, TPC-H and autocomplete. The Play distribution includes its native
+  extensions in the app; regular local builds also support installing compatible
+  signed extensions.
+- **Files and connections**: import and export data through Android's document picker
+  and share actions, save remote server connections, sign in with a password or browser,
+  and share the local server over TLS. Credentials are protected by Android Keystore.
+- **A familiar native interface**: iOS-inspired phone tabs, adaptive tablet navigation,
+  light and dark appearance, searchable logs with Emoji and Plain display options,
+  and the branded About screen with component versions, privacy policy and software
+  notices. Tablet navigation supports short windows and larger text.
+- **Automatic resource limits**: memory defaults to 30% of device RAM, bounded to
+  256–4096 MB, and threads default to one per core. Presets and custom limits are
+  available in Settings.
+- **Android release artifacts**: a signed Android App Bundle accompanies the desktop
+  and server downloads, with checksums and source metadata. The combined release
+  pipeline builds and tests both Android architectures and prepares an internal
+  Google Play draft for review.
+
 ## [2.11.0] - 2026-11-12
 
 ### Added

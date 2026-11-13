@@ -12,6 +12,13 @@ if [ "$(uname)" = Linux ]; then
   # builds all C++ anyway.
   export CFLAGS="${CFLAGS:-} -D_GNU_SOURCE"
 fi
+if [ -n "${HARDCHARGER_ANDROID_ABI:-}" ]; then
+  # Arrow includes visibility.h (and tz.h) before tz.cpp defines BUILD_TZ_LIB.
+  # Android needs that define for the tzdb forward declaration and friend access.
+  # The NDK can initialize CMAKE_CXX_FLAGS before CMake reads CXXFLAGS on a clean
+  # configure. Apply this as a compile definition in the Android toolchain instead.
+  export HARDCHARGER_ANDROID_ARROW=ON
+fi
 CHARGEWIRE_DEPS_DIR="$DEPS" "$HERE/../third_party/chargewire/cpp/scripts/build-arrow.sh"
 # CMake installs libraries into lib64 on RPM-based systems; the server's CMake uses lib.
 if [ -d "$DEPS/arrow-install/lib64" ] && [ ! -e "$DEPS/arrow-install/lib" ]; then

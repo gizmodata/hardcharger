@@ -1,0 +1,26 @@
+Bring Hardcharger and DuckDB to your Android phone or tablet.
+
+Run a real database on your device, explore it in the built-in web workspace, or write SQL in the native console. Local use does not require a GizmoData account.
+
+QUERY YOUR DATA
+• Import CSV, JSON and Parquet files using Android's document picker.
+• Explore tables and run analytical SQL with DuckDB.
+• Save query exports to a location you choose.
+• Use the bundled database extensions, including HTTP file access, DuckLake and PostgreSQL connectivity.
+
+WORK LOCALLY OR CONNECT TO A SERVER
+• Keep an on-device database for local work.
+• Save connections to your own Hardcharger servers.
+• Use password or supported browser sign-in for remote connections.
+• Share the on-device server on a trusted local network over TLS.
+
+BUILT FOR PHONES AND TABLETS
+• Native SQL console with command history and query cancellation.
+• Light and dark appearance, adjustable resource limits and readable server logs.
+• Credentials protected with Android Keystore.
+
+Hardcharger's on-device server runs while the app is in use. It pauses after the app has been in the background for about 30 seconds and resumes when you return. Keep the app open while sharing with other devices.
+
+The Google Play edition includes its supported native extensions in the app. Installing additional native DuckDB extensions at runtime is not supported. Remote servers and network data sources require a network connection and may require their own accounts.
+
+Hardcharger is open-source software under the Apache License 2.0. Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.
