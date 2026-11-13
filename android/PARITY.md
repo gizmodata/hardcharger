@@ -191,7 +191,9 @@ both native builds, JVM tests, lint and both x86_64 emulator suites on 2026-11-1
 Both dependency caches were saved. The signed ARM64/x86_64 candidate is version
 2.11.0/code 1401; its checksum, metadata and all 141 payload signatures were verified
 after download against the local upload certificate. Google Play upload was skipped.
-The owner subsequently uploaded build 1401 in Console, and Google OIDC plus the
-protected GitHub upload environment are configured. The Play Console service-account
-grant and first federated upload remain pending; see `play/CI.md`. All-platform
+The owner subsequently published build 1401 to internal testing, and Google OIDC plus
+the protected GitHub upload environment are configured. The owner sent the Play Console
+service-account invitation. CI run 43330352240 produced and verified signed build 1501
+with both dependency cache hits and passing emulator suites; upload awaits the GitHub
+environment review gate. The first federated upload remains pending; see `play/CI.md`. All-platform
 v2.12.0 release integration remains a separate follow-up.
