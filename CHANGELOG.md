@@ -7,6 +7,11 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Remove test-order and startup-log timing dependencies from the metrics and health
+  logging integration tests.
+
 ## [2.12.0] - 2026-11-12
 
 Hardcharger comes to Android for the first time, bringing the server, DuckDB and the

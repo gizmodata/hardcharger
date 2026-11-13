@@ -214,7 +214,7 @@ def test_engine_host_and_process_gauges(session, metrics_port):
             assert scraped[name] > 0
 
 
-def test_every_family_has_help_and_type(metrics_port):
+def test_every_family_has_help_and_type(server, metrics_port):
     text = httpx.get(url=f"http://127.0.0.1:{metrics_port}/metrics").text
     families = {line.split()[2] for line in text.splitlines() if line.startswith("# TYPE ")}
     described = {line.split()[2] for line in text.splitlines() if line.startswith("# HELP ")}
