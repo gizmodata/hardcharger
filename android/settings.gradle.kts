@@ -5,3 +5,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "Hardcharger"
 include(":app")
+include(":release-tests")

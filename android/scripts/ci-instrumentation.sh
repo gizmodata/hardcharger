@@ -7,7 +7,16 @@ reset_display() {
   adb shell wm density reset
   adb shell settings put system font_scale 1.0
 }
-trap reset_display EXIT
+finish() {
+  local result=$?
+  if [ "$result" -ne 0 ]; then
+    adb logcat -d > android/build/ci/emulator-logcat.txt || true
+    adb logcat -d -b crash > android/build/ci/emulator-crashes.txt || true
+  fi
+  reset_display
+  exit "$result"
+}
+trap finish EXIT
 for distribution in ${HARDCHARGER_TEST_DISTRIBUTIONS:-play local}; do
   [[ "$distribution" == play || "$distribution" == local ]] || exit 1
   reset_display

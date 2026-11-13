@@ -119,10 +119,12 @@ jobs:
         run: |
           python3 server/scripts/third-party-notices.py --check
           android/scripts/build-native.sh "$ABI" play
-          android/gradlew -p android -PhardchargerDistribution=play -PhardchargerTestBuildType=release :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease :app:assembleReleaseAndroidTest
-          mkdir -p android/build/ci/play
-          cp android/build/app-play/outputs/apk/release/app-release.apk android/build/ci/play/app.apk
-          cp android/build/app-play/outputs/apk/androidTest/release/app-release-androidTest.apk android/build/ci/play/test.apk
+          android/gradlew -p android -PhardchargerDistribution=play -PhardchargerSignReleaseForTesting=true :app:testReleaseUnitTest :app:lintRelease :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease :release-tests:assembleRelease
+          mkdir -p android/build/ci/play android/build/ci/release
+          cp android/build/app-play/outputs/apk/debug/app-debug.apk android/build/ci/play/app.apk
+          cp android/build/app-play/outputs/apk/release/app-release.apk android/build/ci/release/app.apk
+          cp android/release-tests/build/outputs/apk/release/release-tests-release.apk android/build/ci/release/test.apk
+          cp android/build/app-play/outputs/apk/androidTest/debug/app-debug-androidTest.apk android/build/ci/play/test.apk
       - name: Build the regular local distribution for regression tests
         if: matrix.abi == 'x86_64' && !inputs.warm_cache
         run: |
@@ -146,7 +148,9 @@ jobs:
           target: google_apis
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save
-          script: bash android/scripts/ci-instrumentation.sh
+          script: |
+            bash android/scripts/ci-instrumentation.sh
+            bash android/scripts/ci-release-tests.sh
       - uses: actions/upload-artifact@v7
         if: ${{ !inputs.warm_cache }}
         with:
@@ -160,6 +164,7 @@ jobs:
           path: |
             android/build/app-play/reports/
             android/build/ci/*.txt
+            android/build/ci/release-evidence/
           if-no-files-found: ignore
 
   bundle:

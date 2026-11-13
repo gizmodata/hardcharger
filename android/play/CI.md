@@ -16,9 +16,16 @@ Pull requests affecting Android still run its unsigned checks. The former
    distributions in a disposable x86_64 emulator. Include tablet navigation from About
    at 100%/200% font scale in short landscape windows. ARM64 and 16 KB emulator coverage
    is recorded separately in `../PARITY.md`.
+   Separately install the non-debuggable, R8-optimized release and run the isolated
+   `release-tests` UI harness against it. This harness uses no app classes, so the
+   production optimizer does not need test-only keep rules. It checks real SQL,
+   Unicode, bundled extensions, rejected external installs, restart persistence,
+   About and short-tablet navigation.
 4. Package the exact tested native artifacts. The protected `android-signing`
    environment provides the upload key. Validate the bundle, manifest, native hashes,
    signing certificate and every signed payload entry.
+   Require R8 optimization/shrinking/obfuscation metadata and the embedded
+   deobfuscation mapping; reject coverage below 25% in any category.
 5. Retain `android-play-candidate` as a CI artifact with AAB, SHA-256, source
    commit, version code and notes. Publish `Hardcharger-android.aab` and
    `android-candidate.json` through the combined GitHub release, with the AAB covered

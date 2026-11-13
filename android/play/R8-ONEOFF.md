@@ -21,6 +21,6 @@ Remove both after the upload, restoring the Terraform provider's normal tag-only
 condition. No new service-account key or broader IAM role is needed.
 
 For the later main integration, retain the app Gradle configuration, narrow JNI
-keep rule, instrumentation-only Error Prone warning rule, R8 bundle validator and
+keep rule, isolated release UI test module, R8 bundle validator and
 tests, and optimized-release coverage in the regular Android workflow. Omit this
 document and the temporary one-off workflow. Do not merge until approved.
