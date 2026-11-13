@@ -1,0 +1,58 @@
+name: Diagnose Windows shell startup
+on:
+  push:
+    branches: [fix/windows-shell-startup]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnose:
+    runs-on: windows-11-arm
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: crash-dumps-windows-arm64
+          path: diagnostic-artifacts
+          run-id: 43345093222
+          github-token: ${{ github.token }}
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Prepare the existing ARM64 binaries
+        run: |
+          mkdir -p server/build
+          find diagnostic-artifacts -name '*.exe' -exec cp '{}' server/build/ \;
+          server/build/hardcharger-server.exe --version
+          bash --version
+          python3 --version
+          uv venv server/tests/.venv --python cpython-3.14-windows-x86_64-none
+          uv pip install --python server/tests/.venv/Scripts/python.exe -r server/tests/pyproject.toml
+      - name: Repeat the original shell test with startup tracing
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('server/tests/test_client_shell.sh')
+          s = p.read_text()
+          s = s.replace('set -euo pipefail', 'set -euo pipefail\nPS4=\'+ pid=$BASHPID sub=$BASH_SUBSHELL line=$LINENO: \'\nset -x')
+          s = s.replace('echo "Server is ready!"', 'set +x\necho "Server is ready!"')
+          p.write_text(s)
+          p = Path('server/tests/test_client_shell.py')
+          s = p.read_text().replace('import pathlib', 'import os\nimport pathlib')
+          s = s.replace('    lines = ANSI.sub', '    (SCRIPT.parents[2] / "diagnostic-logs" / f"shell-{os.getpid()}.txt").write_text(result.stdout + result.stderr, encoding="utf-8")\n    lines = ANSI.sub')
+          p.write_text(s)
+          PY
+          mkdir -p diagnostic-logs
+          for trial in 1 2 3 4; do
+            server/tests/.venv/Scripts/python.exe -m pytest server/tests/test_client_shell.py -q --tb=short -n 4 > "diagnostic-logs/trial-$trial.txt" 2>&1 || true
+            tail -8 "diagnostic-logs/trial-$trial.txt"
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-shell-diagnostic
+          path: diagnostic-logs
