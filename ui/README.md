@@ -305,11 +305,14 @@ npm run build       # dist/, then checks it: no inline code, hashed assets, noth
 npm run package     # release/hardcharger-ui-<version>.tar.gz, SHA256SUMS, its CONTENT_SHA256
 ```
 
-The JavaScript client, `@gizmodata/chargewire`, is not on npm. `vendor/` holds the package
+The JavaScript client, `@gizmodata/chargewire`, is vendored, not installed from a registry (it
+was not on npm when the UI was written; it is from 2.3.6 on). `vendor/` holds the package
 `npm pack` makes from [gizmodata/chargewire-js](https://github.com/gizmodata/chargewire-js) at the
 commit pinned in [`vendor/chargewire-js.json`](vendor/chargewire-js.json) (and
 `package-lock.json` pins its hash again). `node scripts/vendor-chargewire.mjs --verify --rebuild`
-rebuilds that commit and checks every file; `--update <commit>` moves the pin.
+rebuilds that commit and checks every file; `--update <commit>` moves the pin. The vendored
+2.3.6 holds the same 25 files, byte for byte, as npm's `@gizmodata/chargewire@2.3.6` (the two
+archives differ only in their tar metadata).
 
 SheetJS Community Edition (`xlsx`, Apache-2.0), which reads Excel workbooks for Upload data, is
 published on SheetJS's own CDN: npm's `xlsx` stopped at 0.18.5, which has known vulnerabilities
