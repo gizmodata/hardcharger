@@ -92,8 +92,8 @@ chargewire_duckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
   }
   // Match GizmoSQL/DuckDB on native platforms: known extensions install/load on demand.
   // Administrators can override either setting or the repository through init SQL.
-#ifdef HARDCHARGER_IOS
-  // iOS runs only the extensions signed into the app.
+#if defined(HARDCHARGER_IOS) || defined(HARDCHARGER_ANDROID_PLAY)
+  // Store builds run only the extensions signed into the app.
   options.instance_options.emplace_back("autoinstall_known_extensions", "false");
   options.instance_options.emplace_back("autoload_known_extensions", "false");
 #else

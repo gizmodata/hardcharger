@@ -21,6 +21,16 @@ sum=$("${hash[@]}" "$src/openssl.tar.gz" | cut -d' ' -f1)
 tar -xzf "$src/openssl.tar.gz" -C "$src" --strip-components=1
 rm -rf "$PREFIX"
 configure=(./config)
+if [ -n "${HARDCHARGER_ANDROID_ABI:-}" ]; then
+  export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+  case "$(uname)" in Darwin) ndk_host=darwin-x86_64 ;; *) ndk_host=linux-x86_64 ;; esac
+  export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$ndk_host/bin:$PATH"
+  case "$HARDCHARGER_ANDROID_ABI" in
+    arm64-v8a) configure=(./Configure android-arm64 -D__ANDROID_API__=28 -fPIC) ;;
+    x86_64) configure=(./Configure android-x86_64 -D__ANDROID_API__=28 -fPIC) ;;
+    *) echo "Unsupported Android ABI" >&2; exit 2 ;;
+  esac
+fi
 if [ -n "${HARDCHARGER_IOS_SDK:-}" ]; then
   # The iOS app (ios/scripts/build-server-ios.sh): OpenSSL's own iOS targets, for the SDK
   # and oldest iOS the app builds for, without loadable modules (iOS loads no code at run

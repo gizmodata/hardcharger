@@ -1,0 +1,1 @@
+First release of Hardcharger for Android phones and tablets. Run DuckDB on your device with a SQL console, Web UI, and bundled extensions.

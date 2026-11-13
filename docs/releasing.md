@@ -2,7 +2,7 @@
 
 A server release is a `v*` tag on a commit of `main`. The tag runs `.github/workflows/server.yml`
 on that commit: the full matrix (Linux, macOS, Windows, the web UI, the AddressSanitizer and
-ThreadSanitizer jobs) gates everything, and only then are the images pushed and the GitHub
+ThreadSanitizer jobs, iOS, desktop and Android) gates everything, and only then are the images pushed and the GitHub
 Release created. The version arithmetic lives in `.github/scripts/release.sh`, which the
 workflows call and `.github/scripts/test-release.sh` tests on every run.
 
@@ -76,6 +76,23 @@ Because GitHub never makes a pre-release the latest release, `releases/latest` a
 one-line installer's default keep resolving to the last release; a candidate installs only by
 name (`HARDCHARGER_VERSION=2.0.0-rc.1`, `--version 2.0.0-rc.1`). The platform assets keep
 version-free names, which the installers and the Python package download by.
+
+## Android and Google Play
+
+Android is a mandatory tag release gate. Its reusable build shares the run's web UI,
+checks ARM64/x86_64 native libraries, runs phone/tablet instrumentation, and signs the
+AAB with the protected upload key. `Hardcharger-android.aab` is included in the GitHub
+release and `SHA256SUMS`; `android-candidate.json` records its version code and source.
+After publication, `android-play` automatically uploads that exact candidate as an
+internal-testing **draft** through the tag-restricted `google-play-internal` environment.
+There is no manual GitHub approval gate. Review/discard an older draft first. Testing
+rollout and production remain manual Play Console decisions, matching the iOS flow.
+
+Only `server.yml` creates signed candidates, using its run counter for increasing
+Android version codes. For upload-only retry, dispatch `android.yml` on the same tag
+with `candidate_run_id` set to the original server run. On the subsequent fast-forward
+to main, the Android cache warm-up makes native dependency installs available to future
+tags. See [Android CI/CD](../android/play/CI.md) for credentials and provenance checks.
 
 ## Code signing
 

@@ -1,0 +1,145 @@
+{
+  "app": "com.gizmodata.hardcharger",
+  "version": "2.11.0",
+  "version_code": 1501,
+  "distribution": "play",
+  "aab_sha256": "dd024023553094b8814613fa54daf381c80cec2a8fd623cd105192c0612737f8",
+  "assets": [
+    {
+      "file": "app-icon.png",
+      "width": 512,
+      "height": 512,
+      "format": "RGBA PNG",
+      "bytes": 144136,
+      "sha256": "4d2d24a31a6c577919e1281ad8056dd2ca42f6f1b59dd5cadf93cf6bf38b4587"
+    },
+    {
+      "file": "feature-graphic.png",
+      "width": 1024,
+      "height": 500,
+      "format": "RGB PNG",
+      "bytes": 234149,
+      "sha256": "26d84f631c609dbca3c7ea547465042e6d25aa0bc809e9547fd5dc28702f1b1d"
+    },
+    {
+      "file": "phone/01-sql-workspace.png",
+      "width": 1080,
+      "height": 1920,
+      "format": "RGB PNG",
+      "bytes": 157501,
+      "sha256": "f8bac355d4a749cca597bdc65b42b7df1601f1721b33526349ae6be2b31b472c"
+    },
+    {
+      "file": "phone/02-local-server.png",
+      "width": 1080,
+      "height": 1920,
+      "format": "RGB PNG",
+      "bytes": 129187,
+      "sha256": "d6b1f332ee6594d74515d9d833f66ae5657c351001c5755a69245cf49e048a80"
+    },
+    {
+      "file": "phone/03-native-console-dark.png",
+      "width": 1080,
+      "height": 1920,
+      "format": "RGB PNG",
+      "bytes": 86051,
+      "sha256": "a0ef73229ac61b5a2ebbf5c1f367582ddfed94f123e5e729f4ed97390c86ba22"
+    },
+    {
+      "file": "phone/04-settings.png",
+      "width": 1080,
+      "height": 1920,
+      "format": "RGB PNG",
+      "bytes": 96123,
+      "sha256": "843c22da582f75722086a242ba0f6491859ade01680ac0441b05d0be8853d0de"
+    },
+    {
+      "file": "phone/05-about.png",
+      "width": 1080,
+      "height": 1920,
+      "format": "RGB PNG",
+      "bytes": 341178,
+      "sha256": "875e4ab4537ac9aafab65e9e32bcd0f37c9fd09f0fa8c489635a0bf420b34282"
+    },
+    {
+      "file": "tablet-7-inch/01-sql-workspace.png",
+      "width": 1080,
+      "height": 1920,
+      "format": "RGB PNG",
+      "bytes": 112353,
+      "sha256": "9d389a709ced868fa40198ec3457d2d1a0a1ce973a1c95e795c93f7ca747ddd5"
+    },
+    {
+      "file": "tablet-7-inch/02-local-server.png",
+      "width": 1080,
+      "height": 1920,
+      "format": "RGB PNG",
+      "bytes": 132126,
+      "sha256": "14ffd01c20fc4c74d6d723d5ee295e4dba0099b0eac59c4ebca6299b33156ef9"
+    },
+    {
+      "file": "tablet-7-inch/03-native-console-dark.png",
+      "width": 1080,
+      "height": 1920,
+      "format": "RGB PNG",
+      "bytes": 55892,
+      "sha256": "877fe6d770c0663e5b646d880ab2cbe460e71a4b6d61d301a85c4f179a058178"
+    },
+    {
+      "file": "tablet-7-inch/04-settings.png",
+      "width": 1080,
+      "height": 1920,
+      "format": "RGB PNG",
+      "bytes": 95052,
+      "sha256": "4049be9e0030645eaa13ae71c7c55dbeee99700017178b7650b74c3d26bf5e38"
+    },
+    {
+      "file": "tablet-7-inch/05-about.png",
+      "width": 1080,
+      "height": 1920,
+      "format": "RGB PNG",
+      "bytes": 204015,
+      "sha256": "32567050591d1b9877ccb34295d10bd1764bf0d3fb9a89cf380bfae415a44811"
+    },
+    {
+      "file": "tablet-10-inch/01-sql-workspace.png",
+      "width": 1920,
+      "height": 1080,
+      "format": "RGB PNG",
+      "bytes": 150128,
+      "sha256": "87da35137eb7fc29aad27b382a8bc6cb4ea68ad69f24cff149f8c6e92d737a66"
+    },
+    {
+      "file": "tablet-10-inch/02-local-server.png",
+      "width": 1920,
+      "height": 1080,
+      "format": "RGB PNG",
+      "bytes": 87969,
+      "sha256": "6ddeec52a408827d8b4fc58bdeea4fc74a5b45700fc64c3dc6a319b6892eefe0"
+    },
+    {
+      "file": "tablet-10-inch/03-native-console-dark.png",
+      "width": 1920,
+      "height": 1080,
+      "format": "RGB PNG",
+      "bytes": 58551,
+      "sha256": "708543b2a1cf264fe8f6fc27114897dcc1fbbd110387e0b98ae0c7f8b8bd4b06"
+    },
+    {
+      "file": "tablet-10-inch/04-settings.png",
+      "width": 1920,
+      "height": 1080,
+      "format": "RGB PNG",
+      "bytes": 77999,
+      "sha256": "0f722e17b53868c3c9f707fbbaa5991b5c0ce7da2530885365f7401304c1440b"
+    },
+    {
+      "file": "tablet-10-inch/05-about.png",
+      "width": 1920,
+      "height": 1080,
+      "format": "RGB PNG",
+      "bytes": 167074,
+      "sha256": "6734ee3693ef3643db5b7c00f6d78cc8bec2defcb08b8ee450df0c7a46e9fbc3"
+    }
+  ]
+}

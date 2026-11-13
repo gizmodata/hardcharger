@@ -572,6 +572,21 @@
   padding: 0 10px;
   border-bottom: 1px solid var(--border-soft);
 }
+@media (max-width: 560px) {
+  .result-toolbar {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 34px;
+    padding: 6px 10px;
+  }
+  .result-toolbar .grid-filter {
+    flex: 1;
+    min-width: 120px;
+  }
+  .result-toolbar .grid-filter input {
+    width: 100%;
+  }
+}
 .results-count {
   color: var(--muted);
   font-size: 12px;

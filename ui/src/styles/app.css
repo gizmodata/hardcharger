@@ -120,6 +120,11 @@ body,
   height: 100%;
   margin: 0;
 }
+/* Keep mobile WebViews' layout viewport at the device width even when a
+   horizontally scrolling grid or toolbar contains wider content. */
+html {
+  overflow: hidden;
+}
 
 body {
   font-family: var(--font);
@@ -1527,7 +1532,9 @@ th[aria-sort] .monitor-sort {
   right: auto;
   z-index: 41;
   min-width: 220px;
-  max-width: 320px;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
 }
 .menu button:disabled {
   opacity: 0.5;

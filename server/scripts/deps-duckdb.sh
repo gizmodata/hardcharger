@@ -23,7 +23,11 @@ mkdir -p "$CHARGEWIRE_DEPS_DIR"
 if [ ! -e "$SRC/.git" ]; then
   git clone --quiet --filter=blob:none https://github.com/duckdb/duckdb.git "$SRC"
 fi
-git -C "$SRC" fetch --quiet --tags origin
+if [ -n "${HARDCHARGER_ANDROID_ABI:-}" ]; then
+  git -C "$SRC" fetch --quiet --depth 1 origin "$COMMIT"
+else
+  git -C "$SRC" fetch --quiet --tags origin
+fi
 git -C "$SRC" checkout --quiet "$COMMIT"
 cmake -DDUCKDB_SOURCE_DIR="$SRC" -P "$HERE/scripts/retire-ducklake-patch.cmake"
 patches=("$HERE"/scripts/patch-duckdb*.cmake)
@@ -32,21 +36,36 @@ for patch in "${patches[@]}"; do
   cmake -DDUCKDB_SOURCE_DIR="$SRC" -P "$patch"
 done
 
-# Only iOS builds the optional extensions and their transitive libraries. Native builds
+# Mobile apps build the optional extensions and their transitive libraries. Desktop builds
 # retain DuckDB's base four; INSTALL/LOAD uses signed release-compatible modules.
 EXTENSIONS="$HERE/scripts/duckdb-extensions.cmake"
-if [ -n "${HARDCHARGER_IOS_SDK:-}" ]; then
+if [ -n "${HARDCHARGER_IOS_SDK:-}${HARDCHARGER_ANDROID_ABI:-}" ]; then
   EXTENSIONS="$HERE/scripts/duckdb-extensions-ios.cmake"
   for name in httpfs ducklake postgres_scanner; do
     ours=$(awk -v n="$name" '$0 ~ "duckdb_extension_load\\(" n "$" {f = 1} f && /GIT_TAG/ {print $2; exit}' "$EXTENSIONS")
     theirs=$(awk '/GIT_TAG/ {print $2; exit}' "$SRC/.github/config/extensions/$name.cmake")
     [ -n "$ours" ] && [ "$ours" = "$theirs" ] \
-      || { echo "$name: iOS pins '$ours', DuckDB $COMMIT pins '$theirs'" >&2; exit 1; }
+      || { echo "$name: mobile pins '$ours', DuckDB $COMMIT pins '$theirs'" >&2; exit 1; }
   done
+  if [ -n "${HARDCHARGER_ANDROID_ABI:-}" ]; then EXTENSIONS="$HERE/scripts/duckdb-extensions-android.cmake"; fi
   "$HERE/scripts/build-extension-deps.sh"
   export CMAKE_PREFIX_PATH="$CHARGEWIRE_DEPS_DIR/roaring-install:$CHARGEWIRE_DEPS_DIR/libpq-install:$CHARGEWIRE_DEPS_DIR/curl-install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 fi
-if [ -z "${HARDCHARGER_IOS_SDK:-}" ]; then
+if [ -n "${HARDCHARGER_ANDROID_ABI:-}" ]; then
+  VERSION_NAME=$(sed -n 's/^DUCKDB_VERSION_NAME=\(v[^ ]*\)$/\1/p' "$CHARGEWIRE/build-duckdb.sh")
+  platform=android_arm64
+  [ "$HARDCHARGER_ANDROID_ABI" != x86_64 ] || platform=android_amd64
+  cmake -S "$SRC" -B "$CHARGEWIRE_DEPS_DIR/duckdb-build" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$CHARGEWIRE_DEPS_DIR/duckdb-install" \
+    -DOVERRIDE_GIT_DESCRIBE="$VERSION_NAME" -DDUCKDB_EXPLICIT_PLATFORM="$platform" \
+    -DBUILD_SHELL=OFF -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF \
+    -DBUILD_EXTENSIONS="" -DDUCKDB_EXTENSION_CONFIGS="$EXTENSIONS"
+  # Loadable module targets deliberately reference symbols in the host engine. They
+  # are not app artifacts; build the two engine libraries and their static dependencies.
+  cmake --build "$CHARGEWIRE_DEPS_DIR/duckdb-build" --target duckdb duckdb_static duckdb_cpp_api duckdb_local_extension_repository
+  cmake --install "$CHARGEWIRE_DEPS_DIR/duckdb-build"
+  cp "$SRC/src/include/duckdb_v2.h" "$CHARGEWIRE_DEPS_DIR/duckdb-install/include/"
+elif [ -z "${HARDCHARGER_IOS_SDK:-}" ]; then
   CHARGEWIRE_DUCKDB_EXTENSION_CONFIGS="$EXTENSIONS" "$CHARGEWIRE/build-duckdb.sh"
 else
   # The iOS app (ios/scripts/build-server-ios.sh): build-duckdb.sh's build of the same
@@ -94,11 +113,11 @@ cp "$BUILD/src/main/extension/local_extension_repository/libduckdb_local_extensi
 # The static libraries the extensions link, kept with the install (it is what CI caches).
 STATIC_DEPS="$CHARGEWIRE_DEPS_DIR/duckdb-install/lib/static-deps"
 rm -rf "$STATIC_DEPS" && mkdir -p "$STATIC_DEPS"
-if [ -n "${HARDCHARGER_IOS_SDK:-}" ]; then
+if [ -n "${HARDCHARGER_IOS_SDK:-}${HARDCHARGER_ANDROID_ABI:-}" ]; then
   cp "$CHARGEWIRE_DEPS_DIR/libpq-install/lib/libpq.a" "$CHARGEWIRE_DEPS_DIR/roaring-install/lib/libroaring.a" "$STATIC_DEPS/"
   cp "$CHARGEWIRE_DEPS_DIR/curl-install/lib/libcurl.a" "$STATIC_DEPS/"
 fi
-if [ -z "${HARDCHARGER_IOS_SDK:-}" ]; then
+if [ -z "${HARDCHARGER_IOS_SDK:-}${HARDCHARGER_ANDROID_ABI:-}" ]; then
   cmake -DDUCKDB_INSTALL_DIR="$CHARGEWIRE_DEPS_DIR/duckdb-install" -P "$HERE/scripts/prune-duckdb-install.cmake"
 fi
 grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_basetableref.cpp" \
