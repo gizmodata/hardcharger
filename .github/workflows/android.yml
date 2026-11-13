@@ -8,6 +8,10 @@ on:
     paths: ['android/**', 'server/**', 'ui/**', 'third_party/chargewire', '.github/workflows/android.yml']
   workflow_dispatch:
     inputs:
+      candidate_run_id:
+        description: Retry only the upload of an existing signed candidate from this Android workflow run
+        type: string
+        default: ''
       sign:
         description: Sign a release candidate (v* tag or release/* branch only)
         type: boolean
@@ -30,6 +34,7 @@ defaults:
 
 jobs:
   plan:
+    if: inputs.candidate_run_id == ''
     runs-on: ubuntu-24.04
     outputs:
       sign: ${{ steps.plan.outputs.sign }}
@@ -235,6 +240,42 @@ jobs:
           create_credentials_file: false
           export_environment_variables: false
       - name: Upload the same candidate as an internal draft
+        env:
+          GOOGLE_PLAY_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: python3 android/scripts/play-draft.py candidate
+
+  upload-existing:
+    if: github.event_name == 'workflow_dispatch' && inputs.candidate_run_id != ''
+    runs-on: ubuntu-24.04
+    environment: google-play-internal
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -m unittest discover -s android/scripts -p 'test_ci_*.py'
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-android-candidate
+          path: candidate
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify original build gates and exact candidate
+        env:
+          SOURCE_RUN_ID: ${{ inputs.candidate_run_id }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 android/scripts/ci-verify-upload-source.py
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GOOGLE_PLAY_WIF_PROVIDER }}
+          service_account: ${{ vars.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+          create_credentials_file: false
+          export_environment_variables: false
+      - name: Retry the same candidate as an internal draft
         env:
           GOOGLE_PLAY_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: python3 android/scripts/play-draft.py candidate

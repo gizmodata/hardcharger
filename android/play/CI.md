@@ -24,6 +24,20 @@ back the repository's broader checks. Do not create a global `v*` tag for this p
    is created; no production rollout or review submission is requested. An existing
    internal draft must be reviewed/discarded before another can replace it.
 
+For an upload retry, manually dispatch this workflow on the preview branch with
+`candidate_run_id` set to the original run ID. This skips rebuilding/signing, downloads
+that run's candidate, and checks its trusted workflow/branch, source commit, checksum,
+signed metadata and successful plan/UI/native/bundle jobs before authenticating.
+The protected environment still gates the retry. Uploaded but uncommitted bundles are
+reused only when their version code and SHA-256 match exactly.
+
+The uploader first requests `changesNotSentForReview=true`. If Google returns its
+specific error that this flag must not be set, it retries the commit without that
+optional flag. Both attempts set `changesInReviewBehavior=ERROR_IF_IN_REVIEW` to avoid
+interrupting an existing review. The new release remains an internal **draft** throughout;
+the script never promotes its status or touches production. A separate read-back edit
+verifies the committed draft, bundle checksum and retained previous release statuses.
+
 Preview pushes sign automatically. Uploads stay disabled until repository variable
 `ANDROID_PLAY_BOOTSTRAPPED=true` is configured. A manual run can request signing and/or
 an internal draft explicitly; signing is restricted to release branches or matching

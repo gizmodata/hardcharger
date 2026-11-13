@@ -35,6 +35,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Handle Google Play's internal-draft commit flag requirements, retain active test
+  releases, and verify the saved draft and bundle checksum after upload. Upload-only
+  retries reuse a signed CI candidate after checking its original build gates and source.
 - Correct the Android Gradle wrapper download checksum and verify the local signed Play
   bundle workflow with upload credentials stored outside the repository.
 - Enable host-keyboard input when launching the local Android emulator.

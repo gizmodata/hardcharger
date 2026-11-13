@@ -17,6 +17,7 @@ def load(name):
 
 planner = load(name='ci-plan')
 publisher = load(name='play-draft')
+source_verifier = load(name='ci-verify-upload-source')
 
 
 class PlanTests(unittest.TestCase):
@@ -65,6 +66,8 @@ class DraftTests(unittest.TestCase):
         self.fail_validation = False
         self.wrong_version = False
         self.wrong_hash = False
+        self.existing_bundles = []
+        self.commit_error = None
 
     def write_metadata(self):
         (self.directory / 'candidate.json').write_text(json.dumps(self.metadata))
@@ -73,6 +76,8 @@ class DraftTests(unittest.TestCase):
         self.calls.append((method, url, body))
         if url.endswith('/edits'):
             return {'id': 'edit-1'}
+        if method == 'GET' and url.endswith('/bundles'):
+            return {'bundles': self.existing_bundles}
         if method == 'GET':
             return {'releases': self.previous}
         if 'uploadType=media' in url:
@@ -80,6 +85,8 @@ class DraftTests(unittest.TestCase):
                     'sha256': 'wrong' if self.wrong_hash else hashlib.sha256(self.payload).hexdigest()}
         if url.endswith(':validate') and self.fail_validation:
             raise RuntimeError('Validation failed')
+        if ':commit' in url and 'changesNotSentForReview=true' in url and self.commit_error:
+            raise self.commit_error
         return {}
 
     def test_upload_preserves_active_release_and_commits_draft_only(self):
@@ -89,8 +96,50 @@ class DraftTests(unittest.TestCase):
         self.assertEqual(update['releases'][0]['status'], 'completed')
         self.assertEqual(update['releases'][-1]['status'], 'draft')
         self.assertEqual(update['releases'][-1]['versionCodes'], ['1501'])
-        self.assertTrue(self.calls[-1][1].endswith(':commit?changesNotSentForReview=true'))
+        self.assertTrue(self.calls[-1][1].endswith(':commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW&changesNotSentForReview=true'))
         self.assertFalse(any('/tracks/production' in url for _, url, _ in self.calls))
+
+    def test_only_specific_google_flag_error_retries_commit_without_flag(self):
+        self.commit_error = publisher.PlayApiError(status=400, message=publisher.AUTOMATIC_REVIEW_MESSAGE)
+        publisher.upload_draft(directory=self.directory, request=self.request)
+        commits = [url for method, url, _ in self.calls if ':commit' in url]
+        self.assertEqual(len(commits), 2)
+        self.assertTrue(commits[-1].endswith(':commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW'))
+        update = next(body for method, _, body in self.calls if method == 'PUT')
+        self.assertEqual([(r['status'], r['versionCodes']) for r in update['releases']],
+                         [('completed', ['1401']), ('draft', ['1501'])])
+
+    def test_other_commit_errors_abort_without_retry(self):
+        self.commit_error = publisher.PlayApiError(status=400, message='Changes already in review')
+        with self.assertRaises(publisher.PlayApiError):
+            publisher.upload_draft(directory=self.directory, request=self.request)
+        self.assertEqual(sum(':commit' in url for _, url, _ in self.calls), 1)
+        self.assertEqual(self.calls[-1][0], 'DELETE')
+
+    def test_reuses_only_matching_previously_uploaded_bundle(self):
+        self.existing_bundles = [{'versionCode': 1501, 'sha256': self.metadata['bundle_sha256']}]
+        publisher.upload_draft(directory=self.directory, request=self.request)
+        self.assertFalse(any('uploadType=media' in url for _, url, _ in self.calls))
+        self.calls = []
+        self.previous = []
+        self.existing_bundles[0]['sha256'] = 'different'
+        with self.assertRaises(ValueError):
+            publisher.upload_draft(directory=self.directory, request=self.request)
+        self.assertFalse(any(method == 'PUT' or ':commit' in url for method, url, _ in self.calls))
+
+    def test_readback_checks_draft_and_retained_active_release(self):
+        expected = {'version_code': 1501, 'previous_releases': list(self.previous)}
+        self.previous.append({'status': 'draft', 'versionCodes': ['1501']})
+        self.existing_bundles = [{'versionCode': 1501, 'sha256': self.metadata['bundle_sha256']}]
+        publisher.verify_saved_draft(directory=self.directory, expected=expected, request=self.request)
+        self.assertEqual(self.calls[-1][0], 'DELETE')
+        self.previous[-1]['status'] = 'completed'
+        with self.assertRaises(ValueError):
+            publisher.verify_saved_draft(directory=self.directory, expected=expected, request=self.request)
+        self.previous[-1]['status'] = 'draft'
+        self.previous = self.previous[1:]
+        with self.assertRaises(ValueError):
+            publisher.verify_saved_draft(directory=self.directory, expected=expected, request=self.request)
 
     def test_unsigned_or_changed_candidate_never_calls_api(self):
         for changes in [{'signed': False}, {'signed': True, 'bundle_sha256': 'wrong'}]:
@@ -148,6 +197,46 @@ class CandidateTests(unittest.TestCase):
             self.assertEqual(candidate['source_commit'], 'fixture-commit')
             self.assertEqual(candidate['bundle_sha256'], hashlib.sha256(b'candidate').hexdigest())
             self.assertFalse(candidate['signed'])
+
+
+class UploadSourceTests(unittest.TestCase):
+    def setUp(self):
+        self.payload = b'original signed candidate'
+        self.metadata = {'package': 'com.gizmodata.hardcharger', 'signed': True,
+                         'run_id': '123', 'source_commit': 'original-commit',
+                         'bundle_sha256': hashlib.sha256(self.payload).hexdigest()}
+        self.run = {'id': 123, 'repository': {'full_name': 'gizmodata/hardcharger', 'id': 1422890225},
+                    'head_branch': 'release/android-preview', 'path': '.github/workflows/android.yml',
+                    'event': 'workflow_dispatch', 'head_sha': 'original-commit', 'conclusion': 'failure'}
+        self.jobs = [{'name': n, 'status': 'completed', 'conclusion': 'success'}
+                     for n in ('plan', 'ui', 'native (arm64-v8a)', 'native (x86_64)', 'bundle')]
+        self.jobs.append({'name': 'play-draft', 'status': 'completed', 'conclusion': 'failure'})
+
+    def verify(self):
+        source_verifier.verify_source(metadata=self.metadata, run=self.run, jobs=self.jobs,
+                                     run_id='123', ref='refs/heads/release/android-preview', payload=self.payload)
+
+    def test_upload_failure_can_reuse_successful_build(self):
+        self.verify()
+
+    def test_wrong_source_or_event_is_rejected(self):
+        for key, value in [('head_branch', 'main'), ('event', 'pull_request'), ('head_sha', 'different'),
+                           ('path', '.github/workflows/untrusted.yml'), ('id', 456)]:
+            with self.subTest(key=key):
+                previous = self.run[key]
+                self.run[key] = value
+                with self.assertRaises(ValueError):
+                    self.verify()
+                self.run[key] = previous
+
+    def test_failed_build_gate_or_modified_artifact_is_rejected(self):
+        self.jobs[2]['conclusion'] = 'failure'
+        with self.assertRaises(ValueError):
+            self.verify()
+        self.jobs[2]['conclusion'] = 'success'
+        self.payload = b'tampered'
+        with self.assertRaises(ValueError):
+            self.verify()
 
 
 if __name__ == '__main__':
