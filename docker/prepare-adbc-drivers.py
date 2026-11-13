@@ -17,7 +17,7 @@ import tempfile
 
 # Match GizmoSQL's driver set, adding Hardcharger. dbc supplies the other ten.
 DRIVERS = {
-    "gizmosql": ("gizmosql-adbc", "v2.0.15", "AdbcDriverGizmoSQLInit"),
+    "gizmosql": ("gizmosql-adbc", "v2.0.18", "AdbcDriverGizmoSQLInit"),
     "oracle": ("adbc-driver-oracle", "v1.0.1", "OracleDriverInit"),
     "db2": ("adbc-driver-db2", "v0.2.1", "Db2DriverInit"),
     "quack": ("adbc-driver-quack", "v0.1.0-alpha.11", "QuackDriverInit"),

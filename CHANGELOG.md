@@ -18,6 +18,9 @@ own changelog in `python/CHANGELOG.md`.
 - The Python package's `[adbc]` extra requires `adbc-driver-hardcharger` 2.5.0 or newer (was
   2.4.9): `Server.connect()` then gets the driver that opens a connection in the catalog and
   schema it is given.
+- The `-adbc` images bundle GizmoSQL's ADBC driver 2.0.18 (was 2.0.15): its library exports
+  only the ADBC API, as the ADBC shared-library requirements ask. Nothing changes in how the
+  image loads it.
 
 ### Fixed
 
