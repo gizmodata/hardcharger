@@ -133,11 +133,16 @@ public class ReleaseWorkflowTest {
         long deadline = android.os.SystemClock.uptimeMillis() + 30000;
         String visible = "";
         do {
-            StringBuilder text = new StringBuilder();
-            for (UiObject2 node : device.findObjects(By.pkg(APP).text(java.util.regex.Pattern.compile("(?s).+"))))
-                text.append(node.getText()).append('\n');
-            visible = text.toString().replace("\r", "");
-            if (visible.contains(result)) return;
+            try {
+                StringBuilder text = new StringBuilder();
+                for (UiObject2 node : device.findObjects(By.pkg(APP).text(java.util.regex.Pattern.compile("(?s).+"))))
+                    text.append(node.getText()).append('\n');
+                visible = text.toString().replace("\r", "");
+                if (visible.contains(result)) return;
+            } catch (StaleObjectException replacedDuringRead) {
+                // Compose replaces transcript nodes as query output arrives. Read
+                // a fresh snapshot on the next bounded poll; never rerun the SQL.
+            }
             android.os.SystemClock.sleep(100);
         } while (android.os.SystemClock.uptimeMillis() < deadline);
         fail("Missing SQL result: " + result + "\nActual: " + visible);
