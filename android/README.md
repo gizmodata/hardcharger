@@ -133,5 +133,5 @@ Set `HARDCHARGER_ANDROID_BUILD_NUMBER` to a monotonically increasing version cod
 For Google Play, use `android/scripts/build-play.sh` with those variables instead of the
 plain Gradle command above. The bundle is under `android/build/app-play/outputs/bundle/release/`.
 The [combined release workflow](play/CI.md) prepares signed candidates and automatic internal-draft
-uploads; its remote setup is still pending. Never upload a local-distribution bundle or debug-signed
+uploads through the configured keyless Google identity. Never upload a local-distribution bundle or debug-signed
 artifact to Play. Keep upload keys and passwords outside the repository and back them up.
