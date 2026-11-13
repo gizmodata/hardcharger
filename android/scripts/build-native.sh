@@ -19,13 +19,8 @@ OUT="$ROOT/android/build/$HARDCHARGER_ANDROID_ABI"
 [ "$distribution" != play ] || OUT="$OUT/play"
 JNI_DIR="$ROOT/android/app/src/main/jniLibs"
 [ "$distribution" != play ] || JNI_DIR="$ROOT/android/app/src/play/jniLibs"
-WEB_UI="${HARDCHARGER_WEB_UI:-}"
-if [ -z "$WEB_UI" ]; then WEB_UI=$(ls -t "$ROOT"/ui/release/hardcharger-ui-*.tar.gz 2>/dev/null | head -1 || true); fi
-[ -f "$WEB_UI" ] || { echo 'Build ui/ and npm run package, or set HARDCHARGER_WEB_UI.' >&2; exit 1; }
 [ -d "$ANDROID_NDK_HOME" ] || { echo "Missing NDK: $ANDROID_NDK_HOME" >&2; exit 1; }
 mkdir -p "$OUT" "$ROOT/android/build/host-tools"
-# This generator runs on the build host, not Android.
-CMAKE_TOOLCHAIN_FILE= c++ -std=c++20 -O2 "$ROOT/third_party/chargewire/cpp/tools/openapi_json.cc" -o "$ROOT/android/build/host-tools/chargewire_openapi_json"
 "$ROOT/server/scripts/build-deps.sh" openssl replxx
 recipe_key() {
   { cat "$ANDROID_NDK_HOME/source.properties" "$CMAKE_TOOLCHAIN_FILE"; cat "$@"; } | shasum -a 256 | cut -c1-16
@@ -43,6 +38,12 @@ if [ ! -f "$HARDCHARGER_DEPS_DIR/duckdb-install/.android-$duckdb_key.stamp" ]; t
   "$ROOT/server/scripts/build-deps.sh" duckdb
   touch "$HARDCHARGER_DEPS_DIR/duckdb-install/.android-$duckdb_key.stamp"
 fi
+[ "${HARDCHARGER_ANDROID_DEPS_ONLY:-0}" != 1 ] || exit 0
+WEB_UI="${HARDCHARGER_WEB_UI:-}"
+if [ -z "$WEB_UI" ]; then WEB_UI=$(ls -t "$ROOT"/ui/release/hardcharger-ui-*.tar.gz 2>/dev/null | head -1 || true); fi
+[ -f "$WEB_UI" ] || { echo 'Build ui/ and npm run package, or set HARDCHARGER_WEB_UI.' >&2; exit 1; }
+# This generator runs on the build host, not Android.
+CMAKE_TOOLCHAIN_FILE= c++ -std=c++20 -O2 "$ROOT/third_party/chargewire/cpp/tools/openapi_json.cc" -o "$ROOT/android/build/host-tools/chargewire_openapi_json"
 cmake -S "$ROOT/server" -B "$OUT/server" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" \
   -DCMAKE_CROSSCOMPILING_EMULATOR="$ROOT/android/scripts/run-host-tool.sh" \

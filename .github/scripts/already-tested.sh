@@ -44,7 +44,7 @@ REQUIRED=(
 # `sign`). And the compile-cache warm-up jobs, which run only when a push to main skips the
 # tests (a skipped matrix job is listed under its unexpanded name, a skipped call of a
 # reusable workflow under its job id): see may_skip().
-MAY_SKIP=("release" "address sanitizer (linux-amd64)" "thread sanitizer (linux-amd64)" "windows-warm"
+MAY_SKIP=("release" "address sanitizer (linux-amd64)" "thread sanitizer (linux-amd64)" "windows-warm" "warm-android" "android" "android-play" "android / ui" "android / upload-existing"
           "verify signatures (macos-arm64)" "verify signatures (windows)")
 ARTIFACTS=("hardcharger-linux-amd64" "hardcharger-linux-arm64")
 

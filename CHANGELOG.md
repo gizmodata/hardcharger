@@ -7,8 +7,12 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-11-12
+
 ### Added
 
+- Google Play icon, feature graphic matching the iOS header, and separate phone and
+  tablet screenshot sets captured from the Android Play build with synthetic SQL data.
 - Android app with the embedded server and built-in extensions, web workspace, native SQL
   console, file import/export, saved remote connections, browser sign-in, TLS sharing and
   Keystore-protected credentials. Includes ARM64 and 16 KB emulator validation, local build
@@ -16,8 +20,10 @@ own changelog in `python/CHANGELOG.md`.
 - Separate local Google Play build preparation with bundled-only native extensions,
   verified native artifacts, store-listing drafts and an in-app Android privacy policy.
   Local Android builds retain automatic installation/loading of signed extensions.
-- Android preview CI/CD for `release/android-preview`: native builds, emulator tests,
-  protected signing, traceable bundle artifacts and optional Google Play internal drafts.
+- Android in the combined release gate: both native architectures, phone/tablet emulator
+  tests, protected signing, a checksummed AAB and a Google Play internal-testing draft.
+  The owner controls production publication in Play Console; dependency caches are
+  warmed on main for subsequent releases.
 
 ### Changed
 
@@ -35,6 +41,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Keep every Android tablet navigation destination reachable in short landscape windows
+  and at large font sizes, without shrinking touch targets or duplicating system insets.
 - Handle Google Play's internal-draft commit flag requirements, retain active test
   releases, and verify the saved draft and bundle checksum after upload. Upload-only
   retries reuse a signed CI candidate after checking its original build gates and source.

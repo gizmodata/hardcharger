@@ -91,6 +91,10 @@ on:
         description: Also build the iOS app for the simulator and run its unit and UI tests (tags always do)
         type: boolean
         default: false
+      android:
+        description: Also build and test Android (tags always do; sign uses the protected signing environment)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -1332,7 +1336,7 @@ jobs:
   # already passed (changes.outputs.tested), it takes that run's Linux tarballs: the
   # binaries that were tested, not a rebuild.
   image:
-    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, windows, verify-macos, verify-windows, ios, ios-archive]
+    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, windows, verify-macos, verify-windows, ios, ios-archive, android]
     if: >-
       ${{ !cancelled() && needs.changes.result == 'success'
           && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
@@ -1343,7 +1347,8 @@ jobs:
                   && needs.ui-checks.result == 'success' && needs.ui-e2e.result == 'success'
                   && needs.windows.result == 'success'
                   && needs.verify-macos.result == 'success' && needs.verify-windows.result == 'success'
-                  && needs.ios.result == 'success' && needs.ios-archive.result == 'success')) }}
+                  && needs.ios.result == 'success' && needs.ios-archive.result == 'success'
+                  && needs.android.result == 'success')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1704,8 +1709,33 @@ jobs:
       sign: ${{ needs.changes.outputs.sign == 'true' }}
     secrets: inherit
 
+  android:
+    needs: [changes, web-ui]
+    if: ${{ !cancelled() && needs.changes.outputs.tested != 'true' && needs.web-ui.result == 'success' && (startsWith(github.ref, 'refs/tags/v') || inputs.android) }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: ./.github/workflows/android.yml
+    with:
+      sign: ${{ needs.changes.outputs.sign == 'true' }}
+      web_ui_artifact: hardcharger-ui
+    secrets: inherit
+
+  warm-android:
+    needs: changes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.tested == 'true'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: ./.github/workflows/android.yml
+    with:
+      warm_cache: true
+
   checksums:
-    needs: [build, windows, desktop]
+    needs: [build, windows, desktop, android]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.windows.result == 'success' && needs.desktop.result == 'success' && (needs.android.result == 'success' || needs.android.result == 'skipped') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
@@ -1718,9 +1748,10 @@ jobs:
         run: |
           shopt -s nullglob
           # The desktop update package (.app.tar.gz) exists on signed runs only.
-          assets=(hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi Hardcharger-desktop-*.dmg Hardcharger-desktop-*.app.zip Hardcharger-desktop-*.app.tar.gz)
+          assets=(hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi Hardcharger-desktop-*.dmg Hardcharger-desktop-*.app.zip Hardcharger-desktop-*.app.tar.gz Hardcharger-android*.aab)
           # Three tarballs (Linux amd64/arm64, macOS), two Windows zips and two MSIs.
           [ ${#assets[@]} -ge 11 ] || { echo "expected native and desktop release assets, found: ${assets[*]}"; exit 1; }
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then test -f Hardcharger-android.aab; fi
           sha256sum "${assets[@]}" > SHA256SUMS
           cat SHA256SUMS
           sha256sum -c SHA256SUMS
@@ -1734,7 +1765,7 @@ jobs:
   # fails unless every job it needs succeeded (none skipped) and the run signed.
   release:
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums, verify-macos, verify-windows, ios, ios-archive, desktop]
+    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums, verify-macos, verify-windows, ios, ios-archive, desktop, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -1748,7 +1779,7 @@ jobs:
         run: |
           echo "needed jobs: $RESULTS"
           echo "signed: $SIGN; macOS signatures: $MACOS; Windows signatures: $WINDOWS"
-          [ "$(jq -r 'length' <<< "$RESULTS")" -eq 15 ] || { echo "expected the results of 15 jobs"; exit 1; }
+          [ "$(jq -r 'length' <<< "$RESULTS")" -eq 16 ] || { echo "expected the results of 16 jobs"; exit 1; }
           [ "$(jq -r 'map(select(. != "success")) | length' <<< "$RESULTS")" -eq 0 ] || { echo "a needed job did not succeed"; exit 1; }
           [ "$SIGN" = true ] && [ "$MACOS" = success ] && [ "$WINDOWS" = success ] || { echo "the release is not signed"; exit 1; }
       - uses: actions/checkout@v7
@@ -1781,7 +1812,7 @@ jobs:
         run: |
           sha256sum -c SHA256SUMS
           shopt -s nullglob
-          for asset in hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi Hardcharger-desktop-*.dmg Hardcharger-desktop-*.app.zip Hardcharger-desktop-*.app.tar.gz; do
+          for asset in hardcharger-*.tar.gz hardcharger-*.zip Hardcharger-*.msi Hardcharger-desktop-*.dmg Hardcharger-desktop-*.app.zip Hardcharger-desktop-*.app.tar.gz Hardcharger-android*.aab; do
             grep -q "  $asset\$" SHA256SUMS || { echo "$asset is not in SHA256SUMS"; exit 1; }
           done
       # The desktop app's update feed (gizmodata/hardcharger#7): every platform's update package
@@ -1803,6 +1834,34 @@ jobs:
           files: dist/*
           prerelease: ${{ steps.notes.outputs.prerelease == 'true' }}
           make_latest: ${{ steps.notes.outputs.prerelease == 'true' && 'false' || 'true' }}
+
+  android-play:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success'
+    runs-on: ubuntu-24.04
+    environment: google-play-internal
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: android-play-candidate
+          path: candidate
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GOOGLE_PLAY_WIF_PROVIDER }}
+          service_account: ${{ vars.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+          create_credentials_file: false
+          export_environment_variables: false
+      - name: Upload the same candidate as an internal draft
+        env:
+          GOOGLE_PLAY_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: python3 android/scripts/play-draft.py candidate
 
   # What follows a published release: the matching `hardcharger` Python package (workflow.yml),
   # the bundled-driver images :X.Y.Z-adbc (adbc-images.yml) and, for a release that is not a

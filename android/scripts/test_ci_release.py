@@ -42,6 +42,10 @@ class PlanTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.plan(ref='refs/tags/v2.12.0')
 
+    def test_combined_release_uses_server_run_counter(self):
+        result = self.plan(ref='refs/tags/v2.12.0', version='2.12.0', run_number=322)
+        self.assertEqual(result, {'sign': 'true', 'code': '33201', 'upload': 'false'})
+
     def test_run_and_retry_codes_increase_without_collision(self):
         self.assertLess(int(self.plan()['code']), int(self.plan(attempt=2)['code']))
         self.assertLess(int(self.plan(attempt=99)['code']), int(self.plan(run_number=6)['code']))
@@ -203,18 +207,18 @@ class UploadSourceTests(unittest.TestCase):
     def setUp(self):
         self.payload = b'original signed candidate'
         self.metadata = {'package': 'com.gizmodata.hardcharger', 'signed': True,
-                         'run_id': '123', 'source_commit': 'original-commit',
+                         'version': '2.12.0', 'run_id': '123', 'source_commit': 'original-commit',
                          'bundle_sha256': hashlib.sha256(self.payload).hexdigest()}
         self.run = {'id': 123, 'repository': {'full_name': 'gizmodata/hardcharger', 'id': 1422890225},
-                    'head_branch': 'release/android-preview', 'path': '.github/workflows/android.yml',
-                    'event': 'workflow_dispatch', 'head_sha': 'original-commit', 'conclusion': 'failure'}
+                    'head_branch': 'v2.12.0', 'path': '.github/workflows/server.yml',
+                    'event': 'push', 'head_sha': 'original-commit', 'conclusion': 'failure'}
         self.jobs = [{'name': n, 'status': 'completed', 'conclusion': 'success'}
-                     for n in ('plan', 'ui', 'native (arm64-v8a)', 'native (x86_64)', 'bundle')]
+                     for n in ('android / plan', 'web UI (build)', 'android / native (arm64-v8a)', 'android / native (x86_64)', 'android / bundle', 'release')]
         self.jobs.append({'name': 'play-draft', 'status': 'completed', 'conclusion': 'failure'})
 
     def verify(self):
         source_verifier.verify_source(metadata=self.metadata, run=self.run, jobs=self.jobs,
-                                     run_id='123', ref='refs/heads/release/android-preview', payload=self.payload)
+                                     run_id='123', ref='refs/tags/v2.12.0', payload=self.payload)
 
     def test_upload_failure_can_reuse_successful_build(self):
         self.verify()

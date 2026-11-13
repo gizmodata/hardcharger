@@ -199,3 +199,27 @@ then saved the unchanged build 1501 as an internal draft and read back its statu
 and retained previous releases. Preview-push uploads are enabled behind the GitHub
 environment approval gate; see `play/CI.md`. All-platform
 v2.12.0 release integration remains a separate follow-up.
+
+## Compact-landscape navigation follow-up
+
+The Play graphics capture exposed a clipped tablet navigation rail on About at
+1067×600 dp. The local fix scrolls the rail when space is limited and removes its
+duplicate system insets; it keeps full-sized touch targets.
+
+`AppWorkflowTest.tabletRailDestinationsRemainReachableFromAbout` covers all six
+destinations with touch input and activity recreation. It passed on the isolated
+API 36 ARM64 emulator at 600 dp height with 100%, 130%, and 200% text, and at
+400 dp height with 200% text. The debug Play build and lint passed with zero lint
+errors. The existing phone About/versions/notices/back-navigation test also passed.
+Evidence: `android/build/acceptance/tablet-rail/`.
+
+This is a local source fix for the next candidate, not a replacement of Play build
+1501 or its store screenshots.
+
+## v2.12.0 combined release
+
+Android now participates in the shared release gate, with both native ABIs and the
+same web artifact as the other platforms. CI runs the tablet rail regression at
+100%/200% text in 600 dp and 400 dp landscape windows for both distributions. The
+local fix above is included in v2.12.0; the existing listing captures retain their
+explicit build-1501 provenance. Play upload remains an internal draft for owner review.

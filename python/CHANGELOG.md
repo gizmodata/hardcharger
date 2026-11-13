@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-11-12
+
+### Changed
+
+- Install Hardcharger server 2.12.0, the release introducing the native Android app.
+
 ## [2.11.0] - 2026-11-12
 
 ### Changed

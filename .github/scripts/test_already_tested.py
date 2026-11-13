@@ -56,6 +56,11 @@ else:
         self.assertEqual(result["tested"], "true")
         self.assertEqual(result["run"], "17")
 
+    def test_android_optional_jobs_may_skip_but_failed_native_gate_cannot(self):
+        for name in ('warm-android', 'android / ui', 'android / upload-existing'):
+            self.assertEqual(self.check_run(extra=('skipped', name))['tested'], 'true')
+        self.assertEqual(self.check_run(extra=('failure', 'android / native (x86_64)'))['tested'], 'false')
+
     def test_failed_cache_job_is_not_ignored(self):
         self.assertEqual(self.check_run(cache="failure")["tested"], "false")
 

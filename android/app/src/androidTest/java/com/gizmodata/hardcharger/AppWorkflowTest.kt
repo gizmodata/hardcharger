@@ -12,6 +12,40 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class AppWorkflowTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @Test fun tabletRailDestinationsRemainReachableFromAbout() {
+        org.junit.Assume.assumeTrue(compose.activity.resources.configuration.screenWidthDp >= 720)
+        val model = (compose.activity.application as HardchargerApplication).model
+        compose.waitUntil(120_000) { model.running && !model.busy }
+        fun open(label: String) {
+            compose.onNodeWithContentDescription(label, useUnmergedTree = true)
+                .performScrollTo().assertIsDisplayed().performTouchInput { click() }
+        }
+        fun about() {
+            open("Settings")
+            compose.onNodeWithText("Port").assertExists()
+            compose.onNodeWithText("About Hardcharger™").performScrollTo().performClick()
+            compose.onNodeWithText("About").assertIsDisplayed()
+        }
+        about()
+        compose.activityRule.scenario.recreate()
+        // About's app bar reduces the rail's available height. Exercise the bottom
+        // destinations with real touch input, then scroll back to the top destination.
+        open("Saved servers")
+        compose.onNodeWithText("Your servers").assertIsDisplayed()
+        about()
+        open("Logs")
+        compose.onNodeWithText("Follow New Lines").assertIsDisplayed()
+        about()
+        open("Console")
+        compose.onNodeWithText("SQL or .help").assertExists()
+        about()
+        open("Web UI")
+        compose.onNodeWithText("Reconnect").assertExists()
+        about()
+        open("Server")
+        compose.onNodeWithContentDescription("Server status: Running").assertIsDisplayed()
+    }
+
     @Test fun automaticResourceControlsOfferFixedAndCustomChoices() {
         val model = (compose.activity.application as HardchargerApplication).model
         val original = model.settings

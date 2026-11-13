@@ -3,29 +3,29 @@ name: android
 on:
   pull_request:
     paths: ['android/**', 'server/**', 'ui/**', 'third_party/chargewire', '.github/workflows/android.yml']
-  push:
-    branches: [release/android-preview]
-    paths: ['android/**', 'server/**', 'ui/**', 'third_party/chargewire', '.github/workflows/android.yml']
+  workflow_call:
+    inputs:
+      sign:
+        type: boolean
+        default: false
+      web_ui_artifact:
+        type: string
+        default: ''
+      warm_cache:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       candidate_run_id:
-        description: Retry only the upload of an existing signed candidate from this Android workflow run
+        description: Retry the internal draft upload from a successful server release build
         type: string
-        default: ''
-      sign:
-        description: Sign a release candidate (v* tag or release/* branch only)
-        type: boolean
-        default: false
-      upload_internal_draft:
-        description: Upload the signed candidate as a Play internal-testing draft
-        type: boolean
-        default: false
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: android-${{ (github.ref == 'refs/heads/release/android-preview' || inputs.sign) && 'release' || github.ref }}
+  group: android-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 defaults:
@@ -45,11 +45,12 @@ jobs:
       - run: python3 -m unittest discover -s android/scripts -p 'test_ci_*.py'
       - id: plan
         env:
-          REQUEST_SIGN: ${{ github.ref == 'refs/heads/release/android-preview' || inputs.sign || false }}
-          REQUEST_UPLOAD: ${{ inputs.upload_internal_draft || (github.event_name == 'push' && github.ref == 'refs/heads/release/android-preview' && vars.ANDROID_PLAY_BOOTSTRAPPED == 'true') || false }}
+          REQUEST_SIGN: ${{ inputs.sign || false }}
+          REQUEST_UPLOAD: 'false'
         run: python3 android/scripts/ci-plan.py
 
   ui:
+    if: inputs.web_ui_artifact == '' && !inputs.warm_cache
     needs: plan
     runs-on: ubuntu-24.04
     steps:
@@ -68,6 +69,7 @@ jobs:
           if-no-files-found: error
 
   native:
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.ui.result == 'success' || inputs.web_ui_artifact != '' || inputs.warm_cache) }}
     needs: [plan, ui]
     runs-on: ubuntu-24.04
     timeout-minutes: 240
@@ -95,14 +97,23 @@ jobs:
           sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v8
+        if: ${{ !inputs.warm_cache }}
         with:
-          name: android-web-ui
+          name: ${{ inputs.web_ui_artifact || 'android-web-ui' }}
           path: ui/release
       - uses: actions/cache@v5
+        id: deps
         with:
           path: android/build/${{ matrix.abi }}/deps/*-install
           key: android-linux-ndk28.2-${{ matrix.abi }}-${{ hashFiles('android/cmake/**', 'android/scripts/build-native.sh', 'server/scripts/*.sh', 'server/scripts/*.cmake', 'third_party/chargewire/cpp/scripts/*.sh') }}
+      - name: Warm dependency caches on main
+        if: inputs.warm_cache && steps.deps.outputs.cache-hit != 'true'
+        env:
+          HARDCHARGER_ANDROID_DEPS_ONLY: '1'
+          ABI: ${{ matrix.abi }}
+        run: android/scripts/build-native.sh "$ABI" play
       - name: Build and check the Play distribution
+        if: ${{ !inputs.warm_cache }}
         env:
           ABI: ${{ matrix.abi }}
         run: |
@@ -113,7 +124,7 @@ jobs:
           cp android/build/app-play/outputs/apk/debug/app-debug.apk android/build/ci/play/app.apk
           cp android/build/app-play/outputs/apk/androidTest/debug/app-debug-androidTest.apk android/build/ci/play/test.apk
       - name: Build the regular local distribution for regression tests
-        if: matrix.abi == 'x86_64'
+        if: matrix.abi == 'x86_64' && !inputs.warm_cache
         run: |
           android/scripts/build-native.sh x86_64 local
           android/gradlew -p android :app:assembleDebug :app:assembleDebugAndroidTest
@@ -121,13 +132,13 @@ jobs:
           cp android/app/build/outputs/apk/debug/app-debug.apk android/build/ci/local/app.apk
           cp android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk android/build/ci/local/test.apk
       - name: Enable KVM
-        if: matrix.abi == 'x86_64'
+        if: matrix.abi == 'x86_64' && !inputs.warm_cache
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Native and UI instrumentation, both distributions
-        if: matrix.abi == 'x86_64'
+        if: matrix.abi == 'x86_64' && !inputs.warm_cache
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         with:
           api-level: 36
@@ -137,6 +148,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save
           script: bash android/scripts/ci-instrumentation.sh
       - uses: actions/upload-artifact@v7
+        if: ${{ !inputs.warm_cache }}
         with:
           name: android-native-${{ matrix.abi }}
           path: android/app/src/play/jniLibs/
@@ -151,6 +163,7 @@ jobs:
           if-no-files-found: ignore
 
   bundle:
+    if: ${{ !cancelled() && !inputs.warm_cache && needs.plan.result == 'success' && needs.native.result == 'success' }}
     needs: [plan, native]
     runs-on: ubuntu-24.04
     environment: ${{ needs.plan.outputs.sign == 'true' && 'android-signing' || '' }}
@@ -212,37 +225,19 @@ jobs:
           python3 android/scripts/ci-candidate.py
       - uses: actions/upload-artifact@v7
         with:
-          name: hardcharger-android-candidate
+          name: android-play-candidate
           path: android/build/candidate/
           if-no-files-found: error
-
-  play-draft:
-    needs: [plan, bundle]
-    if: needs.plan.outputs.upload == 'true' && needs.plan.outputs.sign == 'true'
-    runs-on: ubuntu-24.04
-    environment: google-play-internal
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - name: Prepare public Android release assets
+        run: |
+          mkdir -p android/build/public-release
+          cp android/build/candidate/hardcharger-play.aab android/build/public-release/Hardcharger-android.aab
+          cp android/build/candidate/candidate.json android/build/public-release/android-candidate.json
+      - uses: actions/upload-artifact@v7
         with:
-          name: hardcharger-android-candidate
-          path: candidate
-      - id: auth
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
-        with:
-          workload_identity_provider: ${{ vars.GOOGLE_PLAY_WIF_PROVIDER }}
-          service_account: ${{ vars.GOOGLE_PLAY_SERVICE_ACCOUNT }}
-          token_format: access_token
-          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
-          create_credentials_file: false
-          export_environment_variables: false
-      - name: Upload the same candidate as an internal draft
-        env:
-          GOOGLE_PLAY_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
-        run: python3 android/scripts/play-draft.py candidate
+          name: hardcharger-android
+          path: android/build/public-release/
+          if-no-files-found: error
 
   upload-existing:
     if: github.event_name == 'workflow_dispatch' && inputs.candidate_run_id != ''
@@ -257,7 +252,7 @@ jobs:
       - run: python3 -m unittest discover -s android/scripts -p 'test_ci_*.py'
       - uses: actions/download-artifact@v8
         with:
-          name: hardcharger-android-candidate
+          name: android-play-candidate
           path: candidate
           run-id: ${{ inputs.candidate_run_id }}
           github-token: ${{ github.token }}

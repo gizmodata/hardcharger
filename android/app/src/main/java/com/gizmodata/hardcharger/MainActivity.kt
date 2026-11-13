@@ -187,7 +187,13 @@ private enum class Screen(val label: String, val icon: ImageVector) {
         }
     }) { padding ->
         Row(Modifier.fillMaxSize().padding(padding)) {
-            if (tablet) NavigationRail(containerColor = MaterialTheme.colorScheme.background) {
+            if (tablet) NavigationRail(
+                // Scaffold already reserves the system bars and app bar. Keep the rail's
+                // touch targets at their normal size and scroll when the window is short.
+                modifier = Modifier.fillMaxHeight().verticalScroll(rememberScrollState()),
+                windowInsets = WindowInsets(0),
+                containerColor = MaterialTheme.colorScheme.background
+            ) {
                 Image(painterResource(R.drawable.head_mark), null, Modifier.padding(vertical = 18.dp).size(42.dp))
                 listOf(Screen.Web, Screen.Console, Screen.Server, Screen.Logs, Screen.Servers, Screen.Settings).forEach { item ->
                     NavigationRailItem(selected = (if (screen in listOf(Screen.About, Screen.Notices, Screen.Privacy)) Screen.Settings else screen) == item,

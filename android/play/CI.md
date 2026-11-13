@@ -1,96 +1,69 @@
-# Android preview CI/CD
+# Android release CI/CD
 
-The workflow is `.github/workflows/android.yml`. Its initial release branch is
-**release/android-preview**. A push to that
-branch triggers Android only: server/Python push triggers are limited to main/tags, and
-the desktop preview uses other branch names. Opening a PR to main deliberately brings
-back the repository's broader checks. Do not create a global `v*` tag for this preview.
+Android is part of `.github/workflows/server.yml` from v2.12.0. Every `v*` tag calls
+`android.yml`; manual server runs can opt in with `android`, and `sign` enables signing.
+Pull requests affecting Android still run its unsigned checks. The former
+`release/android-preview` push trigger is retired.
 
-## What the pipeline does
+## Build and release gates
 
-1. Build the web workspace from the same commit.
-2. Cross-build ARM64 and x86_64 Play libraries, checking that external native-extension
-   loading is absent. Cache dependency installs by ABI, NDK and dependency recipes.
-3. Run JVM tests and release lint; on a disposable x86_64 emulator, exercise both Play
-   and regular local distributions using the real engine, UI and TLS/persistence tests.
-   ARM64/16 KB emulator evidence currently comes from local testing; this workflow
-   does not claim physical-device or ARM64 emulator coverage on the Linux runner.
-4. After both native jobs pass, package their exact artifacts into one release AAB.
-   The `android-signing` environment supplies the upload key only to this job.
-5. Validate the bundle, manifest, native hashes and signatures. Retain the AAB, SHA-256,
-   source commit, version code and notes as `hardcharger-android-candidate`.
-6. Once bootstrapped, authenticate with a short-lived Google token and upload that same
-   candidate through the `google-play-internal` environment. Only an **internal draft**
-   is created; the operator controls rollout in Console. An existing
-   internal draft must be reviewed/discarded before another can replace it.
+1. Reuse the combined run's web workspace artifact from the same commit.
+2. Cross-build ARM64 and x86_64 Play libraries, verifying bundled-only extensions.
+   Cache dependency installs by ABI, NDK and dependency recipes. A successful release
+   fast-forward to main warms those caches on the default branch, making them available
+   to subsequent release tags. A cold cache remains a supported build path.
+3. Run JVM tests, release lint and real-engine instrumentation for both Play and local
+   distributions in a disposable x86_64 emulator. Include tablet navigation from About
+   at 100%/200% font scale in short landscape windows. ARM64 and 16 KB emulator coverage
+   is recorded separately in `../PARITY.md`.
+4. Package the exact tested native artifacts. The protected `android-signing`
+   environment provides the upload key. Validate the bundle, manifest, native hashes,
+   signing certificate and every signed payload entry.
+5. Retain `android-play-candidate` as a CI artifact with AAB, SHA-256, source
+   commit, version code and notes. Publish `Hardcharger-android.aab` and
+   `android-candidate.json` through the combined GitHub release, with the AAB covered
+   by the release's `SHA256SUMS`. Android must pass before the release or images publish.
+6. After the GitHub release succeeds, the `android-play` job requests owner approval
+   through `google-play-internal`, authenticates with a short-lived Google token and
+   uploads the exact candidate as an **internal-testing draft**. The owner controls
+   testing rollout and production publication in Play Console.
 
-For an upload retry, manually dispatch this workflow on the preview branch with
-`candidate_run_id` set to the original run ID. This skips rebuilding/signing, downloads
-that run's candidate, and checks its trusted workflow/branch, source commit, checksum,
-signed metadata and successful plan/UI/native/bundle jobs before authenticating.
-The protected environment still gates the retry. Uploaded but uncommitted bundles are
-reused only when their version code and SHA-256 match exactly.
+The version name follows the server. Version codes are
+`1000 + server-workflow run_number * 100 + run_attempt`; the first combined release
+counter exceeds preview build 1501. Only the server workflow creates signed candidates.
+Use a new run after attempt 99. Upload-only retries do not rebuild or change the code.
 
-The uploader first requests `changesNotSentForReview=true`. If Google returns its
-specific error that this flag must not be set, it retries the commit without that
-optional flag. Both attempts set `changesInReviewBehavior=ERROR_IF_IN_REVIEW` to avoid
-interrupting an existing review. The new release remains an internal **draft** throughout;
-the script never promotes its status or touches production. A separate read-back edit
-verifies the committed draft, bundle checksum and retained previous release statuses.
+## Upload-only retry
 
-Preview pushes sign automatically. Uploads stay disabled until repository variable
-`ANDROID_PLAY_BOOTSTRAPPED=true` is configured. A manual run can request signing and/or
-an internal draft explicitly; signing is restricted to release branches or matching
-version tags, and uploads require signing. PRs never receive these credentials.
+Dispatch `android.yml` **on the original release tag**, setting `candidate_run_id` to
+that server run. The retry checks repository identity, matching version tag, source
+commit, checksum, signing metadata, both native jobs and the successful GitHub release
+before authenticating. It uses the latest attempt's job results. The protected
+Play environment still requires approval. Existing bundles are reused only when both
+version code and SHA-256 match. An existing internal draft must be reviewed/discarded
+in Console before another upload; active releases are retained.
 
-Version codes are `1000 + github.run_number * 100 + github.run_attempt`. This leaves the
-local build 1 behind, increases on retries and is checked against Play's limit. Use a
-new workflow run after retry 99. Release runs are serialized. A future transition to a
-different workflow must preserve monotonic codes against the last uploaded Play code.
+The uploader requests `changesNotSentForReview=true`, retrying without that optional
+flag only for Google's specific rejection of it. Both attempts use
+`changesInReviewBehavior=ERROR_IF_IN_REVIEW`. A separate read-back edit verifies the
+draft, bundle checksum and retained release statuses. The uploader never changes
+production or promotes the draft. Do not edit the app in Console during an API upload.
 
-## One-time setup before the first branch push
+## Credentials and protections
 
-- Create GitHub environment **android-signing**, restricted to
-  `release/android-preview` (and later approved release branches/tags). Store:
-  `ANDROID_UPLOAD_KEYSTORE_B64`, `ANDROID_UPLOAD_STORE_PASSWORD`,
-  `ANDROID_UPLOAD_KEY_PASSWORD`, `ANDROID_UPLOAD_KEY_ALIAS`.
-  Reuse the already-created local upload key. Transfer secret values directly to
-  GitHub's secret store; do not commit, print or attach the keystore/credential JSON.
-- Create **google-play-internal**, with an owner approval rule and the same branch
-  restriction. The workflow references that environment, but YAML alone does not create
-  its protection rules.
-- Enable the Google Play Android Developer API in a Google Cloud project. Create a
-  dedicated service account and grant it access to this app in Play Console, with the
-  permissions needed to manage testing releases, not production releases.
-- Configure GitHub OIDC → Google Workload Identity Federation for that service account.
-  Restrict the trust to this repository's numeric owner/repository identity and the
-  `google-play-internal` environment, with release-branch protection in GitHub. Grant
-  the principal `roles/iam.workloadIdentityUser` on the service account. No long-lived
-  Google service-account JSON key is needed.
-- Set environment variables **GOOGLE_PLAY_WIF_PROVIDER** (full provider resource name)
-  and **GOOGLE_PLAY_SERVICE_ACCOUNT** (service-account email) in `google-play-internal`.
+- `android-signing` holds `ANDROID_UPLOAD_KEYSTORE_B64`, `ANDROID_UPLOAD_STORE_PASSWORD`,
+  `ANDROID_UPLOAD_KEY_PASSWORD` and `ANDROID_UPLOAD_KEY_ALIAS`; tags `v*` and approved
+  release branches may access it. Keystore/passwords never belong in Git or artifacts.
+- `google-play-internal` admits version tags and requires owner approval. Its variables
+  are `GOOGLE_PLAY_WIF_PROVIDER` and `GOOGLE_PLAY_SERVICE_ACCOUNT`.
+- Terraform in `gizmodata-infrastructure-terraform/gcp/core` manages the dedicated
+  `hardcharger-play@gizmodata-core.iam.gserviceaccount.com` identity. Trust checks numeric
+  repository/owner IDs, GitHub's immutable environment subject, the version tag and
+  either a server release push or an Android upload-retry manual run. It grants no
+  project roles or long-lived service-account keys. Play Console access is app-specific
+  and restricted to testing releases.
 
-Keep `ANDROID_PLAY_BOOTSTRAPPED` unset or `false` for the first run. After the first successful
-CI run, download its signed candidate and use it for the initial Console upload/app
-signing enrollment. Complete the Console's required initial setup. Google's Edits API
-documentation requires an existing app with an initial Console upload. Then enable
-the bootstrap variable. Subsequent branch pushes can upload after environment approval.
-The local build is a validation artifact, not the normal release source.
-
-Do not edit this app in Console during a CI upload: Console changes can invalidate
-the API edit. A failed validation does not trigger a fallback rollout. The signed
-candidate remains available even if Google authentication or upload fails.
-
-## v2.12.0 integration
-
-After the Android-only workflow passes on GitHub, make the build reusable and call it
-from the server's all-platform release workflow. Gate the combined release on Android
-tests/signature verification, reuse that run's web artifact, preserve the Play version
-counter, and promote the tested candidate through the agreed store track. Remove the
-standalone branch upload trigger when it is superseded. This integration and a version
-bump are intentionally not part of the preview work; server/Python remain 2.11.0.
-
-## Validation status
+## Preview history
 
 Local validation covers workflow syntax, shell syntax, signed bundle verification and
 offline tests for branch/signing gates, version-code progression, checksum rejection,
@@ -135,10 +108,5 @@ passed all 16 release-control tests, verified the original candidate and build g
 authenticated through federation, and saved the unchanged build **1501** as an internal
 draft. A separate API read-back verified draft status, the original bundle SHA-256 and
 retained previous release statuses. Build 1401 remains active; no rollout was requested.
-`ANDROID_PLAY_BOOTSTRAPPED=true` now enables preview-push uploads after environment
-approval. Finish or discard the existing draft before approving another upload.
-
-References: [Google API setup](https://developers.google.com/android-publisher/getting_started),
-[initial upload and edit lifecycle](https://developers.google.com/android-publisher/edits),
-[OIDC authentication](https://github.com/google-github-actions/auth),
-[draft releases](https://developers.google.com/android-publisher/tracks).
+The preview bootstrap is complete. The combined release workflow supersedes its
+branch upload trigger and bootstrap variable.

@@ -1,12 +1,20 @@
 # Google Play preparation
 
-The intended release path is [Android preview CI/CD](CI.md): signed builds from
-`release/android-preview`, then internal-testing draft uploads after the initial Console
-bootstrap. Local build commands below are for development and release troubleshooting.
+The release path is [combined release CI/CD](CI.md): v2.12.0 and later build and test
+Android with the other platforms, sign the AAB, and upload an internal-testing draft
+after protected environment approval. The owner publishes from Play Console.
 
-The owner has created the organization account and app in Play Console. Build work stays
-local: no bundle or listing has been uploaded by the agent. Organization verification
-and pricing are still to be confirmed. `release-setup.json` records unresolved choices.
+The organization account and app exist, Play App Signing is enrolled, build 1401 was
+activated for internal testing, and CI uploaded build 1501 as a draft. Listing content
+and declarations still need review in Console; files here are preparation material.
+
+## Store graphics
+
+The local [graphics kit](graphics/README.md) contains the 512×512 icon, 1024×500 feature
+graphic, and five screenshots each for phones, 7-inch tablets and 10-inch tablets.
+The feature graphic follows the owner’s iOS header reference with Android screens and copy.
+Use the numbered PNGs in the corresponding Play Console fields; the kit includes a
+preview, editable source, synthetic sample SQL and an asset validation manifest.
 
 ## Before the first upload
 
@@ -26,10 +34,10 @@ and pricing are still to be confirmed. `release-setup.json` records unresolved c
    tablet support. Use synthetic data, never a real server password or customer data.
 6. Set up Play App Signing and a dedicated upload key. Keep its keystore/passwords
    outside Git and back them up securely. A dedicated upload key has now been generated
-   locally; it has not been registered with Play. The local signing directory contains
+   locally and is registered with Play. The local signing directory contains
    the keystore, public certificate and an owner-readable `credentials.json`.
 7. Choose the next unused positive Android version code. Version name follows the
-   server (currently 2.11.0); this preparation does not bump server or Python versions.
+   server. CI assigns increasing version codes; use CI for store candidates.
 
 ## Build locally
 
@@ -59,8 +67,7 @@ Git or a Play upload. Only the `.aab` is uploaded in the normal first-release wo
 Output: `android/build/app-play/outputs/bundle/release/app-release.aab`.
 The verified first signed candidate is also copied to
 `android/build/artifacts/Hardcharger-2.11.0-play-arm64-build1.aab`.
-Build scripts never upload. An ARM64 build is appropriate for this first preview;
-x86_64 needs its own native build and acceptance run before inclusion.
+Local build scripts never upload. CI builds and tests both ARM64 and x86_64 libraries.
 
 The Play library statically includes autocomplete, tpch, httpfs, ducklake,
 postgres_scanner, core_functions, parquet, json and icu. It excludes the separate

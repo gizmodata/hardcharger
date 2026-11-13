@@ -6,20 +6,22 @@ from pathlib import Path
 import urllib.request
 
 REPOSITORY = 'gizmodata/hardcharger'
-BRANCH = 'release/android-preview'
 
 
 def verify_source(*, metadata, run, jobs, run_id, ref, payload):
-    if ref != f'refs/heads/{BRANCH}' or not str(run_id).isdigit():
-        raise ValueError('Candidate retry requires the Android preview branch and a numeric run ID')
-    if (str(run['id']) != str(run_id) or run['repository']['full_name'] != REPOSITORY
-            or run['repository']['id'] != 1422890225 or run['head_branch'] != BRANCH
-            or run['path'] != '.github/workflows/android.yml'
-            or run['event'] not in ('push', 'workflow_dispatch')):
-        raise ValueError('Candidate did not originate in the trusted Android preview workflow')
+    if not str(run_id).isdigit():
+        raise ValueError('Candidate retry requires a numeric run ID')
+    version = metadata.get('version', '')
+    if (ref != f'refs/tags/v{version}' or run['head_branch'] != f'v{version}'
+            or str(run['id']) != str(run_id) or run['repository']['full_name'] != REPOSITORY
+            or run['repository']['id'] != 1422890225
+            or run['path'] != '.github/workflows/server.yml' or run['event'] != 'push'):
+        raise ValueError('Candidate must originate in this version’s server release tag')
     passed = {j['name'] for j in jobs if j['status'] == 'completed' and j['conclusion'] == 'success'}
-    if not {'plan', 'ui', 'native (arm64-v8a)', 'native (x86_64)', 'bundle'} <= passed:
-        raise ValueError('Original candidate build/test/signing gates did not all pass')
+    required = {'web UI (build)', 'android / plan', 'android / native (arm64-v8a)',
+                'android / native (x86_64)', 'android / bundle', 'release'}
+    if not required <= passed:
+        raise ValueError('Original candidate build/test/signing/release gates did not all pass')
     if (metadata['package'] != 'com.gizmodata.hardcharger' or metadata['signed'] is not True
             or str(metadata['run_id']) != str(run_id) or metadata['source_commit'] != run['head_sha']
             or metadata['bundle_sha256'] != hashlib.sha256(payload).hexdigest()):
@@ -43,7 +45,7 @@ if __name__ == '__main__':
     jobs = []
     page = 1
     while True:
-        batch = github_json(path=f'actions/runs/{run_id}/jobs?filter=all&per_page=100&page={page}')['jobs']
+        batch = github_json(path=f'actions/runs/{run_id}/jobs?filter=latest&per_page=100&page={page}')['jobs']
         jobs.extend(batch)
         if len(batch) < 100:
             break
