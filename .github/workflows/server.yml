@@ -1835,6 +1835,7 @@ jobs:
           prerelease: ${{ steps.notes.outputs.prerelease == 'true' }}
           make_latest: ${{ steps.notes.outputs.prerelease == 'true' && 'false' || 'true' }}
 
+  # Automatically upload a draft; the owner publishes from Play Console, as with iOS.
   android-play:
     needs: release
     if: startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success'

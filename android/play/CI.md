@@ -23,10 +23,11 @@ Pull requests affecting Android still run its unsigned checks. The former
    commit, version code and notes. Publish `Hardcharger-android.aab` and
    `android-candidate.json` through the combined GitHub release, with the AAB covered
    by the release's `SHA256SUMS`. Android must pass before the release or images publish.
-6. After the GitHub release succeeds, the `android-play` job requests owner approval
-   through `google-play-internal`, authenticates with a short-lived Google token and
-   uploads the exact candidate as an **internal-testing draft**. The owner controls
-   testing rollout and production publication in Play Console.
+6. After the GitHub release succeeds, `android-play` automatically authenticates through
+   the tag-restricted `google-play-internal` environment with a short-lived Google token
+   and uploads the exact candidate as an **internal-testing draft**. There is no manual
+   GitHub approval gate. The owner controls testing rollout and production publication
+   in Play Console, matching the iOS build-upload/store-publication workflow.
 
 The version name follows the server. Version codes are
 `1000 + server-workflow run_number * 100 + run_attempt`; the first combined release
@@ -38,8 +39,8 @@ Use a new run after attempt 99. Upload-only retries do not rebuild or change the
 Dispatch `android.yml` **on the original release tag**, setting `candidate_run_id` to
 that server run. The retry checks repository identity, matching version tag, source
 commit, checksum, signing metadata, both native jobs and the successful GitHub release
-before authenticating. It uses the latest attempt's job results. The protected
-Play environment still requires approval. Existing bundles are reused only when both
+before authenticating. It uses the latest attempt's job results. The Play environment
+restricts uploads to version tags without a manual approval gate. Existing bundles are reused only when both
 version code and SHA-256 match. An existing internal draft must be reviewed/discarded
 in Console before another upload; active releases are retained.
 
@@ -54,7 +55,7 @@ production or promotes the draft. Do not edit the app in Console during an API u
 - `android-signing` holds `ANDROID_UPLOAD_KEYSTORE_B64`, `ANDROID_UPLOAD_STORE_PASSWORD`,
   `ANDROID_UPLOAD_KEY_PASSWORD` and `ANDROID_UPLOAD_KEY_ALIAS`; tags `v*` and approved
   release branches may access it. Keystore/passwords never belong in Git or artifacts.
-- `google-play-internal` admits version tags and requires owner approval. Its variables
+- `google-play-internal` admits version tags with no required reviewer or wait timer. Its variables
   are `GOOGLE_PLAY_WIF_PROVIDER` and `GOOGLE_PLAY_SERVICE_ACCOUNT`.
 - Terraform in `gizmodata-infrastructure-terraform/gcp/core` manages the dedicated
   `hardcharger-play@gizmodata-core.iam.gserviceaccount.com` identity. Trust checks numeric
@@ -110,3 +111,7 @@ draft. A separate API read-back verified draft status, the original bundle SHA-2
 retained previous release statuses. Build 1401 remains active; no rollout was requested.
 The preview bootstrap is complete. The combined release workflow supersedes its
 branch upload trigger and bootstrap variable.
+
+For v2.12.0, the owner requested automatic draft uploads to match iOS. The GitHub
+required-reviewer gate was removed; tag restrictions, keyless federation, signature
+checks and draft-only uploads remain. Publication is still controlled in Play Console.

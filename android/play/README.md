@@ -1,8 +1,8 @@
 # Google Play preparation
 
 The release path is [combined release CI/CD](CI.md): v2.12.0 and later build and test
-Android with the other platforms, sign the AAB, and upload an internal-testing draft
-after protected environment approval. The owner publishes from Play Console.
+Android with the other platforms, sign the AAB, and automatically upload an internal-testing draft. There is no manual
+GitHub approval gate; the owner publishes from Play Console.
 
 The organization account and app exist, Play App Signing is enrolled, build 1401 was
 activated for internal testing, and CI uploaded build 1501 as a draft. Listing content

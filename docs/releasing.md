@@ -83,9 +83,10 @@ Android is a mandatory tag release gate. Its reusable build shares the run's web
 checks ARM64/x86_64 native libraries, runs phone/tablet instrumentation, and signs the
 AAB with the protected upload key. `Hardcharger-android.aab` is included in the GitHub
 release and `SHA256SUMS`; `android-candidate.json` records its version code and source.
-After publication, approve `android-play` in the `google-play-internal` environment to
-upload that exact candidate as an internal-testing **draft**. Review/discard an older
-draft first. Production remains a manual Play Console decision.
+After publication, `android-play` automatically uploads that exact candidate as an
+internal-testing **draft** through the tag-restricted `google-play-internal` environment.
+There is no manual GitHub approval gate. Review/discard an older draft first. Testing
+rollout and production remain manual Play Console decisions, matching the iOS flow.
 
 Only `server.yml` creates signed candidates, using its run counter for increasing
 Android version codes. For upload-only retry, dispatch `android.yml` on the same tag
