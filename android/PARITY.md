@@ -1,8 +1,9 @@
 # Android acceptance record
 
-Local implementation on branch `android-app`, based on the v2.11.0 source. Verified on
-2026-11-12 on this Apple silicon Mac. No branch, issue, PR, package or app was published.
-The server/Python versions remain unchanged. The APK is a local debug-signed ARM64 build.
+This chronological record begins with local development on the v2.11.0 source on
+2026-11-12. The initial evidence used a debug-signed ARM64 APK before publication.
+Later sections record both-ABI CI, Play internal testing and v2.12.0 release integration;
+the initial limitations below describe that earlier build.
 
 ## Core iOS feature coverage
 

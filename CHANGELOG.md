@@ -9,50 +9,33 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [2.12.0] - 2026-11-12
 
+Hardcharger comes to Android for the first time, bringing the server, DuckDB and the
+SQL workspace to phones and tablets. Google Play availability is coming soon; initial
+builds are available through internal testing.
+
 ### Added
 
-- Google Play icon, feature graphic matching the iOS header, and separate phone and
-  tablet screenshot sets captured from the Android Play build with synthetic SQL data.
-- Android app with the embedded server and built-in extensions, web workspace, native SQL
-  console, file import/export, saved remote connections, browser sign-in, TLS sharing and
-  Keystore-protected credentials. Includes ARM64 and 16 KB emulator validation, local build
-  and launch scripts, and an explicit acceptance record (`android/PARITY.md`).
-- Separate local Google Play build preparation with bundled-only native extensions,
-  verified native artifacts, store-listing drafts and an in-app Android privacy policy.
-  Local Android builds retain automatic installation/loading of signed extensions.
-- Android in the combined release gate: both native architectures, phone/tablet emulator
-  tests, protected signing, a checksummed AAB and a Google Play internal-testing draft.
-  The owner controls production publication in Play Console; dependency caches are
-  warmed on main for subsequent releases.
-
-### Changed
-
-- Bring Android's native presentation closer to iOS: four floating phone tabs, large page
-  titles, a mascot/status card, grouped settings, blue accents, neutral light/dark surfaces,
-  a sharing sheet, and adaptive server controls on tablets.
-- Add the branded iOS-style About screen to Android Settings, with light/dark mascot art,
-  runtime component versions, third-party software notices and the GizmoData footer.
-  Align version rows, address/password copying, sharing controls, console history controls
-  and searchable, styled log rows with iOS; adapt detail rows for larger text.
-- Match iOS resource controls: Automatic memory (30% of device RAM, bounded to 256–4096 MB),
-  memory presets and One per core threads. Fresh installs default to these automatic limits
-  and enable statement logging, while upgrades retain saved explicit settings. Use an
-  adaptive launcher icon so the mascot fills Android's circular mask more fully.
-
-### Fixed
-
-- Keep every Android tablet navigation destination reachable in short landscape windows
-  and at large font sizes, without shrinking touch targets or duplicating system insets.
-- Handle Google Play's internal-draft commit flag requirements, retain active test
-  releases, and verify the saved draft and bundle checksum after upload. Upload-only
-  retries reuse a signed CI candidate after checking its original build gates and source.
-- Correct the Android Gradle wrapper download checksum and verify the local signed Play
-  bundle workflow with upload credentials stored outside the repository.
-- Enable host-keyboard input when launching the local Android emulator.
-- Expose Android's persisted Emoji / Plain log-view preference in Settings and Logs,
-  matching iOS and applying immediately without restarting the server.
-- Keep floating menus, upload dialogs and result actions within narrow mobile WebView
-  screens, including toolbars whose contents exceed the viewport width.
+- **Hardcharger for Android**: run the embedded server on your device, query through
+  the built-in web workspace or native SQL console, and start, stop or restart the
+  server from a native dashboard. Supports Android 9 and later, ARM64 and x86_64.
+- **Built-in database extensions**: DuckLake, PostgreSQL connectivity, HTTP/S3 access,
+  Parquet, JSON, ICU, TPC-H and autocomplete. The Play distribution includes its native
+  extensions in the app; regular local builds also support installing compatible
+  signed extensions.
+- **Files and connections**: import and export data through Android's document picker
+  and share actions, save remote server connections, sign in with a password or browser,
+  and share the local server over TLS. Credentials are protected by Android Keystore.
+- **A familiar native interface**: iOS-inspired phone tabs, adaptive tablet navigation,
+  light and dark appearance, searchable logs with Emoji and Plain display options,
+  and the branded About screen with component versions, privacy policy and software
+  notices. Tablet navigation supports short windows and larger text.
+- **Automatic resource limits**: memory defaults to 30% of device RAM, bounded to
+  256–4096 MB, and threads default to one per core. Presets and custom limits are
+  available in Settings.
+- **Android release artifacts**: a signed Android App Bundle accompanies the desktop
+  and server downloads, with checksums and source metadata. The combined release
+  pipeline builds and tests both Android architectures and prepares an internal
+  Google Play draft for review.
 
 ## [2.11.0] - 2026-11-12
 

@@ -5,17 +5,16 @@ console through a small JNI bridge. Kotlin/Compose supplies the Android controls
 secure credential storage, document picker and share integration. See [PARITY.md](PARITY.md)
 for the acceptance checklist and evidence; unchecked work is not release-ready.
 
-Development uses the `release/android-preview` branch and Android-only CI. Google Play
-uploads remain disabled until the initial Console bootstrap is complete.
-Server and Python package versions are unchanged. The Android version comes from
-`server/CMakeLists.txt`.
+Android joins the combined release in v2.12.0. Google Play availability is coming soon;
+CI prepares internal-testing drafts for owner review. See [release CI/CD](play/CI.md).
+The Android version follows `server/CMakeLists.txt`.
 
 ## Build
 
 Prerequisites: Java 17, CMake 3.28+, Ninja, Node.js 24+, Android SDK, NDK
 28.2.13676358. Android 9 / API 28 is the minimum; target and compile SDK are 36.
-The native build currently develops against ARM64 (Apple silicon emulator and devices).
-The build script also accepts x86_64; it needs its own build and verification.
+The native build supports ARM64 (including Apple silicon emulators) and x86_64.
+CI builds both architectures and runs Play/local instrumentation on x86_64.
 
 Install the SDK packages with Android Studio's SDK Manager or `sdkmanager`:
 
@@ -51,8 +50,8 @@ keyboard disabled, close it and run the launcher again; a cold boot applies the 
 without erasing app data.
 
 On this Mac, double-click **Launch Hardcharger.command** in this directory to open the
-phone emulator with the app installed. The ready-to-try APK is also copied to
-`build/artifacts/Hardcharger-2.11.0-android-arm64-local.apk`.
+phone emulator with the locally built app installed. Build artifacts are kept under
+`build/artifacts/`; use the version reported by the current build.
 
 `run-emulator.sh` installs without clearing the database and forwards **Mac localhost
 31437 → emulator 31337**. Enable TLS/sharing in the app to use HTTPS. To connect from
