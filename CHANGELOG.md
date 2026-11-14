@@ -44,6 +44,8 @@ own changelog in `python/CHANGELOG.md`.
   query and must report the driver version their manifest names (Quack against a Quack server
   the image's own Hardcharger starts), and GizmoSQL, Oracle and Db2, which have no server in the
   test, must load and fail with their own connection error.
+- Enable Android's optimized resource shrinker so release builds optimize code and
+  resource references together.
 
 ## [2.12.1] - 2026-11-14
 
