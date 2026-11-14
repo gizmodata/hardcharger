@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-11-14
+
 ### Added
 
 - Server-enforced Chargewire `read_only` connections, independent of token roles, with
