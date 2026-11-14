@@ -275,7 +275,12 @@ to the same GHCR and Docker Hub repositories. It also updates `:latest-adbc` for
 the current stable server release; older releases and candidates never move it.
 Both native Linux architectures must build, load all 15 drivers and query the
 running server through the `hardcharger` manifest before the multi-architecture
-tags are published. The server image is resolved to a digest before building.
+tags are published. The same test queries a Quack server that the running server
+starts (`INSTALL quack`, so the test container needs the network) through the
+`quack` manifest, checks that both drivers report the version their manifest
+names, and loads GizmoSQL, Oracle and Db2 through the driver manager as far as
+their connection error (no such server runs in the test). The server image is
+resolved to a digest before building.
 
 A server release runs this itself ([After the release](#after-the-release)). Run it by hand to
 rebuild the driver layer (a new driver release, new native pins) without re-releasing the server,
@@ -291,9 +296,17 @@ gh workflow run adbc-images.yml --ref main \
 ```
 
 The native pins in `docker/prepare-adbc-drivers.py` are GizmoSQL 2.0.18, Oracle
-1.0.1, Db2 0.2.1 and Quack 0.1.0-alpha.11; Hardcharger defaults to 2.0.0 and can
+1.0.6, Db2 0.2.6 and Quack 1.0.4; Hardcharger defaults to 2.0.0 and can
 be selected with `driver_tag`. Every native release asset is checked against
-GitHub's SHA-256 digest before it enters the Docker context. Credentials stay
+GitHub's SHA-256 digest before it enters the Docker context, and its library
+must be an ELF shared object for the architecture being staged that exports the
+entrypoint its manifest names. GizmoSQL's and Hardcharger's archives carry their
+manifest template; Oracle's, Db2's and Quack's carry none, so the script writes
+those manifests with the entrypoint and license it pins for each
+(`AdbcDriverOracleInit`, `AdbcDriverDb2Init`, `AdbcDriverQuackInit`, MIT): read
+a driver's changelog for a changed entrypoint or asset name when moving its pin.
+Quack 1.x reaches DuckDB 2.0 Quack servers only; 0.1.0-alpha.11 was the last
+release for DuckDB 1.5's. Credentials stay
 outside the image. The other ten drivers are installed from the public dbc
 registry using dbc 0.3.1; the installed version inventory is saved in the image.
 Update these pins when refreshing the driver layer, then rerun this workflow.
