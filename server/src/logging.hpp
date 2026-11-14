@@ -94,16 +94,23 @@ bool LogEnabled(LogLevel level);
 
 // SQL as it may be logged: statements that can carry credentials (CREATE SECRET,
 // CREATE / ALTER USER ... PASSWORD) are replaced by what they are, wherever their
-// keywords sit (comments cannot hide them); long text is shortened.
+// keywords sit (comments cannot hide them); in any other statement the value given to a
+// credential name (token => '..', PASSWORD '..', a connection string's password=) is
+// masked, on the statement's tokens (RedactSql, redact.hpp); a statement that cannot be
+// read is replaced whole; long text is shortened. Every sink of statement text (the log,
+// instrumentation, the catalog log, the audit record, the monitoring functions) takes it
+// from here.
 std::string LoggableSql(std::string_view sql);
 
 // An error message as it may be logged or stored: a credential statement's error is
-// dropped whole (DuckDB's parser errors echo the statement), and any connection-string
+// dropped whole (DuckDB's parser errors echo the statement), as is that of a statement
+// that cannot be read, and any credential value of the statement, connection-string
 // password or credential-setting value in another statement's error is removed.
 std::string LoggableError(std::string_view sql, std::string_view error);
 
-// Whether a statement carries credentials (CREATE SECRET, CREATE/ALTER USER, a credential
-// setting): what LoggableSql and LoggableError redact whole.
+// Whether a statement carries credentials: one LoggableSql and LoggableError redact whole
+// (CREATE SECRET, CREATE/ALTER USER, a credential setting, a statement that cannot be
+// read), or one with a credential value LoggableSql masks.
 bool IsCredentialStatement(std::string_view sql);
 
 }  // namespace hardcharger

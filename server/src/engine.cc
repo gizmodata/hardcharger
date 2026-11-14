@@ -299,8 +299,10 @@ void RefuseAccessControlStatement(std::string_view sql) {
 }
 
 // An init statement's error for the log. A credential statement (CREATE SECRET, CREATE USER
-// ... PASSWORD) loses the excerpt DuckDB quotes ("LINE 1: ...") and every string literal of
-// the statement wherever the error repeats it; any other statement's error stays whole.
+// ... PASSWORD, or any statement that gives a credential name a value: ATTACH ... (TOKEN
+// '...'), f(password => '...')) loses the excerpt DuckDB quotes ("LINE 1: ...") and every
+// string literal of the statement wherever the error repeats it; any other statement's
+// error stays whole.
 std::string WithoutLiterals(const Piece& piece, std::string error) {
   if (!IsCredentialStatement(piece.text)) return error;
   if (const auto at = error.find("\nLINE "); at != std::string::npos) error.resize(at);
@@ -1405,7 +1407,9 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
                {{"session_id", id_}, {"user", principal_.name}, {"role", principal_.role},
                 {"statement_id", statement_id}, {"kind", "sql"}, {"is_internal", "false"}, {"sql", Abbreviate(sql)}});
     }
-    return Track(StatementKind::kOther, Abbreviate(sql), {.statement = statement_id, .execution = statement_id}, [&] {
+    // (The statement as written: Track redacts what it logs, and its error's redaction
+    // must see the statement, not its redacted form.)
+    return Track(StatementKind::kOther, sql, {.statement = statement_id, .execution = statement_id}, [&] {
       return Guarded(sql, has_parameters, [&] { return DuckDBSession::Execute(sql, parameters); }, parameters);
     });
   }

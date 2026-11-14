@@ -51,6 +51,27 @@ own changelog in `python/CHANGELOG.md`.
   cache at the same moment, which failed on Windows when both started together on a cold cache
   ("Could not move file ... Access is denied").
 
+### Security
+
+- **Statement-log masking now covers every way a statement gives a credential a value, in
+  every place a statement's text is kept.** The value of a credential in a logged statement
+  is now found on the statement's tokens, not by patterns over its raw text, and one function
+  does it for the query log (both formats), the instrumentation tables and SQL Monitor,
+  `hardcharger_active_connections()`, the catalog log, the access-control audit record and the
+  init SQL's failure line. Covered: a value given with any assignment, named-argument or
+  comparison operator, as an option without an operator, or under a struct or map key; any
+  spacing, line break or comment between the name and the value; quoted names; every kind of
+  string literal (escaped, dollar-quoted, with doubled quotes), bare words and values that are
+  expressions; more credential names (API, account, private and encryption keys, passphrases,
+  signatures); quoted values inside connection strings and more URL parameters; statements
+  inside comments; values that lie across the point where long text is shortened (text is now
+  masked first and then shortened, at a token's edge); and error messages that quote a value.
+  A statement that cannot be read (a string, quoted name or comment that never ends) is
+  recorded as `[REDACTED: a statement that could not be read]`, and under access control a
+  failed `CREATE USER` / `ALTER USER` records `[REDACTED: error of a credential statement]`,
+  as a failed `CREATE SECRET` does. Clients still get the full error. Tests:
+  `server/unit/redaction_test.cc`, `server/tests/test_redaction.py`.
+
 ## [2.12.0] - 2026-11-12
 
 Hardcharger comes to Android for the first time, bringing the server, DuckDB and the

@@ -2,6 +2,7 @@
 
 #include <boost/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -355,21 +356,39 @@ std::string MaskCredentials(std::string text) { return RedactCredentials(std::mo
 
 std::string LoggableSql(std::string_view sql) {
   if (auto kind = SensitiveStatement(sql)) return "[REDACTED: " + *kind + "]";
-  // Not a whole-statement credential statement, but an ATTACH connection string can
-  // still carry a password: mask just the value, keep the rest.
-  std::string text(sql);
-  if (text.size() > 4000) text = text.substr(0, 4000) + "\xe2\x80\xa6";
-  return MaskCredentials(std::move(text));
+  // Not a whole-statement credential statement, but any statement can still carry one: a
+  // credential option or named argument, an ATTACH connection string, a URL. Those values
+  // are masked on the statement's tokens (redact.hpp) and the rest is kept; long text is
+  // shortened after the masking, never before.
+  RedactedSql redacted = RedactSql(sql, 4000);
+  if (redacted.unreadable) return "[REDACTED: a statement that could not be read]";
+  return std::move(redacted.text);
 }
 
-bool IsCredentialStatement(std::string_view sql) { return SensitiveStatement(sql).has_value(); }
+bool IsCredentialStatement(std::string_view sql) {
+  if (SensitiveStatement(sql)) return true;
+  const auto values = CredentialValues(sql);
+  return !values || !values->empty();
+}
 
 std::string LoggableError(std::string_view sql, std::string_view error) {
   // DuckDB's parser errors and "LINE n: ..." excerpts echo the statement; the error of
-  // a credential statement is dropped whole.
+  // a credential statement is dropped whole, and so is that of a statement that cannot
+  // be read (nothing says which part of it the error quotes).
   if (SensitiveStatement(sql)) return "[REDACTED: error of a credential statement]";
+  auto values = CredentialValues(sql);
+  if (!values) return "[REDACTED: error of a statement that could not be read]";
   std::string text(error);
   if (auto at = text.find("\nLINE "); at != std::string::npos) text.resize(at);
+  // An error can quote a token of the statement ("syntax error at or near ..."): the
+  // values masked in the statement are masked here too, the longest first (one may
+  // begin with another).
+  std::sort(values->begin(), values->end(), [](const auto& a, const auto& b) { return a.size() > b.size(); });
+  for (const std::string& value : *values) {
+    for (std::size_t at = 0; (at = text.find(value, at)) != std::string::npos; at += 3) {
+      text.replace(at, value.size(), "***");
+    }
+  }
   return MaskCredentials(std::move(text));
 }
 
