@@ -108,7 +108,13 @@ class AppWorkflowTest {
         compose.onNodeWithContentDescription("Console", useUnmergedTree = true).performClick()
         compose.onNodeWithText("SQL or .help").performTextInput("SELECT 4242 AS android_ui_answer;")
         compose.onNodeWithText("Run", useUnmergedTree = true).performClick()
-        compose.waitUntil(30_000) { model.transcript.contains("4242") && !model.querying }
+        // The model finishes before Compose/IME layout has necessarily made the
+        // transcript visible. Wait for the same UI condition asserted below.
+        compose.waitUntil(30_000) {
+            !model.querying && runCatching {
+                compose.onNodeWithText("4242", substring = true).assertIsDisplayed()
+            }.isSuccess
+        }
         compose.onNodeWithText("4242", substring = true).assertIsDisplayed()
         compose.onNodeWithContentDescription("Previous command").performClick()
         compose.onNodeWithText("SQL or .help").assertTextContains("SELECT 4242 AS android_ui_answer;")
