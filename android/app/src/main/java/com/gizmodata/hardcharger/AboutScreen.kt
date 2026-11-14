@@ -94,10 +94,13 @@ import java.time.Year
 @Composable private fun DocumentScreen(asset: String, includeNativeNotices: Boolean = false) {
     val context = LocalContext.current.applicationContext
     val paragraphs by produceState<List<String>?>(initialValue = null, asset, includeNativeNotices) {
-        value = withContext(Dispatchers.IO) {
+        val loaded = withContext(Dispatchers.IO) {
             val app = context.assets.open(asset).bufferedReader().use { it.readText() }
             (app + if (includeNativeNotices) "\n\n" + NativeBridge.notices() else "").split("\n\n")
         }
+        // Keep the state change that creates the lazy list on Android's UI thread,
+        // including when the composition's effect dispatcher resumes on an IO worker.
+        withContext(Dispatchers.Main.immediate) { value = loaded }
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         if (paragraphs == null) CircularProgressIndicator(Modifier.padding(24.dp))

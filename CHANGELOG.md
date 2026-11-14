@@ -17,6 +17,11 @@ own changelog in `python/CHANGELOG.md`.
   server-confirmed read-only session, including after reconnecting. Servers without
   support refuse the connection; ordinary connections keep their existing behavior.
 
+### Fixed
+
+- Android publishes loaded notices and privacy text on the UI thread, keeping the
+  document screen's lazy-list initialization on a thread with an Android looper.
+
 ### Changed
 
 - **The `-adbc` images' Quack driver moves to 1.0.4 (was 0.1.0-alpha.11): it now reaches DuckDB
@@ -54,6 +59,8 @@ own changelog in `python/CHANGELOG.md`.
   query and must report the driver version their manifest names (Quack against a Quack server
   the image's own Hardcharger starts), and GizmoSQL, Oracle and Db2, which have no server in the
   test, must load and fail with their own connection error.
+- Enable Android's optimized resource shrinker so release builds optimize code and
+  resource references together.
 
 ### Security
 
