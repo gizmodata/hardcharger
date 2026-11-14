@@ -104,5 +104,15 @@ def test_server_owned_profiling_remains_available(launcher):
     server = launcher.start(args=["--enable-instrumentation", "--capture-query-profile", "standard"])
     reader = server.client().new_session(options={"read_only": True})
     assert reader.scalar(sql="SELECT 42") == 42
+    # Server-owned profiling must still turn off before credential-bearing reads,
+    # then resume for ordinary queries on the same read-only connection.
+    rows = reader.rows(sql="SELECT current_setting('enable_profiling') AS mode, "
+                           "struct_pack(token := 'readonly-profile-fixture') AS credentials")
+    assert rows[0]["mode"] is None
+    prepared = reader.prepare(sql="SELECT struct_pack(token := 'readonly-prepared-profile-fixture')")
+    result = reader.execute_prepared(prepared_id=prepared["prepared_id"])
+    assert result.status_code == 200, result.text
     assert_read_only(reader.error(sql="CREATE TABLE forbidden_profile_write (n INTEGER)"))
     assert reader.scalar(sql="SELECT 43") == 43
+    assert "readonly-profile-fixture" not in server.log()
+    assert "readonly-prepared-profile-fixture" not in server.log()
