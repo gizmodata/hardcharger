@@ -45,6 +45,9 @@ own changelog in `python/CHANGELOG.md`.
   and verify the optimized app and its bundled crash mappings before upload.
 - Remove test-order and startup-log timing dependencies from the metrics and health
   logging integration tests.
+- Tests: two test servers no longer install the spatial extension into the shared extension
+  cache at the same moment, which failed on Windows when both started together on a cold cache
+  ("Could not move file ... Access is denied").
 
 ## [2.12.0] - 2026-11-12
 

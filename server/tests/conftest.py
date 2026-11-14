@@ -7,6 +7,7 @@ nothing is skipped. Every feature is on whenever its own option says so: there i
 license.
 """
 
+import contextlib
 import dataclasses
 import getpass
 import json
@@ -20,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import warnings
 
 import httpx
 import pytest
@@ -193,6 +195,51 @@ def _test_home() -> pathlib.Path:
 
 
 _HOME = None
+
+
+@contextlib.contextmanager
+def installing(extension: str):
+    """Holds this machine's lock on installing `extension` while the block starts a server that
+    INSTALLs it (in its init SQL), so one process at a time does: the next one finds the
+    extension in the cache and its INSTALL does nothing.
+
+    Every test server shares one extension cache (_test_home), so that an extension downloads
+    once. Two servers that install the same extension at the same moment both download it and
+    each renames its copy into place; the first also loads it, and Windows refuses to replace a
+    file that is in use: the second server's init SQL fails ("Could not move file ...
+    spatial.duckdb_extension ...: Access is denied") and it exits. Two pytest-xdist workers did
+    exactly that on Windows CI, twice in a row, once test_geoarrow.py and
+    test_client_cli_geometry.py happened to start together on a cold cache (2026-11-13). The
+    lock is the port locks' kind: a file lock the OS drops when its holder ends, however it
+    ends. Waiting for it is bounded by the longest a server may take to start, and a wait is
+    reported as a warning, so a run's log says when two installers met."""
+    _PORT_LOCKS.mkdir(parents=True, exist_ok=True)
+    fd = os.open(_PORT_LOCKS / f"install-{extension}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    asked = time.monotonic()
+    deadline = asked + 300 * TIMEOUT_SCALE
+    waited = False
+    try:
+        while True:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() > deadline:
+                    pytest.fail(reason=f"another process has been installing {extension} for too long")
+                waited = True
+                time.sleep(0.1)
+        if waited:
+            # In the run's warnings summary, so its log shows when the lock had work to do.
+            warnings.warn(message=f"waited {time.monotonic() - asked:.1f} s for another test process "
+                                  f"installing the {extension} extension", category=UserWarning, stacklevel=3)
+        yield
+    finally:
+        os.close(fd)  # closing the file drops the lock
 
 
 def clean_environment() -> dict[str, str]:

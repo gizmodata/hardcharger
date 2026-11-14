@@ -12,6 +12,8 @@ import struct
 import pyarrow as pa
 import pytest
 
+from conftest import installing
+
 
 @pytest.fixture(scope="module")
 def session(module_launcher):
@@ -21,8 +23,9 @@ def session(module_launcher):
     # (it swaps DuckDB's extension-callback registry, and TSan can't see the uninstrumented
     # reference count that orders the swap after the planner's read; TSan CI, twice). The
     # download can take a while: the startup wait is a minute.
-    return module_launcher.start(args=["--init-sql-commands", "INSTALL spatial; LOAD spatial;"],
-                                 startup_seconds=60).admin()
+    with installing(extension="spatial"):  # one process at a time: see conftest.installing
+        return module_launcher.start(args=["--init-sql-commands", "INSTALL spatial; LOAD spatial;"],
+                                     startup_seconds=60).admin()
 
 
 def extension_name(field: pa.Field) -> str:
