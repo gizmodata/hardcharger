@@ -7,6 +7,21 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- The web UI's JavaScript client moves from chargewire-js 2.3.5 to 2.3.6 (`ui/vendor`; the same
+  files as npm's `@gizmodata/chargewire@2.3.6`). 2.3.6 fixes a session that replaces a lost one,
+  or the first session on a server that was stopped, opening in the new catalog with the old
+  schema after the schema and then the catalog were set. The UI's tabs were not affected (a tab
+  sets catalog and schema in one step, or reads the session right after, and replaces a lost
+  session itself); a test now holds that in place with the real client.
+- The Python package's `[adbc]` extra requires `adbc-driver-hardcharger` 2.5.0 or newer (was
+  2.4.9): `Server.connect()` then gets the driver that opens a connection in the catalog and
+  schema it is given.
+- The `-adbc` images bundle GizmoSQL's ADBC driver 2.0.18 (was 2.0.15): its library exports
+  only the ADBC API, as the ADBC shared-library requirements ask. Nothing changes in how the
+  image loads it.
+
 ### Fixed
 
 - **A finished statement no longer answers `"state": "running"` with its result attached**

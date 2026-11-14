@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// The JavaScript client, @gizmodata/chargewire, is not on npm: the UI depends on the package
-// that `npm pack` makes from gizmodata/chargewire-js at a pinned commit, kept in vendor/ (and
-// pinned again by package-lock.json's integrity hash). vendor/chargewire-js.json names the
-// commit and the tarball's SHA-256.
+// The JavaScript client, @gizmodata/chargewire, is vendored (it was not on npm before 2.3.6):
+// the UI depends on the package that `npm pack` makes from gizmodata/chargewire-js at a pinned
+// commit, kept in vendor/ (and pinned again by package-lock.json's integrity hash).
+// vendor/chargewire-js.json names the commit and the tarball's SHA-256.
 //
 //   node scripts/vendor-chargewire.mjs --verify             the tarball matches the pin
 //   node scripts/vendor-chargewire.mjs --verify --rebuild   ...and is what the commit builds to

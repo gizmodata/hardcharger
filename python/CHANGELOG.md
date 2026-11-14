@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Require `adbc-driver-hardcharger>=2.5.0` for the `[adbc]` extra. 2.5.0 opens a connection in
+  the catalog and schema it is given: earlier releases set the two in no fixed order, so
+  `connect(catalog=..., db_schema=...)` often failed with "No catalog + schema named ..." or
+  opened in the catalog's default schema. It also installs on Python 3.10 with pyarrow 16 and
+  adbc-driver-manager 1.8, as this package does.
+
 ## [2.12.0] - 2026-11-12
 
 ### Changed

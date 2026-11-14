@@ -279,7 +279,7 @@ gh workflow run adbc-images.yml --ref main \
   -f server_version=2.0.0 -f driver_tag=v2.0.0 -f publish=true
 ```
 
-The native pins in `docker/prepare-adbc-drivers.py` are GizmoSQL 2.0.15, Oracle
+The native pins in `docker/prepare-adbc-drivers.py` are GizmoSQL 2.0.18, Oracle
 1.0.1, Db2 0.2.1 and Quack 0.1.0-alpha.11; Hardcharger defaults to 2.0.0 and can
 be selected with `driver_tag`. Every native release asset is checked against
 GitHub's SHA-256 digest before it enters the Docker context. Credentials stay
