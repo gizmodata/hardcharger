@@ -7,6 +7,11 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Android publishes loaded notices and privacy text on the UI thread, keeping the
+  document screen's lazy-list initialization on a thread with an Android looper.
+
 ### Changed
 
 - **The `-adbc` images' Quack driver moves to 1.0.4 (was 0.1.0-alpha.11): it now reaches DuckDB
