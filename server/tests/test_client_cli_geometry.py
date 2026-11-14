@@ -17,6 +17,7 @@ import subprocess
 
 import pytest
 
+from conftest import installing
 from test_client_cli import binary, client_env, conn_args, strip_ansi
 
 CASES = [
@@ -69,7 +70,8 @@ def server(module_launcher):
     values = ", ".join(f"({i}, '{case}')" for i, case in enumerate(CASES))
     init = ("INSTALL spatial; LOAD spatial; "
             f"CREATE TABLE geo_cases AS SELECT i, input, ST_GeomFromText(input) AS g FROM (VALUES {values}) t(i, input);")
-    return module_launcher.start(args=["--init-sql-commands", init], startup_seconds=60)
+    with installing(extension="spatial"):  # one process at a time: see conftest.installing
+        return module_launcher.start(args=["--init-sql-commands", init], startup_seconds=60)
 
 
 @pytest.fixture(scope="module")
