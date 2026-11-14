@@ -6,8 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.12.1] - 2026-11-14
+
 ### Changed
 
+- Install Hardcharger server 2.12.1, in which a finished statement no longer answers
+  `"state": "running"` with its result attached.
 - Require `adbc-driver-hardcharger>=2.5.0` for the `[adbc]` extra. 2.5.0 opens a connection in
   the catalog and schema it is given: earlier releases set the two in no fixed order, so
   `connect(catalog=..., db_schema=...)` often failed with "No catalog + schema named ..." or

@@ -90,9 +90,9 @@ rollout and production remain manual Play Console decisions, matching the iOS fl
 
 Only `server.yml` creates signed candidates, using its run counter for increasing
 Android version codes. For upload-only retry, dispatch `android.yml` on the same tag
-with `candidate_run_id` set to the original server run. On the subsequent fast-forward
-to main, the Android cache warm-up makes native dependency installs available to future
-tags. See [Android CI/CD](../android/play/CI.md) for credentials and provenance checks.
+with `candidate_run_id` set to the original server run. Main's run on the release
+commit (re-run after the release, step 6 of "Cutting one") warms the Android cache, which
+makes native dependency installs available to future tags. See [Android CI/CD](../android/play/CI.md) for credentials and provenance checks.
 
 ## Code signing
 
@@ -166,31 +166,42 @@ or the file's Properties > Digital Signatures on Windows.
 3. Check locally: `.github/scripts/release.sh version` prints the version,
    `.github/scripts/release.sh changelog 2.0.0-rc.1` prints the notes, and
    `bash .github/scripts/test-release.sh` passes.
-4. Commit, and push the commit to a release branch: `git push origin <sha>:refs/heads/release/v2.0.0-rc.1`.
-   No workflow runs on a `release/v*` push, so this costs nothing. It puts the commit on a branch
-   before anything tags it: the Python package's `github-release` job creates `python-vX.Y.Z`
-   on this commit with the workflow's token, and GitHub refuses that token a new ref that brings in
-   workflow-file changes no branch has yet ("Resource not accessible by integration", 403). 2.5.0
-   changed `server.yml` and `desktop.yml` after main; its PyPI upload went out, then the GitHub
-   Release failed until main had the commit (2026-11-03).
-5. Tag the commit (`git tag v2.0.0-rc.1 <sha>`) and push **only the tag**:
-   `git push origin v2.0.0-rc.1`. Its run is the full gate, and it publishes.
-6. Once that run has published the release, fast-forward main to the same commit:
-   `git push origin <sha>:refs/heads/main`. Main's run then finds the tag's successful run on
-   that commit (`.github/scripts/already-tested.sh`), skips every test, and builds the `:main`
-   image from the tag run's binaries, and the Python package's run on main can download the
-   server it pins. Pushed together, main's run starts before the tag's has passed, so it tests
-   the whole matrix a second time, and the Python run fails on a server that isn't published
-   yet (2.4.1 did both, 2026-10-29). Then delete the release branch:
-   `git push origin --delete release/v2.0.0-rc.1` (main and the tag hold the commit now).
+4. Commit, push the commit to a release branch (`git push origin <sha>:refs/heads/release/v2.0.0-rc.1`)
+   and open a pull request to main. Main takes pull requests only (the check `test`, linear
+   history), so the release commit reaches main through its pull request, and the tag goes on the
+   commit that lands there. The pull request's run tests the matrix, unsigned and without the
+   sanitizers. Its three `real server` jobs fail: the Python package now pins a server release
+   that doesn't exist yet (2.10.0's did, #37). That is expected; `test`, the required check, passes.
+   To run the whole gate first, signed, publishing nothing:
+   `gh workflow run server.yml --ref release/v2.0.0-rc.1 -f sign=true -f full=true -f ios=true -f android=true`.
+5. Merge the pull request (squash: the commit on main is a new one, with the same tree). Fetch,
+   check that `origin/main` is that commit, tag **it** and push **only the tag**:
+   `git fetch origin && git tag v2.0.0-rc.1 origin/main && git push origin v2.0.0-rc.1`. Its run
+   is the full gate, and it publishes. Never tag the release branch's own commit: it is not on
+   main and can't get there. A merge writes a new commit, and a direct push of it to main is
+   refused by the branch rules (or passes as an administrator's bypass, which is not a way to
+   release). Being on main is also what lets the Python package's
+   `github-release` job create `python-vX.Y.Z` on the commit with the workflow's token: GitHub
+   refuses that token a new ref that brings in workflow-file changes no branch has yet ("Resource
+   not accessible by integration", 403). 2.5.0 changed `server.yml` and `desktop.yml` on a commit
+   main didn't have; its PyPI upload went out, then the GitHub Release failed until main had the
+   commit (2026-11-03).
+6. The merge starts two runs on main that can't succeed yet. Main's own server run would test
+   the whole matrix a second time beside the tag's: cancel it (`gh run cancel <id>`). The Python
+   package's run fails in `real server`, on a server that isn't published yet (2.4.1's did,
+   2026-10-29). Once the tag's run has published the release, re-run both (`gh run rerun <id>`): main's
+   server run then finds the tag's successful run on that commit
+   (`.github/scripts/already-tested.sh`), skips every test and builds the `:main` image from the
+   tag run's binaries, and the Python run downloads the server it pins. Then delete the release
+   branch: `git push origin --delete release/v2.0.0-rc.1` (main and the tag hold the commit now).
 7. Check that `:main` is the release:
    `docker run --rm --pull always ghcr.io/gizmodata/hardcharger:main --version`
    prints `Hardcharger X.Y.Z`. Nothing else notices when it isn't: if main's run on the release
-   commit is cancelled, and the next push to main changes only documentation (which skips the
-   server workflow), `:main` stays on the previous release, and the docs' CI, which builds its
-   reference from `:main`, fails on the new version (2.4.1: `:main` said 2.4.0 for a day). Re-run
-   main's run on the release commit (`gh run rerun <id>`): it finds the tag's tested run and only
-   builds the image.
+   commit stays cancelled (step 6), and the next push to main changes only documentation (which
+   skips the server workflow), `:main` stays on the previous release, and the docs' CI, which
+   builds its reference from `:main`, fails on the new version (2.4.1: `:main` said 2.4.0 for a
+   day). Re-run main's run on the release commit (`gh run rerun <id>`): it finds the tag's tested
+   run and only builds the image.
 8. Release the docs at the same version: [The docs](#the-docs).
 
 A tag that isn't `v` plus the version in `server/CMakeLists.txt`, or that has no (or an empty)
