@@ -14,6 +14,7 @@
 
 #include "auth.hpp"
 #include "duckdb_sql.hpp"
+#include "duckdb_read_only.hpp"
 #include "instrumentation.hpp"
 #include "logging.hpp"
 #include "redact.hpp"
@@ -870,6 +871,18 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb
       rbac_(access != nullptr && !access->catalog_rules_only()),
       id_(std::move(id)),
       started_at_us_(NowMicros()) {
+  static const auto read_policy = [] {
+    auto policy = std::make_shared<chargewire_duckdb::ReadOnlyPolicy>(
+        chargewire_duckdb::ReadOnlyPolicy::Default());
+    policy->table_functions.insert({
+        "HARDCHARGER_SETTINGS", "HARDCHARGER_SESSIONS", "HARDCHARGER_METRICS",
+        "HARDCHARGER_ACTIVE_CONNECTIONS", "HARDCHARGER_SERVER_INFO", "HARDCHARGER_MONITOR_INFO",
+        "HARDCHARGER_LIVE_QUERIES", "HARDCHARGER_SERVER_SETTINGS", "HARDCHARGER_SESSION_SETTINGS",
+        "HARDCHARGER_GRANTS", "HARDCHARGER_ROLE_MEMBERS", "HARDCHARGER_ROLES", "HARDCHARGER_USERS",
+        "HARDCHARGER_POLICIES", "HARDCHARGER_EFFECTIVE_PRIVILEGES"});
+    return policy;
+  }();
+  set_read_only_policy(read_policy);
   // User connections are created in exactly one place, the DuckDBSession constructor,
   // and bound here right after it, before any statement runs on them (and before the
   // session is listed anywhere, so a refused one leaves nothing behind).
@@ -912,6 +925,19 @@ bool Session::StartIn(const std::string& catalog, const std::string& schema) {
            {"error", error.what()}});
     return false;
   }
+}
+
+void Session::SetReadOnly() {
+  CheckAlive();
+  DuckDBSession::SetReadOnly();
+  if (guard_) guard_->SetReadOnly();
+  read_only_session_ = true;
+}
+
+void Session::RequireWritableSqlFunction() {
+  if (!read_only_session()) return;
+  read_only_function_refused_ = true;
+  throw chargewire_duckdb::ReadOnlyRefusal("a Hardcharger administrative function");
 }
 
 void Session::CheckAlive() const {
@@ -1003,10 +1029,14 @@ std::string Session::PrepareProfile(const std::string& execution_id) {
   // The server's own settings on the session's connection: not the user's to check
   // (profiling_output names a file, which only an administrator may write).
   auto internal = [&](const std::string& sql) {
+    auto run = [&] {
+      if (read_only_session()) RunOwnSql(sql);
+      else chargewire_duckdb::RunSql(connection(), sql);
+    };
     if (guard_) {
-      guard_->RunInternal([&] { chargewire_duckdb::RunSql(connection(), sql); });
+      guard_->RunInternal(run);
     } else {
-      chargewire_duckdb::RunSql(connection(), sql);
+      run();
     }
   };
   if (mode != profile_mode_) {
@@ -1050,6 +1080,7 @@ void Session::Cancel(std::string_view reason) {
 
 void Session::BeginStatement() {
   interrupted_ = false;
+  read_only_function_refused_ = false;
   std::lock_guard lock(activity_mutex_);
   activity_.cancel_reason.clear();
 }
@@ -1204,6 +1235,7 @@ chargewire::StatementOutcome Session::RunCommand(const Piece& piece) {
     return {};
   }
   const std::string target = ParseKillSession(piece).value_or("");
+  if (read_only_session()) throw chargewire_duckdb::ReadOnlyRefusal("KILL SESSION");
   if (!admin()) {
     throw Error(ErrorCode::kPermissionDenied, "Only admin users can execute KILL SESSION", "42501");
   }
@@ -1348,6 +1380,9 @@ chargewire::StatementOutcome Session::Track(StatementKind kind, std::string_view
     execution->End(error.code() == ErrorCode::kStatementCancelled ? "cancelled" : "error", error_class, logged_error);
     LogFailed(id_fields, sql, logged_error);
     if (killed_) throw KilledError();
+    if (read_only_function_refused_.exchange(false)) {
+      throw chargewire_duckdb::ReadOnlyRefusal("a Hardcharger administrative function");
+    }
     throw;
   }
   execution->Produced();
@@ -1360,6 +1395,9 @@ chargewire::StatementOutcome Session::Track(StatementKind kind, std::string_view
         [this, id_fields, sql = std::string(sql)](const std::string& error) { LogFailed(id_fields, sql, error); },
         [this](const arrow::Status& status) {
       if (killed_) throw KilledError();
+      if (read_only_function_refused_.exchange(false)) {
+        throw chargewire_duckdb::ReadOnlyRefusal("a Hardcharger administrative function");
+      }
       if (interrupted_ && ClassifyStatementError(status.message()) == "cancelled") {
         throw Error(ErrorCode::kStatementCancelled, status.message(), "57014");
       }
@@ -1426,6 +1464,10 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
     for (const Piece& piece : pieces) {
       Step step{&piece};
       step.command = ParseSettingCommand(piece).has_value() || ParseKillSession(piece).has_value();
+      if (auto setting = ParseSettingCommand(piece)) CheckReadOnlySetting(*this, *setting);
+      if (read_only_session() && ParseKillSession(piece)) {
+        throw chargewire_duckdb::ReadOnlyRefusal("KILL SESSION");
+      }
       if (!step.command && rbac_ && authz::LooksLikeAccessControlStatement(piece.text)) {
         // As DuckDB sees the batch: one it can't parse fails as the syntax error it is;
         // one it would take for something else (SHOW GRANTS, RESET ROLE) is refused.
@@ -1497,6 +1539,7 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
 std::unique_ptr<chargewire::PreparedStatement> Session::Prepare(std::string_view sql) {
   CheckAlive();
   SessionScope scope(this);
+  read_only_function_refused_ = false;
   if (sql.find('\0') != std::string_view::npos) {
     throw Error(ErrorCode::kSqlError, "SQL text must not contain a NUL byte", "22021");
   }
@@ -1528,6 +1571,9 @@ std::unique_ptr<chargewire::PreparedStatement> Session::Prepare(std::string_view
                       : DuckDBSession::Prepare(sql);
   } catch (const Error& error) {
     record(false, LoggableError(sql, error.what()));
+    if (read_only_function_refused_.exchange(false)) {
+      throw chargewire_duckdb::ReadOnlyRefusal("a Hardcharger administrative function");
+    }
     throw;
   }
   record(true, "");

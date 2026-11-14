@@ -960,7 +960,14 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
   }
 }
 
+void SessionGuard::CheckReadOnlyCommand(const ParsedCommand& parsed) const {
+  if (read_only_ && !parsed.kind.starts_with("SHOW") && parsed.kind != "SET ROLE") {
+    throw Error(ErrorCode::kReadOnly, parsed.kind + " is not allowed in a read-only session", "25006");
+  }
+}
+
 chargewire::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parsed) {
+  CheckReadOnlyCommand(parsed);
   auto engine = owner_.engine_;
   auto state = StateOf(connection_);
   if (!state) {
@@ -1076,6 +1083,7 @@ std::unique_ptr<chargewire::PreparedStatement> SessionGuard::Prepare(
   RequireLive();
   if (!owner_.catalog_rules_only_) {
     if (auto command = ParseCommand(sql)) {
+      CheckReadOnlyCommand(*command);
       return std::make_unique<PreparedAccessControl>(std::move(*command));
     }
   }

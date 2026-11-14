@@ -443,4 +443,20 @@ TEST(ClientTlsDefaultTest, OnByDefaultAndOffOnlyWhenAsked) {
   EXPECT_TRUE(uri.use_tls);
 }
 
+TEST(ClientConfigReadOnly, EnvironmentIsExplicitAndCommandLineTakesPrecedence) {
+  ScopedEnv env("HARDCHARGER_CLIENT_READ_ONLY");
+  EnvSet("HARDCHARGER_CLIENT_READ_ONLY", "true");
+  ClientConfig config;
+  ResolveEnvironmentVariables(config);
+  EXPECT_TRUE(config.read_only);
+  config.read_only = false;
+  config.read_only_given = true;
+  ResolveEnvironmentVariables(config);
+  EXPECT_FALSE(config.read_only);
+  EnvSet("HARDCHARGER_CLIENT_READ_ONLY", "typo");
+  ClientConfig invalid;
+  ResolveEnvironmentVariables(invalid);
+  EXPECT_NE(invalid.invalid_option.find("HARDCHARGER_CLIENT_READ_ONLY"), std::string::npos);
+}
+
 }  // namespace hardcharger::client

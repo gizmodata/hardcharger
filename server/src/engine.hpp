@@ -113,6 +113,7 @@ class Session : public chargewire_duckdb::DuckDBSession {
                                                      const chargewire::MetadataFilter& filter) override;
   chargewire::OptionErrors SetOptions(const boost::json::object& options) override;
   boost::json::object Options() override;
+  void SetReadOnly() override;
   void Commit() override;
   void Rollback() override;
   chargewire::TransactionState Transaction() override;
@@ -150,6 +151,10 @@ class Session : public chargewire_duckdb::DuckDBSession {
   const std::string& id() const { return id_; }
   const chargewire::Principal& principal() const { return principal_; }
   bool admin() const { return principal_.role == "admin"; }
+  bool read_only_session() const { return read_only_session_; }
+  // Native SQL callbacks lose their typed error through DuckDB's C API. Remember
+  // this refusal so the statement boundary can return read_only / 25006.
+  void RequireWritableSqlFunction();
   // An administrator whose token carries no catalog_access rules: the superuser, who
   // sees and manages every session. A restricted administrator (admin token with rules)
   // is not one, so it sees only its own session, like a non-administrator.
@@ -259,6 +264,8 @@ class Session : public chargewire_duckdb::DuckDBSession {
   const int64_t started_at_us_;
   std::atomic<int> running_ = 0;
   std::atomic<bool> killed_ = false;
+  std::atomic<bool> read_only_session_ = false;
+  std::atomic<bool> read_only_function_refused_ = false;
   std::string end_reason_;  // Ending()'s, on the engine thread; empty: closed by its client
   std::atomic<bool> interrupted_ = false;  // the current statement was cancelled
   std::atomic<chargewire::TransactionState> transaction_ = chargewire::TransactionState::kNone;

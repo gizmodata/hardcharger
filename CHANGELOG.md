@@ -7,6 +7,16 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Server-enforced Chargewire `read_only` connections, independent of token roles, with
+  one-way transitions and `read_only` / SQLSTATE `25006` refusals. Hardcharger monitoring
+  queries and local timeout/tag settings remain available; access-control changes and
+  administrative mutations are refused, including commands prepared before transition.
+- The CLI accepts `--read-only` and `HARDCHARGER_CLIENT_READ_ONLY=true` to require a
+  server-confirmed read-only session, including after reconnecting. Servers without
+  support refuse the connection; ordinary connections keep their existing behavior.
+
 ### Changed
 
 - **The `-adbc` images' Quack driver moves to 1.0.4 (was 0.1.0-alpha.11): it now reaches DuckDB

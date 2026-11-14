@@ -40,6 +40,8 @@ struct ClientConfig {
   std::string username;
   std::string password;
   bool password_provided = false;
+  bool read_only = false;
+  bool read_only_given = false;
 
   // TLS
   bool use_tls = true;     // TLS unless --tls=false, HARDCHARGER_TLS=false or a URI's ?tls=false
