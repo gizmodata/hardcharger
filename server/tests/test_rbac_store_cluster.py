@@ -65,5 +65,5 @@ def test_init_sql_attach_errors_are_redacted(launcher):
         assert running.process.wait(timeout=60) == 1
         log = running.log()
         assert "init SQL failed" in log, log
-        assert "Connection refused" in log or "connection to server" in log, log  # the reason survives
+        assert "init SQL failed: [REDACTED: error of a credential statement]" in log, log
         assert secret not in log, log

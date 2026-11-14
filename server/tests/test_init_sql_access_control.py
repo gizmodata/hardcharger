@@ -7,6 +7,8 @@ fail with the error a session gets. A failing init statement never logs a creden
 
 import secrets
 
+import pytest
+
 from rbac import rbac_env, start_rbac_server
 
 PASSWORD = "pa$$w0rd-" + secrets.token_hex(nbytes=6)
@@ -49,23 +51,33 @@ def test_a_failing_access_control_statement_stops_the_server_without_logging_its
     assert PASSWORD not in log, log
 
 
-def test_without_access_control_init_sql_refuses_create_user_before_running_anything(launcher):
+@pytest.mark.parametrize("statement, diagnostic", [
+    (f"CREATE USER IF NOT EXISTS new_user WITH PASSWORD '{PASSWORD}';",
+     "[REDACTED: error of a credential statement]"),
+    ("CREATE ROLE new_role;",
+     "Hardcharger access control is not enabled on this server, so CREATE ROLE is not available"),
+])
+def test_without_access_control_init_sql_refuses_rbac_before_running_anything(launcher, statement, diagnostic):
     env = init_sql("CREATE TABLE ran_first (i INTEGER);",
-                   f"CREATE USER IF NOT EXISTS new_user WITH PASSWORD '{PASSWORD}';")
+                   statement)
     running = launcher.start(env=env, expect_up=False)
     assert running.process.wait(timeout=20) == 1
     log = running.log()
-    assert ("init SQL failed: Hardcharger access control is not enabled on this server, so CREATE USER is "
-            "not available") in log, log
+    assert f"init SQL failed: {diagnostic}" in log, log
     assert PASSWORD not in log, log
 
 
-def test_a_credential_statement_duckdb_rejects_is_logged_without_its_literals(launcher):
-    # DuckDB quotes the failing line ("LINE 1: ...") in a syntax error; CREATE SECRET's values
-    # aren't key=value pairs, so only dropping the statement's literals keeps them out.
-    env = init_sql(f"CREATE SECRET leaky (TYPE s3, KEY_ID 'key-id', SECRET '{PASSWORD}',, REGION 'x');")
+@pytest.mark.parametrize("statement, diagnostic", [
+    (f"CREATE SECRET leaky (TYPE s3, KEY_ID 'key-id', SECRET '{PASSWORD}',, REGION 'x');",
+     "[REDACTED: error of a credential statement]"),
+    ("SELECT FROM;", "syntax error"),
+])
+def test_rejected_init_sql_masks_sensitive_errors_and_preserves_ordinary_diagnostics(launcher, statement, diagnostic):
+    # DuckDB quotes the failing line in syntax errors. Suppress the entire error for
+    # credential statements, while ordinary syntax errors remain useful.
+    env = init_sql(statement)
     running = launcher.start(env=env, expect_up=False)
     assert running.process.wait(timeout=20) == 1
     log = running.log()
-    assert "init SQL failed" in log and "syntax error" in log, log  # the reason survives
+    assert "init SQL failed" in log and diagnostic in log, log
     assert PASSWORD not in log, log
