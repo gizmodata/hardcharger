@@ -102,11 +102,12 @@ bool LogEnabled(LogLevel level);
 // from here.
 std::string LoggableSql(std::string_view sql);
 
-// An error message as it may be logged or stored: a credential statement's error is
-// dropped whole (DuckDB's parser errors echo the statement), as is that of a statement
-// that cannot be read, and any credential value of the statement, connection-string
-// password or credential-setting value in another statement's error is removed.
-std::string LoggableError(std::string_view sql, std::string_view error);
+inline constexpr std::string_view kCredentialError = "[REDACTED: error of a credential statement]";
+
+// Stored errors of credential-bearing/unreadable statements are dropped whole. The
+// originating client still receives its error. credential_context carries a prepared
+// statement's classification without retaining or passing its raw SQL to public sinks.
+std::string LoggableError(std::string_view sql, std::string_view error, bool credential_context = false);
 
 // Whether a statement carries credentials: one LoggableSql and LoggableError redact whole
 // (CREATE SECRET, CREATE/ALTER USER, a credential setting, a statement that cannot be

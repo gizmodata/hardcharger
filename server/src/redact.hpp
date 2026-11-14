@@ -38,6 +38,7 @@ bool IsCredentialName(std::string_view name);
 //     is one literal or an expression. A bind placeholder (?, $1) is kept;
 //   - what a string literal or a quoted name holds goes through RedactCredentials (an
 //     ATTACH connection string, a URL);
+//   - comment bodies and escaped literals are concealed conservatively;
 //   - text longer than `limit` bytes ends at the last whole token that fits, then "…".
 // A statement that cannot be read (a string, quoted name or comment that never ends) is
 // `unreadable`, with no text: nothing of it may be logged.
@@ -47,9 +48,9 @@ struct RedactedSql {
 };
 RedactedSql RedactSql(std::string_view sql, std::size_t limit);
 
-// The credential values RedactSql masks in the whole of `sql`, as written and as their
-// literals read (the latter from 4 bytes up), for taking them out of an error message
-// that quotes them. None when the statement cannot be read.
-std::optional<std::vector<std::string>> CredentialValues(std::string_view sql);
+// Whether any part of the complete statement is sensitive, including placeholders,
+// comments, escaped literals and connection strings, even beyond the display limit.
+// None when unreadable. Callers must fail closed on that result.
+std::optional<bool> SqlHasCredentials(std::string_view sql);
 
 }  // namespace hardcharger

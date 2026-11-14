@@ -747,7 +747,7 @@ void SessionGuard::AuditDenied(const Error& error, std::string_view sql) {
         {{"kind", "access_control"},
          {"status", "denied"},
          {"user", identity_.user_name},
-         {"error", error.what()},
+         {"error", LoggableError(sql, error.what())},
          {"sql", LoggableSql(sql)},
          {"active_role", state ? state->active_role_name() : ""}});
 }

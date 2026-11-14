@@ -234,7 +234,7 @@ SPELLINGS = [
     ("ATTACH '/no-such-dir/{t}.duckdb' AS {t} (ENCRYPTION_KEY {m})", False),  # a bare word as the value
     ("attach '/no-such-dir/{t}.duckdb' as {t} (password'{m}')", False),
     ("SELECT 1; ATTACH '/no-such-dir/{t}.duckdb' AS {t} (TOKEN '{m}')", False),
-    ("PRAGMA add_parquet_key('k', '{m}') /* {t} */", False),
+    ("SELECT 1 AS {t}; PRAGMA add_parquet_key('k', '{m}')", False),
     ("ATTACH 'dbname={t} user=u password=''{m} {m}'' host=127.0.0.1 port=1' AS {t} (TYPE postgres)", False),
     # The value begins before the log's 4000-byte cut and ends after it.
     ("SELECT '" + "x" * 3800 + "' AS {t}, probe_m(1, token => '" + "{m}" * 30 + "')", True),
@@ -347,7 +347,7 @@ def test_error_quoting_the_value_is_masked(probe_server, admin):
     assert m in problem["detail"], problem  # the twin: the error does quote it (to its author)
     assert_recorded_without(server=probe_server, admin=admin, tag=tag, marker_value=m, sinks=("sql_statements",))
     row = SINKS["sql_statements"](probe_server, admin, tag)[0]
-    assert "syntax error" in row["prepare_error"], row
+    assert row["prepare_error"] == "[REDACTED: error of a credential statement]", row
 
 
 def test_unreadable_statement_is_recorded_redacted_whole(probe_server, admin):
@@ -448,3 +448,103 @@ def test_user_ddl_error_and_audit_record_under_access_control(launcher, store):
     assert errors and m not in repr(errors), errors
     statements = admin.run(sql="SELECT sql_text FROM _hardcharger_instr.sql_statements").to_pylist()
     assert m not in repr(statements) and tag in repr(statements), statements
+
+# Security-review regressions: errors may expose decoded or transformed credentials,
+# so every credential-bearing statement suppresses stored errors in their entirety.
+@pytest.mark.parametrize("value,expected", [
+    ("MKBARE_REVIEW", "MKBARE_REVIEW"),
+    ('"MKQUOTED_REVIEW"', "MKQUOTED_REVIEW"),
+    (r"E'\x4d\x4b\x48\x45\x58_REVIEW'", "MKHEX_REVIEW"),
+    ("'x!z'", "x!z"),
+    ("upper('mklower_review')", "MKLOWER_REVIEW"),
+])
+def test_review_error_values_are_suppressed(server, admin, value, expected):
+    admin.execute(sql="CREATE OR REPLACE MACRO review_echo(token) AS error(token)")
+    tag = tagged()
+    problem = admin.error(sql=f"SELECT review_echo(token => {value}) AS {tag}")
+    assert expected in problem["detail"]
+    assert_recorded_without(server=server, admin=admin, tag=tag, marker_value=expected)
+
+
+def test_review_prepared_errors_and_bind_values_are_suppressed(server, admin):
+    admin.execute(sql="CREATE OR REPLACE MACRO review_echo(token) AS error(token)")
+    for sql, parameters, value in [
+        ("SELECT review_echo(token => upper('mkprepared_review'))", None, "MKPREPARED_REVIEW"),
+        ("SELECT review_echo(token => ?)", ["MKBIND_REVIEW"], "MKBIND_REVIEW"),
+    ]:
+        prepared = admin.prepare(sql=sql)
+        response = admin.execute_prepared(prepared_id=prepared["prepared_id"], parameters=parameters, arrow=False)
+        assert response.status_code == 422 and value in response.text
+        assert_hidden(server=server, admin=admin, marker_value=value)
+
+
+@pytest.mark.parametrize("template", [
+    "SELECT 1 /* ATTACH 'a' (TOKEN '{m}') */ AS {t}",
+    "SELECT 1 /* f(token => 'a' || '{m}') */ AS {t}",
+    'SELECT struct_pack("' + 'x' * 100 + 'token" := \'{m}\') AS {t}',
+    'SELECT struct_pack("token"\u00a0:= \'{m}\') AS {t}',
+])
+def test_review_grammar_values_are_masked(server, admin, template):
+    m, tag = marker(), tagged()
+    admin.query(sql=template.format(m=m, t=tag))
+    assert_recorded_without(server=server, admin=admin, tag=tag, marker_value=m)
+
+
+def test_review_profiles_are_suppressed_and_resume(server, admin):
+    admin.execute(sql="SET hardcharger.capture_query_profile = 'standard'")
+    m = marker()
+    try:
+        admin.query(sql="SELECT 41 AS profile_before")
+        mode = admin.query(sql=f"SELECT current_setting('enable_profiling') AS mode, "
+                               f"struct_pack(token := '{m}') AS profile_secret").column("mode").to_pylist()
+        assert mode == [None], "profiling must be disabled before sensitive SQL executes"
+        prepared = admin.prepare(sql=f"SELECT struct_pack(token := '{m}') AS prepared_profile_secret")
+        assert admin.execute_prepared(prepared_id=prepared["prepared_id"]).status_code == 200
+        admin.query(sql="SELECT 43 AS profile_after")
+    finally:
+        admin.execute(sql="SET hardcharger.capture_query_profile = 'off'")
+    profiles = wait_for(read=lambda: len(rows := admin.query(
+        sql="SELECT query_profile::VARCHAR AS p FROM _hardcharger_instr.sql_executions WHERE query_profile IS NOT NULL").to_pylist()) >= 2 and rows)
+    assert profiles and m not in repr(profiles)
+    assert "profile_before" in repr(profiles) and "profile_after" in repr(profiles)
+    assert "profile_secret" not in repr(profiles)
+    assert_hidden(server=server, admin=admin, marker_value=m)
+
+
+def test_review_init_error_decoded_value_is_suppressed(launcher):
+    m = marker()
+    failed = launcher.start(args=["--init-sql-commands",
+        f"CREATE MACRO review_echo(token) AS error(token); SELECT review_echo(token => '{m}')"], expect_up=False)
+    assert failed.process.wait(timeout=30 * TIMEOUT_SCALE) != 0
+    assert "init SQL failed" in failed.log()
+    assert m not in failed.log()
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+def test_json_credential_literals_and_errors_are_masked(server, admin, prepared):
+    m, tag = marker(), tagged()
+    sql = f"SELECT error(json_extract_string('{{\"password\":\"{m}\"}}', '$.password')) AS {tag}"
+    if prepared:
+        handle = admin.prepare(sql=sql)
+        response = admin.execute_prepared(prepared_id=handle["prepared_id"], arrow=False)
+        assert response.status_code == 422 and m in response.text
+    else:
+        assert m in admin.error(sql=sql)["detail"]
+    assert_recorded_without(server=server, admin=admin, tag=tag, marker_value=m,
+                            sinks=("the log", "sql_statements", "the catalog log"))
+
+
+def test_connection_password_escaped_space_is_masked(server, admin):
+    m, tag = marker(), tagged()
+    # A successful literal read proves that SQL keeps the libpq backslash intact.
+    value = f"dbname=x password=prefix\\ {m} host=127.0.0.1"
+    assert admin.scalar(sql=f"SELECT '{value}' AS {tag}") == value
+    assert_recorded_without(server=server, admin=admin, tag=tag, marker_value=m)
+
+
+@pytest.mark.parametrize("name", ['"add_parquet_key"', '"AdD_PaRqUeT_KeY"'])
+def test_quoted_key_function_is_masked(server, admin, name):
+    # AES keys must have a supported length; include a separate searchable tag.
+    m, tag = uuid.uuid4().hex, tagged()
+    admin.execute(sql=f"PRAGMA {name}('{tag}', '{m}')")
+    assert_hidden(server=server, admin=admin, marker_value=m)

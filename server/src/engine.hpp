@@ -235,7 +235,7 @@ class Session : public chargewire_duckdb::DuckDBSession {
   // `ids`: what it is recorded and logged under.
   chargewire::StatementOutcome Track(StatementKind kind, std::string_view sql, const ExecutionIds& ids,
                                   const std::function<chargewire::StatementOutcome()>& work,
-                                  std::string_view shown = {});
+                                  std::string_view shown = {}, bool credential_context = false);
   // A new statement starts: the previous one's cancellation is over.
   void BeginStatement();
   // A catalog the server owns (instrumentation, logs) and what it is called in messages.
@@ -247,7 +247,7 @@ class Session : public chargewire_duckdb::DuckDBSession {
   void GuardManagedCatalog(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type, const ManagedCatalog& managed) const;
   // Turns DuckDB's profiler on or off for the next execution; returns where it will write
   // the profile (empty: none).
-  std::string PrepareProfile(const std::string& execution_id);
+  std::string PrepareProfile(const std::string& execution_id, bool allowed);
 
   Runtime& runtime_;
   const SensitivePaths& sensitive_paths_;
@@ -268,10 +268,7 @@ class Session : public chargewire_duckdb::DuckDBSession {
   Settings settings_;
   mutable std::mutex activity_mutex_;
   Activity activity_;
-  // Each prepared statement's Chargewire id (p_...), its id in the logs and instrumentation.
-  std::map<const chargewire::PreparedStatement*, std::string> prepared_statement_ids_;
-  // Each prepared statement's text, as the logs show it (for its executions' activity).
-  std::map<const chargewire::PreparedStatement*, std::string> prepared_sql_;
+
 };
 
 // The session whose statement this thread is running, for the SQL functions; null

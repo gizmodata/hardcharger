@@ -367,28 +367,18 @@ std::string LoggableSql(std::string_view sql) {
 
 bool IsCredentialStatement(std::string_view sql) {
   if (SensitiveStatement(sql)) return true;
-  const auto values = CredentialValues(sql);
-  return !values || !values->empty();
+  return SqlHasCredentials(sql).value_or(true);
 }
 
-std::string LoggableError(std::string_view sql, std::string_view error) {
-  // DuckDB's parser errors and "LINE n: ..." excerpts echo the statement; the error of
-  // a credential statement is dropped whole, and so is that of a statement that cannot
-  // be read (nothing says which part of it the error quotes).
-  if (SensitiveStatement(sql)) return "[REDACTED: error of a credential statement]";
-  auto values = CredentialValues(sql);
-  if (!values) return "[REDACTED: error of a statement that could not be read]";
+std::string LoggableError(std::string_view sql, std::string_view error, bool credential_context) {
+  // Values can be transformed before an error quotes them (decoding, case folding,
+  // concatenation, casts, bound parameters). Literal substitution cannot protect them.
+  if (credential_context || SensitiveStatement(sql)) return std::string(kCredentialError);
+  const auto credentials = SqlHasCredentials(sql);
+  if (!credentials) return "[REDACTED: error of a statement that could not be read]";
+  if (*credentials) return std::string(kCredentialError);
   std::string text(error);
   if (auto at = text.find("\nLINE "); at != std::string::npos) text.resize(at);
-  // An error can quote a token of the statement ("syntax error at or near ..."): the
-  // values masked in the statement are masked here too, the longest first (one may
-  // begin with another).
-  std::sort(values->begin(), values->end(), [](const auto& a, const auto& b) { return a.size() > b.size(); });
-  for (const std::string& value : *values) {
-    for (std::size_t at = 0; (at = text.find(value, at)) != std::string::npos; at += 3) {
-      text.replace(at, value.size(), "***");
-    }
-  }
   return MaskCredentials(std::move(text));
 }
 

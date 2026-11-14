@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <chrono>
 
 #include "logging.hpp"
 #include "redact.hpp"
@@ -236,7 +237,7 @@ TEST(Redaction, ConnectionStringsAndUrlsInsideLiterals) {
   for (const char* sql : {"ATTACH $$dbname=x password='S3CR3T S3CR3T' host=h$$ AS d (TYPE postgres)",
                           "ATTACH E'dbname=x password=\\'S3CR3T S3CR3T\\' host=h' AS d (TYPE postgres)",
                           "ATTACH 'dbname=x password=''S3CR3T\\'' S3CR3T'' host=h' AS d (TYPE postgres)"}) {
-    ExpectMasked(sql, "ATTACH 'dbname=x password=*** host=h' AS d (TYPE postgres)");
+    ExpectMasked(sql, "AS d (TYPE postgres)");
   }
   for (const char* sql : {"SELECT * FROM read_csv('https://h/f.csv?api_key=S3CR3T')",
                           "SELECT * FROM read_csv('https://h/f.csv?v=1&key=S3CR3T')",
@@ -299,9 +300,9 @@ TEST(Redaction, ErrorQuotingAMaskedValueIsMasked) {
   const std::string sql = "CALL serve('h', token => 'S3CR3T-1' 'S3CR3T-1b')";
   const std::string logged = LoggableError(sql, "Parser Error: syntax error at or near \"'S3CR3T-1b'\"\nLINE 1: " + sql);
   EXPECT_EQ(logged.find(kSecret), std::string::npos) << logged;
-  EXPECT_NE(logged.find("syntax error at or near"), std::string::npos) << logged;
+  EXPECT_EQ(logged, hardcharger::kCredentialError);
   const std::string converted = LoggableError("ATTACH 'x.db' AS d (ENCRYPTION_KEY 'S3CR3T')", "Invalid Input Error: bad key S3CR3T");
-  EXPECT_EQ(converted, "Invalid Input Error: bad key ***");
+  EXPECT_EQ(converted, hardcharger::kCredentialError);
   // An error of a statement without credential values is kept.
   EXPECT_EQ(LoggableError("SELECT nofn(1)", "Catalog Error: Scalar Function with name nofn does not exist!"),
             "Catalog Error: Scalar Function with name nofn does not exist!");
@@ -326,4 +327,72 @@ TEST(Redaction, AStatementWithACredentialValueIsACredentialStatement) {
   EXPECT_TRUE(hardcharger::IsCredentialStatement("SELECT 'S3CR3T"));
   EXPECT_FALSE(hardcharger::IsCredentialStatement("ATTACH 'x.db' AS d"));
   EXPECT_FALSE(hardcharger::IsCredentialStatement("SELECT token FROM t WHERE id = 7"));
+}
+
+TEST(Redaction, ReviewCredentialClassificationIncludesEveryMaskedForm) {
+  for (const std::string sql : std::vector<std::string>{"SELECT f(token => ?)", "SELECT f(token => $1)",
+                                "SELECT f(token => bare_value)", "SELECT f(token => \"quoted_value\")",
+                                "SELECT f(token => 'xy')", "SELECT f(token => upper('secret_value'))",
+                                "SELECT 'postgresql://u:secret_value@h'", "SELECT 'password=secret_value'",
+                                "SELECT 1 /* TOKEN 'secret_value' */",
+                                "SELECT '" + std::string(5000, 'x') + "', f(token => ?)"}) {
+    EXPECT_TRUE(hardcharger::IsCredentialStatement(sql)) << sql;
+    EXPECT_EQ(LoggableError(sql, "arbitrarily transformed credential"),
+              "[REDACTED: error of a credential statement]") << sql;
+  }
+}
+
+TEST(Redaction, ReviewCommentLongNamesAndUnicodeSpaces) {
+  for (const std::string sql : std::vector<std::string>{"SELECT 1 /* ATTACH 'a' (TOKEN 'S3CR3T') */ AS kept",
+                                "SELECT 1 /* f(token => 'a' || 'S3CR3T') */ AS kept",
+                                "SELECT struct_pack(\"" + std::string(100, 'x') + "token\" := 'S3CR3T') AS kept",
+                                "SELECT struct_pack(\"token\"\xc2\xa0:= 'S3CR3T') AS kept"}) {
+    ExpectMasked(sql, "kept");
+    EXPECT_TRUE(hardcharger::IsCredentialStatement(sql));
+  }
+}
+
+TEST(Redaction, ReviewMalformedAuthoritiesHaveBoundedCost) {
+  std::string text;
+  for (int i = 0; i < 10000; i++) text += "://u:x";
+  const auto started = std::chrono::steady_clock::now();
+  EXPECT_EQ(hardcharger::RedactCredentials(text), text);
+  EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(2));
+  EXPECT_EQ(hardcharger::RedactCredentials("postgres://u:p@ss@h/x https://a:b@host/y"),
+            "postgres://u:***@h/x https://a:***@host/y");
+}
+
+TEST(Redaction, JsonCredentialsInsideSqlLiterals) {
+  for (const char* sql : {R"(SELECT '{"password": "S3CR3T"}' AS kept)",
+                          R"(SELECT $j${"api_key": "S3CR3T"}$j$ AS kept)",
+                          R"(SELECT error(json_extract_string('{"token":"S3CR3T"}', '$.token')) AS kept)"}) {
+    ExpectMasked(sql, "kept");
+    EXPECT_TRUE(hardcharger::IsCredentialStatement(sql));
+    EXPECT_EQ(LoggableError(sql, "decoded value S3CR3T"), hardcharger::kCredentialError);
+  }
+  EXPECT_EQ(LoggableSql(R"(SELECT '{"ordinary": "value"}' AS kept)"),
+            R"(SELECT '{"ordinary": "value"}' AS kept)");
+}
+
+TEST(Redaction, ConnectionPasswordsWithEscapedDelimiters) {
+  for (const char* body : {R"(dbname=x password=prefix\ S3CR3T host=h)",
+                           R"(dbname=x password=prefix\'S3CR3T host=h)",
+                           R"(dbname=x password=prefix\"S3CR3T host=h)",
+                           R"(dbname=x password=prefix\;S3CR3T host=h)",
+                           R"(dbname=x password=prefix\)S3CR3T host=h)"}) {
+    const std::string masked = hardcharger::RedactCredentials(body);
+    EXPECT_EQ(masked, "dbname=x password=*** host=h");
+    EXPECT_EQ(hardcharger::RedactCredentials(masked), masked);
+    ExpectMasked("SELECT $q$" + std::string(body) + "$q$ AS kept", "kept");
+  }
+}
+
+TEST(Redaction, QuotedAndQualifiedKeyFunctions) {
+  for (const char* sql : {R"(PRAGMA "add_parquet_key"('k', 'S3CR3T'); SELECT 1 AS kept)",
+                          R"(CALL "AdD_PaRqUeT_KeY"('k', 'S3CR3T'); SELECT 1 AS kept)",
+                          R"(CALL main.add_parquet_key('k', 'S3CR3T'); SELECT 1 AS kept)",
+                          R"(CALL "main"."add_parquet_key"('k', 'S3CR3T'); SELECT 1 AS kept)"}) {
+    ExpectMasked(sql, "kept");
+    EXPECT_TRUE(hardcharger::IsCredentialStatement(sql));
+  }
 }

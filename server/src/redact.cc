@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <regex>
 
 namespace hardcharger {
 
@@ -13,15 +12,6 @@ namespace {
 constexpr std::string_view kCredentialNames[] = {
     "password", "passwd",  "pwd",     "passphrase",  "secret",         "token", "access_key", "accountkey",
     "account_key", "apikey", "api_key", "private_key", "encryption_key", "sig",   "signature"};
-
-std::string NamesPattern() {
-  std::string pattern;
-  for (const auto name : kCredentialNames) {
-    if (!pattern.empty()) pattern += '|';
-    pattern += name;
-  }
-  return pattern;
-}
 
 std::string Lower(std::string_view text) {
   std::string out(text);
@@ -37,24 +27,133 @@ bool IsCredentialName(std::string_view name) {
 }
 
 std::string RedactCredentials(std::string text) {
-  // The value of a credential key: quoted (libpq's backslash escapes understood; a quote
-  // that never closes runs to the end), or up to whitespace, a quote or the end of a
-  // clause. (A URL's '&' does not end it: in libpq's keyword form '&' may be part of a
-  // password, so the rest of a query string goes too rather than part of a password stay.)
-  static const std::regex kPair(
-      "((?:" + NamesPattern() + R"(|x-amz-[a-z-]+)\s*(?:=>|:=|=)\s*)([eE]?'[^'\\]*(?:\\.[^'\\]*)*'?|"[^"]*"|[^\s"';)]+))",
-      std::regex::icase | std::regex::optimize);
-  static const std::regex kQuoted("('[a-z0-9_.-]*(?:" + NamesPattern() + R"()'\s*:\s*)('[^']*'))",
-                                  std::regex::icase | std::regex::optimize);
-  // A URL's ?key=... (an API key's usual parameter), up to the next parameter.
-  static const std::regex kQueryKey(R"(([?&]key=)[^&\s"']+)", std::regex::icase | std::regex::optimize);
-  // user:password@ in an authority, the password up to the last '@' before the host.
-  static const std::regex kAuthority(R"((://[^:/@\s"']*:)[^\s"']*@)", std::regex::optimize);
-  text = std::regex_replace(text, kPair, "$1***");
-  text = std::regex_replace(text, kQuoted, "$1'***'");
-  text = std::regex_replace(text, kQueryKey, "$1***");
-  text = std::regex_replace(text, kAuthority, "$1***@");
-  return text;
+  // Read key/value text iteratively: no regex recursion/backtracking on untrusted
+  // error messages or connection strings. Every consumed byte is visited O(1) times.
+  auto name_char = [](unsigned char c) {
+    return std::isalnum(c) || c == '_' || c == '.' || c == '-';
+  };
+  auto spaces = [&](std::size_t at) {
+    while (at < text.size() && std::isspace(static_cast<unsigned char>(text[at]))) at++;
+    return at;
+  };
+  auto value_end = [&](std::size_t at, bool query_key) {
+    if (query_key) {
+      while (at < text.size() && text[at] != '&' && text[at] != '\'' && text[at] != '"' &&
+             !std::isspace(static_cast<unsigned char>(text[at]))) at++;
+      return at;
+    }
+    if (at + 1 < text.size() && (text[at] == 'e' || text[at] == 'E') && text[at + 1] == '\'') at++;
+    if (at < text.size() && (text[at] == '\'' || text[at] == '"')) {
+      const char quote = text[at++];
+      while (at < text.size()) {
+        if (text[at] == '\\') {
+          at += std::min<std::size_t>(2, text.size() - at);
+        } else if (text[at++] == quote) {
+          if (at < text.size() && text[at] == quote) at++;
+          else return at;
+        }
+      }
+      return at;  // an unterminated value is concealed through the end
+    }
+    // '&' may be part of a libpq password; conservatively conceal the remainder
+    // of that query string as well, matching the connection-string policy.
+    while (at < text.size()) {
+      // libpq permits a backslash to escape any following byte, including a
+      // delimiter. Consume the pair before considering the value's boundary.
+      if (text[at] == '\\') {
+        at += std::min<std::size_t>(2, text.size() - at);
+      } else if (std::isspace(static_cast<unsigned char>(text[at])) ||
+                 std::string_view("\"';)").find(text[at]) != std::string_view::npos) {
+        break;
+      } else {
+        at++;
+      }
+    }
+    return at;
+  };
+  std::string pairs;
+  pairs.reserve(text.size());
+  for (std::size_t at = 0; at < text.size();) {
+    const std::size_t start = at;
+    const bool quoted = text[at] == '\'' || text[at] == '"';
+    const char quote = text[at];
+    const std::size_t name_start = at + (quoted ? 1 : 0);
+    std::size_t name_end = name_start;
+    while (name_end < text.size() && name_char(text[name_end])) name_end++;
+    if (name_end == name_start) {
+      pairs += text[at++];
+      continue;
+    }
+    const std::string name = Lower(std::string_view(text).substr(name_start, name_end - name_start));
+    const bool query_key = !quoted && name == "key" && start > 0 && (text[start - 1] == '?' || text[start - 1] == '&');
+    const bool credential = IsCredentialName(name) || name.starts_with("x-amz-") || query_key;
+    std::size_t op = spaces(name_end);
+    bool assignment = false;
+    if (quoted && name_end < text.size() && text[name_end] == quote) {
+      op = spaces(name_end + 1);
+      assignment = op < text.size() && text[op] == ':';
+      if (assignment) op++;
+    } else if (!quoted && op < text.size()) {
+      if (text[op] == '=') {
+        op++;
+        if (op < text.size() && text[op] == '>') op++;
+        assignment = true;
+      } else if (text[op] == ':' && op + 1 < text.size() && text[op + 1] == '=') {
+        op += 2;
+        assignment = true;
+      }
+    }
+    if (credential && assignment) {
+      const auto value = spaces(op);
+      const auto end = value_end(value, query_key);
+      pairs.append(text, start, value - start);
+      pairs += quoted ? "'***'" : "***";
+      at = end;
+    } else {
+      // At a quote leave its body available to recognize embedded connection text.
+      const auto end = quoted ? start + 1 : name_end;
+      pairs.append(text, start, end - start);
+      at = end;
+    }
+  }
+  text = std::move(pairs);
+  // Each whitespace/quote-delimited segment is scanned once. In particular, repeated
+  // malformed ://user: prefixes without @ must not retry every remaining suffix.
+  std::string out;
+  out.reserve(text.size());
+  for (std::size_t start = 0; start < text.size();) {
+    auto delimiter = [](unsigned char c) { return std::isspace(c) || c == '\'' || c == '"'; };
+    if (delimiter(text[start])) {
+      out += text[start++];
+      continue;
+    }
+    std::size_t end = start;
+    while (end < text.size() && !delimiter(text[end])) end++;
+    const std::string_view segment(text.data() + start, end - start);
+    const auto last_at = segment.rfind('@');
+    std::size_t password = std::string_view::npos;
+    if (last_at != std::string_view::npos) {
+      for (std::size_t i = 0; i + 3 < last_at; i++) {
+        if (segment.substr(i, 3) != "://") continue;
+        std::size_t colon = i + 3;
+        while (colon < last_at && segment[colon] != ':' && segment[colon] != '/' && segment[colon] != '@') colon++;
+        if (colon < last_at && segment[colon] == ':') {
+          password = colon + 1;
+          break;
+        }
+        i = colon;
+      }
+    }
+    if (password == std::string_view::npos) {
+      out += segment;
+    } else {
+      out += segment.substr(0, password);
+      out += "***";
+      out += segment.substr(last_at);
+    }
+    start = end;
+  }
+  return out;
 }
 
 std::string RedactCredentials(std::string text, const std::vector<std::string>& secrets) {
@@ -96,6 +195,21 @@ bool IsWordChar(char c) {
   return std::isalnum(u) || c == '_' || c == '.' || u >= 0x80;
 }
 
+// DuckDB normalizes Unicode space characters before parsing. Recognize their UTF-8
+// encodings before identifiers, including when a space follows a quoted name.
+std::size_t SpaceBytes(std::string_view text, std::size_t at) {
+  if (at >= text.size()) return 0;
+  if (std::isspace(static_cast<unsigned char>(text[at]))) return 1;
+  const auto tail = text.substr(at);
+  if (tail.starts_with("\xc2\xa0")) return 2;
+  if (tail.size() < 3) return 0;
+  const auto last = static_cast<unsigned char>(tail[2]);
+  if (tail.starts_with("\xe1\x9a\x80") || tail.starts_with("\xe2\x81\x9f") ||
+      tail.starts_with("\xe3\x80\x80") || tail.starts_with("\xef\xbb\xbf") ||
+      (tail.starts_with("\xe2\x80") && ((last >= 0x80 && last <= 0x8b) || last == 0xa8 || last == 0xa9 || last == 0xaf))) return 3;
+  return 0;
+}
+
 class Lexer {
  public:
   explicit Lexer(std::string_view sql) : sql_(sql) {}
@@ -106,8 +220,8 @@ class Lexer {
     if (at_ >= n) return {Kind::kEnd, {}};
     const char c = sql_[at_];
     auto made = [&](Kind kind) { return Lexeme{kind, sql_.substr(start, at_ - start)}; };
-    if (std::isspace(static_cast<unsigned char>(c))) {
-      while (at_ < n && std::isspace(static_cast<unsigned char>(sql_[at_]))) at_++;
+    if (SpaceBytes(sql_, at_) != 0) {
+      while (const auto bytes = SpaceBytes(sql_, at_)) at_ += bytes;
       return made(Kind::kSpace);
     }
     if (StartsComment(at_)) {
@@ -115,7 +229,7 @@ class Lexer {
         while (at_ < n && sql_[at_] != '\n' && sql_[at_] != '\r') at_++;
         return made(Kind::kComment);
       }
-      int depth = 0;  // block comments nest
+      std::size_t depth = 0;  // block comments nest
       do {
         if (at_ + 1 >= n) return Unreadable();
         if (sql_[at_] == '/' && sql_[at_ + 1] == '*') {
@@ -147,7 +261,7 @@ class Lexer {
       // $$..$$ or $tag$..$tag$ (a tag is a name, so $1 is a parameter, not a tag).
       std::size_t tag_end = at_ + 1;
       if (tag_end < n && IsWordChar(sql_[tag_end]) && !std::isdigit(static_cast<unsigned char>(sql_[tag_end]))) {
-        while (tag_end < n && IsWordChar(sql_[tag_end]) && sql_[tag_end] != '.') tag_end++;
+        while (tag_end < n && IsWordChar(sql_[tag_end]) && sql_[tag_end] != '.' && SpaceBytes(sql_, tag_end) == 0) tag_end++;
       }
       if (tag_end < n && sql_[tag_end] == '$') {
         const std::string_view tag = sql_.substr(at_, tag_end - at_ + 1);
@@ -157,11 +271,11 @@ class Lexer {
         return made(Kind::kString);
       }
       at_++;
-      while (at_ < n && IsWordChar(sql_[at_])) at_++;
+      while (at_ < n && IsWordChar(sql_[at_]) && SpaceBytes(sql_, at_) == 0) at_++;
       return made(Kind::kWord);
     }
     if (IsWordChar(c)) {
-      while (at_ < n && IsWordChar(sql_[at_])) at_++;
+      while (at_ < n && IsWordChar(sql_[at_]) && SpaceBytes(sql_, at_) == 0) at_++;
       // A literal with a one-letter prefix (E'..', x'..', b'..'): one token. Only E'..'
       // has backslash escapes. Any other word before a quote is a word of its own
       // (PASSWORD'..' is a name and its value).
@@ -248,29 +362,47 @@ std::string Quoted(std::string_view body, char quote) {
   return out;
 }
 
-// A literal or quoted name with the credentials inside it (a connection string's, a URL's)
-// masked; as written when it holds none.
-std::string MaskedInside(std::string_view token, char quote) {
-  if (token.find('=') == std::string_view::npos && token.find("://") == std::string_view::npos) {
+// Escaped strings can encode credential names or connection strings. Treat them
+// conservatively, without trying to duplicate DuckDB's escape decoder.
+bool Escaped(std::string_view token) {
+  return token.size() > 2 && (token[0] == 'e' || token[0] == 'E') && token[1] == '\'' &&
+         token.find('\\') != std::string_view::npos;
+}
+
+std::string MaskedInside(std::string_view token, char quote, bool& credentials) {
+  if (Escaped(token)) {
+    credentials = true;
+    return "'***'";
+  }
+  // The helper also recognizes quoted JSON/struct keys followed by a colon.
+  if (token.find_first_of("=:") == std::string_view::npos) {
     return std::string(token);
   }
   const std::string body = Body(token);
   std::string masked = RedactCredentials(body);
-  return masked == body ? std::string(token) : Quoted(masked, quote);
+  if (masked == body) return std::string(token);
+  credentials = true;
+  return Quoted(masked, quote);
 }
 
-// A quoted name, or a literal used as a key, that is a credential's. (No name is long.)
-bool IsName(std::string_view token) { return token.size() <= 80 && IsCredentialName(Lower(Body(token))); }
+bool IsName(std::string_view token) { return Escaped(token) || IsCredentialName(Lower(Body(token))); }
 
-// A comment as it may be logged: it can hold a statement of its own (one commented out).
-std::string MaskedComment(std::string_view comment) { return RedactCredentials(std::string(comment)); }
+bool IsKeyFunction(std::string_view name) {
+  return name == "add_parquet_key" || name.ends_with(".add_parquet_key");
+}
+
+// Comments may hold arbitrary commented-out credential expressions. Their bodies
+// are never retained; marking them sensitive also keeps them out of errors/profiles.
+std::string_view MaskedComment(std::string_view comment) {
+  return comment.starts_with("--") ? "-- ***" : "/* *** */";
+}
 
 constexpr std::string_view kMask = "***";
 constexpr std::string_view kCut = "\xe2\x80\xa6";  // …
 
 // One pass over the statement's tokens: writes the loggable text (when `text` is given)
-// and collects the masked values (when `values` is). False when it cannot be read.
-bool Scan(std::string_view sql, std::size_t limit, std::string* text, std::vector<std::string>* values) {
+// and identifies sensitive content independently of the display limit. False if unreadable.
+bool Scan(std::string_view sql, std::size_t limit, std::string* text, bool& credentials) {
   Lexer lexer(sql);
   std::optional<Lexeme> held;  // read while finding a value's end; handled next
   auto next = [&] {
@@ -304,9 +436,9 @@ bool Scan(std::string_view sql, std::size_t limit, std::string* text, std::vecto
       "except", "intersect", "returning", "on",       "join",  "using", "as",     "window", "qualify"};
   // Consumes a value and writes *** for it. False when the statement cannot be read.
   auto mask_value = [&](Shape shape) {
-    int depth = 0;          // brackets open inside the value
-    int cases = 0;          // CASE ... END open inside it (its AND and OR are the value's)
-    int parts = 0;
+    std::size_t depth = 0;  // brackets open inside the value
+    std::size_t cases = 0;          // CASE ... END open inside it (its AND and OR are the value's)
+    std::size_t parts = 0;
     std::string_view only;  // the value, while it is a single word or operator
     std::string spaces;     // after the value's last token: kept
     for (;;) {
@@ -315,7 +447,8 @@ bool Scan(std::string_view sql, std::size_t limit, std::string* text, std::vecto
       if (l.kind == Kind::kSpace || l.kind == Kind::kComment) {
         // Before the value they are kept; inside or after it a comment goes with it.
         if (parts == 0) {
-          emit(l.kind == Kind::kComment && fits(l.text.size()) ? MaskedComment(l.text) : std::string(l.text));
+          if (l.kind == Kind::kComment) credentials = true;
+          emit(l.kind == Kind::kComment ? MaskedComment(l.text) : l.text);
         } else if (l.kind == Kind::kSpace) {
           spaces += l.text;
         }
@@ -344,10 +477,6 @@ bool Scan(std::string_view sql, std::size_t limit, std::string* text, std::vecto
       if (l.kind == Kind::kClose) depth--;
       only = parts++ == 0 && l.kind != Kind::kString ? l.text : std::string_view();
       spaces.clear();
-      if (l.kind == Kind::kString && values != nullptr) {
-        values->emplace_back(l.text);
-        if (std::string body = Body(l.text); body.size() >= 4) values->push_back(std::move(body));
-      }
     }
     if (parts > 0) {
       const bool placeholder = only == "?" || (only.size() > 1 && only.starts_with('$'));
@@ -361,12 +490,13 @@ bool Scan(std::string_view sql, std::size_t limit, std::string* text, std::vecto
   After after = After::kNothing;
   bool first = true;    // the next token starts a statement
   bool attach = false;  // in an ATTACH, whose options take a bare word as a value: (TOKEN abc)
-  while (!cut) {
+  while (true) {
     const Lexeme l = next();
     if (l.kind == Kind::kUnreadable) return false;
     if (l.kind == Kind::kEnd) break;
     if (l.kind == Kind::kSpace || l.kind == Kind::kComment) {
-      emit(l.kind == Kind::kComment && fits(l.text.size()) ? MaskedComment(l.text) : std::string(l.text));
+      if (l.kind == Kind::kComment) credentials = true;
+      emit(l.kind == Kind::kComment ? MaskedComment(l.text) : l.text);
       continue;
     }
     if (first) attach = l.kind == Kind::kWord && Lower(l.text) == "attach";
@@ -393,28 +523,23 @@ bool Scan(std::string_view sql, std::size_t limit, std::string* text, std::vecto
         emit(l.text);
       }
       if (shape) {
+        credentials = true;  // includes placeholders, bare values and empty/malformed values
         if (!mask_value(*shape)) return false;
         continue;
       }
     }
-    // A token longer than what may still be written is never looked into.
-    if (!fits(l.text.size())) {
-      emit(l.text);
-      break;
-    }
     if (l.kind == Kind::kWord) {
-      // (A no-break space, which DuckDB reads as a space, is no part of the name.)
-      std::string name = Lower(l.text);
-      while (!name.empty() && static_cast<unsigned char>(name.back()) >= 0x80) name.pop_back();
+      const std::string name = Lower(l.text);
       // PRAGMA add_parquet_key('name', '<key>'): the key is an argument without a name.
-      after = IsCredentialName(name) ? After::kName : name == "add_parquet_key" ? After::kKeyFunction : After::kNothing;
+      after = IsCredentialName(name) ? After::kName : IsKeyFunction(name) ? After::kKeyFunction : After::kNothing;
       emit(l.text);
     } else if (l.kind == Kind::kQuotedName) {
       if (IsName(l.text)) after = After::kName;
-      emit(text != nullptr ? MaskedInside(l.text, '"') : std::string());
+      else if (IsKeyFunction(Lower(Body(l.text)))) after = After::kKeyFunction;
+      emit(MaskedInside(l.text, '"', credentials));
     } else if (l.kind == Kind::kString) {
       if (IsName(l.text)) after = After::kLiteralKey;  // {'password': '..'}
-      emit(text != nullptr ? MaskedInside(l.text, '\'') : std::string());
+      emit(MaskedInside(l.text, '\'', credentials));
     } else {
       emit(l.text);
     }
@@ -426,17 +551,18 @@ bool Scan(std::string_view sql, std::size_t limit, std::string* text, std::vecto
 
 RedactedSql RedactSql(std::string_view sql, std::size_t limit) {
   RedactedSql out;
-  if (!Scan(sql, limit, &out.text, nullptr)) {
+  bool credentials = false;
+  if (!Scan(sql, limit, &out.text, credentials)) {
     out.text.clear();
     out.unreadable = true;
   }
   return out;
 }
 
-std::optional<std::vector<std::string>> CredentialValues(std::string_view sql) {
-  std::vector<std::string> values;
-  if (!Scan(sql, 0, nullptr, &values)) return std::nullopt;
-  return values;
+std::optional<bool> SqlHasCredentials(std::string_view sql) {
+  bool credentials = false;
+  if (!Scan(sql, 0, nullptr, credentials)) return std::nullopt;
+  return credentials;
 }
 
 }  // namespace hardcharger
