@@ -9,6 +9,23 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- **A finished statement no longer answers `"state": "running"` with its result attached**
+  ([#42](https://github.com/gizmodata/hardcharger/issues/42)). A statement without rows (INSERT,
+  UPDATE, DELETE, `CREATE TABLE ... AS`, SET, BEGIN, COMMIT, any DDL) sent with
+  `Accept: application/vnd.apache.arrow.stream`, as the drivers and the documented `curl`
+  example send it, could answer `{"state":"running","result":{"kind":"update","rows_affected":1}}`:
+  the server set the statement's result a moment before its state, and answered in between. It
+  has been so since the first release. It showed when the machine was busy or small: about 1
+  answer in 700 on four CPUs, nearly every answer on one (a one-CPU container). A client that
+  reads `state` then asked once more for a statement that was over: the ADBC driver sent three
+  requests for an INSERT instead of two. The result and the state are now set in one step
+  (Chargewire 2.4.2), and the answer comes no later than before.
+- A cancel or a statement timeout that arrived in that same moment, after the statement's
+  change had been made, ended the statement as `cancelled` (with a `statement_cancelled` or
+  `statement_timeout` error) although its rows were written and its answer had reported
+  `rows_affected`. Such a statement is now `succeeded`: a cancellation that comes too late to
+  stop the work changes nothing. A cancellation that reaches a statement while it runs stops
+  it as before.
 - Enable Android release code and resource optimization, preserve JNI entry points,
   and verify the optimized app and its bundled crash mappings before upload.
 - Remove test-order and startup-log timing dependencies from the metrics and health
