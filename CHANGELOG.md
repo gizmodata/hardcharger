@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.12.1] - 2026-11-14
+
 ### Changed
 
 - The web UI's JavaScript client moves from chargewire-js 2.3.5 to 2.3.6 (`ui/vendor`; the same
