@@ -7,6 +7,44 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- **The `-adbc` images' Quack driver moves to 1.0.4 (was 0.1.0-alpha.11): it now reaches DuckDB
+  2.0 Quack servers, and no longer DuckDB 1.5 ones.** Quack 1.x speaks Quack protocol version 3,
+  the one DuckDB 2.0's `quack_serve` serves; the alpha spoke DuckDB 1.5's (version 1) and failed
+  its handshake with a DuckDB 2.0 server (tried against Hardcharger 2.12.0 serving Quack). A
+  connection to a DuckDB 1.5 Quack server now fails at connect (`Failed to deserialize: expected
+  end of object, but found field id: 7`, from a DuckDB 1.5.6 server): move that DuckDB to 2.0, or
+  keep an `-adbc` image up to 2.12.1 for it. The driver's
+  [changelog](https://github.com/gizmodata/adbc-driver-quack/blob/main/CHANGELOG.md) lists what
+  1.0 fixed since the alpha, among them a naive `TIMESTAMP` coming back as UTC, `TIMESTAMP_NS`
+  losing its nanoseconds, and dates, times, UUIDs and intervals nested in LIST/STRUCT/MAP coming
+  back NULL.
+- The `-adbc` images bundle the Oracle ADBC driver 1.0.6 (was 1.0.1) and the Db2 driver 0.2.6
+  (was 0.2.1), both now passing the adbc-drivers.org validation suite. Among their fixes: Oracle
+  dates before 1677 or after 2262 read back exactly (`0001-01-01` came back as `1754-08-30`), a
+  bound parameter stream runs every batch (only the first ran), and a Db2 `BLOB`/`CLOB` in a
+  NOT NULL column keeps its first byte. Two changes to expect: both drivers refuse an unknown
+  database option (`NOT_IMPLEMENTED`) where they ignored it, so a misspelt option now fails, and
+  Db2 `FOR BIT DATA` columns are Arrow `binary` (were `utf8`). Oracle accounts with only a 10g
+  password verifier can sign in with `adbc.oracle.allow_10g_verifier=true`. See the
+  [Oracle](https://github.com/gizmodata/adbc-driver-oracle/blob/main/CHANGELOG.md) and
+  [Db2](https://github.com/gizmodata/adbc-driver-db2/blob/main/CHANGELOG.md) changelogs.
+- In the `-adbc` images, the Oracle, Db2 and Quack libraries export only the ADBC API, and their
+  manifests in `/etc/adbc/drivers` name the entrypoints those releases document
+  (`AdbcDriverOracleInit`, `AdbcDriverDb2Init`, `AdbcDriverQuackInit`; `OracleDriverInit`,
+  `Db2DriverInit` and `QuackDriverInit` are still exported, and deprecated). `driver 'oracle'`,
+  `'db2'` and `'quack'` load as before. Their manifests say `license = 'MIT'`, which these
+  drivers have always been (the manifests said Apache-2.0), and each driver's `NOTICE` is now
+  beside its `LICENSE` under `/usr/share/doc/hardcharger-adbc/`.
+- The `ADBC images` workflow checks more before it publishes. Staging refuses a driver library
+  that is not an ELF shared object for the architecture being built, that lacks the entrypoint
+  its manifest names, or whose archive has no `LICENSE`. The smoke test opens the five
+  GizmoData-built drivers through the driver manager by manifest: Hardcharger and Quack run a
+  query and must report the driver version their manifest names (Quack against a Quack server
+  the image's own Hardcharger starts), and GizmoSQL, Oracle and Db2, which have no server in the
+  test, must load and fail with their own connection error.
+
 ## [2.12.1] - 2026-11-14
 
 ### Changed
