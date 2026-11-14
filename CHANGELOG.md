@@ -24,6 +24,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- A failed internal transaction during statement binding rolls back and cleans up
+  without invalidating the shared database. Ordinary writable connections and
+  read-only-session enforcement retain their existing behavior.
+
 - Keep parenthesized query terms intact in `EXPLAIN ANALYZE`, including unions. Built-in
   index metadata remains available in read-only sessions, including computed table names;
   attempts to move the secrets directory report `read_only` for a read-only administrator.
