@@ -236,7 +236,7 @@ arrow::Status ChargewireConnection::Connect(const ClientConfig& config) {
     } else if (!config.username.empty()) {
       client->SignInWithPassword(config.username, config.password);
     }
-    session = client->CreateSession();
+    session = client->CreateSession(config.read_only ? boost::json::object{{"read_only", true}} : boost::json::object{});
   } catch (const wc::Error& e) {
     return ConnectFailure(e, config);
   }
@@ -246,6 +246,7 @@ arrow::Status ChargewireConnection::Connect(const ClientConfig& config) {
   server_version_ = discovery.server_version;
   server_state_ = discovery.state;
   config_ = config;
+  config_.read_only = config.read_only || session->read_only();
   config_.output_stream = &std::cout;
   client_ = std::move(client);
   session_ = std::move(session);
@@ -360,18 +361,22 @@ bool ChargewireConnection::Reopen(const wc::Error& error) {
   if ((!lost && !ended) || !client_) return false;
   try {
     if (ended && CanSignIn()) SignIn();
+    // Preserve a requested or server-imposed restriction on every replacement.
+    config_.read_only = config_.read_only || (session_ && session_->read_only());
+    const boost::json::object options = config_.read_only ? boost::json::object{{"read_only", true}} : boost::json::object{};
     std::unique_ptr<wc::Session> session;
     try {
-      session = client_->CreateSession();
+      session = client_->CreateSession(options);
     } catch (const wc::Error& e) {
       // A restarted server that signs tokens with a new key (no fixed secret key) no longer
       // accepts this sign-in's token: sign in again with what the client has, then retry once.
       if (e.code() != "invalid_token" || !e.reason().empty() || !CanSignIn()) throw;
       SignIn();
-      session = client_->CreateSession();
+      session = client_->CreateSession(options);
     }
     {
       std::lock_guard cancel_lock(cancel_mutex_);
+      config_.read_only = config_.read_only || session->read_only();
       session_ = std::move(session);
     }
     transaction_maybe_open_ = false;

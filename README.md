@@ -522,6 +522,15 @@ shell goes on. A large result is read over up to 8 connections at once, in the s
 `--result-partitions N` (or `HARDCHARGER_RESULT_PARTITIONS`) changes that, and `1` reads every
 result over one connection.
 
+Use `--read-only` (or `HARDCHARGER_CLIENT_READ_ONLY=true`) to require a read-only
+session. The client asks for it when opening the session and requires the server to
+confirm it before running SQL. A server that does not support the option refuses the
+connection. The restriction also applies to replacement sessions after a disconnect;
+open a new connection without the option to write again. The default is unchanged.
+Read-only sessions restrict database changes; they do not sandbox administrator-installed
+extensions. The server's separate `HARDCHARGER_READ_ONLY` setting opens its database file
+read-only and does not configure the CLI.
+
 A server that is starting again after a stop (a GizmoData Cloud cluster with auto-resume)
 answers `server_resuming` while it starts, and the client waits for it and then goes on:
 sign-in, session and statement are sent again as the server asks. While it waits it says so,
@@ -1239,6 +1248,29 @@ tokens (`token_signature_verify_cert_path`, `token_jwks_uri`, or `token_allowed_
 `token_auto_provision_issuer`'s provision.
 
 ### Read-only sessions
+
+Clients may request the Chargewire connection option `read_only: true`, independently
+of the sign-in token's role. The server confirms the restriction in the session's
+options. It is one-way for that session: open a new connection to write again. Ordinary
+connections remain read-write subject to the user's existing permissions. The CLI
+requests this mode with `--read-only`; drivers expose their corresponding read-only
+connection properties. An older server that does not support the option refuses an
+explicit request rather than silently opening a writable connection.
+
+This mode permits queries and metadata while refusing changes to data, temporary
+objects, access-control grants, and other sessions. Refusals use Chargewire `read_only`
+and SQLSTATE `25006`. Prepared statements are checked at execution, including those
+prepared before the connection became read-only. Hardcharger's monitoring tables remain
+available with their existing permissions. The session may change its own
+`hardcharger.query_timeout`, `hardcharger.idle_in_transaction_session_timeout`,
+`hardcharger.session_tag`, and `hardcharger.query_tag`; global settings, client-selected
+profiling changes, `KILL SESSION`, and administrative mutation functions are refused.
+Server-configured instrumentation continues to record reads.
+
+Read-only mode is not a sandbox for administrator-installed extensions or scalar
+functions with external side effects. It uses an explicit list of permitted operations
+and table functions; unsupported operations are refused even if a particular use would
+only read. The existing token role below remains available with its existing behavior.
 
 A sign-in token whose `role` is `readonly` gives a session that reads and changes nothing but
 itself, with or without an access-control store. It may run queries (`SELECT`, `EXPLAIN`,

@@ -90,6 +90,7 @@ int main(int argc, char** argv) {
            "?tls=false, port 31337 by default (443 for *.gizmodata.com); also chargewire://, https:// and http:// (also the one positional "
            "argument; not with --host, --port or --tls)",
            &uri_flag);
+  cl.Bool("read-only", 0, "Require an enforced read-only session (env: HARDCHARGER_CLIENT_READ_ONLY)", &config.read_only);
   cl.Section("TLS");
   cl.Bool("tls", 0,
           "TLS (HTTPS), on by default; --no-tls (or --tls=false, --tls false) for plain HTTP to a server "
@@ -149,6 +150,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   config.tls_given = cl.Given("tls");
+  config.read_only_given = cl.Given("read-only");
 
   if (help) {
     std::cout << "Usage: hardcharger [OPTIONS] [URI]\n       hardcharger ui [OPTIONS]      the web UI on its own (hardcharger ui --help)"

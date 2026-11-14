@@ -1,7 +1,13 @@
 import { type Connection, ChargewireError } from "@gizmodata/chargewire";
 import { describe, expect, it } from "vitest";
 
-import { CatalogRefusedError, SettingsLostError, TabSession, TransactionLostError } from "../../src/lib/tabSession";
+import {
+  CatalogRefusedError,
+  SettingsLostError,
+  TabSession,
+  TransactionLostError,
+  type Where,
+} from "../../src/lib/tabSession";
 
 interface Fake {
   id: string;
@@ -11,12 +17,21 @@ interface Fake {
   endedReason?: string;
   closed: boolean;
   ran: string[];
+  readOnly: boolean;
+  ignoreReadOnly?: boolean;
 }
 
 function opener() {
   const made: Fake[] = [];
-  const open = async (): Promise<Connection> => {
-    const f: Fake = { id: `s_${made.length + 1}`, transaction: "none", gone: false, closed: false, ran: [] };
+  const open = async (where?: Where): Promise<Connection> => {
+    const f: Fake = {
+      id: `s_${made.length + 1}`,
+      transaction: "none",
+      gone: false,
+      closed: false,
+      ran: [],
+      readOnly: where?.readOnly === true,
+    };
     made.push(f);
     const gone = () =>
       f.endedReason
@@ -26,7 +41,16 @@ function opener() {
       sessionId: f.id,
       getSession: async () => {
         if (f.gone) throw gone();
-        return { session_id: f.id, options: { catalog: "memory", schema: "main" }, transaction: f.transaction };
+        return {
+          session_id: f.id,
+          options: { catalog: "memory", schema: "main", read_only: f.readOnly },
+          transaction: f.transaction,
+        };
+      },
+      setOptions: async (options: Record<string, unknown>) => {
+        if (f.gone) throw gone();
+        if (options["read_only"] === true && !f.ignoreReadOnly) f.readOnly = true;
+        return { read_only: f.readOnly };
       },
       execute: async (sql: string) => {
         if (f.gone) throw gone();
@@ -56,6 +80,63 @@ const refusal = () =>
   });
 
 describe("TabSession", () => {
+  it("requests read-only before work and confirms it", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run({ ...here, readOnly: true }, (c) => c.execute("SELECT 1"));
+    expect(made[0]!.readOnly).toBe(true);
+    expect((await s.refresh(here))?.readOnly).toBe(true);
+  });
+
+  it("closes an unconfirmed initial read-only connection before any work runs", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(() => open()); // a server that ignores the creation option
+    await expect(s.run({ ...here, readOnly: true }, (c) => c.execute("SELECT 1"))).rejects.toThrow("did not confirm");
+    expect(made[0]!.closed).toBe(true);
+    expect(made[0]!.ran).toEqual([]);
+  });
+
+  it("keeps an enabled restriction on automatic replacement but allows a fresh choice after close", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.connection(here);
+    expect((await s.enableReadOnly(here)).readOnly).toBe(true);
+    made[0]!.gone = true;
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    expect(made[1]!.readOnly).toBe(true);
+    await s.close();
+    await s.run(here, (c) => c.execute("SELECT 2"));
+    expect(made[2]!.readOnly).toBe(false);
+  });
+
+  it("preserves a server-imposed restriction when replacing the session", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(async (where) => {
+      const conn = await open(where);
+      if (made.length === 1) made[0]!.readOnly = true;
+      return conn;
+    });
+    await s.connection(here);
+    made[0]!.gone = true;
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    expect(made[1]!.readOnly).toBe(true);
+  });
+
+  it("blocks an unconfirmed transition until an explicit new session", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.connection(here);
+    made[0]!.ignoreReadOnly = true;
+    await expect(s.enableReadOnly(here)).rejects.toThrow("did not confirm");
+    expect(made[0]!.closed).toBe(true);
+    await expect(s.run(here, (c) => c.execute("CREATE TABLE t(i INT)"))).rejects.toThrow("New session");
+    expect(made[0]!.ran).toEqual([]);
+    expect(made).toHaveLength(1);
+    await s.close();
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    expect(made).toHaveLength(2);
+  });
+
   it("opens on first use and keeps one session across runs", async () => {
     const { made, open } = opener();
     const s = new TabSession(open);

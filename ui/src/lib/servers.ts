@@ -24,7 +24,7 @@ import {
   parseServerUri,
   serverUrl,
 } from "./serverAddress";
-import type { ConnectionOptions } from "./chargewire";
+import { type ConnectionOptions, confirmReadOnly } from "./chargewire";
 import { pageRequests } from "./pageRequests";
 import { defaultResumeTimeoutS, type ResumeOptions, type ResumeProgress, sendWhileResuming } from "./resuming";
 
@@ -48,6 +48,8 @@ export interface SavedServer extends ServerAddress {
   username?: string;
   /** Seconds before the server cancels a statement; 0 or absent: none. */
   timeout?: number;
+  /** Default for new sessions; an individual new editor session may override it. */
+  readOnly?: boolean;
   /**
    * Seconds to wait for the server while it is resuming (a stopped GizmoData Cloud cluster with
    * auto-resume starting again, Chargewire §11.2); absent: 600, 0: don't wait.
@@ -210,6 +212,7 @@ export function normalizeSaved(s: unknown): SavedServer | undefined {
     ...(fingerprint ? { fingerprint } : {}),
     ...(username ? { username } : {}),
     ...(timeout ? { timeout } : {}),
+    ...(r["readOnly"] === true ? { readOnly: true } : {}),
     ...(resumeTimeout !== undefined ? { resumeTimeout } : {}),
   };
 }
@@ -233,7 +236,7 @@ export function saveSavedServers(
   try {
     // Only the fields the list is for: never anything a caller may have left on an entry.
     const kept = servers.map(
-      ({ id, name, host, port, tls, prefix, trust, fingerprint, username, timeout, resumeTimeout }) => ({
+      ({ id, name, host, port, tls, prefix, trust, fingerprint, username, timeout, resumeTimeout, readOnly }) => ({
         id,
         name,
         host,
@@ -244,6 +247,7 @@ export function saveSavedServers(
         ...(fingerprint ? { fingerprint } : {}),
         ...(username ? { username } : {}),
         ...(timeout ? { timeout } : {}),
+        ...(readOnly ? { readOnly: true } : {}),
         ...(resumeTimeout !== undefined ? { resumeTimeout } : {}),
       }),
     );
@@ -532,7 +536,7 @@ export function relayFetch(auth: () => { token?: string; relaySession?: string }
 }
 
 /** A connection (one session) to a remote, through the relay. */
-export function openRemoteConnection(
+export async function openRemoteConnection(
   signIn: RemoteSignIn,
   relayAuth: () => { token?: string; relaySession?: string },
   options: ConnectionOptions & {
@@ -543,7 +547,7 @@ export function openRemoteConnection(
 ): Promise<Connection> {
   const { signal, catalog, schema, reconnect, onResuming } = options;
   const timeoutS = options.timeoutS ?? 0;
-  return connect({
+  const conn = await connect({
     url: `${window.location.origin}${signIn.relayPath}`,
     // The saved connection's query timeout: the server cancels a statement after it (§6.9).
     ...(timeoutS > 0 ? { statementTimeoutMs: timeoutS * 1000 } : {}),
@@ -555,11 +559,13 @@ export function openRemoteConnection(
     ...(catalog ? { catalog } : {}),
     ...(schema ? { schema } : {}),
     ...(reconnect === undefined ? {} : { reconnect }),
+    ...(options.readOnly ? { sessionOptions: { read_only: true }, reconnect: false } : {}),
     resultPartitions: 1,
     ...(options.queryTag === null ? {} : { queryTag: { client: "hardcharger-ui", ...options.queryTag } }),
     logger: { warn: (message: string) => console.info(`[chargewire] ${message}`) },
     ...(signal ? { signal } : {}),
   });
+  return confirmReadOnly(conn, options.readOnly);
 }
 
 // ---- The store ----
@@ -808,6 +814,7 @@ export class ServersStore {
     if (!state?.signIn) return Promise.reject(new RemoteError("Sign in to this server first.", "not_connected", 0));
     return openRemoteConnection(state.signIn, () => this.relayAuth(), {
       ...options,
+      readOnly: options.readOnly ?? state.saved.readOnly ?? false,
       timeoutS: state.saved.timeout ?? 0,
       resumeTimeoutS: state.saved.resumeTimeout,
       onResuming: (progress) => this.resuming(id, progress),

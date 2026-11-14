@@ -128,9 +128,10 @@ def test_a_dead_clients_running_write_is_cancelled_and_rolled_back_with_its_sess
     victim.execute(sql="BEGIN")
     victim.execute(sql=f"INSERT INTO {table} VALUES (1)")
     assert session_state(victim)[1]["transaction"] == "open"
-    marker = f"dead_{table}"
+    # Identify the write by its unique table: SQL comments are deliberately masked.
+    marker = table
     submit_and_drop_connection(server=idle_server, session=victim,
-                               sql=f"/* {marker} */ INSERT INTO {table} {SLOW_COUNT}")
+                               sql=f"INSERT INTO {table} {SLOW_COUNT}")
     wait_for_running(admin=admin, marker=marker)
     wait_gone(admin=admin, session=victim, what="the dead client's session evicted")
     # It held a transaction open, so it says so (issue #29), rather than vanishing.

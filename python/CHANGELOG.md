@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-11-14
+
+### Changed
+
+- Install Hardcharger server 2.13.0, with server-confirmed read-only connections,
+  the CLI's `--read-only` option, improved credential masking in statement logs,
+  and Android performance and document-screen improvements.
+
 ## [2.12.1] - 2026-11-14
 
 ### Changed

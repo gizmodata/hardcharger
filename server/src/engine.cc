@@ -14,6 +14,7 @@
 
 #include "auth.hpp"
 #include "duckdb_sql.hpp"
+#include "duckdb_read_only.hpp"
 #include "instrumentation.hpp"
 #include "logging.hpp"
 #include "redact.hpp"
@@ -189,10 +190,10 @@ WITH idx_src AS (
 SELECT database_name AS "TABLE_CAT", schema_name AS "TABLE_SCHEM", table_name AS "TABLE_NAME",
        NOT is_unique AS "NON_UNIQUE", CAST(NULL AS VARCHAR) AS "INDEX_QUALIFIER",
        index_name AS "INDEX_NAME", CAST(3 AS SMALLINT) AS "TYPE",
-       idx::SMALLINT AS "ORDINAL_POSITION", cols[idx] AS "COLUMN_NAME",
+       unnest(range(1, len(cols) + 1))::SMALLINT AS "ORDINAL_POSITION", unnest(cols) AS "COLUMN_NAME",
        CAST('A' AS VARCHAR) AS "ASC_OR_DESC", CAST(NULL AS BIGINT) AS "CARDINALITY",
        CAST(NULL AS BIGINT) AS "PAGES", CAST(NULL AS VARCHAR) AS "FILTER_CONDITION"
-FROM all_src, generate_series(1, len(cols)) AS t(idx);
+FROM all_src;
 CREATE VIEW {catalog}.main.hardcharger_view_definition AS
 SELECT database_name AS "TABLE_CAT", schema_name AS "TABLE_SCHEM", view_name AS "TABLE_NAME",
        sql AS "VIEW_DEFINITION"
@@ -298,21 +299,6 @@ void RefuseAccessControlStatement(std::string_view sql) {
   }
 }
 
-// An init statement's error for the log. A credential statement (CREATE SECRET, CREATE USER
-// ... PASSWORD) loses the excerpt DuckDB quotes ("LINE 1: ...") and every string literal of
-// the statement wherever the error repeats it; any other statement's error stays whole.
-std::string WithoutLiterals(const Piece& piece, std::string error) {
-  if (!IsCredentialStatement(piece.text)) return error;
-  if (const auto at = error.find("\nLINE "); at != std::string::npos) error.resize(at);
-  for (const Token& token : piece.tokens) {
-    if (!token.Is(DUCKDB_V2_TOKEN_TYPE_STRING_LITERAL) || token.text.empty()) continue;
-    for (std::size_t at; (at = error.find(token.text)) != std::string::npos;) {
-      error.replace(at, token.text.size(), "'***'");
-    }
-  }
-  return error;
-}
-
 // A readonly session changes nothing, the access-control store included: of the
 // access-control statements it runs only SHOW ... and SET ROLE. (CREATE SCOPED TOKEN would
 // hand it a token that signs in as a user, outside readonly.)
@@ -345,6 +331,23 @@ static void LogCancelled(const Session& session, const LogFields& ids, std::stri
                                {"duration", std::format("{:.3f}", seconds)}});
   Log(LogLevel::kInfo, "statement cancelled", fields);
 }
+
+// Keep only safe display text and a sensitivity bit alongside the prepared object.
+// Their lifetime is exactly the handle's; no raw SQL copy or growing pointer map.
+class LoggedPrepared final : public chargewire::PreparedStatement {
+ public:
+  LoggedPrepared(std::unique_ptr<chargewire::PreparedStatement> inner, std::string id,
+                 std::string shown, bool credentials)
+      : inner(std::move(inner)), id(std::move(id)), shown(std::move(shown)), credentials(credentials) {}
+  std::shared_ptr<arrow::Schema> ParameterSchema() override { return inner->ParameterSchema(); }
+  std::shared_ptr<arrow::Schema> ResultSchema() override { return inner->ResultSchema(); }
+  std::optional<bool> ReturnsRows() override { return inner->ReturnsRows(); }
+
+  const std::unique_ptr<chargewire::PreparedStatement> inner;
+  const std::string id;
+  const std::string shown;
+  const bool credentials;
+};
 
 // One execution of a statement, from its queue slot to its result being let go: gives
 // the slot back, counts it in metrics, logs its success and records its timeline in
@@ -692,7 +695,7 @@ void Backend::RunInitSql() {
   } catch (const Error& error) {
     // DuckDB quotes an ATTACH's connection string, password included, in its errors, and the
     // failing line of a syntax error, a CREATE SECRET's or CREATE USER's literals included.
-    const std::string message = current != nullptr ? WithoutLiterals(*current, error.what()) : error.what();
+    const std::string message = LoggableError(current != nullptr ? current->text : std::string_view(), error.what());
     const auto hint = ExtensionDependencyHint(message);
     throw std::runtime_error("init SQL failed: " + (hint ? *hint + "\n" : std::string()) +
                              RedactCredentials(message));
@@ -870,6 +873,18 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb
       rbac_(access != nullptr && !access->catalog_rules_only()),
       id_(std::move(id)),
       started_at_us_(NowMicros()) {
+  static const auto read_policy = [] {
+    auto policy = std::make_shared<chargewire_duckdb::ReadOnlyPolicy>(
+        chargewire_duckdb::ReadOnlyPolicy::Default());
+    policy->table_functions.insert({
+        "HARDCHARGER_SETTINGS", "HARDCHARGER_SESSIONS", "HARDCHARGER_METRICS",
+        "HARDCHARGER_ACTIVE_CONNECTIONS", "HARDCHARGER_SERVER_INFO", "HARDCHARGER_MONITOR_INFO",
+        "HARDCHARGER_LIVE_QUERIES", "HARDCHARGER_SERVER_SETTINGS", "HARDCHARGER_SESSION_SETTINGS",
+        "HARDCHARGER_GRANTS", "HARDCHARGER_ROLE_MEMBERS", "HARDCHARGER_ROLES", "HARDCHARGER_USERS",
+        "HARDCHARGER_POLICIES", "HARDCHARGER_EFFECTIVE_PRIVILEGES"});
+    return policy;
+  }();
+  set_read_only_policy(read_policy);
   // User connections are created in exactly one place, the DuckDBSession constructor,
   // and bound here right after it, before any statement runs on them (and before the
   // session is listed anywhere, so a refused one leaves nothing behind).
@@ -912,6 +927,19 @@ bool Session::StartIn(const std::string& catalog, const std::string& schema) {
            {"error", error.what()}});
     return false;
   }
+}
+
+void Session::SetReadOnly() {
+  CheckAlive();
+  DuckDBSession::SetReadOnly();
+  if (guard_) guard_->SetReadOnly();
+  read_only_session_ = true;
+}
+
+void Session::RequireWritableSqlFunction() {
+  if (!read_only_session()) return;
+  read_only_function_refused_ = true;
+  throw chargewire_duckdb::ReadOnlyRefusal("a Hardcharger administrative function");
 }
 
 void Session::CheckAlive() const {
@@ -997,16 +1025,22 @@ void Session::FinishRunning() {
   }
 }
 
-std::string Session::PrepareProfile(const std::string& execution_id) {
-  const int mode = settings().capture_query_profile.value_or(runtime_.capture_query_profile.load());
+std::string Session::PrepareProfile(const std::string& execution_id, bool allowed) {
+  // Disable an already-enabled profiler BEFORE executing sensitive SQL. Discarding its
+  // JSON afterward would still write credentials into a temporary file.
+  const int mode = allowed ? settings().capture_query_profile.value_or(runtime_.capture_query_profile.load()) : 0;
   if (mode == 0 && profile_mode_ == 0) return {};
   // The server's own settings on the session's connection: not the user's to check
   // (profiling_output names a file, which only an administrator may write).
   auto internal = [&](const std::string& sql) {
+    auto run = [&] {
+      if (read_only_session()) RunOwnSql(sql);
+      else chargewire_duckdb::RunSql(connection(), sql);
+    };
     if (guard_) {
-      guard_->RunInternal([&] { chargewire_duckdb::RunSql(connection(), sql); });
+      guard_->RunInternal(run);
     } else {
-      chargewire_duckdb::RunSql(connection(), sql);
+      run();
     }
   };
   if (mode != profile_mode_) {
@@ -1050,6 +1084,7 @@ void Session::Cancel(std::string_view reason) {
 
 void Session::BeginStatement() {
   interrupted_ = false;
+  read_only_function_refused_ = false;
   std::lock_guard lock(activity_mutex_);
   activity_.cancel_reason.clear();
 }
@@ -1131,7 +1166,8 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   // Under access control, what a store user may reach outside the database (files, URLs,
   // ATTACH, ...) is the access-control gate's to decide, by its system privileges; the
   // rest of the statement guard (secrets, sensitive paths) holds for everyone.
-  CheckStatement({connection(), admin() || rbac_, config.block_unredacted_secrets, &sensitive_paths_}, piece, type);
+  CheckStatement({connection(), admin() || rbac_, config.block_unredacted_secrets, &sensitive_paths_, read_only_session()},
+                 piece, type);
   if (type == DUCKDB_V2_STATEMENT_TYPE_DETACH) {
     for (const Token& token : piece.tokens) {
       if (token.Value() == kSystemCatalog) {
@@ -1204,6 +1240,7 @@ chargewire::StatementOutcome Session::RunCommand(const Piece& piece) {
     return {};
   }
   const std::string target = ParseKillSession(piece).value_or("");
+  if (read_only_session()) throw chargewire_duckdb::ReadOnlyRefusal("KILL SESSION");
   if (!admin()) {
     throw Error(ErrorCode::kPermissionDenied, "Only admin users can execute KILL SESSION", "42501");
   }
@@ -1244,7 +1281,8 @@ chargewire::StatementOutcome Session::RunCommand(const Piece& piece) {
 
 chargewire::StatementOutcome Session::Track(StatementKind kind, std::string_view sql, const ExecutionIds& ids,
                                          const std::function<chargewire::StatementOutcome()>& work,
-                                         std::string_view shown) {
+                                         std::string_view shown, bool credential_context) {
+  const bool credentials = credential_context || IsCredentialStatement(sql);
   const auto started = std::chrono::steady_clock::now();
   // What a cancel's log line counts from: the submission, when the SDK said when that was.
   const auto submitted = request_submitted_ == std::chrono::steady_clock::time_point{} ? started : request_submitted_;
@@ -1335,7 +1373,7 @@ chargewire::StatementOutcome Session::Track(StatementKind kind, std::string_view
   // The execution clock starts when it leaves the queue.
   if (instrumentation != nullptr) record.start = std::chrono::system_clock::now();
   std::string profile;
-  if (instrumentation != nullptr) profile = PrepareProfile(record.execution_id);
+  if (instrumentation != nullptr) profile = PrepareProfile(record.execution_id, !credentials);
   auto execution = std::make_shared<Execution>(*this, kind, std::move(abbreviated), std::move(slot), started,
                                                submitted, std::move(record), instrumentation != nullptr, id_fields,
                                                std::move(profile));
@@ -1344,10 +1382,13 @@ chargewire::StatementOutcome Session::Track(StatementKind kind, std::string_view
     outcome = work();
   } catch (const Error& error) {
     const std::string_view error_class = ClassifyStatementError(error.what());
-    const std::string logged_error = LoggableError(sql, error.what());
+    const std::string logged_error = LoggableError(sql, error.what(), credential_context);
     execution->End(error.code() == ErrorCode::kStatementCancelled ? "cancelled" : "error", error_class, logged_error);
     LogFailed(id_fields, sql, logged_error);
     if (killed_) throw KilledError();
+    if (read_only_function_refused_.exchange(false)) {
+      throw chargewire_duckdb::ReadOnlyRefusal("a Hardcharger administrative function");
+    }
     throw;
   }
   execution->Produced();
@@ -1356,10 +1397,13 @@ chargewire::StatementOutcome Session::Track(StatementKind kind, std::string_view
     // early and the statement's error in its document; the log and the record say why.
     outcome.rows = std::make_shared<TrackedReader>(
         std::move(outcome.rows), std::move(execution),
-        [sql = std::string(sql)](std::string_view error) { return LoggableError(sql, error); },
+        [sql = std::string(sql), credential_context](std::string_view error) { return LoggableError(sql, error, credential_context); },
         [this, id_fields, sql = std::string(sql)](const std::string& error) { LogFailed(id_fields, sql, error); },
         [this](const arrow::Status& status) {
       if (killed_) throw KilledError();
+      if (read_only_function_refused_.exchange(false)) {
+        throw chargewire_duckdb::ReadOnlyRefusal("a Hardcharger administrative function");
+      }
       if (interrupted_ && ClassifyStatementError(status.message()) == "cancelled") {
         throw Error(ErrorCode::kStatementCancelled, status.message(), "57014");
       }
@@ -1405,7 +1449,9 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
                {{"session_id", id_}, {"user", principal_.name}, {"role", principal_.role},
                 {"statement_id", statement_id}, {"kind", "sql"}, {"is_internal", "false"}, {"sql", Abbreviate(sql)}});
     }
-    return Track(StatementKind::kOther, Abbreviate(sql), {.statement = statement_id, .execution = statement_id}, [&] {
+    // (The statement as written: Track redacts what it logs, and its error's redaction
+    // must see the statement, not its redacted form.)
+    return Track(StatementKind::kOther, sql, {.statement = statement_id, .execution = statement_id}, [&] {
       return Guarded(sql, has_parameters, [&] { return DuckDBSession::Execute(sql, parameters); }, parameters);
     });
   }
@@ -1426,6 +1472,10 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
     for (const Piece& piece : pieces) {
       Step step{&piece};
       step.command = ParseSettingCommand(piece).has_value() || ParseKillSession(piece).has_value();
+      if (auto setting = ParseSettingCommand(piece)) CheckReadOnlySetting(*this, *setting);
+      if (read_only_session() && ParseKillSession(piece)) {
+        throw chargewire_duckdb::ReadOnlyRefusal("KILL SESSION");
+      }
       if (!step.command && rbac_ && authz::LooksLikeAccessControlStatement(piece.text)) {
         // As DuckDB sees the batch: one it can't parse fails as the syntax error it is;
         // one it would take for something else (SHOW GRANTS, RESET ROLE) is refused.
@@ -1497,6 +1547,7 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
 std::unique_ptr<chargewire::PreparedStatement> Session::Prepare(std::string_view sql) {
   CheckAlive();
   SessionScope scope(this);
+  read_only_function_refused_ = false;
   if (sql.find('\0') != std::string_view::npos) {
     throw Error(ErrorCode::kSqlError, "SQL text must not contain a NUL byte", "22021");
   }
@@ -1528,12 +1579,13 @@ std::unique_ptr<chargewire::PreparedStatement> Session::Prepare(std::string_view
                       : DuckDBSession::Prepare(sql);
   } catch (const Error& error) {
     record(false, LoggableError(sql, error.what()));
+    if (read_only_function_refused_.exchange(false)) {
+      throw chargewire_duckdb::ReadOnlyRefusal("a Hardcharger administrative function");
+    }
     throw;
   }
   record(true, "");
-  prepared_statement_ids_[prepared.get()] = prepared_id;
-  prepared_sql_[prepared.get()] = Abbreviate(sql);
-  return prepared;
+  return std::make_unique<LoggedPrepared>(std::move(prepared), prepared_id, Abbreviate(sql), IsCredentialStatement(sql));
 }
 
 chargewire::StatementOutcome Session::ExecutePrepared(chargewire::PreparedStatement& statement,
@@ -1541,21 +1593,20 @@ chargewire::StatementOutcome Session::ExecutePrepared(chargewire::PreparedStatem
   CheckAlive();
   SessionScope scope(this);
   BeginStatement();
-  const auto id = prepared_statement_ids_.find(&statement);
-  const auto text = prepared_sql_.find(&statement);
+  auto& prepared = dynamic_cast<LoggedPrepared&>(statement);
   // Each execution is its request's statement (q_...), of the prepared statement (p_...).
   return Track(StatementKind::kOther, "(prepared statement)",
-               {.statement = id == prepared_statement_ids_.end() ? std::string() : id->second,
+               {.statement = prepared.id,
                 .execution = RequestStatementId(),
                 .prepared = true},
                [&] {
-                 if (!guard_) return DuckDBSession::ExecutePrepared(statement, parameters);
+                 if (!guard_) return DuckDBSession::ExecutePrepared(*prepared.inner, parameters);
                  const bool has_parameters = parameters.rows != nullptr || !parameters.json.is_null();
-                 return guard_->ExecutePrepared(statement, has_parameters, [&](chargewire::PreparedStatement& inner) {
+                 return guard_->ExecutePrepared(*prepared.inner, has_parameters, [&](chargewire::PreparedStatement& inner) {
                    return DuckDBSession::ExecutePrepared(inner, parameters);
                  }, parameters.json);
                },
-               text == prepared_sql_.end() ? std::string_view() : std::string_view(text->second));
+               prepared.shown, prepared.credentials);
 }
 
 int64_t Session::Ingest(const chargewire::IngestTarget& target, std::shared_ptr<arrow::RecordBatchReader> rows) {

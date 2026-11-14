@@ -834,6 +834,7 @@ void CancelBind(duckdb_v2_function_bind_info_handle info, duckdb_v2_scalar_funct
     if (caller == nullptr) {
       throw Error(ErrorCode::kSqlError, "hardcharger_cancel() is only available in a client session");
     }
+    caller->RequireWritableSqlFunction();
     duckdb_v2_opaque data{new CancelBinding{static_cast<Runtime*>(user), caller},
                           [](void* p) { delete static_cast<CancelBinding*>(p); }, nullptr};
     Call([&](auto* e) { return duckdb_v2_scalar_function_bind_set_bind_data(result, &data, e); });
@@ -842,6 +843,7 @@ void CancelBind(duckdb_v2_function_bind_info_handle info, duckdb_v2_scalar_funct
 
 // Cancels what session `id` runs for `caller`; returns whether there was anything.
 bool CancelFor(Runtime& runtime, Session& caller, std::string id) {
+  caller.RequireWritableSqlFunction();
   std::transform(id.begin(), id.end(), id.begin(), [](unsigned char ch) { return std::tolower(ch); });
   switch (runtime.sessions.Find(id, caller)) {
     case SessionRegistry::Lookup::kOwnSession:
@@ -913,6 +915,7 @@ void SessionSettingExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_
     Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_bind_data(info, &data, e); });
     const auto& binding = *static_cast<const CancelBinding*>(data);
     RequireFullAdmin(*binding.session);
+    binding.session->RequireWritableSqlFunction();
     duckdb_v2_factory_handle factory = nullptr;
     Call([&](auto* e) { return duckdb_v2_context_get_factory(context, &factory, e); });
     idx_t rows = 0;

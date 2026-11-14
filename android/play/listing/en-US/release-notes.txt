@@ -1,1 +1,2 @@
-Performance and reliability improvements.
+Improved app performance with optimized code and resource shrinking.
+Smoother privacy policy and software notices screens.

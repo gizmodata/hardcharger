@@ -122,6 +122,7 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
   const [username, setUsername] = useState(server?.saved.username ?? server?.signIn?.username ?? "");
   const [password, setPassword] = useState("");
   const [useTls, setUseTls] = useState(server?.saved.tls ?? true);
+  const [readOnly, setReadOnly] = useState(server?.saved.readOnly ?? false);
   const [trust, setTrust] = useState(server?.saved.trust ?? false);
   /** The fingerprint accepted for this address (from a saved connection, or confirmed here). */
   const [pinned, setPinned] = useState<{ key: string; fingerprint: string } | undefined>(
@@ -185,6 +186,7 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
     setUsername(s.username ?? "");
     setPassword("");
     setUseTls(s.tls);
+    setReadOnly(s.readOnly ?? false);
     setTrust(s.trust);
     setPinned(s.fingerprint ? { key: serverKey(s), fingerprint: s.fingerprint } : undefined);
     setTimeoutS(String(s.timeout ?? 0));
@@ -311,6 +313,7 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
           trust: mode === "fingerprint",
           ...(fingerprint ? { fingerprint } : {}),
           username: username.trim(),
+          readOnly,
           ...(timeoutS > 0 ? { timeout: timeoutS } : {}),
           ...(resumeTimeoutS !== defaultResumeTimeoutS ? { resumeTimeout: resumeTimeoutS } : {}),
           ...(save ? {} : { transient: true }),
@@ -659,6 +662,22 @@ export function AddServerDialog({ server, onConnected, onClose }: Props) {
               </dl>
             </div>
           )}
+
+          <div className="server-field server-readonly">
+            <label className="server-check">
+              <input
+                type="checkbox"
+                checked={readOnly}
+                onChange={(e) => setReadOnly(e.target.checked)}
+                disabled={working}
+              />
+              <span>Read-only sessions</span>
+            </label>
+            <span className="server-hint">
+              Start new sessions on this connection in read-only mode. Once connected, read-only stays on for that
+              session.
+            </span>
+          </div>
 
           <div className="server-field">
             <label className="server-label" htmlFor="server-timeout">

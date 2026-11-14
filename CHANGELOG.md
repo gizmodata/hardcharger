@@ -7,6 +7,34 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-11-14
+
+### Added
+
+- Server-enforced Chargewire `read_only` connections, independent of token roles, with
+  one-way transitions and `read_only` / SQLSTATE `25006` refusals. Hardcharger monitoring
+  queries and local timeout/tag settings remain available; access-control changes and
+  administrative mutations are refused, including commands prepared before transition.
+- The CLI accepts `--read-only` and `HARDCHARGER_CLIENT_READ_ONLY=true` to require a
+  server-confirmed read-only session, including after reconnecting. Servers without
+  support refuse the connection; ordinary connections keep their existing behavior.
+- The web UI can start connections read-only or enable read-only on an existing editor
+  session. The checkbox locks after server confirmation; **New session** permits a fresh
+  choice. Automatic session replacement retains the restriction.
+
+### Fixed
+
+- A failed internal transaction during statement binding rolls back and cleans up
+  without invalidating the shared database. Ordinary writable connections and
+  read-only-session enforcement retain their existing behavior.
+
+- Keep parenthesized query terms intact in `EXPLAIN ANALYZE`, including unions. Built-in
+  index metadata remains available in read-only sessions, including computed table names;
+  attempts to move the secrets directory report `read_only` for a read-only administrator.
+
+- Android publishes loaded notices and privacy text on the UI thread, keeping the
+  document screen's lazy-list initialization on a thread with an Android looper.
+
 ### Changed
 
 - **The `-adbc` images' Quack driver moves to 1.0.4 (was 0.1.0-alpha.11): it now reaches DuckDB
@@ -44,6 +72,17 @@ own changelog in `python/CHANGELOG.md`.
   query and must report the driver version their manifest names (Quack against a Quack server
   the image's own Hardcharger starts), and GizmoSQL, Oracle and Db2, which have no server in the
   test, must load and fail with their own connection error.
+- Enable Android's optimized resource shrinker so release builds optimize code and
+  resource references together.
+
+### Security
+
+- Improve credential masking in statement logs and stored statement errors. Masking now
+  reads SQL tokens, masks values before shortening long statements, and conceals the whole
+  statement when its text cannot be safely read. Stored errors and captured query profiles
+  are suppressed for credential-bearing statements, including prepared executions, while
+  clients retain their own errors. Comment bodies and escaped literals are concealed
+  conservatively; malformed URL masking now has bounded scanning cost.
 
 ## [2.12.1] - 2026-11-14
 
