@@ -31,6 +31,7 @@ export interface SessionInfo {
   idleTimeoutS: number | undefined;
   /** The role it acts with ("": all of the user's roles), as this tab set it. */
   role: string;
+  readOnly: boolean;
 }
 
 export interface Where {
@@ -38,6 +39,7 @@ export interface Where {
   schema: string;
   /** The role the session acts with (SET ROLE); "" or absent for all of the user's roles. */
   role?: string;
+  readOnly?: boolean;
 }
 
 export type Opener = (where: Where) => Promise<Connection>;
@@ -116,6 +118,8 @@ export class TabSession {
   #conn: Promise<Connection> | undefined;
   #serverId: string | undefined;
   #role = "";
+  #readOnly = false;
+  #modeFailure: Error | undefined;
   #info: SessionInfo | undefined;
   /** A statement that may have opened a transaction ran, and none has been seen to end it. */
   #maybeOpen = false;
@@ -156,7 +160,9 @@ export class TabSession {
   }
 
   connection(where: Where): Promise<Connection> {
+    if (this.#modeFailure) return Promise.reject(this.#modeFailure);
     if (!this.#conn) {
+      where = { ...where, readOnly: this.#readOnly || where.readOnly === true };
       // A catalog the server keeps for querying by name (its log or instrumentation catalog,
       // as a preview of one of its tables asks for): the session opens in its own catalog,
       // and the statement, which names the catalog, still runs.
@@ -166,6 +172,20 @@ export class TabSession {
         return this.#open({ ...where, catalog: "", schema: "" });
       });
       const opening = opened.then(async (conn) => {
+        try {
+          // Ordinary connections to stopped servers stay lazy. A requested restriction
+          // must be confirmed before returning even when it wakes the server.
+          if (where.readOnly || conn.sessionId) {
+            const doc = await conn.getSession();
+            if (where.readOnly && doc.options?.["read_only"] !== true) {
+              throw new Error("The server did not confirm read-only mode. Start a new session to continue.");
+            }
+            this.#readOnly ||= doc.options?.["read_only"] === true;
+          }
+        } catch (err) {
+          await conn.close().catch(() => {});
+          throw err;
+        }
         this.#serverId = this.#identify ? await this.#identify(conn).catch(() => undefined) : undefined;
         this.#role = "";
         if (where.role) {
@@ -290,16 +310,37 @@ export class TabSession {
       this.#endedSinceOpen = false;
     }
     const options = doc.options ?? {};
+    this.#readOnly ||= options["read_only"] === true;
     this.#info = {
       id: doc.session_id,
       serverId: this.#serverId,
       role: this.#role,
+      readOnly: this.#readOnly,
       transaction: doc.transaction,
       catalog: typeof options["catalog"] === "string" ? options["catalog"] : "",
       schema: typeof options["schema"] === "string" ? options["schema"] : "",
       idleTimeoutS: doc.idle_timeout_s,
     };
     return this.#info;
+  }
+
+  /** One-way transition; an uncertain result closes and blocks this tab until New session. */
+  async enableReadOnly(where: Where): Promise<SessionInfo> {
+    const conn = await this.connection(where);
+    try {
+      await conn.setOptions({ read_only: true });
+      const info = await this.#read(conn);
+      if (!info.readOnly) throw new Error("The server did not confirm read-only mode.");
+      return info;
+    } catch (err) {
+      this.#modeFailure = new Error(
+        `${err instanceof Error ? err.message : String(err)} The session was closed. Choose New session to continue.`,
+      );
+      this.#lost();
+      this.#info = undefined;
+      await conn.close().catch(() => {});
+      throw this.#modeFailure;
+    }
   }
 
   /** Sets the session's catalog, schema and role now, if it is open (else at its opening). */
@@ -334,6 +375,8 @@ export class TabSession {
     const conn = this.#conn;
     this.#conn = undefined;
     this.#info = undefined;
+    this.#readOnly = false;
+    this.#modeFailure = undefined;
     this.#maybeOpen = false; // ending it rolls back what was open
     this.#endedSinceOpen = false;
     this.#settingsChanged = false;

@@ -18,6 +18,9 @@ own changelog in `python/CHANGELOG.md`.
 - The CLI accepts `--read-only` and `HARDCHARGER_CLIENT_READ_ONLY=true` to require a
   server-confirmed read-only session, including after reconnecting. Servers without
   support refuse the connection; ordinary connections keep their existing behavior.
+- The web UI can start connections read-only or enable read-only on an existing editor
+  session. The checkbox locks after server confirmation; **New session** permits a fresh
+  choice. Automatic session replacement retains the restriction.
 
 ### Fixed
 

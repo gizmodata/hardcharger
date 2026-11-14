@@ -75,6 +75,12 @@ const lab = {
 };
 
 describe("the saved list", () => {
+  it("persists a read-only default and ignores malformed values", () => {
+    const storage = new MemoryStorage();
+    saveSavedServers("joe", [{ ...warehouse, readOnly: true }], storage);
+    expect(loadSavedServers("joe", storage)[0]?.readOnly).toBe(true);
+    expect(normalizeSaved({ ...warehouse, readOnly: "true" })?.readOnly).toBeUndefined();
+  });
   it("round-trips per user, keeps only well-formed entries, and survives blocked storage", () => {
     const storage = new MemoryStorage();
     saveSavedServers("joe", [warehouse, lab], storage);
