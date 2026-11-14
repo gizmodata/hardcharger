@@ -55,6 +55,15 @@ own changelog in `python/CHANGELOG.md`.
   the image's own Hardcharger starts), and GizmoSQL, Oracle and Db2, which have no server in the
   test, must load and fail with their own connection error.
 
+### Security
+
+- Improve credential masking in statement logs and stored statement errors. Masking now
+  reads SQL tokens, masks values before shortening long statements, and conceals the whole
+  statement when its text cannot be safely read. Stored errors and captured query profiles
+  are suppressed for credential-bearing statements, including prepared executions, while
+  clients retain their own errors. Comment bodies and escaped literals are concealed
+  conservatively; malformed URL masking now has bounded scanning cost.
+
 ## [2.12.1] - 2026-11-14
 
 ### Changed
