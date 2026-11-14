@@ -15,6 +15,7 @@ from conftest import run_unit_tests
 UNIT_CASES = [
     "AdminCommandGuard.AttachIsGated", "AdminCommandGuard.DetachIsGated",
     "AdminCommandGuard.ExplainWrappedStatementsAreGated", "AdminCommandGuard.AttachDetachEvasionStillCaught",
+    "AdminCommandGuard.ExplainParenthesizedQueriesKeepTheirWholeBody",
     "UnredactedSecretsSet.TrueIsMatched", "UnredactedSecretsSet.TrueEquivalentsAreMatched",
     "UnredactedSecretsSet.ExplainWrappedSetIsMatched", "UnredactedSecretsSet.FalseAndOtherSqlAreNotMatched",
     "AdminCommandGuard.SetGlobalIsGated", "AdminCommandGuard.BareSetOfDangerousGlobalSettingIsGated",
