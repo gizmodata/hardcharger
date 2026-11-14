@@ -116,3 +116,27 @@ def test_server_owned_profiling_remains_available(launcher):
     assert reader.scalar(sql="SELECT 43") == 43
     assert "readonly-profile-fixture" not in server.log()
     assert "readonly-prepared-profile-fixture" not in server.log()
+
+
+def test_builtin_index_view_and_computed_metadata_arguments(property_server):
+    writer = property_server.admin()
+    writer.execute(sql="CREATE TABLE property_index_columns (a INTEGER, b INTEGER, PRIMARY KEY (a, b))")
+    writer.execute(sql="CREATE INDEX property_index_ba ON property_index_columns (b, a)")
+    reader = property_server.client().new_session(options={"read_only": True})
+    assert reader.rows(sql='SELECT "ORDINAL_POSITION", "COLUMN_NAME" '
+                           'FROM _hardcharger_system.main.hardcharger_index_info '
+                           "WHERE \"TABLE_NAME\" = 'property_index_columns' AND \"INDEX_NAME\" <> 'property_index_ba' ORDER BY 1") == [
+        {"ORDINAL_POSITION": 1, "COLUMN_NAME": "a"},
+        {"ORDINAL_POSITION": 2, "COLUMN_NAME": "b"},
+    ]
+    assert reader.rows(sql='SELECT "ORDINAL_POSITION", "COLUMN_NAME" '
+                           'FROM _hardcharger_system.main.hardcharger_index_info '
+                           "WHERE \"INDEX_NAME\" = 'property_index_ba' ORDER BY 1") == [
+        {"ORDINAL_POSITION": 1, "COLUMN_NAME": "b"},
+        {"ORDINAL_POSITION": 2, "COLUMN_NAME": "a"},
+    ]
+    assert reader.scalar(sql="SELECT count(*) FROM pragma_table_info('property_' || 'index_columns')") == 2
+    assert_read_only(reader.error(sql="SET secret_directory = '/unused-readonly-path'"))
+    assert reader.scalar(sql="SELECT 42") == 42
+    reader.close()
+    writer.close()

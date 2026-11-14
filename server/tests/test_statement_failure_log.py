@@ -44,7 +44,7 @@ def test_a_statement_failing_mid_stream_is_logged_and_recorded(server):
     assert "hunter2" not in server.log(), "the log carries the error's password"
     rows = eventually(lambda: admin.query(
         sql="SELECT status, error_message FROM _hardcharger_instr.sql_executions "
-            f"WHERE execution_id = '{failed[0]['statement_id']}'").to_pylist())
+            f"WHERE execution_id = '{failed[0]['statement_id']}' AND status <> 'executing'").to_pylist())
     assert rows == [{"status": "error", "error_message": "[REDACTED: error of a credential statement]"}], rows
 
 

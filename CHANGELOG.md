@@ -24,6 +24,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Keep parenthesized query terms intact in `EXPLAIN ANALYZE`, including unions. Built-in
+  index metadata remains available in read-only sessions, including computed table names;
+  attempts to move the secrets directory report `read_only` for a read-only administrator.
+
 - Android publishes loaded notices and privacy text on the UI thread, keeping the
   document screen's lazy-list initialization on a thread with an Android looper.
 

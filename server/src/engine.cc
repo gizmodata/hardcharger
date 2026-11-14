@@ -190,10 +190,10 @@ WITH idx_src AS (
 SELECT database_name AS "TABLE_CAT", schema_name AS "TABLE_SCHEM", table_name AS "TABLE_NAME",
        NOT is_unique AS "NON_UNIQUE", CAST(NULL AS VARCHAR) AS "INDEX_QUALIFIER",
        index_name AS "INDEX_NAME", CAST(3 AS SMALLINT) AS "TYPE",
-       idx::SMALLINT AS "ORDINAL_POSITION", cols[idx] AS "COLUMN_NAME",
+       unnest(range(1, len(cols) + 1))::SMALLINT AS "ORDINAL_POSITION", unnest(cols) AS "COLUMN_NAME",
        CAST('A' AS VARCHAR) AS "ASC_OR_DESC", CAST(NULL AS BIGINT) AS "CARDINALITY",
        CAST(NULL AS BIGINT) AS "PAGES", CAST(NULL AS VARCHAR) AS "FILTER_CONDITION"
-FROM all_src, generate_series(1, len(cols)) AS t(idx);
+FROM all_src;
 CREATE VIEW {catalog}.main.hardcharger_view_definition AS
 SELECT database_name AS "TABLE_CAT", schema_name AS "TABLE_SCHEM", view_name AS "TABLE_NAME",
        sql AS "VIEW_DEFINITION"
@@ -1166,7 +1166,8 @@ DUCKDB_V2_STATEMENT_TYPE Session::Authorize(const Piece& piece) {
   // Under access control, what a store user may reach outside the database (files, URLs,
   // ATTACH, ...) is the access-control gate's to decide, by its system privileges; the
   // rest of the statement guard (secrets, sensitive paths) holds for everyone.
-  CheckStatement({connection(), admin() || rbac_, config.block_unredacted_secrets, &sensitive_paths_}, piece, type);
+  CheckStatement({connection(), admin() || rbac_, config.block_unredacted_secrets, &sensitive_paths_, read_only_session()},
+                 piece, type);
   if (type == DUCKDB_V2_STATEMENT_TYPE_DETACH) {
     for (const Token& token : piece.tokens) {
       if (token.Value() == kSystemCatalog) {

@@ -56,7 +56,7 @@ def test_a_failing_access_control_statement_stops_the_server_without_logging_its
      "[REDACTED: error of a credential statement]"),
     ("CREATE ROLE new_role;",
      "Hardcharger access control is not enabled on this server, so CREATE ROLE is not available"),
-])
+], ids=["credential-create-user", "ordinary-create-role"])
 def test_without_access_control_init_sql_refuses_rbac_before_running_anything(launcher, statement, diagnostic):
     env = init_sql("CREATE TABLE ran_first (i INTEGER);",
                    statement)
@@ -71,7 +71,7 @@ def test_without_access_control_init_sql_refuses_rbac_before_running_anything(la
     (f"CREATE SECRET leaky (TYPE s3, KEY_ID 'key-id', SECRET '{PASSWORD}',, REGION 'x');",
      "[REDACTED: error of a credential statement]"),
     ("SELECT FROM;", "syntax error"),
-])
+], ids=["credential-syntax-error", "ordinary-syntax-error"])
 def test_rejected_init_sql_masks_sensitive_errors_and_preserves_ordinary_diagnostics(launcher, statement, diagnostic):
     # DuckDB quotes the failing line in syntax errors. Suppress the entire error for
     # credential statements, while ordinary syntax errors remain useful.

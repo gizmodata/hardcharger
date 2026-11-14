@@ -158,6 +158,7 @@ struct GuardContext {
   bool admin;
   bool block_unredacted_secrets;
   const SensitivePaths* sensitive_paths;
+  bool read_only = false;
 };
 
 // The category of command a non-admin may not run, if `piece` is one (e.g. "ATTACH",
@@ -165,7 +166,8 @@ struct GuardContext {
 std::optional<std::string> ClassifyGatedCommand(duckdb_v2_connection_handle connection, const Piece& piece,
                                                 DUCKDB_V2_STATEMENT_TYPE type);
 
-// Throws chargewire::Error(kPermissionDenied) when `piece` may not run.
+// Throws permission_denied when `piece` may not run; read_only for a reader's
+// attempt to move its secret directory.
 void CheckStatement(const GuardContext& context, const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type);
 
 // The type of the statement that actually runs: EXPLAIN ANALYZE runs the statement it
