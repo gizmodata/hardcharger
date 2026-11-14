@@ -2173,3 +2173,13 @@ th[aria-sort] .monitor-sort {
     margin-left: auto;
   }
 }
+
+.server-readonly {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+}
+.server-readonly .server-hint {
+  margin-left: 23px;
+}

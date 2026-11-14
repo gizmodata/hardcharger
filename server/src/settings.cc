@@ -472,7 +472,20 @@ const std::vector<Setting>& Settings() {
   return settings;
 }
 
+void CheckReadOnlySetting(const Session& session, const SettingCommand& command) {
+  if (!session.read_only_session()) return;
+  const bool local = command.scope != SettingCommand::Scope::kGlobal;
+  const bool allowed = command.name == "query_timeout" ||
+                       command.name == "idle_in_transaction_session_timeout" ||
+                       command.name == "session_tag" || command.name == "query_tag";
+  if (!local || !allowed) {
+    throw Error(ErrorCode::kReadOnly,
+                "This Hardcharger setting is not allowed in a read-only session", "25006");
+  }
+}
+
 void ApplySetting(Session& session, const SettingCommand& command) {
+  CheckReadOnlySetting(session, command);
   const auto& all = Settings();
   const auto it = std::find_if(all.begin(), all.end(), [&](const Setting& s) { return s.name == command.name; });
   if (it == all.end()) {

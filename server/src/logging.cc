@@ -2,6 +2,7 @@
 
 #include <boost/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -355,19 +356,27 @@ std::string MaskCredentials(std::string text) { return RedactCredentials(std::mo
 
 std::string LoggableSql(std::string_view sql) {
   if (auto kind = SensitiveStatement(sql)) return "[REDACTED: " + *kind + "]";
-  // Not a whole-statement credential statement, but an ATTACH connection string can
-  // still carry a password: mask just the value, keep the rest.
-  std::string text(sql);
-  if (text.size() > 4000) text = text.substr(0, 4000) + "\xe2\x80\xa6";
-  return MaskCredentials(std::move(text));
+  // Not a whole-statement credential statement, but any statement can still carry one: a
+  // credential option or named argument, an ATTACH connection string, a URL. Those values
+  // are masked on the statement's tokens (redact.hpp) and the rest is kept; long text is
+  // shortened after the masking, never before.
+  RedactedSql redacted = RedactSql(sql, 4000);
+  if (redacted.unreadable) return "[REDACTED: a statement that could not be read]";
+  return std::move(redacted.text);
 }
 
-bool IsCredentialStatement(std::string_view sql) { return SensitiveStatement(sql).has_value(); }
+bool IsCredentialStatement(std::string_view sql) {
+  if (SensitiveStatement(sql)) return true;
+  return SqlHasCredentials(sql).value_or(true);
+}
 
-std::string LoggableError(std::string_view sql, std::string_view error) {
-  // DuckDB's parser errors and "LINE n: ..." excerpts echo the statement; the error of
-  // a credential statement is dropped whole.
-  if (SensitiveStatement(sql)) return "[REDACTED: error of a credential statement]";
+std::string LoggableError(std::string_view sql, std::string_view error, bool credential_context) {
+  // Values can be transformed before an error quotes them (decoding, case folding,
+  // concatenation, casts, bound parameters). Literal substitution cannot protect them.
+  if (credential_context || SensitiveStatement(sql)) return std::string(kCredentialError);
+  const auto credentials = SqlHasCredentials(sql);
+  if (!credentials) return "[REDACTED: error of a statement that could not be read]";
+  if (*credentials) return std::string(kCredentialError);
   std::string text(error);
   if (auto at = text.find("\nLINE "); at != std::string::npos) text.resize(at);
   return MaskCredentials(std::move(text));

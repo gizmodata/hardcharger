@@ -326,6 +326,8 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // Runs Hardcharger's own statements on the session's connection (its profiler
   // settings, ...) unchecked: they are the server's, not the user's.
   void RunInternal(const std::function<void()>& run);
+  // One-way connection restriction, independent of the principal's privileges.
+  void SetReadOnly() { read_only_ = true; }
 
   // The rows of an introspection table this session may see, for the principal it acts as
   // now (its SET ROLE role included). `user_name`: hardcharger_effective_privileges()'s
@@ -357,6 +359,7 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   void InterruptRunning();
   void CheckBeforeBind(std::string_view sql, const boost::json::value& parameters = {}, bool preparing = false);
   chargewire::StatementOutcome RunCommand(const ParsedCommand& command);
+  void CheckReadOnlyCommand(const ParsedCommand& command) const;
   std::shared_ptr<arrow::RecordBatchReader> Track(std::shared_ptr<arrow::RecordBatchReader> rows,
                                                   std::shared_ptr<void> busy);
   void AuditAllowed();
@@ -365,6 +368,7 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   AccessControl& owner_;
   const Identity identity_;
   bool unrestricted_ = false;  // the superuser: an administrator without catalog_access rules
+  bool read_only_ = false;  // session engine thread only
   const std::string user_id_;  // empty for the administrator
   std::string credential_;     // the user's password hash when the session started
   std::string tenant_id_;

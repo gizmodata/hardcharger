@@ -115,6 +115,16 @@ void ResolveEnvironmentVariables(ClientConfig& config) {
     }
   }
 
+  if (!config.read_only_given) {
+    if (const char* val = get_env("HARDCHARGER_CLIENT_READ_ONLY")) {
+      std::string lower = val;
+      std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) { return std::tolower(ch); });
+      if (lower == "true" || lower == "1" || lower == "yes" || lower == "on") config.read_only = true;
+      else if (lower == "false" || lower == "0" || lower == "no" || lower == "off") config.read_only = false;
+      else config.invalid_option = "HARDCHARGER_CLIENT_READ_ONLY must be true or false";
+    }
+  }
+
   if (!config.tls_given && !config.uri_given) {
     if (const char* val = get_env("HARDCHARGER_TLS")) {
       std::string lower = val;

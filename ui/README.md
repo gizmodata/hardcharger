@@ -50,6 +50,12 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   Closing, reloading or leaving the page ends its sessions on the server at once (keepalive
   `DELETE`s on `pagehide`), rather than at their idle timeout; with a transaction open the
   browser asks first. A page brought back with Back loads again, with new sessions.
+- 🔒 **Read-only sessions**: select the checkbox when adding a connection, or **Read-only**
+  beside an editor tab's session id. The server confirms the restriction before the checkbox
+  locks. It cannot be unchecked on that session; choose **New session**, then uncheck it
+  before running to request a writable session. Automatic replacement retains read-only.
+  Finish an open transaction before enabling it. Older servers refuse explicit read-only
+  requests; ordinary connections still work. Upload is disabled in a read-only tab.
 - 📊 **Results grid** for up to a million rows (only the rows in view are drawn), with DuckDB's
   own formatting of decimals, dates, timestamps, intervals, lists, structs, maps and blobs.
   - **Sort**: click a column header (again for descending, a third time to clear); NULLs sort

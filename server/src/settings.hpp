@@ -41,6 +41,8 @@ const std::vector<Setting>& Settings();
 
 // Applies a SET or RESET; throws chargewire::Error when it may not or the value is bad.
 void ApplySetting(Session& session, const SettingCommand& command);
+// Also used to preflight a batch before any of its settings are changed.
+void CheckReadOnlySetting(const Session& session, const SettingCommand& command);
 
 // The settings `session` may see, as hardcharger_settings() returns them.
 std::shared_ptr<arrow::RecordBatch> SettingsTable(const Session& session);

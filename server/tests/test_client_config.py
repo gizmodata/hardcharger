@@ -26,7 +26,7 @@ PORTED = ["UsernameFromHardchargerUser", "UsernameFallsBackToHardchargerAdminUse
 
 @pytest.fixture(scope="module")
 def results():
-    return run_client_tests(gtest_filter="ClientConfigEnvTest.*:ClientConnectionUriTest.*:ClientTlsDefaultTest.*")
+    return run_client_tests(gtest_filter="ClientConfigEnvTest.*:ClientConnectionUriTest.*:ClientTlsDefaultTest.*:ClientConfigReadOnly.*")
 
 
 def test_every_1x_case_is_ported():

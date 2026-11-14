@@ -24,6 +24,8 @@ export interface TabDoc {
   role: string;
   /** The server the tab's session is on: a saved server's id, or "" for this server. */
   server: string;
+  /** undefined inherits the connection's default; explicit false is a new-session choice. */
+  readOnly?: boolean;
   rowLimit: number;
   /** The saved query this tab edits, and its text as last saved (for the unsaved dot). */
   savedQueryId?: string;
@@ -87,6 +89,7 @@ function normalized(t: TabDoc): TabDoc {
     schema: typeof t.schema === "string" ? t.schema : "",
     role: typeof t.role === "string" ? t.role : "",
     server: typeof t.server === "string" ? t.server : "",
+    readOnly: typeof t.readOnly === "boolean" ? t.readOnly : undefined,
     rowLimit: typeof limit === "number" && (rowLimits as readonly number[]).includes(limit) ? limit : defaultRowLimit,
   };
 }

@@ -8,6 +8,7 @@
 #include <set>
 
 #include "duckdb_sql.hpp"
+#include "duckdb_read_only.hpp"
 #include "platform.hpp"
 #include "chargewire/errors.hpp"
 
@@ -390,7 +391,11 @@ std::optional<Piece> Wrapped(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type) 
   if (type == DUCKDB_V2_STATEMENT_TYPE_EXPLAIN && !t.empty() && t[0].IsWord("EXPLAIN")) {
     i = 1;
     if (i < t.size() && (t[i].IsWord("ANALYZE") || t[i].IsWord("ANALYSE"))) i++;
-    if (i < t.size() && t[i].IsOp("(")) {
+    // Parentheses here can start the query itself, including a UNION. Only the
+    // EXPLAIN option names introduce an option list; never discard a query term.
+    if (i + 1 < t.size() && t[i].IsOp("(") &&
+        (t[i + 1].IsWord("ANALYZE") || t[i + 1].IsWord("ANALYSE") ||
+         t[i + 1].IsWord("FORMAT") || t[i + 1].IsWord("VERBOSE"))) {
       int depth = 0;
       do {
         depth += DepthChange(t[i]);
@@ -883,6 +888,7 @@ void CheckStatement(const GuardContext& context, const Piece& piece, DUCKDB_V2_S
   // the file system.
   if (context.sensitive_paths != nullptr && context.sensitive_paths->enabled()) {
     if (!SetsOf(piece, "secret_directory").empty()) {
+      if (context.read_only) throw chargewire_duckdb::ReadOnlyRefusal("changing secret_directory");
       Deny("Permission denied: Hardcharger blocked changing secret_directory after startup; DuckDB's "
            "persistent secrets stay where the server put them.");
     }

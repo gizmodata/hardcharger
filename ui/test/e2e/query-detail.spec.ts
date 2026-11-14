@@ -7,8 +7,9 @@ test("query windows retain profiles and refresh independently of the monitor", a
   const server = await startOwnServer(["--enable-instrumentation"]);
   const connection = await connect({ url: `${server.url}/chargewire`, ...server.admin, resultPartitions: 1 });
   const sql =
-    "SELECT sum(i) AS popout_profile_probe FROM range(100000) t(i)\n" +
-    Array.from({ length: 100 }, (_, i) => `-- Clipboard scroll line ${i}`).join("\n");
+    "SELECT sum(i\n" +
+    Array.from({ length: 100 }, () => "  + 0").join("\n") +
+    "\n) AS popout_profile_probe FROM range(100000) t(i)";
   try {
     await connection.execute("SET hardcharger.capture_query_profile = 'detailed'");
     await connection.query(sql);
@@ -100,6 +101,45 @@ test("query windows retain profiles and refresh independently of the monitor", a
     await details.getByRole("button", { name: "Close window", exact: true }).click();
     await closed;
     check();
+  } finally {
+    await connection.close();
+    await page.goto("about:blank");
+    await server.stop();
+  }
+});
+
+test("query windows copy masked comments without retaining a profile", async ({ page }) => {
+  const server = await startOwnServer(["--enable-instrumentation"]);
+  const connection = await connect({ url: `${server.url}/chargewire`, ...server.admin });
+  const sql = "SELECT 1 AS masked_profile_probe\n-- clipboard_private_comment";
+  const recordedSql = "SELECT 1 AS masked_profile_probe\n-- ***";
+  try {
+    await connection.execute("SET hardcharger.capture_query_profile = 'detailed'");
+    await connection.query("SELECT 0 AS enable_profile_first");
+    await connection.query(sql);
+    await signIn(page, server.admin, server.url);
+    await page.getByRole("button", { name: "SQL Monitor", exact: true }).click();
+    const opened = page.waitForEvent("popup");
+    await page
+      .getByTestId("sql-monitor-table")
+      .getByRole("button", { name: /masked_profile_probe/ })
+      .click();
+    const details = await opened;
+    const check = await watchPage(details);
+    await expect(details.getByLabel("SQL text", { exact: true })).toHaveText(recordedSql);
+    await expect(details.getByRole("region", { name: "Captured query profile" })).toContainText(
+      "No profile was captured",
+    );
+    await details.getByRole("button", { name: "Copy SQL", exact: true }).click();
+    await expect(details.getByRole("status").filter({ hasText: "Copied to clipboard." })).toBeVisible();
+    expect(await pasted(details)).toBe(recordedSql);
+    await details.reload();
+    await expect(details.getByLabel("SQL text", { exact: true })).toHaveText(recordedSql);
+    await expect(details.getByRole("region", { name: "Captured query profile" })).toContainText(
+      "No profile was captured",
+    );
+    check();
+    await details.close();
   } finally {
     await connection.close();
     await page.goto("about:blank");

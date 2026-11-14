@@ -28,6 +28,8 @@ export interface ConnectionOptions {
   /** The session's catalog and schema (empty: the user's default). */
   catalog?: string;
   schema?: string;
+  /** Request server-enforced read-only mode when creating this session. */
+  readOnly?: boolean;
   /**
    * false: a session the server lost fails with session_not_found instead of being replaced
    * (an editor tab decides itself, since it knows whether a transaction was open).
@@ -38,15 +40,16 @@ export interface ConnectionOptions {
 }
 
 /** A connection (one server session) signed in with the tab's access token. */
-export function openConnection(auth: SignedIn, options: ConnectionOptions = {}): Promise<Connection> {
+export async function openConnection(auth: SignedIn, options: ConnectionOptions = {}): Promise<Connection> {
   const { signal, catalog, schema, reconnect } = options;
-  return connect({
+  const conn = await connect({
     url: chargewireBase(),
     fetch: pageRequests.fetch,
     token: auth.token,
     ...(catalog ? { catalog } : {}),
     ...(schema ? { schema } : {}),
     ...(reconnect === undefined ? {} : { reconnect }),
+    ...(options.readOnly ? { sessionOptions: { read_only: true }, reconnect: false } : {}),
     // One stream per result: the UI reads at most the row limit, and the browser's six
     // connections per host are shared by every tab of the app.
     resultPartitions: 1,
@@ -54,4 +57,19 @@ export function openConnection(auth: SignedIn, options: ConnectionOptions = {}):
     logger: { warn: (message: string) => console.info(`[chargewire] ${message}`) },
     ...(signal ? { signal } : {}),
   });
+  return confirmReadOnly(conn, options.readOnly);
+}
+
+/** Never expose a requested read-only connection before the server confirms it. */
+export async function confirmReadOnly(conn: Connection, requested = false): Promise<Connection> {
+  if (!requested) return conn;
+  try {
+    if ((await conn.getSession()).options?.["read_only"] !== true) {
+      throw new Error("The server did not confirm read-only mode. The session was closed.");
+    }
+    return conn;
+  } catch (err) {
+    await conn.close().catch(() => {});
+    throw err;
+  }
 }

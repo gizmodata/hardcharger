@@ -110,6 +110,7 @@ export function EditorTab(props: Props) {
           app.openConnection({
             catalog: where.catalog,
             schema: where.schema,
+            readOnly: where.readOnly,
             reconnect: false,
             server: tab.server,
             queryTag: null,
@@ -134,6 +135,8 @@ export function EditorTab(props: Props) {
   const [expanded, setExpanded] = useState(false);
   const [notice, setNotice] = useState<string | undefined>();
   const [info, setInfo] = useState<SessionInfo | undefined>();
+  const [changingMode, setChangingMode] = useState(false);
+  const changingModeRef = useRef(false);
   const [catalogs, setCatalogs] = useState<string[] | undefined>();
   const [schemaList, setSchemaList] = useState<{ catalog: string; names: string[] } | undefined>();
   const [listingError, setListingError] = useState<string | undefined>();
@@ -149,12 +152,13 @@ export function EditorTab(props: Props) {
     catalog: tab.catalog || defaults.catalog,
     schema: tab.schema || defaults.schema,
     role: tab.role,
+    readOnly: tab.readOnly ?? app.servers.find(tab.server)?.saved.readOnly ?? false,
   };
   const sessionId = info?.serverId ?? info?.id ?? "";
   const schemas = schemaList && schemaList.catalog === where.catalog ? schemaList.names : undefined;
   const transaction = info?.transaction ?? "none";
   const inTransaction = transaction !== "none";
-  const running = run.kind === "running";
+  const running = run.kind === "running" || changingMode;
   const failed = run.kind === "done" && run.run.statements.some((s) => s.status === "error");
 
   useEffect(() => {
@@ -261,7 +265,7 @@ export function EditorTab(props: Props) {
 
   const execute = useCallback(
     async (statements: string[], range: monaco.IRange | undefined) => {
-      if (controller.current || statements.length === 0) return;
+      if (controller.current || changingModeRef.current || statements.length === 0) return;
       const abort = new AbortController();
       controller.current = abort;
       const startedAt = performance.now();
@@ -313,7 +317,7 @@ export function EditorTab(props: Props) {
     },
     // where and tab are read when a run starts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [app, tabSession, readSession, tab.rowLimit, where.catalog, where.schema],
+    [app, tabSession, readSession, tab.rowLimit, where.catalog, where.schema, where.readOnly],
   );
 
   const runCurrent = useCallback(() => {
@@ -407,7 +411,36 @@ export function EditorTab(props: Props) {
     if (!props.connections.some((connection) => connection.id === server)) return;
     // QueryPage remounts this tab on its new server, closing the old session and clearing
     // its results. Read Monaco directly so even the latest keystroke survives the switch.
-    onChange({ server, catalog: "", schema: "", role: "", sql: editor.current?.value() ?? tab.sql });
+    onChange({
+      server,
+      catalog: "",
+      schema: "",
+      role: "",
+      readOnly: undefined,
+      sql: editor.current?.value() ?? tab.sql,
+    });
+  };
+
+  const changeReadOnly = async (checked: boolean) => {
+    if (controller.current || changingModeRef.current || inTransaction || info?.readOnly) return;
+    if (!tabSession.open) {
+      onChange({ readOnly: checked });
+      return;
+    }
+    if (!checked) return;
+    changingModeRef.current = true;
+    setChangingMode(true);
+    try {
+      setInfo(await tabSession.enableReadOnly(where));
+      onChange({ readOnly: true });
+      setNotice("Read-only is enabled for this session.");
+    } catch (err) {
+      setInfo(undefined);
+      setNotice(errorMessage(err));
+    } finally {
+      changingModeRef.current = false;
+      setChangingMode(false);
+    }
   };
 
   const newSession = async () => {
@@ -475,7 +508,7 @@ export function EditorTab(props: Props) {
       </div>
       {props.resizeHandle}
       <div className="toolbar">
-        {running ? (
+        {run.kind === "running" ? (
           <button
             type="button"
             className="btn btn-danger"
@@ -490,6 +523,7 @@ export function EditorTab(props: Props) {
           <button
             type="button"
             className="btn btn-primary"
+            disabled={changingMode}
             onClick={runCurrent}
             data-testid="run-button"
             title="Run the statement at the cursor, or the selection (Ctrl/⌘+Enter)"
@@ -564,6 +598,7 @@ export function EditorTab(props: Props) {
           }
           title="Load a CSV / Excel / Parquet / JSON / Arrow file into a table"
           data-testid="upload-button"
+          disabled={running || info?.readOnly || where.readOnly}
         >
           <FileUp size={14} /> Upload data
         </button>
@@ -657,73 +692,91 @@ export function EditorTab(props: Props) {
         </span>
       </div>
 
-      {(info || inTransaction) && (
-        <div className="session-bar" data-testid="session-bar">
-          {info && (
-            <button
-              type="button"
-              className="chip chip-button mono"
-              data-testid="session-chip"
-              title={`Session ${sessionId}: the server's log lines, audit records and KILL SESSION name it so (Chargewire session ${info.id}). Click to copy.`}
-              onClick={() =>
-                void copyText(sessionId).then((ok) =>
-                  setNotice(ok ? "Session id copied." : "The browser refused the copy."),
-                )
-              }
-            >
-              Session {sessionId.replace(/^s_/, "").slice(0, 8)} <Copy size={11} />
-            </button>
-          )}
-          {transaction === "open" && (
-            <>
-              <span className="badge badge-warn" data-testid="in-transaction">
-                In transaction
-              </span>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={running}
-                onClick={() => void execute(["COMMIT"], undefined)}
-              >
-                <Check size={14} /> Commit
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={running}
-                onClick={() => void execute(["ROLLBACK"], undefined)}
-              >
-                <Undo2 size={14} /> Rollback
-              </button>
-            </>
-          )}
-          {transaction === "aborted" && (
-            <>
-              <span className="badge badge-danger" data-testid="transaction-failed">
-                Transaction failed — Rollback to continue
-              </span>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={running}
-                onClick={() => void execute(["ROLLBACK"], undefined)}
-              >
-                <Undo2 size={14} /> Rollback
-              </button>
-            </>
-          )}
-          <span className="toolbar-spacer" />
+      <div className="session-bar" data-testid="session-bar">
+        {info && (
           <button
             type="button"
-            className="btn btn-ghost btn-sm"
-            disabled={running}
-            onClick={() => void newSession()}
-            title="End this tab's session (rolling back an open transaction); the next run starts a new one"
+            className="chip chip-button mono"
+            data-testid="session-chip"
+            title={`Session ${sessionId}: the server's log lines, audit records and KILL SESSION name it so (Chargewire session ${info.id}). Click to copy.`}
+            onClick={() =>
+              void copyText(sessionId).then((ok) =>
+                setNotice(ok ? "Session id copied." : "The browser refused the copy."),
+              )
+            }
           >
-            <RotateCcw size={13} /> New session
+            Session {sessionId.replace(/^s_/, "").slice(0, 8)} <Copy size={11} />
           </button>
+        )}
+        <div className="session-mode">
+          <label>
+            <input
+              type="checkbox"
+              checked={info?.readOnly || where.readOnly === true}
+              disabled={running || inTransaction || info?.readOnly === true}
+              onChange={(e) => void changeReadOnly(e.target.checked)}
+            />
+            <span>Read-only</span>
+          </label>
+          <span className="session-mode-note">
+            {changingMode
+              ? "Confirming with the server…"
+              : info?.readOnly
+                ? "Locked for this session. Choose New session to change."
+                : inTransaction
+                  ? "Finish the transaction before enabling read-only."
+                  : "Once enabled, stays on until a new session."}
+          </span>
         </div>
-      )}
+        {transaction === "open" && (
+          <>
+            <span className="badge badge-warn" data-testid="in-transaction">
+              In transaction
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={running}
+              onClick={() => void execute(["COMMIT"], undefined)}
+            >
+              <Check size={14} /> Commit
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={running}
+              onClick={() => void execute(["ROLLBACK"], undefined)}
+            >
+              <Undo2 size={14} /> Rollback
+            </button>
+          </>
+        )}
+        {transaction === "aborted" && (
+          <>
+            <span className="badge badge-danger" data-testid="transaction-failed">
+              Transaction failed — Rollback to continue
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={running}
+              onClick={() => void execute(["ROLLBACK"], undefined)}
+            >
+              <Undo2 size={14} /> Rollback
+            </button>
+          </>
+        )}
+        <span className="toolbar-spacer" />
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          disabled={running}
+          onClick={() => void newSession()}
+          title="End this tab's session (rolling back an open transaction); the next run starts a new one"
+        >
+          <RotateCcw size={13} /> New session
+        </button>
+      </div>
 
       {notice && (
         <div className="notice" role="status" data-testid="tab-notice">

@@ -480,3 +480,16 @@ TEST(AdminCommandGuard, CheckWrapperOkForAllowed) {
 // End-to-end integration: prove the gate is wired into the query path and keys
 // off the session role. A non-admin token is rejected for gated commands and
 // allowed for ordinary queries; an admin (basic-auth) session is unaffected.
+
+TEST(AdminCommandGuard, ExplainParenthesizedQueriesKeepTheirWholeBody) {
+  for (const std::string sql : {"EXPLAIN ANALYZE (SELECT 1) UNION ALL (SELECT 2)",
+                                "EXPLAIN ANALYZE ((SELECT 1) UNION ALL (SELECT 2))",
+                                "EXPLAIN ANALYZE (SELECT 1)",
+                                "EXPLAIN ANALYZE (FORMAT JSON) SELECT 1"}) {
+    SCOPED_TRACE(sql);
+    const auto pieces = hardcharger::SplitStatements(Connection(), sql);
+    ASSERT_EQ(pieces.size(), 1);
+    const auto type = hardcharger::StatementType(Connection(), pieces[0].text);
+    EXPECT_EQ(hardcharger::ExecutedType(Connection(), pieces[0], type), DUCKDB_V2_STATEMENT_TYPE_SELECT);
+  }
+}

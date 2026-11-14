@@ -113,6 +113,7 @@ class Session : public chargewire_duckdb::DuckDBSession {
                                                      const chargewire::MetadataFilter& filter) override;
   chargewire::OptionErrors SetOptions(const boost::json::object& options) override;
   boost::json::object Options() override;
+  void SetReadOnly() override;
   void Commit() override;
   void Rollback() override;
   chargewire::TransactionState Transaction() override;
@@ -150,6 +151,10 @@ class Session : public chargewire_duckdb::DuckDBSession {
   const std::string& id() const { return id_; }
   const chargewire::Principal& principal() const { return principal_; }
   bool admin() const { return principal_.role == "admin"; }
+  bool read_only_session() const { return read_only_session_; }
+  // Native SQL callbacks lose their typed error through DuckDB's C API. Remember
+  // this refusal so the statement boundary can return read_only / 25006.
+  void RequireWritableSqlFunction();
   // An administrator whose token carries no catalog_access rules: the superuser, who
   // sees and manages every session. A restricted administrator (admin token with rules)
   // is not one, so it sees only its own session, like a non-administrator.
@@ -235,7 +240,7 @@ class Session : public chargewire_duckdb::DuckDBSession {
   // `ids`: what it is recorded and logged under.
   chargewire::StatementOutcome Track(StatementKind kind, std::string_view sql, const ExecutionIds& ids,
                                   const std::function<chargewire::StatementOutcome()>& work,
-                                  std::string_view shown = {});
+                                  std::string_view shown = {}, bool credential_context = false);
   // A new statement starts: the previous one's cancellation is over.
   void BeginStatement();
   // A catalog the server owns (instrumentation, logs) and what it is called in messages.
@@ -247,7 +252,7 @@ class Session : public chargewire_duckdb::DuckDBSession {
   void GuardManagedCatalog(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE type, const ManagedCatalog& managed) const;
   // Turns DuckDB's profiler on or off for the next execution; returns where it will write
   // the profile (empty: none).
-  std::string PrepareProfile(const std::string& execution_id);
+  std::string PrepareProfile(const std::string& execution_id, bool allowed);
 
   Runtime& runtime_;
   const SensitivePaths& sensitive_paths_;
@@ -259,6 +264,8 @@ class Session : public chargewire_duckdb::DuckDBSession {
   const int64_t started_at_us_;
   std::atomic<int> running_ = 0;
   std::atomic<bool> killed_ = false;
+  std::atomic<bool> read_only_session_ = false;
+  std::atomic<bool> read_only_function_refused_ = false;
   std::string end_reason_;  // Ending()'s, on the engine thread; empty: closed by its client
   std::atomic<bool> interrupted_ = false;  // the current statement was cancelled
   std::atomic<chargewire::TransactionState> transaction_ = chargewire::TransactionState::kNone;
@@ -268,10 +275,7 @@ class Session : public chargewire_duckdb::DuckDBSession {
   Settings settings_;
   mutable std::mutex activity_mutex_;
   Activity activity_;
-  // Each prepared statement's Chargewire id (p_...), its id in the logs and instrumentation.
-  std::map<const chargewire::PreparedStatement*, std::string> prepared_statement_ids_;
-  // Each prepared statement's text, as the logs show it (for its executions' activity).
-  std::map<const chargewire::PreparedStatement*, std::string> prepared_sql_;
+
 };
 
 // The session whose statement this thread is running, for the SQL functions; null
