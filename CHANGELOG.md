@@ -7,29 +7,15 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
-## [2.12.1] - 2026-11-14
-
 ### Changed
 
-- The web UI's JavaScript client moves from chargewire-js 2.3.5 to 2.3.6 (`ui/vendor`; the same
-  files as npm's `@gizmodata/chargewire@2.3.6`). 2.3.6 fixes a session that replaces a lost one,
-  or the first session on a server that was stopped, opening in the new catalog with the old
-  schema after the schema and then the catalog were set. The UI's tabs were not affected (a tab
-  sets catalog and schema in one step, or reads the session right after, and replaces a lost
-  session itself); a test now holds that in place with the real client.
-- The Python package's `[adbc]` extra requires `adbc-driver-hardcharger` 2.5.0 or newer (was
-  2.4.9): `Server.connect()` then gets the driver that opens a connection in the catalog and
-  schema it is given.
-- The `-adbc` images bundle GizmoSQL's ADBC driver 2.0.18 (was 2.0.15): its library exports
-  only the ADBC API, as the ADBC shared-library requirements ask. Nothing changes in how the
-  image loads it.
 - **The `-adbc` images' Quack driver moves to 1.0.4 (was 0.1.0-alpha.11): it now reaches DuckDB
   2.0 Quack servers, and no longer DuckDB 1.5 ones.** Quack 1.x speaks Quack protocol version 3,
   the one DuckDB 2.0's `quack_serve` serves; the alpha spoke DuckDB 1.5's (version 1) and failed
   its handshake with a DuckDB 2.0 server (tried against Hardcharger 2.12.0 serving Quack). A
   connection to a DuckDB 1.5 Quack server now fails at connect (`Failed to deserialize: expected
   end of object, but found field id: 7`, from a DuckDB 1.5.6 server): move that DuckDB to 2.0, or
-  keep an `-adbc` image up to 2.12.0 for it. The driver's
+  keep an `-adbc` image up to 2.12.1 for it. The driver's
   [changelog](https://github.com/gizmodata/adbc-driver-quack/blob/main/CHANGELOG.md) lists what
   1.0 fixed since the alpha, among them a naive `TIMESTAMP` coming back as UTC, `TIMESTAMP_NS`
   losing its nanoseconds, and dates, times, UUIDs and intervals nested in LIST/STRUCT/MAP coming
@@ -58,6 +44,23 @@ own changelog in `python/CHANGELOG.md`.
   query and must report the driver version their manifest names (Quack against a Quack server
   the image's own Hardcharger starts), and GizmoSQL, Oracle and Db2, which have no server in the
   test, must load and fail with their own connection error.
+
+## [2.12.1] - 2026-11-14
+
+### Changed
+
+- The web UI's JavaScript client moves from chargewire-js 2.3.5 to 2.3.6 (`ui/vendor`; the same
+  files as npm's `@gizmodata/chargewire@2.3.6`). 2.3.6 fixes a session that replaces a lost one,
+  or the first session on a server that was stopped, opening in the new catalog with the old
+  schema after the schema and then the catalog were set. The UI's tabs were not affected (a tab
+  sets catalog and schema in one step, or reads the session right after, and replaces a lost
+  session itself); a test now holds that in place with the real client.
+- The Python package's `[adbc]` extra requires `adbc-driver-hardcharger` 2.5.0 or newer (was
+  2.4.9): `Server.connect()` then gets the driver that opens a connection in the catalog and
+  schema it is given.
+- The `-adbc` images bundle GizmoSQL's ADBC driver 2.0.18 (was 2.0.15): its library exports
+  only the ADBC API, as the ADBC shared-library requirements ask. Nothing changes in how the
+  image loads it.
 
 ### Fixed
 
