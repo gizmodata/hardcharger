@@ -216,7 +216,7 @@ struct CertificateInfo {
   bool verified = false;           // chained to a trusted root and named the host
 };
 
-std::string OneLine(X509_NAME* name) {
+std::string OneLine(const X509_NAME* name) {
   if (name == nullptr) return {};
   BIO* bio = BIO_new(BIO_s_mem());
   X509_NAME_print_ex(bio, name, 0, XN_FLAG_RFC2253);
