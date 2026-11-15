@@ -87,6 +87,10 @@ arrow::Status CheckNameFree(const Snapshot& snap, const std::string& name) {
   if (IdentifiersEqual(name, kPublicRoleName)) {
     return AccessControlError("PUBLIC is a reserved role name");
   }
+  if (IdentifiersEqual(name, kSystemAdminName)) {
+    return AccessControlError(std::string(kSystemAdminName) +
+                              " is the name of the System Admin capability: no user or role can take it");
+  }
   if (snap.FindUserByName(name))
     return AccessControlError("a user named " + name + " already exists");
   if (snap.FindRoleByName(name))
@@ -148,6 +152,24 @@ bool IsTenantAdmin(const Snapshot& snap, const Principal& actor, const std::stri
   if (tenant_id.empty() || actor.superuser) return false;
   const RoleRecord* admin = snap.TenantRole(tenant_id, kTenantAdminSuffix);
   return admin && snap.RolesOf(actor).count(admin->id) > 0;
+}
+
+// Who alone grants and revokes SYSTEM ADMIN, and changes what carries it.
+constexpr const char* kOnlySystemAdministrators =
+    "only the administrator, or a user acting as System Admin (SET ROLE SYSTEM ADMIN)";
+
+// A user acting as System Admin changes the store only while it still holds SYSTEM ADMIN
+// in the store as the change's own transaction reads it: a revoke committed on any replica
+// before this transaction, which this replica's snapshot may not show yet, stops it.
+arrow::Status RequireStillSystemAdmin(const Snapshot& snap, const Principal& actor, const std::string& kind) {
+  if (!actor.acts_as_system_admin()) return arrow::Status::OK();
+  Principal user = Principal::User(actor.acting_user_id, actor.user_name);
+  user.idp_issuer = actor.idp_issuer;
+  user.idp_groups = actor.idp_groups;
+  if (snap.HoldsSystemAdmin(user)) return arrow::Status::OK();
+  return AccessControlError("Hardcharger blocked " + kind + ": user " + actor.user_name + " no longer holds " +
+                            kSystemAdminName + ", which SET ROLE made active. Run RESET ROLE to go on as " +
+                            actor.user_name);
 }
 
 std::string TenantName(const Snapshot& snap, const std::string& tenant_id) {
@@ -670,7 +692,8 @@ arrow::Result<CommandResult> RbacEngine::ExecuteScopedToken(const ScopedTokenCom
           grew = true;
       }
     }
-    ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot&) {
+    ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot& now) {
+      ARROW_RETURN_NOT_OK(RequireStillSystemAdmin(now, actor, CommandKind(c)));
       for (const auto& id : doomed) ARROW_RETURN_NOT_OK(txn.DeleteScopedToken(id));
       return arrow::Status::OK();
     }));
@@ -740,6 +763,7 @@ arrow::Result<CommandResult> RbacEngine::ExecuteScopedToken(const ScopedTokenCom
     token.parent_id = parent.id;
   }
   ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot& now) {
+    ARROW_RETURN_NOT_OK(RequireStillSystemAdmin(now, actor, CommandKind(c)));
     for (const auto& t : now.scoped_tokens()) {
       if (t.user_id == user->id && IdentifiersEqual(t.name, c.name)) {
         return AccessControlError("user " + user->name + " already has a scoped token named " +
@@ -786,15 +810,34 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       return user ? user->name : id;
     };
 
+    // SYSTEM ADMIN, as a user holds it: by a grant of its own, and through each role
+    // granted it. Holding it changes nothing until the session says SET ROLE SYSTEM ADMIN.
+    auto system_admin_rows = [&](const Principal& user) {
+      for (const auto& source : snap->SystemAdminSources(user)) {
+        for (const auto& r : snap->system_admins()) {
+          if (source.empty() ? (r.kind != PrincipalKind::kUser || r.principal_id != user.user_id)
+                             : (r.kind != PrincipalKind::kRole || r.principal_id != source)) {
+            continue;
+          }
+          const auto* role = source.empty() ? nullptr : snap->FindRoleById(source);
+          result.rows.push_back({kSystemAdminName, "SERVER", "*", "", role ? role->name : user.user_name,
+                                 source.empty() ? "USER" : "ROLE", "NO", grantor_name(r.granted_by)});
+        }
+      }
+    };
+
     // Which roles to list: one role, or every role a user holds.
     std::vector<std::string> role_ids;
     if (!show->principal) {
       if (actor.superuser) {
-        result.rows.push_back({"ALL", "SERVER", "*", "", actor.user_name, "SUPERUSER", "YES", ""});
+        // A user acting as System Admin holds what the administrator holds, and says so.
+        result.rows.push_back({"ALL", "SERVER", "*", "", actor.user_name,
+                               actor.acts_as_system_admin() ? kSystemAdminName : "SUPERUSER", "YES", ""});
         return result;
       }
       // The roles the session acts with (SET ROLE narrows them).
       for (const auto& id : snap->RolesOf(actor)) role_ids.push_back(id);
+      system_admin_rows(actor);
     } else {
       ARROW_ASSIGN_OR_RAISE(auto who, ResolveGrantee(*snap, *show->principal));
       if (who.kind == PrincipalKind::kUser) {
@@ -804,12 +847,20 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
               "their own grants; administrators see everyone's");
         }
         for (const auto& id : snap->EffectiveRoleIds(who.id)) role_ids.push_back(id);
+        // Its own session's groups count for the caller itself; for another user (the
+        // administrator asks), what the store alone gives.
+        system_admin_rows(!actor.superuser ? actor : Principal::User(who.id, who.name));
       } else {
         if (!actor.superuser && !snap->EffectiveRoleIds(actor.user_id).count(who.id)) {
           return AccessControlError("Hardcharger blocked SHOW GRANTS for role " + who.name +
                                     ", which you do not hold");
         }
         role_ids.push_back(who.id);
+        for (const auto& r : snap->system_admins()) {
+          if (r.kind != PrincipalKind::kRole || r.principal_id != who.id) continue;
+          result.rows.push_back({kSystemAdminName, "SERVER", "*", "", who.name, "ROLE", "NO",
+                                 grantor_name(r.granted_by)});
+        }
       }
       // Role memberships of the principal itself.
       for (const auto& m : snap->memberships()) {
@@ -898,6 +949,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       -> arrow::Status {
     ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot& snap) {
       cascaded = 0;
+      ARROW_RETURN_NOT_OK(RequireStillSystemAdmin(snap, actor, CommandKind(command)));
       ARROW_RETURN_NOT_OK(fn(txn, snap));
       ARROW_ASSIGN_OR_RAISE(auto after, txn.Reload());
       const auto fallen = after->FallenDelegations();
@@ -966,6 +1018,12 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
     ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
       const auto* existing = snap.FindUserByName(c->name);
       if (!existing) return AccessControlError("user " + c->name + " does not exist");
+      // A new password, ENABLE or an attribute of a user that can act as System Admin would
+      // hand that to whoever makes the change.
+      if (!actor.superuser && snap.UserCarriesSystemAdmin(existing->id)) {
+        return AccessControlError("Hardcharger blocked ALTER USER: user " + existing->name + " holds " +
+                                  kSystemAdminName + "; " + kOnlySystemAdministrators + " changes it");
+      }
       UserRecord user = *existing;
       user_id = user.id;
       switch (c->action) {
@@ -1015,6 +1073,10 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
         }
         return AccessControlError("user " + c->name + " does not exist");
       }
+      if (!actor.superuser && snap.UserCarriesSystemAdmin(user->id)) {
+        return AccessControlError("Hardcharger blocked DROP USER: user " + user->name + " holds " +
+                                  kSystemAdminName + "; " + kOnlySystemAdministrators + " drops it");
+      }
       ARROW_ASSIGN_OR_RAISE(auto owned, OwnedObjects(txn, snap, OwnerKind::kUser, user->id, resolver));
       if (!owned.empty()) {
         return AccessControlError("user " + user->name + " owns " + Join(owned) +
@@ -1059,6 +1121,10 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       }
       if (role->builtin)
         return AccessControlError("the built-in role " + role->name + " cannot be dropped");
+      if (!actor.superuser && snap.RoleCarriesSystemAdmin(role->id)) {
+        return AccessControlError("Hardcharger blocked DROP ROLE: role " + role->name + " holds " +
+                                  kSystemAdminName + "; " + kOnlySystemAdministrators + " drops it");
+      }
       ARROW_ASSIGN_OR_RAISE(auto owned, OwnedObjects(txn, snap, OwnerKind::kRole, role->id, resolver));
       if (!owned.empty()) {
         return AccessControlError("role " + role->name + " owns " + Join(owned) +
@@ -1089,6 +1155,16 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                                     " (only an administrator, or a holder of it "
                                     "WITH ADMIN OPTION)");
         }
+        // Membership in a role that holds SYSTEM ADMIN (itself, or through a role it was
+        // granted) is the capability: its admin option gives and takes it no longer. (Said
+        // to someone who administers the role, and so sees what it holds. A membership
+        // someone else did grant, on an older replica, carries nothing:
+        // Snapshot::SystemAdminSources.)
+        if (!actor.superuser && snap.RoleCarriesSystemAdmin(role->id)) {
+          return AccessControlError("Hardcharger blocked " + CommandKind(command) + ": role " + role->name +
+                                    " holds " + kSystemAdminName + "; " + kOnlySystemAdministrators +
+                                    " grants or revokes it");
+        }
         for (const auto& g : c->grantees) {
           ARROW_ASSIGN_OR_RAISE(auto grantee, ResolveGrantee(snap, g));
           if (snap.TenantOf(grantee.kind, grantee.id) != role_tenant) {
@@ -1113,6 +1189,19 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
               }
             }
             if (existing) {
+              // A membership in a role that holds SYSTEM ADMIN carries it only when the
+              // administrator granted it: the administrator's grant of one that a role's
+              // admin-option holder made makes it the administrator's, from now on.
+              if (actor.superuser && !existing->granted_by.empty() && snap.RoleCarriesSystemAdmin(role->id)) {
+                ARROW_RETURN_NOT_OK(txn.DeleteMembership(grantee.kind, grantee.id, role->id));
+                MembershipRecord taken = *existing;
+                taken.admin_option = existing->admin_option || c->with_admin_option;
+                taken.granted_by = grantor;
+                ARROW_RETURN_NOT_OK(txn.InsertMembership(taken));
+                done.push_back("Granted " + role->name + " to " + grantee.name +
+                               (c->with_admin_option ? " WITH ADMIN OPTION" : ""));
+                continue;
+              }
               if (c->with_admin_option && !existing->admin_option) {
                 ARROW_RETURN_NOT_OK(txn.DeleteMembership(grantee.kind, grantee.id, role->id));
                 MembershipRecord updated = *existing;
@@ -1453,6 +1542,55 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
     return with_cascade_note(Join(done, "; "));
   }
 
+  // ---- GRANT / REVOKE SYSTEM ADMIN -------------------------------------------
+  if (const auto* c = std::get_if<SystemAdminCommand>(&command)) {
+    // Never delegated: no option, no owner, no tenant admin, no ALL stands for it.
+    if (!actor.superuser) {
+      return AccessControlError("Hardcharger blocked " + CommandKind(command) + ": " + kOnlySystemAdministrators +
+                                " grants and revokes " + kSystemAdminName);
+    }
+    std::vector<std::string> done;
+    ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      done.clear();
+      for (const auto& g : c->grantees) {
+        ARROW_ASSIGN_OR_RAISE(auto grantee, ResolveGrantee(snap, g));
+        const bool role = grantee.kind == PrincipalKind::kRole;
+        const bool held = std::any_of(snap.system_admins().begin(), snap.system_admins().end(),
+                                      [&](const SystemAdminRecord& r) {
+                                        return r.kind == grantee.kind && r.principal_id == grantee.id;
+                                      });
+        if (!c->grant) {
+          if (!held) {
+            done.push_back(grantee.name + " does not hold " + kSystemAdminName);
+            continue;
+          }
+          ARROW_RETURN_NOT_OK(txn.DeleteSystemAdmin(grantee.kind, grantee.id));
+          done.push_back(std::string("Revoked ") + kSystemAdminName + " from " + grantee.name);
+          continue;
+        }
+        if (!snap.TenantOf(grantee.kind, grantee.id).empty()) {
+          return AccessControlError(std::string(kSystemAdminName) + " reaches the whole server; a tenant's " +
+                                    (role ? "role" : "user") + " (" + grantee.name + ") cannot hold it");
+        }
+        if (role) {
+          const RoleRecord* record = snap.FindRoleById(grantee.id);
+          if (grantee.id == kPublicRoleId || (record && record->builtin)) {
+            return AccessControlError(std::string(kSystemAdminName) + " cannot be granted to the built-in role " +
+                                      grantee.name + ": every user holds it");
+          }
+        }
+        if (held) {
+          done.push_back(grantee.name + " already holds " + kSystemAdminName);
+          continue;
+        }
+        ARROW_RETURN_NOT_OK(txn.UpsertSystemAdmin({grantee.kind, grantee.id, actor.acting_user_id}));
+        done.push_back(std::string("Granted ") + kSystemAdminName + " to " + grantee.name);
+      }
+      return arrow::Status::OK();
+    }));
+    return Message(Join(done, "; "));
+  }
+
   // ---- tenants ---------------------------------------------------------------
   if (std::holds_alternative<TenantCommand>(command) ||
       std::holds_alternative<CatalogTenantCommand>(command) ||
@@ -1770,6 +1908,29 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
     auto snap = snapshot();
     CommandResult result;
     result.column_names = {"result"};
+    if (c->system_admin) {
+      // What the session is limited to is never widened: a scoped token stays inside its
+      // scope, a tenant's user inside its tenant. (The session's own limits, a read-only
+      // connection and a token with catalog_access rules, are refused by its guard.)
+      if (actor.scope) {
+        return AccessControlError(std::string("Hardcharger blocked SET ROLE ") + kSystemAdminName +
+                                  ": this session signed in with scoped token " + actor.scope->name +
+                                  ", and a scoped token never acts as System Admin");
+      }
+      if (!snap->TenantOfPrincipal(actor).empty()) {
+        return AccessControlError(std::string("Hardcharger blocked SET ROLE ") + kSystemAdminName + ": user " +
+                                  actor.user_name + " belongs to a tenant, and a tenant's user never acts as "
+                                  "System Admin");
+      }
+      if (!snap->HoldsSystemAdmin(actor)) {
+        return AccessControlError(std::string("Hardcharger blocked SET ROLE ") + kSystemAdminName + ": user " +
+                                  actor.user_name + " does not hold " + kSystemAdminName);
+      }
+      result.active_role_id = kSystemAdminRoleId;
+      result.rows.push_back({std::string("Active role: ") + kSystemAdminName +
+                             " (this session acts as the administrator until RESET ROLE)"});
+      return result;
+    }
     if (!c->role) {
       result.active_role_id = "";
       result.rows.push_back({"All of " + actor.user_name + "'s roles are active"});

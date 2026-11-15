@@ -97,6 +97,12 @@ struct Identity {
   std::vector<std::string> idp_groups;
   // The token's catalog_access rules (catalog_rules_only servers; ignored under RBAC).
   std::optional<std::vector<CatalogAccessRule>> catalog_access;
+  // The sign-in's role is readonly: the session changes nothing (and never acts as System
+  // Admin).
+  bool readonly = false;
+  // The session's Chargewire id (s_...), for audit records; empty for the server's own
+  // sessions (the init SQL's).
+  std::string session_id;
 };
 
 // The store user attribute that keeps a provisioned user's token sign-ins readonly
@@ -326,8 +332,14 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // Runs Hardcharger's own statements on the session's connection (its profiler
   // settings, ...) unchecked: they are the server's, not the user's.
   void RunInternal(const std::function<void()>& run);
-  // One-way connection restriction, independent of the principal's privileges.
-  void SetReadOnly() { read_only_ = true; }
+  // One-way connection restriction, independent of the principal's privileges. A session
+  // acting as System Admin stops doing so: a read-only session never does.
+  void SetReadOnly();
+  // An administrative command the session ran outside SQL's statements (KILL SESSION, SET
+  // GLOBAL hardcharger.*): an audit record when it ran it acting as System Admin, naming
+  // its user. `fields`: what it acted on (never a secret).
+  void AuditAdministrativeCommand(std::string_view command,
+                                  std::vector<std::pair<std::string, std::string>> fields = {}) const;
 
   // The rows of an introspection table this session may see, for the principal it acts as
   // now (its SET ROLE role included). `user_name`: hardcharger_effective_privileges()'s
@@ -341,8 +353,17 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   const std::string& user_name() const { return identity_.user_name; }
   bool superuser() const { return identity_.superuser; }  // the token's role is admin (rules or not)
   // True when this session is allowed everything: the administrator without catalog_access
-  // rules. A restricted administrator (admin token with rules) is false.
-  bool unrestricted() const { return unrestricted_; }
+  // rules, or a store user acting as System Admin right now. A restricted administrator
+  // (admin token with rules) is false. Safe from any thread.
+  bool unrestricted() const { return unrestricted_ || system_admin(); }
+  // True while a store user's session acts as System Admin: it said SET ROLE SYSTEM ADMIN
+  // and its user holds SYSTEM ADMIN in the grants the server holds at this call (asked of
+  // them each time; nothing is remembered). Never true for the administrator's own
+  // sessions. Safe from any thread.
+  bool system_admin() const;
+  // What SET ROLE made active: a role's name, "SYSTEM ADMIN" (whether or not its user
+  // still holds it), or empty for all of the user's roles. Safe from any thread.
+  std::string active_role() const;
   // The tenant the session's user belongs to, by name ("" for none).
   const std::string& tenant_name() const { return tenant_name_; }
   // The session started in its tenant's default catalog (ALTER TENANT ... SET DEFAULT CATALOG).
@@ -364,11 +385,25 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
                                                   std::shared_ptr<void> busy);
   void AuditAllowed();
   void AuditDenied(const chargewire::Error& error, std::string_view sql);
+  // Who every audit record of this session names: the user (its name and store id), the
+  // session, and that it acts as System Admin when it does.
+  std::vector<std::pair<std::string, std::string>> AuditWho(bool as_system_admin) const;
+  // The administrative commands (ATTACH, SET GLOBAL, ...) among `sql`'s statements, for
+  // the record of a statement run as System Admin.
+  std::string AdministrativeCommands(std::string_view sql) const;
+  void AuditSystemAdminStatement(std::string_view sql, const std::string& commands,
+                                 const chargewire::Error* error) const;
+  // Writes the record that ends the session's time as System Admin, once.
+  void EndSystemAdmin(const std::string& reason);
+  // SET ROLE SYSTEM ADMIN: why this session may not (its own limits), or nullopt.
+  std::optional<std::string> SystemAdminRefusal() const;
 
   AccessControl& owner_;
   const Identity identity_;
   bool unrestricted_ = false;  // the superuser: an administrator without catalog_access rules
   bool read_only_ = false;  // session engine thread only
+  // A "System Admin elevation" audit record was written and its end was not yet.
+  std::atomic<bool> system_admin_open_{false};
   const std::string user_id_;  // empty for the administrator
   std::string credential_;     // the user's password hash when the session started
   std::string tenant_id_;

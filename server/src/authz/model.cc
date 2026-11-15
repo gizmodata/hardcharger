@@ -57,7 +57,8 @@ Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users, std::vector<R
                    std::vector<PrincipalTenantRecord> principal_tenants,
                    std::vector<CatalogTenantRecord> catalog_tenants,
                    std::vector<GroupMappingRecord> group_mappings,
-                   std::vector<ScopedTokenRecord> scoped_tokens)
+                   std::vector<ScopedTokenRecord> scoped_tokens,
+                   std::vector<SystemAdminRecord> system_admins)
     : version_(version),
       users_(std::move(users)),
       roles_(std::move(roles)),
@@ -82,6 +83,21 @@ Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users, std::vector<R
     role_by_id_[roles_[i].id] = i;
   }
   for (const auto& grant : grants_) grants_by_role_[grant.role_id].push_back(&grant);
+  // SYSTEM ADMIN is held by system-scope users and roles only, never by a built-in role
+  // (PUBLIC is everyone): a record that says otherwise (a store edited by hand, a
+  // principal an older replica dropped) counts for nothing, here and in every listing.
+  std::set<std::pair<PrincipalKind, std::string>> seen;
+  for (auto& record : system_admins) {
+    if (!TenantOf(record.kind, record.principal_id).empty()) continue;
+    if (record.kind == PrincipalKind::kUser) {
+      if (!FindUserById(record.principal_id)) continue;
+    } else {
+      const RoleRecord* role = FindRoleById(record.principal_id);
+      if (!role || role->builtin || role->id == kPublicRoleId || role->id == kSystemAdminRoleId) continue;
+    }
+    if (!seen.insert({record.kind, record.principal_id}).second) continue;
+    system_admins_.push_back(std::move(record));
+  }
   for (const auto& r : system_privileges_) {
     const auto storage = StorageOf(r.privilege);
     if (storage && storage->first == StorageKind::kFilesystem) NoteLocalFileGrant();
@@ -154,7 +170,7 @@ std::shared_ptr<const Snapshot> Snapshot::WithOwner(int64_t version, const Objec
   return std::make_shared<const Snapshot>(version, users_, roles_, memberships_, grants_, std::move(owners),
                                           system_privileges_, row_policies_, masking_policies_, mask_bindings_,
                                           tenants_, principal_tenants_, catalog_tenants_, group_mappings_,
-                                          scoped_tokens_);
+                                          scoped_tokens_, system_admins_);
 }
 
 const OwnerRecord* Snapshot::FindOwner(const ObjectPath& object) const {
@@ -182,6 +198,10 @@ std::set<std::string> Snapshot::RolesOf(const Principal& principal) const {
   }
   const UserRecord* user = FindUserById(principal.user_id);
   if (!user || !user->enabled) return {};
+  // SET ROLE SYSTEM ADMIN names no role: a principal that still carries it here is one
+  // whose session lost SYSTEM ADMIN (one that holds it is the superuser, never looked up),
+  // and acts with nothing until it says RESET ROLE.
+  if (principal.asks_system_admin()) return {};
   auto roles = HeldRoleIds(principal);
   if (principal.active_role_id.empty()) return roles;
   // SET ROLE: PUBLIC (the tenant's) and the active role with what it inherits.
@@ -228,7 +248,73 @@ std::optional<TokenScope> Snapshot::ValidScope(const std::string& token_id,
 
 bool Snapshot::HoldsActiveRole(const Principal& principal) const {
   if (principal.active_role_id.empty() || principal.superuser || principal.is_role()) return true;
+  if (principal.asks_system_admin()) return HoldsSystemAdmin(principal);
   return HeldRoleIds(principal).count(principal.active_role_id) > 0;
+}
+
+std::set<std::string> Snapshot::AdministratorGrantedClosure(const std::string& role_id) const {
+  std::set<std::string> seen{role_id};
+  std::deque<std::string> queue{role_id};
+  while (!queue.empty()) {
+    const std::string current = queue.front();
+    queue.pop_front();
+    for (const auto& m : memberships_) {
+      if (m.member_kind == PrincipalKind::kRole && m.member_id == current && m.granted_by.empty() &&
+          seen.insert(m.role_id).second) {
+        queue.push_back(m.role_id);
+      }
+    }
+  }
+  return seen;
+}
+
+std::vector<std::string> Snapshot::SystemAdminSources(const Principal& principal) const {
+  std::vector<std::string> sources;
+  if (system_admins_.empty() || principal.superuser || principal.is_role() || principal.user_id.empty()) return sources;
+  const UserRecord* user = FindUserById(principal.user_id);
+  if (!user || !user->enabled) return sources;
+  // A tenant's user stays inside its tenant, whatever the store says.
+  if (!TenantOf(PrincipalKind::kUser, user->id).empty()) return sources;
+  // The roles the user holds by the administrator's own hand.
+  std::set<std::string> roles;
+  for (const auto& m : memberships_) {
+    if (m.member_kind == PrincipalKind::kUser && m.member_id == user->id && m.granted_by.empty()) {
+      for (const auto& r : AdministratorGrantedClosure(m.role_id)) roles.insert(r);
+    }
+  }
+  for (const auto& m : group_mappings_) {
+    if (!m.issuer.empty() && m.issuer != principal.idp_issuer) continue;
+    if (std::find(principal.idp_groups.begin(), principal.idp_groups.end(), m.group) == principal.idp_groups.end()) {
+      continue;
+    }
+    if (!FindRoleById(m.role_id) || !TenantOf(PrincipalKind::kRole, m.role_id).empty()) continue;
+    for (const auto& r : AdministratorGrantedClosure(m.role_id)) roles.insert(r);
+  }
+  for (const auto& record : system_admins_) {
+    if (record.kind == PrincipalKind::kUser ? record.principal_id == user->id : roles.count(record.principal_id) > 0) {
+      sources.push_back(record.kind == PrincipalKind::kUser ? std::string() : record.principal_id);
+    }
+  }
+  return sources;
+}
+
+bool Snapshot::RoleCarriesSystemAdmin(const std::string& role_id) const {
+  if (system_admins_.empty()) return false;
+  const auto closure = RoleClosure(role_id);
+  return std::any_of(system_admins_.begin(), system_admins_.end(), [&](const SystemAdminRecord& record) {
+    return record.kind == PrincipalKind::kRole && closure.count(record.principal_id) > 0;
+  });
+}
+
+bool Snapshot::UserCarriesSystemAdmin(const std::string& user_id) const {
+  if (system_admins_.empty()) return false;
+  for (const auto& record : system_admins_) {
+    if (record.kind == PrincipalKind::kUser && record.principal_id == user_id) return true;
+  }
+  for (const auto& m : memberships_) {
+    if (m.member_kind == PrincipalKind::kUser && m.member_id == user_id && RoleCarriesSystemAdmin(m.role_id)) return true;
+  }
+  return false;
 }
 
 std::set<std::string> Snapshot::HeldRoleIds(const Principal& principal) const {

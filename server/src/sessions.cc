@@ -93,7 +93,7 @@ std::vector<SessionSummary> SessionRegistry::List(const Session& viewer) const {
     const Session& s = *entry.session;
     if (s.killed() || !SeesSession(viewer, s)) continue;
     out.push_back({id, s.principal().name, s.principal().role, s.principal().auth_method, s.started_at_us(),
-                   s.running()});
+                   s.running(), s.system_admin()});
   }
   return out;
 }

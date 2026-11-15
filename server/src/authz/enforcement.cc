@@ -1906,6 +1906,7 @@ void RequireActiveRole(const Snapshot& snapshot, const Principal& principal) {
     }
   }
   if (snapshot.HoldsActiveRole(principal)) return;
+  if (principal.asks_system_admin()) throw dd::PermissionException(SystemAdminLostMessage(principal.user_name));
   const RoleRecord* role = snapshot.FindRoleById(principal.active_role_id);
   throw dd::PermissionException("Hardcharger blocked this statement: user " + principal.user_name +
                                 " no longer holds role " +
@@ -2126,8 +2127,31 @@ void PostBind(dd::PlannerExtensionInput& input, dd::BoundStatement& statement) {
 
 // ---------------------------------------------------------------------------
 
+std::string SystemAdminLostMessage(const std::string& user_name) {
+  return "Hardcharger blocked this statement: user " + user_name + " no longer holds " + kSystemAdminName +
+         ", which SET ROLE made active. Run RESET ROLE to go on as " + user_name;
+}
+
 RbacSessionState::RbacSessionState(std::shared_ptr<RbacEngine> engine, Principal principal)
-    : engine_(engine), principal_(std::move(principal)) {}
+    : engine_(engine), administrator_(principal.superuser), principal_(std::move(principal)) {}
+
+Principal RbacSessionState::principal() const {
+  Principal user = session_principal();
+  if (administrator_ || !user.asks_system_admin()) return user;
+  // Never for a session its sign-in limits (the guard refuses those at SET ROLE too).
+  if (user.scope || user.catalog_rules) return user;
+  auto engine = engine_.lock();
+  if (!engine || !engine->snapshot()->HoldsSystemAdmin(user)) return user;
+  // The administrator's shape exactly (no user id: what it creates is the system's, what
+  // it grants stands as the administrator's), naming the user it is.
+  Principal acting = Principal::Superuser(user.user_name);
+  acting.acting_user_id = user.user_id;
+  acting.active_role_id = user.active_role_id;
+  acting.active_role_name = user.active_role_name;
+  acting.idp_issuer = user.idp_issuer;
+  acting.idp_groups = user.idp_groups;
+  return acting;
+}
 
 RbacSessionState::BypassScope::BypassScope(dd::ClientContext& context)
     : state_(context.registered_state->Get<RbacSessionState>(kRbacSessionStateName)) {
@@ -2267,7 +2291,11 @@ dd::RebindQueryInfo RbacSessionState::FinalizePrepareLocked(dd::PreparedStatemen
 
 dd::RebindQueryInfo RbacSessionState::RebindIfGrantsChanged(
     const dd::PreparedStatementData& prepared) {
-  if (unchecked()) return dd::RebindQueryInfo::DO_NOT_REBIND;
+  // A store user's statement is planned again whenever the grants or what the session acts
+  // as changed since it was checked, acting as System Admin included: a statement prepared
+  // as the user carries the user's row filters and masks, and one prepared as System Admin
+  // carries none.
+  if (bypassed() || administrator_) return dd::RebindQueryInfo::DO_NOT_REBIND;
   auto engine = engine_.lock();
   if (!engine) return dd::RebindQueryInfo::ATTEMPT_TO_REBIND;
   const int64_t current = engine->snapshot()->version();
@@ -2505,11 +2533,11 @@ void RegisterRbacEnforcement(dd::DBConfig& config) {
   dd::PlannerExtension::Register(config, std::move(planner_extension));
 }
 
-void AttachRbacSession(dd::ClientContext& context, std::shared_ptr<RbacEngine> engine,
-                       Principal principal) {
-  context.registered_state->Insert(
-      kRbacSessionStateName,
-      dd::make_shared_ptr<RbacSessionState>(std::move(engine), std::move(principal)));
+dd::shared_ptr<RbacSessionState> AttachRbacSession(dd::ClientContext& context, std::shared_ptr<RbacEngine> engine,
+                                                   Principal principal) {
+  auto state = dd::make_shared_ptr<RbacSessionState>(std::move(engine), std::move(principal));
+  context.registered_state->Insert(kRbacSessionStateName, state);
+  return state;
 }
 
 }  // namespace hardcharger::authz

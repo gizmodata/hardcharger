@@ -348,7 +348,7 @@ const Session& RequireSession(const Session* session, const std::string& functio
 std::shared_ptr<arrow::RecordBatch> SessionsTable(Runtime& runtime, const Session& session) {
   arrow::StringBuilder id, user, role, method, client_ip;
   arrow::TimestampBuilder started(arrow::timestamp(arrow::TimeUnit::MICRO, "UTC"), arrow::default_memory_pool());
-  arrow::BooleanBuilder running, current, client_is_local;
+  arrow::BooleanBuilder running, current, client_is_local, system_admin;
   std::map<std::string, std::string> clients;
   if (runtime.server) {
     for (const auto& activity : runtime.server->Sessions()) clients.emplace(activity.session_id, ClientIpAddress(activity.client_address));
@@ -364,6 +364,7 @@ std::shared_ptr<arrow::RecordBatch> SessionsTable(Runtime& runtime, const Sessio
     (void)started.Append(s.started_at_us);
     (void)running.Append(s.running);
     (void)current.Append(s.session_id == session.id());
+    (void)system_admin.Append(s.system_admin);
     const auto found = clients.find(s.session_id);
     if (found == clients.end() || found->second.empty()) {
       (void)client_ip.AppendNull();
@@ -377,7 +378,7 @@ std::shared_ptr<arrow::RecordBatch> SessionsTable(Runtime& runtime, const Sessio
                                    std::find(local_addresses.begin(), local_addresses.end(), ip) != local_addresses.end());
     }
   }
-  std::vector<std::shared_ptr<arrow::Array>> columns(9);
+  std::vector<std::shared_ptr<arrow::Array>> columns(10);
   (void)id.Finish(&columns[0]);
   (void)user.Finish(&columns[1]);
   (void)role.Finish(&columns[2]);
@@ -387,11 +388,14 @@ std::shared_ptr<arrow::RecordBatch> SessionsTable(Runtime& runtime, const Sessio
   (void)current.Finish(&columns[6]);
   (void)client_ip.Finish(&columns[7]);
   (void)client_is_local.Finish(&columns[8]);
+  (void)system_admin.Finish(&columns[9]);
   auto schema = arrow::schema({arrow::field("session_id", arrow::utf8()), arrow::field("username", arrow::utf8()),
                                arrow::field("role", arrow::utf8()), arrow::field("auth_method", arrow::utf8()),
                                arrow::field("start_time", arrow::timestamp(arrow::TimeUnit::MICRO, "UTC")),
                                arrow::field("running", arrow::boolean()), arrow::field("is_current", arrow::boolean()),
-                               arrow::field("client_ip", arrow::utf8()), arrow::field("client_is_local", arrow::boolean())});
+                               arrow::field("client_ip", arrow::utf8()), arrow::field("client_is_local", arrow::boolean()),
+                               // A store user's session acting as System Admin right now.
+                               arrow::field("system_admin", arrow::boolean())});
   return arrow::RecordBatch::Make(schema, columns[0]->length(), columns);
 }
 
@@ -439,6 +443,7 @@ std::shared_ptr<arrow::DataType> Timestamptz() { return arrow::timestamp(arrow::
 // One row, gathered under the session table's lock and built into arrays outside it.
 struct ConnectionRow {
   std::string session_id, username, role, tenant, auth_method;
+  bool system_admin = false;  // a store user's session acting as System Admin right now
   std::vector<std::pair<std::string, std::string>> tags;
   std::string transaction;
   bool busy = false;  // running a statement or an ingest (Hardcharger's side)
@@ -499,6 +504,7 @@ std::shared_ptr<arrow::RecordBatch> ActiveConnectionsTable(Runtime& runtime, con
     row.username = s.principal().name;
     row.role = s.principal().role.empty() ? "user" : s.principal().role;
     row.tenant = s.tenant();
+    row.system_admin = s.system_admin();
     row.auth_method = s.principal().auth_method.empty() ? "token" : s.principal().auth_method;
     row.transaction = std::string(chargewire::TransactionStateName(s.transaction()));
     row.activity = s.activity();
@@ -522,7 +528,7 @@ std::shared_ptr<arrow::RecordBatch> ActiveConnectionsTable(Runtime& runtime, con
   auto tag_values = std::make_shared<arrow::StringBuilder>();
   auto map_type = arrow::map(arrow::utf8(), arrow::utf8());
   arrow::MapBuilder session_tags(pool, tag_keys, tag_values, map_type);
-  arrow::BooleanBuilder tls, token_certificate_bound, is_current;
+  arrow::BooleanBuilder tls, token_certificate_bound, is_current, system_admin;
   arrow::TimestampBuilder statement_started_at(Timestamptz(), pool), queued_since(Timestamptz(), pool),
       session_started_at(Timestamptz(), pool), last_activity_at(Timestamptz(), pool);
   arrow::Int32Builder result_partitions, open_result_streams, open_ingest_parts, retained_results;
@@ -538,6 +544,7 @@ std::shared_ptr<arrow::RecordBatch> ActiveConnectionsTable(Runtime& runtime, con
     text(cluster_id, cluster);
     (void)username.Append(row.username);
     (void)role.Append(row.role);
+    (void)system_admin.Append(row.system_admin);
     text(tenant, row.tenant);
     (void)auth_method.Append(row.auth_method);
     text(client_address, sdk ? sdk->client_address : "");
@@ -613,6 +620,9 @@ std::shared_ptr<arrow::RecordBatch> ActiveConnectionsTable(Runtime& runtime, con
       {"retained_results", &retained_results},
       {"retained_rows", &retained_rows},
       {"is_current", &is_current},
+      // Last, so the columns before it keep their places: a store user's session acting as
+      // System Admin right now.
+      {"system_admin", &system_admin},
   };
   std::vector<std::shared_ptr<arrow::Field>> fields;
   std::vector<std::shared_ptr<arrow::Array>> arrays;
@@ -1048,6 +1058,14 @@ void RegisterSqlFunctions(duckdb_v2_connection_handle connection, Runtime& runti
          return s ? std::optional(s->principal().role) : std::nullopt;
        })},
       {"IS_FULL_ADMIN", "BOOLEAN", [](Runtime&, const Session* s) { return ContextValue{std::nullopt, s && s->full_admin()}; }},
+      // A store user's session acting as System Admin right now (SET ROLE SYSTEM ADMIN).
+      {"IS_SYSTEM_ADMIN", "BOOLEAN",
+       [](Runtime&, const Session* s) { return ContextValue{std::nullopt, s && s->system_admin()}; }},
+      // What SET ROLE made active: a role, 'SYSTEM ADMIN', or NULL for all of the user's roles.
+      {"ACTIVE_ROLE", "VARCHAR", text([](Runtime&, const Session* s) -> std::optional<std::string> {
+         const std::string role = s ? s->active_role() : std::string();
+         return role.empty() ? std::nullopt : std::optional(role);
+       })},
       {"VERSION", "VARCHAR",
        text([](Runtime&, const Session*) -> std::optional<std::string> { return std::string(kVersion); })},
       {"CURRENT_SESSION", "VARCHAR", text([](Runtime&, const Session* s) -> std::optional<std::string> {

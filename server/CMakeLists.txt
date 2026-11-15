@@ -187,6 +187,7 @@ find_package(OpenSSL 3 REQUIRED)
 # server call each other (logging, audit), which static libraries linked in one order
 # can't express for GNU ld.
 add_library(hardcharger_authz OBJECT
+  src/authz/audit_fields.cc
   src/authz/authz.cc
   src/authz/ddl.cc
   src/authz/enforcement.cc
@@ -382,6 +383,7 @@ add_executable(hardcharger-unit-tests
   unit/platform_test.cc
   unit/redaction_test.cc
   unit/store_test.cc
+  unit/system_admin_test.cc
   unit/sensitive_paths_test.cc
   unit/storage_locations_test.cc
   unit/sql_text_test.cc

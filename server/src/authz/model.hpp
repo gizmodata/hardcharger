@@ -160,6 +160,24 @@ struct SystemPrivilegeRecord {
   std::string location = {};
 };
 
+// GRANT SYSTEM ADMIN TO user | ROLE role: the principal may act as the administrator in a
+// session that says SET ROLE SYSTEM ADMIN (and only there, until RESET ROLE). Nothing else
+// in the store confers it: it is no role and no privilege of ALL, and has no admin option.
+struct SystemAdminRecord {
+  PrincipalKind kind = PrincipalKind::kUser;
+  std::string principal_id;
+  // The user who granted it while acting as System Admin (for SHOW GRANTS; the grant
+  // stands without them); empty: the administrator.
+  std::string granted_by;
+};
+
+// The capability's name, as GRANT, SET ROLE and the audit records write it.
+constexpr const char* kSystemAdminName = "SYSTEM ADMIN";
+// The active role of a session that said SET ROLE SYSTEM ADMIN: the id of no role (role
+// ids are random, or "public"), so a principal that carries it without holding SYSTEM
+// ADMIN acts with no role at all, never with a role's rights.
+constexpr const char* kSystemAdminRoleId = "\x1dsystem-admin";
+
 // kSchema: the object is the schema itself (catalog + schema path, no name).
 // kSequence is asked of (USAGE), never recorded: sequences have no owner records.
 // kTableFunction is asked of (EXECUTE) and never recorded either: a table function is
@@ -228,6 +246,11 @@ struct Principal {
   // Catalogs the server keeps for itself (instrumentation, logs), which no one but
   // the administrator sees.
   std::vector<std::string> hidden_catalogs;
+  // A store user acting as System Admin (SET ROLE SYSTEM ADMIN): `superuser` is set, as
+  // for the administrator, and this is the user (for audit records and for checking, in
+  // the store transaction of each change it makes, that it still holds SYSTEM ADMIN).
+  // Empty for the administrator itself. Only RbacSessionState::principal() makes one.
+  std::string acting_user_id;
 
   static Principal Superuser(std::string name) {
     Principal p;
@@ -248,6 +271,9 @@ struct Principal {
     return p;
   }
   bool is_role() const { return !superuser && user_id.empty() && !role_id.empty(); }
+  // A store user's session that asked for SYSTEM ADMIN (whether or not it still holds it).
+  bool asks_system_admin() const { return active_role_id == kSystemAdminRoleId; }
+  bool acts_as_system_admin() const { return superuser && !acting_user_id.empty(); }
 };
 
 // One required privilege on one object, as the enforcement layer derives it
@@ -278,7 +304,8 @@ class Snapshot {
            std::vector<PrincipalTenantRecord> principal_tenants = {},
            std::vector<CatalogTenantRecord> catalog_tenants = {},
            std::vector<GroupMappingRecord> group_mappings = {},
-           std::vector<ScopedTokenRecord> scoped_tokens = {});
+           std::vector<ScopedTokenRecord> scoped_tokens = {},
+           std::vector<SystemAdminRecord> system_admins = {});
 
   int64_t version() const { return version_; }
 
@@ -305,6 +332,10 @@ class Snapshot {
   const std::vector<CatalogTenantRecord>& catalog_tenants() const { return catalog_tenants_; }
   const std::vector<GroupMappingRecord>& group_mappings() const { return group_mappings_; }
   const std::vector<ScopedTokenRecord>& scoped_tokens() const { return scoped_tokens_; }
+  // The SYSTEM ADMIN grants that count: to a system-scope user, or to a system-scope role
+  // that is not built in. A record that names anything else (a principal that is gone, a
+  // tenant's, PUBLIC) is left out when the snapshot is made, so it gives nothing.
+  const std::vector<SystemAdminRecord>& system_admins() const { return system_admins_; }
   const ScopedTokenRecord* FindScopedToken(const std::string& id) const;
   // The scope of a token that still stands for `user_id` at `now` (its user's
   // own, unexpired, and every token it was minted under still there).
@@ -403,8 +434,27 @@ class Snapshot {
   // The roles a user holds: granted ones and those their login token's groups
   // map to, with what each inherits (not narrowed by SET ROLE).
   std::set<std::string> HeldRoleIds(const Principal& principal) const;
-  // False when the session's SET ROLE role is no longer granted to the user.
+  // False when the session's SET ROLE role is no longer granted to the user (SET ROLE
+  // SYSTEM ADMIN: when the user no longer holds SYSTEM ADMIN).
   bool HoldsActiveRole(const Principal& principal) const;
+
+  // ---- SYSTEM ADMIN ----
+  // How the store user holds SYSTEM ADMIN, one entry per way: "" for a grant to the user
+  // itself, else the id of a role granted it that the user holds. Empty: it does not hold
+  // it. Only an enabled system-scope user holds it, and a role gives it only through
+  // memberships the administrator (or a user acting as System Admin) granted, and through
+  // identity-provider group mappings, which only they create: a membership a role's
+  // admin-option holder granted never carries it, whoever wrote it and with whatever
+  // server version. Not narrowed by SET ROLE; a session's own limits (a scoped token, a
+  // read-only connection) are the session's to apply.
+  std::vector<std::string> SystemAdminSources(const Principal& principal) const;
+  bool HoldsSystemAdmin(const Principal& principal) const { return !SystemAdminSources(principal).empty(); }
+  // Does the role hold SYSTEM ADMIN, itself or through a role it was granted (by anyone)?
+  // Membership in such a role, and the role itself, are the administrator's to change.
+  bool RoleCarriesSystemAdmin(const std::string& role_id) const;
+  // Does the stored user hold SYSTEM ADMIN by a grant to itself or through a role it was
+  // granted (by anyone)? Such a user is the administrator's to change.
+  bool UserCarriesSystemAdmin(const std::string& user_id) const;
 
   // Everything the principal may do, as comparable strings (each grant through
   // its roles, each object it owns). A right in one snapshot's set that is
@@ -441,6 +491,8 @@ class Snapshot {
 
  private:
   bool GrantCovers(const ObjectGrantRecord& grant, const AccessRequest& request) const;
+  // Every role `role_id` holds through memberships the administrator granted, itself included.
+  std::set<std::string> AdministratorGrantedClosure(const std::string& role_id) const;
 
   int64_t version_;
   std::vector<UserRecord> users_;
@@ -457,6 +509,7 @@ class Snapshot {
   std::vector<CatalogTenantRecord> catalog_tenants_;
   std::vector<GroupMappingRecord> group_mappings_;
   std::vector<ScopedTokenRecord> scoped_tokens_;
+  std::vector<SystemAdminRecord> system_admins_;
   std::map<std::string, size_t> user_by_key_, user_by_id_, role_by_key_, role_by_id_;
   std::map<std::string, std::vector<const ObjectGrantRecord*>> grants_by_role_;
 };

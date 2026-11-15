@@ -890,7 +890,11 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb
   // session is listed anywhere, so a refused one leaves nothing behind).
   // Enable estimates without printing progress bars in server logs.
   chargewire_duckdb::RunSql(connection(), "SET enable_progress_bar = true; SET enable_progress_bar_print = false");
-  if (access_controlled_) guard_ = access->Bind(connection(), IdentityOf(principal_));
+  if (access_controlled_) {
+    authz::Identity who = IdentityOf(principal_);
+    who.session_id = id_;
+    guard_ = access->Bind(connection(), std::move(who));
+  }
   if (principal_.role == "readonly") authz::BindReadOnlySession(connection(), principal_.name);
   runtime_.sessions.Add(this, capped);
   runtime_.metrics.CountSessionOpened();
@@ -1237,6 +1241,11 @@ void Session::GuardManagedCatalog(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE t
 chargewire::StatementOutcome Session::RunCommand(const Piece& piece) {
   if (auto setting = ParseSettingCommand(piece)) {
     ApplySetting(*this, *setting);
+    if (guard_) {
+      guard_->AuditAdministrativeCommand(
+          std::string(setting->reset ? "RESET" : "SET") +
+              (setting->scope == SettingCommand::Scope::kGlobal ? " GLOBAL" : "") + " hardcharger." + setting->name);
+    }
     return {};
   }
   const std::string target = ParseKillSession(piece).value_or("");
@@ -1276,6 +1285,7 @@ chargewire::StatementOutcome Session::RunCommand(const Piece& piece) {
   }
   if (runtime_.server != nullptr) runtime_.server->EndSession(wanted, KilledError());
   Log(LogLevel::kInfo, "KILL SESSION", {{"target", wanted}, {"user", principal_.name}, {"session_id", id_}});
+  if (guard_) guard_->AuditAdministrativeCommand("KILL SESSION", {{"target_session", wanted}});
   return {};
 }
 

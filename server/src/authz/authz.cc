@@ -16,6 +16,7 @@
 #include <duckdb/main/database_manager.hpp>
 
 #include "audit.hpp"
+#include "authz/audit_fields.hpp"
 #include "authz/ddl.hpp"
 #include "authz/enforcement.hpp"
 #include "authz/engine.hpp"
@@ -598,14 +599,23 @@ void AccessControl::OnSnapshot(const Snapshot& snapshot) {
       guard->End(reason);
       continue;
     }
-    // A statement still running was checked against the rights its user had when it
-    // started: stop it if any of them is gone. An idle session's next statement is
-    // checked against the new grants anyway.
-    if (!previous || !guard->busy()) continue;
     auto state = [&]() -> dd::shared_ptr<RbacSessionState> {
       std::lock_guard lock(guard->mutex_);
       return guard->connection_ ? StateOf(guard->connection_) : nullptr;
     }();
+    // A session acting as System Admin whose user no longer holds SYSTEM ADMIN (revoked,
+    // its role dropped, taken out of the role, here or on another replica): its next
+    // statement is refused anyway (the session's principal is asked of the grants on every
+    // statement), and one still running, which nothing checked, is stopped now.
+    if (state && state->asks_system_admin() && !snapshot.HoldsSystemAdmin(state->session_principal())) {
+      if (guard->busy() && !state->updating_metadata()) guard->InterruptRunning();
+      guard->EndSystemAdmin(std::string(kSystemAdminName) + " no longer held");
+      continue;
+    }
+    // A statement still running was checked against the rights its user had when it
+    // started: stop it if any of them is gone. An idle session's next statement is
+    // checked against the new grants anyway.
+    if (!previous || !guard->busy()) continue;
     // This session's short DDL metadata update is not a running data query to
     // revoke. Other sessions still get interrupted, and subsequent statements
     // check the new snapshot.
@@ -649,8 +659,112 @@ void SessionGuard::RunInternal(const std::function<void()>& run) {
 }
 
 void SessionGuard::Detach() {
+  EndSystemAdmin("session closed");
   std::lock_guard lock(mutex_);
   connection_ = nullptr;
+}
+
+namespace {
+// The session's access-control state, or null once its connection is gone.
+dd::shared_ptr<RbacSessionState> StateIfAttached(std::mutex& mutex, const duckdb_v2_connection_handle& connection) {
+  std::lock_guard lock(mutex);
+  return connection ? StateOf(connection) : nullptr;
+}
+}  // namespace
+
+bool SessionGuard::system_admin() const {
+  // The administrator's own sessions are not store users', and a session without a store
+  // (catalog_access rules alone) has nobody to hold SYSTEM ADMIN.
+  if (unrestricted_ || user_id_.empty()) return false;
+  auto state = StateIfAttached(mutex_, connection_);
+  return state && state->principal().acts_as_system_admin();
+}
+
+std::string SessionGuard::active_role() const {
+  auto state = StateIfAttached(mutex_, connection_);
+  return state ? state->active_role_name() : std::string();
+}
+
+void SessionGuard::SetReadOnly() {
+  read_only_ = true;
+  // No session is read-only and System Admin at once: one that turns read-only goes on as
+  // its user, with all of its roles.
+  auto state = StateIfAttached(mutex_, connection_);
+  if (state && state->asks_system_admin()) {
+    state->SetActiveRole("", "");
+    EndSystemAdmin("the session became read-only");
+  }
+}
+
+std::vector<std::pair<std::string, std::string>> SessionGuard::AuditWho(bool as_system_admin) const {
+  LogFields fields = {{"kind", "access_control"}, {"user", identity_.user_name}};
+  if (!user_id_.empty()) fields.emplace_back("user_id", user_id_);
+  if (!identity_.session_id.empty()) fields.emplace_back("session_id", identity_.session_id);
+  if (as_system_admin) fields.emplace_back("acting_as", kSystemAdminName);
+  return fields;
+}
+
+void SessionGuard::EndSystemAdmin(const std::string& reason) {
+  if (!system_admin_open_.exchange(false)) return;
+  LogFields fields = AuditWho(false);
+  fields.emplace_back("status", "ended");
+  fields.emplace_back("reason", reason);
+  Audit(LogLevel::kInfo, "System Admin elevation ended", std::move(fields));
+}
+
+void SessionGuard::AuditAdministrativeCommand(std::string_view command,
+                                              std::vector<std::pair<std::string, std::string>> extra) const {
+  if (!system_admin()) return;
+  LogFields fields = AuditWho(true);
+  fields.emplace_back("status", "success");
+  fields.emplace_back("statement", std::string(command));
+  for (auto& field : extra) fields.push_back(std::move(field));
+  Audit(LogLevel::kInfo, "administrative command run as System Admin", std::move(fields));
+}
+
+std::string SessionGuard::AdministrativeCommands(std::string_view sql) const {
+  // The families the pre-bind gate keeps for the administrator and for holders of a system
+  // privilege, asked as if the session held none.
+  std::string commands;
+  try {
+    for (auto& handle : chargewire_duckdb::Parse(connection_, sql)) {
+      auto& statement = *dd::capiv2::Convert(handle.get());
+      if (auto category = GatedCategory(statement, [](const std::string&) { return false; })) {
+        commands += (commands.empty() ? "" : "; ") + *category;
+      }
+    }
+  } catch (const std::exception&) {
+    // DuckDB reports what it makes of the text when it runs it.
+  }
+  return commands;
+}
+
+void SessionGuard::AuditSystemAdminStatement(std::string_view sql, const std::string& commands,
+                                             const Error* error) const {
+  LogFields fields = AuditWho(true);
+  fields.emplace_back("status", error ? "failed" : "success");
+  // As every log line shows SQL: credential statements whole, credential values masked.
+  fields.emplace_back("sql", LoggableSql(sql));
+  if (!commands.empty()) fields.emplace_back("administrative", commands);
+  if (error) fields.emplace_back("error", LoggableError(sql, error->what()));
+  Audit(error ? LogLevel::kWarning : LogLevel::kInfo, "statement run as System Admin", std::move(fields));
+}
+
+std::optional<std::string> SessionGuard::SystemAdminRefusal() const {
+  const std::string blocked = std::string("Hardcharger blocked SET ROLE ") + kSystemAdminName + ": ";
+  if (read_only_) {
+    return blocked + "this is a read-only session (its connection asked for read_only), and a read-only session "
+                     "never acts as System Admin";
+  }
+  if (identity_.readonly) {
+    return blocked + "this session signed in readonly (its sign-in's role), and a readonly session never acts as "
+                     "System Admin";
+  }
+  if (identity_.catalog_access) {
+    return blocked + "this session's sign-in token carries catalog_access rules, and a token limited to some "
+                     "catalogs never acts as System Admin";
+  }
+  return std::nullopt;
 }
 
 std::shared_ptr<arrow::RecordBatch> SessionGuard::AccessTableRows(
@@ -705,6 +819,7 @@ void SessionGuard::End(const std::string& reason) {
   }
   Audit(LogLevel::kInfo, "ended a session after an access-control change",
         {{"kind", "access_control"}, {"user", identity_.user_name}, {"reason", reason}});
+  EndSystemAdmin("session ended: " + reason);
 }
 
 void SessionGuard::InterruptRunning() {
@@ -732,24 +847,21 @@ void SessionGuard::AuditAllowed() {
   if (accesses.empty()) return;
   std::string objects;
   for (const auto& access : accesses) objects += (objects.empty() ? "" : "; ") + access;
-  Audit(LogLevel::kInfo, "access control allowed a statement",
-        {{"kind", "access_control"},
-         {"status", "allowed"},
-         {"user", identity_.user_name},
-         {"objects", objects},
-         {"active_role", state->active_role_name()}});
+  LogFields fields = AuditWho(false);
+  fields.insert(fields.end(),
+                {{"status", "allowed"}, {"objects", objects}, {"active_role", state->active_role_name()}});
+  Audit(LogLevel::kInfo, "access control allowed a statement", std::move(fields));
 }
 
 void SessionGuard::AuditDenied(const Error& error, std::string_view sql) {
   if (std::string_view(error.what()).find("Hardcharger blocked") == std::string_view::npos) return;
   auto state = StateOf(connection_);
-  Audit(LogLevel::kWarning, "access control refused a statement",
-        {{"kind", "access_control"},
-         {"status", "denied"},
-         {"user", identity_.user_name},
-         {"error", LoggableError(sql, error.what())},
-         {"sql", LoggableSql(sql)},
-         {"active_role", state ? state->active_role_name() : ""}});
+  LogFields fields = AuditWho(false);
+  fields.insert(fields.end(), {{"status", "denied"},
+                               {"error", LoggableError(sql, error.what())},
+                               {"sql", LoggableSql(sql)},
+                               {"active_role", state ? state->active_role_name() : ""}});
+  Audit(LogLevel::kWarning, "access control refused a statement", std::move(fields));
 }
 
 Error SessionGuard::ForTenant(const Error& error) const {
@@ -757,7 +869,7 @@ Error SessionGuard::ForTenant(const Error& error) const {
   // catalog, schema, table or view it cannot see reads exactly like one about one that
   // does not exist, and so does any error that names a catalog it cannot see (DuckDB's
   // suggestions and candidate lists can).
-  if (unrestricted_) return error;
+  if (unrestricted()) return error;
   const std::string message = error.what();
   // DuckDB binds before the privilege hook. Its spelling suggestions search the
   // whole catalog, including objects absent from this user's filtered metadata.
@@ -818,6 +930,11 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
                 "42501");
   }
   const Principal principal = state->principal();
+  // A session that said SET ROLE SYSTEM ADMIN and no longer holds it runs nothing until it
+  // says RESET ROLE: said here, before the gate would name a system privilege it lacks.
+  if (principal.asks_system_admin() && !principal.superuser) {
+    throw Error(ErrorCode::kPermissionDenied, SystemAdminLostMessage(principal.user_name), "42501");
+  }
   const std::function<bool(const std::string&)> permitted = [&](const std::string& category) {
     auto privilege = SystemPrivilegeForGatedCategory(category);
     return privilege && snapshot->HasSystemPrivilege(principal, *privilege);
@@ -995,17 +1112,75 @@ chargewire::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parse
                     "that certificate; mint tokens for other users from a password or token sign-in",
                 "42501");
   }
-  const Principal actor = unrestricted_ ? Principal::Superuser(identity_.user_name) : state->principal();
+  auto before = engine->snapshot();
+  const auto* set_role = std::get_if<SetRoleCommand>(&parsed.command);
+  const bool elevating = set_role != nullptr && set_role->system_admin && !unrestricted_;
+  const std::string kind = elevating ? std::string("SET ROLE ") + kSystemAdminName : parsed.kind;
+  // What the statement names (never a password or a token): who it is about, and the
+  // privilege or membership it changes, with the store's ids for the users and roles.
+  auto described = [&](LogFields fields, const Snapshot& after) {
+    for (auto& field : AuditFieldsOf(parsed.command, *before, after)) fields.push_back(std::move(field));
+    return fields;
+  };
+  auto refuse = [&](const Error& error, bool as_system_admin) {
+    LogFields fields = AuditWho(as_system_admin);
+    fields.emplace_back("status", "rejected");
+    fields.emplace_back("statement", kind);
+    fields.emplace_back("error", error.what());
+    Audit(LogLevel::kWarning, elevating ? "System Admin elevation refused" : "access-control statement refused",
+          described(std::move(fields), *before));
+  };
+  // SET ROLE and RESET ROLE are the user's own, whatever the session acts as: they are
+  // asked of the user's roles. Every other statement runs as what the session acts as now:
+  // the user, or, acting as System Admin, the administrator (asked of the grants here, at
+  // this statement, and again inside the store transaction of what it changes).
+  Principal actor = set_role != nullptr && !unrestricted_ ? state->session_principal() : state->principal();
+  const bool as_system_admin = actor.acts_as_system_admin();
+  if (set_role == nullptr && actor.asks_system_admin() && !actor.superuser) {
+    const Error lost(ErrorCode::kPermissionDenied, SystemAdminLostMessage(actor.user_name), "42501");
+    refuse(lost, false);
+    throw lost;
+  }
+  if (elevating) {
+    // The session's own limits are never widened by its user's grants.
+    if (auto refusal = SystemAdminRefusal()) {
+      const Error refused(ErrorCode::kPermissionDenied, *refusal, "42501");
+      refuse(refused, false);
+      throw refused;
+    }
+    // The store's own word, as of now: not what this replica last polled. A store that
+    // does not answer elevates nobody.
+    if (auto refreshed = engine->Refresh(); !refreshed.ok()) {
+      const Error refused(ErrorCode::kPermissionDenied,
+                          std::string("Hardcharger blocked SET ROLE ") + kSystemAdminName +
+                              ": it could not be checked against the access control store (" + refreshed.message() +
+                              ")",
+                          "42501");
+      refuse(refused, false);
+      throw refused;
+    }
+    before = engine->snapshot();
+    // An external policy service may refuse it, as it may refuse a session or a statement.
+    if (const auto* service = engine->policy_service()) {
+      const auto decision = service->Decide(PolicyInput(*before, actor, "system_admin"));
+      if (decision != PolicyService::Decision::kAllow) {
+        const Error refused(ErrorCode::kPermissionDenied,
+                            std::string("Hardcharger blocked SET ROLE ") + kSystemAdminName +
+                                (decision == PolicyService::Decision::kDeny
+                                     ? ": the access policy service refused it"
+                                     : ": Hardcharger could not get an answer from the access policy service"),
+                            "42501");
+        refuse(refused, false);
+        throw refused;
+      }
+    }
+  }
   SessionObjectResolver resolver(*dd::capiv2::Convert(connection_));
   auto executed = engine->Execute(parsed.command, actor, resolver);
   if (!executed.ok()) {
-    Audit(LogLevel::kWarning, "access-control statement refused",
-          {{"kind", "access_control"},
-           {"status", "rejected"},
-           {"user", identity_.user_name},
-           {"statement", parsed.kind},
-           {"error", executed.status().message()}});
-    throw ForTenant(FromStatus(executed.status()));
+    const Error error = FromStatus(executed.status());
+    refuse(error, as_system_admin);
+    throw ForTenant(error);
   }
   CommandResult result = std::move(*executed);
   if (result.minted) {
@@ -1021,18 +1196,43 @@ chargewire::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parse
     result.column_names.push_back("token");
     for (auto& row : result.rows) row.push_back(token);
   }
+  const auto after = engine->snapshot();
   if (result.active_role_id) {
-    const auto* role = engine->snapshot()->FindRoleById(*result.active_role_id);
-    state->SetActiveRole(*result.active_role_id, role ? role->name : "");
+    const bool was_asking = state->asks_system_admin();
+    if (*result.active_role_id == kSystemAdminRoleId) {
+      state->SetActiveRole(kSystemAdminRoleId, kSystemAdminName);
+    } else {
+      const auto* role = after->FindRoleById(*result.active_role_id);
+      state->SetActiveRole(*result.active_role_id, role ? role->name : "");
+      // RESET ROLE (SET ROLE ALL | NONE), or SET ROLE with one of the user's roles.
+      if (was_asking) EndSystemAdmin(set_role != nullptr && set_role->role ? "SET ROLE " + *set_role->role : "RESET ROLE");
+    }
   }
   for (const auto& user_id : result.terminate_user_ids) {
     owner_.EndSessionsOf(user_id, parsed.kind == "DROP USER" ? "user dropped" : "user disabled");
   }
-  Audit(LogLevel::kInfo, "access-control statement",
-        {{"kind", "access_control"},
-         {"user", identity_.user_name},
-         {"statement", parsed.kind},
-         {"status", "success"}});
+  if (elevating) {
+    // One record for each time the session starts acting as System Admin (saying it again
+    // while it does changes nothing).
+    if (!system_admin_open_.exchange(true)) {
+      std::string via;
+      for (const auto& source : after->SystemAdminSources(actor)) {
+        const auto* role = source.empty() ? nullptr : after->FindRoleById(source);
+        via += (via.empty() ? "" : ", ") + (source.empty() ? std::string("a grant to the user")
+                                                           : "role " + (role ? role->name : source));
+      }
+      LogFields fields = AuditWho(true);
+      fields.emplace_back("status", "success");
+      fields.emplace_back("statement", kind);
+      fields.emplace_back("held_through", via);
+      Audit(LogLevel::kInfo, "System Admin elevation", std::move(fields));
+    }
+  } else {
+    LogFields fields = AuditWho(as_system_admin);
+    fields.emplace_back("statement", parsed.kind);
+    fields.emplace_back("status", "success");
+    Audit(LogLevel::kInfo, "access-control statement", described(std::move(fields), *after));
+  }
   chargewire::StatementOutcome outcome;
   outcome.rows = Rows(result);
   return outcome;
@@ -1065,14 +1265,21 @@ chargewire::StatementOutcome SessionGuard::Execute(
     }
   }
   auto busy = MarkBusy();
+  // Acting as System Admin as of this statement (asked of the grants now): it passes the
+  // gate as the administrator's does, and is recorded with its user's name. The plan check
+  // asks again when DuckDB binds it.
+  const bool acting = system_admin();
+  const std::string commands = acting ? AdministrativeCommands(sql) : std::string();
   try {
-    if (!unrestricted_) CheckBeforeBind(sql, parameters);
+    if (!unrestricted_ && !acting) CheckBeforeBind(sql, parameters);
     auto outcome = run();
     AuditAllowed();
+    if (acting) AuditSystemAdminStatement(sql, commands, nullptr);
     if (outcome.rows) outcome.rows = Track(std::move(outcome.rows), std::move(busy));
     return outcome;
   } catch (const Error& error) {
     AuditDenied(error, sql);
+    if (acting) AuditSystemAdminStatement(sql, commands, &error);
     throw ForTenant(error);
   }
 }
@@ -1089,7 +1296,7 @@ std::unique_ptr<chargewire::PreparedStatement> SessionGuard::Prepare(
   }
   auto busy = MarkBusy();
   try {
-    if (!unrestricted_) CheckBeforeBind(sql, {}, true);
+    if (!unrestricted_ && !system_admin()) CheckBeforeBind(sql, {}, true);
     auto inner = prepare();
     // What the statement creates or drops is recorded once it has run successfully.
     auto state = StateOf(connection_);
@@ -1122,8 +1329,12 @@ chargewire::StatementOutcome SessionGuard::ExecutePrepared(
                 "42501");
   }
   auto busy = MarkBusy();
+  // As Execute: whether the session acts as System Admin is asked now, at this execution,
+  // whatever it acted as when the statement was prepared.
+  const bool acting = system_admin();
+  const std::string commands = acting ? AdministrativeCommands(guarded->sql()) : std::string();
   try {
-    if (!unrestricted_) CheckBeforeBind(guarded->sql(), parameters);
+    if (!unrestricted_ && !acting) CheckBeforeBind(guarded->sql(), parameters);
     // Its first successful run records who owns what it creates: before it runs, so that
     // nothing it creates can be left without an owner (put back if the run fails).
     auto ownership = guarded->TakeOwnership();
@@ -1160,10 +1371,12 @@ chargewire::StatementOutcome SessionGuard::ExecutePrepared(
     }
     if (state) state->CompleteOwnership(ContextOf(connection_), ownership, recorded);
     AuditAllowed();
+    if (acting) AuditSystemAdminStatement(guarded->sql(), commands, nullptr);
     if (outcome.rows) outcome.rows = Track(std::move(outcome.rows), std::move(busy));
     return outcome;
   } catch (const Error& error) {
     AuditDenied(error, "(prepared statement)");
+    if (acting) AuditSystemAdminStatement(guarded->sql(), commands, &error);
     throw ForTenant(error);
   }
 }
@@ -1172,12 +1385,16 @@ int64_t SessionGuard::Ingest(const chargewire::IngestTarget& target,
                              const std::function<int64_t()>& run) {
   RequireLive();
   auto busy = MarkBusy();
+  const bool acting = system_admin();
+  const std::string what = "(bulk ingest into " + target.table + ")";
   try {
     const int64_t rows = run();
     AuditAllowed();
+    if (acting) AuditSystemAdminStatement(what, {}, nullptr);
     return rows;
   } catch (const Error& error) {
-    AuditDenied(error, "(bulk ingest into " + target.table + ")");
+    AuditDenied(error, what);
+    if (acting) AuditSystemAdminStatement(what, {}, &error);
     throw ForTenant(error);
   }
 }

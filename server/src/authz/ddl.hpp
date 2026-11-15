@@ -109,6 +109,17 @@ struct SystemPrivilegeCommand {
   std::optional<std::string> location;
 };
 
+// GRANT SYSTEM ADMIN TO [USER | ROLE] name, ...   /   REVOKE SYSTEM ADMIN FROM name, ...
+// The capability to act as the administrator in a session that says SET ROLE SYSTEM ADMIN.
+// Two words, like the system privileges, so it is no role's name: a store an earlier
+// version made may hold a role called sysadmin, which stays the ordinary role it was. It
+// is granted on its own, with no ON clause and no option: only the administrator, or a
+// user acting as System Admin, grants and revokes it.
+struct SystemAdminCommand {
+  bool grant = true;
+  std::vector<Grantee> grantees;
+};
+
 // CREATE [OR REPLACE] ROW POLICY name ON table [AS PERMISSIVE | RESTRICTIVE]
 //   [TO role, ...] USING (predicate)
 struct CreateRowPolicyCommand {
@@ -207,8 +218,10 @@ struct GroupMappingCommand {
 
 // SET ROLE role | SET ROLE ALL | SET ROLE NONE | RESET ROLE
 // (no role: act with all of the user's roles again)
+// SET ROLE SYSTEM ADMIN: act as the administrator, until one of the above.
 struct SetRoleCommand {
   std::optional<std::string> role;
+  bool system_admin = false;
 };
 
 // ALTER TABLE | VIEW obj OWNER TO principal
@@ -226,7 +239,7 @@ struct ShowGrantsCommand {
 using RbacCommand =
     std::variant<CreateUserCommand, AlterUserCommand, DropUserCommand, CreateRoleCommand,
                  DropRoleCommand, RoleMembershipCommand, ObjectPrivilegeCommand,
-                 SystemPrivilegeCommand, AlterOwnerCommand, ShowGrantsCommand,
+                 SystemPrivilegeCommand, SystemAdminCommand, AlterOwnerCommand, ShowGrantsCommand,
                  CreateRowPolicyCommand, DropRowPolicyCommand, CreateMaskingPolicyCommand,
                  DropMaskingPolicyCommand, SetColumnMaskCommand, ShowPoliciesCommand, TenantCommand,
                  CatalogTenantCommand, TenantDefaultCatalogCommand, ShowTenantsCommand,

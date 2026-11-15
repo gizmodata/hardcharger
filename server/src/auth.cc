@@ -73,6 +73,7 @@ authz::Identity IdentityOf(const chargewire::Principal& principal) {
   authz::Identity who;
   who.user_name = principal.name;
   who.superuser = principal.role == "admin";
+  who.readonly = principal.role == "readonly";
   auto text = [&](const char* claim) -> std::string {
     const auto* value = principal.claims.if_contains(claim);
     return value && value->is_string() ? std::string(value->as_string()) : std::string();

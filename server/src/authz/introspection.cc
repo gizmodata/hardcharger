@@ -209,6 +209,7 @@ class Visibility {
   bool SeesRole(const std::string& role_id) const { return Holds(role_id) || InTenant(PrincipalKind::kRole, role_id); }
 
   ViewerKind kind() const { return kind_; }
+  const Principal& viewer() const { return viewer_; }
   const std::set<std::string>& held() const { return held_; }
   bool Holds(const std::string& role_id) const { return held_.count(role_id) > 0; }
   bool Active(const std::string& role_id) const { return active_.count(role_id) > 0; }
@@ -383,6 +384,21 @@ std::shared_ptr<arrow::RecordBatch> Grants(const Snapshot& snapshot, const Visib
       rows.Add({names.Role(r.role_id), std::string("ROLE"), SystemPrivilegeName(r.privilege),
                 std::string(r.location.empty() ? "SYSTEM" : "LOCATION"), Cell{}, Cell{}, location, Cell{},
                 names.Grantor(r.granted_by), r.admin_option, names.Tenant(PrincipalKind::kRole, r.role_id)});
+    }
+  }
+  // SYSTEM ADMIN: who may act as the administrator (in a session that says SET ROLE
+  // SYSTEM ADMIN). The administrator sees every grant of it; a user, the one to itself and
+  // those to roles it holds. It reaches no catalog: a restricted administrator sees none.
+  if (visibility.kind() != ViewerKind::kRestrictedAdministrator) {
+    for (const auto& r : snapshot.system_admins()) {
+      const bool user = r.kind == PrincipalKind::kUser;
+      if (visibility.kind() == ViewerKind::kUser &&
+          !(user ? r.principal_id == visibility.viewer().user_id : visibility.SeesRole(r.principal_id))) {
+        continue;
+      }
+      rows.Add({user ? names.User(r.principal_id) : names.Role(r.principal_id), std::string(user ? "USER" : "ROLE"),
+                std::string(kSystemAdminName), std::string("SYSTEM"), Cell{}, Cell{}, Cell{}, Cell{},
+                names.Grantor(r.granted_by), false, Cell{}});
     }
   }
   // An owner holds every privilege on what it owns, and may grant them.
@@ -584,8 +600,10 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
     }
   }
   if (asked_for_self && kind == ViewerKind::kAdministrator) {
+    // A store user acting as System Admin holds what the administrator holds, and the row
+    // says through what.
     rows.Add({viewer.user_name, std::string("ALL"), std::string("SERVER"), Cell{}, Cell{}, Cell{}, Cell{},
-              std::string("SUPERUSER"), true});
+              std::string(viewer.acts_as_system_admin() ? kSystemAdminName : "SUPERUSER"), true});
     return rows.Finish();
   }
   if (asked_for_self && kind == ViewerKind::kRestrictedAdministrator) {
@@ -661,6 +679,15 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
     for (const auto& p : privileges) {
       rows.Add({who.user_name, p, OwnedType(o.type), target[0], target[1], target[2], Cell{}, std::string("OWNER"),
                 true});
+    }
+  }
+  // SYSTEM ADMIN, once for each way the user holds it: `via` is the role granted it, or
+  // the user itself. It gives nothing until the session says SET ROLE SYSTEM ADMIN, which a
+  // scoped token's session never may.
+  if (!who.scope) {
+    for (const auto& source : snapshot.SystemAdminSources(who)) {
+      rows.Add({who.user_name, std::string(kSystemAdminName), std::string("SYSTEM"), Cell{}, Cell{}, Cell{}, Cell{},
+                source.empty() ? who.user_name : names.Role(source), false});
     }
   }
   for (const auto p : AllSystemPrivileges()) {
