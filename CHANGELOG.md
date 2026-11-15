@@ -7,7 +7,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
-## [2.13.0] - 2026-11-14
+## [2.13.1] - 2026-11-14
+
+This includes the features prepared for 2.13.0. The 2.13.0 tag failed final
+release validation and was not published; 2.13.1 includes the corrections.
 
 ### Added
 
@@ -23,6 +26,11 @@ own changelog in `python/CHANGELOG.md`.
   choice. Automatic session replacement retains the restriction.
 
 ### Fixed
+
+- Transaction-state refresh no longer holds the SDK engine lifetime lock while entering
+  DuckDB, preventing a lock-order inversion with active-session monitoring.
+- Extension validation waits for asynchronous installation to finish and downloads
+  its signed replacement-test fixture after startup, with statement diagnostics.
 
 - A failed internal transaction during statement binding rolls back and cleans up
   without invalidating the shared database. Ordinary writable connections and
