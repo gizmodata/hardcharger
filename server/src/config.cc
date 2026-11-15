@@ -1,5 +1,7 @@
 #include "config.hpp"
 
+#include "platform.hpp"
+
 #include <boost/json.hpp>
 #include <yaml-cpp/yaml.h>
 
@@ -259,6 +261,11 @@ const std::vector<Option>& Options() {
        NUMBER(result_retention_seconds)},
       // Statements
       {"query_timeout_seconds", Kind::kInt, "default statement timeout (0: none)", NUMBER(query_timeout_seconds)},
+      {"max_sql_nesting", Kind::kInt,
+       "the deepest nesting a statement may have (brackets, subqueries, chained operators): DuckDB's "
+       "max_expression_depth is set to it, and no session can raise that setting past it. 0: what the "
+       "stack of the threads that run statements takes (1000 with an 8 MB stack, 128 with macOS's 512 KB)",
+       NUMBER(max_sql_nesting)},
       {"print_queries", Kind::kBool,
        "log every statement", FLAG(print_queries)},
       {"rbac_store_uri", Kind::kString,
@@ -658,6 +665,10 @@ void Validate(Loaded& loaded) {
         "max_sessions, session_idle_timeout, idle_in_transaction_session_timeout, "
         "shutdown_grace_period_seconds and max_concurrent_statements cannot be negative");
   }
+  if (c.max_sql_nesting < 0 || c.max_sql_nesting > 100000) {
+    throw std::invalid_argument("max_sql_nesting must be from 0 (automatic) to 100000, not " +
+                                std::to_string(c.max_sql_nesting));
+  }
   if (c.result_retention_seconds < 1 || c.result_retention_seconds > 30 * 24 * 3600) {
     throw std::invalid_argument("result_retention_seconds must be from 1 to 2592000 (30 days), not " +
                                 std::to_string(c.result_retention_seconds));
@@ -846,6 +857,11 @@ std::string OptionsJson() {
       {"options", options},
   };
   return boost::json::serialize(out) + "\n";
+}
+
+int64_t SqlNestingLimit(const Config& config) {
+  if (config.max_sql_nesting > 0) return config.max_sql_nesting;
+  return std::clamp<int64_t>(static_cast<int64_t>(DefaultThreadStackBytes() / 4096), 32, 1000);
 }
 
 }  // namespace hardcharger

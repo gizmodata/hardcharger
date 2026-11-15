@@ -1042,6 +1042,40 @@ column, key or pair under a credential name that is not one only a credential ha
 URL's path, a URL query's `code`, an `INSERT` without a column list or from a `SELECT`, and a
 value an error quotes after the statement transformed it (a substring, a hash, an encoding).
 
+### Statements refused before DuckDB parses them
+
+Three kinds of statement are answered with an error by the server itself, in one pass over
+their text, because DuckDB's parser cannot be handed them safely. None of them could run:
+
+- **Parentheses opened and never closed.** DuckDB 2.0's parser takes time quadratic in their
+  number to report the syntax error (8,000 of them: about 20 seconds; 500,000: hours), on one
+  core, and neither the statement timeout nor a cancel interrupts a parse. The server answers
+  `Parser Error: syntax error: 8000 opening parentheses are never closed (the first "(" at
+  position 8)` at once. They are counted on DuckDB's own tokens, so a parenthesis in a
+  string, a quoted name or a comment is not one. The SQL given to `query()` as a literal is
+  checked the same way.
+- **Brackets nested deeper than `max_sql_nesting`** (`(`, `[` and `{` together):
+  `Parser Error: the statement's brackets nest 3000 deep, and this server takes 128 (its
+  max_sql_nesting option)`.
+- **More than four times `max_sql_nesting` tables in one `FROM` clause**, joined or listed
+  with commas.
+
+`max_sql_nesting` (`--max-sql-nesting`, `HARDCHARGER_MAX_SQL_NESTING`) is the deepest nesting
+a statement may have. DuckDB recurses once per level of a statement's nesting (brackets,
+subqueries, chained operators such as `a || b || c`, joins), on the thread that runs the
+statement, and past what that thread's stack takes the server does not answer with an error:
+it stops. The server therefore sets DuckDB's own limit, `max_expression_depth`, to
+`max_sql_nesting` at startup (after the init SQL), and no session can set
+`max_expression_depth` higher: `SET max_expression_depth = …` above the limit is refused, for
+an administrator too. DuckDB then refuses deeper nesting wherever it parses or binds, with
+its `Max expression depth limit of N exceeded`.
+
+Left at `0`, the default, `max_sql_nesting` is what the stack of a statement thread takes at
+4 KB a level, at most DuckDB's own default of 1000: **1000 on Linux** (8 MB stacks, so nothing
+changes there), **128 on macOS** (512 KB) and **256 on Windows** (1 MB). DuckDB counts some
+constructs as several levels (a nested scalar subquery as about four). Set it higher only
+with stacks to match.
+
 ### Credential and system files
 
 With `block_sensitive_paths` on (the default), no statement can open, list, write, move or

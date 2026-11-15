@@ -57,6 +57,29 @@ own changelog in `python/CHANGELOG.md`.
     field later in the same text (`{"url": "http://h:8080/api", "password": "P@ss…"}`). A quoted
     URL ends at its closing quote.
 
+- **A statement can no longer hold a core in DuckDB's parser, or stop the server, by its
+  shape alone.** Any signed-in user could do either:
+  - A statement with parentheses opened and never closed kept DuckDB 2.0's parser busy for
+    time quadratic in their number (8 KB of them: 17 seconds; 500 KB: hours), one core per
+    statement, and neither the statement timeout, `hardcharger_cancel()` nor a client's
+    cancel took effect until the parse returned. Such a statement cannot parse: the server
+    now answers it with the syntax error at once (`… 8000 opening parentheses are never
+    closed …`), for a statement, a request of several, a prepare, the init SQL and the SQL
+    given to `query()` as a literal. The count is made on DuckDB's own tokens.
+  - DuckDB recurses once per level of a statement's nesting, on a thread with a default
+    stack. Its own limit (`max_expression_depth`, 1000) assumes 8 MB, and any session could
+    raise it. On macOS, where a thread gets 512 KB, statements DuckDB accepts by default
+    stopped the server process: `'a' || 'a' || …` with 900 terms, 460 nested lists or
+    function calls, 300 nested subqueries, a 300-table join. On every platform a session that
+    ran `SET max_expression_depth TO 10000000` first could do the same with a few thousand
+    levels, and 8,000 nested subqueries or 20,000 tables in one `FROM` clause did it
+    whatever the setting. The server now sets DuckDB's limit to what its statement threads'
+    stacks take (the new `max_sql_nesting` option: 1000 on Linux, as before; 128 on macOS; 256
+    on Windows), refuses `SET max_expression_depth` above it, and refuses a statement whose
+    brackets nest deeper, or whose `FROM` clause names more than four times as many tables,
+    before DuckDB's parser sees it. See README, "Statements refused before DuckDB parses
+    them".
+
 ### Changed
 
 - **Android builds reach internal testers automatically.** Each release publishes its Android
@@ -105,6 +128,13 @@ own changelog in `python/CHANGELOG.md`.
   literal), shared by the log, instrumentation, the monitoring functions and the audit record,
   with no `std::regex` on statement text; error text and bound text parameters are read in
   linear time too.
+
+### Added
+
+- `max_sql_nesting` (`--max-sql-nesting`, `HARDCHARGER_MAX_SQL_NESTING`): the deepest nesting
+  a statement may have. DuckDB's `max_expression_depth` is set to it at startup, and no
+  session can raise that setting past it. `0`, the default, is what the stack of the threads
+  that run statements takes: 1000 on Linux, 128 on macOS, 256 on Windows.
 
 ### Notes on the 2.13.0 entries
 

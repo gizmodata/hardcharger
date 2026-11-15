@@ -41,6 +41,11 @@ std::string MakePrivateTempDirectory(const std::string& prefix);
 
 std::tm UtcTime(std::time_t seconds);
 int64_t ProcessId();
+// The stack a thread started without saying otherwise gets, in bytes (what the threads
+// that run statements have): 512 KB on macOS, the soft RLIMIT_STACK on Linux (8 MB as a
+// rule), 1 MB on Windows.
+std::size_t DefaultThreadStackBytes();
+
 std::string HostName();
 // Current interface addresses; no DNS lookup. IPv4-mapped IPv6 is normalized to IPv4.
 std::vector<std::string> LocalIpAddresses();

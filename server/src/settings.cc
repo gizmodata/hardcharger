@@ -304,6 +304,11 @@ std::vector<Setting> Build() {
   auto config_value = [](auto getter) {
     return [getter](const Runtime& r) -> O { return getter(r); };
   };
+  startup({.name = "max_sql_nesting", .input_type = "INTEGER", .option = "max_sql_nesting",
+           .default_value = number(SqlNestingLimit(kDefaults)),
+           .description = "The deepest nesting a statement may have: DuckDB's max_expression_depth, which no "
+                          "session can raise past it (default: what the statement threads' stacks take).",
+           .get_global = config_value([](const Runtime& r) { return std::to_string(SqlNestingLimit(r.config)); })});
   startup({.name = "max_sessions", .input_type = "INTEGER", .option = "max_sessions",
            .default_value = number(kDefaults.max_sessions),
            .description = "Most non-admin sessions at once; more get too_many_sessions (0: unlimited).",

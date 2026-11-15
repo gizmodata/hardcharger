@@ -66,6 +66,31 @@ class SqlTokens {
 
 SqlTokens LexSql(std::string_view sql);
 
+// The parentheses a statement opens and never closes. Such a statement cannot parse, and
+// DuckDB 2.0's parser takes time quadratic in their number to say so (8,000 of them: 20
+// seconds; 500,000: hours), which neither the statement timeout nor a cancel interrupts: the
+// statement intake refuses it before the parser sees it. Counted on DuckDB's tokens, so a
+// parenthesis in a string, a quoted name or a comment is none.
+//
+// And how deep its brackets nest ( ( [ { together ). DuckDB's parser recurses once per level
+// before any of its own limits is checked: a few thousand nested subqueries overflow the
+// stack of the thread that parses them, and the server stops. The intake refuses a statement
+// nested deeper than the server allows (max_sql_nesting), which DuckDB would refuse anyway.
+struct SqlUnclosed {
+  std::size_t count = 0;      // in the statement that has the most
+  std::size_t position = 0;   // of that statement's first one, in bytes from the start of the text
+  bool in_query_text = false; // in SQL given to query() as a literal, which DuckDB parses when it binds
+  std::size_t nesting = 0;    // the deepest the text's brackets nest, a query() literal's included
+  // The most tables one FROM clause names (joined, or listed with commas). The parser
+  // recurses once per table as well, and DuckDB binds no more of them than its nesting limit.
+  std::size_t tables = 0;
+};
+SqlUnclosed UnclosedParentheses(const SqlTokens& tokens);
+// The error that refuses such a statement: parentheses never closed, brackets nested deeper
+// than `nesting_limit`, or more than four times that many tables in one FROM clause (0: no
+// limit on either). "" when the statement may go on to the parser.
+std::string UnclosedParenthesesError(const SqlUnclosed& unclosed, std::size_t nesting_limit = 0);
+
 // For tests: the tokens DuckDB's parser itself builds for `sql` (Parser::ParseQuery's own
 // steps: NormalizeSQLString, then the tokenizer with the parser's behaviour, which throws
 // where the parser refuses), as (kind, offset, text) with comments and white space left out

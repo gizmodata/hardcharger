@@ -10,7 +10,9 @@
 // (duckdb_v2_tokenize_sql, the connection's grammar). Seeded, so a failure names its input.
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <random>
 #include <string>
 #include <vector>
@@ -263,4 +265,79 @@ TEST_F(SqlLex, KindsAndUnreadableReasons) {
   EXPECT_EQ(LexSql("SELECT '\xff'").unreadable(), std::optional<std::string>("invalid UTF-8"));
   EXPECT_FALSE(LexSql("SELECT 1 AS a$q$ -- trailing comment").unreadable());
   EXPECT_FALSE(LexSql("SELECT 1 AS \"\"").unreadable());  // tokenized; DuckDB's parser refuses it later
+}
+
+// ---- Parentheses never closed, and how deep brackets nest (the statement intake's check) ----
+
+TEST_F(SqlLex, UnclosedParenthesesAreCountedOnTokens) {
+  auto unclosed = [](const std::string& sql) { return hardcharger::UnclosedParentheses(LexSql(sql)); };
+  EXPECT_EQ(unclosed("SELECT (1 + (2 * 3))").count, 0u);
+  EXPECT_EQ(unclosed("SELECT ((1").count, 2u);
+  EXPECT_EQ(unclosed("SELECT ((1").position, 7u);
+  EXPECT_EQ(unclosed("SELECT abs(1), ((2 + 3)").count, 1u);
+  EXPECT_EQ(unclosed("SELECT abs(1), ((2 + 3)").position, 15u);
+  // Each statement on its own; the worst one is reported.
+  EXPECT_EQ(unclosed("SELECT (1; SELECT (((2; SELECT 3").count, 3u);
+  EXPECT_EQ(unclosed("SELECT (1; SELECT (((2; SELECT 3").position, 18u);
+  EXPECT_EQ(unclosed("SELECT (1); SELECT (2)").count, 0u);
+  // A parenthesis in a literal, a dollar-quoted literal, a quoted name or a comment is no token.
+  EXPECT_EQ(unclosed("SELECT '((((', $$((($$, $q$(($q$, \"((\", `((` -- ((\n /* (( */").count, 0u);
+  EXPECT_EQ(unclosed("SELECT E'\\'((', a$q$ FROM t WHERE x = '(' AND y = a$q$").count, 0u);
+  // One too many closes nothing that follows; DuckDB refuses it at once on its own.
+  EXPECT_EQ(unclosed("SELECT 1)))) + (2").count, 1u);
+  // Brackets of the other kinds are not what DuckDB's parser is slow on.
+  EXPECT_EQ(unclosed("SELECT [[[1, {a: 1").count, 0u);
+  // Text DuckDB cannot tokenize is refused by its tokenizer at once.
+  EXPECT_EQ(unclosed("SELECT ((( 'never closed").count, 0u);
+  // The SQL given to query() as a literal is parsed when the call is bound.
+  EXPECT_EQ(unclosed("SELECT * FROM query('SELECT ((1')").count, 2u);
+  EXPECT_TRUE(unclosed("SELECT * FROM query('SELECT ((1')").in_query_text);
+  EXPECT_EQ(unclosed("SELECT * FROM QUERY /* c */ ( $q$SELECT (1$q$)").count, 1u);
+  EXPECT_EQ(unclosed("SELECT * FROM query('SELECT * FROM query(''SELECT (((1'')')").count, 3u);
+  EXPECT_EQ(unclosed("SELECT * FROM query('SELECT ''((('' AS s')").count, 0u);
+  EXPECT_EQ(unclosed("SELECT other('SELECT ((1'), 'query(''((''' FROM t").count, 0u);
+  // Linear in the text: the reviewer's 500 KB, and sixteen megabytes.
+  const auto started = std::chrono::steady_clock::now();
+  EXPECT_EQ(unclosed("SELECT " + std::string(500000, '(')).count, 500000u);
+  EXPECT_EQ(unclosed("SELECT " + std::string(16 * 1024 * 1024, '(')).count, 16u * 1024 * 1024);
+  const char* scale = std::getenv("HARDCHARGER_TEST_TIMEOUT_SCALE");
+  EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::duration<double>(8.0 * (scale != nullptr ? std::atof(scale) : 1.0)));
+}
+
+TEST_F(SqlLex, BracketNestingAndTheErrorsThatRefuseAStatement) {
+  auto nesting = [](const std::string& sql) { return hardcharger::UnclosedParentheses(LexSql(sql)).nesting; };
+  EXPECT_EQ(nesting("SELECT 1"), 0u);
+  EXPECT_EQ(nesting("SELECT (1), (2), [3], {a: 4}"), 1u);
+  EXPECT_EQ(nesting("SELECT f(g([{a: (1)}]))"), 5u);
+  EXPECT_EQ(nesting("SELECT ((1)); SELECT (((2)))"), 3u);
+  EXPECT_EQ(nesting("SELECT '((((((' -- ((((("), 0u);
+  EXPECT_EQ(nesting("SELECT * FROM (SELECT * FROM query('SELECT ((1))'))"), 4u);
+  // The tables one FROM clause names: joins and commas, at the clause's own level.
+  auto tables = [](const std::string& sql) { return hardcharger::UnclosedParentheses(LexSql(sql)).tables; };
+  EXPECT_EQ(tables("SELECT 1"), 0u);
+  EXPECT_EQ(tables("SELECT a, b, c FROM t"), 1u);
+  EXPECT_EQ(tables("SELECT a, b FROM t, u JOIN v ON t.i = v.i, w WHERE a IN (1, 2, 3) ORDER BY 1, 2, 3"), 4u);
+  EXPECT_EQ(tables("SELECT f(a, b, c) FROM t JOIN u USING (a, b, c) JOIN v ON g(1, 2, 3) = 1"), 3u);
+  EXPECT_EQ(tables("SELECT * FROM (SELECT 1 FROM a, b, c, d, e) s JOIN t ON true"), 5u);
+  EXPECT_EQ(tables("SELECT 1 FROM a UNION ALL SELECT 2 FROM b, c UNION ALL SELECT 3, 4, 5, 6, 7"), 2u);
+  EXPECT_EQ(tables("SELECT 1 IS DISTINCT FROM 2, 3, 4, 5, 6"), 0u);
+  EXPECT_EQ(tables("SELECT extract(year FROM d), 1, 2, 3, 4, 5 FROM t"), 1u);
+  EXPECT_EQ(tables("SELECT 'FROM a, b, c, d' -- FROM a, b, c, d"), 0u);
+  EXPECT_EQ(tables("SELECT 1 FROM a, b; SELECT 2 FROM c, d, e; SELECT 3, 4, 5, 6"), 3u);
+  auto error = [](const std::string& sql, std::size_t limit) {
+    return hardcharger::UnclosedParenthesesError(hardcharger::UnclosedParentheses(LexSql(sql)), limit);
+  };
+  EXPECT_EQ(error("SELECT ((1))", 2), "");
+  EXPECT_EQ(error("SELECT ((1))", 0), "");
+  EXPECT_EQ(error("SELECT (((1)))", 2),
+            "Parser Error: the statement's brackets nest 3 deep, and this server takes 2 (its max_sql_nesting option)");
+  EXPECT_EQ(error("SELECT 1 FROM a, b, c, d, e, f, g, h", 2), "");
+  EXPECT_EQ(error("SELECT 1 FROM a, b, c, d JOIN e ON true JOIN f ON true, g, h, i", 2),
+            "Parser Error: a FROM clause of the statement names 9 tables, and this server takes 8 in one "
+            "(four times its max_sql_nesting option)");
+  EXPECT_EQ(error("SELECT ((1", 1000),
+            "Parser Error: syntax error: 2 opening parentheses are never closed (the first \"(\" at position 8)");
+  EXPECT_EQ(error("SELECT (1", 1000), "Parser Error: syntax error: 1 opening parenthesis is never closed (the first \"(\" at position 8)");
+  EXPECT_EQ(error("SELECT * FROM query('SELECT (1')", 1000),
+            "Parser Error: syntax error: 1 opening parenthesis is never closed (in the SQL given to query() at position 20)");
 }

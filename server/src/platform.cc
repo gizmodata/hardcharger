@@ -10,6 +10,7 @@
 #include <cwctype>
 #else
 #include <fnmatch.h>
+#include <pthread.h>
 #include <pwd.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
@@ -736,5 +737,21 @@ bool GlobSegmentMatches(const std::string& pattern, const std::string& segment) 
 }
 
 #endif
+
+std::size_t DefaultThreadStackBytes() {
+#ifdef _WIN32
+  return 1024 * 1024;  // the linker's default reserve, which threads take unless told otherwise
+#else
+  // A default attribute's stack size is the default for new threads (glibc answers with its
+  // process-wide default, taken from RLIMIT_STACK at start; macOS and bionic with their constant).
+  std::size_t bytes = 0;
+  pthread_attr_t attributes;
+  if (pthread_attr_init(&attributes) == 0) {
+    pthread_attr_getstacksize(&attributes, &bytes);
+    pthread_attr_destroy(&attributes);
+  }
+  return bytes != 0 ? bytes : 512 * 1024;
+#endif
+}
 
 }  // namespace hardcharger

@@ -22,6 +22,7 @@
 #include "redact.hpp"
 #include "platform.hpp"
 #include "settings.hpp"
+#include "sql_lex.hpp"
 #include "sql_functions.hpp"
 #include "version.hpp"
 #include "chargewire/server.hpp"
@@ -379,6 +380,34 @@ std::shared_ptr<arrow::RecordBatchReader> WithoutCatalogs(std::shared_ptr<arrow:
 }
 
 // Without access control, its statements get a clear error instead of DuckDB's syntax error.
+// SET / PRAGMA [GLOBAL | SESSION | LOCAL] max_expression_depth: no session raises DuckDB's
+// limit on nesting past the server's (max_sql_nesting). DuckDB recurses once per level of a
+// statement's nesting, on a thread whose stack is what it is: past the limit the server
+// would not answer with an error, it would stop.
+void RefuseDeeperNesting(const Piece& piece, int64_t limit) {
+  const auto& t = piece.tokens;
+  std::size_t i = 0;
+  if (i >= t.size() || !(t[i].IsWord("SET") || t[i].IsWord("PRAGMA"))) return;
+  i++;
+  if (i < t.size() && (t[i].IsWord("SESSION") || t[i].IsWord("LOCAL") || t[i].IsWord("GLOBAL"))) i++;
+  if (i >= t.size() || t[i].Value() != "max_expression_depth") return;
+  i++;
+  if (i < t.size() && (t[i].IsOp("=") || t[i].IsWord("TO") || t[i].IsOp("("))) i++;
+  int64_t value = -1;
+  if (i < t.size() && t[i].Is(DUCKDB_V2_TOKEN_TYPE_NUMBER_LITERAL) && t[i].text.size() <= 9 &&
+      std::all_of(t[i].text.begin(), t[i].text.end(), [](unsigned char c) { return std::isdigit(c) != 0; }) &&
+      (i + 1 == t.size() || (i + 2 == t.size() && t[i + 1].IsOp(")")))) {
+    value = std::stoll(std::string(t[i].text));
+  }
+  if (value < 0 || value > limit) {
+    throw Error(ErrorCode::kSqlError,
+                "max_expression_depth can be set to a number up to " + std::to_string(limit) +
+                    " on this server: deeper nesting would overflow the stack of the threads that run "
+                    "statements. The server's max_sql_nesting option raises the limit.",
+                "22023");
+  }
+}
+
 void RefuseAccessControlStatement(std::string_view sql) {
   if (auto kind = authz::AccessControlStatementKind(sql)) {
     throw Error(ErrorCode::kSqlError,
@@ -662,6 +691,15 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
     add_attached(SqlLiteral(catalog_log_->catalog()), catalog_log_->file(), "the log database");
   }
   RunInitSql();
+  {
+    // DuckDB's own limit on a statement's nesting, set to what the threads that run
+    // statements can take (max_sql_nesting), after the init SQL (which may have set it):
+    // DuckDB applies it wherever it parses and binds, the SQL given to query() included.
+    chargewire_duckdb::Connection connection;
+    chargewire_duckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), connection.out(), err); });
+    chargewire_duckdb::RunSql(connection.get(),
+                              "SET GLOBAL max_expression_depth = " + std::to_string(SqlNestingLimit(runtime_.config)));
+  }
   // After the init SQL, which attaches the catalogs the defaults name, and after the
   // instrumentation and log catalogs are known (neither can be the default).
   ResolveDefaultLocation();
@@ -740,6 +778,13 @@ void Backend::RunInitSql() {
   }
   if (sql.find_first_not_of(" \t\r\n;") == std::string::npos) {
     return;
+  }
+  // A statement that leaves parentheses open cannot parse, and DuckDB's parser takes time
+  // quadratic in their number to say so: refused before it sees the text (sql_lex.hpp).
+  if (const std::string refusal = UnclosedParenthesesError(
+          UnclosedParentheses(LexSql(sql)), static_cast<std::size_t>(SqlNestingLimit(config)));
+      !refusal.empty()) {
+    throw InitSqlError("init SQL failed: " + refusal);
   }
   chargewire_duckdb::Connection connection;
   chargewire_duckdb::Call([&](auto* err) {
@@ -1570,6 +1615,19 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
   };
   // The statement's Chargewire id (q_...): its sql_statements row, and its execution's.
   const std::string statement_id = RequestStatementId();
+  if (const std::string refusal = UnclosedParenthesesError(
+          masked->unclosed, static_cast<std::size_t>(SqlNestingLimit(runtime_.config)));
+      !refusal.empty()) {
+    // Parentheses left open: the statement cannot parse, and DuckDB's parser would take time
+    // quadratic in their number to say so, with no timeout or cancel able to stop it. Or
+    // brackets nested deeper than the server takes: its parser recurses once per level. It
+    // fails here, as the error it is, recorded as any statement that does not parse.
+    runtime_.metrics.RecordStatement(StatementKind::kOther, "error", ClassifyStatementError(refusal), 0);
+    if (runtime_.instrumentation != nullptr) {
+      runtime_.instrumentation->StatementCreated(*this, statement_id, masked->text, "statement", false, refusal);
+    }
+    throw Error(ErrorCode::kSqlError, refusal, "42601");
+  }
   // An access-control statement (GRANT, CREATE USER, ...) is the guard's, text and all:
   // it runs one at a time, and the guard refuses anything riding along.
   if (rbac_ && authz::LooksLikeAccessControlStatement(sql)) {
@@ -1606,6 +1664,7 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
       Step step{&piece};
       step.command = ParseSettingCommand(piece).has_value() || ParseKillSession(piece).has_value();
       if (auto setting = ParseSettingCommand(piece)) CheckReadOnlySetting(*this, *setting);
+      RefuseDeeperNesting(piece, SqlNestingLimit(runtime_.config));
       if (read_only_session() && ParseKillSession(piece)) {
         throw chargewire_duckdb::ReadOnlyRefusal("KILL SESSION");
       }
@@ -1696,7 +1755,13 @@ std::unique_ptr<chargewire::PreparedStatement> Session::Prepare(std::string_view
   };
   std::unique_ptr<chargewire::PreparedStatement> prepared;
   try {
+    if (const std::string refusal = UnclosedParenthesesError(
+            masked->unclosed, static_cast<std::size_t>(SqlNestingLimit(runtime_.config)));
+        !refusal.empty()) {
+      throw Error(ErrorCode::kSqlError, refusal, "42601");  // (as Execute)
+    }
     if (!rbac_) RefuseAccessControlStatement(sql);
+    for (const Piece& piece : pieces) RefuseDeeperNesting(piece, SqlNestingLimit(runtime_.config));
     const bool access_control = rbac_ && authz::LooksLikeAccessControlStatement(sql);
     if (access_control) RefuseStoreChangeWhenReadonly(principal_, sql);
     if (pieces.size() == 1 && !access_control) {
