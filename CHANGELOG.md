@@ -59,8 +59,15 @@ own changelog in `python/CHANGELOG.md`.
   new one had replaced. A tab whose session was opened through the old registration now finds it
   gone and opens a new one, as the connection now asks, with a note (or, with a transaction open,
   runs nothing and says so).
-- **Web UI: a file dropped on a read-only tab is uploaded through a read-only session**, which
-  the server refuses, instead of a session of its own that could write.
+- **Web UI: Upload is offered only where its session can write.** The schema browser's Upload
+  button and its "Upload data…" items (on a server, a catalog, a schema) opened the upload dialog
+  for a connection saved with "Read-only sessions", and the server refused the upload only after
+  the form was filled in; a file dropped on a read-only tab opened a session of its own that
+  could write. Each of these, and the tab's own Upload, is now unavailable when the session it
+  would use is or will be opened read-only, with the reason as its tooltip ("Upload is off: this
+  connection opens read-only sessions", "Upload is off in a read-only tab"); a file dragged over
+  such a tab shows the reason and dropping it opens nothing. The server's refusal of an upload in
+  a read-only session stays as the backstop.
 
 ## [2.13.0] - 2026-11-14
 

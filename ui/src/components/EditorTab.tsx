@@ -20,6 +20,7 @@ import {
   type Where,
 } from "../lib/tabSession";
 import type { ThemeName } from "../lib/theme";
+import { uploadUnavailable } from "../lib/upload/availability";
 import { requestUpload } from "../lib/upload/request";
 import { errorMessage, useSession } from "../session";
 import { BenchmarkQueries } from "./BenchmarkQueries";
@@ -190,6 +191,7 @@ export function EditorTab(props: Props) {
     inTransaction,
   });
   const tabReadOnly = box.checked || box.pending;
+  const uploadOff = uploadUnavailable({ connectionReadOnly: connectionDefault, tabReadOnly });
 
   useEffect(() => {
     onStatus({ running, failed, transaction, sessionId, readOnly: tabReadOnly });
@@ -646,15 +648,9 @@ export function EditorTab(props: Props) {
           onClick={() =>
             requestUpload({ catalog: where.catalog, schema: where.schema, role: tab.role, server: tab.server })
           }
-          title={
-            box.checked || box.pending
-              ? "Upload is off in a read-only tab"
-              : connectionDefault
-                ? "Upload is off: this connection opens read-only sessions"
-                : "Load a CSV / Excel / Parquet / JSON / Arrow file into a table"
-          }
+          title={uploadOff ?? "Load a CSV / Excel / Parquet / JSON / Arrow file into a table"}
           data-testid="upload-button"
-          disabled={running || box.checked || box.pending || connectionDefault}
+          disabled={running || uploadOff !== undefined}
         >
           <FileUp size={14} /> Upload data
         </button>

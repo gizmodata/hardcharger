@@ -45,6 +45,7 @@ import {
 } from "../lib/servers";
 import { addressLabel } from "../lib/serverAddress";
 import { sqlNameDragType } from "../lib/sqlNameDrag";
+import { uploadUnavailable } from "../lib/upload/availability";
 import { requestUpload } from "../lib/upload/request";
 import { errorMessage, useSession } from "../session";
 import { ResumeBadge } from "./ResumeStatus";
@@ -397,6 +398,12 @@ export function DataExplorer() {
       { label: "Use this catalog and schema", run: () => pointTabAt(server, catalog, schema), disabled: useBlocked },
     ];
   };
+  /** Why an upload to `server` can't be offered (its sessions open read-only), or undefined. */
+  const uploadOff = (server: string, followsTab = false) =>
+    uploadUnavailable({
+      connectionReadOnly: serverOf(server)?.state?.saved.readOnly === true,
+      tabReadOnly: followsTab && server === active.server && active.readOnly === true,
+    });
   const upload = (server: string, catalog?: string, schema?: string) =>
     requestUpload({
       catalog: catalog ?? (server === active.server ? active.catalog : ""),
@@ -408,7 +415,7 @@ export function DataExplorer() {
     { label: "Insert name in editor", run: () => insert(qualified(catalog, schema)) },
     { label: "Copy name", run: () => copy(qualified(catalog, schema)) },
     { label: "Use this catalog and schema", run: () => pointTabAt(server, catalog, schema), disabled: useBlocked },
-    { label: "Upload data…", run: () => upload(server, catalog, schema) },
+    { label: "Upload data…", run: () => upload(server, catalog, schema), disabled: uploadOff(server) },
   ];
   const catalogMenu = (server: string, catalog: string): MenuItem[] => [
     { label: "Insert name in editor", run: () => insert(ident(catalog)) },
@@ -424,7 +431,7 @@ export function DataExplorer() {
           ),
       disabled: useBlocked,
     },
-    { label: "Upload data…", run: () => upload(server, catalog) },
+    { label: "Upload data…", run: () => upload(server, catalog), disabled: uploadOff(server) },
   ];
   const columnMenu = (column: ColumnEntry): MenuItem[] => [
     { label: "Insert name in editor", run: () => insert(ident(column.name)) },
@@ -438,7 +445,7 @@ export function DataExplorer() {
         label: "New tab on this server",
         run: () => session.requestQuery({ sql: "", run: false, newTab: true, server: server.id }),
       });
-      items.push({ label: "Upload data…", run: () => upload(server.id) });
+      items.push({ label: "Upload data…", run: () => upload(server.id), disabled: uploadOff(server.id) });
     }
     if (state) {
       if (server.connected) {
@@ -878,10 +885,12 @@ export function DataExplorer() {
           type="button"
           className="btn btn-ghost btn-icon btn-sm"
           onClick={() => upload(active.server)}
-          title="Upload data: a CSV, Excel, Parquet, JSON or Arrow file into a table"
+          title={
+            uploadOff(active.server, true) ?? "Upload data: a CSV, Excel, Parquet, JSON or Arrow file into a table"
+          }
           aria-label="Upload data"
           data-testid="explorer-upload"
-          disabled={!serverOf(active.server)?.connected}
+          disabled={!serverOf(active.server)?.connected || uploadOff(active.server, true) !== undefined}
         >
           <FileUp size={14} />
         </button>

@@ -3,10 +3,13 @@
 // dragged onto the page offers to upload it.
 
 import { FileUp } from "lucide-react";
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 
-import { currentActiveTab } from "../lib/activeTab";
+import { currentActiveTab, useActiveTab } from "../lib/activeTab";
+import { useServers } from "../lib/servers";
+import { uploadUnavailable } from "../lib/upload/availability";
 import { closeUpload, requestUpload, useUploadRequest } from "../lib/upload/request";
+import { useSession } from "../session";
 import { loadModule } from "../lib/stale";
 import "../styles/upload.css";
 
@@ -17,6 +20,19 @@ const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes("Files") ?? fa
 export function UploadHost() {
   const { request, serial } = useUploadRequest();
   const [dragging, setDragging] = useState(false);
+  const app = useSession();
+  const snapshot = useServers(app.servers);
+  const active = useActiveTab();
+  // A file dropped on a read-only tab, or on a tab whose connection opens read-only sessions,
+  // can't be uploaded: the overlay says so, and the drop opens nothing.
+  const off = uploadUnavailable({
+    connectionReadOnly: snapshot.servers.find((s) => s.saved.id === active.server)?.saved.readOnly === true,
+    tabReadOnly: active.readOnly === true,
+  });
+  const offRef = useRef(off);
+  useEffect(() => {
+    offRef.current = off;
+  });
 
   useEffect(() => {
     let depth = 0;
@@ -29,7 +45,7 @@ export function UploadHost() {
     const over = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      if (e.dataTransfer) e.dataTransfer.dropEffect = offRef.current ? "none" : "copy";
     };
     const leave = (e: DragEvent) => {
       if (!hasFiles(e)) return;
@@ -43,7 +59,7 @@ export function UploadHost() {
       depth = 0;
       setDragging(false);
       const file = e.dataTransfer?.files[0];
-      if (!file) return;
+      if (!file || offRef.current) return;
       const tab = currentActiveTab();
       requestUpload({
         catalog: tab.catalog,
@@ -71,10 +87,19 @@ export function UploadHost() {
     <>
       {dragging && !request && (
         <div className="upload-drop" data-testid="upload-drop-overlay" aria-hidden>
-          <div className="upload-drop-box">
+          <div className="upload-drop-box" data-off={off ? "" : undefined}>
             <FileUp size={28} />
-            <strong>Drop the file to upload it into a table</strong>
-            <span>CSV, TSV, Excel, Parquet, JSON or Arrow</span>
+            {off ? (
+              <>
+                <strong data-testid="upload-drop-off">{off}</strong>
+                <span>Dropping the file does nothing.</span>
+              </>
+            ) : (
+              <>
+                <strong>Drop the file to upload it into a table</strong>
+                <span>CSV, TSV, Excel, Parquet, JSON or Arrow</span>
+              </>
+            )}
           </div>
         </div>
       )}

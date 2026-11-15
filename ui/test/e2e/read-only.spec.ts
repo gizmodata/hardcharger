@@ -1,7 +1,7 @@
 import { copyFileSync } from "node:fs";
 import path from "node:path";
 
-import type { Page, TestInfo } from "@playwright/test";
+import type { Locator, Page, TestInfo } from "@playwright/test";
 
 import { activeTab, expect, expectProblem, gridRows, runDone, signIn, test } from "./fixtures.ts";
 
@@ -303,35 +303,124 @@ test("a reload shows the new session's real state, read-write as well as read-on
   await expect(ro.box).not.toBeChecked();
 });
 
-test("a file dropped on a read-only tab is uploaded through a read-only session, which the server refuses", async ({
-  page,
-  harness,
-}) => {
+/** Drags a file over the page; `drop` lets go of it. */
+async function dragFile(page: Page, name: string, drop: boolean): Promise<void> {
+  const dt = await page.evaluateHandle((file) => {
+    const d = new DataTransfer();
+    d.items.add(new File(["a,b\n1,2\n"], file, { type: "text/csv" }));
+    return d;
+  }, name);
+  await page.dispatchEvent("main", "dragenter", { dataTransfer: dt });
+  if (drop) await page.dispatchEvent("main", "drop", { dataTransfer: dt });
+}
+
+test("a file dropped on a read-only tab is not offered an upload, and opens nothing", async ({ page, harness }) => {
   await signIn(page, harness.admin);
   const ro = readOnlyMode(page);
+  // Twin first: a read-write tab offers it.
+  await dragFile(page, "dropped_writable.csv", false);
+  await expect(page.getByTestId("upload-drop-overlay")).toContainText("Drop the file to upload it into a table");
+  await dragFile(page, "dropped_writable.csv", true);
+  const dialog = page.getByTestId("upload-data-dialog");
+  await expect(dialog.getByLabel("Table", { exact: true })).toHaveValue("dropped_writable");
+  await dialog.getByRole("button", { name: "Close", exact: true }).last().click();
+  await expect(dialog).toHaveCount(0);
+
   await runDone(page, "SELECT 1 AS n");
   await ro.box.click();
   await expect(ro.mode).toHaveAttribute("data-state", "on");
   await expect(activeTab(page).getByTestId("upload-button")).toBeDisabled();
-  const dt = await page.evaluateHandle(() => {
-    const d = new DataTransfer();
-    d.items.add(new File(["a,b\n1,2\n"], "dropped_read_only.csv", { type: "text/csv" }));
-    return d;
-  });
-  await page.dispatchEvent("main", "dragenter", { dataTransfer: dt });
-  await page.dispatchEvent("main", "drop", { dataTransfer: dt });
-  const dialog = page.getByTestId("upload-data-dialog");
-  await expect(dialog.getByLabel("Table", { exact: true })).toHaveValue("dropped_read_only");
-  const created = page.waitForRequest(
-    (r) => r.method() === "POST" && r.url().endsWith("/sessions") && r.postDataJSON()?.options?.read_only === true,
+  await expect(activeTab(page).getByTestId("upload-button")).toHaveAttribute(
+    "title",
+    "Upload is off in a read-only tab",
   );
-  expectProblem(page, { status: 403, url: /\/ingest(\?|$)/ });
-  await dialog.getByRole("button", { name: "Upload", exact: true }).click();
-  await created;
-  await expect(dialog.getByTestId("upload-error")).toContainText("bulk ingest is not allowed in a read-only session");
-  await dialog.getByRole("button", { name: "Close", exact: true }).last().click();
-  await runDone(page, "SELECT count(*) AS n FROM duckdb_tables() WHERE table_name = 'dropped_read_only'");
-  expect(await gridRows(page)).toEqual([["n"], ["0"]]);
+  await expect(page.getByTestId("explorer-upload")).toBeDisabled();
+  await expect(page.getByTestId("explorer-upload")).toHaveAttribute("title", "Upload is off in a read-only tab");
+  await dragFile(page, "dropped_read_only.csv", false);
+  await expect(page.getByTestId("upload-drop-off")).toHaveText("Upload is off in a read-only tab");
+  await dragFile(page, "dropped_read_only.csv", true);
+  await expect(page.getByTestId("upload-drop-overlay")).toHaveCount(0);
+  await expect(dialog).toHaveCount(0);
+});
+
+test("the schema browser offers Upload only where its session can write", async ({ page, harness }) => {
+  const remote = harness.remotes.plain;
+  const tree = page.getByRole("tree", { name: "Servers" });
+  const off = "Upload is off: this connection opens read-only sessions";
+  const addServer = async (readOnly: boolean) => {
+    await page.getByTestId("explorer-add-server").click();
+    const dialog = page.getByTestId("add-server-dialog");
+    await dialog.getByLabel("Display name", { exact: true }).fill("Uploads");
+    await dialog.getByLabel("Host", { exact: true }).fill(remote.url);
+    await dialog.getByLabel("Username", { exact: true }).fill(remote.admin.username);
+    await dialog.getByLabel("Password", { exact: true }).fill(remote.admin.password);
+    await dialog.getByRole("checkbox", { name: "Read-only sessions", exact: true }).setChecked(readOnly);
+    await dialog.getByTestId("add-server-connect").click();
+    await expect(dialog).toHaveCount(0);
+  };
+  /** The "Upload data…" item of a tree row's menu (opened with a right click). */
+  const uploadItem = async (row: Locator) => {
+    await row.locator(":scope > .tree-row-wrap").click({ button: "right" });
+    return page.getByRole("menuitem", { name: "Upload data…" });
+  };
+  const server = tree.getByRole("treeitem", { name: "Uploads", exact: true });
+  const catalog = server.getByRole("treeitem", { name: "e2e", exact: true });
+  const schema = catalog.getByRole("treeitem", { name: "main", exact: true });
+  const serverItemOf = async () => {
+    const row = server.locator(":scope > .tree-row-wrap");
+    await row.hover();
+    await row.getByRole("button", { name: "More for Uploads" }).click();
+    return page.getByRole("menuitem", { name: "Upload data…" });
+  };
+
+  await signIn(page, harness.admin);
+  // This server, read-write: offered.
+  const local = tree
+    .getByRole("treeitem", { name: "This server", exact: true })
+    .getByRole("treeitem", { name: harness.catalog, exact: true });
+  await expect(await uploadItem(local)).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("explorer-upload")).toBeEnabled();
+
+  // A server added read-write: offered on the server, its catalogs and its schemas.
+  await addServer(false);
+  await expect(await serverItemOf()).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await expect(catalog).toBeVisible();
+  await expect(await uploadItem(catalog)).toBeEnabled();
+  await page.keyboard.press("Escape");
+
+  // The same server with Read-only sessions: not offered anywhere, with the reason.
+  await addServer(true);
+  const item = await serverItemOf();
+  await expect(item).toBeDisabled();
+  await expect(item).toHaveAttribute("title", off);
+  await page.keyboard.press("Escape");
+  await expect(catalog).toBeVisible();
+  const catalogItem = await uploadItem(catalog);
+  await expect(catalogItem).toBeDisabled();
+  await expect(catalogItem).toHaveAttribute("title", off);
+  await page.keyboard.press("Escape");
+  await catalog.getByRole("button", { name: "e2e", exact: true }).click();
+  await expect(schema).toBeVisible();
+  const schemaItem = await uploadItem(schema);
+  await expect(schemaItem).toBeDisabled();
+  await expect(schemaItem).toHaveAttribute("title", off);
+  await page.keyboard.press("Escape");
+  // This server's entries are unaffected.
+  await expect(await uploadItem(local)).toBeEnabled();
+  await page.keyboard.press("Escape");
+
+  // A tab on that connection: its Upload, the browser's Upload button and a drop are off too.
+  await activeTab(page).getByLabel("Connection", { exact: true }).selectOption({ label: "Uploads" });
+  await expect(activeTab(page).getByTestId("upload-button")).toBeDisabled();
+  await expect(activeTab(page).getByTestId("upload-button")).toHaveAttribute("title", off);
+  await expect(page.getByTestId("explorer-upload")).toBeDisabled();
+  await expect(page.getByTestId("explorer-upload")).toHaveAttribute("title", off);
+  await dragFile(page, "dropped_remote.csv", false);
+  await expect(page.getByTestId("upload-drop-off")).toHaveText(off);
+  await dragFile(page, "dropped_remote.csv", true);
+  await expect(page.getByTestId("upload-data-dialog")).toHaveCount(0);
 });
 
 test("while the server is asked, the box is pending, not checked", async ({ page, harness }) => {

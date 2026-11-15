@@ -62,8 +62,9 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   with work in it, an older server without read-only sessions), the session stays as it was,
   read-write, and the server's message says what to do before ticking again; only when the
   outcome is unknown (no answer, the session gone) does the tab end the session and say why.
-  Upload is disabled in a read-only tab, and a file dropped on one is uploaded through a
-  read-only session, which the server refuses.
+  Upload is not offered where its session would be read-only: in a read-only tab (its Upload,
+  the schema browser's Upload button, a dropped file) or on a connection saved with read-only
+  sessions (also the schema browser's "Upload data…" items); the tooltip says why.
 - 📊 **Results grid** for up to a million rows (only the rows in view are drawn), with DuckDB's
   own formatting of decimals, dates, timestamps, intervals, lists, structs, maps and blobs.
   - **Sort**: click a column header (again for descending, a third time to clear); NULLs sort
