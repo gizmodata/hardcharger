@@ -15,6 +15,31 @@ own changelog in `python/CHANGELOG.md`.
   upload (2.13.1's was refused because 2.13.0's draft was still there), and an older build never
   replaces a newer one. Closed and open testing and production stay manual in Play Console.
 
+### Security
+
+- **Access control: a writer could redirect what a trigger reads and writes.** DuckDB looks up the
+  names in a trigger's action again in every statement that fires it, in the writer's session. A
+  user who may write a table could so, with a temporary table (or a table of their own ahead in
+  their search path) named like one the trigger's action names without its catalog and schema:
+  - **evade an audit trigger**: the audit row of their write landed in their own table, and the
+    real audit table got none (an administrator's trigger included);
+  - **read through another user's trigger**: a trigger runs with its owner's rights, so what its
+    body read with them was written into the writer's table, for the writer to read;
+  - feed a trigger a view or a sequence of their own in place of the one its action names.
+
+  Affected: every release with triggers under access control, through 2.13.0. Now
+  `CREATE [OR REPLACE] TRIGGER` stores the action with its tables, views and sequences named in
+  full, as the creator's session resolved them (the init SQL's triggers too), so a trigger depends
+  on no session. For a trigger from before, each name in its action must be, in the writer's
+  session, the object it is for the trigger's own table (in that table's catalog; a bare name in
+  the table's own schema, else in `main`): otherwise the write is refused, naming the trigger and
+  the name. Triggers whose names resolve that way keep firing for every writer. Refused for every
+  writer until their owner runs `CREATE OR REPLACE TRIGGER` once (which stores the names in full):
+  a trigger with a bare name that is in both its table's schema and `main`, one whose bare name
+  only its creator's own search path found (in a third schema), and one whose body reaches a
+  table through a macro. An administrator's own statements are not checked. Servers without
+  access control are as DuckDB is: name the tables in a trigger's action in full.
+
 ## [2.13.1] - 2026-11-15
 
 ### Fixed

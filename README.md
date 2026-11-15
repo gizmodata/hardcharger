@@ -1166,6 +1166,23 @@ triggers of its own fires them, each body with its own owner's rights, and an ad
 trigger fired that way runs with the rights of the body that fired it. `INSERT ... ON CONFLICT`
 (and `INSERT OR IGNORE` / `OR REPLACE`) fires a table's `INSERT` triggers like any insert.
 
+DuckDB keeps a trigger's action as it was written and looks its names up again in every statement
+that fires the trigger, in the writer's session: a table, view or sequence the action names
+without its catalog and schema follows the writer's search path, the writer's temporary objects
+first. Under access control a trigger does not depend on that. `CREATE [OR REPLACE] TRIGGER` stores
+the action with those names written in full (`duckdb_triggers()` shows
+`INSERT INTO catalog.schema.audit_log ...`), in a session and in the init SQL alike. A trigger made
+by an earlier Hardcharger (2.13.0 and before), or one that was already in a database file, still
+has the names as written: each must be, in the writer's session, the object it is for the
+trigger's own table (the schema path it gives, in that table's catalog; a bare name in the table's
+own schema, else in the catalog's `main`), or the write is refused, saying which trigger and which
+name. A writer with a temporary table or a table of its own of that name ahead in its search path
+no longer has the trigger's rows land there. Refused for every writer, until the trigger's owner
+runs `CREATE OR REPLACE TRIGGER` once: a bare name that is in both the table's schema and `main`,
+one that only the creator's own search path found, and a body that reaches a table through a
+macro. On a server without access control every session may do anything anyway and DuckDB's own
+behaviour stands: name the tables in a trigger's action in full (`catalog.schema.table`).
+
 A write needs the privilege of what it does. `INSERT ... ON CONFLICT DO NOTHING` and
 `INSERT OR IGNORE` need `INSERT`; `ON CONFLICT ... DO UPDATE` and `INSERT OR REPLACE` need `INSERT`
 and `UPDATE`; a `MERGE INTO` needs `INSERT`, `UPDATE` or `DELETE` for each kind of `WHEN ... THEN`

@@ -397,6 +397,10 @@ class PlanChecker {
   // Set by CheckAsDefiner for the one Visit of the body's root, so the root is checked
   // here rather than handed to yet another checker.
   bool trigger_body_entered_ = false;
+  // The names in the trigger bodies a statement fires are held against the writer's
+  // session (triggers.hpp, "Names in a body"). Not for an administrator's own statement,
+  // whose users' trigger bodies are checked for their owners' rights alone.
+  bool check_trigger_names_ = true;
 
   void Visit(dd::LogicalOperator& op,
              dd::optional_ptr<dd::TableCatalogEntry> dml_target = nullptr) {
@@ -405,6 +409,12 @@ class PlanChecker {
     // gone or the trigger can't be told, else with the writer's, as DuckDB runs it.
     if (const TriggerBody* body = TriggerBodyAt(trigger_bodies_, op); body && !body->base) {
       if (!body->problem.empty()) Deny(principal_, body->problem);
+      // Whoever made the trigger and whoever's rights its body runs with: every name in it
+      // must be, in this session, what it is for the trigger's own table.
+      if (check_trigger_names_ && !trigger_body_entered_) {
+        const std::string names = TriggerBodyNameProblem(context_, trigger_bodies_, *body);
+        if (!names.empty()) ::hardcharger::authz::Deny(principal_, names);
+      }
       if (body->definer && !trigger_body_entered_) return CheckAsDefiner(*body, op);
       dml_target = nullptr;
     }
@@ -1370,6 +1380,12 @@ class PlanChecker {
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       RequireTriggerDrop(table_path, trigger.object_name, "replace");
     }
+    // The trigger is stored with the names in its action written in full, as this session
+    // resolves them, and its owner record is of that definition.
+    if (!QualifyTriggerNames(context_, table_path, info)) {
+      Deny(principal_, "the tables the action of trigger " + QuoteIdentifierIfNeeded(trigger.object_name) +
+                           " names could not be read, so it can't be stored with their full names");
+    }
     ownership_.push_back({PendingOwnership::Kind::kCreate, TriggerOwnerPath(table_path, trigger.object_name),
                           ObjectType::kTrigger, TriggerDefinitionHash(info)});
   }
@@ -1400,6 +1416,7 @@ class PlanChecker {
     checker.trigger_context_ = body.describe + " cannot run, because its owner " + body.definer_name +
                                " may not do what its body does: ";
     checker.trigger_body_entered_ = true;
+    checker.check_trigger_names_ = check_trigger_names_;
     checker.Visit(plan);
     for (auto& access : checker.accesses_) accesses_.insert(access);
     for (auto& object : checker.objects_) objects_.push_back(std::move(object));
@@ -1860,6 +1877,7 @@ void CheckDefinerBodies(dd::ClientContext& context, const Snapshot& snapshot, dd
       checker.trigger_context_ = body->describe + " cannot run, because its owner " + body->definer_name +
                                  " may not do what its body does: ";
       checker.trigger_body_entered_ = true;
+      checker.check_trigger_names_ = false;  // an administrator's own statement
       checker.Visit(op);
       return;
     }
@@ -1949,10 +1967,36 @@ void CollectRename(dd::ClientContext& context, dd::LogicalOperator& op,
   for (auto& child : op.children) if (child) CollectRename(context, *child, changes);
 }
 
+// CREATE TRIGGER outside any session (the init SQL): its action's names written in full.
+// Never a reason for the statement to fail: what can't be resolved stays as written, and
+// is held against each writer's session when the trigger fires.
+void QualifyUncheckedTriggers(dd::ClientContext& context, dd::LogicalOperator& op) {
+  if (op.type == OpType::LOGICAL_CREATE_TRIGGER) {
+    try {
+      auto& info = op.Cast<dd::LogicalCreate>().info->Cast<dd::CreateTriggerInfo>();
+      const auto parts = PartsOf(info);
+      if (parts.size() >= 3 && !IsTempCatalog(parts[0]) && !info.temporary && info.base_table) {
+        const ObjectPath table{parts[0], {parts.begin() + 1, parts.end() - 1},
+                               compat::Str(info.base_table->GetQualifiedName().Name())};
+        QualifyTriggerNames(context, table, info);
+      }
+    } catch (const std::exception&) {
+    }
+  }
+  for (auto& child : op.children) {
+    if (child) QualifyUncheckedTriggers(context, *child);
+  }
+}
+
 void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalOperator>& plan) {
   auto& context = input.context;
   auto state = context.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
-  if (!state) return;  // a Hardcharger-internal connection
+  if (!state) {
+    // A Hardcharger-internal connection: nothing to check. The init SQL's DuckDB statements
+    // run on one: a trigger they create is stored with its names in full, as a session's is.
+    if (plan) QualifyUncheckedTriggers(context, *plan);
+    return;
+  }
   auto engine = state->engine();
   if (!engine) {
     throw dd::PermissionException(
@@ -2026,6 +2070,7 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
           if (parts.size() >= 3 && !IsTempCatalog(parts[0]) && !info.temporary && info.base_table) {
             const ObjectPath table{parts[0], {parts.begin() + 1, parts.end() - 1},
                                    compat::Str(info.base_table->GetQualifiedName().Name())};
+            QualifyTriggerNames(context, table, info);  // stored with its names in full, as a user's is
             ownership.push_back({PendingOwnership::Kind::kCreate, TriggerOwnerPath(table, parts.back()),
                                  ObjectType::kTrigger, TriggerDefinitionHash(info)});
           }
