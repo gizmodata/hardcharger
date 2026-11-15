@@ -101,6 +101,9 @@ asked for `SYSTEM ADMIN` (`SessionGuard::VerifySystemAdmin`, called from
 reads the store's data version, loads the store if it moved, and, if the store did not
 answer, marks the session unverified: it then acts as nobody until the store answers or it
 says `RESET ROLE`. The cost is one small store read per statement, for these sessions only.
+A statement that is already *running* when the grant goes is stopped when its server hears
+of it (at once on the replica where the change was made, at the next poll on the others):
+"the next statement" is the guarantee, and the interrupt is on top of it.
 
 Everything in the server keyed on "this is an administrator" (`Session::admin()`,
 `full_admin()`, `SessionGuard::unrestricted()`, `RbacSessionState::unchecked()`) asks that
