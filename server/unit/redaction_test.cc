@@ -715,8 +715,18 @@ TEST(RedactionTokens, EverySpaceDuckDBReadsSeparatesANameFromItsValue) {
       EXPECT_NE(logged.find("kept"), std::string::npos) << sql << "\n  logged: " << logged;
     }
   }
-  // A character DuckDB reads as part of a word is part of the word here too: this is the
-  // one name `token<U+1680>`, which is no credential name, as DuckDB sees it.
+  // A character DuckDB reads as part of the word makes it another name, and DuckDB refuses
+  // the statement ("Unrecognized option encryption_key<U+180E>"). The value typed after it
+  // is the credential all the same: a name is matched without its invisible characters.
+  for (const char* glued : {"\xc2\x85", "\xe1\xa0\x8e", "\xe2\x80\x8c", "\xe1\x9a\x80", "\x1f", "\xe2\x80\xa8"}) {
+    for (const std::string sql : {std::string("ATTACH 'f.db' AS wj (ENCRYPTION_KEY") + glued + "'S3CR3T') -- kept",
+                                  std::string("SELECT * FROM nofn(token") + glued + " => 'S3CR3T') -- kept",
+                                  std::string("SELECT * FROM nofn(to") + glued + "ken => 'S3CR3T') -- kept"}) {
+      const std::string logged = LoggableSql(sql);
+      EXPECT_EQ(logged.find(kSecret), std::string::npos) << sql << "\n  logged: " << logged;
+      EXPECT_NE(logged.find("kept"), std::string::npos) << sql << "\n  logged: " << logged;
+    }
+  }
   EXPECT_EQ(LoggableSql("SELECT 1 AS token\xe1\x9a\x80"), "SELECT 1 AS token\xe1\x9a\x80");
 }
 

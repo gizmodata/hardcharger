@@ -434,8 +434,11 @@ def test_every_space_duckdb_reads_separates_a_name_from_its_value(server, admin)
     for cp in spaces:
         for name, text in sinks.items():
             assert secrets_by_cp[cp] not in text, f"U+{cp:04X}: the value reached {name}"
-    # The twin: a code point DuckDB reads as part of the name makes it another name, kept.
-    assert secrets_by_cp[0x1680] in log, "token<U+1680> is one word to DuckDB, not the credential name"
+    # And where DuckDB reads the code point as part of the name (U+1680, U+180E, U+200C ...: it
+    # then refuses the statement for the name it does not know), the value typed after it is
+    # masked all the same: a credential name is matched without its invisible characters.
+    for cp in candidates:
+        assert secrets_by_cp[cp] not in log, f"U+{cp:04X}: the value after the name was logged"
 
 
 # ---- Finding 3: errors and bound parameters, by value ---------------------------------------

@@ -50,10 +50,18 @@ std::string Lower(std::string_view text) {
   return out;
 }
 
-// A name as the lists spell it: lower case, '-' as '_'.
+// A name as the lists spell it: lower case, '-' as '_', and without the characters that are
+// not ASCII or are control characters. (A name pasted with an invisible character on it,
+// `ENCRYPTION_KEY<U+180E>'...'`, is another name to DuckDB, which refuses the statement; the
+// value typed after it is the credential all the same.)
 std::string Normal(std::string_view name) {
-  std::string out = Lower(name);
-  std::replace(out.begin(), out.end(), '-', '_');
+  std::string out;
+  out.reserve(name.size());
+  for (const char c : name) {
+    const auto byte = static_cast<unsigned char>(c);
+    if (byte < 0x20 || byte >= 0x7f) continue;
+    out += c == '-' ? '_' : static_cast<char>(std::tolower(byte));
+  }
   return out;
 }
 

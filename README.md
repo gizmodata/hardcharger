@@ -943,7 +943,10 @@ and `-` reads as `_`. A **credential name** is one that ends in `password`, `pas
 `apikey`, `api_key`, `private_key`, `encryption_key`, `subscription_key`, `sig`, `signature`,
 `auth`, `authorization`, `credential`, `credentials`, `cookie`, `jwt` or `bearer`, or is
 `pass` or `pw`, or ends in `_pass` or `_pw` (`s3_secret_access_key`, `X-API-Key`,
-`Proxy-Authorization`, `bearer_token`).
+`Proxy-Authorization`, `bearer_token`). Characters that are not ASCII and control characters
+are left out of a name before it is compared, so a name pasted with an invisible character on
+it (`ENCRYPTION_KEY<U+180E>'…'`, which DuckDB refuses as an unknown option) still has its
+value masked.
 
 **Statements replaced whole**, by their own first words (not by words in a comment or a
 string). In a request of several statements only that statement is replaced:
