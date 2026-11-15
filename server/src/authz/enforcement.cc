@@ -458,11 +458,39 @@ class PlanChecker {
       }
       case OpType::LOGICAL_MERGE_INTO: {
         auto& merge = op.Cast<dd::LogicalMergeInto>();
-        // MERGE may insert, update and delete: require all three.
-        Require(merge.table, Privilege::kInsert, {});
-        Require(merge.table, Privilege::kUpdate, {});
-        Require(merge.table, Privilege::kDelete, {});
-        if (merge.return_chunk) RequireAllColumns(merge.table);
+        // A merge (MERGE INTO, and INSERT ... ON CONFLICT, which DuckDB runs as one) needs
+        // the privilege of each action it has, as in Postgres: ON CONFLICT DO NOTHING
+        // inserts, DO UPDATE inserts and updates. The target columns it reads (the keys it
+        // matches on, a condition) need SELECT, through the scan beneath.
+        bool inserts = false, updates = false, deletes = false;
+        for (const auto& [when, actions] : merge.actions) {
+          for (const auto& action : actions) {
+            switch (action ? action->action_type : dd::MergeActionType::MERGE_UPDATE) {
+              case dd::MergeActionType::MERGE_INSERT:
+                inserts = true;
+                break;
+              case dd::MergeActionType::MERGE_UPDATE:
+                updates = true;
+                // An update DuckDB runs as a delete and an insert is still an update.
+                break;
+              case dd::MergeActionType::MERGE_DELETE:
+                deletes = true;
+                break;
+              case dd::MergeActionType::MERGE_DO_NOTHING:
+              case dd::MergeActionType::MERGE_ERROR:
+                break;
+              default:  // an action this check does not know: everything
+                inserts = updates = deletes = true;
+                break;
+            }
+          }
+        }
+        // A merge that can change nothing still names its target as one to write.
+        if (!inserts && !updates && !deletes) inserts = true;
+        if (inserts) Require(merge.table, Privilege::kInsert, {});
+        if (updates) Require(merge.table, Privilege::kUpdate, {});
+        if (deletes) Require(merge.table, Privilege::kDelete, {});
+        if (merge.return_chunk && !ReturningAddedForTriggers(trigger_bodies_, op)) RequireAllColumns(merge.table);
         VisitChildren(op, &merge.table);
         return;
       }

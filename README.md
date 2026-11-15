@@ -1110,7 +1110,16 @@ view, macro, trigger, policy, column default or check constraint names, and drop
 such a type is refused too). `GRANT CREATE TRIGGER, DROP TRIGGER ON SCHEMA tools TO analyst` lets a
 role put triggers on the tables it owns. A user's trigger runs with its owner's rights, whoever
 writes the table, so an administrator's write lends it nothing; an administrator's trigger runs
-with the writer's rights, as DuckDB runs it.
+with the writer's rights, as DuckDB runs it. Triggers chain: a body that writes a table with
+triggers of its own fires them, each body with its own owner's rights, and an administrator's
+trigger fired that way runs with the rights of the body that fired it. `INSERT ... ON CONFLICT`
+(and `INSERT OR IGNORE` / `OR REPLACE`) fires a table's `INSERT` triggers like any insert.
+
+A write needs the privilege of what it does. `INSERT ... ON CONFLICT DO NOTHING` and
+`INSERT OR IGNORE` need `INSERT`; `ON CONFLICT ... DO UPDATE` and `INSERT OR REPLACE` need `INSERT`
+and `UPDATE`; a `MERGE INTO` needs `INSERT`, `UPDATE` or `DELETE` for each kind of `WHEN ... THEN`
+action it has. Each also needs `SELECT` on the target's columns it reads, which for the conflict
+forms is the key that tells a conflict (`GRANT SELECT (id) ON t TO r` is enough).
 
 The init SQL (`init_sql_commands`, `init_sql_commands_file`) can hold these statements too.
 They run as the administrator, in order with the DuckDB statements around them, so a grant

@@ -148,49 +148,79 @@ bool ReturnsToUser(const dd::LogicalOperator& cte) {
   return !consumer || consumer->type != OpType::LOGICAL_AGGREGATE_AND_GROUP_BY;
 }
 
-// The DML under a base CTE's definition: down through single-child operators.
-TriggerBase BaseOf(const dd::LogicalOperator& cte) {
-  TriggerBase base;
-  base.returning_to_user = ReturnsToUser(cte);
-  const dd::LogicalOperator* op = cte.children.empty() ? nullptr : cte.children[0].get();
-  for (int depth = 0; op && depth < 64; ++depth) {
-    switch (op->type) {
-      case OpType::LOGICAL_INSERT:
-        base.table = &op->Cast<dd::LogicalInsert>().table;
-        base.event = dd::TriggerEventType::INSERT_EVENT;
-        base.dml = op;
-        return base;
-      case OpType::LOGICAL_DELETE:
-        base.table = &op->Cast<dd::LogicalDelete>().table;
-        base.event = dd::TriggerEventType::DELETE_EVENT;
-        base.dml = op;
-        return base;
-      case OpType::LOGICAL_UPDATE: {
-        auto& update = op->Cast<dd::LogicalUpdate>();
-        base.table = &update.table;
-        base.event = dd::TriggerEventType::UPDATE_EVENT;
-        base.dml = op;
-        if (!UpdatedColumns(update, base.updated_columns)) {
-          base.problem = "the columns an UPDATE with triggers sets could not be read from the plan; ask an administrator";
-        }
-        return base;
-      }
-      case OpType::LOGICAL_MERGE_INTO:
-        base.problem = "a trigger fired by MERGE INTO is not available under access control";
-        return base;
-      default:
-        break;
-    }
-    op = op->children.size() == 1 ? op->children[0].get() : nullptr;
+// The INSERT, UPDATE, DELETE and MERGE operators under `op`, never looking into a CTE's
+// definition (a WITH of the statement's own, the alias of a transition table, a chain
+// nested in a trigger's body) nor below one of them: a statement's own write sits under
+// its WITH clauses, and, where the statement is itself a trigger's body, under the joins
+// DuckDB leaves when it decorrelates NEW and OLD.
+void CollectWrites(const dd::LogicalOperator& op, std::vector<const dd::LogicalOperator*>& writes) {
+  if (WrittenTable(op)) {
+    writes.push_back(&op);
+    return;
   }
-  base.problem = "the statement a trigger fires on could not be found in the plan";
+  const size_t first = op.type == OpType::LOGICAL_MATERIALIZED_CTE ? 1 : 0;
+  for (size_t i = first; i < op.children.size(); ++i) {
+    if (op.children[i]) CollectWrites(*op.children[i], writes);
+  }
+}
+
+// The statement under a base CTE's definition. `in_body`: the chain is the body of another
+// trigger, whose result DuckDB discards, so nothing the statement returns reaches the writer.
+TriggerBase BaseOf(const dd::LogicalOperator& cte, bool in_body) {
+  TriggerBase base;
+  base.returning_to_user = !in_body && ReturnsToUser(cte);
+  std::vector<const dd::LogicalOperator*> writes;
+  if (!cte.children.empty() && cte.children[0]) CollectWrites(*cte.children[0], writes);
+  if (writes.size() != 1) {
+    base.problem = "the statement a trigger fires on could not be found in the plan; ask an administrator";
+    return base;
+  }
+  const dd::LogicalOperator* op = writes[0];
+  base.dml = op;
+  switch (op->type) {
+    case OpType::LOGICAL_INSERT:
+      base.table = &op->Cast<dd::LogicalInsert>().table;
+      base.event = dd::TriggerEventType::INSERT_EVENT;
+      break;
+    case OpType::LOGICAL_MERGE_INTO:
+      // INSERT ... ON CONFLICT (INSERT OR IGNORE, INSERT OR REPLACE): DuckDB runs it as a
+      // merge and fires the table's INSERT triggers. A MERGE INTO statement never gets
+      // here: DuckDB refuses one on a table with triggers.
+      base.table = &op->Cast<dd::LogicalMergeInto>().table;
+      base.event = dd::TriggerEventType::INSERT_EVENT;
+      break;
+    case OpType::LOGICAL_DELETE:
+      base.table = &op->Cast<dd::LogicalDelete>().table;
+      base.event = dd::TriggerEventType::DELETE_EVENT;
+      break;
+    case OpType::LOGICAL_UPDATE: {
+      auto& update = op->Cast<dd::LogicalUpdate>();
+      base.table = &update.table;
+      base.event = dd::TriggerEventType::UPDATE_EVENT;
+      if (!UpdatedColumns(update, base.updated_columns)) {
+        base.problem = "the columns an UPDATE with triggers sets could not be read from the plan; ask an administrator";
+      }
+      break;
+    }
+    default:
+      base.dml = nullptr;
+      base.problem = "the statement a trigger fires on could not be found in the plan; ask an administrator";
+      break;
+  }
   return base;
 }
 
-void CollectBases(const dd::LogicalOperator& op, std::map<std::string, TriggerBase>& bases) {
-  if (auto uuid = After(CteName(op), kBasePrefix)) bases[*uuid] = BaseOf(op);
-  for (const auto& child : op.children) {
-    if (child) CollectBases(*child, bases);
+// Is this the CTE of a trigger's body (statement or row)?
+bool IsBodyCte(const std::string& name) {
+  return After(name, kBodyPrefix).has_value() || After(name, kBeforeBodyPrefix).has_value();
+}
+
+void CollectBases(const dd::LogicalOperator& op, std::map<std::string, TriggerBase>& bases, bool in_body) {
+  const std::string name = CteName(op);
+  if (auto uuid = After(name, kBasePrefix)) bases[*uuid] = BaseOf(op, in_body);
+  for (size_t i = 0; i < op.children.size(); ++i) {
+    // A body CTE's definition (its first child) is the body.
+    if (op.children[i]) CollectBases(*op.children[i], bases, in_body || (i == 0 && IsBodyCte(name)));
   }
 }
 
@@ -389,37 +419,69 @@ class Finder {
   }
 
   void MatchRowBodies(const dd::LogicalOperator& op, const TriggerBase& base, const std::vector<Candidate>& candidates) {
-    if (dd::TableCatalogEntry* written = WrittenTable(op)) {
-      std::vector<const dd::TriggerCatalogEntry*> matching;
-      for (const auto& candidate : candidates) {
-        if (candidate.target && candidate.target == written) matching.push_back(candidate.trigger);
-      }
-      if (matching.empty()) {
+    const std::string name = CteName(op);
+    if (auto nested = After(name, kBasePrefix)) {
+      // The body writes a table that has statement triggers of its own: the binder put
+      // their chain where the body's INSERT, UPDATE or DELETE would be. The whole chain is
+      // the body, so the triggers it fires in turn are checked beneath it; they are found
+      // like any other (Walk).
+      auto chain = bases.find(*nested);
+      std::vector<const dd::LogicalOperator*> beside;
+      if (op.children.size() > 1 && op.children[1]) CollectWrites(*op.children[1], beside);
+      if (chain == bases.end() || !chain->second.problem.empty() || !chain->second.table || !beside.empty()) {
         bodies.push_back(Unmatched(op, "a row trigger of table " + PathOfEntry(*base.table).ToString() +
                                            " could not be matched to its body; ask an administrator"));
         return;
       }
-      TriggerBody body = BodyOf(snapshot_, *matching[0], *base.table);
-      for (size_t i = 1; i < matching.size(); ++i) {
-        TriggerBody other = BodyOf(snapshot_, *matching[i], *base.table);
-        const bool same_owner = other.definer.has_value() == body.definer.has_value() &&
-                                (!body.definer || (other.definer->user_id == body.definer->user_id &&
-                                                   other.definer->role_id == body.definer->role_id)) &&
-                                other.problem == body.problem;
-        if (!same_owner) {
-          body.problem = "the row triggers " + QuoteIdentifierIfNeeded(body.trigger.object_name) + " and " +
-                         QuoteIdentifierIfNeeded(other.trigger.object_name) + " on table " + body.table.ToString() +
-                         " both write " + PathOfEntry(*written).ToString() +
-                         " and have different owners, so their bodies can't be told apart; ask an administrator";
-        }
+      RowBody(op, *chain->second.table, base, candidates);
+      for (const auto& child : op.children) {
+        if (child) Walk(*child);
       }
-      body.root = &op;
-      bodies.push_back(std::move(body));
+      return;
+    }
+    if (After(name, "__duckdb_trigger_")) {
+      // Any other CTE of a chain has its place beneath a base CTE, never here.
+      bodies.push_back(Unmatched(op, "a row trigger of table " + PathOfEntry(*base.table).ToString() +
+                                         " could not be matched to its body; ask an administrator"));
+      return;
+    }
+    if (dd::TableCatalogEntry* written = WrittenTable(op)) {
+      RowBody(op, *written, base, candidates);
       return;  // a body is one DML: nothing of another trigger sits beneath it
     }
     for (const auto& child : op.children) {
       if (child) MatchRowBodies(*child, base, candidates);
     }
+  }
+
+  // The body at `root` writes `written`: whose trigger is it?
+  void RowBody(const dd::LogicalOperator& root, dd::TableCatalogEntry& written, const TriggerBase& base,
+               const std::vector<Candidate>& candidates) {
+    std::vector<const dd::TriggerCatalogEntry*> matching;
+    for (const auto& candidate : candidates) {
+      if (candidate.target && candidate.target == &written) matching.push_back(candidate.trigger);
+    }
+    if (matching.empty()) {
+      bodies.push_back(Unmatched(root, "a row trigger of table " + PathOfEntry(*base.table).ToString() +
+                                           " could not be matched to its body; ask an administrator"));
+      return;
+    }
+    TriggerBody body = BodyOf(snapshot_, *matching[0], *base.table);
+    for (size_t i = 1; i < matching.size(); ++i) {
+      TriggerBody other = BodyOf(snapshot_, *matching[i], *base.table);
+      const bool same_owner = other.definer.has_value() == body.definer.has_value() &&
+                              (!body.definer || (other.definer->user_id == body.definer->user_id &&
+                                                 other.definer->role_id == body.definer->role_id)) &&
+                              other.problem == body.problem;
+      if (!same_owner) {
+        body.problem = "the row triggers " + QuoteIdentifierIfNeeded(body.trigger.object_name) + " and " +
+                       QuoteIdentifierIfNeeded(other.trigger.object_name) + " on table " + body.table.ToString() +
+                       " both write " + PathOfEntry(written).ToString() +
+                       " and have different owners, so their bodies can't be told apart; ask an administrator";
+      }
+    }
+    body.root = &root;
+    bodies.push_back(std::move(body));
   }
 
   dd::ClientContext& context_;
@@ -430,7 +492,7 @@ class Finder {
 
 TriggerBodies FindTriggerBodies(dd::ClientContext& context, const Snapshot& snapshot, dd::LogicalOperator& plan) {
   Finder finder(context, snapshot);
-  CollectBases(plan, finder.bases);
+  CollectBases(plan, finder.bases, false);
   finder.Walk(plan);
   for (const auto& [uuid, base] : finder.bases) {
     if (!base.dml || !base.table) continue;

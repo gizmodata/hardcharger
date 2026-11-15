@@ -7,6 +7,33 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Access control: chains of triggers run**
+  ([#52](https://github.com/gizmodata/hardcharger/issues/52)). A write was refused with "the
+  statement a trigger fires on could not be found in the plan" when a trigger's body read a
+  transition table (`REFERENCING NEW TABLE AS ...`) and wrote a table with a trigger of its own,
+  and when the writer's own statement had a `WITH` clause (an ordinary user got "no SELECT
+  privilege" there instead). A `FOR EACH ROW` trigger whose body wrote a table with a statement
+  trigger was refused with "a row trigger ... could not be matched to its body". All of these run
+  now, as they do without access control: each body is still checked with its owner's rights, and
+  an administrator's trigger fired from another trigger's body runs with the rights of that
+  body's owner. Thanks to Jfoxyyc for the report.
+- **Access control: `INSERT ... ON CONFLICT` on a table with a trigger runs**
+  ([#53](https://github.com/gizmodata/hardcharger/issues/53)). It was refused with "a trigger
+  fired by MERGE INTO is not available under access control", for the administrator too, because
+  DuckDB runs `ON CONFLICT`, `INSERT OR IGNORE` and `INSERT OR REPLACE` as a merge. They fire the
+  table's `INSERT` triggers now, the body checked with its owner's rights as for a plain insert.
+- **Access control: a merge needs only the privileges of its actions**
+  ([#53](https://github.com/gizmodata/hardcharger/issues/53)). `INSERT ... ON CONFLICT DO NOTHING`
+  and `INSERT OR IGNORE` needed `INSERT`, `UPDATE` and `DELETE` on the table, as every statement
+  DuckDB plans as a merge did. They need `INSERT`; `DO UPDATE` and `INSERT OR REPLACE` need
+  `INSERT` and `UPDATE`; `MERGE INTO` needs the privilege of each `WHEN ... THEN` action it has.
+  All of them still need `SELECT` on the target's columns they read (for the conflict forms, the
+  key columns). The refusal of such a write into a table with row or masking policies now says
+  "MERGE (or INSERT ... ON CONFLICT)".
+- The server builds against OpenSSL 4 (a certificate name is taken as `const`).
+
 ## [2.13.0] - 2026-11-14
 
 ### Added

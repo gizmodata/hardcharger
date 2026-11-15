@@ -294,6 +294,59 @@ def test_writes_that_read_need_select(joe, wanda):
     expect_allowed(client=wanda, sql="UPDATE orders SET amount = 0")
 
 
+def test_a_merge_needs_the_privileges_of_its_actions(admin, server):
+    # MERGE INTO, and INSERT ... ON CONFLICT (which DuckDB runs as a merge), need INSERT,
+    # UPDATE and DELETE each only where an action does it (issue #53), plus SELECT on the
+    # target's columns they read, as every write does.
+    for sql in ["CREATE TABLE stock (id INT PRIMARY KEY, qty INT)", "INSERT INTO stock VALUES (1, 10)",
+                "CREATE ROLE stock_adder", "CREATE USER sam", "GRANT stock_adder TO sam",
+                "GRANT INSERT, SELECT ON stock TO stock_adder"]:
+        expect_allowed(client=admin, sql=sql)
+    sam = server.user(name="sam")
+    insert_only = ("MERGE INTO stock USING (SELECT 2 AS id, 20 AS qty) s ON stock.id = s.id "
+                   "WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.qty)")
+    updating = ("MERGE INTO stock USING (SELECT 1 AS id, 11 AS qty) s ON stock.id = s.id "
+                "WHEN MATCHED THEN UPDATE SET qty = s.qty WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.qty)")
+    deleting = "MERGE INTO stock USING (SELECT 2 AS id) s ON stock.id = s.id WHEN MATCHED THEN DELETE"
+
+    def stock() -> list:
+        return admin.run(sql="SELECT id, qty FROM stock ORDER BY id").to_pylist()
+
+    try:
+        expect_allowed(client=sam, sql="INSERT INTO stock VALUES (1, 99) ON CONFLICT DO NOTHING")
+        expect_allowed(client=sam, sql="INSERT OR IGNORE INTO stock VALUES (1, 99)")
+        expect_allowed(client=sam, sql=insert_only)
+        assert stock() == [{"id": 1, "qty": 10}, {"id": 2, "qty": 20}]
+        for sql in ["INSERT INTO stock VALUES (1, 11) ON CONFLICT (id) DO UPDATE SET qty = excluded.qty",
+                    "INSERT OR REPLACE INTO stock VALUES (1, 11)", updating]:
+            expect_blocked(client=sam, sql=sql, why="no UPDATE privilege")
+        expect_blocked(client=sam, sql=deleting, why="no DELETE privilege")
+        assert stock() == [{"id": 1, "qty": 10}, {"id": 2, "qty": 20}]
+        expect_allowed(client=admin, sql="GRANT UPDATE ON stock TO stock_adder")
+        expect_allowed(client=sam, sql="INSERT INTO stock VALUES (1, 11) ON CONFLICT (id) DO UPDATE SET qty = excluded.qty")
+        expect_allowed(client=sam, sql="INSERT OR REPLACE INTO stock VALUES (2, 21)")
+        expect_allowed(client=sam, sql=updating.replace("11 AS qty", "12 AS qty"))
+        expect_blocked(client=sam, sql=deleting, why="no DELETE privilege")
+        assert stock() == [{"id": 1, "qty": 12}, {"id": 2, "qty": 21}]
+        expect_allowed(client=admin, sql="GRANT DELETE ON stock TO stock_adder")
+        expect_allowed(client=sam, sql=deleting)
+        assert stock() == [{"id": 1, "qty": 12}]
+        # An action's privilege alone is not enough: INSERT without the others still inserts,
+        # and none of them stands in for INSERT.
+        expect_allowed(client=admin, sql="REVOKE INSERT ON stock FROM stock_adder")
+        expect_blocked(client=sam, sql="INSERT INTO stock VALUES (3, 30) ON CONFLICT DO NOTHING", why="no INSERT privilege")
+        expect_blocked(client=sam, sql=insert_only, why="no INSERT privilege")
+        # Telling a match reads the key: without SELECT on it, no merge.
+        expect_allowed(client=admin, sql="GRANT INSERT ON stock TO stock_adder")
+        expect_allowed(client=admin, sql="REVOKE SELECT ON stock FROM stock_adder")
+        expect_blocked(client=sam, sql="INSERT INTO stock VALUES (3, 30) ON CONFLICT DO NOTHING", why="no SELECT")
+        expect_allowed(client=sam, sql="INSERT INTO stock VALUES (3, 30)")
+        assert stock() == [{"id": 1, "qty": 12}, {"id": 3, "qty": 30}]
+    finally:
+        for sql in ["DROP TABLE stock", "DROP USER sam", "DROP ROLE stock_adder"]:
+            expect_allowed(client=admin, sql=sql)
+
+
 def test_dml_inside_a_cte_is_a_write(joe, eve):
     expect_blocked(client=joe, sql="WITH d AS (DELETE FROM orders RETURNING *) SELECT * FROM d",
                    why="no DELETE privilege")

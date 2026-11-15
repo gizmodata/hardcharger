@@ -424,3 +424,211 @@ def test_the_administrator_is_unaffected(admin, mia):
         expect_allowed(client=admin, sql="DROP TRIGGER admin_orders ON app.orders")
         expect_allowed(client=admin, sql="DELETE FROM main.audit WHERE what = 'top-secret-value'")
         expect_allowed(client=admin, sql="DELETE FROM app.orders WHERE id = 11")
+
+
+# ---- chains: a trigger whose body fires another, and a writer's own WITH (issue #52) ----
+
+def make(client, statements: list[str]) -> None:
+    for sql in statements:
+        expect_allowed(client=client, sql=sql)
+
+
+def drop_tables(client, names: list[str]) -> None:
+    for name in names:
+        expect_allowed(client=client, sql=f"DROP TABLE IF EXISTS {name}")
+
+
+def test_a_chain_of_triggers_reading_transition_tables(admin, mia, joe):
+    # raw -> staged -> totals, each step a statement trigger reading the rows of the step
+    # before (REFERENCING NEW TABLE): the body of the first trigger is the statement that
+    # fires the second. joe may write only the first table; the bodies run as mia.
+    make(client=mia, statements=[
+        "CREATE TABLE app.raw (id INT)", "CREATE TABLE app.staged (id INT)", "CREATE TABLE app.totals (total INT)",
+        "CREATE TRIGGER staged_to_totals AFTER INSERT ON app.staged REFERENCING NEW TABLE AS fresh "
+        "FOR EACH STATEMENT INSERT INTO app.totals SELECT sum(id) FROM fresh",
+        "CREATE TRIGGER raw_to_staged AFTER INSERT ON app.raw REFERENCING NEW TABLE AS fresh "
+        "FOR EACH STATEMENT INSERT INTO app.staged SELECT id * 10 FROM fresh",
+        "GRANT INSERT ON app.raw TO writers", "GRANT SELECT ON app.staged TO writers", "GRANT SELECT ON app.totals TO writers",
+    ])
+    try:
+        expect_blocked(client=joe, sql="INSERT INTO app.staged VALUES (0)", why="no INSERT privilege")
+        expect_allowed(client=joe, sql="INSERT INTO app.raw VALUES (1), (2)")
+        assert sorted(values(client=joe, sql="SELECT id FROM app.staged")) == ["10", "20"]
+        assert values(client=joe, sql="SELECT total FROM app.totals") == ["30"]
+        expect_allowed(client=admin, sql="INSERT INTO app.raw VALUES (3)")
+        assert sorted(values(client=joe, sql="SELECT total FROM app.totals")) == ["30", "30"]
+        # The second trigger's body still gets only its owner's rights, however deep it sits.
+        expect_allowed(client=mia, sql="CREATE OR REPLACE TRIGGER staged_to_totals AFTER INSERT ON app.staged "
+                                       "REFERENCING NEW TABLE AS fresh FOR EACH STATEMENT "
+                                       "INSERT INTO app.leak SELECT value FROM main.secrets, fresh")
+        for client in [admin, joe]:
+            error = expect_blocked(client=client, sql="INSERT INTO app.raw VALUES (4)", why=CANNOT_RUN)
+            assert "trigger staged_to_totals on table" in error.detail
+            assert "no SELECT privilege on table" in error.detail and "secrets" in error.detail
+        assert values(client=mia, sql="SELECT count(*) FROM app.leak") == ["0"]
+        assert values(client=mia, sql="SELECT count(*) FROM app.raw") == ["3"]
+    finally:
+        drop_tables(client=mia, names=["app.raw", "app.staged", "app.totals"])
+
+
+def test_a_statement_trigger_whose_body_fires_a_row_trigger(mia, joe):
+    make(client=mia, statements=[
+        "CREATE TABLE app.batches (id INT)", "CREATE TABLE app.lines (id INT)", "CREATE TABLE app.line_log (id INT)",
+        "CREATE TRIGGER log_lines AFTER INSERT ON app.lines FOR EACH ROW INSERT INTO app.line_log VALUES (NEW.id + 1)",
+        "CREATE TRIGGER batch_lines AFTER INSERT ON app.batches REFERENCING NEW TABLE AS fresh "
+        "FOR EACH STATEMENT INSERT INTO app.lines SELECT id FROM fresh",
+        "GRANT INSERT ON app.batches TO writers", "GRANT SELECT ON app.line_log TO writers",
+    ])
+    try:
+        expect_allowed(client=joe, sql="INSERT INTO app.batches VALUES (1), (2)")
+        assert sorted(values(client=joe, sql="SELECT id FROM app.line_log")) == ["2", "3"]
+    finally:
+        drop_tables(client=mia, names=["app.batches", "app.lines", "app.line_log"])
+
+
+def test_a_row_trigger_whose_body_fires_a_statement_trigger(admin, mia, joe):
+    # The row trigger's body writes a table with a statement trigger of its own: DuckDB binds
+    # that trigger's chain where the body's INSERT would be.
+    make(client=mia, statements=[
+        "CREATE TABLE app.parts (id INT)", "CREATE TABLE app.part_copies (id INT)", "CREATE TABLE app.copy_log (what VARCHAR)",
+        "CREATE TRIGGER log_copies AFTER INSERT ON app.part_copies FOR EACH STATEMENT INSERT INTO app.copy_log VALUES ('copied')",
+        "CREATE TRIGGER copy_parts AFTER INSERT ON app.parts FOR EACH ROW INSERT INTO app.part_copies VALUES (NEW.id)",
+        "GRANT INSERT ON app.parts TO writers", "GRANT SELECT ON app.part_copies TO writers",
+        "GRANT SELECT ON app.copy_log TO writers",
+    ])
+    try:
+        expect_blocked(client=joe, sql="INSERT INTO app.part_copies VALUES (0)", why="no INSERT privilege")
+        expect_allowed(client=joe, sql="INSERT INTO app.parts VALUES (7), (8)")
+        assert sorted(values(client=joe, sql="SELECT id FROM app.part_copies")) == ["7", "8"]
+        assert values(client=joe, sql="SELECT DISTINCT what FROM app.copy_log") == ["copied"]
+        # An administrator's trigger on the table the body writes runs with the rights of who
+        # wrote that table: the row trigger's owner, mia, who may not write main.audit.
+        expect_allowed(client=admin, sql="CREATE TRIGGER audit_copies AFTER INSERT ON app.part_copies FOR EACH STATEMENT "
+                                         "INSERT INTO main.audit VALUES ('part copied')")
+        error = expect_blocked(client=joe, sql="INSERT INTO app.parts VALUES (9)", why=CANNOT_RUN)
+        assert "trigger copy_parts on table" in error.detail
+        assert "no INSERT privilege on table" in error.detail and "audit" in error.detail
+        assert sorted(values(client=joe, sql="SELECT id FROM app.part_copies")) == ["7", "8"]
+        # Twin: once mia may write it, the cascade runs.
+        expect_allowed(client=admin, sql="GRANT INSERT ON main.audit TO trigger_makers")
+        try:
+            expect_allowed(client=joe, sql="INSERT INTO app.parts VALUES (9)")
+            assert values(client=admin, sql="SELECT what FROM main.audit WHERE what = 'part copied'") == ["part copied"]
+        finally:
+            expect_allowed(client=admin, sql="REVOKE INSERT ON main.audit FROM trigger_makers")
+            expect_allowed(client=admin, sql="DELETE FROM main.audit WHERE what = 'part copied'")
+    finally:
+        drop_tables(client=mia, names=["app.parts", "app.part_copies", "app.copy_log"])
+
+
+def test_the_writers_own_with_on_a_table_with_a_trigger(server, mia):
+    # ike holds INSERT on app.orders and nothing else.
+    ike = server.user(name="ike")
+    before = logged(client=mia)
+    try:
+        expect_allowed(client=ike, sql="WITH fresh AS (SELECT 14 AS id, 'fourteenth' AS note) "
+                                       "INSERT INTO app.orders SELECT id, note FROM fresh")
+        assert logged(client=mia) == before + 1
+        assert values(client=mia, sql="SELECT note FROM app.orders WHERE id = 14") == ["fourteenth"]
+        # A RETURNING of the writer's own hands the rows back, WITH or not: SELECT, as always.
+        expect_blocked(client=ike, sql="WITH fresh AS (SELECT 15 AS id, 'fifteenth' AS note) "
+                                       "INSERT INTO app.orders SELECT id, note FROM fresh RETURNING *",
+                       why="no SELECT privilege")
+        assert values(client=mia, sql="SELECT count(*) FROM app.orders WHERE id = 15") == ["0"]
+    finally:
+        expect_allowed(client=mia, sql="DELETE FROM app.orders WHERE id IN (14, 15)")
+
+
+def test_a_cte_named_like_a_triggers_own_gets_no_owner_rights(mia, joe):
+    # DuckDB names the CTEs it binds triggers into __duckdb_trigger_base_<uuid> and
+    # __duckdb_trigger_body_<n>_<uuid>. A writer who names CTEs that way must not have a
+    # statement of their own taken for the body of mia's trigger (which would run it with
+    # mia's rights): joe may write app.orders, and not app.order_log.
+    before = values(client=mia, sql="SELECT count(*) FROM app.order_log")
+    orders = values(client=mia, sql="SELECT count(*) FROM app.orders")
+    for sql in [
+        'WITH "__duckdb_trigger_base_x" AS (INSERT INTO app.orders VALUES (16, \'s\') RETURNING *), '
+        '"__duckdb_trigger_body_1_x" AS (INSERT INTO app.order_log VALUES (\'forged\') RETURNING *) '
+        'SELECT count(*) FROM "__duckdb_trigger_base_x"',
+        'WITH "__duckdb_trigger_base_x" AS (INSERT INTO app.items VALUES (16) RETURNING *), '
+        '"__duckdb_trigger_body_1_x" AS (INSERT INTO app.order_log VALUES (\'forged\') RETURNING *) '
+        'SELECT count(*) FROM "__duckdb_trigger_base_x"',
+        'WITH "__duckdb_trigger_body_1_x" AS (INSERT INTO app.order_log VALUES (\'forged\') RETURNING *) SELECT 1',
+    ]:
+        expect_blocked(client=joe, sql=sql)
+    assert values(client=mia, sql="SELECT count(*) FROM app.order_log") == before
+    assert values(client=mia, sql="SELECT count(*) FROM app.orders") == orders
+    assert values(client=mia, sql="SELECT count(*) FROM app.items") == ["0"]
+
+
+# ---- INSERT ... ON CONFLICT on a table with a trigger (issue #53) ----
+
+def test_on_conflict_fires_the_tables_triggers(admin, mia, joe, server):
+    # DuckDB runs INSERT ... ON CONFLICT as a merge and fires the table's INSERT triggers.
+    make(client=mia, statements=[
+        "CREATE TABLE app.keyed (id INT PRIMARY KEY, note VARCHAR)", "CREATE TABLE app.keyed_log (what VARCHAR)",
+        "CREATE TRIGGER log_keyed AFTER INSERT ON app.keyed FOR EACH STATEMENT INSERT INTO app.keyed_log VALUES ('fired')",
+        "GRANT INSERT, SELECT ON app.keyed TO writers", "GRANT INSERT ON app.keyed TO inserters",
+        "GRANT SELECT ON app.keyed_log TO writers",
+    ])
+
+    def fired() -> int:
+        return int(values(client=mia, sql="SELECT count(*) FROM app.keyed_log")[0])
+
+    def notes() -> list:
+        return values(client=mia, sql="SELECT note FROM app.keyed ORDER BY id")
+
+    try:
+        expect_blocked(client=joe, sql="INSERT INTO app.keyed_log VALUES ('joes')", why="no INSERT privilege")
+        expect_allowed(client=joe, sql="INSERT INTO app.keyed VALUES (1, 'first') ON CONFLICT DO NOTHING")
+        expect_allowed(client=joe, sql="INSERT INTO app.keyed VALUES (1, 'again') ON CONFLICT DO NOTHING")
+        expect_allowed(client=joe, sql="INSERT OR IGNORE INTO app.keyed VALUES (1, 'ignored'), (2, 'second')")
+        assert notes() == ["first", "second"] and fired() == 3
+        expect_allowed(client=admin, sql="INSERT INTO app.keyed VALUES (2, 'admin') ON CONFLICT (id) DO NOTHING")
+        assert notes() == ["first", "second"] and fired() == 4
+        # DO UPDATE and OR REPLACE update: UPDATE as well as INSERT.
+        for sql in ["INSERT INTO app.keyed VALUES (1, 'updated') ON CONFLICT (id) DO UPDATE SET note = excluded.note",
+                    "INSERT OR REPLACE INTO app.keyed VALUES (1, 'replaced')"]:
+            expect_blocked(client=joe, sql=sql, why="no UPDATE privilege")
+        assert notes() == ["first", "second"] and fired() == 4
+        expect_allowed(client=mia, sql="GRANT UPDATE ON app.keyed TO writers")
+        expect_allowed(client=joe, sql="INSERT INTO app.keyed VALUES (1, 'updated') ON CONFLICT (id) DO UPDATE "
+                                       "SET note = excluded.note")
+        assert notes() == ["updated", "second"] and fired() == 5
+        expect_allowed(client=joe, sql="INSERT OR REPLACE INTO app.keyed VALUES (1, 'replaced'), (3, 'third')")
+        assert notes() == ["replaced", "second", "third"] and fired() == 6
+        # The writer's own RETURNING hands rows back (joe may read them).
+        assert values(client=joe, sql="INSERT INTO app.keyed VALUES (4, 'fourth') ON CONFLICT DO NOTHING "
+                                      "RETURNING note") == ["fourth"]
+        # ike holds INSERT alone. Telling a conflict reads the key, so it takes SELECT on the
+        # key column (as Postgres asks for a conflict target), and nothing more: not on the
+        # rows the binder returns to the triggers.
+        ike = server.user(name="ike")
+        expect_blocked(client=ike, sql="INSERT INTO app.keyed VALUES (5, 'fifth') ON CONFLICT DO NOTHING",
+                       why="no SELECT privilege")
+        expect_allowed(client=mia, sql="GRANT SELECT (id) ON app.keyed TO inserters")
+        expect_allowed(client=ike, sql="INSERT INTO app.keyed VALUES (5, 'fifth') ON CONFLICT DO NOTHING")
+        expect_blocked(client=ike, sql="INSERT INTO app.keyed VALUES (6, 'sixth') ON CONFLICT DO NOTHING RETURNING *",
+                       why="no SELECT on column(s) note")
+        assert notes() == ["replaced", "second", "third", "fourth", "fifth"]
+        # The body still runs with its owner's rights, and no more.
+        expect_allowed(client=mia, sql="CREATE OR REPLACE TRIGGER log_keyed AFTER INSERT ON app.keyed FOR EACH STATEMENT "
+                                       "INSERT INTO app.leak SELECT value FROM main.secrets")
+        for client in [admin, joe]:
+            error = expect_blocked(client=client, sql="INSERT INTO app.keyed VALUES (7, 'seventh') ON CONFLICT DO NOTHING",
+                                   why=CANNOT_RUN)
+            assert "trigger log_keyed on table" in error.detail
+        assert values(client=mia, sql="SELECT count(*) FROM app.leak") == ["0"]
+        assert values(client=mia, sql="SELECT count(*) FROM app.keyed WHERE id = 7") == ["0"]
+    finally:
+        drop_tables(client=mia, names=["app.keyed", "app.keyed_log"])
+
+
+def test_merge_into_a_table_with_triggers_is_duckdbs_to_refuse(admin, mia):
+    # DuckDB 2.0 has no MERGE INTO on a table with triggers; the error is its own, not a
+    # refusal of access control's.
+    with pytest.raises(ChargewireError) as raised:
+        admin.run(sql="MERGE INTO app.orders USING (SELECT 99 AS id) s ON orders.id = s.id "
+                      "WHEN NOT MATCHED THEN INSERT VALUES (s.id, 'merged')")
+    assert "MERGE INTO is not supported on tables with triggers" in raised.value.detail
+    assert raised.value.code != "permission_denied"

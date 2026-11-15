@@ -321,7 +321,7 @@ class PolicyRewriter {
         RefuseWriteInto(op->Cast<dd::LogicalUpdate>().table, "UPDATE");
         break;
       case OpType::LOGICAL_MERGE_INTO:
-        RefuseWriteInto(op->Cast<dd::LogicalMergeInto>().table, "MERGE");
+        RefuseWriteInto(op->Cast<dd::LogicalMergeInto>().table, "MERGE (or INSERT ... ON CONFLICT)");
         break;
       case OpType::LOGICAL_DELETE: {
         // DELETE ... RETURNING hands back whole rows, masked columns included.

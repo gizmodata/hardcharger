@@ -19,6 +19,17 @@
 // is a correlated column), so a row trigger's body is found as the INSERT, UPDATE or DELETE
 // in there on the table its action names. A body that can't be matched refuses the
 // statement (fail closed).
+//
+// Chains. The statement a trigger fires on is the one INSERT, UPDATE, DELETE or merge in
+// its base CTE's definition outside any CTE's definition there: a WITH of the statement's
+// own, and the alias the binder gives a transition table, put CTE nodes above it. A body
+// that writes a table with statement triggers of its own is bound as that table's whole
+// chain (its base CTE, the nested bodies beside it), which is then the body: the nested
+// bodies are checked beneath it, with their owners' rights or, for an administrator's
+// trigger, the rights of the body that fired it. INSERT ... ON CONFLICT is a merge in the
+// plan and fires the INSERT triggers. A CTE the writer names like one of the binder's gets
+// nothing from it: the statement in it is still expanded by the binder, so it is never the
+// one write its "base" would need, and the statement is refused.
 
 #pragma once
 
