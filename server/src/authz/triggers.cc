@@ -322,18 +322,27 @@ TriggerBody BodyOf(const Snapshot& snapshot, const dd::TriggerCatalogEntry& trig
   body.trigger = TriggerOwnerPath(body.table, compat::Str(trigger.name));
   body.describe = "trigger " + QuoteIdentifierIfNeeded(body.trigger.object_name) + " on table " + body.table.ToString();
   const OwnerRecord* owner = snapshot.FindTriggerOwner(body.trigger);
-  if (!owner || owner->type != ObjectType::kTrigger || owner->owner_kind == OwnerKind::kSystem) return body;
+  if (!owner || owner->type != ObjectType::kTrigger) return body;
+  // Is the record of the trigger as it is now?
+  auto of_this_definition = [&]() {
+    try {
+      const std::string current = TriggerDefinitionHash(trigger);
+      return !current.empty() && current == owner->definition_hash;
+    } catch (...) {
+      return false;
+    }
+  };
+  if (owner->owner_kind == OwnerKind::kSystem) {
+    // An administrator's: it runs with the writer's rights, and vouches for its reads of
+    // the firing statement's rows when the record is of this very definition (one changed
+    // since outside access control is nobody's to vouch for). No record of the definition
+    // (written before there were any): not vouched.
+    body.administrators = !owner->definition_hash.empty() && of_this_definition();
+    return body;
+  }
   // A record of an earlier trigger of this name (dropped, and the name reused by an
   // administrator or the init SQL) must not apply: the definition must match.
-  if (!owner->definition_hash.empty()) {
-    std::string current;
-    try {
-      current = TriggerDefinitionHash(trigger);
-    } catch (...) {
-      current.clear();
-    }
-    if (current != owner->definition_hash) return body;
-  }
+  if (!owner->definition_hash.empty() && !of_this_definition()) return body;
   switch (owner->owner_kind) {
     case OwnerKind::kUser: {
       const UserRecord* user = snapshot.FindUserById(owner->owner_id);
@@ -512,6 +521,7 @@ class Finder {
                               (!body.definer || (other.definer->user_id == body.definer->user_id &&
                                                  other.definer->role_id == body.definer->role_id)) &&
                               other.problem == body.problem;
+      body.administrators = body.administrators && other.administrators;
       if (!same_owner) {
         body.problem = "the row triggers " + QuoteIdentifierIfNeeded(body.trigger.object_name) + " and " +
                        QuoteIdentifierIfNeeded(other.trigger.object_name) + " on table " + body.table.ToString() +

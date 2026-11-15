@@ -74,13 +74,21 @@ own changelog in `python/CHANGELOG.md`.
   hand the triggers their rows. A write now needs `SELECT` on the columns the statement itself
   reads (`WHERE`, a `SET` expression, a join, a subquery, its own `RETURNING`), with a trigger or
   without, and `INSERT ... ON CONFLICT DO UPDATE` on the key and what its `SET` and `WHERE` read.
-  The rows handed to the triggers are checked where they are read: a trigger body that reads them
-  (a transition table, `OLD`, `NEW`) needs `SELECT` on the table, the writer's or else the trigger
-  owner's, so a user's trigger can copy the rows its owner may read and an administrator's trigger
-  that reads them still takes the writer's `SELECT`. Columns of the table's keys and indexes (and,
-  for an `UPDATE`, of a `CHECK` over several columns) still need the writer's `SELECT` on a table
-  with triggers, because a constraint error of the write can name or tell of them, and so does
-  every scanned column of a table with generated columns.
+  Somebody answers for the rows where a trigger's body reads them (a transition table, `OLD`,
+  `NEW`):
+  - **an administrator's trigger vouches for its body**: the writer needs no `SELECT` for a body's
+    reads of the rows when an administrator's session created or replaced the trigger. An
+    administrator who puts a row-copying trigger on a table is choosing who can see those rows.
+    Everything else the body does still takes the writer's rights;
+  - a user's trigger answers with its owner's rights: the owner needs `SELECT` on the table;
+  - any other trigger (one the init SQL's DuckDB statements created or replaced, one that came
+    with a database file) answers for nothing: reading the rows takes the writer's `SELECT`, as
+    before. `CREATE OR REPLACE TRIGGER` in an administrator's session makes it vouch.
+
+  Columns of the table's keys and
+  indexes (and, for an `UPDATE`, of a `CHECK` over several columns) still need the writer's
+  `SELECT` on a table with triggers, because a constraint error of the write can name or tell of
+  them, and so does every scanned column of a table with generated columns.
 - The server builds against OpenSSL 4 (a certificate name is taken as `const`).
 - **Web UI: the Read-only box shows the session the tab has, never only what was asked for.**
   With a session open, the box was checked whenever read-only had been asked for (the

@@ -110,15 +110,45 @@
 // that comes from the write: the binder's own SELECT count_star() FROM base, which gives
 // the writer the number of rows changed and no value. Every other scan of the base CTE is
 // a row reader: a transition table (REFERENCING OLD/NEW TABLE, an alias CTE in the
-// trigger's body) or the rows a row trigger's OLD and NEW come from. A row reader may see
-// the carried columns only with SELECT on them: either the rights the write's scan was
-// checked with hold it (then nothing was waived, as before there were carried columns),
-// or the rights the reading body runs with do (the trigger's owner; for an
-// administrator's trigger, the writer again, so such a trigger that reads the rows still
-// takes the writer's SELECT). The rows that feed OLD and NEW sit beside the row triggers'
-// bodies, not inside one: each row trigger's body answers for them (DuckDB makes every
-// row trigger's body name OLD or NEW). None of this trusts the CTE's name: a CTE the
-// writer names like a base is held to the same rules.
+// trigger's body) or the rows a row trigger's OLD and NEW come from. (The rows that feed
+// OLD and NEW sit beside the row triggers' bodies, not inside one: each row trigger's body
+// answers for them. DuckDB makes every row trigger's body name OLD or NEW.) None of this
+// trusts the CTE's name: a CTE the writer names like a base is held to the same rules.
+//
+// Who answers for a row reader. Where the rights the write's scan was checked with hold
+// SELECT on the carried columns, nothing was waived and nobody else needs to (as it was
+// before there were carried columns). Where they don't, somebody must answer for the
+// columns the writer was let off, and it is one of three:
+//
+//   1. An administrator, for a trigger an administrator made. Such a trigger VOUCHES for
+//      its body's reads of the rows of the statement that fires it: the writer is not
+//      asked for SELECT because of them. The administrator wrote the body and so chose
+//      where the rows go; an administrator who puts a row-copying trigger on a table
+//      chooses who can see those rows. Only these reads are vouched for: everything else
+//      the body does (the tables it writes, other tables it reads) is checked with the
+//      writer's rights, as ever. A trigger vouches when, and only when, its owner record
+//      is a system one (written when an administrator's own session created or replaced
+//      the trigger, under access control) AND that record's definition hash is the hash
+//      of the trigger as it is now (TriggerBody::administrators). So a user's trigger an
+//      administrator replaced vouches (the record is the administrator's, of the new
+//      definition), and nothing a user can do makes a trigger vouch: a trigger a user
+//      creates or replaces gets a user's record; one a user drops and recreates, the
+//      same; DuckDB renames no table that has a trigger (and a rename moves a table's
+//      trigger records as they are); a trigger on a temporary table has no record at
+//      all, and DuckDB has no temporary trigger on another table. A trigger with NO
+//      record does not vouch, though it too runs with the writer's rights: nobody
+//      recorded who made it (the init SQL's DuckDB statements run outside access control,
+//      and a database file comes with whatever triggers it had, also one a user was let
+//      ATTACH). Nor does a record that no longer matches the definition (a user's or a
+//      system one: the trigger was changed outside access control). Those are case 3.
+//   2. The trigger's owner, for a user's trigger: the owner needs SELECT on those
+//      columns (checked with the owner's rights, like the rest of the body).
+//   3. Otherwise the writer: SELECT, as before there were carried columns. That is a
+//      reader in the writer's own statement, and a trigger nobody recorded.
+//
+// Cases 1 and 2 rest on the body doing what its maker wrote, whoever fires it: the names
+// in every body are held against the writer's session before any of this ("Names in a
+// body", above), so a writer cannot have the rows land in a table of its own.
 
 #pragma once
 
@@ -150,8 +180,11 @@ struct TriggerBody {
   std::string definer_name;
   // Why the body can't run at all (its owner is gone, or the trigger couldn't be matched).
   std::string problem;
+  // An administrator made this very trigger: its owner record is a system one whose
+  // definition hash is the trigger's as it is now ("Who answers for a row reader", above).
+  bool administrators = false;
   // The trigger whose action the body is; several when a row trigger's body could be any
-  // of them.
+  // of them (then `administrators` holds for all of them).
   std::vector<const duckdb::TriggerCatalogEntry*> entries;
 
   // ---- carried columns (see above) ----

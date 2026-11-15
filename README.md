@@ -1195,13 +1195,24 @@ columns DuckDB has to read to check a constraint or keep an index whose error co
 table's unique keys for a `DELETE`, for instance). So an unfiltered `UPDATE t SET x = 0` or
 `DELETE FROM t` on a table without keys needs none, with triggers on the table or without. With
 triggers, a write needs `SELECT` on the columns of the table's keys and indexes (and an `UPDATE` on
-those of a `CHECK` over several columns) even where it would not without them. The rows DuckDB
-hands the triggers are for whoever reads them to answer for: a trigger body that reads them (a
-transition table, `OLD`, `NEW`) needs `SELECT` on the table, held by the writer or else by the
-trigger's owner, so an administrator's trigger that reads them (it runs with the writer's rights)
-takes the writer's `SELECT`. A table with both triggers and generated columns is the exception:
-there a write needs `SELECT` on every column DuckDB reads to hand the triggers their rows (all of
-them for a `DELETE`).
+those of a `CHECK` over several columns) even where it would not without them, and on a table that
+also has generated columns, on every column DuckDB reads to hand the triggers their rows.
+
+DuckDB hands a table's triggers the rows a write changes (a transition table, `OLD`, `NEW`), and
+somebody answers for a writer who may not read those rows itself:
+
+- **An administrator's trigger vouches for its body.** When an administrator's session creates (or
+  replaces) a trigger, the writer needs no `SELECT` for that body's reads of the rows: the
+  administrator wrote the body, and so chose where the rows go. An administrator who puts a
+  row-copying trigger on a table is choosing who can see those rows: whoever can read the table
+  the body copies them into, or the error a failing body raises. Everything else the body does
+  (the tables it writes, other tables it reads) still takes the writer's rights.
+- **A user's trigger answers with its owner's rights:** the owner needs `SELECT` on the table.
+- **Any other trigger answers for nothing**, and reading the rows takes the writer's own `SELECT`:
+  a trigger that DuckDB statements in the init SQL created or replaced (they run outside access
+  control, so nobody is on record as having made it), and one that was already in a database
+  file. An administrator makes such a trigger vouch by running its `CREATE OR REPLACE TRIGGER`
+  once in a session.
 
 The init SQL (`init_sql_commands`, `init_sql_commands_file`) can hold these statements too.
 They run as the administrator, in order with the DuckDB statements around them, so a grant

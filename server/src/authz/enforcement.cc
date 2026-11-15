@@ -393,15 +393,18 @@ class PlanChecker {
         rights_{Rights{principal, ""}} {}
 
   // The carried columns (triggers.hpp) a base write's scan was not asked SELECT for,
-  // because the rights it was checked with lack it: whoever reads the base's rows must
-  // hold it instead. Shared by a checker and the checkers it makes for trigger bodies. A
-  // base's scan is checked before its rows' readers (a CTE's definition comes before its
-  // scope); `read` refuses a waiver that would come after one all the same.
+  // because the rights it was checked with lack it: somebody must answer for them where
+  // the base's rows are read (RequireCarriedRows). Shared by a checker and the checkers
+  // it makes for trigger bodies. A base's scan is checked before its rows' readers (a
+  // CTE's definition comes before its scope); `read` refuses a waiver that would come
+  // after one all the same.
   struct CarriedRows {
     std::map<const dd::LogicalOperator*, std::vector<std::string>> waived;  // by the base's write
     std::set<const dd::LogicalOperator*> read;
   };
   std::shared_ptr<CarriedRows> carried_rows_ = std::make_shared<CarriedRows>();
+  // The trigger body being checked, innermost (nullptr: the statement itself).
+  const TriggerBody* current_body_ = nullptr;
 
   // Checking a trigger's body with its owner's rights: prefixed to every refusal.
   std::string trigger_context_;
@@ -418,6 +421,11 @@ class PlanChecker {
     // A trigger's body, bound into the statement that fires it (triggers.hpp): checked with
     // its owner's rights when a user owns the trigger, refused outright when its owner is
     // gone or the trigger can't be told, else with the writer's, as DuckDB runs it.
+    struct RestoreBody {
+      const TriggerBody*& slot;
+      const TriggerBody* saved;
+      ~RestoreBody() { slot = saved; }
+    } restore_body{current_body_, current_body_};
     if (const TriggerBody* body = TriggerBodyAt(trigger_bodies_, op); body && !body->base) {
       if (!body->problem.empty()) Deny(principal_, body->problem);
       // Whoever made the trigger and whoever's rights its body runs with: every name in it
@@ -427,8 +435,8 @@ class PlanChecker {
         if (!names.empty()) ::hardcharger::authz::Deny(principal_, names);
       }
       if (body->definer && !trigger_body_entered_) return CheckAsDefiner(*body, op);
-      // A row trigger's body reads the rows its statement changes (OLD, NEW), with the
-      // rights it runs with: these.
+      current_body_ = body;
+      // A row trigger's body reads the rows its statement changes (OLD, NEW).
       if (body->reads_rows_of) {
         if (const TriggerBody* base = TriggerBodyAt(trigger_bodies_, *body->reads_rows_of)) RequireCarriedRows(*base);
       }
@@ -748,7 +756,7 @@ class PlanChecker {
       case OpType::LOGICAL_CTE_REF:
         // A CTE's rows were checked where its definition read them, with one exception:
         // the rows a write hands its triggers (a transition table), whose carried columns
-        // the writer was not asked SELECT for. Whoever reads them here answers for those.
+        // the writer was not asked SELECT for. Somebody answers for those here.
         if (const TriggerBody* base = BaseReadBy(trigger_bodies_, op)) RequireCarriedRows(*base);
         VisitChildren(op, dml_target);
         return;
@@ -953,16 +961,45 @@ class PlanChecker {
     return true;
   }
 
-  // Reading the rows a base write hands its triggers (a transition table, OLD and NEW):
-  // SELECT on the carried columns the write's scan was let off, with the rights in force.
+  // The rows a base write hands its triggers are read here (a transition table, OLD and
+  // NEW), by the trigger body being checked or by the statement itself. For the carried
+  // columns the write's scan was let off, somebody answers (triggers.hpp, "Who answers
+  // for a row reader"): the administrator who made the trigger (nothing is asked), the
+  // trigger's owner (SELECT, with the owner's rights: the ones in force in its body), or
+  // else the writer, who is the one that lacks them. The first two only for a trigger of
+  // the written table itself. (Its body does what its maker wrote: the names in it were
+  // held against this session where the body was entered.)
   void RequireCarriedRows(const TriggerBody& base) {
     carried_rows_->read.insert(base.root);
     auto waived = carried_rows_->waived.find(base.root);
     if (waived == carried_rows_->waived.end()) return;
-    carried_note_ = " (a trigger reads the rows the statement changes: that takes SELECT on them, the writer's or "
-                    "else the trigger owner's)";
+    const TriggerBody* reader = current_body_;
+    const bool of_this_table =
+        reader && !reader->base && IdentifiersEqual(reader->table.catalog, base.table.catalog) &&
+        reader->table.schema_path.size() == base.table.schema_path.size() &&
+        std::equal(reader->table.schema_path.begin(), reader->table.schema_path.end(), base.table.schema_path.begin(),
+                   [](const std::string& a, const std::string& b) { return IdentifiersEqual(a, b); }) &&
+        IdentifiersEqual(reader->table.object_name, base.table.object_name);
+    if (of_this_table && reader->administrators) return;  // an administrator's trigger vouches for these reads
+    if (of_this_table && reader->definer) {
+      carried_note_ = " (the trigger's body reads the rows the statement changes: that takes SELECT on them, the "
+                      "writer's or else the trigger owner's)";
+      RequireObject(base.table, ObjectType::kTable, Privilege::kSelect, waived->second);
+      carried_note_.clear();
+      return;
+    }
+    carried_note_ = reader && !reader->base
+                        ? " (" + reader->describe +
+                              " reads the rows the statement changes, and nobody is on record as having made it "
+                              "under access control: that takes the writer's SELECT on them)"
+                        : " (the statement reads the rows it changes)";
     RequireObject(base.table, ObjectType::kTable, Privilege::kSelect, waived->second);
     carried_note_.clear();
+    // The rights in force here hold what the write's scan was let off for lacking: they
+    // are not the writer's, then (no plan DuckDB makes reads a statement's rows in the
+    // body of another table's trigger). Nobody answers for the rows.
+    ::hardcharger::authz::Deny(principal_, "the rows the statement on table " + base.table.ToString() +
+                                               " changes are read where nobody answers for them; ask an administrator");
   }
 
   ObjectPath PathOf(dd::CatalogEntry& entry) { return PathOfEntry(entry); }
