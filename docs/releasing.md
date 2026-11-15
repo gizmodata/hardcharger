@@ -170,8 +170,10 @@ or the file's Properties > Digital Signatures on Windows.
    and open a pull request to main. Main takes pull requests only (the check `test`, linear
    history), so the release commit reaches main through its pull request, and the tag goes on the
    commit that lands there. The pull request's run tests the matrix, unsigned and without the
-   sanitizers. Its three `real server` jobs fail: the Python package now pins a server release
-   that doesn't exist yet (2.10.0's did, #37). That is expected; `test`, the required check, passes.
+   sanitizers. The Python package workflow runs its required `test` job and checks whether
+   the pinned server release is published. Its three `real server` jobs run when that release
+   exists; otherwise they wait for publication. Every package publishing run requires the
+   server release and all download/integration checks to pass.
    To run the whole gate first, signed, publishing nothing:
    `gh workflow run server.yml --ref release/v2.0.0-rc.1 -f sign=true -f full=true -f ios=true -f android=true`.
 5. Merge the pull request (squash: the commit on main is a new one, with the same tree). Fetch,

@@ -13,12 +13,10 @@
 # against the real server it downloads (Linux amd64/arm64, macOS arm64), and
 # Server.connect() through adbc-driver-hardcharger from PyPI (the `client` job).
 #
-# The `client` job runs on python-v* tags only. It installs the `[adbc]` extra from PyPI,
-# where adbc-driver-hardcharger (and adbc-driver-chargewire under it) are not published yet,
-# so on every main push and pull request it could only fail at the install, and main was
-# red for that alone. On a tag it still runs and still gates the publish: a python-v* tag
-# can't ship until those drivers are on PyPI, which is the order they must be released in.
-name: workflow
+# The `client` job installs the `[adbc]` extra from PyPI on every publishing run and on
+# explicit manual client checks. Its published drivers and server must already exist.
+# Development PRs/main still test real downloads whenever their pinned server is published.
+name: Python package
 
 on:
   push:
@@ -53,6 +51,8 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    outputs:
+      server_available: ${{ steps.server-release.outputs.available }}
     steps:
       - uses: actions/checkout@v7
       - name: Python package tracks the server version
@@ -72,6 +72,16 @@ jobs:
             args+=(--server-tag "v$RELEASE")
           fi
           python3 .github/scripts/check_python_version.py "${args[@]}"
+      - name: Whether the pinned server is published
+        id: server-release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUIRE_SERVER: ${{ startsWith(github.ref, 'refs/tags/python-v') || (github.event_name == 'workflow_dispatch' && (inputs.client || inputs.release != '')) }}
+        run: |
+          args=(--tag "v$(bash .github/scripts/release.sh version)")
+          if [ "$REQUIRE_SERVER" = true ]; then args+=(--required); fi
+          python3 .github/scripts/python_server_release.py "${args[@]}" >> "$GITHUB_OUTPUT"
       # Remove at Hardcharger 2.0.0 together with .github/scripts/check_no_version_labels.py:
       # until then the docs say "Hardcharger", never "Hardcharger 0.x".
       - name: No version labels in the docs
@@ -121,6 +131,10 @@ jobs:
   # also proves the real download, digest check and cache on each platform.
   server:
     name: real server (${{ matrix.runner }})
+    needs: test
+    # Development version bumps precede the server release. Published versions still
+    # get integration coverage on PRs/main; every publishing run requires it above.
+    if: needs.test.outputs.server_available == 'true'
     strategy:
       fail-fast: false
       matrix:

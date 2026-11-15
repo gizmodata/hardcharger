@@ -7,10 +7,7 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
-## [2.13.1] - 2026-11-14
-
-This includes the features prepared for 2.13.0. The 2.13.0 tag failed final
-release validation and was not published; 2.13.1 includes the corrections.
+## [2.13.0] - 2026-11-14
 
 ### Added
 
@@ -26,6 +23,10 @@ release validation and was not published; 2.13.1 includes the corrections.
   choice. Automatic session replacement retains the restriction.
 
 ### Fixed
+
+- Python package CI waits for an unpublished server release before scheduling its
+  download tests. Published-version PRs still run them, and package publication
+  continues to require every download and integration gate.
 
 - Transaction-state refresh no longer holds the SDK engine lifetime lock while entering
   DuckDB, preventing a lock-order inversion with active-session monitoring.
