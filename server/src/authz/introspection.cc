@@ -489,7 +489,8 @@ std::shared_ptr<arrow::RecordBatch> Users(const Snapshot& snapshot, const Princi
   Rows rows(ColumnsOf(AccessTable::kUsers));
   if (visibility.kind() == ViewerKind::kRestrictedAdministrator) return rows.Finish();
   for (const auto& u : snapshot.users()) {
-    const bool current = !viewer.superuser && u.id == viewer.user_id;
+    // (A user acting as System Admin sees every user, and is still the one it is.)
+    const bool current = u.id == (viewer.superuser ? viewer.acting_user_id : viewer.user_id);
     if (visibility.kind() == ViewerKind::kUser && !current && !visibility.InTenant(PrincipalKind::kUser, u.id)) continue;
     // Never the password hash: only whether there is one.
     rows.Add({u.name, u.enabled, u.password_hash.has_value() && !u.password_hash->empty(),

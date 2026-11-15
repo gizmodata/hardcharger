@@ -101,6 +101,13 @@ inside the change's own store transaction (`RequireStillSystemAdmin`, `engine.cc
 reads the store after every writer before it. A revoke committed on another replica stops
 the change even if this replica has not polled yet.
 
+**Through an identity-provider group** the holding is as current as the session's sign-in
+token: dropping the mapping, or revoking `SYSTEM ADMIN` from the role, ends it at the next
+statement like any other change to the store; taking the user out of the group at the
+identity provider ends it when a token that lists the group stops being accepted, as for
+every role a group gives. (A session belongs to the authority of the token that opened it,
+groups included, so a later token without the group cannot use it.)
+
 **Asking** reads the store, not the replica's copy (`RbacEngine::Refresh` before the
 check), so a grant is usable at once on every replica, a revoke refuses at once, and a
 store that does not answer elevates nobody.

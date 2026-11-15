@@ -750,6 +750,10 @@ def test_who_holds_it_and_which_sessions_act_as_one(world):
          "grantee_type": "SYSTEM ADMIN", "grant_option": "YES", "granted_by": ""}]
     assert rows(client=alice, sql=effective.format("")) == [
         {"user_name": "alice", "privilege": "ALL", "object_type": "SERVER", "via": "SYSTEM ADMIN"}]
+    # She sees every user, as the administrator does, and is still the one she is.
+    listed = rows(client=alice, sql="SELECT name, is_current FROM hardcharger_users() ORDER BY name")
+    assert listed == [{"name": "alice", "is_current": True}, {"name": "bob", "is_current": False},
+                      {"name": "carol", "is_current": False}], listed
     # The administrator is not one: it is the administrator.
     assert rows(client=admin, sql=state) == [{"system_admin": False, "active_role": None, "full_admin": True,
                                               "role": "admin", "user_name": "admin"}]
