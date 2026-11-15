@@ -8,6 +8,7 @@ import {
   loadSavedServers,
   mergeDesktopServers,
   relayFetch,
+  type RegisteredRemote,
   saveRemoteSignIns,
   saveSavedServers,
   loadDismissed,
@@ -325,5 +326,63 @@ describe("ServersStore: removing a desktop server, and adding it back", () => {
     );
     expect(edited.id).toBe(picked.id);
     expect(store.snapshot().servers.map((s) => [s.saved.id, s.saved.port])).toEqual([[picked.id, 31337]]);
+  });
+});
+
+describe("ServersStore: signing in to a connected server again", () => {
+  it("the listings connection opens again through the new registration; a refreshed sign-in keeps it", async () => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    const paths: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init);
+        const path = new URL(request.url).pathname;
+        paths.push(`${request.method} ${path}`);
+        if (path.endsWith("/chargewire")) {
+          return Response.json({
+            protocol: "chargewire",
+            protocol_versions: ["1"],
+            server: { name: "remote", version: "0" },
+            capabilities: [],
+            auth: { grant_types: ["password"] },
+          });
+        }
+        return Response.json({ session_id: "s_1", options: {}, transaction: "none" }, { status: 201 });
+      }),
+    );
+    try {
+      const store = new ServersStore("joe", () => undefined);
+      const entry = store.add({ name: "R", host: "r.example.com", port: 31337, tls: true, prefix: "", trust: false });
+      const registration = (id: string): RegisteredRemote => ({
+        id,
+        name: "R",
+        url: "https://r.example.com:31337/chargewire",
+        origin: "https://r.example.com:31337",
+        tls_mode: "verified",
+        tls: null,
+        server: {},
+        relay_session: "p-1",
+        relay_path: `/ui/v1/remotes/${id}/chargewire`,
+        signed_in: true,
+      });
+      const auth = { username: "ann", token: "tok", expiresAt: Date.now() + 60_000 };
+      store.signedIn(entry.id, registration("r-1"), auth);
+      const first = await store.connection(entry.id);
+      // The dialog records the user name the server reports: the same registration, the same connection.
+      store.signedIn(entry.id, registration("r-1"), { ...auth, username: "ann@example" });
+      expect(await store.connection(entry.id)).toBe(first);
+      // Registered again (the relay drops r-1): a new connection, through r-2.
+      store.signedIn(entry.id, registration("r-2"), auth);
+      const second = await store.connection(entry.id);
+      expect(second).not.toBe(first);
+      expect(paths.some((p) => p.startsWith("GET /ui/v1/remotes/r-2/"))).toBe(true);
+      // Nothing was sent through r-1 to end the old one: the relay no longer has it.
+      expect(paths.filter((p) => p.startsWith("DELETE"))).toEqual([]);
+      expect(store.openConnections().map((c) => c.connection)).toEqual([second]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -39,7 +39,13 @@ export interface Where {
   schema: string;
   /** The role the session acts with (SET ROLE); "" or absent for all of the user's roles. */
   role?: string;
+  /** The work must run in a read-only session: an open one that isn't is switched first. */
   readOnly?: boolean;
+  /**
+   * A session opened now (the first, or one replacing a lost one) opens read-only: the tab's
+   * choice for new sessions. An open session is left as it is.
+   */
+  openReadOnly?: boolean;
 }
 
 export type Opener = (where: Where) => Promise<Connection>;
@@ -94,22 +100,80 @@ function catalogNote(catalog: string): string {
   );
 }
 
+/**
+ * This page's relay no longer has the remote server the session was opened through: the page
+ * registered the server again (signed in to it again), which replaces the earlier registration,
+ * or the relay restarted. The session can't be reached any more.
+ */
+const remoteNotFound = "remote_not_found";
+
 export function isSessionGone(err: unknown): boolean {
   return (
     ChargewireError.is(err) &&
     (err.code === ErrorCode.sessionNotFound ||
+      (err.code === remoteNotFound && err.status === 404) ||
       (err.code === ErrorCode.sessionEnded && err.reason === "idle_in_transaction"))
   );
 }
 
 /** Why the session went, for the notes: the server's reason when it gave one. */
 function goneReasonOf(err: unknown): string {
+  if (ChargewireError.is(err) && err.code === remoteNotFound) {
+    return "this page signed in to the server again, which leaves the sessions it had there unreachable";
+  }
   if (ChargewireError.is(err) && err.code === ErrorCode.sessionEnded && err.reason === "idle_in_transaction") {
     // Its idle timeout, or its idle-in-transaction timeout, ended it while a transaction was open
     // (Chargewire §5.7: either way the reason is idle_in_transaction).
     return "the server ended it: it sat idle with a transaction open, past the server's timeout";
   }
   return "it was idle too long, or the server restarted";
+}
+
+/**
+ * The server answered a request to make the session read-only with a refusal and did nothing
+ * (spec §5.1, §5.3): an option it refused (`errors.read_only` in a 200, which the client throws
+ * with the option's code and status 400), or the request as a whole (a 4xx problem document)
+ * for a reason that leaves the session as it was. Judged by the server's code and status only;
+ * a client-side code (`client_*`: no answer, or one that isn't the protocol's), a 5xx, or a
+ * code about the session itself (not found, ended) is not a refusal: the outcome is unknown.
+ */
+const refusalCodes: readonly string[] = [
+  ErrorCode.invalidOptionValue, // e.g. "temporary sequences: drop them first", "a transaction with work in it is open"
+  ErrorCode.unknownOption, // a server without read-only sessions
+  ErrorCode.readOnly,
+  ErrorCode.badRequest,
+  ErrorCode.permissionDenied,
+  ErrorCode.rateLimited,
+  ErrorCode.invalidToken,
+];
+
+export function isReadOnlyRefusal(err: unknown): err is ChargewireError {
+  return (
+    ChargewireError.is(err) &&
+    refusalCodes.includes(err.code) &&
+    err.status !== undefined &&
+    err.status >= 400 &&
+    err.status < 500
+  );
+}
+
+/** The server refused to make the session read-only and left it exactly as it was. */
+export class ReadOnlyRefusedError extends Error {
+  override readonly name = "ReadOnlyRefusedError";
+  /** The server's code (`invalid_option_value`, `unknown_option`, ...). */
+  readonly code: string;
+  /** The server's own words, for people. */
+  readonly detail: string;
+  constructor(cause: ChargewireError) {
+    const detail = cause.detail || cause.title || cause.message;
+    super(
+      `Read-only was not enabled: ${detail.replace(/[.\s]+$/, "")}. ` +
+        "The session is unchanged and still read-write; select Read-only again when that is done.",
+      { cause },
+    );
+    this.code = cause.code;
+    this.detail = detail;
+  }
 }
 
 export class TabSession {
@@ -145,6 +209,14 @@ export class TabSession {
     return this.#conn !== undefined;
   }
 
+  /**
+   * The server confirmed read-only for this tab's session: the open one, or, with none open,
+   * the last one (its replacement opens read-only too, until New session: close()).
+   */
+  get readOnly(): boolean {
+    return this.#readOnly;
+  }
+
   /** Takes the note about a catalog the session couldn't open in, once. */
   takeCatalogNote(): string | undefined {
     const note = this.#catalogNote;
@@ -159,10 +231,27 @@ export class TabSession {
     return note;
   }
 
+  /**
+   * The session, opened on first use with `where` (read-only when `where` asks for it, or when
+   * this tab's last session was). An open session asked to be read-only that the server has not
+   * confirmed so is never handed out as it is: it is switched first (the work waits for the
+   * server's answer), and a refusal fails the work with nothing run (ReadOnlyRefusedError).
+   */
   connection(where: Where): Promise<Connection> {
     if (this.#modeFailure) return Promise.reject(this.#modeFailure);
+    if (this.#conn && where.readOnly === true && !this.#readOnly) {
+      const current = this.#conn;
+      return current.then(async (conn) => {
+        // Opened read-only meanwhile (a session that was still opening), or switched by
+        // another caller: nothing to do.
+        if (this.#readOnly) return conn;
+        if (this.#conn !== current) return this.connection(where);
+        await this.#switchReadOnly(conn);
+        return conn;
+      });
+    }
     if (!this.#conn) {
-      where = { ...where, readOnly: this.#readOnly || where.readOnly === true };
+      where = { ...where, readOnly: this.#readOnly || where.readOnly === true || where.openReadOnly === true };
       // A catalog the server keeps for querying by name (its log or instrumentation catalog,
       // as a preview of one of its tables asks for): the session opens in its own catalog,
       // and the statement, which names the catalog, still runs.
@@ -256,7 +345,9 @@ export class TabSession {
   /** Reads the session document: its id, transaction, current catalog and schema. */
   async refresh(where: Where): Promise<SessionInfo | undefined> {
     if (!this.#conn) return this.#info;
-    return this.run(where, (conn) => this.#read(conn));
+    // Reading the session never changes its mode (a replacement opens as openReadOnly asks, and
+    // read-only when this one was).
+    return this.run({ ...where, readOnly: false }, (conn) => this.#read(conn));
   }
 
   /**
@@ -324,23 +415,60 @@ export class TabSession {
     return this.#info;
   }
 
-  /** One-way transition; an uncertain result closes and blocks this tab until New session. */
+  /**
+   * Makes the open session read-only (one way), returning the session as the server then
+   * describes it. A refusal the server gives with the session intact (temporary sequences, a
+   * transaction with work in it, a server without read-only sessions) leaves it exactly as it
+   * was, still open and read-write, and throws ReadOnlyRefusedError with the server's words.
+   * Only when the outcome is unknown (no answer, a session the server no longer has, an
+   * answer that doesn't confirm it) does the tab stop using the session: it is closed and the
+   * tab is blocked until New session, with a message that says why.
+   */
   async enableReadOnly(where: Where): Promise<SessionInfo> {
-    const conn = await this.connection(where);
+    const conn = await this.connection({ ...where, readOnly: false });
+    return this.#readOnly ? this.#read(conn) : this.#switchReadOnly(conn);
+  }
+
+  async #switchReadOnly(conn: Connection): Promise<SessionInfo> {
     try {
       await conn.setOptions({ read_only: true });
-      const info = await this.#read(conn);
-      if (!info.readOnly) throw new Error("The server did not confirm read-only mode.");
-      return info;
     } catch (err) {
-      this.#modeFailure = new Error(
-        `${err instanceof Error ? err.message : String(err)} The session was closed. Choose New session to continue.`,
-      );
-      this.#lost();
-      this.#info = undefined;
-      await conn.close().catch(() => {});
-      throw this.#modeFailure;
+      if (isReadOnlyRefusal(err)) {
+        // The session is as it was: show it as the server now describes it (a read that fails
+        // leaves the last one; the next run finds out what happened to the session).
+        await this.#read(conn).catch(() => {});
+        throw new ReadOnlyRefusedError(err);
+      }
+      throw await this.#unknownMode(conn, err);
     }
+    let info: SessionInfo;
+    try {
+      info = await this.#read(conn);
+    } catch (err) {
+      throw await this.#unknownMode(conn, err);
+    }
+    if (!info.readOnly) {
+      throw await this.#unknownMode(conn, new Error("The server did not confirm read-only mode."));
+    }
+    return info;
+  }
+
+  /** The switch's outcome is unknown: stop using the session, and say why. */
+  async #unknownMode(conn: Connection, err: unknown): Promise<Error> {
+    const gone = isSessionGone(err) || ChargewireError.is(err, ErrorCode.sessionEnded);
+    const why = err instanceof Error ? err.message.replace(/[.\s]+$/, "") : String(err);
+    this.#modeFailure = new Error(
+      gone
+        ? `The session ended on the server before read-only could be confirmed (${why}). Its temporary ` +
+            "tables, settings and any open transaction are gone. Choose New session to continue."
+        : `Whether the server made the session read-only is not known (${why}). To be safe this tab no ` +
+            "longer uses it: the session was closed, with its temporary tables, settings and any open " +
+            "transaction. Choose New session to continue.",
+    );
+    this.#lost();
+    this.#info = undefined;
+    await conn.close().catch(() => {});
+    return this.#modeFailure;
   }
 
   /** Sets the session's catalog, schema and role now, if it is open (else at its opening). */
@@ -350,7 +478,9 @@ export class TabSession {
     if (where.catalog) options["catalog"] = where.catalog;
     if (where.schema) options["schema"] = where.schema;
     const role = where.role ?? "";
-    await this.run(where, async (conn) => {
+    // Moving the session never changes its mode (a replacement opens as openReadOnly asks, and
+    // read-only when this one was).
+    await this.run({ ...where, readOnly: false }, async (conn) => {
       if (Object.keys(options).length) {
         try {
           await conn.setOptions(options);

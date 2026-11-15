@@ -9,8 +9,10 @@ import type { monaco } from "../lib/monaco";
 import { type ScriptRun, cancelNote, messageFor, runScript } from "../lib/script";
 import { isTransactionStatement, mayChangeCatalog, splitStatements, statementPreview } from "../lib/sql";
 import { type TabDoc, rowLimits } from "../lib/tabs";
+import { readOnlyBox, runReadOnly } from "../lib/readOnlyBox";
 import {
   CatalogRefusedError,
+  ReadOnlyRefusedError,
   type SessionInfo,
   SettingsLostError,
   TabSession,
@@ -32,6 +34,8 @@ export interface TabStatus {
   failed: boolean;
   transaction: TransactionState;
   sessionId?: string;
+  /** The Read-only box is checked, or awaiting the server's answer. */
+  readOnly: boolean;
 }
 
 /** What the query page can do to a tab: put text at its cursor, run SQL in it. */
@@ -53,6 +57,8 @@ type Run =
       cancelling: boolean;
       document?: StatementDocument;
       receiving?: boolean;
+      /** The run asked for a read-only session the server had not confirmed yet (one opening). */
+      askedReadOnly?: boolean;
     }
   | { kind: "done"; run: ScriptRun; startedAt: number; server: string };
 
@@ -101,7 +107,7 @@ function duration(ms: number): string {
  * Tabs stay mounted while hidden, so a run in a background tab keeps going.
  */
 export function EditorTab(props: Props) {
-  const { tab, active, theme, editorHeight, defaults, onChange, onStatus } = props;
+  const { tab, active, theme, editorHeight, onChange, onStatus } = props;
   const app = useSession();
   const tabSession = useMemo(
     () =>
@@ -148,12 +154,23 @@ export function EditorTab(props: Props) {
     latest.current = props;
   });
 
-  const where: Where = {
-    catalog: tab.catalog || defaults.catalog,
-    schema: tab.schema || defaults.schema,
-    role: tab.role,
-    readOnly: tab.readOnly ?? app.servers.find(tab.server)?.saved.readOnly ?? false,
-  };
+  /** The connection's default for new sessions ("Read-only sessions" when it was added). */
+  const connectionDefaultOf = (p: Props) => app.servers.find(p.tab.server)?.saved.readOnly === true;
+  /**
+   * Where the tab's statements run, read when they start (a stale render's copy could ask an
+   * open session for a mode it was not opened with). readOnly is what runReadOnly says: an open
+   * session keeps the mode the server gave it; a new one (a replacement too) opens as the tab asks.
+   */
+  const whereOf = (p: Props): Where => ({
+    catalog: p.tab.catalog || p.defaults.catalog,
+    schema: p.tab.schema || p.defaults.schema,
+    role: p.tab.role,
+    readOnly: runReadOnly(tabSession.open, tabSession.readOnly, p.tab.readOnly ?? connectionDefaultOf(p)),
+    // A session opened now (a replacement too) follows the tab's choice.
+    openReadOnly: p.tab.readOnly ?? connectionDefaultOf(p),
+  });
+  const where = whereOf(props);
+  const connectionDefault = connectionDefaultOf(props);
   const sessionId = info?.serverId ?? info?.id ?? "";
   const schemas = schemaList && schemaList.catalog === where.catalog ? schemaList.names : undefined;
   const transaction = info?.transaction ?? "none";
@@ -161,9 +178,22 @@ export function EditorTab(props: Props) {
   const running = run.kind === "running" || changingMode;
   const failed = run.kind === "done" && run.run.statements.some((s) => s.status === "error");
 
+  const box = readOnlyBox({
+    open: tabSession.open,
+    sessionReadOnly: info?.readOnly,
+    confirmed: tabSession.readOnly,
+    requested: tab.readOnly ?? connectionDefault,
+    connectionDefault,
+    switching: changingMode,
+    runAskedReadOnly: run.kind === "running" && run.askedReadOnly === true,
+    running,
+    inTransaction,
+  });
+  const tabReadOnly = box.checked || box.pending;
+
   useEffect(() => {
-    onStatus({ running, failed, transaction, sessionId });
-  }, [running, failed, transaction, sessionId, onStatus]);
+    onStatus({ running, failed, transaction, sessionId, readOnly: tabReadOnly });
+  }, [running, failed, transaction, sessionId, tabReadOnly, onStatus]);
 
   // The tab's session ends with the tab (closing it, or signing out).
   useEffect(() => {
@@ -249,9 +279,10 @@ export function EditorTab(props: Props) {
   /** After a run: the session's transaction, and its catalog and schema (a USE shows here). */
   const readSession = useCallback(async () => {
     try {
-      const next = await tabSession.refresh(where);
+      const at = whereOf(latest.current);
+      const next = await tabSession.refresh(at);
       setInfo(next);
-      if (next && (next.catalog !== where.catalog || next.schema !== where.schema)) {
+      if (next && (next.catalog !== at.catalog || next.schema !== at.schema)) {
         latest.current.onChange({ catalog: next.catalog, schema: next.schema });
       }
     } catch (err) {
@@ -270,9 +301,17 @@ export function EditorTab(props: Props) {
       controller.current = abort;
       const startedAt = performance.now();
       setNotice(undefined);
-      setRun({ kind: "running", startedAt, statement: 0, total: statements.length, rows: 0, cancelling: false });
+      const at = whereOf(latest.current);
+      setRun({
+        kind: "running",
+        startedAt,
+        statement: 0,
+        total: statements.length,
+        rows: 0,
+        cancelling: false,
+        askedReadOnly: at.readOnly === true && !tabSession.readOnly,
+      });
       editor.current?.highlight(range);
-      const at = { ...where };
       let result: ScriptRun;
       try {
         result = await runScript({
@@ -315,9 +354,9 @@ export function EditorTab(props: Props) {
       if (mayChangeCatalog(statements.join(";\n"))) latest.current.onCatalogChanged?.();
       setFinished((n) => n + 1);
     },
-    // where and tab are read when a run starts.
+    // where and tab are read when a run starts (whereOf(latest.current)).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [app, tabSession, readSession, tab.rowLimit, where.catalog, where.schema, where.readOnly],
+    [app, tabSession, readSession, tab.rowLimit],
   );
 
   const runCurrent = useCallback(() => {
@@ -422,21 +461,32 @@ export function EditorTab(props: Props) {
   };
 
   const changeReadOnly = async (checked: boolean) => {
-    if (controller.current || changingModeRef.current || inTransaction || info?.readOnly) return;
+    if (controller.current || changingModeRef.current) return;
     if (!tabSession.open) {
-      onChange({ readOnly: checked });
+      // The choice for the next session; a tab whose last session was read-only keeps that
+      // for the next one until New session.
+      if (!tabSession.readOnly) onChange({ readOnly: checked });
       return;
     }
-    if (!checked) return;
+    // One way, on an open session: only a tick does anything, and the server decides.
+    if (!checked || inTransaction || info?.readOnly || tabSession.readOnly) return;
     changingModeRef.current = true;
     setChangingMode(true);
     try {
-      setInfo(await tabSession.enableReadOnly(where));
+      setInfo(await tabSession.enableReadOnly(whereOf(latest.current)));
       onChange({ readOnly: true });
       setNotice("Read-only is enabled for this session.");
     } catch (err) {
-      setInfo(undefined);
-      setNotice(errorMessage(err));
+      if (err instanceof ReadOnlyRefusedError) {
+        // The server said no and left the session as it was: still open, still read-write.
+        if (app.checkSignIn(err.cause)) return;
+        setInfo(tabSession.info);
+        setNotice(err.message);
+      } else {
+        if (app.checkSignIn(err)) return;
+        setInfo(undefined);
+        setNotice(errorMessage(err));
+      }
     } finally {
       changingModeRef.current = false;
       setChangingMode(false);
@@ -596,9 +646,15 @@ export function EditorTab(props: Props) {
           onClick={() =>
             requestUpload({ catalog: where.catalog, schema: where.schema, role: tab.role, server: tab.server })
           }
-          title="Load a CSV / Excel / Parquet / JSON / Arrow file into a table"
+          title={
+            box.checked || box.pending
+              ? "Upload is off in a read-only tab"
+              : connectionDefault
+                ? "Upload is off: this connection opens read-only sessions"
+                : "Load a CSV / Excel / Parquet / JSON / Arrow file into a table"
+          }
           data-testid="upload-button"
-          disabled={running || info?.readOnly || where.readOnly}
+          disabled={running || box.checked || box.pending || connectionDefault}
         >
           <FileUp size={14} /> Upload data
         </button>
@@ -708,25 +764,22 @@ export function EditorTab(props: Props) {
             Session {sessionId.replace(/^s_/, "").slice(0, 8)} <Copy size={11} />
           </button>
         )}
-        <div className="session-mode">
+        <div className="session-mode" data-testid="read-only-mode" data-state={box.state}>
           <label>
             <input
               type="checkbox"
-              checked={info?.readOnly || where.readOnly === true}
-              disabled={running || inTransaction || info?.readOnly === true}
+              ref={(input) => {
+                // Neither checked nor unchecked while the server's answer is awaited.
+                if (input) input.indeterminate = box.pending;
+              }}
+              checked={box.checked}
+              aria-busy={box.pending || undefined}
+              disabled={box.disabled}
               onChange={(e) => void changeReadOnly(e.target.checked)}
             />
             <span>Read-only</span>
           </label>
-          <span className="session-mode-note">
-            {changingMode
-              ? "Confirming with the server…"
-              : info?.readOnly
-                ? "Locked for this session. Choose New session to change."
-                : inTransaction
-                  ? "Finish the transaction before enabling read-only."
-                  : "Once enabled, stays on until a new session."}
-          </span>
+          <span className="session-mode-note">{box.note}</span>
         </div>
         {transaction === "open" && (
           <>

@@ -719,7 +719,17 @@ export class ServersStore {
       version: registered.server.version ?? "",
       tls: registered.tls,
     };
-    const saved = this.find(id)?.saved;
+    const previous = this.find(id);
+    const saved = previous?.saved;
+    // Registering a server again replaces its earlier registration in the relay: what was
+    // opened through that one can't be reached any more (not even to end it). The listings
+    // connection opens again through the new one; an editor tab finds its session gone and
+    // opens a new one (TabSession: remote_not_found).
+    if (previous?.signIn && previous.signIn.relayId !== registered.id) {
+      const stale = this.#connections.get(id);
+      this.#connections.delete(id);
+      void stale?.then((c) => this.#extra.delete(c)).catch(() => {});
+    }
     this.#set({
       ...this.#state,
       relaySession: registered.relay_session || this.#state.relaySession,

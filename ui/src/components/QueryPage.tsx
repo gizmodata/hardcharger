@@ -354,6 +354,7 @@ export default function QueryPage({ theme }: Props) {
       server: activeTab?.server ?? "",
       sessionId: activeStatus?.sessionId ?? "",
       title: activeTab?.title ?? "",
+      readOnly: activeStatus?.readOnly ?? false,
     });
   }, [
     activeTab?.catalog,
@@ -363,6 +364,7 @@ export default function QueryPage({ theme }: Props) {
     activeStatus?.transaction,
     activeStatus?.sessionId,
     activeTab?.title,
+    activeStatus?.readOnly,
     defaults,
   ]);
   useEffect(() => () => resetActiveTab(), []);

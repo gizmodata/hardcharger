@@ -1,4 +1,9 @@
-import { activeTab, expect, expectProblem, runDone, signIn, test } from "./fixtures.ts";
+import { copyFileSync } from "node:fs";
+import path from "node:path";
+
+import type { Page, TestInfo } from "@playwright/test";
+
+import { activeTab, expect, expectProblem, gridRows, runDone, signIn, test } from "./fixtures.ts";
 
 test("a tab can become read-only, locks the choice, and a new session permits writes", async ({
   page,
@@ -69,4 +74,290 @@ test("connection preference opens remote tabs read-only and survives reload", as
   await expect(activeTab(page).getByRole("checkbox", { name: "Read-only", exact: true })).toBeChecked();
   await expect(activeTab(page).getByRole("checkbox", { name: "Read-only", exact: true })).toBeDisabled();
   await expect(activeTab(page).getByTestId("query-error")).toHaveCount(0);
+});
+
+/** The tab's Read-only box, its state (data-state: on, off, pending, next-on, next-off) and its note. */
+function readOnlyMode(page: Page) {
+  const tab = activeTab(page);
+  return {
+    box: tab.getByRole("checkbox", { name: "Read-only", exact: true }),
+    mode: tab.getByTestId("read-only-mode"),
+    notice: tab.getByTestId("tab-notice"),
+    chip: tab.getByTestId("session-chip"),
+    error: tab.getByTestId("query-error"),
+  };
+}
+
+/** Copies a screenshot next to the review report when HARDCHARGER_UI_TEST_SCREENSHOTS names a folder. */
+async function keepScreenshot(page: Page, testInfo: TestInfo, name: string): Promise<void> {
+  const file = testInfo.outputPath(`${testInfo.project.name}-${name}`);
+  await page.screenshot({ path: file });
+  const keep = process.env["HARDCHARGER_UI_TEST_SCREENSHOTS"];
+  if (keep) copyFileSync(file, path.join(keep, `${testInfo.project.name}-${name}`));
+}
+
+test("temporary sequences: the server's refusal leaves the session and its temporary objects; after DROP the box locks", async ({
+  page,
+  harness,
+}, testInfo) => {
+  await signIn(page, harness.admin);
+  const ro = readOnlyMode(page);
+  await runDone(page, "CREATE TEMP TABLE scratch AS SELECT 42 AS v");
+  await runDone(page, "CREATE TEMP SEQUENCE seq");
+  await expect(ro.error).toHaveCount(0);
+  const session = await ro.chip.textContent();
+  await expect(ro.mode).toHaveAttribute("data-state", "off");
+
+  await ro.box.click();
+  await expect(ro.notice).toHaveText(
+    "Read-only was not enabled: read_only cannot be set while the session has temporary sequences: drop them first. " +
+      "The session is unchanged and still read-write; select Read-only again when that is done.",
+  );
+  await expect(ro.mode).toHaveAttribute("data-state", "off");
+  await expect(ro.box).not.toBeChecked();
+  await expect(ro.box).toBeEnabled();
+  await expect(ro.chip).toHaveText(session!);
+  await keepScreenshot(page, testInfo, "read-only-refused.png");
+
+  // The temporary table is still there, in the same session, and the advice can be followed.
+  await runDone(page, "SELECT v FROM scratch");
+  expect(await gridRows(page)).toEqual([["v"], ["42"]]);
+  await runDone(page, "SELECT nextval('seq') AS n");
+  expect(await gridRows(page)).toEqual([["n"], ["1"]]);
+  await runDone(page, "DROP SEQUENCE seq");
+  await expect(ro.error).toHaveCount(0);
+  await expect(ro.chip).toHaveText(session!);
+
+  await ro.box.click();
+  await expect(ro.mode).toHaveAttribute("data-state", "on");
+  await expect(ro.box).toBeChecked();
+  await expect(ro.box).toBeDisabled();
+  await expect(ro.notice).toHaveText("Read-only is enabled for this session.");
+  await expect(ro.chip).toHaveText(session!);
+  await runDone(page, "SELECT v FROM scratch");
+  expect(await gridRows(page)).toEqual([["v"], ["42"]]);
+  await keepScreenshot(page, testInfo, "read-only-locked.png");
+  // And the lock is the server's: a write is refused with its read_only error.
+  await runDone(page, "CREATE TEMP TABLE refused (i INTEGER)");
+  await expect(ro.error).toHaveText("read onlyCREATE is not allowed in a read-only session");
+});
+
+test("an open transaction the tab didn't know about: the refusal keeps it open, and its work commits", async ({
+  page,
+  harness,
+}) => {
+  await signIn(page, harness.admin);
+  const ro = readOnlyMode(page);
+  await runDone(page, "CREATE TEMP TABLE txn_target (i INTEGER)");
+  const session = await ro.chip.textContent();
+  // The session's reads fail while the transaction starts, so the tab doesn't know one is open
+  // and leaves the box usable: the server is the one that refuses.
+  const sessionDoc = /\/chargewire\/v1\/sessions\/[^/?]+$/;
+  let failed = 0;
+  await page.route(sessionDoc, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    failed++;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/problem+json",
+      body: JSON.stringify({ code: "internal_error", status: 500, title: "Injected", detail: "injected read failure" }),
+    });
+  });
+  expectProblem(page, { status: 500, url: sessionDoc });
+  await runDone(page, "BEGIN");
+  await runDone(page, "INSERT INTO txn_target VALUES (7)");
+  await page.unroute(sessionDoc);
+  expect(failed).toBeGreaterThan(0);
+  await expect(activeTab(page).getByTestId("in-transaction")).toHaveCount(0);
+  await expect(ro.box).toBeEnabled();
+
+  await ro.box.click();
+  await expect(ro.notice).toHaveText(
+    "Read-only was not enabled: read_only cannot be set while a transaction with work in it is open: commit or roll back first. " +
+      "The session is unchanged and still read-write; select Read-only again when that is done.",
+  );
+  // The session, its transaction and its work are all still there.
+  await expect(activeTab(page).getByTestId("in-transaction")).toBeVisible();
+  await expect(ro.mode).toHaveAttribute("data-state", "off");
+  await expect(ro.box).not.toBeChecked();
+  await expect(ro.box).toBeDisabled(); // now that the tab knows the transaction is open
+  await expect(ro.chip).toHaveText(session!);
+  await activeTab(page).getByRole("button", { name: "Commit", exact: true }).click();
+  await expect(activeTab(page).getByTestId("in-transaction")).toHaveCount(0);
+  await runDone(page, "SELECT i FROM txn_target");
+  expect(await gridRows(page)).toEqual([["i"], ["7"]]);
+
+  await ro.box.click();
+  await expect(ro.mode).toHaveAttribute("data-state", "on");
+  await expect(ro.box).toBeChecked();
+  await expect(ro.chip).toHaveText(session!);
+});
+
+test("re-adding a connected server with Read-only sessions never shows a writable session as read-only, and a reload shows the new session's state", async ({
+  page,
+  harness,
+}) => {
+  const remote = harness.remotes.plain;
+  const addServer = async (readOnly: boolean) => {
+    await page.getByTestId("explorer-add-server").click();
+    const dialog = page.getByTestId("add-server-dialog");
+    await dialog.getByLabel("Display name", { exact: true }).fill("Re-added");
+    await dialog.getByLabel("Host", { exact: true }).fill(remote.url);
+    await dialog.getByLabel("Username", { exact: true }).fill(remote.admin.username);
+    await dialog.getByLabel("Password", { exact: true }).fill(remote.admin.password);
+    await dialog.getByRole("checkbox", { name: "Read-only sessions", exact: true }).setChecked(readOnly);
+    await dialog.getByTestId("add-server-connect").click();
+    await expect(dialog).toHaveCount(0);
+  };
+  /** A write with the box checked is refused by the server: never checked and writable. */
+  const neverCheckedAndWritable = async (table: string): Promise<boolean> => {
+    const checked = await ro.box.isChecked();
+    await runDone(page, `CREATE TEMP TABLE ${table} (i INTEGER)`);
+    const refused = (await ro.error.count()) > 0;
+    if (refused) await expect(ro.error).toHaveText("read onlyCREATE is not allowed in a read-only session");
+    if (checked) expect(refused, `${table}: written with the Read-only box checked`).toBe(true);
+    return refused;
+  };
+
+  await signIn(page, harness.admin);
+  const ro = readOnlyMode(page);
+  await addServer(false);
+  await activeTab(page).getByLabel("Connection", { exact: true }).selectOption({ label: "Re-added" });
+  await runDone(page, "CREATE TEMP TABLE writable_before (i INTEGER)");
+  await expect(ro.error).toHaveCount(0);
+  await expect(ro.mode).toHaveAttribute("data-state", "off");
+  const session = await ro.chip.textContent();
+
+  // The same server again, now with read-only sessions. The box doesn't claim the open session,
+  // which the tab last read as read-write.
+  await addServer(true);
+  await expect(ro.mode).toHaveAttribute("data-state", "off");
+  await expect(ro.box).not.toBeChecked();
+  await expect(ro.mode).toContainText("This session is read-write. New sessions on this connection start read-only.");
+  // Registering the server again ended what the page had opened through the old registration
+  // (the relay answers 404 for it): the tab's next run opens a new session, as the connection
+  // now asks, and the write is refused there.
+  expectProblem(page, {
+    status: 404,
+    url: /\/ui\/v1\/remotes\/[^/]+\/chargewire\/v1\/sessions\/[^/]+(\/statements)?$/,
+  });
+  expect(await neverCheckedAndWritable("after_readd")).toBe(true);
+  await expect(ro.notice).toContainText(
+    "A new session was started: the previous one ended (this page signed in to the server again",
+  );
+  await expect(ro.chip).not.toHaveText(session!);
+  await expect(ro.mode).toHaveAttribute("data-state", "on");
+  await expect(ro.box).toBeChecked();
+  await expect(ro.box).toBeDisabled();
+
+  // New session: the connection's setting for the next one, checked once the server says so.
+  await activeTab(page).getByRole("button", { name: "New session", exact: true }).click();
+  await expect(ro.mode).toHaveAttribute("data-state", "next-on");
+  await runDone(page, "SELECT count(*) AS n FROM remote");
+  await expect(ro.mode).toHaveAttribute("data-state", "on");
+  await expect(ro.box).toBeDisabled();
+  expect(await neverCheckedAndWritable("refused_new_session")).toBe(true);
+  await expect(ro.box).toBeChecked();
+
+  // After a reload: before a run, the choice for the next session; after it, the server's word.
+  await page.reload();
+  await expect(ro.mode).toHaveAttribute("data-state", "next-on");
+  await expect(ro.chip).toHaveCount(0);
+  await runDone(page, "SELECT count(*) AS n FROM remote");
+  await expect(ro.mode).toHaveAttribute("data-state", "on");
+  await expect(ro.box).toBeChecked();
+  await expect(ro.box).toBeDisabled();
+  expect(await neverCheckedAndWritable("refused_after_reload")).toBe(true);
+  await expect(ro.box).toBeChecked();
+});
+
+test("a reload shows the new session's real state, read-write as well as read-only", async ({ page, harness }) => {
+  await signIn(page, harness.admin);
+  const ro = readOnlyMode(page);
+  await runDone(page, "SELECT 1 AS n");
+  await ro.box.click();
+  await expect(ro.mode).toHaveAttribute("data-state", "on");
+
+  await page.reload();
+  // The stored choice, for the next session; nothing is open yet.
+  await expect(ro.mode).toHaveAttribute("data-state", "next-on");
+  await expect(ro.chip).toHaveCount(0);
+  const created = page.waitForRequest(
+    (r) => r.method() === "POST" && r.url().endsWith("/sessions") && r.postDataJSON()?.options?.read_only === true,
+  );
+  await runDone(page, "SELECT 2 AS n");
+  await created;
+  await expect(ro.mode).toHaveAttribute("data-state", "on");
+  await runDone(page, "CREATE TEMP TABLE refused (i INTEGER)");
+  await expect(ro.error).toHaveText("read onlyCREATE is not allowed in a read-only session");
+
+  // Twin: New session, unticked, reload: read-write, and writes go through.
+  await activeTab(page).getByRole("button", { name: "New session", exact: true }).click();
+  await ro.box.uncheck();
+  await expect(ro.mode).toHaveAttribute("data-state", "next-off");
+  await page.reload();
+  await expect(ro.mode).toHaveAttribute("data-state", "next-off");
+  await runDone(page, "CREATE TEMP TABLE writable (i INTEGER)");
+  await expect(ro.error).toHaveCount(0);
+  await expect(ro.mode).toHaveAttribute("data-state", "off");
+  await expect(ro.box).not.toBeChecked();
+});
+
+test("a file dropped on a read-only tab is uploaded through a read-only session, which the server refuses", async ({
+  page,
+  harness,
+}) => {
+  await signIn(page, harness.admin);
+  const ro = readOnlyMode(page);
+  await runDone(page, "SELECT 1 AS n");
+  await ro.box.click();
+  await expect(ro.mode).toHaveAttribute("data-state", "on");
+  await expect(activeTab(page).getByTestId("upload-button")).toBeDisabled();
+  const dt = await page.evaluateHandle(() => {
+    const d = new DataTransfer();
+    d.items.add(new File(["a,b\n1,2\n"], "dropped_read_only.csv", { type: "text/csv" }));
+    return d;
+  });
+  await page.dispatchEvent("main", "dragenter", { dataTransfer: dt });
+  await page.dispatchEvent("main", "drop", { dataTransfer: dt });
+  const dialog = page.getByTestId("upload-data-dialog");
+  await expect(dialog.getByLabel("Table", { exact: true })).toHaveValue("dropped_read_only");
+  const created = page.waitForRequest(
+    (r) => r.method() === "POST" && r.url().endsWith("/sessions") && r.postDataJSON()?.options?.read_only === true,
+  );
+  expectProblem(page, { status: 403, url: /\/ingest(\?|$)/ });
+  await dialog.getByRole("button", { name: "Upload", exact: true }).click();
+  await created;
+  await expect(dialog.getByTestId("upload-error")).toContainText("bulk ingest is not allowed in a read-only session");
+  await dialog.getByRole("button", { name: "Close", exact: true }).last().click();
+  await runDone(page, "SELECT count(*) AS n FROM duckdb_tables() WHERE table_name = 'dropped_read_only'");
+  expect(await gridRows(page)).toEqual([["n"], ["0"]]);
+});
+
+test("while the server is asked, the box is pending, not checked", async ({ page, harness }) => {
+  await signIn(page, harness.admin);
+  const ro = readOnlyMode(page);
+  await runDone(page, "SELECT 1 AS n");
+  // Hold the switch until the box has been looked at.
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const sessionDoc = /\/chargewire\/v1\/sessions\/[^/?]+$/;
+  await page.route(sessionDoc, async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    await held;
+    await route.fallback();
+  });
+  await ro.box.click();
+  await expect.poll(async () => ro.mode.getAttribute("data-state")).toBe("pending");
+  expect(await ro.box.isChecked()).toBe(false);
+  expect(await ro.box.evaluate((input: HTMLInputElement) => input.indeterminate)).toBe(true);
+  expect(await ro.box.isEnabled()).toBe(false);
+  await expect(ro.mode).toContainText("Confirming with the server…");
+  release();
+  await expect(ro.mode).toHaveAttribute("data-state", "on");
+  await expect(ro.box).toBeChecked();
+  expect(await ro.box.evaluate((input: HTMLInputElement) => input.indeterminate)).toBe(false);
+  await page.unroute(sessionDoc);
 });

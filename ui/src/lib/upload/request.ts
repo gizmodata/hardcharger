@@ -13,6 +13,11 @@ export interface UploadRequest {
   server?: string;
   /** A file dropped on the page. */
   file?: File;
+  /**
+   * The tab it came from is read-only: the upload's own session opens read-only too, so the
+   * server refuses it (a file dropped on a read-only tab is not a way around it).
+   */
+  readOnly?: boolean;
 }
 
 let current: UploadRequest | null = null;

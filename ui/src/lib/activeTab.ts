@@ -15,6 +15,8 @@ export interface ActiveTab {
   server: string;
   sessionId?: string;
   title?: string;
+  /** The tab's Read-only box is checked or awaiting the server (a dropped file's upload follows it). */
+  readOnly?: boolean;
 }
 
 const none: ActiveTab = { catalog: "", schema: "", transaction: "none", role: "", server: "" };
@@ -29,7 +31,8 @@ export function publishActiveTab(next: ActiveTab): void {
     next.role === current.role &&
     next.server === current.server &&
     next.sessionId === current.sessionId &&
-    next.title === current.title
+    next.title === current.title &&
+    next.readOnly === current.readOnly
   ) {
     return;
   }

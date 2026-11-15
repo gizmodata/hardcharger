@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   CatalogRefusedError,
+  ReadOnlyRefusedError,
   SettingsLostError,
   TabSession,
   TransactionLostError,
   type Where,
+  isReadOnlyRefusal,
 } from "../../src/lib/tabSession";
 
 interface Fake {
@@ -19,7 +21,31 @@ interface Fake {
   ran: string[];
   readOnly: boolean;
   ignoreReadOnly?: boolean;
+  /** Temporary sequences the session holds (the server refuses read_only while it has any). */
+  tempSequences: number;
+  /** A statement ran inside the open transaction (the server refuses read_only then). */
+  work: boolean;
+  /** What each statement ran as: the session's read_only when it ran. */
+  modes: boolean[];
+  /** The next read_only request fails this way instead of being answered (an unknown outcome). */
+  failReadOnly?: () => Error;
+  /** How many times read_only was asked for. */
+  switches: number;
 }
+
+/** What @gizmodata/chargewire 2.3.6 throws for an option the server refused (Session.#settled). */
+function optionRefusal(code: string, detail: string): ChargewireError {
+  return new ChargewireError({
+    code,
+    status: 400,
+    detail,
+    message: `session option "read_only": ${detail} (${code}, HTTP 400)`,
+  });
+}
+
+const sequencesDetail = "read_only cannot be set while the session has temporary sequences: drop them first";
+const transactionDetail =
+  "read_only cannot be set while a transaction with work in it is open: commit or roll back first";
 
 function opener() {
   const made: Fake[] = [];
@@ -31,6 +57,10 @@ function opener() {
       closed: false,
       ran: [],
       readOnly: where?.readOnly === true,
+      tempSequences: 0,
+      work: false,
+      modes: [],
+      switches: 0,
     };
     made.push(f);
     const gone = () =>
@@ -48,15 +78,33 @@ function opener() {
         };
       },
       setOptions: async (options: Record<string, unknown>) => {
+        if (options["read_only"] === true) f.switches++;
+        const fail = options["read_only"] === true ? f.failReadOnly : undefined;
+        f.failReadOnly = undefined;
+        if (fail) throw fail();
         if (f.gone) throw gone();
-        if (options["read_only"] === true && !f.ignoreReadOnly) f.readOnly = true;
+        if (options["read_only"] === true && !f.readOnly && !f.ignoreReadOnly) {
+          // As the server does (duckdb_session.cc SetReadOnly): a refusal leaves the session as it was.
+          if (f.tempSequences > 0) throw optionRefusal("invalid_option_value", sequencesDetail);
+          if (f.transaction !== "none" && f.work) throw optionRefusal("invalid_option_value", transactionDetail);
+          f.readOnly = true;
+        }
         return { read_only: f.readOnly };
       },
       execute: async (sql: string) => {
         if (f.gone) throw gone();
         f.ran.push(sql);
-        if (sql === "BEGIN") f.transaction = "open";
-        if (sql === "COMMIT") f.transaction = "none";
+        f.modes.push(f.readOnly);
+        if (sql === "BEGIN") {
+          f.transaction = "open";
+          f.work = false;
+        } else if (sql === "COMMIT" || sql === "ROLLBACK") {
+          f.transaction = "none";
+        } else if (f.transaction !== "none") {
+          f.work = true;
+        }
+        if (sql.startsWith("CREATE TEMP SEQUENCE")) f.tempSequences++;
+        if (sql.startsWith("DROP SEQUENCE")) f.tempSequences--;
         return null;
       },
       close: async () => {
@@ -315,5 +363,272 @@ describe("TabSession", () => {
     const s = new TabSession(open);
     const err = new ChargewireError({ code: "sql_error", status: 400 });
     await expect(s.run(here, () => Promise.reject(err))).rejects.toBe(err);
+  });
+});
+
+describe("TabSession: the server's answer to Read-only", () => {
+  it("a refusal with the session intact (temporary sequences) leaves it open and read-write; following the advice works", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run(here, (c) => c.execute("CREATE TEMP TABLE scratch AS SELECT 42 AS v"));
+    await s.run(here, (c) => c.execute("CREATE TEMP SEQUENCE seq"));
+    await s.refresh(here);
+
+    const err = await s.enableReadOnly(here).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ReadOnlyRefusedError);
+    expect((err as ReadOnlyRefusedError).code).toBe("invalid_option_value");
+    expect((err as ReadOnlyRefusedError).detail).toBe(sequencesDetail);
+    expect((err as Error).message).toBe(
+      `Read-only was not enabled: ${sequencesDetail}. The session is unchanged and still read-write; ` +
+        "select Read-only again when that is done.",
+    );
+    expect((err as Error).message).not.toMatch(/closed|New session/);
+    // The session is exactly as it was: open, the same one, read-write, nothing ended.
+    expect(made[0]!.closed).toBe(false);
+    expect(made[0]!.readOnly).toBe(false);
+    expect(s.open).toBe(true);
+    expect(s.readOnly).toBe(false);
+    expect(s.info).toMatchObject({ id: "s_1", readOnly: false });
+
+    // The server's advice can be followed in the same session, and the next tick locks it.
+    await s.run(here, (c) => c.execute("DROP SEQUENCE seq"));
+    expect(made).toHaveLength(1);
+    expect(made[0]!.ran).toEqual([
+      "CREATE TEMP TABLE scratch AS SELECT 42 AS v",
+      "CREATE TEMP SEQUENCE seq",
+      "DROP SEQUENCE seq",
+    ]);
+    expect(await s.enableReadOnly(here)).toMatchObject({ id: "s_1", readOnly: true });
+    expect(made[0]!.readOnly).toBe(true);
+    expect(s.readOnly).toBe(true);
+    await s.run(here, (c) => c.execute("SELECT v FROM scratch"));
+    expect(made).toHaveLength(1); // the temporary table's session, still
+  });
+
+  it("a refusal for an open transaction with work in it leaves the transaction open; after COMMIT the switch goes through", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run(here, (c) => c.execute("BEGIN"));
+    s.noteStatement("BEGIN");
+    await s.run(here, (c) => c.execute("INSERT INTO t VALUES (1)"));
+    // A tick sent while the tab does not know the transaction (its last read failed).
+    const err = await s.enableReadOnly(here).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ReadOnlyRefusedError);
+    expect((err as ReadOnlyRefusedError).detail).toBe(transactionDetail);
+    expect(made[0]!.closed).toBe(false);
+    expect(made[0]!.transaction).toBe("open"); // not rolled back
+    expect(s.info).toMatchObject({ id: "s_1", transaction: "open", readOnly: false });
+    await s.run(here, (c) => c.execute("COMMIT"));
+    s.noteStatement("COMMIT");
+    expect(made[0]!.ran).toEqual(["BEGIN", "INSERT INTO t VALUES (1)", "COMMIT"]);
+    expect(await s.enableReadOnly(here)).toMatchObject({ id: "s_1", transaction: "none", readOnly: true });
+    expect(made).toHaveLength(1);
+  });
+
+  it.each([
+    ["invalid_option_value", 400],
+    ["unknown_option", 400], // a server without read-only sessions
+    ["read_only", 400],
+    ["bad_request", 400],
+    ["permission_denied", 403],
+    ["rate_limited", 429],
+    ["invalid_token", 401],
+  ])("the server's refusal %s (HTTP %i) keeps the session", async (code, status) => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    made[0]!.failReadOnly = () => new ChargewireError({ code, status, detail: `refused: ${code}` });
+    const err = await s.enableReadOnly(here).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ReadOnlyRefusedError);
+    expect((err as Error).message).toContain(`refused: ${code}`);
+    expect(made[0]!.closed).toBe(false);
+    expect(s.open).toBe(true);
+    await s.run(here, (c) => c.execute("SELECT 2"));
+    expect(made).toHaveLength(1);
+    expect(made[0]!.ran).toEqual(["SELECT 1", "SELECT 2"]);
+  });
+
+  it.each([
+    ["no answer", () => new ChargewireError({ code: "client_transport_error", detail: "connection reset" })],
+    ["a proxy's 502", () => new ChargewireError({ code: "client_http_error", status: 502, detail: "Bad Gateway" })],
+    ["a server failure", () => new ChargewireError({ code: "internal_error", status: 500, detail: "boom" })],
+    ["a refusal code with a 5xx", () => new ChargewireError({ code: "invalid_option_value", status: 503 })],
+    ["an answer off the protocol", () => new ChargewireError({ code: "client_protocol_error", detail: "not JSON" })],
+    ["an aborted request", () => new DOMException("The operation was aborted.", "AbortError")],
+  ])("an unknown outcome (%s) stops using the session, says why, and blocks until New session", async (_, fail) => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run(here, (c) => c.execute("CREATE TEMP TABLE scratch AS SELECT 1"));
+    made[0]!.failReadOnly = fail;
+    const err = await s.enableReadOnly(here).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(ReadOnlyRefusedError);
+    expect((err as Error).message).toMatch(
+      /^Whether the server made the session read-only is not known \(.+\)\. To be safe this tab no longer uses it: the session was closed, with its temporary tables, settings and any open transaction\. Choose New session to continue\.$/,
+    );
+    expect(made[0]!.closed).toBe(true);
+    await expect(s.run(here, (c) => c.execute("CREATE TABLE t(i INT)"))).rejects.toBe(err);
+    expect(made).toHaveLength(1);
+    await s.close();
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    expect(made).toHaveLength(2);
+  });
+
+  it("a session the server no longer has: the tab says it ended, and blocks until New session", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    made[0]!.gone = true;
+    const err = await s.enableReadOnly(here).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(
+      /^The session ended on the server before read-only could be confirmed \(.*session_not_found.*\)\. Its temporary tables, settings and any open transaction are gone\. Choose New session to continue\.$/,
+    );
+    expect(made[0]!.closed).toBe(true);
+    await expect(s.run(here, (c) => c.execute("SELECT 2"))).rejects.toBe(err);
+    expect(made).toHaveLength(1);
+  });
+
+  it("classifies by the server's code and status, never by the message", () => {
+    const refusal = (code: string, status?: number, message?: string) =>
+      isReadOnlyRefusal(new ChargewireError({ code, ...(status ? { status } : {}), ...(message ? { message } : {}) }));
+    expect(refusal("invalid_option_value", 400)).toBe(true);
+    expect(refusal("permission_denied", 403)).toBe(true);
+    expect(refusal("invalid_option_value")).toBe(false); // no answer carried it
+    expect(refusal("invalid_option_value", 500)).toBe(false);
+    expect(refusal("session_not_found", 404)).toBe(false);
+    expect(refusal("session_ended", 401)).toBe(false);
+    expect(refusal("client_http_error", 400)).toBe(false); // a proxy's page, not the server's word
+    expect(refusal("client_transport_error", undefined, "invalid_option_value: drop them first")).toBe(false);
+    expect(isReadOnlyRefusal(new Error("invalid_option_value"))).toBe(false);
+  });
+});
+
+describe("TabSession: a run that asks for read-only never uses a writable session", () => {
+  it("an open read-write session is switched before the work runs, and the work runs read-only on it", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    expect(made[0]!.readOnly).toBe(false);
+    await s.run({ ...here, readOnly: true }, (c) => c.execute("CREATE TABLE t (i INT)"));
+    expect(made).toHaveLength(1);
+    expect(made[0]!.switches).toBe(1);
+    expect(made[0]!.modes).toEqual([false, true]); // the second statement ran in a read-only session
+    expect(s.readOnly).toBe(true);
+    expect((await s.refresh(here))?.readOnly).toBe(true);
+  });
+
+  it("a refused switch fails the run with the server's words, runs nothing, and keeps the session", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run(here, (c) => c.execute("CREATE TEMP SEQUENCE seq"));
+    const err = await s
+      .run({ ...here, readOnly: true }, (c) => c.execute("CREATE TABLE t (i INT)"))
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ReadOnlyRefusedError);
+    expect(made[0]!.ran).toEqual(["CREATE TEMP SEQUENCE seq"]); // the write never ran
+    expect(made[0]!.closed).toBe(false);
+    expect(s.readOnly).toBe(false);
+    // Without the request, the session is used as it is (the box shows it read-write).
+    await s.run(here, (c) => c.execute("DROP SEQUENCE seq"));
+    expect(made).toHaveLength(1);
+  });
+
+  it("a session still opening read-only is not switched again", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    const first = s.run({ ...here, readOnly: true }, (c) => c.execute("SELECT 1"));
+    const second = s.run({ ...here, readOnly: true }, (c) => c.execute("SELECT 2"));
+    await Promise.all([first, second]);
+    expect(made).toHaveLength(1);
+    expect(made[0]!.switches).toBe(0); // asked for at creation, confirmed then
+    expect(made[0]!.modes).toEqual([true, true]);
+  });
+
+  it("reading or moving the session never changes its mode", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    await s.refresh({ ...here, readOnly: true });
+    await s.setWhere({ catalog: "memory", schema: "other", readOnly: true });
+    expect(made[0]!.switches).toBe(0);
+    expect(made[0]!.readOnly).toBe(false);
+  });
+
+  it("a replacement for a lost read-write session follows the session, not a later request", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    made[0]!.gone = true;
+    // A read after the loss replaces it, keeping its mode.
+    await s.refresh({ ...here, readOnly: true });
+    expect(made).toHaveLength(2);
+    expect(made[1]!.readOnly).toBe(false);
+    // A run that asks for read-only switches the replacement first.
+    await s.run({ ...here, readOnly: true }, (c) => c.execute("SELECT 2"));
+    expect(made[1]!.modes).toEqual([true]);
+  });
+
+  it("two tabs on one server: each session is confirmed on its own", async () => {
+    const { made, open } = opener();
+    const writable = new TabSession(open);
+    const readOnly = new TabSession(open);
+    await writable.run(here, (c) => c.execute("SELECT 1"));
+    await readOnly.run({ ...here, readOnly: true }, (c) => c.execute("SELECT 2"));
+    expect(made.map((f) => f.readOnly)).toEqual([false, true]);
+    expect((await writable.refresh(here))?.readOnly).toBe(false);
+    expect((await readOnly.refresh(here))?.readOnly).toBe(true);
+  });
+});
+
+describe("TabSession: sessions opened later follow the tab's choice", () => {
+  it("a replacement for a lost read-write session opens as the tab now asks (the connection's default changed)", async () => {
+    const { made, open } = opener();
+    const s = new TabSession(open);
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    made[0]!.gone = true;
+    await s.run({ ...here, openReadOnly: true }, (c) => c.execute("CREATE TABLE t (i INT)"));
+    expect(made).toHaveLength(2);
+    expect(made[1]!.readOnly).toBe(true);
+    expect(made[1]!.modes).toEqual([true]);
+    expect((await s.refresh(here))?.readOnly).toBe(true);
+    // Twin: an open read-write session is left as it is by the same request.
+    const t = new TabSession(open);
+    await t.run(here, (c) => c.execute("SELECT 1"));
+    await t.run({ ...here, openReadOnly: true }, (c) => c.execute("SELECT 2"));
+    expect(made[2]!.modes).toEqual([false, false]);
+    expect(made[2]!.switches).toBe(0);
+  });
+
+  it("a session the relay can no longer reach (signed in again) is replaced, with the reason; with a transaction open nothing runs", async () => {
+    const relayGone = () =>
+      new ChargewireError({ code: "remote_not_found", status: 404, detail: "no such remote server: r-1" });
+    const { made, open } = opener();
+    const s = new TabSession(async (where) => {
+      const conn = await open(where);
+      const f = made.at(-1)!;
+      const execute = conn.execute.bind(conn);
+      return Object.assign(conn, {
+        execute: async (sql: string) => {
+          if (f.endedReason === "relay") throw relayGone();
+          return execute(sql);
+        },
+      });
+    });
+    await s.run(here, (c) => c.execute("SELECT 1"));
+    made[0]!.endedReason = "relay";
+    await s.run({ ...here, openReadOnly: true }, (c) => c.execute("SELECT 2"));
+    expect(made).toHaveLength(2);
+    expect(made[1]!.readOnly).toBe(true);
+    expect(s.takeReplacedNote()).toMatch(/this page signed in to the server again/);
+    // With a transaction open, nothing runs on a new session.
+    await s.run(here, (c) => c.execute("BEGIN"));
+    s.noteStatement("BEGIN");
+    made[1]!.endedReason = "relay";
+    await expect(s.run(here, (c) => c.execute("INSERT 1"))).rejects.toBeInstanceOf(TransactionLostError);
+    expect(made).toHaveLength(2);
+    // Another 404 code is not a lost session.
+    const t = new TabSession(async () => {
+      throw new ChargewireError({ code: "not_found", status: 404 });
+    });
+    await expect(t.run(here, (c) => c.execute("SELECT 1"))).rejects.toMatchObject({ code: "not_found" });
   });
 });

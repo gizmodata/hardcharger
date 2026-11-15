@@ -33,6 +33,34 @@ own changelog in `python/CHANGELOG.md`.
   key columns). The refusal of such a write into a table with row or masking policies now says
   "MERGE (or INSERT ... ON CONFLICT)".
 - The server builds against OpenSSL 4 (a certificate name is taken as `const`).
+- **Web UI: the Read-only box shows the session the tab has, never only what was asked for.**
+  With a session open, the box was checked whenever read-only had been asked for (the
+  connection's "Read-only sessions" turned on while the tab was connected, say), even over a
+  session the server had opened read-write and that still wrote. It is now checked and locked only
+  once the server has said that this session is read-only; while it is being asked, it shows a
+  pending state ("Confirming with the server…"), not checked. The connection's setting applies to
+  sessions opened after it (a new tab, New session, a reload, a replacement for a lost session);
+  an open read-write session stays read-write, and the box says so, until it is ticked. A run
+  asked to be read-only on an open read-write session switches it first and runs nothing if the
+  server refuses. With no session open, the box shows the tab's choice for the next one, which the
+  server confirms before anything runs in it.
+- **Web UI: a refused Read-only leaves the session as it was.** When the server refused to make a
+  session read-only and kept it (temporary sequences: "drop them first"; a transaction with work
+  in it: "commit or roll back first"; a server without read-only sessions), the UI closed the
+  session: its temporary tables and settings went with it, the server's advice could not be
+  followed, the tab was blocked until New session, and an open transaction was rolled back. Such a
+  refusal, told apart by the server's error code and status, now leaves the session open and
+  read-write, the box unchecked and usable, and shows the server's message. Only an outcome that
+  is not known (no answer, the session gone, an answer that doesn't confirm it) ends the session,
+  with a message that says which.
+- **Web UI: signing in again to a connected server works.** Adding a server that was already
+  connected (to change its settings, such as Read-only sessions) failed with "no such remote
+  server" and disconnected it: the check used the connection opened through the registration the
+  new one had replaced. A tab whose session was opened through the old registration now finds it
+  gone and opens a new one, as the connection now asks, with a note (or, with a transaction open,
+  runs nothing and says so).
+- **Web UI: a file dropped on a read-only tab is uploaded through a read-only session**, which
+  the server refuses, instead of a session of its own that could write.
 
 ## [2.13.0] - 2026-11-14
 

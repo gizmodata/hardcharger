@@ -408,7 +408,10 @@ export default function UploadDialog({ request, serial, onClose }: Props) {
     setBusy(true);
     setProgress({ phase: "uploading", fraction: 0, rows: 0, bytes: 0 });
     try {
-      const c = await uploadConnection((o) => session.openConnection({ ...o, server }), role);
+      const c = await uploadConnection(
+        (o) => session.openConnection({ ...o, server, ...(request.readOnly === true ? { readOnly: true } : {}) }),
+        role,
+      );
       conn.current = c;
       const res = await runUpload({
         conn: c,
