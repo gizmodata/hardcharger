@@ -6,6 +6,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 
 #include "platform.hpp"
 
@@ -200,3 +201,34 @@ TEST(RaiseOpenFileLimit, RaisesALowSoftLimitToTheHardLimit) {
   setrlimit(RLIMIT_NOFILE, &original);
 }
 #endif
+
+// The init SQL runs on a thread with the statement threads' stack (engine.cc): the main
+// thread has 1 MB on Windows, an embedding's thread 512 KB on macOS and iOS.
+namespace {
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+int UseStack(int frames) {
+  volatile char block[64 * 1024];
+  for (std::size_t i = 0; i < sizeof(block); i += 4096) block[i] = static_cast<char>(frames);
+  if (frames == 0) return block[0];
+  return UseStack(frames - 1) + block[4096];  // (not a tail call: the frame stays)
+}
+}  // namespace
+
+TEST(RunWithStack, RunsTheBodyOnAThreadWithTheStackAskedFor) {
+  std::size_t bytes = 0;
+  int used = -1;
+  hardcharger::RunWithStack(hardcharger::kStatementThreadStackBytes, [&] {
+    bytes = hardcharger::CurrentThreadStackBytes();
+    used = UseStack(96);  // 6 MB: a 512 KB or 1 MB stack stops the test process here
+  });
+  EXPECT_GE(bytes, hardcharger::kStatementThreadStackBytes);
+  EXPECT_NE(used, -1);  // the body ran to its end
+  // What the body throws is rethrown to the caller.
+  EXPECT_THROW(hardcharger::RunWithStack(hardcharger::kStatementThreadStackBytes,
+                                         [] { throw std::invalid_argument("init SQL failed"); }),
+               std::invalid_argument);
+}

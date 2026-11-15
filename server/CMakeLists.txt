@@ -213,10 +213,11 @@ target_include_directories(hardcharger_authz SYSTEM PRIVATE
 target_link_libraries(hardcharger_authz PUBLIC chargewire_duckdb OpenSSL::Crypto)
 target_compile_options(hardcharger_authz PRIVATE ${HARDCHARGER_AUTHZ_WARNINGS})
 
-# SQL as DuckDB's own tokenizer reads it (src/sql_lex.hpp), for the log masking and the
-# statement intake. Like the access control it uses DuckDB's C++ headers (the tokenizer
-# class its parser runs), so it is compiled the same way and kept to this one file.
-add_library(hardcharger_sql_lex OBJECT src/sql_lex.cc)
+# SQL as DuckDB's own tokenizer reads it (src/sql_lex.hpp), for the log masking, and the
+# parse guard (src/parse_guard.hpp), DuckDB's parser hook that refuses the statement shapes
+# its parser cannot be handed safely. Like the access control they use DuckDB's C++ headers
+# (the tokenizer class its parser runs), so they are compiled the same way.
+add_library(hardcharger_sql_lex OBJECT src/sql_lex.cc src/parse_guard.cc)
 target_include_directories(hardcharger_sql_lex PRIVATE src)
 target_include_directories(hardcharger_sql_lex SYSTEM PRIVATE
                            "${CHARGEWIRE_DUCKDB_PREFIX}/include/duckdb_third_party")
@@ -389,6 +390,7 @@ add_executable(hardcharger-unit-tests
   unit/instrumentation_test.cc
   unit/log_level_test.cc
   unit/metrics_test.cc
+  unit/parse_guard_test.cc
   unit/patterns_test.cc
   unit/platform_test.cc
   unit/redaction_test.cc

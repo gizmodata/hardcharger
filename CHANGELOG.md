@@ -57,28 +57,51 @@ own changelog in `python/CHANGELOG.md`.
     field later in the same text (`{"url": "http://h:8080/api", "password": "P@ss…"}`). A quoted
     URL ends at its closing quote.
 
-- **A statement can no longer hold a core in DuckDB's parser, or stop the server, by its
-  shape alone.** Any signed-in user could do either:
-  - A statement with parentheses opened and never closed kept DuckDB 2.0's parser busy for
-    time quadratic in their number (8 KB of them: 17 seconds; 500 KB: hours), one core per
-    statement, and neither the statement timeout, `hardcharger_cancel()` nor a client's
-    cancel took effect until the parse returned. Such a statement cannot parse: the server
-    now answers it with the syntax error at once (`… 8000 opening parentheses are never
-    closed …`), for a statement, a request of several, a prepare, the init SQL and the SQL
-    given to `query()` as a literal. The count is made on DuckDB's own tokens.
-  - DuckDB recurses once per level of a statement's nesting, on a thread with a default
-    stack. Its own limit (`max_expression_depth`, 1000) assumes 8 MB, and any session could
-    raise it. On macOS, where a thread gets 512 KB, statements DuckDB accepts by default
-    stopped the server process: `'a' || 'a' || …` with 900 terms, 460 nested lists or
-    function calls, 300 nested subqueries, a 300-table join. On every platform a session that
-    ran `SET max_expression_depth TO 10000000` first could do the same with a few thousand
-    levels, and 8,000 nested subqueries or 20,000 tables in one `FROM` clause did it
-    whatever the setting. The server now sets DuckDB's limit to what its statement threads'
-    stacks take (the new `max_sql_nesting` option: 1000 on Linux, as before; 128 on macOS; 256
-    on Windows), refuses `SET max_expression_depth` above it, and refuses a statement whose
-    brackets nest deeper, or whose `FROM` clause names more than four times as many tables,
-    before DuckDB's parser sees it. See README, "Statements refused before DuckDB parses
-    them".
+- **No SQL text can hold a core in DuckDB's parser, or stop the server, by its shape alone,
+  however it reaches the parser.** Any signed-in user could do either:
+  - A text with parentheses opened and never closed kept DuckDB 2.0's parser busy for time
+    quadratic in their number (8 KB of them: 17 seconds; 500 KB: hours), one core each, and
+    neither the statement timeout, `hardcharger_cancel()` nor a client's cancel took effect
+    until the parse returned. Such a text cannot parse: the server now answers it with the
+    syntax error at once (`… 8000 opening parentheses are never closed …`). The check is made
+    in DuckDB's parser hook, on every text DuckDB is asked to parse: a statement, a request of
+    several, a prepare, the init SQL, SQL built at run time and given to `query()` or
+    `query_table()` (`query('SELECT ' || repeat('(', 4000))` took 3.9 s), to
+    `json_serialize_sql()` (anyone's: 8,000 took 35 s) or `json_serialize_plan()`, on DuckDB's
+    worker threads too, and IMPORT DATABASE's `load.sql` (DuckDB parsed it with a parser no
+    hook sees: the server's `import_database` now parses it through the check, and refuses a
+    statement in it that is not a `COPY`). The count is made on DuckDB's own tokens.
+  - DuckDB recurses once per level of a statement's nesting, and its own limit
+    (`max_expression_depth`, 1000) assumes an 8 MB stack. On macOS, where the threads that
+    ran statements had 512 KB, statements DuckDB accepts by default stopped the server process:
+    `'a' || 'a' || …` with 900 terms, 460 nested lists or function calls, 300 nested
+    subqueries, a 300-table join. On every platform a session that ran `SET
+    max_expression_depth TO 10000000` first could do the same with a few thousand levels, and
+    8,000 nested subqueries or 20,000 tables in one `FROM` clause did it whatever the setting,
+    also when built at run time and parsed on one of DuckDB's own worker threads
+    (`json_serialize_sql()` over a scan). Statement threads now have an 8 MB stack on every
+    platform (Chargewire SDK), the init SQL runs on a thread with the same, and the new
+    `max_sql_nesting` option (1000, DuckDB's default, everywhere) is DuckDB's limit: no session
+    can raise `max_expression_depth` past it (`SET`, `PRAGMA`, `RESET GLOBAL`), and text whose
+    brackets nest deeper, or whose `FROM` clause names more than four times as many tables, is
+    refused before DuckDB's parser sees it.
+  - A dotted name of thousands of parts (`SELECT a.b.b.b…`) kept DuckDB's binder busy for time
+    quadratic in their number (20,000 parts, 40 KB: 45 s), uninterrupted. A name of more parts
+    than `max_sql_nesting` is refused.
+  - No session can switch the check off: `SET`, `RESET` and `PRAGMA` of
+    `allow_parser_override_extension`, in any scope and for an administrator too, are refused.
+  See README, "Statements refused before DuckDB parses them".
+- **DuckDB's autocomplete functions are off unless `enable_sql_auto_complete` turns them on,
+  and then they are for administrators only.** `sql_auto_complete()` takes unfinished SQL by
+  design and ran DuckDB's matcher for time exponential in the brackets it left open (14 of
+  them: 7 s; 16: 37 s; 18: over 40 s), for any signed-in user, with a statement timeout or a
+  cancel taking effect only once it returned; `sql_tokenize()` and `check_peg_parser()` run the
+  same matcher (`sql_tokenize()`: over 120 s on 2,000 open parentheses), and
+  `duckdb_format_sql()`, anyone's, took time and memory quadratic in its argument (4,000
+  nested subqueries: 3 s and a 64 MB result). Off (the default), the extension is not loaded
+  and a linked-in one refuses its functions; on, it is loaded at startup and its functions
+  answer administrators only, wherever the call is. Nothing in Hardcharger calls them. See
+  README, "DuckDB's autocomplete functions".
 
 ### Changed
 
@@ -132,9 +155,27 @@ own changelog in `python/CHANGELOG.md`.
 ### Added
 
 - `max_sql_nesting` (`--max-sql-nesting`, `HARDCHARGER_MAX_SQL_NESTING`): the deepest nesting
-  a statement may have. DuckDB's `max_expression_depth` is set to it at startup, and no
-  session can raise that setting past it. `0`, the default, is what the stack of the threads
-  that run statements takes: 1000 on Linux, 128 on macOS, 256 on Windows.
+  a statement may have (brackets, chained operators, joins, the parts of a dotted name; a
+  `FROM` clause may name four times as many tables). DuckDB's `max_expression_depth` is set to
+  it at startup, and no session can raise that setting past it. `0`, the default, is what the
+  8 MB stack of the threads that run statements takes: 1000, on every platform.
+- `enable_sql_auto_complete` (`--enable-sql-auto-complete`,
+  `HARDCHARGER_ENABLE_SQL_AUTO_COMPLETE`, off by default): DuckDB's autocomplete functions
+  (`sql_auto_complete`, `sql_tokenize`, `check_peg_parser`, `duckdb_format_sql`), for
+  administrators only.
+
+### Notes on what these limits leave
+
+- A statement that parses and binds can still take long to plan, and planning is not
+  interrupted by a statement timeout or a cancel: DuckDB's join-order optimizer took 11 s for a
+  300-way join of subqueries and over two minutes for 600 (DuckDB's limit admits a join of up
+  to about 1000). This predates these changes on Linux; on macOS such joins were refused by the
+  lower limit of 128 that 2.13.x had there.
+- With `enable_sql_auto_complete` on, an administrator's `sql_auto_complete()` still runs to
+  its end before a timeout or a cancel takes effect.
+- DuckDB's own worker threads keep the platform's default stack (512 KB on macOS); they parse
+  only what `json_serialize_sql()` and its kind are given row by row, which was measured to
+  take twice the default limit there.
 
 ### Notes on the 2.13.0 entries
 

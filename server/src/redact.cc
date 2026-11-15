@@ -1894,7 +1894,6 @@ MaskedSql MaskSql(std::string_view sql, std::size_t limit) {
     out.credentials = true;
     return out;
   }
-  out.unclosed = UnclosedParentheses(tokens);
   SqlMasker(tokens, 0).Run(out, limit);
   return out;
 }

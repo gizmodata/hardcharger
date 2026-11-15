@@ -307,8 +307,13 @@ std::vector<Setting> Build() {
   startup({.name = "max_sql_nesting", .input_type = "INTEGER", .option = "max_sql_nesting",
            .default_value = number(SqlNestingLimit(kDefaults)),
            .description = "The deepest nesting a statement may have: DuckDB's max_expression_depth, which no "
-                          "session can raise past it (default: what the statement threads' stacks take).",
+                          "session can raise past it (default: what the statement threads' 8 MB stacks take, 1000).",
            .get_global = config_value([](const Runtime& r) { return std::to_string(SqlNestingLimit(r.config)); })});
+  startup({.name = "enable_sql_auto_complete", .input_type = "BOOLEAN", .option = "enable_sql_auto_complete",
+           .default_value = Bool(kDefaults.enable_sql_auto_complete),
+           .description = "DuckDB's autocomplete functions (sql_auto_complete and its siblings) run, for administrators "
+                          "only; off, they are refused to everyone.",
+           .get_global = config_value([](const Runtime& r) { return Bool(r.config.enable_sql_auto_complete); })});
   startup({.name = "max_sessions", .input_type = "INTEGER", .option = "max_sessions",
            .default_value = number(kDefaults.max_sessions),
            .description = "Most non-admin sessions at once; more get too_many_sessions (0: unlimited).",

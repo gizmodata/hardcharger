@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 
+#include "parse_guard.hpp"
 #include "authz/authz.hpp"
 #include "config.hpp"
 #include "duckdb_backend.hpp"
@@ -82,6 +83,8 @@ class Backend : public chargewire_duckdb::DuckDBBackend {
   // The server's own files, which no SQL opens (guards.hpp): shared with the file
   // system guard in the instance.
   std::shared_ptr<PrivateFiles> private_files_;
+  // DuckDB's parser hook: the limits on statement text's shape (parse_guard.hpp).
+  std::shared_ptr<ParseGuard> parse_guard_;
   std::string system_catalog_dir_;
   // The init SQL connection's current catalog and schema once the init SQL ran (unset
   // without init SQL).

@@ -262,10 +262,16 @@ const std::vector<Option>& Options() {
       // Statements
       {"query_timeout_seconds", Kind::kInt, "default statement timeout (0: none)", NUMBER(query_timeout_seconds)},
       {"max_sql_nesting", Kind::kInt,
-       "the deepest nesting a statement may have (brackets, subqueries, chained operators): DuckDB's "
-       "max_expression_depth is set to it, and no session can raise that setting past it. 0: what the "
-       "stack of the threads that run statements takes (1000 with an 8 MB stack, 128 with macOS's 512 KB)",
+       "the deepest nesting a statement may have (brackets, subqueries, chained operators, dotted names; a "
+       "FROM clause may name four times as many tables): DuckDB's max_expression_depth is set to it, and no "
+       "session can raise that setting past it. 0: what the 8 MB stack of the threads that run statements "
+       "takes, 1000 on every platform",
        NUMBER(max_sql_nesting)},
+      {"enable_sql_auto_complete", Kind::kBool,
+       "turn on DuckDB's autocomplete functions (sql_auto_complete, sql_tokenize, check_peg_parser, "
+       "duckdb_format_sql), for administrators only: their time grows exponentially with the brackets their "
+       "input leaves open, and nothing interrupts them. Off (the default), they are refused to everyone",
+       FLAG(enable_sql_auto_complete)},
       {"print_queries", Kind::kBool,
        "log every statement", FLAG(print_queries)},
       {"rbac_store_uri", Kind::kString,
@@ -861,7 +867,7 @@ std::string OptionsJson() {
 
 int64_t SqlNestingLimit(const Config& config) {
   if (config.max_sql_nesting > 0) return config.max_sql_nesting;
-  return std::clamp<int64_t>(static_cast<int64_t>(DefaultThreadStackBytes() / 4096), 32, 1000);
+  return std::clamp<int64_t>(static_cast<int64_t>(kStatementThreadStackBytes / 4096), 32, 1000);
 }
 
 }  // namespace hardcharger

@@ -16,8 +16,6 @@
 #include <string_view>
 #include <vector>
 
-#include "sql_lex.hpp"
-
 namespace hardcharger {
 
 // Masks the credential values `text` may carry, idempotently (each value becomes ***):
@@ -78,9 +76,6 @@ struct MaskedStatement {
 // comments and white space are not counted).
 struct MaskedSql : MaskedStatement {
   std::vector<MaskedStatement> statements;
-  // What the same reading found for the statement intake: parentheses never closed
-  // (sql_lex.hpp), which it refuses before DuckDB's parser sees the text.
-  SqlUnclosed unclosed;
 };
 
 // Reads `sql` once. `limit`: the longest text kept, for the request and for each statement.

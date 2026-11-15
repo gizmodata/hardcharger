@@ -2,8 +2,9 @@
 // tokenizer (duckdb::Tokenizer, the class its parser runs) over the text its parser
 // tokenizes (duckdb::Parser::NormalizeSQLString: UTF-8 checked, Unicode spaces made plain
 // ones), with the comments and the white space between tokens kept as tokens too. The log
-// masking (redact.hpp) and the statement intake's bracket check read statements through
-// this, so neither can see a token boundary where DuckDB sees none.
+// masking (redact.hpp) reads statements through this, so it cannot see a token boundary
+// where DuckDB sees none. (The limits on a statement's shape are DuckDB's parser hook's,
+// parse_guard.hpp, which reads every text DuckDB parses.)
 //
 // No connection is needed: every DuckDB grammar, extended or not, is tokenized by this one
 // class; a grammar extension changes only which words are keywords, which nothing here
@@ -65,31 +66,6 @@ class SqlTokens {
 };
 
 SqlTokens LexSql(std::string_view sql);
-
-// The parentheses a statement opens and never closes. Such a statement cannot parse, and
-// DuckDB 2.0's parser takes time quadratic in their number to say so (8,000 of them: 20
-// seconds; 500,000: hours), which neither the statement timeout nor a cancel interrupts: the
-// statement intake refuses it before the parser sees it. Counted on DuckDB's tokens, so a
-// parenthesis in a string, a quoted name or a comment is none.
-//
-// And how deep its brackets nest ( ( [ { together ). DuckDB's parser recurses once per level
-// before any of its own limits is checked: a few thousand nested subqueries overflow the
-// stack of the thread that parses them, and the server stops. The intake refuses a statement
-// nested deeper than the server allows (max_sql_nesting), which DuckDB would refuse anyway.
-struct SqlUnclosed {
-  std::size_t count = 0;      // in the statement that has the most
-  std::size_t position = 0;   // of that statement's first one, in bytes from the start of the text
-  bool in_query_text = false; // in SQL given to query() as a literal, which DuckDB parses when it binds
-  std::size_t nesting = 0;    // the deepest the text's brackets nest, a query() literal's included
-  // The most tables one FROM clause names (joined, or listed with commas). The parser
-  // recurses once per table as well, and DuckDB binds no more of them than its nesting limit.
-  std::size_t tables = 0;
-};
-SqlUnclosed UnclosedParentheses(const SqlTokens& tokens);
-// The error that refuses such a statement: parentheses never closed, brackets nested deeper
-// than `nesting_limit`, or more than four times that many tables in one FROM clause (0: no
-// limit on either). "" when the statement may go on to the parser.
-std::string UnclosedParenthesesError(const SqlUnclosed& unclosed, std::size_t nesting_limit = 0);
 
 // For tests: the tokens DuckDB's parser itself builds for `sql` (Parser::ParseQuery's own
 // steps: NormalizeSQLString, then the tokenizer with the parser's behaviour, which throws
