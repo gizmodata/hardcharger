@@ -20,8 +20,8 @@ own changelog in `python/CHANGELOG.md`.
   was only prepared, for the administrator and for ordinary users. All of them are now
   refused before DuckDB binds anything: the screen walks every kind of statement and refuses
   what it has no rule for, and a table function or pragma is bound only when it is on the
-  server's list. In a read-only connection this also changes: a table function or pragma that
-  does not exist is answered `read_only` rather than a catalog error; `EXPLAIN` of `LOAD`,
+  server's list. In a read-only connection this also changes: a pragma that does not exist is
+  answered `read_only` rather than a catalog error; `EXPLAIN` of `LOAD`,
   `VACUUM`, `BEGIN`, `COMMIT`, `DEALLOCATE` and `PREPARE`, which answered a plan, is refused;
   and `EXPLAIN` of a statement that changes a catalog is refused with other words
   (`EXPLAIN of INSERT is not allowed in a read-only session`).
@@ -31,34 +31,69 @@ own changelog in `python/CHANGELOG.md`.
   back; the commit that followed answered success. The switch is now refused with
   `invalid_option_value` whenever the open transaction holds work, by DuckDB's own account of
   the transaction as well as the server's, and the work stays the client's to commit.
-- A statement that is cancelled while a read-only connection reads the views' and macros'
-  definitions is logged and recorded as cancelled, not as a read-only refusal.
-
-### Known, not fixed in this release
-
-A read-only connection can still advance or set a sequence through a view or macro that
-someone allowed to create one has made, where the statement does not lead the server to its
-definition: a view the reader holds no privilege on (the answer is `permission_denied`, after
-the sequence has moved) or was granted a moment ago; a view or macro created in a DuckLake
-after the connection's first statement; a view created `WITH (DEFER_BINDING)`, read through
-`information_schema.columns`, `SHOW ALL TABLES`, `DESCRIBE` or the table listing; a view with a
-dot in its name, quoted inside a string argument; a macro that passes its argument to a table
-function; and a macro named like one of DuckDB's functions. With two attached databases, a
-statement that is only prepared and moves a sequence in one of them can still leave a `COMMIT`
-that answers `422` after part of the transaction was stored. Both are as in 2.13.0.
+- **A read-only connection could advance or set a sequence through a view or macro.** 2.13.0
+  read the definitions of the views and macros a statement named before DuckDB bound it; DuckDB
+  binds more than that. A sequence moved through a view the reader held no privilege on (the
+  answer was `permission_denied`, after the sequence had moved) or was granted a moment ago, a
+  view or macro made in a DuckLake after the connection's first statement, a view created
+  `WITH (DEFER_BINDING)` read through `information_schema.columns`, `SHOW ALL TABLES`,
+  `DESCRIBE` or the table listing, a view with a dot in its name quoted inside a string
+  argument, a macro that passes its argument to a table function, and a macro named like one
+  of DuckDB's functions. Nothing is listed in advance any more: DuckDB itself now refuses a
+  sequence's use in a read-only connection's transaction where it happens, and asks the server
+  before the bind step of any table function, so a function that is not on the server's list
+  is refused wherever its call was written, its bind step unrun
+  (`server/scripts/patch-duckdb-read-only.cmake`).
+- **One user's view no longer changes what other users' read-only connections are answered.**
+  While a view existed whose definition a read-only connection would not bind, in any schema
+  and under any name, 2.13.0 refused every table function with a bind parameter or a computed
+  argument (`SELECT count(*) FROM range(?)`) in every read-only connection that could see it.
+- **A `COMMIT` could fail after part of the transaction was stored.** With two attached
+  databases, a statement that was only prepared and moved a sequence in one of them left a
+  transaction whose `COMMIT` answered `422` after it had stored the other database's rows, or
+  discarded them, depending on which database the transaction touched first. A sequence's use
+  is now a write where it happens: DuckDB refuses it with its one-database error, before the
+  value moves, in a transaction that has written another database.
 
 ### Changed
 
+- DuckDB is built with one more patch (`server/scripts/patch-duckdb-read-only.cmake`, about
+  100 lines, idempotent, a build error when DuckDB's source no longer matches): a sequence's
+  use is registered as a write before its value changes, and a hook runs before every table
+  function's bind step. The server does not link with a DuckDB that lacks it. The dependency
+  cache key for DuckDB changes with it (`ci-deps-key.sh` hashes the patch files), so the next
+  CI run on every platform builds DuckDB cold.
+- In a read-write connection a statement that is only prepared and moves a sequence
+  (`SELECT * FROM range(nextval('s'))`) now succeeds with autocommit (it answered `422`,
+  "Cannot commit changes made by statement binding") and commits with its transaction;
+  creating a view in one attached database over `range(nextval(...))` of another database's
+  sequence is refused with DuckDB's one-database error.
+- In a read-only connection a statement that reaches a view or macro which would advance a
+  sequence answers `403 read_only`, "the statement would change data, and its transaction is
+  read-only"; a prepare of one may be accepted and its execution refused. A table function
+  that does not exist answers DuckDB's catalog error again, as in 2.13.0.
 - CI runs the Chargewire conformance suite with `CHARGEWIRE_TEST_REQUIRE_READ_ONLY=1` (Linux,
   macOS, sanitizers, Windows): a build without read-only sessions fails its read-only
   conformance tests, which would otherwise skip.
+
+### Known
+
+- Read-only is not a sandbox for scalar functions that write somewhere other than a catalog
+  (`write_log()`, an extension's), nor for the bind step of a table function that is on the
+  list. A view over a table function of an extension that is not loaded makes DuckDB install
+  and load the extension when a read-only connection reads the view, before the function is
+  refused.
+- `COMMIT` of a transaction that a failed statement aborted answers success and rolls back, as
+  before (DuckDB's behaviour); the failed statement and the session's transaction state say so.
 
 ### Added
 
 - Tests: read-only connections as an ordinary user under access control and as the
   administrator (bind-time evaluation in every statement form that holds it, executed and
-  prepared; temporary sequences; an option sent between pending work and the switch); a
-  cancel that lands in the read-only screen; the CLI's `HARDCHARGER_CLIENT_READ_ONLY`
+  prepared; temporary sequences; an option sent between pending work and the switch; a view
+  the reader holds no privilege on, then granted; views named `tables`, `columns` and `views`
+  made by another user, which stop nobody); two attached databases with a statement that
+  uses a sequence while it is bound, in both orders; the CLI's `HARDCHARGER_CLIENT_READ_ONLY`
   spellings and the flag's precedence over it.
 
 ## [2.13.0] - 2026-11-14

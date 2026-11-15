@@ -1272,13 +1272,13 @@ functions with external side effects. It uses an explicit list of permitted oper
 and table functions; unsupported operations are refused even if a particular use would
 only read. A statement is refused before DuckDB looks anything of it up when it holds what
 DuckDB would evaluate while it binds (a function call as the argument of a table function,
-also under `EXPLAIN`), a table function or `PRAGMA` that is not on the list (one that does
-not exist included), or `EXPLAIN` of a statement that the connection may not run, other than
-`COPY ... TO` and `CALL`. Views and macros are followed by name from the statement; a view or
-macro the statement does not lead the server to (one the reader holds no privilege on, one
-created `WITH (DEFER_BINDING)`, a macro that passes its argument to a table function) can
-still advance a sequence when DuckDB binds it. A connection whose open transaction holds
-work is not switched to read-only: commit or roll back first. The
+also under `EXPLAIN`), a `PRAGMA` that is not on the list, or `EXPLAIN` of a statement that
+the connection may not run, other than `COPY ... TO` and `CALL`. What a statement reaches
+through a view or macro, whoever defined it, is held by DuckDB itself: a sequence is not
+advanced or set in a read-only connection wherever the call stands, and a table function
+that is not on the list is refused before its bind step runs. Nobody's view or macro changes
+what another connection is answered. A connection whose open transaction holds work is not
+switched to read-only: commit or roll back first. The
 existing token role below remains available with its existing behavior.
 
 A sign-in token whose `role` is `readonly` gives a session that reads and changes nothing but

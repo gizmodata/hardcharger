@@ -317,36 +317,81 @@ def test_an_option_between_the_work_and_the_switch_does_not_hide_the_work(contro
     assert controlled.rows() == 4
 
 
-def test_a_cancel_that_lands_in_the_read_only_screen_is_recorded_as_a_cancel(launcher):
-    # A read-only session's statement starts with the server reading the views' and macros'
-    # definitions (again after any change to a catalog), on the session's connection. A cancel
-    # that ends that read ends the statement as cancelled, and is logged as that: 2.13.0
-    # logged and recorded "a statement whose views and macros the server cannot read is not
-    # allowed in a read-only session" for it.
-    # Many macros make the read long enough to cancel. The statement itself takes no time, so
-    # one the engine was interrupted in was interrupted in the screen: the proof the cancel landed there.
-    server = launcher.start(args=["--log-format", "json"])
-    writer = server.admin()
-    for batch in range(20):
-        writer.execute(sql="; ".join(f"CREATE MACRO ro_screen_filler_{batch}_{i}(a) AS a + {i}" for i in range(1000)))
-    reader = server.client().new_session(options={"read_only": True})
-    interrupted = []
-    for attempt in range(60):
-        writer.execute(sql=f"CREATE OR REPLACE MACRO ro_screen_bump() AS {attempt}")  # the definitions are read again
-        response = reader.submit(sql="SELECT count(*) FROM range(3)", headers={"Prefer": "respond-async"})
-        assert response.status_code in (200, 201, 202), response.text
-        statement_id = response.json()["statement_id"]
-        time.sleep((2, 5, 10, 20)[attempt % 4] / 1000)  # (so that it has started; the read takes longer than any of these)
-        reader.http.post(url=f"{reader.url}/statements/{statement_id}/cancel", headers=reader.headers())
-        doc = reader.wait_done(statement_id=statement_id)
-        assert doc["state"] in ("succeeded", "cancelled"), doc  # never a refusal, never an error
-        # One that the engine was running when the cancel came: it logs what the engine answered.
-        interrupted = [record for record in server.log_records()
-                       if record.get("statement_id") == statement_id and record.get("message") == "statement failed"]
-        if doc["state"] == "cancelled" and interrupted:
-            break
-    assert interrupted, "no cancel landed while the definitions were read: the test proved nothing"
-    for record in interrupted:
-        assert "read-only session" not in record["error"] and "INTERRUPT" in record["error"], record
-    assert reader.scalar(sql="SELECT 2") == 2  # the session goes on, and reads the definitions when it next needs them
-    reader.close()
+# ---- What DuckDB binds that the statement does not show ----
+#
+# 2.13.0 read the definitions of the views and macros a session could list and refused what it
+# found there. DuckDB binds more than a session can list. Nothing is listed now: DuckDB refuses
+# a sequence's use in a read-only connection's transaction where it happens, and asks the
+# server before any table function's bind step.
+
+
+@pytest.mark.parametrize("definition", ["SELECT * FROM range(nextval('ro_ids'))", "SELECT * FROM range(setval('ro_ids', 4242))"])
+def test_a_view_the_reader_holds_no_privilege_on_moves_nothing(controlled, definition):
+    # The reader may use the sequence and read one table; the administrator owns a view over
+    # the sequence that the reader has no grant on, so access control hides its definition
+    # from the reader's listing. 2.13.0 answered 403 permission_denied after the sequence had moved.
+    controlled.admin.run(sql=f"CREATE VIEW ro_next_ids AS {definition}")  # (creating it binds it once, in the administrator's session)
+    before = controlled.sequence()
+    reader = controlled.session(who="ordinary user", read_only=True)
+    assert reader.run(sql="SELECT count(*) AS n FROM ro_orders").to_pylist() == [{"n": 3}]
+    for prepare in (False, True):
+        problem = refusal(reader, "SELECT * FROM ro_next_ids", prepare=prepare)
+        assert problem.status == 403 and problem.code in ("permission_denied", "read_only"), problem
+        assert controlled.sequence() == before, prepare
+    # A grant made after the session's first statement: the view is the reader's to read now,
+    # and reading it would move the sequence. Refused as read_only, nothing moved.
+    controlled.admin.run(sql="GRANT SELECT ON ro_next_ids TO ro_reader_role")
+    before = controlled.sequence()  # (the GRANT is the administrator's statement)
+    for sql in ("SELECT * FROM ro_next_ids", "SELECT count(*) FROM ro_next_ids", "SELECT id FROM ro_orders WHERE id IN (SELECT * FROM ro_next_ids)"):
+        problem = refusal(reader, sql)
+        assert (problem.status, problem.code, problem.sqlstate) == (403, "read_only", "25006"), (sql, problem)
+        assert controlled.sequence() == before, sql
+        try:  # prepared: refused then, or accepted and refused when executed
+            prepared = reader.prepare(sql=sql)
+        except ChargewireError as refused_at_prepare:
+            assert refused_at_prepare.code == "read_only", refused_at_prepare
+        else:
+            with pytest.raises(ChargewireError) as caught:
+                reader.execute_prepared(prepared_id=prepared)
+            assert caught.value.code == "read_only", caught.value
+        assert controlled.sequence() == before, "prepared " + sql
+    # The twins: the reader still reads what it could, and the same principal's read-write
+    # session reads the view, which moves the sequence.
+    assert reader.run(sql="SELECT id FROM ro_orders_view ORDER BY id").to_pylist() == [{"id": 2}, {"id": 3}]
+    writer = controlled.session(who="ordinary user", read_only=False)
+    assert writer.run(sql="SELECT count(*) AS n FROM ro_next_ids").num_rows == 1  # answered, where the reader was refused
+    if "nextval" in definition:
+        assert controlled.sequence() == before + 1
+
+
+def test_a_view_named_like_one_of_duckdbs_own_stops_nobody_elses_connection(controlled):
+    # `tables`, `columns`, `views` are views of DuckDB's own and ordinary names for a schema of
+    # metadata. A user who may create views in one schema makes them there, with a definition
+    # a read-only connection may not run itself (a table function over a function call). No
+    # other user's read-only connection is answered differently for it: the administrator's,
+    # a reader's that can see the schema, one opened before and one opened after.
+    admin = controlled.admin
+    for sql in ("CREATE SCHEMA ro_shared", "CREATE TABLE ro_shared.facts AS SELECT 1 AS i", "CREATE ROLE ro_maker",
+                f"CREATE USER ro_mallory WITH PASSWORD '{READER_PASSWORD}'", "GRANT ro_maker TO ro_mallory",
+                "GRANT CREATE VIEW, DROP VIEW ON SCHEMA ro_shared TO ro_maker", "GRANT SELECT ON SCHEMA ro_shared TO ro_reader_role"):
+        admin.run(sql=sql)
+    before = [controlled.session(who=who, read_only=True) for who in ("ordinary user", "administrator")]
+    for session in before:
+        assert session.run(sql="SELECT 1 AS one").to_pylist() == [{"one": 1}]
+    mallory = controlled.rbac.client(token=controlled.rbac.password_token(user="ro_mallory", password=READER_PASSWORD))
+    for view in ("tables", "columns", "views"):
+        mallory.run(sql=f"CREATE VIEW ro_shared.{view} AS SELECT * FROM unnest(string_split('a,b', ','))")
+    after = [controlled.session(who=who, read_only=True) for who in ("ordinary user", "administrator")]
+    for session in before + after:
+        assert session.run(sql="SELECT 1 AS one").to_pylist() == [{"one": 1}]
+        assert session.run(sql="SELECT count(*) AS n FROM ro_orders").to_pylist() == [{"n": 3}]
+        assert session.run(sql="SELECT count(*) AS n FROM ro_shared.facts").to_pylist() == [{"n": 1}]
+        assert session.run(sql="SELECT count(*) AS n FROM range(?)", parameters=[2]).to_pylist() == [{"n": 2}]
+        for sql in ("SHOW TABLES", "SELECT count(*) FROM information_schema.tables", "SELECT count(*) FROM information_schema.columns",
+                    "PRAGMA table_info('ro_orders')", "EXPLAIN SELECT 1"):
+            assert session.run(sql=sql).num_rows >= 1, sql
+        assert session.metadata(kind="tables").num_rows >= 1
+        assert session.execute_prepared(prepared_id=session.prepare(sql="SELECT count(*) AS n FROM ro_orders")).to_pylist() == [{"n": 3}]
+        # The view itself is a view like any other.
+        assert session.run(sql="SELECT count(*) AS n FROM ro_shared.tables").to_pylist() == [{"n": 2}]
+    assert controlled.rows() == 3 and controlled.sequence() is None
