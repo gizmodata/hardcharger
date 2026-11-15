@@ -392,6 +392,17 @@ class PlanChecker {
         trigger_bodies_(trigger_bodies),
         rights_{Rights{principal, ""}} {}
 
+  // The carried columns (triggers.hpp) a base write's scan was not asked SELECT for,
+  // because the rights it was checked with lack it: whoever reads the base's rows must
+  // hold it instead. Shared by a checker and the checkers it makes for trigger bodies. A
+  // base's scan is checked before its rows' readers (a CTE's definition comes before its
+  // scope); `read` refuses a waiver that would come after one all the same.
+  struct CarriedRows {
+    std::map<const dd::LogicalOperator*, std::vector<std::string>> waived;  // by the base's write
+    std::set<const dd::LogicalOperator*> read;
+  };
+  std::shared_ptr<CarriedRows> carried_rows_ = std::make_shared<CarriedRows>();
+
   // Checking a trigger's body with its owner's rights: prefixed to every refusal.
   std::string trigger_context_;
   // Set by CheckAsDefiner for the one Visit of the body's root, so the root is checked
@@ -416,6 +427,11 @@ class PlanChecker {
         if (!names.empty()) ::hardcharger::authz::Deny(principal_, names);
       }
       if (body->definer && !trigger_body_entered_) return CheckAsDefiner(*body, op);
+      // A row trigger's body reads the rows its statement changes (OLD, NEW), with the
+      // rights it runs with: these.
+      if (body->reads_rows_of) {
+        if (const TriggerBody* base = TriggerBodyAt(trigger_bodies_, *body->reads_rows_of)) RequireCarriedRows(*base);
+      }
       dml_target = nullptr;
     }
     trigger_body_entered_ = false;
@@ -702,7 +718,6 @@ class PlanChecker {
       case OpType::LOGICAL_EXPRESSION_GET:
       case OpType::LOGICAL_DUMMY_SCAN:
       case OpType::LOGICAL_EMPTY_RESULT:
-      case OpType::LOGICAL_CTE_REF:
       case OpType::LOGICAL_JOIN:
       case OpType::LOGICAL_DELIM_JOIN:
       case OpType::LOGICAL_COMPARISON_JOIN:
@@ -727,6 +742,14 @@ class PlanChecker {
 
       case OpType::LOGICAL_MATERIALIZED_CTE:
       case OpType::LOGICAL_TRIGGER:
+        VisitChildren(op, dml_target);
+        return;
+
+      case OpType::LOGICAL_CTE_REF:
+        // A CTE's rows were checked where its definition read them, with one exception:
+        // the rows a write hands its triggers (a transition table), whose carried columns
+        // the writer was not asked SELECT for. Whoever reads them here answers for those.
+        if (const TriggerBody* base = BaseReadBy(trigger_bodies_, op)) RequireCarriedRows(*base);
         VisitChildren(op, dml_target);
         return;
 
@@ -888,10 +911,58 @@ class PlanChecker {
       const auto& column = table->GetColumn(dd::LogicalIndex(index.GetPrimaryIndex()));
       columns.push_back(compat::Str(column.Name()));
     }
-    // The row-locating scan under the statement's own UPDATE / DELETE target
-    // needs no SELECT unless it reads columns (in WHERE or SET), as in Postgres.
-    if (columns.empty() && dml_target && table.get() == dml_target.get()) return;
+    if (dml_target && table.get() == dml_target.get()) {
+      // The row-locating scan under the statement's own UPDATE / DELETE target
+      // needs no SELECT unless it reads columns (in WHERE or SET), as in Postgres.
+      if (columns.empty()) return;
+      // On a table with triggers the binder makes that scan read every column, to hand the
+      // triggers their rows (triggers.hpp, "Carried columns"). A writer who holds SELECT on
+      // all of them is checked as ever, below. One who does not still needs SELECT on what
+      // the statement itself reads; the carried columns it lacks go to nothing but the
+      // write operator, and whoever reads the rows after it answers for them
+      // (RequireCarriedRows).
+      if (const TriggerBody* base = BaseScannedBy(trigger_bodies_, get)) {
+        std::vector<std::string> lacking;
+        for (const auto& column : base->carried_columns) {
+          if (!HoldsSelect(PathOf(*table), ObjectTypeOf(*table), column)) lacking.push_back(column);
+        }
+        if (!lacking.empty()) {
+          if (!base->read_columns.empty()) Require(*table, Privilege::kSelect, base->read_columns);
+          // Never after a reader of these rows was let through (in every plan DuckDB
+          // makes the scan is checked first): then the columns are the writer's to hold.
+          if (carried_rows_->read.count(base->root)) Require(*table, Privilege::kSelect, lacking);
+          carried_rows_->waived[base->root] = std::move(lacking);
+          return;
+        }
+      }
+    }
     Require(*table, Privilege::kSelect, columns);
+  }
+
+  // Would Require(SELECT on `column`) pass, for every one whose rights are in force?
+  bool HoldsSelect(const ObjectPath& path, ObjectType type, const std::string& column) {
+    if (!snapshot_.CatalogVisible(principal_, path.catalog)) return false;
+    if (IsTempCatalog(path.catalog)) {
+      if (in_owned_view_) return false;
+      if (!principal_.catalog_rules) return true;
+    }
+    const AccessRequest request{path, type, Privilege::kSelect, {column}};
+    for (const auto& rights : rights_) {
+      if (!snapshot_.Check(rights.principal, request).allowed) return false;
+    }
+    return true;
+  }
+
+  // Reading the rows a base write hands its triggers (a transition table, OLD and NEW):
+  // SELECT on the carried columns the write's scan was let off, with the rights in force.
+  void RequireCarriedRows(const TriggerBody& base) {
+    carried_rows_->read.insert(base.root);
+    auto waived = carried_rows_->waived.find(base.root);
+    if (waived == carried_rows_->waived.end()) return;
+    carried_note_ = " (a trigger reads the rows the statement changes: that takes SELECT on them, the writer's or "
+                    "else the trigger owner's)";
+    RequireObject(base.table, ObjectType::kTable, Privilege::kSelect, waived->second);
+    carried_note_.clear();
   }
 
   ObjectPath PathOf(dd::CatalogEntry& entry) { return PathOfEntry(entry); }
@@ -1058,6 +1129,7 @@ class PlanChecker {
         what += " (read through the view " + unowned_view_ +
                 ", which has no owner, so it reads with your rights)";
       }
+      what += carried_note_;
       Deny(principal_, what);
     }
   }
@@ -1417,6 +1489,7 @@ class PlanChecker {
                                " may not do what its body does: ";
     checker.trigger_body_entered_ = true;
     checker.check_trigger_names_ = check_trigger_names_;
+    checker.carried_rows_ = carried_rows_;
     checker.Visit(plan);
     for (auto& access : checker.accesses_) accesses_.insert(access);
     for (auto& object : checker.objects_) objects_.push_back(std::move(object));
@@ -1859,6 +1932,7 @@ class PlanChecker {
   std::string owned_view_;    // the innermost view read with its owner's rights
   std::string unowned_view_;  // the innermost view read with the caller's rights
   std::string creating_view_;  // checking this new view's query (CheckViewQuery)
+  std::string carried_note_;   // added to a refusal of RequireCarriedRows
   std::vector<PendingOwnership> ownership_;
   std::set<std::string> accesses_;
   boost::json::array objects_;

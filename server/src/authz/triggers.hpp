@@ -63,6 +63,62 @@
 // control stores the action with its tables, views and sequences named in full, as the
 // creator's session resolved them (QualifyTriggerNames), and the owner record's hash is of
 // what is stored. The init SQL's triggers too.
+// Carried columns. To feed the triggers their rows (transition tables, OLD and NEW), the
+// binder adds RETURNING * to the writer's UPDATE, DELETE or merge, which makes the scan
+// that locates the rows read every column of the table. Reading a column that way is no
+// read of the writer's: a writer needs SELECT on what its own statement reads (WHERE, a
+// SET expression, a join, a subquery), as it would without the triggers. A column of that
+// scan is "carried", and asks no SELECT of the writer, only when every use of it in the
+// whole plan is one of the binder's own hand-overs to the write operator:
+//
+//   DELETE   an entry of the DELETE's own expression list that is the bare column
+//            (bind_delete.cpp: the row id, then the columns of the row it returns);
+//   UPDATE   the entry of the UPDATE's own expression list for a column that is that very
+//            column, bare ("c = c", which the binder adds for every column the statement
+//            did not set: bind_update.cpp, BindUpdateConstraints), or a column of the OLD
+//            row image the UPDATE takes by place (LogicalUpdate::old_row_columns);
+//   merge    (INSERT ... ON CONFLICT DO UPDATE) the same "c = c" of an update action.
+//
+// A column is still itself where an operator gives it on unchanged: an entry of a
+// projection that is the bare column, and a materialized CTE's column for every scan of
+// that CTE (DuckDB keeps the outer rows of a correlated subquery in CTEs of its own). Those
+// are followed, and the uses of the column under its new names count as uses of it.
+//
+// Anything else is a read and needs SELECT:
+//   - a column used in a filter, a join condition, a SET or RETURNING expression, an
+//     aggregate, a subquery (also where an operator names it in a correlated-column list
+//     rather than an expression), and a column of the scan that nothing uses;
+//   - a column the write itself can tell of: one in a key or an index of the table (a
+//     constraint error names a key's value, and DuckDB runs an UPDATE that returns its
+//     rows as a delete and an insert, so a foreign key that refers to the row stops it),
+//     and for an UPDATE a column of a CHECK constraint over several columns (a failed
+//     CHECK tells of the ones the statement did not set);
+//   - every column, when the plan is not laid out as this expects. What it expects: the
+//     write takes its row ids from one plain scan of the written table (no filter pushed
+//     into it); every operator beneath the write is one whose uses of columns this file
+//     knows how to list (ListsItsColumnUses), with no expression it can't look into; from
+//     each operator that has the column, only filters and joins (which hand a column on as
+//     itself) come before the one that takes it (a projection or an aggregate, which give
+//     on only what their expressions name, a materialized CTE's definition, or the
+//     write); the write's rows go into the base CTE through a projection of bare columns
+//     (so no generated column is computed from them here) and nowhere else; and the
+//     writer's statement has no RETURNING of its own.
+// So a carried value can only end up written back where it was, or in the base CTE's rows.
+//
+// Who reads those rows. A scan of the base CTE is "blind" when the operator right above it
+// is a projection or an aggregate and no expression anywhere names a column of the scan
+// that comes from the write: the binder's own SELECT count_star() FROM base, which gives
+// the writer the number of rows changed and no value. Every other scan of the base CTE is
+// a row reader: a transition table (REFERENCING OLD/NEW TABLE, an alias CTE in the
+// trigger's body) or the rows a row trigger's OLD and NEW come from. A row reader may see
+// the carried columns only with SELECT on them: either the rights the write's scan was
+// checked with hold it (then nothing was waived, as before there were carried columns),
+// or the rights the reading body runs with do (the trigger's owner; for an
+// administrator's trigger, the writer again, so such a trigger that reads the rows still
+// takes the writer's SELECT). The rows that feed OLD and NEW sit beside the row triggers'
+// bodies, not inside one: each row trigger's body answers for them (DuckDB makes every
+// row trigger's body name OLD or NEW). None of this trusts the CTE's name: a CTE the
+// writer names like a base is held to the same rules.
 
 #pragma once
 
@@ -97,6 +153,20 @@ struct TriggerBody {
   // The trigger whose action the body is; several when a row trigger's body could be any
   // of them.
   std::vector<const duckdb::TriggerCatalogEntry*> entries;
+
+  // ---- carried columns (see above) ----
+  // A base UPDATE, DELETE or merge whose plan is laid out as described above: the scan
+  // of the written table that locates its rows (else nullptr, and nothing is carried), ...
+  const duckdb::LogicalOperator* target_scan = nullptr;
+  // ... the scan's columns the statement itself reads (SELECT, as without triggers), ...
+  std::vector<std::string> read_columns;
+  // ... its other columns, which only the triggers' rows need, ...
+  std::vector<std::string> carried_columns;
+  // ... and the scans of the base CTE that can read those rows with the rights in force
+  // where they sit (transition tables).
+  std::vector<const duckdb::LogicalOperator*> row_readers;
+  // A row trigger's body: the base write (a base's root) whose rows its OLD and NEW are.
+  const duckdb::LogicalOperator* reads_rows_of = nullptr;
 };
 
 using TriggerBodies = std::vector<TriggerBody>;
@@ -123,6 +193,11 @@ std::string TriggerBodyNameProblem(duckdb::ClientContext& context, const Trigger
 // resolve (a CTE's name, a transition table's). False (and the action as it was) when the
 // action can't be read to the end.
 bool QualifyTriggerNames(duckdb::ClientContext& context, const ObjectPath& table, duckdb::CreateTriggerInfo& info);
+// The base whose target scan `scan` is, when its columns were told apart (carried columns).
+const TriggerBody* BaseScannedBy(const TriggerBodies& bodies, const duckdb::LogicalOperator& scan);
+
+// The base whose rows the CTE scan `scan` can read (a row reader of it), if any.
+const TriggerBody* BaseReadBy(const TriggerBodies& bodies, const duckdb::LogicalOperator& scan);
 
 // Does any body in `bodies` run with an owner's rights, or refuse the statement?
 bool HasDefinerBody(const TriggerBodies& bodies);

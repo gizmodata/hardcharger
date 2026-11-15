@@ -1189,6 +1189,20 @@ and `UPDATE`; a `MERGE INTO` needs `INSERT`, `UPDATE` or `DELETE` for each kind 
 action it has. Each also needs `SELECT` on the target's columns it reads, which for the conflict
 forms is the key that tells a conflict (`GRANT SELECT (id) ON t TO r` is enough).
 
+An `UPDATE` or `DELETE` needs `SELECT` on the columns the statement itself reads (in `WHERE`, a
+`SET` expression, a join, a subquery; on all of them for a `RETURNING`), as in Postgres, and on the
+columns DuckDB has to read to check a constraint or keep an index whose error could name them (a
+table's unique keys for a `DELETE`, for instance). So an unfiltered `UPDATE t SET x = 0` or
+`DELETE FROM t` on a table without keys needs none, with triggers on the table or without. With
+triggers, a write needs `SELECT` on the columns of the table's keys and indexes (and an `UPDATE` on
+those of a `CHECK` over several columns) even where it would not without them. The rows DuckDB
+hands the triggers are for whoever reads them to answer for: a trigger body that reads them (a
+transition table, `OLD`, `NEW`) needs `SELECT` on the table, held by the writer or else by the
+trigger's owner, so an administrator's trigger that reads them (it runs with the writer's rights)
+takes the writer's `SELECT`. A table with both triggers and generated columns is the exception:
+there a write needs `SELECT` on every column DuckDB reads to hand the triggers their rows (all of
+them for a `DELETE`).
+
 The init SQL (`init_sql_commands`, `init_sql_commands_file`) can hold these statements too.
 They run as the administrator, in order with the DuckDB statements around them, so a grant
 can name a table the init SQL has just created:

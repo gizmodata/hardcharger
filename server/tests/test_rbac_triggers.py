@@ -45,11 +45,12 @@ def server(module_launcher, store, tmp_path_factory):
         "GRANT CREATE MACRO, DROP MACRO ON SCHEMA app TO macro_makers",
         "GRANT SELECT ON governed TO eu_staff",
         "CREATE ROW POLICY eu_rows ON governed TO eu_staff USING (region = 'EU')",
-        "CREATE ROLE inserters",
+        "CREATE ROLE inserters", "CREATE ROLE changers",
         "CREATE USER mia", "CREATE USER joe", "CREATE USER cal", "CREATE USER dan", "CREATE USER sid", "CREATE USER ike",
+        "CREATE USER wes",
         "GRANT trigger_makers, app_builders, writers, eu_staff TO mia",
         "GRANT writers TO joe", "GRANT app_builders, macro_makers TO cal", "GRANT trigger_droppers TO dan",
-        "GRANT secret_readers TO sid", "GRANT inserters TO ike",
+        "GRANT secret_readers TO sid", "GRANT inserters TO ike", "GRANT changers TO wes",
     ]:
         expect_allowed(client=admin, sql=sql)
     mia = server.user(name="mia")
@@ -93,6 +94,12 @@ def joe(server):
 @pytest.fixture
 def cal(server):
     return server.user(name="cal")
+
+
+@pytest.fixture
+def wes(server):
+    # Holds role changers alone: what each test grants it on the test's own tables.
+    return server.user(name="wes")
 
 
 def triggers_of(admin, table: str) -> set[str]:
@@ -180,6 +187,7 @@ def test_a_users_trigger_gets_no_administrator_rights(admin, mia, joe, server):
         expect_allowed(client=admin, sql="REVOKE secret_readers FROM mia")
         expect_allowed(client=mia, sql="DROP TRIGGER leak_secrets ON app.items")
         expect_allowed(client=mia, sql="DELETE FROM app.leak")
+        expect_allowed(client=mia, sql="DELETE FROM app.items")
 
 
 def test_an_administrators_trigger_runs_with_the_writers_rights(admin, joe):
@@ -632,3 +640,490 @@ def test_merge_into_a_table_with_triggers_is_duckdbs_to_refuse(admin, mia):
                       "WHEN NOT MATCHED THEN INSERT VALUES (s.id, 'merged')")
     assert "MERGE INTO is not supported on tables with triggers" in raised.value.detail
     assert raised.value.code != "permission_denied"
+
+
+# ---- UPDATE and DELETE on a table with triggers: what the writer must be able to read ----
+#
+# DuckDB adds RETURNING * to a write that fires triggers, to hand them their rows; the scan
+# that locates the rows then reads every column of the table. Those columns are carried to
+# the triggers, not read by the writer: a writer needs SELECT on what its own statement
+# reads (WHERE, a SET expression, a join, a subquery, its own RETURNING), as on a table
+# without triggers. Whoever reads the rows after that (a transition table, OLD and NEW) needs
+# SELECT on them: the writer, or else the trigger's owner.
+
+NO_SELECT = "no SELECT privilege on table"
+NO_SELECT_ON = "no SELECT on column(s) "
+ROWS_READ = "a trigger reads the rows the statement changes"
+
+
+def count(client, table: str, where: str = "true") -> int:
+    return int(values(client=client, sql=f"SELECT count(*) FROM {table} WHERE {where}")[0])
+
+
+def columns_missing(error: ChargewireError) -> set[str]:
+    """The columns a "no SELECT on column(s) a, b of c.s.t" refusal names."""
+    assert NO_SELECT_ON in error.detail, error.detail
+    return set(error.detail.split(sep=NO_SELECT_ON)[1].split(sep=" of ")[0].split(sep=", "))
+
+
+def test_a_write_that_reads_nothing_needs_no_select_on_a_table_with_triggers(admin, wes):
+    # Every kind of statement trigger whose body reads no row: BEFORE, AFTER, UPDATE OF, and
+    # ones that declare transition tables without reading them.
+    make(client=admin, statements=[
+        "CREATE TABLE main.dr_t (id INT, x INT)", "INSERT INTO main.dr_t VALUES (1, 1), (2, 2)",
+        "CREATE TABLE main.dr_plain (id INT, x INT)", "INSERT INTO main.dr_plain VALUES (1, 1), (2, 2)",
+        "CREATE TABLE main.dr_log (what VARCHAR)",
+        "CREATE TRIGGER dr_before BEFORE UPDATE ON main.dr_t FOR EACH STATEMENT INSERT INTO main.dr_log VALUES ('before')",
+        "CREATE TRIGGER dr_upd AFTER UPDATE ON main.dr_t REFERENCING OLD TABLE AS was NEW TABLE AS now "
+        "FOR EACH STATEMENT INSERT INTO main.dr_log VALUES ('updated')",
+        "CREATE TRIGGER dr_of AFTER UPDATE OF x ON main.dr_t FOR EACH STATEMENT INSERT INTO main.dr_log VALUES ('x updated')",
+        "CREATE TRIGGER dr_del AFTER DELETE ON main.dr_t REFERENCING OLD TABLE AS gone "
+        "FOR EACH STATEMENT INSERT INTO main.dr_log VALUES ('deleted')",
+        "GRANT UPDATE, DELETE ON main.dr_t TO changers", "GRANT UPDATE, DELETE ON main.dr_plain TO changers",
+        "GRANT INSERT ON main.dr_log TO changers",
+    ])
+    try:
+        for table in ["main.dr_t", "main.dr_plain"]:
+            expect_blocked(client=wes, sql=f"SELECT x FROM {table}", why=NO_SELECT)
+        # Without a trigger an unfiltered write needs no SELECT (as in Postgres): as ever.
+        assert values(client=wes, sql="UPDATE main.dr_plain SET x = 0") == ["2"]
+        assert values(client=wes, sql="DELETE FROM main.dr_plain") == ["2"]
+        # With triggers it was refused with "no SELECT privilege on table": the same now.
+        assert values(client=wes, sql="UPDATE main.dr_t SET x = 0") == ["2"]
+        assert values(client=admin, sql="SELECT x FROM main.dr_t") == ["0", "0"]
+        assert [count(client=admin, table="main.dr_log", where=f"what = '{what}'")
+                for what in ["before", "updated", "x updated"]] == [1, 1, 1]
+        # UPDATE OF x does not fire for id; a SET to the column's own value reads nothing.
+        assert values(client=wes, sql="UPDATE main.dr_t SET id = 7") == ["2"]
+        assert values(client=wes, sql="UPDATE main.dr_t SET id = id") == ["2"]
+        assert [count(client=admin, table="main.dr_log", where=f"what = '{what}'")
+                for what in ["before", "updated", "x updated"]] == [3, 3, 1]
+        assert values(client=wes, sql="DELETE FROM main.dr_t") == ["2"]
+        assert count(client=admin, table="main.dr_t") == 0
+        assert count(client=admin, table="main.dr_log", where="what = 'deleted'") == 1
+        # The triggers run with the writer's rights (an administrator made them): twin.
+        expect_allowed(client=admin, sql="REVOKE INSERT ON main.dr_log FROM changers")
+        expect_blocked(client=wes, sql="DELETE FROM main.dr_t", why="no INSERT privilege on table")
+        # And the write still needs its own privilege.
+        expect_allowed(client=admin, sql="REVOKE DELETE ON main.dr_t FROM changers")
+        expect_blocked(client=wes, sql="DELETE FROM main.dr_t", why="no DELETE privilege on table")
+    finally:
+        drop_tables(client=admin, names=["main.dr_t", "main.dr_plain", "main.dr_log"])
+
+
+# Statements on the table {t} (id, x, y, z, w) that read it, and the columns they read.
+READS = [
+    ("UPDATE {t} SET z = 0 WHERE x = 1", {"x"}),
+    ("UPDATE {t} SET z = id", {"id"}),
+    ("UPDATE {t} SET x = x + 1", {"x"}),
+    ("UPDATE {t} SET z = o.v FROM main.dr_other o WHERE {n}.id = o.id", {"id"}),
+    ("UPDATE {t} SET z = 0 WHERE id IN (SELECT id FROM {t} WHERE y > 1000)", {"id", "y"}),
+    # Correlated subqueries: DuckDB keeps the outer rows in CTEs of its own for these.
+    ("UPDATE {t} SET z = (SELECT max(o.v) FROM main.dr_other o WHERE o.v > {n}.y)", {"y"}),
+    ("UPDATE {t} SET z = 0 WHERE EXISTS (SELECT 1 FROM main.dr_other o WHERE o.id = {n}.id "
+     "AND EXISTS (SELECT 1 FROM main.dr_other p WHERE p.v > {n}.y))", {"id", "y"}),
+    ("DELETE FROM {t} WHERE x = -1", {"x"}),
+    ("DELETE FROM {t} USING main.dr_other o WHERE {n}.id = o.id AND o.v < 0", {"id"}),
+    ("DELETE FROM {t} WHERE id IN (SELECT id FROM {t} WHERE y > 1000)", {"id", "y"}),
+    ("DELETE FROM {t} WHERE (SELECT count(*) FROM main.dr_other o WHERE o.v > {n}.y) > 100", {"y"}),
+]
+
+
+@pytest.mark.parametrize("triggers", [True, False], ids=["with-triggers", "without-triggers"])
+def test_a_write_needs_select_on_the_columns_it_reads_and_no_others(admin, wes, triggers):
+    # The same statements on a table with triggers and on one without: each needs SELECT on
+    # exactly the columns it reads itself, trigger or not.
+    name = "dr_trig" if triggers else "dr_bare"
+    table = f"main.{name}"
+    make(client=admin, statements=[
+        f"CREATE TABLE {table} (id INT, x INT, y INT, z INT, w INT)",
+        f"INSERT INTO {table} VALUES (1, 1, 10, 100, 0), (2, 2, 20, 200, 0)",
+        "CREATE TABLE IF NOT EXISTS main.dr_other (id INT, v INT)", "CREATE TABLE IF NOT EXISTS main.dr_rlog (what VARCHAR)",
+        f"GRANT UPDATE, DELETE ON {table} TO changers", "GRANT SELECT ON main.dr_other TO changers",
+        "GRANT INSERT ON main.dr_rlog TO changers",
+    ])
+    if triggers:
+        make(client=admin, statements=[
+            f"CREATE TRIGGER {name}_upd AFTER UPDATE ON {table} FOR EACH STATEMENT INSERT INTO main.dr_rlog VALUES ('{name}')",
+            f"CREATE TRIGGER {name}_del AFTER DELETE ON {table} FOR EACH STATEMENT INSERT INTO main.dr_rlog VALUES ('{name}')",
+        ])
+    try:
+        for statement, reads in READS:
+            sql = statement.format(t=table, n=name)
+            before = count(client=admin, table="main.dr_rlog", where=f"what = '{name}'")
+            # No SELECT at all on the table.
+            expect_blocked(client=wes, sql=sql, why=NO_SELECT)
+            # SELECT on a column the statement does not read opens nothing ...
+            expect_allowed(client=admin, sql=f"GRANT SELECT (w) ON {table} TO changers")
+            # (a refusal names what the first scan it stops at lacks: the statement may have two)
+            missing = columns_missing(error=expect_blocked(client=wes, sql=sql, why=NO_SELECT_ON))
+            assert missing and missing <= reads, sql
+            # ... and each column it reads is needed.
+            for column in sorted(reads):
+                others = sorted(reads - {column})
+                if others:
+                    expect_allowed(client=admin, sql=f"GRANT SELECT ({', '.join(others)}) ON {table} TO changers")
+                assert columns_missing(error=expect_blocked(client=wes, sql=sql, why=NO_SELECT_ON)) == {column}, sql
+                if others:
+                    expect_allowed(client=admin, sql=f"REVOKE SELECT ({', '.join(others)}) ON {table} FROM changers")
+            assert count(client=admin, table="main.dr_rlog", where=f"what = '{name}'") == before
+            # Twin: SELECT on just those columns, and it runs (and fires the trigger).
+            expect_allowed(client=admin, sql=f"GRANT SELECT ({', '.join(sorted(reads))}) ON {table} TO changers")
+            expect_allowed(client=wes, sql=sql)
+            assert count(client=admin, table="main.dr_rlog", where=f"what = '{name}'") == before + (1 if triggers else 0)
+            # Reading the table is still refused for the other columns.
+            assert "z" in columns_missing(error=expect_blocked(client=wes, sql=f"SELECT * FROM {table}", why=NO_SELECT_ON))
+            expect_allowed(client=admin, sql=f"REVOKE SELECT ({', '.join(sorted(reads | {'w'}))}) ON {table} FROM changers")
+        # A RETURNING of the writer's own hands rows back: SELECT on every column of the
+        # table, whatever it lists, with a trigger or without.
+        returning = f"UPDATE {table} SET z = 0 RETURNING x"
+        expect_blocked(client=wes, sql=returning, why=NO_SELECT)
+        expect_allowed(client=admin, sql=f"GRANT SELECT (x) ON {table} TO changers")
+        assert columns_missing(error=expect_blocked(client=wes, sql=returning, why=NO_SELECT_ON)) == {"id", "y", "z", "w"}
+        expect_allowed(client=admin, sql=f"GRANT SELECT ON {table} TO changers")
+        assert len(values(client=wes, sql=returning)) == 2
+    finally:
+        drop_tables(client=admin, names=[table])
+
+
+def test_a_users_trigger_may_hand_on_the_rows_its_owner_may_read(admin, mia, wes):
+    # mia owns the tables and the triggers; their bodies copy the rows a write changes
+    # (transition tables, OLD) into a table of hers that she lets the writers read. wes
+    # may not read the tables he writes: what he gets to see is what mia, who may, chose.
+    make(client=mia, statements=[
+        "CREATE TABLE app.dr_src (id INT, note VARCHAR)", "INSERT INTO app.dr_src VALUES (1, 'one'), (2, 'two')",
+        "CREATE TABLE app.dr_rows (id INT, note VARCHAR)", "INSERT INTO app.dr_rows VALUES (3, 'three')",
+        "CREATE TABLE app.dr_copy (id INT, note VARCHAR)",
+        "CREATE TABLE app.dr_quiet (id INT, note VARCHAR)", "INSERT INTO app.dr_quiet VALUES (6, 'six')",
+        "CREATE TRIGGER dr_quiet_upd AFTER UPDATE ON app.dr_quiet FOR EACH STATEMENT INSERT INTO app.dr_copy VALUES (0, 'quiet')",
+        "CREATE TRIGGER dr_src_upd AFTER UPDATE ON app.dr_src REFERENCING OLD TABLE AS was NEW TABLE AS now "
+        "FOR EACH STATEMENT INSERT INTO app.dr_copy SELECT now.id, was.note || '>' || now.note FROM was JOIN now USING (id)",
+        "CREATE TRIGGER dr_src_del AFTER DELETE ON app.dr_src REFERENCING OLD TABLE AS gone "
+        "FOR EACH STATEMENT INSERT INTO app.dr_copy SELECT id, 'gone ' || note FROM gone",
+        "CREATE TRIGGER dr_rows_del AFTER DELETE ON app.dr_rows FOR EACH ROW "
+        "INSERT INTO app.dr_copy VALUES (OLD.id, 'row ' || OLD.note)",
+        "GRANT UPDATE, DELETE ON app.dr_src TO changers", "GRANT DELETE ON app.dr_rows TO changers",
+        "GRANT UPDATE ON app.dr_quiet TO changers", "GRANT SELECT ON app.dr_copy TO changers",
+    ])
+    try:
+        for table in ["app.dr_src", "app.dr_rows", "app.dr_quiet"]:
+            expect_blocked(client=wes, sql=f"SELECT note FROM {table}", why=NO_SELECT)
+        expect_blocked(client=wes, sql="INSERT INTO app.dr_copy VALUES (0, 'wes')", why="no INSERT privilege")
+        # A trigger that reads no row.
+        assert values(client=wes, sql="UPDATE app.dr_quiet SET note = 'new'") == ["1"]
+        assert values(client=wes, sql="SELECT note FROM app.dr_copy") == ["quiet"]
+        expect_allowed(client=mia, sql="DELETE FROM app.dr_copy")
+        # Triggers that read the rows.
+        assert values(client=wes, sql="UPDATE app.dr_src SET note = 'new'") == ["2"]
+        assert sorted(values(client=wes, sql="SELECT note FROM app.dr_copy")) == ["one>new", "two>new"]
+        assert values(client=wes, sql="DELETE FROM app.dr_src") == ["2"]
+        assert values(client=wes, sql="DELETE FROM app.dr_rows") == ["1"]
+        assert sorted(values(client=wes, sql="SELECT note FROM app.dr_copy WHERE note NOT LIKE '%>%'")) == [
+            "gone new", "gone new", "row three"]
+        # What the statement itself reads still takes the writer's own SELECT.
+        expect_allowed(client=mia, sql="INSERT INTO app.dr_src VALUES (4, 'four')")
+        expect_blocked(client=wes, sql="DELETE FROM app.dr_src WHERE note = 'four'", why=NO_SELECT)
+        expect_blocked(client=wes, sql="UPDATE app.dr_src SET note = note || '!'", why=NO_SELECT)
+        expect_allowed(client=mia, sql="GRANT SELECT (id) ON app.dr_src TO changers")
+        assert columns_missing(error=expect_blocked(client=wes, sql="DELETE FROM app.dr_src WHERE note = 'four'",
+                                                    why=NO_SELECT_ON)) == {"note"}
+        assert values(client=wes, sql="DELETE FROM app.dr_src WHERE id = 4") == ["1"]
+        # An administrator's write fires them as before.
+        expect_allowed(client=mia, sql="INSERT INTO app.dr_rows VALUES (5, 'five')")
+        expect_allowed(client=admin, sql="DELETE FROM app.dr_rows")
+        assert count(client=mia, table="app.dr_copy", where="note = 'row five'") == 1
+    finally:
+        drop_tables(client=mia, names=["app.dr_src", "app.dr_rows", "app.dr_quiet", "app.dr_copy"])
+
+
+def test_an_administrators_trigger_reads_the_rows_with_the_writers_rights(admin, wes):
+    # An administrator's trigger runs with the writer's rights. A body that reads the rows
+    # the write changes (a transition table, OLD) and puts them where the writer can read
+    # them would hand a writer without SELECT the very columns it may not read: it takes
+    # the writer's own SELECT, as before.
+    make(client=admin, statements=[
+        "CREATE TABLE main.dr_adm (id INT, note VARCHAR)", "INSERT INTO main.dr_adm VALUES (1, 'pin-1234'), (2, 'pin-5678')",
+        "CREATE TABLE main.dr_seen (note VARCHAR)", "CREATE TABLE main.dr_num (n INT)",
+        "GRANT UPDATE, DELETE ON main.dr_adm TO changers", "GRANT INSERT, SELECT ON main.dr_seen TO changers",
+        "GRANT INSERT, SELECT ON main.dr_num TO changers",
+    ])
+    readers = [
+        ("DELETE FROM main.dr_adm",
+         "AFTER DELETE ON main.dr_adm REFERENCING OLD TABLE AS gone FOR EACH STATEMENT "
+         "INSERT INTO main.dr_seen SELECT note FROM gone"),
+        ("DELETE FROM main.dr_adm",
+         "AFTER DELETE ON main.dr_adm FOR EACH ROW INSERT INTO main.dr_seen VALUES (OLD.note)"),
+        ("UPDATE main.dr_adm SET id = 7",
+         "AFTER UPDATE ON main.dr_adm REFERENCING OLD TABLE AS was FOR EACH STATEMENT "
+         "INSERT INTO main.dr_seen SELECT note FROM was"),
+        ("UPDATE main.dr_adm SET id = 0",
+         "AFTER UPDATE ON main.dr_adm REFERENCING NEW TABLE AS now FOR EACH STATEMENT "
+         "INSERT INTO main.dr_seen SELECT note FROM now"),
+        # A body that tells of the rows by failing: the error would carry a value.
+        ("DELETE FROM main.dr_adm",
+         "AFTER DELETE ON main.dr_adm REFERENCING OLD TABLE AS gone FOR EACH STATEMENT "
+         "INSERT INTO main.dr_num SELECT CAST(note AS INT) FROM gone"),
+    ]
+    try:
+        expect_blocked(client=wes, sql="SELECT note FROM main.dr_adm", why=NO_SELECT)
+        for sql, trigger in readers:
+            expect_allowed(client=admin, sql=f"CREATE OR REPLACE TRIGGER dr_adm_reads {trigger}")
+            error = expect_blocked(client=wes, sql=sql, why=NO_SELECT)
+            assert ROWS_READ in error.detail and "pin-" not in error.detail
+            assert count(client=admin, table="main.dr_seen") == 0 and count(client=admin, table="main.dr_num") == 0
+            assert values(client=admin, sql="SELECT id FROM main.dr_adm ORDER BY id") == ["1", "2"]
+            # SELECT on one column is not SELECT on the rows.
+            expect_allowed(client=admin, sql="GRANT SELECT (id) ON main.dr_adm TO changers")
+            error = expect_blocked(client=wes, sql=sql, why=NO_SELECT_ON)
+            assert columns_missing(error=error) == {"note"} and ROWS_READ in error.detail
+            expect_allowed(client=admin, sql="REVOKE SELECT (id) ON main.dr_adm FROM changers")
+            expect_allowed(client=admin, sql="DROP TRIGGER dr_adm_reads ON main.dr_adm")
+        # Twin: a writer who may read the table fires each of them, and sees in dr_seen
+        # (or in the error of the last) what it may read anyway.
+        expect_allowed(client=admin, sql="GRANT SELECT ON main.dr_adm TO changers")
+        for sql, trigger in readers[:-1]:
+            expect_allowed(client=admin, sql=f"CREATE OR REPLACE TRIGGER dr_adm_reads {trigger}")
+            before = count(client=admin, table="main.dr_seen")
+            expect_allowed(client=wes, sql=sql)
+            assert sorted(values(client=wes, sql="SELECT DISTINCT note FROM main.dr_seen")) == ["pin-1234", "pin-5678"]
+            assert count(client=admin, table="main.dr_seen") == before + 2
+            expect_allowed(client=admin, sql="DROP TRIGGER dr_adm_reads ON main.dr_adm")
+            expect_allowed(client=admin, sql="DELETE FROM main.dr_adm")
+            expect_allowed(client=admin, sql="INSERT INTO main.dr_adm VALUES (1, 'pin-1234'), (2, 'pin-5678')")
+        expect_allowed(client=admin, sql=f"CREATE OR REPLACE TRIGGER dr_adm_reads {readers[-1][1]}")
+        with pytest.raises(ChargewireError) as raised:
+            wes.run(sql=readers[-1][0])
+        assert raised.value.code != "permission_denied" and "pin-" in raised.value.detail
+        # A trigger that reads no row asks nothing of the writer (the test above); one that
+        # reads them through another table's SELECT is checked there, as any body is.
+    finally:
+        drop_tables(client=admin, names=["main.dr_adm", "main.dr_seen", "main.dr_num"])
+
+
+def test_a_users_trigger_reads_the_rows_with_the_writers_select_or_its_owners(admin, mia, wes, server):
+    # mia's trigger reads the rows of a table that is no longer hers, and that she may not
+    # read: the writer's SELECT covers the rows (as it always did), or nobody's does.
+    make(client=admin, statements=[
+        "CREATE SCHEMA dr_ops", "CREATE ROLE dr_owners", "CREATE ROLE dr_readers",
+        "GRANT CREATE TABLE, CREATE TRIGGER ON SCHEMA dr_ops TO trigger_makers",
+    ])
+    try:
+        make(client=mia, statements=[
+            "CREATE TABLE dr_ops.src (id INT, note VARCHAR)", "INSERT INTO dr_ops.src VALUES (1, 'one')",
+            "CREATE TABLE dr_ops.copy (note VARCHAR)",
+            "CREATE TRIGGER src_del AFTER DELETE ON dr_ops.src REFERENCING OLD TABLE AS gone "
+            "FOR EACH STATEMENT INSERT INTO dr_ops.copy SELECT note FROM gone",
+        ])
+        make(client=admin, statements=[
+            "ALTER TABLE dr_ops.src OWNER TO ROLE dr_owners", "GRANT DELETE ON dr_ops.src TO changers",
+            "GRANT SELECT ON dr_ops.src TO dr_readers",
+        ])
+        expect_blocked(client=mia, sql="SELECT note FROM dr_ops.src", why=NO_SELECT)
+        error = expect_blocked(client=wes, sql="DELETE FROM dr_ops.src", why="cannot run, because its owner user mia")
+        assert "trigger src_del on table" in error.detail and NO_SELECT in error.detail and ROWS_READ in error.detail
+        assert count(client=admin, table="dr_ops.src") == 1 and count(client=admin, table="dr_ops.copy") == 0
+        # Twin: the writer may read the rows. A user granted SELECT ...
+        expect_allowed(client=admin, sql="GRANT dr_readers TO wes")
+        expect_allowed(client=server.user(name="wes"), sql="DELETE FROM dr_ops.src")
+        assert values(client=admin, sql="SELECT note FROM dr_ops.copy") == ["one"]
+        expect_allowed(client=admin, sql="REVOKE dr_readers FROM wes")
+        # ... and an administrator, as before.
+        expect_allowed(client=admin, sql="INSERT INTO dr_ops.src VALUES (0, 'zero')")
+        expect_allowed(client=admin, sql="DELETE FROM dr_ops.src")
+        assert sorted(values(client=admin, sql="SELECT note FROM dr_ops.copy")) == ["one", "zero"]
+        # Twin: the trigger's owner may.
+        expect_allowed(client=admin, sql="INSERT INTO dr_ops.src VALUES (2, 'two')")
+        expect_blocked(client=server.user(name="wes"), sql="DELETE FROM dr_ops.src", why="cannot run, because its owner user mia")
+        expect_allowed(client=admin, sql="GRANT dr_readers TO mia")
+        expect_allowed(client=server.user(name="wes"), sql="DELETE FROM dr_ops.src")
+        assert sorted(values(client=admin, sql="SELECT note FROM dr_ops.copy")) == ["one", "two", "zero"]
+        expect_allowed(client=admin, sql="REVOKE dr_readers FROM mia")
+    finally:
+        for sql in ["DROP TABLE IF EXISTS dr_ops.src", "DROP TABLE IF EXISTS dr_ops.copy",
+                    "REVOKE CREATE TABLE, CREATE TRIGGER ON SCHEMA dr_ops FROM trigger_makers",
+                    "DROP SCHEMA IF EXISTS dr_ops", "DROP ROLE IF EXISTS dr_owners", "DROP ROLE IF EXISTS dr_readers"]:
+            expect_allowed(client=admin, sql=sql)
+
+
+def test_keys_and_checked_columns_are_not_carried(admin, wes):
+    # What the write itself can tell of a column: a constraint error names a key's value
+    # (DuckDB runs an UPDATE that returns its rows as a delete and an insert, so a foreign
+    # key that refers to the row stops it), and a CHECK over several columns tells of the
+    # ones the statement did not set. Those take SELECT, as on a table without triggers.
+    make(client=admin, statements=[
+        "CREATE TABLE main.dr_parent (id INT PRIMARY KEY, x INT, y INT)",
+        "INSERT INTO main.dr_parent VALUES (41, 1, 1), (42, 2, 2)",
+        "CREATE TABLE main.dr_child (pid INT REFERENCES main.dr_parent (id))", "INSERT INTO main.dr_child VALUES (41)",
+        "CREATE TABLE main.dr_ck (id INT, x INT, y INT, CHECK (x + y < 1000))", "INSERT INTO main.dr_ck VALUES (1, 1, 10)",
+        "CREATE TABLE main.dr_klog (what VARCHAR)",
+        "CREATE TRIGGER dr_parent_upd AFTER UPDATE ON main.dr_parent FOR EACH STATEMENT INSERT INTO main.dr_klog VALUES ('u')",
+        "CREATE TRIGGER dr_parent_del AFTER DELETE ON main.dr_parent FOR EACH STATEMENT INSERT INTO main.dr_klog VALUES ('d')",
+        "CREATE TRIGGER dr_ck_upd AFTER UPDATE ON main.dr_ck FOR EACH STATEMENT INSERT INTO main.dr_klog VALUES ('c')",
+        "GRANT UPDATE, DELETE ON main.dr_parent TO changers", "GRANT UPDATE ON main.dr_ck TO changers",
+        "GRANT INSERT ON main.dr_klog TO changers",
+    ])
+    try:
+        for sql in ["DELETE FROM main.dr_parent", "UPDATE main.dr_parent SET x = 0"]:
+            error = expect_blocked(client=wes, sql=sql, why=NO_SELECT)
+            assert "41" not in error.detail
+        # Twin: SELECT on the key (and not on x or y), and the write is DuckDB's to run or to
+        # refuse, naming a key the writer may read.
+        expect_allowed(client=admin, sql="GRANT SELECT (id) ON main.dr_parent TO changers")
+        for sql in ["DELETE FROM main.dr_parent", "UPDATE main.dr_parent SET x = 0"]:
+            with pytest.raises(ChargewireError) as raised:
+                wes.run(sql=sql)
+            assert raised.value.code != "permission_denied" and "41" in raised.value.detail, str(raised.value)
+        expect_allowed(client=admin, sql="DELETE FROM main.dr_child")
+        assert values(client=wes, sql="UPDATE main.dr_parent SET x = 0") == ["2"]
+        assert values(client=wes, sql="DELETE FROM main.dr_parent") == ["2"]
+        assert count(client=admin, table="main.dr_klog", where="what IN ('u', 'd')") == 2
+        expect_blocked(client=wes, sql="SELECT x FROM main.dr_parent", why=NO_SELECT_ON)
+
+        # x + y < 1000: setting x tells of y.
+        expect_blocked(client=wes, sql="UPDATE main.dr_ck SET x = 995", why=NO_SELECT)
+        expect_allowed(client=admin, sql="GRANT SELECT (y) ON main.dr_ck TO changers")
+        with pytest.raises(ChargewireError) as raised:
+            wes.run(sql="UPDATE main.dr_ck SET x = 995")
+        assert raised.value.code != "permission_denied" and "CHECK constraint failed" in raised.value.detail
+        assert values(client=wes, sql="UPDATE main.dr_ck SET x = 5") == ["1"]
+        assert columns_missing(error=expect_blocked(client=wes, sql="SELECT * FROM main.dr_ck", why=NO_SELECT_ON)) == {"id", "x"}
+    finally:
+        drop_tables(client=admin, names=["main.dr_child", "main.dr_parent", "main.dr_ck", "main.dr_klog"])
+
+
+def test_on_conflict_do_update_needs_select_on_the_key_and_what_it_reads(admin, wes):
+    # INSERT ... ON CONFLICT DO UPDATE is a merge in the plan. With a trigger on the table
+    # the binder carries the columns the update leaves alone, too: the writer needs SELECT
+    # on the key that tells a conflict and on what its own statement reads, as without one.
+    make(client=admin, statements=[
+        "CREATE TABLE main.dr_keyed (id INT PRIMARY KEY, note VARCHAR, extra INT)",
+        "INSERT INTO main.dr_keyed VALUES (1, 'first', 10)",
+        "CREATE TABLE main.dr_ulog (what VARCHAR)",
+        "CREATE TRIGGER dr_keyed_ins AFTER INSERT ON main.dr_keyed FOR EACH STATEMENT INSERT INTO main.dr_ulog VALUES ('i')",
+        "GRANT INSERT, UPDATE ON main.dr_keyed TO changers", "GRANT INSERT ON main.dr_ulog TO changers",
+    ])
+    upsert = "INSERT INTO main.dr_keyed VALUES (1, 'again', 0) ON CONFLICT (id) DO UPDATE SET note = excluded.note"
+    try:
+        expect_blocked(client=wes, sql=upsert, why=NO_SELECT)
+        expect_allowed(client=admin, sql="GRANT SELECT (id) ON main.dr_keyed TO changers")
+        assert values(client=wes, sql=upsert) == ["1"]
+        assert values(client=admin, sql="SELECT note || ' ' || extra FROM main.dr_keyed") == ["again 10"]
+        assert count(client=admin, table="main.dr_ulog") == 1
+        for sql in [upsert + " WHERE dr_keyed.extra > 0",
+                    "INSERT INTO main.dr_keyed VALUES (1, 'again', 0) ON CONFLICT (id) DO UPDATE SET extra = dr_keyed.extra + 1"]:
+            assert columns_missing(error=expect_blocked(client=wes, sql=sql, why=NO_SELECT_ON)) == {"extra"}
+            expect_allowed(client=admin, sql="GRANT SELECT (extra) ON main.dr_keyed TO changers")
+            expect_allowed(client=wes, sql=sql)
+            expect_allowed(client=admin, sql="REVOKE SELECT (extra) ON main.dr_keyed FROM changers")
+        assert values(client=admin, sql="SELECT note || ' ' || extra FROM main.dr_keyed") == ["again 11"]
+        assert "note" in columns_missing(error=expect_blocked(client=wes, sql=upsert + " RETURNING *", why=NO_SELECT_ON))
+    finally:
+        drop_tables(client=admin, names=["main.dr_keyed", "main.dr_ulog"])
+
+
+def test_a_write_in_a_triggers_body_is_checked_the_same_way(admin, wes):
+    # The UPDATE or DELETE is the body of an administrator's trigger, so it runs with the
+    # writer's rights; the table it writes has a trigger of its own.
+    make(client=admin, statements=[
+        "CREATE TABLE main.dr_inbox (id INT)", "CREATE TABLE main.dr_state (id INT, x INT)",
+        "INSERT INTO main.dr_state VALUES (1, 1), (2, 2)", "CREATE TABLE main.dr_slog (what VARCHAR)",
+        "CREATE TRIGGER dr_state_upd AFTER UPDATE ON main.dr_state FOR EACH STATEMENT INSERT INTO main.dr_slog VALUES ('u')",
+        "CREATE TRIGGER dr_state_del AFTER DELETE ON main.dr_state FOR EACH STATEMENT INSERT INTO main.dr_slog VALUES ('d')",
+        "CREATE TRIGGER dr_inbox_ins AFTER INSERT ON main.dr_inbox FOR EACH STATEMENT UPDATE main.dr_state SET x = 0",
+        "GRANT INSERT ON main.dr_inbox TO changers", "GRANT UPDATE, DELETE ON main.dr_state TO changers",
+        "GRANT INSERT ON main.dr_slog TO changers",
+    ])
+    try:
+        expect_blocked(client=wes, sql="SELECT x FROM main.dr_state", why=NO_SELECT)
+        expect_allowed(client=wes, sql="INSERT INTO main.dr_inbox VALUES (1)")
+        assert values(client=admin, sql="SELECT x FROM main.dr_state") == ["0", "0"]
+        assert count(client=admin, table="main.dr_slog", where="what = 'u'") == 1
+        # A body that reads the table it writes: the writer's SELECT on that column.
+        for body in ["DELETE FROM main.dr_state WHERE x = 0",
+                     "CREATE OR REPLACE TRIGGER dr_inbox_ins AFTER INSERT ON main.dr_inbox FOR EACH ROW "
+                     "DELETE FROM main.dr_state WHERE x = NEW.id"]:
+            trigger = body if body.startswith("CREATE") else (
+                "CREATE OR REPLACE TRIGGER dr_inbox_ins AFTER INSERT ON main.dr_inbox FOR EACH STATEMENT " + body)
+            expect_allowed(client=admin, sql=trigger)
+            expect_blocked(client=wes, sql="INSERT INTO main.dr_inbox VALUES (0)", why=NO_SELECT)
+            assert count(client=admin, table="main.dr_state") == 2
+            expect_allowed(client=admin, sql="GRANT SELECT (x) ON main.dr_state TO changers")
+            expect_allowed(client=wes, sql="INSERT INTO main.dr_inbox VALUES (0)")
+            assert count(client=admin, table="main.dr_state") == 0
+            expect_allowed(client=admin, sql="REVOKE SELECT (x) ON main.dr_state FROM changers")
+            expect_allowed(client=admin, sql="INSERT INTO main.dr_state VALUES (1, 0), (2, 0)")
+        assert count(client=admin, table="main.dr_slog", where="what = 'd'") == 2
+    finally:
+        drop_tables(client=admin, names=["main.dr_inbox", "main.dr_state", "main.dr_slog"])
+
+
+def test_the_carried_rows_reach_no_statement_of_the_writers_own(admin, wes):
+    # Every way a writer's statement could get at the rows the binder carries to the
+    # triggers: a RETURNING of its own (in a WITH too), a statement with parameters (bound
+    # and checked on another path), and a CTE named like the one the binder keeps the rows
+    # in (__duckdb_trigger_base_<uuid>), which this check then treats as that CTE. Counting
+    # its rows tells what the write itself tells (the number of rows changed); anything
+    # that reads a value takes SELECT.
+    make(client=admin, statements=[
+        "CREATE TABLE main.dr_c (id INT, x INT)", "INSERT INTO main.dr_c VALUES (1, 10), (2, 20)",
+        "CREATE TABLE main.dr_cplain (id INT, x INT)", "INSERT INTO main.dr_cplain VALUES (1, 10), (2, 20)",
+        "CREATE TABLE main.dr_clog (what VARCHAR)", "CREATE TABLE main.dr_mine (x INT)",
+        "CREATE TRIGGER dr_c_upd AFTER UPDATE ON main.dr_c FOR EACH STATEMENT INSERT INTO main.dr_clog VALUES ('u')",
+        "CREATE TRIGGER dr_c_del AFTER DELETE ON main.dr_c FOR EACH STATEMENT INSERT INTO main.dr_clog VALUES ('d')",
+        "GRANT UPDATE, DELETE ON main.dr_c TO changers", "GRANT UPDATE, DELETE ON main.dr_cplain TO changers",
+        "GRANT INSERT ON main.dr_clog TO changers", "GRANT INSERT, SELECT ON main.dr_mine TO changers",
+    ])
+    forged = 'WITH "__duckdb_trigger_base_x" AS (UPDATE main.dr_cplain SET id = 0 RETURNING *) '
+    try:
+        for sql in [
+            "UPDATE main.dr_c SET id = 0 RETURNING x",
+            "DELETE FROM main.dr_c RETURNING *",
+            "WITH gone AS (DELETE FROM main.dr_c RETURNING *) SELECT count(*) FROM gone",
+            "WITH gone AS (DELETE FROM main.dr_c RETURNING id) SELECT max(id) FROM gone",
+            "WITH changed AS (UPDATE main.dr_c SET id = 0 RETURNING *) INSERT INTO main.dr_mine SELECT x FROM changed",
+            "CREATE TEMP TABLE dr_kept AS WITH gone AS (DELETE FROM main.dr_c RETURNING *) SELECT * FROM gone",
+            "UPDATE main.dr_c SET id = 0 WHERE rowid IN (SELECT rowid FROM main.dr_c WHERE x > 10)",
+            "UPDATE main.dr_c SET id = 0 WHERE dr_c IS NOT NULL",
+            "EXPLAIN UPDATE main.dr_c SET id = 0 WHERE x > 10",
+            "PREPARE dr_p AS DELETE FROM main.dr_c WHERE x > $1",
+            forged + 'SELECT max(x) FROM "__duckdb_trigger_base_x"',
+            forged + 'SELECT count(*) FROM "__duckdb_trigger_base_x" WHERE x > 10',
+            forged + 'SELECT count(*) FROM "__duckdb_trigger_base_x" GROUP BY x',
+            forged + 'SELECT count(*) FROM (SELECT DISTINCT * FROM "__duckdb_trigger_base_x")',
+            forged + 'SELECT count(*) FROM "__duckdb_trigger_base_x" a, "__duckdb_trigger_base_x" b WHERE a.x < b.x',
+            forged + 'SELECT 1 FROM "__duckdb_trigger_base_x" ORDER BY x',
+            forged + 'SELECT * FROM "__duckdb_trigger_base_x"',
+            forged + 'INSERT INTO main.dr_mine SELECT x FROM "__duckdb_trigger_base_x"',
+        ]:
+            expect_blocked(client=wes, sql=sql, why=NO_SELECT)
+        # A body of the writer's own beside it is no trigger's.
+        expect_blocked(client=wes, why="could not be matched to its body", sql=forged + (
+            ', "__duckdb_trigger_body_1_x" AS (INSERT INTO main.dr_mine SELECT x FROM "__duckdb_trigger_base_x" '
+            'RETURNING *) SELECT count(*) FROM "__duckdb_trigger_base_x"'))
+        # With parameters, run and prepared. A statement is checked when it is prepared, on
+        # the plan as DuckDB binds it (a correlated subquery not yet flattened), and again
+        # when it runs: both must refuse.
+        for sql, parameters in [
+            ("UPDATE main.dr_c SET id = ? WHERE x > ?", [0, 10]),
+            ("UPDATE main.dr_c SET id = ? WHERE EXISTS (SELECT 1 FROM main.dr_mine m WHERE m.x > dr_c.x)", [0]),
+            ("DELETE FROM main.dr_c WHERE (SELECT count(*) FROM main.dr_mine m WHERE m.x > dr_c.x) > ?", [100]),
+            ("UPDATE main.dr_c SET id = (SELECT max(m.x) + ?::INT FROM main.dr_mine m WHERE m.x <> dr_c.x)", [1]),
+        ]:
+            for call in [lambda: wes.run(sql=sql, parameters=parameters), lambda: wes.prepare(sql=sql)]:
+                with pytest.raises(ChargewireError) as raised:
+                    call()
+                assert raised.value.code == "permission_denied" and NO_SELECT in raised.value.detail, sql
+        assert count(client=admin, table="main.dr_mine") == 0 and count(client=admin, table="main.dr_clog") == 0
+        assert values(client=admin, sql="SELECT id FROM main.dr_c ORDER BY id") == ["1", "2"]
+        assert values(client=admin, sql="SELECT id FROM main.dr_cplain ORDER BY id") == ["1", "2"]
+        # Twins: the same shapes that read no value.
+        assert values(client=wes, sql=forged + 'SELECT count(*) FROM "__duckdb_trigger_base_x"') == ["2"]
+        assert values(client=wes, sql="UPDATE main.dr_c SET id = 0 WHERE rowid >= 0") == ["2"]
+        assert expect_allowed(client=wes, sql="UPDATE main.dr_c SET x = ?", parameters=[5]).column(0).to_pylist() == [2]
+        prepared = wes.prepare(sql="UPDATE main.dr_c SET x = ?")
+        assert wes.execute_prepared(prepared_id=prepared, parameters=[6]).column(0).to_pylist() == [2]
+        expect_allowed(client=wes, sql="PREPARE dr_p AS DELETE FROM main.dr_c")
+        assert values(client=wes, sql="EXECUTE dr_p") == ["2"]
+        assert count(client=admin, table="main.dr_clog") == 4
+    finally:
+        drop_tables(client=admin, names=["main.dr_c", "main.dr_cplain", "main.dr_clog", "main.dr_mine"])

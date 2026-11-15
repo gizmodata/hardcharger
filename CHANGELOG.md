@@ -67,6 +67,20 @@ own changelog in `python/CHANGELOG.md`.
   All of them still need `SELECT` on the target's columns they read (for the conflict forms, the
   key columns). The refusal of such a write into a table with row or masking policies now says
   "MERGE (or INSERT ... ON CONFLICT)".
+- **Access control: a write that reads nothing needs no `SELECT` on a table with triggers.** A
+  user holding `UPDATE` or `DELETE` but not `SELECT` was refused `UPDATE t SET x = 0` and
+  `DELETE FROM t` with "no SELECT privilege on table" as soon as the table had a trigger, though
+  the same statements run on a table without one: DuckDB makes such a write read every column, to
+  hand the triggers their rows. A write now needs `SELECT` on the columns the statement itself
+  reads (`WHERE`, a `SET` expression, a join, a subquery, its own `RETURNING`), with a trigger or
+  without, and `INSERT ... ON CONFLICT DO UPDATE` on the key and what its `SET` and `WHERE` read.
+  The rows handed to the triggers are checked where they are read: a trigger body that reads them
+  (a transition table, `OLD`, `NEW`) needs `SELECT` on the table, the writer's or else the trigger
+  owner's, so a user's trigger can copy the rows its owner may read and an administrator's trigger
+  that reads them still takes the writer's `SELECT`. Columns of the table's keys and indexes (and,
+  for an `UPDATE`, of a `CHECK` over several columns) still need the writer's `SELECT` on a table
+  with triggers, because a constraint error of the write can name or tell of them, and so does
+  every scanned column of a table with generated columns.
 - The server builds against OpenSSL 4 (a certificate name is taken as `const`).
 - **Web UI: the Read-only box shows the session the tab has, never only what was asked for.**
   With a session open, the box was checked whenever read-only had been asked for (the
