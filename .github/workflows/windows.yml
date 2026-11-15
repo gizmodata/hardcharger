@@ -354,6 +354,9 @@ jobs:
           CHARGEWIRE_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
           # One-signal draining (test_lifecycle.py) waits this long for running work.
           CHARGEWIRE_TEST_SERVER_DRAIN_FLAG: --shutdown-grace-period-seconds
+          # Hardcharger has read-only sessions (Chargewire §5.8): without the capability the read-only
+          # tests fail here, where they would otherwise skip, saying so.
+          CHARGEWIRE_TEST_REQUIRE_READ_ONLY: "1"
           HARDCHARGER_ADMIN_USERNAME: chargewire
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
@@ -364,6 +367,9 @@ jobs:
       - name: Chargewire conformance suite (chargewire-duckdb)
         if: ${{ !cancelled() && steps.chargewire.outcome == 'success' }}
         working-directory: third_party/chargewire/conformance
+        env:
+          # chargewire-duckdb has read-only sessions too (as Chargewire's own run of it requires).
+          CHARGEWIRE_TEST_REQUIRE_READ_ONLY: "1"
         run: |
           CHARGEWIRE_TEST_SERVER_BINARY="$(cygpath -m "$GITHUB_WORKSPACE/build-chargewire/chargewire-duckdb.exe")" \
             .venv/Scripts/python.exe -m pytest -q -rfE

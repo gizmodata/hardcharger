@@ -7,6 +7,60 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A read-only connection could advance or set a sequence through a statement that held
+  the call itself.** DuckDB evaluates the arguments of table functions while it binds a
+  statement, before the read-only guard sees a plan, and the guard's screen missed what
+  DuckDB binds under another statement: `EXPLAIN CALL range(nextval('s'))` and `EXPLAIN` of
+  `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `COPY`, `PREPARE` and `EXECUTE`; a `COPY`'s file name
+  and options; what a `PIVOT` is pivoted on; `json_execute_serialized_sql()` (as a function
+  and as a pragma) and `json_serialize_plan()`. Each answered `403 read_only` after the
+  sequence had moved (`setval`: to a value of the reader's choice), also when the statement
+  was only prepared, for the administrator and for ordinary users. All of them are now
+  refused before DuckDB binds anything: the screen walks every kind of statement and refuses
+  what it has no rule for, and a table function or pragma is bound only when it is on the
+  server's list. In a read-only connection this also changes: a table function or pragma that
+  does not exist is answered `read_only` rather than a catalog error; `EXPLAIN` of `LOAD`,
+  `VACUUM`, `BEGIN`, `COMMIT`, `DEALLOCATE` and `PREPARE`, which answered a plan, is refused;
+  and `EXPLAIN` of a statement that changes a catalog is refused with other words
+  (`EXPLAIN of INSERT is not allowed in a read-only session`).
+- **Switching a connection to read-only could silently discard uncommitted work.** Sending an
+  option that changed nothing between the work and the switch (`autocommit` again with the
+  value it had, as connection pools do) made the server accept the switch and roll the work
+  back; the commit that followed answered success. The switch is now refused with
+  `invalid_option_value` whenever the open transaction holds work, by DuckDB's own account of
+  the transaction as well as the server's, and the work stays the client's to commit.
+- A statement that is cancelled while a read-only connection reads the views' and macros'
+  definitions is logged and recorded as cancelled, not as a read-only refusal.
+
+### Known, not fixed in this release
+
+A read-only connection can still advance or set a sequence through a view or macro that
+someone allowed to create one has made, where the statement does not lead the server to its
+definition: a view the reader holds no privilege on (the answer is `permission_denied`, after
+the sequence has moved) or was granted a moment ago; a view or macro created in a DuckLake
+after the connection's first statement; a view created `WITH (DEFER_BINDING)`, read through
+`information_schema.columns`, `SHOW ALL TABLES`, `DESCRIBE` or the table listing; a view with a
+dot in its name, quoted inside a string argument; a macro that passes its argument to a table
+function; and a macro named like one of DuckDB's functions. With two attached databases, a
+statement that is only prepared and moves a sequence in one of them can still leave a `COMMIT`
+that answers `422` after part of the transaction was stored. Both are as in 2.13.0.
+
+### Changed
+
+- CI runs the Chargewire conformance suite with `CHARGEWIRE_TEST_REQUIRE_READ_ONLY=1` (Linux,
+  macOS, sanitizers, Windows): a build without read-only sessions fails its read-only
+  conformance tests, which would otherwise skip.
+
+### Added
+
+- Tests: read-only connections as an ordinary user under access control and as the
+  administrator (bind-time evaluation in every statement form that holds it, executed and
+  prepared; temporary sequences; an option sent between pending work and the switch); a
+  cancel that lands in the read-only screen; the CLI's `HARDCHARGER_CLIENT_READ_ONLY`
+  spellings and the flag's precedence over it.
+
 ## [2.13.0] - 2026-11-14
 
 ### Added

@@ -591,6 +591,9 @@ jobs:
         working-directory: third_party/chargewire/conformance
         env:
           CHARGEWIRE_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build/hardcharger-server
+          # Hardcharger has read-only sessions (Chargewire §5.8): without the capability the read-only
+          # tests fail here, where they would otherwise skip, saying so.
+          CHARGEWIRE_TEST_REQUIRE_READ_ONLY: "1"
           CHARGEWIRE_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
           CHARGEWIRE_TEST_SERVER_USERNAME: chargewire
           CHARGEWIRE_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
@@ -1089,6 +1092,9 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
           CHARGEWIRE_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-server
+          # Hardcharger has read-only sessions (Chargewire §5.8): without the capability the read-only
+          # tests fail here, where they would otherwise skip, saying so.
+          CHARGEWIRE_TEST_REQUIRE_READ_ONLY: "1"
           CHARGEWIRE_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
           CHARGEWIRE_TEST_SERVER_USERNAME: chargewire
           CHARGEWIRE_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
@@ -1274,6 +1280,9 @@ jobs:
             suppressions=${{ github.workspace }}/server/tests/tsan.supp
             log_path=${{ github.workspace }}/tsan-reports/tsan
           CHARGEWIRE_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-tsan/hardcharger-server
+          # Hardcharger has read-only sessions (Chargewire §5.8): without the capability the read-only
+          # tests fail here, where they would otherwise skip, saying so.
+          CHARGEWIRE_TEST_REQUIRE_READ_ONLY: "1"
           CHARGEWIRE_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
           CHARGEWIRE_TEST_SERVER_USERNAME: chargewire
           CHARGEWIRE_TEST_SERVER_IDLE_FLAG: --session-idle-timeout
