@@ -40,8 +40,11 @@ def test_known_extensions_install_and_load_on_demand_then_work_offline(launcher,
 
 def test_signed_optional_module_can_be_force_installed_from_a_customer_repository(launcher, tmp_path):
     cache = tmp_path / "first-cache"
-    running = launcher.start(args=["--init-sql-commands", f"SET extension_directory = '{cache}'; INSTALL tpch;"])
+    running = launcher.start(args=["--init-sql-commands", f"SET extension_directory = '{cache}';"])
     session = running.admin()
+    # Download the signed fixture through the normal statement path, with its
+    # completion deadline and diagnostics, instead of the 30-second startup gate.
+    session.execute(sql="INSTALL tpch")
     version = session.scalar(sql="SELECT library_version FROM pragma_version()")
     platform = session.scalar(sql="PRAGMA platform")
     signed = cache / version / platform / "tpch.duckdb_extension"

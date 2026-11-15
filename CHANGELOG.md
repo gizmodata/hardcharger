@@ -24,6 +24,15 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Python package CI waits for an unpublished server release before scheduling its
+  download tests. Published-version PRs still run them, and package publication
+  continues to require every download and integration gate.
+
+- Transaction-state refresh no longer holds the SDK engine lifetime lock while entering
+  DuckDB, preventing a lock-order inversion with active-session monitoring.
+- Extension validation waits for asynchronous installation to finish and downloads
+  its signed replacement-test fixture after startup, with statement diagnostics.
+
 - A failed internal transaction during statement binding rolls back and cleans up
   without invalidating the shared database. Ordinary writable connections and
   read-only-session enforcement retain their existing behavior.
