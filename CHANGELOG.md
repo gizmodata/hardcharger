@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.13.1] - 2026-11-15
+
 ### Fixed
 
 - **Access control: chains of triggers run**
@@ -108,6 +110,15 @@ that answers `422` after part of the transaction was stored. Both are as in 2.13
 
 ### Changed
 
+- **The Python package downloads the server without a GitHub token**
+  ([#54](https://github.com/gizmodata/hardcharger/issues/54)). `pip install hardcharger` fetches
+  the release tarball from its direct download URL and checks it against the release's
+  `SHA256SUMS`, so neither a token nor GitHub's API (and its limit on anonymous requests) is
+  needed. A token that is refused is followed by an anonymous retry. On Linux, when GitHub
+  can't be reached or refuses, the launcher takes the server from the public image
+  `ghcr.io/gizmodata/hardcharger:<version>` through the registry's HTTP API, with every layer
+  checked against its digest. `HARDCHARGER_INSTALL_SOURCE` (`auto`, `github`, `ghcr`) chooses;
+  see the package's README and CHANGELOG. Thanks to Jfoxyyc for the report.
 - CI runs the Chargewire conformance suite with `CHARGEWIRE_TEST_REQUIRE_READ_ONLY=1` (Linux,
   macOS, sanitizers, Windows): a build without read-only sessions fails its read-only
   conformance tests, which would otherwise skip.

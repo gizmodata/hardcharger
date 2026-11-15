@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.13.1] - 2026-11-15
+
 ### Added
 
 - On Linux the server can come from the public container image

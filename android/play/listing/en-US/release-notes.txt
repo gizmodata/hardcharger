@@ -1,2 +1,2 @@
-Improved app performance with optimized code and resource shrinking.
-Smoother privacy policy and software notices screens.
+Read-only connections refuse more statements that could change data, and keep uncommitted work when switched on.
+Triggers that fire other triggers, and INSERT ... ON CONFLICT on tables with triggers, work with access control.
