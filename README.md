@@ -1278,12 +1278,17 @@ role it was, and `SET ROLE "SYSTEM ADMIN"` (quoted) names a role, never this.
   that gave it, taking the user out of that role or unmapping its group, the session's next
   statement fails with `user alice no longer holds SYSTEM ADMIN, which SET ROLE made active.
   Run RESET ROLE to go on as alice`, and a statement still running is stopped. Disabling or
-  dropping the user ends its sessions. On other replicas this arrives with the next poll of
-  the store (about a second); a change to users, roles or grants by that session is refused
-  at once everywhere, because the change's own store transaction asks again. What the
-  session did before stands: an open transaction is alice's to commit or roll back after
-  `RESET ROLE`. `SET ROLE SYSTEM ADMIN` itself asks the store, not the replica's copy, so
-  while the store is down nobody starts acting as System Admin.
+  dropping the user ends its sessions. This holds on every replica at once, not after its
+  next poll: a session acting as System Admin asks the store itself (one small read of its
+  version) before every statement, and a change it makes to users, roles or grants asks
+  again inside the change's own store transaction. What the session did before stands: an
+  open transaction is alice's to commit or roll back after `RESET ROLE`.
+- **Only on the store's own word.** What a server last heard from the store is not enough
+  to act as System Admin on. While the store does not answer, `SET ROLE SYSTEM ADMIN` is
+  refused, and a session already acting as one runs nothing more that way (`… which is
+  asked of the access control store before every statement, and the store did not
+  answer`); `RESET ROLE` makes it its user again, served from the last grants like every
+  store user. The administrator is not affected.
 - **Never more than the session's own limits.** A session that signed in with a scoped
   token, with a token carrying `catalog_access` rules, with the `readonly` role, or on a
   `read_only` connection, and every session of a tenant's user, is refused, and the refusal
@@ -1296,10 +1301,9 @@ role it was, and `SET ROLE "SYSTEM ADMIN"` (quoted) names a role, never this.
   and the environment out of SQL's reach for every role). It needs no grant, so it still
   signs in and takes `SYSTEM ADMIN` away from anyone when the store's grants are wrong, and
   the server starts when they are missing or unreadable (nobody holds `SYSTEM ADMIN` then,
-  and the log says so). With `rbac_max_snapshot_age_seconds`, a System Admin is refused with
-  the other store users while the store is down; the administrator is not. An external
-  policy service (`rbac_opa_url`) is asked once, with the action `system_admin`, when a
-  session asks; like the administrator's, a System Admin's statements are not sent to it.
+  and the log says so). An external policy service (`rbac_opa_url`) is asked once, with the
+  action `system_admin`, when a session asks; like the administrator's, a System Admin's
+  statements are not sent to it.
 
 Who holds it, and which sessions act as one now:
 

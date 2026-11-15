@@ -680,6 +680,23 @@ bool SessionGuard::system_admin() const {
   return state && state->principal().acts_as_system_admin();
 }
 
+void SessionGuard::VerifySystemAdmin() const {
+  if (unrestricted_ || user_id_.empty() || owner_.catalog_rules_only_) return;
+  auto state = StateIfAttached(mutex_, connection_);
+  if (!state || !state->asks_system_admin()) return;
+  // One round trip (the store's data version; a load when it moved). A change this finds
+  // reaches every session here as a poll's would (AccessControl::OnSnapshot).
+  const auto refreshed = owner_.engine_->Refresh();
+  state->SetSystemAdminUnverified(refreshed.ok() ? std::string() : refreshed.message());
+}
+
+void SessionGuard::RefuseIfSystemAdminLost() const {
+  if (unrestricted_ || user_id_.empty()) return;
+  auto state = StateIfAttached(mutex_, connection_);
+  if (!state || !state->asks_system_admin() || state->principal().superuser) return;
+  throw Error(ErrorCode::kPermissionDenied, state->SystemAdminRefusal(), "42501");
+}
+
 std::string SessionGuard::active_role() const {
   auto state = StateIfAttached(mutex_, connection_);
   return state ? state->active_role_name() : std::string();
@@ -933,7 +950,7 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
   // A session that said SET ROLE SYSTEM ADMIN and no longer holds it runs nothing until it
   // says RESET ROLE: said here, before the gate would name a system privilege it lacks.
   if (principal.asks_system_admin() && !principal.superuser) {
-    throw Error(ErrorCode::kPermissionDenied, SystemAdminLostMessage(principal.user_name), "42501");
+    throw Error(ErrorCode::kPermissionDenied, state->SystemAdminRefusal(), "42501");
   }
   const std::function<bool(const std::string&)> permitted = [&](const std::string& category) {
     auto privilege = SystemPrivilegeForGatedCategory(category);
@@ -1137,7 +1154,7 @@ chargewire::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parse
   Principal actor = set_role != nullptr && !unrestricted_ ? state->session_principal() : state->principal();
   const bool as_system_admin = actor.acts_as_system_admin();
   if (set_role == nullptr && actor.asks_system_admin() && !actor.superuser) {
-    const Error lost(ErrorCode::kPermissionDenied, SystemAdminLostMessage(actor.user_name), "42501");
+    const Error lost(ErrorCode::kPermissionDenied, state->SystemAdminRefusal(), "42501");
     refuse(lost, false);
     throw lost;
   }
@@ -1200,6 +1217,7 @@ chargewire::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parse
   if (result.active_role_id) {
     const bool was_asking = state->asks_system_admin();
     if (*result.active_role_id == kSystemAdminRoleId) {
+      state->SetSystemAdminUnverified({});  // the store answered just now
       state->SetActiveRole(kSystemAdminRoleId, kSystemAdminName);
     } else {
       const auto* role = after->FindRoleById(*result.active_role_id);
@@ -1254,6 +1272,7 @@ std::optional<ParsedCommand> ParseCommand(std::string_view sql) {
 chargewire::StatementOutcome SessionGuard::Execute(
     std::string_view sql, bool has_parameters,
     const std::function<chargewire::StatementOutcome()>& run, const boost::json::value& parameters) {
+  VerifySystemAdmin();
   RequireLive();
   if (!owner_.catalog_rules_only_) {
     if (auto command = ParseCommand(sql)) {
@@ -1287,6 +1306,7 @@ chargewire::StatementOutcome SessionGuard::Execute(
 std::unique_ptr<chargewire::PreparedStatement> SessionGuard::Prepare(
     std::string_view sql,
     const std::function<std::unique_ptr<chargewire::PreparedStatement>()>& prepare) {
+  VerifySystemAdmin();
   RequireLive();
   if (!owner_.catalog_rules_only_) {
     if (auto command = ParseCommand(sql)) {
@@ -1313,6 +1333,7 @@ std::unique_ptr<chargewire::PreparedStatement> SessionGuard::Prepare(
 chargewire::StatementOutcome SessionGuard::ExecutePrepared(
     chargewire::PreparedStatement& statement, bool has_parameters,
     const std::function<chargewire::StatementOutcome(chargewire::PreparedStatement&)>& run, const boost::json::value& parameters) {
+  VerifySystemAdmin();
   RequireLive();
   if (auto* command = dynamic_cast<PreparedAccessControl*>(&statement)) {
     if (has_parameters) {
@@ -1383,11 +1404,17 @@ chargewire::StatementOutcome SessionGuard::ExecutePrepared(
 
 int64_t SessionGuard::Ingest(const chargewire::IngestTarget& target,
                              const std::function<int64_t()>& run) {
+  VerifySystemAdmin();
   RequireLive();
   auto busy = MarkBusy();
   const bool acting = system_admin();
   const std::string what = "(bulk ingest into " + target.table + ")";
   try {
+    // A session that asked for SYSTEM ADMIN and does not act as one ingests nothing (said
+    // here: an ingest passes no gate that would say it).
+    if (auto state = StateOf(connection_); state && !acting && state->asks_system_admin()) {
+      throw Error(ErrorCode::kPermissionDenied, state->SystemAdminRefusal(), "42501");
+    }
     const int64_t rows = run();
     AuditAllowed();
     if (acting) AuditSystemAdminStatement(what, {}, nullptr);
@@ -1405,6 +1432,7 @@ std::shared_ptr<arrow::RecordBatchReader> SessionGuard::Metadata(
         run,
     const std::function<std::shared_ptr<arrow::RecordBatchReader>(std::shared_ptr<arrow::RecordBatchReader>)>&
         describe) {
+  VerifySystemAdmin();
   RequireLive();
   auto state = StateOf(connection_);
   if (!state) {

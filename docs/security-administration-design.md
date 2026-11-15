@@ -83,12 +83,24 @@ ADMIN` sets the session's active role to the reserved id. Every time anything as
 session is, the state reads the snapshot the engine holds at that moment: if the user holds
 `SYSTEM ADMIN` there, the answer is a superuser principal in exactly the administrator's
 shape (no user id, so what it creates is system-owned and what it grants has no grantor)
-that also names the user (`acting_user_id`); if not, it is the user with the reserved
+that also names the user (`acting_user_id`); if not (or if the store did not answer when
+this request asked it, below), it is the user with the reserved
 active role, which `Snapshot::RolesOf` gives *no role at all*, not even `PUBLIC`. Failing
 to hold it therefore fails closed everywhere, including in code that never heard of the
 feature; the explicit checks only make the message clear (`user alice no longer holds
 SYSTEM ADMIN, which SET ROLE made active. Run RESET ROLE to go on as alice`). Nothing is
 cached: the answer is computed from the current snapshot on every call.
+
+**The snapshot is the store's own word, for these sessions.** Every other check in
+Hardcharger reads the snapshot the server last loaded, which a poll refreshes about once a
+second and which keeps being served while the store is away. That is not good enough for
+unrestricted power: a revoke on another replica would count a second late, and on a
+replica that cannot reach the store, never. So before every request of a session that
+asked for `SYSTEM ADMIN` (`SessionGuard::VerifySystemAdmin`, called from
+`Session::CheckAlive` and again when the statement leaves the statement queue), the server
+reads the store's data version, loads the store if it moved, and, if the store did not
+answer, marks the session unverified: it then acts as nobody until the store answers or it
+says `RESET ROLE`. The cost is one small store read per statement, for these sessions only.
 
 Everything in the server keyed on "this is an administrator" (`Session::admin()`,
 `full_admin()`, `SessionGuard::unrestricted()`, `RbacSessionState::unchecked()`) asks that
@@ -108,9 +120,8 @@ identity provider ends it when a token that lists the group stops being accepted
 every role a group gives. (A session belongs to the authority of the token that opened it,
 groups included, so a later token without the group cannot use it.)
 
-**Asking** reads the store, not the replica's copy (`RbacEngine::Refresh` before the
-check), so a grant is usable at once on every replica, a revoke refuses at once, and a
-store that does not answer elevates nobody.
+**Asking** reads the store the same way (`RbacEngine::Refresh` before the check), so a
+grant is usable at once on every replica and a store that does not answer elevates nobody.
 
 ## Decisions, with the alternative each time
 
@@ -149,11 +160,14 @@ Each took the safer side. Any can be overruled.
 7. **A tenant's users and roles never hold it**, and the grant is refused. Tenant admins
    manage their tenant's users (passwords, enable, drop); a holder inside a tenant would be
    theirs to take over.
-8. **Asking needs the store to answer**, and a session acting as System Admin is a store
-   user for `rbac_max_snapshot_age_seconds` (refused past it, unlike the administrator).
-   Alternative: let it ride the last snapshot like a sign-in does. Rejected: the
-   administrator is the designed way in during a store outage, and "the store's last word"
-   is too weak a basis for unrestricted power.
+8. **Acting as System Admin needs the store to answer, at every statement**: to start, and
+   to go on. Alternative: let such a session ride the last snapshot, as a sign-in and every
+   other grant does (bounded only by `rbac_max_snapshot_age_seconds`, which is off by
+   default). That was the first implementation, and a review of it showed the consequence:
+   923 administrator-only statements ran on a second replica in the 0.8 s after a revoke
+   had committed on the first, and a replica cut off from the store kept a revoked,
+   disabled user as System Admin for as long as it was cut off. The administrator is the
+   designed way in during a store outage; a System Admin waits for the store.
 9. **The external policy service is asked when a session asks** (action `system_admin`),
    and not for the statements that follow (as for the administrator). No answer means no.
    Alternative: never ask it. Rejected: a deployment that puts a policy service in front of
@@ -170,6 +184,10 @@ Each took the safer side. Any can be overruled.
 12. **No cache, not even one keyed by the snapshot's version.** It would be correct (a
     snapshot is immutable) and would save a walk over the memberships per call for sessions
     acting as System Admin; it is left out so that "asked every time" needs no argument.
+13. **A session that asked and does not act as one runs nothing**, the session's own
+    commands (`SET hardcharger.*`, `KILL SESSION`) included, and metadata requests list
+    nothing. Only `SET ROLE` / `RESET ROLE` and ending the transaction through the protocol
+    get it out.
 
 ## What a non-administrator can reach
 

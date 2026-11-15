@@ -292,6 +292,19 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // Throws chargewire::Error(kSessionEnded) once an access-control change ended the session.
   void RequireLive() const;
 
+  // For a session that said SET ROLE SYSTEM ADMIN: reads the store's version and loads
+  // what changed, so that what the session does next rests on the store's own word and not
+  // on what this server last polled (a revoke on another replica counts at once), and
+  // notes when the store did not answer: the session then acts as nobody until it does.
+  // Does nothing for any other session. Called at the start of every request, on the
+  // session's engine thread, before RequireLive.
+  void VerifySystemAdmin() const;
+  // Throws permission_denied, saying why, for a session that said SET ROLE SYSTEM ADMIN and
+  // does not act as one (its user no longer holds it, or the store did not answer): such a
+  // session runs nothing until RESET ROLE. For the commands that are not SQL statements of
+  // DuckDB's or access control's (SET hardcharger.*, KILL SESSION), which pass no other check.
+  void RefuseIfSystemAdminLost() const;
+
   // Runs one statement text. An access-control statement (GRANT, CREATE USER, SHOW
   // GRANTS, ...) runs here; anything else passes the pre-bind gate and is run by `run`
   // (DuckDB), under the plan check.

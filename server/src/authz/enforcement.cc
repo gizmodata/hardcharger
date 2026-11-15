@@ -2135,9 +2135,31 @@ std::string SystemAdminLostMessage(const std::string& user_name) {
 RbacSessionState::RbacSessionState(std::shared_ptr<RbacEngine> engine, Principal principal)
     : engine_(engine), administrator_(principal.superuser), principal_(std::move(principal)) {}
 
+std::string RbacSessionState::SystemAdminRefusal() const {
+  std::string user_name, unverified;
+  {
+    std::lock_guard<std::mutex> lock(principal_mutex_);
+    user_name = principal_.user_name;
+    unverified = system_admin_unverified_;
+  }
+  if (unverified.empty()) return SystemAdminLostMessage(user_name);
+  return "Hardcharger blocked this statement: user " + user_name + " acts as System Admin here (SET ROLE " +
+         kSystemAdminName + "), which is asked of the access control store before every statement, and the store did "
+         "not answer (" + unverified + "). Run RESET ROLE to go on as " + user_name;
+}
+
 Principal RbacSessionState::principal() const {
-  Principal user = session_principal();
+  Principal user;
+  bool unverified = false;
+  {
+    std::lock_guard<std::mutex> lock(principal_mutex_);
+    user = principal_;
+    unverified = !system_admin_unverified_.empty();
+  }
   if (administrator_ || !user.asks_system_admin()) return user;
+  // The store did not answer when this request asked it: nobody acts as System Admin on
+  // what this server last heard.
+  if (unverified) return user;
   // Never for a session its sign-in limits (the guard refuses those at SET ROLE too).
   if (user.scope || user.catalog_rules) return user;
   auto engine = engine_.lock();

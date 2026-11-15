@@ -954,6 +954,9 @@ void Session::CheckAlive() const {
     throw Error(ErrorCode::kPermissionDenied,
                 "Hardcharger blocked this request: the session is not bound to access control", "42501");
   }
+  // Before anything in this request asks whether the session is an administrator's: a
+  // session acting as System Admin is one only on the store's own word, as of now.
+  guard_->VerifySystemAdmin();
   guard_->RequireLive();
 }
 
@@ -1239,6 +1242,9 @@ void Session::GuardManagedCatalog(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE t
 }
 
 chargewire::StatementOutcome Session::RunCommand(const Piece& piece) {
+  // (A session that asked for SYSTEM ADMIN and no longer acts as one runs nothing until
+  // RESET ROLE, these commands included.)
+  if (guard_) guard_->RefuseIfSystemAdminLost();
   if (auto setting = ParseSettingCommand(piece)) {
     ApplySetting(*this, *setting);
     if (guard_) {

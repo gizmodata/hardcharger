@@ -18,7 +18,9 @@ own changelog in `python/CHANGELOG.md`.
   revokes it: it has no admin option, is no part of `ALL PRIVILEGES`, and a role carries it
   only through memberships they granted (and identity-provider group mappings). It is asked
   of the grants on every statement, prepared ones included, so a revoke, a dropped role or a
-  removed membership ends it for open sessions at their next statement, on every replica.
+  removed membership ends it for open sessions at their next statement, on every replica
+  at once: such a session asks the store itself before every statement, and runs nothing as
+  System Admin while the store does not answer.
   Sessions limited by a scoped token, `catalog_access` rules, a read-only connection, the
   `readonly` role or a tenant are refused. The administrator stays outside it, as the way in.
   `SHOW GRANTS`, `hardcharger_grants()` and `hardcharger_effective_privileges()` show who

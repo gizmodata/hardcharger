@@ -84,6 +84,18 @@ class RbacSessionState : public duckdb::ClientContextState {
     std::lock_guard<std::mutex> lock(principal_mutex_);
     return principal_.asks_system_admin();
   }
+  // Acting as System Admin rests on the store's own word, read before each request of a
+  // session that asks for it (SessionGuard::VerifySystemAdmin): `error` is why that could
+  // not be had (the store did not answer), or empty when it was. While it is not empty the
+  // session acts as nobody: principal() is its user with no role, as when it no longer
+  // holds SYSTEM ADMIN.
+  void SetSystemAdminUnverified(std::string error) {
+    std::lock_guard<std::mutex> lock(principal_mutex_);
+    system_admin_unverified_ = std::move(error);
+  }
+  // What a statement of this session is told when it asked for SYSTEM ADMIN and does not
+  // act as one: the store did not answer, or its user no longer holds it.
+  std::string SystemAdminRefusal() const;
   // SET ROLE (empty: all roles). Statements prepared before are checked again.
   void SetActiveRole(std::string role_id, std::string role_name);
   // The SET ROLE role's name, for audit records (empty: all roles).
@@ -155,6 +167,7 @@ class RbacSessionState : public duckdb::ClientContextState {
   const bool administrator_;  // the session signed in as the administrator: never looked up
   mutable std::mutex principal_mutex_;
   Principal principal_;
+  std::string system_admin_unverified_;  // guarded by principal_mutex_
   std::atomic<int64_t> persona_version_{0};
   std::atomic<int> bypass_depth_{0};
 
