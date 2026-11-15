@@ -1279,7 +1279,16 @@ Server-configured instrumentation continues to record reads.
 Read-only mode is not a sandbox for administrator-installed extensions or scalar
 functions with external side effects. It uses an explicit list of permitted operations
 and table functions; unsupported operations are refused even if a particular use would
-only read. The existing token role below remains available with its existing behavior.
+only read. A statement is refused before DuckDB looks anything of it up when it holds what
+DuckDB would evaluate while it binds (a function call as the argument of a table function,
+also under `EXPLAIN`), a table function or `PRAGMA` that is not on the list (one that does
+not exist included), or `EXPLAIN` of a statement that the connection may not run, other than
+`COPY ... TO` and `CALL`. Views and macros are followed by name from the statement; a view or
+macro the statement does not lead the server to (one the reader holds no privilege on, one
+created `WITH (DEFER_BINDING)`, a macro that passes its argument to a table function) can
+still advance a sequence when DuckDB binds it. A connection whose open transaction holds
+work is not switched to read-only: commit or roll back first. The
+existing token role below remains available with its existing behavior.
 
 A sign-in token whose `role` is `readonly` gives a session that reads and changes nothing but
 itself, with or without an access-control store. It may run queries (`SELECT`, `EXPLAIN`,

@@ -1,11 +1,12 @@
 """The protocol connection property, independent of token roles and server file mode."""
 
 import json
+import time
 
 import pyarrow as pa
 import pytest
 
-from rbac import rbac_env
+from rbac import ChargewireError, rbac_env, start_rbac_server
 
 
 def assert_read_only(problem):
@@ -140,3 +141,212 @@ def test_builtin_index_view_and_computed_metadata_arguments(property_server):
     assert reader.scalar(sql="SELECT 42") == 42
     reader.close()
     writer.close()
+
+
+# ---- As an ordinary user, with access control on ----
+#
+# The tests above run as the unrestricted administrator. A read-only session's own statements
+# (its READ ONLY transactions, the definitions its screen reads) run on a connection that
+# access control checks for everyone else, and the refusals must come before any effect
+# whoever asks. Each test here runs as a store user with a handful of grants, and as the
+# administrator of the same server.
+
+READER_PASSWORD = "reader-Password-123456"
+
+
+class Controlled:
+    """A server under access control: `reader` holds SELECT on a table and two views, INSERT on
+    the table, and may use the sequence; `admin` is the administrator."""
+
+    def __init__(self, launcher, store):
+        self.rbac = start_rbac_server(launcher=launcher, store_uri=store.new_database())
+        self.admin = self.rbac.admin()
+        for sql in ("CREATE SEQUENCE ro_ids", "CREATE TABLE ro_orders (id BIGINT, item VARCHAR)",
+                    "INSERT INTO ro_orders VALUES (1, 'a'), (2, 'b'), (3, 'c')",
+                    "CREATE VIEW ro_orders_view AS SELECT id FROM ro_orders WHERE id > 1",
+                    "CREATE ROLE ro_reader_role", f"CREATE USER ro_reader WITH PASSWORD '{READER_PASSWORD}'",
+                    "GRANT ro_reader_role TO ro_reader", "GRANT SELECT ON ro_orders TO ro_reader_role",
+                    "GRANT INSERT ON ro_orders TO ro_reader_role", "GRANT SELECT ON ro_orders_view TO ro_reader_role",
+                    "GRANT USAGE ON SEQUENCE ro_ids TO ro_reader_role"):
+            self.admin.run(sql=sql)
+
+    def session(self, who: str, read_only: bool):
+        token = self.admin.token if who == "administrator" else self.rbac.password_token(user="ro_reader", password=READER_PASSWORD)
+        return self.rbac.client(token=token, options={"read_only": True} if read_only else None)
+
+    def sequence(self):
+        """The sequence's last value, as the administrator's own session reads it."""
+        return self.admin.run(sql="SELECT last_value FROM system.main.duckdb_sequences() WHERE sequence_name = 'ro_ids'").to_pylist()[0]["last_value"]
+
+    def rows(self) -> int:
+        return self.admin.run(sql="SELECT count(*) AS n FROM ro_orders").to_pylist()[0]["n"]
+
+
+@pytest.fixture
+def controlled(launcher, store):
+    return Controlled(launcher=launcher, store=store)
+
+
+def refusal(session, sql: str, parameters=None, prepare: bool = False) -> ChargewireError:
+    with pytest.raises(ChargewireError) as caught:
+        if prepare:
+            session.prepare(sql=sql)
+        else:
+            session.run(sql=sql, parameters=parameters)
+    return caught.value
+
+
+# What DuckDB evaluates while it binds, under every kind of statement that reaches the
+# binder: 2.13.0 answered 403 to each of these after the sequence had moved (set, with setval).
+# (Statements that hold it themselves. What DuckDB binds through a view or macro that the
+# statement does not lead the server to is not closed by this: see the README.)
+BOUND = [
+    "EXPLAIN CALL range({f})", "EXPLAIN (FORMAT JSON) CALL range({f})",
+    "EXPLAIN INSERT INTO ro_orders SELECT range, 'x' FROM range({f})",
+    "EXPLAIN UPDATE ro_orders SET item = 'q' FROM range({f}) r WHERE ro_orders.id = r.range",
+    "EXPLAIN DELETE FROM ro_orders USING range({f}) r WHERE ro_orders.id = r.range",
+    "EXPLAIN MERGE INTO ro_orders USING range({f}) s ON ro_orders.id = s.range WHEN MATCHED THEN DELETE",
+    "EXPLAIN PREPARE ro_never AS SELECT * FROM range({f})",
+    "WITH c AS (INSERT INTO ro_orders SELECT range, 'x' FROM range({f}) RETURNING *) SELECT * FROM c",
+    "SELECT * FROM ro_orders PIVOT (count(*) FOR (SELECT item || count(*) FROM range({f})) IN ('a1'))",
+    "SELECT json_serialize_plan('SELECT * FROM range({q})')",
+    "SELECT * FROM range({f})",  # (the control: refused before 2.13.0 was fixed too)
+]
+
+
+@pytest.mark.parametrize("function", ["nextval('ro_ids')", "setval('ro_ids', 4242)"])
+@pytest.mark.parametrize("who", ["administrator", "ordinary user"])
+def test_nothing_is_evaluated_while_binding_whoever_asks(controlled, who, function):
+    reader = controlled.session(who=who, read_only=True)
+    assert controlled.sequence() is None
+    for template in BOUND:
+        sql = template.format(f=function, q=function.replace("'", "''"))
+        for prepare in (False, True):  # sent to run, and only prepared (never executed)
+            problem = refusal(reader, sql, prepare=prepare)
+            assert (problem.status, problem.code, problem.sqlstate) == (403, "read_only", "25006"), (sql, prepare, problem)
+            assert controlled.sequence() is None, (sql, prepare)
+    # A file is the administrator's to write under access control: refused one way or the other, before anything.
+    problem = refusal(reader, f"EXPLAIN COPY (SELECT * FROM range({function})) TO 'ro_never_written.csv'")
+    assert problem.code in ("read_only", "permission_denied") and controlled.sequence() is None, problem
+    # A serialized statement: as a literal, as a bind parameter (what a prepared execution binds), and as a pragma.
+    serialized = controlled.admin.run(sql="SELECT json_serialize_sql(?) AS j", parameters=[f"SELECT * FROM range({function})"]).to_pylist()[0]["j"]
+    literal = "'" + serialized.replace("'", "''") + "'"
+    for sql, parameters in ((f"SELECT * FROM json_execute_serialized_sql({literal})", None), ("SELECT * FROM json_execute_serialized_sql(?)", [serialized]),
+                            (f"PRAGMA json_execute_serialized_sql({literal})", None)):
+        # (to an ordinary user access control refuses the function itself, before the read-only screen is asked)
+        refusals = [(403, "read_only", "25006")] if who == "administrator" else [(403, "read_only", "25006"), (403, "permission_denied", "42501")]
+        problem = refusal(reader, sql, parameters=parameters)
+        assert (problem.status, problem.code, problem.sqlstate) in refusals, (sql, problem)
+        assert controlled.sequence() is None, sql
+        problem = refusal(reader, sql, prepare=True)
+        assert (problem.status, problem.code, problem.sqlstate) in refusals and controlled.sequence() is None, (sql, problem)
+    # The twins, in the same read-only session: what binds nothing of the kind is answered.
+    assert reader.run(sql="SELECT count(*) AS n FROM ro_orders").to_pylist() == [{"n": 3}]
+    assert reader.run(sql="SELECT id FROM ro_orders_view ORDER BY id").to_pylist() == [{"id": 2}, {"id": 3}]
+    for sql in ("EXPLAIN SELECT * FROM ro_orders", "EXPLAIN SELECT * FROM ro_orders_view", "EXPLAIN CALL range(3)", "SELECT * FROM range(3)",
+                "PRAGMA table_info('ro_orders')", "SHOW TABLES", "SELECT json_serialize_sql('SELECT 1')"):
+        assert reader.run(sql=sql).num_rows >= 1, sql
+    assert reader.execute_prepared(prepared_id=reader.prepare(sql="SELECT count(*) AS n FROM ro_orders WHERE id > ?"), parameters=[1]).to_pylist() == [{"n": 2}]
+    assert reader.metadata(kind="tables").num_rows >= 1
+    # What changes a catalog is refused under an EXPLAIN as without one, with plain values too.
+    assert refusal(reader, "EXPLAIN INSERT INTO ro_orders VALUES (9, 'x')").code == "read_only"
+    assert refusal(reader, "INSERT INTO ro_orders VALUES (9, 'x')").code == "read_only"
+    assert controlled.rows() == 3 and controlled.sequence() is None
+    # And the same principal's read-write session: the statements are ones it may run, and
+    # binding them moves the sequence (so it is the read-only session that kept it still).
+    writer = controlled.session(who=who, read_only=False)
+    assert writer.run(sql="EXPLAIN INSERT INTO ro_orders VALUES (9, 'x')").num_rows >= 1  # a plan, nothing inserted
+    writer.run(sql=f"EXPLAIN CALL range({function})")
+    moved = controlled.sequence()
+    assert moved is not None
+    writer.prepare(sql="SELECT 1")  # (a prepare that binds nothing of the kind)
+    assert controlled.rows() == 3
+    assert controlled.admin.run(sql="SELECT nextval('ro_ids') AS n").to_pylist()[0]["n"] == moved + 1
+
+
+@pytest.mark.parametrize("who", ["administrator", "ordinary user"])
+def test_a_session_with_a_temporary_sequence_is_not_made_read_only_and_a_read_only_one_has_none(controlled, who):
+    session = controlled.session(who=who, read_only=False)
+    session.run(sql="CREATE TEMP SEQUENCE ro_temp_ids")
+    assert session.run(sql="SELECT nextval('ro_temp_ids') AS n").to_pylist() == [{"n": 1}]
+    answer = session.http.patch(url=session.url, headers=session.headers(), json={"options": {"read_only": True}}).json()
+    assert answer["errors"]["read_only"]["code"] == "invalid_option_value" and "temporary sequence" in answer["errors"]["read_only"]["detail"], answer
+    assert answer["options"]["read_only"] is False
+    assert session.run(sql="SELECT nextval('ro_temp_ids') AS n").to_pylist() == [{"n": 2}]  # untouched, and still the session's to use
+    session.run(sql="DROP SEQUENCE ro_temp_ids")
+    answer = session.http.patch(url=session.url, headers=session.headers(), json={"options": {"read_only": True}}).json()
+    assert answer["errors"] == {} and answer["options"]["read_only"] is True, answer
+    # None can be made now, and a statement that names one where DuckDB evaluates while binding
+    # is refused before DuckDB looks the name up (403, not "no such sequence").
+    assert refusal(session, "CREATE TEMP SEQUENCE ro_temp_ids").code == "read_only"
+    for sql in ("EXPLAIN CALL range(nextval('ro_temp_ids'))", "EXPLAIN INSERT INTO ro_orders SELECT range, 'x' FROM range(setval('ro_temp_ids', 9))",
+                "SELECT * FROM range(nextval('ro_temp_ids'))"):
+        for prepare in (False, True):
+            problem = refusal(session, sql, prepare=prepare)
+            assert (problem.status, problem.code) == (403, "read_only"), (sql, prepare, problem)
+    assert session.run(sql="SELECT count(*) AS n FROM system.main.duckdb_sequences() WHERE temporary").to_pylist() == [{"n": 0}]
+
+
+@pytest.mark.parametrize("between", [{"autocommit": False}, {"schema": "main"}, {"session_tag": {"app": "pool"}}, {"no_such_option": 1}])
+@pytest.mark.parametrize("who", ["administrator", "ordinary user"])
+def test_an_option_between_the_work_and_the_switch_does_not_hide_the_work(controlled, who, between):
+    # 2.13.0: {"autocommit": false} sent again to a session in manual commit made the server
+    # forget the INSERT, accept the switch, roll the INSERT back, and answer 204 to the commit.
+    session = controlled.session(who=who, read_only=False)
+
+    def patch(options):
+        response = session.http.patch(url=session.url, headers=session.headers(), json={"options": options})
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert patch({"autocommit": False})["errors"] == {}
+    session.run(sql="INSERT INTO ro_orders VALUES (4, 'd')")
+    patch(between)
+    answer = patch({"read_only": True})
+    assert answer["errors"]["read_only"]["code"] == "invalid_option_value", answer
+    assert "commit or roll back first" in answer["errors"]["read_only"]["detail"], answer
+    assert answer["options"]["read_only"] is False
+    assert controlled.rows() == 3  # not committed by any of it either
+    assert session.http.post(url=f"{session.url}/commit", headers=session.headers()).status_code == 204
+    assert controlled.rows() == 4
+    # The twin: with nothing pending, the same option and then the switch are accepted.
+    patch(between)
+    answer = patch({"read_only": True})
+    assert answer["errors"] == {} and answer["options"]["read_only"] is True, answer
+    assert refusal(session, "INSERT INTO ro_orders VALUES (5, 'e')").code == "read_only"
+    assert controlled.rows() == 4
+
+
+def test_a_cancel_that_lands_in_the_read_only_screen_is_recorded_as_a_cancel(launcher):
+    # A read-only session's statement starts with the server reading the views' and macros'
+    # definitions (again after any change to a catalog), on the session's connection. A cancel
+    # that ends that read ends the statement as cancelled, and is logged as that: 2.13.0
+    # logged and recorded "a statement whose views and macros the server cannot read is not
+    # allowed in a read-only session" for it.
+    # Many macros make the read long enough to cancel. The statement itself takes no time, so
+    # one the engine was interrupted in was interrupted in the screen: the proof the cancel landed there.
+    server = launcher.start(args=["--log-format", "json"])
+    writer = server.admin()
+    for batch in range(20):
+        writer.execute(sql="; ".join(f"CREATE MACRO ro_screen_filler_{batch}_{i}(a) AS a + {i}" for i in range(1000)))
+    reader = server.client().new_session(options={"read_only": True})
+    interrupted = []
+    for attempt in range(60):
+        writer.execute(sql=f"CREATE OR REPLACE MACRO ro_screen_bump() AS {attempt}")  # the definitions are read again
+        response = reader.submit(sql="SELECT count(*) FROM range(3)", headers={"Prefer": "respond-async"})
+        assert response.status_code in (200, 201, 202), response.text
+        statement_id = response.json()["statement_id"]
+        time.sleep((2, 5, 10, 20)[attempt % 4] / 1000)  # (so that it has started; the read takes longer than any of these)
+        reader.http.post(url=f"{reader.url}/statements/{statement_id}/cancel", headers=reader.headers())
+        doc = reader.wait_done(statement_id=statement_id)
+        assert doc["state"] in ("succeeded", "cancelled"), doc  # never a refusal, never an error
+        # One that the engine was running when the cancel came: it logs what the engine answered.
+        interrupted = [record for record in server.log_records()
+                       if record.get("statement_id") == statement_id and record.get("message") == "statement failed"]
+        if doc["state"] == "cancelled" and interrupted:
+            break
+    assert interrupted, "no cancel landed while the definitions were read: the test proved nothing"
+    for record in interrupted:
+        assert "read-only session" not in record["error"] and "INTERRUPT" in record["error"], record
+    assert reader.scalar(sql="SELECT 2") == 2  # the session goes on, and reads the definitions when it next needs them
+    reader.close()
