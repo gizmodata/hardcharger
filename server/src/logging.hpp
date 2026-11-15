@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -92,26 +93,46 @@ void SetLogCaptureForTesting(std::function<void(LogLevel, std::string_view)> cap
 // Would a record at `level` be written?
 bool LogEnabled(LogLevel level);
 
-// SQL as it may be logged: statements that can carry credentials (CREATE SECRET,
-// CREATE / ALTER USER ... PASSWORD) are replaced by what they are, wherever their
-// keywords sit (comments cannot hide them); in any other statement the value given to a
-// credential name (token => '..', PASSWORD '..', a connection string's password=) is
-// masked, on the statement's tokens (RedactSql, redact.hpp); a statement that cannot be
-// read is replaced whole; long text is shortened. Every sink of statement text (the log,
-// instrumentation, the catalog log, the audit record, the monitoring functions) takes it
-// from here.
+struct MaskedSql;  // redact.hpp
+
+// SQL as it may be logged: the value given to a credential name (token => '..',
+// PASSWORD '..', a connection string's password=, a URL's user:password@) is ***; a
+// statement that is credential DDL as a whole (CREATE SECRET, CREATE / ALTER USER with a
+// password, SET of a credential setting) is replaced by what it is; a statement DuckDB
+// cannot tokenize is replaced whole, with the reason; long text is shortened. The reading is
+// MaskSql's (redact.hpp), on DuckDB's own tokens; README.md lists the forms that are masked.
+// Every sink of statement text (the log, instrumentation, the catalog log, the audit
+// record, the monitoring functions) takes it from here.
 std::string LoggableSql(std::string_view sql);
 
-inline constexpr std::string_view kCredentialError = "[REDACTED: error of a credential statement]";
+// An error of the statement `sql` as it may be logged and stored (RedactError, redact.hpp):
+// without DuckDB's excerpt of the statement, with the values the statement's masking hid
+// replaced by ***, and with credentials in the shapes RedactCredentials knows masked. With
+// no statement ("") only the last applies. The originating client still receives its error.
+std::string LoggableError(std::string_view sql, std::string_view error);
 
-// Stored errors of credential-bearing/unreadable statements are dropped whole. The
-// originating client still receives its error. credential_context carries a prepared
-// statement's classification without retaining or passing its raw SQL to public sinks.
-std::string LoggableError(std::string_view sql, std::string_view error, bool credential_context = false);
-
-// Whether a statement carries credentials: one LoggableSql and LoggableError redact whole
-// (CREATE SECRET, CREATE/ALTER USER, a credential setting, a statement that cannot be
-// read), or one with a credential value LoggableSql masks.
+// Whether a statement carries credentials: its masking hid a value (or it has a
+// placeholder where one goes), or it could not be read.
 bool IsCredentialStatement(std::string_view sql);
+
+// A request's SQL read once, for the engine to hand to every sink of it.
+std::shared_ptr<const MaskedSql> MaskedOf(std::string_view sql);
+
+// While one exists on a thread, the three functions above answer from `masked` when given
+// this same text (the same bytes at the same address), so code that only has the text (the
+// access-control audit record) does not read the statement again.
+class MaskedSqlScope {
+ public:
+  MaskedSqlScope(std::string_view sql, std::shared_ptr<const MaskedSql> masked);
+  ~MaskedSqlScope();
+  MaskedSqlScope(const MaskedSqlScope&) = delete;
+  MaskedSqlScope& operator=(const MaskedSqlScope&) = delete;
+
+ private:
+  friend std::shared_ptr<const MaskedSql> MaskedOf(std::string_view sql);
+  const std::string_view sql_;
+  const std::shared_ptr<const MaskedSql> masked_;
+  MaskedSqlScope* const outer_;
+};
 
 }  // namespace hardcharger

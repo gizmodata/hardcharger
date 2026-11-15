@@ -2,8 +2,8 @@
 
 #include <algorithm>
 #include <ctime>
+#include <cctype>
 #include <format>
-#include <regex>
 
 #include "duckdb_v2.hpp"
 #include "platform.hpp"
@@ -173,16 +173,32 @@ std::optional<std::string> ParseKillSession(const Piece& piece) {
   if (piece.tokens.size() < 2 || !piece.tokens[0].IsWord("KILL") || !piece.tokens[1].IsWord("SESSION")) {
     return std::nullopt;
   }
-  static const std::regex kKill(R"re(^\s*KILL\s+SESSION\s+(?:'([^']*)'|"([^"]*)"|([0-9A-Za-z_-]+))\s*$)re",
-                                std::regex::icase);
-  std::match_results<std::string_view::const_iterator> match;
-  if (!std::regex_match(piece.text.begin(), piece.text.end(), match, kKill)) {
-    return std::string();  // a KILL SESSION without a usable id
+  // After the two words: white space, then the id as one literal, one quoted name or a bare
+  // id, and nothing more. Read by hand: the statement can be of any length, and a regular
+  // expression's matcher may recurse once per character of it (libstdc++'s does).
+  auto is_space = [](char c) { return std::isspace(static_cast<unsigned char>(c)) != 0; };
+  const std::string_view text = piece.text;
+  const std::string_view kill = piece.tokens[0].text;
+  const std::string_view session = piece.tokens[1].text;
+  const std::string_view between(kill.data() + kill.size(), static_cast<std::size_t>(session.data() - (kill.data() + kill.size())));
+  if (kill.data() != text.data() || between.empty() || !std::all_of(between.begin(), between.end(), is_space)) {
+    return std::string();  // (a comment between the words: not the command)
   }
-  for (int group = 1; group <= 3; group++) {
-    if (match[group].matched) return match[group].str();
+  std::size_t at = static_cast<std::size_t>(session.data() + session.size() - text.data());
+  const std::size_t after_words = at;
+  while (at < text.size() && is_space(text[at])) at++;
+  std::size_t end = text.size();
+  while (end > at && is_space(text[end - 1])) end--;
+  const std::string_view id = text.substr(at, end - at);
+  if (at == after_words || id.empty()) return std::string();  // a KILL SESSION without a usable id
+  if (id.size() >= 2 && (id.front() == '\'' || id.front() == '"') && id.back() == id.front()) {
+    const std::string_view inner = id.substr(1, id.size() - 2);
+    return inner.find(id.front()) == std::string_view::npos ? std::string(inner) : std::string();
   }
-  return std::string();
+  const bool bare = std::all_of(id.begin(), id.end(), [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_' || c == '-';
+  });
+  return bare ? std::string(id) : std::string();
 }
 
 namespace {

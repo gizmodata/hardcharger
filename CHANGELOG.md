@@ -7,6 +7,46 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Security
+
+- **The statement log's credential masking is rebuilt on DuckDB's own tokenizer, and what it
+  masks is now written down** (README, "What the statement log masks": the statements replaced
+  whole, the forms of a credential's value, the URL parts, headers, parameters and functions,
+  and the rule for text DuckDB cannot tokenize). A masker recognises forms: a credential in a
+  form outside that list is logged as written. An independent review of 2.13.0's masking found
+  values that reached the log, the instrumentation tables, the catalog log and the audit
+  record; each is closed, with a test that reads every sink:
+  - **A connection-string password with `;`, `)`, `"` or `'` in it** was masked only up to
+    the punctuation in the keyword form (`password=Zk7;…`) and not at all in a URL
+    (`postgresql://u:Zk7"…@host`), in the statement and in the stored error. The keyword form
+    is now read as libpq reads it (to the next white space, with its quoting and backslash
+    escapes), with MySQL's `"…"`, ODBC's `{…}` and `;`-separated lists read as theirs; a URL's
+    password runs to the last `@` before the host. Any character may be in the password.
+  - **Where the masker's own lexer read a statement differently from DuckDB**, the value was
+    logged: `$` inside a name (`a$q$`, which it took for a dollar-quoted literal) and U+2060,
+    which DuckDB reads as white space. There is no second lexer now: statements are read
+    through DuckDB's tokenizer class and its parser's normalization of Unicode spaces
+    (`server/src/sql_lex.cc`), and a seeded differential test (100,000 texts, against the
+    parser's own tokenization and the C API's on a live connection) holds that in place.
+  - **Forms that were not recognised**: HTTP header maps (`Authorization`,
+    `Proxy-Authorization`, `X-API-Key`, `Cookie`, in any case, as `MAP {…}`, a struct,
+    `MAP([…], […])` or `map_from_entries`); a token as a URL's user (`https://TOKEN@host`,
+    `https://TOKEN:x-oauth-basic@host`); the URL parameters `auth`, `api-key`, `jwt`, `code`,
+    `credential`, `subscription-key`, `sessionid`; SQL given to a function as text
+    (`postgres_execute('pg', 'ALTER ROLE app PASSWORD ''…''')`, MySQL's `IDENTIFIED BY`,
+    nested to four levels); a credential built from pieces (`'… password=' || x`,
+    `format('…?token={}', x)`: the whole expression); `IN`, `LIKE`, `BETWEEN` and the other
+    comparisons of a credential column, a comparison written the other way round or through
+    a function or a cast, and `INSERT … (name, password) VALUES …`; `SET <credential
+    setting> TO '…'` for every credential word (2.13.0 knew seven of them, and `=`); a
+    literal that is `Bearer <token>`.
+  - **An error message no longer re-exposes what the statement's masking hid.** The values
+    hidden in the statement, and the values bound to its masked placeholders (JSON and Arrow
+    parameters), are replaced wherever the error quotes them. 2.13.0's changelog said stored
+    errors were suppressed "for credential-bearing statements, including prepared executions";
+    that held only where the placeholder followed a credential name, and an error could still
+    quote a bound value or the tail of a password.
+
 ### Changed
 
 - **Android builds reach internal testers automatically.** Each release publishes its Android
@@ -15,6 +55,47 @@ own changelog in `python/CHANGELOG.md`.
   upload (2.13.1's was refused because 2.13.0's draft was still there), and an older build never
   replaces a newer one. Closed and open testing and production stay manual in Play Console.
 
+- **Errors, query profiles and comments of ordinary statements are kept again.** Since 2.13.0
+  any statement with a comment (dbt's, Metabase's, Looker's and sqlcommenter's query tags), a
+  comparison of two credential-named columns (`a.access_token = b.access_token`) or an escaped
+  literal had its comment blanked, its stored error replaced by `[REDACTED: error of a
+  credential statement]` and its query profile dropped. A comment is now kept as written (a
+  credential inside one is still masked), such a comparison hides nothing, and an error is
+  redacted by value, as above: the reason it gives survives. Only the error of a statement
+  that computes a credential value (`token => upper('…')`) is replaced whole.
+- **A failed init SQL statement says which statement failed and why**: `init SQL failed:
+  <reason> (init SQL statement 2 of 5: <the statement as the log shows it>)`. With 2.13.0 a
+  failing `ATTACH` with a password, `CREATE SECRET` or `CREATE USER` stopped the server with
+  only `init SQL failed: [REDACTED: error of a credential statement]`.
+- **No wording keeps a statement's text out of the log.** A name such as `a$q$`, or the words
+  `create secret`, `create user` or `alter user` in a comment or a string, made the statement
+  log, `sql_statements` and the monitoring functions show `[REDACTED: …]` for a statement
+  that ran. What a statement is, is now decided on its own first words as DuckDB tokenizes
+  them, and in a request of several statements only the credential DDL is replaced. Text is
+  hidden whole only when DuckDB cannot tokenize it (and so cannot run it), and the placeholder
+  says why: `[REDACTED: a statement that could not be read: an unterminated string literal]`.
+  `CREATE USER` and `ALTER USER` without a password are logged as written.
+- **A statement is read once for all its sinks.** The masking ran two to five times per
+  statement, each pass costing about 0.18 s per MB, most of it in six regular-expression
+  searches: a 16 MB `INSERT` spent over 14 s in it. It is one pass of about 25 ms per MB now
+  (0.4 s for 16 MB), shared by the log, instrumentation, the monitoring functions and the
+  audit record, with no `std::regex` on statement text.
+
+### Notes on the 2.13.0 entries
+
+- "Extension validation waits for asynchronous installation to finish …" (2.13.0, Fixed)
+  described a change to the test suite only (`INSTALL tpch` moved from init SQL into a session
+  statement); the server's behaviour did not change.
+- "Python package CI waits for an unpublished server release before scheduling its download
+  tests" (2.13.0, Fixed): the `real server` jobs do not wait. When the pinned server release is
+  not published they are skipped for that commit and never run for it; the package is first
+  tested against the new server by the publishing run, where they are required
+  (`docs/releasing.md` now says so). A test now holds the workflow's wiring in place
+  (`publish` needs `test`, `server` and `client` and has no status function; `server` is
+  skipped only by the release check; every publishing trigger requires the release).
+- "Comment bodies and escaped literals are concealed conservatively" (2.13.0, Security) did
+  not say that such a statement also lost its stored error and its query profile; see
+  "Changed" above.
 ## [2.13.1] - 2026-11-15
 
 ### Fixed

@@ -921,6 +921,104 @@ connection of a streamed result), `timeout` (`Chargewire-Statement-Timeout` or
 `session_closed` (the session was deleted) or `server_shutdown`. A statement that
 ends on its own, or fails, gets none.
 
+### What the statement log masks
+
+Statement text and error text are kept in several places: the log's `statement`, `prepare`,
+`Client SQL command execution succeeded` and `statement failed` lines (at any level),
+`_hardcharger_instr.sql_statements` (`sql_text`, `prepare_error`) and `sql_executions`
+(`error_message`), the catalog log, `hardcharger_active_connections()` and
+`hardcharger_live_queries()`, the access-control audit record (`sql`, `error`) and the line a
+failed init SQL statement stops the server with. Before text reaches any of them, the credential
+values in it are replaced by `***`. The client that sent a statement still gets its own error
+as DuckDB gave it.
+
+A masker recognises forms; it does not understand statements. **What is masked is the list
+below, and nothing else: a credential written in any other form is logged as written.** Each
+form has a test (`server/unit/redaction_test.cc`, `server/tests/test_log_masking_forms.py`).
+
+A statement is read as DuckDB's own tokenizer reads it, so a value is found where DuckDB finds
+it, whatever comments, quoting or Unicode white space surround it. In a name, case is ignored
+and `-` reads as `_`. A **credential name** is one that ends in `password`, `passwd`, `pwd`,
+`passphrase`, `secret`, `token`, `access_key`, `secret_key`, `accountkey`, `account_key`,
+`apikey`, `api_key`, `private_key`, `encryption_key`, `subscription_key`, `sig`, `signature`,
+`auth`, `authorization`, `credential`, `credentials`, `cookie`, `jwt` or `bearer`, or is
+`pass` or `pw`, or ends in `_pass` or `_pw` (`s3_secret_access_key`, `X-API-Key`,
+`Proxy-Authorization`, `bearer_token`).
+
+**Statements replaced whole**, by their own first words (not by words in a comment or a
+string). In a request of several statements only that statement is replaced:
+
+| Statement | Logged as |
+|---|---|
+| `CREATE [OR REPLACE] [PERSISTENT \| TEMPORARY \| TEMP] SECRET …` | `[REDACTED: secret DDL]` |
+| `CREATE USER …` / `ALTER USER …` with a literal or a credential name in it (`PASSWORD '…'`) | `[REDACTED: user DDL]` |
+| `SET` / `PRAGMA` `[GLOBAL \| SESSION \| LOCAL]` of a setting whose name has `password`, `passwd`, `pwd`, `passphrase`, `secret`, `token`, `access_key`, `accountkey`, `account_key`, `apikey`, `api_key`, `private_key`, `encryption_key`, `signature`, `credential`, `bearer`, `authorization`, `cookie` or `jwt` in it, or is a credential name, with `=` or `TO` (not `SET VARIABLE`, whose value is masked instead) | `[REDACTED: a credential setting]` |
+
+**The value given to a credential name** in any other statement. The whole value is replaced,
+whether it is one literal or an expression (`'a' || 'b'`, `upper('…')`, a subquery):
+
+| Form | Example |
+|---|---|
+| a named argument | `f(token => v)`, `f(token := v)`, `f(token = v)` |
+| a struct, MAP or JSON key | `{password: v}`, `{'password': v}`, `MAP {'api_key': v}` |
+| an option list | `ATTACH '…' (ENCRYPTION_KEY 'v')`, `(TOKEN v)` with a bare word in an `ATTACH` |
+| `SET VARIABLE` | `SET VARIABLE my_api_key = v` |
+| a comparison with a literal or an expression | `password = v`, `==`, `<>`, `!=`, `<`, `>`, `<=`, `>=`, `~`, `!~`, `IN (…)`, `[NOT] LIKE`, `ILIKE`, `GLOB`, `REGEXP`, `SIMILAR TO`, `BETWEEN … AND …`, `IS [NOT] DISTINCT FROM`; also `v = password`, `lower(password) = v`, `password::TEXT = v`, `CAST(password AS TEXT) = v` |
+| an `UPDATE`'s assignment | `SET password = v` |
+| an `INSERT` with a column list and `VALUES` rows | `INSERT INTO users (name, password) VALUES ('eve', v), …` |
+| a name and its value as two literals | `json_object('api_key', 'v')`, `VALUES ('api_key', 'v')`, `map_from_entries([('Authorization', 'v')])`, `MAP(['Authorization'], ['v'])` |
+| DuckDB's key function | `PRAGMA add_parquet_key('name', 'v')` (all arguments) |
+| a password clause of another engine | `IDENTIFIED BY 'v'`, `IDENTIFIED WITH plugin BY 'v'` / `AS 'v'` |
+| an `Authorization` value on its own | a literal that is `Bearer <token>` or `Basic <base64>` |
+
+A comparison of two columns (`a.access_token = b.access_token`), `IS NULL`, and a name with no
+value (`SELECT token FROM t`, `CREATE TABLE t (password VARCHAR)`) hide nothing. A bind
+placeholder (`token => ?`, `$1`, `$name`) is kept as written; the value bound to it is a
+credential for the statement's errors (below).
+
+**Inside a string literal, a quoted name and a comment**, and in error text:
+
+| Form | What is masked |
+|---|---|
+| a URL's userinfo, `scheme://user:password@host` | the password, up to the last `@` before the host (so one with `@`, `:`, `/`, quotes, brackets or a space in it goes whole); for `http` and `https` the user as well: `https://TOKEN@host`, `https://TOKEN:x-oauth-basic@host` |
+| a URL's query parameters | the value of a parameter with a credential name (`?auth=`, `?api-key=`, `?jwt=`, `?access_token=`, `?sig=`, `?X-Goog-Signature=`), of any `X-Amz-…` parameter, and of `key`, `code`, `sessionid` and `session_id`, up to the next `&` or `#` |
+| `key=value` with a credential name as the key | libpq's keyword form (to the next white space, a backslash taking the next character; or `'…'`), also behind `postgres:` and `ducklake:postgres:`; `"…"` (MySQL); `{…}` (ODBC); a `;`-separated list, to the next `;` (ADO, Azure's `AccountKey=…;`) |
+| `key => value`, `key := value`, `'key': 'value'`, `"key": "value"` | the value (JSON and struct text) |
+| a header line | `Authorization:`, `Proxy-Authorization:`, `Cookie:`, `Set-Cookie:`, `X-API-Key:`, `X-Auth-Token:`, `X-Amz-Security-Token:`, to the end of the line |
+| SQL given as text | a literal or a comment that holds a statement (`postgres_execute('pg', 'ALTER ROLE app PASSWORD ''v''')`, `query('…')`, a statement commented out) is read again with every rule above, four levels deep; one DuckDB cannot tokenize, or with a backslash before a quote, that names a credential before a quote is masked whole |
+| a value built from pieces | when a credential's value runs to the end of a literal that is joined to something (`'host=h password=' \|\| x`), the rest of the concatenation; when the literal is a function's argument and the value is a placeholder (`format('…?token={}', x)`, `%s`), the function's other arguments |
+
+**Text DuckDB cannot tokenize** (an unterminated string literal, quoted identifier, `/*`
+comment or dollar-quoted string, or invalid UTF-8) cannot be searched for values and never
+runs: all of it is replaced by `[REDACTED: a statement that could not be read: <which>]`, and
+its error by `[REDACTED: error of a statement that could not be read: <which>]`.
+
+**Errors.** An error is logged and stored without DuckDB's excerpt of the statement
+(`LINE 1: …`), with every value the statement's masking hid replaced wherever the error quotes
+it (in any letter case, as the literal's value with its quotes and escapes resolved, joined
+when it was written as `'a' || 'b'`, and each piece of a password that a connection-string
+parser split at its punctuation), with the values bound to the statement's masked
+placeholders replaced the same way (JSON parameters and Arrow parameter rows), and then with
+the forms of the table above masked in the error's own text (DuckDB quotes an `ATTACH`'s
+connection string in its errors). The reason an error gives is kept. Two errors are replaced
+whole, because what they might quote cannot be listed: that of a statement whose credential
+value is computed (`token => upper('…')`), by
+`[REDACTED: error of a statement that computes a credential value]`, and that of an execution
+that binds more than 1,000 credential values.
+
+**Query profiles** (`capture_query_profile`) hold a statement's text and constants: none is
+captured for a statement in which a value was masked. A comment, a join on a credential-named
+column and an ordinary escaped literal mask nothing, and such statements keep their profile.
+
+A failed init SQL statement stops the server with one line that says why and which:
+`init SQL failed: <the error, redacted as above> (init SQL statement 2 of 5: <the statement
+as the log shows it>)`.
+
+Among what is **not** masked: an argument given by position (`hmac('key', msg)`), a value
+under a name that is not a credential name (`key => …`, `tokens => […]`, `client_key_pem`), a
+credential in a URL's path, an `INSERT` without a column list or from a `SELECT`, and a value
+an error quotes after the statement transformed it (a substring, a hash, an encoding).
+
 ### Credential and system files
 
 With `block_sensitive_paths` on (the default), no statement can open, list, write, move or

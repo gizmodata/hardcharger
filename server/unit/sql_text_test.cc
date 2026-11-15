@@ -130,4 +130,20 @@ TEST_F(SqlText, KillSessionCommands) {
   EXPECT_EQ(Kill("KILL SESSION '" + id + "';"), id);
   EXPECT_EQ(Kill("KILL SESSION"), std::string());
   EXPECT_FALSE(Kill("SELECT 'KILL SESSION x'"));
+  // Every form the command takes, and what is not one.
+  EXPECT_EQ(Kill("kill  session\t\"" + id + "\" "), id);
+  EXPECT_EQ(Kill("KILL SESSION s_abc-DEF_123"), "s_abc-DEF_123");
+  EXPECT_EQ(Kill("KILL SESSION 'a' 'b'"), std::string());
+  EXPECT_EQ(Kill("KILL SESSION 'a''b'"), std::string());
+  EXPECT_EQ(Kill("KILL SESSION a b"), std::string());
+  EXPECT_EQ(Kill("KILL SESSION a.b"), std::string());
+  EXPECT_EQ(Kill("KILL /* c */ SESSION 'a'"), std::string());
+  EXPECT_EQ(Kill("KILL SESSION''"), std::string());
+  // A statement of any length is read in one pass (a regular expression read this text
+  // before: on libstdc++, megabytes of white space after the words recursed once per byte).
+  const std::string long_id(2 * 1024 * 1024, 'x');
+  EXPECT_EQ(Kill("KILL SESSION" + std::string(16 * 1024 * 1024, ' ') + "'" + id + "'"), id);
+  EXPECT_EQ(Kill("KILL SESSION '" + long_id + "'"), long_id);
+  EXPECT_EQ(Kill("KILL SESSION " + long_id), long_id);
+  EXPECT_EQ(Kill("KILL SESSION " + long_id + " ;x"), std::nullopt);  // (two statements: not one command)
 }

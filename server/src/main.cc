@@ -745,6 +745,11 @@ int main(int argc, char** argv) {
     backend->StopHealthCheck();
     backend->StopInstrumentation();
     hc::LogSuccess("stopped");
+  } catch (const hc::InitSqlError& e) {
+    // (Its message is loggable as it is: engine.cc built it from the masked statement.)
+    hc::LogFatal(e.what());
+    hc::embedding::Failed(e.what());
+    return 1;
   } catch (const std::exception& e) {
     // The last resort, for whatever escaped the code that should have handled it: such an
     // error may quote a connection string (the store's, an ATTACH's) or a credential, so it
