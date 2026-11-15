@@ -77,22 +77,59 @@ such as `2.1.0.post1`, and still downloads server `2.1.0`. Release candidates us
 (`2.1.0rc1`) for Python and `2.1.0-rc.1` for the server. The separate ADBC driver has its
 own release cycle.
 
-The release comes from [gizmodata/hardcharger](https://github.com/gizmodata/hardcharger/releases)
-through the GitHub API. Its SHA-256 must match the digest GitHub recorded for the asset,
-and the unpacked server must report the expected version, or nothing is installed.
+The server comes from a public source. No account, token or Docker is needed:
 
-Public releases download anonymously. An optional GitHub token raises the API rate limit:
-`HARDCHARGER_INSTALL_TOKEN`, else `GH_TOKEN`, else the token of a signed-in
-[`gh`](https://cli.github.com) (`gh auth token`). Set `HARDCHARGER_INSTALL_TOKEN=none` to
-force an anonymous download. The token is sent only to the GitHub API, never to the
-storage host the download is redirected to, and is never printed.
+1. **GitHub Releases** of [gizmodata/hardcharger](https://github.com/gizmodata/hardcharger/releases).
+   The release tarball is fetched from its direct download URL
+   (`https://github.com/gizmodata/hardcharger/releases/download/v<version>/hardcharger-<platform>.tar.gz`),
+   which uses neither the GitHub API nor its rate limit, and its SHA-256 must match the
+   release's `SHA256SUMS`.
+2. **The container image** `ghcr.io/gizmodata/hardcharger:<version>`, on Linux, when GitHub
+   can't be reached or refuses: a sandbox that allows PyPI and ghcr.io but not github.com,
+   for example. The launcher reads the image through the registry's HTTP API (an anonymous
+   pull token, the manifest for this architecture), checks every layer against its digest
+   and takes the server's files out of the layers. They are the files of the release
+   tarball, byte for byte, and run outside the image as the tarball's do. The image holds
+   Linux binaries, so on macOS the server comes from GitHub only.
+
+Whatever the source, the unpacked server must report the expected version, or nothing is
+installed. A download that doesn't match its checksum or digest stops the install. A source
+that can't be reached or refuses is passed over, with a line on stderr saying why, and when
+every source fails the error names each one and its reason: the HTTP status, a rate limit
+and when it resets, the connection error, the host a redirect led to.
+
+`HARDCHARGER_INSTALL_SOURCE` picks one source: `github`, or `ghcr` for the container image
+alone (Linux):
+
+```bash
+HARDCHARGER_INSTALL_SOURCE=ghcr python -m hardcharger download
+```
+
+`HARDCHARGER_INSTALL_REGISTRY_IMAGE` names another copy of the image, without a tag (the
+server version is the tag): `docker.io/gizmodata/hardcharger`, or a mirror in an air-gapped
+network such as `registry.example.com/mirror/hardcharger` (`http://` in front for a registry
+without TLS). The image must be one that can be pulled without signing in.
+
+A GitHub token is optional: `HARDCHARGER_INSTALL_TOKEN`, else `GH_TOKEN`, else the token of
+a signed-in [`gh`](https://cli.github.com) (`gh auth token`). With one, the GitHub API is
+asked first, which is how a GitHub Enterprise Server or a private copy of the repository is
+read (`HARDCHARGER_RELEASE_API_URL`, `HARDCHARGER_RELEASE_REPO`). A token the API refuses
+(expired, or one for something else) is not the end: the launcher says so and downloads
+without it. `HARDCHARGER_INSTALL_TOKEN=none` never sends a token. The token is sent only
+to the GitHub API, never to the host a download is redirected to nor to the container
+registry, and is never printed.
 
 | Variable | Meaning |
 |---|---|
 | `HARDCHARGER_SERVER_BINARY` | run this `hardcharger-server` instead of downloading one |
 | `HARDCHARGER_VERSION` | the server version to download (default: the one this package pins) |
 | `HARDCHARGER_CACHE_DIR` | where downloads are kept (default `~/.cache/hardcharger`) |
-| `HARDCHARGER_INSTALL_TOKEN` | the GitHub token for the download (`none`: anonymous) |
+| `HARDCHARGER_INSTALL_SOURCE` | `auto` (default: GitHub, then on Linux the container image), `github` or `ghcr` |
+| `HARDCHARGER_INSTALL_REGISTRY_IMAGE` | the container image, without a tag (default `ghcr.io/gizmodata/hardcharger`) |
+| `HARDCHARGER_INSTALL_TOKEN` | a GitHub token for the GitHub API (`none`: never send one) |
+| `HARDCHARGER_RELEASE_API_URL` | the GitHub API's base URL (default `https://api.github.com`), e.g. GitHub Enterprise Server |
+| `HARDCHARGER_RELEASE_DOWNLOAD_URL` | the base of the direct download URLs (default `https://github.com`); with only the API URL set, the API is used |
+| `HARDCHARGER_RELEASE_REPO` | the repository the releases come from (default `gizmodata/hardcharger`) |
 
 ## Tests
 
@@ -101,11 +138,13 @@ uv venv && uv pip install -e . --group dev
 .venv/bin/python -m pytest -m "not integration and not download"      # no server needed
 HARDCHARGER_PY_TEST_SERVER_BINARY=/path/to/hardcharger-server \
   .venv/bin/python -m pytest -m "integration and not client"           # the real server
-.venv/bin/python -m pytest -m download                                 # a real download
+.venv/bin/python -m pytest -m download                                 # real downloads
 ```
 
-The `client` tests also need `adbc-driver-hardcharger` installed. The integration, client
-and download tests fail, never skip, without their server, client or GitHub access.
+The unit tests use a fake GitHub and a fake container registry on 127.0.0.1 and never the
+network. The `client` tests also need `adbc-driver-hardcharger` installed. The integration,
+client and download tests fail, never skip, without their server, client or access to
+GitHub and ghcr.io.
 
 ## License
 

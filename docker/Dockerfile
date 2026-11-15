@@ -14,6 +14,10 @@ RUN apt-get update \
 
 # The tarball's tree: bin/, LICENSE, CHANGELOG.md and the third-party notices, which are
 # also linked where Debian-style images keep each package's (/usr/share/doc/<package>/).
+# The Python package (`pip install hardcharger`) takes this tree out of the image's layers
+# when GitHub can't be reached: /opt/hardcharger is IMAGE_ROOT in
+# python/src/hardcharger/_install.py, and python/tests/test_install_sources.py checks
+# the two agree.
 COPY dist/hardcharger-linux-${TARGETARCH}/ /opt/hardcharger/
 RUN ln -s /opt/hardcharger/bin/hardcharger-server /usr/local/bin/hardcharger-server \
  && ln -s /opt/hardcharger/bin/hardcharger /usr/local/bin/hardcharger \

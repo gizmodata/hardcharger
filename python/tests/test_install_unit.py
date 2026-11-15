@@ -1,5 +1,6 @@
-"""The download: token choice, the redirect that must not carry the token, digest and
-version checks, unsafe tarballs, unsupported platforms. Against a fake GitHub."""
+"""The download through the GitHub API with a token: token choice, the redirect that must
+not carry the token, digest and version checks, unsafe tarballs, unsupported platforms.
+Against a fake GitHub. The sources and their fallbacks are in test_install_sources.py."""
 
 from __future__ import annotations
 
@@ -171,32 +172,18 @@ def test_normalize_version(given, expected):
     assert _install.normalize_version(version=given) == expected
 
 
-def test_without_a_token_the_error_says_how_to_get_access(fake_github, monkeypatch):
-    monkeypatch.setenv("HARDCHARGER_INSTALL_TOKEN", "none")
-    with pytest.raises(expected_exception=InstallError) as error:
-        ensure_server()
-    message = str(error.value)
-    assert f"couldn't find Hardcharger release v{SERVER_VERSION} on GitHub (HTTP 404)" in message
-    assert (
-        "set HARDCHARGER_INSTALL_TOKEN to a GitHub token that can read gizmodata/hardcharger"
-        in (message)
-    )
-    assert fake_github.api_requests[0].authorization is None
-
-
-def test_with_a_wrong_token_the_error_says_it_cannot_read(fake_github, monkeypatch):
-    monkeypatch.setenv("HARDCHARGER_INSTALL_TOKEN", "wrong-token")
-    with pytest.raises(expected_exception=InstallError) as error:
-        ensure_server()
-    assert "The token in use can't read gizmodata/hardcharger's releases" in str(error.value)
-    assert "wrong-token" not in str(error.value)
-
-
-def test_a_missing_release_is_a_404(fake_github, monkeypatch):
+def test_a_missing_release_names_every_github_attempt(fake_github, monkeypatch):
     monkeypatch.setenv("HARDCHARGER_INSTALL_TOKEN", TOKEN)
     with pytest.raises(expected_exception=InstallError) as error:
         ensure_server(version="9.9.9")
-    assert "couldn't find Hardcharger release v9.9.9 on GitHub (HTTP 404)" in str(error.value)
+    message = str(error.value)
+    assert f"couldn't download Hardcharger 9.9.9 for {detect_platform()}. Tried:" in message
+    api = f"{fake_github.api.url}/repos/gizmodata/hardcharger/releases/tags/v9.9.9"
+    web = f"{fake_github.web.url}/gizmodata/hardcharger/releases/download/v9.9.9/SHA256SUMS"
+    assert f"  - GitHub API with the configured token: {api}: HTTP 404 Not Found\n" in message
+    assert f"  - GitHub release download: {web}: HTTP 404 Not Found\n" in message
+    assert f"  - GitHub API without a token: {api}: HTTP 404 Not Found" in message
+    assert TOKEN not in message
 
 
 def test_a_digest_mismatch_is_refused(fake_github, monkeypatch, tmp_path):
@@ -295,9 +282,11 @@ def test_cli_download_prints_the_path(fake_github, monkeypatch, tmp_path):
 
 def test_cli_download_failure_exits_1(fake_github, monkeypatch):
     monkeypatch.setenv("HARDCHARGER_INSTALL_TOKEN", "none")
-    result = _python_m("download")
+    result = _python_m("download", "--version", "9.9.9")
     assert result.returncode == 1
-    assert "set HARDCHARGER_INSTALL_TOKEN" in result.stderr
+    assert "hardcharger: couldn't download Hardcharger 9.9.9" in result.stderr
+    assert "/releases/download/v9.9.9/SHA256SUMS: HTTP 404 Not Found" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_cli_server_runs_the_binary_with_its_arguments(monkeypatch, tmp_path):

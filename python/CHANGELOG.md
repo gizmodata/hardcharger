@@ -6,6 +6,52 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- On Linux the server can come from the public container image
+  (`ghcr.io/gizmodata/hardcharger:<version>`) when GitHub can't be reached or refuses, as
+  in a sandbox that allows PyPI and ghcr.io but not github.com. The launcher reads the
+  image through the registry's HTTP API with the standard library alone (no Docker): an
+  anonymous pull token, the manifest for this architecture, every layer checked against
+  its digest, and the server's files (`/opt/hardcharger` in the image, the same files as
+  the release tarball's) taken out of the layers. The same `--version` check follows.
+- `HARDCHARGER_INSTALL_SOURCE`: `auto` (the default: GitHub, then on Linux the container
+  image), `github` or `ghcr`. Another value is an error that names these three.
+- `HARDCHARGER_INSTALL_REGISTRY_IMAGE` names another copy of the image, such as
+  `docker.io/gizmodata/hardcharger` or a mirror in an air-gapped network, and
+  `HARDCHARGER_RELEASE_DOWNLOAD_URL` the base of the direct download URLs.
+
+### Changed
+
+- The download needs no GitHub token and no GitHub API. The release tarball comes from its
+  direct download URL
+  (`https://github.com/gizmodata/hardcharger/releases/download/v<version>/...`) and must
+  match its SHA-256 in the release's `SHA256SUMS`, so GitHub's limit of 60 anonymous API
+  requests an hour per address no longer applies. With a token configured the API is still
+  asked first (GitHub Enterprise Server, a private copy), and without one it is asked when
+  the direct download fails.
+- When every source fails, the error names each one tried and why: the HTTP status, a rate
+  limit and when it resets, the connection error, and the host a redirect led to. Each
+  failed attempt is also reported on stderr as it happens. The hint to set a token "while
+  the releases are internal" is gone: the releases are public.
+
+### Fixed
+
+- A GitHub token that the API refuses (an expired `GH_TOKEN`, a token for something else)
+  no longer ends the install with HTTP 401, 403 or 404: the launcher says so on stderr and
+  downloads without the token.
+- A release whose API answer records no digest for the tarball is checked against the
+  release's `SHA256SUMS`, and not installed when there is neither. Before, such a download
+  was installed without any check.
+- A download that breaks off partway is reported as that, and the next source is tried,
+  where it used to be reported as a wrong SHA-256.
+- Two processes installing the same release at once (parallel test workers on a cold
+  cache) no longer step on each other: the one that finishes second keeps the first one's
+  install, which may already be running, where it used to delete and replace it.
+- A cache directory that can't be created, a tarball that isn't one and a server whose
+  `--version` hangs are reported as install errors (`hardcharger: ...`, exit status 1),
+  not as Python tracebacks.
+
 ## [2.13.0] - 2026-11-14
 
 ### Changed

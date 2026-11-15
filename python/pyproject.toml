@@ -59,6 +59,6 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
   "integration: runs the real hardcharger-server (HARDCHARGER_PY_TEST_SERVER_BINARY); fails without it",
-  "download: downloads a real release from GitHub (HARDCHARGER_PY_TEST_TOKEN or gh auth token); fails without access",
+  "download: downloads the real release from GitHub and, on Linux, from the image on ghcr.io; fails without access",
   "client: needs adbc-driver-hardcharger installed; fails without it",
 ]
