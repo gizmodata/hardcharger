@@ -7,6 +7,32 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- `SYSTEM ADMIN`: named users act as the administrator, under their own names. `GRANT SYSTEM
+  ADMIN TO alice` (or `TO ROLE dba`) lets the user say `SET ROLE SYSTEM ADMIN` in a session,
+  which then does everything the administrator does (users, roles, grants, policies,
+  tenants, administrative commands; no grant, row policy or mask applies to it) until
+  `RESET ROLE`. Holding it changes nothing by itself, and no new, reconnected or replaced
+  session inherits it. Only the administrator or a session acting as System Admin grants and
+  revokes it: it has no admin option, is no part of `ALL PRIVILEGES`, and a role carries it
+  only through memberships they granted (and identity-provider group mappings). It is asked
+  of the grants on every statement, prepared ones included, so a revoke, a dropped role or a
+  removed membership ends it for open sessions at their next statement, on every replica.
+  Sessions limited by a scoped token, `catalog_access` rules, a read-only connection, the
+  `readonly` role or a tenant are refused. The administrator stays outside it, as the way in.
+  `SHOW GRANTS`, `hardcharger_grants()` and `hardcharger_effective_privileges()` show who
+  holds it; `HARDCHARGER_IS_SYSTEM_ADMIN()`, `HARDCHARGER_ACTIVE_ROLE()` and a `system_admin`
+  column in `hardcharger_sessions()` and `hardcharger_active_connections()` show which
+  sessions act as one. The store gains one table on the first start; a 2.13 store is
+  upgraded in place.
+- The access-control audit records name who and what: `user_id` and `session_id` on every
+  record, and on access-control statements the users and roles they are about (`target`,
+  `target_ids`) and the privilege, membership or object they change. Acting as System Admin
+  adds `acting_as`, records each start, refusal and end of it, and records every statement
+  run that way. No record holds a password, hash, token or secret; chains written by earlier
+  versions still verify.
+
 ### Changed
 
 - **Android builds reach internal testers automatically.** Each release publishes its Android
@@ -14,6 +40,8 @@ own changelog in `python/CHANGELOG.md`.
   leaving a draft to publish by hand in Play Console. A leftover draft no longer stops the
   upload (2.13.1's was refused because 2.13.0's draft was still there), and an older build never
   replaces a newer one. Closed and open testing and production stay manual in Play Console.
+- `SYSTEM ADMIN` is no longer available as a user's or role's name (`CREATE ROLE "SYSTEM
+  ADMIN"` is refused). One a store already has stays an ordinary role, written quoted.
 
 ## [2.13.1] - 2026-11-15
 

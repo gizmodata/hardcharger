@@ -1222,6 +1222,151 @@ could reach the server's files outside DuckDB's file system; the `sqlite_scanner
 takes the administrator or a role granted `MANAGE EXTENSIONS`, which belong only to roles you
 would trust with the server's files.
 
+### Named administrators (`SYSTEM ADMIN`)
+
+The administrator is the one user the server is started with (`admin_username` and its
+password). `SYSTEM ADMIN` lets named users do the administrator's work under their own
+names, so nobody has to share that password and the audit trail says who did what:
+
+```sql
+GRANT SYSTEM ADMIN TO alice;        -- or TO ROLE dba: the role's members may ask
+```
+
+Holding it changes nothing by itself. alice signs in as herself, with her own roles' rights,
+and asks for it in the session where she needs it, as `sudo` is asked for:
+
+```sql
+SET ROLE SYSTEM ADMIN;              -- this session acts as the administrator
+CREATE USER carl WITH PASSWORD '…';
+GRANT analyst TO carl;
+RESET ROLE;                         -- alice again (SET ROLE ALL, NONE or a role do the same)
+```
+```sql
+REVOKE SYSTEM ADMIN FROM alice;     -- the administrator, or another System Admin
+```
+
+It is written in two words, like the system privileges (`READ FILESYSTEM`), so it is no
+role's name: a role called `sysadmin` in a store an earlier version made stays the ordinary
+role it was, and `SET ROLE "SYSTEM ADMIN"` (quoted) names a role, never this.
+
+- **What the session can do.** Between `SET ROLE SYSTEM ADMIN` and `RESET ROLE` it does
+  everything the administrator does, and nothing less: users, roles, grants, row and masking
+  policies, tenants, group mappings and scoped tokens for others; `ATTACH`, secrets,
+  extensions, files, `SET GLOBAL`, `KILL SESSION`, the SQL monitor and the server's own
+  catalogs. Its statements are not checked against grants, row policies or masks, in every
+  tenant's catalogs. What it creates belongs to the administrator (no user owns it), and
+  what it grants stands as the administrator's grants do, also once it no longer holds
+  `SYSTEM ADMIN`. Back as herself, alice holds nothing on what she made as System Admin.
+- **One session at a time.** Another session of the same user, a new session, a reconnect
+  and a session a client opens to replace a lost one all start as the user. A client that
+  sends `SET ROLE SYSTEM ADMIN` again is asked like the first time. The `hardcharger` client
+  and the web UI's SQL editor need nothing special: it is plain SQL in the session they
+  hold. (The UI's own administrator pages, and the role it shows, follow the sign-in's role,
+  which stays `user`.)
+- **Who grants it.** Only the administrator, or a session acting as System Admin. It has no
+  `ADMIN OPTION` or `GRANT OPTION`, `ALL PRIVILEGES` never includes it, and no owner, tenant
+  admin or holder of a role's admin option can give it. It goes to a user or a role of the
+  server itself: not to `PUBLIC`, and not to a tenant's user or role.
+- **Through a role.** A role granted it carries it to the members the administrator (or a
+  System Admin) gave the role, to roles they granted it to, and to users whose sign-in token
+  lists a group mapped to it (`CREATE GROUP MAPPING`, which only they create). A membership
+  that the holder of a role's `ADMIN OPTION` granted never carries it, and once a role holds
+  `SYSTEM ADMIN`, only the administrator or a System Admin grants, revokes or drops that
+  role, whatever admin option exists on it.
+- **Taken away at the next statement.** Whether the user holds it is asked on every
+  statement, prepared ones included. After `REVOKE SYSTEM ADMIN`, `DROP ROLE` of the role
+  that gave it, taking the user out of that role or unmapping its group, the session's next
+  statement fails with `user alice no longer holds SYSTEM ADMIN, which SET ROLE made active.
+  Run RESET ROLE to go on as alice`, and a statement still running is stopped. Disabling or
+  dropping the user ends its sessions. On other replicas this arrives with the next poll of
+  the store (about a second); a change to users, roles or grants by that session is refused
+  at once everywhere, because the change's own store transaction asks again. What the
+  session did before stands: an open transaction is alice's to commit or roll back after
+  `RESET ROLE`. `SET ROLE SYSTEM ADMIN` itself asks the store, not the replica's copy, so
+  while the store is down nobody starts acting as System Admin.
+- **Never more than the session's own limits.** A session that signed in with a scoped
+  token, with a token carrying `catalog_access` rules, with the `readonly` role, or on a
+  `read_only` connection, and every session of a tenant's user, is refused, and the refusal
+  says which of these it is (`Hardcharger blocked SET ROLE SYSTEM ADMIN: this session signed
+  in with scoped token reports, and a scoped token never acts as System Admin`). A session
+  acting as System Admin that turns `read_only` stops acting as one.
+- **The administrator stays the way in.** It is the server's configuration, not a user of
+  the store: no statement renames it, changes its password, disables or drops it, and a
+  System Admin cannot read its credentials (`block_sensitive_paths` keeps the configuration
+  and the environment out of SQL's reach for every role). It needs no grant, so it still
+  signs in and takes `SYSTEM ADMIN` away from anyone when the store's grants are wrong, and
+  the server starts when they are missing or unreadable (nobody holds `SYSTEM ADMIN` then,
+  and the log says so). With `rbac_max_snapshot_age_seconds`, a System Admin is refused with
+  the other store users while the store is down; the administrator is not. An external
+  policy service (`rbac_opa_url`) is asked once, with the action `system_admin`, when a
+  session asks; like the administrator's, a System Admin's statements are not sent to it.
+
+Who holds it, and which sessions act as one now:
+
+```sql
+SELECT grantee, grantee_type, privilege, grantor FROM hardcharger_grants() WHERE privilege = 'SYSTEM ADMIN';
+```
+```text
+grantee | grantee_type | privilege    | grantor
+alice   | USER         | SYSTEM ADMIN | administrator
+dba     | ROLE         | SYSTEM ADMIN | administrator
+```
+```sql
+SELECT user_name, privilege, via FROM hardcharger_effective_privileges('dave') WHERE privilege = 'SYSTEM ADMIN';
+```
+```text
+user_name | privilege    | via
+dave      | SYSTEM ADMIN | dba
+```
+```sql
+SELECT username, role, system_admin FROM hardcharger_sessions() ORDER BY username;
+```
+```text
+username | role  | system_admin
+admin    | admin | false
+alice    | user  | true
+```
+
+`SHOW GRANTS` lists it too (one `ALL` on `SERVER` row with grantee type `SYSTEM ADMIN` while
+the session acts as one). `hardcharger_active_connections()` has the same `system_admin`
+column. A session asks about itself with `HARDCHARGER_IS_SYSTEM_ADMIN()` and
+`HARDCHARGER_ACTIVE_ROLE()` (the role `SET ROLE` made active, `SYSTEM ADMIN`, or NULL);
+`HARDCHARGER_IS_FULL_ADMIN()` is true for it as for the administrator, and
+`HARDCHARGER_ROLE()` stays the sign-in's role.
+
+Everything about it is in the access-control audit chain, and every record names the user
+by name and by its id in the store (`user`, `user_id`), the session (`session_id`) and, for
+what it did as System Admin, `acting_as`: `SYSTEM ADMIN`:
+
+| Record (`message`) | When |
+|---|---|
+| `access-control statement`, `statement`: `GRANT SYSTEM ADMIN` / `REVOKE SYSTEM ADMIN` | It is granted or revoked (`target`, `target_ids`: the user or role) |
+| `System Admin elevation` | A session starts acting as one (`held_through`: its own grant, or the role) |
+| `System Admin elevation refused` | `SET ROLE SYSTEM ADMIN` is refused (`error`: why) |
+| `System Admin elevation ended` | It stops (`reason`: `RESET ROLE`, `SYSTEM ADMIN no longer held`, `session closed`, ...) |
+| `access-control statement`, `access-control statement refused` | Each `CREATE USER`, `GRANT`, ... it runs, with `target`, `target_ids`, `privilege`, `membership`, `membership_ids`, `object`, `change` as they apply |
+| `statement run as System Admin` | Every other statement it runs (`sql`, as the log shows SQL: credentials masked; `administrative`: `ATTACH`, `CREATE SECRET`, ... when it is one) |
+| `administrative command run as System Admin` | `KILL SESSION` (`target_session`), `SET GLOBAL hardcharger.*` |
+
+```json
+{"message":"access-control statement","kind":"access_control","user":"alice","user_id":"5e4d0972-a268-45e8-a071-bb4f78e761ec","session_id":"s_4wa5v2ujjazy3r5avaadvoqslxjxixxb","acting_as":"SYSTEM ADMIN","statement":"GRANT","status":"success","target":"user carl","target_ids":"4c6de293-3ce4-4c13-aa02-ebe0e5ba1940","membership":"role analyst","membership_ids":"5fea80e6-163f-4966-9e73-b0be61c1d98a"}
+```
+
+No record holds a password, a password hash, a token or a secret: `ALTER USER … WITH
+PASSWORD` is recorded as `change`: `password`, a scoped token by its name. The `user_id`,
+`session_id` and target fields are on every access-control record from 2.14 on, whoever
+runs the statement; a log an earlier version wrote still verifies (`--verify-audit-log`),
+since each record says which fields its digest covers.
+
+Upgrading needs nothing: the first 2.14 server to open a store adds one table to it and
+leaves the rest, the schema version included, as it was. A 2.13 replica on the same store
+does not read that table, so there nobody holds `SYSTEM ADMIN`, `SET ROLE SYSTEM ADMIN` is
+a syntax error, and the rules above about roles that carry it are not applied: nothing such
+a replica lets a non-administrator write can give anyone `SYSTEM ADMIN` (a membership it
+lets a role's admin-option holder grant does not carry it), but grant it only once every
+replica runs 2.14, so that every replica also shows and audits it. The reasons for each
+rule are in [docs/security-administration-design.md](docs/security-administration-design.md).
+
 ### When the store is down
 
 Access control never lets the store hold up the server, and never fails open on
