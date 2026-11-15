@@ -280,3 +280,55 @@ def test_a_stale_snapshot_is_reported_and_bounded(launcher, postgres):
              what="hardcharger_rbac_store_up to come back")
     assert ann.run(sql="SELECT a FROM t").column("a").to_pylist() == [1]
     assert "the access control store answers again" in limited.log()
+
+
+def test_a_store_that_does_not_answer_elevates_nobody(launcher, postgres):
+    """SYSTEM ADMIN comes from the store: SET ROLE SYSTEM ADMIN asks it, so nobody starts
+    acting as one while it is down; a session that already does is a store user's, served
+    from the last snapshot and refused past rbac_max_snapshot_age_seconds like any other;
+    and the administrator, the way in, is not."""
+    metrics_port = free_port()
+    server = start_rbac_server(launcher=launcher, store_uri=postgres.uri, args=["--metrics-port", str(metrics_port)],
+                               env={"HARDCHARGER_RBAC_MAX_SNAPSHOT_AGE_SECONDS": "4",
+                                    "HARDCHARGER_RBAC_STORE_TIMEOUT_SECONDS": "2"})
+    admin = server.admin()
+    for sql in ["CREATE TABLE vault AS SELECT 42 AS secret", "CREATE USER alice", "CREATE USER bob",
+                "GRANT SYSTEM ADMIN TO alice", "GRANT SYSTEM ADMIN TO bob"]:
+        admin.run(sql=sql)
+    alice, bob = server.user(name="alice"), server.user(name="bob")
+    alice.run(sql="SET ROLE SYSTEM ADMIN")
+    assert alice.run(sql="SELECT secret FROM vault").column("secret").to_pylist() == [42]
+
+    postgres.stop()
+    stopped = time.monotonic()
+    # bob holds it in the snapshot this server has, and still may not start: the store's
+    # own word is what counts, and it gives none.
+    error, took = bounded(call=lambda: bob.run(sql="SET ROLE SYSTEM ADMIN"), seconds=15)
+    assert error is not None, "SET ROLE SYSTEM ADMIN succeeded against a stopped store"
+    assert error.code == "permission_denied", error
+    assert "Hardcharger blocked SET ROLE SYSTEM ADMIN: it could not be checked against the access control store" in \
+        error.detail and UNAVAILABLE in error.detail, error.detail
+    assert postgres.password not in error.detail
+    assert refused(call=lambda: bob.run(sql="SELECT secret FROM vault")).code == "permission_denied"
+    # alice, already acting as one, reads on from the last snapshot, and changes nothing in
+    # the store (as nobody can).
+    assert alice.run(sql="SELECT secret FROM vault").column("secret").to_pylist() == [42]
+    error, took = bounded(call=lambda: alice.run(sql="CREATE USER made_during_the_outage"), seconds=15)
+    assert error is not None and UNAVAILABLE in error.detail, error
+    # Past the limit she is refused, as every store user is; the administrator is not.
+    wait_for(condition=lambda: time.monotonic() - stopped > 6, timeout=10, what="the snapshot to age")
+    wait_for(condition=lambda: metrics(port=metrics_port)["hardcharger_rbac_snapshot_age_seconds"] > 4, timeout=15,
+             what="hardcharger_rbac_snapshot_age_seconds to pass the limit")
+    error = refused(call=lambda: alice.run(sql="SELECT secret FROM vault"))
+    assert "has not answered for" in error.detail and "rbac_max_snapshot_age_seconds (4)" in error.detail, error.detail
+    assert admin.run(sql="SELECT secret FROM vault").column("secret").to_pylist() == [42]
+
+    postgres.start()
+    wait_for(condition=lambda: metrics(port=metrics_port)["hardcharger_rbac_store_up"] == 1, timeout=30,
+             what="hardcharger_rbac_store_up to come back")
+    # The store answers again: her session goes on as it was, and bob may ask.
+    assert alice.run(sql="SELECT secret FROM vault").column("secret").to_pylist() == [42]
+    alice.run(sql="CREATE USER made_after_the_outage")
+    bob.run(sql="SET ROLE SYSTEM ADMIN")
+    assert users(admin=admin) == {"alice", "bob", "made_after_the_outage"}
+    assert postgres.password not in server.log()

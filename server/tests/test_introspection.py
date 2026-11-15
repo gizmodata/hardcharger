@@ -56,6 +56,7 @@ COLUMNS = [
     ("last_activity_at", "TIMESTAMP WITH TIME ZONE"), ("cancel_reason", "VARCHAR"), ("result_partitions", "INTEGER"),
     ("open_result_streams", "INTEGER"), ("open_ingest_parts", "INTEGER"), ("retained_results", "INTEGER"),
     ("retained_rows", "BIGINT"), ("is_current", "BOOLEAN"),
+    ("system_admin", "BOOLEAN"),  # last: a store user's session acting as System Admin right now
 ]
 
 SERVER_INFO_PUBLIC = [
