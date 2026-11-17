@@ -6,7 +6,7 @@ secure credential storage, document picker and share integration. See [PARITY.md
 for the acceptance checklist and evidence; unchecked work is not release-ready.
 
 Android joins the combined release in v2.12.0. Google Play availability is coming soon;
-CI automatically uploads internal-testing drafts; the owner publishes from Play Console.
+CI publishes each release to internal testing automatically; the owner promotes to production from Play Console.
 See [release CI/CD](play/CI.md).
 The Android version follows `server/CMakeLists.txt`.
 
@@ -132,6 +132,6 @@ Local builds use Android's debug key. For a signed release APK/AAB, supply
 Set `HARDCHARGER_ANDROID_BUILD_NUMBER` to a monotonically increasing version code.
 For Google Play, use `android/scripts/build-play.sh` with those variables instead of the
 plain Gradle command above. The bundle is under `android/build/app-play/outputs/bundle/release/`.
-The [combined release workflow](play/CI.md) prepares signed candidates and automatic internal-draft
-uploads through the configured keyless Google identity. Never upload a local-distribution bundle or debug-signed
+The [combined release workflow](play/CI.md) prepares signed candidates and publishes them to internal
+testing through the configured keyless Google identity. Never upload a local-distribution bundle or debug-signed
 artifact to Play. Keep upload keys and passwords outside the repository and back them up.

@@ -37,7 +37,8 @@ name: server
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    # v<version>-play.<n> tags only publish an existing Android candidate (android.yml).
+    tags: ["v*", "!v*-play.*"]
     paths:
       - "**"
       - "!docs/**"
@@ -1844,7 +1845,8 @@ jobs:
           prerelease: ${{ steps.notes.outputs.prerelease == 'true' }}
           make_latest: ${{ steps.notes.outputs.prerelease == 'true' && 'false' || 'true' }}
 
-  # Automatically upload a draft; the owner publishes from Play Console, as with iOS.
+  # Publish to Play's internal testing track, as iOS uploads to TestFlight; the build replaces
+  # the track's previous release or leftover draft. Closed/open testing and production stay manual.
   android-play:
     needs: release
     if: startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success'
@@ -1868,10 +1870,10 @@ jobs:
           access_token_scopes: https://www.googleapis.com/auth/androidpublisher
           create_credentials_file: false
           export_environment_variables: false
-      - name: Upload the same candidate as an internal draft
+      - name: Publish the same candidate to internal testing
         env:
           GOOGLE_PLAY_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
-        run: python3 android/scripts/play-draft.py candidate
+        run: python3 android/scripts/play-internal.py candidate
 
   # What follows a published release: the matching `hardcharger` Python package (workflow.yml),
   # the bundled-driver images :X.Y.Z-adbc (adbc-images.yml) and, for a release that is not a

@@ -32,9 +32,10 @@ Pull requests affecting Android still run its unsigned checks. The former
    by the release's `SHA256SUMS`. Android must pass before the release or images publish.
 6. After the GitHub release succeeds, `android-play` automatically authenticates through
    the tag-restricted `google-play-internal` environment with a short-lived Google token
-   and uploads the exact candidate as an **internal-testing draft**. There is no manual
-   GitHub approval gate. The owner controls testing rollout and production publication
-   in Play Console, matching the iOS build-upload/store-publication workflow.
+   and publishes the exact candidate to **internal testing** as a completed release, so
+   internal testers get it at once, as with TestFlight. There is no manual GitHub approval
+   gate. The owner controls closed/open testing and production in Play Console, matching
+   the iOS TestFlight/App Store workflow.
 
 The version name follows the server. Version codes are
 `1000 + server-workflow run_number * 100 + run_attempt`; the first combined release
@@ -46,16 +47,25 @@ Use a new run after attempt 99. Upload-only retries do not rebuild or change the
 Dispatch `android.yml` **on the original release tag**, setting `candidate_run_id` to
 that server run. The retry checks repository identity, matching version tag, source
 commit, checksum, signing metadata, both native jobs and the successful GitHub release
-before authenticating. It uses the latest attempt's job results. The Play environment
+before authenticating. It uses the latest attempt's job results.
+
+To publish an already released version's tested bundle with a newer uploader (the tag's own
+copy is older), push a publish-only tag `v<version>-play.<n>` at the current `main`, dispatch
+`android.yml` on that tag with the version's server run, then delete the tag. `server.yml`
+ignores these tags, so they start no release; Google's trust and the Play environment admit
+them as `v*` tags, and the retry still requires the bundle from the version's own tag run.
+First used for v2.13.1 (2026-11-17). The Play environment
 restricts uploads to version tags without a manual approval gate. Existing bundles are reused only when both
-version code and SHA-256 match. An existing internal draft must be reviewed/discarded
-in Console before another upload; active releases are retained.
+version code and SHA-256 match. The new build becomes the internal track's only release,
+replacing the previous completed release and any leftover draft. The uploader refuses a
+build whose version code is not above the track's live (non-draft) release, so a retry of an
+old candidate never moves testers back to an older build.
 
 The uploader requests `changesNotSentForReview=true`, retrying without that optional
 flag only for Google's specific rejection of it. Both attempts use
-`changesInReviewBehavior=ERROR_IF_IN_REVIEW`. A separate read-back edit verifies the
-draft, bundle checksum and retained release statuses. The uploader never changes
-production or promotes the draft. Do not edit the app in Console during an API upload.
+`changesInReviewBehavior=ERROR_IF_IN_REVIEW`. A separate read-back edit verifies that the
+build is the internal track's only, completed release, that its bundle checksum matches and
+that the production track is unchanged. The uploader never writes any track but internal. Do not edit the app in Console during an API upload.
 
 ## Credentials and protections
 
@@ -122,3 +132,7 @@ branch upload trigger and bootstrap variable.
 For v2.12.0, the owner requested automatic draft uploads to match iOS. The GitHub
 required-reviewer gate was removed; tag restrictions, keyless federation, signature
 checks and draft-only uploads remain. Publication is still controlled in Play Console.
+
+From v2.14.0 (owner request, 2026-11-15), release builds publish to internal testing as
+completed releases instead of drafts, matching TestFlight: a leftover draft (2.13.0's
+blocked the 2.13.1 upload) no longer stops a release. Production stays manual.

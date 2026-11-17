@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_run_id:
-        description: Retry the internal draft upload from a successful server release build
+        description: Retry the internal testing publish from a successful server release build
         type: string
         required: true
 
@@ -276,7 +276,7 @@ jobs:
           access_token_scopes: https://www.googleapis.com/auth/androidpublisher
           create_credentials_file: false
           export_environment_variables: false
-      - name: Retry the same candidate as an internal draft
+      - name: Publish the same candidate to internal testing
         env:
           GOOGLE_PLAY_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
-        run: python3 android/scripts/play-draft.py candidate
+        run: python3 android/scripts/play-internal.py candidate

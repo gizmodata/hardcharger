@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import urllib.request
 
 REPOSITORY = 'gizmodata/hardcharger'
@@ -12,7 +13,10 @@ def verify_source(*, metadata, run, jobs, run_id, ref, payload):
     if not str(run_id).isdigit():
         raise ValueError('Candidate retry requires a numeric run ID')
     version = metadata.get('version', '')
-    if (ref != f'refs/tags/v{version}' or run['head_branch'] != f'v{version}'
+    # The release tag itself, or a publish-only tag v<version>-play.<n> on a later commit, which
+    # publishes this version's tested bundle with that commit's uploader (server.yml ignores it).
+    publish_ref = re.fullmatch(pattern=rf'refs/tags/v{re.escape(version)}(-play\.[1-9][0-9]{{0,2}})?', string=ref)
+    if (not version or publish_ref is None or run['head_branch'] != f'v{version}'
             or str(run['id']) != str(run_id) or run['repository']['full_name'] != REPOSITORY
             or run['repository']['id'] != 1422890225
             or run['path'] != '.github/workflows/server.yml' or run['event'] != 'push'):

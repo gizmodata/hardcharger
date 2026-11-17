@@ -16,7 +16,7 @@ def load(name):
 
 
 planner = load(name='ci-plan')
-publisher = load(name='play-draft')
+publisher = load(name='play-internal')
 source_verifier = load(name='ci-verify-upload-source')
 
 
@@ -54,7 +54,7 @@ class PlanTests(unittest.TestCase):
                 self.plan(**changes)
 
 
-class DraftTests(unittest.TestCase):
+class InternalPublishTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -66,7 +66,8 @@ class DraftTests(unittest.TestCase):
         (self.directory / 'release-notes.txt').write_text('Internal test release')
         self.write_metadata()
         self.calls = []
-        self.previous = [{'name': 'Previous', 'versionCodes': ['1401'], 'status': 'completed'}]
+        self.internal = [{'name': 'Previous', 'versionCodes': ['1401'], 'status': 'completed'}]
+        self.production = [{'name': 'Store', 'versionCodes': ['1301'], 'status': 'completed'}]
         self.fail_validation = False
         self.wrong_version = False
         self.wrong_hash = False
@@ -82,8 +83,12 @@ class DraftTests(unittest.TestCase):
             return {'id': 'edit-1'}
         if method == 'GET' and url.endswith('/bundles'):
             return {'bundles': self.existing_bundles}
+        if method == 'GET' and url.endswith('/tracks/internal'):
+            return {'releases': self.internal}
+        if method == 'GET' and url.endswith('/tracks/production'):
+            return {'releases': self.production}
         if method == 'GET':
-            return {'releases': self.previous}
+            raise AssertionError(f'unexpected read {url}')
         if 'uploadType=media' in url:
             return {'versionCode': 1502 if self.wrong_version else 1501,
                     'sha256': 'wrong' if self.wrong_hash else hashlib.sha256(self.payload).hexdigest()}
@@ -93,81 +98,107 @@ class DraftTests(unittest.TestCase):
             raise self.commit_error
         return {}
 
-    def test_upload_preserves_active_release_and_commits_draft_only(self):
-        publisher.upload_draft(directory=self.directory, request=self.request)
-        update = next(call[2] for call in self.calls if call[0] == 'PUT')
-        self.assertEqual(update['track'], 'internal')
-        self.assertEqual(update['releases'][0]['status'], 'completed')
-        self.assertEqual(update['releases'][-1]['status'], 'draft')
-        self.assertEqual(update['releases'][-1]['versionCodes'], ['1501'])
+    def puts(self):
+        return [(url, body) for method, url, body in self.calls if method == 'PUT']
+
+    def test_publishes_a_completed_internal_release_and_touches_no_other_track(self):
+        publisher.publish_internal(directory=self.directory, request=self.request)
+        [(url, update)] = self.puts()
+        self.assertTrue(url.endswith('/tracks/internal'))
+        self.assertEqual(update, {'track': 'internal', 'releases': [
+            {'name': '2.11.0 (1501)', 'versionCodes': ['1501'], 'status': 'completed',
+             'releaseNotes': [{'language': 'en-US', 'text': 'Internal test release'}]}]})
         self.assertTrue(self.calls[-1][1].endswith(':commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW&changesNotSentForReview=true'))
-        self.assertFalse(any('/tracks/production' in url for _, url, _ in self.calls))
+        for method, url, _ in self.calls:
+            if '/tracks/' in url and not url.endswith('/tracks/internal'):
+                self.assertEqual(method, 'GET', url)
+
+    def test_leftover_draft_no_longer_blocks_and_is_replaced(self):
+        # 2026-11-15: the 2.13.0 draft blocked the 2.13.1 upload under the old draft-only rule.
+        self.internal = [{'status': 'completed', 'versionCodes': ['1401']},
+                         {'status': 'draft', 'versionCodes': ['1451']}]
+        expected = publisher.publish_internal(directory=self.directory, request=self.request)
+        [(_, update)] = self.puts()
+        self.assertEqual([(r['status'], r['versionCodes']) for r in update['releases']], [('completed', ['1501'])])
+        self.assertEqual(expected['replaced'], self.internal)
+        self.assertTrue(any(':commit' in url for _, url, _ in self.calls))
+
+    def test_draft_with_a_higher_code_does_not_block(self):
+        self.internal = [{'status': 'draft', 'versionCodes': ['9901']}]
+        publisher.publish_internal(directory=self.directory, request=self.request)
+        self.assertEqual(len(self.puts()), 1)
+
+    def test_never_moves_testers_to_an_older_or_same_build(self):
+        for code in ('1501', '1601'):
+            with self.subTest(live=code):
+                self.calls = []
+                self.internal = [{'status': 'completed', 'versionCodes': [code]}]
+                with self.assertRaisesRegex(ValueError, 'refusing to publish older build 1501'):
+                    publisher.publish_internal(directory=self.directory, request=self.request)
+                self.assertFalse(any('uploadType=media' in url or ':commit' in url for _, url, _ in self.calls))
+                self.assertEqual(self.calls[-1][0], 'DELETE')
 
     def test_only_specific_google_flag_error_retries_commit_without_flag(self):
         self.commit_error = publisher.PlayApiError(status=400, message=publisher.AUTOMATIC_REVIEW_MESSAGE)
-        publisher.upload_draft(directory=self.directory, request=self.request)
+        publisher.publish_internal(directory=self.directory, request=self.request)
         commits = [url for method, url, _ in self.calls if ':commit' in url]
         self.assertEqual(len(commits), 2)
         self.assertTrue(commits[-1].endswith(':commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW'))
-        update = next(body for method, _, body in self.calls if method == 'PUT')
-        self.assertEqual([(r['status'], r['versionCodes']) for r in update['releases']],
-                         [('completed', ['1401']), ('draft', ['1501'])])
 
     def test_other_commit_errors_abort_without_retry(self):
         self.commit_error = publisher.PlayApiError(status=400, message='Changes already in review')
         with self.assertRaises(publisher.PlayApiError):
-            publisher.upload_draft(directory=self.directory, request=self.request)
+            publisher.publish_internal(directory=self.directory, request=self.request)
         self.assertEqual(sum(':commit' in url for _, url, _ in self.calls), 1)
         self.assertEqual(self.calls[-1][0], 'DELETE')
 
     def test_reuses_only_matching_previously_uploaded_bundle(self):
         self.existing_bundles = [{'versionCode': 1501, 'sha256': self.metadata['bundle_sha256']}]
-        publisher.upload_draft(directory=self.directory, request=self.request)
+        publisher.publish_internal(directory=self.directory, request=self.request)
         self.assertFalse(any('uploadType=media' in url for _, url, _ in self.calls))
         self.calls = []
-        self.previous = []
         self.existing_bundles[0]['sha256'] = 'different'
         with self.assertRaises(ValueError):
-            publisher.upload_draft(directory=self.directory, request=self.request)
+            publisher.publish_internal(directory=self.directory, request=self.request)
         self.assertFalse(any(method == 'PUT' or ':commit' in url for method, url, _ in self.calls))
 
-    def test_readback_checks_draft_and_retained_active_release(self):
-        expected = {'version_code': 1501, 'previous_releases': list(self.previous)}
-        self.previous.append({'status': 'draft', 'versionCodes': ['1501']})
+    def test_readback_requires_the_build_completed_and_production_unchanged(self):
+        expected = {'version_code': 1501, 'replaced': list(self.internal), 'production': list(self.production)}
+        self.internal = [{'status': 'completed', 'versionCodes': ['1501']}]
         self.existing_bundles = [{'versionCode': 1501, 'sha256': self.metadata['bundle_sha256']}]
-        publisher.verify_saved_draft(directory=self.directory, expected=expected, request=self.request)
+        publisher.verify_published(directory=self.directory, expected=expected, request=self.request)
         self.assertEqual(self.calls[-1][0], 'DELETE')
-        self.previous[-1]['status'] = 'completed'
-        with self.assertRaises(ValueError):
-            publisher.verify_saved_draft(directory=self.directory, expected=expected, request=self.request)
-        self.previous[-1]['status'] = 'draft'
-        self.previous = self.previous[1:]
-        with self.assertRaises(ValueError):
-            publisher.verify_saved_draft(directory=self.directory, expected=expected, request=self.request)
+        for internal in ([{'status': 'draft', 'versionCodes': ['1501']}],
+                         [{'status': 'completed', 'versionCodes': ['1401']}],
+                         [{'status': 'completed', 'versionCodes': ['1501']}, {'status': 'draft', 'versionCodes': ['1451']}]):
+            with self.subTest(internal=internal):
+                self.internal = internal
+                with self.assertRaisesRegex(ValueError, 'Internal testing does not show build 1501'):
+                    publisher.verify_published(directory=self.directory, expected=expected, request=self.request)
+        self.internal = [{'status': 'completed', 'versionCodes': ['1501']}]
+        self.production = [{'status': 'completed', 'versionCodes': ['1501']}]
+        with self.assertRaisesRegex(ValueError, 'production track changed'):
+            publisher.verify_published(directory=self.directory, expected=expected, request=self.request)
+        self.production = expected['production']
+        self.existing_bundles[0]['sha256'] = 'different'
+        with self.assertRaisesRegex(ValueError, 'checksum does not match'):
+            publisher.verify_published(directory=self.directory, expected=expected, request=self.request)
 
     def test_unsigned_or_changed_candidate_never_calls_api(self):
         for changes in [{'signed': False}, {'signed': True, 'bundle_sha256': 'wrong'}]:
             self.metadata.update(changes)
             self.write_metadata()
             with self.assertRaises(ValueError):
-                publisher.upload_draft(directory=self.directory, request=self.request)
+                publisher.publish_internal(directory=self.directory, request=self.request)
             self.assertEqual(self.calls, [])
-
-    def test_existing_draft_is_not_overwritten(self):
-        self.previous = [{'status': 'draft', 'versionCodes': ['1401']}]
-        with self.assertRaises(ValueError):
-            publisher.upload_draft(directory=self.directory, request=self.request)
-        self.assertFalse(any('uploadType=media' in url for _, url, _ in self.calls))
-        self.assertEqual(self.calls[-1][0], 'DELETE')
 
     def test_wrong_version_and_validation_failure_never_commit(self):
         for mode in ('wrong_version', 'wrong_hash', 'fail_validation'):
             with self.subTest(mode=mode):
                 self.calls = []
-                self.previous = [{'name': 'Previous', 'versionCodes': ['1401'], 'status': 'completed'}]
                 setattr(self, mode, True)
                 with self.assertRaises((ValueError, RuntimeError)):
-                    publisher.upload_draft(directory=self.directory, request=self.request)
+                    publisher.publish_internal(directory=self.directory, request=self.request)
                 self.assertFalse(any(':commit' in url for _, url, _ in self.calls))
                 self.assertEqual(self.calls[-1][0], 'DELETE')
                 setattr(self, mode, False)
@@ -214,11 +245,25 @@ class UploadSourceTests(unittest.TestCase):
                     'event': 'push', 'head_sha': 'original-commit', 'conclusion': 'failure'}
         self.jobs = [{'name': n, 'status': 'completed', 'conclusion': 'success'}
                      for n in ('android / plan', 'web UI (build)', 'android / native (arm64-v8a)', 'android / native (x86_64)', 'android / bundle', 'release')]
-        self.jobs.append({'name': 'play-draft', 'status': 'completed', 'conclusion': 'failure'})
+        self.jobs.append({'name': 'android-play', 'status': 'completed', 'conclusion': 'failure'})
 
-    def verify(self):
+    def verify(self, ref='refs/tags/v2.12.0'):
         source_verifier.verify_source(metadata=self.metadata, run=self.run, jobs=self.jobs,
-                                     run_id='123', ref='refs/tags/v2.12.0', payload=self.payload)
+                                     run_id='123', ref=ref, payload=self.payload)
+
+    def test_publish_only_tag_of_the_same_version_is_accepted(self):
+        for ref in ('refs/tags/v2.12.0-play.1', 'refs/tags/v2.12.0-play.12'):
+            with self.subTest(ref=ref):
+                self.verify(ref=ref)
+        for ref in ('refs/tags/v2.12.1', 'refs/tags/v2.12.00', 'refs/tags/v2.12.0-play.', 'refs/tags/v2.12.0-play.0',
+                    'refs/tags/v2.12.0-play.1x', 'refs/tags/v2.12.0-rc.1', 'refs/heads/v2.12.0', 'refs/heads/main',
+                    'refs/tags/v2.12.0-play.1000', 'refs/tags/v2x12x0'):
+            with self.subTest(ref=ref), self.assertRaisesRegex(ValueError, 'this version'):
+                self.verify(ref=ref)
+        # The candidate must still come from the version's own release tag run.
+        self.run['head_branch'] = 'v2.12.0-play.1'
+        with self.assertRaisesRegex(ValueError, 'this version'):
+            self.verify(ref='refs/tags/v2.12.0-play.1')
 
     def test_upload_failure_can_reuse_successful_build(self):
         self.verify()
