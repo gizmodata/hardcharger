@@ -30,10 +30,12 @@
 
 <h3 align="center">Fast, secure, remote DuckDB. Every feature included.</h3>
 
-<p align="center">
-  <a href="https://gizmodata.com/hardcharger/install"><strong>Install Hardcharger</strong></a>
-  &nbsp;·&nbsp; or try it on your phone or tablet:
-</p>
+<h3 align="center">
+  <a href="https://docs.hardcharger.gizmodata.com">📖 Documentation</a>
+  &nbsp;·&nbsp;
+  <a href="https://gizmodata.com/hardcharger/install">⬇️ Install Hardcharger</a>
+</h3>
+<p align="center">Or try it on your phone or tablet:</p>
 <p align="center">
   <a href="https://apps.apple.com/us/app/hardcharger/id6824900180"><img src="docs/assets/app-store-badge.svg" alt="Download on the App Store" height="40"></a>
   &nbsp;
@@ -65,6 +67,9 @@ Enterprise in GizmoSQL is in every Hardcharger build.
 - 🧩 **Configured your way.** Flags, `HARDCHARGER_*` environment variables, or a YAML file.
 - 🌐 **Ready to scale out.** Results are already described as partitions with locations,
   so distributed query execution can arrive without a protocol change.
+
+📖 **[The documentation](https://docs.hardcharger.gizmodata.com)** covers installing, connecting
+from every client, security, operations and the full reference.
 
 ## 🖥️ Desktop app (v2.1.0+)
 
