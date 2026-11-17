@@ -1641,7 +1641,7 @@ maps every GizmoSQL name to its Hardcharger name.
 
 - Chat with us in the [GizmoData Community Slack](https://join.slack.com/t/gizmodatacommunity/shared_invite/zt-42jk7kdti-SJp7qk7d6XYCIKfBG~4HrA).
 - Report bugs and ask for features in [GitHub issues](https://github.com/gizmodata/hardcharger/issues).
-- For support plans, or to have GizmoData run it for you on [GizmoData Cloud](https://gizmodata.com),
+- For support plans, or to have GizmoData run it for you on [GizmoData Cloud](https://gizmodata.com/cloud),
   write to [sales@gizmodata.com](mailto:sales@gizmodata.com).
 
 ## 📄 License
