@@ -30,6 +30,16 @@
 
 <h3 align="center">Fast, secure, remote DuckDB. Every feature included.</h3>
 
+<p align="center">
+  <a href="https://gizmodata.com/hardcharger/install"><strong>Install Hardcharger</strong></a>
+  &nbsp;·&nbsp; or try it on your phone or tablet:
+</p>
+<p align="center">
+  <a href="https://apps.apple.com/us/app/hardcharger/id6824900180"><img src="docs/assets/app-store-badge.svg" alt="Download on the App Store" height="40"></a>
+  &nbsp;
+  <a href="https://play.google.com/store/apps/details?id=com.gizmodata.hardcharger"><img src="docs/assets/google-play-badge.png" alt="Get it on Google Play" height="40"></a>
+</p>
+
 ---
 
 ## 🏎️ What is Hardcharger?
@@ -196,7 +206,15 @@ and its built-in extensions, built into the app. The app shows:
   over TLS at the address in the QR code, checking the certificate's fingerprint.
 - 🌐 **Other servers**: saved in the Keychain, signed in with a password or single sign-on.
 
-It needs iOS 18 or later. Build it from [`ios/`](ios/README.md).
+Get it on the [App Store](https://apps.apple.com/us/app/hardcharger/id6824900180); it needs iOS 18 or later. To build it yourself, see
+[`ios/`](ios/README.md).
+
+## 🤖 Android app
+
+The same server runs on Android phones and tablets (Android 9 or later), with its web UI, the
+`hardcharger` console, files from the document picker and the share sheet, and passwords kept in
+Android's secure storage. Get it on [Google Play](https://play.google.com/store/apps/details?id=com.gizmodata.hardcharger), or build it from
+[`android/`](android/README.md).
 
 ## 🚀 Performance
 
@@ -273,6 +291,30 @@ arrived with its end-of-stream marker, so a query that fails mid-stream can neve
 a short, successful one.
 
 ## ⚡ Quick start
+
+### Install
+
+The **[install page](https://gizmodata.com/hardcharger/install)** picks the right download for
+your computer: the desktop app for macOS and Windows, the server and CLI, Docker, Python, and the
+iPhone, iPad and Android apps.
+
+For the server and CLI on macOS (Apple silicon) or Linux (x86-64, arm64), the one-line installer
+puts `hardcharger-server` and the `hardcharger` client in `~/.hardcharger`:
+
+```bash
+curl https://install.hardcharger.gizmodata.com | sh
+HARDCHARGER_ADMIN_PASSWORD='change-me' ~/.hardcharger/bin/hardcharger-server --database my.duckdb
+```
+
+On Windows (PowerShell):
+
+```powershell
+irm https://install.hardcharger.gizmodata.com/install.ps1 | iex
+```
+
+The installer keeps every version you install side by side and switches between them in seconds.
+See [hardcharger-install](https://github.com/gizmodata/hardcharger-install) for choosing a version,
+adding it to your `PATH`, listing and uninstalling.
 
 ### Docker
 
@@ -1616,5 +1658,6 @@ License Agreement, not an open-source licence.
 <p align="center">
   <a href="https://gizmodata.com"><img src="https://raw.githubusercontent.com/gizmodata/hardcharger/main/docs/assets/gizmodata-logo.png" alt="GizmoData™" width="56"></a><br>
   <sub>Built by <a href="https://gizmodata.com">GizmoData™</a></sub><br>
-  <sub>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</sub>
+  <sub>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</sub><br>
+  <sub>App Store is a service mark of Apple Inc. Google Play and the Google Play logo are trademarks of Google LLC.</sub>
 </p>

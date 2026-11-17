@@ -5,7 +5,7 @@ console through a small JNI bridge. Kotlin/Compose supplies the Android controls
 secure credential storage, document picker and share integration. See [PARITY.md](PARITY.md)
 for the acceptance checklist and evidence; unchecked work is not release-ready.
 
-Android joins the combined release in v2.12.0. Google Play availability is coming soon;
+Android joins the combined release in v2.12.0 and is on [Google Play](https://play.google.com/store/apps/details?id=com.gizmodata.hardcharger);
 CI publishes each release to internal testing automatically; the owner promotes to production from Play Console.
 See [release CI/CD](play/CI.md).
 The Android version follows `server/CMakeLists.txt`.
