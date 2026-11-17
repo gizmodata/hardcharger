@@ -30,10 +30,14 @@
 
 <h3 align="center">Fast, secure, remote DuckDB. Every feature included.</h3>
 
+<p align="center">The quickest start: fully managed, nothing to install.</p>
+<p align="center">
+  <a href="https://gizmodata.com/cloud"><img src="docs/assets/gizmodata-cloud-badge.png" alt="Run it on GizmoData Cloud" height="48"></a>
+</p>
 <h3 align="center">
   <a href="https://docs.hardcharger.gizmodata.com">📖 Documentation</a>
   &nbsp;·&nbsp;
-  <a href="https://gizmodata.com/hardcharger/install">⬇️ Install Hardcharger</a>
+  <a href="https://gizmodata.com/hardcharger/install">⬇️ Install it yourself</a>
 </h3>
 <p align="center">Or try it on your phone or tablet:</p>
 <p align="center">
