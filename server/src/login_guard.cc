@@ -159,7 +159,7 @@ LoginGuard::Decision LoginGuard::Check(std::string_view user_name, std::string_v
   const std::string address = AddressKey(client_address);
   std::lock_guard lock(mutex_);
   const int64_t now = Now();
-  const Pair* pair = nullptr;
+  Pair* pair = nullptr;
   if (!address.empty()) {
     if (auto it = pairs_.find({user, address}); it != pairs_.end()) pair = &it->second;
   }
@@ -168,7 +168,21 @@ LoginGuard::Decision LoginGuard::Check(std::string_view user_name, std::string_v
     return Decision{false, CeilSeconds(until - now), reason};
   };
   if (pair && pair->locked_until_ms > now) return refuse(pair->locked_until_ms, "locked", counts_.throttled_locked);
-  if (Known(pair, now)) return {};
+  // Attempts being checked right now count as failures until they end: at most the
+  // threshold's worth of guesses are ever in the air for one pair.
+  const bool lock_over = pair && pair->locked_until_ms > 0;  // (not > now: checked above)
+  if (pair && settings_.lockout_threshold > 0 &&
+      (lock_over ? 0 : Current(pair->counter, now)) + pair->in_flight >= settings_.lockout_threshold) {
+    return refuse(now + kSecond, "locked", counts_.throttled_locked);
+  }
+  auto allow = [&]() -> Decision {
+    if (!address.empty()) {
+      Pair& held = pairs_[{user, address}];
+      ++held.in_flight;
+    }
+    return {};
+  };
+  if (Known(pair, now)) return allow();
   if (auto it = users_.find(user); it != users_.end()) {
     const int64_t until = BackoffUntil(it->second.counter, settings_.user_backoff_after, now);
     if (until > now) return refuse(until, "user_backoff", counts_.throttled_user);
@@ -179,7 +193,21 @@ LoginGuard::Decision LoginGuard::Check(std::string_view user_name, std::string_v
       if (until > now) return refuse(until, "address_backoff", counts_.throttled_address);
     }
   }
-  return {};
+  return allow();
+}
+
+void LoginGuard::ReleaseLocked(const std::string& user_key, const std::string& address) {
+  if (address.empty()) return;
+  if (auto it = pairs_.find({user_key, address}); it != pairs_.end() && it->second.in_flight > 0) {
+    --it->second.in_flight;
+  }
+}
+
+void LoginGuard::Release(std::string_view user_name, std::string_view client_address) {
+  const std::string user = UserKey(user_name);
+  const std::string address = AddressKey(client_address);
+  std::lock_guard lock(mutex_);
+  ReleaseLocked(user, address);
 }
 
 bool LoginGuard::ApplyLocked(const authz::LoginEventRecord& e) {
@@ -276,6 +304,7 @@ void LoginGuard::RecordFailure(std::string_view user_name, std::string_view clie
     std::lock_guard lock(mutex_);
     event.at_ms = Now();
     ++counts_.failures;
+    ReleaseLocked(event.user_key, event.address);
     if (ApplyLocked(event)) {
       Pair& pair = pairs_[{event.user_key, event.address}];
       pair.locked_here = true;
@@ -304,6 +333,7 @@ void LoginGuard::RecordSuccess(std::string_view user_name, std::string_view clie
                                 AddressKey(client_address), origin_};
   std::lock_guard lock(mutex_);
   event.at_ms = Now();
+  ReleaseLocked(event.user_key, event.address);
   bool write = true;
   if (!event.address.empty()) {
     if (auto it = pairs_.find({event.user_key, event.address}); it != pairs_.end()) {
@@ -354,7 +384,7 @@ void LoginGuard::PruneLocked(int64_t now) {
   for (auto it = pairs_.begin(); it != pairs_.end();) {
     const Pair& pair = it->second;
     const bool old_success = pair.last_success_ms == 0 || now - pair.last_success_ms > keep_success;
-    if (pair.locked_until_ms <= now && idle(pair.counter) && old_success) {
+    if (pair.locked_until_ms <= now && pair.in_flight == 0 && idle(pair.counter) && old_success) {
       it = pairs_.erase(it);
     } else {
       ++it;

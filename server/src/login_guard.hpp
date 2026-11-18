@@ -127,10 +127,15 @@ class LoginGuard {
   // Why records are still waiting to be written (the store's last error), or empty.
   std::string PendingProblem();
 
-  // Before a password is checked: whether to check it at all.
+  // Before a password is checked: whether to check it at all. An allowed attempt holds a
+  // place in its pair until RecordFailure, RecordSuccess or Release: with the pair's failures
+  // it counts toward the threshold, so many attempts at once can't all be checked before the
+  // first of them fails (the extras wait a second).
   Decision Check(std::string_view user_name, std::string_view client_address);
   void RecordFailure(std::string_view user_name, std::string_view client_address);
   void RecordSuccess(std::string_view user_name, std::string_view client_address);
+  // An allowed attempt that ended neither way (the check itself failed).
+  void Release(std::string_view user_name, std::string_view client_address);
   // An administrator clears what it names: a pair and its user's delay (both), a user's
   // pairs and delay (user only), an address's pairs and delay (address only), or everything
   // (neither). Returns
@@ -156,6 +161,7 @@ class LoginGuard {
   };
   struct Pair {
     Counter counter;
+    int64_t in_flight = 0;  // allowed attempts not yet recorded
     int64_t locked_until_ms = 0;
     int64_t last_success_ms = 0;
     std::string user_name;
@@ -181,6 +187,7 @@ class LoginGuard {
   void PruneLocked(int64_t now);
   void Loop(std::chrono::milliseconds interval);
   bool Known(const Pair* pair, int64_t now) const;
+  void ReleaseLocked(const std::string& user_key, const std::string& address);
 
   const LoginGuardSettings settings_;
   const std::string origin_;

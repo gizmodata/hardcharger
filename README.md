@@ -876,6 +876,58 @@ trusted_proxies: [10.0.0.0/8, fd00::/8]   # flag: --trusted-proxies 10.0.0.0/8,f
   request has arrived yet.
 - List only proxies that append to or overwrite these headers: one that passes a client's
   header through lets that client choose the address it is recorded under.
+- The limits on failed sign-ins (below) count by this address too. Behind a proxy that isn't
+  listed, every client has the proxy's address, so a lock of one user from "one address" keeps
+  that user out through the whole proxy: list your proxies. A password sign-in that carries
+  a forwarding header the server doesn't believe is logged once an hour, saying so.
+
+### Failed sign-ins
+
+Every password check (the Chargewire password grant, the web UI's sign-in, and
+`--verify-credentials`) goes through the same limits, for the administrator and store users
+alike:
+
+- **One user from one client address**: after `login_lockout_threshold` (5) failed
+  passwords within `login_failure_window_seconds` (900) of each other, that pair is locked for
+  `login_lockout_seconds` (900). While it is locked, every attempt of that user from that
+  address is refused before the password is checked, the right one included. The same user
+  from any other address is still checked, so nobody can lock an account, the
+  administrator's included, out from everywhere.
+- **One user from any address**: after `login_user_backoff_after` (5) failures, a growing
+  delay between attempts: `login_backoff_base_seconds` (1), doubling with each further failure,
+  at most `login_backoff_max_seconds` (30). An attempt sooner is refused. Never a lock, and an
+  address the user signed in from within `login_known_address_days` (30) skips it.
+- **One address trying any users**: the same delay after `login_address_backoff_after` (20)
+  failures from that address.
+- **The answer** is `429 rate_limited` with `Retry-After` (seconds) and the detail `too many
+  failed sign-in attempts: try again in N s`, the same whether the user exists or not (an
+  unknown name is counted like a known one). A successful sign-in resets its pair's count. An
+  IPv6 client counts as its /64.
+- **Every replica agrees**: each failure, success and clear is a record in the access-control
+  store (not access-control data: writing one makes no replica reload), and replicas read each
+  other's about once a second, so a lock holds on whichever replica the next attempt reaches,
+  after a restart, and in `--verify-credentials`. Decisions are made from memory: a guess never
+  waits on the store, and while the store doesn't answer each replica counts on its own (a
+  warning says so). Without a store the counts are the process's own.
+- An administrator without `catalog_access` rules sees them and clears them:
+
+```sql
+SELECT scope, user_name, client_address, failures, locked, retry_after_seconds
+FROM hardcharger_login_locks();            -- pairs, users and addresses with failures
+SELECT hardcharger_clear_login_lock('joe', '203.0.113.9');  -- one pair (and joe's delay)
+SELECT hardcharger_clear_login_lock('joe', NULL);           -- joe from everywhere
+SELECT hardcharger_clear_login_lock(NULL, '203.0.113.9');   -- one address
+SELECT hardcharger_clear_login_lock(NULL, NULL);            -- everything
+```
+
+- A lock, its end and a clear are security warnings in the log and records in the audit
+  chain (`status=locked|unlocked|cleared`, `user`, `client_address`). Metrics:
+  `hardcharger_login_failures_total`, `hardcharger_login_throttled_total{reason="locked"|
+  "user_backoff"|"address_backoff"}`, `hardcharger_login_locks_total` and
+  `hardcharger_login_locks_active`. `hardcharger_users()` shows each user's `last_sign_in_at`
+  and `failed_sign_ins` to the administrator, and a user its own.
+- Setting `login_lockout_threshold` to 0 turns pair locks off; `login_backoff_max_seconds`
+  0 turns the delays off.
 
 ### DuckDB files and DuckLake metadata
 
@@ -1194,6 +1246,17 @@ that file out of SQL's reach (see below). Without `rbac_store_uri`, an access-co
 statement in the init SQL stops the server before anything runs (`access control is not
 enabled on this server`).
 
+A password set by `CREATE USER` or `ALTER USER ... WITH PASSWORD` needs `password_min_length`
+(12) characters; there are no composition rules and no expiry by default (NIST SP 800-63B).
+`password_min_character_classes` (0 to 4) asks for that many kinds among lowercase letters,
+uppercase letters, digits and other characters, and `password_max_age_days` (0: never) stops a
+password from signing in once it is that old, until an administrator sets a new one
+(`the password of user joe has expired: ...`, said only to whoever gave the right password). The
+policy is checked only when a password is set: existing passwords keep working, a password set
+before 2.14 never expires, and `CREATE USER IF NOT EXISTS` for a user that exists sets nothing
+and checks nothing. The administrator's password (`admin_password`) is the operator's: one
+the policy would refuse is a warning at startup.
+
 Use PostgreSQL in production, and for any cluster of more than one replica. For
 development, or a server that will only ever run one replica, the store can be a DuckDB
 file instead:
@@ -1436,7 +1499,7 @@ one returns only the rows the caller may see:
 |---|---|
 | `hardcharger_grants()` | Object, column and system privileges, plus ownerships: grantee, privilege, object, grantor, grant option, tenant |
 | `hardcharger_role_members()` | Who holds each role: users, roles, and identity-provider groups (`CREATE GROUP MAPPING`) |
-| `hardcharger_roles()`, `hardcharger_users()` | Names and attributes that aren't secret (never a password hash or a token) |
+| `hardcharger_roles()`, `hardcharger_users()` | Names and attributes that aren't secret (never a password hash or a token); a user's `last_sign_in_at` and `failed_sign_ins` for the administrator and for the user itself |
 | `hardcharger_policies()` | Row policies and column masks, with their expressions and whether they apply to you |
 | `hardcharger_effective_privileges([user_name])` | What you hold after role inheritance, ownership, `SET ROLE` and a scoped token's limits, and the role each privilege comes from |
 

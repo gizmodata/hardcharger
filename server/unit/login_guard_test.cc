@@ -4,12 +4,14 @@
 // records (in-memory and DuckDB-file stores) and the password policy.
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
+#include "authz/authz.hpp"
 #include "authz/password.hpp"
 #include "authz/store.hpp"
 #include "login_guard.hpp"
@@ -431,4 +433,64 @@ TEST(PasswordPolicy, LengthCountsCharactersAndClassesAreOptional) {
   EXPECT_FALSE(CheckPasswordPolicy("alllowercaseletters", classes).ok());
   EXPECT_TRUE(CheckPasswordPolicy("lowercase and 123", classes).ok());  // lower, other (space), digit
   EXPECT_TRUE(CheckPasswordPolicy("Lowercase4567", classes).ok());
+}
+
+TEST(LoginGuard, AttemptsInTheAirCountTowardTheThreshold) {
+  // Many attempts at once: no more than the threshold are ever checked before the lock.
+  Fixture f;
+  auto guard = f.Guard();
+  Fail(*guard, "alice", "203.0.113.9", 2);
+  for (int i = 0; i < 3; ++i) EXPECT_TRUE(guard->Check("alice", "203.0.113.9").allowed) << i;
+  const auto waiting = guard->Check("alice", "203.0.113.9");
+  EXPECT_FALSE(waiting.allowed);
+  EXPECT_EQ(waiting.retry_after_seconds, 1);
+  // One ends without a verdict (Release), one succeeds: room again, and the pair is reset.
+  guard->Release("alice", "203.0.113.9");
+  EXPECT_TRUE(guard->Check("alice", "203.0.113.9").allowed);
+  guard->RecordSuccess("alice", "203.0.113.9");
+  guard->RecordFailure("alice", "203.0.113.9");
+  guard->RecordFailure("alice", "203.0.113.9");
+  EXPECT_TRUE(guard->Check("alice", "203.0.113.9").allowed);
+}
+
+// ---- Password expiry (password_max_age_days), on a DuckDB-file store ----
+
+TEST(PasswordPolicy, AnOldPasswordExpiresAndAnUndatedOneNever) {
+  using hardcharger::authz::AccessControl;
+  using hardcharger::authz::HashPassword;
+  using hardcharger::authz::UserRecord;
+  const auto dir = PrivateDir();
+  const std::string uri = "duckdb:" + (dir / "rbac.duckdb").string();
+  const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::system_clock::now().time_since_epoch()).count();
+  {
+    auto store = RbacStore::Open(uri);
+    ASSERT_TRUE(store.ok()) << store.status().ToString();
+    const auto status = (*store)->Mutate([&](hardcharger::authz::StoreTransaction& txn, const auto&) {
+      for (const auto& [id, name] : {std::pair{"u1", "old"}, std::pair{"u2", "fresh"}, std::pair{"u3", "undated"}}) {
+        auto hash = HashPassword("a-long-password-1");
+        if (!hash.ok()) return hash.status();
+        ARROW_RETURN_NOT_OK(txn.InsertUser(UserRecord{id, name, *hash, true, {}, std::nullopt}));
+      }
+      ARROW_RETURN_NOT_OK(txn.SetPasswordChangedAt("u1", now - 91 * int64_t{86400000}));
+      return txn.SetPasswordChangedAt("u2", now - 89 * int64_t{86400000});
+    });
+    ASSERT_TRUE(status.ok()) << status.ToString();
+  }
+  for (const int64_t days : {int64_t{90}, int64_t{0}}) {
+    hardcharger::authz::Options options;
+    options.store_uri = uri;
+    options.administrator_name = "admin";
+    options.password_max_age_days = days;
+    options.poll_interval = std::chrono::milliseconds(0);
+    AccessControl access(options);
+    for (const auto* name : {"old", "fresh", "undated"}) {
+      const auto signed_in = access.AuthenticatePassword(name, "a-long-password-1");
+      ASSERT_TRUE(signed_in.has_value()) << name;
+      EXPECT_EQ(signed_in->password_expired, days == 90 && std::string(name) == "old") << name << " " << days;
+    }
+    EXPECT_FALSE(access.AuthenticatePassword("old", "wrong-password").has_value());
+    access.Shutdown();
+  }
+  std::filesystem::remove_all(dir);
 }

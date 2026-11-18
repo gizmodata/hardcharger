@@ -15,6 +15,7 @@ clock in hand (expiry of a 15-minute lock, the delays' growth and cap, the known
 is in unit/login_guard_test.cc; nothing here waits more than a few seconds.
 """
 
+import concurrent.futures
 import json
 import subprocess
 import time
@@ -138,6 +139,19 @@ def test_an_unknown_user_gets_exactly_the_answers_a_known_one_gets(launcher, sto
     administrator = answers(user="admin", address="203.0.113.3")
     assert known == unknown == administrator, (known, unknown, administrator)
     assert [status for status, *_ in known] == [401] * 5 + [429] * 2, known
+
+
+def test_many_attempts_at_once_are_not_all_checked(launcher, store):
+    # Twenty wrong passwords in parallel for one pair: no more than the threshold are checked
+    # (401); the rest are refused unchecked (429), so a burst buys no extra guesses.
+    server = start(launcher=launcher, store_uri=store.new_database(), args=["--enable-metrics", "true"])
+    admin = server.admin()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
+        statuses = list(pool.map(lambda _: sign_in(server=server, user="ann", password="wrong-password",
+                                                   address="203.0.113.9").status_code, range(20)))
+    assert statuses.count(401) <= 5 and statuses.count(401) + statuses.count(429) == 20, statuses
+    failures = admin.run(sql="SELECT value FROM hardcharger_metrics() WHERE name = 'hardcharger_login_failures_total'")
+    assert failures.to_pylist()[0]["value"] == statuses.count(401), (failures, statuses)
 
 
 # ---- Delays across addresses and users ----

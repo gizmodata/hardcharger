@@ -216,9 +216,20 @@ chargewire::Principal Authenticator::AuthenticatePassword(std::string_view usern
       throw RateLimited(decision.retry_after_seconds);
     }
   }
+  // The attempt holds its place in the guard until recorded; an exception on the way (the
+  // store too stale to decide) gives it back.
+  struct Held {
+    LoginGuard* guard;
+    std::string_view user, address;
+    bool done = false;
+    ~Held() {
+      if (guard && !done) guard->Release(user, address);
+    }
+  } held{guard_.get(), username, context.client_address};
   const bool user_ok = SameSecret(username, username_);
   const bool password_ok = SameSecret(password, password_);
   if (user_ok && password_ok) {
+    held.done = true;
     if (guard_) guard_->RecordSuccess(username, context.client_address);
     LogAt(log_level_, LogLevel::kInfo, "signed in", {{"user", LoggableName(username)}, {"method", "password"}});
     return chargewire::Principal{std::string(username), "admin", "password", {}, {}};
@@ -239,6 +250,7 @@ chargewire::Principal Authenticator::AuthenticatePassword(std::string_view usern
                       " has expired: an administrator sets a new one with ALTER USER ... WITH PASSWORD");
     }
     if (store_user && !user_ok) {
+      held.done = true;
       if (guard_) guard_->RecordSuccess(username, context.client_address);
       LogAt(log_level_, LogLevel::kInfo, "signed in",
             {{"user", store_user->user_name}, {"method", "password"}, {"role", "user"}});
@@ -246,6 +258,7 @@ chargewire::Principal Authenticator::AuthenticatePassword(std::string_view usern
                                 {{"credential", store_user->credential}}, {}};
     }
   }
+  held.done = true;
   if (guard_) guard_->RecordFailure(username, context.client_address);
   // The name is the client's, unauthenticated: cut, so a refusal can't fill the log.
   LogAt(log_level_, LogLevel::kInfo, "sign-in refused",
