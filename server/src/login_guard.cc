@@ -453,7 +453,7 @@ void LoginGuard::Sync() {
     }
   }
   std::vector<authz::LoginEventRecord> remote;
-  if (store_ && problem.empty()) {
+  if (store_ && problem.empty() && store_->Shared()) {
     int64_t since = 0;
     {
       std::lock_guard lock(mutex_);
@@ -488,6 +488,9 @@ void LoginGuard::Sync() {
       PruneLocked(now);
       last_prune_ms_ = now;
     }
+    // The first prune comes a round of kStorePruneEvery after the start, not with it: a
+    // starting cluster's replicas don't all delete at once.
+    if (last_store_prune_ms_ == 0) last_store_prune_ms_ = now;
     if (store_ && now - last_store_prune_ms_ > kStorePruneEvery) {
       prune_store = true;
       last_store_prune_ms_ = now;
@@ -636,6 +639,7 @@ class AccessControlEvents : public LoginEventStore {
     const auto status = access_->PruneLoginEvents(failures_before_ms, successes_before_ms);
     return status.ok() ? std::string() : status.message();
   }
+  bool Shared() const override { return access_->store_file().empty(); }
 
  private:
   std::shared_ptr<authz::AccessControl> access_;

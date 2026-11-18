@@ -67,6 +67,9 @@ class LoginEventStore {
   virtual std::string Append(const std::vector<authz::LoginEventRecord>& events) = 0;
   virtual std::string Since(int64_t since_ms, std::vector<authz::LoginEventRecord>& out) = 0;
   virtual std::string Prune(int64_t failures_before_ms, int64_t successes_before_ms) = 0;
+  // Whether other processes write records while this one runs (PostgreSQL: other replicas).
+  // A DuckDB file is one server's alone: its records are read once, at Load().
+  virtual bool Shared() const { return true; }
 };
 
 class LoginGuard {
