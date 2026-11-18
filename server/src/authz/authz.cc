@@ -513,6 +513,7 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
     principal.idp_issuer = who.idp_issuer;
     principal.idp_groups = who.idp_groups;
     principal.hidden_catalogs = hidden_catalogs_;
+    principal.catalog_access_token = who.catalog_access.has_value();
     // The external policy service may refuse the session.
     if (const auto* service = engine_->policy_service()) {
       switch (service->Decide(PolicyInput(*snapshot, principal, "connect"))) {
@@ -1139,8 +1140,16 @@ chargewire::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parse
     for (auto& field : AuditFieldsOf(parsed.command, *before, after)) fields.push_back(std::move(field));
     return fields;
   };
+  // Which statement of the session this is (the client's request id, its sql_statements
+  // row), and the role SET ROLE narrowed the session to: every access-control record says.
+  auto correlated = [&](LogFields fields, const Principal& who) {
+    if (!request_id_.empty()) fields.emplace_back("statement_id", request_id_);
+    if (!who.active_role_id.empty() && !who.asks_system_admin()) fields.emplace_back("active_role", who.active_role_name);
+    return fields;
+  };
+  Principal session_user = state->session_principal();
   auto refuse = [&](const Error& error, bool as_system_admin) {
-    LogFields fields = AuditWho(as_system_admin);
+    LogFields fields = correlated(AuditWho(as_system_admin), session_user);
     fields.emplace_back("status", "rejected");
     fields.emplace_back("statement", kind);
     fields.emplace_back("error", error.what());
@@ -1193,7 +1202,8 @@ chargewire::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parse
     }
   }
   SessionObjectResolver resolver(*dd::capiv2::Convert(connection_));
-  auto executed = engine->Execute(parsed.command, actor, resolver);
+  RbacEngine::AuditNotes notes;
+  auto executed = engine->Execute(parsed.command, actor, resolver, &notes);
   if (!executed.ok()) {
     const Error error = FromStatus(executed.status());
     refuse(error, as_system_admin);
@@ -1246,10 +1256,13 @@ chargewire::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parse
       Audit(LogLevel::kInfo, "System Admin elevation", std::move(fields));
     }
   } else {
-    LogFields fields = AuditWho(as_system_admin);
+    LogFields fields = correlated(AuditWho(as_system_admin), session_user);
     fields.emplace_back("statement", parsed.kind);
     fields.emplace_back("status", "success");
-    Audit(LogLevel::kInfo, "access-control statement", described(std::move(fields), *after));
+    fields = described(std::move(fields), *after);
+    // An account change: what authorized it, and its sanitized state before and after.
+    for (auto& note : notes) fields.push_back(std::move(note));
+    Audit(LogLevel::kInfo, "access-control statement", std::move(fields));
   }
   chargewire::StatementOutcome outcome;
   outcome.rows = Rows(result);

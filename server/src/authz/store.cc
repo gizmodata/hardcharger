@@ -1092,7 +1092,15 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   for (dd::idx_t r = 0; r < RowCount(*stp); ++r) {
     // A privilege a later Hardcharger added: this server doesn't know it, so nobody holds it.
     auto privilege = SystemPrivilegeFromName(GetString(*stp, 1, r));
-    if (!privilege || !StorageOf(*privilege)) continue;
+    if (!privilege) continue;
+    if (IsAccountPrivilege(*privilege)) {
+      // The account privileges (2.14) live here too, everywhere and with no admin option,
+      // where a 2.13 server skips them: a row that says otherwise gives nothing more.
+      if (!GetString(*stp, 2, r).empty()) continue;
+      system_privileges.push_back({GetString(*stp, 0, r), *privilege, false, GetString(*stp, 4, r)});
+      continue;
+    }
+    if (!StorageOf(*privilege)) continue;
     system_privileges.push_back({GetString(*stp, 0, r), *privilege, GetBool(*stp, 3, r), GetString(*stp, 4, r),
                                  GetString(*stp, 2, r)});
   }
@@ -1549,8 +1557,8 @@ arrow::Status StoreTransaction::UpsertOwner(const OwnerRecord& o) {
 }
 
 // A system privilege granted everywhere lives in system_privileges, where every server
-// reads it, unless it is one of the storage privileges 2.1 and earlier don't know; those,
-// and every location grant, live in storage_privileges.
+// reads it, unless it is one of the storage privileges 2.1 and earlier don't know or an
+// account privilege (2.14); those, and every location grant, live in storage_privileges.
 namespace {
 bool InStorageTable(const SystemPrivilegeRecord& r) {
   return !r.location.empty() || !IsOriginalSystemPrivilege(r.privilege);

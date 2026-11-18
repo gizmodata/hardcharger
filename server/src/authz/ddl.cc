@@ -781,6 +781,13 @@ class Parser {
         {"WRITE", "HTTP", nullptr, SystemPrivilege::kWriteHttp},
         {"EXPORT", "DATABASE", nullptr, SystemPrivilege::kExportDatabase},
         {"IMPORT", "DATABASE", nullptr, SystemPrivilege::kImportDatabase},
+        // The account privileges. No role is named by two unquoted words, so GRANT CREATE USER
+        // TO helpdesk was a syntax error before 2.14, never a role grant.
+        {"CREATE", "USER", nullptr, SystemPrivilege::kCreateUser},
+        {"ALTER", "USER", nullptr, SystemPrivilege::kAlterUser},
+        {"DROP", "USER", nullptr, SystemPrivilege::kDropUser},
+        {"CREATE", "ROLE", nullptr, SystemPrivilege::kCreateRole},
+        {"DROP", "ROLE", nullptr, SystemPrivilege::kDropRole},
     };
     for (const auto& phrase : kPhrases) {
       if (PeekKeyword(phrase.first) && PeekKeyword(phrase.second, 1) &&
@@ -1210,6 +1217,15 @@ arrow::Result<RbacCommand> ParseRbacStatement(const std::string& sql) {
   ARROW_ASSIGN_OR_RAISE(auto tokens, Tokenize(sql));
   Parser parser(std::move(tokens), sql);
   return parser.ParseStatement();
+}
+
+std::optional<SystemPrivilege> AccountPrivilegeOf(const RbacCommand& command) {
+  if (std::holds_alternative<CreateUserCommand>(command)) return SystemPrivilege::kCreateUser;
+  if (std::holds_alternative<AlterUserCommand>(command)) return SystemPrivilege::kAlterUser;
+  if (std::holds_alternative<DropUserCommand>(command)) return SystemPrivilege::kDropUser;
+  if (std::holds_alternative<CreateRoleCommand>(command)) return SystemPrivilege::kCreateRole;
+  if (std::holds_alternative<DropRoleCommand>(command)) return SystemPrivilege::kDropRole;
+  return std::nullopt;
 }
 
 std::string CommandKind(const RbacCommand& command) {

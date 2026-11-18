@@ -73,6 +73,10 @@ def test_what_a_system_admin_does_is_recorded_under_its_own_name(server, tmp_pat
     expect_blocked(client=alice, sql="SELECT * FROM ledger", why="user alice has no SELECT privilege on table")
 
     records = audit_records(server=server)
+    # Every access-control record names the statement it is about (its Chargewire id); the
+    # ids are each statement's own.
+    correlated = [r.pop("statement_id") for r in records if "statement_id" in r]
+    assert correlated and all(i.startswith("q_") for i in correlated) and len(set(correlated)) == len(correlated)
     # The ids the store gave them, from the records of their creation.
     ids = {name: about(records, statement="CREATE USER", target=f"user {name}")[0]["target_ids"]
            for name in ("alice", "bob", "carl")}
@@ -104,14 +108,23 @@ def test_what_a_system_admin_does_is_recorded_under_its_own_name(server, tmp_pat
     expected = [
         as_admin | {"message": "System Admin elevation", "status": "success", "statement": ELEVATE,
                     "held_through": "a grant to the user"},
-        as_admin | done | {"statement": "CREATE USER", "target": "user carl", "target_ids": ids["carl"]},
+        as_admin | done | {"statement": "CREATE USER", "target": "user carl", "target_ids": ids["carl"],
+                           "privilege": "CREATE USER", "authorized_by": "System Admin", "before": "none",
+                           "after": "enabled; password login; roles: none"},
         as_admin | done | {"statement": "ALTER USER", "target": "user carl", "target_ids": ids["carl"],
-                           "change": "password"},
+                           "privilege": "ALTER USER", "change": "password", "authorized_by": "System Admin",
+                           "before": "enabled; password login; roles: none",
+                           "after": "enabled; password login (new password); roles: none"},
         as_admin | done | {"statement": "ALTER USER", "target": "user carl", "target_ids": ids["carl"],
-                           "change": "attribute region"},
+                           "privilege": "ALTER USER", "change": "attribute region", "authorized_by": "System Admin",
+                           "before": "enabled; password login; roles: none",
+                           "after": "enabled; password login; roles: none; attributes: region"},
         as_admin | done | {"statement": "GRANT", "target": "user carl, user bob",
                            "target_ids": f"{ids['carl']}, {ids['bob']}", "membership": "role clerks",
-                           "membership_ids": clerks, "option": "WITH ADMIN OPTION"},
+                           "membership_ids": clerks, "option": "WITH ADMIN OPTION", "authorized_by": "System Admin",
+                           "before": "user carl in role clerks: no; user bob in role clerks: no",
+                           "after": "user carl in role clerks: yes, WITH ADMIN OPTION; user bob in role clerks: yes, "
+                                    "WITH ADMIN OPTION"},
         as_admin | done | {"statement": "GRANT", "target": "role clerks", "target_ids": clerks,
                            "privilege": "SELECT (id), INSERT", "object": "TABLE ledger"},
         as_admin | done | {"statement": "GRANT", "target": "role clerks", "target_ids": clerks,
@@ -136,7 +149,7 @@ def test_what_a_system_admin_does_is_recorded_under_its_own_name(server, tmp_pat
                     "error": "[REDACTED: error of a credential statement]"},
         as_admin | {"message": "access-control statement refused", "status": "rejected", "statement": "DROP USER",
                     "error": "Hardcharger access control: user nobody_at_all does not exist",
-                    "target": "user nobody_at_all", "target_ids": "?"},
+                    "target": "user nobody_at_all", "target_ids": "?", "privilege": "DROP USER"},
         as_alice | {"message": "System Admin elevation ended", "status": "ended", "reason": "RESET ROLE"},
         as_alice | done | {"statement": "SET ROLE"},
         as_alice | {"message": "access control refused a statement", "status": "denied", "active_role": "",

@@ -691,12 +691,15 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
                 source.empty() ? who.user_name : names.Role(source), false});
     }
   }
+  const auto account_roles = snapshot.AccountPrivilegeRoles(who);
   for (const auto p : AllSystemPrivileges()) {
-    // The roles that give it, everywhere or on a location.
+    // The roles that give it, everywhere or on a location (an account privilege: only through
+    // the administrator's own memberships).
     const bool system = snapshot.HasSystemPrivilege(who, p);
     if (!system && (!StorageOf(p) || who.catalog_rules || who.scope)) continue;
+    const auto& giving = IsAccountPrivilege(p) ? account_roles : roles;
     for (const auto& r : snapshot.system_privileges()) {
-      if (r.privilege != p || !roles.count(r.role_id) || (system && !r.location.empty())) continue;
+      if (r.privilege != p || !giving.count(r.role_id) || (system && !r.location.empty())) continue;
       const Cell location = r.location.empty() ? Cell{} : Text(r.location);
       rows.Add({who.user_name, SystemPrivilegeName(p), std::string(r.location.empty() ? "SYSTEM" : "LOCATION"),
                 Cell{}, Cell{}, location, Cell{}, names.Role(r.role_id), r.admin_option});

@@ -5,6 +5,7 @@
 // token or an attribute's value is in no field.
 #pragma once
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,5 +29,18 @@ namespace hardcharger::authz {
 // `after` (as it left it: what it created).
 std::vector<std::pair<std::string, std::string>> AuditFieldsOf(const RbacCommand& command, const Snapshot& before,
                                                                const Snapshot& after);
+
+// An account change's state before and after, sanitized, for its audit record's `before` and
+// `after` fields: for CREATE / ALTER / DROP USER the user ("enabled; password login; roles:
+// clerks WITH ADMIN OPTION; attributes: region"), for CREATE / DROP ROLE the role ("members:
+// 2; inherits: none; privileges: SELECT on ledger, CREATE USER"), for GRANT / REVOKE of a
+// role each membership ("user bob in role clerks: no"), and for GRANT / REVOKE of an account
+// privilege each holding ("role helpdesk: CREATE USER: no"). "none" for what does not exist.
+// A password shows only as "password login" (and "(new password)" when its hash changed),
+// an attribute by its name: never a password, a hash, an attribute's value or a token.
+// nullopt for any other statement.
+std::optional<std::pair<std::string, std::string>> AccountChangeValues(const RbacCommand& command,
+                                                                       const Snapshot& before,
+                                                                       const Snapshot& after);
 
 }  // namespace hardcharger::authz

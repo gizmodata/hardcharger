@@ -149,8 +149,13 @@ class RbacEngine {
   // Reload when the store's version moved (another replica wrote).
   arrow::Status Refresh();
 
+  // `notes`, when given, receives audit fields of an account change (CREATE / ALTER / DROP
+  // USER, CREATE / DROP ROLE, a membership, an account privilege): what authorized it
+  // (authorized_by) and the sanitized state before and after (AccountChangeValues). Never a
+  // password, a hash or a token.
+  using AuditNotes = std::vector<std::pair<std::string, std::string>>;
   arrow::Result<CommandResult> Execute(const RbacCommand& command, const Principal& actor,
-                                       ObjectResolver& resolver);
+                                       ObjectResolver& resolver, AuditNotes* notes = nullptr);
 
   // Password login for a store user. Returns the principal on success; any
   // failure (unknown user, wrong password, disabled) is the same error.

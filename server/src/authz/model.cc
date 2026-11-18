@@ -98,6 +98,21 @@ Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users, std::vector<R
     if (!seen.insert({record.kind, record.principal_id}).second) continue;
     system_admins_.push_back(std::move(record));
   }
+  // The account privileges are held everywhere, with no admin option, by system-scope roles
+  // that are not built in: a record that says otherwise (a store edited by hand) is read as
+  // that or left out.
+  system_privileges_.erase(
+      std::remove_if(system_privileges_.begin(), system_privileges_.end(),
+                     [&](const SystemPrivilegeRecord& r) {
+                       if (!IsAccountPrivilege(r.privilege)) return false;
+                       const RoleRecord* role = FindRoleById(r.role_id);
+                       return !r.location.empty() || !role || role->builtin || role->id == kPublicRoleId ||
+                              !TenantOf(PrincipalKind::kRole, r.role_id).empty();
+                     }),
+      system_privileges_.end());
+  for (auto& r : system_privileges_) {
+    if (IsAccountPrivilege(r.privilege)) r.admin_option = false;
+  }
   for (const auto& r : system_privileges_) {
     const auto storage = StorageOf(r.privilege);
     if (storage && storage->first == StorageKind::kFilesystem) NoteLocalFileGrant();
@@ -268,17 +283,11 @@ std::set<std::string> Snapshot::AdministratorGrantedClosure(const std::string& r
   return seen;
 }
 
-std::vector<std::string> Snapshot::SystemAdminSources(const Principal& principal) const {
-  std::vector<std::string> sources;
-  if (system_admins_.empty() || principal.superuser || principal.is_role() || principal.user_id.empty()) return sources;
-  const UserRecord* user = FindUserById(principal.user_id);
-  if (!user || !user->enabled) return sources;
-  // A tenant's user stays inside its tenant, whatever the store says.
-  if (!TenantOf(PrincipalKind::kUser, user->id).empty()) return sources;
+std::set<std::string> Snapshot::AdministratorGrantedRolesOf(const Principal& principal) const {
   // The roles the user holds by the administrator's own hand.
   std::set<std::string> roles;
   for (const auto& m : memberships_) {
-    if (m.member_kind == PrincipalKind::kUser && m.member_id == user->id && m.granted_by.empty()) {
+    if (m.member_kind == PrincipalKind::kUser && m.member_id == principal.user_id && m.granted_by.empty()) {
       for (const auto& r : AdministratorGrantedClosure(m.role_id)) roles.insert(r);
     }
   }
@@ -290,6 +299,42 @@ std::vector<std::string> Snapshot::SystemAdminSources(const Principal& principal
     if (!FindRoleById(m.role_id) || !TenantOf(PrincipalKind::kRole, m.role_id).empty()) continue;
     for (const auto& r : AdministratorGrantedClosure(m.role_id)) roles.insert(r);
   }
+  return roles;
+}
+
+std::set<std::string> Snapshot::AccountPrivilegeRoles(const Principal& principal) const {
+  if (principal.superuser || principal.is_role() || principal.user_id.empty() || principal.scope ||
+      principal.catalog_rules || principal.catalog_access_token) {
+    return {};
+  }
+  const UserRecord* user = FindUserById(principal.user_id);
+  if (!user || !user->enabled) return {};
+  // A tenant's user stays inside its tenant (its tenant admin manages its accounts).
+  if (!TenantOf(PrincipalKind::kUser, user->id).empty()) return {};
+  // Of the roles the session acts with, those an administrator's grants reach.
+  const auto acting = RolesOf(principal);
+  std::set<std::string> roles;
+  for (const auto& r : AdministratorGrantedRolesOf(principal)) {
+    if (acting.count(r) && TenantOf(PrincipalKind::kRole, r).empty()) roles.insert(r);
+  }
+  return roles;
+}
+
+bool Snapshot::RoleCarriesAccountPrivilege(const std::string& role_id) const {
+  const auto closure = RoleClosure(role_id);
+  return std::any_of(system_privileges_.begin(), system_privileges_.end(), [&](const SystemPrivilegeRecord& r) {
+    return IsAccountPrivilege(r.privilege) && closure.count(r.role_id) > 0;
+  });
+}
+
+std::vector<std::string> Snapshot::SystemAdminSources(const Principal& principal) const {
+  std::vector<std::string> sources;
+  if (system_admins_.empty() || principal.superuser || principal.is_role() || principal.user_id.empty()) return sources;
+  const UserRecord* user = FindUserById(principal.user_id);
+  if (!user || !user->enabled) return sources;
+  // A tenant's user stays inside its tenant, whatever the store says.
+  if (!TenantOf(PrincipalKind::kUser, user->id).empty()) return sources;
+  const std::set<std::string> roles = AdministratorGrantedRolesOf(principal);
   for (const auto& record : system_admins_) {
     if (record.kind == PrincipalKind::kUser ? record.principal_id == user->id : roles.count(record.principal_id) > 0) {
       sources.push_back(record.kind == PrincipalKind::kUser ? std::string() : record.principal_id);
@@ -751,7 +796,8 @@ bool Snapshot::HasSystemPrivilege(const Principal& principal, SystemPrivilege pr
   // allow, read the database file, an extension's scanner, a secret's remote storage.
   if (principal.catalog_rules) return principal.rules_administrator && IsRulesAdministratorPrivilege(privilege);
   if (principal.scope) return false;  // a scoped token holds none
-  const auto roles = RolesOf(principal);
+  // An account privilege counts only through the administrator's own memberships.
+  const auto roles = IsAccountPrivilege(privilege) ? AccountPrivilegeRoles(principal) : RolesOf(principal);
   for (const auto& r : system_privileges_) {
     if (r.privilege == privilege && r.location.empty() && roles.count(r.role_id)) return true;
   }
@@ -789,7 +835,9 @@ std::optional<std::vector<std::string>> Snapshot::StorageLocationsOf(const Princ
 
 bool Snapshot::CanGrantSystemPrivilege(const Principal& principal, SystemPrivilege privilege,
                                        const std::string& location) const {
-  if (principal.superuser) return true;
+  if (principal.is_unrestricted_administrator()) return true;
+  // Never delegated: no admin option passes an account privilege on.
+  if (IsAccountPrivilege(privilege)) return false;
   const auto roles = RolesOf(principal);
   for (const auto& r : system_privileges_) {
     if (r.privilege == privilege && r.admin_option && roles.count(r.role_id) &&
@@ -1112,7 +1160,8 @@ Snapshot::Fallen Snapshot::FallenDelegations() const {
     for (size_t i = 0; i < system_privileges_.size(); ++i) {
       if (s_ok[i]) continue;
       const auto& r = system_privileges_[i];
-      if (!FindUserById(r.granted_by)) continue;
+      // An account privilege stands only as the administrator's grant.
+      if (IsAccountPrivilege(r.privilege) || !FindUserById(r.granted_by)) continue;
       const auto roles = roles_of(r.granted_by);
       for (size_t j = 0; j < system_privileges_.size(); ++j) {
         const auto& h = system_privileges_[j];

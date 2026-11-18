@@ -62,12 +62,26 @@ enum class SystemPrivilege {
   kWriteObjectStorage,  // COPY ... TO object storage
   kReadHttp,            // reading http://, https://, hf://
   kWriteHttp,           // COPY ... TO http(s)
+  // The account privileges (2.14): CREATE / ALTER / DROP USER and CREATE / DROP ROLE of
+  // system-scope users and roles below the holder's own reach, for a help desk that manages
+  // accounts without reading data. Granted only by an unrestricted administrator, never WITH
+  // ADMIN OPTION, never to PUBLIC or a tenant's role; see IsAccountPrivilege.
+  kCreateUser,
+  kAlterUser,
+  kDropUser,
+  kCreateRole,
+  kDropRole,
 };
 
 // "MANAGE CATALOGS", "READ FILESYSTEM", ...
 std::string SystemPrivilegeName(SystemPrivilege privilege);
 const std::vector<SystemPrivilege>& AllSystemPrivileges();
 std::optional<SystemPrivilege> SystemPrivilegeFromName(const std::string& name);
+// CREATE USER, ALTER USER, DROP USER, CREATE ROLE, DROP ROLE: the privileges that manage
+// accounts. A role holds one only through memberships the administrator granted (a role's
+// ADMIN OPTION never passes it on), and a session limited by its sign-in (a scoped token, a
+// token with catalog_access rules) never uses one.
+bool IsAccountPrivilege(SystemPrivilege privilege);
 
 // Does the setting hold a credential (http_proxy_password, s3_secret_access_key, ...),
 // by its name? Reading one needs MANAGE CONFIG.

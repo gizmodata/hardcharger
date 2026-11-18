@@ -305,6 +305,11 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // DuckDB's or access control's (SET hardcharger.*, KILL SESSION), which pass no other check.
   void RefuseIfSystemAdminLost() const;
 
+  // The Chargewire id of the statement the session runs now (its sql_statements row), which
+  // the access-control audit records carry as statement_id; empty: none. The session sets it
+  // around each access-control statement.
+  void SetRequestId(std::string id) { request_id_ = std::move(id); }
+
   // Runs one statement text. An access-control statement (GRANT, CREATE USER, SHOW
   // GRANTS, ...) runs here; anything else passes the pre-bind gate and is run by `run`
   // (DuckDB), under the plan check.
@@ -424,6 +429,9 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   bool started_in_tenant_catalog_ = false;
   int64_t scope_expires_at_ = 0;  // a scoped token's session: when the scope ends (Unix s)
   std::string tenant_catalogs_;
+  // The statement being run (SetRequestId), for the access-control audit records; engine
+  // thread only.
+  std::string request_id_;
 
   mutable std::mutex mutex_;  // guards connection_ and ended_ against the store's listener
   duckdb_v2_connection_handle connection_;

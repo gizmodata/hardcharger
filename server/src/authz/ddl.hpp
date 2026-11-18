@@ -258,4 +258,8 @@ arrow::Result<RbacCommand> ParseRbacStatement(const std::string& sql);
 // The SQL statement kind for logs and audit ("GRANT", "CREATE ROLE", ...).
 std::string CommandKind(const RbacCommand& command);
 
+// The account privilege a non-administrator needs for the statement (CREATE USER for
+// CREATE USER, ...), or nullopt for a statement no account privilege covers.
+std::optional<SystemPrivilege> AccountPrivilegeOf(const RbacCommand& command);
+
 }  // namespace hardcharger::authz

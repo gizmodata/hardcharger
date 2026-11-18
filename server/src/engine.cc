@@ -1465,6 +1465,14 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
                {{"session_id", id_}, {"user", principal_.name}, {"role", principal_.role},
                 {"statement_id", statement_id}, {"kind", "sql"}, {"is_internal", "false"}, {"sql", Abbreviate(sql)}});
     }
+    // Its audit records say which statement they are about.
+    struct RequestId {
+      authz::SessionGuard* guard;
+      ~RequestId() {
+        if (guard) guard->SetRequestId({});
+      }
+    } request_id{guard_.get()};
+    if (guard_) guard_->SetRequestId(statement_id);
     // (The statement as written: Track redacts what it logs, and its error's redaction
     // must see the statement, not its redacted form.)
     return Track(StatementKind::kOther, sql, {.statement = statement_id, .execution = statement_id}, [&] {

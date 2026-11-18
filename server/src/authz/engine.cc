@@ -6,6 +6,7 @@
 #include <set>
 #include <sstream>
 
+#include "authz/audit_fields.hpp"
 #include "authz/policies.hpp"
 #include "logging.hpp"
 #include "platform.hpp"
@@ -176,6 +177,209 @@ std::string TenantName(const Snapshot& snap, const std::string& tenant_id) {
   if (tenant_id.empty()) return "the system scope";
   const auto* t = snap.FindTenantById(tenant_id);
   return "tenant " + (t ? t->name : tenant_id);
+}
+
+// ---- account management by a holder of an account privilege ------------------------------
+//
+// CREATE USER, ALTER USER, DROP USER, CREATE ROLE and DROP ROLE are system privileges: a role
+// granted one (by an unrestricted administrator, never with an admin option) may run that
+// statement on system-scope users and roles that are no more than the session itself. Each
+// check below is asked of the store as the change's own transaction reads it, so a revoke
+// committed on any replica stops the very next statement.
+
+std::string RoleNamesOf(const Snapshot& snap, const std::set<std::string>& ids) {
+  std::vector<std::string> names;
+  for (const auto& id : ids) {
+    const auto* role = snap.FindRoleById(id);
+    names.push_back(role ? role->name : id);
+  }
+  std::sort(names.begin(), names.end());
+  return Join(names);
+}
+
+// What lets the principal run an account statement (CREATE / ALTER / DROP USER, CREATE / DROP
+// ROLE): the administrator's authority, its tenant's tenant_admin role, or an account
+// privilege, which then limits whom it reaches (RequireUserWithinReach,
+// RequireRoleWithinReach).
+struct AccountAuthority {
+  enum class Kind { kAdministrator, kTenantAdmin, kPrivilege };
+  Kind kind = Kind::kAdministrator;
+  std::string text;  // the audit record's authorized_by
+  bool delegated() const { return kind == Kind::kPrivilege; }
+};
+
+arrow::Result<AccountAuthority> AuthorizeAccountStatement(const Snapshot& snap, const Principal& actor,
+                                                          const RbacCommand& command, const std::string& name) {
+  using Kind = AccountAuthority::Kind;
+  if (actor.is_unrestricted_administrator()) {
+    return AccountAuthority{Kind::kAdministrator, actor.acts_as_system_admin() ? "System Admin" : "administrator"};
+  }
+  const std::string kind = CommandKind(command);
+  // A tenant admin manages the users and roles of its own tenant, as before.
+  auto tenant = TenantForName(snap, name);
+  if (tenant.ok() && IsTenantAdmin(snap, actor, *tenant)) {
+    return AccountAuthority{Kind::kTenantAdmin, "tenant_admin of " + TenantName(snap, *tenant)};
+  }
+  const SystemPrivilege privilege = *AccountPrivilegeOf(command);
+  const std::string privilege_name = SystemPrivilegeName(privilege);
+  if (!snap.HasSystemPrivilege(actor, privilege)) {
+    // Say so when the session's sign-in is what keeps the privilege away.
+    Principal unlimited = actor;
+    unlimited.catalog_access_token = false;
+    if (actor.catalog_access_token && snap.HasSystemPrivilege(unlimited, privilege)) {
+      return AccessControlError("Hardcharger blocked " + kind +
+                                ": this session's sign-in token carries catalog_access rules, and such a session "
+                                "never uses the " +
+                                privilege_name + " privilege");
+    }
+    return AccessControlError("Hardcharger blocked " + kind +
+                              ": only administrators manage users and roles on this server (and, for system-scope "
+                              "users and roles, a role granted the " +
+                              privilege_name + " privilege)");
+  }
+  if (!tenant.ok()) return tenant.status();
+  if (!tenant->empty()) {
+    return AccessControlError("Hardcharger blocked " + kind + ": " + name + " belongs to " + TenantName(snap, *tenant) +
+                              ", and the " + privilege_name +
+                              " privilege reaches system-scope users and roles only (the tenant's own tenant_admin "
+                              "role manages the tenant's)");
+  }
+  std::set<std::string> through;
+  const auto roles = snap.AccountPrivilegeRoles(actor);
+  for (const auto& r : snap.system_privileges()) {
+    if (r.privilege == privilege && roles.count(r.role_id)) through.insert(r.role_id);
+  }
+  return AccountAuthority{Kind::kPrivilege, privilege_name + " privilege, through role " + RoleNamesOf(snap, through)};
+}
+
+// The server administrator (or a certificate administrator) is configuration, not a store
+// user: a holder of an account privilege is told so rather than "does not exist".
+arrow::Status RefuseAdministratorAccount(const std::string& name, const std::string& kind,
+                                         const RbacEngine::Options& options) {
+  bool administrator = !options.administrator_name.empty() && IdentifiersEqual(name, options.administrator_name);
+  for (const auto& certificate : options.certificate_administrators) {
+    administrator = administrator || IdentifiersEqual(name, certificate);
+  }
+  if (!administrator) return arrow::Status::OK();
+  return AccessControlError("Hardcharger blocked " + kind + ": " + name +
+                            " is the server administrator, which is set in the server's configuration and never "
+                            "managed with SQL");
+}
+
+// May a holder of ALTER USER or DROP USER change or drop `target`? Only a user that is no more
+// than the session itself, so that a new password, ENABLE or DROP never hands over (or takes
+// away) authority the session lacks: every role it holds is one the session acts with, every
+// admin option it holds is one the session could grant, every session attribute it has (row
+// and masking policies read them) the actor has with the same value, and (changing it) it owns
+// nothing. SYSTEM ADMIN and the administrator are refused before this.
+arrow::Status RequireUserWithinReach(const Snapshot& snap, const Principal& actor, const UserRecord& target,
+                                     const std::string& kind, bool dropping) {
+  auto blocked = [&](const std::string& why) {
+    return AccessControlError("Hardcharger blocked " + kind + ": user " + target.name + " " + why +
+                              "; only an administrator " + (dropping ? "drops" : "changes") + " it");
+  };
+  const auto acting = snap.RolesOf(actor);
+  std::set<std::string> missing;
+  for (const auto& id : snap.EffectiveRoleIds(target.id)) {
+    if (!acting.count(id)) missing.insert(id);
+  }
+  if (!missing.empty()) {
+    return blocked("holds role " + RoleNamesOf(snap, missing) + ", which user " + actor.user_name +
+                   " does not hold in this session");
+  }
+  std::set<std::string> options;
+  for (const auto& m : snap.memberships()) {
+    if (m.member_kind == PrincipalKind::kUser && m.member_id == target.id && m.admin_option &&
+        !snap.CanAdminRole(actor, m.role_id)) {
+      options.insert(m.role_id);
+    }
+  }
+  if (!options.empty()) {
+    return blocked("holds role " + RoleNamesOf(snap, options) + " WITH ADMIN OPTION, which user " + actor.user_name +
+                   " does not");
+  }
+  const UserRecord* self = snap.FindUserById(actor.user_id);
+  for (const auto& [key, value] : target.attributes) {
+    const auto mine = self ? self->attributes.find(key) : std::map<std::string, std::string>::const_iterator();
+    if (!self || mine == self->attributes.end() || mine->second != value) {
+      return blocked("has the session attribute " + key + ", which row and masking policies read, and user " +
+                     actor.user_name + " does not have it with the same value");
+    }
+  }
+  if (!dropping) {
+    std::vector<std::string> owned;
+    for (const auto& o : snap.owners()) {
+      if (o.owner_kind == OwnerKind::kUser && o.owner_id == target.id) owned.push_back(o.object.ToString());
+    }
+    if (!owned.empty()) {
+      std::sort(owned.begin(), owned.end());
+      return blocked("owns " + owned.front() +
+                     (owned.size() > 1 ? " and " + std::to_string(owned.size() - 1) + " more" : std::string()) +
+                     ", and signing in as it acts as their owner");
+    }
+  }
+  return arrow::Status::OK();
+}
+
+// May a holder of DROP ROLE drop `role`? Only one whose loss takes away nothing the session
+// does not hold, and that no policy names: everything it inherits the session acts with; it
+// is a role the session acts with, or holds no privilege of its own; and no row policy names
+// it and no masking policy exempts it (dropping it would change what those policies decide).
+arrow::Status RequireRoleWithinReach(const Snapshot& snap, const Principal& actor, const RoleRecord& role,
+                                     const std::string& kind) {
+  auto blocked = [&](const std::string& why) {
+    return AccessControlError("Hardcharger blocked " + kind + ": role " + role.name + " " + why +
+                              "; only an administrator drops it");
+  };
+  const auto acting = snap.RolesOf(actor);
+  std::set<std::string> missing;
+  for (const auto& id : snap.RoleClosure(role.id)) {
+    if (id != role.id && !acting.count(id)) missing.insert(id);
+  }
+  if (!missing.empty()) {
+    return blocked("inherits role " + RoleNamesOf(snap, missing) + ", which user " + actor.user_name +
+                   " does not hold in this session");
+  }
+  if (!acting.count(role.id)) {
+    const bool grants = std::any_of(snap.grants().begin(), snap.grants().end(),
+                                    [&](const ObjectGrantRecord& g) { return g.role_id == role.id; });
+    const bool system = std::any_of(snap.system_privileges().begin(), snap.system_privileges().end(),
+                                    [&](const SystemPrivilegeRecord& r) { return r.role_id == role.id; });
+    if (grants || system) {
+      return blocked("holds privileges of its own, and user " + actor.user_name +
+                     " does not hold the role in this session");
+    }
+  }
+  for (const auto& p : snap.row_policies()) {
+    if (std::find(p.role_ids.begin(), p.role_ids.end(), role.id) != p.role_ids.end()) {
+      return blocked("is named by row policy " + p.name + " on " + p.table.ToString());
+    }
+  }
+  for (const auto& b : snap.mask_bindings()) {
+    if (std::find(b.exempt_role_ids.begin(), b.exempt_role_ids.end(), role.id) != b.exempt_role_ids.end()) {
+      return blocked("is exempt from the masking policy on " + b.table.ToString() + "." +
+                     QuoteIdentifierIfNeeded(b.column));
+    }
+  }
+  return arrow::Status::OK();
+}
+
+// The account privileges a role holds, itself or through the roles it inherits.
+std::string AccountPrivilegesCarried(const Snapshot& snap, const std::string& role_id) {
+  const auto closure = snap.RoleClosure(role_id);
+  std::set<std::string> names;
+  for (const auto& r : snap.system_privileges()) {
+    if (IsAccountPrivilege(r.privilege) && closure.count(r.role_id)) names.insert(SystemPrivilegeName(r.privilege));
+  }
+  return Join({names.begin(), names.end()});
+}
+
+// The password a CREATE USER or ALTER USER sets, whoever sets it: OK, or why it is refused.
+// 2.14.0's password policy (CheckPasswordPolicy, from the login guard's track) hooks in here;
+// until then any password is accepted, as before. Never quote the password in the message.
+arrow::Status CheckNewPassword(const std::string& password) {
+  (void)password;
+  return arrow::Status::OK();
 }
 
 arrow::Result<std::vector<std::string>> OwnedObjects(StoreTransaction& txn, const Snapshot& snap,
@@ -786,7 +990,7 @@ arrow::Result<CommandResult> RbacEngine::ExecuteScopedToken(const ScopedTokenCom
 }
 
 arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, const Principal& actor,
-                                                 ObjectResolver& resolver) {
+                                                 ObjectResolver& resolver, AuditNotes* notes) {
   // A scoped token may read its grants, narrow itself and mint narrower
   // tokens; it never changes access control.
   if (actor.scope && !std::holds_alternative<ShowGrantsCommand>(command) &&
@@ -916,28 +1120,33 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
     return result;
   }
 
-  // Users and roles are the administrator's. Grants can be delegated: an owner
-  // grants on what it owns, and WITH GRANT / ADMIN OPTION passes that on.
-  const bool user_or_role_ddl = std::holds_alternative<CreateUserCommand>(command) ||
-                                std::holds_alternative<AlterUserCommand>(command) ||
-                                std::holds_alternative<DropUserCommand>(command) ||
-                                std::holds_alternative<CreateRoleCommand>(command) ||
-                                std::holds_alternative<DropRoleCommand>(command);
-  if (!actor.superuser && user_or_role_ddl) {
-    // A tenant admin manages the users and roles of its own tenant.
-    std::string name;
-    if (const auto* c = std::get_if<CreateUserCommand>(&command)) name = c->name;
-    if (const auto* c = std::get_if<AlterUserCommand>(&command)) name = c->name;
-    if (const auto* c = std::get_if<DropUserCommand>(&command)) name = c->name;
-    if (const auto* c = std::get_if<CreateRoleCommand>(&command)) name = c->name;
-    if (const auto* c = std::get_if<DropRoleCommand>(&command)) name = c->name;
-    auto snap = snapshot();
-    auto tenant = TenantForName(*snap, name);
-    if (!tenant.ok() || !IsTenantAdmin(*snap, actor, *tenant)) {
-      return AccessControlError("Hardcharger blocked " + CommandKind(command) +
-                                ": only administrators manage users and roles on this server");
+  // Users and roles are the administrator's, a tenant admin's in its tenant, and (for
+  // system-scope users and roles no more than the session itself) an account privilege
+  // holder's. Grants can be delegated: an owner grants on what it owns, and WITH GRANT /
+  // ADMIN OPTION passes that on.
+  std::string account_name;
+  if (const auto* c = std::get_if<CreateUserCommand>(&command)) account_name = c->name;
+  if (const auto* c = std::get_if<AlterUserCommand>(&command)) account_name = c->name;
+  if (const auto* c = std::get_if<DropUserCommand>(&command)) account_name = c->name;
+  if (const auto* c = std::get_if<CreateRoleCommand>(&command)) account_name = c->name;
+  if (const auto* c = std::get_if<DropRoleCommand>(&command)) account_name = c->name;
+  const bool account_statement = AccountPrivilegeOf(command).has_value();
+  // Asked first of this replica's snapshot (and, when that refuses, of the store again, so a
+  // grant made on another replica counts at once), before any password is hashed; then again,
+  // authoritatively, inside the change's own store transaction (`authorize`).
+  if (account_statement && !actor.is_unrestricted_administrator()) {
+    auto first = AuthorizeAccountStatement(*snapshot(), actor, command, account_name);
+    if (!first.ok()) {
+      if (!Refresh().ok()) return first.status();
+      ARROW_RETURN_NOT_OK(AuthorizeAccountStatement(*snapshot(), actor, command, account_name).status());
     }
   }
+  AccountAuthority authority;
+  auto authorize = [&](const Snapshot& snap) -> arrow::Status {
+    ARROW_ASSIGN_OR_RAISE(authority, AuthorizeAccountStatement(snap, actor, command, account_name));
+    if (notes) *notes = {{"authorized_by", authority.text}};
+    return arrow::Status::OK();
+  };
 
   CommandResult result;
   // Every change runs in one store transaction, which also removes the grants
@@ -949,11 +1158,23 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       -> arrow::Status {
     ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot& snap) {
       cascaded = 0;
+      if (notes) notes->clear();  // a retried transaction starts over
       ARROW_RETURN_NOT_OK(RequireStillSystemAdmin(snap, actor, CommandKind(command)));
       ARROW_RETURN_NOT_OK(fn(txn, snap));
       ARROW_ASSIGN_OR_RAISE(auto after, txn.Reload());
+      // An account change's state before and after, as this transaction reads and leaves it.
+      auto note_values = [&](const Snapshot& final_state) {
+        if (!notes) return;
+        if (auto values = AccountChangeValues(command, snap, final_state)) {
+          notes->emplace_back("before", values->first);
+          notes->emplace_back("after", values->second);
+        }
+      };
       const auto fallen = after->FallenDelegations();
-      if (fallen.empty()) return arrow::Status::OK();
+      if (fallen.empty()) {
+        note_values(*after);
+        return arrow::Status::OK();
+      }
       if (restrict) {
         return AccessControlError(
             "other grants depend on this one; REVOKE ... CASCADE removes them too");
@@ -967,6 +1188,10 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       }
       cascaded =
           fallen.grant_ids.size() + fallen.memberships.size() + fallen.system_privileges.size();
+      if (notes) {
+        ARROW_ASSIGN_OR_RAISE(auto settled, txn.Reload());
+        note_values(*settled);
+      }
       return arrow::Status::OK();
     }));
     ARROW_ASSIGN_OR_RAISE(auto snap, store_->Load());
@@ -993,12 +1218,15 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       hash = std::move(h);
     }
     ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      ARROW_RETURN_NOT_OK(authorize(snap));
       if (c->if_not_exists && snap.FindUserByName(c->name)) {
         message = "User " + c->name + " already exists";
         return arrow::Status::OK();
       }
+      if (c->password) ARROW_RETURN_NOT_OK(CheckNewPassword(*c->password));
       ARROW_RETURN_NOT_OK(CheckNewUserName(snap, c->name, options_));
       ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name));
+      // A new user holds nothing but PUBLIC, whoever creates it.
       message = "User " + c->name + " created";
       UserRecord user{StoreTransaction::NewId(), c->name, hash, true, {}};
       ARROW_RETURN_NOT_OK(txn.InsertUser(user));
@@ -1011,11 +1239,26 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
   if (const auto* c = std::get_if<AlterUserCommand>(&command)) {
     std::optional<std::string> hash;
     if (c->action == AlterUserCommand::Action::kSetPassword) {
+      ARROW_RETURN_NOT_OK(CheckNewPassword(c->password));
       ARROW_ASSIGN_OR_RAISE(auto h, HashPassword(c->password, options_.password_iterations));
       hash = std::move(h);
     }
     std::string user_id;
     ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      ARROW_RETURN_NOT_OK(authorize(snap));
+      const bool attribute = c->action == AlterUserCommand::Action::kSetAttribute ||
+                             c->action == AlterUserCommand::Action::kUnsetAttribute;
+      if (authority.delegated()) {
+        ARROW_RETURN_NOT_OK(RefuseAdministratorAccount(c->name, "ALTER USER", options_));
+        // Session attributes decide what row and masking policies show: setting one is
+        // granting data, not managing an account.
+        if (attribute) {
+          return AccessControlError(
+              "Hardcharger blocked ALTER USER: session attributes decide what row and masking policies show, and "
+              "only an administrator sets them (the ALTER USER privilege sets passwords and enables and disables "
+              "users)");
+        }
+      }
       const auto* existing = snap.FindUserByName(c->name);
       if (!existing) return AccessControlError("user " + c->name + " does not exist");
       // A new password, ENABLE or an attribute of a user that can act as System Admin would
@@ -1023,6 +1266,9 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       if (!actor.is_unrestricted_administrator() && snap.UserCarriesSystemAdmin(existing->id)) {
         return AccessControlError("Hardcharger blocked ALTER USER: user " + existing->name + " holds " +
                                   kSystemAdminName + "; " + kOnlySystemAdministrators + " changes it");
+      }
+      if (authority.delegated()) {
+        ARROW_RETURN_NOT_OK(RequireUserWithinReach(snap, actor, *existing, "ALTER USER", /*dropping=*/false));
       }
       UserRecord user = *existing;
       user_id = user.id;
@@ -1065,6 +1311,8 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
   if (const auto* c = std::get_if<DropUserCommand>(&command)) {
     std::string user_id;
     ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      ARROW_RETURN_NOT_OK(authorize(snap));
+      if (authority.delegated()) ARROW_RETURN_NOT_OK(RefuseAdministratorAccount(c->name, "DROP USER", options_));
       const auto* user = snap.FindUserByName(c->name);
       if (!user) {
         if (c->if_exists) {
@@ -1076,6 +1324,9 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       if (!actor.is_unrestricted_administrator() && snap.UserCarriesSystemAdmin(user->id)) {
         return AccessControlError("Hardcharger blocked DROP USER: user " + user->name + " holds " +
                                   kSystemAdminName + "; " + kOnlySystemAdministrators + " drops it");
+      }
+      if (authority.delegated()) {
+        ARROW_RETURN_NOT_OK(RequireUserWithinReach(snap, actor, *user, "DROP USER", /*dropping=*/true));
       }
       ARROW_ASSIGN_OR_RAISE(auto owned, OwnedObjects(txn, snap, OwnerKind::kUser, user->id, resolver));
       if (!owned.empty()) {
@@ -1094,12 +1345,15 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
   // ---- CREATE ROLE -------------------------------------------------------
   if (const auto* c = std::get_if<CreateRoleCommand>(&command)) {
     ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      ARROW_RETURN_NOT_OK(authorize(snap));
       if (c->if_not_exists && snap.FindRoleByName(c->name)) {
         message = "Role " + c->name + " already exists";
         return arrow::Status::OK();
       }
       ARROW_RETURN_NOT_OK(CheckNameFree(snap, c->name));
       ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name, /*for_user=*/false));
+      // A new role holds nothing, and its creator gets no admin option on it: what goes into
+      // it, and who holds it, is up to those who may grant that.
       message = "Role " + c->name + " created";
       RoleRecord role{StoreTransaction::NewId(), c->name, false};
       ARROW_RETURN_NOT_OK(txn.InsertRole(role));
@@ -1111,6 +1365,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
   // ---- DROP ROLE ---------------------------------------------------------
   if (const auto* c = std::get_if<DropRoleCommand>(&command)) {
     ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+      ARROW_RETURN_NOT_OK(authorize(snap));
       const auto* role = snap.FindRoleByName(c->name);
       if (!role) {
         if (c->if_exists) {
@@ -1125,6 +1380,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
         return AccessControlError("Hardcharger blocked DROP ROLE: role " + role->name + " holds " +
                                   kSystemAdminName + "; " + kOnlySystemAdministrators + " drops it");
       }
+      if (authority.delegated()) ARROW_RETURN_NOT_OK(RequireRoleWithinReach(snap, actor, *role, "DROP ROLE"));
       ARROW_ASSIGN_OR_RAISE(auto owned, OwnedObjects(txn, snap, OwnerKind::kRole, role->id, resolver));
       if (!owned.empty()) {
         return AccessControlError("role " + role->name + " owns " + Join(owned) +
@@ -1165,6 +1421,22 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                                     " holds " + kSystemAdminName + "; " + kOnlySystemAdministrators +
                                     " grants or revokes it");
         }
+        // Likewise an account privilege (CREATE USER, ...): it spreads only by an
+        // administrator's hand, so its admin option does not give membership in a role that
+        // holds one (and a membership it gave would not carry it: AccountPrivilegeRoles).
+        // Revoking one stays the grantor's, as for any membership.
+        if (c->grant && !actor.is_unrestricted_administrator() && snap.RoleCarriesAccountPrivilege(role->id)) {
+          return AccessControlError("Hardcharger blocked GRANT: role " + role->name + " holds the account privilege " +
+                                    AccountPrivilegesCarried(snap, role->id) +
+                                    "; only an administrator grants membership in it");
+        }
+        if (notes && notes->empty()) {
+          notes->emplace_back("authorized_by", actor.is_unrestricted_administrator()
+                                                   ? (actor.acts_as_system_admin() ? "System Admin" : "administrator")
+                                               : snap.CanAdminRole(actor, role->id)
+                                                   ? "ADMIN OPTION on role " + role->name
+                                                   : "tenant_admin of " + TenantName(snap, role_tenant));
+        }
         for (const auto& g : c->grantees) {
           ARROW_ASSIGN_OR_RAISE(auto grantee, ResolveGrantee(snap, g));
           if (snap.TenantOf(grantee.kind, grantee.id) != role_tenant) {
@@ -1189,10 +1461,11 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
               }
             }
             if (existing) {
-              // A membership in a role that holds SYSTEM ADMIN carries it only when the
-              // administrator granted it: the administrator's grant of one that a role's
-              // admin-option holder made makes it the administrator's, from now on.
-              if (actor.superuser && !existing->granted_by.empty() && snap.RoleCarriesSystemAdmin(role->id)) {
+              // A membership in a role that holds SYSTEM ADMIN or an account privilege carries
+              // it only when the administrator granted it: the administrator's grant of one
+              // that a role's admin-option holder made makes it the administrator's, from now on.
+              if (actor.superuser && !existing->granted_by.empty() &&
+                  (snap.RoleCarriesSystemAdmin(role->id) || snap.RoleCarriesAccountPrivilege(role->id))) {
                 ARROW_RETURN_NOT_OK(txn.DeleteMembership(grantee.kind, grantee.id, role->id));
                 MembershipRecord taken = *existing;
                 taken.admin_option = existing->admin_option || c->with_admin_option;
@@ -1473,6 +1746,23 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
         [&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
           for (SystemPrivilege p : c->privileges) {
             const std::string name = SystemPrivilegeName(p) + where;
+            if (IsAccountPrivilege(p)) {
+              // Granted and revoked by an unrestricted administrator alone, with no admin
+              // option to pass on, to system-scope roles that are not built in.
+              if (!actor.is_unrestricted_administrator()) {
+                return AccessControlError("Hardcharger blocked " + CommandKind(command) + ": only an administrator " +
+                                          (c->grant ? "grants " : "revokes ") + name +
+                                          " (an account privilege is never delegated)");
+              }
+              if (c->with_admin_option) {
+                return AccessControlError("Hardcharger blocked " + CommandKind(command) + ": " + name +
+                                          " has no ADMIN OPTION; only an administrator grants and revokes an "
+                                          "account privilege");
+              }
+              if (notes && notes->empty()) {
+                notes->emplace_back("authorized_by", actor.acts_as_system_admin() ? "System Admin" : "administrator");
+              }
+            }
             if (c->grant && !snap.CanGrantSystemPrivilege(actor, p, location)) {
               return AccessControlError(
                   "Hardcharger blocked GRANT: user " + actor.user_name + " may not grant " + name +
@@ -1491,6 +1781,14 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                     "system privileges reach the whole server; a tenant's role "
                     "(" +
                     grantee.name + ") cannot hold them");
+              }
+              if (c->grant && IsAccountPrivilege(p)) {
+                const RoleRecord* record = snap.FindRoleById(grantee.id);
+                if (grantee.id == kPublicRoleId || (record && record->builtin)) {
+                  return AccessControlError("Hardcharger blocked GRANT: " + name +
+                                            " cannot be granted to the built-in role " + grantee.name +
+                                            ", which every user holds");
+                }
               }
               std::vector<SystemPrivilegeRecord> matching;
               const SystemPrivilegeRecord* own = nullptr;

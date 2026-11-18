@@ -222,6 +222,16 @@ std::string SystemPrivilegeName(SystemPrivilege privilege) {
       return "READ HTTP";
     case SystemPrivilege::kWriteHttp:
       return "WRITE HTTP";
+    case SystemPrivilege::kCreateUser:
+      return "CREATE USER";
+    case SystemPrivilege::kAlterUser:
+      return "ALTER USER";
+    case SystemPrivilege::kDropUser:
+      return "DROP USER";
+    case SystemPrivilege::kCreateRole:
+      return "CREATE ROLE";
+    case SystemPrivilege::kDropRole:
+      return "DROP ROLE";
   }
   return "UNKNOWN";
 }
@@ -234,8 +244,23 @@ const std::vector<SystemPrivilege>& AllSystemPrivileges() {
       SystemPrivilege::kExportDatabase, SystemPrivilege::kImportDatabase,
       SystemPrivilege::kCheckpoint,     SystemPrivilege::kReadObjectStorage,
       SystemPrivilege::kWriteObjectStorage, SystemPrivilege::kReadHttp,
-      SystemPrivilege::kWriteHttp};
+      SystemPrivilege::kWriteHttp,      SystemPrivilege::kCreateUser,
+      SystemPrivilege::kAlterUser,      SystemPrivilege::kDropUser,
+      SystemPrivilege::kCreateRole,     SystemPrivilege::kDropRole};
   return kAll;
+}
+
+bool IsAccountPrivilege(SystemPrivilege privilege) {
+  switch (privilege) {
+    case SystemPrivilege::kCreateUser:
+    case SystemPrivilege::kAlterUser:
+    case SystemPrivilege::kDropUser:
+    case SystemPrivilege::kCreateRole:
+    case SystemPrivilege::kDropRole:
+      return true;
+    default:
+      return false;
+  }
 }
 
 std::optional<SystemPrivilege> SystemPrivilegeFromName(const std::string& name) {
