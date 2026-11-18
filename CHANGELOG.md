@@ -56,6 +56,10 @@ own changelog in `python/CHANGELOG.md`.
   leaving a draft to publish by hand in Play Console. A leftover draft no longer stops the
   upload (2.13.1's was refused because 2.13.0's draft was still there), and an older build never
   replaces a newer one. Closed and open testing and production stay manual in Play Console.
+- **Android: built with Android Gradle plugin 9.5.1 and Gradle 9.9.1**
+  ([#58](https://github.com/gizmodata/hardcharger/issues/58)), from 8.13.2 and 8.13, as Play
+  Console recommends for R8's newer optimizations. Kotlin is compiled by the plugin's built-in
+  support. Release builds still minify and shrink, and keep the native bridge's methods.
 
 ## [2.13.1] - 2026-11-15
 

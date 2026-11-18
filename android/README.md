@@ -40,7 +40,8 @@ android/scripts/build-native.sh
 ```
 
 The debug APK is `android/app/build/outputs/apk/debug/app-debug.apk`. The Gradle wrapper
-uses Gradle 8.13 with its official distribution checksum. The app uses the repository's
+uses Gradle 9.9.1 with its official distribution checksum, and the build uses Android Gradle
+plugin 9.5.1 with its built-in Kotlin support. The app uses the repository's
 brand art and bundled Mozilla CA bundle. No credentials are embedded in build artifacts.
 
 ## Emulator
