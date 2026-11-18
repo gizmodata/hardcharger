@@ -1020,7 +1020,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       if (!existing) return AccessControlError("user " + c->name + " does not exist");
       // A new password, ENABLE or an attribute of a user that can act as System Admin would
       // hand that to whoever makes the change.
-      if (!actor.superuser && snap.UserCarriesSystemAdmin(existing->id)) {
+      if (!actor.is_unrestricted_administrator() && snap.UserCarriesSystemAdmin(existing->id)) {
         return AccessControlError("Hardcharger blocked ALTER USER: user " + existing->name + " holds " +
                                   kSystemAdminName + "; " + kOnlySystemAdministrators + " changes it");
       }
@@ -1073,7 +1073,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
         }
         return AccessControlError("user " + c->name + " does not exist");
       }
-      if (!actor.superuser && snap.UserCarriesSystemAdmin(user->id)) {
+      if (!actor.is_unrestricted_administrator() && snap.UserCarriesSystemAdmin(user->id)) {
         return AccessControlError("Hardcharger blocked DROP USER: user " + user->name + " holds " +
                                   kSystemAdminName + "; " + kOnlySystemAdministrators + " drops it");
       }
@@ -1121,7 +1121,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       }
       if (role->builtin)
         return AccessControlError("the built-in role " + role->name + " cannot be dropped");
-      if (!actor.superuser && snap.RoleCarriesSystemAdmin(role->id)) {
+      if (!actor.is_unrestricted_administrator() && snap.RoleCarriesSystemAdmin(role->id)) {
         return AccessControlError("Hardcharger blocked DROP ROLE: role " + role->name + " holds " +
                                   kSystemAdminName + "; " + kOnlySystemAdministrators + " drops it");
       }
@@ -1160,7 +1160,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
         // to someone who administers the role, and so sees what it holds. A membership
         // someone else did grant, on an older replica, carries nothing:
         // Snapshot::SystemAdminSources.)
-        if (!actor.superuser && snap.RoleCarriesSystemAdmin(role->id)) {
+        if (!actor.is_unrestricted_administrator() && snap.RoleCarriesSystemAdmin(role->id)) {
           return AccessControlError("Hardcharger blocked " + CommandKind(command) + ": role " + role->name +
                                     " holds " + kSystemAdminName + "; " + kOnlySystemAdministrators +
                                     " grants or revokes it");
@@ -1545,7 +1545,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
   // ---- GRANT / REVOKE SYSTEM ADMIN -------------------------------------------
   if (const auto* c = std::get_if<SystemAdminCommand>(&command)) {
     // Never delegated: no option, no owner, no tenant admin, no ALL stands for it.
-    if (!actor.superuser) {
+    if (!actor.is_unrestricted_administrator()) {
       return AccessControlError("Hardcharger blocked " + CommandKind(command) + ": " + kOnlySystemAdministrators +
                                 " grants and revokes " + kSystemAdminName);
     }

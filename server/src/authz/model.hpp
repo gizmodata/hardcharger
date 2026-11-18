@@ -274,6 +274,17 @@ struct Principal {
   // A store user's session that asked for SYSTEM ADMIN (whether or not it still holds it).
   bool asks_system_admin() const { return active_role_id == kSystemAdminRoleId; }
   bool acts_as_system_admin() const { return superuser && !acting_user_id.empty(); }
+  // THE question for anything only an unrestricted administrator may do (granting SYSTEM
+  // ADMIN, changing a user or role that carries it, and whatever later privileges are
+  // reserved the same way): is this principal the administrator, signed in without
+  // catalog_access rules, or a store user's session acting as System Admin right now? Ask
+  // it here, of the principal taken for the statement at hand, and never keep the answer:
+  // RbacSessionState::principal() hands out the second kind only while the session said SET
+  // ROLE SYSTEM ADMIN, its user holds SYSTEM ADMIN, and the store answered for this request
+  // (SessionGuard::VerifySystemAdmin). A session's own view of it is
+  // SessionGuard::unrestricted(); a store change re-checks it in its own transaction
+  // (RequireStillSystemAdmin in engine.cc).
+  bool is_unrestricted_administrator() const { return superuser; }
 };
 
 // One required privilege on one object, as the enforcement layer derives it
