@@ -14,7 +14,7 @@ import gzip
 import pathlib
 
 from rbac import RbacServer, expect_allowed, rbac_env
-from test_rbac_trigger_names import LEGACY, LEGACY_ACCESS, LEGACY_MIA, LEGACY_MIA_ACCESS, LEGACY_OBJECTS
+from test_rbac_trigger_names import LEGACY, LEGACY_ACCESS, LEGACY_MIA, LEGACY_MIA_ACCESS, LEGACY_OBJECTS, LEGACY_WES
 
 FIXTURES = pathlib.Path(__file__).resolve().parent
 
@@ -32,8 +32,11 @@ def test_write_the_fixture(launcher, tmp_path):
     mia = server.user(name="mia")
     for sql in LEGACY_MIA + LEGACY_MIA_ACCESS:
         expect_allowed(client=mia, sql=sql)
+    wes = server.user(name="wes")
+    for sql in LEGACY_WES:
+        expect_allowed(client=wes, sql=sql)
     stored = admin.run(sql="SELECT sql FROM duckdb_triggers() ORDER BY trigger_name").column("sql").to_pylist()
-    assert len(stored) == 17 and not any(f"{LEGACY}." in sql for sql in stored), stored
+    assert len(stored) == 20 and not any(f"{LEGACY}." in sql for sql in stored), stored
     expect_allowed(client=admin, sql="CHECKPOINT")
     running.stop()
     for path in (database, store):

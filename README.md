@@ -1188,6 +1188,13 @@ Under access control a trigger does not depend on that:
   fires for sessions in that database), or give a `WITH` another name. A user's trigger fired by an
   administrator is held to this too; an administrator's own trigger fired by an administrator is
   not.
+- A table's `CHECK` constraints and generated columns are kept as written as well, and bound in
+  each session that writes the table or reads the column. The macros they call, and the types
+  they cast to, are held to the same rule against their table, wherever the table is written or
+  read (a trigger's body included). `CREATE TABLE` stores those macros with their schema
+  (`CHECK (main.is_valid(x))`), and a macro or type named like one a table's default, `CHECK` or
+  generated column uses is the administrator's alone to create. Column defaults are bound with
+  their table's own search path.
 - A trigger made by an earlier Hardcharger (2.13.1 and before), or one that was already in a
   database file, still has its names as written, and keeps firing wherever they resolve to the
   objects for its table. Refused for every writer but an administrator, until the trigger's owner
@@ -1212,7 +1219,8 @@ columns DuckDB has to read to check a constraint or keep an index whose error co
 table's unique keys for a `DELETE`, for instance). So an unfiltered `UPDATE t SET x = 0` or
 `DELETE FROM t` on a table without keys needs none, with triggers on the table or without. With
 triggers, a write needs `SELECT` on the columns of the table's keys and indexes (and an `UPDATE` on
-those of a `CHECK` over several columns) even where it would not without them, and on a table that
+those of a `CHECK` over several columns, or of one that calls a macro) even where it would not
+without them, and on a table that
 also has generated columns, on every column DuckDB reads to hand the triggers their rows.
 
 DuckDB hands a table's triggers the rows a write changes (a transition table, `OLD`, `NEW`), and

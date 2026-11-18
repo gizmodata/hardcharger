@@ -1194,7 +1194,8 @@ def test_keys_and_checked_columns_are_not_carried(admin, wes):
 
 # Why a write to a table with triggers still takes SELECT, in the refusal's words.
 KEYS_NOTE = ("the table has triggers: a write to it that reads no column needs no SELECT, except on the columns of its "
-             "keys and indexes, and an UPDATE's on those of a CHECK over several columns, whose errors can tell their values")
+             "keys and indexes, and an UPDATE's on those of a CHECK over several columns or one that calls more than "
+             "DuckDB's own functions, whose errors can tell their values")
 GENERATED_NOTE = ("the table has triggers and generated columns: a write to it computes the generated columns from the "
                   "rows it changes, which takes SELECT on the table")
 
@@ -1215,6 +1216,40 @@ def test_a_write_the_statement_reads_for_says_nothing_of_keys(admin, wes):
         assert values(client=wes, sql="DELETE FROM main.dr_kw WHERE id = 1") == ["1"]
     finally:
         drop_tables(client=admin, names=["main.dr_kw", "main.dr_kwlog"])
+
+
+def test_a_check_that_calls_a_macro_is_not_carried(admin, wes):
+    # Fix round 2, finding 04: an UPDATE returns its rows as a delete and an insert, so DuckDB
+    # checks every CHECK again on the carried columns. A single-column CHECK of DuckDB's own
+    # functions says nothing of the value; one that calls a macro (bound in the writer's
+    # session, or erroring with the value) may, so its column takes the writer's SELECT.
+    make(client=admin, statements=[
+        "CREATE MACRO main.dr_has(x) AS length(x) > 0",
+        "CREATE TABLE main.dr_cm (id INT, balance INT, secret VARCHAR CHECK (dr_has(secret)))",
+        "CREATE TABLE main.dr_cb (id INT, balance INT, secret VARCHAR CHECK (length(secret) > 0), "
+        "stamp VARCHAR CHECK (CAST(stamp AS TIMESTAMPTZ) IS NOT NULL))",
+        "INSERT INTO main.dr_cm VALUES (1, 0, 'cm-secret')", "INSERT INTO main.dr_cb VALUES (1, 0, 'cb-secret', '2026-01-01 00:00')",
+        "CREATE TABLE main.dr_clog (what VARCHAR)",
+        "CREATE TRIGGER dr_cm_upd AFTER UPDATE ON main.dr_cm FOR EACH STATEMENT INSERT INTO main.dr_clog VALUES ('cm')",
+        "CREATE TRIGGER dr_cb_upd AFTER UPDATE ON main.dr_cb FOR EACH STATEMENT INSERT INTO main.dr_clog VALUES ('cb')",
+        "GRANT UPDATE ON main.dr_cm TO changers", "GRANT UPDATE ON main.dr_cb TO changers",
+        "GRANT INSERT ON main.dr_clog TO changers",
+    ])
+    try:
+        error = expect_blocked(client=wes, sql="UPDATE main.dr_cm SET balance = 1", why=NO_SELECT)
+        assert KEYS_NOTE in error.detail and "cm-secret" not in error.detail
+        # Twin: DuckDB's own functions only. It runs without SELECT, also with the session's
+        # time zone and calendar changed (what a cast to a time with zone depends on).
+        for sql in ["SET TimeZone = 'Asia/Tokyo'", "SET Calendar = 'japanese'"]:
+            expect_allowed(client=wes, sql=sql)
+        assert values(client=wes, sql="UPDATE main.dr_cb SET balance = 1") == ["1"]
+        # And the macro's table with SELECT on its column.
+        expect_allowed(client=admin, sql="GRANT SELECT (secret) ON main.dr_cm TO changers")
+        assert values(client=wes, sql="UPDATE main.dr_cm SET balance = 1") == ["1"]
+        assert sorted(values(client=admin, sql="SELECT what FROM main.dr_clog")) == ["cb", "cm"]
+    finally:
+        drop_tables(client=admin, names=["main.dr_cm", "main.dr_cb", "main.dr_clog"])
+        expect_allowed(client=admin, sql="DROP MACRO IF EXISTS main.dr_has")
 
 
 def test_a_table_with_generated_columns_and_triggers_takes_select(admin, wes):

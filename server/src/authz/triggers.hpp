@@ -73,9 +73,22 @@
 //     macros stands for (a default's temporary sequence), or the names can't be read (a
 //     sequence, or a query_table() table, named by something other than a plain string):
 //     fail closed.
-// Functions and types are not checked here: a session can make none that shadows one a body
-// uses (temporary macros are refused, and a macro, sequence or type named like one a trigger
-// uses is the administrator's alone to create: macros.cc).
+// The types a cast names are held to the same rule (a user's type made before its name was
+// pinned, earlier in the session's search path, would change what the cast does).
+//
+// A table's CHECK constraints and generated columns are kept as written too, and DuckDB binds
+// them again in the session of each statement that writes the table (CHECK) or reads a
+// generated column, inside a trigger's body as anywhere. Their macros (and those macros'
+// names) and cast types are held to the same rule against the table they belong to: for every
+// table a statement writes or scans outside a view's query (StatementTableExpressionProblem),
+// and for every table a trigger's body reaches (TriggerBodyNameProblem: an administrator's
+// statement too, for a user's trigger). CREATE TABLE stores the macros they call with their
+// schema (QualifyTableExpressions), and a macro or type named like one a table's default,
+// CHECK or generated column calls is the administrator's alone to create (macros.cc). Column
+// defaults are bound with the table's own search path by DuckDB, so no session decides them.
+// A row trigger's action may have a WITH of its own, which DuckDB binds above the action's
+// INSERT, UPDATE or DELETE: the body starts at that WITH, so its definitions are checked with
+// the trigger's rights and names like the rest of the body.
 //
 // New triggers don't depend on the search path within their catalog: CREATE [OR REPLACE]
 // TRIGGER under access control stores the action with its tables, views and sequences named
@@ -114,7 +127,9 @@
 //     constraint error names a key's value, and DuckDB runs an UPDATE that returns its
 //     rows as a delete and an insert, so a foreign key that refers to the row stops it),
 //     and for an UPDATE a column of a CHECK constraint over several columns (a failed
-//     CHECK tells of the ones the statement did not set);
+//     CHECK tells of the ones the statement did not set), or of one that calls anything but
+//     DuckDB's own functions or casts to anything but its own types (a macro can raise an
+//     error that names the value: UsesOnlyBuiltIns);
 //   - every column, when the plan is not laid out as this expects. What it expects: the
 //     write takes its row ids from one plain scan of the written table (no filter pushed
 //     into it); every operator beneath the write is one whose uses of columns this file
@@ -180,6 +195,7 @@
 #include <duckdb.hpp>
 #include <duckdb/catalog/catalog_entry/trigger_catalog_entry.hpp>
 #include <duckdb/parser/parsed_data/create_trigger_info.hpp>
+#include <duckdb/parser/parsed_data/create_table_info.hpp>
 #include <optional>
 #include <string>
 #include <vector>
@@ -261,6 +277,30 @@ std::string TriggerBodyNameProblem(duckdb::ClientContext& context, const Trigger
 // sequence by something other than a plain string, query() or query_table() of one that is
 // not a table's name); empty when it can.
 std::string QualifyTriggerNames(duckdb::ClientContext& context, const ObjectPath& table, duckdb::CreateTriggerInfo& info);
+
+// A table's CHECK constraints and generated columns are kept as written and bound again in
+// the session of each statement that writes the table (CHECK) or reads a generated column.
+// Why the macros they call (and the macros those call, and the tables, views and sequences
+// those name) are not, in this session, what their names are for the table ("Names in a
+// body" applied to the table); empty when they are.
+std::string TableExpressionProblem(duckdb::ClientContext& context, duckdb::TableCatalogEntry& table);
+
+// The same for every table a statement writes or scans outside a view's query (a view's
+// query is bound with its own search path). In words for a refusal; empty when none.
+std::string StatementTableExpressionProblem(duckdb::ClientContext& context, const duckdb::LogicalOperator& plan);
+
+// CREATE TABLE / ALTER TABLE: the macros a CHECK constraint or a generated column calls, as
+// this session resolves them, given their schema (as a trigger's names are), so that no
+// session's search path decides them later. What can't be resolved is left as written.
+void QualifyTableExpressions(duckdb::ClientContext& context, const std::string& catalog,
+                             duckdb::CreateTableInfo& info);
+void QualifyTableExpression(duckdb::ClientContext& context, const std::string& catalog,
+                            duckdb::unique_ptr<duckdb::ParsedExpression>& expression);
+
+// Does `expression` call DuckDB's own functions, and cast to its own types, only? (Nothing a
+// user could create or a session's search path could choose.)
+bool UsesOnlyBuiltIns(duckdb::ClientContext& context, const duckdb::ParsedExpression& expression);
+bool BuiltInType(duckdb::ClientContext& context, const duckdb::ParsedExpression& expression, int depth);
 
 // CREATE TABLE / CREATE VIEW (or a rename) of `path` by a user other than the administrator:
 // why not, when a trigger of that catalog from before names the object bare, in its table's

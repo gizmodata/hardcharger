@@ -87,6 +87,21 @@ LEGACY_OBJECTS = [
     "CREATE TABLE main.seq_t (id INT)",
     "CREATE TRIGGER seq_cast AFTER INSERT ON main.seq_t FOR EACH STATEMENT "
     "INSERT INTO audit_log VALUES ('cast', nextval('audit_seq'::VARCHAR))",
+    # CHECK constraints, generated columns and defaults that call macros (and cast to a type)
+    # by bare names: bound again in each writer's or reader's session.
+    "CREATE MACRO main.is_valid(x) AS x > 0", "CREATE MACRO main.fmt(x) AS 'genuine ' || x",
+    "CREATE MACRO main.has_text(x) AS length(x) > 0", "CREATE MACRO main.is_positive(x) AS x > 0",
+    "CREATE MACRO main.dflt() AS 'genuine default'", "CREATE TYPE main.mood AS ENUM ('ok', 'sad')",
+    "CREATE TABLE main.checked (x INT CHECK (is_valid(x)))", "CREATE TABLE main.chk_pay (id INT)",
+    "CREATE TRIGGER chk_pay_ins AFTER INSERT ON main.chk_pay REFERENCING NEW TABLE AS fresh FOR EACH STATEMENT "
+    "INSERT INTO main.checked SELECT id FROM fresh",
+    "CREATE TABLE main.ctrg (id INT, balance INT, secret VARCHAR CHECK (has_text(secret)))",
+    "INSERT INTO main.ctrg VALUES (1, 0, 'ctrg-secret-1'), (2, 0, 'ctrg-secret-2')",
+    "CREATE TRIGGER ctrg_upd AFTER UPDATE ON main.ctrg FOR EACH STATEMENT INSERT INTO main.audit_log VALUES ('ctrg upd', 0)",
+    "CREATE TABLE main.pos (x INT CHECK (is_positive(x)))",
+    "CREATE TABLE main.dflt_t (id INT, note VARCHAR DEFAULT dflt())",
+    "CREATE TABLE main.moods (m VARCHAR, mm VARCHAR AS (CAST(CAST(m AS mood) AS VARCHAR)))",
+    "INSERT INTO main.moods (m) VALUES ('ok')",
 ]
 LEGACY_ACCESS = [
     "CREATE ROLE writers", "CREATE ROLE makers", "CREATE USER wes", "CREATE USER mia",
@@ -105,6 +120,10 @@ LEGACY_ACCESS = [
     "GRANT SELECT ON main.lookup TO writers", "GRANT INSERT ON main.lk_r TO writers",
     "GRANT SELECT, UPDATE, DELETE ON main.lk_u TO writers", "GRANT INSERT ON main.mac_t TO writers",
     "GRANT INSERT ON main.seq_t TO writers",
+    "GRANT CREATE MACRO, CREATE TYPE ON SCHEMA ws TO writers",
+    "GRANT INSERT ON main.checked TO writers", "GRANT INSERT ON main.chk_pay TO writers",
+    "GRANT UPDATE, DELETE ON main.ctrg TO writers", "GRANT INSERT ON main.pos TO writers",
+    "GRANT INSERT ON main.dflt_t TO writers", "GRANT SELECT ON main.moods TO writers",
 ]
 # mia's own tables and triggers (she owns them: her triggers run with her rights) ...
 LEGACY_MIA = [
@@ -116,10 +135,22 @@ LEGACY_MIA = [
     "CREATE TABLE mine_notes (id INT)",
     "CREATE TRIGGER mine_notes_ins AFTER INSERT ON mine_notes FOR EACH STATEMENT INSERT INTO main.msink SELECT note FROM mnotes",
     "USE main",
+    # One that reads a generated column calling a macro by a bare name.
+    "CREATE TABLE app.gvault (secret VARCHAR, label VARCHAR AS (fmt(secret)))",
+    "INSERT INTO app.gvault VALUES ('vault-secret-1')", "CREATE TABLE app.glabels (label VARCHAR)",
+    "CREATE TABLE app.gmine (id INT)",
+    "CREATE TRIGGER gmine_ins AFTER INSERT ON app.gmine FOR EACH STATEMENT INSERT INTO app.glabels SELECT label FROM app.gvault",
+]
+# What wes had made in a schema of his own by then (2.13.0 let him): macros and a type named
+# like the ones those tables call.
+LEGACY_WES = [
+    "CREATE MACRO ws.is_valid(x) AS true", "CREATE MACRO ws.fmt(x) AS 'FORGED BY WES'",
+    "CREATE MACRO ws.has_text(x) AS error('LEAK: ' || x)", "CREATE MACRO ws.dflt() AS 'FORGED DEFAULT'",
+    "CREATE TYPE ws.mood AS ENUM ('ok', 'LEAK')",
 ]
 # ... and who may write them.
 LEGACY_MIA_ACCESS = ["GRANT INSERT ON app.mine TO writers", "GRANT INSERT ON app.mine_rows TO writers",
-                     "GRANT INSERT ON app.mine_notes TO writers"]
+                     "GRANT INSERT ON app.mine_notes TO writers", "GRANT INSERT ON app.gmine TO writers"]
 
 # The fixture's access-control store is a DuckDB one. With another store (PostgreSQL) the
 # database is the fixture's and the grants are made again; who made which trigger is on record
@@ -127,7 +158,8 @@ LEGACY_MIA_ACCESS = ["GRANT INSERT ON app.mine TO writers", "GRANT INSERT ON app
 # with no owner on record, and the writers get what her triggers' bodies need.
 OWNERS_ON_RECORD = STORE_KIND == "duckdb"
 WITHOUT_OWNERS = ["GRANT SELECT ON main.other_secret TO writers", "GRANT INSERT ON main.msink TO writers",
-                  "GRANT SELECT ON app.mnotes TO writers"]
+                  "GRANT SELECT ON app.mnotes TO writers", "GRANT SELECT ON app.gvault TO writers",
+                  "GRANT INSERT ON app.glabels TO writers"]
 
 TEMPORARY = "in this session that is a temporary object of the session's own"
 ANOTHER = "in this session that is another object than it is for the trigger's own table"
@@ -599,6 +631,89 @@ def test_a_name_a_trigger_from_before_reads_bare_cant_be_made_two(legacy):
             remedy="The trigger's owner can name it with its schema (schema.name) with CREATE OR REPLACE TRIGGER")
 
 
+# ---- CHECK constraints, generated columns, defaults: bound in the writer's session too ----
+
+USE_WS = "USE ws"
+TABLE_MACRO = "and in this session that is another macro than it is for its table"
+
+
+def test_a_writers_macro_does_not_stand_in_for_one_a_check_calls(legacy):
+    # Fix round 2, finding 01: a CHECK constraint is bound again at every write, in the
+    # writer's session, so a macro of the writer's named like the one it calls bare (made
+    # in a schema of the writer's, put first with USE) let rows the CHECK forbids through:
+    # directly, and through an administrator's trigger.
+    admin, wes = legacy.admin(), legacy.user(name="wes")
+    expect_blocked(client=wes, sql="INSERT INTO main.checked VALUES (-1)", code="execution_error", why="CHECK constraint failed")
+    expect_allowed(client=wes, sql=USE_WS)
+    for sql, prefix in [(f"INSERT INTO {LEGACY}.main.checked VALUES (-1)", ""),
+                        (f"INSERT INTO {LEGACY}.main.chk_pay VALUES (-2)", "trigger chk_pay_ins on table")]:
+        error = expect_blocked(client=wes, sql=sql, why=TABLE_MACRO)
+        assert f"a CHECK constraint or generated column of table {LEGACY}.main.checked calls is_valid" in error.detail
+        assert prefix in error.detail and "RESET search_path" in error.detail
+    assert count(client=admin, table="main.checked") == 0 and count(client=admin, table="main.chk_pay") == 0
+    # Twin: the writer's own search path back, the table's macro holds.
+    expect_allowed(client=wes, sql="USE main")
+    expect_blocked(client=wes, sql="INSERT INTO main.chk_pay VALUES (-2)", code="execution_error", why="CHECK constraint failed")
+    expect_allowed(client=wes, sql="INSERT INTO main.chk_pay VALUES (2)")
+    assert values(client=admin, sql="SELECT x FROM main.checked") == ["2"]
+
+
+def test_a_writers_macro_does_not_run_in_a_users_trigger_through_a_generated_column(legacy):
+    # Fix round 2, finding 02: a generated column is bound where it is read, in the reader's
+    # session. Read by mia's trigger, the writer's macro of its name ran in her body with her
+    # rights (reading what she may read, deciding what her trigger wrote).
+    admin, wes = legacy.admin(), legacy.user(name="wes")
+    expect_allowed(client=wes, sql=USE_WS)
+    error = expect_blocked(client=wes, sql=f"INSERT INTO {LEGACY}.app.gmine VALUES (1)", why=TABLE_MACRO)
+    assert "trigger gmine_ins on table" in error.detail and f"table {LEGACY}.app.gvault calls fmt" in error.detail
+    assert count(client=admin, table="app.glabels") == 0
+    # An administrator's session is held to it too, for a user's trigger (on this store's
+    # fixture the trigger has no owner on record, so it is the administrator's own statement).
+    if OWNERS_ON_RECORD:
+        expect_allowed(client=admin, sql=USE_WS)
+        expect_blocked(client=admin, sql=f"INSERT INTO {LEGACY}.app.gmine VALUES (2)", why=TABLE_MACRO)
+        expect_allowed(client=admin, sql=f"USE {LEGACY}")
+    # Twin.
+    expect_allowed(client=wes, sql="USE main")
+    expect_allowed(client=wes, sql="INSERT INTO app.gmine VALUES (3)")
+    assert values(client=admin, sql="SELECT label FROM app.glabels") == ["genuine vault-secret-1"]
+
+
+def test_a_cast_in_a_generated_column_finds_its_tables_type(legacy):
+    # Types: a generated column that casts to a type by a bare name finds it where it is read.
+    # The writer's type of that name (made before it was pinned) is refused, not used.
+    wes = legacy.user(name="wes")
+    assert values(client=wes, sql="SELECT mm FROM main.moods") == ["ok"]
+    expect_allowed(client=wes, sql=USE_WS)
+    error = expect_blocked(client=wes, sql=f"SELECT mm FROM {LEGACY}.main.moods",
+                           why="casts to type mood, and in this session that is another type than it is for its table")
+    assert f"table {LEGACY}.main.moods" in error.detail
+    # Twin: the other column reads (a scan of the table is checked as a whole, fail closed) only
+    # back in main.
+    expect_allowed(client=wes, sql="USE main")
+    assert values(client=wes, sql="SELECT m FROM main.moods") == ["ok"]
+
+
+def test_a_default_is_bound_where_its_table_is(legacy):
+    # A column default is not the writer's to shadow: DuckDB binds it with its table's search
+    # path. The writer's own dflt() made earlier changes nothing (shown, not assumed).
+    admin, wes = legacy.admin(), legacy.user(name="wes")
+    for use in ["USE main", USE_WS]:
+        expect_allowed(client=wes, sql=use)
+        expect_allowed(client=wes, sql=f"INSERT INTO {LEGACY}.main.dflt_t (id) VALUES (1)")
+    assert values(client=admin, sql="SELECT note FROM main.dflt_t") == ["genuine default", "genuine default"]
+
+
+def test_a_macro_or_type_a_table_calls_is_the_administrators_to_create(legacy):
+    # What a table's CHECK constraints, generated columns and defaults call is pinned like
+    # what a view or a trigger calls: a user may not make a macro of that name.
+    wes = legacy.user(name="wes")
+    expect_blocked(client=wes, sql="CREATE MACRO ws.is_positive(x) AS true",
+                   why="(or a table's column default, CHECK constraint or generated column)")
+    # Twin: a name nothing calls.
+    expect_allowed(client=wes, sql="CREATE MACRO ws.is_negative(x) AS x < 0")
+
+
 # ---- new triggers: stored with their names given their schema ----
 
 @pytest.fixture(scope="module")
@@ -608,7 +723,7 @@ def server(module_launcher, store, tmp_path_factory):
     admin = server.admin()
     for sql in ["CREATE SCHEMA app", "CREATE SCHEMA ws", "CREATE ROLE writers", "CREATE ROLE makers",
                 "CREATE USER wes", "CREATE USER mia", "GRANT writers TO wes", "GRANT makers TO mia",
-                "GRANT CREATE TABLE, CREATE VIEW, CREATE SEQUENCE ON SCHEMA ws TO writers",
+                "GRANT CREATE TABLE, CREATE VIEW, CREATE SEQUENCE, CREATE MACRO, DROP MACRO, CREATE TYPE ON SCHEMA ws TO writers",
                 "GRANT CREATE TABLE, CREATE TRIGGER, CREATE VIEW, CREATE SEQUENCE, USAGE, SELECT, INSERT, UPDATE, DELETE "
                 "ON SCHEMA app TO makers"]:
         expect_allowed(client=admin, sql=sql)
@@ -920,6 +1035,95 @@ def test_a_renamed_database_or_attach_alias_keeps_its_triggers(launcher, store, 
     for sql in [f"ATTACH '{branch}' AS branch_eu", "USE branch_eu", "INSERT INTO main.pay VALUES (2)"]:
         expect_allowed(client=admin, sql=sql)
     assert values(client=admin, sql="SELECT what FROM branch_eu.main.pay_log") == ["branch pay 2"]
+
+
+def test_new_tables_name_the_macros_their_checks_and_generated_columns_call(admin, mia, wes):
+    # CREATE TABLE stores the macros a CHECK constraint or a
+    # generated column calls with their schema, as the creator's session resolves them: a
+    # writer's macro of that name in a schema of its own, put first, changes nothing.
+    drop(client=admin, statements=[
+        "CREATE MACRO main.r2_valid(x) AS x > 0", "CREATE MACRO main.r2_fmt(x) AS 'genuine ' || x",
+        "CREATE TABLE main.r2_checked (x INT CHECK (r2_valid(x)), label VARCHAR AS (r2_fmt(x)))",
+        "GRANT INSERT, SELECT ON main.r2_checked TO writers",
+    ])
+    for sql in ["CREATE TABLE app.r2_mine (x INT CHECK (r2_valid(x)))", "GRANT INSERT ON app.r2_mine TO writers"]:
+        expect_allowed(client=mia, sql=sql)
+    try:
+        stored = values(client=admin, sql="SELECT sql FROM duckdb_tables() WHERE table_name IN ('r2_checked', 'r2_mine') ORDER BY 1")
+        assert all("main.r2_valid(x)" in sql for sql in stored), stored
+        assert "main.r2_fmt(x)" in stored[1] or "main.r2_fmt(x)" in stored[0], stored
+        # The writer's macros of those names (another schema: nothing pins them) ...
+        for sql in ["CREATE MACRO ws.r2_valid(x) AS true", "CREATE MACRO ws.r2_fmt(x) AS 'FORGED BY WES'", USE_WS]:
+            expect_allowed(client=wes, sql=sql)
+        # ... are not what runs.
+        for table in ["tn.main.r2_checked (x)", "tn.app.r2_mine"]:
+            expect_blocked(client=wes, sql=f"INSERT INTO {table} VALUES (-1)", code="execution_error", why="CHECK constraint failed")
+        expect_allowed(client=wes, sql="INSERT INTO tn.main.r2_checked (x) VALUES (1)")
+        assert values(client=wes, sql="SELECT label FROM tn.main.r2_checked") == ["genuine 1"]
+    finally:
+        drop(client=admin, statements=["DROP MACRO IF EXISTS ws.r2_valid", "DROP MACRO IF EXISTS ws.r2_fmt",
+                                       "DROP TABLE IF EXISTS main.r2_checked", "DROP TABLE IF EXISTS app.r2_mine",
+                                       "DROP MACRO IF EXISTS main.r2_valid", "DROP MACRO IF EXISTS main.r2_fmt"])
+
+
+def test_a_type_a_generated_column_casts_to_is_the_administrators_to_create(admin, wes):
+    # A cast in a generated column finds its type by name where the column is read: a user's
+    # type of that name is refused at CREATE TYPE, as for a view's, a CHECK's or a default's.
+    drop(client=admin, statements=["CREATE TYPE main.r2_mood AS ENUM ('ok')",
+                                   "CREATE TABLE main.r2_moods (m VARCHAR, mm VARCHAR AS (CAST(CAST(m AS r2_mood) AS VARCHAR)))"])
+    try:
+        expect_blocked(client=wes, sql="CREATE TYPE ws.r2_mood AS ENUM ('ok', 'LEAK')", why="it names a type by that name")
+        expect_allowed(client=wes, sql="CREATE TYPE ws.r2_other AS ENUM ('ok')")
+    finally:
+        drop(client=admin, statements=["DROP TABLE IF EXISTS main.r2_moods", "DROP TYPE IF EXISTS main.r2_mood",
+                                       "DROP TYPE IF EXISTS ws.r2_other"])
+
+
+def test_a_row_triggers_own_with_is_its_body(admin, mia, wes):
+    # Fix round 2, finding 03: a FOR EACH ROW trigger whose action has a WITH of its own was
+    # refused for every writer (its WITH sits above the action's INSERT, which was taken for
+    # the whole body). The WITH is the body's: it fires, and its definition is checked with
+    # the trigger's rights and names like the rest of the body.
+    drop(client=admin, statements=[
+        "CREATE TABLE main.rw_log (what VARCHAR, n INT)", "CREATE TABLE main.rw_pay (id INT)",
+        "CREATE TRIGGER rw_row AFTER INSERT ON main.rw_pay FOR EACH ROW "
+        "WITH w AS (SELECT NEW.id AS id), v AS (SELECT id * 10 AS n FROM w) INSERT INTO main.rw_log SELECT 'row', n FROM v",
+        "GRANT INSERT ON main.rw_pay TO writers", "GRANT INSERT ON main.rw_log TO writers",
+        "CREATE TABLE main.rw_secret (note VARCHAR)", "INSERT INTO main.rw_secret VALUES ('rw-secret')",
+    ])
+    for sql in ["CREATE TABLE app.rw_t (id INT)", "CREATE TABLE app.rw_mlog (what VARCHAR)",
+                "CREATE TRIGGER rw_m AFTER INSERT ON app.rw_t FOR EACH ROW "
+                "WITH w AS (SELECT 'cte ' || NEW.id AS what) INSERT INTO app.rw_mlog SELECT what FROM w",
+                "GRANT INSERT ON app.rw_t TO writers"]:
+        expect_allowed(client=mia, sql=sql)
+    try:
+        expect_allowed(client=wes, sql="INSERT INTO main.rw_pay VALUES (1)")
+        # The writer's own WITH of the same name stands in for nothing: the body's is nearer.
+        expect_allowed(client=wes, sql="WITH w AS (SELECT 999 AS id) INSERT INTO main.rw_pay VALUES (2)")
+        for client, n in [(wes, 1), (mia, 2), (admin, 3)]:
+            expect_allowed(client=client, sql=f"INSERT INTO app.rw_t VALUES ({n})")
+        assert sorted(values(client=admin, sql="SELECT n FROM main.rw_log")) == ["10", "20"]
+        assert sorted(values(client=admin, sql="SELECT what FROM app.rw_mlog")) == ["cte 1", "cte 2", "cte 3"]
+        # The WITH's definition runs with the owner's rights: mia may not read rw_secret, so
+        # her trigger that reads it in its WITH does not run, whoever writes.
+        expect_allowed(client=mia, sql="CREATE OR REPLACE TRIGGER rw_m AFTER INSERT ON app.rw_t FOR EACH ROW "
+                                       "WITH w AS (SELECT note || NEW.id AS what FROM main.rw_secret) "
+                                       "INSERT INTO app.rw_mlog SELECT what FROM w")
+        for client in [wes, admin]:
+            error = expect_blocked(client=client, sql="INSERT INTO tn.app.rw_t VALUES (4)", why="may not do what its body does")
+            assert "rw_secret" in error.detail, error.detail
+        # And its names are held to the session: a temporary table named like main's.
+        expect_allowed(client=admin, sql="GRANT SELECT ON main.rw_secret TO makers")
+        expect_allowed(client=wes, sql="CREATE TEMP TABLE rw_secret AS SELECT 'FORGED' AS note")
+        error = expect_blocked(client=wes, sql="INSERT INTO tn.app.rw_t VALUES (5)", why="names main.rw_secret")
+        assert TEMPORARY in error.detail
+        expect_allowed(client=wes, sql="DROP TABLE temp.main.rw_secret")
+        expect_allowed(client=wes, sql="INSERT INTO tn.app.rw_t VALUES (6)")
+        assert values(client=admin, sql="SELECT what FROM app.rw_mlog WHERE what LIKE 'rw-%'") == ["rw-secret6"]
+    finally:
+        drop(client=admin, statements=["DROP TABLE IF EXISTS main.rw_pay", "DROP TABLE IF EXISTS main.rw_log",
+                                       "DROP TABLE IF EXISTS app.rw_t", "DROP TABLE IF EXISTS app.rw_mlog",
+                                       "DROP TABLE IF EXISTS main.rw_secret"])
 
 
 def test_the_init_sqls_triggers_are_stored_with_their_names_given_their_schema(launcher, store, tmp_path):

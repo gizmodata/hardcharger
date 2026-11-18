@@ -44,6 +44,15 @@ own changelog in `python/CHANGELOG.md`.
     `main`, and one whose bare name only its creator's own search path found. Only an
     administrator may now create a table or view that would put such a name in both. A trigger
     whose body calls a macro that reads a table or a sequence fires again.
+  - A table's CHECK constraints and generated columns are bound again in each session that
+    writes the table or reads the column, and so are held to the same rule: the macros they
+    call (and the types they cast to) must be the ones their names are for the table, or the
+    statement is refused, saying so. `CREATE TABLE` stores those macros with their schema, and
+    only an administrator may create a macro or type named like one a table's default, CHECK
+    constraint or generated column uses. Column defaults are bound with their table's own
+    search path and need nothing more.
+  - A `FOR EACH ROW` trigger whose action has a `WITH` of its own fires; the `WITH` is checked
+    as part of the trigger's body.
 
 ### Fixed
 
@@ -71,7 +80,9 @@ own changelog in `python/CHANGELOG.md`.
   Columns of the table's keys and indexes (and, for an `UPDATE`, of a `CHECK` over several
   columns) still need the writer's `SELECT` on a table with triggers, because a constraint error
   of the write can name or tell of them, and so does every scanned column of a table with
-  generated columns. The refusal says which of these it is.
+  generated columns. So do the columns of a single-column `CHECK` that calls anything but
+  DuckDB's own functions (a macro), since its error can name the value. The refusal says which
+  of these it is.
 
 ## [2.13.1] - 2026-11-15
 

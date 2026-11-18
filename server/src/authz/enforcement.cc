@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <duckdb/catalog/catalog.hpp>
+#include <duckdb/parser/constraints/check_constraint.hpp>
 #include <duckdb/catalog/catalog_entry_retriever.hpp>
 #include <duckdb/catalog/catalog_search_path.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
@@ -379,6 +380,25 @@ bool ChangesWholeServer(dd::ClientContext& context, const dd::Identifier& name,
 // view only), view inside view, each against its own owner. A view without a
 // valid owner record reads with the caller's rights, in addition to the
 // rights of any view it sits in.
+// ALTER TABLE ... ADD COLUMN (a generated one, or one with a CHECK) and ADD CONSTRAINT CHECK:
+// the macros they call given their schema, as CREATE TABLE does (QualifyTableExpressions).
+void QualifyAlterExpressions(dd::ClientContext& context, const std::string& catalog, dd::AlterInfo& info) {
+  auto& table_info = info.Cast<dd::AlterTableInfo>();
+  if (table_info.alter_table_type == dd::AlterTableType::ADD_COLUMN) {
+    auto& column = table_info.Cast<dd::AddColumnInfo>().new_column;
+    if (column.Generated()) {
+      auto copy = column.GeneratedExpression().Copy();
+      QualifyTableExpression(context, catalog, copy);
+      column.SetGeneratedExpression(std::move(copy));
+    }
+  } else if (table_info.alter_table_type == dd::AlterTableType::ADD_CONSTRAINT) {
+    auto& constraint = table_info.Cast<dd::AddConstraintInfo>().constraint;
+    if (constraint && constraint->type == dd::ConstraintType::CHECK) {
+      QualifyTableExpression(context, catalog, constraint->Cast<dd::CheckConstraint>().expression);
+    }
+  }
+}
+
 class PlanChecker {
  public:
   using ViewColumns = std::unordered_map<const ViewMarker*, std::vector<std::string>>;
@@ -541,6 +561,10 @@ class PlanChecker {
           }
         }
         CheckCreate(*create.info->base, ObjectType::kTable, Privilege::kCreateTable);
+        // The macros its CHECK constraints and generated columns call, given their schema.
+        if (const auto parts = PartsOf(*create.info->base); !parts.empty()) {
+          QualifyTableExpressions(context_, parts[0], create.info->Base());
+        }
         VisitChildren(op, nullptr);  // CREATE TABLE AS reads its source
         return;
       }
@@ -941,8 +965,8 @@ class PlanChecker {
               if (!HoldsSelect(PathOf(*table), ObjectTypeOf(*table), column)) {
                 carried_note_ =
                     " (the table has triggers: a write to it that reads no column needs no SELECT, except on the "
-                    "columns of its keys and indexes, and an UPDATE's on those of a CHECK over several columns, "
-                    "whose errors can tell their values)";
+                    "columns of its keys and indexes, and an UPDATE's on those of a CHECK over several columns or "
+                    "one that calls more than DuckDB's own functions, whose errors can tell their values)";
                 break;
               }
             }
@@ -1860,6 +1884,7 @@ class PlanChecker {
     // A default that names a sequence (a temporary table's too): USAGE on it. (DuckDB
     // binds ADD COLUMN ... DEFAULT nextval() with a NULL default and fills the column with
     // an UPDATE, which is checked when it runs; SET DEFAULT is checked here.)
+    if (info.type == dd::AlterType::ALTER_TABLE && !parts.empty()) QualifyAlterExpressions(context_, parts[0], info);
     if (info.type == dd::AlterType::ALTER_TABLE) {
       auto& table_info = info.Cast<dd::AlterTableInfo>();
       if (table_info.alter_table_type == dd::AlterTableType::ADD_COLUMN) {
@@ -2125,6 +2150,19 @@ void CollectRename(dd::ClientContext& context, dd::LogicalOperator& op,
 // Never a reason for the statement to fail: what can't be resolved stays as written, and
 // is held against each writer's session when the trigger fires.
 void QualifyUncheckedTriggers(dd::ClientContext& context, dd::LogicalOperator& op) {
+  try {
+    if (op.type == OpType::LOGICAL_CREATE_TABLE) {
+      auto& create = op.Cast<dd::LogicalCreateTable>();
+      if (const auto parts = PartsOf(*create.info->base); !parts.empty()) {
+        QualifyTableExpressions(context, parts[0], create.info->Base());
+      }
+    } else if (op.type == OpType::LOGICAL_ALTER) {
+      auto& info = *op.Cast<dd::LogicalAlter>().info;
+      const auto parts = PartsOf(info);
+      if (info.type == dd::AlterType::ALTER_TABLE && !parts.empty()) QualifyAlterExpressions(context, parts[0], info);
+    }
+  } catch (const std::exception&) {
+  }
   if (op.type == OpType::LOGICAL_CREATE_TRIGGER) {
     try {
       auto& info = op.Cast<dd::LogicalCreate>().info->Cast<dd::CreateTriggerInfo>();
@@ -2165,9 +2203,15 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
       // Record superuser-created objects as system-owned so a stale record of a
       // user's earlier object of the same name can never apply to them.
       std::function<void(dd::LogicalOperator&)> collect = [&](dd::LogicalOperator& op) {
+        if (op.type == OpType::LOGICAL_ALTER) {
+          auto& info = *op.Cast<dd::LogicalAlter>().info;
+          const auto parts = PartsOf(info);
+          if (info.type == dd::AlterType::ALTER_TABLE && !parts.empty()) QualifyAlterExpressions(context, parts[0], info);
+        }
         if (op.type == OpType::LOGICAL_CREATE_TABLE) {
           auto parts = PartsOf(*op.Cast<dd::LogicalCreateTable>().info->base);
           auto& info = *op.Cast<dd::LogicalCreateTable>().info->base;
+          if (!parts.empty()) QualifyTableExpressions(context, parts[0], op.Cast<dd::LogicalCreateTable>().info->Base());
           auto existing = LookUp(context, dd::CatalogType::TABLE_ENTRY, parts);
           if (parts.size() >= 3 && !IsTempCatalog(parts[0]) &&
               !(existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT)) {
@@ -2277,6 +2321,11 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
   const auto trigger_bodies = FindTriggerBodies(context, *snapshot, *plan);
   PlanChecker checker(context, *snapshot, principal, view_columns, trigger_bodies);
   checker.Visit(*plan);
+  // The CHECK constraints and generated columns of what it writes and reads: their macros are
+  // bound in this session too (triggers.hpp).
+  if (auto problem = StatementTableExpressionProblem(context, *plan); !problem.empty()) {
+    ::hardcharger::authz::Deny(principal, problem);
+  }
   RemoveViewMarkers(plan);
   // The external policy service may refuse what passed.
   if (const auto* service = engine->policy_service()) {
@@ -2332,6 +2381,9 @@ void PostBind(dd::PlannerExtensionInput& input, dd::BoundStatement& statement) {
   const auto trigger_bodies = FindTriggerBodies(input.context, *snapshot, *statement.plan);
   PlanChecker checker(input.context, *snapshot, principal, view_columns, trigger_bodies);
   checker.Visit(*statement.plan);
+  if (auto problem = StatementTableExpressionProblem(input.context, *statement.plan); !problem.empty()) {
+    ::hardcharger::authz::Deny(principal, problem);
+  }
   state->NoteBindChecked();
 }
 

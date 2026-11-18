@@ -213,6 +213,28 @@ class ReferenceCollector {
   int depth_ = 0;
 };
 
+// A table's column defaults, CHECK constraints and generated columns: DuckDB keeps them as
+// written and binds them again where a row is written (defaults, CHECKs) or a generated column
+// is read, in that statement's session.
+void CollectTableExpressions(const dd::TableCatalogEntry& table, ReferenceCollector& collector) {
+  for (const auto& column : table.GetColumns().Logical()) {
+    if (column.Generated()) {
+      auto copy = column.GeneratedExpression().Copy();
+      collector.Expression(*copy);
+    } else if (column.HasDefaultValue()) {
+      auto copy = column.DefaultValue().Copy();
+      collector.Expression(*copy);
+    }
+  }
+  for (const auto& constraint : table.GetConstraints()) {
+    if (!constraint || constraint->type != dd::ConstraintType::CHECK) continue;
+    auto& check = constraint->Cast<dd::CheckConstraint>();
+    if (!check.expression) continue;
+    auto copy = check.expression->Copy();
+    collector.Expression(*copy);
+  }
+}
+
 void CollectMacro(const dd::MacroFunction& macro, ReferenceCollector& collector) {
   auto copy = macro.Copy();
   for (auto& parameter : copy->default_parameters) {
@@ -397,6 +419,14 @@ std::optional<std::string> MacroNameRefusal(dd::ClientContext& context, const Sn
       // The schemas first, then each one's entries (see SequenceNameRefusal).
       for (auto& found : catalog.GetSchemas(context)) {
         auto& schema = found.get();
+        // A table's defaults, CHECK constraints and generated columns are bound in the session
+        // that writes or reads it: what they call is pinned like what a view calls.
+        schema.Scan(context, dd::CatalogType::TABLE_ENTRY, [&](dd::CatalogEntry& entry) {
+          if (entry.type != dd::CatalogType::TABLE_ENTRY) return;
+          ReferenceCollector collector(catalog_name);
+          CollectTableExpressions(entry.Cast<dd::TableCatalogEntry>(), collector);
+          pinned.insert(pinned.end(), collector.references.begin(), collector.references.end());
+        });
         schema.Scan(context, dd::CatalogType::VIEW_ENTRY, [&](dd::CatalogEntry& entry) {
           if (entry.type != dd::CatalogType::VIEW_ENTRY) return;
           try {
@@ -463,14 +493,16 @@ std::optional<std::string> MacroNameRefusal(dd::ClientContext& context, const Sn
   for (const auto& reference : pinned) {
     if (CouldMean(reference, path)) {
       return what + " would change what a view, a trigger, a row or masking policy, or a macro one of them uses "
-             "computes: it calls a function by that name. Only the administrator may create or replace it";
+             "computes (or a table's column default, CHECK constraint or generated column): it calls a function by that "
+             "name. Only the administrator may create or replace it";
     }
   }
   return std::nullopt;
 }
 
 // Every type name the catalogs' re-bound SQL uses: views' queries, macros' bodies, triggers'
-// bodies, tables' column defaults and CHECK constraints (bound when a row is written), and
+// bodies, tables' column defaults and CHECK constraints (bound when a row is written) and
+// generated columns (bound where they are read), and
 // the store's policies. A table's columns are not among them: DuckDB copies a type into the
 // column at CREATE TABLE, so dropping or replacing the type changes nothing there.
 std::optional<std::vector<Reference>> TypeReferences(dd::ClientContext& context, const Snapshot& snapshot,
@@ -488,19 +520,7 @@ std::optional<std::vector<Reference>> TypeReferences(dd::ClientContext& context,
         ReferenceCollector collector(catalog_name);
         schema.Scan(context, dd::CatalogType::TABLE_ENTRY, [&](dd::CatalogEntry& entry) {
           if (entry.type == dd::CatalogType::TABLE_ENTRY) {
-            auto& table = entry.Cast<dd::TableCatalogEntry>();
-            for (const auto& column : table.GetColumns().Logical()) {
-              if (!column.HasDefaultValue()) continue;
-              auto copy = column.DefaultValue().Copy();
-              collector.Expression(*copy);
-            }
-            for (const auto& constraint : table.GetConstraints()) {
-              if (!constraint || constraint->type != dd::ConstraintType::CHECK) continue;
-              auto& check = constraint->Cast<dd::CheckConstraint>();
-              if (!check.expression) continue;
-              auto copy = check.expression->Copy();
-              collector.Expression(*copy);
-            }
+            CollectTableExpressions(entry.Cast<dd::TableCatalogEntry>(), collector);
           } else if (entry.type == dd::CatalogType::VIEW_ENTRY) {
             try {
               auto query = entry.Cast<dd::ViewCatalogEntry>().GetQuery().Copy();
