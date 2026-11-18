@@ -70,6 +70,13 @@ x64/Arm64. Linux packaging and testing are follow-up work.
   `127.0.0.1` over plain HTTP. The password never enters settings, YAML, logs or the command
   line; native commands return it only to the controller, on a click. Without a usable
   credential store the server starts with a password for that run only, and the card says why.
+- **Text size** (`src-tauri/src/zoom.rs`): one zoom level for every window (Safari's steps,
+  50% to 300%), remembered in `view.json` and applied as each window opens. On macOS an NSEvent
+  local monitor takes ⌘= / ⌘+ / ⌘⇧= / ⌘− / ⌘0 and the keypad's + and − before any window or
+  page sees them, by the character the layout types, so they work in the SQL editor and type
+  nothing; the View menu (Bigger, Smaller, Actual Size) shows them and is the mouse's way, and
+  Settings has a Text size control. macOS's Accessibility Text size can't be read by apps, so
+  it isn't followed.
 - **Connect from another computer** has Web UI, Python/ADBC, JDBC, CLI and JavaScript
   tabs with copyable examples generated from the saved endpoint and TLS mode. Examples
   use Hardcharger URI schemes and client credential environment variables; saved secrets

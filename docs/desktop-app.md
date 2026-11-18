@@ -109,6 +109,14 @@ and desktop preferences such as launch at login are not server YAML options. Sen
 values are stored in macOS Keychain or Windows Credential Manager. macOS may ask permission
 to read the app's saved credential, especially after an ad hoc preview rebuild.
 
+**Text size.** Make every window bigger or smaller (the dashboard, the SQL workspace and query
+details) with **View → Bigger / Smaller / Actual Size**, the same shortcuts as Safari (⌘+ or ⌘=,
+⌘−, ⌘0, and the numeric keypad's + and −; Ctrl on Windows), or **Settings → Application → Text
+size**. The shortcuts work with the cursor in the SQL editor too, and type nothing there. The
+size is remembered and applied to each window as it opens, after a relaunch too. macOS's own
+**Accessibility → Display → Text size** is not followed: macOS gives apps no way to read it, and
+web content (which the app's windows are) doesn't receive it.
+
 **Logs → Live tail** follows new output every two seconds. Turn it off to pause, or use
 **Refresh** for a single update. Scrolling up keeps your place while you read earlier lines.
 

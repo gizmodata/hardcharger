@@ -11,6 +11,7 @@ mod tray;
 mod ui_sidecar;
 mod updates;
 mod workspace_passwords;
+mod zoom;
 
 use server::{Server, Settings, Status};
 use std::sync::{
@@ -155,6 +156,27 @@ async fn regenerate_local_password(
     }
     let _ = app.emit_to("main", "server-changed", ());
     result
+}
+
+/// The app's text size, for Settings > Text size (#55).
+#[tauri::command]
+fn zoom_state(
+    window: WebviewWindow,
+    zoom: tauri::State<'_, zoom::Zoom>,
+) -> Result<zoom::ZoomState, String> {
+    controller(&window)?;
+    Ok(zoom.state())
+}
+
+/// Sets the app's text size from Settings: every window, remembered.
+#[tauri::command]
+fn set_zoom_level(
+    window: WebviewWindow,
+    app: AppHandle,
+    level: f64,
+) -> Result<zoom::ZoomState, String> {
+    controller(&window)?;
+    zoom::set_level(&app, level)
 }
 
 #[tauri::command]
@@ -438,7 +460,10 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
             .disable_drag_drop_handler()
             .build();
             match result {
-                Ok(window) => tauri::webview::NewWindowResponse::Create { window },
+                Ok(window) => {
+                    zoom::apply(&window);
+                    tauri::webview::NewWindowResponse::Create { window }
+                }
                 Err(error) => {
                     report(
                         &detail_app,
@@ -451,6 +476,7 @@ async fn workspace(app: AppHandle) -> Result<(), String> {
         // File drops belong to the web UI's existing upload flow.
         .disable_drag_drop_handler()
         .build()
+        .map(|window| zoom::apply(&window))
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -671,6 +697,9 @@ fn menu_action(app: &AppHandle, id: &str) {
             });
         }
         "quit" => app.exit(0),
+        "zoom-in" => zoom::step(app, zoom::Step::Bigger),
+        "zoom-out" => zoom::step(app, zoom::Step::Smaller),
+        "zoom-reset" => zoom::step(app, zoom::Step::ActualSize),
         _ => (),
     }
 }
@@ -709,7 +738,9 @@ fn main() {
             update_preferences,
             update_install,
             local_admin_password,
-            regenerate_local_password
+            regenerate_local_password,
+            zoom_state,
+            set_zoom_level
         ])
         .setup(|app| {
             let binary_name = if cfg!(windows) {
@@ -731,6 +762,13 @@ fn main() {
                 &directory,
                 app.package_info().version.to_string(),
             ));
+            // The text size, applied to each window as it opens (#55).
+            app.manage(zoom::Zoom::new(&directory));
+            if let Some(main) = app.get_webview_window("main") {
+                zoom::apply(&main);
+            }
+            #[cfg(target_os = "macos")]
+            zoom::install_key_monitor(app.handle().clone());
             let server = Server::new(binary, directory).map_err(std::io::Error::other)?;
             let start = server.settings.start_on_open;
             app.manage(Arc::new(Mutex::new(server)));
@@ -843,9 +881,20 @@ fn main() {
                     &PredefinedMenuItem::close_window(app, None)?,
                 ],
             )?;
+            // As Safari's: the shortcuts work in every window, in text fields too (zoom.rs).
+            let view = Submenu::with_items(
+                app,
+                "View",
+                true,
+                &[
+                    &MenuItem::with_id(app, "zoom-in", "Bigger", true, Some("CmdOrCtrl+="))?,
+                    &MenuItem::with_id(app, "zoom-out", "Smaller", true, Some("CmdOrCtrl+-"))?,
+                    &MenuItem::with_id(app, "zoom-reset", "Actual Size", true, Some("CmdOrCtrl+0"))?,
+                ],
+            )?;
             app.set_menu(Menu::with_items(
                 app,
-                &[&application, &server_menu, &edit, &window_menu],
+                &[&application, &server_menu, &edit, &view, &window_menu],
             )?)?;
             #[cfg(target_os = "macos")]
             window_menu.set_as_windows_menu_for_nsapp()?;

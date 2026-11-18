@@ -36,6 +36,8 @@ tauri = { version = "2", features = ["tray-icon", "image-png", "test"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
 objc2 = "0.6"
+# The zoom shortcuts' key monitor's handler (zoom.rs); already in the tree through tao.
+block2 = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }

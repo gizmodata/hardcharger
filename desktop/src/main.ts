@@ -55,6 +55,9 @@ let logScroll = 0;
 let logFollowing = true;
 let pendingImport: Record<string, unknown> | null = null;
 let theme = localStorage.getItem("hardcharger-desktop:theme") ?? "system";
+/** The app's text size (every window's zoom, #55); null until the native side answers. */
+let zoom: { level: number; levels: number[] } | null = null;
+const mac = navigator.userAgent.includes("Mac");
 document.documentElement.dataset.theme = theme;
 
 const icons: Record<string, string> = {
@@ -365,14 +368,14 @@ function render() {
       <div class="identity">${picture("header", "Hardcharger™")}<span class="edition">DESKTOP</span></div>
       <div class="nav-label">WORKSPACE</div>
       <nav aria-label="Main navigation">
-        <button data-tab="server" class="nav-item ${tab === "server" ? "active" : ""}">${icon("server")}Local server<span class="nav-dot ${running ? "running" : ""}"></span></button>
-        <button data-action="workspace" class="nav-item" title="${running ? "Open the SQL workspace on the local server" : "Open the SQL workspace for your remote servers (the local server is stopped)"}" ${!native || busy ? "disabled" : ""}>${icon("workspace")}SQL workspace<span class="external">↗</span></button>
-        <button data-tab="logs" class="nav-item ${tab === "logs" ? "active" : ""}">${icon("logs")}Logs</button>
+        <button data-tab="server" title="Local server" class="nav-item ${tab === "server" ? "active" : ""}">${icon("server")}<span class="nav-text">Local server</span><span class="nav-dot ${running ? "running" : ""}"></span></button>
+        <button data-action="workspace" class="nav-item" title="${running ? "Open the SQL workspace on the local server" : "Open the SQL workspace for your remote servers (the local server is stopped)"}" ${!native || busy ? "disabled" : ""}>${icon("workspace")}<span class="nav-text">SQL workspace</span><span class="external">↗</span></button>
+        <button data-tab="logs" title="Logs" class="nav-item ${tab === "logs" ? "active" : ""}">${icon("logs")}<span class="nav-text">Logs</span></button>
       </nav>
       <div class="nav-label second">APPLICATION</div>
       <nav aria-label="Application navigation">
-        <button data-tab="settings" class="nav-item ${tab === "settings" ? "active" : ""}">${icon("settings")}Settings</button>
-        <button data-tab="about" class="nav-item ${tab === "about" ? "active" : ""}">${icon("info")}About Hardcharger</button>
+        <button data-tab="settings" title="Settings" class="nav-item ${tab === "settings" ? "active" : ""}">${icon("settings")}<span class="nav-text">Settings</span></button>
+        <button data-tab="about" title="About Hardcharger" class="nav-item ${tab === "about" ? "active" : ""}">${icon("info")}<span class="nav-text">About Hardcharger</span></button>
       </nav>
       <div class="sidebar-bottom"><span class="connection"><span class="nav-dot ${running ? "running" : ""}"></span>${running ? "Local server running" : "Local server stopped"}</span><a class="by-marketing" data-marketing-link href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">by <strong>GizmoData™</strong></a></div>
     </aside>
@@ -551,6 +554,10 @@ function render() {
     catch (e) { showFormError(e); }
   });
   document.querySelector("#cancel-import")?.addEventListener("click", () => { pendingImport = null; render(); });
+  document.querySelector("#text-size")?.addEventListener("change", e => {
+    const level = Number((e.target as HTMLSelectElement).value);
+    void invoke<{ level: number; levels: number[] }>("set_zoom_level", { level }).then(state => { zoom = state; }).catch(showError);
+  });
   document.querySelector("#launch-login")?.addEventListener("change", e => {
     const requested = (e.target as HTMLInputElement).checked;
     void invoke<boolean>("launch_at_login", { enabled: requested }).then(v => { login = v; }).catch(showError);
@@ -590,7 +597,14 @@ function settingsView(s: Status | null) {
       </div>
     </form>
     ${remoteServersView(s)}
-    <section class="card detail-card"><div class="section-heading"><div><h3>Application</h3><p>Keep Hardcharger close at hand.</p></div></div><label class="check-row"><input id="launch-login" type="checkbox" ${login ? "checked" : ""} ${!native ? "disabled" : ""}><span><strong>Launch at login</strong><small>Open quietly in the menu bar or system tray when you sign in.</small></span></label><p class="muted">The window can close while the server keeps running. Quit Hardcharger to stop it cleanly.</p></section>`;
+    <section class="card detail-card"><div class="section-heading"><div><h3>Application</h3><p>Keep Hardcharger close at hand.</p></div></div><label class="check-row"><input id="launch-login" type="checkbox" ${login ? "checked" : ""} ${!native ? "disabled" : ""}><span><strong>Launch at login</strong><small>Open quietly in the menu bar or system tray when you sign in.</small></span></label>${textSizeField()}<p class="muted">The window can close while the server keeps running. Quit Hardcharger to stop it cleanly.</p></section>`;
+}
+
+function textSizeField() {
+  const levels = zoom?.levels ?? [0.5, 0.75, 0.85, 1, 1.15, 1.25, 1.5, 1.75, 2, 2.5, 3];
+  const level = zoom?.level ?? 1;
+  const key = mac ? "⌘" : "Ctrl+";
+  return `<label class="field text-size"><span>Text size</span><select id="text-size" ${!native || !zoom ? "disabled" : ""}>${levels.map(l => `<option value="${l}" ${l === level ? "selected" : ""}>${Math.round(l * 100)}%${l === 1 ? " (actual size)" : ""}</option>`).join("")}</select><small>Makes every Hardcharger window bigger or smaller, the SQL workspace and query details included, and is remembered. Shortcuts: ${key}+ bigger, ${key}− smaller, ${key}0 actual size (View menu).</small></label>`;
 }
 
 function networkView(s: Status | null) {
@@ -855,6 +869,13 @@ if (native) {
   void listen<string>("desktop-error", e => showError(e.payload));
   startUpdates(render);
   void invoke<boolean>("launch_at_login", { enabled: null }).then(v => { login = v; if (tab === "settings") render(); }).catch(showError);
+  void invoke<{ level: number; levels: number[] }>("zoom_state").then(state => { zoom = state; if (tab === "settings") render(); }).catch(showError);
+  // A shortcut or the View menu changed it: keep the control in step without re-rendering the form.
+  void listen<{ level: number; levels: number[] }>("zoom-changed", e => {
+    zoom = e.payload;
+    const select = document.querySelector<HTMLSelectElement>("#text-size");
+    if (select) select.value = String(zoom.level);
+  });
   void refresh();
   let ticks = 0;
   setInterval(() => {

@@ -31,6 +31,15 @@ own changelog in `python/CHANGELOG.md`.
   and JavaScript examples for `127.0.0.1` over plain HTTP that read the credentials from
   `HARDCHARGER_USER` / `HARDCHARGER_PASSWORD`. The password stays out of Export YAML, logs, the
   command line and the examples. Upgrading users get a password on their first start.
+- **Desktop app: text size** ([#55](https://github.com/gizmodata/hardcharger/issues/55)). Every
+  window (the dashboard, the SQL workspace and query details) zooms with Safari's shortcuts:
+  ⌘+ (typed as ⌘= or ⌘⇧= on a US keyboard, or with the + key of Dutch, German and other
+  layouts), ⌘−, ⌘0 and the numeric keypad's + and −, also with the cursor in the SQL editor,
+  where they type nothing. A **View** menu has Bigger, Smaller and Actual Size, and Settings has
+  a **Text size** control. The size is remembered and applied to each window as it opens. At
+  large sizes in small windows the dashboard's sidebar keeps only its icons, and the SQL
+  workspace's editor gives way so Run and the results stay reachable. Thanks to maartenb for
+  the report.
 
 ### Changed
 

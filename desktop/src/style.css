@@ -29,7 +29,7 @@ button:disabled { opacity: .45; cursor: default; }
 button:focus-visible, input:focus-visible, pre:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
 svg { width: 18px; height: 18px; flex-shrink: 0; }
 #app { display: flex; min-height: 100vh; }
-.sidebar { width: 220px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--soft); padding: 29px 16px 20px; display: flex; flex-direction: column; position: fixed; inset: 0 auto 0 0; }
+.sidebar { width: 220px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--soft); padding: 29px 16px 20px; display: flex; flex-direction: column; position: fixed; inset: 0 auto 0 0; overflow-y: auto; }
 .identity { padding: 0 10px; margin-bottom: 40px; }
 .brand-image { display: block; }
 .brand-image img { width: 100%; height: auto; display: block; }
@@ -234,3 +234,27 @@ footer { padding:14px 32px; border-top:1px solid var(--soft); display:flex; just
 .credentials dd { margin:0; }
 .credentials code { font-size:14px; overflow-wrap:anywhere; user-select:all; }
 .local-admin .control-actions { flex-wrap:wrap; padding-bottom:6px; }
+.text-size select { padding:9px 12px; border:1px solid var(--border); border-radius:5px; background:var(--bg); color:var(--text); font:inherit; max-width:280px; }
+.text-size small { color:var(--muted); line-height:1.6; }
+/* A large text size (#55) in a small window: the page is laid out in the window's size divided
+   by the zoom (430 px wide at 200% of the smallest window). The sidebar keeps only its icons
+   (their names stay for screen readers and tooltips), and the content takes the width. */
+@media(max-width:640px) {
+  .sidebar { width:60px; padding:16px 8px; }
+  .identity, .nav-label, .sidebar-bottom { display:none; }
+  .nav-item { justify-content:center; padding:12px 0; position:relative; }
+  .nav-text, .nav-item .external { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+  .nav-item .nav-dot { position:absolute; top:7px; right:9px; margin:0; }
+  main { margin-left:60px; width:calc(100% - 60px); }
+  header { padding:0 14px; height:52px; }
+  header .pill { display:none; }
+  .content { padding:16px 14px; }
+  .hero { padding:18px; min-height:0; }
+  .hero-mascot { display:none; }
+  .hero-content { width:100%; }
+  .stats { grid-template-columns:1fr; }
+  .detail-card { padding:16px; }
+  .control-actions { flex-wrap:wrap; }
+  .section-heading { flex-wrap:wrap; gap:8px; }
+  footer { flex-wrap:wrap; gap:4px 12px; }
+}
