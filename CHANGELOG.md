@@ -41,6 +41,14 @@ own changelog in `python/CHANGELOG.md`.
   workspace's editor gives way so Run and the results stay reachable. Thanks to maartenb for
   the report.
 
+### Fixed
+
+- **Android console: result tables line up**
+  ([#57](https://github.com/gizmodata/hardcharger/issues/57)). A table's borders ran past its
+  rows: Android's monospace font has no box-drawing characters, so they came from a wider
+  fallback font. The console now uses JetBrains Mono (no ligatures), bundled under the SIL Open
+  Font License, in which every character is one cell wide.
+
 ### Changed
 
 - **Android builds reach internal testers automatically.** Each release publishes its Android

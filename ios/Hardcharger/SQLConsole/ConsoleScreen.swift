@@ -13,7 +13,11 @@ struct SQLConsoleScreen: View {
     private var console: SQLConsole { scene.sqlConsole(for: scene.sqlTarget) }
 
     /// The console's type size: monospaced, following Dynamic Type.
-    private var uiFont: UIFont {
+    private var uiFont: UIFont { Self.font(for: typeSize) }
+
+    /// The console's font at a Dynamic Type size: SF Mono, whose box-drawing characters are as
+    /// wide as its text, so a result table's borders meet its rows (HardchargerTests checks it).
+    static func font(for typeSize: DynamicTypeSize) -> UIFont {
         UIFontMetrics(forTextStyle: .footnote).scaledFont(
             for: .monospacedSystemFont(ofSize: 13, weight: .regular), compatibleWith: UITraitCollection(
                 preferredContentSizeCategory: UIContentSizeCategory(typeSize)))
