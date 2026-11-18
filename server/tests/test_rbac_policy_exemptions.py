@@ -257,6 +257,33 @@ def test_only_an_unrestricted_administrator_grants_and_revokes_them(world):
     assert column(client=alice, sql="SELECT id FROM emp") == []
 
 
+def test_a_role_carries_one_only_through_memberships_the_administrator_granted(world):
+    admin = world.admin
+    # del may hand out replicator (WITH ADMIN OPTION), as she may any role she administers.
+    for sql in ["CREATE USER del", "CREATE USER bob", "CREATE USER cy", "CREATE ROLE team",
+                "GRANT replicator TO del WITH ADMIN OPTION", "GRANT team TO cy"]:
+        expect_allowed(client=admin, sql=sql)
+    dele = world.user(name="del")
+    expect_allowed(client=dele, sql="GRANT replicator TO bob")
+    expect_allowed(client=dele, sql="GRANT replicator TO ROLE team")
+    assert column(client=dele, sql="SELECT ssn FROM emp") == REAL_SSN  # hers came from the administrator
+    for name in ("bob", "cy"):
+        session = world.user(name=name)
+        # The role's grants reach them; its exemptions don't: no rows (no policy names them), masked, refused.
+        assert column(client=session, sql="SELECT id FROM emp") == []
+        assert column(client=session, sql="SELECT ssn FROM masks_only") == ["XXX"] * 3
+        expect_blocked(client=session, sql="INSERT INTO rows_only VALUES (9, 'EU')",
+                       why=refused_write(verb="INSERT", table="rows_only"))
+        assert rows(client=session, sql="SELECT count(*) AS n FROM hardcharger_effective_privileges() "
+                                        "WHERE privilege LIKE 'EXEMPT%'") == [{"n": 0}]
+    # The twin: the administrator's own grant of the same role.
+    expect_allowed(client=admin, sql="GRANT replicator TO bob")
+    assert column(client=world.user(name="bob"), sql="SELECT ssn FROM emp") == REAL_SSN
+    # Never to PUBLIC, which everyone holds.
+    expect_blocked(client=admin, sql="GRANT EXEMPT ROW POLICIES TO ROLE PUBLIC",
+                   why="Hardcharger blocked GRANT: EXEMPT ROW POLICIES is never granted to PUBLIC")
+
+
 def test_scoped_and_catalog_restricted_tokens_never_pick_one_up(world):
     rep = world.user(name="rep")
     scoped_token = rows(client=world.admin, sql="CREATE SCOPED TOKEN loader FOR USER rep ALLOW SELECT, INSERT, UPDATE, "

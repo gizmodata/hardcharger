@@ -1189,10 +1189,12 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
               }
             }
             if (existing) {
-              // A membership in a role that holds SYSTEM ADMIN carries it only when the
-              // administrator granted it: the administrator's grant of one that a role's
-              // admin-option holder made makes it the administrator's, from now on.
-              if (actor.superuser && !existing->granted_by.empty() && snap.RoleCarriesSystemAdmin(role->id)) {
+              // A membership in a role that holds SYSTEM ADMIN (or a policy exemption)
+              // carries it only when the administrator granted it: the administrator's grant
+              // of one that a role's admin-option holder made makes it the administrator's,
+              // from now on.
+              if (actor.superuser && !existing->granted_by.empty() &&
+                  (snap.RoleCarriesSystemAdmin(role->id) || snap.RoleCarriesPolicyExemption(role->id))) {
                 ARROW_RETURN_NOT_OK(txn.DeleteMembership(grantee.kind, grantee.id, role->id));
                 MembershipRecord taken = *existing;
                 taken.admin_option = existing->admin_option || c->with_admin_option;
@@ -1505,6 +1507,11 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                     "system privileges reach the whole server; a tenant's role "
                     "(" +
                     grantee.name + ") cannot hold them");
+              }
+              if (c->grant && IsPolicyExemption(p) && grantee.id == kPublicRoleId) {
+                return AccessControlError("Hardcharger blocked GRANT: " + SystemPrivilegeName(p) +
+                                          " is never granted to PUBLIC (that would take the policies away from "
+                                          "everyone: drop them instead)");
               }
               std::vector<SystemPrivilegeRecord> matching;
               const SystemPrivilegeRecord* own = nullptr;

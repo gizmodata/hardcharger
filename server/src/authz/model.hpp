@@ -462,6 +462,18 @@ class Snapshot {
   // SYSTEM ADMIN: when the user no longer holds SYSTEM ADMIN).
   bool HoldsActiveRole(const Principal& principal) const;
 
+  // ---- policy exemptions (EXEMPT ROW POLICIES, EXEMPT MASKING POLICIES) ----
+  // The roles through which the principal can hold a policy exemption: of the roles it acts
+  // with (RolesOf: SET ROLE narrows them), those it reaches through memberships the
+  // administrator granted (or a System Admin, recorded as the administrator's) and through
+  // identity-provider group mappings, never PUBLIC or a tenant's role. A membership a role's
+  // admin-option holder granted never carries an exemption, so it spreads only by an
+  // administrator's hand. Empty for the administrator (which needs none).
+  std::set<std::string> PolicyExemptionRoles(const Principal& principal) const;
+  // Does the role hold a policy exemption, itself or through a role it was granted (by
+  // anyone)? The administrator's GRANT of it then takes a delegated membership over.
+  bool RoleCarriesPolicyExemption(const std::string& role_id) const;
+
   // ---- SYSTEM ADMIN ----
   // How the store user holds SYSTEM ADMIN, one entry per way: "" for a grant to the user
   // itself, else the id of a role granted it that the user holds. Empty: it does not hold

@@ -68,6 +68,29 @@ TEST(PolicyExemption, NeverForALimitedSessionOrATenant) {
   EXPECT_TRUE(snap.ExemptFromPolicies(Principal::User("u-rep", "rep"), kRows));
 }
 
+TEST(PolicyExemption, OnlyThroughMembershipsTheAdministratorGranted) {
+  std::vector<UserRecord> users = {{"u-rep", "rep", std::nullopt, true, {}}, {"u-bob", "bob", std::nullopt, true, {}},
+                                   {"u-cy", "cy", std::nullopt, true, {}}};
+  std::vector<RoleRecord> roles = {{kPublicRoleId, kPublicRoleName, true}, {"r-repl", "replicator", false},
+                                   {"r-team", "team", false}};
+  // rep holds replicator from the administrator, WITH ADMIN OPTION; bob holds it from rep;
+  // cy holds team from the administrator, and team holds replicator from rep.
+  std::vector<MembershipRecord> memberships = {{PrincipalKind::kUser, "u-rep", "r-repl", true, ""},
+                                               {PrincipalKind::kUser, "u-bob", "r-repl", false, "u-rep"},
+                                               {PrincipalKind::kUser, "u-cy", "r-team", false, ""},
+                                               {PrincipalKind::kRole, "r-team", "r-repl", false, "u-rep"}};
+  const Snapshot snap(1, users, roles, memberships, {}, {}, {{"r-repl", kRows, false, ""}, {kPublicRoleId, kMasks, false, ""}});
+  EXPECT_TRUE(snap.ExemptFromPolicies(Principal::User("u-rep", "rep"), kRows));
+  EXPECT_FALSE(snap.ExemptFromPolicies(Principal::User("u-bob", "bob"), kRows));
+  EXPECT_FALSE(snap.ExemptFromPolicies(Principal::User("u-cy", "cy"), kRows));
+  // PUBLIC (everyone's) never carries one, whatever the store says.
+  EXPECT_FALSE(snap.ExemptFromPolicies(Principal::User("u-rep", "rep"), kMasks));
+  // SET ROLE to another role leaves it behind.
+  Principal narrowed = Principal::User("u-rep", "rep");
+  narrowed.active_role_id = kPublicRoleId;
+  EXPECT_FALSE(snap.ExemptFromPolicies(narrowed, kRows));
+}
+
 TEST(PolicyExemption, NeverDelegatedWhateverTheStoreSays) {
   // A row claiming an admin option gives its holder no right to grant.
   const Snapshot snap = Make({{"r-repl", kRows, true, ""}, {"r-repl", SystemPrivilege::kManageConfig, true, ""}});

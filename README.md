@@ -1400,7 +1400,10 @@ exemption grants nothing else: the job still needs `SELECT`, `INSERT` and the re
 
 - **Who grants them.** Only the administrator or a session acting as System Admin, and
   never `WITH ADMIN OPTION`: each takes away every policy of its kind at once. They are
-  granted to roles (not a tenant's) and to nothing narrower than the whole server.
+  granted to roles (not `PUBLIC`, not a tenant's) and to nothing narrower than the whole
+  server. A role carries them only through memberships the administrator (or a System
+  Admin) granted: a member a role's admin-option holder added gets the role's other
+  privileges, not its exemptions, until the administrator grants the role itself.
 - **Who never holds them.** A session signed in with a scoped token or a token with
   `catalog_access` rules, and a tenant's users. An exemption reaches no catalog the
   principal can't see.

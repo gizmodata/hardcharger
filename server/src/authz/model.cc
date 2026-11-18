@@ -268,6 +268,49 @@ std::set<std::string> Snapshot::AdministratorGrantedClosure(const std::string& r
   return seen;
 }
 
+std::set<std::string> Snapshot::PolicyExemptionRoles(const Principal& principal) const {
+  if (principal.superuser) return {};
+  // The roles the principal holds by the administrator's own hand (memberships it granted,
+  // and identity-provider group mappings, which only it creates), with what those inherit
+  // the same way. A role principal (a trigger's owner): the role, and what it inherits so.
+  std::set<std::string> granted;
+  if (principal.is_role()) {
+    if (!FindRoleById(principal.role_id)) return {};
+    granted = AdministratorGrantedClosure(principal.role_id);
+  } else {
+    const UserRecord* user = FindUserById(principal.user_id);
+    if (!user || !user->enabled) return {};
+    for (const auto& m : memberships_) {
+      if (m.member_kind == PrincipalKind::kUser && m.member_id == user->id && m.granted_by.empty()) {
+        for (const auto& r : AdministratorGrantedClosure(m.role_id)) granted.insert(r);
+      }
+    }
+    for (const auto& m : group_mappings_) {
+      if (!m.issuer.empty() && m.issuer != principal.idp_issuer) continue;
+      if (std::find(principal.idp_groups.begin(), principal.idp_groups.end(), m.group) == principal.idp_groups.end()) {
+        continue;
+      }
+      if (!FindRoleById(m.role_id)) continue;
+      for (const auto& r : AdministratorGrantedClosure(m.role_id)) granted.insert(r);
+    }
+  }
+  // Of those, the ones the session acts with (SET ROLE narrows them); never PUBLIC (which
+  // everyone holds) nor a tenant's role.
+  const auto acting = RolesOf(principal);
+  std::set<std::string> roles;
+  for (const auto& r : granted) {
+    if (r != kPublicRoleId && acting.count(r) && TenantOf(PrincipalKind::kRole, r).empty()) roles.insert(r);
+  }
+  return roles;
+}
+
+bool Snapshot::RoleCarriesPolicyExemption(const std::string& role_id) const {
+  const auto closure = RoleClosure(role_id);
+  return std::any_of(system_privileges_.begin(), system_privileges_.end(), [&](const SystemPrivilegeRecord& r) {
+    return IsPolicyExemption(r.privilege) && closure.count(r.role_id) > 0;
+  });
+}
+
 std::vector<std::string> Snapshot::SystemAdminSources(const Principal& principal) const {
   std::vector<std::string> sources;
   if (system_admins_.empty() || principal.superuser || principal.is_role() || principal.user_id.empty()) return sources;
@@ -751,7 +794,8 @@ bool Snapshot::HasSystemPrivilege(const Principal& principal, SystemPrivilege pr
   // allow, read the database file, an extension's scanner, a secret's remote storage.
   if (principal.catalog_rules) return principal.rules_administrator && IsRulesAdministratorPrivilege(privilege);
   if (principal.scope) return false;  // a scoped token holds none
-  const auto roles = RolesOf(principal);
+  // A policy exemption counts only through the administrator's own memberships.
+  const auto roles = IsPolicyExemption(privilege) ? PolicyExemptionRoles(principal) : RolesOf(principal);
   for (const auto& r : system_privileges_) {
     if (r.privilege == privilege && r.location.empty() && roles.count(r.role_id)) return true;
   }
@@ -767,6 +811,11 @@ bool Snapshot::ExemptFromPolicies(const Principal& principal, SystemPrivilege ex
   if (principal.policy_exemptions_unverified) return false;
   // Nor to a session limited by its token: scoped, or with catalog_access rules.
   if (principal.catalog_access_token || principal.scope) return false;
+  // Asked before every statement of every store user: most stores grant none.
+  if (std::none_of(system_privileges_.begin(), system_privileges_.end(),
+                   [&](const SystemPrivilegeRecord& r) { return r.privilege == exemption; })) {
+    return false;
+  }
   // A tenant's user or role is never exempt: a system privilege reaches the whole server.
   if (!TenantOfPrincipal(principal).empty()) return false;
   // Scoped tokens and catalog_access rules hold no system privilege.

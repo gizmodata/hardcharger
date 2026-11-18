@@ -1096,7 +1096,9 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
     auto privilege = SystemPrivilegeFromName(GetString(*stp, 1, r));
     if (!privilege) continue;
     if (!StorageOf(*privilege) && !(IsPolicyExemption(*privilege) && GetString(*stp, 2, r).empty())) continue;
-    system_privileges.push_back({GetString(*stp, 0, r), *privilege, GetBool(*stp, 3, r), GetString(*stp, 4, r),
+    // A policy exemption has no admin option, whatever a row says.
+    system_privileges.push_back({GetString(*stp, 0, r), *privilege,
+                                 !IsPolicyExemption(*privilege) && GetBool(*stp, 3, r), GetString(*stp, 4, r),
                                  GetString(*stp, 2, r)});
   }
 

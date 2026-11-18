@@ -49,7 +49,8 @@ own changelog in `python/CHANGELOG.md`.
   on a table writes it as freely as it reads it (`INSERT`, `UPDATE`, `MERGE`, `INSERT ... ON
   CONFLICT`, `DELETE ... RETURNING`, bulk ingest); everyone else's writes into such a table are
   refused as before. Only the administrator or a session acting as System Admin grants them,
-  never with an admin option; scoped tokens, tokens with `catalog_access` rules and a tenant's
+  never with an admin option or to `PUBLIC`, and a role carries them only through memberships
+  they granted (as `SYSTEM ADMIN`); scoped tokens, tokens with `catalog_access` rules and a tenant's
   users never hold them; a user's trigger body uses its owner's exemptions, never the
   writer's. A revoke counts at the next statement, prepared ones included, on every replica at
   once (a session that holds one asks the store before each statement, and while the store
