@@ -1467,6 +1467,20 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       location = parsed->second;
     }
     const std::string where = location.empty() ? "" : " on location '" + location + "'";
+    // A policy exemption takes away every row policy, or every mask, at once: only an
+    // unrestricted administrator grants or revokes one, and never with an admin option.
+    for (SystemPrivilege p : c->privileges) {
+      if (!IsPolicyExemption(p)) continue;
+      if (!actor.is_unrestricted_administrator()) {
+        return AccessControlError("Hardcharger blocked " + CommandKind(command) + ": " + kOnlySystemAdministrators +
+                                  " grants and revokes " + SystemPrivilegeName(p));
+      }
+      if (c->with_admin_option) {
+        return AccessControlError("Hardcharger blocked " + CommandKind(command) + ": " + SystemPrivilegeName(p) +
+                                  " has no admin option; only the administrator, or a user acting as System Admin, "
+                                  "grants it");
+      }
+    }
     std::vector<std::string> done;
     ARROW_RETURN_NOT_OK(mutate_with(
         !c->grant && !c->cascade,

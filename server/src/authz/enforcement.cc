@@ -2088,11 +2088,15 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
   }
   // Row and masking policies apply to what passed the check (a user's trigger body: the
   // owner's policies).
-  ApplyPolicies(context, snapshot, principal, plan, FindTriggerBodies(context, *snapshot, *plan));
+  // The audit record names each policy exemption that let the statement through.
+  std::set<std::string> exemptions;
+  ApplyPolicies(context, snapshot, principal, plan, FindTriggerBodies(context, *snapshot, *plan), false, &exemptions);
   auto ownership = checker.TakeOwnership();
   CollectRename(context, *plan, ownership);
+  auto accesses = checker.TakeAccesses();
+  accesses.insert(accesses.end(), exemptions.begin(), exemptions.end());
   state->NoteChecked(snapshot->version(), std::move(ownership),
-                     plan->type == OpType::LOGICAL_PREPARE, checker.TakeAccesses());
+                     plan->type == OpType::LOGICAL_PREPARE, std::move(accesses));
 }
 
 // Check every statement as soon as it is bound. DuckDB prepares a statement with
@@ -2155,6 +2159,7 @@ Principal RbacSessionState::principal() const {
     std::lock_guard<std::mutex> lock(principal_mutex_);
     user = principal_;
     unverified = !system_admin_unverified_.empty();
+    user.policy_exemptions_unverified = !policy_exemptions_unverified_.empty();
   }
   if (administrator_ || !user.asks_system_admin()) return user;
   // The store did not answer when this request asked it: nobody acts as System Admin on

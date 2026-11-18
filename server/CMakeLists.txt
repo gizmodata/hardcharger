@@ -381,6 +381,7 @@ add_executable(hardcharger-unit-tests
   unit/metrics_test.cc
   unit/patterns_test.cc
   unit/platform_test.cc
+  unit/policy_exemption_test.cc
   unit/redaction_test.cc
   unit/store_test.cc
   unit/system_admin_test.cc

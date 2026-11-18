@@ -558,6 +558,9 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
   runtime_.instance_info =
       CollectInstanceInfo(runtime_.config, runtime_.instance_id, duckdb_version(), runtime_.started_at);
   RegisterSqlFunctions(connection.get(), runtime_);
+  // current_user, session_user, user and current_role answer for the session (on every
+  // server: without access control, as for the administrator).
+  authz::InstallPolicyContextFunctions(instance());
   AttachSystemCatalog();
   if (runtime_.config.enable_instrumentation) {
     instrumentation_ = std::make_unique<Instrumentation>(runtime_, instance(), duckdb_version());
@@ -958,6 +961,15 @@ void Session::CheckAlive() const {
   // session acting as System Admin is one only on the store's own word, as of now.
   guard_->VerifySystemAdmin();
   guard_->RequireLive();
+}
+
+authz::SessionPolicyContext Session::policy_context() const {
+  if (guard_) return guard_->PolicyContextNow();
+  // No access control: every session is the administrator's. (A session under access
+  // control without a guard runs nothing: CheckAlive.)
+  authz::SessionPolicyContext answers;
+  answers.all_roles_active = !access_controlled_;
+  return answers;
 }
 
 void Session::CheckEnded() {

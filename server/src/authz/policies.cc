@@ -3,9 +3,12 @@
 #include <duckdb/catalog/catalog.hpp>
 #include <duckdb/catalog/catalog_entry_retriever.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
+#include <duckdb/catalog/catalog_transaction.hpp>
+#include <duckdb/catalog/default/default_functions.hpp>
 #include <duckdb/common/vector_operations/variadic_executor.hpp>
 #include <duckdb/function/scalar_function.hpp>
 #include <duckdb/main/attached_database.hpp>
+#include <duckdb/main/capi_v2/capi_v2_internal.hpp>
 #include <duckdb/main/client_context.hpp>
 #include <duckdb/main/config.hpp>
 #include <duckdb/main/database_manager.hpp>
@@ -38,6 +41,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "authz/authz.hpp"
 #include "authz/duckdb_internal.hpp"
 #include "authz/resolver.hpp"
 #include "authz/views.hpp"
@@ -111,11 +115,12 @@ bool IsContextFunction(const std::string& n) {
 }
 
 // What a policy must not read: anything the session can set, or anything that
-// reaches outside the row.
+// reaches outside the row. current_role() (and the function it stands for in plain SQL,
+// hardcharger_active_role()) changes with SET ROLE.
 bool IsForbiddenFunction(const std::string& n) {
   static const std::unordered_set<std::string> kNames = {
-      "getvariable",   "current_setting",  "query",   "query_table", "current_role",
-      "hardcharger_role", "nextval", "currval", "setseed"};
+      "getvariable",      "current_setting", "query",   "query_table", "current_role",
+      "hardcharger_role", "hardcharger_active_role", "nextval", "currval", "setseed"};
   return kNames.count(n) > 0;
 }
 
@@ -158,6 +163,10 @@ arrow::Status CheckShape(const dd::ParsedExpression& expr, const std::string& ma
     case dd::ExpressionClass::COLUMN_REF: {
       const auto names = ColumnNames(expr.Cast<dd::ColumnRefExpression>());
       if (names.size() == 1 && IsUserFunction(Lower(names[0]))) return arrow::Status::OK();
+      // current_role written without parentheses is the same call.
+      if (names.size() == 1 && Lower(names[0]) == "current_role") {
+        return Invalid("a policy cannot call current_role()");
+      }
       if (!mask_parameter.empty() &&
           !(names.size() == 1 && IdentifiersEqual(names[0], mask_parameter))) {
         return Invalid("a masking policy may read only its parameter " + mask_parameter);
@@ -224,21 +233,55 @@ void Substitute(dd::unique_ptr<dd::ParsedExpression>& expr, const PolicyContext&
       });
 }
 
-// A bound policy expression may not have reached anything the parse check
-// could not see (a macro's body, say).
-void CheckBound(const dd::Expression& expr) {
-  if (expr.GetExpressionClass() == dd::ExpressionClass::BOUND_SUBQUERY) {
+// The constant string a bound context function was called with, or nullopt.
+std::optional<std::string> BoundStringArgument(const dd::BoundFunctionExpression& fn) {
+  const auto& args = fn.GetChildren();
+  if (args.size() != 1 || !args[0] || args[0]->GetExpressionClass() != dd::ExpressionClass::BOUND_CONSTANT) {
+    return std::nullopt;
+  }
+  const auto& value = args[0]->Cast<dd::BoundConstantExpression>().GetValue();
+  if (value.IsNull() || value.type().id() != dd::LogicalTypeId::VARCHAR) return std::nullopt;
+  return value.GetValue<std::string>();
+}
+
+// A bound policy expression may not have reached anything the parse check could not see
+// (a macro's body, say). The context functions a macro's body calls are the plain-SQL ones,
+// which answer for the session: here they answer for the policy's principal instead (a
+// trigger body's owner), exactly as the policy's own calls do (Substitute).
+void ResolveBound(dd::unique_ptr<dd::Expression>& expr, const PolicyContext& context) {
+  if (expr->GetExpressionClass() == dd::ExpressionClass::BOUND_SUBQUERY) {
     Refuse("a row or masking policy on a table it reads contains a subquery");
   }
-  if (expr.GetExpressionClass() == dd::ExpressionClass::BOUND_FUNCTION) {
-    const auto& fn = expr.Cast<dd::BoundFunctionExpression>();
+  if (expr->GetExpressionClass() == dd::ExpressionClass::BOUND_FUNCTION) {
+    const auto& fn = expr->Cast<dd::BoundFunctionExpression>();
     const std::string name = Lower(compat::Str(fn.Function().GetName()));
     if (IsForbiddenFunction(name)) {
       Refuse("a row or masking policy on a table it reads calls " + name + "()");
     }
+    if (name == "hardcharger_user" && fn.GetChildren().empty()) {
+      expr = dd::make_uniq<dd::BoundConstantExpression>(dd::Value(context.user_name));
+      return;
+    }
+    if (name == "is_role_active" || name == "session_attribute") {
+      const auto argument = BoundStringArgument(fn);
+      if (!argument) {
+        Refuse("a row or masking policy on a table it reads calls " + name + "() with something other than a "
+               "string constant");
+      }
+      if (name == "is_role_active") {
+        expr = dd::make_uniq<dd::BoundConstantExpression>(
+            dd::Value::BOOLEAN(context.role_names.count(FoldIdentifier(*argument)) > 0));
+      } else {
+        auto it = context.attributes.find(*argument);
+        expr = dd::make_uniq<dd::BoundConstantExpression>(it == context.attributes.end()
+                                                              ? dd::Value(dd::LogicalType::VARCHAR)
+                                                              : dd::Value(it->second));
+      }
+      return;
+    }
   }
-  dd::ExpressionIterator::EnumerateChildren(expr,
-                                            [](const dd::Expression& child) { CheckBound(child); });
+  dd::ExpressionIterator::EnumerateChildren(
+      *expr, [&](dd::unique_ptr<dd::Expression>& child) { ResolveBound(child, context); });
 }
 
 // ---- the plan rewrite --------------------------------------------------------
@@ -265,17 +308,22 @@ std::vector<std::string> SensitiveSettingNames(dd::ClientContext& context) {
 class PolicyRewriter {
  public:
   PolicyRewriter(dd::ClientContext& context, std::shared_ptr<const Snapshot> snapshot,
-                 const Principal& principal, const TriggerBodies& trigger_bodies)
+                 const Principal& principal, const TriggerBodies& trigger_bodies,
+                 std::set<std::string>* exemptions_used)
       : context_(context),
         snapshot_owner_(std::move(snapshot)),
         snapshot_(*snapshot_owner_),
         principal_(principal),
         trigger_bodies_(trigger_bodies),
         policy_context_(PolicyContext::For(snapshot_, principal)),
-        restricted_(snapshot_.RestrictsCatalogs(principal)) {}
+        restricted_(snapshot_.RestrictsCatalogs(principal)),
+        exempt_rows_(snapshot_.ExemptFromPolicies(principal, SystemPrivilege::kExemptRowPolicies)),
+        exempt_masks_(snapshot_.ExemptFromPolicies(principal, SystemPrivilege::kExemptMaskingPolicies)),
+        exemptions_used_(exemptions_used) {}
 
   void Rewrite(dd::unique_ptr<dd::LogicalOperator>& plan, bool body = false) {
     entered_body_ = body;
+    entered_as_body_ = body;
     Walk(plan);
     if (masks_.empty()) return;
     SubstituteMasks(*plan);
@@ -286,10 +334,36 @@ class PolicyRewriter {
   }
 
  private:
-  bool Governed(const ObjectPath& path) {
-    return !snapshot_.RowPoliciesOn(path).empty() ||
-           !snapshot_.ApplicableMasks(principal_, path).empty();
+  // The row policies and masks that apply to the principal on the table, after its
+  // exemptions (EXEMPT ROW POLICIES / EXEMPT MASKING POLICIES). Every row policy on a table
+  // counts, whoever it names: a role no permissive policy covers sees no rows.
+  std::vector<const RowPolicyRecord*> RowPolicies(const ObjectPath& path) {
+    auto found = snapshot_.RowPoliciesOn(path);
+    if (exempt_rows_ && !found.empty()) {
+      NoteExemption(SystemPrivilege::kExemptRowPolicies, path);
+      return {};
+    }
+    return found;
   }
+  std::vector<std::pair<std::string, const MaskingPolicyRecord*>> Masks(const ObjectPath& path) {
+    auto found = snapshot_.ApplicableMasks(principal_, path);
+    if (exempt_masks_ && !found.empty()) {
+      NoteExemption(SystemPrivilege::kExemptMaskingPolicies, path);
+      return {};
+    }
+    return found;
+  }
+  // For the audit record: an exemption let this statement past a policy.
+  void NoteExemption(SystemPrivilege exemption, const ObjectPath& path) {
+    if (!exemptions_used_) return;
+    exemptions_used_->insert(SystemPrivilegeName(exemption) + " on table " + path.ToString() +
+                             (entered_as_body_ ? " (in a trigger body, as its owner " + principal_.user_name + ")"
+                                               : std::string()));
+  }
+
+  // A write is refused while any row policy or mask still applies after exemptions: one
+  // exempt from everything on the table writes it as freely as it reads it.
+  bool Governed(const ObjectPath& path) { return !RowPolicies(path).empty() || !Masks(path).empty(); }
 
   void RefuseWriteInto(dd::TableCatalogEntry& table, const char* verb) {
     const ObjectPath path = PathOfEntry(table);
@@ -305,7 +379,7 @@ class PolicyRewriter {
     // The body of a trigger a user owns: the owner's policies, not this principal's.
     if (const TriggerBody* body = TriggerBodyAt(trigger_bodies_, *op); body && !body->base) {
       if (body->definer && !entered_body_) {
-        ApplyPolicies(context_, snapshot_owner_, *body->definer, op, trigger_bodies_, true);
+        ApplyPolicies(context_, snapshot_owner_, *body->definer, op, trigger_bodies_, true, exemptions_used_);
         return;
       }
     }
@@ -327,8 +401,7 @@ class PolicyRewriter {
         // DELETE ... RETURNING hands back whole rows, masked columns included.
         auto& del = op->Cast<dd::LogicalDelete>();
         const ObjectPath path = PathOfEntry(del.table);
-        if (del.return_chunk && !ReturningAddedForTriggers(trigger_bodies_, *op) &&
-            !snapshot_.ApplicableMasks(principal_, path).empty()) {
+        if (del.return_chunk && !ReturningAddedForTriggers(trigger_bodies_, *op) && !Masks(path).empty()) {
           Refuse("DELETE ... RETURNING on " + path.ToString() + ", which has masked columns");
         }
         break;
@@ -669,8 +742,8 @@ class PolicyRewriter {
     }
     const ObjectPath path = PathOfEntry(*table);
     if (IdentifiersEqual(path.catalog, TEMP_CATALOG)) return;
-    const auto policies = snapshot_.RowPoliciesOn(path);
-    const auto masks = snapshot_.ApplicableMasks(principal_, path);
+    const auto policies = RowPolicies(path);
+    const auto masks = Masks(path);
     if (policies.empty() && masks.empty()) return;
 
     // Bind policy SQL against this scan, as DuckDB's binder would: column
@@ -692,7 +765,7 @@ class PolicyRewriter {
       where_binder.target_type = type;  // a mask keeps its column's type; a predicate is BOOLEAN
       auto bound = where_binder.Bind(parsed);
       bound = dd::BoundCastExpression::AddCastToType(context_, std::move(bound), type);
-      CheckBound(*bound);
+      ResolveBound(bound, policy_context_);
       return bound;
     };
 
@@ -819,6 +892,12 @@ class PolicyRewriter {
   dd::column_binding_map_t<dd::unique_ptr<dd::Expression>> masks_;
   std::unordered_set<const dd::LogicalOperator*> policy_filters_;
   const bool restricted_;  // sees only some catalogs (tenant, catalog_access, hidden)
+  // EXEMPT ROW POLICIES / EXEMPT MASKING POLICIES, as the principal holds them now.
+  const bool exempt_rows_;
+  const bool exempt_masks_;
+  std::set<std::string>* exemptions_used_;  // where to note an exemption that applied, or null
+  // This rewriter is a trigger body's, for its owner.
+  bool entered_as_body_ = false;
 };
 
 }  // namespace
@@ -851,22 +930,25 @@ arrow::Result<dd::unique_ptr<dd::ParsedExpression>> PreparePolicyExpression(
 
 // A superuser's statement is rewritten only where a user's trigger body sits in it.
 void ApplyDefinerPolicies(dd::ClientContext& context, const std::shared_ptr<const Snapshot>& snapshot,
-                          dd::unique_ptr<dd::LogicalOperator>& op, const TriggerBodies& trigger_bodies) {
+                          dd::unique_ptr<dd::LogicalOperator>& op, const TriggerBodies& trigger_bodies,
+                          std::set<std::string>* exemptions_used) {
   if (const TriggerBody* body = TriggerBodyAt(trigger_bodies, *op); body && body->definer) {
-    ApplyPolicies(context, snapshot, *body->definer, op, trigger_bodies, true);
+    ApplyPolicies(context, snapshot, *body->definer, op, trigger_bodies, true, exemptions_used);
     return;
   }
   for (auto& child : op->children) {
-    if (child) ApplyDefinerPolicies(context, snapshot, child, trigger_bodies);
+    if (child) ApplyDefinerPolicies(context, snapshot, child, trigger_bodies, exemptions_used);
   }
 }
 
 void ApplyPolicies(dd::ClientContext& context, const std::shared_ptr<const Snapshot>& snapshot,
                    const Principal& principal, dd::unique_ptr<dd::LogicalOperator>& plan,
-                   const TriggerBodies& trigger_bodies, bool body) {
+                   const TriggerBodies& trigger_bodies, bool body, std::set<std::string>* exemptions_used) {
   if (!plan) return;
   if (principal.superuser) {
-    if (HasDefinerBody(trigger_bodies)) ApplyDefinerPolicies(context, snapshot, plan, trigger_bodies);
+    if (HasDefinerBody(trigger_bodies)) {
+      ApplyDefinerPolicies(context, snapshot, plan, trigger_bodies, exemptions_used);
+    }
     return;
   }
   // Most statements need no rewrite: no policies, no tenants, no catalog limits, and no
@@ -891,7 +973,29 @@ void ApplyPolicies(dd::ClientContext& context, const std::shared_ptr<const Snaps
       !lists(*plan) && !HasDefinerBody(trigger_bodies)) {
     return;
   }
-  PolicyRewriter(context, snapshot, principal, trigger_bodies).Rewrite(plan, body);
+  PolicyRewriter(context, snapshot, principal, trigger_bodies, exemptions_used).Rewrite(plan, body);
+}
+
+void InstallPolicyContextFunctions(duckdb_v2_instance_handle instance) {
+  // DuckDB's own answer to each is 'duckdb'. A policy's call never reaches these (it is
+  // replaced by a literal before binding, Substitute); plain SQL, views and macros do, and
+  // get the same answer a policy gets for the same session. The functions they call answer
+  // for the session binding the statement, and a store user's prepared statement is bound
+  // again once SET ROLE or the store changed. Fully qualified, so no macro in the search
+  // path stands in for them. `user` is DuckDB's macro for current_user.
+  static const dd::DefaultMacro kMacros[] = {
+      {DEFAULT_SCHEMA, "current_user", "() AS system.main.hardcharger_user()"},
+      {DEFAULT_SCHEMA, "session_user", "() AS system.main.hardcharger_user()"},
+      {DEFAULT_SCHEMA, "current_role", "() AS system.main.hardcharger_active_role()"},
+  };
+  auto& database = *dd::capiv2::Convert(instance)->GetDatabase().instance;
+  auto& catalog = dd::Catalog::GetSystemCatalog(database);
+  auto transaction = dd::CatalogTransaction::GetSystemTransaction(database);
+  for (const auto& macro : kMacros) {
+    auto info = dd::DefaultFunctionGenerator::CreateInternalMacroInfo(macro);
+    info->on_conflict = dd::OnCreateConflict::REPLACE_ON_CONFLICT;
+    catalog.CreateFunction(transaction, *info);
+  }
 }
 
 }  // namespace hardcharger::authz

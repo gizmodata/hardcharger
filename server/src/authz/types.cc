@@ -222,8 +222,16 @@ std::string SystemPrivilegeName(SystemPrivilege privilege) {
       return "READ HTTP";
     case SystemPrivilege::kWriteHttp:
       return "WRITE HTTP";
+    case SystemPrivilege::kExemptRowPolicies:
+      return "EXEMPT ROW POLICIES";
+    case SystemPrivilege::kExemptMaskingPolicies:
+      return "EXEMPT MASKING POLICIES";
   }
   return "UNKNOWN";
+}
+
+bool IsPolicyExemption(SystemPrivilege privilege) {
+  return privilege == SystemPrivilege::kExemptRowPolicies || privilege == SystemPrivilege::kExemptMaskingPolicies;
 }
 
 const std::vector<SystemPrivilege>& AllSystemPrivileges() {
@@ -234,7 +242,8 @@ const std::vector<SystemPrivilege>& AllSystemPrivileges() {
       SystemPrivilege::kExportDatabase, SystemPrivilege::kImportDatabase,
       SystemPrivilege::kCheckpoint,     SystemPrivilege::kReadObjectStorage,
       SystemPrivilege::kWriteObjectStorage, SystemPrivilege::kReadHttp,
-      SystemPrivilege::kWriteHttp};
+      SystemPrivilege::kWriteHttp,      SystemPrivilege::kExemptRowPolicies,
+      SystemPrivilege::kExemptMaskingPolicies};
   return kAll;
 }
 

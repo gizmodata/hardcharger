@@ -144,6 +144,127 @@ void RegisterScalar(duckdb_v2_connection_handle connection, duckdb_v2_factory_ha
   Call([&](auto* e) { return duckdb_v2_connection_register_scalar_function(connection, function.get(), e); });
 }
 
+// ---- is_role_active(name), session_attribute(name) ----
+//
+// What a row or masking policy's calls answer, for the session binding the statement (a
+// store user's prepared statement is bound again once SET ROLE or the store changed).
+// Outside a client session: NULL.
+
+struct PolicyContextBinding {
+  bool session = false;
+  authz::SessionPolicyContext answers;
+};
+
+enum class PolicyContextFunction { kIsRoleActive, kSessionAttribute };
+
+void PolicyContextBind(duckdb_v2_function_bind_info_handle, duckdb_v2_scalar_function_bind_info_handle result,
+                       duckdb_v2_context_handle, duckdb_v2_error_info_handle* err) {
+  Guarded(err, [&] {
+    auto binding = std::make_unique<PolicyContextBinding>();
+    if (const Session* session = CurrentSession()) {
+      binding->session = true;
+      binding->answers = session->policy_context();
+    }
+    duckdb_v2_opaque data{binding.release(), [](void* p) { delete static_cast<PolicyContextBinding*>(p); },
+                          [](void* a, void* b) {
+                            const auto& x = *static_cast<const PolicyContextBinding*>(a);
+                            const auto& y = *static_cast<const PolicyContextBinding*>(b);
+                            return x.session == y.session && x.answers == y.answers;
+                          }};
+    Call([&](auto* e) { return duckdb_v2_scalar_function_bind_set_bind_data(result, &data, e); });
+  });
+}
+
+void PolicyContextExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_context_handle context,
+                       duckdb_v2_error_info_handle* err, PolicyContextFunction function) {
+  Guarded(err, [&] {
+    void* data = nullptr;
+    Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_bind_data(info, &data, e); });
+    const auto& binding = *static_cast<const PolicyContextBinding*>(data);
+    duckdb_v2_factory_handle factory = nullptr;
+    Call([&](auto* e) { return duckdb_v2_context_get_factory(context, &factory, e); });
+    idx_t rows = 0;
+    Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_row_count(info, &rows, e); });
+    duckdb_v2_vector_handle input = nullptr;
+    Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_arg(info, 0, &input, e); });
+    duckdb_v2_vector_handle output = nullptr;
+    Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_result(info, &output, e); });
+    auto type = Type(factory, function == PolicyContextFunction::kIsRoleActive ? "BOOLEAN" : "VARCHAR");
+    Call([&](auto* e) { return duckdb_v2_vector_set_size(output, rows, e); });  // written row by row
+    for (idx_t row = 0; row < rows; row++) {
+      chargewire_duckdb::Value in;
+      Call([&](auto* e) { return duckdb_v2_vector_get_value(input, row, in.out(), e); });
+      bool null = true;
+      Call([&](auto* e) { return duckdb_v2_value_is_null(in.get(), &null, e); });
+      std::optional<std::string> name;
+      if (!null) {
+        duckdb_v2_str text{};
+        Call([&](auto* e) { return duckdb_v2_value_get_varchar(in.get(), &text, e); });
+        name = std::string(text.ptr, text.len);
+      }
+      chargewire_duckdb::Value out;
+      std::optional<std::string> attribute;
+      if (name && binding.session && function == PolicyContextFunction::kSessionAttribute) {
+        attribute = binding.answers.Attribute(*name);
+      }
+      if (!name || !binding.session || (function == PolicyContextFunction::kSessionAttribute && !attribute)) {
+        Call([&](auto* e) { return duckdb_v2_value_create_null(factory, type.get(), out.out(), e); });
+      } else if (function == PolicyContextFunction::kIsRoleActive) {
+        const bool active = binding.answers.RoleActive(*name);
+        Call([&](auto* e) { return duckdb_v2_value_create_bool(factory, active, out.out(), e); });
+      } else {
+        const duckdb_v2_str text = Str(*attribute);
+        Call([&](auto* e) { return duckdb_v2_value_create_varchar(factory, &text, out.out(), e); });
+      }
+      Call([&](auto* e) { return duckdb_v2_vector_set_value(output, row, out.get(), e); });
+    }
+  });
+}
+
+void IsRoleActiveExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_context_handle context,
+                      duckdb_v2_error_info_handle* err) {
+  PolicyContextExec(info, context, err, PolicyContextFunction::kIsRoleActive);
+}
+void SessionAttributeExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_context_handle context,
+                          duckdb_v2_error_info_handle* err) {
+  PolicyContextExec(info, context, err, PolicyContextFunction::kSessionAttribute);
+}
+
+void RegisterPolicyContextFunction(duckdb_v2_connection_handle connection, duckdb_v2_factory_handle factory,
+                                   PolicyContextFunction which) {
+  ScalarFunction function;
+  Call([&](auto* e) { return duckdb_v2_scalar_function_create(factory, function.out(), e); });
+  const bool role = which == PolicyContextFunction::kIsRoleActive;
+  const duckdb_v2_str function_name = Str(role ? "is_role_active" : "session_attribute");
+  Call([&](auto* e) { return duckdb_v2_scalar_function_set_name(function.get(), &function_name, e); });
+  duckdb_v2_function_signature_handle signature = nullptr;
+  Call([&](auto* e) { return duckdb_v2_scalar_function_get_signature(function.get(), &signature, e); });
+  auto varchar = Type(factory, "VARCHAR");
+  const duckdb_v2_identifier_t parameter = Str("name");
+  Call([&](auto* e) {
+    return duckdb_v2_function_signature_add_parameter(signature, &parameter, varchar.get(), nullptr,
+                                                      DUCKDB_V2_FUNCTION_PARAMETER_KIND_POSITIONAL_ONLY, e);
+  });
+  auto return_type = Type(factory, role ? "BOOLEAN" : "VARCHAR");
+  Call([&](auto* e) { return duckdb_v2_function_signature_set_return_type(signature, return_type.get(), e); });
+  // Same answer for the whole statement, but not across statements (as HARDCHARGER_USER()).
+  Call([&](auto* e) {
+    return duckdb_v2_scalar_function_set_property(function.get(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+                                                  DUCKDB_V2_FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY, e);
+  });
+  // NULL in, NULL out, handled by the function itself (NULL outside a client session too).
+  Call([&](auto* e) {
+    return duckdb_v2_scalar_function_set_property(function.get(), DUCKDB_V2_FUNCTION_PROPERTY_NULL_HANDLING,
+                                                  DUCKDB_V2_FUNCTION_PROPERTY_NULL_HANDLING_SPECIAL, e);
+  });
+  Call([&](auto* e) { return duckdb_v2_scalar_function_set_bind_callback(function.get(), PolicyContextBind, e); });
+  Call([&](auto* e) {
+    return duckdb_v2_scalar_function_set_exec_callback(function.get(), role ? IsRoleActiveExec : SessionAttributeExec,
+                                                       e);
+  });
+  Call([&](auto* e) { return duckdb_v2_connection_register_scalar_function(connection, function.get(), e); });
+}
+
 // ---- Table functions over Arrow batches, built for each execution ----
 
 // A table function's arguments: its optional VARCHAR parameters, in order (nullopt: NULL).
@@ -1125,6 +1246,8 @@ void RegisterSqlFunctions(duckdb_v2_connection_handle connection, Runtime& runti
   RegisterSessionSetting(connection, factory, runtime, false);
   RegisterSessionSetting(connection, factory, runtime, true);
   RegisterCancel(connection, factory, runtime);
+  RegisterPolicyContextFunction(connection, factory, PolicyContextFunction::kIsRoleActive);
+  RegisterPolicyContextFunction(connection, factory, PolicyContextFunction::kSessionAttribute);
 
   // Access-control introspection: what the session may see of the store's grants, roles,
   // users and policies. Outside a client session (the system catalog's views are created

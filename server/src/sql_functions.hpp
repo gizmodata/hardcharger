@@ -3,7 +3,8 @@
 //
 //   HARDCHARGER_USER(), _ROLE(), _VERSION(), _CURRENT_SESSION(), _CURRENT_INSTANCE(),
 //   _CURRENT_CLUSTER(), _INSTRUMENTATION_ENABLED(), _INSTRUMENTATION_CATALOG(),
-//   _INSTRUMENTATION_SCHEMA(); table functions hardcharger_settings(),
+//   _INSTRUMENTATION_SCHEMA(); is_role_active(name) and session_attribute(name), which
+//   answer as a row or masking policy's calls do; table functions hardcharger_settings(),
 //   hardcharger_sessions(), hardcharger_metrics(), and access control's introspection
 //   (hardcharger_grants(), _role_members(), _roles(), _users(), _policies(),
 //   _effective_privileges([user_name]); authz/introspection.hpp).

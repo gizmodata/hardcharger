@@ -176,6 +176,8 @@ std::optional<std::pair<StorageKind, StorageMode>> StorageOf(SystemPrivilege pri
 }
 
 bool IsOriginalSystemPrivilege(SystemPrivilege privilege) {
+  // Added in 2.14: a server before it would refuse a store whose system_privileges named one.
+  if (IsPolicyExemption(privilege)) return false;
   const auto storage = StorageOf(privilege);
   return !storage || storage->first == StorageKind::kFilesystem;
 }

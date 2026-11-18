@@ -781,6 +781,8 @@ class Parser {
         {"WRITE", "HTTP", nullptr, SystemPrivilege::kWriteHttp},
         {"EXPORT", "DATABASE", nullptr, SystemPrivilege::kExportDatabase},
         {"IMPORT", "DATABASE", nullptr, SystemPrivilege::kImportDatabase},
+        {"EXEMPT", "ROW", "POLICIES", SystemPrivilege::kExemptRowPolicies},
+        {"EXEMPT", "MASKING", "POLICIES", SystemPrivilege::kExemptMaskingPolicies},
     };
     for (const auto& phrase : kPhrases) {
       if (PeekKeyword(phrase.first) && PeekKeyword(phrase.second, 1) &&

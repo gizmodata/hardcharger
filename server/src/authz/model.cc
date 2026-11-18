@@ -758,6 +758,21 @@ bool Snapshot::HasSystemPrivilege(const Principal& principal, SystemPrivilege pr
   return false;
 }
 
+bool Snapshot::ExemptFromPolicies(const Principal& principal, SystemPrivilege exemption) const {
+  if (!IsPolicyExemption(exemption)) return false;
+  // Policies never apply to the administrator (nor to a session acting as System Admin).
+  if (principal.superuser) return true;
+  // A session that holds an exemption asks the store before each statement; when it did
+  // not answer, the policies apply.
+  if (principal.policy_exemptions_unverified) return false;
+  // Nor to a session limited by its token: scoped, or with catalog_access rules.
+  if (principal.catalog_access_token || principal.scope) return false;
+  // A tenant's user or role is never exempt: a system privilege reaches the whole server.
+  if (!TenantOfPrincipal(principal).empty()) return false;
+  // Scoped tokens and catalog_access rules hold no system privilege.
+  return HasSystemPrivilege(principal, exemption);
+}
+
 bool Snapshot::HasStorageAccess(const Principal& principal, SystemPrivilege privilege, const StoragePath& path,
                                 const LocalPathContext& context) const {
   if (principal.superuser) return true;
@@ -790,6 +805,8 @@ std::optional<std::vector<std::string>> Snapshot::StorageLocationsOf(const Princ
 bool Snapshot::CanGrantSystemPrivilege(const Principal& principal, SystemPrivilege privilege,
                                        const std::string& location) const {
   if (principal.superuser) return true;
+  // Never delegated, whatever a store row says about an admin option.
+  if (IsPolicyExemption(privilege)) return false;
   const auto roles = RolesOf(principal);
   for (const auto& r : system_privileges_) {
     if (r.privilege == privilege && r.admin_option && roles.count(r.role_id) &&

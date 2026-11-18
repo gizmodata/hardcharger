@@ -93,6 +93,13 @@ class RbacSessionState : public duckdb::ClientContextState {
     std::lock_guard<std::mutex> lock(principal_mutex_);
     system_admin_unverified_ = std::move(error);
   }
+  // The same for a policy exemption the session's principal holds (EXEMPT ROW / MASKING
+  // POLICIES): while the store did not answer this request, no exemption applies
+  // (Principal::policy_exemptions_unverified). Empty: it answered, or was not asked.
+  void SetPolicyExemptionsUnverified(std::string error) {
+    std::lock_guard<std::mutex> lock(principal_mutex_);
+    policy_exemptions_unverified_ = std::move(error);
+  }
   // What a statement of this session is told when it asked for SYSTEM ADMIN and does not
   // act as one: the store did not answer, or its user no longer holds it.
   std::string SystemAdminRefusal() const;
@@ -168,6 +175,7 @@ class RbacSessionState : public duckdb::ClientContextState {
   mutable std::mutex principal_mutex_;
   Principal principal_;
   std::string system_admin_unverified_;  // guarded by principal_mutex_
+  std::string policy_exemptions_unverified_;  // guarded by principal_mutex_
   std::atomic<int64_t> persona_version_{0};
   std::atomic<int> bypass_depth_{0};
 

@@ -159,6 +159,9 @@ class Session : public chargewire_duckdb::DuckDBSession {
   bool system_admin() const { return guard_ && guard_->system_admin(); }
   // What SET ROLE made the session act as: a role's name, "SYSTEM ADMIN", or empty.
   std::string active_role() const { return guard_ ? guard_->active_role() : std::string(); }
+  // What is_role_active() and session_attribute() answer in this session: what a row or
+  // masking policy sees for it.
+  authz::SessionPolicyContext policy_context() const;
   bool read_only_session() const { return read_only_session_; }
   // Native SQL callbacks lose their typed error through DuckDB's C API. Remember
   // this refusal so the statement boundary can return read_only / 25006.

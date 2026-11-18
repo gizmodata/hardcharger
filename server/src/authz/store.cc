@@ -899,6 +899,7 @@ arrow::Status RbacStore::InitializeSchema() {
           "granted_by VARCHAR NOT NULL, PRIMARY KEY (role_id, privilege, granted_by))",
       // The storage privileges that 2.1 and earlier don't know: READ / WRITE OBJECT STORAGE
       // and HTTP, and any storage privilege granted ON LOCATION (location '' is everywhere).
+      // Since 2.14 also EXEMPT ROW POLICIES and EXEMPT MASKING POLICIES (location '').
       // A table of their own, so that a server that predates them never reads them (it
       // would take a location grant for one everywhere, or refuse the store for a name it
       // doesn't know): to it, their holders simply lack them.
@@ -1091,8 +1092,10 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
                               T("storage_privileges") + " ORDER BY role_id, privilege, location, granted_by"));
   for (dd::idx_t r = 0; r < RowCount(*stp); ++r) {
     // A privilege a later Hardcharger added: this server doesn't know it, so nobody holds it.
+    // A policy exemption is here only everywhere (location '').
     auto privilege = SystemPrivilegeFromName(GetString(*stp, 1, r));
-    if (!privilege || !StorageOf(*privilege)) continue;
+    if (!privilege) continue;
+    if (!StorageOf(*privilege) && !(IsPolicyExemption(*privilege) && GetString(*stp, 2, r).empty())) continue;
     system_privileges.push_back({GetString(*stp, 0, r), *privilege, GetBool(*stp, 3, r), GetString(*stp, 4, r),
                                  GetString(*stp, 2, r)});
   }

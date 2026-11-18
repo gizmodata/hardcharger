@@ -251,6 +251,13 @@ struct Principal {
   // the store transaction of each change it makes, that it still holds SYSTEM ADMIN).
   // Empty for the administrator itself. Only RbacSessionState::principal() makes one.
   std::string acting_user_id;
+  // The session holds a policy exemption (EXEMPT ROW / MASKING POLICIES) and the store did
+  // not answer when this request asked it (SessionGuard::VerifySystemAdmin): no exemption
+  // applies (Snapshot::ExemptFromPolicies). Only RbacSessionState::principal() sets it.
+  bool policy_exemptions_unverified = false;
+  // A store user's session whose sign-in token carries catalog_access rules (which grant a
+  // store user nothing under access control): it never holds a policy exemption.
+  bool catalog_access_token = false;
 
   static Principal Superuser(std::string name) {
     Principal p;
@@ -386,6 +393,12 @@ class Snapshot {
   // Does the principal hold the system privilege through one of its roles (a storage
   // privilege: everywhere)? Always true for the administrator.
   bool HasSystemPrivilege(const Principal& principal, SystemPrivilege privilege) const;
+  // Is the principal exempt from the policies `exemption` names (EXEMPT ROW POLICIES: every
+  // row policy on every table; EXEMPT MASKING POLICIES: every mask)? The administrator is;
+  // a store user or role through a role that holds it, never through a scoped token, a
+  // token with catalog_access rules, or as a tenant's user or role, and not while its
+  // session's check with the store did not answer (Principal::policy_exemptions_unverified).
+  bool ExemptFromPolicies(const Principal& principal, SystemPrivilege exemption) const;
   // Does it hold the storage privilege `privilege` everywhere or on a location that covers
   // `path`? Always true for the administrator.
   bool HasStorageAccess(const Principal& principal, SystemPrivilege privilege, const StoragePath& path,
