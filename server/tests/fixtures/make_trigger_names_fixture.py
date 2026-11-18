@@ -1,6 +1,6 @@
 """Writes the fixture test_rbac_trigger_names.py opens: a database, and its access-control
 store (a DuckDB one), with triggers made by a Hardcharger from before trigger actions were
-stored with their names in full (2.13.0). Run it with that server binary, once:
+stored with their names given their schema (2.13.0). Run it with that server binary, once:
 
     HARDCHARGER_TEST_BINARY=/path/to/2.13.0/hardcharger-server HARDCHARGER_TEST_RBAC_STORE=duckdb \
         python -m pytest fixtures/make_trigger_names_fixture.py -p no:cacheprovider
@@ -33,7 +33,7 @@ def test_write_the_fixture(launcher, tmp_path):
     for sql in LEGACY_MIA + LEGACY_MIA_ACCESS:
         expect_allowed(client=mia, sql=sql)
     stored = admin.run(sql="SELECT sql FROM duckdb_triggers() ORDER BY trigger_name").column("sql").to_pylist()
-    assert len(stored) == 11 and not any(f"{LEGACY}." in sql for sql in stored), stored
+    assert len(stored) == 17 and not any(f"{LEGACY}." in sql for sql in stored), stored
     expect_allowed(client=admin, sql="CHECKPOINT")
     running.stop()
     for path in (database, store):

@@ -32,37 +32,59 @@
 // one write its "base" would need, and the statement is refused.
 //
 // Names in a body. DuckDB keeps a trigger's action as it was written and binds it again in
-// every statement that fires it, in the WRITER's session. A table, view or sequence the
-// action names without its catalog and schema is therefore looked up with the writer's
-// search path, the writer's temporary objects first: a writer with a temporary table named
-// like the table an audit trigger writes had the audit row land in its own table, and one
-// named like the table a user's trigger writes read there what the trigger's owner may read.
-// So, in an access-controlled session, each name in a body must be, for the writer's
-// session, the object it is for the trigger's own table (TriggerBodyNameProblem), whoever
-// made the trigger and whoever writes, in chains too (each body against its own trigger's
-// table). What a name is for the trigger's table ("canonical"; DuckDB lets a body name
-// objects of the table's own catalog only):
+// every statement that fires it, inside the WRITER's statement and session. A table, view or
+// sequence the action names without its catalog is therefore looked up with the writer's
+// current catalog and search path, the writer's temporary objects first (the temporary
+// catalog's schema is main, so a temporary audit_log is found before main.audit_log), and a
+// bare name is looked up as a CTE before the catalog: a WITH of the writer's statement (or of a
+// trigger body that fires this one, which binds it inside itself) is in scope in the body. A
+// writer could so have an audit row land in its own table, feed an audit trigger rows of its
+// choosing, or have a user's trigger, which runs with its owner's rights, read or write what the
+// writer chose. So, in an access-controlled session, each name in a body must be, for the
+// writer's session, the object it is for the trigger's own table (TriggerBodyNameProblem),
+// whoever made the trigger and whoever writes, in chains too (each body against its own
+// trigger's table). An administrator's own statements are checked only in the bodies of users'
+// triggers they fire (those run with their owners' rights; an administrator's own trigger
+// fired by an administrator is the administrator's to shadow). What a name is for the trigger's
+// table ("canonical"; DuckDB lets a body name objects of the table's own catalog only):
 //   - written in full (catalog, schemas, name): that object;
 //   - without a catalog: the schema path it gives, in the table's catalog (and
 //     "catalog.name": the catalog's default schema, main);
 //   - bare: in the table's own schema, else in the catalog's default schema, main. One that
 //     is in both is nobody's to choose: refused, for every writer, until the trigger's owner
-//     names it in full (taking the table's schema would let whoever may create a table there
-//     take over a name that meant main's).
-// The statement is refused when the writer's session resolves a name to anything else (a
-// temporary object, one reached by USE or the search path, another catalog's), and also
-// when the body's plan reaches a table, view or sequence that no name in the action stands
-// for (a macro's, a default's temporary sequence), or the names can't be read: fail closed.
-// A name of a CTE or of a transition table is no table's. Functions, macros and types are
-// not checked here: a session can make none that shadows one a body uses (temporary macros
-// are refused, and a macro, sequence or type named like one a trigger uses is the
-// administrator's alone to create: macros.cc). An administrator's own statements are not
-// checked: it is the writer this guards against.
+//     names it with its schema (taking the table's schema would let whoever may create a table
+//     there take over a name that meant main's). Only the administrator may create a table or
+//     view that would put a bare name a trigger uses in both (TriggerNameRefusal).
+// A bare name in the scope of a CTE of the body's own (DuckDB's scoping: a node's CTEs are
+// seen by its body and by the CTEs after them in the same WITH, a CTE's own definition looks
+// further out, a recursive CTE sees itself) or of a transition table is that, no table's.
+// The statement is refused when:
+//   - the writer's session resolves a name to anything else (a temporary object, one reached
+//     by USE or the search path, another catalog's), saying what to do;
+//   - the body (or a macro it calls) reads a CTE defined outside the body: in the bound plan
+//     every CTE reference is a LogicalCTERef with its CTE's index, so one whose CTE is neither
+//     inside the body nor one the binder made for the triggers (a base's rows, the place row
+//     triggers sit, DuckDB's own "__duckdb_" CTEs for correlated subqueries, which no name in
+//     the body or its macros gives) is a WITH from outside standing in (TriggerBody::outer_ctes);
+//   - a macro the body calls is not, in this session, the one its name is for the table, or a
+//     name in the macro's own text fails the same checks (table macros are bound where they are
+//     called, in the writer's session, and see its CTEs);
+//   - the body's plan reaches a table, view or sequence that no name in the action or in its
+//     macros stands for (a default's temporary sequence), or the names can't be read (a
+//     sequence, or a query_table() table, named by something other than a plain string):
+//     fail closed.
+// Functions and types are not checked here: a session can make none that shadows one a body
+// uses (temporary macros are refused, and a macro, sequence or type named like one a trigger
+// uses is the administrator's alone to create: macros.cc).
 //
-// New triggers don't depend on any of that: CREATE [OR REPLACE] TRIGGER under access
-// control stores the action with its tables, views and sequences named in full, as the
-// creator's session resolved them (QualifyTriggerNames), and the owner record's hash is of
-// what is stored. The init SQL's triggers too.
+// New triggers don't depend on the search path within their catalog: CREATE [OR REPLACE]
+// TRIGGER under access control stores the action with its tables, views and sequences named
+// with their schema, as the creator's session resolved them (QualifyTriggerNames), and the
+// owner record's hash is of what is stored; the init SQL's triggers too. Not with their
+// catalog (Philip, 2.14.0): a catalog's name is the database file's or the ATTACH alias, and
+// renaming either must not break writes. The price: a writer's temporary object named like an
+// object of main a trigger names, or a session whose current catalog is not the trigger
+// table's, is refused rather than served.
 // Carried columns. To feed the triggers their rows (transition tables, OLD and NEW), the
 // binder adds RETURNING * to the writer's UPDATE, DELETE or merge, which makes the scan
 // that locates the rows read every column of the table. Reading a column that way is no
@@ -147,8 +169,11 @@
 //      reader in the writer's own statement, and a trigger nobody recorded.
 //
 // Cases 1 and 2 rest on the body doing what its maker wrote, whoever fires it: the names
-// in every body are held against the writer's session before any of this ("Names in a
-// body", above), so a writer cannot have the rows land in a table of its own.
+// in every body (and in the macros it calls) are held against the writer's session before any
+// of this, and no WITH from outside the body stands in for what it reads ("Names in a body",
+// above), so a writer cannot have the rows land in a table of its own or the body read rows of
+// its choosing. A table with keys, indexes or a CHECK over several columns, and one with
+// generated columns, still takes the writer's SELECT on those columns; the refusal says why.
 
 #pragma once
 
@@ -183,6 +208,9 @@ struct TriggerBody {
   // An administrator made this very trigger: its owner record is a system one whose
   // definition hash is the trigger's as it is now ("Who answers for a row reader", above).
   bool administrators = false;
+  // CTEs defined outside the body that the body reads (by name): the firing statement's WITH,
+  // or an enclosing trigger body's, bound where the body names a table ("Names in a body").
+  std::vector<std::string> outer_ctes;
   // The trigger whose action the body is; several when a row trigger's body could be any
   // of them (then `administrators` holds for all of them).
   std::vector<const duckdb::TriggerCatalogEntry*> entries;
@@ -193,6 +221,9 @@ struct TriggerBody {
   const duckdb::LogicalOperator* target_scan = nullptr;
   // ... the scan's columns the statement itself reads (SELECT, as without triggers), ...
   std::vector<std::string> read_columns;
+  // (of those, the ones it reads only because a key, an index or a CHECK over several columns
+  // of the table can tell their values: for the refusal's words) ...
+  std::vector<std::string> told_columns;
   // ... its other columns, which only the triggers' rows need, ...
   std::vector<std::string> carried_columns;
   // ... and the scans of the base CTE that can read those rows with the rights in force
@@ -220,14 +251,28 @@ bool ReturningAddedForTriggers(const TriggerBodies& bodies, const duckdb::Logica
 // statement's transaction.
 std::string TriggerBodyNameProblem(duckdb::ClientContext& context, const TriggerBodies& bodies, const TriggerBody& body);
 
-// CREATE [OR REPLACE] TRIGGER on `table`: writes into the action of `info` the full names of
-// the tables, views and sequences it names, as this session resolves them, so that the
-// trigger DuckDB stores depends on no session's search path. Leaves alone what it cannot
-// resolve (a CTE's name, a transition table's). False (and the action as it was) when the
-// action can't be read to the end.
-bool QualifyTriggerNames(duckdb::ClientContext& context, const ObjectPath& table, duckdb::CreateTriggerInfo& info);
+// CREATE [OR REPLACE] TRIGGER on `table`: writes into the action of `info` the schema of each
+// table, view and sequence it names (not the catalog: a database file renamed, or attached
+// under another name, keeps its triggers), as this session resolves them, so that the
+// trigger DuckDB stores depends on no session's search path within its catalog. Leaves alone
+// what it cannot resolve (a CTE's name where that CTE is in scope, a transition table's). A
+// reason the trigger can't be stored (in words for a refusal; the action as it was) when the
+// action can't be read to the end, or names what could never be checked when it fires (a
+// sequence by something other than a plain string, query() or query_table() of one that is
+// not a table's name); empty when it can.
+std::string QualifyTriggerNames(duckdb::ClientContext& context, const ObjectPath& table, duckdb::CreateTriggerInfo& info);
+
+// CREATE TABLE / CREATE VIEW (or a rename) of `path` by a user other than the administrator:
+// why not, when a trigger of that catalog from before names the object bare, in its table's
+// schema or main, and this would put one of that name in both (the trigger would then be
+// refused for every writer, "Names in a body"). Nothing when it may.
+std::optional<std::string> TriggerNameRefusal(duckdb::ClientContext& context, const ObjectPath& path);
 // The base whose target scan `scan` is, when its columns were told apart (carried columns).
 const TriggerBody* BaseScannedBy(const TriggerBodies& bodies, const duckdb::LogicalOperator& scan);
+
+// A base UPDATE, DELETE or merge (with no RETURNING of the writer's) on `table`, if any: the
+// statement writes a table with triggers.
+const TriggerBody* BaseWriting(const TriggerBodies& bodies, const duckdb::TableCatalogEntry& table);
 
 // The base whose rows the CTE scan `scan` can read (a row reader of it), if any.
 const TriggerBody* BaseReadBy(const TriggerBodies& bodies, const duckdb::LogicalOperator& scan);

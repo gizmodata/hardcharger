@@ -17,28 +17,61 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Security
 
-- **Access control: a writer could redirect what a trigger reads and writes.** DuckDB looks up the
-  names in a trigger's action again in every statement that fires it, in the writer's session. A
-  user who may write a table could so, with a temporary table (or a table of their own ahead in
-  their search path) named like one the trigger's action names without its catalog and schema:
-  - **evade an audit trigger**: the audit row of their write landed in their own table, and the
-    real audit table got none (an administrator's trigger included);
-  - **read through another user's trigger**: a trigger runs with its owner's rights, so what its
-    body read with them was written into the writer's table, for the writer to read;
-  - feed a trigger a view or a sequence of their own in place of the one its action names.
+- **Access control: what a trigger's action names no longer depends on the session that fires
+  it.** DuckDB looks the names in a trigger's action up again in every statement that fires the
+  trigger, in the writer's session. Under access control a table, view or sequence that an action
+  names without its catalog (a bare name, or `schema.name`) must now be, in the writer's session,
+  the object it is for the trigger's own table, and nothing from outside the trigger's body (a
+  `WITH` of the statement that fires it, or of a trigger body that does) may take the place of a
+  table or view the body reads; otherwise the write is refused, naming the trigger, the name and
+  what to do about it. The same holds for the names in the macros a trigger's body calls, and for
+  a user's trigger fired by an administrator. Affected: every release with triggers under access
+  control, through 2.13.1.
+  - `CREATE [OR REPLACE] TRIGGER` stores the action with its tables, views and sequences named
+    with their schema, as the creator's session resolves them (`INSERT INTO main.audit_log ...`),
+    in a session and in the init SQL alike. Not with their catalog: renaming a database file, or
+    attaching one under another name, leaves its triggers working. It refuses an action that names
+    a sequence (`nextval`) or a `query_table()` table by anything but a plain string, which could
+    never be checked when the trigger fires.
+  - A session's temporary objects are found first, and the temporary catalog's schema is `main`:
+    a writer with a temporary table, view or sequence named like an object in `main` that a
+    trigger names is refused until it drops it. A trigger on a table of an attached database fires
+    for sessions whose current catalog is that database (`USE`).
+  - Triggers made before (names as written) keep firing wherever their names resolve to the
+    objects for their table. Refused for every writer but an administrator, whose own statements
+    are not checked (so try a write as a user after upgrading), until their owner runs
+    `CREATE OR REPLACE TRIGGER` once: a trigger whose bare name is in both its table's schema and
+    `main`, and one whose bare name only its creator's own search path found. Only an
+    administrator may now create a table or view that would put such a name in both. A trigger
+    whose body calls a macro that reads a table or a sequence fires again.
 
-  Affected: every release with triggers under access control, through 2.13.0. Now
-  `CREATE [OR REPLACE] TRIGGER` stores the action with its tables, views and sequences named in
-  full, as the creator's session resolved them (the init SQL's triggers too), so a trigger depends
-  on no session. For a trigger from before, each name in its action must be, in the writer's
-  session, the object it is for the trigger's own table (in that table's catalog; a bare name in
-  the table's own schema, else in `main`): otherwise the write is refused, naming the trigger and
-  the name. Triggers whose names resolve that way keep firing for every writer. Refused for every
-  writer until their owner runs `CREATE OR REPLACE TRIGGER` once (which stores the names in full):
-  a trigger with a bare name that is in both its table's schema and `main`, one whose bare name
-  only its creator's own search path found (in a third schema), and one whose body reaches a
-  table through a macro. An administrator's own statements are not checked. Servers without
-  access control are as DuckDB is: name the tables in a trigger's action in full.
+### Fixed
+
+- **Access control: an administrator's `CREATE TRIGGER IF NOT EXISTS` leaves a user's trigger
+  hers.** Run over a user's existing trigger, it left the trigger as it was but recorded it as
+  the administrator's, so it ran with the writer's rights from then on. It now changes nothing.
+- **Access control: a write that reads nothing needs no `SELECT` on a table with triggers.** A
+  user holding `UPDATE` or `DELETE` but not `SELECT` was refused `UPDATE t SET x = 0` and
+  `DELETE FROM t` with "no SELECT privilege on table" as soon as the table had a trigger, though
+  the same statements run on a table without one: DuckDB makes such a write read every column, to
+  hand the triggers their rows. A write now needs `SELECT` on the columns the statement itself
+  reads (`WHERE`, a `SET` expression, a join, a subquery, its own `RETURNING`), with a trigger or
+  without, and `INSERT ... ON CONFLICT DO UPDATE` on the key and what its `SET` and `WHERE` read.
+  Somebody answers for the rows where a trigger's body reads them (a transition table, `OLD`,
+  `NEW`):
+  - **an administrator's trigger vouches for its body**: the writer needs no `SELECT` for a body's
+    reads of the rows when an administrator's session created or replaced the trigger. An
+    administrator who puts a row-copying trigger on a table is choosing who can see those rows.
+    Everything else the body does still takes the writer's rights;
+  - a user's trigger answers with its owner's rights: the owner needs `SELECT` on the table;
+  - any other trigger (one the init SQL's DuckDB statements created or replaced, one that came
+    with a database file) answers for nothing: reading the rows takes the writer's `SELECT`, as
+    before. `CREATE OR REPLACE TRIGGER` in an administrator's session makes it vouch.
+
+  Columns of the table's keys and indexes (and, for an `UPDATE`, of a `CHECK` over several
+  columns) still need the writer's `SELECT` on a table with triggers, because a constraint error
+  of the write can name or tell of them, and so does every scanned column of a table with
+  generated columns. The refusal says which of these it is.
 
 ## [2.13.1] - 2026-11-15
 
@@ -67,28 +100,6 @@ own changelog in `python/CHANGELOG.md`.
   All of them still need `SELECT` on the target's columns they read (for the conflict forms, the
   key columns). The refusal of such a write into a table with row or masking policies now says
   "MERGE (or INSERT ... ON CONFLICT)".
-- **Access control: a write that reads nothing needs no `SELECT` on a table with triggers.** A
-  user holding `UPDATE` or `DELETE` but not `SELECT` was refused `UPDATE t SET x = 0` and
-  `DELETE FROM t` with "no SELECT privilege on table" as soon as the table had a trigger, though
-  the same statements run on a table without one: DuckDB makes such a write read every column, to
-  hand the triggers their rows. A write now needs `SELECT` on the columns the statement itself
-  reads (`WHERE`, a `SET` expression, a join, a subquery, its own `RETURNING`), with a trigger or
-  without, and `INSERT ... ON CONFLICT DO UPDATE` on the key and what its `SET` and `WHERE` read.
-  Somebody answers for the rows where a trigger's body reads them (a transition table, `OLD`,
-  `NEW`):
-  - **an administrator's trigger vouches for its body**: the writer needs no `SELECT` for a body's
-    reads of the rows when an administrator's session created or replaced the trigger. An
-    administrator who puts a row-copying trigger on a table is choosing who can see those rows.
-    Everything else the body does still takes the writer's rights;
-  - a user's trigger answers with its owner's rights: the owner needs `SELECT` on the table;
-  - any other trigger (one the init SQL's DuckDB statements created or replaced, one that came
-    with a database file) answers for nothing: reading the rows takes the writer's `SELECT`, as
-    before. `CREATE OR REPLACE TRIGGER` in an administrator's session makes it vouch.
-
-  Columns of the table's keys and
-  indexes (and, for an `UPDATE`, of a `CHECK` over several columns) still need the writer's
-  `SELECT` on a table with triggers, because a constraint error of the write can name or tell of
-  them, and so does every scanned column of a table with generated columns.
 - The server builds against OpenSSL 4 (a certificate name is taken as `const`).
 - **Web UI: the Read-only box shows the session the tab has, never only what was asked for.**
   With a session open, the box was checked whenever read-only had been asked for (the

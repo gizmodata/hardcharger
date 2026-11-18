@@ -1063,9 +1063,10 @@ def test_a_trigger_made_outside_access_control_does_not_vouch(launcher, store, t
 
 def test_the_rows_a_trigger_hands_on_go_where_its_maker_wrote(admin, mia, wes):
     # Whoever answers for the rows answers for a body that does what its maker wrote. A
-    # trigger is stored with the names in its action in full (test_rbac_trigger_names.py has
-    # the triggers of before), so a writer's own tables of the sink's name, temporary or ahead
-    # in its search path, take nothing.
+    # trigger is stored with the names in its action given their schema
+    # (test_rbac_trigger_names.py has the triggers of before), so a writer's own table of the
+    # sink's name ahead in its search path takes nothing; a temporary one would stand in for
+    # main's (the temporary catalog's schema is main), so the write is refused.
     make(client=admin, statements=[
         "CREATE TABLE main.dr_pin (id INT, note VARCHAR)", "CREATE TABLE main.dr_pin_sink (note VARCHAR)",
         "CREATE SCHEMA dr_ws", "GRANT CREATE TABLE ON SCHEMA dr_ws TO changers",
@@ -1084,8 +1085,18 @@ def test_the_rows_a_trigger_hands_on_go_where_its_maker_wrote(admin, mia, wes):
             expect_allowed(client=admin, sql=f"INSERT INTO {table} VALUES (1, 'one'), (2, 'two')")
             expect_allowed(client=maker, sql="CREATE OR REPLACE TRIGGER dr_pin_del " +
                                              COPIES_ROWS.format(table=table, sink="dr_pin_sink"))
+            stored = values(client=admin, sql="SELECT sql FROM duckdb_triggers() WHERE trigger_name = 'dr_pin_del'")[0]
+            assert "INSERT INTO main.dr_pin_sink " in stored, stored
             expect_blocked(client=wes, sql=f"SELECT note FROM {catalog}.{table}", why=NO_SELECT)
+            error = expect_blocked(client=wes, sql=f"DELETE FROM {catalog}.{table}",
+                                   why="names main.dr_pin_sink, and in this session that is a temporary object")
+            assert "Drop or rename the temporary object to write this table" in error.detail
+            assert count(client=admin, table=table) == 2
+            # Twin: without the temporary table, the writer's own table ahead in its search
+            # path takes nothing.
+            expect_allowed(client=wes, sql="DROP TABLE temp.main.dr_pin_sink")
             assert values(client=wes, sql=f"DELETE FROM {catalog}.{table}") == ["2"]
+            expect_allowed(client=wes, sql="CREATE TEMP TABLE dr_pin_sink (note VARCHAR)")
             assert sorted(values(client=admin, sql="SELECT note FROM main.dr_pin_sink")) == ["one", "two"]
             expect_allowed(client=admin, sql="DELETE FROM main.dr_pin_sink")
             assert count(client=wes, table="dr_ws.dr_pin_sink") == 0 and count(client=wes, table="temp.main.dr_pin_sink") == 0
@@ -1154,6 +1165,7 @@ def test_keys_and_checked_columns_are_not_carried(admin, wes):
         for sql in ["DELETE FROM main.dr_parent", "UPDATE main.dr_parent SET x = 0"]:
             error = expect_blocked(client=wes, sql=sql, why=NO_SELECT)
             assert "41" not in error.detail
+            assert KEYS_NOTE in error.detail, error.detail
         # Twin: SELECT on the key (and not on x or y), and the write is DuckDB's to run or to
         # refuse, naming a key the writer may read.
         expect_allowed(client=admin, sql="GRANT SELECT (id) ON main.dr_parent TO changers")
@@ -1168,7 +1180,8 @@ def test_keys_and_checked_columns_are_not_carried(admin, wes):
         expect_blocked(client=wes, sql="SELECT x FROM main.dr_parent", why=NO_SELECT_ON)
 
         # x + y < 1000: setting x tells of y.
-        expect_blocked(client=wes, sql="UPDATE main.dr_ck SET x = 995", why=NO_SELECT)
+        error = expect_blocked(client=wes, sql="UPDATE main.dr_ck SET x = 995", why=NO_SELECT)
+        assert KEYS_NOTE in error.detail, error.detail
         expect_allowed(client=admin, sql="GRANT SELECT (y) ON main.dr_ck TO changers")
         with pytest.raises(ChargewireError) as raised:
             wes.run(sql="UPDATE main.dr_ck SET x = 995")
@@ -1177,6 +1190,56 @@ def test_keys_and_checked_columns_are_not_carried(admin, wes):
         assert columns_missing(error=expect_blocked(client=wes, sql="SELECT * FROM main.dr_ck", why=NO_SELECT_ON)) == {"id", "x"}
     finally:
         drop_tables(client=admin, names=["main.dr_child", "main.dr_parent", "main.dr_ck", "main.dr_klog"])
+
+
+# Why a write to a table with triggers still takes SELECT, in the refusal's words.
+KEYS_NOTE = ("the table has triggers: a write to it that reads no column needs no SELECT, except on the columns of its "
+             "keys and indexes, and an UPDATE's on those of a CHECK over several columns, whose errors can tell their values")
+GENERATED_NOTE = ("the table has triggers and generated columns: a write to it computes the generated columns from the "
+                  "rows it changes, which takes SELECT on the table")
+
+
+def test_a_write_the_statement_reads_for_says_nothing_of_keys(admin, wes):
+    # The note is for the columns a key, an index or a CHECK makes a read: a column the
+    # statement itself reads (its WHERE) is refused as ever, without it.
+    make(client=admin, statements=[
+        "CREATE TABLE main.dr_kw (id INT PRIMARY KEY, x INT)", "INSERT INTO main.dr_kw VALUES (1, 1)",
+        "CREATE TABLE main.dr_kwlog (what VARCHAR)",
+        "CREATE TRIGGER dr_kw_del AFTER DELETE ON main.dr_kw FOR EACH STATEMENT INSERT INTO main.dr_kwlog VALUES ('d')",
+        "GRANT DELETE ON main.dr_kw TO changers", "GRANT INSERT ON main.dr_kwlog TO changers",
+        "GRANT SELECT (id) ON main.dr_kw TO changers",
+    ])
+    try:
+        error = expect_blocked(client=wes, sql="DELETE FROM main.dr_kw WHERE x = 1", why=NO_SELECT_ON)
+        assert KEYS_NOTE not in error.detail and columns_missing(error=error) == {"x"}
+        assert values(client=wes, sql="DELETE FROM main.dr_kw WHERE id = 1") == ["1"]
+    finally:
+        drop_tables(client=admin, names=["main.dr_kw", "main.dr_kwlog"])
+
+
+def test_a_table_with_generated_columns_and_triggers_takes_select(admin, wes):
+    # DuckDB computes a generated column from the rows a write changes, in the statement: no
+    # column of such a table's write is carried, so the writer needs SELECT, and is told why.
+    make(client=admin, statements=[
+        "CREATE TABLE main.dr_gen (id INT, x INT, twice INT GENERATED ALWAYS AS (x * 2))",
+        "INSERT INTO main.dr_gen (id, x) VALUES (1, 1), (2, 2)",
+        "CREATE TABLE main.dr_glog (what VARCHAR)",
+        "CREATE TRIGGER dr_gen_del AFTER DELETE ON main.dr_gen FOR EACH STATEMENT INSERT INTO main.dr_glog VALUES ('d')",
+        "CREATE TRIGGER dr_gen_upd AFTER UPDATE ON main.dr_gen FOR EACH STATEMENT INSERT INTO main.dr_glog VALUES ('u')",
+        "GRANT DELETE, UPDATE ON main.dr_gen TO changers", "GRANT INSERT ON main.dr_glog TO changers",
+    ])
+    try:
+        for sql in ["DELETE FROM main.dr_gen WHERE true", "UPDATE main.dr_gen SET x = 3"]:
+            error = expect_blocked(client=wes, sql=sql, why=NO_SELECT)
+            assert GENERATED_NOTE in error.detail, error.detail
+        assert count(client=admin, table="main.dr_glog") == 0
+        # Twin: with SELECT on the table, both run.
+        expect_allowed(client=admin, sql="GRANT SELECT ON main.dr_gen TO changers")
+        assert values(client=wes, sql="UPDATE main.dr_gen SET x = 3") == ["2"]
+        assert values(client=wes, sql="DELETE FROM main.dr_gen WHERE true") == ["2"]
+        assert sorted(values(client=admin, sql="SELECT what FROM main.dr_glog")) == ["d", "u"]
+    finally:
+        drop_tables(client=admin, names=["main.dr_gen", "main.dr_glog"])
 
 
 def test_on_conflict_do_update_needs_select_on_the_key_and_what_it_reads(admin, wes):

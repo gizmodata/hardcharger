@@ -412,8 +412,8 @@ class PlanChecker {
   // here rather than handed to yet another checker.
   bool trigger_body_entered_ = false;
   // The names in the trigger bodies a statement fires are held against the writer's
-  // session (triggers.hpp, "Names in a body"). Not for an administrator's own statement,
-  // whose users' trigger bodies are checked for their owners' rights alone.
+  // session (triggers.hpp, "Names in a body"). For an administrator's own statement, only in
+  // the bodies of users' triggers (CheckDefinerBodies) and beneath them.
   bool check_trigger_names_ = true;
 
   void Visit(dd::LogicalOperator& op,
@@ -935,13 +935,38 @@ class PlanChecker {
           if (!HoldsSelect(PathOf(*table), ObjectTypeOf(*table), column)) lacking.push_back(column);
         }
         if (!lacking.empty()) {
-          if (!base->read_columns.empty()) Require(*table, Privilege::kSelect, base->read_columns);
+          if (!base->read_columns.empty()) {
+            // Say why when it is a key's, an index's or a CHECK's column the writer lacks.
+            for (const auto& column : base->told_columns) {
+              if (!HoldsSelect(PathOf(*table), ObjectTypeOf(*table), column)) {
+                carried_note_ =
+                    " (the table has triggers: a write to it that reads no column needs no SELECT, except on the "
+                    "columns of its keys and indexes, and an UPDATE's on those of a CHECK over several columns, "
+                    "whose errors can tell their values)";
+                break;
+              }
+            }
+            Require(*table, Privilege::kSelect, base->read_columns);
+            carried_note_.clear();
+          }
           // Never after a reader of these rows was let through (in every plan DuckDB
           // makes the scan is checked first): then the columns are the writer's to hold.
           if (carried_rows_->read.count(base->root)) Require(*table, Privilege::kSelect, lacking);
           carried_rows_->waived[base->root] = std::move(lacking);
           return;
         }
+      } else if (BaseWriting(trigger_bodies_, (*table))) {
+        // A table with triggers whose write's columns could not be told apart: every column
+        // the scan reads is a read, as before. Say why.
+        carried_note_ = (*table).HasGeneratedColumns()
+                            ? " (the table has triggers and generated columns: a write to it computes the generated "
+                              "columns from the rows it changes, which takes SELECT on the table)"
+                            : " (the table has triggers, and this statement's plan is not one in which the columns "
+                              "only the triggers need can be told apart from the ones it reads: that takes SELECT on "
+                              "them)";
+        Require(*table, Privilege::kSelect, columns);
+        carried_note_.clear();
+        return;
       }
     }
     Require(*table, Privilege::kSelect, columns);
@@ -1368,6 +1393,9 @@ class PlanChecker {
       Deny(principal_, "user " + principal_.user_name + " has no " + PrivilegeName(privilege) +
                            " privilege on " + where);
     }
+    if (type == ObjectType::kTable || type == ObjectType::kView) {
+      if (auto refusal = TriggerNameRefusal(context_, target)) Deny(principal_, *refusal);
+    }
     ownership_.push_back({PendingOwnership::Kind::kCreate, target, type, {}, false, {}, !existing});
     return true;
   }
@@ -1489,12 +1517,9 @@ class PlanChecker {
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       RequireTriggerDrop(table_path, trigger.object_name, "replace");
     }
-    // The trigger is stored with the names in its action written in full, as this session
+    // The trigger is stored with the names in its action given their schema, as this session
     // resolves them, and its owner record is of that definition.
-    if (!QualifyTriggerNames(context_, table_path, info)) {
-      Deny(principal_, "the tables the action of trigger " + QuoteIdentifierIfNeeded(trigger.object_name) +
-                           " names could not be read, so it can't be stored with their full names");
-    }
+    if (auto problem = QualifyTriggerNames(context_, table_path, info); !problem.empty()) Deny(principal_, problem);
     ownership_.push_back({PendingOwnership::Kind::kCreate, TriggerOwnerPath(table_path, trigger.object_name),
                           ObjectType::kTrigger, TriggerDefinitionHash(info)});
   }
@@ -1875,6 +1900,19 @@ class PlanChecker {
                              path.ToString() + " (only its owner, or a role granted " +
                              PrivilegeName(request.privilege) + ")");
       }
+      std::string renamed;
+      if (info.type == dd::AlterType::ALTER_TABLE &&
+          info.Cast<dd::AlterTableInfo>().alter_table_type == dd::AlterTableType::RENAME_TABLE) {
+        renamed = compat::Str(info.Cast<dd::RenameTableInfo>().new_table_name);
+      } else if (info.type == dd::AlterType::ALTER_VIEW &&
+                 info.Cast<dd::AlterViewInfo>().alter_view_type == dd::AlterViewType::RENAME_VIEW) {
+        renamed = compat::Str(info.Cast<dd::RenameViewInfo>().new_view_name);
+      }
+      if (!renamed.empty() && !IdentifiersEqual(renamed, path.object_name)) {
+        ObjectPath destination = path;
+        destination.object_name = renamed;
+        if (auto refusal = TriggerNameRefusal(context_, destination)) Deny(principal_, *refusal);
+      }
       return;
     }
     Deny(principal_, "this ALTER needs an administrator");
@@ -1983,12 +2021,17 @@ void CheckDefinerBodies(dd::ClientContext& context, const Snapshot& snapshot, dd
   if (const TriggerBody* body = TriggerBodyAt(bodies, op)) {
     if (!body->problem.empty()) ::hardcharger::authz::Deny(Principal::Superuser("administrator"), body->problem);
     if (body->definer) {
+      // The administrator's session must not decide what a user's trigger names either: the
+      // body runs with its owner's rights, and would read the administrator's temporary
+      // objects (or WITH) into the owner's tables. The same for the bodies beneath it.
+      const std::string names = TriggerBodyNameProblem(context, bodies, *body);
+      if (!names.empty()) ::hardcharger::authz::Deny(Principal::Superuser("administrator"), names);
       const auto view_columns = ViewColumnsUsed(op);
       PlanChecker checker(context, snapshot, *body->definer, view_columns, bodies);
       checker.trigger_context_ = body->describe + " cannot run, because its owner " + body->definer_name +
                                  " may not do what its body does: ";
       checker.trigger_body_entered_ = true;
-      checker.check_trigger_names_ = false;  // an administrator's own statement
+      checker.check_trigger_names_ = true;
       checker.Visit(op);
       return;
     }
@@ -2181,9 +2224,23 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
           if (parts.size() >= 3 && !IsTempCatalog(parts[0]) && !info.temporary && info.base_table) {
             const ObjectPath table{parts[0], {parts.begin() + 1, parts.end() - 1},
                                    compat::Str(info.base_table->GetQualifiedName().Name())};
-            QualifyTriggerNames(context, table, info);  // stored with its names in full, as a user's is
-            ownership.push_back({PendingOwnership::Kind::kCreate, TriggerOwnerPath(table, parts.back()),
-                                 ObjectType::kTrigger, TriggerDefinitionHash(info)});
+            // IF NOT EXISTS over a trigger that is there changes nothing: DuckDB keeps it, and
+            // its owner record (a user's trigger stays the user's, run with the user's rights).
+            dd::optional_ptr<dd::CatalogEntry> existing;
+            std::vector<std::string> table_parts(parts.begin(), parts.end() - 1);
+            table_parts.push_back(table.object_name);
+            if (auto entry = LookUp(context, dd::CatalogType::TABLE_ENTRY, table_parts);
+                entry && entry->type == dd::CatalogType::TABLE_ENTRY) {
+              existing = LookUpTrigger(context, entry->Cast<dd::TableCatalogEntry>(), parts.back());
+            }
+            if (!(existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT)) {
+              // Stored with its names given their schema, as a user's is.
+              if (auto problem = QualifyTriggerNames(context, table, info); !problem.empty()) {
+                ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
+              }
+              ownership.push_back({PendingOwnership::Kind::kCreate, TriggerOwnerPath(table, parts.back()),
+                                   ObjectType::kTrigger, TriggerDefinitionHash(info)});
+            }
           }
         }
         for (auto& child : op.children) {

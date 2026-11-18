@@ -1168,20 +1168,37 @@ trigger fired that way runs with the rights of the body that fired it. `INSERT .
 
 DuckDB keeps a trigger's action as it was written and looks its names up again in every statement
 that fires the trigger, in the writer's session: a table, view or sequence the action names
-without its catalog and schema follows the writer's search path, the writer's temporary objects
-first. Under access control a trigger does not depend on that. `CREATE [OR REPLACE] TRIGGER` stores
-the action with those names written in full (`duckdb_triggers()` shows
-`INSERT INTO catalog.schema.audit_log ...`), in a session and in the init SQL alike. A trigger made
-by an earlier Hardcharger (2.13.0 and before), or one that was already in a database file, still
-has the names as written: each must be, in the writer's session, the object it is for the
-trigger's own table (the schema path it gives, in that table's catalog; a bare name in the table's
-own schema, else in the catalog's `main`), or the write is refused, saying which trigger and which
-name. A writer with a temporary table or a table of its own of that name ahead in its search path
-no longer has the trigger's rows land there. Refused for every writer, until the trigger's owner
-runs `CREATE OR REPLACE TRIGGER` once: a bare name that is in both the table's schema and `main`,
-one that only the creator's own search path found, and a body that reaches a table through a
-macro. On a server without access control every session may do anything anyway and DuckDB's own
-behaviour stands: name the tables in a trigger's action in full (`catalog.schema.table`).
+without its catalog follows the writer's current catalog and search path, the writer's temporary
+objects first, and a bare name is taken by a `WITH` of the firing statement before the catalog.
+Under access control a trigger does not depend on that:
+
+- `CREATE [OR REPLACE] TRIGGER` stores the action with its tables, views and sequences named with
+  their schema, as the creator's session resolves them (`duckdb_triggers()` shows
+  `INSERT INTO main.audit_log ...`), in a session and in the init SQL alike. The catalog is left
+  out, so renaming a database file, or attaching one under another name, leaves its triggers
+  working. An action that names a sequence (`nextval`) or a `query_table()` table by anything but a
+  plain string is refused, since what it names could not be checked when the trigger fires.
+- When a trigger fires, each name in its action, and in the macros its action calls, must be, in
+  the writer's session, the object it is for the trigger's own table (the schema it gives, in that
+  table's catalog; a bare name in the table's own schema, else in `main`), and no `WITH` from
+  outside the trigger's body may stand in for a table or view the body reads. Otherwise the write
+  is refused, saying which trigger and which name, and what to do: drop a temporary object of that
+  name (the temporary catalog's schema is `main`, so a temporary `audit_log` is found before
+  `main.audit_log`), `USE` the trigger table's database (a trigger on an attached database's table
+  fires for sessions in that database), or give a `WITH` another name. A user's trigger fired by an
+  administrator is held to this too; an administrator's own trigger fired by an administrator is
+  not.
+- A trigger made by an earlier Hardcharger (2.13.1 and before), or one that was already in a
+  database file, still has its names as written, and keeps firing wherever they resolve to the
+  objects for its table. Refused for every writer but an administrator, until the trigger's owner
+  runs `CREATE OR REPLACE TRIGGER` once (with the same text, which then stores the names with their
+  schema): a bare name that is in both the table's schema and `main`, and one that only the
+  creator's own search path found. Only an administrator may create a table or view that would put
+  a bare name a trigger uses in both places. After upgrading, try a write as a user: an
+  administrator's own statements are not checked.
+
+On a server without access control every session may do anything anyway and DuckDB's own behaviour
+stands: name the tables in a trigger's action with their schema.
 
 A write needs the privilege of what it does. `INSERT ... ON CONFLICT DO NOTHING` and
 `INSERT OR IGNORE` need `INSERT`; `ON CONFLICT ... DO UPDATE` and `INSERT OR REPLACE` need `INSERT`
