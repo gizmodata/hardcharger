@@ -35,7 +35,9 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
+#include "authz/login_events.hpp"
 #include "authz/model.hpp"
 
 namespace duckdb {
@@ -84,6 +86,9 @@ struct StoreOptions {
   // as not initialized), it is not claimed for cluster_id (another cluster's store is still
   // refused), and every write fails.
   bool read_only = false;
+  // With read_only: sign-in records (AppendLoginEvents) are still written, so a failed
+  // check counts toward the login guard's limits as one on the server does. Nothing else is.
+  bool record_sign_ins = false;
 };
 
 // The text "access control store unavailable" every error of an unreachable or hung
@@ -130,6 +135,17 @@ class RbacStore {
   // so the caller can apply the change to the snapshot it holds when that was the version
   // before.
   arrow::Result<int64_t> Write(const std::function<arrow::Status(StoreTransaction&)>& fn);
+
+  // Sign-in records (login_events.hpp). They are not access-control data: writing them
+  // neither bumps the data version nor makes replicas reload, and a store a server older
+  // than 2.14 created has no table for them until a 2.14 server opens it (reads then return
+  // nothing, and writes fail).
+  arrow::Status AppendLoginEvents(const std::vector<LoginEventRecord>& events);
+  // Every record at or after `since_ms`, oldest first.
+  arrow::Result<std::vector<LoginEventRecord>> LoginEventsSince(int64_t since_ms);
+  // Drops failure and clear records before `failures_before_ms`, success records before
+  // `successes_before_ms`, and every success record of a (user, address) with a later one.
+  arrow::Status PruneLoginEvents(int64_t failures_before_ms, int64_t successes_before_ms);
 
   const std::string& description() const { return description_; }
   // A DuckDB store's file, absolute; empty for any other store.
@@ -181,6 +197,7 @@ class RbacStore {
   std::string secret_dir_;   // the private instance's (empty) secret directory
   std::string file_path_;    // a DuckDB store's file
   std::string cluster_id_;
+  bool sign_ins_writable_ = false;  // read_only + record_sign_ins: attached for writing since a record
 
   friend class StoreTransaction;
   friend class StoreTurn;
@@ -204,6 +221,8 @@ class StoreTransaction {
   // nullopt removes the attribute.
   arrow::Status SetUserAttribute(const std::string& user_id, const std::string& attribute,
                                  const std::optional<std::string>& value);
+  // When the user's password was last set (ms since the epoch); nullopt forgets it.
+  arrow::Status SetPasswordChangedAt(const std::string& user_id, std::optional<int64_t> at_ms);
   arrow::Status UpsertTenant(const TenantRecord& tenant);
   // Also forgets the tenant's catalog and principal assignments.
   arrow::Status DeleteTenant(const std::string& tenant_id);

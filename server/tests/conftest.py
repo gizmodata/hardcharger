@@ -242,6 +242,17 @@ def installing(extension: str):
         os.close(fd)  # closing the file drops the lock
 
 
+# The login guard and the password policy at their defaults would trip over the suite itself:
+# every test signs in from 127.0.0.1, many send wrong passwords on purpose to shared servers,
+# and test users have short passwords. So test servers get rules that never fire (the guard
+# still counts and records), unless a test sets its own (test_login_guard.py does).
+LENIENT_SIGN_IN = {
+    "HARDCHARGER_LOGIN_LOCKOUT_THRESHOLD": "0",
+    "HARDCHARGER_LOGIN_BACKOFF_MAX_SECONDS": "0",
+    "HARDCHARGER_PASSWORD_MIN_LENGTH": "1",
+}
+
+
 def clean_environment() -> dict[str, str]:
     # A value this shell exports (for a real server) must never reach a test server.
     env = {k: v for k, v in os.environ.items() if not k.startswith("HARDCHARGER_")}
@@ -346,8 +357,8 @@ class Launcher:
         log_path = self.tmp_path / f"server-{port}.log"
         process = subprocess.Popen(
             args=[str(binary), "--host", "127.0.0.1", "--port", str(port), *(args or [])],
-            env={**clean_environment(), "HARDCHARGER_ADMIN_PASSWORD": password, "HARDCHARGER_ADMIN_USERNAME": username,
-                 **env},
+            env={**clean_environment(), **LENIENT_SIGN_IN, "HARDCHARGER_ADMIN_PASSWORD": password,
+                 "HARDCHARGER_ADMIN_USERNAME": username, **env},
             stdin=stdin, stdout=subprocess.DEVNULL, stderr=log_path.open("w"), cwd=self.tmp_path, **POPEN_FLAGS)
         running = Running(base_url=f"http://127.0.0.1:{port}", username=username, password=password,
                           secret_key=secret_key, process=process, log_path=log_path, port=port)

@@ -13,6 +13,7 @@
 #include "authz/store.hpp"
 #include "identity_provider.hpp"
 #include "logging.hpp"
+#include "login_guard.hpp"
 #include "tokens.hpp"
 #include "chargewire/errors.hpp"
 
@@ -94,6 +95,7 @@ int VerifyCredentials(const Config& config, std::istream& in, std::ostream& out)
   const std::string username = StringField(request, "username");
   const std::string password = StringField(request, "password");
   const std::string subject_token = StringField(request, "subject_token");
+  const std::string client_address = StringField(request, "client_address");
   if (grant_type == "password" && (username.empty() || password.empty())) {
     return BadInput(out, "a password grant needs username and password");
   }
@@ -113,6 +115,8 @@ int VerifyCredentials(const Config& config, std::istream& in, std::ostream& out)
     options.cluster_id = config.cluster_id;
     options.store_shared = config.rbac_store_shared;
     options.read_only = true;
+    // ... but a password check counts toward the login guard's limits, as on the server.
+    options.record_sign_ins = true;
     // Not asked: the policy service decides statements, not sign-ins.
     try {
       access = std::make_shared<authz::AccessControl>(options);
@@ -131,13 +135,33 @@ int VerifyCredentials(const Config& config, std::istream& in, std::ostream& out)
   auto tokens = std::make_shared<JwtTokenService>(secret_key, std::chrono::seconds(config.token_lifetime_seconds),
                                                   RandomUuid(), config.allow_cross_instance_tokens,
                                                   ParseLogLevel(config.auth_log_level), access);
+  // The server's login guard, from the store's records (memory only without a store).
+  LoginGuardSettings guard_settings = LoginGuardSettingsFrom(config);
+  guard_settings.record_routine_successes = false;  // a success is written only when it ends failures
+  auto guard = std::make_shared<LoginGuard>(guard_settings, "verify-credentials-" + RandomUuid(),
+                                            StoreLoginEvents(access));
+  if (std::string problem = guard->Load(); !problem.empty()) {
+    if (access) access->Shutdown();
+    return Undecided(out, StoreProblem(problem), "the store's sign-in records can't be read: " + problem);
+  }
+  // Writes this check's record (a failure, or a success that ends one) before the answer.
+  auto record = [&] {
+    guard->Sync();
+    if (std::string problem = guard->PendingProblem(); !problem.empty()) {
+      Log(LogLevel::kWarning, "the sign-in record of this check could not be written to the store",
+          {{"error", problem}});
+    }
+  };
   try {
     const IdentityProvider provider = DiscoverIdentityProvider(config);
     Authenticator authenticator(config, access, [tokens](std::string_view token) { return tokens->Validate(token); },
-                                provider.jwks);
+                                provider.jwks, guard);
+    chargewire::SignInContext context;
+    context.client_address = client_address;
     chargewire::Principal principal = grant_type == "password"
-                                          ? authenticator.AuthenticatePassword(username, password)
+                                          ? authenticator.AuthenticatePassword(username, password, context)
                                           : authenticator.ExchangeToken(subject_token);
+    record();
     const bool scoped = principal.claims.contains("scope_id");
     boost::json::object answer{{"verified", true},
                                {"user", principal.name},
@@ -147,7 +171,15 @@ int VerifyCredentials(const Config& config, std::istream& in, std::ostream& out)
     if (access) access->Shutdown();
     return Answer(out, kVerifiedExit, std::move(answer));
   } catch (const chargewire::Error& e) {
+    record();
     if (access) access->Shutdown();
+    if (e.code() == chargewire::ErrorCode::kRateLimited) {
+      return Answer(out, kRefusedExit,
+                    {{"verified", false},
+                     {"reason", "rate_limited"},
+                     {"retry_after_seconds", e.retry_after() ? e.retry_after()->count() : 1},
+                     {"message", e.what()}});
+    }
     // The server's own refusal, with the reason it would give the client; a store that
     // stopped answering in between (permission_denied from a stale snapshot) is no answer.
     if (e.code() == chargewire::ErrorCode::kInvalidCredentials || e.code() == chargewire::ErrorCode::kInvalidToken) {

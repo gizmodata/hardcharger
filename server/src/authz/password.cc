@@ -89,4 +89,32 @@ bool VerifyPassword(const std::string& password, const std::string& stored_hash)
   return CRYPTO_memcmp(actual, expected.data(), kHashBytes) == 0;
 }
 
+arrow::Status CheckPasswordPolicy(const std::string& password, const PasswordPolicy& policy) {
+  int64_t characters = 0;
+  bool lower = false, upper = false, digit = false, other = false;
+  for (const unsigned char c : password) {
+    if ((c & 0xC0) != 0x80) ++characters;  // a UTF-8 lead byte (or ASCII): one character
+    if (c >= 'a' && c <= 'z') {
+      lower = true;
+    } else if (c >= 'A' && c <= 'Z') {
+      upper = true;
+    } else if (c >= '0' && c <= '9') {
+      digit = true;
+    } else {
+      other = true;
+    }
+  }
+  if (characters < policy.min_length) {
+    return arrow::Status::Invalid("Hardcharger access control: the password is too short: it needs at least ",
+                                  policy.min_length, " characters (password_min_length)");
+  }
+  const int64_t classes = int64_t{lower} + int64_t{upper} + int64_t{digit} + int64_t{other};
+  if (classes < policy.min_character_classes) {
+    return arrow::Status::Invalid(
+        "Hardcharger access control: the password needs characters of at least ", policy.min_character_classes,
+        " kinds among lowercase letters, uppercase letters, digits and others (password_min_character_classes)");
+  }
+  return arrow::Status::OK();
+}
+
 }  // namespace hardcharger::authz

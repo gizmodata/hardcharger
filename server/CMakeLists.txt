@@ -247,6 +247,7 @@ add_library(hardcharger_core STATIC
   src/instrumentation.cc
   src/jwks.cc
   src/logging.cc
+  src/login_guard.cc
   src/metrics.cc
   src/oauth.cc
   src/patterns.cc
@@ -377,6 +378,7 @@ add_executable(hardcharger-unit-tests
   unit/ingest_test.cc
   unit/instrumentation_test.cc
   unit/log_level_test.cc
+  unit/login_guard_test.cc
   unit/metrics_test.cc
   unit/patterns_test.cc
   unit/platform_test.cc

@@ -19,7 +19,7 @@ using chargewire::ErrorCode;
 
 // ---- A small columnar builder ----
 
-enum class Kind { kText, kBool, kTextList, kTextMap };
+enum class Kind { kText, kBool, kTextList, kTextMap, kInt64, kTimestampMs };
 
 struct Column {
   const char* name;
@@ -27,7 +27,8 @@ struct Column {
 };
 
 using TextMap = std::map<std::string, std::string>;
-using Cell = std::variant<std::monostate, std::string, bool, std::vector<std::string>, TextMap>;
+// kInt64 and kTimestampMs (milliseconds since the epoch) cells hold an int64_t.
+using Cell = std::variant<std::monostate, std::string, bool, std::vector<std::string>, TextMap, int64_t>;
 
 std::shared_ptr<arrow::DataType> TypeOf(Kind kind) {
   switch (kind) {
@@ -39,6 +40,10 @@ std::shared_ptr<arrow::DataType> TypeOf(Kind kind) {
       return arrow::list(arrow::utf8());
     case Kind::kTextMap:
       return arrow::map(arrow::utf8(), arrow::utf8());
+    case Kind::kInt64:
+      return arrow::int64();
+    case Kind::kTimestampMs:
+      return arrow::timestamp(arrow::TimeUnit::MICRO, "UTC");
   }
   return arrow::utf8();
 }
@@ -123,6 +128,30 @@ class Rows {
         Check(b.Finish(&out));
         break;
       }
+      case Kind::kInt64: {
+        arrow::Int64Builder b;
+        for (const auto& row : rows_) {
+          if (const auto* v = std::get_if<int64_t>(&row[c])) {
+            Check(b.Append(*v));
+          } else {
+            Check(b.AppendNull());
+          }
+        }
+        Check(b.Finish(&out));
+        break;
+      }
+      case Kind::kTimestampMs: {
+        arrow::TimestampBuilder b(TypeOf(Kind::kTimestampMs), arrow::default_memory_pool());
+        for (const auto& row : rows_) {
+          if (const auto* v = std::get_if<int64_t>(&row[c])) {
+            Check(b.Append(*v * 1000));
+          } else {
+            Check(b.AppendNull());
+          }
+        }
+        Check(b.Finish(&out));
+        break;
+      }
     }
     return out;
   }
@@ -147,7 +176,9 @@ const std::vector<Column>& ColumnsOf(AccessTable table) {
       {"name", Kind::kText}, {"builtin", Kind::kBool}, {"tenant", Kind::kText}, {"is_active", Kind::kBool}};
   static const std::vector<Column> kUsers = {
       {"name", Kind::kText},           {"enabled", Kind::kBool},       {"has_password", Kind::kBool},
-      {"tenant", Kind::kText},         {"attributes", Kind::kTextMap}, {"is_current", Kind::kBool}};
+      {"tenant", Kind::kText},         {"attributes", Kind::kTextMap}, {"is_current", Kind::kBool},
+      // 2.14, from the login guard: shown to the administrator, and to each user for itself.
+      {"last_sign_in_at", Kind::kTimestampMs}, {"failed_sign_ins", Kind::kInt64}};
   static const std::vector<Column> kPolicies = {
       {"name", Kind::kText},           {"kind", Kind::kText},           {"catalog_name", Kind::kText},
       {"schema_name", Kind::kText},    {"table_name", Kind::kText},     {"column_name", Kind::kText},
@@ -468,16 +499,24 @@ std::shared_ptr<arrow::RecordBatch> Roles(const Snapshot& snapshot, const Visibi
 // ---- hardcharger_users() ----
 
 std::shared_ptr<arrow::RecordBatch> Users(const Snapshot& snapshot, const Principal& viewer,
-                                          const Visibility& visibility) {
+                                          const Visibility& visibility, const SignInSummaries& summaries) {
   Names names(snapshot);
   Rows rows(ColumnsOf(AccessTable::kUsers));
   if (visibility.kind() == ViewerKind::kRestrictedAdministrator) return rows.Finish();
   for (const auto& u : snapshot.users()) {
     const bool current = !viewer.superuser && u.id == viewer.user_id;
     if (visibility.kind() == ViewerKind::kUser && !current && !visibility.InTenant(PrincipalKind::kUser, u.id)) continue;
+    // Sign-in history: the administrator's to see, and each user's own.
+    Cell last_sign_in, failed;
+    if (summaries && (visibility.kind() == ViewerKind::kAdministrator || current)) {
+      const SignInSummary summary = summaries(u.name);
+      if (summary.last_sign_in_ms) last_sign_in = *summary.last_sign_in_ms;
+      failed = summary.failed_sign_ins;
+    }
     // Never the password hash: only whether there is one.
     rows.Add({u.name, u.enabled, u.password_hash.has_value() && !u.password_hash->empty(),
-              names.Tenant(PrincipalKind::kUser, u.id), TextMap(u.attributes.begin(), u.attributes.end()), current});
+              names.Tenant(PrincipalKind::kUser, u.id), TextMap(u.attributes.begin(), u.attributes.end()), current,
+              last_sign_in, failed});
   }
   return rows.Finish();
 }
@@ -701,7 +740,8 @@ std::shared_ptr<arrow::RecordBatch> EmptyAccessTable(AccessTable table) { return
 
 std::shared_ptr<arrow::RecordBatch> AccessTableRows(AccessTable table, const Snapshot& snapshot,
                                                     const Principal& viewer,
-                                                    const std::optional<std::string>& user_name) {
+                                                    const std::optional<std::string>& user_name,
+                                                    const SignInSummaries& summaries) {
   const Visibility visibility(snapshot, viewer);
   switch (table) {
     case AccessTable::kGrants:
@@ -711,7 +751,7 @@ std::shared_ptr<arrow::RecordBatch> AccessTableRows(AccessTable table, const Sna
     case AccessTable::kRoles:
       return Roles(snapshot, visibility);
     case AccessTable::kUsers:
-      return Users(snapshot, viewer, visibility);
+      return Users(snapshot, viewer, visibility, summaries);
     case AccessTable::kPolicies:
       return Policies(snapshot, viewer, visibility);
     case AccessTable::kEffectivePrivileges:

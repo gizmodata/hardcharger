@@ -234,6 +234,43 @@ const std::vector<Option>& Options() {
        "the identity provider's name for people (\"Sign in with <name>\")", TEXT(oauth_provider_name)},
       {"oauth_max_flows", Kind::kInt, "browser sign-ins in progress at once",
        NUMBER(oauth_max_flows)},
+      // Failed password sign-ins
+      {"login_lockout_threshold", Kind::kInt,
+       "failed password sign-ins of one user from one client address that lock that pair for "
+       "login_lockout_seconds (other addresses still sign in). 0: never lock",
+       NUMBER(login_lockout_threshold)},
+      {"login_lockout_seconds", Kind::kInt, "how long a (user, client address) lock lasts",
+       NUMBER(login_lockout_seconds)},
+      {"login_failure_window_seconds", Kind::kInt,
+       "a failure count is forgotten once this long has passed since its last failure",
+       NUMBER(login_failure_window_seconds)},
+      {"login_user_backoff_after", Kind::kInt,
+       "failed sign-ins of one user (from any address) after which its attempts are spaced by a "
+       "growing delay, never a lock. 0: no per-user delay",
+       NUMBER(login_user_backoff_after)},
+      {"login_address_backoff_after", Kind::kInt,
+       "failed sign-ins from one client address (any users) after which its attempts are spaced by a "
+       "growing delay. 0: no per-address delay",
+       NUMBER(login_address_backoff_after)},
+      {"login_backoff_base_seconds", Kind::kInt,
+       "the first delay; each further failure doubles it", NUMBER(login_backoff_base_seconds)},
+      {"login_backoff_max_seconds", Kind::kInt, "the longest delay (0: no delays at all)",
+       NUMBER(login_backoff_max_seconds)},
+      {"login_known_address_days", Kind::kInt,
+       "a client address a user signed in from within this many days skips the per-user and "
+       "per-address delays (not a lock). 0: no address skips them",
+       NUMBER(login_known_address_days)},
+      // Passwords
+      {"password_min_length", Kind::kInt,
+       "characters a password set by CREATE USER or ALTER USER needs (existing passwords keep working)",
+       NUMBER(password_min_length)},
+      {"password_min_character_classes", Kind::kInt,
+       "kinds of characters (lowercase, uppercase, digits, others) a new password needs, 0 to 4",
+       NUMBER(password_min_character_classes)},
+      {"password_max_age_days", Kind::kInt,
+       "days after which a store user's password stops signing in until an administrator sets a new "
+       "one (0: never; a password set before 2.14 never expires)",
+       NUMBER(password_max_age_days)},
       // Sessions
       {"max_sessions", Kind::kInt,
        "most non-admin sessions at once (0: unlimited)", NUMBER(max_sessions)},
@@ -556,6 +593,25 @@ void Validate(Loaded& loaded) {
     throw std::invalid_argument("ports must be between 0 and 65535");
   }
   if (c.oauth_max_flows < 1) throw std::invalid_argument("oauth_max_flows must be positive");
+  for (const auto& [name, value] : std::initializer_list<std::pair<const char*, int64_t>>{
+           {"login_lockout_threshold", c.login_lockout_threshold},
+           {"login_user_backoff_after", c.login_user_backoff_after},
+           {"login_address_backoff_after", c.login_address_backoff_after},
+           {"login_backoff_base_seconds", c.login_backoff_base_seconds},
+           {"login_backoff_max_seconds", c.login_backoff_max_seconds},
+           {"login_known_address_days", c.login_known_address_days},
+           {"password_max_age_days", c.password_max_age_days}}) {
+    if (value < 0) throw std::invalid_argument(std::string(name) + " must not be negative");
+  }
+  for (const auto& [name, value] : std::initializer_list<std::pair<const char*, int64_t>>{
+           {"login_lockout_seconds", c.login_lockout_seconds},
+           {"login_failure_window_seconds", c.login_failure_window_seconds}}) {
+    if (value < 1) throw std::invalid_argument(std::string(name) + " must be at least 1");
+  }
+  if (c.password_min_length < 1) throw std::invalid_argument("password_min_length must be at least 1");
+  if (c.password_min_character_classes < 0 || c.password_min_character_classes > 4) {
+    throw std::invalid_argument("password_min_character_classes must be between 0 and 4");
+  }
   for (const auto& proxy : c.trusted_proxies) {
     try {
       chargewire::ParseIpNetwork(proxy);

@@ -298,6 +298,10 @@ AccessControl::AccessControl(const Options& options)
   engine_options.poll_interval =
       catalog_rules_only_ || read_only_ ? std::chrono::milliseconds(0) : options.poll_interval;
   engine_options.read_only = read_only_;
+  engine_options.record_sign_ins = read_only_ && options.record_sign_ins;
+  engine_options.password_policy = {options.password_min_length, options.password_min_character_classes,
+                                    options.password_max_age_days};
+  password_max_age_days_ = options.password_max_age_days;
   engine_options.store_timeout = options.store_timeout;
   if (!catalog_rules_only_) {
     engine_options.cluster_id = options.cluster_id;
@@ -356,8 +360,30 @@ std::optional<AccessControl::SignIn> AccessControl::AuthenticatePassword(
   if (!principal.ok()) return std::nullopt;
   const UserRecord* user = engine_->snapshot()->FindUserById(principal->user_id);
   if (user == nullptr) return std::nullopt;
-  return SignIn{user->name, Fingerprint(user->password_hash)};
+  SignIn out{user->name, Fingerprint(user->password_hash)};
+  // A password set before 2.14 (or by an older server) has no date and never expires.
+  if (password_max_age_days_ > 0 && user->password_changed_at_ms) {
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    out.password_expired = now - *user->password_changed_at_ms > password_max_age_days_ * 86400000;
+  }
+  return out;
 }
+
+arrow::Status AccessControl::AppendLoginEvents(const std::vector<LoginEventRecord>& events) {
+  return engine_->AppendLoginEvents(events);
+}
+
+arrow::Result<std::vector<LoginEventRecord>> AccessControl::LoginEventsSince(int64_t since_ms) {
+  return engine_->LoginEventsSince(since_ms);
+}
+
+arrow::Status AccessControl::PruneLoginEvents(int64_t failures_before_ms, int64_t successes_before_ms) {
+  return engine_->PruneLoginEvents(failures_before_ms, successes_before_ms);
+}
+
+void AccessControl::SetSignInSummaries(SignInSummaries summaries) { sign_in_summaries_ = std::move(summaries); }
 
 namespace {
 
@@ -670,7 +696,8 @@ std::shared_ptr<arrow::RecordBatch> SessionGuard::AccessTableRows(
     }
     principal = state->principal();
   }
-  return authz::AccessTableRows(table, *owner_.engine_->snapshot(), principal, user_name);
+  return authz::AccessTableRows(table, *owner_.engine_->snapshot(), principal, user_name,
+                                owner_.sign_in_summaries_);
 }
 
 void SessionGuard::RequireLive() const {

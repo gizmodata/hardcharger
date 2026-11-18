@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include "admission.hpp"
@@ -24,6 +25,7 @@ namespace hardcharger {
 class CatalogLog;
 class HealthChecker;
 class Instrumentation;
+class LoginGuard;
 
 // What the instrumentation writer has done, for hardcharger_server_info() and /metrics.
 struct InstrumentationStats {
@@ -67,6 +69,9 @@ struct Runtime {
   // The Chargewire server, for the SQL functions that see and cancel its sessions (set before
   // it starts; null in a process that serves nothing).
   chargewire::Server* server = nullptr;
+  // The limits on failed password sign-ins (login_guard.hpp), for the SQL functions that
+  // list and clear them; null in a process that serves nothing.
+  std::shared_ptr<LoginGuard> login_guard;
   // What this instance is and runs on, collected at startup (the backend fills it).
   InstanceInfo instance_info;
 

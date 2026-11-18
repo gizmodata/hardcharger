@@ -63,6 +63,13 @@ Error Refused() {
   return Error(ErrorCode::kInvalidCredentials, "the user name or password is not correct");
 }
 
+// The login guard's refusal: the same for every user name, known or not.
+Error RateLimited(int64_t retry_after_seconds) {
+  return Error::RetryAfter(ErrorCode::kRateLimited, std::chrono::seconds(retry_after_seconds),
+                           "too many failed sign-in attempts: try again in " +
+                               std::to_string(retry_after_seconds) + " s");
+}
+
 Error TokenRefused() {
   return Error(ErrorCode::kInvalidCredentials, "the sign-in token is not accepted");
 }
@@ -138,7 +145,7 @@ std::string AuthorityKey(const chargewire::Principal& principal,
 Authenticator::Authenticator(const Config& config,
                              std::shared_ptr<authz::AccessControl> access,
                              std::function<chargewire::Principal(std::string_view)> server_tokens,
-                             std::shared_ptr<Jwks> jwks)
+                             std::shared_ptr<Jwks> jwks, std::shared_ptr<LoginGuard> guard)
     : username_(config.admin_username),
       password_(config.admin_password),
       jwks_(std::move(jwks)),
@@ -153,7 +160,8 @@ Authenticator::Authenticator(const Config& config,
       access_(std::move(access)),
       server_tokens_(std::move(server_tokens)),
       mutual_tls_(!config.tls_cert.empty() && !config.mtls_ca_cert.empty() && config.mtls_certificate_sign_in),
-      certificate_admins_(config.mtls_admin_identities) {
+      certificate_admins_(config.mtls_admin_identities),
+      guard_(std::move(guard)) {
   if (!config.token_signature_verify_cert_path.empty()) {
     std::string pem = ReadFile(config.token_signature_verify_cert_path);
     // A certificate or a bare public key both work.
@@ -165,6 +173,11 @@ Authenticator::Authenticator(const Config& config,
 
 chargewire::Principal Authenticator::AuthenticatePassword(std::string_view username,
                                                        std::string_view password) {
+  return AuthenticatePassword(username, password, chargewire::SignInContext{});
+}
+
+chargewire::Principal Authenticator::AuthenticatePassword(std::string_view username, std::string_view password,
+                                                       const chargewire::SignInContext& context) {
   if (username == kTokenUser) {
     // A scoped token this server (or its cluster, sharing the secret key) handed out,
     // sent as the password of the user "token".
@@ -180,9 +193,33 @@ chargewire::Principal Authenticator::AuthenticatePassword(std::string_view usern
     }
     if (AcceptsTokens()) return ExchangeToken(password);
   }
+  // From here on a password is checked: the login guard decides first whether to check it.
+  if (guard_) {
+    if (context.forwarding_ignored) {
+      // Once an hour: behind a proxy that isn't trusted, every client has the proxy's address.
+      const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch()).count();
+      int64_t last = forwarding_warned_ms_.load();
+      if ((last == 0 || now - last > 3600 * 1000) && forwarding_warned_ms_.compare_exchange_strong(last, now)) {
+        Log(LogLevel::kWarning,
+            "a password sign-in carried X-Forwarded-For or Forwarded from an address that is not in "
+            "trusted_proxies: the header is ignored, so failed sign-ins through that proxy count against the "
+            "proxy's address. List the proxy in trusted_proxies",
+            {{"client_address", context.client_address}});
+      }
+    }
+    const LoginGuard::Decision decision = guard_->Check(username, context.client_address);
+    if (!decision.allowed) {
+      LogAt(log_level_, LogLevel::kDebug, "sign-in refused before the password check: too many failed attempts",
+            {{"user", LoggableName(username)}, {"method", "password"}, {"client_address", context.client_address},
+             {"reason", decision.reason}, {"retry_after", std::to_string(decision.retry_after_seconds)}});
+      throw RateLimited(decision.retry_after_seconds);
+    }
+  }
   const bool user_ok = SameSecret(username, username_);
   const bool password_ok = SameSecret(password, password_);
   if (user_ok && password_ok) {
+    if (guard_) guard_->RecordSuccess(username, context.client_address);
     LogAt(log_level_, LogLevel::kInfo, "signed in", {{"user", LoggableName(username)}, {"method", "password"}});
     return chargewire::Principal{std::string(username), "admin", "password", {}, {}};
   }
@@ -193,15 +230,26 @@ chargewire::Principal Authenticator::AuthenticatePassword(std::string_view usern
     // it, so this always refuses): every refusal then costs the same password check,
     // and timing does not say which name is the administrator's.
     auto store_user = access_->AuthenticatePassword(username, password);
+    if (store_user && !user_ok && store_user->password_expired) {
+      // The right password, too old (password_max_age_days): neither a failure nor a sign-in.
+      LogAt(log_level_, LogLevel::kInfo, "sign-in refused: the password has expired",
+            {{"user", store_user->user_name}, {"method", "password"}});
+      throw Error(ErrorCode::kInvalidCredentials,
+                  "the password of user " + store_user->user_name +
+                      " has expired: an administrator sets a new one with ALTER USER ... WITH PASSWORD");
+    }
     if (store_user && !user_ok) {
+      if (guard_) guard_->RecordSuccess(username, context.client_address);
       LogAt(log_level_, LogLevel::kInfo, "signed in",
             {{"user", store_user->user_name}, {"method", "password"}, {"role", "user"}});
       return chargewire::Principal{store_user->user_name, "user", "password",
                                 {{"credential", store_user->credential}}, {}};
     }
   }
+  if (guard_) guard_->RecordFailure(username, context.client_address);
   // The name is the client's, unauthenticated: cut, so a refusal can't fill the log.
-  LogAt(log_level_, LogLevel::kInfo, "sign-in refused", {{"user", LoggableName(username)}, {"method", "password"}});
+  LogAt(log_level_, LogLevel::kInfo, "sign-in refused",
+        {{"user", LoggableName(username)}, {"method", "password"}, {"client_address", context.client_address}});
   throw Refused();
 }
 

@@ -96,6 +96,21 @@ struct Config {
   std::string oauth_provider_name;  // shown to people ("Sign in with ..."); empty: none
   int64_t oauth_max_flows = 10000;  // sign-ins in progress at once
 
+  // Failed password sign-ins (login_guard.hpp)
+  int64_t login_lockout_threshold = 5;        // failures of one (user, address) that lock it; 0: never
+  int64_t login_lockout_seconds = 900;
+  int64_t login_failure_window_seconds = 900;  // a counter forgets this long after its last failure
+  int64_t login_user_backoff_after = 5;       // per-user delay after this many failures; 0: none
+  int64_t login_address_backoff_after = 20;   // per-address delay after this many failures; 0: none
+  int64_t login_backoff_base_seconds = 1;
+  int64_t login_backoff_max_seconds = 30;     // 0: no delays
+  int64_t login_known_address_days = 30;      // a recent success's address skips the delays; 0: none
+
+  // Passwords set with CREATE USER / ALTER USER (authz/password.hpp)
+  int64_t password_min_length = 12;
+  int64_t password_min_character_classes = 0;  // of lower, upper, digit, other (0-4)
+  int64_t password_max_age_days = 0;            // 0: never expires
+
   // Sessions
   int64_t max_sessions = 0;  // non-admin sessions at once; 0 = unlimited
   int64_t session_idle_timeout = 900;  // seconds; 0 = never

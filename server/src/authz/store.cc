@@ -285,6 +285,14 @@ dd::Value OptText(const std::optional<std::string>& s) {
   return s ? dd::Value(*s) : dd::Value(dd::LogicalType::VARCHAR);
 }
 dd::Value Bool(bool b) { return dd::Value::BOOLEAN(b); }
+dd::Value BigInt(int64_t v) { return dd::Value::BIGINT(v); }
+
+// A statement failed because its table isn't there (a store an older server created).
+bool IsMissingTable(const arrow::Status& status) {
+  const std::string message = Lower(status.message());
+  return message.find("does not exist") != std::string::npos ||
+         message.find("not found") != std::string::npos;
+}
 
 // String lists are stored as JSON arrays (["a","b"]).
 std::string ToJson(const std::vector<std::string>& values) {
@@ -882,6 +890,17 @@ arrow::Status RbacStore::InitializeSchema() {
           " (role_id VARCHAR NOT NULL, privilege VARCHAR NOT NULL, location VARCHAR NOT NULL, "
           "admin_option BOOLEAN NOT NULL, granted_by VARCHAR NOT NULL, "
           "PRIMARY KEY (role_id, privilege, location, granted_by))",
+      // 2.14: when each user's password was last set (password_max_age_days). A table of its
+      // own, so an older server still reads and writes the store (it never updates the date:
+      // a password it sets keeps the date of the one before).
+      "CREATE TABLE IF NOT EXISTS " + T("password_changes") +
+          " (user_id VARCHAR PRIMARY KEY, changed_at_ms BIGINT NOT NULL)",
+      // 2.14: the login guard's sign-in records (login_events.hpp). Not access-control data:
+      // written without bumping the data version.
+      "CREATE TABLE IF NOT EXISTS " + T("login_events") +
+          " (event_id VARCHAR PRIMARY KEY, at_ms BIGINT NOT NULL, kind VARCHAR NOT NULL, "
+          "user_key VARCHAR NOT NULL, user_name VARCHAR NOT NULL, address VARCHAR NOT NULL, "
+          "origin VARCHAR NOT NULL)",
   };
   ARROW_RETURN_NOT_OK(Exec(conn, ddl[0]));  // meta, which says the schema's version
   {
@@ -974,7 +993,22 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
                                               T("users") + " ORDER BY name_key"));
   for (dd::idx_t r = 0; r < RowCount(*u); ++r) {
     users.push_back(
-        {GetString(*u, 0, r), GetString(*u, 1, r), GetOptString(*u, 2, r), GetBool(*u, 3, r), {}});
+        {GetString(*u, 0, r), GetString(*u, 1, r), GetOptString(*u, 2, r), GetBool(*u, 3, r), {}, std::nullopt});
+  }
+  {
+    // A store no 2.14 server has opened yet has no such table (read-only openings only:
+    // every other opening creates it): no dates.
+    auto pc = Run(conn, "SELECT user_id, changed_at_ms FROM " + T("password_changes"));
+    if (!pc.ok() && !(options_.read_only && IsMissingTable(pc.status()))) return pc.status();
+    if (pc.ok()) {
+      std::map<std::string, int64_t> changed;
+      for (dd::idx_t r = 0; r < RowCount(**pc); ++r) {
+        changed[GetString(**pc, 0, r)] = (*pc)->GetValue(1, r).GetValue<int64_t>();
+      }
+      for (auto& user : users) {
+        if (auto it = changed.find(user.id); it != changed.end()) user.password_changed_at_ms = it->second;
+      }
+    }
   }
   ARROW_ASSIGN_OR_RAISE(auto ua,
                         Run(conn, "SELECT user_id, attribute, value FROM " + T("user_attributes")));
@@ -1231,6 +1265,88 @@ arrow::Status RbacStore::Transact(const std::function<arrow::Status(StoreTransac
   return last;
 }
 
+// ---- Sign-in records ----
+
+arrow::Status RbacStore::AppendLoginEvents(const std::vector<LoginEventRecord>& events) {
+  if (events.empty()) return arrow::Status::OK();
+  if (options_.read_only && !options_.record_sign_ins) {
+    return arrow::Status::Invalid(
+        "Hardcharger access control: the access control store was opened read-only; nothing is written");
+  }
+  StoreTurn turn;
+  ARROW_RETURN_NOT_OK(Lock(turn));
+  auto& conn = *link_;
+  if (options_.read_only && !sign_ins_writable_) {
+    // A read-only opening that records sign-ins attaches for writing only now, when it has
+    // one to write: until then the store is as untouched as any read-only opening leaves it.
+    ARROW_RETURN_NOT_OK(Redacted(Exec(conn, "DETACH rbac_store")));
+    ARROW_RETURN_NOT_OK(Redacted(Exec(conn, connect_uri_.empty()
+                                                ? "ATTACH " + Quote(file_path_) + " AS rbac_store"
+                                                : "ATTACH " + Quote(connect_uri_) + " AS rbac_store (TYPE postgres)")));
+    sign_ins_writable_ = true;
+  }
+  ARROW_RETURN_NOT_OK(Redacted(Exec(conn, "BEGIN TRANSACTION")));
+  auto body = [&]() -> arrow::Status {
+    for (const auto& e : events) {
+      ARROW_RETURN_NOT_OK(Run(conn, "INSERT INTO " + T("login_events") + " VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                              {Text(e.id), BigInt(e.at_ms), Text(e.kind), Text(e.user_key), Text(e.user_name),
+                               Text(e.address), Text(e.origin)})
+                              .status());
+    }
+    return Exec(conn, "COMMIT");
+  };
+  auto status = Redacted(body());
+  if (!status.ok()) {
+    if (status.message().find("timed out after") == std::string::npos) (void)Query(conn, "ROLLBACK");
+    return status;
+  }
+  CheckpointFile();
+  return status;
+}
+
+arrow::Result<std::vector<LoginEventRecord>> RbacStore::LoginEventsSince(int64_t since_ms) {
+  StoreTurn turn;
+  ARROW_RETURN_NOT_OK(Lock(turn));
+  auto rows = Run(*link_,
+                  "SELECT event_id, at_ms, kind, user_key, user_name, address, origin FROM " + T("login_events") +
+                      " WHERE at_ms >= $1 ORDER BY at_ms, event_id",
+                  {BigInt(since_ms)});
+  std::vector<LoginEventRecord> out;
+  if (!rows.ok()) {
+    // A store a 2.14 server never opened (only a read-only opening sees one): no records.
+    if (options_.read_only && IsMissingTable(rows.status())) return out;
+    return Redacted(rows.status());
+  }
+  for (dd::idx_t r = 0; r < RowCount(**rows); ++r) {
+    out.push_back({GetString(**rows, 0, r), (*rows)->GetValue(1, r).GetValue<int64_t>(), GetString(**rows, 2, r),
+                   GetString(**rows, 3, r), GetString(**rows, 4, r), GetString(**rows, 5, r),
+                   GetString(**rows, 6, r)});
+  }
+  return out;
+}
+
+arrow::Status RbacStore::PruneLoginEvents(int64_t failures_before_ms, int64_t successes_before_ms) {
+  if (options_.read_only) return arrow::Status::OK();
+  StoreTurn turn;
+  ARROW_RETURN_NOT_OK(Lock(turn));
+  auto& conn = *link_;
+  ARROW_RETURN_NOT_OK(Redacted(Run(conn,
+                                   "DELETE FROM " + T("login_events") +
+                                       " WHERE (kind <> 'success' AND at_ms < $1) OR (kind = 'success' AND at_ms < $2)",
+                                   {BigInt(failures_before_ms), BigInt(successes_before_ms)})
+                                   .status()));
+  // One success record per (user, address) is all the guard needs: the latest.
+  ARROW_RETURN_NOT_OK(Redacted(Run(conn,
+                                   "DELETE FROM " + T("login_events") + " WHERE kind = 'success' AND event_id IN "
+                                   "(SELECT a.event_id FROM " + T("login_events") + " a JOIN " + T("login_events") +
+                                       " b ON a.user_key = b.user_key AND a.address = b.address "
+                                       "AND b.kind = 'success' AND (b.at_ms > a.at_ms OR (b.at_ms = a.at_ms AND "
+                                       "b.event_id > a.event_id)) WHERE a.kind = 'success')")
+                                   .status()));
+  CheckpointFile();
+  return arrow::Status::OK();
+}
+
 // ---------------------------------------------------------------------------
 
 std::string StoreTransaction::NewId() {
@@ -1277,6 +1393,14 @@ arrow::Status StoreTransaction::SetUserAttribute(const std::string& user_id,
   if (!value) return arrow::Status::OK();
   return Run(conn_, "INSERT INTO " + T("user_attributes") + " VALUES ($1, $2, $3)",
              {Text(user_id), Text(attribute), Text(*value)})
+      .status();
+}
+
+arrow::Status StoreTransaction::SetPasswordChangedAt(const std::string& user_id, std::optional<int64_t> at_ms) {
+  ARROW_RETURN_NOT_OK(
+      Run(conn_, "DELETE FROM " + T("password_changes") + " WHERE user_id = $1", {Text(user_id)}).status());
+  if (!at_ms) return arrow::Status::OK();
+  return Run(conn_, "INSERT INTO " + T("password_changes") + " VALUES ($1, $2)", {Text(user_id), BigInt(*at_ms)})
       .status();
 }
 
@@ -1409,6 +1533,7 @@ arrow::Status StoreTransaction::DeleteUser(const std::string& user_id) {
   ARROW_RETURN_NOT_OK(
       Run(conn_, "DELETE FROM " + T("user_attributes") + " WHERE user_id = $1", {Text(user_id)})
           .status());
+  ARROW_RETURN_NOT_OK(SetPasswordChangedAt(user_id, std::nullopt));
   ARROW_RETURN_NOT_OK(SetPrincipalTenant(PrincipalKind::kUser, user_id, ""));
   ARROW_RETURN_NOT_OK(
       Run(conn_, "DELETE FROM " + T("scoped_tokens") + " WHERE user_id = $1", {Text(user_id)})

@@ -18,6 +18,12 @@ arrow::Status AccessControlError(const std::string& message) {
 
 namespace {
 
+int64_t NowMilliseconds() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
 CommandResult Message(const std::string& text) {
   CommandResult result;
   result.column_names = {"result"};
@@ -186,6 +192,7 @@ arrow::Result<std::shared_ptr<RbacEngine>> RbacEngine::Create(const Options& opt
   store_options.cluster_id = options.cluster_id;
   store_options.shared = options.store_shared;
   store_options.read_only = options.read_only;
+  store_options.record_sign_ins = options.record_sign_ins;
   ARROW_ASSIGN_OR_RAISE(engine->store_, RbacStore::Open(store_options));
   if (!options.policy_service_url.empty()) {
     engine->policy_service_ =
@@ -364,7 +371,7 @@ arrow::Result<Principal> RbacEngine::ProvisionUser(const std::string& user_name,
     if (snap.FindUserByName(user_name)) return arrow::Status::OK();
     ARROW_RETURN_NOT_OK(CheckNewUserName(snap, user_name, options_));
     ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, user_name));
-    UserRecord user{StoreTransaction::NewId(), user_name, std::nullopt, true, {}};
+    UserRecord user{StoreTransaction::NewId(), user_name, std::nullopt, true, {}, std::nullopt};
     ARROW_RETURN_NOT_OK(txn.InsertUser(user));
     for (const auto& [attribute, value] : attributes) {
       ARROW_RETURN_NOT_OK(txn.SetUserAttribute(user.id, attribute, value));
@@ -942,14 +949,18 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
     }
     ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
       if (c->if_not_exists && snap.FindUserByName(c->name)) {
+        // Its password stays as it is: no policy applies to a password nothing sets (an init
+        // SQL written before the policy keeps starting the server).
         message = "User " + c->name + " already exists";
         return arrow::Status::OK();
       }
+      if (c->password) ARROW_RETURN_NOT_OK(CheckPasswordPolicy(*c->password, options_.password_policy));
       ARROW_RETURN_NOT_OK(CheckNewUserName(snap, c->name, options_));
       ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name));
       message = "User " + c->name + " created";
-      UserRecord user{StoreTransaction::NewId(), c->name, hash, true, {}};
+      UserRecord user{StoreTransaction::NewId(), c->name, hash, true, {}, std::nullopt};
       ARROW_RETURN_NOT_OK(txn.InsertUser(user));
+      if (hash) ARROW_RETURN_NOT_OK(txn.SetPasswordChangedAt(user.id, NowMilliseconds()));
       return txn.SetPrincipalTenant(PrincipalKind::kUser, user.id, tenant);
     }));
     return Message(message);
@@ -959,6 +970,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
   if (const auto* c = std::get_if<AlterUserCommand>(&command)) {
     std::optional<std::string> hash;
     if (c->action == AlterUserCommand::Action::kSetPassword) {
+      ARROW_RETURN_NOT_OK(CheckPasswordPolicy(c->password, options_.password_policy));
       ARROW_ASSIGN_OR_RAISE(auto h, HashPassword(c->password, options_.password_iterations));
       hash = std::move(h);
     }
@@ -972,10 +984,12 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
         case AlterUserCommand::Action::kSetPassword:
           user.password_hash = hash;
           message = "Password changed for user " + user.name;
+          ARROW_RETURN_NOT_OK(txn.SetPasswordChangedAt(user.id, NowMilliseconds()));
           break;
         case AlterUserCommand::Action::kClearPassword:
           user.password_hash.reset();
           message = "Password login removed for user " + user.name;
+          ARROW_RETURN_NOT_OK(txn.SetPasswordChangedAt(user.id, std::nullopt));
           break;
         case AlterUserCommand::Action::kEnable:
           user.enabled = true;
