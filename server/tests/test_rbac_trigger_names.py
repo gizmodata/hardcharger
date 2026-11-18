@@ -939,3 +939,28 @@ def test_the_init_sqls_triggers_are_stored_with_their_names_given_their_schema(l
     expect_allowed(client=wes, sql="CREATE TEMP TABLE job_log (what VARCHAR)")
     expect_allowed(client=wes, sql="INSERT INTO ops.jobs VALUES (1)")
     assert count(client=admin, table="ops.job_log") == 1 and count(client=wes, table="temp.main.job_log") == 0
+
+
+def test_a_trigger_created_in_a_transaction_that_rolls_back_changes_nothing(admin, mia, wes):
+    # Neither the trigger nor its owner record outlives a rollback: mia's trigger stays hers.
+    for sql in ["CREATE TABLE app.rb (id INT)", "CREATE TABLE app.rb_sink (what VARCHAR)",
+                "CREATE TRIGGER rb_ins AFTER INSERT ON app.rb FOR EACH STATEMENT INSERT INTO app.rb_sink VALUES ('by mia')",
+                "GRANT INSERT ON app.rb TO writers"]:
+        expect_allowed(client=mia, sql=sql)
+    try:
+        for client, sql in [(mia, "CREATE OR REPLACE TRIGGER rb_ins AFTER INSERT ON app.rb FOR EACH STATEMENT "
+                                  "INSERT INTO app.rb_sink VALUES ('replaced')"),
+                            (admin, "CREATE OR REPLACE TRIGGER rb_ins AFTER INSERT ON app.rb FOR EACH STATEMENT "
+                                    "INSERT INTO app.rb_sink VALUES ('replaced')"),
+                            (mia, "CREATE TRIGGER rb_new AFTER INSERT ON app.rb FOR EACH STATEMENT "
+                                  "INSERT INTO app.rb_sink VALUES ('new')")]:
+            expect_allowed(client=client, sql="BEGIN TRANSACTION")
+            expect_allowed(client=client, sql=sql)
+            expect_allowed(client=client, sql="ROLLBACK")
+        assert values(client=admin, sql="SELECT trigger_name FROM duckdb_triggers() WHERE table_name = 'rb'") == ["rb_ins"]
+        # Still mia's, run with her rights: wes, who may not write her sink, fires it.
+        expect_blocked(client=wes, sql="INSERT INTO app.rb_sink VALUES ('wes')", why="no INSERT privilege")
+        expect_allowed(client=wes, sql="INSERT INTO app.rb VALUES (1)")
+        assert values(client=admin, sql="SELECT what FROM app.rb_sink") == ["by mia"]
+    finally:
+        drop(client=admin, statements=["DROP TABLE IF EXISTS app.rb", "DROP TABLE IF EXISTS app.rb_sink"])

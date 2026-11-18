@@ -1103,8 +1103,12 @@ class NameCheck {
       const std::string named = where + " names " + Written(name.parts);
       if (ambiguous) {
         return what_ + named +
-               " without its schema, and both the table's own schema and its catalog's main schema have one: it is "
-               "not known which is meant, for any session." +
+               (name.parts.size() == 1
+                    ? std::string(" without its schema, and both the table's own schema and its catalog's main schema "
+                                  "have one")
+                    : std::string(", which reads both as a schema's object and as its catalog's (catalog.name), and "
+                                  "both are there")) +
+               ": it is not known which is meant, for any session." +
                (macro.empty() ? std::string(" The trigger's owner can name it with its schema (schema.name) with "
                                             "CREATE OR REPLACE TRIGGER")
                               : std::string(" An administrator can name it with its schema in the macro"));
@@ -1962,8 +1966,11 @@ std::optional<std::string> TriggerNameRefusal(dd::ClientContext& context, const 
   const std::string name = FoldIdentifier(path.object_name);
   const bool in_main = path.schema_path.size() == 1 && IdentifiersEqual(path.schema_path[0], DEFAULT_SCHEMA);
   const std::vector<std::string> main_schema{DEFAULT_SCHEMA};
+  // Only DuckDB's own catalogs keep triggers. (A catalog that is not there: DuckDB says so.)
+  auto found_catalog = dd::Catalog::GetCatalogEntry(context, dd::Identifier(path.catalog));
+  if (!found_catalog || !found_catalog->IsDuckCatalog()) return std::nullopt;
   try {
-    auto& catalog = dd::Catalog::GetCatalog(context, dd::Identifier(path.catalog));
+    auto& catalog = *found_catalog;
     // The tables first, then each one's triggers, outside the schema scans' callbacks (lock
     // order: see SequenceNameRefusal).
     std::vector<dd::reference<dd::TableCatalogEntry>> tables;
