@@ -40,14 +40,15 @@ export function useAdminConnection(page: string, server = "", systemAdminOnly = 
     if (!opens) return;
     const controller = new AbortController();
     let owned: Connection | undefined;
+    // While the session is being set up, it is closed by the setup itself once it sees the
+    // page leave (never under a statement the setup still sends, which would find it gone).
+    let settingUp = true;
+    const aborted = () => controller.signal.aborted;
     session
       .openConnection({ server, signal: controller.signal, queryTag: observerQueryTag(page) })
       .then(async (conn) => {
         owned = conn;
-        if (controller.signal.aborted) {
-          await conn.close();
-          return;
-        }
+        if (aborted()) return;
         if (server) {
           const permission = await conn.query("SELECT HARDCHARGER_IS_FULL_ADMIN() AS full_admin");
           if (permission.get(0)?.toJSON()["full_admin"] !== true)
@@ -55,27 +56,34 @@ export function useAdminConnection(page: string, server = "", systemAdminOnly = 
         }
         let used = conn;
         if (systemAdmin) {
+          if (aborted()) return;
           used = reportingRefusals(conn, () => session.systemAdmin.recheck());
           await used.execute(elevateSql);
+          if (aborted()) return;
           if (!(await actsAsSystemAdmin(used)))
             throw new Error("This session could not act as System Admin: the server did not confirm it.");
         }
         // Only an admin can request this. Monitoring must remain usable when every
         // ordinary slot is occupied, even if admin_bypass_queue_default is false.
+        if (aborted()) return;
         await used.execute("SET hardcharger.bypass_queue = true");
+        if (aborted()) return;
         await used.execute("SET hardcharger.capture_query_profile = 'off'");
-        if (controller.signal.aborted) return;
+        if (aborted()) return;
         setError(undefined);
         setConnection({ server, value: used });
       })
       .catch((err: unknown) => {
-        if (!controller.signal.aborted && (server || !session.checkSignIn(err)))
-          setError({ server, message: errorMessage(err) });
+        if (!aborted() && (server || !session.checkSignIn(err))) setError({ server, message: errorMessage(err) });
+      })
+      .finally(() => {
+        settingUp = false;
+        if (aborted()) void owned?.close().catch(() => {});
       });
     return () => {
       controller.abort();
       setConnection(undefined);
-      void owned?.close().catch(() => {});
+      if (!settingUp) void owned?.close().catch(() => {});
     };
   }, [session, opens, systemAdmin, page, server]);
   return {

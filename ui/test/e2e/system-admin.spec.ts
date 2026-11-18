@@ -107,12 +107,16 @@ test("a revoke closes the admin pages and the tab's System Admin, as the server 
     await nav(page, "Server Configuration").click();
     const table = page.getByTestId("server-configuration-table");
     await expect(table).toContainText("hardcharger.max_concurrent_statements");
+    // The page's first load is over (Refresh is disabled until it is): the revoke below must
+    // meet the request this test makes, not one still in flight.
+    const refresh = page.getByRole("button", { name: "Refresh", exact: true });
+    await expect(refresh).toBeEnabled();
 
     // Revoked by the administrator while the page is open. Nothing in the UI changes by itself;
     // the page's next request is refused by the server, and then every tab asks its session.
     await admin.execute(`REVOKE SYSTEM ADMIN FROM ${who.username}`);
     expectProblem(page, { status: 403, url: /\/statements$/ });
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await refresh.click();
     await expect(page.getByText("Only unrestricted administrators can view server configuration.")).toBeVisible();
     await expect(nav(page, "Server Configuration")).toHaveCount(0);
     await expect(headerChip(page)).toHaveCount(0);
