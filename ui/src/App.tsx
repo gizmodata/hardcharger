@@ -6,7 +6,7 @@ import { Layout } from "./components/Layout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ConfirmWorkspaceCloseDialog } from "./components/ConfirmWorkspaceCloseDialog";
 import { SignInPage } from "./components/SignInPage";
-import { type SignedIn, clearSignIn, loadSignIn, saveSignIn } from "./lib/auth";
+import { type SignedIn, clearSignIn, loadSignIn, readOnlyRequested, saveSignIn } from "./lib/auth";
 import { endSessionsOnExit } from "./lib/pageExit";
 import { useRoute } from "./lib/route";
 import { useTheme } from "./lib/theme";
@@ -14,6 +14,7 @@ import { loadModule } from "./lib/stale";
 import { type ConnectionOptions, discover, openConnection } from "./lib/chargewire";
 import { internalQueryTag } from "./lib/queryTags";
 import { type AppContract, RelayApi, ServersStore } from "./lib/servers";
+import { isReadOnlyRefusal } from "./lib/tabSession";
 import {
   type AppSession,
   type Identity,
@@ -81,8 +82,28 @@ function noConnection(): Connection {
 }
 
 function initialPhase(): Phase {
-  const saved = loadSignIn();
+  // A ?read_only=1 link is read (and leaves the address bar) on every load, signed in or not.
+  const linkReadOnly = readOnlyRequested();
+  let saved = loadSignIn();
+  if (saved && linkReadOnly && saved.readOnly !== true) {
+    // Already signed in in this tab: the link makes this page's new sessions read-only.
+    saved = { ...saved, readOnly: true };
+    saveSignIn(saved);
+  }
   return saved ? { kind: "connecting", auth: saved } : { kind: "signed-out" };
+}
+
+/**
+ * Why a sign-in with "Start sessions read-only" didn't get its session: the server refused
+ * read-only sessions (one without them answers unknown_option), in its own words. Nothing ran.
+ */
+function readOnlyRefusedNotice(err: unknown): string | undefined {
+  if (!isReadOnlyRefusal(err)) return undefined;
+  const detail = (err.detail || err.title || err.message).replace(/[.\s]+$/, "");
+  return (
+    `The server did not start a read-only session: ${detail}. Nothing ran. ` +
+    'Sign in again without "Start sessions read-only" to use this server.'
+  );
 }
 
 export function App() {
@@ -231,6 +252,13 @@ export function App() {
     void (async () => {
       let connection: Connection | undefined;
       try {
+        if (auth.readOnly === true) {
+          // "Start sessions read-only": ask the server for one now, so a server that can't
+          // (one before 2.13.0) says so on the sign-in page, in its own words, before any tab
+          // could run anything. Each tab's session is confirmed again when it opens.
+          const probe = await openConnection(auth, { signal: controller.signal, readOnly: true });
+          await probe.close().catch(() => {});
+        }
         connection = await openExtraConnection(auth, { signal: controller.signal });
         const identity = await whoAmI(connection);
         if (controller.signal.aborted) {
@@ -242,7 +270,8 @@ export function App() {
         void connection?.close().catch(() => {});
         if (controller.signal.aborted) return;
         clearSignIn();
-        setPhase({ kind: "signed-out", notice: signInLost(err) ?? errorMessage(err) });
+        const refused = auth.readOnly === true ? readOnlyRefusedNotice(err) : undefined;
+        setPhase({ kind: "signed-out", notice: signInLost(err) ?? refused ?? errorMessage(err) });
       }
     })();
     return () => controller.abort();

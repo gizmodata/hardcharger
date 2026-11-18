@@ -7,6 +7,21 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- **Web UI: start read-only from the sign-in page, or from a link**
+  ([#61](https://github.com/gizmodata/hardcharger/issues/61)). The sign-in page has **Start
+  sessions read-only**, for password, client-certificate and browser (single sign-on) sign-in:
+  every new editor session on the server the UI is served from (new tabs, New session, a reload,
+  the replacement for a lost session) then opens read-only, confirmed by the server before
+  anything runs, and Upload is off as on a read-only connection. It is a default for your own
+  sessions in that tab, not a restricted account: New session, then clearing **Read-only**,
+  still opens a writable one. A link with `?read_only=1` ticks the box (and makes an
+  already-signed-in page's new sessions read-only); `?sign_in=browser&read_only=1` opens a
+  read-only workspace in one click, the choice surviving the identity provider's round trip.
+  The parameter leaves the address bar at once. A server without read-only sessions refuses at
+  sign-in, with its own message, before anything runs.
+
 ### Changed
 
 - **Android builds reach internal testers automatically.** Each release publishes its Android

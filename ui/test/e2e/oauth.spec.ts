@@ -4,7 +4,7 @@
 // secret it kept in this tab, and is signed in; nothing of it stays in the URL.
 import { type Idp, startIdp } from "./idp.ts";
 import { type OAuthServer, startOAuthServer } from "./harness.ts";
-import { expect, test } from "./fixtures.ts";
+import { activeTab, expect, expectProblem, runDone, test } from "./fixtures.ts";
 
 let idp: Idp;
 let server: OAuthServer;
@@ -107,4 +107,53 @@ test("a refusal after a ?sign_in=browser link shows the reason and doesn't loop"
   await page.getByTestId("signin-browser").click();
   await expect(page.getByTestId("header-user")).toContainText("alice@example.com");
   expect(idp.authorizations).toBe(2);
+});
+
+// "Start sessions read-only" with browser sign-in (#61): the choice is kept in this tab with the
+// flow, so it survives the identity provider's round trip without riding in a URL.
+async function firstTabIsReadOnly(page: import("@playwright/test").Page): Promise<void> {
+  const tab = activeTab(page);
+  await runDone(page, "SELECT 1 AS n");
+  await expect(tab.getByTestId("read-only-mode")).toHaveAttribute("data-state", "on");
+  expectProblem(page, { status: 400, url: /\/statements$/, required: false });
+  expectProblem(page, { status: 403, url: /\/statements$/, required: false });
+  await runDone(page, "CREATE TEMP TABLE refused_after_sso (i INTEGER)");
+  await expect(tab.getByTestId("query-error")).toContainText("read-only session");
+}
+
+test("Start sessions read-only, ticked before the provider, is read-only when the page comes back", async ({
+  page,
+}) => {
+  await page.goto(`${server.url}/ui/`);
+  await page.getByRole("checkbox", { name: "Start sessions read-only", exact: true }).check();
+  await page.getByTestId("signin-browser").click();
+  await expect(page.getByTestId("header-user")).toContainText("alice@example.com");
+  expect(page.url()).not.toContain("read_only");
+  await firstTabIsReadOnly(page);
+  // Positive twin: signed out, cleared, the next round trip is read-write.
+  await page.getByRole("button", { name: "Sign out" }).click();
+  const start = page.getByRole("checkbox", { name: "Start sessions read-only", exact: true });
+  await expect(start).toBeChecked();
+  await start.uncheck();
+  await page.getByTestId("signin-browser").click();
+  await expect(page.getByTestId("header-user")).toContainText("alice@example.com");
+  await runDone(page, "CREATE TEMP TABLE writable_after_sso (i INTEGER)");
+  await expect(activeTab(page).getByTestId("query-error")).toHaveCount(0);
+});
+
+test("?sign_in=browser&read_only=1 goes to the provider and comes back read-only, with nothing in the URL", async ({
+  page,
+}) => {
+  await page.goto(`${server.url}/ui/?sign_in=browser&read_only=1`);
+  await expect(page.getByTestId("header-user")).toContainText("alice@example.com");
+  expect(idp.authorizations).toBe(1);
+  const url = new URL(page.url());
+  expect(url.pathname + url.search + url.hash).toBe("/ui/");
+  await firstTabIsReadOnly(page);
+  // A reload keeps the sign-in, read-only with it, and goes nowhere.
+  await page.reload();
+  await expect(page.getByTestId("header-user")).toContainText("alice@example.com");
+  await runDone(page, "SELECT 2 AS n");
+  await expect(activeTab(page).getByTestId("read-only-mode")).toHaveAttribute("data-state", "on");
+  expect(idp.authorizations).toBe(1);
 });

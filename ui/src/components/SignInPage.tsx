@@ -7,9 +7,12 @@ import {
   SignInError,
   browserSignInProvider,
   finishBrowserSignIn,
+  lastReadOnly,
   lastUsername,
   offersBrowserSignIn,
   pendingSignInRequest,
+  readOnlyRequested,
+  rememberReadOnly,
   settleSignInRequest,
   signIn,
   signInWithCertificate,
@@ -28,9 +31,18 @@ interface Props {
   onSignedIn: (auth: SignedIn) => void;
 }
 
+/**
+ * "Start sessions read-only" as the page opens: ticked by a `?read_only=1` link, or as this tab
+ * last chose it (so it is never applied without being shown).
+ */
+function initialReadOnly(): boolean {
+  return readOnlyRequested() || lastReadOnly();
+}
+
 export function SignInPage({ server, serverError, busy, notice, theme, onSignedIn }: Props) {
   const [username, setUsername] = useState(lastUsername);
   const [password, setPassword] = useState("");
+  const [readOnly, setReadOnly] = useState(initialReadOnly);
   const [error, setError] = useState<string | undefined>();
   // Back from the identity provider: the flow id is in the URL's fragment (read and removed
   // once, on the first render), and this tab holds the flow's poll secret.
@@ -53,7 +65,8 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
     try {
       const auth = await attempt();
       setPassword("");
-      onSignedIn(auth);
+      rememberReadOnly(readOnly);
+      onSignedIn(readOnly ? { ...auth, readOnly: true } : auth);
     } catch (err) {
       setError(err instanceof SignInError ? err.message : String(err));
       afterFailure?.();
@@ -73,7 +86,11 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
       (auth) => {
         if (!live) return;
         setWorking(false);
-        if (auth) signedIn.current(auth);
+        if (!auth) return;
+        // The flow kept the choice made before the identity provider; the box shows it.
+        rememberReadOnly(auth.readOnly === true);
+        setReadOnly(auth.readOnly === true);
+        signedIn.current(auth);
       },
       (err: unknown) => {
         if (!live) return;
@@ -90,7 +107,8 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
     if (working) return;
     setWorking(true);
     setError(undefined);
-    startBrowserSignIn().then(
+    rememberReadOnly(readOnly);
+    startBrowserSignIn({ readOnly }).then(
       (url) => window.location.assign(url),
       (err: unknown) => {
         setWorking(false);
@@ -197,6 +215,26 @@ export function SignInPage({ server, serverError, busy, notice, theme, onSignedI
               />
             </label>
           </>
+        )}
+        {(passwordGrant || certificateGrant || browserGrant) && (
+          <div className="signin-read-only">
+            <label className="signin-check">
+              <input
+                type="checkbox"
+                name="read-only"
+                checked={readOnly}
+                onChange={(e) => setReadOnly(e.target.checked)}
+                disabled={busy || working}
+                aria-describedby="signin-read-only-hint"
+                data-testid="signin-read-only"
+              />
+              <span>Start sessions read-only</span>
+            </label>
+            <span className="signin-hint" id="signin-read-only-hint">
+              A default for your sessions in this tab, not a restricted account: the server makes each one read-only
+              before anything runs. New session, then clearing Read-only, still opens a writable one.
+            </span>
+          </div>
         )}
         {error && (
           <p className="signin-error" role="alert" data-testid="signin-error">

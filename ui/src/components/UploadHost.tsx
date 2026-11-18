@@ -9,7 +9,7 @@ import { currentActiveTab, useActiveTab } from "../lib/activeTab";
 import { useServers } from "../lib/servers";
 import { uploadUnavailable } from "../lib/upload/availability";
 import { closeUpload, requestUpload, useUploadRequest } from "../lib/upload/request";
-import { useSession } from "../session";
+import { readOnlyDefault, useSession } from "../session";
 import { loadModule } from "../lib/stale";
 import "../styles/upload.css";
 
@@ -26,7 +26,11 @@ export function UploadHost() {
   // A file dropped on a read-only tab, or on a tab whose connection opens read-only sessions,
   // can't be uploaded: the overlay says so, and the drop opens nothing.
   const off = uploadUnavailable({
-    connectionReadOnly: snapshot.servers.find((s) => s.saved.id === active.server)?.saved.readOnly === true,
+    connectionReadOnly: readOnlyDefault(
+      app,
+      active.server,
+      snapshot.servers.find((s) => s.saved.id === active.server)?.saved,
+    ),
     tabReadOnly: active.readOnly === true,
   });
   const offRef = useRef(off);

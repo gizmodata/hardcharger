@@ -22,7 +22,7 @@ import {
 import type { ThemeName } from "../lib/theme";
 import { uploadUnavailable } from "../lib/upload/availability";
 import { requestUpload } from "../lib/upload/request";
-import { errorMessage, useSession } from "../session";
+import { errorMessage, readOnlyDefault, useSession } from "../session";
 import { BenchmarkQueries } from "./BenchmarkQueries";
 import { QueryProgress } from "./QueryProgress";
 import { internalQueryTag } from "../lib/queryTags";
@@ -155,8 +155,11 @@ export function EditorTab(props: Props) {
     latest.current = props;
   });
 
-  /** The connection's default for new sessions ("Read-only sessions" when it was added). */
-  const connectionDefaultOf = (p: Props) => app.servers.find(p.tab.server)?.saved.readOnly === true;
+  /**
+   * The connection's default for new sessions ("Read-only sessions" when it was added; on this
+   * server, "Start sessions read-only" at sign-in).
+   */
+  const connectionDefaultOf = (p: Props) => readOnlyDefault(app, p.tab.server, app.servers.find(p.tab.server)?.saved);
   /**
    * Where the tab's statements run, read when they start (a stale render's copy could ask an
    * open session for a mode it was not opened with). readOnly is what runReadOnly says: an open

@@ -15,12 +15,20 @@ export interface SignedIn {
   token: string;
   /** Milliseconds since the epoch. */
   expiresAt: number;
+  /**
+   * "Start sessions read-only" was ticked at sign-in: every session the page opens on its own
+   * server asks for read_only, and the server confirms it before anything runs. A default for
+   * this sign-in's sessions, not a restricted account (New session can still open a writable one).
+   */
+  readOnly?: boolean;
 }
 
 // The iOS app signs its web views in by writing these two keys (ios/Hardcharger/Web/
 // WebConsole.swift, signInScript): keep them, and SignedIn's shape, in step with it.
 const key = "hardcharger-ui:sign-in";
 const userKey = "hardcharger-ui:user-name";
+/** "Start sessions read-only" as this tab last chose it (shown ticked on the next sign-in page). */
+const readOnlyKey = "hardcharger-ui:read-only";
 
 export class SignInError extends Error {
   override readonly name = "SignInError";
@@ -49,7 +57,12 @@ export function loadSignIn(now = Date.now()): SignedIn | null {
     const s = JSON.parse(raw) as Partial<SignedIn>;
     if (typeof s.token !== "string" || typeof s.username !== "string" || typeof s.expiresAt !== "number") return null;
     if (s.expiresAt - now < 5000) return null;
-    return { username: s.username, token: s.token, expiresAt: s.expiresAt };
+    return {
+      username: s.username,
+      token: s.token,
+      expiresAt: s.expiresAt,
+      ...(s.readOnly === true ? { readOnly: true } : {}),
+    };
   } catch {
     return null;
   }
@@ -69,6 +82,29 @@ export function clearSignIn(): void {
     storage()?.removeItem(key);
   } catch {
     // nothing saved
+  }
+}
+
+/**
+ * Whether "Start sessions read-only" was ticked the last time this tab chose (a sign-in, or a
+ * `?read_only=1` link), to show it ticked again: remembered per tab, like the token, and never
+ * applied without the box showing it.
+ */
+export function lastReadOnly(): boolean {
+  try {
+    return storage()?.getItem(readOnlyKey) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Remembers this tab's choice of "Start sessions read-only" (see lastReadOnly). */
+export function rememberReadOnly(readOnly: boolean): void {
+  try {
+    if (readOnly) storage()?.setItem(readOnlyKey, "1");
+    else storage()?.removeItem(readOnlyKey);
+  } catch {
+    // Private mode without storage: the box starts unticked next time.
   }
 }
 
@@ -141,6 +177,8 @@ const fragmentKey = "chargewire_oauth_flow";
 interface StoredFlow {
   flowId: string;
   pollSecret: string;
+  /** "Start sessions read-only" was ticked when the flow started: the sign-in it ends in is read-only. */
+  readOnly?: boolean;
 }
 
 /** The identity provider's name the server gives (`auth.oauth_browser.provider`), if any. */
@@ -157,9 +195,12 @@ export function offersBrowserSignIn(server: { capabilities?: readonly string[] }
 
 /**
  * Starts a browser sign-in and returns the URL to send the browser to. The page comes back
- * to where it is now (its path and query; the fragment is never sent).
+ * to where it is now (its path and query; the fragment is never sent). `readOnly` (the sign-in
+ * page's "Start sessions read-only") is kept with the flow in this tab, so it survives the
+ * round trip through the identity provider without riding in a URL.
  */
-export async function startBrowserSignIn(signal?: AbortSignal): Promise<string> {
+export async function startBrowserSignIn(options: { readOnly?: boolean; signal?: AbortSignal } = {}): Promise<string> {
+  const { signal } = options;
   const returnTo = window.location.pathname + window.location.search;
   let resp: Response;
   try {
@@ -186,7 +227,11 @@ export async function startBrowserSignIn(signal?: AbortSignal): Promise<string> 
   if (!body.flow_id || !body.poll_secret || !body.authorize_url) {
     throw new SignInError("The server answered without a sign-in to follow.", "client_protocol_error", resp.status);
   }
-  const flow: StoredFlow = { flowId: body.flow_id, pollSecret: body.poll_secret };
+  const flow: StoredFlow = {
+    flowId: body.flow_id,
+    pollSecret: body.poll_secret,
+    ...(options.readOnly === true ? { readOnly: true } : {}),
+  };
   try {
     storage()?.setItem(flowKey, JSON.stringify(flow));
   } catch {
@@ -260,6 +305,43 @@ function readSignInRequest(): "browser" | null {
 }
 
 /**
+ * Whether a link asked for read-only sessions (`?read_only=1`, alone or with
+ * `?sign_in=browser`). Read on the first call of a page load and removed from the address bar
+ * at once, whatever its value, so a reload or Back doesn't depend on it. A request ticks the
+ * sign-in page's "Start sessions read-only" (it is remembered for this tab, as a tick is), and
+ * when this tab is already signed in, makes the page's new sessions read-only.
+ */
+export function readOnlyRequested(): boolean {
+  if (readOnlyRequest === undefined) {
+    readOnlyRequest = readReadOnlyRequest();
+    if (readOnlyRequest) rememberReadOnly(true);
+  }
+  return readOnlyRequest;
+}
+
+let readOnlyRequest: boolean | undefined;
+const readOnlyParam = "read_only";
+
+/** What `?read_only=` asks for: 1, true, yes or on (any case) is a request; anything else isn't. */
+export function parseReadOnlyParam(value: string | null): boolean {
+  return value !== null && /^(1|true|yes|on)$/i.test(value.trim());
+}
+
+function readReadOnlyRequest(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has(readOnlyParam)) return false;
+  const requested = params.getAll(readOnlyParam).some(parseReadOnlyParam);
+  params.delete(readOnlyParam);
+  const rest = params.toString();
+  window.history.replaceState(
+    window.history.state,
+    "",
+    window.location.pathname + (rest ? `?${rest}` : "") + window.location.hash,
+  );
+  return requested;
+}
+
+/**
  * Collects the token of the flow this tab started and the server sent it back from. Null
  * when this tab didn't start `flowId` (someone else's link): the page ignores it.
  */
@@ -324,7 +406,12 @@ async function collectFlow(flowId: string): Promise<SignedIn | null> {
     }
     if (body.state === "complete" && typeof body.access_token === "string" && body.access_token !== "") {
       const lifetime = typeof body.expires_in === "number" && body.expires_in > 0 ? body.expires_in : 3600;
-      return { username: "", token: body.access_token, expiresAt: Date.now() + lifetime * 1000 };
+      return {
+        username: "",
+        token: body.access_token,
+        expiresAt: Date.now() + lifetime * 1000,
+        ...(flow.readOnly === true ? { readOnly: true } : {}),
+      };
     }
     if (body.state === "failed") {
       const code = body.error?.code ?? "client_sign_in_failed";

@@ -450,3 +450,183 @@ test("while the server is asked, the box is pending, not checked", async ({ page
   expect(await ro.box.evaluate((input: HTMLInputElement) => input.indeterminate)).toBe(false);
   await page.unroute(sessionDoc);
 });
+
+// ---- "Start sessions read-only" on the sign-in page, and ?read_only=1 (#61) ----
+
+/** Every session the page asks the server for, with whether it asked for read_only. */
+function sessionCreations(page: Page): { readOnly: boolean }[] {
+  const seen: { readOnly: boolean }[] = [];
+  page.on("request", (r) => {
+    if (r.method() !== "POST" || !/\/chargewire\/v1\/sessions$/.test(new URL(r.url()).pathname)) return;
+    const body = r.postDataJSON() as { options?: { read_only?: unknown } } | null;
+    seen.push({ readOnly: body?.options?.read_only === true });
+  });
+  return seen;
+}
+
+async function signInWithForm(page: Page, who: { username: string; password: string }): Promise<void> {
+  await page.getByLabel("User name").fill(who.username);
+  await page.getByLabel("Password").fill(who.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByTestId("header-user")).toContainText(who.username);
+  await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+}
+
+/** A write in the active tab is refused by the server as read-only, and nothing was created. */
+async function writeRefused(page: Page, table: string): Promise<void> {
+  expectProblem(page, { status: 400, url: /\/statements$/, required: false });
+  expectProblem(page, { status: 403, url: /\/statements$/, required: false });
+  await runDone(page, `CREATE TEMP TABLE ${table} (i INTEGER)`);
+  await expect(readOnlyMode(page).error).toContainText("read-only session");
+}
+
+test("Start sessions read-only: the first tab, a new tab, New session and a reload all start read-only", async ({
+  page,
+  harness,
+}, testInfo) => {
+  const created = sessionCreations(page);
+  await page.goto("/ui/");
+  const start = page.getByRole("checkbox", { name: "Start sessions read-only", exact: true });
+  await expect(start).not.toBeChecked();
+  await start.check();
+  await keepScreenshot(page, testInfo, "signin-read-only.png");
+  await signInWithForm(page, harness.admin);
+  // The sign-in asked the server for a read-only session once, before any tab could run.
+  expect(created[0]).toEqual({ readOnly: true });
+
+  // The first tab: server-confirmed read-only, a write refused, Upload off.
+  const ro = readOnlyMode(page);
+  await expect(ro.mode).toHaveAttribute("data-state", "next-on");
+  const before = created.length;
+  await runDone(page, "SELECT 1 AS n");
+  await expect(ro.mode).toHaveAttribute("data-state", "on");
+  await expect(ro.box).toBeChecked();
+  await expect(ro.box).toBeDisabled();
+  expect(created.slice(before)).toContainEqual({ readOnly: true });
+  await writeRefused(page, "ro_first_tab");
+  await expect(activeTab(page).getByTestId("upload-button")).toBeDisabled();
+  await expect(activeTab(page).getByTestId("upload-button")).toHaveAttribute(
+    "title",
+    "Upload is off: this connection opens read-only sessions",
+  );
+
+  // A new tab.
+  await page.getByRole("button", { name: "New tab" }).click();
+  await runDone(page, "SELECT 2 AS n");
+  await expect(readOnlyMode(page).mode).toHaveAttribute("data-state", "on");
+  await writeRefused(page, "ro_new_tab");
+
+  // New session: read-only again by default...
+  await activeTab(page).getByRole("button", { name: "New session", exact: true }).click();
+  await expect(readOnlyMode(page).mode).toHaveAttribute("data-state", "next-on");
+  await runDone(page, "SELECT 3 AS n");
+  await expect(readOnlyMode(page).mode).toHaveAttribute("data-state", "on");
+  await writeRefused(page, "ro_new_session");
+  // ...and the same user can still choose a writable one: New session, then clear Read-only.
+  await activeTab(page).getByRole("button", { name: "New session", exact: true }).click();
+  await readOnlyMode(page).box.uncheck();
+  await runDone(page, "CREATE TEMP TABLE writable_by_choice (i INTEGER)");
+  await expect(readOnlyMode(page).error).toHaveCount(0);
+  await expect(readOnlyMode(page).mode).toHaveAttribute("data-state", "off");
+
+  // A reload (the sign-in is kept for this tab, read-only with it): every tab starts read-only,
+  // the one left writable by choice included.
+  await page.reload();
+  await expect(page.getByTestId("header-user")).toContainText(harness.admin.username);
+  await runDone(page, "SELECT 4 AS n");
+  await expect(readOnlyMode(page).mode).toHaveAttribute("data-state", "on");
+  await writeRefused(page, "ro_after_reload");
+  await page.getByRole("tab", { name: /Query 1/ }).click();
+  await runDone(page, "SELECT 5 AS n");
+  await expect(readOnlyMode(page).mode).toHaveAttribute("data-state", "on");
+});
+
+test("Start sessions read-only left unticked keeps sessions read-write", async ({ page, harness }) => {
+  const created = sessionCreations(page);
+  await page.goto("/ui/");
+  await expect(page.getByRole("checkbox", { name: "Start sessions read-only", exact: true })).not.toBeChecked();
+  await signInWithForm(page, harness.admin);
+  await runDone(page, "CREATE TEMP TABLE writable_by_default (i INTEGER)");
+  await expect(readOnlyMode(page).error).toHaveCount(0);
+  await expect(readOnlyMode(page).mode).toHaveAttribute("data-state", "off");
+  await expect(activeTab(page).getByTestId("upload-button")).toBeEnabled();
+  expect(created.length).toBeGreaterThan(0);
+  expect(created.every((c) => !c.readOnly)).toBe(true);
+});
+
+test("?read_only=1 ticks the box, leaves the address bar at once, and a password sign-in is read-only", async ({
+  page,
+  harness,
+}) => {
+  await page.goto("/ui/?read_only=1&x=1");
+  const start = page.getByRole("checkbox", { name: "Start sessions read-only", exact: true });
+  await expect(start).toBeChecked();
+  const url = new URL(page.url());
+  expect(url.pathname + url.search).toBe("/ui/?x=1");
+  await signInWithForm(page, harness.admin);
+  await runDone(page, "SELECT 1 AS n");
+  await expect(readOnlyMode(page).mode).toHaveAttribute("data-state", "on");
+  await writeRefused(page, "ro_by_link");
+  // Signed out in the same tab, the box is still shown ticked: never applied unseen.
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(start).toBeChecked();
+  // Positive twin: cleared, the next sign-in is read-write.
+  await start.uncheck();
+  await signInWithForm(page, harness.admin);
+  await runDone(page, "CREATE TEMP TABLE writable_after_clearing (i INTEGER)");
+  await expect(readOnlyMode(page).error).toHaveCount(0);
+});
+
+test("?read_only=1 on a page already signed in makes its new sessions read-only", async ({ page, harness }) => {
+  await signIn(page, harness.admin);
+  await runDone(page, "CREATE TEMP TABLE writable_before_link (i INTEGER)");
+  await expect(readOnlyMode(page).error).toHaveCount(0);
+  await page.goto("/ui/?read_only=1");
+  await expect(page.getByTestId("header-user")).toContainText(harness.admin.username);
+  expect(new URL(page.url()).search).toBe("");
+  await runDone(page, "SELECT 1 AS n");
+  await expect(readOnlyMode(page).mode).toHaveAttribute("data-state", "on");
+  await writeRefused(page, "ro_link_signed_in");
+});
+
+test("a server without read-only sessions refuses at sign-in in its own words, and nothing runs", async ({
+  page,
+  harness,
+}) => {
+  // As a server before 2.13.0 answers a session option it doesn't know.
+  const refusal = 'unknown session option "read_only"';
+  await page.route(/\/chargewire\/v1\/sessions$/, async (route) => {
+    const body = route.request().postDataJSON() as { options?: { read_only?: unknown } } | null;
+    if (route.request().method() !== "POST" || body?.options?.read_only !== true) return route.fallback();
+    await route.fulfill({
+      status: 400,
+      contentType: "application/problem+json",
+      body: JSON.stringify({
+        type: "about:blank",
+        title: "Bad Request",
+        status: 400,
+        code: "unknown_option",
+        detail: refusal,
+      }),
+    });
+  });
+  expectProblem(page, { status: 400, url: /\/sessions$/ });
+  const statements: string[] = [];
+  page.on("request", (r) => {
+    if (/\/statements$/.test(r.url())) statements.push(r.url());
+  });
+  await page.goto("/ui/");
+  await page.getByRole("checkbox", { name: "Start sessions read-only", exact: true }).check();
+  await page.getByLabel("User name").fill(harness.admin.username);
+  await page.getByLabel("Password").fill(harness.admin.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByTestId("signin-notice")).toHaveText(
+    `The server did not start a read-only session: ${refusal}. Nothing ran. ` +
+      'Sign in again without "Start sessions read-only" to use this server.',
+  );
+  await expect(page.getByTestId("header-user")).toHaveCount(0);
+  expect(statements).toEqual([]);
+  // Positive twin: without the box, the same server signs in.
+  await page.getByRole("checkbox", { name: "Start sessions read-only", exact: true }).uncheck();
+  await signInWithForm(page, harness.admin);
+});

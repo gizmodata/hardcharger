@@ -170,6 +170,9 @@ HARDCHARGER_ADMIN_PASSWORD='change-me' hardcharger-server --web-ui --tls-cert se
 - 🌐 **Sign in with your identity provider**: with browser sign-in on (below), the page offers
   **Sign in with <provider>** beside the user name and password, and comes back signed in. A
   link to `/ui/?sign_in=browser` starts that sign-in without the click.
+- 🔒 **Start sessions read-only** on the sign-in page (or a link with `?read_only=1`) makes every
+  new editor session read-only, confirmed by the server before anything runs: a default for your
+  own sessions, not a restricted account.
 - 🛡️ The server's own sign-in, a short-lived token kept only in the tab, and a strict
   Content-Security-Policy: nothing loads from another origin.
 
@@ -1410,6 +1413,12 @@ browser sign-in and nobody is signed in in that tab; it takes the parameter out 
 bar first, so a reload, Back or a failed sign-in doesn't go to the provider again, and a failure
 shows the sign-in page with the reason. The flow is still the person's own, in their tab, and
 the provider still asks them to sign in or confirm.
+
+Add `read_only=1` (`/ui/?sign_in=browser&read_only=1`, or `/ui/?read_only=1` for the password
+form) to tick the sign-in page's **Start sessions read-only**: the person's editor sessions then
+open read-only, confirmed by the server. It is a default for their sessions, not a restriction
+of their account (they can still choose a writable session); the parameter leaves the address
+bar at once, and the choice survives the trip to the identity provider in that tab.
 
 ### Object lifetimes and access-control records
 

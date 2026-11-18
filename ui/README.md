@@ -50,8 +50,18 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   Closing, reloading or leaving the page ends its sessions on the server at once (keepalive
   `DELETE`s on `pagehide`), rather than at their idle timeout; with a transaction open the
   browser asks first. A page brought back with Back loads again, with new sessions.
-- 🔒 **Read-only sessions**: select the checkbox when adding a connection, or **Read-only**
-  beside an editor tab's session id. The box shows the session the tab has: it is checked and
+- 🔒 **Read-only sessions**: select **Start sessions read-only** on the sign-in page (for this
+  server: password, certificate and browser sign-in), the checkbox when adding a connection, or
+  **Read-only** beside an editor tab's session id. **Start sessions read-only** is a default for
+  your sessions in that tab, not a restricted account: new tabs, New session, a reload and the
+  replacement for a lost session open read-only, and the server is asked for a read-only session
+  at sign-in, so one that has none (before 2.13.0) refuses there, in its own words, before anything
+  runs. It is kept with the tab's sign-in (in `sessionStorage`; for browser sign-in, with the flow,
+  so it survives the identity provider's round trip) and is shown ticked whenever it applies. A
+  link with `?read_only=1` ticks it (and, on a page already signed in, makes that page's new
+  sessions read-only); the parameter is read once and leaves the address bar at once, and
+  `?sign_in=browser&read_only=1` opens a read-only workspace in one click. Restricting a person
+  for real stays a `readonly` token role or grants. The box shows the session the tab has: it is checked and
   locked only once the server says that session is read-only, and shows a pending state while it
   is asked. It cannot be unchecked on that session; choose **New session**, then uncheck it
   before running to request a writable session. With no session open, the box is the tab's choice
@@ -234,8 +244,9 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   GizmoData Cloud's Connect opens) starts that sign-in on its own, once: only when the server
   offers it, nobody is signed in and the page isn't the way back from a flow; the parameter
   leaves the address bar before the flow starts (so a reload, Back or a failure can't loop),
-  and a failure shows the reason as a failed click does. e2e: `oauth.spec.ts`, against a
-  mock identity provider (`test/e2e/idp.ts`); unit: `test/unit/sign-in-link.test.tsx`.
+  and a failure shows the reason as a failed click does; with `&read_only=1` the sign-in it
+  starts is read-only (above). e2e: `oauth.spec.ts`, against a mock identity provider
+  (`test/e2e/idp.ts`); unit: `test/unit/sign-in-link.test.tsx`, `read-only-sign-in.test.tsx`.
 - 🎨 The Hardcharger™ bull logo (its light or dark variant to match the theme), GizmoData's
   orange and Chargewire blue, light and dark themes (the system's choice until you pick one), Inter
   embedded in the build (SIL Open Font License 1.1,
