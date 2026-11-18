@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod local_admin;
 mod migrate;
 mod network;
 #[cfg(target_os = "macos")]
@@ -112,6 +113,45 @@ pub(crate) async fn control(
     .await;
     if let Ok(status) = &result {
         tray::show(app, status.running);
+    }
+    let _ = app.emit_to("main", "server-changed", ());
+    result
+}
+
+/// Only this computer: the administrator's password, for the dashboard's Reveal and Copy (#56).
+#[tauri::command]
+async fn local_admin_password(
+    window: WebviewWindow,
+    state: tauri::State<'_, Shared>,
+) -> Result<String, String> {
+    controller(&window)?;
+    work(state.inner().clone(), Server::local_password).await
+}
+
+/// Only this computer: Generate new password. Like Restart, it closes the SQL workspace and
+/// query windows first and needs the controller's confirmation.
+#[tauri::command]
+async fn regenerate_local_password(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: tauri::State<'_, Shared>,
+    confirmed: Option<bool>,
+) -> Result<Status, String> {
+    controller(&window)?;
+    if confirmed != Some(true) {
+        return Err("Confirm generating a new password first.".into());
+    }
+    for (label, window) in app.webview_windows() {
+        if label.starts_with("query-detail-") {
+            window.destroy().map_err(|e| e.to_string())?;
+        }
+    }
+    if let Some(window) = app.get_webview_window("workspace") {
+        window.destroy().map_err(|e| e.to_string())?;
+    }
+    let result = work(state.inner().clone(), Server::regenerate_local_password).await;
+    if let Ok(status) = &result {
+        tray::show(&app, status.running);
     }
     let _ = app.emit_to("main", "server-changed", ());
     result
@@ -667,7 +707,9 @@ fn main() {
             update_state,
             update_check,
             update_preferences,
-            update_install
+            update_install,
+            local_admin_password,
+            regenerate_local_password
         ])
         .setup(|app| {
             let binary_name = if cfg!(windows) {

@@ -21,6 +21,16 @@ own changelog in `python/CHANGELOG.md`.
   read-only workspace in one click, the choice surviving the identity provider's round trip.
   The parameter leaves the address bar at once. A server without read-only sessions refuses at
   sign-in, with its own message, before anything runs.
+- **Desktop app: other programs on this computer can connect in Only this computer mode**
+  ([#56](https://github.com/gizmodata/hardcharger/issues/56)). The local server's administrator
+  password is generated once, kept in the macOS Keychain or Windows Credential Manager and reused
+  on every start, instead of changing at every start and never being shown. The dashboard shows
+  the user name and the masked password with **Reveal**, **Copy password** and **Generate new
+  password** (which restarts a running server after the Restart confirmation; the old password
+  stops working), and a **Connect from this computer** panel has Web UI, Python / ADBC, JDBC, CLI
+  and JavaScript examples for `127.0.0.1` over plain HTTP that read the credentials from
+  `HARDCHARGER_USER` / `HARDCHARGER_PASSWORD`. The password stays out of Export YAML, logs, the
+  command line and the examples. Upgrading users get a password on their first start.
 
 ### Changed
 

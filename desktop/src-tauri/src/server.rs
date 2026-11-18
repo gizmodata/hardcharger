@@ -6,8 +6,12 @@ use std::{
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::Arc,
     time::{Duration, Instant},
 };
+
+use crate::local_admin::LocalAdmin;
+use crate::remote_servers::PasswordStore;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -128,6 +132,18 @@ pub struct Status {
     pub generated_certificate: Option<crate::network::GeneratedCertificate>,
     /// A server this app started in an earlier run that is still running (issue #28).
     pub leftover: Option<Leftover>,
+    /// Only this computer: the administrator's user name, never the password (#56).
+    pub local_admin: Option<LocalAdminStatus>,
+}
+
+/// What the dashboard shows about local-only mode's administrator, without the password: Reveal
+/// and Copy ask for it (`Server::local_password`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAdminStatus {
+    pub username: String,
+    /// Why the password couldn't be saved in the credential store (it then changes at every start).
+    pub error: Option<String>,
 }
 
 /// What the app records about the server it started (`sidecar.json` in its data folder),
@@ -175,7 +191,20 @@ pub struct Server {
     settings_pending: bool,
     pending_network: Option<bool>,
     leftover: Option<Leftover>,
+    local_admin: LocalAdmin,
     pub stop_deadlines: StopDeadlines,
+}
+
+/// Where the local administrator's password is kept: the OS credential store; in unit tests,
+/// memory, so they never touch a real keychain.
+#[cfg(not(test))]
+fn default_password_store() -> Arc<dyn PasswordStore> {
+    Arc::new(crate::remote_servers::Keychain)
+}
+
+#[cfg(test)]
+fn default_password_store() -> Arc<dyn PasswordStore> {
+    Arc::new(crate::remote_servers::tests::MemoryStore::default())
 }
 
 const SIDECAR_FILE: &str = "sidecar.json";
@@ -313,6 +342,15 @@ fn request_error(error: reqwest::Error) -> String {
 
 impl Server {
     pub fn new(binary: PathBuf, directory: PathBuf) -> Result<Self, String> {
+        Self::with_password_store(binary, directory, default_password_store())
+    }
+
+    /// As new, keeping the local administrator's password in `store`.
+    pub fn with_password_store(
+        binary: PathBuf,
+        directory: PathBuf,
+        store: Arc<dyn PasswordStore>,
+    ) -> Result<Self, String> {
         fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
         #[cfg(unix)]
         {
@@ -395,6 +433,7 @@ impl Server {
             settings_pending,
             pending_network,
             leftover,
+            local_admin: LocalAdmin::new(store),
             stop_deadlines: StopDeadlines::default(),
         };
         result.validate_options(&result.settings)?;
@@ -469,8 +508,37 @@ impl Server {
         if self.settings.network.enabled {
             &self.settings.network.username
         } else {
-            "hardcharger"
+            crate::local_admin::USERNAME
         }
+    }
+
+    /// Only this computer: the administrator's password, for Reveal and Copy on the dashboard
+    /// (a person's click; never sent anywhere else). While the server runs, the one it runs with.
+    pub fn local_password(&mut self) -> Result<String, String> {
+        if self.settings.network.enabled {
+            return Err("Network access uses the user name and password set in Settings.".into());
+        }
+        if self.status()?.running && !self.password.is_empty() {
+            return Ok(self.password.clone());
+        }
+        self.local_admin.password().map_err(|e| {
+            format!("The password could not be read from the OS credential store: {e}")
+        })
+    }
+
+    /// Only this computer: replaces the administrator's password with a new one and, when the
+    /// server runs, restarts it with that one, so the old password stops working at once.
+    pub fn regenerate_local_password(&mut self) -> Result<Status, String> {
+        if self.settings.network.enabled {
+            return Err("Network access uses the password set in Settings.".into());
+        }
+        let running = self.status()?.running;
+        self.local_admin.regenerate()?;
+        if running {
+            self.stop()?;
+            return self.start();
+        }
+        self.status()
     }
 
     fn http_client(&self) -> Result<reqwest::blocking::Client, String> {
@@ -611,6 +679,12 @@ impl Server {
                 &self.settings.network.tls_cert,
             ),
             leftover: self.leftover.clone(),
+            local_admin: (!self.settings.network.enabled).then(|| LocalAdminStatus {
+                username: crate::local_admin::USERNAME.into(),
+                error: self.local_admin.error.as_ref().map(|e| {
+                    format!("The password could not be saved in the OS credential store, so it changes at every start ({e}).")
+                }),
+            }),
         })
     }
 
@@ -657,7 +731,9 @@ impl Server {
         self.password = if self.settings.network.enabled {
             self.settings.network.password.clone()
         } else {
-            random_secret()?
+            // Generated once and kept in the credential store, so it stays the same until the
+            // person generates a new one (#56).
+            self.local_admin.password_for_start()?
         };
         let log = OpenOptions::new()
             .create(true)
@@ -1776,6 +1852,197 @@ mod tests {
             !directory.join(SIDECAR_FILE).exists(),
             "a clean stop forgets the sidecar record"
         );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Runs `sql` with the bundled CLI as `username`, the password in its environment (as the
+    /// dashboard's examples say), and returns its output.
+    fn cli(server: &Server, username: &str, password: &str, sql: &str) -> std::process::Output {
+        Command::new(server.client_binary())
+            .args([
+                "--host",
+                "127.0.0.1",
+                "--port",
+                &server.settings.port.to_string(),
+                "--no-tls",
+                "--username",
+                username,
+                "-c",
+                sql,
+            ])
+            .env("HARDCHARGER_PASSWORD", password)
+            .output()
+            .unwrap()
+    }
+
+    fn password_accepted(server: &Server, password: &str) -> reqwest::StatusCode {
+        server
+            .http_client()
+            .unwrap()
+            .post(format!("{}/chargewire/v1/auth/token", server.endpoint()))
+            .json(&serde_json::json!({"grant_type": "password", "username": "hardcharger", "password": password}))
+            .send()
+            .unwrap()
+            .status()
+    }
+
+    /// Nothing the app writes or shows, and not the server's command line, contains `password`.
+    fn assert_kept_secret(server: &mut Server, directory: &Path, password: &str) {
+        for file in ["server.log", "server.yaml", "settings.json"] {
+            if let Ok(text) = fs::read_to_string(directory.join(file)) {
+                assert!(!text.contains(password), "{file} contains the password");
+            }
+        }
+        let status = serde_json::to_string(&server.status().unwrap()).unwrap();
+        assert!(
+            !status.contains(password),
+            "the status (and Export YAML's settings) contains it"
+        );
+        #[cfg(unix)]
+        if let Some(pid) = server.status().unwrap().pid {
+            let ps = Command::new("ps")
+                .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            let command = String::from_utf8_lossy(&ps.stdout);
+            assert!(command.contains("hardcharger-server"), "{command}");
+            assert!(
+                !command.contains(password),
+                "the command line contains the password"
+            );
+        }
+    }
+
+    /// #56: Only this computer's administrator password is generated once, kept, shown on
+    /// request, the same after a restart and a relaunch, and replaced by Generate new password,
+    /// after which the old one is refused. The CLI (and Python/ADBC, with
+    /// HARDCHARGER_DESKTOP_TEST_PYTHON naming a Python that has adbc-driver-hardcharger) signs
+    /// in with the shown credentials.
+    #[test]
+    fn local_only_password_is_kept_shown_and_regenerated_with_real_server() {
+        let Some(binary) = std::env::var_os("HARDCHARGER_DESKTOP_TEST_SERVER") else {
+            return;
+        };
+        let directory = std::env::temp_dir().join(format!(
+            "hardcharger-local-admin-test-{}",
+            random_secret().unwrap()
+        ));
+        let store: Arc<dyn PasswordStore> =
+            Arc::new(crate::remote_servers::tests::MemoryStore::default());
+        let mut server =
+            Server::with_password_store(binary.clone().into(), directory.clone(), store.clone())
+                .unwrap();
+        server
+            .save_settings(Settings {
+                start_on_open: false,
+                ..Settings::default()
+            })
+            .unwrap();
+        let status = server.status().unwrap();
+        assert_eq!(status.local_admin.as_ref().unwrap().username, "hardcharger");
+        assert!(status.local_admin.as_ref().unwrap().error.is_none());
+        // Shown before the first start too (generated and saved on first use).
+        let shown = server.local_password().unwrap();
+        assert!(shown.len() >= crate::local_admin::MINIMUM_LENGTH);
+        assert_eq!(
+            store.get(crate::local_admin::ACCOUNT).unwrap().as_deref(),
+            Some(shown.as_str())
+        );
+        assert!(start_on_a_free_port(&mut server, "127.0.0.1").running);
+        let port = server.settings.port;
+        assert_eq!(server.local_password().unwrap(), shown);
+        let output = cli(
+            &server,
+            "hardcharger",
+            &shown,
+            "CREATE TABLE kept AS SELECT 42 AS answer;",
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if let Some(python) = std::env::var_os("HARDCHARGER_DESKTOP_TEST_PYTHON") {
+            let script = format!(
+                "import os\nfrom adbc_driver_hardcharger import dbapi as hardcharger\n\
+                 with hardcharger.connect(uri='hardcharger://127.0.0.1:{port}?tls=false', \
+                 username=os.environ['HARDCHARGER_USER'], password=os.environ['HARDCHARGER_PASSWORD']) as c:\n\
+                 \x20   with c.cursor() as cur:\n\
+                 \x20       cur.execute(operation='SELECT answer FROM kept')\n\
+                 \x20       print(cur.fetchone()[0])\n"
+            );
+            let output = Command::new(python)
+                .args(["-I", "-c", &script])
+                .env("HARDCHARGER_USER", "hardcharger")
+                .env("HARDCHARGER_PASSWORD", &shown)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+        }
+        assert_kept_secret(&mut server, &directory, &shown);
+
+        // A restart keeps it.
+        server.stop().unwrap();
+        assert_eq!(server.local_password().unwrap(), shown);
+        assert!(server.start().unwrap().running);
+        assert_eq!(password_accepted(&server, &shown), reqwest::StatusCode::OK);
+
+        // A relaunch (a new app process: a new Server over the same credential store) keeps it.
+        drop(server);
+        let mut server =
+            Server::with_password_store(binary.into(), directory.clone(), store.clone()).unwrap();
+        server.settings.port = port;
+        assert_eq!(server.local_password().unwrap(), shown);
+        assert!(start_on_a_free_port(&mut server, "127.0.0.1").running);
+        let output = cli(&server, "hardcharger", &shown, "SELECT answer FROM kept;");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
+
+        // Generate new password: the server restarts with the new one; the old one is refused.
+        let status = server.regenerate_local_password().unwrap();
+        assert!(status.running);
+        let fresh = server.local_password().unwrap();
+        assert_ne!(fresh, shown);
+        assert_eq!(
+            store.get(crate::local_admin::ACCOUNT).unwrap().as_deref(),
+            Some(fresh.as_str())
+        );
+        assert_eq!(
+            password_accepted(&server, &shown),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+        let refused = cli(&server, "hardcharger", &shown, "SELECT 1;");
+        assert!(!refused.status.success());
+        let output = cli(&server, "hardcharger", &fresh, "SELECT answer FROM kept;");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            server.sign_in().is_ok(),
+            "the SQL workspace signs in with the new one"
+        );
+        assert_kept_secret(&mut server, &directory, &fresh);
+        assert_kept_secret(&mut server, &directory, &shown);
+
+        // Network mode has its own password: none of this applies there.
+        server.stop().unwrap();
+        server.settings.network.enabled = true;
+        assert!(server.local_password().is_err());
+        assert!(server.regenerate_local_password().is_err());
+        assert!(server.status().unwrap().local_admin.is_none());
+        server.settings.network.enabled = false;
+        drop(server);
         fs::remove_dir_all(directory).unwrap();
     }
 

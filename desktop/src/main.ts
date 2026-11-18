@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { stringify } from "yaml";
 import { version as appVersion } from "../package.json";
 import { connectionPanel, bindConnectionPanel } from "./connectionPanel";
+import { localAdminCard, localAdminDialog, bindLocalAdmin, forgetRevealedPassword, confirmingNewPassword, type LocalAdminStatus } from "./localAdmin";
 import { updateBadge, updateAbout, updateDialogs, bindUpdates, startUpdates } from "./updates";
 import { defaultNetwork, networkErrors, certificateCovers, lostAddress, normalHost, isGizmoDataCloudHost, type NetworkSettings, type NetworkInfo, type GeneratedCertificate, type WorkspaceTrust } from "./network";
 import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, type ServerOption } from "./configuration";
@@ -20,6 +21,8 @@ interface Status {
   pendingNetwork?: boolean | null;
   /** A server this app started in an earlier run that is still running (issue #28). */
   leftover?: { pid: number; host: string; port: number } | null;
+  /** Only this computer: the administrator's user name (the password only on Reveal or Copy). */
+  localAdmin?: LocalAdminStatus | null;
 }
 
 const native = isTauri();
@@ -383,7 +386,7 @@ function render() {
         ${tab === "server" ? serverView(s) : tab === "settings" ? settingsView(s) : tab === "logs" ? logsView() : aboutView()}
       </div>
       <footer><span>${esc(s?.version ?? "Hardcharger")} <span class="footer-dot">·</span> Chargewire</span><span>Fast, secure, remote DuckDB.</span></footer>
-    </main>${trustDialog()}${controlDialog()}${updateDialogs(running, s?.settings.start_on_open ?? true)}`;
+    </main>${trustDialog()}${controlDialog()}${localAdminDialog(s)}${updateDialogs(running, s?.settings.start_on_open ?? true)}`;
   const controlConfirmation = document.querySelector<HTMLDialogElement>("#server-control-confirmation");
   if (controlConfirmation) {
     controlConfirmation.showModal();
@@ -402,6 +405,7 @@ function render() {
     });
   }
   bindConnectionPanel(current, render);
+  bindLocalAdmin(render, status => { current = status as Status; render(); }, showError);
   bindUpdates(render, () => current?.running ?? false);
   const logOutput = document.querySelector<HTMLElement>("#log-output");
   if (logOutput) logOutput.scrollTop = logFollowing ? logOutput.scrollHeight : logScroll;
@@ -422,7 +426,7 @@ function render() {
       if (workspaceTrust) void invoke("show_certificate_folder", { certificate: workspaceTrust.certificate.certificate }).catch(showError);
     });
   }
-  app.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b => b.addEventListener("click", () => { tab = b.dataset.tab!; error = ""; render(); if (tab === "logs") void refreshLogs(); }));
+  app.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b => b.addEventListener("click", () => { tab = b.dataset.tab!; error = ""; forgetRevealedPassword(); render(); if (tab === "logs") void refreshLogs(); }));
   app.querySelectorAll<HTMLButtonElement>("[data-action]").forEach(b => b.addEventListener("click", () => void action(b.dataset.action!)));
   app.querySelectorAll<HTMLAnchorElement>("[data-marketing-link]").forEach(link => link.addEventListener("click", e => {
     if (!native) return;
@@ -564,6 +568,7 @@ function serverView(s: Status | null) {
       </div>${picture("mascot", "Hardcharger charging bull mascot", "hero-mascot")}
     </section>
     <div class="stats"><section class="card stat"><span class="stat-label">SERVER ADDRESS</span><strong class="mono" title="${esc(s?.endpoint ?? "")}">${esc(s?.endpoint ?? "Loading…")}</strong><span>Chargewire endpoint${s?.settings.network?.enabled ? ` · listening on ${esc(s.settings.network.listen_address)}` : ""}</span></section><section class="card stat"><span class="stat-label">UPTIME</span><strong>${running ? uptime(s!.uptimeSeconds) : "—"}</strong><span>${running ? "Since the last start" : "Server is stopped"}</span></section><section class="card stat"><span class="stat-label">DATABASE SIZE</span><strong>${s ? bytes(s.databaseBytes) : "—"}</strong><span>Stored on this computer</span></section></div>
+    ${localAdminCard(s, busy || !native)}
     ${connectionPanel(s)}
     <section class="card detail-card"><div class="section-heading"><div><h3>Server controls</h3><p>Manage the server running on this computer.</p></div><span class="pill">${running ? `PID ${s?.pid}` : "Offline"}</span></div><div class="control-actions">${button("start", "Start", "play", false, running || !s)}${button("stop", "Stop", "stop", false, !running)}${button("restart", "Restart", "restart", false, !running)}<span class="control-note">Stopping closes the SQL workspace.</span></div><div class="database-row">${icon("folder")}<div><strong>Hardcharger.duckdb</strong><span title="${esc(s?.database ?? "")}">${esc(s?.database ?? "Loading database location…")}</span></div>${button("folder", "Show folder", "folder")}</div></section>
     <div class="resident-note">${icon("info")}<p><strong>Close the window. Keep the engine running.</strong> Hardcharger stays in your menu bar or system tray. Choose <strong>Quit Hardcharger</strong> there to stop the server and exit.</p></div>`;
@@ -757,10 +762,11 @@ async function refresh() {
     const s = await invoke<Status>("server_status");
     // The workspace removed or renamed a remote server: Settings shows it, unless it holds edits.
     const remotesChanged = !draftDirty && !remoteRows && JSON.stringify(current?.settings.remote_servers ?? []) !== JSON.stringify(s.settings.remote_servers ?? []);
-    const changed = !current || current.running !== s.running || current.error !== s.error || current.leftover?.pid !== s.leftover?.pid || remotesChanged;
+    const changed = !current || current.running !== s.running || current.error !== s.error || current.leftover?.pid !== s.leftover?.pid || remotesChanged
+      || JSON.stringify(current.localAdmin ?? null) !== JSON.stringify(s.localAdmin ?? null);
     current = s;
     // Keep form focus, scroll position, and text selections while polling.
-    if (changed) render();
+    if (changed && !confirmingNewPassword()) render();
     else if (tab === "server") {
       const values = app.querySelectorAll<HTMLElement>(".stat strong");
       if (values[1]) values[1].textContent = s.running ? uptime(s.uptimeSeconds) : "—";
@@ -834,7 +840,7 @@ async function saveSettings(settings: Settings) {
 }
 
 if (designPreview) {
-  current = { running: true, pid: 24781, port: 31337, endpoint: "http://127.0.0.1:31337", database: "~/Library/Application Support/Hardcharger/Hardcharger.duckdb", logFile: "server.log", uptimeSeconds: 165, databaseBytes: 122683392, version: `Hardcharger ${appVersion}`, error: null, settings: { port: 31337, start_on_open: true, server_options: {} } };
+  current = { running: true, pid: 24781, port: 31337, endpoint: "http://127.0.0.1:31337", database: "~/Library/Application Support/Hardcharger/Hardcharger.duckdb", logFile: "server.log", uptimeSeconds: 165, databaseBytes: 122683392, version: `Hardcharger ${appVersion}`, error: null, settings: { port: 31337, start_on_open: true, server_options: {} }, localAdmin: { username: "hardcharger", error: null } };
 } else if (!native) {
   error = "Open the Hardcharger desktop app to control your server. Use ?preview=1 to view the design in a browser.";
 }

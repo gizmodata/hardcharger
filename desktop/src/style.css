@@ -228,3 +228,9 @@ footer { padding:14px 32px; border-top:1px solid var(--soft); display:flex; just
 .remote-servers .remote-lock-fingerprint { color:#9a6a00; }
 .remote-servers .remote-lock-plaintext { color:#b42318; }
 .remote-servers #add-remote { margin-top:14px; }
+.credentials { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px; margin:16px 0 0; }
+.credentials > div { padding:12px 14px; border:1px solid var(--border); border-radius:6px; background:var(--bg); min-width:0; }
+.credentials dt { font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
+.credentials dd { margin:0; }
+.credentials code { font-size:14px; overflow-wrap:anywhere; user-select:all; }
+.local-admin .control-actions { flex-wrap:wrap; padding-bottom:6px; }

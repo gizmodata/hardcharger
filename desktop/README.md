@@ -62,6 +62,14 @@ x64/Arm64. Linux packaging and testing are follow-up work.
   DNS name/IP, and set the administrator user name and password. The password persists
   in the OS credential store. Save and start the server; the dashboard shows the actual
   endpoint, transport, listen address, and URLs for other computers.
+- **Only this computer** keeps a generated administrator password (`hardcharger`, at least
+  12 characters) in the OS credential store (account `local-admin-password` under the app's
+  service name, `src-tauri/src/local_admin.rs`), reused on every start. The dashboard shows it
+  masked with Reveal, Copy password and Generate new password (which restarts a running server
+  after the Restart confirmation), and **Connect from this computer** gives examples for
+  `127.0.0.1` over plain HTTP. The password never enters settings, YAML, logs or the command
+  line; native commands return it only to the controller, on a click. Without a usable
+  credential store the server starts with a password for that run only, and the card says why.
 - **Connect from another computer** has Web UI, Python/ADBC, JDBC, CLI and JavaScript
   tabs with copyable examples generated from the saved endpoint and TLS mode. Examples
   use Hardcharger URI schemes and client credential environment variables; saved secrets
@@ -144,8 +152,9 @@ x64/Arm64. Linux packaging and testing are follow-up work.
   visible as managed; listener/TLS/administrator fields are edited in Network access.
   YAML imports cannot change network sharing or its credentials, and exports leave
   desktop-managed networking/authentication out. mTLS and saved remote connections remain
-  follow-up work. Returning to local-only mode restores loopback HTTP and a freshly
-  generated private administrator password, while retaining the saved network configuration.
+  follow-up work. Returning to local-only mode restores loopback HTTP and the local
+  administrator password kept in the credential store, while retaining the saved network
+  configuration.
 - Normal close/quit is covered; crash recovery and OS logout/reboot behavior still need
   platform acceptance testing before release. Background residency does not keep a sleeping
   computer awake or make this a system service.
@@ -171,6 +180,10 @@ labeled **design preview**, with sample status and native controls disabled; it 
 Network tests also cover an IPv6 listener, persistent credential redaction, authenticated
 HTTP/TLS startup with a freshly generated short-lived test certificate, wrong passwords,
 and rejection of a mismatched TLS hostname. Test certificates never enter the OS trust store.
+The local administrator password test keeps the password in memory; set
+`HARDCHARGER_DESKTOP_TEST_KEYCHAIN=1` to also exercise the real credential store under a
+throwaway service name (never the app's own entries), and `HARDCHARGER_DESKTOP_TEST_PYTHON` to a
+Python with `adbc-driver-hardcharger` to sign in from Python/ADBC too.
 
 ## Signing and release artifacts
 
