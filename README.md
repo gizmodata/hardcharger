@@ -1376,6 +1376,84 @@ lets a role's admin-option holder grant does not carry it), but grant it only on
 replica runs 2.14, so that every replica also shows and audits it. The reasons for each
 rule are in [docs/security-administration-design.md](docs/security-administration-design.md).
 
+### Delegated account management (`CREATE USER`, ...)
+
+A help desk can manage accounts without reading data and without `SYSTEM ADMIN`. Five system
+privileges, each opening one statement, are granted to a role like `READ FILESYSTEM`:
+
+```sql
+CREATE ROLE helpdesk;
+GRANT CREATE USER, ALTER USER, DROP USER, CREATE ROLE, DROP ROLE TO helpdesk;
+GRANT helpdesk TO amy;
+```
+
+amy then creates users, resets their passwords, disables, enables and drops them, and creates
+and drops roles, under her own name:
+
+```sql
+CREATE USER eve WITH PASSWORD '…';
+ALTER USER eve WITH PASSWORD '…';    -- ends eve's sessions, as an administrator's reset does
+ALTER USER eve DISABLE;
+DROP USER eve;
+```
+
+What she reaches is limited to what her session is, so none of these statements hands her
+(or anyone) authority she lacks:
+
+- **Users no more powerful than the session.** `ALTER USER` and `DROP USER` reach a user only
+  when every role it holds is one the session acts with (`SET ROLE` narrows that), every role
+  it holds `WITH ADMIN OPTION` is one amy could grant, every session attribute it has (which
+  row and masking policies read) amy has with the same value, and, for `ALTER USER`, it owns
+  no table, view or schema. A user who holds `SYSTEM ADMIN` and the server administrator are
+  never reached (`Hardcharger blocked ALTER USER: user bob holds role analyst, which user amy
+  does not hold in this session; only an administrator changes it`). That covers a new
+  password, `ENABLE` of a disabled account, `DISABLE` and `DROP`.
+- **No policy attributes.** `ALTER USER … SET ATTRIBUTE` / `UNSET ATTRIBUTE` stay the
+  administrator's: an attribute decides which rows and values a user sees.
+- **Roles no more powerful than the session.** `DROP ROLE` reaches a role only when
+  everything it inherits is held by the session, it is held by the session itself or holds no
+  privilege of its own, and no row policy names it and no masking policy exempts it. A new
+  role (`CREATE ROLE`) holds nothing, and its creator gets no admin option on it: granting a
+  role still needs the role `WITH ADMIN OPTION`, as before. A new user holds `PUBLIC` only.
+- **The server's own users and roles.** A tenant's users and roles stay with that tenant's
+  `tenant_admin` role, as before (`acme/tom belongs to tenant acme, and the ALTER USER
+  privilege reaches system-scope users and roles only`).
+- **Granted only by an administrator.** Only the administrator, or a session acting as
+  System Admin, grants and revokes them; they have no `ADMIN OPTION`, are never part of `ALL
+  PRIVILEGES`, and go to a role of the server itself, not to `PUBLIC` or a tenant's role. A
+  role carries them only through memberships the administrator gave (and through group
+  mappings): a membership the holder of a role's admin option granted never carries one, and
+  once a role holds one, only the administrator grants membership in it.
+- **Never for a limited sign-in.** A scoped token, a token with `catalog_access` rules, a
+  `readonly` sign-in and a `read_only` connection never use them (`this session's sign-in
+  token carries catalog_access rules, and such a session never uses the CREATE USER
+  privilege`).
+- **Taken away at the next statement, on every replica.** Each statement asks the store
+  itself inside its own store transaction, not what the replica last polled, so after
+  `REVOKE CREATE USER FROM helpdesk` (or taking amy out of the role) on any replica, amy's
+  next `CREATE USER` anywhere is refused. A grant is usable at once on every replica too.
+
+Passwords set this way are checked as any `CREATE USER` or `ALTER USER … WITH PASSWORD`
+password is. Each change and each refusal is an access-control audit record with the target
+(`target`, `target_ids`), the privilege the statement needs (`privilege`), what authorized it
+(`authorized_by`: `administrator`, `System Admin`, `tenant_admin of tenant acme`, or `ALTER USER
+privilege, through role helpdesk`), the session's `active_role`, the statement's Chargewire id
+(`statement_id`, also on its log lines) and the account before and after, sanitized:
+
+```json
+{"message":"access-control statement","user":"amy","user_id":"…","session_id":"s_…","statement_id":"q_…","active_role":"helpdesk","statement":"ALTER USER","status":"success","target":"user eve","target_ids":"…","privilege":"ALTER USER","change":"password","authorized_by":"ALTER USER privilege, through role helpdesk","before":"enabled; password login; roles: none","after":"enabled; password login (new password); roles: none"}
+```
+
+A password appears only as `password login`, an attribute by its name: no record holds a
+password, a hash, a token or an attribute's value. Membership grants (`user carl in role
+clerks: no` → `yes, WITH ADMIN OPTION`) and grants of these privileges carry `before` and
+`after` too.
+
+The privileges are kept where a 2.13 server does not read them, so mixed versions and a
+rollback keep working: on a 2.13 replica nobody holds them (it refuses those statements to
+everyone but the administrator). The reasons for each rule are in
+[docs/security-administration-design.md](docs/security-administration-design.md).
+
 ### When the store is down
 
 Access control never lets the store hold up the server, and never fails open on

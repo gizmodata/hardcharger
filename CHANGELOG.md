@@ -34,6 +34,24 @@ own changelog in `python/CHANGELOG.md`.
   adds `acting_as`, records each start, refusal and end of it, and records every statement
   run that way. No record holds a password, hash, token or secret; chains written by earlier
   versions still verify.
+- Delegated account management: `CREATE USER`, `ALTER USER`, `DROP USER`, `CREATE ROLE` and
+  `DROP ROLE` are system privileges (`GRANT CREATE USER, ALTER USER TO helpdesk`), so a help
+  desk manages accounts without reading data or holding `SYSTEM ADMIN`. A holder reaches only
+  the server's own users and roles that are no more than its session: never a `SYSTEM ADMIN`
+  holder or the server administrator, nor a user holding a role, admin option or session
+  attribute the session lacks, nor (for a password or `ENABLE`) one that owns objects; a role
+  is dropped only when nothing beyond the session goes with it and no policy names it. Session
+  attributes stay the administrator's, a new role holds nothing and gives its creator no
+  admin option, and tenants stay with their tenant admins. Only an unrestricted administrator
+  grants them (no admin option, not to `PUBLIC` or a tenant's role), a role carries them only
+  through memberships the administrator granted, scoped tokens and `catalog_access` tokens
+  never use them, and a revoke counts at the next statement on every replica. A 2.13 server
+  on the same store keeps working (to it, nobody holds them).
+- Access-control audit records of account changes (users, roles, memberships, account
+  privileges) carry what authorized them (`authorized_by`), the account's sanitized state
+  `before` and `after` (never a password, hash or attribute value), and the privilege the
+  statement needs; every access-control record carries the statement's Chargewire id
+  (`statement_id`) and the session's `active_role`, refusals included.
 - Web UI: a tab whose session acts as System Admin says so (a "System Admin" badge in the tab
   and the header), and while one does, the UI offers the administrator's pages (Server
   Configuration, SQL Monitor, every session with End on the Sessions page), each through a

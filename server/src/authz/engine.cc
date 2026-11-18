@@ -1098,10 +1098,20 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                                grantor_name(g.granted_by)});
       }
     }
+    // An account privilege is listed for a user only through the roles that give it to the
+    // user (the administrator's memberships): one a delegated membership reaches gives nothing.
+    std::optional<std::set<std::string>> account_roles;
+    if (!show->principal) {
+      account_roles = snap->AccountPrivilegeRoles(actor);
+    } else if (const auto* user = snap->FindUserByName(show->principal->name);
+               user && show->principal->kind != GranteeKind::kRole) {
+      account_roles = snap->AccountPrivilegeRoles(actor.superuser ? Principal::User(user->id, user->name) : actor);
+    }
     for (const auto& role_id : role_ids) {
       const auto* role = snap->FindRoleById(role_id);
       for (const auto& r : snap->system_privileges()) {
         if (r.role_id != role_id) continue;
+        if (IsAccountPrivilege(r.privilege) && account_roles && !account_roles->count(role_id)) continue;
         result.rows.push_back({SystemPrivilegeName(r.privilege), r.location.empty() ? "SYSTEM" : "LOCATION",
                                r.location, "", role ? role->name : role_id, "ROLE", r.admin_option ? "YES" : "NO",
                                grantor_name(r.granted_by)});

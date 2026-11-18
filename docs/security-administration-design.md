@@ -1,8 +1,9 @@
-# Named administrators: `SYSTEM ADMIN`
+# Named administrators (`SYSTEM ADMIN`) and delegated account management
 
-Design note for the System Admin capability (2.14.0). It started as an assessment of named
-administrative accounts and delegated account management; the first is built as described
-here, the second is not (see "Not built").
+Design note for the System Admin capability and the account privileges (`CREATE USER`, `ALTER
+USER`, `DROP USER`, `CREATE ROLE`, `DROP ROLE`), both 2.14.0. It started as an assessment of
+named administrative accounts and delegated account management; both are built as described
+here (the account privileges in "Delegated account management" below).
 
 ## What it is
 
@@ -200,8 +201,8 @@ run it against a holder:
 | Statement | Non-administrator |
 |---|---|
 | `GRANT` / `REVOKE SYSTEM ADMIN` | Refused. No option, owner or tenant admin stands in. |
-| `CREATE` / `ALTER` / `DROP USER` (password, enable, disable, attributes) | Refused for system-scope users, as before (`only administrators manage users and roles`). A tenant admin reaches its tenant's users, none of whom can hold it. |
-| `CREATE` / `DROP ROLE` | Same. A new role holds nothing; a recreated name holds nothing. |
+| `CREATE` / `ALTER` / `DROP USER` (password, enable, disable, attributes) | Refused for a user who holds it, whatever account privilege the actor holds (`user sam holds SYSTEM ADMIN; only the administrator, or a user acting as System Admin … changes it`). A tenant admin reaches its tenant's users, none of whom can hold it. |
+| `CREATE` / `DROP ROLE` | `DROP ROLE` of a role that carries it: refused the same way. A new role holds nothing; a recreated name holds nothing. |
 | `GRANT` / `REVOKE role` where the role holds it (itself or through roles) | Refused, whatever admin option. Elsewhere unchanged, and what an admin-option holder grants does not carry it. |
 | `GRANT other TO <role that holds it>` | Allowed: it gives the role's holders more, and no one `SYSTEM ADMIN`. |
 | `CREATE` / `DROP GROUP MAPPING` | Refused, as before. |
@@ -276,9 +277,156 @@ to follow), and the schema browser and completions, which list what the user's o
 see (an elevated tab still runs anything on any catalog; it just isn't listed). Listing as
 System Admin would need a long-lived elevated listing session beside the tab's.
 
+## Delegated account management
+
+Below `SYSTEM ADMIN`, five system privileges let a help desk manage accounts without reading
+data: `CREATE USER`, `ALTER USER`, `DROP USER`, `CREATE ROLE`, `DROP ROLE`, one statement each,
+granted to roles with the existing machinery (`GRANT CREATE USER, ALTER USER TO helpdesk`).
+The administrator, a session acting as System Admin and a tenant admin in its tenant are
+unaffected by them. Account management is a takeover path (a new password for an
+administrator is the administrator), so the design is mostly the target boundary.
+
+The owner's requirements:
+
+1. No altering, dropping, disabling or resetting the password of a user who holds `SYSTEM
+   ADMIN` (or the server administrator), nor of a user who holds a role the actor doesn't hold.
+2. Only roles the actor holds `WITH ADMIN OPTION` can be granted (membership delegation keeps
+   its admin option); creating a role confers no right to grant arbitrary roles.
+3. `CREATE ROLE` never hands out privileges the actor lacks.
+4. Changing policy attributes, enabling a privileged account or altering a more powerful role
+   are refused the same way.
+5. Tenant delegates stay inside their tenant; scoped and catalog-restricted tokens never use
+   these privileges.
+6. They are granted only by an unrestricted administrator, with no admin option.
+7. Passwords set through them obey the 2.14.0 password policy.
+8. Every account change and every denial is a structured audit record, never with a password,
+   hash or token.
+9. A revoke takes effect on the next statement on every replica.
+
+### How it works
+
+**Who may** (`AuthorizeAccountStatement`, `engine.cc`). An unrestricted administrator
+(`Principal::is_unrestricted_administrator()`), a tenant's `tenant_admin` for a name in its
+tenant (as before), or a holder of the statement's account privilege for a system-scope
+name. Anyone else gets the old refusal, now naming the privilege (`only administrators manage
+users and roles on this server (and, for system-scope users and roles, a role granted the
+CREATE USER privilege)`).
+
+**Holding one** (`Snapshot::AccountPrivilegeRoles`, `model.cc`). Of the roles the session
+acts with (`RolesOf`, which `SET ROLE` narrows), those the user reaches through memberships
+whose `granted_by` is empty (the administrator's, which a System Admin's are too) and through
+identity-provider group mappings (which only they create); the same rule as `SYSTEM ADMIN`'s
+(`AdministratorGrantedRolesOf`, shared). Never for a scoped token, a token with
+`catalog_access` rules (`Principal::catalog_access_token`, new: such rules grant a store user
+nothing under access control, but they say the sign-in was meant to be limited), a rules
+principal, a role principal, a disabled user or a tenant's user.
+
+**Granting one.** `GRANT CREATE USER …` is refused unless the actor is an unrestricted
+administrator, refused `WITH ADMIN OPTION` (even for the administrator), refused to `PUBLIC`
+and built-in roles, and refused to a tenant's role (as every system privilege is).
+`CanGrantSystemPrivilege` answers no for any non-administrator, and `FallenDelegations` never
+lets a delegated record stand, so a hand-edited row passes nothing on. A non-administrator's
+`GRANT role TO …` of a role that carries one (itself or through roles it inherits) is refused,
+whatever admin option it holds (`role helpdesk holds the account privilege CREATE USER; only
+an administrator grants membership in it`); revoking such a membership stays its grantor's.
+The administrator's own `GRANT role TO user` of a membership an admin-option holder made
+takes it over, as for `SYSTEM ADMIN`.
+
+**The target boundary for users** (`RequireUserWithinReach`). `ALTER USER` and `DROP USER`
+reach a user only when it is no more than the session:
+
+- not a holder of `SYSTEM ADMIN` (the existing refusal) and not the server administrator or a
+  certificate administrator (`admin is the server administrator, which is set in the server's
+  configuration and never managed with SQL`);
+- every role it holds (`EffectiveRoleIds`, transitively) is in the session's `RolesOf`;
+- every role it holds `WITH ADMIN OPTION` is one the session could grant (`CanAdminRole`);
+- every session attribute it has, the actor has with the same value (attributes are what row
+  and masking policies read: signing in as the user would see its rows);
+- for `ALTER USER`, it owns nothing (signing in as an owner acts as the owner; `DROP USER` of an
+  owner was refused already).
+
+This one rule covers a new password, removing it, `ENABLE` (a disabled account that holds more
+than the session stays disabled), `DISABLE` and `DROP`. `ALTER USER … SET / UNSET ATTRIBUTE`
+is refused to holders outright: setting an attribute is granting data.
+
+**The target boundary for roles** (`RequireRoleWithinReach`). `DROP ROLE` reaches a role
+when everything it inherits is in the session's roles, it is itself one of them or holds no
+object grant or system privilege of its own, and no row policy names it and no masking policy
+exempts it (dropping it would change what those policies decide; a restrictive policy left
+with no roles would even apply to everyone). Built-in roles and roles carrying `SYSTEM ADMIN`
+are refused as before. `CREATE ROLE` makes an empty role and gives its creator nothing, so the
+only way to fill it is with privileges the actor could already grant anywhere.
+
+**Tenants.** A holder reaches system-scope names only (`acme/tom belongs to tenant acme, and
+the ALTER USER privilege reaches system-scope users and roles only`); tenant roles cannot hold
+the privileges; tenant admins keep their own path, unchanged.
+
+**The store's own word.** Each statement is authorized twice: first against this replica's
+snapshot (refreshing once from the store before a refusal, so a grant made elsewhere counts at
+once), before any password is hashed; then, authoritatively, inside the change's own store
+transaction, against the snapshot that transaction reads after every writer before it. A
+revoke committed on any replica therefore stops the very next statement, with no poll to wait
+for; and no session state remembers a holding, so there is nothing to invalidate.
+
+**Storage and mixed versions.** The five privileges are written to `storage_privileges`
+(location `''`, no admin option), not `system_privileges`: a 2.13 server refuses to load a
+store whose `system_privileges` names a privilege it does not know ("corrupt store"), and
+skips unknown names in `storage_privileges`. 2.13's `DROP ROLE` already deletes a role's rows
+there. No table, no schema version bump; on a 2.13 replica nobody holds them, so it refuses
+those statements to everyone but the administrator (checked by hand with a 2.13.1 binary:
+it opens such a store, refuses the holder, and its `DROP ROLE` removes the role's rows). A
+record with a location, an admin option, a built-in or tenant role or a role that is gone
+counts for nothing when the snapshot is built.
+
+**Passwords.** `CheckNewPassword` in `engine.cc` is the one place a password set by `CREATE
+USER` or `ALTER USER … WITH PASSWORD` is checked, whoever sets it (after authorization;
+`CREATE USER IF NOT EXISTS` of an existing user checks nothing). The 2.14.0 password policy
+(`CheckPasswordPolicy`, from the login-guard track) replaces its body when the two meet.
+
+**Audit.** Every access-control record now carries `statement_id` (the statement's Chargewire
+id, the one its log lines and `sql_statements` row carry) and, under `SET ROLE`, `active_role`,
+refusals included. The five statements name the privilege they need (`privilege`). An account
+change (the five statements, a membership `GRANT` / `REVOKE`, a `GRANT` / `REVOKE` of an
+account privilege) adds `authorized_by` (`administrator`, `System Admin`, `tenant_admin of
+tenant acme`, `ADMIN OPTION on role clerks`, `ALTER USER privilege, through role helpdesk`)
+and `before` / `after` (`AccountChangeValues`, `audit_fields.cc`), computed from the store as
+the change's own transaction read and left it: a user as `enabled; password login; roles:
+clerks WITH ADMIN OPTION; attributes: region`, a role as `members: 2; inherits: none;
+privileges: 3 object grants, CREATE USER`, a membership as `user bob in role clerks: yes, WITH
+ADMIN OPTION`. A password shows only as `password login` (`(new password)` when the hash
+changed, compared and never written), an attribute by its name only.
+
+### Decisions, with the alternative each time
+
+Each took the safer side. Any can be overruled; the open ones are in the track's QUESTIONS.
+
+1. **Five privileges, one statement each**, not one `MANAGE USERS`. Alternative: one
+   privilege. Rejected: the assessment asked for distinct ones, and "create but never drop" is
+   a real help-desk shape.
+2. **Two-word names as `GRANT` writes them** (`CREATE USER`). No role is named by two unquoted
+   words, so no statement 2.13 accepted changes meaning.
+3. **Held only through the administrator's memberships**, and membership in a carrying role is
+   the administrator's to grant. Alternative: let a role's admin option pass membership on.
+   Rejected by requirement 6: an admin option on a carrying role is an admin option on the
+   privilege.
+4. **The target boundary compares with the session, not the user** (`SET ROLE helpdesk`
+   narrows what amy reaches). Alternative: every role the user holds. Rejected: a session is
+   what acts.
+5. **Attributes are a subset check, and setting them is the administrator's.** Alternative:
+   ignore attributes. Rejected: they are policy inputs, and a password reset of a user with
+   `region = 'eu'` would read the EU rows.
+6. **Owners are out of reach for `ALTER USER`.** Alternative: compare ownerships too. Rejected
+   as more machinery than the case is worth; the administrator can transfer ownership first.
+7. **A new role gives its creator no admin option.** Alternative: PostgreSQL's (the creator
+   may grant it). Rejected: an empty role the administrator fills later would stay in the help
+   desk's hands.
+8. **Not to `PUBLIC`, even by the administrator.** Alternative: allow it. Rejected: every
+   user would be a help desk, which no one means.
+9. **Tenant roles cannot hold them**; tenant admins are the tenant's delegation.
+10. **Checked in the store transaction**, not by a per-statement store read beforehand (as
+    `SYSTEM ADMIN` does): the statements change the store anyway, so the transaction is the
+    store's word at no extra cost.
+
 ## Not built
 
-- Distinct system privileges for account management (`CREATE USER`, `ALTER USER`, `DROP
-  USER`, `CREATE ROLE`, `DROP ROLE`) with a target boundary, for delegation below a full
-  administrator. The owner chose the full equivalent; these remain possible beside it.
 - Export of the audit chain to an independent append-only destination.

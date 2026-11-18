@@ -369,6 +369,7 @@ FetchContent_Declare(
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(googletest)
 add_executable(hardcharger-unit-tests
+  unit/account_privileges_test.cc
   unit/admission_test.cc
   unit/authority_key_test.cc
   unit/catalog_log_test.cc

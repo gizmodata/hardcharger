@@ -298,6 +298,13 @@ def test_membership_in_a_help_desk_role_is_the_administrators_to_give(world):
     world.setup("GRANT CREATE USER TO desk2")
     carl = world.as_user(user="carl")
     expect_blocked(client=carl, sql="CREATE USER by_carl", why=not_held(statement="CREATE USER"))
+
+    def listed(client, sql: str) -> list[str]:
+        return [r["privilege"] for r in rows(client=client, sql=sql) if r["privilege"] == "CREATE USER"]
+
+    assert listed(client=carl, sql="SHOW GRANTS") == []
+    assert listed(client=world.admin, sql="SHOW GRANTS FOR carl") == []
+    assert listed(client=world.admin, sql="SHOW GRANTS FOR ROLE desk2") == ["CREATE USER"]
     expect_allowed(client=dana, sql="CREATE USER by_dana")  # dana's membership is the administrator's
     # Its admin option no longer gives membership in it; taking back what it gave stays allowed.
     expect_blocked(client=dana, sql="GRANT desk2 TO bob",
@@ -307,6 +314,8 @@ def test_membership_in_a_help_desk_role_is_the_administrators_to_give(world):
     # The administrator's own grant of carl's membership takes it over: now it carries it.
     world.setup("GRANT desk2 TO carl")
     expect_allowed(client=carl, sql="CREATE USER by_carl")
+    assert listed(client=carl, sql="SHOW GRANTS") == ["CREATE USER"]
+    assert listed(client=world.admin, sql="SHOW GRANTS FOR carl") == ["CREATE USER"]
     effective = rows(client=world.admin, sql="SELECT user_name, privilege, via FROM hardcharger_effective_privileges('carl') "
                                              "WHERE privilege = 'CREATE USER'")
     assert effective == [{"user_name": "carl", "privilege": "CREATE USER", "via": "desk2"}]
