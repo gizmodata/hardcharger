@@ -14,6 +14,7 @@ import { loadModule } from "./lib/stale";
 import { type ConnectionOptions, discover, openConnection } from "./lib/chargewire";
 import { internalQueryTag } from "./lib/queryTags";
 import { type AppContract, RelayApi, ServersStore } from "./lib/servers";
+import { SystemAdminTabs } from "./lib/systemAdmin";
 import {
   type AppSession,
   type Identity,
@@ -118,6 +119,9 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [storeKey],
   );
+  // Which tabs act as System Admin: one record per sign-in, as the servers store.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const systemAdminTabs = useMemo(() => new SystemAdminTabs(), [storeKey]);
   const servers = useRef<ServersStore | undefined>(undefined);
   useEffect(() => {
     servers.current = store;
@@ -299,6 +303,7 @@ export function App() {
       connection,
       identity,
       isAdmin: local && identity.role === "admin",
+      systemAdmin: systemAdminTabs,
       contract,
       localServer: local,
       servers: store,
@@ -327,6 +332,7 @@ export function App() {
     server,
     contract,
     store,
+    systemAdminTabs,
     signOut,
     openExtraConnection,
     requestQuery,

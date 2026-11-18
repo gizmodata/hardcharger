@@ -1,6 +1,18 @@
 import type { StatementDocument, TransactionState } from "@gizmodata/chargewire";
 import { confirmDialog } from "../lib/dialogs";
-import { Check, Copy, FileUp, Info, ListOrdered, Play, RotateCcw, Save, Square, Undo2 } from "lucide-react";
+import {
+  Check,
+  Copy,
+  FileUp,
+  Info,
+  ListOrdered,
+  Play,
+  RotateCcw,
+  Save,
+  ShieldAlert,
+  Square,
+  Undo2,
+} from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { listingsFor } from "../lib/catalogs";
@@ -295,6 +307,26 @@ export function EditorTab(props: Props) {
     // where is read when called; the tab's values are current then.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [app, tabSession, where.catalog, where.schema]);
+
+  // Whether this tab's session acts as System Admin, as it last answered (TabSession asks it
+  // again whenever that may have changed). Tabs on this server tell the page, which offers the
+  // admin pages while one does. Something refused as System Admin elsewhere (an admin page's
+  // own session) has the tab ask again: now when idle, else when its run ends.
+  const systemAdmin = info?.systemAdmin === true;
+  const askSystemAdminAgain = useCallback(() => {
+    tabSession.askSystemAdminAgain();
+    setInfo(tabSession.info);
+    if (!controller.current && !changingModeRef.current) void readSession();
+  }, [tabSession, readSession]);
+  useEffect(() => {
+    if (tab.server) return;
+    app.systemAdmin.report(tab.id, systemAdmin, askSystemAdminAgain);
+  }, [app, tab.id, tab.server, systemAdmin, askSystemAdminAgain]);
+  useEffect(() => {
+    const tabs = app.systemAdmin;
+    const id = tab.id;
+    return () => tabs.forget(id);
+  }, [app, tab.id, tab.server]);
 
   const execute = useCallback(
     async (statements: string[], range: monaco.IRange | undefined) => {
@@ -682,6 +714,18 @@ export function EditorTab(props: Props) {
             ))}
           </select>
         </label>
+        {systemAdmin && (
+          <span
+            className="chip chip-system-admin"
+            data-testid="tab-system-admin"
+            title={
+              "This tab's session acts as System Admin (SET ROLE SYSTEM ADMIN): it does what the administrator " +
+              "does, and no grant, row policy or mask applies to it. RESET ROLE ends it."
+            }
+          >
+            <ShieldAlert size={13} /> System Admin
+          </span>
+        )}
         {props.roles.length > 0 && !tab.server && (
           <label className="toolbar-field" title={lockedTitle ?? "The role this tab acts with (SET ROLE)"}>
             Run as

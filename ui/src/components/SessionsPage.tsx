@@ -1,10 +1,14 @@
 import { RefreshCw, XCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import type { Connection } from "@gizmodata/chargewire";
+
+import { useAdminConnection } from "../lib/adminConnection";
 import { formatDate } from "../lib/format";
 import { quoteLiteral } from "../lib/sql";
-import { type AppSession, errorMessage, useSession } from "../session";
+import { errorMessage, useSession } from "../session";
 import { ConfirmSessionDialog } from "./ConfirmSessionDialog";
+import { SystemAdminNotice } from "./SystemAdminNotice";
 
 interface SessionRow {
   session_id: string;
@@ -23,8 +27,8 @@ function when(ms: number): string {
   return `${formatDate(ms)} ${d.toISOString().slice(11, 19)} UTC`;
 }
 
-async function readSessions(session: AppSession): Promise<SessionRow[]> {
-  const table = await session.connection.query(
+async function readSessions(connection: Connection): Promise<SessionRow[]> {
+  const table = await connection.query(
     "SELECT session_id, username, role, auth_method, start_time, running, is_current, client_ip, client_is_local " +
       "FROM hardcharger_sessions() ORDER BY start_time",
   );
@@ -33,10 +37,18 @@ async function readSessions(session: AppSession): Promise<SessionRow[]> {
 
 /**
  * The server's sessions (hardcharger_sessions()): an administrator sees every session and
- * can end one (KILL SESSION); everyone else sees only their own.
+ * can end one (KILL SESSION); everyone else sees only their own. A user one of whose tabs acts
+ * as System Admin sees and ends them as the administrator does, through a session of this
+ * page's own that acts as System Admin too (useAdminConnection), and only while it does.
  */
 export default function SessionsPage() {
   const session = useSession();
+  const observer = useAdminConnection("sessions", "", true);
+  const systemAdmin = observer.systemAdmin;
+  // The administrator reads through the UI's own session; a System Admin through the page's
+  // elevated one, once it is open (until then nothing is read).
+  const connection: Connection | undefined = systemAdmin ? observer.connection : session.connection;
+  const administers = session.isAdmin || (systemAdmin && !!observer.connection);
   const [rows, setRows] = useState<SessionRow[] | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [busy, setBusy] = useState(true);
@@ -59,30 +71,32 @@ export default function SessionsPage() {
   );
 
   useEffect(() => {
+    if (!connection) return;
     let live = true;
-    readSessions(session).then(
+    readSessions(connection).then(
       (rows) => live && apply({ rows }),
       (error: unknown) => live && apply({ error }),
     );
     return () => {
       live = false;
     };
-  }, [session, apply]);
+  }, [connection, apply]);
 
   const load = async () => {
+    if (!connection) return;
     setBusy(true);
     try {
-      apply({ rows: await readSessions(session) });
+      apply({ rows: await readSessions(connection) });
     } catch (error) {
       apply({ error });
     }
   };
 
   const kill = async (row: SessionRow) => {
-    if (ending) return;
+    if (ending || !connection) return;
     setEnding(row.session_id);
     try {
-      await session.connection.execute(`KILL SESSION ${quoteLiteral(row.session_id)}`);
+      await connection.execute(`KILL SESSION ${quoteLiteral(row.session_id)}`);
       setNotice(`Ended session ${row.session_id}.`);
       await load();
     } catch (err) {
@@ -109,7 +123,7 @@ export default function SessionsPage() {
       <div className="page-head">
         <h2>Sessions</h2>
         <p className="page-sub">
-          {session.isAdmin
+          {administers
             ? "Every session on this server. Ending one cancels its statements and signs its user out of it."
             : "Your sessions on this server (an administrator sees everyone's)."}
         </p>
@@ -117,14 +131,15 @@ export default function SessionsPage() {
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
+      {systemAdmin && <SystemAdminNotice />}
       {notice && (
         <p className="results-notice" role="status">
           {notice}
         </p>
       )}
-      {error && (
+      {(error ?? (systemAdmin ? observer.error : undefined)) && (
         <div className="result-error" role="alert">
-          <pre>{error}</pre>
+          <pre>{error ?? observer.error}</pre>
         </div>
       )}
       {rows && (
@@ -138,7 +153,7 @@ export default function SessionsPage() {
               <th>Sign-in</th>
               <th>Started</th>
               <th>State</th>
-              {session.isAdmin && <th aria-label="Actions" />}
+              {administers && <th aria-label="Actions" />}
             </tr>
           </thead>
           <tbody>
@@ -169,7 +184,7 @@ export default function SessionsPage() {
                 <td>{r.auth_method}</td>
                 <td>{when(r.start_time)}</td>
                 <td>{r.running ? "running" : "idle"}</td>
-                {session.isAdmin && (
+                {administers && (
                   <td>
                     {!r.is_current && (
                       <button

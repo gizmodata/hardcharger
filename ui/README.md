@@ -22,7 +22,8 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   <img src="../docs/assets/web-ui-query-light.png" alt="The web UI: the schema browser with the server and its catalogs, two editor tabs, and a query's results" width="80%">
 </p>
 
-- 🔭 **SQL Monitor** and **Server Configuration** for unrestricted administrators: query
+- 🔭 **SQL Monitor** and **Server Configuration** for unrestricted administrators, and for a
+  user granted `SYSTEM ADMIN` while one of their tabs acts as System Admin: query
   lifecycle, recent history, timeouts, queue slots, independent query-detail windows,
   session controls, and live session/global settings. Monitoring
   requires `--enable-instrumentation`; see [the operational guide](../docs/sql-monitor.md).
@@ -204,6 +205,13 @@ They are available in browser sessions and the [desktop app's SQL workspace](../
   and its **×** hides it in this browser.
 - 👥 **Sessions**: an administrator sees every session on the server and can end one
   (`KILL SESSION`); everyone else sees their own.
+- 🛡️ **System Admin** (a user granted `SYSTEM ADMIN`): `SET ROLE SYSTEM ADMIN` in a tab makes
+  its session act as the administrator; the tab and the header show a **System Admin** badge
+  while it does, and the administrator's pages are offered, each through a session of its own
+  that says `SET ROLE SYSTEM ADMIN` too. The UI never remembers it: the tab asks its session
+  (`HARDCHARGER_IS_SYSTEM_ADMIN()`) after `SET ROLE`, `RESET ROLE`, a refused statement and a
+  refusal on one of those pages, so `RESET ROLE`, a revoke or **New session** closes them.
+  e2e: `system-admin.spec.ts`; unit: `test/unit/systemAdmin.test.tsx`.
 - 🧭 **API** (`/ui/api`): the server's Chargewire API in [Swagger UI](https://github.com/swagger-api/swagger-ui)
   (`swagger-ui-dist`, pinned, in the build: nothing comes from a CDN), from the OpenAPI
   document the server lists in discovery (capability `openapi`, `links.openapi`, normally

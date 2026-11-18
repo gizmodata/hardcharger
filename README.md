@@ -1261,8 +1261,13 @@ role it was, and `SET ROLE "SYSTEM ADMIN"` (quoted) names a role, never this.
   and a session a client opens to replace a lost one all start as the user. A client that
   sends `SET ROLE SYSTEM ADMIN` again is asked like the first time. The `hardcharger` client
   and the web UI's SQL editor need nothing special: it is plain SQL in the session they
-  hold. (The UI's own administrator pages, and the role it shows, follow the sign-in's role,
-  which stays `user`.)
+  hold. In the web UI, a tab whose session acts as System Admin says so (a "System Admin"
+  badge in the tab and in the header), and while one does, the UI offers the administrator's
+  pages (Server Configuration, SQL Monitor, everyone's sessions with End): each opens a
+  session of its own that says `SET ROLE SYSTEM ADMIN` too. The UI asks the tab's session
+  (`HARDCHARGER_IS_SYSTEM_ADMIN()`) after `SET ROLE`, `RESET ROLE`, a refused statement and
+  a refusal on one of those pages, so `RESET ROLE`, a revoke or a new session closes them
+  again. The role it shows next to the user stays the sign-in's, `user`.
 - **Who grants it.** Only the administrator, or a session acting as System Admin. It has no
   `ADMIN OPTION` or `GRANT OPTION`, `ALL PRIVILEGES` never includes it, and no owner, tenant
   admin or holder of a role's admin option can give it. It goes to a user or a role of the

@@ -246,14 +246,35 @@ replace a lost one; both refuse to re-run a statement after losing a session in 
 session:
 
 - the client's `.show` prints `role: user`, and its completions keep the list they had
-  until `.refresh`;
-- the web UI decides once, at sign-in, whether to offer the SQL Monitor, Server
-  Configuration, "End session" and the "SQL details" link, shows the role `user`, and runs
-  those pages and the schema browser in sessions of its own, which are not the editor
-  tab's. An elevated tab can query the same functions by hand.
+  until `.refresh`.
 
-Making the UI offer a "System Admin" switch that sends the statement on its own sessions
-is a UI change of its own.
+The web UI follows the session (2.14.0). Each editor tab knows whether its session acts as
+System Admin only from the session's own answer to `HARDCHARGER_IS_SYSTEM_ADMIN()`, which it
+asks after anything that may change it: a `SET`, `RESET` or `EXECUTE` in the tab, a
+statement refused while the tab acted as one (a revoke shows up as a refusal), a change of
+role or read-only mode, and a refusal as System Admin on one of the admin pages. While the
+session is refused as System Admin (it asked and does not act as one), the tab asks at every
+read, since the server may undo that (a grant again, the store back) until `RESET ROLE`. A
+statement that succeeds needs no question: a session that asked and does not act as one runs
+nothing. A new or replacement session is never one, and the tab never says `SET ROLE SYSTEM
+ADMIN` on its own (the Run as picker quotes role names, so it never names it either).
+
+While at least one tab on the server acts as System Admin, the UI offers the Server
+Configuration and SQL Monitor pages and the Sessions page's view of every session with End.
+Each of those pages runs in a session of its own (never inside an editor tab's transaction or
+queue), and for a user that session says `SET ROLE SYSTEM ADMIN` itself and confirms it with
+`HARDCHARGER_IS_SYSTEM_ADMIN()` before anything else, so the server asks the grants and the
+store for every statement those pages send, as for the tab. That is a second elevation,
+audited like the first; it is made only while the user has one of their own in a tab, and it
+ends (the page's session is closed) as soon as no tab acts as one. A refusal as System Admin
+on such a page has every tab ask its session again and counts them as not acting as one until
+they answer.
+
+Still following the sign-in, not the session: the role shown next to the user (`user`), the
+"SQL details" link to a recorded statement (it opens a window of its own, with no editor tab
+to follow), and the schema browser and completions, which list what the user's own sessions
+see (an elevated tab still runs anything on any catalog; it just isn't listed). Listing as
+System Admin would need a long-lived elevated listing session beside the tab's.
 
 ## Not built
 

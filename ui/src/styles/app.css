@@ -340,6 +340,13 @@ select {
   color: var(--accent);
   font-weight: 600;
 }
+/* A session acting as System Admin (SET ROLE SYSTEM ADMIN): the header and the tab say so. */
+.chip-system-admin {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: 600;
+}
 
 /* Sign-in */
 .signin {

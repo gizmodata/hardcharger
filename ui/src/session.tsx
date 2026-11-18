@@ -8,6 +8,7 @@ import { createContext, use } from "react";
 import type { SignedIn } from "./lib/auth";
 import type { ConnectionOptions } from "./lib/chargewire";
 import type { AppContract, ServersStore } from "./lib/servers";
+import type { SystemAdminTabs } from "./lib/systemAdmin";
 
 export interface Identity {
   user: string;
@@ -48,7 +49,13 @@ export interface AppSession {
   /** The UI's own session on this server; rejects everything without a local server. */
   connection: Connection;
   identity: Identity;
+  /**
+   * Signed in as the administrator (HARDCHARGER_ROLE() = 'admin'). A user acting as System
+   * Admin in a tab is not: see systemAdmin, which follows what the tabs' sessions answer.
+   */
   isAdmin: boolean;
+  /** The editor tabs whose sessions on this server act as System Admin (SET ROLE SYSTEM ADMIN). */
+  systemAdmin: SystemAdminTabs;
   /** What serves the UI: a Hardcharger server to sign in to, or the UI alone (`hardcharger ui`). */
   contract: AppContract;
   /** False in the UI without a server: no "This server", no admin pages, remotes only. */

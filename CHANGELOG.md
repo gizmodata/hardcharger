@@ -34,6 +34,13 @@ own changelog in `python/CHANGELOG.md`.
   adds `acting_as`, records each start, refusal and end of it, and records every statement
   run that way. No record holds a password, hash, token or secret; chains written by earlier
   versions still verify.
+- Web UI: a tab whose session acts as System Admin says so (a "System Admin" badge in the tab
+  and the header), and while one does, the UI offers the administrator's pages (Server
+  Configuration, SQL Monitor, every session with End on the Sessions page), each through a
+  session of its own that says `SET ROLE SYSTEM ADMIN` too. It follows the server, never a
+  remembered flag: the tab asks its session after `SET ROLE`, `RESET ROLE`, a refused
+  statement or a refusal on one of those pages, so `RESET ROLE`, a revoke, or a new session
+  closes them again.
 
 ### Changed
 

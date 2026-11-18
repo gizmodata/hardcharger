@@ -6,7 +6,9 @@ Desktop users enable `enable_instrumentation` under Settings → Server options,
 and restart the server to enable SQL Monitor.
 
 Start the server with `--enable-instrumentation`, open `/ui/`, and sign in as an
-unrestricted administrator. **SQL Monitor** refreshes every two seconds. Without
+unrestricted administrator, or as a user granted `SYSTEM ADMIN` who runs `SET ROLE SYSTEM
+ADMIN` in an editor tab (the pages are offered while a tab's session acts as System Admin,
+and each page's own session says `SET ROLE SYSTEM ADMIN` too). **SQL Monitor** refreshes every two seconds. Without
 instrumentation its navigation item is disabled; `/ui/monitor` explains how to enable it.
 **Server Configuration** is available even when instrumentation is disabled.
 

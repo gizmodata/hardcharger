@@ -18,6 +18,7 @@ import {
 
 import { setRoleSql } from "./roles";
 import { firstKeyword } from "./sql";
+import { actsAsSystemAdmin, isSystemAdminRefusal, mayChangeRole } from "./systemAdmin";
 import type { StatementStream } from "./script";
 
 export interface SessionInfo {
@@ -32,6 +33,11 @@ export interface SessionInfo {
   /** The role it acts with ("": all of the user's roles), as this tab set it. */
   role: string;
   readOnly: boolean;
+  /**
+   * The session acts as System Admin (SET ROLE SYSTEM ADMIN), as it last answered when asked
+   * (HARDCHARGER_IS_SYSTEM_ADMIN()); see TabSession.systemAdmin.
+   */
+  systemAdmin: boolean;
 }
 
 export interface Where {
@@ -195,6 +201,10 @@ export class TabSession {
   #catalogNote: string | undefined;
   /** Why the last session was replaced (shown once as a note), if it was. */
   #replaced: string | undefined;
+  /** The open session said it acts as System Admin the last time it was asked. */
+  #systemAdmin = false;
+  /** What the session acts as may have changed since it was last asked: ask at the next read. */
+  #askSystemAdmin = false;
 
   constructor(open: Opener, identify?: Identify) {
     this.#open = open;
@@ -215,6 +225,29 @@ export class TabSession {
    */
   get readOnly(): boolean {
     return this.#readOnly;
+  }
+
+  /**
+   * The open session acts as System Admin, as it answered when last asked. It is asked again
+   * at the next read (refresh) after anything that may change it: SET, RESET or EXECUTE, a
+   * statement that failed while it acted as one (a revoke shows up as a refusal), a change of
+   * role or read-only mode, or askSystemAdminAgain(). A new session (a replacement too) never
+   * acts as one: the server never carries it over, and this tab never says SET ROLE SYSTEM
+   * ADMIN on its own.
+   */
+  get systemAdmin(): boolean {
+    return this.#systemAdmin;
+  }
+
+  /**
+   * Something outside the tab was refused as System Admin: count the session as not acting as
+   * one until it says otherwise, at the next read.
+   */
+  askSystemAdminAgain(): void {
+    if (!this.#conn) return;
+    this.#systemAdmin = false;
+    this.#askSystemAdmin = true;
+    if (this.#info) this.#info = { ...this.#info, systemAdmin: false };
   }
 
   /** Takes the note about a catalog the session couldn't open in, once. */
@@ -276,6 +309,8 @@ export class TabSession {
           throw err;
         }
         this.#serverId = this.#identify ? await this.#identify(conn).catch(() => undefined) : undefined;
+        this.#systemAdmin = false;
+        this.#askSystemAdmin = false;
         this.#role = "";
         if (where.role) {
           await conn.execute(setRoleSql(where.role));
@@ -334,6 +369,7 @@ export class TabSession {
     // Where and how statements run: a new session starts without it, so a run that finds the
     // session gone doesn't go again there (it could write to another schema's table).
     if (word === "USE" || word === "SET" || word === "RESET" || word === "PRAGMA") this.#settingsChanged = true;
+    if (mayChangeRole(sql)) this.#askSystemAdmin = true;
     if (word === "BEGIN" || word === "START") {
       this.#maybeOpen = true;
       this.#endedSinceOpen = false;
@@ -373,6 +409,9 @@ export class TabSession {
         await stream.rowsAffected();
       } catch (err) {
         await stream.close().catch(() => {});
+        // Refused, perhaps because the session no longer acts as System Admin (or a SET
+        // ROLE that failed half way): ask it at the next read.
+        if (this.#systemAdmin || mayChangeRole(sql)) this.#askSystemAdmin = true;
         throw err;
       }
       this.noteStatement(sql);
@@ -402,11 +441,28 @@ export class TabSession {
     }
     const options = doc.options ?? {};
     this.#readOnly ||= options["read_only"] === true;
+    if (this.#askSystemAdmin) {
+      const was = this.#systemAdmin;
+      try {
+        this.#systemAdmin = await actsAsSystemAdmin(conn);
+        this.#askSystemAdmin = false;
+      } catch (err) {
+        if (isSessionGone(err)) throw err;
+        // Not one now. A refusal as System Admin means the session asked for it and doesn't
+        // act as one (revoked, or the store did not answer), which the server may undo (a
+        // grant again, the store back) until RESET ROLE: asked at every read until it answers.
+        // Anything else answers nothing (an aborted transaction; a server without System
+        // Admin): asked again only if it was one.
+        this.#systemAdmin = false;
+        this.#askSystemAdmin = was || isSystemAdminRefusal(err);
+      }
+    }
     this.#info = {
       id: doc.session_id,
       serverId: this.#serverId,
       role: this.#role,
       readOnly: this.#readOnly,
+      systemAdmin: this.#systemAdmin,
       transaction: doc.transaction,
       catalog: typeof options["catalog"] === "string" ? options["catalog"] : "",
       schema: typeof options["schema"] === "string" ? options["schema"] : "",
@@ -430,6 +486,8 @@ export class TabSession {
   }
 
   async #switchReadOnly(conn: Connection): Promise<SessionInfo> {
+    // A session acting as System Admin that turns read-only stops acting as one: ask after.
+    if (this.#systemAdmin) this.#askSystemAdmin = true;
     try {
       await conn.setOptions({ read_only: true });
     } catch (err) {
@@ -493,6 +551,7 @@ export class TabSession {
         }
       }
       if (role !== this.#role) {
+        this.#askSystemAdmin = true;
         await conn.execute(setRoleSql(role));
         this.#role = role;
       }
@@ -510,6 +569,8 @@ export class TabSession {
     this.#maybeOpen = false; // ending it rolls back what was open
     this.#endedSinceOpen = false;
     this.#settingsChanged = false;
+    this.#systemAdmin = false;
+    this.#askSystemAdmin = false;
     if (conn) await conn.then((c) => c.close()).catch(() => {});
   }
 
@@ -519,6 +580,8 @@ export class TabSession {
     this.#maybeOpen = false; // a new session starts in no transaction
     this.#endedSinceOpen = false;
     this.#settingsChanged = false;
+    this.#systemAdmin = false;
+    this.#askSystemAdmin = false;
     // The server has no session to end; this only releases the client's side.
     if (conn) void conn.then((c) => c.close()).catch(() => {});
   }

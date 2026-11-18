@@ -2,6 +2,7 @@ import { RefreshCw, Settings } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useAdminConnection } from "../lib/adminConnection";
+import { SystemAdminHint, SystemAdminNotice } from "./SystemAdminNotice";
 import { useActiveTab } from "../lib/activeTab";
 import { quoteLiteral } from "../lib/sql";
 import {
@@ -24,7 +25,7 @@ interface Edit {
 export default function ServerConfigurationPage() {
   const session = useSession();
   const active = useActiveTab();
-  const { connection, allowed, error: connectionError } = useAdminConnection("server-configuration");
+  const { connection, allowed, systemAdmin, error: connectionError } = useAdminConnection("server-configuration");
   const [settings, setSettings] = useState<ServerSetting[]>();
   const [target, setTarget] = useState<{ id: string; settings: ServerSetting[] }>();
   const [sessionChoice, setSessionChoice] = useState("editor");
@@ -116,6 +117,7 @@ export default function ServerConfigurationPage() {
       <div className="sessions-page">
         <h2>Server Configuration</h2>
         <p>Only unrestricted administrators can view server configuration.</p>
+        <SystemAdminHint />
       </div>
     );
   const shown = settings?.filter((s) =>
@@ -161,6 +163,7 @@ export default function ServerConfigurationPage() {
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
+      {systemAdmin && <SystemAdminNotice />}
       {(error || connectionError) && (
         <div className="result-error" role="alert">
           <pre>{error ?? connectionError}</pre>
