@@ -109,7 +109,8 @@ def test_each_function_has_its_columns(alice):
         "hardcharger_grants()": GRANTS,
         "hardcharger_role_members()": ("role", "member", "member_type", "admin_option", "grantor", "issuer", "tenant"),
         "hardcharger_roles()": ("name", "builtin", "tenant", "is_active"),
-        "hardcharger_users()": ("name", "enabled", "has_password", "tenant", "attributes", "is_current"),
+        "hardcharger_users()": ("name", "enabled", "has_password", "tenant", "attributes", "is_current",
+                                "last_sign_in_at", "failed_sign_ins"),
         "hardcharger_policies()": ("name", "kind", "catalog_name", "schema_name", "table_name", "column_name",
                                    "permissive", "roles", "exempt_roles", "expression", "applies_to_current_user"),
         "hardcharger_effective_privileges()": ("user_name", "privilege", "object_type", "catalog_name", "schema_name",
@@ -182,8 +183,10 @@ def test_a_user_sees_only_the_roles_it_holds_and_its_own_user_row(alice, bob):
     assert {r["name"] for r in rows(client=alice, sql="SELECT name FROM hardcharger_roles()")} == {
         "PUBLIC", "reader", "analyst", "ops_role", "colrole"}
     me = rows(client=bob, sql="SELECT * FROM hardcharger_users()")
+    # bob signed in with its password: its own sign-in columns are filled in (test_login_guard.py).
+    assert me[0].pop("last_sign_in_at") is not None, me
     assert me == [{"name": "bob", "enabled": True, "has_password": True, "tenant": None,
-                   "attributes": [("region", "US")], "is_current": True}], me
+                   "attributes": [("region", "US")], "is_current": True, "failed_sign_ins": 0}], me
     assert [r["name"] for r in rows(client=alice, sql="SELECT name FROM hardcharger_users()")] == ["alice"]
 
 

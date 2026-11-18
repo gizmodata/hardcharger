@@ -924,6 +924,13 @@ arrow::Status RbacStore::InitializeSchema() {
     }
   }
   for (const auto& sql : ddl) ARROW_RETURN_NOT_OK(Exec(conn, sql));
+  if (!connect_uri_.empty()) {
+    // Every replica reads the newest sign-in records about once a second: in PostgreSQL by
+    // an index (DuckDB can't create one through the attachment; a missing index only costs
+    // time, so a failure here is not one).
+    (void)Query(conn, "CALL postgres_execute('rbac_store', 'CREATE INDEX IF NOT EXISTS login_events_at ON " +
+                          std::string("hardcharger_rbac.login_events (at_ms)')"));
+  }
   ARROW_RETURN_NOT_OK(Run(conn, "INSERT INTO " + T("meta") +
                                     " SELECT 'data_version', '1' WHERE NOT EXISTS (SELECT 1 FROM " +
                                     T("meta") + " WHERE key = 'data_version')")
