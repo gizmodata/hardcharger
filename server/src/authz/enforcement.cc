@@ -2141,7 +2141,7 @@ RbacSessionState::BypassScope::~BypassScope() {
 void RbacSessionState::NoteChecked(int64_t snapshot_version,
                                    std::vector<PendingOwnership> ownership, bool prepare_only,
                                    std::vector<std::string> accesses) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  MutexLock lock(mutex_);
   last_accesses_ = std::move(accesses);
   ++checked_pending_;
   last_checked_version_ = snapshot_version;
@@ -2151,28 +2151,28 @@ void RbacSessionState::NoteChecked(int64_t snapshot_version,
 }
 
 std::vector<std::string> RbacSessionState::TakeAccesses() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  MutexLock lock(mutex_);
   std::vector<std::string> taken;
   taken.swap(last_accesses_);
   return taken;
 }
 
 std::vector<PendingOwnership> RbacSessionState::TakePreparedOwnership() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  MutexLock lock(mutex_);
   std::vector<PendingOwnership> taken;
   taken.swap(prepared_ownership_);
   return taken;
 }
 
 void RbacSessionState::SetActiveRole(std::string role_id, std::string role_name) {
-  std::lock_guard<std::mutex> lock(principal_mutex_);
+  MutexLock lock(principal_mutex_);
   principal_.active_role_id = std::move(role_id);
   principal_.active_role_name = std::move(role_name);
   ++persona_version_;
 }
 
 void RbacSessionState::NoteBindChecked() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  MutexLock lock(mutex_);
   bind_checked_pending_ = true;
 }
 
@@ -2183,7 +2183,7 @@ dd::RebindQueryInfo RbacSessionState::OnFinalizePrepare(dd::ClientContext&,
   dd::RebindQueryInfo rebind;
   std::vector<PendingOwnership> to_record;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    MutexLock lock(mutex_);
     rebind = FinalizePrepareLocked(prepared, mode, runs_now);
     if (runs_now) {
       for (const auto& o : pending_ownership_) {
@@ -2200,7 +2200,7 @@ dd::RebindQueryInfo RbacSessionState::OnFinalizePrepare(dd::ClientContext&,
   }
   std::vector<RecordedOwnership> undo;
   auto status = RecordOwnership(to_record, undo);
-  std::lock_guard<std::mutex> lock(mutex_);
+  MutexLock lock(mutex_);
   for (auto& u : undo) recorded_ownership_.push_back(std::move(u));
   if (!status.ok()) {
     pending_ownership_.clear();
@@ -2258,7 +2258,7 @@ dd::RebindQueryInfo RbacSessionState::FinalizePrepareLocked(dd::PreparedStatemen
     prepared_ownership_.clear();
     throw dd::PermissionException(
         "Hardcharger blocked this statement: its plan could not be checked against user " +
-        principal_.user_name + "'s grants");
+        principal().user_name + "'s grants");
   }
   if (prepared_versions_.size() > 4096) prepared_versions_.clear();
   prepared_versions_[&prepared] = {last_checked_version_, last_checked_persona_};
@@ -2271,7 +2271,7 @@ dd::RebindQueryInfo RbacSessionState::RebindIfGrantsChanged(
   auto engine = engine_.lock();
   if (!engine) return dd::RebindQueryInfo::ATTEMPT_TO_REBIND;
   const int64_t current = engine->snapshot()->version();
-  std::lock_guard<std::mutex> lock(mutex_);
+  MutexLock lock(mutex_);
   auto it = prepared_versions_.find(&prepared);
   if (it != prepared_versions_.end() && it->second.first == current &&
       it->second.second == persona_version_.load()) {
@@ -2291,7 +2291,7 @@ void RbacSessionState::QueryEnd(dd::ClientContext& context, dd::optional_ptr<dd:
   std::vector<PendingOwnership> pending;
   std::vector<RecordedOwnership> recorded;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    MutexLock lock(mutex_);
     pending.swap(pending_ownership_);
     recorded.swap(recorded_ownership_);
     planned_ownership_.clear();

@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "duckdb_v2.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger {
 
@@ -44,14 +45,15 @@ class HealthChecker {
   const std::chrono::seconds staleness_;
   chargewire_duckdb::Connection connection_;
 
-  mutable std::mutex mutex_;
+  mutable Mutex mutex_;
   std::condition_variable wake_;
-  bool stopping_ = false;
-  bool exited_ = false;
-  bool last_ok_ = false;
-  bool reported_ = false;  // the first result is logged too (a check failing from the start)
-  std::string last_error_ = "no health check has run yet";
-  std::chrono::steady_clock::time_point last_finished_{};
+  bool stopping_ HC_GUARDED_BY(mutex_) = false;
+  bool exited_ HC_GUARDED_BY(mutex_) = false;
+  bool last_ok_ HC_GUARDED_BY(mutex_) = false;
+  // The first result is logged too (a check failing from the start).
+  bool reported_ HC_GUARDED_BY(mutex_) = false;
+  std::string last_error_ HC_GUARDED_BY(mutex_) = "no health check has run yet";
+  std::chrono::steady_clock::time_point last_finished_ HC_GUARDED_BY(mutex_){};
   std::atomic<bool> running_query_ = false;
   std::atomic<double> last_duration_seconds_ = NAN;
   std::thread thread_;

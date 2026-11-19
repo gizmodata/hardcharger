@@ -78,7 +78,7 @@ std::unordered_map<std::string, Jwks::Key> Jwks::Parse(const std::string& docume
 }
 
 Jwks::Key Jwks::Find(const std::string& kid) {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   const auto now = std::chrono::steady_clock::now();
   const bool fresh = fetched_ && now - fetched_at_ < ttl_;
   if (auto it = keys_.find(kid); fresh && it != keys_.end()) return it->second;

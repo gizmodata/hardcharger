@@ -554,7 +554,7 @@ std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle co
       }
     }
   }
-  std::lock_guard lock(sessions_mutex_);
+  MutexLock lock(sessions_mutex_);
   std::erase_if(sessions_, [](const auto& weak) { return weak.expired(); });
   sessions_.push_back(guard);
   return guard;
@@ -564,7 +564,7 @@ void AccessControl::OnSnapshot(const Snapshot& snapshot) {
   std::vector<std::shared_ptr<SessionGuard>> live;
   std::shared_ptr<const Snapshot> previous;
   {
-    std::lock_guard lock(sessions_mutex_);
+    MutexLock lock(sessions_mutex_);
     previous = std::move(seen_);
     seen_ = engine_->snapshot();
     for (const auto& weak : sessions_) {
@@ -603,7 +603,7 @@ void AccessControl::OnSnapshot(const Snapshot& snapshot) {
     // checked against the new grants anyway.
     if (!previous || !guard->busy()) continue;
     auto state = [&]() -> dd::shared_ptr<RbacSessionState> {
-      std::lock_guard lock(guard->mutex_);
+      MutexLock lock(guard->mutex_);
       return guard->connection_ ? StateOf(guard->connection_) : nullptr;
     }();
     // This session's short DDL metadata update is not a running data query to
@@ -622,7 +622,7 @@ void AccessControl::OnSnapshot(const Snapshot& snapshot) {
 void AccessControl::EndSessionsOf(const std::string& user_id, const std::string& reason) {
   std::vector<std::shared_ptr<SessionGuard>> ending;
   {
-    std::lock_guard lock(sessions_mutex_);
+    MutexLock lock(sessions_mutex_);
     for (const auto& weak : sessions_) {
       auto guard = weak.lock();
       if (guard && guard->user_id_ == user_id) ending.push_back(std::move(guard));
@@ -649,7 +649,7 @@ void SessionGuard::RunInternal(const std::function<void()>& run) {
 }
 
 void SessionGuard::Detach() {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   connection_ = nullptr;
 }
 
@@ -659,7 +659,7 @@ std::shared_ptr<arrow::RecordBatch> SessionGuard::AccessTableRows(
   if (owner_.catalog_rules_only_) return EmptyAccessTable(table);
   Principal principal;
   {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     if (connection_ == nullptr) return EmptyAccessTable(table);
     auto state = StateOf(connection_);
     if (!state) {
@@ -674,7 +674,7 @@ std::shared_ptr<arrow::RecordBatch> SessionGuard::AccessTableRows(
 }
 
 void SessionGuard::RequireLive() const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   if (ended_) {
     // Spec §5.6's reason for what access control saw.
     namespace why = chargewire::reason;
@@ -698,7 +698,7 @@ void SessionGuard::RequireLive() const {
 
 void SessionGuard::End(const std::string& reason) {
   {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     if (ended_) return;
     ended_ = reason;
     if (connection_) duckdb_v2_connection_interrupt(connection_, nullptr);
@@ -708,7 +708,7 @@ void SessionGuard::End(const std::string& reason) {
 }
 
 void SessionGuard::InterruptRunning() {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   if (connection_) duckdb_v2_connection_interrupt(connection_, nullptr);
 }
 
@@ -780,7 +780,7 @@ Error SessionGuard::ForTenant(const Error& error) const {
   }
   if (!hide) {
     try {
-      std::lock_guard lock(mutex_);
+      MutexLock lock(mutex_);
       if (connection_ == nullptr) return error;
       auto& context = ContextOf(connection_);
       auto state = StateOf(connection_);

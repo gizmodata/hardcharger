@@ -202,7 +202,7 @@ void CatalogLog::Stop() {
   // No line reaches Add once the sink is unset; then the writer drains what is queued.
   SetLogSink(nullptr);
   {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     if (!writer_.joinable() || stopping_) return;
     stopping_ = true;
   }
@@ -212,7 +212,7 @@ void CatalogLog::Stop() {
 
 void CatalogLog::Add(const LogRecord& record) {
   {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     if (stopping_) return;
     if (queue_.size() >= kMaxQueued) {
       dropped_++;
@@ -250,9 +250,9 @@ void CatalogLog::WriterLoop() {
   LogSinkExclusion exclusion;
   uint64_t reported_drops = 0;
   auto reported_at = std::chrono::steady_clock::time_point();
-  std::unique_lock lock(mutex_);
+  UniqueMutexLock lock(mutex_);
   for (;;) {
-    wake_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
+    wake_.wait(lock.native(), [this]() HC_REQUIRES(mutex_) { return stopping_ || !queue_.empty(); });
     if (queue_.empty() && stopping_) return;
     std::vector<LogRecord> batch;
     while (!queue_.empty() && batch.size() < kBatchRows) {
@@ -260,7 +260,7 @@ void CatalogLog::WriterLoop() {
       queue_.pop_front();
     }
     const uint64_t dropped = dropped_;
-    lock.unlock();
+    lock.Unlock();
     Write(batch);
     // At most once a minute: a catalog that stays down must not flood the output.
     if (dropped > reported_drops && std::chrono::steady_clock::now() - reported_at >= std::chrono::minutes(1)) {
@@ -269,7 +269,7 @@ void CatalogLog::WriterLoop() {
           {{"dropped_total", std::to_string(dropped)}, {"queue_limit", std::to_string(kMaxQueued)}});
       reported_drops = dropped;
     }
-    lock.lock();
+    lock.Lock();
   }
 }
 

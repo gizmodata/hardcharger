@@ -23,6 +23,7 @@
 #include <stdexcept>
 
 #include "platform.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger::web {
 
@@ -389,7 +390,7 @@ class Relay::Impl {
   }
 
   std::size_t SessionCount() const {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     return sessions_.size();
   }
 
@@ -451,7 +452,7 @@ class Relay::Impl {
 
   Authorized Authorize(const chargewire::AppRequest& request, bool make_pending) {
     const auto now = Clock::now();
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     Sweep(now);
     const std::string_view named = request.Header(kSessionHeader);
     if (!named.empty()) {
@@ -491,7 +492,7 @@ class Relay::Impl {
   }
 
   std::shared_ptr<RelaySession> Make(const std::string& key, std::string owner, bool signed_in,
-                                     Clock::time_point now) {
+                                     Clock::time_point now) HC_REQUIRES(mutex_) {
     if (sessions_.size() >= options_.max_sessions) {
       throw Problem(429, "rate_limited", "too many relay sessions on this server; try again later");
     }
@@ -507,7 +508,7 @@ class Relay::Impl {
     session.expires = now + (session.signed_in ? options_.session_lifetime : options_.pending_lifetime);
   }
 
-  void Sweep(Clock::time_point now) {
+  void Sweep(Clock::time_point now) HC_REQUIRES(mutex_) {
     if (now < next_sweep_) return;
     next_sweep_ = now + std::chrono::seconds(30);
     for (auto it = sessions_.begin(); it != sessions_.end();) {
@@ -520,14 +521,14 @@ class Relay::Impl {
   }
 
   std::shared_ptr<RelaySession> Session(const std::string& key) {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     auto it = sessions_.find(key);
     if (it == sessions_.end()) throw Problem(401, "relay_session_required", "the relay session has ended");
     return it->second;
   }
 
   std::shared_ptr<Remote> RemoteOf(const std::string& key, const std::string& id) {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     auto it = sessions_.find(key);
     if (it == sessions_.end()) throw Problem(401, "relay_session_required", "the relay session has ended");
     auto remote = it->second->remotes.find(id);
@@ -555,7 +556,7 @@ class Relay::Impl {
     auto session = Session(authorized.key);
     json::array remotes;
     {
-      std::lock_guard lock(mutex_);
+      MutexLock lock(mutex_);
       for (const auto& [id, remote] : session->remotes) remotes.push_back(RemoteJson(*remote, session->key));
     }
     return JsonAnswer(200, json::object{{"remotes", std::move(remotes)},
@@ -687,7 +688,7 @@ class Relay::Impl {
     if (spec.tls != TlsMode::kPlaintext) remote->certificate = CertificateJson(probed.certificate, spec.tls);
     json::object answer;
     {
-      std::lock_guard lock(mutex_);
+      MutexLock lock(mutex_);
       auto it = sessions_.find(authorized.key);
       if (it == sessions_.end()) throw Problem(401, "relay_session_required", "the relay session has ended");
       auto& session = *it->second;
@@ -717,7 +718,7 @@ class Relay::Impl {
   chargewire::AppResponse RemoveRemote(chargewire::AppRequest& request, const std::string& id) {
     const Authorized authorized = Authorize(request, false);
     {
-      std::lock_guard lock(mutex_);
+      MutexLock lock(mutex_);
       auto it = sessions_.find(authorized.key);
       if (it == sessions_.end()) throw Problem(401, "relay_session_required", "the relay session has ended");
       if (it->second->remotes.erase(id) == 0) throw Problem(404, "remote_not_found", "no such remote server: " + id);
@@ -774,7 +775,7 @@ class Relay::Impl {
       response = co_await Exchange(stream, std::move(upstream), has_body ? request.body : nullptr, chunked);
     }
     if (sign_in && response.status == 200) {
-      std::lock_guard lock(mutex_);
+      MutexLock lock(mutex_);
       auto it = sessions_.find(authorized.key);
       if (it != sessions_.end() && !it->second->signed_in) {
         it->second->signed_in = true;
@@ -919,7 +920,7 @@ class Relay::Impl {
   // One TLS context for verified remotes (the system's roots, read once) and one that
   // verifies nothing (fingerprint mode checks the certificate itself).
   std::shared_ptr<ssl::context> Context(TlsMode mode) {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     auto& slot = mode == TlsMode::kVerified ? verified_context_ : trusting_context_;
     if (slot) return slot;
     auto context = std::make_shared<ssl::context>(ssl::context::tls_client);
@@ -958,11 +959,11 @@ class Relay::Impl {
   }
 
   RelayOptions options_;
-  mutable std::mutex mutex_;
-  std::map<std::string, std::shared_ptr<RelaySession>> sessions_;
-  Clock::time_point next_sweep_{};
-  std::shared_ptr<ssl::context> verified_context_;
-  std::shared_ptr<ssl::context> trusting_context_;
+  mutable Mutex mutex_;
+  std::map<std::string, std::shared_ptr<RelaySession>> sessions_ HC_GUARDED_BY(mutex_);
+  Clock::time_point next_sweep_ HC_GUARDED_BY(mutex_){};
+  std::shared_ptr<ssl::context> verified_context_ HC_GUARDED_BY(mutex_);
+  std::shared_ptr<ssl::context> trusting_context_ HC_GUARDED_BY(mutex_);
 };
 
 Relay::Relay(RelayOptions options) : impl_(std::make_unique<Impl>(std::move(options))) {}

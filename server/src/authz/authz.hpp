@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "chargewire/backend.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger::authz {
 
@@ -271,9 +272,10 @@ class AccessControl {
   std::atomic<bool> would_provision_{false};
   std::vector<std::string> hidden_catalogs_;
   ScopedTokenSigner signer_;
-  std::mutex sessions_mutex_;
-  std::vector<std::weak_ptr<SessionGuard>> sessions_;
-  std::shared_ptr<const Snapshot> seen_;  // the snapshot sessions were last compared with
+  Mutex sessions_mutex_;
+  std::vector<std::weak_ptr<SessionGuard>> sessions_ HC_GUARDED_BY(sessions_mutex_);
+  // The snapshot sessions were last compared with.
+  std::shared_ptr<const Snapshot> seen_ HC_GUARDED_BY(sessions_mutex_);
 };
 
 // One session's side of access control: everything its statements go through. Every
@@ -377,9 +379,12 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   int64_t scope_expires_at_ = 0;  // a scoped token's session: when the scope ends (Unix s)
   std::string tenant_catalogs_;
 
-  mutable std::mutex mutex_;  // guards connection_ and ended_ against the store's listener
+  mutable Mutex mutex_;  // guards connection_ and ended_ against the store's listener
+  // Not HC_GUARDED_BY: the session's engine thread reads it without mutex_ while its statements
+  // run, and the one write (Detach(), nulling it) comes from the session's destructor, after the
+  // last statement; every other thread (the store's listener, DuckDB's) reads it under mutex_.
   duckdb_v2_connection_handle connection_;
-  std::optional<std::string> ended_;  // why the session ended
+  std::optional<std::string> ended_ HC_GUARDED_BY(mutex_);  // why the session ended
   std::shared_ptr<std::atomic<int>> busy_;
 };
 

@@ -30,7 +30,7 @@ class QueryProgress {
  public:
   ~QueryProgress() { if (shown_) std::cerr << "\r\033[2K" << std::flush; }
   void Report(const wc::StatementDocument& doc) {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
     if (seconds < 0.5) return;
     std::ostringstream line;
@@ -49,8 +49,8 @@ class QueryProgress {
   }
  private:
   std::chrono::steady_clock::time_point started_ = std::chrono::steady_clock::now();
-  std::mutex mutex_;
-  bool shown_ = false;
+  Mutex mutex_;
+  bool shown_ HC_GUARDED_BY(mutex_) = false;
 };
 
 // What a Chargewire reason means, for a person: why the server refused a token it issued
@@ -212,8 +212,11 @@ arrow::Status ChargewireConnection::Connect(const ClientConfig& config) {
   options.tls.cert_file = config.mtls_cert;
   options.tls.key_file = config.mtls_key;
   options.resume_timeout = std::chrono::seconds(std::max(0, config.resume_timeout));
-  resume_->quiet = config.quiet;
-  resume_->terminal = StderrIsTerminal();
+  {
+    MutexLock lock(resume_->mutex);
+    resume_->quiet = config.quiet;
+    resume_->terminal = StderrIsTerminal();
+  }
   resume_->stop.store(false);
   options.on_resuming = [status = resume_](const wc::ResumeProgress& progress) {
     return status->Report(progress.attempt, progress.retry_in, progress.elapsed, progress.detail);
@@ -466,7 +469,7 @@ auto ChargewireConnection::WithSession(Call&& call) -> decltype(call()) {
 bool ChargewireConnection::ResumeStatus::Report(int attempt, std::chrono::milliseconds retry_in,
                                                 std::chrono::milliseconds elapsed, const std::string& detail) {
   if (stop.load()) return false;
-  std::lock_guard lock(mutex);
+  MutexLock lock(mutex);
   if (quiet) return true;
   const auto seconds = [](std::chrono::milliseconds ms) { return static_cast<long long>((ms.count() + 999) / 1000); };
   const long long spent = elapsed.count() / 1000;
@@ -495,7 +498,7 @@ bool ChargewireConnection::ResumeStatus::Report(int attempt, std::chrono::millis
 }
 
 void ChargewireConnection::ResumeStatus::Done() {
-  std::lock_guard lock(mutex);
+  MutexLock lock(mutex);
   if (line_length > 0) std::cerr << '\r' << std::string(line_length, ' ') << '\r' << std::flush;
   line_length = 0;
   attempt_shown = 0;

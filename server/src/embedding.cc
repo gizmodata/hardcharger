@@ -17,6 +17,7 @@
 #include "duckdb_v2.h"
 #include "hardcharger_embedded.h"
 #include "third_party_notices.hpp"
+#include "thread_annotations.hpp"
 #include "version.hpp"
 #include "web_ui.hpp"
 
@@ -32,17 +33,21 @@ int hardcharger_server_main(int argc, char** argv);
 extern "C" int32_t duckdb_register_static_extensions(void);
 #endif
 
+using hardcharger::Mutex;
+using hardcharger::MutexLock;
+using hardcharger::UniqueMutexLock;
+
 struct hardcharger_server {
-  std::mutex mutex;
+  Mutex mutex;
   std::condition_variable changed;
   // From the server's thread.
-  bool ready = false;
-  bool exited = false;
-  int exit_status = 0;
-  int port = 0;
-  std::string failure;
+  bool ready HC_GUARDED_BY(mutex) = false;
+  bool exited HC_GUARDED_BY(mutex) = false;
+  int exit_status HC_GUARDED_BY(mutex) = 0;
+  int port HC_GUARDED_BY(mutex) = 0;
+  std::string failure HC_GUARDED_BY(mutex);
   // From the app: stop requests StopRequests::Wait() hasn't taken yet.
-  int stop_requests = 0;
+  int stop_requests HC_GUARDED_BY(mutex) = 0;
   std::thread thread;
 };
 
@@ -50,11 +55,11 @@ namespace {
 
 // The running server: one per process, which the hooks report to. Set before its thread
 // starts and cleared once that thread has been joined.
-std::mutex current_mutex;
-hardcharger_server* current = nullptr;
+Mutex current_mutex;
+hardcharger_server* current HC_GUARDED_BY(current_mutex) = nullptr;
 
 hardcharger_server* Current() {
-  std::lock_guard lock(current_mutex);
+  MutexLock lock(current_mutex);
   return current;
 }
 
@@ -73,7 +78,7 @@ void Ready(uint16_t port) {
   hardcharger_server* server = Current();
   if (server == nullptr) return;
   {
-    std::lock_guard lock(server->mutex);
+    MutexLock lock(server->mutex);
     server->ready = true;
     server->port = port;
   }
@@ -83,15 +88,15 @@ void Ready(uint16_t port) {
 void Failed(std::string_view message) {
   hardcharger_server* server = Current();
   if (server == nullptr) return;
-  std::lock_guard lock(server->mutex);
+  MutexLock lock(server->mutex);
   if (server->failure.empty()) server->failure = std::string(message);
 }
 
 void StopRequests::Wait() {
   hardcharger_server* server = Current();
   if (server == nullptr) return;
-  std::unique_lock lock(server->mutex);
-  server->changed.wait(lock, [&] { return server->stop_requests > 0; });
+  UniqueMutexLock lock(server->mutex);
+  server->changed.wait(lock.native(), [&]() HC_REQUIRES(server->mutex) { return server->stop_requests > 0; });
   server->stop_requests--;
 }
 
@@ -99,7 +104,7 @@ void StopRequests::Wake() {
   hardcharger_server* server = Current();
   if (server == nullptr) return;
   {
-    std::lock_guard lock(server->mutex);
+    MutexLock lock(server->mutex);
     server->stop_requests++;
   }
   server->changed.notify_all();
@@ -123,7 +128,7 @@ int hardcharger_server_start(int argc, const char* const* argv, hardcharger_serv
 #endif
   auto* server = new hardcharger_server();
   {
-    std::lock_guard lock(current_mutex);
+    MutexLock lock(current_mutex);
     if (current != nullptr) {
       delete server;
       CopyError("a Hardcharger server is already running in this process", error, error_size);
@@ -147,14 +152,14 @@ int hardcharger_server_start(int argc, const char* const* argv, hardcharger_serv
       hardcharger::embedding::Failed("the server stopped on an unknown exception");
     }
     {
-      std::lock_guard lock(server->mutex);
+      MutexLock lock(server->mutex);
       server->exited = true;
       server->exit_status = status;
     }
     server->changed.notify_all();
   });
-  std::unique_lock lock(server->mutex);
-  server->changed.wait(lock, [&] { return server->ready || server->exited; });
+  UniqueMutexLock lock(server->mutex);
+  server->changed.wait(lock.native(), [&]() HC_REQUIRES(server->mutex) { return server->ready || server->exited; });
   if (server->ready) {
     *out = server;
     return 0;
@@ -162,10 +167,10 @@ int hardcharger_server_start(int argc, const char* const* argv, hardcharger_serv
   // It ended before it served: hand back why, and free it.
   const int status = server->exit_status == 0 ? 1 : server->exit_status;
   std::string why = server->failure.empty() ? "the server stopped before it served (see its log)" : server->failure;
-  lock.unlock();
+  lock.Unlock();
   server->thread.join();
   {
-    std::lock_guard current_lock(current_mutex);
+    MutexLock current_lock(current_mutex);
     current = nullptr;
   }
   delete server;
@@ -176,14 +181,14 @@ int hardcharger_server_start(int argc, const char* const* argv, hardcharger_serv
 int hardcharger_server_port(const hardcharger_server* server) {
   if (server == nullptr) return 0;
   auto* s = const_cast<hardcharger_server*>(server);
-  std::lock_guard lock(s->mutex);
+  MutexLock lock(s->mutex);
   return s->port;
 }
 
 void hardcharger_server_request_stop(hardcharger_server* server, int immediately) {
   if (server == nullptr) return;
   {
-    std::lock_guard lock(server->mutex);
+    MutexLock lock(server->mutex);
     if (server->exited) return;
     server->stop_requests += immediately ? 2 : 1;
   }
@@ -193,14 +198,14 @@ void hardcharger_server_request_stop(hardcharger_server* server, int immediately
 int hardcharger_server_is_running(const hardcharger_server* server) {
   if (server == nullptr) return 0;
   auto* s = const_cast<hardcharger_server*>(server);
-  std::lock_guard lock(s->mutex);
+  MutexLock lock(s->mutex);
   return s->exited ? 0 : 1;
 }
 
 int hardcharger_server_wait(hardcharger_server* server, char* error, size_t error_size) {
   if (server == nullptr) return 0;
-  std::unique_lock lock(server->mutex);
-  server->changed.wait(lock, [&] { return server->exited; });
+  UniqueMutexLock lock(server->mutex);
+  server->changed.wait(lock.native(), [&]() HC_REQUIRES(server->mutex) { return server->exited; });
   const int status = server->exit_status;
   if (status != 0) {
     CopyError(server->failure.empty() ? "the server stopped on an error (see its log)" : server->failure, error,
@@ -214,7 +219,7 @@ void hardcharger_server_free(hardcharger_server* server) {
   // The thread sets `exited` as its last act; joining it is what makes the server free to go.
   if (server->thread.joinable()) server->thread.join();
   {
-    std::lock_guard lock(current_mutex);
+    MutexLock lock(current_mutex);
     if (current == server) current = nullptr;
   }
   delete server;

@@ -677,7 +677,7 @@ void Instrumentation::Start() {
 
 void Instrumentation::Stop() {
   {
-    std::unique_lock lock(mutex_);
+    UniqueMutexLock lock(mutex_);
     if (stopped_ || !writer_.joinable()) {
       stopped_ = true;
       return;
@@ -699,7 +699,7 @@ void Instrumentation::Stop() {
 void Instrumentation::Enqueue(Event event) {
   const std::size_t bytes = event.Bytes();
   {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     if (stopped_ || !writer_.joinable()) return;
     if (queued_bytes_ + bytes > limits_.max_queued_bytes) {
       // Never block the statement on its record: count it and carry on.
@@ -726,9 +726,9 @@ void Instrumentation::WriterLoop() {
   InstrumentationStats& stats = runtime_.instrumentation_stats;
   uint64_t reported_drops = 0;
   std::optional<std::chrono::steady_clock::time_point> reported_at;  // the last drop report
-  std::unique_lock lock(mutex_);
+  UniqueMutexLock lock(mutex_);
   for (;;) {
-    wake_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
+    wake_.wait(lock.native(), [this]() HC_REQUIRES(mutex_) { return stopping_ || !queue_.empty(); });
     if (queue_.empty() && stopping_) break;
     if (stopping_ && std::chrono::steady_clock::now() >= drain_until_) {
       // Past the drain deadline: what is left is dropped, and said so.
@@ -737,17 +737,17 @@ void Instrumentation::WriterLoop() {
       queued_bytes_ = 0;
       stats.queued -= static_cast<int64_t>(left);
       stats.dropped += left;
-      lock.unlock();
+      lock.Unlock();
       Log(LogLevel::kWarning, "instrumentation backlog not written by the shutdown deadline: records dropped",
           {{"dropped", std::to_string(left)},
            {"deadline_seconds", std::to_string(limits_.drain_deadline.count() / 1000.0)}});
-      lock.lock();
+      lock.Lock();
       break;
     }
     if (const auto delay = write_delay_ms_.load(); delay > 0) {  // tests: a slow catalog
-      lock.unlock();
+      lock.Unlock();
       std::this_thread::sleep_for(std::chrono::milliseconds(delay));
-      lock.lock();
+      lock.Lock();
     }
     // A batch: everything queued, up to the cap; a raw statement (tests) runs alone.
     std::vector<Event> batch;
@@ -759,7 +759,7 @@ void Instrumentation::WriterLoop() {
       queue_.pop_front();
     }
     stats.queued -= static_cast<int64_t>(batch.size());
-    lock.unlock();
+    lock.Unlock();
     if (raw) {
       Run(std::get<RawSql>(batch.front().what).sql);
       stats.written++;
@@ -776,9 +776,9 @@ void Instrumentation::WriterLoop() {
            {"queue_limit_bytes", std::to_string(limits_.max_queued_bytes)}});
       reported_drops = dropped;
     }
-    lock.lock();
+    lock.Lock();
   }
-  lock.unlock();
+  lock.Unlock();
   for (const std::string& sql : FinalSweep()) Run(sql);
 }
 
@@ -828,8 +828,8 @@ void Instrumentation::Write(std::vector<Event>& events, std::size_t first, std::
     // past a stop), try the batch again, and otherwise let it go, counted and said once.
     for (int attempt = 0; attempt < 3; attempt++) {
       {
-        std::unique_lock lock(mutex_);
-        if (wake_.wait_for(lock, std::chrono::seconds(1), [this] { return stopping_; })) break;
+        UniqueMutexLock lock(mutex_);
+        if (wake_.wait_for(lock.native(), std::chrono::seconds(1), [this]() HC_REQUIRES(mutex_) { return stopping_; })) break;
       }
       if (Reachable()) {
         if (TryWrite(events, first, last, error)) return;
@@ -1076,13 +1076,13 @@ void Instrumentation::ExecutionAdmitted(const ExecutionRecord& r) {
 }
 
 void Instrumentation::ExecutionProgress(const ExecutionRecord& r) {
-  std::lock_guard lock(monitor_mutex_);
+  MutexLock lock(monitor_mutex_);
   monitor_[r.execution_id] = r;
   std::string{}.swap(monitor_[r.execution_id].query_profile);
 }
 
 std::vector<ExecutionRecord> Instrumentation::MonitorRecords() {
-  std::lock_guard lock(monitor_mutex_);
+  MutexLock lock(monitor_mutex_);
   std::vector<ExecutionRecord> records;
   records.reserve(monitor_.size());
   for (const auto& [id, record] : monitor_) records.push_back(record);
@@ -1096,7 +1096,7 @@ static std::size_t MonitorBytes(const ExecutionRecord& r) {
 
 void Instrumentation::ExecutionFinished(const ExecutionRecord& r) {
   {
-    std::lock_guard lock(monitor_mutex_);
+    MutexLock lock(monitor_mutex_);
     monitor_[r.execution_id] = r;
     std::string{}.swap(monitor_[r.execution_id].query_profile);
     monitor_finished_bytes_ += MonitorBytes(monitor_[r.execution_id]);

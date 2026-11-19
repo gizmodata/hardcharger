@@ -23,6 +23,7 @@
 #include "authz/opa.hpp"
 #include "authz/password.hpp"
 #include "authz/store.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger::authz {
 
@@ -225,19 +226,19 @@ class RbacEngine {
   std::string dummy_hash_;  // verified against for unknown users (equal timing)
   std::unique_ptr<RbacStore> store_;
   std::unique_ptr<PolicyService> policy_service_;
-  mutable std::mutex snapshot_mutex_;
-  std::shared_ptr<const Snapshot> snapshot_;
-  std::mutex listener_mutex_;
-  SnapshotListener listener_;
+  mutable Mutex snapshot_mutex_;
+  std::shared_ptr<const Snapshot> snapshot_ HC_GUARDED_BY(snapshot_mutex_);
+  Mutex listener_mutex_;
+  SnapshotListener listener_ HC_GUARDED_BY(listener_mutex_);
 
   std::atomic<int64_t> last_answer_ns_{0};  // steady clock: the store last answered
   std::atomic<bool> store_up_{true};
   int64_t outage_started_ns_ = 0;  // the poller's: when the store stopped answering
   int64_t outage_logged_ns_ = 0;   // ... and when that was last logged
 
-  std::mutex poll_mutex_;
+  Mutex poll_mutex_;
   std::condition_variable poll_cv_;
-  bool stopping_ = false;  // guarded by poll_mutex_
+  bool stopping_ HC_GUARDED_BY(poll_mutex_) = false;
   std::mutex stop_mutex_;  // serializes Stop()'s join
   std::thread poller_;
 };

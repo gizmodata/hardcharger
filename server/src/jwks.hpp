@@ -7,6 +7,8 @@
 #include <string>
 #include <unordered_map>
 
+#include "thread_annotations.hpp"
+
 namespace hardcharger {
 
 struct OidcEndpoints {
@@ -40,10 +42,10 @@ class Jwks {
  private:
   const std::string uri_;
   const std::chrono::minutes ttl_;
-  std::mutex mutex_;
-  std::unordered_map<std::string, Key> keys_;
-  std::chrono::steady_clock::time_point fetched_at_{};
-  bool fetched_ = false;
+  Mutex mutex_;
+  std::unordered_map<std::string, Key> keys_ HC_GUARDED_BY(mutex_);
+  std::chrono::steady_clock::time_point fetched_at_ HC_GUARDED_BY(mutex_){};
+  bool fetched_ HC_GUARDED_BY(mutex_) = false;
 };
 
 }  // namespace hardcharger

@@ -18,6 +18,7 @@
 
 #include "client_config.hpp"
 #include "chargewire/client.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger::client {
 
@@ -156,11 +157,12 @@ class ChargewireConnection {
   // What the client shows while it waits for a server that is resuming (Chargewire §11.2).
   // Shared with the client's callback, so it outlives a move of this connection.
   struct ResumeStatus {
-    std::mutex mutex;
-    bool quiet = false;
-    bool terminal = false;  // stderr is a terminal: one line, rewritten as it counts down
-    size_t line_length = 0;  // of the countdown line shown, 0: none
-    int attempt_shown = 0;
+    Mutex mutex;
+    bool quiet HC_GUARDED_BY(mutex) = false;
+    // stderr is a terminal: one line, rewritten as it counts down.
+    bool terminal HC_GUARDED_BY(mutex) = false;
+    size_t line_length HC_GUARDED_BY(mutex) = 0;  // of the countdown line shown, 0: none
+    int attempt_shown HC_GUARDED_BY(mutex) = 0;
     std::atomic<bool> stop{false};  // Ctrl-C: stop waiting
     // Called by the client on each wait; false stops it.
     bool Report(int attempt, std::chrono::milliseconds retry_in, std::chrono::milliseconds elapsed,

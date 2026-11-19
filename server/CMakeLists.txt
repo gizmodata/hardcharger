@@ -31,6 +31,11 @@ if(MSVC)
 else()
   set(HARDCHARGER_WARNINGS -Wall -Wextra)
   set(HARDCHARGER_AUTHZ_WARNINGS -Wall -Wextra -Wno-unused-parameter)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # Clang's thread-safety analysis: the mutexes and what they guard (src/thread_annotations.hpp).
+    list(APPEND HARDCHARGER_WARNINGS -Wthread-safety)
+    list(APPEND HARDCHARGER_AUTHZ_WARNINGS -Wthread-safety)
+  endif()
 endif()
 
 # DuckDB 2.0 and Arrow C++ (IPC only), built by scripts/build-deps.sh.

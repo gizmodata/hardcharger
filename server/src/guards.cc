@@ -538,7 +538,7 @@ void SensitivePaths::Add(const std::string& path, const std::string& category) {
 #endif
   if (local == "~" || local.starts_with("~/")) local = home_ + local.substr(1);
   for (auto& key : Keys(local, home_, true)) {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     const bool present =
         std::any_of(entries_.begin(), entries_.end(), [&](const Entry& e) { return e.key == key; });
     if (!present) entries_.push_back({std::move(key), category, local});
@@ -605,7 +605,7 @@ std::optional<std::string> SensitivePaths::Check(const std::string& path) const 
   // as far as the path exists (a planted link, /etc -> /private/etc on macOS, 8.3 names).
   const auto candidates = Keys(local, home_, /*resolve=*/true);
   {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     for (const auto& candidate : candidates) {
       if (std::find(allowed_keys_.begin(), allowed_keys_.end(), candidate) != allowed_keys_.end()) {
         return std::nullopt;
@@ -621,7 +621,7 @@ std::optional<std::string> SensitivePaths::Check(const std::string& path) const 
   if (!HasSecondLink(local)) return std::nullopt;
   std::vector<Entry> entries;
   {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     entries = entries_;
   }
   std::error_code ec;
@@ -693,12 +693,12 @@ void PrivateFiles::Add(const std::string& path, const std::string& category, boo
     keyed.names.push_back(ComparisonKey(Utf8Path(file.filename()) + suffix));
     keyed.names.push_back(ComparisonKey("tmp_" + Utf8Path(file.filename()) + suffix));
   }
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   entries_.push_back(std::move(keyed));
 }
 
 bool PrivateFiles::empty() const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   return entries_.empty();
 }
 
@@ -726,7 +726,7 @@ bool PrivateFiles::MayName(const std::string& path) const {
   if (!IsLocalPath(path)) return false;
   const std::string local = LocalSpelling(path, home_);
   {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     if (entries_.empty()) return false;
     for (const auto& part : Segments(ComparisonKey(local))) {
       for (const auto& keyed : entries_) {
@@ -754,7 +754,7 @@ bool PrivateFiles::MayName(const std::string& path) const {
 std::optional<PrivateFiles::Entry> PrivateFiles::Find(const std::string& path) const {
   const auto candidates = CandidateKeys(path, /*resolve=*/true);
   if (candidates.empty()) return std::nullopt;
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   for (const auto& keyed : entries_) {
     for (const auto& candidate : candidates) {
       for (const auto& key : keyed.keys) {
@@ -777,7 +777,7 @@ std::optional<PrivateFiles::Entry> PrivateFiles::Find(const std::string& path) c
 
 bool PrivateFiles::IsCopyTwin(const std::string& path) const {
   const auto candidates = CandidateKeys(path, true);
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   for (const auto& keyed : entries_) {
     for (const auto& candidate : candidates) {
       if (std::find(keyed.twins.begin(), keyed.twins.end(), candidate) != keyed.twins.end()) return true;

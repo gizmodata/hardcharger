@@ -53,13 +53,13 @@ class StoreLink {
   }
 
   ~StoreLink() {
-    std::unique_lock lock(state_->mutex);
+    UniqueMutexLock lock(state_->mutex);
     state_->stopping = true;
     state_->cv.notify_all();
     // A thread still waiting on a store that hangs is left behind: it owns all it uses.
     const bool finished =
-        state_->cv.wait_for(lock, timeout_, [this] { return state_->finished; });
-    lock.unlock();
+        state_->cv.wait_for(lock.native(), timeout_, [this]() HC_REQUIRES(state_->mutex) { return state_->finished; });
+    lock.Unlock();
     if (finished) {
       thread_.join();
     } else {
@@ -75,7 +75,7 @@ class StoreLink {
   // Whether a statement has run for the whole timeout (one a caller gave up on included):
   // the store doesn't answer.
   bool Hung() const {
-    std::lock_guard lock(state_->mutex);
+    MutexLock lock(state_->mutex);
     return state_->busy && std::chrono::steady_clock::now() - state_->busy_since >= timeout_;
   }
 
@@ -83,13 +83,13 @@ class StoreLink {
   arrow::Result<dd::unique_ptr<dd::QueryResult>> Call(Work work) {
     auto task = std::make_shared<Task>();
     task->work = std::move(work);
-    std::unique_lock lock(state_->mutex);
+    UniqueMutexLock lock(state_->mutex);
     const auto now = std::chrono::steady_clock::now();
     // A statement that has hung for the whole timeout already: no use queueing behind it.
     if (state_->busy && now - state_->busy_since >= timeout_) return TimedOut();
     state_->queue.push_back(task);
     state_->cv.notify_all();
-    if (!state_->cv.wait_until(lock, now + timeout_, [&] { return task->done; })) {
+    if (!state_->cv.wait_until(lock.native(), now + timeout_, [&] { return task->done; })) {
       task->abandoned = true;
       state_->rollback_pending = true;  // whatever transaction it was part of is cancelled
       state_->cv.notify_all();
@@ -120,14 +120,14 @@ class StoreLink {
   struct State {
     std::unique_ptr<dd::DuckDB> db;
     std::unique_ptr<dd::Connection> conn;
-    std::mutex mutex;
+    Mutex mutex;  // also guards the Tasks' done, abandoned, result and error
     std::condition_variable cv;
-    std::deque<std::shared_ptr<Task>> queue;
-    bool stopping = false;
-    bool finished = false;
-    bool rollback_pending = false;
-    bool busy = false;  // running a statement (since busy_since)
-    std::chrono::steady_clock::time_point busy_since;
+    std::deque<std::shared_ptr<Task>> queue HC_GUARDED_BY(mutex);
+    bool stopping HC_GUARDED_BY(mutex) = false;
+    bool finished HC_GUARDED_BY(mutex) = false;
+    bool rollback_pending HC_GUARDED_BY(mutex) = false;
+    bool busy HC_GUARDED_BY(mutex) = false;  // running a statement (since busy_since)
+    std::chrono::steady_clock::time_point busy_since HC_GUARDED_BY(mutex);
     ~State() {
       conn.reset();
       db.reset();
@@ -135,21 +135,23 @@ class StoreLink {
   };
 
   static void Loop(State& state) {
-    std::unique_lock lock(state.mutex);
+    UniqueMutexLock lock(state.mutex);
     while (true) {
-      state.cv.wait(lock, [&] { return state.stopping || state.rollback_pending || !state.queue.empty(); });
+      state.cv.wait(lock.native(), [&]() HC_REQUIRES(state.mutex) {
+        return state.stopping || state.rollback_pending || !state.queue.empty();
+      });
       if (state.rollback_pending) {
         // A caller gave up on a statement of this connection's transaction: undo it
         // before anything else runs (outside a transaction this only errs).
         state.rollback_pending = false;
         state.busy = true;
         state.busy_since = std::chrono::steady_clock::now();
-        lock.unlock();
+        lock.Unlock();
         try {
           (void)state.conn->Query("ROLLBACK");
         } catch (const std::exception&) {
         }
-        lock.lock();
+        lock.Lock();
         state.busy = false;
         continue;
       }
@@ -159,7 +161,7 @@ class StoreLink {
       if (task->abandoned) continue;
       state.busy = true;
       state.busy_since = std::chrono::steady_clock::now();
-      lock.unlock();
+      lock.Unlock();
       dd::unique_ptr<dd::QueryResult> result;
       std::string error;
       try {
@@ -168,7 +170,7 @@ class StoreLink {
         error = e.what();
         if (error.empty()) error = "unknown error";
       }
-      lock.lock();
+      lock.Lock();
       state.busy = false;
       if (!task->abandoned) {
         task->result = std::move(result);
@@ -176,9 +178,9 @@ class StoreLink {
         task->done = true;
         state.cv.notify_all();
       } else {
-        lock.unlock();
+        lock.Unlock();
         result.reset();
-        lock.lock();
+        lock.Lock();
       }
     }
     state.finished = true;
@@ -683,7 +685,7 @@ StoreTurn::~StoreTurn() {
 }
 
 arrow::Status RbacStore::Lock(StoreTurn& turn) {
-  std::unique_lock lock(turn_mutex_);
+  UniqueMutexLock lock(turn_mutex_);
   const uint64_t ticket = next_ticket_++;
   // Checked at every handover, and between them often enough to notice a hang well within
   // the timeout. The callers ahead may take long (reading a large store is work of their
@@ -696,14 +698,14 @@ arrow::Status RbacStore::Lock(StoreTurn& turn) {
       abandoned_.insert(ticket);
       return link_->TimedOut();
     }
-    turn_cv_.wait_for(lock, check);
+    turn_cv_.wait_for(lock.native(), check);
   }
   turn.store_ = this;
   return arrow::Status::OK();
 }
 
 void RbacStore::Unlock() {
-  std::lock_guard lock(turn_mutex_);
+  MutexLock lock(turn_mutex_);
   ++serving_;
   while (abandoned_.erase(serving_) > 0) ++serving_;
   turn_cv_.notify_all();

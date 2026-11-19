@@ -22,6 +22,7 @@
 #include "logging.hpp"
 #include "runtime.hpp"
 #include "sql_text.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger {
 
@@ -271,10 +272,10 @@ class Session : public chargewire_duckdb::DuckDBSession {
   std::atomic<chargewire::TransactionState> transaction_ = chargewire::TransactionState::kNone;
   int profile_mode_ = 0;        // what the connection's profiler is set to
 
-  mutable std::mutex settings_mutex_;
-  Settings settings_;
-  mutable std::mutex activity_mutex_;
-  Activity activity_;
+  mutable Mutex settings_mutex_;
+  Settings settings_ HC_GUARDED_BY(settings_mutex_);
+  mutable Mutex activity_mutex_;
+  Activity activity_ HC_GUARDED_BY(activity_mutex_);
 
 };
 

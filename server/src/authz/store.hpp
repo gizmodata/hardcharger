@@ -37,6 +37,7 @@
 #include <string>
 
 #include "authz/model.hpp"
+#include "thread_annotations.hpp"
 
 namespace duckdb {
 class DuckDB;
@@ -172,11 +173,11 @@ class RbacStore {
   std::shared_ptr<StoreLink> link_;
   // Turns at link_ (Lock): tickets in the order asked, the one being served, and tickets
   // whose callers gave up waiting.
-  std::mutex turn_mutex_;
+  Mutex turn_mutex_;
   std::condition_variable turn_cv_;
-  uint64_t next_ticket_ = 0;
-  uint64_t serving_ = 0;
-  std::set<uint64_t> abandoned_;
+  uint64_t next_ticket_ HC_GUARDED_BY(turn_mutex_) = 0;
+  uint64_t serving_ HC_GUARDED_BY(turn_mutex_) = 0;
+  std::set<uint64_t> abandoned_ HC_GUARDED_BY(turn_mutex_);
   std::string description_;  // for logs; never contains credentials
   std::string secret_dir_;   // the private instance's (empty) secret directory
   std::string file_path_;    // a DuckDB store's file

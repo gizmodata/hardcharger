@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "authz/engine.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger::authz {
 
@@ -64,14 +65,14 @@ class RbacSessionState : public duckdb::ClientContextState {
 
   // A copy: SET ROLE may change it between statements.
   Principal principal() const {
-    std::lock_guard<std::mutex> lock(principal_mutex_);
+    MutexLock lock(principal_mutex_);
     return principal_;
   }
   // SET ROLE (empty: all roles). Statements prepared before are checked again.
   void SetActiveRole(std::string role_id, std::string role_name);
   // The SET ROLE role's name, for audit records (empty: all roles).
   std::string active_role_name() const {
-    std::lock_guard<std::mutex> lock(principal_mutex_);
+    MutexLock lock(principal_mutex_);
     return principal_.active_role_name;
   }
   std::shared_ptr<RbacEngine> engine() const { return engine_.lock(); }
@@ -89,7 +90,11 @@ class RbacSessionState : public duckdb::ClientContextState {
     duckdb::shared_ptr<RbacSessionState> state_;
   };
   bool bypassed() const { return bypass_depth_.load() > 0; }
-  bool unchecked() const { return principal_.superuser || bypassed(); }
+  bool unchecked() const {
+    if (bypassed()) return true;
+    MutexLock lock(principal_mutex_);
+    return principal_.superuser;
+  }
 
   // Called by the pre-optimize hook once a plan passed (or needs no check).
   // `prepare_only`: the plan is a PREPARE (DuckDB 2.x prepares a client-side
@@ -130,36 +135,38 @@ class RbacSessionState : public duckdb::ClientContextState {
  private:
   duckdb::RebindQueryInfo RebindIfGrantsChanged(const duckdb::PreparedStatementData& prepared);
   duckdb::RebindQueryInfo FinalizePrepareLocked(duckdb::PreparedStatementData& prepared,
-                                                duckdb::PreparedStatementMode mode, bool& runs_now);
+                                                duckdb::PreparedStatementMode mode, bool& runs_now)
+      HC_REQUIRES(mutex_);
 
   std::weak_ptr<RbacEngine> engine_;
-  mutable std::mutex principal_mutex_;
-  Principal principal_;
+  mutable Mutex principal_mutex_;
+  Principal principal_ HC_GUARDED_BY(principal_mutex_);
   std::atomic<int64_t> persona_version_{0};
   std::atomic<int> bypass_depth_{0};
 
-  std::mutex mutex_;
+  Mutex mutex_;
   // Plans checked by the hook that have not reached OnFinalizePrepare yet.
-  int checked_pending_ = 0;
+  int checked_pending_ HC_GUARDED_BY(mutex_) = 0;
   // The statement being prepared passed the bind-time check.
-  bool bind_checked_pending_ = false;
-  int64_t last_checked_version_ = 0;
-  int64_t last_checked_persona_ = 0;
+  bool bind_checked_pending_ HC_GUARDED_BY(mutex_) = false;
+  int64_t last_checked_version_ HC_GUARDED_BY(mutex_) = 0;
+  int64_t last_checked_persona_ HC_GUARDED_BY(mutex_) = 0;
   // Ownership changes of the plan just checked, until OnFinalizePrepare files
   // them under "runs now" (pending_ownership_) or "prepared" (prepared_ownership_).
-  std::vector<PendingOwnership> planned_ownership_;
-  bool planned_prepare_only_ = false;
-  std::vector<PendingOwnership> prepared_ownership_;
-  std::vector<std::string> last_accesses_;
+  std::vector<PendingOwnership> planned_ownership_ HC_GUARDED_BY(mutex_);
+  bool planned_prepare_only_ HC_GUARDED_BY(mutex_) = false;
+  std::vector<PendingOwnership> prepared_ownership_ HC_GUARDED_BY(mutex_);
+  std::vector<std::string> last_accesses_ HC_GUARDED_BY(mutex_);
   // Which snapshot version each prepared statement was checked against.
-  std::unordered_map<const void*, std::pair<int64_t, int64_t>> prepared_versions_;
-  std::vector<PendingOwnership> pending_ownership_;
+  std::unordered_map<const void*, std::pair<int64_t, int64_t>> prepared_versions_ HC_GUARDED_BY(mutex_);
+  std::vector<PendingOwnership> pending_ownership_ HC_GUARDED_BY(mutex_);
   // Owners recorded for the statement now running, before it ran (undone if it fails).
-  std::vector<RecordedOwnership> recorded_ownership_;
+  std::vector<RecordedOwnership> recorded_ownership_ HC_GUARDED_BY(mutex_);
   // Drops are committed with an explicit DuckDB transaction, never on a rolled-back
   // statement. Renames keep the source protected until commit; rollback removes
   // only the destination's preinstalled records.
   std::atomic<bool> updating_metadata_{false};
+  // The session's own thread's (DuckDB's transaction callbacks), so not under mutex_.
   std::vector<PendingOwnership> transaction_ownership_;
   std::vector<RecordedOwnership> transaction_recorded_;
 };

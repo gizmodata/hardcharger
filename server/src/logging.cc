@@ -3,6 +3,7 @@
 #include <boost/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -28,6 +29,7 @@
 
 #include "platform.hpp"
 #include "redact.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger {
 
@@ -36,14 +38,17 @@ namespace {
 // What marks a text line when lines carry emoji: its level's, or an outcome's.
 enum class Marker { kLevel, kSuccess, kFatal };
 
-std::mutex log_mutex;
-LogLevel min_level = LogLevel::kInfo;
-bool json_format = false;
-bool emoji = false;
-FILE* output = stderr;
-LogFields default_fields;
-std::function<void(LogLevel, std::string_view)> capture;
-std::function<void(const LogRecord&)> sink;
+Mutex log_mutex;
+// Written under log_mutex, read without it on every log call (a relaxed atomic: a call racing a
+// change of level may use either level).
+std::atomic<LogLevel> min_level{LogLevel::kInfo};
+LogLevel MinLevel() { return min_level.load(std::memory_order_relaxed); }
+bool json_format HC_GUARDED_BY(log_mutex) = false;
+bool emoji HC_GUARDED_BY(log_mutex) = false;
+FILE* output HC_GUARDED_BY(log_mutex) = stderr;
+LogFields default_fields HC_GUARDED_BY(log_mutex);
+std::function<void(LogLevel, std::string_view)> capture HC_GUARDED_BY(log_mutex);
+std::function<void(const LogRecord&)> sink HC_GUARDED_BY(log_mutex);
 thread_local int sink_exclusions = 0;
 
 std::string Timestamp(std::chrono::system_clock::time_point now) {
@@ -82,7 +87,7 @@ bool IsTerminal(FILE* stream) {
 
 void Write(LogLevel level, std::string_view message, const LogFields& fields, Marker marker = Marker::kLevel) {
   const auto now = std::chrono::system_clock::now();
-  std::lock_guard lock(log_mutex);
+  MutexLock lock(log_mutex);
   if (capture) {
     capture(level, message);
     return;
@@ -178,8 +183,8 @@ void ConfigureLogging(std::string_view level, std::string_view format, const std
   const bool marks = !json && (emoji_mode == "always" ||
                                (emoji_mode == "auto" && LogEmojiAuto(IsTerminal(destination), std::getenv("LC_ALL"),
                                                                      std::getenv("LC_CTYPE"), std::getenv("LANG"))));
-  std::lock_guard lock(log_mutex);
-  min_level = parsed;
+  MutexLock lock(log_mutex);
+  min_level.store(parsed, std::memory_order_relaxed);
   json_format = json;
   emoji = marks;
   // A server started again in the same process (embedded in an app: embedding.hpp)
@@ -189,31 +194,31 @@ void ConfigureLogging(std::string_view level, std::string_view format, const std
 }
 
 bool LogEmojiEnabled() {
-  std::lock_guard lock(log_mutex);
+  MutexLock lock(log_mutex);
   return emoji;
 }
 
 void WriteToTextLog(std::string_view text) {
-  std::lock_guard lock(log_mutex);
+  MutexLock lock(log_mutex);
   if (json_format || capture) return;
   std::fwrite(text.data(), 1, text.size(), output);
   std::fflush(output);
 }
 
 void SetDefaultLogFields(LogFields fields) {
-  std::lock_guard lock(log_mutex);
+  MutexLock lock(log_mutex);
   default_fields = std::move(fields);
 }
 
-bool LogEnabled(LogLevel level) { return level >= min_level; }
+bool LogEnabled(LogLevel level) { return level >= MinLevel(); }
 
 void Log(LogLevel level, std::string_view message, const LogFields& fields) {
-  if (level < min_level) return;
+  if (level < MinLevel()) return;
   Write(level, message, fields);
 }
 
 void LogSuccess(std::string_view message, const LogFields& fields) {
-  if (LogLevel::kInfo < min_level) return;
+  if (LogLevel::kInfo < MinLevel()) return;
   Write(LogLevel::kInfo, message, fields, Marker::kSuccess);
 }
 
@@ -222,12 +227,12 @@ void LogFatal(std::string_view message, const LogFields& fields) { Write(LogLeve
 void LogAt(LogLevel threshold, LogLevel level, std::string_view message, const LogFields& fields,
            bool ignore_logger_threshold) {
   if (level < threshold) return;
-  if (!ignore_logger_threshold && level < min_level) return;
+  if (!ignore_logger_threshold && level < MinLevel()) return;
   Write(level, message, fields);
 }
 
 void SetLogSink(std::function<void(const LogRecord&)> destination) {
-  std::lock_guard lock(log_mutex);
+  MutexLock lock(log_mutex);
   sink = std::move(destination);
 }
 
@@ -236,7 +241,7 @@ LogSinkExclusion::LogSinkExclusion() { sink_exclusions++; }
 LogSinkExclusion::~LogSinkExclusion() { sink_exclusions--; }
 
 void SetLogCaptureForTesting(std::function<void(LogLevel, std::string_view)> sink) {
-  std::lock_guard lock(log_mutex);
+  MutexLock lock(log_mutex);
   capture = std::move(sink);
 }
 

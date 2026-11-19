@@ -205,7 +205,7 @@ RbacEngine::~RbacEngine() { Stop(); }
 void RbacEngine::Stop() {
   std::lock_guard<std::mutex> stop(stop_mutex_);
   {
-    std::lock_guard<std::mutex> lock(poll_mutex_);
+    MutexLock lock(poll_mutex_);
     stopping_ = true;
   }
   poll_cv_.notify_all();  // a poller waiting out its interval wakes at once
@@ -213,13 +213,13 @@ void RbacEngine::Stop() {
 }
 
 void RbacEngine::PollLoop() {
-  std::unique_lock<std::mutex> lock(poll_mutex_);
+  UniqueMutexLock lock(poll_mutex_);
   while (!stopping_) {
-    poll_cv_.wait_for(lock, options_.poll_interval, [this] { return stopping_; });
+    poll_cv_.wait_for(lock.native(), options_.poll_interval, [this]() HC_REQUIRES(poll_mutex_) { return stopping_; });
     if (stopping_) break;
-    lock.unlock();
+    lock.Unlock();
     NoteStoreAnswer(Refresh());  // a store that does not answer keeps the last good snapshot
-    lock.lock();
+    lock.Lock();
   }
 }
 
@@ -285,14 +285,14 @@ void RbacEngine::NoteStoreAnswer(const arrow::Status& status) {
 }
 
 std::shared_ptr<const Snapshot> RbacEngine::snapshot() const {
-  std::lock_guard<std::mutex> lock(snapshot_mutex_);
+  MutexLock lock(snapshot_mutex_);
   return snapshot_;
 }
 
 void RbacEngine::Publish(std::shared_ptr<const Snapshot> snapshot) {
   bool replaced = false;
   {
-    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    MutexLock lock(snapshot_mutex_);
     // Never go backwards (a slow reload must not undo a newer local write).
     if (!snapshot_ || snapshot->version() > snapshot_->version()) {
       snapshot_ = snapshot;
@@ -300,12 +300,12 @@ void RbacEngine::Publish(std::shared_ptr<const Snapshot> snapshot) {
     }
   }
   if (!replaced) return;
-  std::lock_guard<std::mutex> lock(listener_mutex_);
+  MutexLock lock(listener_mutex_);
   if (listener_) listener_(*snapshot);
 }
 
 void RbacEngine::SetSnapshotListener(SnapshotListener listener) {
-  std::lock_guard<std::mutex> lock(listener_mutex_);
+  MutexLock lock(listener_mutex_);
   listener_ = std::move(listener);
 }
 
