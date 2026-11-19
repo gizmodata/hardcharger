@@ -13,7 +13,7 @@ import time
 
 import httpx
 import pyarrow as pa
-import pyarrow.ipc as ipc
+from pyarrow import ipc
 
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
 TERMINAL = ("succeeded", "failed", "cancelled")

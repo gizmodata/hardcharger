@@ -23,7 +23,6 @@ import time
 import urllib.request
 
 import psutil
-
 from client import Session
 
 INSTALLER_URL = "https://install.hardcharger.gizmodata.com"
@@ -58,7 +57,7 @@ def install_release(version: str, cache: pathlib.Path) -> pathlib.Path:
 def describe_binary(binary: pathlib.Path) -> dict:
     """Version strings and a fingerprint of the binary (what exactly ran)."""
     def output(*args: str) -> str:
-        done = subprocess.run(args=[str(binary), *args], capture_output=True, text=True, timeout=60)
+        done = subprocess.run(args=[str(binary), *args], capture_output=True, text=True, timeout=60, check=False)
         return (done.stdout or done.stderr).strip()
     version = output("--version")
     match = re.search(r"(\d+\.\d+\.\d+\S*)", version)
@@ -84,7 +83,7 @@ def drop_os_caches() -> bool:
         return False
     subprocess.run(args=["sync"], check=True)
     done = subprocess.run(args=["sudo", "-n", "sh", "-c", "echo 3 > /proc/sys/vm/drop_caches"],
-                          capture_output=True)
+                          capture_output=True, check=False)
     return done.returncode == 0
 
 

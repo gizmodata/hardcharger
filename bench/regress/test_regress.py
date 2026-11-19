@@ -14,9 +14,9 @@ import pytest
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import compare  # noqa: E402
-import stats  # noqa: E402
-import workloads  # noqa: E402
+import compare
+import stats
+import workloads
 
 THRESHOLDS = json.loads((HERE / "thresholds.json").read_text())
 
@@ -175,3 +175,11 @@ def test_stored_baseline_round_trips_and_must_match_settings(tmp_path):
     stored_old["config"]["threads"] = 8
     with pytest.raises(SystemExit, match="threads"):
         compare.build_report(runs=[current, stored_old], thresholds=THRESHOLDS)
+
+
+def test_one_repetition_is_never_judged():
+    run = fake_run(slow_factor=1.5)
+    run["repetitions"] = [r for r in run["repetitions"] if r["rep"] == 0]
+    report, verdict = compare.build_report(runs=[run], thresholds=THRESHOLDS)
+    assert verdict["regressions"] == [] and verdict["possible"] == []
+    assert "fewer than 3 repetitions" in report

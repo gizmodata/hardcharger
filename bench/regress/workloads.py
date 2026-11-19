@@ -197,7 +197,7 @@ def check_answer(table, expected: list[list] | None) -> str | None:
         return f"{len(actual)} rows, expected {len(expected)}"
     if _rows_match(actual=actual, expected=expected):
         return None
-    key = lambda row: [str(cell) for cell in row]  # noqa: E731
+    key = lambda row: [str(cell) for cell in row]
     if _rows_match(actual=sorted(actual, key=key), expected=sorted(expected, key=key)):
         return None
     for index, (a, e) in enumerate(zip(actual, expected)):

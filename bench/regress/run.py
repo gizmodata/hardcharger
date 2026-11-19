@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Performance regression suite: runs the same workloads against several Hardcharger server
 versions on one machine and writes raw results (results.json) and a report (report.md).
 
@@ -25,6 +26,8 @@ See docs/benchmarks.md.
 
 import argparse
 import datetime
+import functools
+import hashlib
 import json
 import multiprocessing
 import os
@@ -39,15 +42,15 @@ import urllib.request
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import httpx  # noqa: E402
-import psutil  # noqa: E402
-import pyarrow  # noqa: E402
+import compare
+import httpx
+import psutil
+import pyarrow
+import stats
+import workers
+import workloads
 
-import compare  # noqa: E402
-import server as servers  # noqa: E402
-import stats  # noqa: E402
-import workers  # noqa: E402
-import workloads  # noqa: E402
+import server as servers
 
 SCHEMA_VERSION = 1
 ALL_WORKLOADS = ["tpch", "many-pipelines", "concurrent", "tpch-10x22"]
@@ -78,7 +81,8 @@ def cpu_model() -> str:
             if line.startswith("model name"):
                 return line.split(":", 1)[1].strip()
     if platform.system() == "Darwin":
-        done = subprocess.run(args=["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True)
+        done = subprocess.run(args=["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True,
+                              check=False)
         return done.stdout.strip()
     return platform.processor()
 
@@ -92,8 +96,17 @@ def host_info(args) -> dict:
             "load_average_at_start": list(os.getloadavg())}
 
 
+def suite_fingerprint() -> str:
+    """sha256 over the suite's own files (a copy on a benchmark host has no git checkout)."""
+    digest = hashlib.sha256()
+    for path in sorted(HERE.glob("*.py")) + [HERE / "requirements.txt", HERE / "thresholds.json"]:
+        digest.update(path.name.encode() + b"\0" + path.read_bytes())
+    return digest.hexdigest()
+
+
 def git_sha() -> str | None:
-    done = subprocess.run(args=["git", "-C", str(HERE), "rev-parse", "HEAD"], capture_output=True, text=True)
+    done = subprocess.run(args=["git", "-C", str(HERE), "rev-parse", "HEAD"], capture_output=True, text=True,
+                          check=False)
     return done.stdout.strip() or None
 
 
@@ -306,13 +319,15 @@ def run_clients(server, label: str, rep: int, clients: int, passes: int, spread:
     return out
 
 
-def measured(server, record: dict, workload: str, run) -> None:
-    """Runs one workload, recording the server's CPU seconds and wall time around it."""
+def measured(server, record: dict, workload: str, run):
+    """Runs one workload, recording the server's CPU seconds and wall time around it; returns
+    what the workload returns."""
     cpu = server.sampler.cpu_seconds()
     began = time.perf_counter()
-    run()
+    result = run()
     record.setdefault("resources", {})[workload] = {"server_cpu_s": server.sampler.cpu_seconds() - cpu,
                                                     "wall_s": time.perf_counter() - began}
+    return result
 
 
 def main() -> int:
@@ -347,9 +362,8 @@ def main() -> int:
     work = pathlib.Path(args.work).resolve()
     out = pathlib.Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    if cores := servers.parse_cores(spec=args.client_cores):
-        if hasattr(os, "sched_setaffinity"):
-            os.sched_setaffinity(0, cores)
+    if (cores := servers.parse_cores(spec=args.client_cores)) and hasattr(os, "sched_setaffinity"):
+        os.sched_setaffinity(0, cores)
 
     specs = resolve_servers(args=args, work=work)
     if len(specs) < 1:
@@ -365,7 +379,7 @@ def main() -> int:
                    "concurrent_passes": args.concurrent_passes, "workloads": selected,
                    "drop_caches": args.drop_caches, "transport": "Chargewire HTTP/1.1, plaintext, loopback"},
         "client": {"python": platform.python_version(), "httpx": httpx.__version__, "pyarrow": pyarrow.__version__,
-                   "bench_git_sha": git_sha()},
+                   "bench_git_sha": git_sha(), "suite_sha256": suite_fingerprint()},
         "servers": {s["label"]: {k: v for k, v in s.items() if k != "label"} for s in specs},
         "order": [s["label"] for s in specs], "candidate": specs[-1]["label"],
         "load": {}, "reference_answers": {}, "repetitions": [],
@@ -406,28 +420,25 @@ def main() -> int:
                 session.close()
                 if int(record["settings"]["threads"]) != args.threads:
                     raise RuntimeError(f"{label} runs {record['settings']['threads']} threads, not {args.threads}")
+                common = {"server": server, "label": label, "rep": rep, "args": args, "recorder": recorder}
                 if "tpch" in selected:
-                    measured(server=server, record=record, workload="tpch", run=lambda: run_tpch(
-                        server=server, label=label, rep=rep, args=args, queries=queries, expected=expected,
-                        recorder=recorder, record=record))
+                    measured(server=server, record=record, workload="tpch", run=functools.partial(
+                        run_tpch, queries=queries, expected=expected, record=record, **common))
                 if "many-pipelines" in selected:
-                    measured(server=server, record=record, workload="many-pipelines", run=lambda: run_many_pipelines(
-                        server=server, label=label, rep=rep, args=args, recorder=recorder, record=record))
+                    measured(server=server, record=record, workload="many-pipelines", run=functools.partial(
+                        run_many_pipelines, record=record, **common))
                 if "concurrent" in selected:
                     record["concurrent"] = {}
                     for clients in results["config"]["clients"]:
-                        def go(clients=clients):
-                            record["concurrent"][str(clients)] = run_clients(
-                                server=server, label=label, rep=rep, clients=clients, passes=args.concurrent_passes,
-                                spread=True, queries=queries, expected=expected, args=args, recorder=recorder,
-                                workload="concurrent")
-                        measured(server=server, record=record, workload=f"concurrent-{clients}", run=go)
+                        record["concurrent"][str(clients)] = measured(
+                            server=server, record=record, workload=f"concurrent-{clients}", run=functools.partial(
+                                run_clients, clients=clients, passes=args.concurrent_passes, spread=True,
+                                queries=queries, expected=expected, workload="concurrent", **common))
                 if "tpch-10x22" in selected:
-                    def ten():
-                        record["tpch-10x22"] = run_clients(
-                            server=server, label=label, rep=rep, clients=10, passes=1, spread=False, queries=queries,
-                            expected=expected, args=args, recorder=recorder, workload="tpch-10x22")
-                    measured(server=server, record=record, workload="tpch-10x22", run=ten)
+                    record["tpch-10x22"] = measured(
+                        server=server, record=record, workload="tpch-10x22", run=functools.partial(
+                            run_clients, clients=10, passes=1, spread=False, queries=queries, expected=expected,
+                            workload="tpch-10x22", **common))
                 record["peak_rss_bytes"] = server.peak_rss_linux() or server.sampler.peak_rss
             finally:
                 server.stop()

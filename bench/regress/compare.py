@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Turns raw results into a report: correctness first, then flagged regressions, then every metric.
 
     python bench/regress/compare.py results.json [--with-baseline baselines/<host>/<v>.json ...]
@@ -22,7 +23,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import stats  # noqa: E402
+import stats
 
 # kind -> (threshold key, higher is better)
 KINDS = {"latency": ("latency", False), "tail": ("tail", False), "suite": ("suite", False),
@@ -134,7 +135,10 @@ def compare_metric(candidate: list[list[float]], baseline: list[list[float]], ki
                                             iterations=thresholds["bootstrap_iterations"],
                                             confidence=thresholds["confidence"])
     status = "info"
-    if kind in KINDS:
+    # Fewer repetitions than this on either side: the interval only knows the noise within one
+    # server start, so nothing is judged (min_repetitions).
+    enough = min(len([r for r in candidate if r]), len([r for r in baseline if r])) >= thresholds["min_repetitions"]
+    if kind in KINDS and enough:
         key, higher_is_better = KINDS[kind]
         change = stats.median(samples_by_rep=candidate) - stats.median(samples_by_rep=baseline)
         minimum = {"ms": thresholds["min_change_ms"] / 1000, "s": thresholds["min_change_ms"] / 1000,
@@ -178,7 +182,7 @@ def build_report(runs: list[dict], thresholds: dict, candidate: str | None = Non
     improvements = [f for f in flagged if f[2]["status"] == "improvement"]
 
     host, config = run["host"], run["config"]
-    lines = [f"# Hardcharger performance regression report", ""]
+    lines = ["# Hardcharger performance regression report", ""]
     lines += [f"Run {run['started_at']} to {run.get('finished_at', '(unfinished)')} on **{host['host_class']}** "
               f"({host['cpu_model']}, {host['logical_cpus']} logical CPUs, {host['memory_bytes'] / 2**30:.0f} GiB, "
               f"{host['system']} {host['release']}).", ""]
@@ -219,7 +223,8 @@ def build_report(runs: list[dict], thresholds: dict, candidate: str | None = Non
     lines += [f"Thresholds: latency {t['latency']:.0%}, suite elapsed {t['suite']:.0%}, tail latency {t['tail']:.0%}, "
               f"throughput {t['throughput']:.0%}, server CPU {t['cpu']:.0%}, memory {t['rss']:.0%}; changes under "
               f"{t['min_change_ms']:g} ms (CPU: {t['min_change_cpu_s']:g} s, memory: {t['min_change_mib']:g} MiB) are "
-              f"never flagged. **REGRESSION**: the whole {t['confidence']:.0%} interval of the ratio is past the "
+              f"never flagged, and nothing is judged with fewer than {t['min_repetitions']} repetitions. "
+              f"**REGRESSION**: the whole {t['confidence']:.0%} interval of the ratio is past the "
               f"threshold; *possible*: the median ratio is past it and the whole interval is slower than no change, "
               f"but not all of it past the threshold.", ""]
     if flagged:
