@@ -14,7 +14,7 @@ import { useTheme } from "./lib/theme";
 import { loadModule } from "./lib/stale";
 import { type ConnectionOptions, discover, openConnection } from "./lib/chargewire";
 import { internalQueryTag } from "./lib/queryTags";
-import { passwordMustChange } from "./lib/passwordChange";
+import { passwordExpired, passwordMustChange } from "./lib/passwordChange";
 import { type AppContract, RelayApi, ServersStore } from "./lib/servers";
 import { SystemAdminTabs } from "./lib/systemAdmin";
 import {
@@ -31,7 +31,7 @@ type Phase =
   | { kind: "signed-out"; notice?: string }
   | { kind: "connecting"; auth: SignedIn }
   // Signed in with a temporary password: the session runs nothing until it is changed.
-  | { kind: "must-change"; auth: SignedIn; connection: Connection }
+  | { kind: "must-change"; auth: SignedIn; connection: Connection; expired: boolean }
   | { kind: "ready"; auth: SignedIn; connection: Connection; identity: Identity }
   // The UI without a server behind it (`hardcharger ui`): nothing local to sign in to.
   | { kind: "ready-without-local"; identity: Identity };
@@ -248,7 +248,7 @@ export function App() {
         setPhase({ kind: "ready", auth, connection, identity });
       } catch (err) {
         if (connection && !controller.signal.aborted && passwordMustChange(err)) {
-          setPhase({ kind: "must-change", auth, connection });
+          setPhase({ kind: "must-change", auth, connection, expired: passwordExpired(err) });
           return;
         }
         void connection?.close().catch(() => {});
@@ -384,6 +384,7 @@ export function App() {
         <ChangePasswordPage
           auth={phase.auth}
           connection={phase.connection}
+          expired={phase.expired}
           onChanged={(auth) => {
             saveSignIn(auth);
             setPhase({ kind: "connecting", auth });

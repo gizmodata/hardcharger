@@ -13,6 +13,8 @@ interface Props {
   auth: SignedIn;
   /** Its session: the server runs nothing on it but the change. */
   connection: Connection;
+  /** The password is older than the server allows (password_max_age_days), not set by someone else. */
+  expired?: boolean;
   /** Signed in again with the new password. */
   onChanged: (auth: SignedIn) => void;
   onSignOut: () => void;
@@ -20,11 +22,11 @@ interface Props {
 
 /**
  * Shown when the server holds the session until its password is changed: the password was
- * set by someone else (a help desk's reset, or an administrator's EXPIRE). The user gives the
- * current (temporary) password and a new one; the change ends the session, and the page signs
+ * set by someone else (a help desk's reset, or an administrator's EXPIRE), or is older than
+ * the server's password_max_age_days. The user gives the current password and a new one; the change ends the session, and the page signs
  * in again with the new password.
  */
-export function ChangePasswordPage({ auth, connection, onChanged, onSignOut }: Props) {
+export function ChangePasswordPage({ auth, connection, expired = false, onChanged, onSignOut }: Props) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [again, setAgain] = useState("");
@@ -76,7 +78,9 @@ export function ChangePasswordPage({ auth, connection, onChanged, onSignOut }: P
           <Wordmark size="signin" />
         </h1>
         <p className="signin-notice" role="status" data-testid="password-must-change">
-          The password of {auth.username} was set by someone else. Choose your own before you go on.
+          {expired
+            ? `The password of ${auth.username} has expired. Choose a new one before you go on.`
+            : `The password of ${auth.username} was set by someone else. Choose your own before you go on.`}
         </p>
         <label className="field">
           <span>Current password</span>

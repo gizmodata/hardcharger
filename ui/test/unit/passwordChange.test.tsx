@@ -7,7 +7,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChangePasswordPage } from "../../src/components/ChangePasswordPage";
-import { changeOwnPasswordSql, passwordMustChange, sqlString } from "../../src/lib/passwordChange";
+import { changeOwnPasswordSql, passwordExpired, passwordMustChange, sqlString } from "../../src/lib/passwordChange";
 
 afterEach(() => {
   cleanup();
@@ -22,7 +22,22 @@ const held = new ChargewireError({
     "before anything else runs: ALTER USER CURRENT_USER WITH PASSWORD '<new>' REPLACE '<current>'",
 });
 
+const expired = new ChargewireError({
+  code: "permission_denied",
+  status: 403,
+  detail:
+    "Hardcharger blocked this statement: the password of user carl has expired (password_max_age_days) and must " +
+    "be changed before anything else runs: ALTER USER CURRENT_USER WITH PASSWORD '<new>' REPLACE '<current>'",
+});
+
 describe("recognizing a temporary password", () => {
+  it("tells an expired password from one someone else set", () => {
+    expect(passwordMustChange(expired)).toBe(true);
+    expect(passwordExpired(expired)).toBe(true);
+    expect(passwordExpired(held)).toBe(false);
+    expect(passwordExpired(new Error("has expired (password_max_age_days)"))).toBe(false);
+  });
+
   it("is the server's hold, and nothing else", () => {
     expect(passwordMustChange(held)).toBe(true);
     expect(
@@ -57,6 +72,22 @@ function fill(label: string, value: string) {
 }
 
 describe("the change-password page", () => {
+  it("says an expired password has expired", () => {
+    const { connection } = fakeConnection(async () => ({}));
+    render(
+      <ChangePasswordPage
+        auth={{ username: "carl", token: "t1", expiresAt: Date.now() + 60_000 }}
+        connection={connection}
+        expired
+        onChanged={() => {}}
+        onSignOut={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("password-must-change").textContent).toBe(
+      "The password of carl has expired. Choose a new one before you go on.",
+    );
+  });
+
   it("changes the password, then signs in again with the new one", async () => {
     const { connection, ran, close } = fakeConnection(async () => ({}));
     const fetch = vi.fn(async () => Response.json({ access_token: "t2", expires_in: 3600 }));

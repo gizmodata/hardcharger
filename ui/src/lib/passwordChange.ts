@@ -13,6 +13,14 @@ export function passwordMustChange(err: unknown): boolean {
   return errorMessage(err).includes(mustChangeWords);
 }
 
+/**
+ * Was it held because the password is older than the server's password_max_age_days (rather
+ * than set by someone else)? The server says "has expired (password_max_age_days)".
+ */
+export function passwordExpired(err: unknown): boolean {
+  return passwordMustChange(err) && errorMessage(err).includes("has expired (password_max_age_days)");
+}
+
 /** A SQL string literal: the text between single quotes, each quote doubled. */
 export function sqlString(text: string): string {
   return `'${text.replaceAll("'", "''")}'`;
