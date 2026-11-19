@@ -14,6 +14,16 @@ own changelog in `python/CHANGELOG.md`.
   leaving a draft to publish by hand in Play Console. A leftover draft no longer stops the
   upload (2.13.1's was refused because 2.13.0's draft was still there), and an older build never
   replaces a newer one. Closed and open testing and production stay manual in Play Console.
+- **Hardened Linux binaries.** The Linux server and client are position-independent executables
+  with full RELRO and a non-executable stack, built with the stack protector, stack-clash
+  protection, `_FORTIFY_SOURCE` and libstdc++'s assertions (a bounds violation stops the process
+  instead of reading or writing out of bounds). The glibc 2.28 baseline is unchanged; CI checks
+  the hardening on every Linux build.
+
+### Fixed
+
+- **Client: `.cd` with no directory** now says so when it cannot change to the home directory,
+  as `.cd DIR` already did.
 
 ## [2.13.1] - 2026-11-15
 

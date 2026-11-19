@@ -24,6 +24,32 @@ include(FetchContent)
 # MSVC: the static C runtime (/MT) for everything, as DuckDB always builds with it.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+# Hardening of the Linux binaries (glibc; Android's NDK sets its own): for everything compiled
+# here (the server, the client, Chargewire, yaml-cpp, zlib; DuckDB, Arrow and OpenSSL are built
+# by scripts/ and linked as archives):
+#  - stack protector (strong) and stack-clash protection;
+#  - _FORTIFY_SOURCE=3 (checked string and memory calls; the manylinux_2_28 image's glibc 2.28
+#    headers give level 2) in optimized builds, never in sanitizer builds (it hides their
+#    interceptors' findings);
+#  - _GLIBCXX_ASSERTIONS: libstdc++'s cheap precondition checks (bounds of operator[], front()
+#    of an empty container, ...): a violation aborts instead of reading or writing out of bounds;
+#  - a position-independent executable (ASLR for the program itself; the dependency archives
+#    are built position-independent), full RELRO (-z relro -z now: the GOT is read-only after
+#    start-up) and a non-executable stack.
+# server/scripts/check-hardening.sh checks the result (CI runs it on the release binaries).
+option(HARDCHARGER_HARDENING "Hardening compile and link flags (Linux)" ON)
+if(HARDCHARGER_HARDENING AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID AND NOT MSVC)
+  add_compile_options(-fstack-protector-strong -fstack-clash-protection
+                      $<$<COMPILE_LANGUAGE:CXX>:-D_GLIBCXX_ASSERTIONS>)
+  if(NOT "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS}" MATCHES "-fsanitize")
+    add_compile_options("$<$<NOT:$<CONFIG:Debug>>:-U_FORTIFY_SOURCE;-D_FORTIFY_SOURCE=3>")
+  endif()
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+  include(CheckPIESupported)
+  check_pie_supported(LANGUAGES C CXX)
+  add_link_options(-Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack)
+endif()
+
 # Warnings, as each compiler spells them: in Hardcharger's own targets only (the dependencies'
 # headers are SYSTEM includes, so their warnings stay theirs). HARDCHARGER_WERROR (CI's builds
 # turn it on) makes them errors; a local build keeps them warnings.

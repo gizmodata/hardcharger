@@ -778,6 +778,18 @@ jobs:
           fi
           stage="dist/hardcharger-${{ matrix.name }}"
           server/scripts/check-glibc-baseline.sh "$stage"/bin/*
+      # The Linux binaries are hardened (server/CMakeLists.txt, HARDCHARGER_HARDENING): a
+      # position-independent executable, full RELRO, a non-executable stack, the stack protector
+      # and _FORTIFY_SOURCE. The check is first shown to fail on a program built without them.
+      - name: Check the hardening (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          printf 'int main(void) { return 0; }\n' > "$RUNNER_TEMP/plain.c"
+          cc -O2 -fno-stack-protector -U_FORTIFY_SOURCE -no-pie -Wl,-z,norelro -o "$RUNNER_TEMP/plain" "$RUNNER_TEMP/plain.c"
+          if server/scripts/check-hardening.sh "$RUNNER_TEMP/plain" >/dev/null 2>&1; then
+            echo "the hardening check passed a program built without hardening"; exit 1
+          fi
+          server/scripts/check-hardening.sh "dist/hardcharger-${{ matrix.name }}"/bin/*
       # Nothing shipped may link a library a user's machine may not have: on Linux only
       # glibc's own and the GCC runtime (readelf NEEDED), no RPATH/RUNPATH; on macOS only
       # the OS's /usr/lib and /System/Library/Frameworks (otool -L), no LC_RPATH.
