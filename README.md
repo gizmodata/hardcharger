@@ -1434,7 +1434,55 @@ What she reaches is limited to what her session is, so none of these statements 
   next `CREATE USER` anywhere is refused. A grant is usable at once on every replica too.
 
 Passwords set this way are checked as any `CREATE USER` or `ALTER USER … WITH PASSWORD`
-password is. Each change and each refusal is an access-control audit record with the target
+password is, and are **temporary** (below): amy can hand eve a first password, but cannot keep
+using it, and a reset she does shows up the next time the real user signs in.
+
+### Temporary passwords and changing your own
+
+A password someone else chose for a user is temporary when a delegate sets it (a holder of
+`CREATE USER` or `ALTER USER`, or a tenant's `tenant_admin`), and when an administrator asks
+for it with `EXPIRE`:
+
+```sql
+ALTER USER carl WITH PASSWORD '…' EXPIRE;       -- carl changes it at the next sign-in
+CREATE USER dora WITH PASSWORD '…' EXPIRE;      -- and dora at her first
+ALTER USER erin PASSWORD EXPIRE;                -- erin's current password, from her next statement on
+ALTER USER carl WITH PASSWORD '…';              -- an administrator's, without EXPIRE: not temporary
+```
+
+A sign-in with a temporary password succeeds, but its session runs nothing (statements,
+prepared statements, metadata requests, ingest) except the change of that password, and says
+so: `Hardcharger blocked this statement: the password of user carl was set by someone else and
+must be changed before anything else runs: ALTER USER CURRENT_USER WITH PASSWORD '<new>'
+REPLACE '<current>'`. A sign-in that does not use the password (an identity provider's token,
+a client certificate) is not held. `--verify-credentials` verifies a temporary password (a
+stopped cluster may start for it) and adds `"password_must_change": true` to its answer.
+
+Every user changes its own password, with no privilege, by giving the current one:
+
+```sql
+ALTER USER CURRENT_USER WITH PASSWORD 'new password' REPLACE 'current password';
+-- or with its own name: ALTER USER carl WITH PASSWORD '…' REPLACE '…'
+```
+
+The current password is required, so a session alone (or an access token someone took) can
+never change it; `ALTER USER <own name> WITH PASSWORD '…'` without `REPLACE` is refused to
+everyone but the administrator. The change ends the user's sessions, as any password change
+does: sign in again with the new password. The web UI does all of this itself: signed in with
+a temporary password, it asks for a new one, changes it and signs in again. The `hardcharger`
+client runs the statement as written. `CURRENT_USER` is a keyword here: a user actually named
+`current_user` is written quoted (`ALTER USER "current_user" …`).
+
+A help desk that resets a password and signs in with it can only change it, which is an audit
+record under the user's name, and the user's next sign-in then fails with every password they
+know. `hardcharger_users()` shows `password_must_change` to administrators (and to each user
+for its own row); the audit records say `password`: `temporary password set`, `password
+changed by the user`, `password set`, `password expired` or `password removed`, the
+account's `after` state ends in `; password must be changed` while it must, and each statement
+refused in such a session is a `statement refused until the password is changed` record.
+
+A 2.13 replica on the same store does not know temporary passwords: there, such a sign-in is
+not held. As with `SYSTEM ADMIN`, use them once every replica runs 2.14. Each change and each refusal is an access-control audit record with the target
 (`target`, `target_ids`), the privilege the statement needs (`privilege`), what authorized it
 (`authorized_by`: `administrator`, `System Admin`, `tenant_admin of tenant acme`, or `ALTER USER
 privilege, through role helpdesk`), the session's `active_role`, the statement's Chargewire id

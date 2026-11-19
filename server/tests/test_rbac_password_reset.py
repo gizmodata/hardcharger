@@ -227,3 +227,32 @@ def test_the_reset_marks_only_that_password(world, store):
         import psycopg
         with psycopg.connect(conninfo=world.server.store_uri, autocommit=True) as connection:
             assert connection.execute(query="SELECT count(*) FROM hardcharger_rbac.password_resets").fetchone() == (0,)
+
+
+def test_the_command_line_client_changes_a_temporary_password(world):
+    """The client needs nothing special: its first statement is refused saying how to change
+    the password, the change is plain SQL, and a new run signs in with the new password."""
+    import subprocess
+
+    from conftest import CLIENT_BINARY, clean_environment
+
+    if not CLIENT_BINARY.exists():
+        pytest.fail(reason=f"{CLIENT_BINARY} is missing: build the server first")
+    temporary, chosen = password(name="carl-temporary"), password(name="carl-chosen")
+    expect_allowed(client=world.as_user(user="amy"), sql=f"ALTER USER carl WITH PASSWORD '{temporary}'")
+
+    def client(secret: str, script: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            args=[str(CLIENT_BINARY), "--host", "127.0.0.1", "--port", str(world.server.running.port), "--tls=false",
+                  "--username", "carl", "-q", "--csv", "--no-header"],
+            env={**clean_environment(), "HARDCHARGER_PASSWORD": secret}, input=script, capture_output=True,
+            text=True, timeout=120)
+
+    first = client(secret=temporary, script=f"SELECT 'before';\n{change(new=chosen, current=temporary)};\n")
+    assert "before" not in first.stdout, first.stdout
+    assert must_change(user="carl") in first.stderr, first.stderr
+    assert world.signs_in(user="carl", secret=chosen), (first.stdout, first.stderr)
+    second = client(secret=chosen, script="SELECT 'after';\n")
+    assert second.stdout.strip() == "after", (second.stdout, second.stderr)
+    for run in (first, second):
+        assert temporary not in run.stderr + run.stdout and chosen not in run.stderr + run.stdout

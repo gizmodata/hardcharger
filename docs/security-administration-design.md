@@ -427,6 +427,66 @@ Each took the safer side. Any can be overruled; the open ones are in the track's
     `SYSTEM ADMIN` does): the statements change the store anyway, so the transaction is the
     store's word at no extra cost.
 
+### Temporary passwords and self-service changes
+
+A password reset is the ability to sign in as the user, and a password chosen for someone else
+is known to whoever chose it. So a password someone else chose is temporary, and the user
+replaces it before doing anything else (the owner's decision, 2026-11-18).
+
+**Which passwords are temporary.** Every password a non-administrator sets for another user:
+a delegate's `ALTER USER … WITH PASSWORD` and `CREATE USER … WITH PASSWORD`, and a tenant
+admin's. An unrestricted administrator's only when it says so: `WITH PASSWORD '…' EXPIRE` on
+`ALTER USER` or `CREATE USER` (the Oracle word, after the password it qualifies), or `ALTER USER
+name PASSWORD EXPIRE` for the password the user has now (a delegate may do that too, within its
+reach). An administrator's password without `EXPIRE`, `PASSWORD NULL` and the user's own change
+end it.
+
+**How it is kept.** `password_resets (user_id, password_fingerprint, set_by, set_at_ms)`, a
+table of its own created `IF NOT EXISTS` (no schema bump; a 2.13 server never reads it). The
+record names the password it was made for by `PasswordFingerprint` (the first 16 bytes of the
+SHA-256 of the stored hash, as an access token's `credential` claim does), and
+`Snapshot::PasswordMustChange` honours it only while the user's password is still that one. So
+a password set later by anyone, a 2.13 replica included, leaves it standing for nothing, and no
+code path needs to remember to clear it. `DROP USER` deletes it.
+
+**What such a session may do.** A session is held when it signed in with that very password
+(`Identity::credential` equals the record's fingerprint): a sign-in that used no password (an
+identity provider's token, a certificate) is not. `SessionGuard::RefuseUntilPasswordChanged`
+runs at the start of every request that can run anything, `Session::Execute` (every statement,
+access-control ones included), `Prepare`, `ExecutePrepared`, `Metadata` and `Ingest`, and lets
+through only `ALTER USER CURRENT_USER | <own name> WITH PASSWORD '…' REPLACE '…'`. It is asked
+of the current snapshot at every request, so `ALTER USER x PASSWORD EXPIRE` holds open
+sessions from their next statement. Each refusal is an audit record (`statement refused until
+the password is changed`, with the request and the SQL as the log shows it). Alternative: allow
+harmless statements such as `SELECT 1`. Rejected: every client tried worked without (the web
+UI recognizes the refusal and shows its change form; the `hardcharger` client runs the change
+as typed), and "harmless" is a list that would grow.
+
+**Self-service.** `ALTER USER CURRENT_USER WITH PASSWORD '<new>' REPLACE '<current>'` (also with
+the user's own name) needs no privilege and checks the current password with the password
+check sign-in uses, against this replica's snapshot, then once more after a refresh, and the
+store transaction confirms the hash is still the one verified. Without `REPLACE`, a
+non-administrator's change of its own password is refused. The alternative was a fresh sign-in
+check (a token newer than N minutes). Rejected: a stolen access token is fresh, and a reauthentication
+step would need protocol support in every client; the current password is what proves the
+person. A wrong current password fails the statement and is audited. The change ends the user's
+sessions, the one that ran it included (its access token names the old password), as every
+password change does, and the client signs in again; the web UI does that by itself.
+
+**Sign-ins before a session.** The token endpoint and `--verify-credentials` treat a temporary
+password as valid: it is the user's credential, and GizmoData Cloud's auto-resume should wake a
+stopped cluster for it so the user can change it there. The verifier's answer says
+`"password_must_change": true`; the session the cluster then opens is held as above.
+
+**Audit.** `password`: `temporary password set`, `password changed by the user` (with
+`authorized_by`: `the user's own current password`), `password set`, `password expired`,
+`password removed`; the account's `before` / `after` state ends in `; password must be
+changed` while it must. `hardcharger_users()` has `password_must_change` for administrators and
+the user's own row (NULL in other rows).
+
+**Mixed versions.** A 2.13 replica does not hold such sessions. Use temporary passwords once
+every replica runs 2.14, as for `SYSTEM ADMIN`.
+
 ## Not built
 
 - Export of the audit chain to an independent append-only destination.

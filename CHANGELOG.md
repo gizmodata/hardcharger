@@ -47,6 +47,14 @@ own changelog in `python/CHANGELOG.md`.
   through memberships the administrator granted, scoped tokens and `catalog_access` tokens
   never use them, and a revoke counts at the next statement on every replica. A 2.13 server
   on the same store keeps working (to it, nobody holds them).
+- Temporary passwords and self-service password changes. A password a delegate sets for
+  someone else (a holder of `CREATE USER` / `ALTER USER`, a tenant admin), or an administrator
+  sets with `WITH PASSWORD '…' EXPIRE` (or `ALTER USER name PASSWORD EXPIRE`), must be changed
+  before anything else: its sign-in succeeds, but the session runs only `ALTER USER
+  CURRENT_USER WITH PASSWORD '<new>' REPLACE '<current>'`, which every user may run for itself
+  and which needs the current password. `hardcharger_users()` gains `password_must_change`,
+  `--verify-credentials` says `"password_must_change": true`, and the web UI asks for a new
+  password when it signs in with a temporary one.
 - Access-control audit records of account changes (users, roles, memberships, account
   privileges) carry what authorized them (`authorized_by`), the account's sanitized state
   `before` and `after` (never a password, hash or attribute value), and the privilege the
@@ -62,6 +70,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- Changing one's own password through `ALTER USER <own name> WITH PASSWORD '…'` needs the
+  current one (`… REPLACE '<current>'`), for every user but the administrator; `CURRENT_USER`
+  in `ALTER USER` names the session's own user (a user named `current_user` is written quoted).
 - **Android builds reach internal testers automatically.** Each release publishes its Android
   build to Google Play's internal testing track, as iOS builds reach TestFlight, instead of
   leaving a draft to publish by hand in Play Console. A leftover draft no longer stops the
