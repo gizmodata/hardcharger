@@ -1416,6 +1416,12 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                                   " hours ago): an administrator must set a new one");
       }
       replaced = *verified;
+      // "Changing" a password to itself would end a temporary or expired password's hold and
+      // date it anew while whoever set it still knows it: a new password must be new.
+      if (c->action == Action::kSetPassword && VerifyPassword(c->password, replaced)) {
+        return AccessControlError("Hardcharger blocked ALTER USER: the new password is the current one; choose a "
+                                  "different password");
+      }
     }
     if (c->action == Action::kSetPassword) {
       ARROW_RETURN_NOT_OK(CheckNewPassword(c->password, options_.password_policy));

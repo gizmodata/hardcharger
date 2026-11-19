@@ -1568,7 +1568,9 @@ ALTER USER CURRENT_USER WITH PASSWORD 'new password' REPLACE 'current password';
 ```
 
 The current password is required, so a session alone (or an access token someone took) can
-never change it; `ALTER USER <own name> WITH PASSWORD '…'` without `REPLACE` is refused to
+never change it, and the new one must differ from it (`the new password is the current one;
+choose a different password`), so a temporary or expired password never ends its hold by being
+"changed" to itself; `ALTER USER <own name> WITH PASSWORD '…'` without `REPLACE` is refused to
 everyone but the administrator. The change ends the user's sessions, as any password change
 does: sign in again with the new password. The web UI does all of this itself: signed in with
 a temporary password, it asks for a new one, changes it and signs in again. The `hardcharger`

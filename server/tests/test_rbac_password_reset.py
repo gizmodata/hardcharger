@@ -119,6 +119,32 @@ def test_the_help_desk_using_a_temporary_password_can_only_change_it(world):
         assert secret not in log
 
 
+def test_a_password_is_never_changed_to_itself(world):
+    # A temporary password "changed" to itself would end the hold while whoever set it still
+    # knows it: refused, the session stays held, and it is no failed sign-in.
+    amy = world.as_user(user="amy")
+    temporary = password(name="carl-temporary")
+    expect_allowed(client=amy, sql=f"ALTER USER carl WITH PASSWORD '{temporary}'")
+    as_carl = world.server.user(name="carl", password=temporary)
+    same = "Hardcharger blocked ALTER USER: the new password is the current one; choose a different password"
+    for _ in range(6):  # more than login_lockout_threshold: none of them counts as a failure
+        expect_blocked(client=as_carl, sql=change(new=temporary, current=temporary), why=same)
+    assert_restricted(client=as_carl, user="carl")
+    assert rows(client=world.admin, sql="SELECT password_must_change FROM hardcharger_users() WHERE name = 'carl'") \
+        == [{"password_must_change": True}]
+    assert rows(client=world.admin, sql="SELECT * FROM hardcharger_login_locks() WHERE user_name = 'carl'") == []
+    assert signs_in(world=world, user="carl", secret=temporary)
+    records = audit_records(server=world.server)
+    assert about(records, statement="ALTER USER", user="carl", status="success") == []
+    # The twin: a new one is accepted and ends the hold.
+    chosen = password(name="carl-chosen")
+    expect_allowed(client=as_carl, sql=change(new=chosen, current=temporary))
+    # A password that is not temporary is not "changed" to itself either.
+    carl = world.server.user(name="carl", password=chosen)
+    expect_blocked(client=carl, sql=change(new=chosen, current=chosen), why=same)
+    assert world.signs_in(user="carl", secret=chosen)
+
+
 def test_every_user_changes_its_own_password_with_the_current_one(world):
     world.setup("CREATE USER nopw")
     current = world.passwords["carl"]

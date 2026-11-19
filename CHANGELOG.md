@@ -53,7 +53,7 @@ own changelog in `python/CHANGELOG.md`.
   sets with `WITH PASSWORD '…' EXPIRE` (or `ALTER USER name PASSWORD EXPIRE`), must be changed
   before anything else: its sign-in succeeds, but the session runs only `ALTER USER
   CURRENT_USER WITH PASSWORD '<new>' REPLACE '<current>'`, which every user may run for itself
-  and which needs the current password. `hardcharger_users()` gains `password_must_change`,
+  and which needs the current password (and a new one that differs from it). `hardcharger_users()` gains `password_must_change`,
   `--verify-credentials` says `"password_must_change": true`, and the web UI asks for a new
   password when it signs in with a temporary one. A temporary password stops working after
   `password_temporary_max_age_hours` (72; 0: no limit), and an administrator then sets a new one.
