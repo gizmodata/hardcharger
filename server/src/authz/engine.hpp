@@ -216,6 +216,13 @@ class RbacEngine {
   arrow::Status PruneLoginEvents(int64_t failures_before_ms, int64_t successes_before_ms) {
     return store_->PruneLoginEvents(failures_before_ms, successes_before_ms);
   }
+  arrow::Result<bool> TakeLoginLock(const std::string& key, const std::string& holder, int64_t now_ms,
+                                    int64_t stale_before_ms) {
+    return store_->TakeLoginLock(key, holder, now_ms, stale_before_ms);
+  }
+  arrow::Status ReleaseLoginLock(const std::string& key, const std::string& holder) {
+    return store_->ReleaseLoginLock(key, holder);
+  }
   const PasswordPolicy& password_policy() const { return options_.password_policy; }
 
   const std::string& store_description() const { return store_->description(); }

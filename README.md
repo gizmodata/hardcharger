@@ -930,7 +930,12 @@ client address, and while that pair is locked the change is refused the same way
 - **Every replica agrees**: each failure, success and clear is a record in the access-control
   store (not access-control data: writing one makes no replica reload), and replicas read each
   other's about once a second, so a lock holds on whichever replica the next attempt reaches,
-  after a restart, and in `--verify-credentials`. Decisions are made from memory: a guess never
+  after a restart, and in `--verify-credentials`. Checks by `--verify-credentials` that overlap
+  take turns per user and per client address (a lock row in the store; a DuckDB store file is
+  opened by one check at a time), each reading the records before it checks and writing its
+  own before it answers; one that can't write its failure answers undecided (exit 2), as does
+  one that waits longer than `rbac_store_timeout_seconds` for its turn (`"reason":
+  "store_busy"`). Decisions are made from memory: a guess never
   waits on the store, and while the store doesn't answer each replica counts on its own (a
   warning says so). Without a store the counts are the process's own.
 - An administrator without `catalog_access` rules sees them and clears them:

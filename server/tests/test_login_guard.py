@@ -416,6 +416,49 @@ def test_the_verifier_counts_its_failures_and_the_server_honours_them(launcher, 
     limited(sign_in(server=again, user="joe", password=JOE_PASSWORD, address="203.0.113.9"))
 
 
+def test_overlapping_verifiers_check_no_more_than_the_threshold_and_record_every_failure(launcher, store):
+    # Verifiers are separate processes: they take turns through the store (lock rows; a DuckDB
+    # file opened for writing), so each sees the failures recorded before it, and every
+    # failure is recorded.
+    uri = store.new_database()
+    server = start(launcher=launcher, store_uri=uri)
+    create_joe(server=server)
+    password = admin_password(server)
+    server.running.stop()
+    credentials = [joe_credential(password=f"wrong-password-{i}", address="203.0.113.9") for i in range(10)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(credentials)) as pool:
+        answers = list(pool.map(lambda c: verify(store_uri=uri, credential=c, admin_password=password), credentials))
+    reasons = [answer.get("reason") for _, answer in answers]
+    assert reasons.count("invalid_credentials") <= 5, answers
+    # The rest were refused unchecked (or, waiting too long for their turn, undecided: exit 2).
+    assert all((code, answer["reason"]) in ((1, "invalid_credentials"), (1, "rate_limited"), (2, "store_busy"))
+               for code, answer in answers), answers
+    # Every failure was recorded: once five were checked, the pair is locked, the right
+    # password included, for the verifier and for the server.
+    if reasons.count("invalid_credentials") < 5:
+        for i in range(5 - reasons.count("invalid_credentials")):
+            code, answer = verify(store_uri=uri, credential=joe_credential(password=f"wrong-again-{i}",
+                                                                           address="203.0.113.9"),
+                                  admin_password=password)
+            if answer["reason"] == "rate_limited":
+                time.sleep(answer["retry_after_seconds"])
+    code, answer = verify(store_uri=uri, credential=joe_credential(password=JOE_PASSWORD, address="203.0.113.9"),
+                          admin_password=password)
+    assert (code, answer["reason"]) == (1, "rate_limited") and answer["retry_after_seconds"] > 800, answer
+    again = start(launcher=launcher, store_uri=uri)
+    limited(sign_in(server=again, user="joe", password=JOE_PASSWORD, address="203.0.113.9"))
+    # The twin: another address, once the user's delay has passed, is verified.
+    again.running.stop()
+    for _ in range(3):
+        code, answer = verify(store_uri=uri, credential=joe_credential(password=JOE_PASSWORD, address="192.0.2.1"),
+                              admin_password=password)
+        if code == 0:
+            break
+        assert answer["reason"] == "rate_limited", answer
+        time.sleep(answer["retry_after_seconds"])
+    assert code == 0 and answer["verified"] is True, answer
+
+
 def test_a_verified_password_resets_the_pair_for_the_verifier(launcher, store):
     uri = store.new_database()
     server = start(launcher=launcher, store_uri=uri)

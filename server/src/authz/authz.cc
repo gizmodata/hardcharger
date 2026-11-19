@@ -381,6 +381,15 @@ arrow::Status AccessControl::PruneLoginEvents(int64_t failures_before_ms, int64_
   return engine_->PruneLoginEvents(failures_before_ms, successes_before_ms);
 }
 
+arrow::Result<bool> AccessControl::TakeLoginLock(const std::string& key, const std::string& holder, int64_t now_ms,
+                                                 int64_t stale_before_ms) {
+  return engine_->TakeLoginLock(key, holder, now_ms, stale_before_ms);
+}
+
+arrow::Status AccessControl::ReleaseLoginLock(const std::string& key, const std::string& holder) {
+  return engine_->ReleaseLoginLock(key, holder);
+}
+
 void AccessControl::SetSignInSummaries(SignInSummaries summaries) { sign_in_summaries_ = std::move(summaries); }
 
 void AccessControl::SetPasswordAttempts(PasswordAttempts attempts) { password_attempts_ = std::move(attempts); }

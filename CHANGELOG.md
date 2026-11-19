@@ -106,7 +106,8 @@ own changelog in `python/CHANGELOG.md`.
   attempt through when it ends however many arrive at once. Refusals are `429 rate_limited`
   with `Retry-After`, the same for every user name. Every number is a setting (`login_*`); counts are shared through the
   access-control store by every replica and by `--verify-credentials`, which takes an optional
-  `client_address`. Administrators list and clear them with `hardcharger_login_locks()` and
+  `client_address`; overlapping verifications take turns through the store, so they check no
+  more than the limits allow, and one that can't record its failure answers undecided. Administrators list and clear them with `hardcharger_login_locks()` and
   `hardcharger_clear_login_lock(user, address)`; locks are logged and audited, with new metrics.
   The client address honours `trusted_proxies`. The current password a user gives in `ALTER USER
   ... REPLACE` counts the same way, as a sign-in from the session's client address.

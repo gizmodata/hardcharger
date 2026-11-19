@@ -385,6 +385,18 @@ TEST(LoginEventStore, DuckDBFileAndItsReadOnlyOpenings) {
     auto store = RbacStore::Open(uri);
     ASSERT_TRUE(store.ok()) << store.status().ToString();
     ExerciseStore(**store);
+    // Lock rows (what --verify-credentials takes in a shared store): one holder at a time, a
+    // stale one taken over, given back only by its holder, and ignored as records (no user key).
+    EXPECT_TRUE(*(*store)->TakeLoginLock("lock:user:bob", "v1", 1000, 0));
+    EXPECT_FALSE(*(*store)->TakeLoginLock("lock:user:bob", "v2", 1100, 0));
+    EXPECT_TRUE(*(*store)->TakeLoginLock("lock:address:198.51.100.7", "v2", 1100, 0));  // another key
+    ASSERT_TRUE((*store)->ReleaseLoginLock("lock:user:bob", "v2").ok());           // not v2's: stays
+    EXPECT_FALSE(*(*store)->TakeLoginLock("lock:user:bob", "v2", 1200, 0));
+    EXPECT_TRUE(*(*store)->TakeLoginLock("lock:user:bob", "v2", 70000, 1001));    // v1's is stale
+    ASSERT_TRUE((*store)->ReleaseLoginLock("lock:user:bob", "v2").ok());
+    ASSERT_TRUE((*store)->ReleaseLoginLock("lock:address:198.51.100.7", "v2").ok());
+    EXPECT_TRUE(*(*store)->TakeLoginLock("lock:user:bob", "v3", 70100, 0));
+    ASSERT_TRUE((*store)->ReleaseLoginLock("lock:user:bob", "v3").ok());
   }
   {
     // Read-only: reads, and refuses to write.
@@ -411,6 +423,11 @@ TEST(LoginEventStore, DuckDBFileAndItsReadOnlyOpenings) {
     const auto other = (*store)->Mutate([](auto&, auto&) { return arrow::Status::OK(); });
     EXPECT_FALSE(other.ok());
     EXPECT_NE(other.message().find("opened read-only"), std::string::npos) << other.ToString();
+    // The file, held for writing by this opening alone, is the lock: nothing is written.
+    EXPECT_TRUE(*(*store)->TakeLoginLock("lock:user:bob", "v1", 1000, 0));
+    EXPECT_TRUE(*(*store)->TakeLoginLock("lock:user:bob", "v2", 1100, 0));
+    ASSERT_TRUE((*store)->ReleaseLoginLock("lock:user:bob", "v1").ok());
+    EXPECT_EQ((*store)->LoginEventsSince(0)->size(), 3u);
   }
   std::filesystem::remove_all(dir);
 }

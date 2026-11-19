@@ -146,6 +146,15 @@ class RbacStore {
   // Drops failure and clear records before `failures_before_ms`, success records before
   // `successes_before_ms`, and every success record of a (user, address) with a later one.
   arrow::Status PruneLoginEvents(int64_t failures_before_ms, int64_t successes_before_ms);
+  // A lock row among the sign-in records (kind "lock", event_id `key`, origin `holder`),
+  // taken in one store transaction: true when this call took it, false when another holder
+  // has it (one older than `stale_before_ms` is taken over: its holder died). Servers ignore
+  // such rows (no user key). --verify-credentials takes one per user and per client address
+  // around each password check, so concurrent verifiers check one at a time and each sees the
+  // failures recorded before it.
+  arrow::Result<bool> TakeLoginLock(const std::string& key, const std::string& holder, int64_t now_ms,
+                                    int64_t stale_before_ms);
+  arrow::Status ReleaseLoginLock(const std::string& key, const std::string& holder);
 
   const std::string& description() const { return description_; }
   // A DuckDB store's file, absolute; empty for any other store.
@@ -203,7 +212,11 @@ class RbacStore {
   // Whether the store's SYSTEM ADMIN table was there, in this server's shape, when the
   // store was opened (ProbeSystemAdmins). Not: it is neither read nor written.
   bool system_admins_readable_ = false;
-  bool sign_ins_writable_ = false;  // read_only + record_sign_ins: attached for writing since a record
+  // Attaches the store for writing, once, in a read-only opening that records sign-ins.
+  arrow::Status EnableSignInWrites();
+  bool sign_ins_writable_ = false;
+  // A read-only opening that records sign-ins holds a DuckDB file for writing (one at a time).
+  bool exclusive_file_ = false;  // read_only + record_sign_ins: attached for writing since a record
 
   friend class StoreTransaction;
   friend class StoreTurn;
