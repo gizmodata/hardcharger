@@ -1,0 +1,108 @@
+# Dependabot version updates: weekly, one grouped pull request per ecosystem and directory for
+# minor and patch updates and one for major updates, at most three open per entry. A new version
+# waits a week before Dependabot proposes it (cooldown), so a release that is pulled or
+# compromised in its first days never reaches a pull request. Security updates are not delayed.
+#
+# Not here, on purpose: the native server's dependencies (DuckDB, Arrow, OpenSSL, replxx, zlib,
+# jwt-cpp, yaml-cpp, googletest) are pinned in server/scripts/ and server/CMakeLists.txt, and a
+# bump needs its licence review (THIRD_PARTY_NOTICES.md, checked by the build) and a cold
+# dependency build; third_party/chargewire is a submodule moved with the server; the UI's
+# vendored packages (ui/vendor/*.tgz) are rebuilt by ui/scripts/vendor-*.mjs.
+#
+# Dependabot's commits carry no DCO sign-off: squash-merge them with a signed-off message.
+version: 2
+
+updates:
+  # The workflows and the composite actions under .github/actions.
+  - package-ecosystem: github-actions
+    directories: ["/", "/.github/actions/*"]
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    labels: [dependencies, github_actions]
+    commit-message:
+      prefix: "CI"
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+      actions-major:
+        update-types: [major]
+
+  # The web UI (ui/) and the desktop app's front end (desktop/).
+  - package-ecosystem: npm
+    directories: ["/ui", "/desktop"]
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    labels: [dependencies]
+    commit-message:
+      prefix: "Dependencies"
+    # Vendored tarballs (file:vendor/*.tgz), rebuilt by ui/scripts/vendor-*.mjs, never from npm.
+    ignore:
+      - dependency-name: "@gizmodata/chargewire"
+      - dependency-name: xlsx
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+      npm-major:
+        update-types: [major]
+
+  # The Python package (python/) and the server's test suite (server/tests/).
+  - package-ecosystem: pip
+    directories: ["/python", "/server/tests"]
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    labels: [dependencies]
+    commit-message:
+      prefix: "Dependencies"
+    groups:
+      pip-minor-patch:
+        update-types: [minor, patch]
+      pip-major:
+        update-types: [major]
+
+  # The desktop app's Tauri shell.
+  - package-ecosystem: cargo
+    directory: /desktop/src-tauri
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    labels: [dependencies]
+    commit-message:
+      prefix: "Dependencies"
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+      cargo-major:
+        update-types: [major]
+
+  # The Android app (its Gradle plugins, libraries and the Gradle wrapper).
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    labels: [dependencies]
+    commit-message:
+      prefix: "Dependencies"
+    groups:
+      gradle-minor-patch:
+        update-types: [minor, patch]
+      gradle-major:
+        update-types: [major]

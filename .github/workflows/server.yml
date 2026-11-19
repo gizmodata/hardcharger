@@ -30,9 +30,10 @@ name: server
 
 # Not for changes that build, test and package nothing: the documentation (docs/, Markdown
 # other than the CHANGELOG.md and THIRD_PARTY_NOTICES.md the tarballs ship, the notices'
-# texts and the UI's Markdown, which its lint checks), the
-# benchmarks (bench/), the Python package (python/, workflow.yml), the other workflows and
-# the docs' version-label check (.github/scripts/check_no_version_labels.py, run by workflow.yml).
+# texts and the UI's Markdown, which its lint checks), the benchmarks (bench/), the Python
+# package (python/, workflow.yml), the other workflows, the repository settings files
+# (CODEOWNERS, Dependabot, the issue forms) and the docs' version-label check
+# (.github/scripts/check_no_version_labels.py, run by workflow.yml).
 # Path filters never apply to tags; a manual run is always available.
 on:
   push:
@@ -50,6 +51,9 @@ on:
       - "ui/**/*.md"
       - "server/third-party-notices/**"
       - "!.github/ISSUE_TEMPLATE/**"
+      - "!.github/CODEOWNERS"
+      - "!.github/dependabot.yml"
+      - "!.github/workflows/codeql.yml"
       - "!.github/workflows/workflow.yml"
       - "!.github/workflows/dockerhub-check.yml"
       - "!.github/workflows/homebrew.yml"
@@ -66,6 +70,9 @@ on:
       - "ui/**/*.md"
       - "server/third-party-notices/**"
       - "!.github/ISSUE_TEMPLATE/**"
+      - "!.github/CODEOWNERS"
+      - "!.github/dependabot.yml"
+      - "!.github/workflows/codeql.yml"
       - "!.github/workflows/workflow.yml"
       - "!.github/workflows/dockerhub-check.yml"
       - "!.github/workflows/homebrew.yml"

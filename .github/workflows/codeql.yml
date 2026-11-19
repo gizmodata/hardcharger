@@ -1,0 +1,67 @@
+# CodeQL code scanning: the server and client (C/C++), the web UI and the desktop app's front
+# end (JavaScript/TypeScript), the Python package, tests and release scripts, and these
+# workflows themselves (actions). On pull requests to main, weekly on main (the baseline a pull
+# request's alerts are compared with), and by hand. Results go to the Security tab.
+#
+# C/C++ is analyzed without a build (build-mode none): a real build needs DuckDB and Arrow,
+# hours cold, and CodeQL reads the sources and headers directly. The chargewire submodule is
+# not checked out, so it is analyzed in its own repository, not here.
+name: codeql
+
+on:
+  pull_request:
+    branches: [main]
+    # Documentation only: nothing CodeQL reads. (CHANGELOG.md and the other Markdown files
+    # are text too; nothing in docs/ or bench/ is analyzed code that ships.)
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  schedule:
+    - cron: "17 6 * * 1"  # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    # The CodeQL bundle has a Linux Arm64 build (codeql-bundle-linux-arm64, which
+    # github/codeql-action v4 picks on an arm64 runner).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: c-cpp
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config: |
+            paths-ignore:
+              - "**/node_modules/**"
+              - "ui/vendor/**"
+              - "docs/**"
+              - "bench/**"
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
