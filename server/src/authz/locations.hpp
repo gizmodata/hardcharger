@@ -38,8 +38,9 @@ SystemPrivilege StoragePrivilege(StorageKind kind, StorageMode mode);
 // The kind and mode of a storage privilege; nullopt for the other system privileges.
 std::optional<std::pair<StorageKind, StorageMode>> StorageOf(SystemPrivilege privilege);
 // Privileges that, granted everywhere, live in the store's original system_privileges
-// table: every system privilege but the four object storage and HTTP ones and the account
-// privileges (CREATE USER, ...).
+// table: every system privilege but the four object storage and HTTP ones, the account
+// privileges (CREATE USER, ...) and the two policy exemptions, which live in
+// storage_privileges (location '') where a server that predates them skips them.
 bool IsOriginalSystemPrivilege(SystemPrivilege privilege);
 // "the server's file system", "object storage", "the web"
 std::string StorageKindName(StorageKind kind);

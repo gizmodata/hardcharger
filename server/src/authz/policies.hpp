@@ -7,7 +7,8 @@
 // masked column is replaced by the masking expression, so filters, joins,
 // sorts and aggregates see the masked value too. Context functions in policy
 // SQL (the user, their roles, their attributes) become literals first; DuckDB
-// never evaluates them. Writing to a table with policies is refused for now.
+// never evaluates them. Writing to a table with policies is refused for now, unless the
+// writer is exempt from all of them (EXEMPT ROW POLICIES, EXEMPT MASKING POLICIES).
 
 #pragma once
 
@@ -56,8 +57,13 @@ arrow::Result<duckdb::unique_ptr<duckdb::ParsedExpression>> PreparePolicyExpress
 // rewrite safely. The body of a trigger a user owns (`trigger_bodies`) gets the owner's
 // policies, whoever runs the statement (a superuser's statement gets only those).
 // `body`: `plan` is a trigger body's root being rewritten for its owner.
+// A principal that holds EXEMPT ROW POLICIES (EXEMPT MASKING POLICIES) gets no row
+// filters (masks), and may write a table no policy or mask applies to after its
+// exemptions; each table an exemption let the statement past is added to
+// `exemptions_used` ("EXEMPT ROW POLICIES on table c.s.t"), for the audit record.
 void ApplyPolicies(duckdb::ClientContext& context, const std::shared_ptr<const Snapshot>& snapshot,
                    const Principal& principal, duckdb::unique_ptr<duckdb::LogicalOperator>& plan,
-                   const TriggerBodies& trigger_bodies, bool body = false);
+                   const TriggerBodies& trigger_bodies, bool body = false,
+                   std::set<std::string>* exemptions_used = nullptr);
 
 }  // namespace hardcharger::authz

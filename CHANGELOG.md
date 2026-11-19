@@ -67,6 +67,34 @@ own changelog in `python/CHANGELOG.md`.
   remembered flag: the tab asks its session after `SET ROLE`, `RESET ROLE`, a refused
   statement or a refusal on one of those pages, so `RESET ROLE`, a revoke, or a new session
   closes them again.
+- **Access control: exemptions from row and masking policies**
+  ([#59](https://github.com/gizmodata/hardcharger/issues/59)). `GRANT EXEMPT ROW POLICIES,
+  EXEMPT MASKING POLICIES TO ROLE replicator` lets a trusted job (a replication service, say)
+  read every table without row-policy filters and every column unmasked, those created later
+  too, without running as the administrator. A principal exempt from every row policy and mask
+  on a table writes it as freely as it reads it (`INSERT`, `UPDATE`, `MERGE`, `INSERT ... ON
+  CONFLICT`, `DELETE ... RETURNING`, bulk ingest); everyone else's writes into such a table are
+  refused as before. Only the administrator or a session acting as System Admin grants them,
+  never with an admin option or to `PUBLIC`, and a role carries them only through memberships
+  they granted (as `SYSTEM ADMIN`); scoped tokens, tokens with `catalog_access` rules and a tenant's
+  users never hold them; a user's trigger body uses its owner's exemptions, never the
+  writer's. A revoke counts at the next statement, prepared ones included, on every replica at
+  once (a session that holds one asks the store before each statement, and while the store
+  doesn't answer no exemption applies). `SHOW GRANTS`, `hardcharger_grants()` and
+  `hardcharger_effective_privileges()` list them, `hardcharger_policies()` says which policies
+  no longer apply, and the audit record of each statement an exemption let through names it. A
+  2.13 replica on the same store doesn't read them, and applies every policy.
+- **Access control: the policy functions work in plain SQL**
+  ([#60](https://github.com/gizmodata/hardcharger/issues/60)). `is_role_active(name)` and
+  `session_attribute(name)` are ordinary functions now, and `current_user`, `session_user` and
+  `user` return the Hardcharger user (as `hardcharger_user()` does) instead of `duckdb`;
+  `current_role()` returns the role `SET ROLE` made active, or NULL. Each gives the same answer
+  in a statement, a view or a macro as inside a row or masking policy for the same session, and
+  is worked out when the statement runs, so `SET ROLE` counts at the next statement, prepared
+  ones included. `is_role_active` is false alike for a role the user doesn't hold and one that
+  doesn't exist. Without access control, and for the administrator, every role is active and
+  there are no attributes. Policies still can't call `current_role()` (written with or without
+  parentheses).
 
 ### Changed
 
@@ -80,6 +108,21 @@ own changelog in `python/CHANGELOG.md`.
   replaces a newer one. Closed and open testing and production stay manual in Play Console.
 - `SYSTEM ADMIN` is no longer available as a user's or role's name (`CREATE ROLE "SYSTEM
   ADMIN"` is refused). One a store already has stays an ordinary role, written quoted.
+- **Behaviour change for sign-in tokens with `catalog_access` rules under access control.** A
+  store user's session that signed in with a token carrying `catalog_access` rules no longer
+  uses any system privilege its roles hold (`READ FILESYSTEM`, `WRITE FILESYSTEM`, `MANAGE
+  CATALOGS`, `MANAGE EXTENSIONS`, `MANAGE SECRETS`, `MANAGE CONFIG`, `EXPORT DATABASE`, `IMPORT
+  DATABASE`, `CHECKPOINT`, the object storage and HTTP privileges, everywhere or on a location,
+  and the policy exemptions), nor grants one with an admin option, the same as a scoped token's
+  session. Until 2.13 such a session used them. Its statements that need one are refused, saying
+  the token's rules are why; the same user signed in without `catalog_access` rules is not
+  affected, and the rules still grant a store user no table access of their own.
+- `current_user`, `session_user`, `user` and `current_role()` answer for the session (above)
+  everywhere, so a view or query that compared them with `'duckdb'` sees the Hardcharger user
+  now. A user's new macro can't be named `is_role_active` or `session_attribute` (they are
+  built-in functions now), and a row or masking policy that reaches `current_role` through a
+  macro or as a bare name, or calls `hardcharger_active_role()`, is refused when a table it
+  protects is read, as a direct `current_role()` call always was.
 
 ## [2.13.1] - 2026-11-15
 

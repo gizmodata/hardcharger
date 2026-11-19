@@ -31,6 +31,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -113,6 +114,27 @@ inline constexpr const char* kProvisionedRoleAttribute = "provisioned_role";
 // minter's certificate binding or empty).
 using ScopedTokenSigner =
     std::function<std::string(const std::string&, const std::string&, int64_t, const std::string&)>;
+
+// What the context functions a row or masking policy may call answer for one session,
+// in plain SQL as in a policy: is_role_active(name), session_attribute(name). The
+// administrator (and a session acting as System Admin, and every session on a server
+// without access control) has every role active and no attributes.
+struct SessionPolicyContext {
+  bool all_roles_active = false;
+  std::set<std::string> active_roles;  // folded names, as policies compare them
+  std::map<std::string, std::string> attributes;
+  // Is the role active in the session? Never says whether a role exists.
+  bool RoleActive(const std::string& name) const;
+  // The session's attribute, or nullopt when it has none of that name.
+  std::optional<std::string> Attribute(const std::string& name) const;
+  bool operator==(const SessionPolicyContext&) const = default;
+};
+
+// Replaces DuckDB's built-in current_user, session_user, user and current_role (each
+// 'duckdb') with the session's own answers: the Hardcharger user (as hardcharger_user()),
+// and the role SET ROLE made active, or NULL (as hardcharger_active_role()). Once, on the
+// instance's system catalog, before any session runs.
+void InstallPolicyContextFunctions(duckdb_v2_instance_handle instance);
 
 // On a server without access control: the kind of access-control statement `sql` is
 // ("CREATE ROLE", ...), so it can be refused with a clear error, or nullopt for SQL
@@ -302,7 +324,11 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // notes when the store did not answer: the session then acts as nobody until it does.
   // Does nothing for any other session. Called at the start of every request, on the
   // session's engine thread, before RequireLive.
+  // The same for a session whose principal holds a policy exemption (EXEMPT ROW POLICIES,
+  // EXEMPT MASKING POLICIES): while the store does not answer, no exemption applies.
   void VerifySystemAdmin() const;
+  // What is_role_active(), session_attribute() and the policies answer for this session now.
+  SessionPolicyContext PolicyContextNow() const;
   // Throws permission_denied, saying why, for a session that said SET ROLE SYSTEM ADMIN and
   // does not act as one (its user no longer holds it, or the store did not answer): such a
   // session runs nothing until RESET ROLE. For the commands that are not SQL statements of

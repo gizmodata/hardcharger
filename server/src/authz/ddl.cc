@@ -809,6 +809,9 @@ class Parser {
         {"DROP", "USER", nullptr, SystemPrivilege::kDropUser},
         {"CREATE", "ROLE", nullptr, SystemPrivilege::kCreateRole},
         {"DROP", "ROLE", nullptr, SystemPrivilege::kDropRole},
+        // The policy exemptions.
+        {"EXEMPT", "ROW", "POLICIES", SystemPrivilege::kExemptRowPolicies},
+        {"EXEMPT", "MASKING", "POLICIES", SystemPrivilege::kExemptMaskingPolicies},
     };
     for (const auto& phrase : kPhrases) {
       if (PeekKeyword(phrase.first) && PeekKeyword(phrase.second, 1) &&

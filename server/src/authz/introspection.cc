@@ -512,10 +512,14 @@ std::shared_ptr<arrow::RecordBatch> Policies(const Snapshot& snapshot, const Pri
   Names names(snapshot);
   Rows rows(ColumnsOf(AccessTable::kPolicies));
   const bool unchecked = viewer.superuser;  // policies don't apply to the administrator
+  // Nor row policies to a holder of EXEMPT ROW POLICIES, nor masks to one of EXEMPT MASKING
+  // POLICIES.
+  const bool rows_exempt = snapshot.ExemptFromPolicies(viewer, SystemPrivilege::kExemptRowPolicies);
+  const bool masks_exempt = snapshot.ExemptFromPolicies(viewer, SystemPrivilege::kExemptMaskingPolicies);
   for (const auto& p : snapshot.row_policies()) {
     if (!visibility.TableVisible(p.table)) continue;
     bool applies = false;
-    if (!unchecked) {
+    if (!unchecked && !rows_exempt) {
       for (const auto* a : snapshot.ApplicableRowPolicies(viewer, p.table)) applies = applies || a->id == p.id;
     }
     const auto target = TargetCells(p.table);
@@ -530,7 +534,7 @@ std::shared_ptr<arrow::RecordBatch> Policies(const Snapshot& snapshot, const Pri
     const auto* policy = snapshot.FindMaskingPolicyById(b.policy_id);
     if (policy == nullptr) continue;
     bool applies = false;
-    if (!unchecked) {
+    if (!unchecked && !masks_exempt) {
       for (const auto& [column, mask] : snapshot.ApplicableMasks(viewer, b.table)) {
         applies = applies || IdentifiersEqual(column, b.column);
       }
@@ -697,13 +701,18 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
                 source.empty() ? who.user_name : names.Role(source), false});
     }
   }
+  // An account privilege or a policy exemption is given only by the roles the administrator's
+  // own memberships reach.
   const auto account_roles = snapshot.AccountPrivilegeRoles(who);
+  const auto exemption_roles = snapshot.AdministratorGrantedActingRoles(who);
   for (const auto p : AllSystemPrivileges()) {
-    // The roles that give it, everywhere or on a location (an account privilege: only through
-    // the administrator's own memberships).
+    // A policy exemption only where it applies (never to a scoped token or a token with
+    // catalog_access rules, nor to a tenant's user).
+    if (IsPolicyExemption(p) && !snapshot.ExemptFromPolicies(who, p)) continue;
+    // The roles that give it, everywhere or on a location.
     const bool system = snapshot.HasSystemPrivilege(who, p);
-    if (!system && (!StorageOf(p) || who.catalog_rules || who.scope)) continue;
-    const auto& giving = IsAccountPrivilege(p) ? account_roles : roles;
+    if (!system && (!StorageOf(p) || who.catalog_rules || who.token_holds_no_system_privilege())) continue;
+    const auto& giving = IsAccountPrivilege(p) ? account_roles : IsPolicyExemption(p) ? exemption_roles : roles;
     for (const auto& r : snapshot.system_privileges()) {
       if (r.privilege != p || !giving.count(r.role_id) || (system && !r.location.empty())) continue;
       const Cell location = r.location.empty() ? Cell{} : Text(r.location);

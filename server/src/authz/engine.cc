@@ -1593,11 +1593,13 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
               }
             }
             if (existing) {
-              // A membership in a role that holds SYSTEM ADMIN or an account privilege carries
-              // it only when the administrator granted it: the administrator's grant of one
-              // that a role's admin-option holder made makes it the administrator's, from now on.
+              // A membership in a role that holds SYSTEM ADMIN, an account privilege or a
+              // policy exemption carries it only when the administrator granted it: the
+              // administrator's grant of one that a role's admin-option holder made makes it the
+              // administrator's, from now on.
               if (actor.superuser && !existing->granted_by.empty() &&
-                  (snap.RoleCarriesSystemAdmin(role->id) || snap.RoleCarriesAccountPrivilege(role->id))) {
+                  (snap.RoleCarriesSystemAdmin(role->id) || snap.RoleCarriesAccountPrivilege(role->id) ||
+                   snap.RoleCarriesPolicyExemption(role->id))) {
                 ARROW_RETURN_NOT_OK(txn.DeleteMembership(grantee.kind, grantee.id, role->id));
                 MembershipRecord taken = *existing;
                 taken.admin_option = existing->admin_option || c->with_admin_option;
@@ -1872,6 +1874,20 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       location = parsed->second;
     }
     const std::string where = location.empty() ? "" : " on location '" + location + "'";
+    // A policy exemption takes away every row policy, or every mask, at once: only an
+    // unrestricted administrator grants or revokes one, and never with an admin option.
+    for (SystemPrivilege p : c->privileges) {
+      if (!IsPolicyExemption(p)) continue;
+      if (!actor.is_unrestricted_administrator()) {
+        return AccessControlError("Hardcharger blocked " + CommandKind(command) + ": " + kOnlySystemAdministrators +
+                                  " grants and revokes " + SystemPrivilegeName(p));
+      }
+      if (c->with_admin_option) {
+        return AccessControlError("Hardcharger blocked " + CommandKind(command) + ": " + SystemPrivilegeName(p) +
+                                  " has no admin option; only the administrator, or a user acting as System Admin, "
+                                  "grants it");
+      }
+    }
     std::vector<std::string> done;
     ARROW_RETURN_NOT_OK(mutate_with(
         !c->grant && !c->cascade,
@@ -1921,6 +1937,11 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                                             " cannot be granted to the built-in role " + grantee.name +
                                             ", which every user holds");
                 }
+              }
+              if (c->grant && IsPolicyExemption(p) && grantee.id == kPublicRoleId) {
+                return AccessControlError("Hardcharger blocked GRANT: " + SystemPrivilegeName(p) +
+                                          " is never granted to PUBLIC (that would take the policies away from "
+                                          "everyone: drop them instead)");
               }
               std::vector<SystemPrivilegeRecord> matching;
               const SystemPrivilegeRecord* own = nullptr;

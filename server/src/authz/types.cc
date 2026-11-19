@@ -232,8 +232,16 @@ std::string SystemPrivilegeName(SystemPrivilege privilege) {
       return "CREATE ROLE";
     case SystemPrivilege::kDropRole:
       return "DROP ROLE";
+    case SystemPrivilege::kExemptRowPolicies:
+      return "EXEMPT ROW POLICIES";
+    case SystemPrivilege::kExemptMaskingPolicies:
+      return "EXEMPT MASKING POLICIES";
   }
   return "UNKNOWN";
+}
+
+bool IsPolicyExemption(SystemPrivilege privilege) {
+  return privilege == SystemPrivilege::kExemptRowPolicies || privilege == SystemPrivilege::kExemptMaskingPolicies;
 }
 
 const std::vector<SystemPrivilege>& AllSystemPrivileges() {
@@ -246,7 +254,8 @@ const std::vector<SystemPrivilege>& AllSystemPrivileges() {
       SystemPrivilege::kWriteObjectStorage, SystemPrivilege::kReadHttp,
       SystemPrivilege::kWriteHttp,      SystemPrivilege::kCreateUser,
       SystemPrivilege::kAlterUser,      SystemPrivilege::kDropUser,
-      SystemPrivilege::kCreateRole,     SystemPrivilege::kDropRole};
+      SystemPrivilege::kCreateRole,     SystemPrivilege::kDropRole,
+      SystemPrivilege::kExemptRowPolicies, SystemPrivilege::kExemptMaskingPolicies};
   return kAll;
 }
 

@@ -71,7 +71,16 @@ enum class SystemPrivilege {
   kDropUser,
   kCreateRole,
   kDropRole,
+  // Policy exemptions (2.14): read every table without row-policy filters, or every column
+  // unmasked; one exempt from everything on a table may write it too. Only an unrestricted
+  // administrator grants them, never WITH ADMIN OPTION (IsPolicyExemption).
+  kExemptRowPolicies,      // EXEMPT ROW POLICIES
+  kExemptMaskingPolicies,  // EXEMPT MASKING POLICIES
 };
+
+// EXEMPT ROW POLICIES or EXEMPT MASKING POLICIES: each takes away every policy of its kind
+// at once, so neither is ever delegated (no admin option, no grant by a holder).
+bool IsPolicyExemption(SystemPrivilege privilege);
 
 // "MANAGE CATALOGS", "READ FILESYSTEM", ...
 std::string SystemPrivilegeName(SystemPrivilege privilege);

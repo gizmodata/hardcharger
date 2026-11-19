@@ -229,6 +229,9 @@ CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const
 bool IsRulesAdministratorPrivilege(SystemPrivilege privilege);
 // The words of a refusal of one of the others to it.
 std::string RulesAdministratorRefusal(const std::string& what, SystemPrivilege privilege);
+// The words of a refusal of a system privilege to a store user's session whose sign-in
+// token carries catalog_access rules (Principal::catalog_access_token): it uses none.
+std::string CatalogAccessTokenRefusal(const std::string& what, SystemPrivilege privilege, const std::string& user);
 // The words of a catalog_access refusal.
 std::string CatalogAccessDenied(const std::string& catalog, CatalogAccessLevel needed, const std::string& user);
 
@@ -264,9 +267,14 @@ struct Principal {
   // the store transaction of each change it makes, that it still holds SYSTEM ADMIN).
   // Empty for the administrator itself. Only RbacSessionState::principal() makes one.
   std::string acting_user_id;
+  // The session holds a policy exemption (EXEMPT ROW / MASKING POLICIES) and the store did
+  // not answer when this request asked it (SessionGuard::VerifySystemAdmin): no exemption
+  // applies (Snapshot::ExemptFromPolicies). Only RbacSessionState::principal() sets it.
+  bool policy_exemptions_unverified = false;
   // A store user's session whose sign-in token carries catalog_access rules (which grant a
-  // store user nothing under access control, and are ignored for its data): it never uses the
-  // account privileges (CREATE USER, ...), as it never acts as System Admin.
+  // store user nothing under access control, and are ignored for its data): like a scoped
+  // token's, it uses no system privilege (token_holds_no_system_privilege): no account
+  // privilege (CREATE USER, ...), no policy exemption, and it never acts as System Admin.
   bool catalog_access_token = false;
 
   static Principal Superuser(std::string name) {
@@ -288,6 +296,11 @@ struct Principal {
     return p;
   }
   bool is_role() const { return !superuser && user_id.empty() && !role_id.empty(); }
+  // THE question for every system privilege (READ FILESYSTEM, MANAGE CATALOGS, the policy
+  // exemptions, ...), everywhere and on a location, used or granted on: a session limited by
+  // its sign-in token, a scoped token or a store user's token with catalog_access rules,
+  // uses none of them, whatever its user's roles hold.
+  bool token_holds_no_system_privilege() const { return scope.has_value() || catalog_access_token; }
   // A store user's session that asked for SYSTEM ADMIN (whether or not it still holds it).
   bool asks_system_admin() const { return active_role_id == kSystemAdminRoleId; }
   bool acts_as_system_admin() const { return superuser && !acting_user_id.empty(); }
@@ -408,6 +421,12 @@ class Snapshot {
   // Does the principal hold the system privilege through one of its roles (a storage
   // privilege: everywhere)? Always true for the administrator.
   bool HasSystemPrivilege(const Principal& principal, SystemPrivilege privilege) const;
+  // Is the principal exempt from the policies `exemption` names (EXEMPT ROW POLICIES: every
+  // row policy on every table; EXEMPT MASKING POLICIES: every mask)? The administrator is;
+  // a store user or role through a role that holds it, never through a scoped token, a
+  // token with catalog_access rules, or as a tenant's user or role, and not while its
+  // session's check with the store did not answer (Principal::policy_exemptions_unverified).
+  bool ExemptFromPolicies(const Principal& principal, SystemPrivilege exemption) const;
   // Does it hold the storage privilege `privilege` everywhere or on a location that covers
   // `path`? Always true for the administrator.
   bool HasStorageAccess(const Principal& principal, SystemPrivilege privilege, const StoragePath& path,
@@ -473,17 +492,23 @@ class Snapshot {
   bool HoldsActiveRole(const Principal& principal) const;
 
   // ---- account privileges (CREATE USER, ALTER USER, DROP USER, CREATE ROLE, DROP ROLE) ----
-  // The roles through which the principal holds the account privileges: of the roles the
-  // session acts with (RolesOf: SET ROLE narrows them), those the user reaches through
-  // memberships the administrator granted, or through an identity-provider group mapping
-  // (which only it creates). A membership a role's admin-option holder granted never carries
-  // one, so they spread only by an administrator's hand, like SYSTEM ADMIN. Empty for the
-  // administrator (which needs none), a role principal, a disabled or tenant's user, a scoped
-  // token, and a token with catalog_access rules.
+  // ---- and policy exemptions (EXEMPT ROW POLICIES, EXEMPT MASKING POLICIES) ----
+  // Of AdministratorGrantedRolesOf, the roles the session acts with (RolesOf: SET ROLE
+  // narrows them), never PUBLIC or a tenant's role: the roles through which the principal
+  // holds a policy exemption or (AccountPrivilegeRoles) an account privilege. A membership a
+  // role's admin-option holder granted never carries one, so they spread only by an
+  // administrator's hand, like SYSTEM ADMIN. Empty for the administrator (which needs none),
+  // a disabled or tenant's user, a scoped token, a token with catalog_access rules and a
+  // session under catalog rules.
+  std::set<std::string> AdministratorGrantedActingRoles(const Principal& principal) const;
+  // AdministratorGrantedActingRoles for a user's session; empty for a role principal.
   std::set<std::string> AccountPrivilegeRoles(const Principal& principal) const;
   // Does the role hold an account privilege, itself or through a role it was granted (by
   // anyone)? Membership in it is then the administrator's to grant.
   bool RoleCarriesAccountPrivilege(const std::string& role_id) const;
+  // Does the role hold a policy exemption, itself or through a role it was granted (by
+  // anyone)? The administrator's GRANT of it then takes a delegated membership over.
+  bool RoleCarriesPolicyExemption(const std::string& role_id) const;
 
   // ---- SYSTEM ADMIN ----
   // How the store user holds SYSTEM ADMIN, one entry per way: "" for a grant to the user
@@ -540,8 +565,11 @@ class Snapshot {
   bool GrantCovers(const ObjectGrantRecord& grant, const AccessRequest& request) const;
   // Every role `role_id` holds through memberships the administrator granted, itself included.
   std::set<std::string> AdministratorGrantedClosure(const std::string& role_id) const;
-  // Every system-scope role the user holds through memberships the administrator granted and
-  // through its identity-provider groups' mappings, with what those inherit the same way.
+  // The one walk behind SYSTEM ADMIN, the account privileges and the policy exemptions: every
+  // system-scope role the user holds through memberships the administrator granted and through
+  // its identity-provider groups' mappings, with what those inherit the same way (a role
+  // principal: the role and what it inherits so). Empty for the administrator, an unknown or
+  // disabled user and a tenant's user.
   std::set<std::string> AdministratorGrantedRolesOf(const Principal& principal) const;
 
   int64_t version_;

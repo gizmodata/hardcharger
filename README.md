@@ -1501,6 +1501,78 @@ The privileges are kept where a 2.13 server does not read them, so mixed version
 rollback keep working: on a 2.13 replica nobody holds them (it refuses those statements to
 everyone but the administrator). The reasons for each rule are in
 [docs/security-administration-design.md](docs/security-administration-design.md).
+### Tokens with `catalog_access` rules under access control
+
+Under access control a store user's grants decide what it may read and write; the
+`catalog_access` rules of its sign-in token grant it nothing more. A session that signed in
+with such a token also uses none of the system privileges its roles hold, as a scoped
+token's session uses none: no `READ FILESYSTEM`, `MANAGE CATALOGS`, storage privilege on a
+location, account privilege (`CREATE USER`, ...), policy exemption, or admin option to grant
+one. It is told so: `Hardcharger blocked
+ATTACH needs the MANAGE CATALOGS system privilege, which this session does not use: it signed
+in with a token that carries catalog_access rules ...`. The same user signed in without the
+rules uses them as before (changed in 2.14).
+
+### Exemptions from row and masking policies
+
+A trusted job, such as a replication service that keeps a table in step with its source,
+can read and write tables that have row or masking policies without running as the
+administrator:
+
+```sql
+CREATE ROLE replicator;
+GRANT EXEMPT ROW POLICIES, EXEMPT MASKING POLICIES TO ROLE replicator;
+GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA crm TO replicator;  -- still needed
+GRANT replicator TO etl;
+```
+
+`EXEMPT ROW POLICIES` reads every table without its row-policy filters, and `EXEMPT MASKING
+POLICIES` reads every column unmasked; one grant covers every table, those created later
+too (the counterparts of PostgreSQL's `BYPASSRLS` and Oracle's `EXEMPT ACCESS POLICY`). A
+principal exempt from every row policy and mask on a table writes it as freely as it reads
+it: `INSERT`, `UPDATE`, `MERGE`, `INSERT ... ON CONFLICT` and `DELETE ... RETURNING`, bulk
+ingest included. Everyone else gets today's answer: a write into a table with policies is
+refused, and a role exempt from only one kind is refused where the other kind applies. An
+exemption grants nothing else: the job still needs `SELECT`, `INSERT` and the rest.
+
+- **Who grants them.** Only the administrator or a session acting as System Admin, and
+  never `WITH ADMIN OPTION`: each takes away every policy of its kind at once. They are
+  granted to roles (not `PUBLIC`, not a tenant's) and to nothing narrower than the whole
+  server. A role carries them only through memberships the administrator (or a System
+  Admin) granted: a member a role's admin-option holder added gets the role's other
+  privileges, not its exemptions, until the administrator grants the role itself.
+- **Who never holds them.** A session signed in with a scoped token or a token with
+  `catalog_access` rules, and a tenant's users. An exemption reaches no catalog the
+  principal can't see.
+- **Definer's rights.** A user's trigger body runs with its owner's exemptions, never the
+  writer's. Views and macros apply the reader's policies, as always, so the reader's
+  exemptions: an exempt owner lends a view nothing.
+- **Revokes.** A revoke counts at the session's next statement, prepared ones included,
+  on every replica at once: a session that holds an exemption asks the store before each
+  statement (one small read), and while the store doesn't answer, no exemption applies.
+- **Seen and recorded.** `SHOW GRANTS`, `hardcharger_grants()` and
+  `hardcharger_effective_privileges()` list them; `hardcharger_policies()` says a policy
+  doesn't apply to an exempt session; and the audit record of each statement an exemption
+  let through names it (`objects`: `EXEMPT ROW POLICIES on table crm.main.accounts`).
+
+A 2.13 replica on the same store does not read the exemptions (they are kept where it skips
+privileges it does not know), so there every policy applies to their holders.
+
+### Policy functions in plain SQL
+
+The functions a row or masking policy can call give the same answer in any statement, so a
+user can check what their policies will see:
+
+| Function | Answer |
+|---|---|
+| `current_user`, `session_user`, `user`, `hardcharger_user()` | The Hardcharger user (DuckDB's own answer is `duckdb`) |
+| `is_role_active('hr')` | Whether the role is active in this session (after `SET ROLE`); false for a role the user doesn't hold and for one that doesn't exist alike |
+| `session_attribute('region')` | The user's attribute (`ALTER USER … SET ATTRIBUTE`), or NULL |
+| `current_role()` | The role `SET ROLE` made active, or NULL (policies can't call it: the session changes it) |
+
+Each answer is worked out when the statement runs, so `SET ROLE` counts at the next
+statement, prepared ones included. For the administrator, and on a server without access
+control, every role is active and there are no attributes.
 
 ### When the store is down
 

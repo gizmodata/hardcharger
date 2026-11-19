@@ -23,6 +23,7 @@
 #include "authz/engine.hpp"
 #include "authz/gate.hpp"
 #include "authz/introspection.hpp"
+#include "authz/policies.hpp"
 #include "authz/resolver.hpp"
 #include "authz/storage_access.hpp"
 #include "duckdb_sql.hpp"
@@ -683,11 +684,61 @@ bool SessionGuard::system_admin() const {
 void SessionGuard::VerifySystemAdmin() const {
   if (unrestricted_ || user_id_.empty() || owner_.catalog_rules_only_) return;
   auto state = StateIfAttached(mutex_, connection_);
-  if (!state || !state->asks_system_admin()) return;
+  if (!state) return;
+  const bool system_admin = state->asks_system_admin();
+  // A policy exemption takes away every policy of its kind at once: a session that holds
+  // one (as this server last heard) asks the store too, so that a revoke on another replica
+  // counts at its next statement. One that holds none has nothing to lose.
+  bool exempt = false;
+  if (!system_admin) {
+    Principal principal = state->principal();
+    principal.policy_exemptions_unverified = false;
+    const auto snapshot = owner_.engine_->snapshot();
+    exempt = snapshot->ExemptFromPolicies(principal, SystemPrivilege::kExemptRowPolicies) ||
+             snapshot->ExemptFromPolicies(principal, SystemPrivilege::kExemptMaskingPolicies);
+  }
+  if (!system_admin && !exempt) {
+    state->SetPolicyExemptionsUnverified({});
+    return;
+  }
   // One round trip (the store's data version; a load when it moved). A change this finds
   // reaches every session here as a poll's would (AccessControl::OnSnapshot).
   const auto refreshed = owner_.engine_->Refresh();
-  state->SetSystemAdminUnverified(refreshed.ok() ? std::string() : refreshed.message());
+  const std::string error = refreshed.ok() ? std::string() : refreshed.message();
+  if (system_admin) state->SetSystemAdminUnverified(error);
+  state->SetPolicyExemptionsUnverified(error);
+}
+
+SessionPolicyContext SessionGuard::PolicyContextNow() const {
+  SessionPolicyContext answers;
+  if (unrestricted_) {
+    answers.all_roles_active = true;
+    return answers;
+  }
+  // catalog_access rules alone: no store, so no roles or attributes.
+  if (owner_.catalog_rules_only_) return answers;
+  auto state = StateIfAttached(mutex_, connection_);
+  if (!state) return answers;
+  const Principal principal = state->principal();
+  if (principal.superuser) {
+    answers.all_roles_active = true;
+    return answers;
+  }
+  // Exactly what a policy sees for this principal (PolicyContext::For).
+  auto context = PolicyContext::For(*owner_.engine_->snapshot(), principal);
+  answers.active_roles = std::move(context.role_names);
+  answers.attributes = std::move(context.attributes);
+  return answers;
+}
+
+bool SessionPolicyContext::RoleActive(const std::string& name) const {
+  return all_roles_active || active_roles.count(FoldIdentifier(name)) > 0;
+}
+
+std::optional<std::string> SessionPolicyContext::Attribute(const std::string& name) const {
+  auto it = attributes.find(name);
+  if (it == attributes.end()) return std::nullopt;
+  return it->second;
 }
 
 void SessionGuard::RefuseIfSystemAdminLost() const {
@@ -1108,6 +1159,11 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
         if (principal.rules_administrator) {
           throw Error(ErrorCode::kPermissionDenied,
                       "Hardcharger blocked " + RulesAdministratorRefusal(*category, *privilege), "42501");
+        }
+        if (principal.catalog_access_token && !principal.scope) {
+          throw Error(ErrorCode::kPermissionDenied,
+                      "Hardcharger blocked " + CatalogAccessTokenRefusal(*category, *privilege, identity_.user_name),
+                      "42501");
         }
         throw Error(ErrorCode::kPermissionDenied,
                     "Hardcharger blocked " + *category + ", which needs the " +

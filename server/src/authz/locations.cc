@@ -179,6 +179,8 @@ bool IsOriginalSystemPrivilege(SystemPrivilege privilege) {
   // The account privileges are 2.14's: a 2.13 server refuses a store whose system_privileges
   // table names one, and skips one in storage_privileges.
   if (IsAccountPrivilege(privilege)) return false;
+  // Added in 2.14: a server before it would refuse a store whose system_privileges named one.
+  if (IsPolicyExemption(privilege)) return false;
   const auto storage = StorageOf(privilege);
   return !storage || storage->first == StorageKind::kFilesystem;
 }
