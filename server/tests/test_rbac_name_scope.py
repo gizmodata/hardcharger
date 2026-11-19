@@ -388,6 +388,11 @@ def test_a_definition_whose_names_its_scope_would_not_find_is_refused_at_create(
     expect_allowed(client=admin, sql="CREATE TRIGGER src_t AFTER INSERT ON app.src REFERENCING NEW TABLE AS n FOR EACH STATEMENT "
                                      "INSERT INTO app.sink SELECT fmt(region) FROM n")
     assert "main.fmt(region)" in rows(client=admin, sql="SELECT sql FROM duckdb_triggers() WHERE trigger_name = 'src_t'")[0][0]
+    # A row trigger's body has its table's scope too.
+    expect_allowed(client=admin, sql="CREATE TABLE app.rsrc (id INT, region VARCHAR)")
+    expect_allowed(client=admin, sql="CREATE TRIGGER rsrc_r AFTER INSERT ON app.rsrc FOR EACH ROW "
+                                     "INSERT INTO app.sink VALUES (fmt(NEW.region) || ' row')")
+    expect_allowed(client=admin, sql="GRANT INSERT ON app.rsrc TO writers")
     # What they compute for a session that has a macro of that name ahead.
     expect_allowed(client=admin, sql="GRANT SELECT ON rpt.v TO writers")
     expect_allowed(client=admin, sql="GRANT INSERT ON app.src TO writers")
@@ -395,7 +400,8 @@ def test_a_definition_whose_names_its_scope_would_not_find_is_refused_at_create(
     for path, wes in sessions(server=server, catalog=c):
         assert rows(client=wes, sql=f"SELECT f FROM {c}.rpt.v") == [("genuine other-secret-A",)], path
         expect_allowed(client=wes, sql=f"INSERT INTO {c}.app.src VALUES (1, 'EMEA')")
-    assert rows(client=admin, sql="SELECT DISTINCT note FROM app.sink") == [("genuine EMEA",)]
+        expect_allowed(client=wes, sql=f"INSERT INTO {c}.app.rsrc VALUES (1, 'EMEA')")
+    assert rows(client=admin, sql="SELECT DISTINCT note FROM app.sink ORDER BY note") == [("genuine EMEA",), ("genuine EMEA row",)]
     # A macro that calls a macro: its body is bound where it is used. Named bare in there, the
     # inner one is main's only for an object of main.
     expect_allowed(client=admin, sql="CREATE TABLE main.n1 (x INT CHECK (outer_ok(x)))")

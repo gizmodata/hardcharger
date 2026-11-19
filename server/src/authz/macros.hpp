@@ -14,7 +14,14 @@
 //     replacement's body would read with them too, and a row policy could be made true.
 //
 // MacroNameRefusal refuses both. Temporary macros stay the administrator's: a session's
-// macro is found before every other function, inside other principals' views too.
+// macro is found before every other function in the session's own statements.
+//
+// Since 2.14 a view's query, a policy, a trigger's body and a table's own expressions find
+// their functions under a name scope (name_scope.hpp), not through any session, so a macro
+// elsewhere can no longer stand in for the one they mean. The refusal stays for what a scope
+// still finds: a new macro in the very schema such an expression looks in, named like a
+// built-in it calls or like a name of its that finds nothing yet (an object from before 2.14
+// that is refused until an administrator mends it: not a user's to mend with a macro).
 
 #pragma once
 

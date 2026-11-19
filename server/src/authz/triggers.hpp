@@ -66,26 +66,22 @@
 //     inside the body nor one the binder made for the triggers (a base's rows, the place row
 //     triggers sit, DuckDB's own "__duckdb_" CTEs for correlated subqueries, which no name in
 //     the body or its macros gives) is a WITH from outside standing in (TriggerBody::outer_ctes);
-//   - a macro the body calls is not, in this session, the one its name is for the table, or a
-//     name in the macro's own text fails the same checks (table macros are bound where they are
-//     called, in the writer's session, and see its CTEs);
+//   - a table, view or sequence named in the text of a macro the body calls fails the same
+//     checks (table macros are bound where they are called, in the writer's statement, and see
+//     its CTEs; which macro a name is, the body's name scope decides: name_scope.hpp);
 //   - the body's plan reaches a table, view or sequence that no name in the action or in its
 //     macros stands for (a default's temporary sequence), or the names can't be read (a
 //     sequence, or a query_table() table, named by something other than a plain string):
 //     fail closed.
-// The types a cast names are held to the same rule (a user's type made before its name was
-// pinned, earlier in the session's search path, would change what the cast does).
-//
-// A table's CHECK constraints and generated columns are kept as written too, and DuckDB binds
-// them again in the session of each statement that writes the table (CHECK) or reads a
-// generated column, inside a trigger's body as anywhere. Their macros (and those macros'
-// names) and cast types are held to the same rule against the table they belong to: for every
-// table a statement writes or scans outside a view's query (StatementTableExpressionProblem),
-// and for every table a trigger's body reaches (TriggerBodyNameProblem: an administrator's
-// statement too, for a user's trigger). CREATE TABLE stores the macros they call with their
-// schema (QualifyTableExpressions), and a macro or type named like one a table's default,
-// CHECK or generated column calls is the administrator's alone to create (macros.cc). Column
-// defaults are bound with the table's own search path by DuckDB, so no session decides them.
+// The functions, macros, table macros and types a body names are NOT held against the session
+// here: the body is bound under its table's name scope (name_scope.hpp), which finds them in
+// the table's own schema and among DuckDB's own, whatever the session, and so are the CHECK
+// constraints, generated columns and column defaults of every table the body reaches, each
+// under its own table's scope. What this file still does with a function's name is read INTO
+// the macro the scope finds for it, for the tables, views and sequences its text names. CREATE
+// TABLE and CREATE TRIGGER store the macros they call with their schema (QualifyTableExpressions,
+// QualifyTriggerNames), and refuse a definition whose names its scope would not find
+// (StoredNamesProblem).
 // A row trigger's action may have a WITH of its own, which DuckDB binds above the action's
 // INSERT, UPDATE or DELETE: the body starts at that WITH, so its definitions are checked with
 // the trigger's rights and names like the rest of the body.

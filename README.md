@@ -1188,13 +1188,6 @@ Under access control a trigger does not depend on that:
   fires for sessions in that database), or give a `WITH` another name. A user's trigger fired by an
   administrator is held to this too; an administrator's own trigger fired by an administrator is
   not.
-- A table's `CHECK` constraints and generated columns are kept as written as well, and bound in
-  each session that writes the table or reads the column. The macros they call, and the types
-  they cast to, are held to the same rule against their table, wherever the table is written or
-  read (a trigger's body included). `CREATE TABLE` stores those macros with their schema
-  (`CHECK (main.is_valid(x))`), and a macro or type named like one a table's default, `CHECK` or
-  generated column uses is the administrator's alone to create. Column defaults are bound with
-  their table's own search path.
 - A trigger made by an earlier Hardcharger (2.13.1 and before), or one that was already in a
   database file, still has its names as written, and keeps firing wherever they resolve to the
   objects for its table. Refused for every writer but an administrator, until the trigger's owner
@@ -1203,6 +1196,37 @@ Under access control a trigger does not depend on that:
   creator's own search path found. Only an administrator may create a table or view that would put
   a bare name a trigger uses in both places. After upgrading, try a write as a user: an
   administrator's own statements are not checked.
+
+The functions those bodies call are not the session's to decide either, and neither are the ones
+in a view's query, a row or masking policy, or a table's `CHECK` constraints, generated columns and
+column defaults. DuckDB keeps all of these as written and looks their names up again in whichever
+session reads or writes. Under access control each has one schema to look in, fixed by what it
+belongs to, and no session's search path, current catalog or temporary objects are consulted:
+
+| Expression | Where its functions, macros and types are found |
+|---|---|
+| A table's `CHECK` constraints, generated columns, column defaults | the table's schema |
+| A trigger's body | its table's schema |
+| A view's query | the view's schema |
+| A row or masking policy | `main` of the protected table's database |
+| A macro one of them calls | where the caller's are |
+
+A name without a schema is found there, or among DuckDB's own functions. `schema.name` is found in
+that schema of the same database, `catalog.schema.name` exactly there. A macro is never called as a
+method inside one of these (`x.is_valid()`; DuckDB's own functions are: `x.lower()`). So a macro or
+type in another schema is named with its schema: `CHECK (main.is_valid(x))`. `CREATE TABLE` and
+`CREATE TRIGGER` store the macros they call that way, as the creating session finds them
+(`duckdb_tables()` shows `CHECK(main.is_valid(x))`); `CREATE VIEW`, `CREATE ROW POLICY`,
+`CREATE MASKING POLICY` and `SET MASKING POLICY` refuse a definition whose names would not be
+found, with the name to write. An administrator's session gets the same answers as anyone's.
+
+Views, triggers, policies and tables from before 2.14 are looked up the same way. One that names
+a macro of another schema without it, or calls a macro as a method, is refused when it is used,
+saying which name and how to mend it: `CREATE OR REPLACE` the view or trigger, re-create the policy,
+`ALTER TABLE ... ALTER COLUMN ... SET DEFAULT`; for a `CHECK` constraint or generated column, which
+DuckDB cannot alter, re-create the table or have an administrator create a macro of that name in
+the table's own schema that calls the one meant
+(`CREATE MACRO app.is_valid(x) AS main.is_valid(x)`).
 
 On a server without access control every session may do anything anyway and DuckDB's own behaviour
 stands: name the tables in a trigger's action with their schema.

@@ -17,6 +17,35 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Security
 
+- **Access control: a policy, a view, a trigger and a table's own expressions find their
+  functions in one place, whatever the session.** A row or masking policy, a view's query, a
+  trigger's body, and a table's CHECK constraints, generated columns and column defaults are
+  kept as written and looked up again in the session of whoever reads or writes. Under access
+  control the functions, macros and types they name are no longer found through that session
+  (its search path, `USE`, its current catalog, its temporary objects). Each has one schema to
+  look in, fixed by what it belongs to: a table's own schema for its constraints, generated
+  columns and defaults; the trigger table's for a trigger's body; the view's for a view; `main`
+  of the table's database for a policy (a policy belongs to no schema). A name is found there or
+  among DuckDB's own functions; `schema.name` in that schema of the same database; and a macro
+  is not called as a method (`x.is_valid()`), which only DuckDB's own functions are. The same
+  holds inside the macros they call. Every session gets the same answer, an administrator's
+  included. Affected: every release with access control, through 2.13.1.
+  - What to write: name a macro or type that is in another schema with its schema
+    (`main.is_valid(x)`). `CREATE TABLE` and `CREATE TRIGGER` store the macros they call that
+    way for you, as the creating session finds them; `CREATE VIEW`, `CREATE ROW POLICY`,
+    `CREATE MASKING POLICY` and setting a masking policy on a column refuse a definition whose
+    names would not be found, saying what to write.
+  - Objects made before this release are looked up the same way. One whose macro is in its
+    own schema (or is named with its schema) works as before. One that names a macro of another
+    schema bare, or calls a macro as a method, is refused when used, saying which name and what
+    to do: `CREATE OR REPLACE` the view or trigger, re-create the policy, change a default with
+    `ALTER TABLE`; for a CHECK constraint or generated column, which DuckDB cannot alter,
+    re-create the table, or an administrator creates a macro of that name in the table's schema
+    that calls the one meant (`CREATE MACRO app.is_valid(x) AS main.is_valid(x)`). After
+    upgrading, read and write as a user once.
+  - This needs Hardcharger's DuckDB build (a small patch to DuckDB's binder,
+    `server/scripts/patch-duckdb-name-scope.cmake`): rebuild the dependencies when building
+    from source.
 - **Access control: what a trigger's action names no longer depends on the session that fires
   it.** DuckDB looks the names in a trigger's action up again in every statement that fires the
   trigger, in the writer's session. Under access control a table, view or sequence that an action
@@ -44,13 +73,6 @@ own changelog in `python/CHANGELOG.md`.
     `main`, and one whose bare name only its creator's own search path found. Only an
     administrator may now create a table or view that would put such a name in both. A trigger
     whose body calls a macro that reads a table or a sequence fires again.
-  - A table's CHECK constraints and generated columns are bound again in each session that
-    writes the table or reads the column, and so are held to the same rule: the macros they
-    call (and the types they cast to) must be the ones their names are for the table, or the
-    statement is refused, saying so. `CREATE TABLE` stores those macros with their schema, and
-    only an administrator may create a macro or type named like one a table's default, CHECK
-    constraint or generated column uses. Column defaults are bound with their table's own
-    search path and need nothing more.
   - A `FOR EACH ROW` trigger whose action has a `WITH` of its own fires; the `WITH` is checked
     as part of the trigger's body.
 
