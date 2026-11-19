@@ -126,6 +126,10 @@ class RbacEngine {
     // The store opened read-only (StoreOptions::read_only), with no poller: for a one-shot
     // check of credentials. ProvisionUser then decides as it would, without creating the user.
     bool read_only = false;
+    // With read_only: sign-in records are still written (StoreOptions::record_sign_ins).
+    bool record_sign_ins = false;
+    // What CREATE USER and ALTER USER ... WITH PASSWORD accept.
+    PasswordPolicy password_policy;
   };
 
   static arrow::Result<std::shared_ptr<RbacEngine>> Create(const Options& options);
@@ -201,6 +205,18 @@ class RbacEngine {
   arrow::Status RequireFreshSnapshot() const;
   // The store's cluster (its first cluster_id), or empty.
   const std::string& store_cluster_id() const { return store_->cluster_id(); }
+
+  // The login guard's sign-in records (RbacStore::AppendLoginEvents and the rest).
+  arrow::Status AppendLoginEvents(const std::vector<LoginEventRecord>& events) {
+    return store_->AppendLoginEvents(events);
+  }
+  arrow::Result<std::vector<LoginEventRecord>> LoginEventsSince(int64_t since_ms) {
+    return store_->LoginEventsSince(since_ms);
+  }
+  arrow::Status PruneLoginEvents(int64_t failures_before_ms, int64_t successes_before_ms) {
+    return store_->PruneLoginEvents(failures_before_ms, successes_before_ms);
+  }
+  const PasswordPolicy& password_policy() const { return options_.password_policy; }
 
   const std::string& store_description() const { return store_->description(); }
   const std::string& store_file() const { return store_->file_path(); }

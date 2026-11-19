@@ -462,6 +462,61 @@ std::vector<Setting> Build() {
            .description = "Refuse attempts to enable unredacted secret output.",
            .admin_only = true,
            .get_global = config_value([](const Runtime& r) { return Bool(r.config.block_unredacted_secrets); })});
+  startup({.name = "login_lockout_threshold", .input_type = "INTEGER", .option = "login_lockout_threshold",
+           .default_value = number(kDefaults.login_lockout_threshold),
+           .description = "Failed password sign-ins of one user from one client address that lock the pair (0: never).",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.login_lockout_threshold); })});
+  startup({.name = "login_lockout_seconds", .input_type = "INTEGER", .option = "login_lockout_seconds",
+           .default_value = number(kDefaults.login_lockout_seconds),
+           .description = "How long a (user, client address) lock lasts, in seconds.",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.login_lockout_seconds); })});
+  startup({.name = "login_failure_window_seconds", .input_type = "INTEGER", .option = "login_failure_window_seconds",
+           .default_value = number(kDefaults.login_failure_window_seconds),
+           .description = "A failure count is forgotten this many seconds after its last failure.",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.login_failure_window_seconds); })});
+  startup({.name = "login_user_backoff_after", .input_type = "INTEGER", .option = "login_user_backoff_after",
+           .default_value = number(kDefaults.login_user_backoff_after),
+           .description = "Failed sign-ins of one user (any address) before its attempts are delayed (0: never).",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.login_user_backoff_after); })});
+  startup({.name = "login_address_backoff_after", .input_type = "INTEGER", .option = "login_address_backoff_after",
+           .default_value = number(kDefaults.login_address_backoff_after),
+           .description = "Failed sign-ins from one client address (any users) before its attempts are delayed (0: never).",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.login_address_backoff_after); })});
+  startup({.name = "login_backoff_base_seconds", .input_type = "INTEGER", .option = "login_backoff_base_seconds",
+           .default_value = number(kDefaults.login_backoff_base_seconds),
+           .description = "The first sign-in delay; each further failure doubles it.",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.login_backoff_base_seconds); })});
+  startup({.name = "login_backoff_max_seconds", .input_type = "INTEGER", .option = "login_backoff_max_seconds",
+           .default_value = number(kDefaults.login_backoff_max_seconds),
+           .description = "The longest sign-in delay (0: no delays).",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.login_backoff_max_seconds); })});
+  startup({.name = "login_known_address_days", .input_type = "INTEGER", .option = "login_known_address_days",
+           .default_value = number(kDefaults.login_known_address_days),
+           .description = "A client address a user signed in from within this many days skips the delays (0: none).",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.login_known_address_days); })});
+  startup({.name = "password_min_length", .input_type = "INTEGER", .option = "password_min_length",
+           .default_value = number(kDefaults.password_min_length),
+           .description = "Characters a password set by CREATE USER or ALTER USER needs.",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.password_min_length); })});
+  startup({.name = "password_min_character_classes", .input_type = "INTEGER", .option = "password_min_character_classes",
+           .default_value = number(kDefaults.password_min_character_classes),
+           .description = "Kinds of characters (lowercase, uppercase, digits, others) a new password needs.",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.password_min_character_classes); })});
+  startup({.name = "password_max_age_days", .input_type = "INTEGER", .option = "password_max_age_days",
+           .default_value = number(kDefaults.password_max_age_days),
+           .description = "Days after which a store user's password stops signing in (0: never).",
+           .admin_only = true,
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.password_max_age_days); })});
   return s;
 }
 

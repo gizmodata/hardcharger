@@ -34,6 +34,7 @@ struct Principal;
 // chargewire::Error when the viewer may not ask (another user's privileges).
 std::shared_ptr<arrow::RecordBatch> AccessTableRows(AccessTable table, const Snapshot& snapshot,
                                                     const Principal& viewer,
-                                                    const std::optional<std::string>& user_name);
+                                                    const std::optional<std::string>& user_name,
+                                                    const SignInSummaries& summaries = {});
 
 }  // namespace hardcharger::authz

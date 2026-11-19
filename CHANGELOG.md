@@ -95,6 +95,24 @@ own changelog in `python/CHANGELOG.md`.
   doesn't exist. Without access control, and for the administrator, every role is active and
   there are no attributes. Policies still can't call `current_role()` (written with or without
   parentheses).
+- **Limits on failed password sign-ins.** After 5 wrong passwords for one user from one client
+  address, that pair is locked for 15 minutes; per user across addresses, and per address
+  across users, there is a growing delay (at most 30 s), never a lock, so no account can be
+  locked out from everywhere. Refusals are `429 rate_limited` with `Retry-After`, the same for
+  every user name. Every number is a setting (`login_*`); counts are shared through the
+  access-control store by every replica and by `--verify-credentials`, which takes an optional
+  `client_address`. Administrators list and clear them with `hardcharger_login_locks()` and
+  `hardcharger_clear_login_lock(user, address)`; locks are logged and audited, with new metrics.
+  The client address honours `trusted_proxies`.
+- **A password policy.** New passwords need 12 characters (`password_min_length`); character
+  classes (`password_min_character_classes`) and expiry (`password_max_age_days`) are optional.
+  Existing passwords keep working.
+- **`hardcharger_users()` shows `last_sign_in_at` and `failed_sign_ins`.**
+- **`trusted_proxy_secret`: trust a reverse proxy by a secret header, not its address.** A
+  request carrying the secret in `X-Hardcharger-Proxy-Secret` has its `X-Forwarded-For` /
+  `Forwarded` read as from a listed proxy, for proxies whose address range other workloads share.
+  The header is compared in constant time, always removed from requests, and the secret is never
+  logged or listed.
 
 ### Changed
 

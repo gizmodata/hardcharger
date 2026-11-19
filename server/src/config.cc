@@ -123,6 +123,13 @@ const std::vector<Option>& Options() {
        "hop that is not itself a trusted proxy. Never used for authentication or TLS. Empty: trust "
        "none (the TCP peer is the client)",
        LIST(trusted_proxies)},
+      {"trusted_proxy_secret", Kind::kString,
+       "a secret (at least 32 characters) a reverse proxy adds to each request in the "
+       "X-Hardcharger-Proxy-Secret header: a request carrying it is read as from a trusted proxy "
+       "(its X-Forwarded-For or Forwarded names the client), whatever its address; for a proxy whose "
+       "address range other workloads share. Never used for authentication or TLS (prefer the "
+       "environment variable)",
+       TEXT(trusted_proxy_secret)},
       // TLS
       {"tls_cert", Kind::kString, "TLS certificate chain (PEM)",
        TEXT(tls_cert)},
@@ -234,6 +241,43 @@ const std::vector<Option>& Options() {
        "the identity provider's name for people (\"Sign in with <name>\")", TEXT(oauth_provider_name)},
       {"oauth_max_flows", Kind::kInt, "browser sign-ins in progress at once",
        NUMBER(oauth_max_flows)},
+      // Failed password sign-ins
+      {"login_lockout_threshold", Kind::kInt,
+       "failed password sign-ins of one user from one client address that lock that pair for "
+       "login_lockout_seconds (other addresses still sign in). 0: never lock",
+       NUMBER(login_lockout_threshold)},
+      {"login_lockout_seconds", Kind::kInt, "how long a (user, client address) lock lasts",
+       NUMBER(login_lockout_seconds)},
+      {"login_failure_window_seconds", Kind::kInt,
+       "a failure count is forgotten once this long has passed since its last failure",
+       NUMBER(login_failure_window_seconds)},
+      {"login_user_backoff_after", Kind::kInt,
+       "failed sign-ins of one user (from any address) after which its attempts are spaced by a "
+       "growing delay, never a lock. 0: no per-user delay",
+       NUMBER(login_user_backoff_after)},
+      {"login_address_backoff_after", Kind::kInt,
+       "failed sign-ins from one client address (any users) after which its attempts are spaced by a "
+       "growing delay. 0: no per-address delay",
+       NUMBER(login_address_backoff_after)},
+      {"login_backoff_base_seconds", Kind::kInt,
+       "the first delay; each further failure doubles it", NUMBER(login_backoff_base_seconds)},
+      {"login_backoff_max_seconds", Kind::kInt, "the longest delay (0: no delays at all)",
+       NUMBER(login_backoff_max_seconds)},
+      {"login_known_address_days", Kind::kInt,
+       "a client address a user signed in from within this many days skips the per-user and "
+       "per-address delays (not a lock). 0: no address skips them",
+       NUMBER(login_known_address_days)},
+      // Passwords
+      {"password_min_length", Kind::kInt,
+       "characters a password set by CREATE USER or ALTER USER needs (existing passwords keep working)",
+       NUMBER(password_min_length)},
+      {"password_min_character_classes", Kind::kInt,
+       "kinds of characters (lowercase, uppercase, digits, others) a new password needs, 0 to 4",
+       NUMBER(password_min_character_classes)},
+      {"password_max_age_days", Kind::kInt,
+       "days after which a store user's password stops signing in until an administrator sets a new "
+       "one (0: never; a password set before 2.14 never expires)",
+       NUMBER(password_max_age_days)},
       // Sessions
       {"max_sessions", Kind::kInt,
        "most non-admin sessions at once (0: unlimited)", NUMBER(max_sessions)},
@@ -556,6 +600,29 @@ void Validate(Loaded& loaded) {
     throw std::invalid_argument("ports must be between 0 and 65535");
   }
   if (c.oauth_max_flows < 1) throw std::invalid_argument("oauth_max_flows must be positive");
+  // (Never quoted: a refused value is still the operator's secret.)
+  if (!c.trusted_proxy_secret.empty() && c.trusted_proxy_secret.size() < 32) {
+    throw std::invalid_argument("trusted_proxy_secret must be at least 32 characters (openssl rand -hex 32)");
+  }
+  for (const auto& [name, value] : std::initializer_list<std::pair<const char*, int64_t>>{
+           {"login_lockout_threshold", c.login_lockout_threshold},
+           {"login_user_backoff_after", c.login_user_backoff_after},
+           {"login_address_backoff_after", c.login_address_backoff_after},
+           {"login_backoff_base_seconds", c.login_backoff_base_seconds},
+           {"login_backoff_max_seconds", c.login_backoff_max_seconds},
+           {"login_known_address_days", c.login_known_address_days},
+           {"password_max_age_days", c.password_max_age_days}}) {
+    if (value < 0) throw std::invalid_argument(std::string(name) + " must not be negative");
+  }
+  for (const auto& [name, value] : std::initializer_list<std::pair<const char*, int64_t>>{
+           {"login_lockout_seconds", c.login_lockout_seconds},
+           {"login_failure_window_seconds", c.login_failure_window_seconds}}) {
+    if (value < 1) throw std::invalid_argument(std::string(name) + " must be at least 1");
+  }
+  if (c.password_min_length < 1) throw std::invalid_argument("password_min_length must be at least 1");
+  if (c.password_min_character_classes < 0 || c.password_min_character_classes > 4) {
+    throw std::invalid_argument("password_min_character_classes must be between 0 and 4");
+  }
   for (const auto& proxy : c.trusted_proxies) {
     try {
       chargewire::ParseIpNetwork(proxy);
@@ -767,6 +834,10 @@ Loaded LoadConfig(int argc, char** argv) {
       if (option.name == "admin_password") {
         loaded.notes.push_back("--admin-password is visible in process listings; prefer HARDCHARGER_ADMIN_PASSWORD");
       }
+      if (option.name == "trusted_proxy_secret") {
+        loaded.notes.push_back(
+            "--trusted-proxy-secret is visible in process listings; prefer HARDCHARGER_TRUSTED_PROXY_SECRET");
+      }
     } else if (auto env = Env(EnvName(option.name))) {
       value = env;
       source = "env " + EnvName(option.name);
@@ -812,7 +883,8 @@ std::string Usage() {
       << "      check the access-control audit records in a JSON log and exit (0: intact)\n"
       << "  --verify-credentials  (with the server's configuration: read one JSON credential, as a client\n"
       << "      sends it to /chargewire/v1/auth/token, on stdin; decide it as the server would, writing\n"
-      << "      nothing; print one JSON line; exit 0 verified, 1 refused, 2 bad input, 3 undecided)\n"
+      << "      only a refused password's sign-in record; print one JSON line; exit 0 verified, 1 refused,\n"
+      << "      2 bad input, 3 undecided)\n"
       << "  --print-options-json  (every option, with its flag, variable, YAML key and default, as JSON)\n"
       << "  --licenses  (the third-party software in this binary and its embedded web UI, and their licences)\n"
       << "  --version, --print-duckdb-version, --help\n";

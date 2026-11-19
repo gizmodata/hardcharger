@@ -140,11 +140,28 @@ def test_truncated_token_rejected(server):
 
 # ---- Behaviour over several requests ----
 
-def test_multiple_failed_attempts_still_reject_then_allow(server):
+def test_five_failed_attempts_lock_that_address_out_and_no_other(launcher):
+    # The login guard at its defaults (test_login_guard.py has the rest): after five wrong
+    # passwords from one address, that user's sign-ins from there are refused before the
+    # password is checked, the right one included, with 429 and Retry-After ...
+    server = launcher.start(username=USERNAME, password=PASSWORD, args=["--trusted-proxies", "127.0.0.1"],
+                            env={"HARDCHARGER_LOGIN_LOCKOUT_THRESHOLD": "5",
+                                 "HARDCHARGER_LOGIN_BACKOFF_MAX_SECONDS": "30"})
+    here, elsewhere = {"X-Forwarded-For": "203.0.113.9"}, {"X-Forwarded-For": "198.51.100.7"}
+    assert httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token", headers=elsewhere, timeout=120,
+                      json={"grant_type": "password", "username": USERNAME, "password": PASSWORD}).status_code == 200
+
+    def attempt(password: str, headers: dict) -> httpx.Response:
+        return httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token", headers=headers, timeout=120,
+                          json={"grant_type": "password", "username": USERNAME, "password": password})
+
     for _ in range(5):
-        refused(server=server, username=USERNAME, password="wrongpassword")
-    # No lockout: the right password still works.
-    assert sign_in(server=server, username=USERNAME, password=PASSWORD).status_code == 200
+        problem(response=attempt(password="wrongpassword", headers=here), status=401, code="invalid_credentials")
+    locked = attempt(password=PASSWORD, headers=here)
+    problem(response=locked, status=429, code="rate_limited")
+    assert 880 <= int(locked.headers["Retry-After"]) <= 900, locked.headers
+    # ... while the same user still signs in from another address.
+    assert attempt(password=PASSWORD, headers=elsewhere).status_code == 200
 
 
 def test_token_remains_valid_for_multiple_queries(server):

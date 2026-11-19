@@ -29,6 +29,8 @@
 #include "instance_info.hpp"
 #include "jwks.hpp"
 #include "logging.hpp"
+#include "login_guard.hpp"
+#include "authz/password.hpp"
 #include "oauth.hpp"
 #include "platform.hpp"
 #include "redact.hpp"
@@ -109,6 +111,24 @@ chargewire::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   options.cors_allowed_origins = config.cors_origins;
   // Validated at startup (config.cc): only the address recorded for the client changes.
   for (const auto& proxy : config.trusted_proxies) options.trusted_proxies.push_back(chargewire::ParseIpNetwork(proxy));
+  // Or by a secret the proxy adds. The header is always taken out of requests (a relay to
+  // another server must never pass it on), set or not.
+  options.trusted_proxy_secret = config.trusted_proxy_secret;
+  options.trusted_proxy_secret_header = hc::kTrustedProxySecretHeader;
+  options.on_proxy_secret_mismatch = [](const std::string& peer) {
+    // Once an hour: a proxy with a stale secret sends it on every request.
+    static std::atomic<int64_t> last{0};
+    const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count();
+    int64_t seen = last.load();
+    if (seen != 0 && now - seen < 3600) return;
+    if (!last.compare_exchange_strong(seen, now)) return;
+    hc::Log(hc::LogLevel::kWarning,
+            std::string("a request carried ") + hc::kTrustedProxySecretHeader +
+                " with a value that is not trusted_proxy_secret: its forwarding headers are ignored and the "
+                "connection's address is the client's. Check the proxy's secret (repeats are not logged for an hour)",
+            {{"peer", peer}});
+  };
   // Certificate refusals (a replayed bound token, another identity's sign-in, a revoked
   // certificate, an unknown identity): a security warning and an audit record each.
   // The SDK rate-limits them per source: a summary (suppressed > 0) stands for the
@@ -537,6 +557,9 @@ int main(int argc, char** argv) {
       options.cluster_id = config.cluster_id;
       options.store_shared = config.rbac_store_shared;
       options.max_snapshot_age = std::chrono::seconds(config.rbac_max_snapshot_age_seconds);
+      options.password_min_length = config.password_min_length;
+      options.password_min_character_classes = config.password_min_character_classes;
+      options.password_max_age_days = config.password_max_age_days;
       // Access-control audit records form a hash chain from here on.
       hc::StartAuditChain(config.audit_chain_key);
       access = std::make_shared<hc::authz::AccessControl>(options);
@@ -604,11 +627,71 @@ int main(int argc, char** argv) {
             return tokens->IssueScoped(user, scope_id, expires_at, certificate_thumbprint);
           });
     }
+    // The limits on failed password sign-ins, shared through the store's records with the
+    // other replicas (memory only without a store). Stopped on every way out of this block.
+    auto login_guard = std::make_shared<hc::LoginGuard>(hc::LoginGuardSettingsFrom(config), instance_id,
+                                                        hc::StoreLoginEvents(store_access));
+    struct StopLoginGuard {
+      std::shared_ptr<hc::LoginGuard>& guard;
+      ~StopLoginGuard() {
+        if (guard) guard->Stop();
+      }
+    } stop_login_guard{login_guard};
+    if (std::string problem = login_guard->Load(); !problem.empty()) {
+      hc::Log(hc::LogLevel::kWarning,
+              "login guard: the access control store's sign-in records can't be read; counting failed sign-ins "
+              "from now on",
+              {{"error", problem}});
+    }
+    login_guard->Start();
+    runtime.login_guard = login_guard;
+    if (store_access) {
+      store_access->SetSignInSummaries([guard = std::weak_ptr<hc::LoginGuard>(login_guard)](const std::string& user) {
+        hc::authz::SignInSummary out;
+        if (auto g = guard.lock()) {
+          const auto summary = g->ForUser(user);
+          out.last_sign_in_ms = summary.last_sign_in_ms;
+          out.failed_sign_ins = summary.failures;
+          out.last_failed_sign_in_ms = summary.last_failure_ms;
+        }
+        return out;
+      });
+    }
+    runtime.metrics.AddCollector([guard = std::weak_ptr<hc::LoginGuard>(login_guard)](std::vector<hc::Sample>& out) {
+      auto g = guard.lock();
+      if (!g) return;
+      const auto counts = g->counts();
+      out.push_back({"hardcharger_login_failures_total", {}, static_cast<double>(counts.failures)});
+      out.push_back({"hardcharger_login_locks_total", {}, static_cast<double>(counts.locks)});
+      out.push_back({"hardcharger_login_throttled_total", {{"reason", "locked"}},
+                     static_cast<double>(counts.throttled_locked)});
+      out.push_back({"hardcharger_login_throttled_total", {{"reason", "user_backoff"}},
+                     static_cast<double>(counts.throttled_user)});
+      out.push_back({"hardcharger_login_throttled_total", {{"reason", "address_backoff"}},
+                     static_cast<double>(counts.throttled_address)});
+      out.push_back({"hardcharger_login_locks_active", {}, static_cast<double>(counts.active_locks)});
+    });
+    if (config.password_min_length < 8) {
+      hc::Log(hc::LogLevel::kWarning,
+              "password_min_length is below 8: short passwords fall to guessing quickly; 12 or more is recommended",
+              {{"setting", "password_min_length"}, {"value", std::to_string(config.password_min_length)},
+               {"recommended_minimum", "12"}});
+    }
+    {
+      // The administrator's password is the operator's (not checked like a store user's), so
+      // one the policy would refuse is only a warning.
+      hc::authz::PasswordPolicy policy{config.password_min_length, config.password_min_character_classes, 0};
+      if (!config.admin_password.empty() && !hc::authz::CheckPasswordPolicy(config.admin_password, policy).ok()) {
+        hc::Log(hc::LogLevel::kWarning,
+                "the administrator's password is weaker than the password policy asks of store users "
+                "(password_min_length, password_min_character_classes): choose a longer one");
+      }
+    }
     auto backend = std::make_shared<hc::Backend>(runtime, access);
     const hc::IdentityProvider provider = hc::DiscoverIdentityProvider(config);
     auto authenticator = std::make_shared<hc::Authenticator>(
         config, store_access, [tokens](std::string_view token) { return tokens->Validate(token); },
-        provider.jwks);
+        provider.jwks, login_guard);
     backend->StartHealthCheck();
 
     std::unique_ptr<hc::MetricsEndpoint> metrics_endpoint;
@@ -739,6 +822,7 @@ int main(int argc, char** argv) {
     stop_signals.Wake();
     signals.join();
     if (watcher.joinable()) watcher.join();
+    login_guard->Stop();             // its last records reach the store first
     if (access) access->Shutdown();  // the store poller, before the engine and DuckDB go
     if (metrics_endpoint) metrics_endpoint->Stop();
     if (exit_marker) exit_marker->Clean();

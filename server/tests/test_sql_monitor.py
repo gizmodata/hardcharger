@@ -33,7 +33,12 @@ def test_disabled_and_safe_configuration(launcher):
     assert "instrumentation" in admin.error(sql="SELECT * FROM hardcharger_live_queries()")["detail"]
     rows = admin.rows(sql="SELECT * FROM hardcharger_server_settings()")
     assert any(r["name"] == "hardcharger.enable_instrumentation" for r in rows)
-    assert not any("password" in r["name"] or "private_key" in r["name"] or "secret_key" in r["name"] for r in rows)
+    # No secret: the password policy's settings name passwords but hold numbers.
+    policy = {"hardcharger.password_min_length", "hardcharger.password_min_character_classes",
+              "hardcharger.password_max_age_days"}
+    assert policy <= {r["name"] for r in rows}
+    assert not any(("password" in r["name"] and r["name"] not in policy) or "private_key" in r["name"]
+                   or "secret_key" in r["name"] for r in rows)
     admin.execute(sql="SET GLOBAL hardcharger.max_concurrent_statements = 3")
     assert admin.scalar(sql="SELECT global_value FROM hardcharger_server_settings() "
                             "WHERE name = 'hardcharger.max_concurrent_statements'") == "3"

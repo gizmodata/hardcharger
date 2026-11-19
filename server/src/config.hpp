@@ -12,6 +12,10 @@
 
 namespace hardcharger {
 
+// The request header a reverse proxy carries trusted_proxy_secret in. Always removed from a
+// request before anything reads it.
+inline constexpr const char* kTrustedProxySecretHeader = "X-Hardcharger-Proxy-Secret";
+
 struct Config {
   // Listener
   std::string host = "0.0.0.0";
@@ -28,6 +32,9 @@ struct Config {
   // name the client in logs, audit, sessions and the per-address sign-in bound; never
   // used for authentication or TLS. Empty: trust none.
   std::vector<std::string> trusted_proxies;
+  // A secret a reverse proxy adds in kTrustedProxySecretHeader: a request carrying it is read
+  // as from a trusted proxy, whatever its address. Never logged or listed.
+  std::string trusted_proxy_secret;
 
   // TLS
   std::string tls_cert;   // PEM certificate chain; with tls_key, turns TLS on
@@ -95,6 +102,21 @@ struct Config {
   std::string oauth_instance_id;    // routes a shared proxy's callbacks: state = <id>.<random>
   std::string oauth_provider_name;  // shown to people ("Sign in with ..."); empty: none
   int64_t oauth_max_flows = 10000;  // sign-ins in progress at once
+
+  // Failed password sign-ins (login_guard.hpp)
+  int64_t login_lockout_threshold = 5;        // failures of one (user, address) that lock it; 0: never
+  int64_t login_lockout_seconds = 900;
+  int64_t login_failure_window_seconds = 900;  // a counter forgets this long after its last failure
+  int64_t login_user_backoff_after = 5;       // per-user delay after this many failures; 0: none
+  int64_t login_address_backoff_after = 20;   // per-address delay after this many failures; 0: none
+  int64_t login_backoff_base_seconds = 1;
+  int64_t login_backoff_max_seconds = 30;     // 0: no delays
+  int64_t login_known_address_days = 30;      // a recent success's address skips the delays; 0: none
+
+  // Passwords set with CREATE USER / ALTER USER (authz/password.hpp)
+  int64_t password_min_length = 12;
+  int64_t password_min_character_classes = 0;  // of lower, upper, digit, other (0-4)
+  int64_t password_max_age_days = 0;            // 0: never expires
 
   // Sessions
   int64_t max_sessions = 0;  // non-admin sessions at once; 0 = unlimited

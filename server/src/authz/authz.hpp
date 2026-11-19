@@ -21,6 +21,8 @@
 //    right stop, and their tokens stop working.
 #pragma once
 
+#include <arrow/result.h>
+#include <arrow/status.h>
 #include <duckdb_v2.h>
 
 #include <atomic>
@@ -36,6 +38,7 @@
 #include <string_view>
 #include <vector>
 
+#include "authz/login_events.hpp"
 #include "chargewire/backend.hpp"
 
 namespace hardcharger::authz {
@@ -74,7 +77,23 @@ struct Options {
   // one-shot check of a credential that writes nothing, a user a sign-in token would
   // provision included (would_provision()).
   bool read_only = false;
+  // With read_only: the login guard's sign-in records are still written, so a credential
+  // check counts toward its limits (--verify-credentials).
+  bool record_sign_ins = false;
+  // The password policy (password.hpp): what CREATE USER and ALTER USER ... WITH PASSWORD
+  // accept, and when a password stops signing in (0: never).
+  int64_t password_min_length = 12;
+  int64_t password_min_character_classes = 0;
+  int64_t password_max_age_days = 0;
 };
+
+// What hardcharger_users() shows of a user's sign-ins (from the login guard).
+struct SignInSummary {
+  std::optional<int64_t> last_sign_in_ms;     // the last successful password sign-in
+  int64_t failed_sign_ins = 0;                // failures the guard still counts
+  std::optional<int64_t> last_failed_sign_in_ms;
+};
+using SignInSummaries = std::function<SignInSummary(const std::string& user_name)>;
 
 // One catalog_access rule of a sign-in token: a catalog name or glob ('*', '?') and
 // "read", "write" or "none". The first rule that matches a catalog decides.
@@ -225,6 +244,8 @@ class AccessControl {
   struct SignIn {
     std::string user_name;
     std::string credential;  // for Identity::credential
+    // The password was right, and older than password_max_age_days: refuse the sign-in.
+    bool password_expired = false;
   };
   std::optional<SignIn> AuthenticatePassword(std::string_view user_name,
                                              std::string_view password) const;
@@ -292,6 +313,14 @@ class AccessControl {
   };
   StoreHealth store_health() const;
 
+  // The login guard's sign-in records in the store (login_events.hpp); see RbacStore.
+  arrow::Status AppendLoginEvents(const std::vector<LoginEventRecord>& events);
+  arrow::Result<std::vector<LoginEventRecord>> LoginEventsSince(int64_t since_ms);
+  arrow::Status PruneLoginEvents(int64_t failures_before_ms, int64_t successes_before_ms);
+
+  // Where hardcharger_users() reads each user's sign-ins from (unset: no values).
+  void SetSignInSummaries(SignInSummaries summaries);
+
  private:
   void OnSnapshot(const Snapshot& snapshot);
   void EndSessionsOf(const std::string& user_id, const std::string& reason);
@@ -303,6 +332,8 @@ class AccessControl {
   std::atomic<bool> would_provision_{false};
   std::vector<std::string> hidden_catalogs_;
   ScopedTokenSigner signer_;
+  SignInSummaries sign_in_summaries_;
+  int64_t password_max_age_days_ = 0;
   std::mutex sessions_mutex_;
   std::vector<std::weak_ptr<SessionGuard>> sessions_;
   std::shared_ptr<const Snapshot> seen_;  // the snapshot sessions were last compared with

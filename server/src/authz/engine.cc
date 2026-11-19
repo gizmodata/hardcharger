@@ -20,6 +20,12 @@ arrow::Status AccessControlError(const std::string& message) {
 
 namespace {
 
+int64_t NowMilliseconds() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
 CommandResult Message(const std::string& text) {
   CommandResult result;
   result.column_names = {"result"};
@@ -216,11 +222,6 @@ struct AccountAuthority {
   bool sets_temporary_passwords() const { return kind == Kind::kTenantAdmin || kind == Kind::kPrivilege; }
 };
 
-int64_t NowMilliseconds() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-      .count();
-}
-
 arrow::Result<AccountAuthority> AuthorizeAccountStatement(const Snapshot& snap, const Principal& actor,
                                                           const RbacCommand& command, const std::string& name) {
   using Kind = AccountAuthority::Kind;
@@ -387,12 +388,12 @@ std::string AccountPrivilegesCarried(const Snapshot& snap, const std::string& ro
   return Join({names.begin(), names.end()});
 }
 
-// The password a CREATE USER or ALTER USER sets, whoever sets it: OK, or why it is refused.
-// 2.14.0's password policy (CheckPasswordPolicy, from the login guard's track) hooks in here;
-// until then any password is accepted, as before. Never quote the password in the message.
-arrow::Status CheckNewPassword(const std::string& password) {
-  (void)password;
-  return arrow::Status::OK();
+// The password a CREATE USER or ALTER USER sets, whoever sets it: OK, or why the password
+// policy (password_min_length, password_min_character_classes) refuses it, never quoting it.
+// Asked after the statement is authorized (and, for a user's own change, after its current
+// password is checked), so a session that may not set the password is told that instead.
+arrow::Status CheckNewPassword(const std::string& password, const PasswordPolicy& policy) {
+  return CheckPasswordPolicy(password, policy);
 }
 
 arrow::Result<std::vector<std::string>> OwnedObjects(StoreTransaction& txn, const Snapshot& snap,
@@ -425,6 +426,7 @@ arrow::Result<std::shared_ptr<RbacEngine>> RbacEngine::Create(const Options& opt
   store_options.cluster_id = options.cluster_id;
   store_options.shared = options.store_shared;
   store_options.read_only = options.read_only;
+  store_options.record_sign_ins = options.record_sign_ins;
   ARROW_ASSIGN_OR_RAISE(engine->store_, RbacStore::Open(store_options));
   if (!options.policy_service_url.empty()) {
     engine->policy_service_ =
@@ -603,7 +605,7 @@ arrow::Result<Principal> RbacEngine::ProvisionUser(const std::string& user_name,
     if (snap.FindUserByName(user_name)) return arrow::Status::OK();
     ARROW_RETURN_NOT_OK(CheckNewUserName(snap, user_name, options_));
     ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, user_name));
-    UserRecord user{StoreTransaction::NewId(), user_name, std::nullopt, true, {}};
+    UserRecord user{StoreTransaction::NewId(), user_name, std::nullopt, true, {}, std::nullopt};
     ARROW_RETURN_NOT_OK(txn.InsertUser(user));
     for (const auto& [attribute, value] : attributes) {
       ARROW_RETURN_NOT_OK(txn.SetUserAttribute(user.id, attribute, value));
@@ -1284,16 +1286,19 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
     ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
       ARROW_RETURN_NOT_OK(authorize(snap));
       if (c->if_not_exists && snap.FindUserByName(c->name)) {
+        // Its password stays as it is: no policy applies to a password nothing sets (an init
+        // SQL written before the policy keeps starting the server).
         message = "User " + c->name + " already exists";
         return arrow::Status::OK();
       }
-      if (c->password) ARROW_RETURN_NOT_OK(CheckNewPassword(*c->password));
+      if (c->password) ARROW_RETURN_NOT_OK(CheckNewPassword(*c->password, options_.password_policy));
       ARROW_RETURN_NOT_OK(CheckNewUserName(snap, c->name, options_));
       ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, c->name));
       // A new user holds nothing but PUBLIC, whoever creates it.
       message = "User " + c->name + " created";
-      UserRecord user{StoreTransaction::NewId(), c->name, hash, true, {}};
+      UserRecord user{StoreTransaction::NewId(), c->name, hash, true, {}, std::nullopt};
       ARROW_RETURN_NOT_OK(txn.InsertUser(user));
+      if (hash) ARROW_RETURN_NOT_OK(txn.SetPasswordChangedAt(user.id, NowMilliseconds()));
       // A password someone else chose is the user's to replace before anything else: always
       // when a delegate chose it, and when the administrator says EXPIRE.
       if (hash && (authority.sets_temporary_passwords() || c->expire)) {
@@ -1340,7 +1345,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       replaced = *verified;
     }
     if (c->action == Action::kSetPassword) {
-      ARROW_RETURN_NOT_OK(CheckNewPassword(c->password));
+      ARROW_RETURN_NOT_OK(CheckNewPassword(c->password, options_.password_policy));
       ARROW_ASSIGN_OR_RAISE(auto h, HashPassword(c->password, options_.password_iterations));
       hash = std::move(h);
     }
@@ -1386,6 +1391,8 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       switch (c->action) {
         case Action::kSetPassword:
           user.password_hash = hash;
+          // Every way of setting a password dates it (password_max_age_days).
+          ARROW_RETURN_NOT_OK(txn.SetPasswordChangedAt(user.id, NowMilliseconds()));
           if (self_service) {
             message = "Password changed for user " + user.name + ": sign in again with the new one";
             note("password changed by the user");
@@ -1407,6 +1414,7 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
           message = "Password login removed for user " + user.name;
           note("password removed");
           ARROW_RETURN_NOT_OK(txn.SetPasswordReset(user.id, std::nullopt));
+          ARROW_RETURN_NOT_OK(txn.SetPasswordChangedAt(user.id, std::nullopt));
           break;
         case Action::kExpirePassword:
           if (!user.password_hash) {

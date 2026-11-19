@@ -10,7 +10,7 @@ import json
 import subprocess
 import yaml
 
-from conftest import BINARY, free_port
+from conftest import BINARY, LENIENT_SIGN_IN, free_port
 
 # Settings whose value on a fresh server is not a fixed default.
 NO_FIXED_DEFAULT = {
@@ -28,7 +28,10 @@ def settings(server) -> dict[str, dict]:
 def test_every_reported_default_is_the_live_value_on_a_fresh_server(launcher):
     server = launcher.start()
     by_name = settings(server=server)
-    fixture_overrides = {"hardcharger.host": "127.0.0.1", "hardcharger.port": str(server.port)}
+    fixture_overrides = {"hardcharger.host": "127.0.0.1", "hardcharger.port": str(server.port),
+                         # The launcher's (conftest.LENIENT_SIGN_IN).
+                         **{"hardcharger." + name.removeprefix("HARDCHARGER_").lower(): value
+                            for name, value in LENIENT_SIGN_IN.items()}}
     checked = []
     for name, row in by_name.items():
         if name in NO_FIXED_DEFAULT:

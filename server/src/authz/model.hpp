@@ -34,6 +34,9 @@ struct UserRecord {
   // Set by the administrator (ALTER USER ... SET ATTRIBUTE); row and masking
   // policies read them with session_attribute('key').
   std::map<std::string, std::string> attributes;
+  // When the password was last set (ms since the epoch), from 2.14 on; nullopt for a
+  // password set before (or by an older server), which never expires.
+  std::optional<int64_t> password_changed_at_ms;
 };
 
 struct RoleRecord {

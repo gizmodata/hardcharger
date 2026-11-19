@@ -12,6 +12,7 @@
 //    The certificate proves who the user is; grants decide what they may do.
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -20,6 +21,7 @@
 #include "config.hpp"
 #include "jwks.hpp"
 #include "logging.hpp"
+#include "login_guard.hpp"
 #include "chargewire/backend.hpp"
 
 namespace hardcharger {
@@ -51,14 +53,21 @@ class Authenticator : public chargewire::Authenticator {
  public:
   // `access`: access control, or null. `server_tokens` validates this server's own
   // access tokens (for scoped tokens sent as a password). `jwks`: the identity
-  // provider's keys, or null to verify with the configured key only.
+  // provider's keys, or null to verify with the configured key only. `guard`: the limits
+  // on failed password sign-ins (login_guard.hpp), or null for none.
   explicit Authenticator(const Config& config,
                 std::shared_ptr<authz::AccessControl> access = nullptr,
                 std::function<chargewire::Principal(std::string_view)> server_tokens = nullptr,
-                std::shared_ptr<Jwks> jwks = nullptr);
+                std::shared_ptr<Jwks> jwks = nullptr, std::shared_ptr<LoginGuard> guard = nullptr);
 
+  // A password sign-in from an unknown address (the guard's per-user limits still apply).
   chargewire::Principal AuthenticatePassword(std::string_view username,
                                           std::string_view password) override;
+  // Every password check goes through the login guard: one it refuses is never checked
+  // (429 rate_limited with Retry-After, the same for every user name), a wrong one counts
+  // as a failure, a right one resets the (user, address) pair.
+  chargewire::Principal AuthenticatePassword(std::string_view username, std::string_view password,
+                                          const chargewire::SignInContext& context) override;
   chargewire::Principal ExchangeToken(std::string_view subject_token) override;
   chargewire::Principal AuthenticateCertificate(std::string_view identity,
                                              const chargewire::ClientCertificate& certificate) override;
@@ -86,6 +95,8 @@ class Authenticator : public chargewire::Authenticator {
   std::function<chargewire::Principal(std::string_view)> server_tokens_;
   bool mutual_tls_ = false;  // client certificates are verified (mtls_ca_cert)
   std::vector<std::string> certificate_admins_;
+  std::shared_ptr<LoginGuard> guard_;
+  std::atomic<int64_t> forwarding_warned_ms_{0};
 };
 
 }  // namespace hardcharger

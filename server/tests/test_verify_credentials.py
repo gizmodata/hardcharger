@@ -91,6 +91,17 @@ def claimed_by(store_uri: str) -> str | None:
     return found.group(1)
 
 
+def sign_in_records(store_uri: str) -> list[tuple] | None:
+    """The login guard's records in the store (kind, user, address): the one thing a check
+    writes, and only for a password it refused (or one that ends failures). None for a DuckDB
+    store, which Python can't read."""
+    if store_uri.startswith("duckdb:"):
+        return None
+    with psycopg.connect(conninfo=store_uri) as connection:
+        return connection.execute(query="SELECT kind, user_key, address FROM hardcharger_rbac.login_events "
+                                        "ORDER BY at_ms, event_id").fetchall()
+
+
 def schema_exists(store_uri: str) -> bool:
     if store_uri.startswith("duckdb:"):
         return pathlib.Path(store_uri.removeprefix("duckdb:")).exists()
@@ -173,11 +184,19 @@ def test_store_user_password(stopped_cluster):
     code, answer, _ = verify(credential=password(username="PAT", password="pat-pw:1"), env=store_env(uri),
                              secrets=("pat-pw:1",))
     assert code == 0 and answer["user"] == "pat", answer
+    # Nothing written for a verified credential (on a DuckDB store, not a byte).
+    assert fingerprint(store_uri=uri) == before, "the check wrote to the store"
+    earlier = sign_in_records(store_uri=uri)  # the server's own, from setting the store up
     for name, pw in [("pat", "wrong"), ("sam", "sam-pw:1"), ("nopw", "anything"), ("nobody", "nobody-pw:9")]:
         code, answer, _ = verify(credential=password(username=name, password=pw), env=store_env(uri), secrets=(pw,))
         assert code == 1 and answer == {"verified": False, "reason": "invalid_credentials",
                                         "message": "the user name or password is not correct"}, (name, answer)
+    # Each refusal is a sign-in record, as on the server (test_login_guard.py), and nothing else.
+    if (records := sign_in_records(store_uri=uri)) is not None:
+        assert records[len(earlier):] == [("failure", name, "") for name in ("pat", "sam", "nopw", "nobody")], records
+        assert fingerprint(store_uri=uri) == before, "the check wrote more than sign-in records"
     # The administrator signs in with a store too.
+    before = fingerprint(store_uri=uri)
     code, answer, _ = verify(credential=password(username="admin", password=ADMIN_PASSWORD), env=store_env(uri))
     assert code == 0 and answer["role"] == "admin", answer
     assert fingerprint(store_uri=uri) == before, "the check wrote to the store"
@@ -340,6 +359,8 @@ def test_scoped_token(scoped_tokens):
     code, answer, _ = verify(credential=password(username="token", password=live), env=store_env(uri), secrets=(live,))
     assert code == 0 and answer == {"verified": True, "user": "wes", "role": "user", "method": "scoped_token",
                                     "would_provision": False}, answer
+    assert fingerprint(store_uri=uri) == before
+    earlier = sign_in_records(store_uri=uri)
     # As a password, a revoked token gets the password refusal, as the server gives it (as a
     # bearer token it would say token_revoked).
     code, answer, _ = verify(credential=password(username="token", password=revoked), env=store_env(uri),
@@ -349,7 +370,10 @@ def test_scoped_token(scoped_tokens):
     code, answer, _ = verify(credential=password(username="token", password=live),
                              env=store_env(uri, HARDCHARGER_SECRET_KEY="another-secret-key-0123456789"), secrets=(live,))
     assert code == 1 and answer["reason"] == "invalid_credentials", answer
-    assert fingerprint(store_uri=uri) == before
+    # Those refusals were password checks of the user "token": sign-in records, nothing else.
+    if (records := sign_in_records(store_uri=uri)) is not None:
+        assert records[len(earlier):] == [("failure", "token", "")] * 2, records
+        assert fingerprint(store_uri=uri) == before
 
 
 def test_scoped_token_bound_to_the_issuing_instance(scoped_tokens):

@@ -15,6 +15,7 @@
 #include "duckdb_v2.hpp"
 #include "engine.hpp"
 #include "instrumentation.hpp"
+#include "login_guard.hpp"
 #include "runtime.hpp"
 #include "authz/authz.hpp"
 #include "platform.hpp"
@@ -1037,6 +1038,157 @@ void CancelExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_conte
   });
 }
 
+// ---- Sign-in locks: hardcharger_login_locks(), hardcharger_clear_login_lock() ----
+
+void RequireLockAdmin(const Session& session) {
+  if (!session.full_admin()) {
+    throw Error(ErrorCode::kPermissionDenied,
+                "only an administrator without catalog_access rules can see or clear sign-in locks", "42501");
+  }
+}
+
+LoginGuard& RequireLoginGuard(Runtime& runtime) {
+  if (!runtime.login_guard) throw Error(ErrorCode::kSqlError, "this process has no sign-in limits");
+  return *runtime.login_guard;
+}
+
+std::shared_ptr<arrow::RecordBatch> LoginLocksTable(Runtime& runtime, const Session& viewer) {
+  RequireLockAdmin(viewer);
+  arrow::StringBuilder scope, user, address;
+  arrow::Int64Builder failures, retry;
+  arrow::BooleanBuilder locked;
+  arrow::TimestampBuilder last_failure(Timestamptz(), arrow::default_memory_pool()),
+      locked_until(Timestamptz(), arrow::default_memory_pool()),
+      blocked_until(Timestamptz(), arrow::default_memory_pool());
+  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  auto time = [](arrow::TimestampBuilder& builder, int64_t ms) {
+    (void)(ms > 0 ? builder.Append(ms * 1000) : builder.AppendNull());
+  };
+  for (const auto& entry : RequireLoginGuard(runtime).List()) {
+    (void)scope.Append(entry.scope);
+    (void)(entry.user_name.empty() && entry.scope == "address" ? user.AppendNull() : user.Append(entry.user_name));
+    (void)(entry.client_address.empty() ? address.AppendNull() : address.Append(entry.client_address));
+    (void)failures.Append(entry.failures);
+    time(last_failure, entry.last_failure_ms);
+    (void)locked.Append(entry.locked_until_ms > 0);
+    time(locked_until, entry.locked_until_ms);
+    time(blocked_until, entry.blocked_until_ms);
+    (void)retry.Append(entry.blocked_until_ms > now ? (entry.blocked_until_ms - now + 999) / 1000 : 0);
+  }
+  std::vector<std::shared_ptr<arrow::Array>> arrays;
+  std::vector<std::shared_ptr<arrow::Field>> fields;
+  auto finish = [&](std::string name, auto& builder) {
+    auto array = builder.Finish().ValueOrDie();
+    fields.push_back(arrow::field(std::move(name), array->type()));
+    arrays.push_back(std::move(array));
+  };
+  finish("scope", scope);
+  finish("user_name", user);
+  finish("client_address", address);
+  finish("failures", failures);
+  finish("last_failure_at", last_failure);
+  finish("locked", locked);
+  finish("locked_until", locked_until);
+  finish("blocked_until", blocked_until);
+  finish("retry_after_seconds", retry);
+  const int64_t length = arrays.empty() ? 0 : arrays.front()->length();
+  return arrow::RecordBatch::Make(arrow::schema(fields), length, arrays);
+}
+
+void ClearLockBind(duckdb_v2_function_bind_info_handle info, duckdb_v2_scalar_function_bind_info_handle result,
+                   duckdb_v2_context_handle, duckdb_v2_error_info_handle* err) {
+  Guarded(err, [&] {
+    void* user = nullptr;
+    Call([&](auto* e) { return duckdb_v2_function_bind_get_user_data(info, &user, e); });
+    Session* caller = CurrentSession();
+    if (caller == nullptr) {
+      throw Error(ErrorCode::kSqlError, "hardcharger_clear_login_lock() is only available in a client session");
+    }
+    RequireLockAdmin(*caller);
+    caller->RequireWritableSqlFunction();
+    duckdb_v2_opaque data{new CancelBinding{static_cast<Runtime*>(user), caller},
+                          [](void* p) { delete static_cast<CancelBinding*>(p); }, nullptr};
+    Call([&](auto* e) { return duckdb_v2_scalar_function_bind_set_bind_data(result, &data, e); });
+  });
+}
+
+void ClearLockExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_context_handle context,
+                   duckdb_v2_error_info_handle* err) {
+  Guarded(err, [&] {
+    void* data = nullptr;
+    Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_bind_data(info, &data, e); });
+    const auto& binding = *static_cast<const CancelBinding*>(data);
+    RequireLockAdmin(*binding.session);
+    binding.session->RequireWritableSqlFunction();
+    LoginGuard& guard = RequireLoginGuard(*binding.runtime);
+    duckdb_v2_factory_handle factory = nullptr;
+    Call([&](auto* e) { return duckdb_v2_context_get_factory(context, &factory, e); });
+    idx_t rows = 0;
+    Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_row_count(info, &rows, e); });
+    duckdb_v2_vector_handle inputs[2] = {nullptr, nullptr};
+    for (idx_t i = 0; i < 2; i++) {
+      Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_arg(info, i, &inputs[i], e); });
+    }
+    duckdb_v2_vector_handle output = nullptr;
+    Call([&](auto* e) { return duckdb_v2_scalar_function_exec_get_result(info, &output, e); });
+    Call([&](auto* e) { return duckdb_v2_vector_set_size(output, rows, e); });  // written row by row
+    for (idx_t row = 0; row < rows; row++) {
+      std::optional<std::string> args[2];
+      for (idx_t i = 0; i < 2; i++) {
+        chargewire_duckdb::Value in;
+        Call([&](auto* e) { return duckdb_v2_vector_get_value(inputs[i], row, in.out(), e); });
+        bool null = true;
+        Call([&](auto* e) { return duckdb_v2_value_is_null(in.get(), &null, e); });
+        if (null) continue;
+        duckdb_v2_str text{};
+        Call([&](auto* e) { return duckdb_v2_value_get_varchar(in.get(), &text, e); });
+        args[i] = std::string(text.ptr, text.len);
+      }
+      const int64_t cleared = guard.Clear(args[0], args[1], binding.session->principal().name);
+      chargewire_duckdb::Value out;
+      Call([&](auto* e) { return duckdb_v2_value_create_bigint(factory, cleared, out.out(), e); });
+      Call([&](auto* e) { return duckdb_v2_vector_set_value(output, row, out.get(), e); });
+    }
+  });
+}
+
+void RegisterClearLoginLock(duckdb_v2_connection_handle connection, duckdb_v2_factory_handle factory,
+                            Runtime& runtime) {
+  ScalarFunction function;
+  Call([&](auto* e) { return duckdb_v2_scalar_function_create(factory, function.out(), e); });
+  const duckdb_v2_str function_name = Str("hardcharger_clear_login_lock");
+  Call([&](auto* e) { return duckdb_v2_scalar_function_set_name(function.get(), &function_name, e); });
+  duckdb_v2_function_signature_handle signature = nullptr;
+  Call([&](auto* e) { return duckdb_v2_scalar_function_get_signature(function.get(), &signature, e); });
+  auto varchar = Type(factory, "VARCHAR");
+  for (const auto parameter : {"user_name", "client_address"}) {
+    const auto field = Str(parameter);
+    Call([&](auto* e) {
+      return duckdb_v2_function_signature_add_parameter(signature, &field, varchar.get(), nullptr,
+                                                        DUCKDB_V2_FUNCTION_PARAMETER_KIND_POSITIONAL_ONLY, e);
+    });
+  }
+  auto bigint = Type(factory, "BIGINT");
+  Call([&](auto* e) { return duckdb_v2_function_signature_set_return_type(signature, bigint.get(), e); });
+  // It acts: never folded at planning, never shared between rows or statements; NULL
+  // arguments mean "every user" / "every address", so it must see them.
+  Call([&](auto* e) {
+    return duckdb_v2_scalar_function_set_property(function.get(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+                                                  DUCKDB_V2_FUNCTION_PROPERTY_STABILITY_VOLATILE, e);
+  });
+  Call([&](auto* e) {
+    return duckdb_v2_scalar_function_set_property(function.get(), DUCKDB_V2_FUNCTION_PROPERTY_NULL_HANDLING,
+                                                  DUCKDB_V2_FUNCTION_PROPERTY_NULL_HANDLING_SPECIAL, e);
+  });
+  duckdb_v2_opaque user{&runtime, nullptr, nullptr};
+  Call([&](auto* e) { return duckdb_v2_scalar_function_set_user_data(function.get(), &user, e); });
+  Call([&](auto* e) { return duckdb_v2_scalar_function_set_bind_callback(function.get(), ClearLockBind, e); });
+  Call([&](auto* e) { return duckdb_v2_scalar_function_set_exec_callback(function.get(), ClearLockExec, e); });
+  Call([&](auto* e) { return duckdb_v2_connection_register_scalar_function(connection, function.get(), e); });
+}
+
 // Session setting mutations are volatile and run only during execution, never while
 // describing/preparing the statement. ApplySetting remains the type/scope validator.
 void SessionSettingExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_context_handle context,
@@ -1248,6 +1400,10 @@ void RegisterSqlFunctions(duckdb_v2_connection_handle connection, Runtime& runti
   RegisterCancel(connection, factory, runtime);
   RegisterPolicyContextFunction(connection, factory, PolicyContextFunction::kIsRoleActive);
   RegisterPolicyContextFunction(connection, factory, PolicyContextFunction::kSessionAttribute);
+  RegisterTable(connection, factory, runtime, "hardcharger_login_locks", [](Runtime& r, const Session* s, const TableArgs&) {
+    return LoginLocksTable(r, RequireSession(s, "hardcharger_login_locks"));
+  });
+  RegisterClearLoginLock(connection, factory, runtime);
 
   // Access-control introspection: what the session may see of the store's grants, roles,
   // users and policies. Outside a client session (the system catalog's views are created
