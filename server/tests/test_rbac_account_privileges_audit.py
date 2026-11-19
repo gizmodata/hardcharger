@@ -72,22 +72,24 @@ def test_account_changes_and_refusals_are_recorded_without_secrets(server, tmp_p
     refused = who | {"message": "access-control statement refused", "status": "rejected"}
     through = "privilege, through role helpdesk"
     as_desk = {"active_role": "helpdesk"}
-    eve_was = "enabled; password login; roles: none"
+    # Every password the help desk sets is temporary: eve and carl must change theirs first.
+    eve_was = "enabled; password login; roles: none; password must be changed"
     expected = [
         done | {"statement": "SET ROLE", "membership": "role helpdesk", "membership_ids": helpdesk},
         done | as_desk | {"statement": "CREATE USER", "target": "user eve", "target_ids": ids["eve"],
-                          "privilege": "CREATE USER", "authorized_by": f"CREATE USER {through}", "before": "none",
-                          "after": eve_was},
+                          "privilege": "CREATE USER", "authorized_by": f"CREATE USER {through}",
+                          "password": "temporary password set", "before": "none", "after": eve_was},
         done | as_desk | {"statement": "ALTER USER", "target": "user eve", "target_ids": ids["eve"],
                           "privilege": "ALTER USER", "change": "password", "authorized_by": f"ALTER USER {through}",
-                          "before": eve_was, "after": "enabled; password login (new password); roles: none"},
+                          "password": "temporary password set", "before": eve_was,
+                          "after": "enabled; password login (new password); roles: none; password must be changed"},
         done | as_desk | {"statement": "ALTER USER", "target": "user eve", "target_ids": ids["eve"],
                           "privilege": "ALTER USER", "change": "disabled", "authorized_by": f"ALTER USER {through}",
-                          "before": eve_was, "after": "disabled; password login; roles: none"},
+                          "before": eve_was, "after": "disabled; password login; roles: none; password must be changed"},
         done | as_desk | {"statement": "ALTER USER", "target": "user carl", "target_ids": ids["carl"],
                           "privilege": "ALTER USER", "change": "password", "authorized_by": f"ALTER USER {through}",
-                          "before": "enabled; no password login; roles: none",
-                          "after": "enabled; password login; roles: none"},
+                          "password": "temporary password set", "before": "enabled; no password login; roles: none",
+                          "after": "enabled; password login; roles: none; password must be changed"},
         refused | as_desk | {"statement": "ALTER USER", "target": "user bob", "target_ids": ids["bob"],
                              "privilege": "ALTER USER", "change": "password",
                              "error": "Hardcharger access control: Hardcharger blocked ALTER USER: user bob holds role "
@@ -105,8 +107,8 @@ def test_account_changes_and_refusals_are_recorded_without_secrets(server, tmp_p
                                       "grants CREATE USER (an account privilege is never delegated)"},
         done | as_desk | {"statement": "SET ROLE"},
         done | {"statement": "DROP USER", "target": "user eve", "target_ids": ids["eve"], "privilege": "DROP USER",
-                "authorized_by": f"DROP USER {through}", "before": "disabled; password login; roles: none",
-                "after": "none"},
+                "authorized_by": f"DROP USER {through}",
+                "before": "disabled; password login; roles: none; password must be changed", "after": "none"},
         done | {"statement": "CREATE ROLE", "target": "role night_shift", "target_ids": night,
                 "privilege": "CREATE ROLE", "authorized_by": f"CREATE ROLE {through}", "before": "none",
                 "after": "members: 0; inherits: none; privileges: none"},

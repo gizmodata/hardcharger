@@ -215,7 +215,8 @@ def test_only_administrators_change_access_control(world):
         expect_allowed(client=world.admin, sql=sql)
     for sql, why in [("CREATE ROLE sneaky", "only administrators manage users and roles"),
                      ("DROP USER joe", "only administrators manage users and roles"),
-                     ("ALTER USER joe WITH PASSWORD 'x'", "only administrators manage users and roles"),
+                     ("ALTER USER joe WITH PASSWORD 'x'", "to change your own password, give the current one"),
+                     ("ALTER USER joe DISABLE", "only administrators manage users and roles"),
                      ("GRANT analyst TO joe", "may not grant or revoke role analyst"),
                      ("REVOKE analyst FROM joe", "may not grant or revoke role analyst"),
                      ("GRANT SELECT ON orders TO analyst", "may not grant SELECT on memory.main.orders"),
