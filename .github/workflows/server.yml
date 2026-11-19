@@ -510,14 +510,16 @@ jobs:
         id: build
         run: |
           # (chargewire-client-tests and chargewire-sdk-tests, Chargewire's own tests, build on request.)
+          # HARDCHARGER_WERROR: a warning in Hardcharger's own code fails the build (CI only; on
+          # clang, the macOS leg, that includes -Wthread-safety).
           if [ "$RUNNER_OS" = Linux ]; then
-            server/scripts/in-manylinux.sh server server/build -DHARDCHARGER_STATIC=ON \
+            server/scripts/in-manylinux.sh server server/build -DHARDCHARGER_STATIC=ON -DHARDCHARGER_WERROR=ON \
               -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL"
             server/scripts/in-manylinux.sh build server/build --target chargewire-client-tests chargewire-sdk-tests
           else
             read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
             cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                  -DHARDCHARGER_STATIC=ON -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" \
+                  -DHARDCHARGER_STATIC=ON -DHARDCHARGER_WERROR=ON -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" \
                   -DOPENSSL_ROOT_DIR="$PWD/server/.deps/openssl-install" -DOPENSSL_USE_STATIC_LIBS=TRUE \
                   "${launcher[@]}"
             cmake --build server/build

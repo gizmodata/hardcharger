@@ -229,8 +229,9 @@ jobs:
           openssl="/c/vcpkg/installed/$VCPKG_TRIPLET"
           read -ra launcher <<< "$HARDCHARGER_CMAKE_LAUNCHER"
           # vcpkg's toolchain (windows-vcpkg.cmake) finds the libraries DuckDB's built-in
-          # extensions link, as DuckDB's own build did.
-          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          # extensions link, as DuckDB's own build did. HARDCHARGER_WERROR: /WX on Hardcharger's
+          # own code (CI only).
+          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DHARDCHARGER_WERROR=ON \
                 -DCMAKE_TOOLCHAIN_FILE="$(cygpath -m "$PWD/.github/cmake/windows-vcpkg.cmake")" \
                 -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE \
                 -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" "${launcher[@]}"

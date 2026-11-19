@@ -254,7 +254,9 @@ std::shared_ptr<arrow::RecordBatchReader> ListedColumnsOnly(
       } else {
         auto serialized = arrow::ipc::SerializeSchema(*arrow::schema(kept, (*table_schema)->metadata()));
         if (!serialized.ok()) fail(serialized.status());
-        appended = rebuilt.Append((*serialized)->data(), (*serialized)->size());
+        // A schema's IPC message: far below BinaryBuilder's 2 GiB offset limit.
+        appended = rebuilt.Append((*serialized)->data(),
+                                  static_cast<arrow::BinaryBuilder::offset_type>((*serialized)->size()));
       }
       if (!appended.ok()) fail(appended);
     }

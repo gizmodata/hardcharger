@@ -85,19 +85,19 @@ struct CatalogAccessRule {
 
 // Who a session acts for, from its access token.
 struct Identity {
-  std::string user_name;
+  std::string user_name{};
   bool superuser = false;  // the administrator (token role "admin")
   // The fingerprint of the user's password the token was issued against; empty for
   // tokens that did not come from a password sign-in.
-  std::string credential;
-  std::string scope_id;  // a scoped token's store record
+  std::string credential{};
+  std::string scope_id{};  // a scoped token's store record
   // The client certificate the access token is bound to (x5t#S256), or empty. Scoped
   // tokens this identity mints carry it too.
-  std::string certificate_thumbprint;
-  std::string idp_issuer;
-  std::vector<std::string> idp_groups;
+  std::string certificate_thumbprint{};
+  std::string idp_issuer{};
+  std::vector<std::string> idp_groups{};
   // The token's catalog_access rules (catalog_rules_only servers; ignored under RBAC).
-  std::optional<std::vector<CatalogAccessRule>> catalog_access;
+  std::optional<std::vector<CatalogAccessRule>> catalog_access{};
 };
 
 // The store user attribute that keeps a provisioned user's token sign-ins readonly

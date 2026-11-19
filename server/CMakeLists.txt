@@ -24,10 +24,15 @@ include(FetchContent)
 # MSVC: the static C runtime (/MT) for everything, as DuckDB always builds with it.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-# Warnings, as each compiler spells them.
+# Warnings, as each compiler spells them: in Hardcharger's own targets only (the dependencies'
+# headers are SYSTEM includes, so their warnings stay theirs). HARDCHARGER_WERROR (CI's builds
+# turn it on) makes them errors; a local build keeps them warnings.
+option(HARDCHARGER_WERROR "Treat warnings in Hardcharger's own code as errors (CI)" OFF)
 if(MSVC)
   set(HARDCHARGER_WARNINGS /W3)
   set(HARDCHARGER_AUTHZ_WARNINGS /W3)
+  # getenv, fopen and friends are standard C++; MSVC's _s replacements are not portable.
+  add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 else()
   set(HARDCHARGER_WARNINGS -Wall -Wextra)
   set(HARDCHARGER_AUTHZ_WARNINGS -Wall -Wextra -Wno-unused-parameter)
@@ -35,6 +40,15 @@ else()
     # Clang's thread-safety analysis: the mutexes and what they guard (src/thread_annotations.hpp).
     list(APPEND HARDCHARGER_WARNINGS -Wthread-safety)
     list(APPEND HARDCHARGER_AUTHZ_WARNINGS -Wthread-safety)
+  endif()
+endif()
+if(HARDCHARGER_WERROR)
+  if(MSVC)
+    list(APPEND HARDCHARGER_WARNINGS /WX)
+    list(APPEND HARDCHARGER_AUTHZ_WARNINGS /WX)
+  else()
+    list(APPEND HARDCHARGER_WARNINGS -Werror)
+    list(APPEND HARDCHARGER_AUTHZ_WARNINGS -Werror)
   endif()
 endif()
 
@@ -105,7 +119,7 @@ if(HARDCHARGER_STATIC)
   target_sources(hardcharger_duckdb INTERFACE
                  "${_duckdb_loader}"
                  "${CHARGEWIRE_DUCKDB_PREFIX}/share/duckdb-static/static_extension_autoregister.cpp")
-  target_include_directories(hardcharger_duckdb INTERFACE "${CHARGEWIRE_DUCKDB_PREFIX}/include")
+  target_include_directories(hardcharger_duckdb SYSTEM INTERFACE "${CHARGEWIRE_DUCKDB_PREFIX}/include")
   if(IOS)
     # As macOS, with the build's libcurl (in the archives); libcurl also uses the
     # system's proxy settings (SystemConfiguration).
@@ -129,7 +143,8 @@ endif()
 # The Chargewire server SDK and its DuckDB backend, and its client library (for the
 # command-line client). Its own tests (chargewire-client-tests) build on request only.
 set(CHARGEWIRE_BUILD_TESTS ON)
-add_subdirectory(../third_party/chargewire/cpp chargewire EXCLUDE_FROM_ALL)
+# SYSTEM: its headers (and DuckDB's, which it passes on) are includes of a dependency here.
+add_subdirectory(../third_party/chargewire/cpp chargewire EXCLUDE_FROM_ALL SYSTEM)
 
 # jwt-cpp 0.7.2 (header-only; Boost.JSON traits).
 set(JWT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -137,7 +152,8 @@ set(JWT_DISABLE_PICOJSON ON CACHE BOOL "" FORCE)
 FetchContent_Declare(
   jwt-cpp
   URL https://github.com/Thalhammer/jwt-cpp/archive/refs/tags/v0.7.2.tar.gz
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  SYSTEM)
 FetchContent_MakeAvailable(jwt-cpp)
 
 # yaml-cpp 0.9.0, for the config file.
@@ -149,7 +165,8 @@ set(YAML_MSVC_SHARED_RT OFF CACHE BOOL "" FORCE)  # MSVC: the static C runtime, 
 FetchContent_Declare(
   yaml-cpp
   URL https://github.com/jbeder/yaml-cpp/archive/refs/tags/yaml-cpp-0.9.0.tar.gz
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  SYSTEM)
 FetchContent_MakeAvailable(yaml-cpp)
 
 # The Chargewire specification's version (the startup banner names it): its OpenAPI
@@ -179,7 +196,8 @@ FetchContent_Declare(
   URL https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.gz
   URL_HASH SHA256=02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-  EXCLUDE_FROM_ALL)
+  EXCLUDE_FROM_ALL
+  SYSTEM)
 FetchContent_MakeAvailable(zlib)
 
 # Access control (role-based). The one part of Hardcharger that uses DuckDB's

@@ -343,12 +343,6 @@ bool AllowedWhilePending(std::string_view method, std::string_view path) {
   return false;
 }
 
-std::string SslErrorText(const boost::system::error_code& ec) {
-  std::string text = ec.message();
-  // OpenSSL's "certificate verify failed" says nothing about why: add the verify result.
-  return text;
-}
-
 }  // namespace
 
 std::string NormalizeFingerprint(std::string_view text) {

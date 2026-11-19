@@ -714,7 +714,8 @@ CommandResult CommandProcessor::Process(const std::string& line) {
       // quoting the whole command keeps the user's own quotes.
       shell_cmd = "\"" + shell_cmd + "\"";
 #endif
-      std::system(shell_cmd.c_str());
+      // The command's own output says how it went (as in the SQLite shell, its exit status isn't shown).
+      [[maybe_unused]] const int status = std::system(shell_cmd.c_str());
 #endif
     }
     return CommandResult::OK;
@@ -729,7 +730,10 @@ CommandResult CommandProcessor::Process(const std::string& line) {
 #else
       const char* home = std::getenv("HOME");
 #endif
-      if (home) chdir(home);
+      if (home && chdir(home) != 0) {
+        std::cerr << ErrorStyle() << "Error: cannot change to directory '" << home << "'"
+                  << ErrorStyleReset() << std::endl;
+      }
     } else {
       if (chdir(args[1].c_str()) != 0) {
         std::cerr << ErrorStyle() << "Error: cannot change to directory '" << args[1] << "'"

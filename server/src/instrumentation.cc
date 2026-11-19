@@ -910,7 +910,10 @@ std::vector<std::string> Instrumentation::Render(const Batch& b) const {
     const ExecutionRecord& r = e.record;
     const bool finished = e.phase == Phase::kFinished;
     const auto end = finished ? r.end : std::nullopt;
-    const auto total_end = finished ? (r.fetch_end ? r.fetch_end : r.end) : std::nullopt;
+    // Through the last fetch when there was one. (Computed here, not from a copied optional:
+    // GCC 14 took the copy's value for "maybe uninitialized".)
+    std::optional<int64_t> total_ms;
+    if (finished && (r.fetch_end || r.end)) total_ms = MillisBetween(r.start, r.fetch_end ? *r.fetch_end : *r.end);
     rows.Begin();
     rows.Str(r.execution_id), rows.Str(r.statement_id), rows.Time(r.start), rows.Time(end);
     rows.Time(r.enqueue_time), rows.Time(finished ? r.fetch_start : std::nullopt);
@@ -918,7 +921,7 @@ std::vector<std::string> Instrumentation::Render(const Batch& b) const {
     rows.Int(finished ? std::optional<int64_t>(r.rows) : std::nullopt);
     rows.Str(StatusOf(e)), rows.StrOrNull(finished ? r.error : "");
     rows.Int(end ? std::optional<int64_t>(MillisBetween(r.start, *end)) : std::nullopt);
-    rows.Int(total_end ? std::optional<int64_t>(MillisBetween(r.start, *total_end)) : std::nullopt);
+    rows.Int(total_ms);
     rows.StrOrNull(finished ? r.query_profile : ""), rows.StrOrNull(finished ? r.cancel_reason : "");
     rows.End();
   };

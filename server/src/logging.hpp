@@ -65,11 +65,11 @@ void LogAt(LogLevel threshold, LogLevel level, std::string_view message, const L
 
 // A line as written: its time, level and message, the default fields, then its own.
 struct LogRecord {
-  std::chrono::system_clock::time_point time;
-  LogLevel level;
-  std::string message;
-  LogFields fields;
-  std::string thread;  // the logging thread's id
+  std::chrono::system_clock::time_point time{};
+  LogLevel level{};
+  std::string message{};
+  LogFields fields{};
+  std::string thread{};  // the logging thread's id
 };
 
 // A second destination for every line written (catalog logging), or none. It is called
