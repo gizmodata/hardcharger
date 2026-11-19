@@ -433,8 +433,9 @@ def test_a_revoke_stops_a_statement_that_is_running(world):
     finally:
         runner.http.delete(url=f"{runner.url}/statements/{running}", headers=runner.headers())
     assert column(client=runner, sql="SELECT id FROM emp") == []
-    # The twin: a grant takes nothing away, and a statement running meanwhile goes on.
-    running = runner.submit(sql="SELECT sum(e.id * r.range) FROM emp e, range(1000000000000) r")
+    # The twin: a grant takes nothing away, and a statement running meanwhile goes on (it
+    # reads masks_only, whose rows rep sees either way).
+    running = runner.submit(sql="SELECT sum(e.id * r.range) FROM masks_only e, range(1000000000000) r")
     try:
         expect_allowed(client=world.admin, sql="GRANT EXEMPT ROW POLICIES TO ROLE replicator")
         assert runner.wait(statement_id=running, timeout=3 * TIMEOUT_SCALE)["state"] == "running"
