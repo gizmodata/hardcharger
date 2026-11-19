@@ -891,7 +891,11 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb
   // User connections are created in exactly one place, the DuckDBSession constructor,
   // and bound here right after it, before any statement runs on them (and before the
   // session is listed anywhere, so a refused one leaves nothing behind).
-  // Enable estimates without printing progress bars in server logs.
+  // Enable estimates (statement status: the Web UI's and the CLI's progress) without printing
+  // progress bars in server logs. DuckDB computes one only after progress_bar_time (2 s by
+  // default), then at most every 100 ms (server/scripts/patch-duckdb-progress-throttle.cmake):
+  // unpatched it does so after every task, under a lock its worker threads need, which
+  // stalled plans with many pipelines.
   chargewire_duckdb::RunSql(connection(), "SET enable_progress_bar = true; SET enable_progress_bar_print = false");
   if (access_controlled_) {
     authz::Identity who = IdentityOf(principal_);

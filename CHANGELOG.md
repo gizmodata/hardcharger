@@ -145,6 +145,19 @@ own changelog in `python/CHANGELOG.md`.
   macro or as a bare name, or calls `hardcharger_active_role()`, is refused when a table it
   protects is read, as a direct `current_role()` call always was.
 
+### Fixed
+
+- Queries whose plans have many parts (a UNION ALL of dozens of SELECTs, many scalar
+  subqueries) run as fast as in 2.8.0 and earlier again. Since 2.9.0, which turned on DuckDB's
+  progress estimate for the Web UI and the CLI, DuckDB recomputed the estimate after every
+  piece of work, under a lock its worker threads need: on a 30-way UNION ALL that added stalls
+  of 150 ms to over a second and up to 13 times the CPU time on Linux servers. DuckDB is now
+  patched to compute the estimate only once a statement has run for `progress_bar_time`
+  (2 seconds unless set), and then at most every 100 ms. What changes for you: a statement
+  shows an estimated percentage once it has run for 2 seconds, not from its start (until then
+  the Web UI and the CLI show it as running, without a percentage). `SET progress_bar_time =
+  0` gives a session estimates from the start again, still computed at most every 100 ms.
+
 ## [2.13.1] - 2026-11-15
 
 ### Fixed

@@ -46,3 +46,5 @@ grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_baset
   || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
 grep -q HardchargerDecimal38Converter "$SRC/src/common/arrow/arrow_appender.cpp" \
   || { echo "DuckDB lost the HUGEINT / UHUGEINT Arrow export patch" >&2; exit 1; }
+grep -q next_update_ms "$SRC/src/common/progress_bar/progress_bar.cpp" \
+  || { echo "DuckDB lost the progress estimate throttle patch" >&2; exit 1; }
