@@ -587,8 +587,11 @@ def test_the_administrator_is_out_of_a_system_admins_reach(world):
     expect_blocked(client=alice, sql="SELECT * FROM read_text('/proc/self/environ')",
                    why="Hardcharger blocked access to '/proc/self/environ'")
     assert error_of(client=alice, sql="SELECT getenv('HARDCHARGER_ADMIN_PASSWORD')") != ""
-    assert rows(client=alice, sql="SELECT name FROM hardcharger_server_settings() WHERE name ILIKE '%password%' "
-                                  "OR name ILIKE '%secret_key%'") == []
+    # (The password policy's settings name passwords but hold numbers.)
+    policy = ("hardcharger.password_min_length", "hardcharger.password_min_character_classes",
+              "hardcharger.password_max_age_days", "hardcharger.password_temporary_max_age_hours")
+    assert rows(client=alice, sql="SELECT name FROM hardcharger_server_settings() WHERE (name ILIKE '%password%' "
+                                  f"OR name ILIKE '%secret_key%') AND name NOT IN {policy}") == []
     # Its password still signs it in, with everything it could do before.
     admin = world.server.admin()
     assert ledger(client=admin) == EVERY_ROW
