@@ -25,19 +25,23 @@ own changelog in `python/CHANGELOG.md`.
   (its search path, `USE`, its current catalog, its temporary objects). Each has one schema to
   look in, fixed by what it belongs to: a table's own schema for its constraints, generated
   columns, defaults and index expressions; the trigger table's for a trigger's body; the view's for a view; `main`
-  of the table's database for a policy (a policy belongs to no schema). A name is found there or
-  among DuckDB's own functions; `schema.name` in that schema of the same database; and a macro
-  is not called as a method (`x.is_valid()`), which only DuckDB's own functions are. The same
+  of the table's database for a policy (a policy belongs to no schema). A name without a schema
+  is found there, then in `main` of that same database, then among DuckDB's own functions (the
+  order DuckDB documents for views, without the session); `schema.name` in that schema of the
+  same database; and a macro is not called as a method (`x.is_valid()`), which only DuckDB's own
+  functions are. The same
   holds inside the macros they call. Every session gets the same answer, an administrator's
   included. Affected: every release with access control, through 2.13.1.
-  - What to write: name a macro or type that is in another schema with its schema
-    (`main.is_valid(x)`). `CREATE TABLE` and `CREATE TRIGGER` store the macros they call that
-    way for you, as the creating session finds them; `CREATE VIEW`, `CREATE INDEX`,
+  - What to write: nothing new for a macro or type in the object's own schema or in `main`.
+    One in a third schema, which only the creator's search path finds, is named with its schema
+    (`util.stamp()`). `CREATE TABLE` and `CREATE TRIGGER` store the macros they call that way
+    for you, as the creating session finds them; `CREATE VIEW`, `CREATE INDEX`,
     `CREATE ROW POLICY` and setting a masking policy on a column refuse a definition whose
-    names would not be found, saying what to write.
+    names would be something else where it is evaluated, saying what to write. Only an
+    administrator may create a macro or type that an existing object would then find first.
   - Objects made before this release are looked up the same way. One whose macro is in its
-    own schema (or is named with its schema) works as before. One that names a macro of another
-    schema bare, or calls a macro as a method, is refused when used, saying which name and what
+    own schema or in `main` (or is named with its schema) works as before. One that names a
+    macro of a third schema bare, or calls a macro as a method, is refused when used, saying which name and what
     to do: `CREATE OR REPLACE` the view or trigger, re-create the policy, change a default with
     `ALTER TABLE`; for a CHECK constraint or generated column, which DuckDB cannot alter,
     re-create the table, or an administrator creates a macro of that name in the table's schema

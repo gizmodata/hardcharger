@@ -9,9 +9,9 @@ the value, a row policy that is true, a CHECK that passes, a macro of his runnin
 user's trigger with her rights. Released 2.13.0 behaves so.
 
 Now each stored expression has a name scope, one schema fixed by its object (its table's, its
-view's; a policy's is main), and finds a function, macro or type there and among DuckDB's own
-only, whatever the session, an administrator's included; `schema.f` in the scope's catalog;
-never as a method call of a macro. What is not found that way is refused, saying what to write.
+view's; a policy's is main), and finds a function, macro or type there, then in main of its own
+database, then among DuckDB's own, whatever the session, an administrator's included; `schema.f`
+in the scope's catalog; never as a method call of a macro. What is not found that way is refused, saying what to write.
 
 Every probe of the two reviews of the earlier, route-by-route fixes is here: on a database a
 2.13.0 server made (name_scope_legacy.py: the user's macros were already there), and on new
@@ -225,19 +225,48 @@ def test_a_generated_column_from_before_is_its_tables_in_views_and_trigger_bodie
     for path, wes in sessions(server=legacy, catalog=L):
         expect_allowed(client=wes, sql=f"INSERT INTO {L}.app.mine2 VALUES (1)")
     assert rows(client=admin, sql="SELECT DISTINCT label FROM app.mlabels2") == [("genuine vault2-secret-1",)]
-    # Named bare, it was main's by her search path; her table is in app. Not found for any
-    # session (never the session's own fmt), with the two ways out.
-    for path, wes in sessions(server=legacy, catalog=L):
-        detail = not_found(client=wes, sql=f"INSERT INTO {L}.app.mine VALUES (1)", name="function fmt",
-                           whose=f"a CHECK constraint, generated column, column default or index of table {L}.app.mvault",
-                           remedy=f"an administrator can create a macro of that name in {L}.app that calls the one meant")
-        assert f"a name without a schema is looked up in {L}.app and among DuckDB's own only" in detail, detail
-    assert rows(client=admin, sql="SELECT count(*) FROM app.mlabels") == [(0,)]
-    expect_allowed(client=admin, sql="CREATE MACRO app.fmt(x) AS main.fmt(x)")
+    # Named bare: her table is in app, which has no fmt, so it is main's of the table's own
+    # database, for every session (never the session's own fmt).
     for path, wes in sessions(server=legacy, catalog=L):
         expect_allowed(client=wes, sql=f"INSERT INTO {L}.app.mine VALUES (1)")
     assert rows(client=admin, sql="SELECT DISTINCT label FROM app.mlabels ORDER BY label") == [
         ("genuine vault-secret-1",), ("genuine vault-secret-2",)]
+
+
+def test_a_bare_name_is_the_objects_own_schemas_before_mains(legacy):
+    # The order is fixed: the object's own schema, then main of its database, then DuckDB's own.
+    # app.mvault's generated column calls fmt bare; app gets a fmt of its own (an
+    # administrator's: the name pin lets no one else create it, test_rbac_macros.py).
+    admin = legacy.admin()
+    expect_allowed(client=admin, sql="CREATE MACRO app.fmt(x) AS 'app ' || x")
+    for path, wes in sessions(server=legacy, catalog=L):
+        expect_allowed(client=wes, sql=f"INSERT INTO {L}.app.mine VALUES (1)")
+    assert rows(client=admin, sql="SELECT DISTINCT label FROM app.mlabels ORDER BY label") == [
+        ("app vault-secret-1",), ("app vault-secret-2",)]
+    # A view of main that reads main's own column of the same shape still gets main's.
+    for path, wes in sessions(server=legacy, catalog=L):
+        assert rows(client=wes, sql=f"SELECT f FROM {L}.main.fmt_v ORDER BY f") == [
+            ("genuine other-secret-A",), ("genuine other-secret-B",)], path
+
+
+def test_main_is_the_objects_own_databases_not_the_sessions(legacy):
+    # A second database with macros of the same names in ITS main, and a session whose current
+    # catalog it is: a bare name in an object of the first database is still that database's main's.
+    admin = legacy.admin()
+    for sql in ["ATTACH ':memory:' AS other", "CREATE MACRO other.main.fmt(x) AS 'other ' || x",
+                "CREATE MACRO other.main.mask(x) AS x", "CREATE MACRO other.main.is_valid(x) AS true",
+                "CREATE MACRO other.main.dflt() AS 'other default'", "USE other"]:
+        expect_allowed(client=admin, sql=sql)
+    assert rows(client=admin, sql="SELECT current_database()") == [("other",)]
+    assert rows(client=admin, sql=f"SELECT f FROM {L}.rpt.fmt_v ORDER BY f") == [("genuine ann",), ("genuine bob",)]
+    assert rows(client=admin, sql=f"SELECT * FROM {L}.rpt.people ORDER BY name") == [("ann", "***11"), ("bob", "***22")]
+    fails(client=admin, sql=f"INSERT INTO {L}.main.checked VALUES (-1)", why=CHECK_FAILED)
+    expect_allowed(client=admin, sql=f"INSERT INTO {L}.main.dflt_pk VALUES (1, DEFAULT)")
+    # A table of schema app whose generated column calls fmt bare: app has none, so the main of
+    # ITS database, not of the session's.
+    assert rows(client=admin, sql=f"SELECT label FROM {L}.app.mvault ORDER BY label") == [
+        ("genuine vault-secret-1",), ("genuine vault-secret-2",)]
+    assert rows(client=legacy.admin(), sql="SELECT note FROM main.dflt_pk") == [("genuine default",)]
 
 
 def test_rows_a_trigger_copies_pass_through_the_tables_own_check(legacy):
@@ -272,6 +301,10 @@ def test_a_default_from_before_is_its_tables(legacy):
         not_found(client=wes, sql=f"INSERT INTO {L}.app.msrc VALUES (1)", name="function stamp",
                   whose=f"a CHECK constraint, generated column, column default or index of table {L}.app.mlog",
                   remedy="a column default can be changed with ALTER TABLE")
+        # (its macro is in a third schema, util: neither the table's nor main)
+    detail = fails(client=legacy.user(name="wes"), sql=f"INSERT INTO {L}.app.msrc VALUES (1)", why=NOT_FOUND)
+    assert (f"a name without a schema is looked up in {L}.app, then in schema main of catalog {L} and among "
+            "DuckDB's own only") in detail, detail
     assert rows(client=admin, sql="SELECT count(*) FROM app.mlog") == [(0,)]
     expect_allowed(client=admin, sql="ALTER TABLE app.mlog ALTER COLUMN approved_by SET DEFAULT util.stamp()")
     for path, wes in sessions(server=legacy, catalog=L):
@@ -322,18 +355,13 @@ def test_policies_from_before_compute_the_same_for_every_reader(legacy):
                 ("ann", "EMEA", "***-**-1111")], (path, table)
 
 
-def test_a_view_from_before_finds_its_functions_in_its_own_schema(legacy):
-    admin = legacy.admin()
-    genuine = [("genuine other-secret-A",), ("genuine other-secret-B",)]
+def test_a_view_from_before_finds_its_functions_in_its_own_schema_then_main(legacy):
     for user in ["wes", "admin"]:
         for path, client in sessions(server=legacy, catalog=L, user=user):
-            assert rows(client=client, sql=f"SELECT f FROM {L}.main.fmt_v ORDER BY f") == genuine, path
-            # A view in rpt whose macro DuckDB found in main: no longer, for anyone.
-            not_found(client=client, sql=f"SELECT f FROM {L}.rpt.fmt_v", name="function fmt",
-                      whose=f"view {L}.rpt.fmt_v", remedy="Run CREATE OR REPLACE VIEW with the function named with its schema")
-    expect_allowed(client=admin, sql="CREATE OR REPLACE VIEW rpt.fmt_v AS SELECT main.fmt(name) AS f FROM main.people")
-    for path, wes in sessions(server=legacy, catalog=L):
-        assert rows(client=wes, sql=f"SELECT f FROM {L}.rpt.fmt_v ORDER BY f") == [("genuine ann",), ("genuine bob",)], path
+            assert rows(client=client, sql=f"SELECT f FROM {L}.main.fmt_v ORDER BY f") == [
+                ("genuine other-secret-A",), ("genuine other-secret-B",)], path
+            # A view in rpt that calls main's macro bare (rpt has none of that name).
+            assert rows(client=client, sql=f"SELECT f FROM {L}.rpt.fmt_v ORDER BY f") == [("genuine ann",), ("genuine bob",)], path
 
 
 def test_an_index_over_a_macro_is_its_tables_when_bound_after_a_start(launcher, store, tmp_path):
@@ -431,16 +459,20 @@ def test_a_new_table_says_which_macro_it_means_and_no_session_changes_it(server,
             expect_allowed(client=client, sql=f"INSERT INTO {c}.app.t (x) VALUES (1)")
             assert rows(client=client, sql=f"SELECT DISTINCT x, label, note FROM {c}.app.t") == [
                 (1, "genuine 1", "genuine stamp")], path
-    # The type could not be given its schema in the stored text: named bare, it would not be
-    # found in app. So the definition is refused, saying what to write.
-    detail = fails(client=admin, sql="CREATE TABLE app.t_type (m VARCHAR, mm VARCHAR AS (CAST(CAST(m AS mood) AS VARCHAR)))",
-                   why="names type mood")
-    assert f"which is {c}.main.mood in this session but would not be found" in detail and "main.mood" in detail, detail
-    expect_allowed(client=admin, sql="CREATE TABLE app.t_type (m VARCHAR, mm VARCHAR AS (CAST(CAST(m AS main.mood) AS VARCHAR)))")
+    # A type of main named bare from a table of app is main's; one the creator's search path
+    # found in a third schema would not be found, and the definition is refused, saying what to write.
+    expect_allowed(client=admin, sql="CREATE TABLE app.t_type (m VARCHAR, mm VARCHAR AS (CAST(CAST(m AS mood) AS VARCHAR)))")
     expect_allowed(client=admin, sql="INSERT INTO app.t_type VALUES ('ok')")
     expect_allowed(client=admin, sql="GRANT SELECT ON app.t_type TO writers")
     for path, wes in sessions(server=server, catalog=c):
         assert rows(client=wes, sql=f"SELECT mm FROM {c}.app.t_type") == [("ok",)], path
+    expect_allowed(client=admin, sql="CREATE TYPE util.grade AS ENUM ('a', 'b')")
+    expect_allowed(client=admin, sql="SET search_path = 'main,util'")
+    detail = fails(client=admin, sql="CREATE TABLE app.t_grade (g VARCHAR, gg VARCHAR AS (CAST(CAST(g AS grade) AS VARCHAR)))",
+                   why="names type grade")
+    expect_allowed(client=admin, sql="SET search_path = 'main'")
+    assert f"which is {c}.util.grade in this session but would not be found" in detail and "util.grade" in detail, detail
+    expect_allowed(client=admin, sql="CREATE TABLE app.t_grade (g VARCHAR, gg VARCHAR AS (CAST(CAST(g AS util.grade) AS VARCHAR)))")
 
 
 def test_a_definition_whose_names_its_scope_would_not_find_is_refused_at_create(server, admin):
@@ -461,14 +493,25 @@ def test_a_definition_whose_names_its_scope_would_not_find_is_refused_at_create(
     fails(client=admin, sql="INSERT INTO main.m3 VALUES ('')", why=CHECK_FAILED)
     expect_allowed(client=admin, sql="INSERT INTO main.m3 VALUES ('abc')")
     assert rows(client=admin, sql="SELECT u FROM main.m3") == [("ABC",)]
-    # A view outside main that calls a macro of main by a bare name (the session finds it; the
-    # view's own schema would not).
+    # A view outside main that calls a macro of main by a bare name: its schema has none, so
+    # main's of its own database (the pattern 2.13 documents). One that calls a macro of a
+    # third schema bare, which only the creator's search path finds, is refused.
     expect_allowed(client=admin, sql="CREATE TABLE app.src (id INT, region VARCHAR)")
     expect_allowed(client=admin, sql="CREATE TABLE app.sink (note VARCHAR)")
-    detail = fails(client=admin, sql="CREATE VIEW rpt.v AS SELECT fmt(note) AS f FROM main.other_secret",
-                   why=f"which is {c}.main.fmt in this session but would not be found where")
-    assert f"view {c}.rpt.v calls function fmt" in detail and "name it with its schema (schema.name): main.fmt" in detail, detail
-    expect_allowed(client=admin, sql="CREATE VIEW rpt.v AS SELECT main.fmt(note) AS f FROM main.other_secret")
+    expect_allowed(client=admin, sql="CREATE VIEW rpt.v AS SELECT fmt(note) AS f FROM main.other_secret")
+    expect_allowed(client=admin, sql="CREATE MACRO util.tag(x) AS 'u ' || x")
+    expect_allowed(client=admin, sql="SET search_path = 'main,util'")
+    detail = fails(client=admin, sql="CREATE VIEW rpt.v_tag AS SELECT tag(note) AS f FROM main.other_secret",
+                   why=f"which is {c}.util.tag in this session but would not be found where")
+    assert f"view {c}.rpt.v_tag calls function tag" in detail and "name it with its schema (schema.name): util.tag" in detail, detail
+    assert f"there a name is looked up in {c}.rpt, then in schema main of catalog {c} and among DuckDB's own" in detail, detail
+    # An index over such a macro: it would not be found when the index is bound again after a start.
+    detail = fails(client=admin, sql="CREATE INDEX src_tag ON app.src (tag(region))",
+                   why=f"an index on table {c}.app.src calls function tag, which is {c}.util.tag in this session but would not be found")
+    expect_allowed(client=admin, sql="SET search_path = 'main'")
+    expect_allowed(client=admin, sql="CREATE VIEW rpt.v_tag AS SELECT util.tag(note) AS f FROM main.other_secret")
+    expect_allowed(client=admin, sql="CREATE INDEX src_tag ON app.src (util.tag(region))")
+    expect_allowed(client=admin, sql="CREATE INDEX src_fmt ON app.src (fmt(region))")
     # A trigger's action is stored with the macros it calls given their schema, like its tables.
     expect_allowed(client=admin, sql="CREATE TRIGGER src_t AFTER INSERT ON app.src REFERENCING NEW TABLE AS n FOR EACH STATEMENT "
                                      "INSERT INTO app.sink SELECT fmt(region) FROM n")
@@ -487,21 +530,17 @@ def test_a_definition_whose_names_its_scope_would_not_find_is_refused_at_create(
         expect_allowed(client=wes, sql=f"INSERT INTO {c}.app.src VALUES (1, 'EMEA')")
         expect_allowed(client=wes, sql=f"INSERT INTO {c}.app.rsrc VALUES (1, 'EMEA')")
     assert rows(client=admin, sql="SELECT DISTINCT note FROM app.sink ORDER BY note") == [("genuine EMEA",), ("genuine EMEA row",)]
-    # An index over a macro of another schema, named bare: it would not be found when the index
-    # is bound again after the next start.
-    detail = fails(client=admin, sql="CREATE INDEX src_fmt ON app.src (fmt(region))",
-                   why=f"an index on table {c}.app.src calls function fmt, which is {c}.main.fmt in this session but would not be found")
-    assert "name it with its schema (schema.name): main.fmt" in detail, detail
-    expect_allowed(client=admin, sql="CREATE INDEX src_fmt ON app.src (main.fmt(region))")
-    # A macro that calls a macro: its body is bound where it is used. Named bare in there, the
-    # inner one is main's only for an object of main.
+    # A macro that calls a macro: its body is bound where it is used. main's inner one, named
+    # bare, is found from an object of any schema of the database; a third schema's is not.
     expect_allowed(client=admin, sql="CREATE TABLE main.n1 (x INT CHECK (outer_ok(x)))")
-    detail = fails(client=admin, sql="CREATE TABLE app.n2 (x INT CHECK (main.outer_ok(x)))",
-                   why="calls macro outer_ok, which calls function inner_ok")
-    assert "name it with its schema (schema.name) in macro outer_ok: main.inner_ok" in detail, detail
-    # (DuckDB lets no one replace a macro a table's CHECK depends on: a second one, written in full.)
-    expect_allowed(client=admin, sql="CREATE MACRO main.outer_ok2(x) AS main.inner_ok(x)")
-    expect_allowed(client=admin, sql="CREATE TABLE app.n2 (x INT CHECK (main.outer_ok2(x)))")
+    expect_allowed(client=admin, sql="CREATE TABLE app.n2 (x INT CHECK (main.outer_ok(x)))")
+    expect_allowed(client=admin, sql="CREATE MACRO util.inner_u(x) AS x > 0")
+    expect_allowed(client=admin, sql="SET search_path = 'main,util'")
+    expect_allowed(client=admin, sql="CREATE MACRO util.outer_u(x) AS inner_u(x)")
+    detail = fails(client=admin, sql="CREATE TABLE app.n3 (x INT CHECK (util.outer_u(x)))",
+                   why="calls macro outer_u, which calls function inner_u")
+    expect_allowed(client=admin, sql="SET search_path = 'main'")
+    assert "name it with its schema (schema.name) in macro outer_u: util.inner_u" in detail, detail
     expect_allowed(client=admin, sql="GRANT INSERT ON main.n1 TO writers")
     expect_allowed(client=admin, sql="GRANT INSERT ON app.n2 TO writers")
     for path, wes in sessions(server=server, catalog=c):
@@ -552,6 +591,62 @@ def test_new_policies_compute_the_same_for_every_reader_and_through_a_view(serve
     assert "name it with its schema (schema.name): util.in_apac" in raised.value.detail, raised.value.detail
     expect_allowed(client=admin, sql="CREATE ROW POLICY apac ON main.emp2 TO makers USING (util.in_apac(region))")
     assert rows(client=server.user(name="mia"), sql="SELECT 1") == [(1,)]
+
+
+def test_a_macro_named_like_one_an_object_finds_in_main_is_the_administrators_to_create(server, admin):
+    # What "own schema, then main" leaves to guard: a macro made later in the object's own
+    # schema would be found before main's, and one who may replace main's would change it for
+    # everyone. The creation-time name pin (macros.cc) refuses both to all but an administrator.
+    c = server.catalog
+    pinned = "would change what a view, a trigger, a row or masking policy"
+    for sql in ["CREATE MACRO main.pin_fmt(x) AS 'main ' || x", "CREATE MACRO main.pin_ok(x) AS x > 0",
+                "CREATE MACRO main.pin_region(x) AS x = 'EU'",
+                "CREATE TABLE main.pin_t (x INT CHECK (pin_ok(x)), region VARCHAR)", "INSERT INTO main.pin_t VALUES (1, 'EU'), (2, 'US')",
+                "CREATE VIEW rpt.pin_v AS SELECT pin_fmt(region) AS f FROM main.pin_t",
+                "CREATE ROW POLICY pin_eu ON main.pin_t TO writers USING (pin_region(region))",
+                "GRANT SELECT ON main.pin_t TO writers", "GRANT SELECT ON rpt.pin_v TO writers",
+                "GRANT CREATE MACRO, DROP MACRO ON SCHEMA rpt TO writers", "GRANT CREATE MACRO, DROP MACRO ON SCHEMA main TO writers"]:
+        expect_allowed(client=admin, sql=sql)
+    wes = server.user(name="wes")
+    try:
+        # In the view's own schema, where it would be found before main's.
+        expect_blocked(client=wes, sql="CREATE MACRO rpt.pin_fmt(x) AS 'mine'", why=pinned)
+        # In main: the ones the table's CHECK, the view and the policy call there.
+        for name, body in [("pin_ok", "true"), ("pin_fmt", "'mine'"), ("pin_region", "true")]:
+            expect_blocked(client=wes, sql=f"CREATE OR REPLACE MACRO main.{name}(x) AS {body}", why=pinned)
+        # Twin: a name nothing calls, in both schemas.
+        for schema in ["rpt", "main"]:
+            expect_allowed(client=wes, sql=f"CREATE MACRO {schema}.pin_spare(x) AS x")
+            expect_allowed(client=wes, sql=f"DROP MACRO {schema}.pin_spare")
+        # And everything computes what it did.
+        assert rows(client=wes, sql=f"SELECT f FROM {c}.rpt.pin_v") == [("main EU",)]
+        assert rows(client=wes, sql=f"SELECT x FROM {c}.main.pin_t") == [(1,)]
+        fails(client=admin, sql="INSERT INTO main.pin_t VALUES (-1, 'EU')", why=CHECK_FAILED)
+    finally:
+        expect_allowed(client=admin, sql="REVOKE CREATE MACRO, DROP MACRO ON SCHEMA rpt FROM writers")
+        expect_allowed(client=admin, sql="REVOKE CREATE MACRO, DROP MACRO ON SCHEMA main FROM writers")
+
+
+def test_a_new_view_whose_own_schema_has_the_name_means_that_one_and_says_so(server, admin):
+    # The macro is in the view's schema before the view is made. A creator whose session finds
+    # main's by that name is told the view would mean the other one; one whose session finds the
+    # view's own gets a view that means it for every reader.
+    c = server.catalog
+    expect_allowed(client=admin, sql="CREATE MACRO rpt.fmt(x) AS 'rpt ' || x")
+    try:
+        detail = fails(client=admin, sql="CREATE VIEW rpt.own_v AS SELECT fmt(note) AS f FROM main.other_secret",
+                       why=f"which is {c}.main.fmt in this session but would be {c}.rpt.fmt where")
+        assert "name it with its schema (schema.name): main.fmt" in detail, detail
+        expect_allowed(client=admin, sql="USE rpt")
+        expect_allowed(client=admin, sql=f"CREATE VIEW rpt.own_v AS SELECT fmt(note) AS f FROM {c}.main.other_secret")
+        expect_allowed(client=admin, sql="USE main")
+        expect_allowed(client=admin, sql="GRANT SELECT ON rpt.own_v TO writers")
+        for user in ["wes", "admin"]:
+            for path, client in sessions(server=server, catalog=c, user=user):
+                assert rows(client=client, sql=f"SELECT f FROM {c}.rpt.own_v") == [("rpt other-secret-A",)], path
+    finally:
+        expect_allowed(client=admin, sql="DROP VIEW IF EXISTS rpt.own_v")
+        expect_allowed(client=admin, sql="DROP MACRO rpt.fmt")
 
 
 def test_a_users_own_table_with_own_macros_still_works(server, admin):

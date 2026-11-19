@@ -33,7 +33,7 @@ def server(module_launcher, store, tmp_path_factory):
         "INSERT INTO secrets VALUES (1, 'top-secret-value')",
         # The administrator's types, each pinned by one kind of re-bound SQL.
         "CREATE TYPE main.level AS ENUM ('low', 'high')",
-        "CREATE VIEW reports.levels AS SELECT id, (CASE WHEN amount > 15 THEN 'high' ELSE 'low' END)::main.level AS lv "
+        "CREATE VIEW reports.levels AS SELECT id, (CASE WHEN amount > 15 THEN 'high' ELSE 'low' END)::level AS lv "
         "FROM main.orders",
         "CREATE TYPE main.label_t AS ENUM ('a', 'b')",
         "CREATE MACRO main.as_label(x) AS x::label_t",
@@ -211,21 +211,30 @@ def test_a_type_a_view_uses_cannot_be_replaced_or_dropped(admin, mia, joe):
     expect_allowed(client=admin, sql="CREATE TYPE main.spare_t AS ENUM ('one', 'two')")
 
 
-def test_a_type_in_a_views_schema_does_not_stand_in_for_the_one_it_names(admin, mia, joe):
-    # reports.levels casts to main.level. A view finds its types under its name scope
-    # (name_scope.hpp), so a type of that name in the view's own schema changes nothing, and one
-    # who may create types there may have it. (Named bare, which DuckDB would have looked up in
-    # reports and then main, the view is refused at CREATE.)
+def test_a_type_cannot_stand_in_for_one_a_view_finds_earlier_in_its_search_path(admin, mia):
+    # reports.levels names level unqualified: a view looks in its own schema first, so
+    # reports.level would be found before main's. mia may create types in main and tools,
+    # not reports.
     expect_allowed(client=admin, sql="GRANT CREATE TYPE, DROP TYPE ON SCHEMA reports TO type_makers")
     try:
-        expect_allowed(client=mia, sql="CREATE TYPE reports.level AS ENUM ('other')")
-        try:
-            rows = expect_allowed(client=joe, sql="SELECT lv FROM reports.levels ORDER BY id").to_pylist()
-            assert rows == [{"lv": "low"}, {"lv": "high"}, {"lv": "high"}]
-        finally:
-            expect_allowed(client=mia, sql="DROP TYPE reports.level")
+        expect_blocked(client=mia, sql="CREATE TYPE reports.level AS ENUM ('other')", why=WOULD_CHANGE)
+        # Twin: another name in the same schema.
+        expect_allowed(client=mia, sql="CREATE TYPE reports.other_level AS ENUM ('other')")
+        expect_allowed(client=mia, sql="DROP TYPE reports.other_level")
     finally:
         expect_allowed(client=admin, sql="REVOKE CREATE TYPE, DROP TYPE ON SCHEMA reports FROM type_makers")
+
+
+@pytest.mark.parametrize("name, used_by", [
+    ("label_t", "a macro"), ("region_t", "a row policy"), ("grade_t", "a column default"),
+    ("score_t", "a check constraint"), ("status_t", "a trigger"), ("masked_t", "a masking policy"),
+])
+def test_a_type_a_macro_policy_default_check_or_trigger_uses_cannot_be_replaced(admin, mia, name, used_by):
+    expect_blocked(client=mia, sql=f"CREATE OR REPLACE TYPE main.{name} AS ENUM ('mine')", why=IN_USE)
+    expect_blocked(client=mia, sql=f"DROP TYPE main.{name}", why=IN_USE)
+    # A type of the same name in another schema of the search path would stand in for it
+    # where the name is unqualified.
+    expect_blocked(client=mia, sql=f"CREATE TYPE tools.{name} AS ENUM ('mine')", why=WOULD_CHANGE)
 
 
 def test_a_type_a_macro_uses_keeps_its_meaning(admin, mia, joe):

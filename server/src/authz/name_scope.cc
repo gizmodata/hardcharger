@@ -18,12 +18,14 @@ namespace compat = hardcharger::authz::ddb;
 
 const char kSystemCatalog[] = "system";
 
-// Does a name without a schema that its scope's schema does not have fall back to schema main
-// of the scope's catalog, before DuckDB's own? DuckDB's own rule for a view and a default is
-// "its schema, then main". Off: a stored expression finds a bare name in its own schema and
-// among DuckDB's own only, and names a macro of main as main.f (2.14.0, as decided). Turning it
-// on is this one line; the definition-time checks follow, since they ask FindUnderScope.
-constexpr bool kBareNamesFallBackToMain = false;
+// A name without a schema that its scope's schema does not have is looked up in schema main of
+// the scope's own catalog next, before DuckDB's own: DuckDB's own order for a view and a default
+// ("its schema, then main"), minus the session. Decided for 2.14.0 (Philip, 2026-11-18): objects
+// outside main that call main's macros by a bare name, as 2.13 documents, keep working. The
+// catalog is the scope's, never the session's current one. What it leaves to guard: a macro
+// created later in the object's own schema would be found before main's; the creation-time
+// name pin (macros.cc) refuses that to everyone but an administrator.
+constexpr bool kBareNamesFallBackToMain = true;
 
 // The entry at exactly this catalog, schema path and name; null when there is none (or no
 // such schema, or catalog).
@@ -245,9 +247,10 @@ std::string NotFoundUnderScope(const std::string& noun, const std::string& writt
             " (or as one of DuckDB's own), and a call written value." + written.substr(written.rfind('.') + 1) +
             "() is read as a method call for DuckDB's own functions only. ";
   } else {
-    text += "a name without a schema is looked up in " + scope_schema + " and among DuckDB's own only" +
-            (kind == "policy" ? " (a policy belongs to no schema, so its catalog's main)" : "") +
-            ", also inside the macros it calls. ";
+    text += "a name without a schema is looked up in " + scope_schema +
+            (kind == "policy" ? " (a policy belongs to no schema, so its catalog's main)"
+                              : ", then in schema main of catalog " + scope_catalog) +
+            " and among DuckDB's own only, also inside the macros it calls. ";
   }
   return text + remedy;
 }

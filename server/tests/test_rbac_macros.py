@@ -33,11 +33,10 @@ def server(module_launcher, store, tmp_path_factory):
         # An administrator's macro that a view uses, one a row policy uses, and a chain
         # (view -> outer -> inner) whose inner macro the view reaches only through outer.
         "CREATE MACRO main.fmt_amount(a) AS a * 100",
-        # (a view finds a function in its own schema and among DuckDB's own: main's is named so)
-        "CREATE VIEW reports.amounts AS SELECT id, main.fmt_amount(amount) AS cents FROM main.orders",
+        "CREATE VIEW reports.amounts AS SELECT id, fmt_amount(amount) AS cents FROM main.orders",
         "CREATE MACRO main.inner_label(r) AS lower(r)",
-        "CREATE MACRO main.outer_label(r) AS main.inner_label(r) || '!'",
-        "CREATE VIEW reports.labels AS SELECT main.outer_label(region) AS label FROM main.orders",
+        "CREATE MACRO main.outer_label(r) AS inner_label(r) || '!'",
+        "CREATE VIEW reports.labels AS SELECT outer_label(region) AS label FROM main.orders",
         "CREATE TABLE governed (id INT, region VARCHAR)",
         "INSERT INTO governed VALUES (1, 'EU'), (2, 'US')",
         "CREATE MACRO main.region_ok(r) AS r = 'EU'",
@@ -234,19 +233,16 @@ def test_a_macro_a_view_uses_cannot_be_replaced(admin, mia, joe):
     expect_allowed(client=mia, sql="CREATE OR REPLACE MACRO main.spare(x) AS x + 2")
 
 
-def test_a_macro_in_a_views_schema_does_not_stand_in_for_the_one_it_names(admin, mia, joe):
-    # reports.amounts calls main.fmt_amount. A view finds its functions under its name scope
-    # (name_scope.hpp), so a macro of that name in the view's own schema changes nothing, and
-    # one who may create macros there may have it. (Named bare, which DuckDB would have looked
-    # up in reports and then main, the view is refused at CREATE: test_rbac_name_scope.py.)
+def test_a_macro_cannot_stand_in_for_one_a_view_finds_later_in_its_search_path(admin, mia):
+    # reports.amounts calls fmt_amount unqualified: a view looks in its own schema first,
+    # so reports.fmt_amount (or tools.fmt_amount, read as a schema-qualified name) would
+    # be found before main's. mia may create macros in main and tools, not reports.
     expect_allowed(client=admin, sql="GRANT CREATE MACRO, DROP MACRO ON SCHEMA reports TO macro_makers")
     try:
-        expect_allowed(client=mia, sql="CREATE MACRO reports.fmt_amount(a) AS 0")
-        try:
-            rows = expect_allowed(client=joe, sql="SELECT cents FROM reports.amounts ORDER BY id").to_pylist()
-            assert rows == [{"cents": 1000}, {"cents": 2000}, {"cents": 3000}]
-        finally:
-            expect_allowed(client=mia, sql="DROP MACRO reports.fmt_amount")
+        expect_blocked(client=mia, sql="CREATE MACRO reports.fmt_amount(a) AS 0", why=IN_USE)
+        # Twin: another name in the same schema.
+        expect_allowed(client=mia, sql="CREATE MACRO reports.fmt_other(a) AS 0")
+        expect_allowed(client=mia, sql="DROP MACRO reports.fmt_other")
     finally:
         expect_allowed(client=admin, sql="REVOKE CREATE MACRO, DROP MACRO ON SCHEMA reports FROM macro_makers")
 

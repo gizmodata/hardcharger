@@ -20,8 +20,9 @@
 // their functions under a name scope (name_scope.hpp), not through any session, so a macro
 // elsewhere can no longer stand in for the one they mean. The refusal stays for what a scope
 // still finds: a new macro in the very schema such an expression looks in, named like a
-// built-in it calls or like a name of its that finds nothing yet (an object from before 2.14
-// that is refused until an administrator mends it: not a user's to mend with a macro).
+// built-in it calls, like a macro of main it calls bare (the scope looks in the object's own
+// schema before main), or like a name of its that finds nothing yet (an object from before
+// 2.14 that is refused until an administrator mends it: not a user's to mend with a macro).
 
 #pragma once
 

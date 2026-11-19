@@ -17,8 +17,8 @@
 // macros calling macros). The hook finds a name ONLY as follows, the same for every session,
 // administrators included:
 //
-//   f                 in the scope's schema, else among DuckDB's own (the system catalog:
-//                     built-ins and loaded extensions)
+//   f                 in the scope's schema, else in schema main of the scope's catalog, else
+//                     among DuckDB's own (the system catalog: built-ins and loaded extensions)
 //   schema.f          in that schema of the scope's CATALOG, else DuckDB's own of that schema
 //                     (main.lower); never the session's current catalog
 //   catalog.schema.f  exactly there; never the temporary catalog
@@ -35,8 +35,10 @@
 //                                      caller's arguments into the macro's body and binds both
 //                                      as one expression)
 //
-// A name not found that way is refused with what to write instead; it is never looked up in the
-// session. Objects from before 2.14 are bound the same way. Tables, views and sequences are not
+// (main after the scope's own schema is DuckDB's own order for a view and a default, "its
+// schema, then main", without the session's search path DuckDB appends to it; and always main
+// of the SCOPE's catalog.) A name not found that way is refused with what to write instead; it
+// is never looked up in the session. Objects from before 2.14 are bound the same way. Tables, views and sequences are not
 // this file's: triggers.hpp ("Names in a body").
 //
 // The definer's own statement (CREATE TABLE, CREATE VIEW, CREATE TRIGGER, CREATE ... POLICY) is

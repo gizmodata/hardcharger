@@ -634,7 +634,6 @@ def test_a_name_a_trigger_from_before_reads_bare_cant_be_made_two(legacy):
 # ---- CHECK constraints, generated columns, defaults: bound in the writer's session too ----
 
 USE_WS = "USE ws"
-NOT_FOUND = "was not found. There a function is never looked up through the session's search path"
 
 
 def test_a_writers_macro_does_not_stand_in_for_one_a_check_calls(legacy):
@@ -657,21 +656,16 @@ def test_a_writers_macro_does_not_run_in_a_users_trigger_through_a_generated_col
     # Fix round 2, finding 02: a generated column is bound where it is read, in the reader's
     # session. Read by mia's trigger, the writer's macro of its name ran in her body with her
     # rights (reading what she may read, deciding what her trigger wrote). Round 3: the column
-    # finds its macro in its table's schema (app) and among DuckDB's own. This one named main's
-    # bare, which only mia's search path found: refused for every session, saying how to mend it.
+    # finds its macro in its table's schema (app), then in main of its database, then among
+    # DuckDB's own, whatever the session: main.fmt, for the writer and the administrator alike.
     admin, wes = legacy.admin(), legacy.user(name="wes")
-    for client, use in [(wes, "USE main"), (wes, USE_WS), (admin, USE_WS)]:
+    for client, use in [(wes, "USE main"), (wes, USE_WS), (wes, f"SET search_path = '{LEGACY}.ws,{LEGACY}.main'"),
+                        (admin, USE_WS)]:
         expect_allowed(client=client, sql=use)
-        error = expect_blocked(client=client, sql=f"INSERT INTO {LEGACY}.app.gmine VALUES (1)", code="sql_error", why=NOT_FOUND)
-        assert f"function fmt, which a CHECK constraint, generated column, column default or index of table {LEGACY}.app.gvault calls" in error.detail
-        assert f"an administrator can create a macro of that name in {LEGACY}.app that calls the one meant" in error.detail
-        assert "FORGED" not in error.detail
-    assert count(client=admin, table="app.glabels") == 0
-    # Mended the way it says: the table's own schema has the macro, and no session has another.
+        expect_allowed(client=client, sql=f"INSERT INTO {LEGACY}.app.gmine VALUES (1)")
     expect_allowed(client=admin, sql=f"USE {LEGACY}")
-    expect_allowed(client=admin, sql="CREATE MACRO app.fmt(x) AS main.fmt(x)")
-    expect_allowed(client=wes, sql=f"INSERT INTO {LEGACY}.app.gmine VALUES (3)")
-    assert values(client=admin, sql="SELECT label FROM app.glabels") == ["genuine vault-secret-1"]
+    assert values(client=admin, sql="SELECT DISTINCT label FROM app.glabels") == ["genuine vault-secret-1"]
+    assert count(client=admin, table="app.glabels") == 4
 
 
 def test_a_cast_in_a_generated_column_finds_its_tables_type(legacy):

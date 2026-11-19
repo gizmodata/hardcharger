@@ -2145,8 +2145,8 @@ std::string ScopeProblem(dd::ClientContext& context, const std::string& catalog,
            (IsTemporary(here) ? std::string("a temporary one of this session") : PathOfEntry(here).ToString()) +
            " in this session but " +
            (there ? "would be " + PathOfEntry(*there).ToString() : std::string("would not be found")) + " where " +
-           what + " is evaluated: there a name is looked up in " + scope.ToString() +
-           " and among DuckDB's own, and a name with a schema in that schema of catalog " +
+           what + " is evaluated: there a name is looked up in " + scope.ToString() + ", then in schema main of catalog " +
+           QuoteIdentifierIfNeeded(catalog) + " and among DuckDB's own, and a name with a schema in that schema of catalog " +
            QuoteIdentifierIfNeeded(catalog) + ", whatever the session's search path. " +
            (IsTemporary(here) ? std::string("It cannot use a temporary ") + noun
                               : "So that it means the same for everyone, " + fix + ": " + with_schema(here));
