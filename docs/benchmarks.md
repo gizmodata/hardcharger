@@ -1084,7 +1084,7 @@ Host classes are `aws-<instance type>`, `gha-<runner label>` or `<os>-<arch>-loc
   ```bash
   set -a; . <infra repo>/aws/.env; set +a; export REGION=us-east-2
   bench/regress/aws.sh up && bench/regress/aws.sh setup
-  bench/regress/aws.sh build release/v2.14.0 2.14.0-dev     # optional; ~N min
+  bench/regress/aws.sh build release/v2.14.0 2.14.0-dev     # optional; ~7 min on 32 cores
   bench/regress/aws.sh run -- --release 2.4.1 --release 2.13.1 \
       --server 2.14.0-dev=/home/ubuntu/build/2.14.0-dev/server/build/hardcharger-server \
       --scale 1 --threads 8 --memory-limit 16GiB --server-cores 0-7 --client-cores 8-31 \
@@ -1100,3 +1100,67 @@ Host classes are `aws-<instance type>`, `gha-<runner label>` or `<os>-<arch>-loc
   treat its flags as leads. A wrong answer fails the job; a regression only warns.
 - **Locally**, for development: `--scale 0.01 --repetitions 2 --warm-passes 1 --mp-runs 5`
   finishes in a minute. A laptop under load measures the load.
+
+### First run: 2.4.1, 2.13.1 and release/v2.14.0 on AWS (2026-11-19)
+
+One on-demand c8a.8xlarge in us-east-2 (AMD EPYC 9R45, 32 cores without SMT, 61 GiB, Ubuntu
+24.04, kernel 7.0.0-1017-aws). Servers pinned to cores 0-7 with 8 DuckDB threads and a 16 GiB
+memory limit; clients on cores 8-31; page cache dropped before every start. Four servers:
+2.4.1 and 2.13.1 from the installer, and two builds made on the instance with the release
+recipe (manylinux_2_28): `2.14.0-dev`, `release/v2.14.0` at b97b77511, and `2.14.0-dev-pb`,
+the same plus the progress-estimate throttle of `feat/v2.14-progress-bar` (13c03d3d7, a DuckDB
+patch). Both builds still call themselves 2.13.1 (the branch's version is not bumped yet); the
+report tells them apart by label and sha256.
+
+**SF1, 10 repetitions** (about 10 minutes): 38,800 answers checked, none wrong, no statement
+failed. Medians; the interval is the 95% bootstrap interval of the ratio to 2.4.1.
+
+| Metric | 2.4.1 | 2.13.1 | 2.14.0-dev | 2.14.0-dev-pb | 2.14.0-dev vs 2.4.1 |
+|---|---|---|---|---|---|
+| TPC-H, 22 queries warm (s) | 0.322 | 0.324 | 0.323 | 0.322 | +0.2% [-1%, +1%] |
+| TPC-H, first pass after start (s) | 0.593 | 0.598 | 0.590 | 0.591 | -0.5% [-1%, -0%] |
+| Slowest single query change | | | | | q19 +3.3% [+0%, +6%], under the 10% threshold |
+| union30 (q311 shape) p50 (ms) | 12.2 | 16.6 | 31.4 | 12.8 | **+158% [+30%, +421%] REGRESSION** |
+| union30 p90 (ms) | 12.5 | 347.5 | 333.2 | 13.1 | **+2575% REGRESSION** |
+| union30 p99 (ms) | 12.9 | 516.2 | 517.5 | 13.4 | **+3906% REGRESSION** |
+| scalar30 p50 (ms) | 10.2 | 10.6 | 10.6 | 10.5 | +4.0% [+3%, +4%] |
+| Server CPU, many-pipelines (s) | 2.15 | 8.54 | 8.68 | 2.20 | **+305% REGRESSION** |
+| 1 client, throughput (q/s) | 66.9 | 66.6 | 66.8 | 66.8 | -0.2% [-1%, +1%] |
+| 4 clients, throughput (q/s) | 135.8 | 134.4 | 135.8 | 136.3 | -0.0% [-1%, +1%] |
+| 10 clients, throughput (q/s) | 147.3 | 146.6 | 147.3 | 147.6 | -0.0% [-0%, +1%] |
+| 10 clients, latency p99 (ms) | 166.5 | 165.4 | 161.6 | 170.2 | -2.9% [-12%, +5%] |
+| Ten clients x 22 queries, wall (s) | 1.505 | 1.504 | 1.503 | 1.502 | -0.2% [-1%, +0%] |
+| Peak resident set (MiB) | 1421 | 1406 | 1418 | 1435 | -0.2% [-4%, +4%] |
+
+What it says:
+
+- **release/v2.14.0 carries the 2.9.0 regression, and the suite flags it**: the 30-part
+  `UNION ALL` statement stalls up to half a second at the tail and costs four times the server
+  CPU, against 2.4.1 and against the throttled build. Against 2.13.1 nothing is flagged: the
+  regression is the same size (p99 516 vs 518 ms). The stall reproduces on AWS with the suite's
+  synthetic tables, not only with DB Olympics data (macOS does not show it).
+- **The progress-estimate throttle (`feat/v2.14-progress-bar`) removes it**: 2.14.0-dev-pb is
+  2.4.1 within noise on every metric (union30 p99 13.4 vs 12.9 ms, CPU 2.20 vs 2.15 s), and
+  23-97% better than 2.13.1 on the many-pipelines metrics, with nothing else moving.
+- Everything else (TPC-H per query and as a suite, cold and warm, 1/4/10 clients, the ten-client
+  case, memory) is equal across all four versions to within 1-3%, with intervals of a few
+  percent: the setup resolves changes well under the 10% threshold.
+- The statement of 30 scalar subqueries does not stall in any version; `scalar30` is 4% slower
+  in every version since 2.4.1, below the threshold.
+
+**SF10, 5 repetitions, one pass per concurrent client** (about 20 minutes; no published answers
+at SF10, so every version is checked against 2.4.1's own): 12,800 answers checked, none wrong,
+no statement failed. The same picture: union30 p99 523 ms on release/v2.14.0 and 525 ms on
+2.13.1 against 22.9 ms on 2.4.1 and 23.6 ms with the throttle; p90 344 ms against 20.6 ms;
+server CPU on that workload +74% [+46%, +87%]. TPC-H (warm suite 1.749 s against 1.752 s; cold
+3.341 s against 3.347 s; no query beyond 5%), throughput at 1, 4 and 10 clients (12.6, 14.7 and
+14.3 q/s for every version) and the ten-client case (15.4 s) are equal. Peak memory varies
+between starts by about 10% at SF10 (7.3-8.4 GiB), inside its threshold.
+
+The runs of 2.4.1 and 2.13.1 are stored as baselines in
+`bench/regress/baselines/aws-c8a.8xlarge/sf1-t8/` and `.../sf10-t8/`.
+
+Cost: 0.80 instance-hours of an on-demand c8a.8xlarge ($1.7243/h list price) plus its 150 GB
+gp3 volume: about $1.42 for both builds and both runs. Afterwards `aws.sh check` found nothing
+tagged `Purpose=hardcharger-perf-regress` (instance terminated; security group and key pair
+deleted).
