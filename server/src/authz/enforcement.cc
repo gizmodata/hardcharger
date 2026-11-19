@@ -607,6 +607,7 @@ class PlanChecker {
         auto& index = op.Cast<dd::LogicalCreateIndex>();
         if (!IsTempCatalog(compat::Str(index.table.ParentCatalog().GetName()))) {
           Require(index.table, Privilege::kAlterTable, {});
+          if (index.info) QualifyIndexExpressions(context_, compat::Str(index.table.ParentCatalog().GetName()), *index.info);
           if (auto problem = IndexStoredNamesProblem(context_, index); !problem.empty()) Deny(principal_, problem);
         }
         VisitChildren(op, nullptr);
@@ -2195,6 +2196,9 @@ void QualifyUncheckedTriggers(dd::ClientContext& context, dd::LogicalOperator& o
       auto& info = *op.Cast<dd::LogicalAlter>().info;
       const auto parts = PartsOf(info);
       if (info.type == dd::AlterType::ALTER_TABLE && !parts.empty()) QualifyAlterExpressions(context, parts[0], info);
+    } else if (op.type == OpType::LOGICAL_CREATE_INDEX) {
+      auto& index = op.Cast<dd::LogicalCreateIndex>();
+      if (index.info) QualifyIndexExpressions(context, compat::Str(index.table.ParentCatalog().GetName()), *index.info);
     }
   } catch (const std::exception&) {
   }
@@ -2237,6 +2241,11 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
     if (plan && !state->bypassed()) {
       // Record superuser-created objects as system-owned so a stale record of a
       // user's earlier object of the same name can never apply to them.
+      // An index that could not be bound to one macro beyond doubt is nobody's to read or write
+      // through, an administrator's statement included (triggers.hpp, IndexExpressionProblem).
+      if (auto problem = StatementIndexProblem(context, *plan); !problem.empty()) {
+        ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
+      }
       std::function<void(dd::LogicalOperator&)> collect = [&](dd::LogicalOperator& op) {
         if (op.type == OpType::LOGICAL_ALTER) {
           auto& info = *op.Cast<dd::LogicalAlter>().info;
@@ -2246,6 +2255,7 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
         if (op.type == OpType::LOGICAL_CREATE_INDEX) {
           auto& index = op.Cast<dd::LogicalCreateIndex>();
           if (!IsTempCatalog(compat::Str(index.table.ParentCatalog().GetName()))) {
+            if (index.info) QualifyIndexExpressions(context, compat::Str(index.table.ParentCatalog().GetName()), *index.info);
             if (auto problem = IndexStoredNamesProblem(context, index); !problem.empty()) {
               ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
             }
@@ -2385,6 +2395,10 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
   const auto trigger_bodies = FindTriggerBodies(context, *snapshot, *plan);
   PlanChecker checker(context, *snapshot, principal, view_columns, trigger_bodies);
   checker.Visit(*plan);
+  // The indexes of what it reads and writes are bound (again, after a start) while it runs.
+  if (auto problem = StatementIndexProblem(context, *plan); !problem.empty()) {
+    ::hardcharger::authz::Deny(principal, problem);
+  }
   RemoveViewMarkers(plan);
   // The external policy service may refuse what passed.
   if (const auto* service = engine->policy_service()) {
@@ -2440,6 +2454,9 @@ void PostBind(dd::PlannerExtensionInput& input, dd::BoundStatement& statement) {
   const auto trigger_bodies = FindTriggerBodies(input.context, *snapshot, *statement.plan);
   PlanChecker checker(input.context, *snapshot, principal, view_columns, trigger_bodies);
   checker.Visit(*statement.plan);
+  if (auto problem = StatementIndexProblem(input.context, *statement.plan); !problem.empty()) {
+    ::hardcharger::authz::Deny(principal, problem);
+  }
   state->NoteBindChecked();
 }
 

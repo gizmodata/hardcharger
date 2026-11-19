@@ -191,6 +191,7 @@
 #include <duckdb.hpp>
 #include <duckdb/catalog/catalog_entry/trigger_catalog_entry.hpp>
 #include <duckdb/parser/parsed_data/create_trigger_info.hpp>
+#include <duckdb/parser/parsed_data/create_index_info.hpp>
 #include <duckdb/parser/parsed_data/create_table_info.hpp>
 #include <optional>
 #include <set>
@@ -301,6 +302,23 @@ void QualifyTableExpressions(duckdb::ClientContext& context, const std::string& 
                              duckdb::CreateTableInfo& info);
 void QualifyTableExpression(duckdb::ClientContext& context, const std::string& catalog,
                             duckdb::unique_ptr<duckdb::ParsedExpression>& expression);
+
+// CREATE INDEX: the macros the index's expressions call, given their schema, like a table's
+// CHECKs (QualifyTableExpression). An index's entries are computed with what its expression
+// finds, and the expression is bound again after every start: stored with its schema, it can
+// only ever mean that macro.
+void QualifyIndexExpressions(duckdb::ClientContext& context, const std::string& catalog, duckdb::CreateIndexInfo& info);
+
+// An index whose stored expression would not be bound to one macro (or type) beyond doubt when
+// the index is next bound, under its table's name scope: one from before 2.14 that names a
+// macro without its schema while its database has several of that name (the table's own schema
+// is looked in before main; which one computed the entries on disk is not on record), or names
+// one its scope does not find. Keeping such an index with another macro than the one its
+// entries were computed with makes it wrong, and DuckDB ends a DELETE on it with a fatal error.
+// Why `table` must not be read or written through it, with what to do; "" when every index is
+// sure. And the same for every table a statement's plan scans or writes.
+std::string IndexExpressionProblem(duckdb::ClientContext& context, duckdb::TableCatalogEntry& table);
+std::string StatementIndexProblem(duckdb::ClientContext& context, const duckdb::LogicalOperator& plan);
 
 // Does `expression` call DuckDB's own functions, and cast to its own types, only? (Nothing a
 // user could create or a session's search path could choose.)

@@ -390,6 +390,128 @@ def test_an_index_over_a_macro_is_its_tables_when_bound_after_a_start(launcher, 
     assert rows(client=second.admin(), sql="SELECT (SELECT count(*) FROM main.ix_bare), (SELECT count(*) FROM main.ix_full)") == [(2, 2)]
 
 
+def test_a_new_index_stores_its_macro_and_a_later_macro_of_that_name_changes_nothing(launcher, store, tmp_path):
+    # Review of round 3, finding 04. An index over main's macro, written bare, on a table of
+    # app; a user who may create macros in app then makes one of that name there. A bare name
+    # is looked up in the table's own schema before main, so after the next start the unique
+    # index was bound over HIS macro: inserts collided, and a DELETE of a row indexed before
+    # ended in a DuckDB fatal error that invalidated the database for every session.
+    # CREATE INDEX stores the macro with its schema now, so it can only ever mean that one.
+    database, uri = tmp_path / "nx.duckdb", store.new_database()
+    first = start_rbac_server(launcher=launcher, store_uri=uri, args=["--database", str(database)])
+    admin = first.admin()
+    for sql in ["CREATE SCHEMA app", "CREATE SCHEMA ws", "CREATE ROLE makers", "CREATE ROLE writers",
+                "CREATE USER mia", "CREATE USER wes", "GRANT makers TO mia", "GRANT writers TO wes",
+                "GRANT CREATE MACRO ON SCHEMA app TO makers", "GRANT CREATE TABLE, CREATE MACRO ON SCHEMA ws TO writers",
+                "CREATE MACRO main.norm(x) AS lower(x)", "CREATE TABLE app.people (id INT, name VARCHAR)",
+                "CREATE UNIQUE INDEX people_name ON app.people (norm(name))", "INSERT INTO app.people VALUES (1, 'Ann')",
+                "GRANT SELECT, INSERT, DELETE ON app.people TO makers"]:
+        expect_allowed(client=admin, sql=sql)
+    stored = rows(client=admin, sql="SELECT sql FROM duckdb_indexes() WHERE index_name = 'people_name'")[0][0]
+    assert "main.norm(" in stored, stored
+    mia = first.user(name="mia")
+    fails(client=mia, sql="INSERT INTO app.people VALUES (2, 'ANN')", why='Duplicate key "lower(name): ann"')
+    # The index says main.norm: a macro of that name in app is no one's to worry about.
+    expect_allowed(client=mia, sql="CREATE MACRO app.norm(x) AS 'everyone'")
+    # Twin: a user's own index over his own macro, named bare from its own schema.
+    wes = first.user(name="wes")
+    for sql in ["USE ws", "CREATE MACRO w_norm(x) AS upper(x)", "CREATE TABLE mine (id INT, name VARCHAR)",
+                "CREATE UNIQUE INDEX mine_name ON mine (w_norm(name))", "INSERT INTO mine VALUES (1, 'a')"]:
+        expect_allowed(client=wes, sql=sql)
+    assert "ws.w_norm(" in rows(client=admin, sql="SELECT sql FROM duckdb_indexes() WHERE index_name = 'mine_name'")[0][0]
+    fails(client=wes, sql="INSERT INTO mine VALUES (2, 'A')", why="Duplicate key")
+    expect_allowed(client=admin, sql="CHECKPOINT")
+    first.running.stop()
+    for start in range(2):  # the index is bound again after every start
+        again = start_rbac_server(launcher=launcher, store_uri=uri, args=["--database", str(database)])
+        admin, mia, wes = again.admin(), again.user(name="mia"), again.user(name="wes")
+        expect_allowed(client=admin, sql=f"INSERT INTO app.people VALUES ({10 + start}, 'Cid{start}')")
+        expect_allowed(client=admin, sql=f"INSERT INTO app.people VALUES ({20 + start}, 'Dee{start}')")
+        fails(client=mia, sql="INSERT INTO app.people VALUES (6, 'ANN')" if start == 0 else "INSERT INTO app.people VALUES (6, 'CID0')",
+              why='Duplicate key "lower(name): ')
+        # A row indexed before the start goes, and the table is still there for everyone.
+        expect_allowed(client=admin, sql="DELETE FROM app.people WHERE id = 1" if start == 0 else "DELETE FROM app.people WHERE id = 20")
+        assert rows(client=mia, sql="SELECT count(*) FROM app.people") == [(2 + start,)]
+        fails(client=wes, sql="INSERT INTO ws.mine VALUES (3, 'A')", why="Duplicate key")
+        expect_allowed(client=wes, sql=f"INSERT INTO ws.mine VALUES ({30 + start}, 'b{start}')")
+        expect_allowed(client=wes, sql=f"DELETE FROM ws.mine WHERE id = {30 + start}")
+        expect_allowed(client=admin, sql="CHECKPOINT")
+        again.running.stop()
+
+
+def test_an_index_from_before_is_bound_to_one_macro_beyond_doubt_or_not_used(legacy, launcher, tmp_path):
+    # Indexes a 2.13.0 server made keep their macro as written, bare. Bound under the table's
+    # name scope (its schema, then main; never the session), and only where that is one macro
+    # beyond doubt: with two of the name in the database nobody knows which one computed the
+    # entries on disk, and an index kept with the other is wrong (DuckDB ends a DELETE on it with
+    # a fatal error that invalidates the database). Such a table is refused, saying how to mend it.
+    admin = legacy.admin()
+    two = "of that name (in "
+    mend = "Drop the index and create it again"
+
+    def refused(server, table: str, why: str):
+        for client in [server.user(name="wes"), server.admin()]:
+            for sql in [f"INSERT INTO {L}.{table} VALUES (50, 'Zed')", f"DELETE FROM {L}.{table} WHERE id = 1",
+                        f"SELECT count(*) FROM {L}.{table}"]:
+                error = expect_blocked(client=client, sql=sql, why=why)
+                assert mend in error.detail and "FATAL" not in error.detail, error.detail
+        assert rows(client=server.admin(), sql="SELECT 1") == [(1,)]  # and the database is still there
+
+    def sound(server, table: str, key: int):
+        for path, wes in sessions(server=server, catalog=L):
+            fails(client=wes, sql=f"INSERT INTO {L}.{table} VALUES (99, 'ANN')", why='Duplicate key "lower(name): ann"')
+        wes = server.user(name="wes")
+        expect_allowed(client=wes, sql=f"INSERT INTO {L}.{table} VALUES ({key}, 'Bob{key}')")
+        expect_allowed(client=wes, sql=f"DELETE FROM {L}.{table} WHERE id = {key}")
+        assert rows(client=server.admin(), sql=f"SELECT name FROM {L}.{table} WHERE id = 1") == [("Ann",)]
+
+    # One macro of that name (main's): bound to it, from any session.
+    sound(server=legacy, table="app.people", key=2)
+    # A user who may create macros in the table's schema may not create one of that name ...
+    expect_allowed(client=admin, sql="GRANT CREATE MACRO ON SCHEMA app TO writers")
+    error = expect_blocked(client=legacy.user(name="wes"), sql="CREATE MACRO app.norm(x) AS 'everyone'",
+                           why="would change what a view, a trigger, a row or masking policy")
+    assert "generated column or index" in error.detail, error.detail
+    # ... and where an administrator does, or one was there from before (rpt.norm_r), the table
+    # is not used until its index says which.
+    expect_allowed(client=admin, sql="CREATE MACRO app.norm(x) AS 'everyone'")
+    refused(server=legacy, table="app.people", why=f"index people_name on table {L}.app.people calls macro norm without its schema")
+    assert two in expect_blocked(client=admin, sql="DELETE FROM app.people", why="has 2 of that name").detail
+    refused(server=legacy, table="rpt.items", why=f"index items_name on table {L}.rpt.items calls macro norm_r without its schema")
+    # One that only its creator's search path found, in a third schema.
+    refused(server=legacy, table="app.tagged", why="it is in neither the table's own schema nor main of its database")
+    # CHECKPOINT (the statement) binds every index first, and DuckDB invalidates the database
+    # when one cannot be bound: refused too, with the same words, and the database is still there.
+    error = expect_blocked(client=admin, sql="CHECKPOINT", why="CHECKPOINT binds every index, and index ")
+    assert mend in error.detail, error.detail
+    assert rows(client=admin, sql="SELECT count(*) FROM main.emp") == [(3,)]
+    # The same after a start: refused, not bound.
+    legacy.running.stop()
+    database = tmp_path / f"{L}.duckdb"
+    second = start_rbac_server(launcher=launcher, store_uri=legacy.store_uri, args=["--database", str(database)])
+    refused(server=second, table="app.people", why="has 2 of that name")
+    refused(server=second, table="rpt.items", why="has 2 of that name")
+    refused(server=second, table="app.tagged", why="neither the table's own schema nor main")
+    # Mended as the refusal says. CREATE INDEX stores the macro the creating session means with
+    # its schema (main's here, though the table's own schema has one of that name too).
+    admin = second.admin()
+    for schema, index, table, written, macro in [("app", "people_name", "app.people", "norm", "main.norm"),
+                                                 ("rpt", "items_name", "rpt.items", "norm_r", "main.norm_r"),
+                                                 ("app", "tagged_name", "app.tagged", "util.norm_u", "util.norm_u")]:
+        expect_allowed(client=admin, sql=f"DROP INDEX {schema}.{index}")
+        expect_allowed(client=admin, sql=f"CREATE UNIQUE INDEX {index} ON {table} ({written}(name))")
+        stored = rows(client=admin, sql=f"SELECT sql FROM duckdb_indexes() WHERE index_name = '{index}'")[0][0]
+        assert f"{macro}(" in stored, stored
+    expect_allowed(client=admin, sql="CHECKPOINT")
+    for key, table in enumerate(["app.people", "rpt.items", "app.tagged"]):
+        sound(server=second, table=table, key=60 + key)
+    expect_allowed(client=admin, sql="CHECKPOINT")
+    second.running.stop()
+    third = start_rbac_server(launcher=launcher, store_uri=legacy.store_uri, args=["--database", str(database)])
+    for key, table in enumerate(["app.people", "rpt.items", "app.tagged"]):
+        sound(server=third, table=table, key=70 + key)
+
+
 def test_a_nested_schemas_macro_is_found_from_any_session(legacy):
     # A name with a nested schema path and no catalog (DuckDB 2.0) is in its table's catalog,
     # not wherever the session's search path finds a schema of the first name.
@@ -505,13 +627,15 @@ def test_a_definition_whose_names_its_scope_would_not_find_is_refused_at_create(
                    why=f"which is {c}.util.tag in this session but would not be found where")
     assert f"view {c}.rpt.v_tag calls function tag" in detail and "name it with its schema (schema.name): util.tag" in detail, detail
     assert f"there a name is looked up in {c}.rpt, then in schema main of catalog {c} and among DuckDB's own" in detail, detail
-    # An index over such a macro: it would not be found when the index is bound again after a start.
-    detail = fails(client=admin, sql="CREATE INDEX src_tag ON app.src (tag(region))",
-                   why=f"an index on table {c}.app.src calls function tag, which is {c}.util.tag in this session but would not be found")
+    # An index over such a macro is stored with the macro's schema, like a CHECK; a macro called
+    # as a method is refused, as everywhere.
+    expect_allowed(client=admin, sql="CREATE INDEX src_tag ON app.src (tag(region))")
+    fails(client=admin, sql="CREATE INDEX src_tag_m ON app.src (region.tag())", why=method)
     expect_allowed(client=admin, sql="SET search_path = 'main'")
     expect_allowed(client=admin, sql="CREATE VIEW rpt.v_tag AS SELECT util.tag(note) AS f FROM main.other_secret")
-    expect_allowed(client=admin, sql="CREATE INDEX src_tag ON app.src (util.tag(region))")
     expect_allowed(client=admin, sql="CREATE INDEX src_fmt ON app.src (fmt(region))")
+    assert rows(client=admin, sql="SELECT index_name, sql LIKE '%util.tag(%' OR sql LIKE '%main.fmt(%' FROM duckdb_indexes() "
+                                  "WHERE index_name IN ('src_tag', 'src_fmt') ORDER BY 1") == [("src_fmt", True), ("src_tag", True)]
     # A trigger's action is stored with the macros it calls given their schema, like its tables.
     expect_allowed(client=admin, sql="CREATE TRIGGER src_t AFTER INSERT ON app.src REFERENCING NEW TABLE AS n FOR EACH STATEMENT "
                                      "INSERT INTO app.sink SELECT fmt(region) FROM n")

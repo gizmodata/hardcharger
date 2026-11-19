@@ -1217,10 +1217,11 @@ current one), then among DuckDB's own functions: a view in `reports` that calls 
 of the same database, `catalog.schema.name` exactly there. A macro is never called as a method
 inside one of these (`x.is_valid()`; DuckDB's own functions are: `x.lower()`). A macro or type in a
 third schema, which only the creator's search path finds, is named with its schema:
-`DEFAULT util.stamp()`. `CREATE TABLE` and `CREATE TRIGGER` store the macros they call that way, as
-the creating session finds them (`duckdb_tables()` shows `CHECK(main.is_valid(x))`); `CREATE VIEW`,
-`CREATE INDEX`, `CREATE ROW POLICY` and `SET MASKING POLICY` refuse a definition whose names would
-be something else where it is evaluated, with the name to write. Only an administrator may create a
+`DEFAULT util.stamp()`. `CREATE TABLE`, `CREATE INDEX` and `CREATE TRIGGER` store the macros they
+call that way, as the creating session finds them (`duckdb_tables()` shows
+`CHECK(main.is_valid(x))`, `duckdb_indexes()` `main.norm("name")`); `CREATE VIEW`,
+`CREATE ROW POLICY` and `SET MASKING POLICY` refuse a definition whose names would be something
+else where it is evaluated, with the name to write. Only an administrator may create a
 macro or type that an existing view, trigger, policy or table would then find first. An
 administrator's session gets the same answers as anyone's.
 
@@ -1231,6 +1232,13 @@ saying which name and how to mend it: `CREATE OR REPLACE` the view or trigger, r
 DuckDB cannot alter, re-create the table or have an administrator create a macro of that name in
 the table's own schema that calls the one meant
 (`CREATE MACRO app.is_valid(x) AS main.is_valid(x)`).
+
+An index over a macro that was made before 2.14 keeps the macro's name as written, and an index's
+entries are only right for the macro they were computed with. Such an index is used while its name
+can mean one macro only. Where its database has several macros of that name (one in the table's
+schema and one in `main`, say), or the name is in neither place, reads and writes of the table and
+`CHECKPOINT` are refused, saying so, until the index is dropped and created again: `CREATE INDEX`
+then stores the macro with its schema.
 
 On a server without access control every session may do anything anyway and DuckDB's own behaviour
 stands: name the tables in a trigger's action with their schema.

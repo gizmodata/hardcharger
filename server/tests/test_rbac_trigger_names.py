@@ -692,7 +692,7 @@ def test_a_macro_or_type_a_table_calls_is_the_administrators_to_create(legacy):
     # what a view or a trigger calls: a user may not make a macro of that name.
     wes = legacy.user(name="wes")
     expect_blocked(client=wes, sql="CREATE MACRO ws.is_positive(x) AS true",
-                   why="(or a table's column default, CHECK constraint or generated column)")
+                   why="(or a table's column default, CHECK constraint, generated column or index)")
     # Twin: a name nothing calls.
     expect_allowed(client=wes, sql="CREATE MACRO ws.is_negative(x) AS x < 0")
 

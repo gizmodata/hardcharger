@@ -4,7 +4,12 @@
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/common/enums/trigger_type.hpp>
 #include <duckdb/main/client_context.hpp>
+#include <duckdb/main/attached_database.hpp>
+#include <duckdb/main/database_manager.hpp>
+#include <duckdb/catalog/catalog_entry/index_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/macro_catalog_entry.hpp>
+#include <duckdb/parser/parsed_data/create_index_info.hpp>
+#include <duckdb/storage/data_table.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/sequence_catalog_entry.hpp>
 #include <duckdb/function/scalar_macro_function.hpp>
@@ -2099,6 +2104,164 @@ void QualifyTableExpressions(dd::ClientContext& context, const std::string& cata
     QualifyTableExpression(context, catalog, copy);
     column.SetDefaultValue(std::move(copy));
   }
+}
+
+void QualifyIndexExpressions(dd::ClientContext& context, const std::string& catalog, dd::CreateIndexInfo& info) {
+  if (IdentifiersEqual(catalog, TEMP_CATALOG) || info.temporary) return;
+  // parsed_expressions is what the index keeps and is bound from again after a start.
+  for (auto* list : {&info.parsed_expressions, &info.expressions}) {
+    for (auto& expression : *list) QualifyTableExpression(context, catalog, expression);
+  }
+}
+
+namespace {
+
+// How many macros (or types) of this name a catalog has, in any schema.
+size_t CountNamed(dd::ClientContext& context, dd::Catalog& catalog, dd::CatalogType type, const std::string& name,
+                  std::vector<std::string>& where) {
+  size_t count = 0;
+  const std::string catalog_name = compat::Str(catalog.GetName());
+  for (auto& found : catalog.GetSchemas(context)) {
+    const ObjectPath schema = PathOfEntry(found.get());
+    auto entry = EntryAt(context, type, catalog_name, schema.schema_path, name);
+    if (!entry || entry->internal) continue;
+    ++count;
+    where.push_back(schema.ToString());
+  }
+  return count;
+}
+
+}  // namespace
+
+std::string IndexExpressionProblem(dd::ClientContext& context, dd::TableCatalogEntry& table) {
+  try {
+    if (!table.IsDuckTable() || !table.GetStorage().HasIndexes()) return "";
+    const ObjectPath path = PathOfEntry(table);
+    if (IdentifiersEqual(path.catalog, TEMP_CATALOG)) return "";
+    // The schema's index entries first, then their expressions, outside the scan's callback.
+    std::vector<dd::reference<dd::IndexCatalogEntry>> indexes;
+    table.ParentSchema().Scan(context, dd::CatalogType::INDEX_ENTRY, [&](dd::CatalogEntry& entry) {
+      if (entry.type != dd::CatalogType::INDEX_ENTRY) return;
+      auto& index = entry.Cast<dd::IndexCatalogEntry>();
+      if (IdentifiersEqual(compat::Str(index.GetTableName()), path.object_name)) indexes.push_back(index);
+    });
+    for (auto& found : indexes) {
+      auto& index = found.get();
+      if (index.parsed_expressions.empty()) continue;  // an index over plain columns
+      ActionNames names;
+      for (const auto& expression : index.parsed_expressions) {
+        if (!expression) continue;
+        auto copy = expression->Copy();
+        names.Expression(copy);
+      }
+      const std::string what = "index " + QuoteIdentifierIfNeeded(compat::Str(index.name)) + " on table " + path.ToString();
+      const std::string mend = ". Drop the index and create it again (DROP INDEX, then CREATE INDEX, which stores the "
+                               "macros and types it names with their schema)";
+      auto problem = [&](dd::CatalogType type, const std::vector<std::string>& parts, const char* noun,
+                         const char* verb) -> std::string {
+        dd::optional_ptr<dd::CatalogEntry> under_scope;
+        try {
+          under_scope = FindUnderScope(context, type, path.catalog, path.schema_path, parts);
+        } catch (const std::exception&) {
+        }
+        if (under_scope && (under_scope->internal || IsDuckDbsOwn(*under_scope))) return "";
+        if (parts.size() > 1) {
+          if (under_scope) return "";  // named with its schema: that one, for every session
+          // value.f(): DuckDB's own functions only (name_scope.hpp).
+          dd::optional_ptr<dd::CatalogEntry> method;
+          try {
+            method = FindUnderScope(context, type, path.catalog, path.schema_path, {parts.back()});
+          } catch (const std::exception&) {
+          }
+          if (type != dd::CatalogType::TYPE_ENTRY && method && (method->internal || IsDuckDbsOwn(*method))) return "";
+          return what + " " + verb + " " + noun + " " + Written(parts) + ", which is not found where an index's "
+                 "expression is looked up (that schema of the table's own database; a macro is never called as "
+                 "value.function())" + mend;
+        }
+        std::vector<std::string> where;
+        const size_t named = CountNamed(context, table.ParentCatalog(), type, parts[0], where);
+        if (named == 0) return "";  // no macro (or type) of that name anywhere: not a name of one
+        std::string places;
+        for (const auto& place : where) places += (places.empty() ? "" : ", ") + place;
+        if (!under_scope) {
+          return what + " " + verb + " " + noun + " " + Written(parts) + " without its schema, and it is in neither the "
+                 "table's own schema nor main of its database (it is in " + places + "), where an index's expression "
+                 "is looked up whatever the session" + mend;
+        }
+        if (named > 1) {
+          return what + " " + verb + " " + noun + " " + Written(parts) + " without its schema, and catalog " +
+                 QuoteIdentifierIfNeeded(path.catalog) + " has " + std::to_string(named) + " of that name (in " + places +
+                 "): which one the index's entries were computed with is not on record, and an index kept with "
+                 "another one would be wrong, so the table is not read or written until that is settled" + mend +
+                 ", naming the one meant";
+        }
+        return "";
+      };
+      for (const auto& type_name : names.types) {
+        if (auto text = problem(dd::CatalogType::TYPE_ENTRY, type_name, "type", "names"); !text.empty()) return text;
+      }
+      for (const auto& function : names.functions) {
+        if (function.table) continue;
+        if (auto text = problem(dd::CatalogType::SCALAR_FUNCTION_ENTRY, function.parts, "macro", "calls"); !text.empty()) {
+          return text;
+        }
+      }
+    }
+    return "";
+  } catch (const std::exception&) {
+    return "";  // not read here: the index is bound under its table's name scope all the same
+  }
+}
+
+namespace {
+void CollectUsedTables(const dd::LogicalOperator& op, std::vector<dd::TableCatalogEntry*>& tables, bool& checkpoint) {
+  dd::TableCatalogEntry* table = WrittenTable(op);
+  if (!table && op.type == OpType::LOGICAL_GET) {
+    auto& get = op.Cast<dd::LogicalGet>();
+    if (auto scanned = get.GetTable()) {
+      table = scanned.get();
+    } else {
+      const std::string function = FoldIdentifier(compat::Str(get.function.GetName()));
+      checkpoint = checkpoint || function == "checkpoint" || function == "force_checkpoint";
+    }
+  }
+  if (table && std::find(tables.begin(), tables.end(), table) == tables.end()) tables.push_back(table);
+  for (const auto& child : op.children) {
+    if (child) CollectUsedTables(*child, tables, checkpoint);
+  }
+}
+}  // namespace
+
+std::string StatementIndexProblem(dd::ClientContext& context, const dd::LogicalOperator& plan) {
+  std::vector<dd::TableCatalogEntry*> tables;
+  bool checkpoint = false;
+  CollectUsedTables(plan, tables, checkpoint);
+  for (dd::TableCatalogEntry* table : tables) {
+    if (auto problem = IndexExpressionProblem(context, *table); !problem.empty()) return problem;
+  }
+  if (!checkpoint) return "";
+  // CHECKPOINT (the statement) binds every index of every table before it writes them, and
+  // DuckDB invalidates the database when one cannot be bound: the same question, for them all.
+  try {
+    std::vector<dd::reference<dd::TableCatalogEntry>> every;
+    for (const auto& database : dd::DatabaseManager::Get(context).GetDatabases(context)) {
+      if (!database || database->IsSystem() || database->IsTemporary()) continue;
+      auto& catalog = database->GetCatalog();
+      if (!catalog.IsDuckCatalog()) continue;
+      for (auto& found : catalog.GetSchemas(context)) {
+        found.get().Scan(context, dd::CatalogType::TABLE_ENTRY, [&](dd::CatalogEntry& entry) {
+          if (entry.type == dd::CatalogType::TABLE_ENTRY) every.push_back(entry.Cast<dd::TableCatalogEntry>());
+        });
+      }
+    }
+    for (auto& table : every) {
+      if (auto problem = IndexExpressionProblem(context, table.get()); !problem.empty()) {
+        return "CHECKPOINT binds every index, and " + problem;
+      }
+    }
+  } catch (const std::exception&) {
+  }
+  return "";
 }
 
 namespace {

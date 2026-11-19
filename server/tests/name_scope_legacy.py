@@ -22,6 +22,8 @@ LEGACY_OBJECTS = [
     "CREATE MACRO main.in_region2(x) AS x <> 'LATAM'", "CREATE MACRO main.dflt() AS 'genuine default'",
     "CREATE MACRO main.inner_ok(x) AS x > 0", "CREATE MACRO main.outer_ok(x) AS inner_ok(x)",
     "CREATE MACRO main.pair_ok(a, b) AS a < b",
+    "CREATE MACRO main.norm(x) AS lower(x)", "CREATE MACRO main.norm_r(x) AS lower(x)",
+    "CREATE MACRO util.norm_u(x) AS lower(x)",
     "CREATE TYPE main.mood AS ENUM ('ok', 'sad')",
     "CREATE TABLE main.other_secret (note VARCHAR)", "INSERT INTO main.other_secret VALUES ('other-secret-A'), ('other-secret-B')",
     "CREATE TABLE main.audit_log (what VARCHAR, n BIGINT)",
@@ -52,6 +54,17 @@ LEGACY_OBJECTS = [
     "CREATE TABLE main.pairs (i INT, j INT, CHECK (pair_ok(i, j)))", "INSERT INTO main.pairs VALUES (1, 5)",
     # A generated column DuckDB computes again when rows are appended (by a trigger, here).
     "CREATE TABLE main.gen_src (secret VARCHAR)", "CREATE TABLE main.gen_sink (secret VARCHAR, label VARCHAR AS (fmt(secret)))",
+    # Unique indexes over a macro named bare: main's from a table of app (the only one of that
+    # name); main's from a table of rpt, where the user then makes one of the same name; and one
+    # the creator's search path found in a third schema.
+    "CREATE TABLE app.people (id INT, name VARCHAR)", "INSERT INTO app.people VALUES (1, 'Ann')",
+    "CREATE UNIQUE INDEX people_name ON app.people (norm(name))",
+    "CREATE TABLE rpt.items (id INT, name VARCHAR)", "INSERT INTO rpt.items VALUES (1, 'Ann')",
+    "CREATE UNIQUE INDEX items_name ON rpt.items (norm_r(name))",
+    "SET search_path = 'main,util'",
+    "CREATE TABLE app.tagged (id INT, name VARCHAR)", "INSERT INTO app.tagged VALUES (1, 'Ann')",
+    "CREATE UNIQUE INDEX tagged_name ON app.tagged (norm_u(name))",
+    "SET search_path = 'main'",
     # Policies' tables.
     "CREATE TABLE main.emp (name VARCHAR, region VARCHAR, ssn VARCHAR)",
     "INSERT INTO main.emp VALUES ('ann', 'EMEA', '111-11-1111'), ('bob', 'APAC', '222-22-2222'), ('cy', 'LATAM', '333-33-3333')",
@@ -69,6 +82,7 @@ LEGACY_WES = [
     f"CREATE MACRO rpt.mask(x) AS error('LEAK: ' || x || ' / ' || (SELECT string_agg(note, ',') FROM {LEGACY}.main.other_secret))",
     "CREATE MACRO ws.stamp() AS 'FORGED BY WES'", "CREATE MACRO ws.dflt() AS 'FORGED DEFAULT', (m) AS 'FORGED DEFAULT'",
     "CREATE MACRO ws.pair_ok(a, b) AS true, (m, a, b) AS true",
+    "CREATE MACRO rpt.norm_r(x) AS 'everyone'",
     "CREATE MACRO ws.mask_ssn(x) AS x, (a, b) AS b", "CREATE MACRO ws.in_region(x) AS true, (a, b) AS true",
     "CREATE MACRO ws.in_region2(x) AS true", "CREATE MACRO ws.inner_ok(x) AS true",
     "CREATE TYPE ws.mood AS ENUM ('ok', 'LEAK')",
@@ -115,6 +129,8 @@ LEGACY_ACCESS = [
     "GRANT INSERT ON main.outbox TO writers", "GRANT SELECT ON main.moods TO writers",
     "GRANT INSERT ON main.dflt_t TO writers", "GRANT INSERT ON main.gen_src TO writers",
     "GRANT SELECT, INSERT ON main.dflt_pk TO writers", "GRANT SELECT, UPDATE ON main.pairs TO writers",
+    "GRANT SELECT, INSERT, DELETE ON app.people TO writers", "GRANT SELECT, INSERT, DELETE ON rpt.items TO writers",
+    "GRANT SELECT, INSERT, DELETE ON app.tagged TO writers",
     "GRANT INSERT ON main.gen_sink TO writers", "GRANT SELECT ON main.fmt_v TO writers",
     "GRANT SELECT ON rpt.fmt_v TO writers", "GRANT SELECT ON main.emp TO writers",
     "GRANT SELECT ON main.emp2 TO writers", "GRANT SELECT ON main.emp3 TO writers",

@@ -34,10 +34,11 @@ own changelog in `python/CHANGELOG.md`.
   included. Affected: every release with access control, through 2.13.1.
   - What to write: nothing new for a macro or type in the object's own schema or in `main`.
     One in a third schema, which only the creator's search path finds, is named with its schema
-    (`util.stamp()`). `CREATE TABLE` and `CREATE TRIGGER` store the macros they call that way
-    for you, as the creating session finds them; `CREATE VIEW`, `CREATE INDEX`,
-    `CREATE ROW POLICY` and setting a masking policy on a column refuse a definition whose
-    names would be something else where it is evaluated, saying what to write. Only an
+    (`util.stamp()`). `CREATE TABLE`, `CREATE INDEX` and `CREATE TRIGGER` store the macros they
+    call that way for you, as the creating session finds them (`duckdb_indexes()` shows
+    `main.norm("name")`); `CREATE VIEW`, `CREATE ROW POLICY` and setting a masking policy on a
+    column refuse a definition whose names would be something else where it is evaluated, saying
+    what to write. Only an
     administrator may create a macro or type that an existing object would then find first.
   - Objects made before this release are looked up the same way. One whose macro is in its
     own schema or in `main` (or is named with its schema) works as before. One that names a
@@ -47,6 +48,12 @@ own changelog in `python/CHANGELOG.md`.
     re-create the table, or an administrator creates a macro of that name in the table's schema
     that calls the one meant (`CREATE MACRO app.is_valid(x) AS main.is_valid(x)`). After
     upgrading, read and write as a user once.
+  - An index over a macro, made before this release, keeps the macro's name as written. It is
+    used only while that name can mean one macro: if its database has several macros of the
+    name, or the name is not in the table's schema or `main`, reads and writes of the table
+    (and `CHECKPOINT`) are refused until the index is dropped and created again, which stores
+    the macro with its schema. (An index kept with another macro than the one its entries were
+    computed with is wrong, and DuckDB ends a `DELETE` on it with a fatal error.)
   - This needs Hardcharger's DuckDB build (a small patch to DuckDB's binder,
     `server/scripts/patch-duckdb-name-scope.cmake`): rebuild the dependencies when building
     from source.

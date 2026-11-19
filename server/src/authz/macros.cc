@@ -3,6 +3,7 @@
 #include "authz/resolver.hpp"
 
 #include <duckdb/catalog/catalog.hpp>
+#include <duckdb/catalog/catalog_entry/index_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/macro_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
@@ -235,6 +236,24 @@ void CollectTableExpressions(const dd::TableCatalogEntry& table, ReferenceCollec
   }
 }
 
+// The expressions of a schema's indexes: kept as written too, and bound again (under their
+// table's name scope) when an index is first needed after a start. What they call is the
+// table's as much as a CHECK's: a macro of that name made later where the scope looks first
+// would be bound into the index, whose entries were computed with the other one.
+void CollectIndexExpressions(dd::ClientContext& context, dd::SchemaCatalogEntry& schema, ReferenceCollector& collector) {
+  schema.Scan(context, dd::CatalogType::INDEX_ENTRY, [&](dd::CatalogEntry& entry) {
+    if (entry.type != dd::CatalogType::INDEX_ENTRY) return;
+    auto& index = entry.Cast<dd::IndexCatalogEntry>();
+    for (const auto* list : {&index.parsed_expressions, &index.expressions}) {
+      for (const auto& expression : *list) {
+        if (!expression) continue;
+        auto copy = expression->Copy();
+        collector.Expression(*copy);
+      }
+    }
+  });
+}
+
 void CollectMacro(const dd::MacroFunction& macro, ReferenceCollector& collector) {
   auto copy = macro.Copy();
   for (auto& parameter : copy->default_parameters) {
@@ -427,6 +446,11 @@ std::optional<std::string> MacroNameRefusal(dd::ClientContext& context, const Sn
           CollectTableExpressions(entry.Cast<dd::TableCatalogEntry>(), collector);
           pinned.insert(pinned.end(), collector.references.begin(), collector.references.end());
         });
+        {
+          ReferenceCollector collector(catalog_name);
+          CollectIndexExpressions(context, schema, collector);
+          pinned.insert(pinned.end(), collector.references.begin(), collector.references.end());
+        }
         schema.Scan(context, dd::CatalogType::VIEW_ENTRY, [&](dd::CatalogEntry& entry) {
           if (entry.type != dd::CatalogType::VIEW_ENTRY) return;
           try {
@@ -493,7 +517,7 @@ std::optional<std::string> MacroNameRefusal(dd::ClientContext& context, const Sn
   for (const auto& reference : pinned) {
     if (CouldMean(reference, path)) {
       return what + " would change what a view, a trigger, a row or masking policy, or a macro one of them uses "
-             "computes (or a table's column default, CHECK constraint or generated column): it calls a function by that "
+             "computes (or a table's column default, CHECK constraint, generated column or index): it calls a function by that "
              "name. Only the administrator may create or replace it";
     }
   }
@@ -539,6 +563,7 @@ std::optional<std::vector<Reference>> TypeReferences(dd::ClientContext& context,
           });
         }
         ForEachTrigger(context, schema, [&](const dd::TriggerCatalogEntry& trigger) { collector.TriggerAction(trigger); });
+        CollectIndexExpressions(context, schema, collector);
         named.insert(named.end(), collector.types.begin(), collector.types.end());
       }
     } catch (const std::exception& e) {
