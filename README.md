@@ -1654,7 +1654,10 @@ exemption grants nothing else: the job still needs `SELECT`, `INSERT` and the re
   exemptions: an exempt owner lends a view nothing.
 - **Revokes.** A revoke counts at the session's next statement, prepared ones included,
   on every replica at once: a session that holds an exemption asks the store before each
-  statement (one small read), and while the store doesn't answer, no exemption applies.
+  statement (one small read), and while the store doesn't answer, no exemption applies. The
+  same holds for a trigger owner's exemption in its trigger bodies: while some trigger's owner
+  is exempt, every session asks the store before each statement, and a body run while the
+  store doesn't answer applies its owner's policies.
 - **Seen and recorded.** `SHOW GRANTS`, `hardcharger_grants()` and
   `hardcharger_effective_privileges()` list them; `hardcharger_policies()` says a policy
   doesn't apply to an exempt session; and the audit record of each statement an exemption

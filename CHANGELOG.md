@@ -82,8 +82,9 @@ own changelog in `python/CHANGELOG.md`.
   they granted (as `SYSTEM ADMIN`); scoped tokens, tokens with `catalog_access` rules and a tenant's
   users never hold them; a user's trigger body uses its owner's exemptions, never the
   writer's. A revoke counts at the next statement, prepared ones included, on every replica at
-  once (a session that holds one asks the store before each statement, and while the store
-  doesn't answer no exemption applies). `SHOW GRANTS`, `hardcharger_grants()` and
+  once (a session that holds one asks the store before each statement, as does every session
+  while a trigger's owner holds one, and while the store doesn't answer no exemption applies,
+  in a trigger body either). `SHOW GRANTS`, `hardcharger_grants()` and
   `hardcharger_effective_privileges()` list them, `hardcharger_policies()` says which policies
   no longer apply, and the audit record of each statement an exemption let through names it. A
   2.13 replica on the same store doesn't read them, and applies every policy.

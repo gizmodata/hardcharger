@@ -2048,7 +2048,8 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
       if (HasDefinerBody(bodies)) {
         CheckDefinerBodies(context, *snapshot, *plan, bodies);
         RemoveViewMarkers(plan);
-        ApplyPolicies(context, snapshot, Principal::Superuser("administrator"), plan, FindTriggerBodies(context, *snapshot, *plan));
+        ApplyPolicies(context, snapshot, Principal::Superuser("administrator"), plan,
+                      FindTriggerBodies(context, *snapshot, *plan, state->definer_exemptions_unverified()));
         state->NoteChecked(snapshot->version(), std::move(ownership), plan->type == OpType::LOGICAL_PREPARE);
         return;
       }
@@ -2093,7 +2094,8 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
   // owner's policies).
   // The audit record names each policy exemption that let the statement through.
   std::set<std::string> exemptions;
-  ApplyPolicies(context, snapshot, principal, plan, FindTriggerBodies(context, *snapshot, *plan), false, &exemptions);
+  ApplyPolicies(context, snapshot, principal, plan,
+                FindTriggerBodies(context, *snapshot, *plan, state->definer_exemptions_unverified()), false, &exemptions);
   auto ownership = checker.TakeOwnership();
   CollectRename(context, *plan, ownership);
   auto accesses = checker.TakeAccesses();

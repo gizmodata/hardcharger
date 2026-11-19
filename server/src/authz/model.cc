@@ -874,6 +874,33 @@ bool Snapshot::HasSystemPrivilege(const Principal& principal, SystemPrivilege pr
   return false;
 }
 
+bool Snapshot::AnyTriggerOwnerExempt() const {
+  if (std::none_of(system_privileges_.begin(), system_privileges_.end(),
+                   [](const SystemPrivilegeRecord& r) { return IsPolicyExemption(r.privilege); })) {
+    return false;
+  }
+  for (const auto& o : owners_) {
+    if (o.type != ObjectType::kTrigger) continue;
+    Principal owner;
+    if (o.owner_kind == OwnerKind::kUser) {
+      const UserRecord* user = FindUserById(o.owner_id);
+      if (!user) continue;
+      owner = Principal::User(user->id, user->name);
+    } else if (o.owner_kind == OwnerKind::kRole) {
+      const RoleRecord* role = FindRoleById(o.owner_id);
+      if (!role) continue;
+      owner = Principal::Role(role->id, role->name);
+    } else {
+      continue;
+    }
+    if (ExemptFromPolicies(owner, SystemPrivilege::kExemptRowPolicies) ||
+        ExemptFromPolicies(owner, SystemPrivilege::kExemptMaskingPolicies)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool Snapshot::ExemptFromPolicies(const Principal& principal, SystemPrivilege exemption) const {
   if (!IsPolicyExemption(exemption)) return false;
   // Policies never apply to the administrator (nor to a session acting as System Admin).

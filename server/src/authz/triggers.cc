@@ -490,7 +490,8 @@ class Finder {
 
 }  // namespace
 
-TriggerBodies FindTriggerBodies(dd::ClientContext& context, const Snapshot& snapshot, dd::LogicalOperator& plan) {
+TriggerBodies FindTriggerBodies(dd::ClientContext& context, const Snapshot& snapshot, dd::LogicalOperator& plan,
+                                bool definer_exemptions_unverified) {
   Finder finder(context, snapshot);
   CollectBases(plan, finder.bases, false);
   finder.Walk(plan);
@@ -503,6 +504,11 @@ TriggerBodies FindTriggerBodies(dd::ClientContext& context, const Snapshot& snap
     entry.table = PathOfEntry(*base.table);
     entry.describe = "the statement on table " + entry.table.ToString();
     finder.bodies.push_back(std::move(entry));
+  }
+  if (definer_exemptions_unverified) {
+    for (auto& body : finder.bodies) {
+      if (body.definer) body.definer->policy_exemptions_unverified = true;
+    }
   }
   return std::move(finder.bodies);
 }

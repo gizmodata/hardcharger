@@ -435,6 +435,10 @@ class Snapshot {
   // token with catalog_access rules, or as a tenant's user or role, and not while its
   // session's check with the store did not answer (Principal::policy_exemptions_unverified).
   bool ExemptFromPolicies(const Principal& principal, SystemPrivilege exemption) const;
+  // Is the owner of some trigger exempt from row or masking policies? Its trigger bodies then
+  // run without those policies for whoever fires them, so each statement asks the store
+  // first, as a session that holds an exemption does (SessionGuard::VerifySystemAdmin).
+  bool AnyTriggerOwnerExempt() const;
   // Does it hold the storage privilege `privilege` everywhere or on a location that covers
   // `path`? Always true for the administrator.
   bool HasStorageAccess(const Principal& principal, SystemPrivilege privilege, const StoragePath& path,
