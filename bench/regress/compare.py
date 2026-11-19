@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Turns raw results into a report: correctness first, then flagged regressions, then every metric.
 
-    python bench/regress/compare.py results.json [--with-baseline baselines/<host>/<v>.json ...]
-        [--candidate LABEL] [--out report.md] [--save-baselines bench/regress/baselines] [--fail-on-regression]
+    python bench/regress/compare.py results.json [--with-baseline baselines/<host>/sf1-t8/<v>.json ...]
+        [--candidate LABEL] [--out report.md] [--save-baselines bench/regress/baselines [--save-labels 2.13.1]]
+        [--fail-on-regression]
 
 The candidate (default: the run's own, the last server it lists) is compared with every other
 label. For each metric the statistic is the median, with a two-level bootstrap interval of the
@@ -298,12 +299,18 @@ def build_report(runs: list[dict], thresholds: dict, candidate: str | None = Non
     return "\n".join(lines), verdict
 
 
-def save_baselines(run: dict, directory: pathlib.Path) -> list[pathlib.Path]:
-    """One file per version: <directory>/<host class>/<label>.json, the run with only that version."""
+def baseline_dir(run: dict, directory: pathlib.Path) -> pathlib.Path:
+    """<directory>/<host class>/sf<scale>-t<threads>: only runs with equal settings compare."""
+    config = run["config"]
+    return directory / run["host"]["host_class"] / f"sf{config['scale']:g}-t{config['threads']}".replace(".", "_")
+
+
+def save_baselines(run: dict, directory: pathlib.Path, labels: list[str] | None = None) -> list[pathlib.Path]:
+    """One file per version: <baseline_dir>/<label>.json, the run with only that version."""
     written = []
-    target = directory / run["host"]["host_class"]
+    target = baseline_dir(run=run, directory=directory)
     target.mkdir(parents=True, exist_ok=True)
-    for label in run["servers"]:
+    for label in labels or run["servers"]:
         subset = {**run, "servers": {label: run["servers"][label]}, "order": [label], "candidate": label,
                   "load": {label: run["load"].get(label, {})},
                   "repetitions": [r for r in run["repetitions"] if r["label"] == label],
@@ -323,7 +330,8 @@ def main() -> int:
     parser.add_argument("--candidate", help="label to judge (default: the run's candidate)")
     parser.add_argument("--thresholds", default=str(HERE / "thresholds.json"))
     parser.add_argument("--out", help="write the report here (default: print it)")
-    parser.add_argument("--save-baselines", help="also store each version of this run under DIR/<host class>/")
+    parser.add_argument("--save-baselines", help="also store versions of this run under DIR/<host class>/sf<scale>-t<threads>/")
+    parser.add_argument("--save-labels", help="comma-separated labels to store (default: every version)")
     parser.add_argument("--fail-on-regression", action="store_true", help="exit 1 when a regression is flagged")
     args = parser.parse_args()
     runs = [json.loads(pathlib.Path(args.results).read_text())]
@@ -337,7 +345,8 @@ def main() -> int:
         print(report)
     print(verdict["summary"], file=sys.stderr)
     if args.save_baselines:
-        for path in save_baselines(run=runs[0], directory=pathlib.Path(args.save_baselines)):
+        labels = args.save_labels.split(",") if args.save_labels else None
+        for path in save_baselines(run=runs[0], directory=pathlib.Path(args.save_baselines), labels=labels):
             print(f"stored {path}", file=sys.stderr)
     failed = verdict["correctness_failures"] or verdict["errors"]
     return 1 if failed or (args.fail_on_regression and verdict["regressions"]) else 0

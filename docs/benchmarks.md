@@ -1064,8 +1064,9 @@ throughput 10%, server CPU 15%, peak memory 20%; changes under 1 ms (0.05 s CPU,
 flagged. Outputs: `results.json` (raw: every timing), `report.md` (correctness, flagged changes,
 every metric with its interval, per-repetition order and load) and `verdict.json`.
 
-`compare.py --save-baselines bench/regress/baselines` stores each version of a run as
-`baselines/<host class>/<version>.json`; `--with-baseline <file>` adds a stored version to a
+`compare.py --save-baselines bench/regress/baselines [--save-labels 2.13.1]` stores versions of a
+run as `baselines/<host class>/sf<scale>-t<threads>/<version>.json` (released versions only, by
+convention); `--with-baseline <file>` adds a stored version to a
 later run's report (refused unless the host class and settings match; marked as not interleaved).
 Host classes are `aws-<instance type>`, `gha-<runner label>` or `<os>-<arch>-local`.
 

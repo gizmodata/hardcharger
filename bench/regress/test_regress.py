@@ -166,7 +166,7 @@ def test_stored_baseline_round_trips_and_must_match_settings(tmp_path):
     run = fake_run(slow_factor=1.5)
     paths = compare.save_baselines(run=run, directory=tmp_path)
     assert sorted(p.name for p in paths) == ["new.json", "old.json"]
-    stored_old = json.loads((tmp_path / "test" / "old.json").read_text())
+    stored_old = json.loads((tmp_path / "test" / "sf1-t2" / "old.json").read_text())
     current = copy.deepcopy(run)
     current["servers"].pop("old")
     current["repetitions"] = [r for r in current["repetitions"] if r["label"] == "new"]
