@@ -113,6 +113,7 @@ jobs:
 
       # Passes the architecture to vcvarsall (arm64 on the arm64 runner selects the native
       # ARM64-hosted toolchain). Its environment reaches the bash steps too.
+      # (Its latest release, v1.13.0, still declares Node 20; none declares Node 24 yet.)
       - &build-msvc
         uses: ilammy/msvc-dev-cmd@v1
         with:
