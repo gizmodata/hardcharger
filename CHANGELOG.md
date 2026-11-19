@@ -39,7 +39,8 @@ own changelog in `python/CHANGELOG.md`.
   desk manages accounts without reading data or holding `SYSTEM ADMIN`. A holder reaches only
   the server's own users and roles that are no more than its session: never a `SYSTEM ADMIN`
   holder or the server administrator, nor a user holding a role, admin option or session
-  attribute the session lacks, nor (for a password or `ENABLE`) one that owns objects; a role
+  attribute the session lacks (or a role the administrator granted it that the session holds
+  only through a delegated membership), nor (for a password or `ENABLE`) one that owns objects; a role
   is dropped only when nothing beyond the session goes with it and no policy names it. Session
   attributes stay the administrator's, a new role holds nothing and gives its creator no
   admin option, and tenants stay with their tenant admins. Only an unrestricted administrator

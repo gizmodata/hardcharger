@@ -511,6 +511,13 @@ class Snapshot {
   std::set<std::string> AdministratorGrantedActingRoles(const Principal& principal) const;
   // AdministratorGrantedActingRoles for a user's session; empty for a role principal.
   std::set<std::string> AccountPrivilegeRoles(const Principal& principal) const;
+  // The roles a stored user holds through memberships the administrator granted, with what
+  // those inherit the same way (the store's part of AdministratorGrantedRolesOf: no sign-in's
+  // groups), whether or not it is enabled; never PUBLIC; empty for a tenant's user. What a new
+  // password, ENABLE or DROP USER of it hands over or takes away beyond its roles' ordinary
+  // grants: the reach rule asks that the session hold each of these the same way
+  // (AdministratorGrantedActingRoles).
+  std::set<std::string> AdministratorGrantedRolesOfStoredUser(const std::string& user_id) const;
   // Does the role hold an account privilege, itself or through a role it was granted (by
   // anyone)? Membership in it is then the administrator's to grant.
   bool RoleCarriesAccountPrivilege(const std::string& role_id) const;

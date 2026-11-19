@@ -1490,7 +1490,10 @@ What she reaches is limited to what her session is, so none of these statements 
 (or anyone) authority she lacks:
 
 - **Users no more powerful than the session.** `ALTER USER` and `DROP USER` reach a user only
-  when every role it holds is one the session acts with (`SET ROLE` narrows that), every role
+  when every role it holds is one the session acts with (`SET ROLE` narrows that), and held
+  the same way: a role it holds through a membership the administrator granted (which can
+  carry an account privilege or a policy exemption) amy must hold that way too, not only through
+  one a role's admin-option holder granted (which carries neither); every role
   it holds `WITH ADMIN OPTION` is one amy could grant, every session attribute it has (which
   row and masking policies read) amy has with the same value, and, for `ALTER USER`, it owns
   no table, view or schema. A user who holds `SYSTEM ADMIN` and the server administrator are
@@ -1500,7 +1503,8 @@ What she reaches is limited to what her session is, so none of these statements 
 - **No policy attributes.** `ALTER USER … SET ATTRIBUTE` / `UNSET ATTRIBUTE` stay the
   administrator's: an attribute decides which rows and values a user sees.
 - **Roles no more powerful than the session.** `DROP ROLE` reaches a role only when
-  everything it inherits is held by the session, it is held by the session itself or holds no
+  everything it inherits is held by the session (what it inherits through the administrator's
+  memberships, held the administrator's way), it is held by the session itself or holds no
   privilege of its own, and no row policy names it and no masking policy exempts it. A new
   role (`CREATE ROLE`) holds nothing, and its creator gets no admin option on it: granting a
   role still needs the role `WITH ADMIN OPTION`, as before. A new user holds `PUBLIC` only.

@@ -328,12 +328,7 @@ std::set<std::string> Snapshot::AdministratorGrantedRolesOf(const Principal& pri
   if (!user || !user->enabled) return {};
   // A tenant's user stays inside its tenant, whatever the store says.
   if (!TenantOf(PrincipalKind::kUser, user->id).empty()) return {};
-  std::set<std::string> roles;
-  for (const auto& m : memberships_) {
-    if (m.member_kind == PrincipalKind::kUser && m.member_id == user->id && m.granted_by.empty()) {
-      for (const auto& r : AdministratorGrantedClosure(m.role_id)) roles.insert(r);
-    }
-  }
+  std::set<std::string> roles = AdministratorGrantedRolesOfStoredUser(user->id);
   for (const auto& m : group_mappings_) {
     if (!m.issuer.empty() && m.issuer != principal.idp_issuer) continue;
     if (std::find(principal.idp_groups.begin(), principal.idp_groups.end(), m.group) == principal.idp_groups.end()) {
@@ -342,6 +337,19 @@ std::set<std::string> Snapshot::AdministratorGrantedRolesOf(const Principal& pri
     if (!FindRoleById(m.role_id) || !TenantOf(PrincipalKind::kRole, m.role_id).empty()) continue;
     for (const auto& r : AdministratorGrantedClosure(m.role_id)) roles.insert(r);
   }
+  return roles;
+}
+
+std::set<std::string> Snapshot::AdministratorGrantedRolesOfStoredUser(const std::string& user_id) const {
+  // The store's memberships alone (no sign-in's groups), enabled or not.
+  if (!TenantOf(PrincipalKind::kUser, user_id).empty()) return {};
+  std::set<std::string> roles;
+  for (const auto& m : memberships_) {
+    if (m.member_kind == PrincipalKind::kUser && m.member_id == user_id && m.granted_by.empty()) {
+      for (const auto& r : AdministratorGrantedClosure(m.role_id)) roles.insert(r);
+    }
+  }
+  roles.erase(kPublicRoleId);
   return roles;
 }
 

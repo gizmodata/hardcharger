@@ -321,6 +321,71 @@ def test_membership_in_a_help_desk_role_is_the_administrators_to_give(world):
     assert effective == [{"user_name": "carl", "privilege": "CREATE USER", "via": "desk2"}]
 
 
+def test_reach_compares_how_each_role_is_held(world):
+    """A membership a role's admin-option holder granted carries no policy exemption or account
+    privilege; one the administrator granted does. So a help desk that holds a role only the first
+    way never resets, enables, expires, drops (or drops a role carrying) a user who holds it the
+    second way: signing in as that user would hand over what the help desk does not carry."""
+    amy = world.as_user(user="amy")
+    world.setup("CREATE USER dave", "CREATE ROLE readers_all", "GRANT SELECT ON ledger TO readers_all",
+                "GRANT readers_all TO dave WITH ADMIN OPTION")
+    dave = world.as_user(user="dave")
+    expect_allowed(client=dave, sql="GRANT readers_all TO amy")  # delegated: carries no exemption
+    carol_password = password(name="carol")
+    world.setup("GRANT EXEMPT ROW POLICIES TO readers_all", f"CREATE USER carol WITH PASSWORD '{carol_password}'",
+                "GRANT readers_all TO carol",
+                # An account privilege, carried by ops: amy's membership is dave's, made before it (amy has
+                # DROP USER through helpdesk too: what counts is how she holds ops).
+                "CREATE ROLE ops", "GRANT ops TO dave WITH ADMIN OPTION", f"CREATE USER erin WITH PASSWORD '{password(name='erin')}'")
+    expect_allowed(client=dave, sql="GRANT ops TO amy")
+    world.setup("GRANT DROP USER TO ops", "GRANT ops TO erin",
+                "CREATE ROLE readers_lead", "GRANT readers_all TO ROLE readers_lead")
+    carol = world.server.client(token=world.server.password_token(user="carol", password=carol_password))
+    # What each holds: carol is exempt from the ledger's row policies, amy is not.
+    assert len(rows(client=carol, sql="SELECT * FROM ledger")) == 2
+    assert len(rows(client=amy, sql="SELECT * FROM ledger")) == 0
+    def carried(client) -> list[tuple[str, str]]:
+        return sorted((r["privilege"], r["granted_to"]) for r in rows(client=client, sql="SHOW GRANTS")
+                      if r["granted_to"] in ("readers_all", "ops") and r["privilege"] != "SELECT")
+
+    assert carried(client=amy) == []
+
+    def held(target: str, role: str, verb: str = "changes") -> str:
+        return (f"user {target} holds role {role} through a membership an administrator granted, and user amy holds it "
+                f"in this session only through one a role's admin-option holder granted (which carries no account "
+                f"privilege or policy exemption); only an administrator {verb} it")
+
+    world.setup("CREATE USER parked", "GRANT readers_all TO parked", "ALTER USER parked DISABLE")
+    for target, role in (("carol", "readers_all"), ("erin", "ops")):
+        for sql in (f"ALTER USER {target} WITH PASSWORD '{password(name=target)}'", f"ALTER USER {target} DISABLE",
+                    f"ALTER USER {target} PASSWORD EXPIRE", f"ALTER USER {target} WITH PASSWORD NULL"):
+            expect_blocked(client=amy, sql=sql, why=held(target=target, role=role))
+        expect_blocked(client=amy, sql=f"DROP USER {target}", why=held(target=target, role=role, verb="drops"))
+    # A disabled user is weighed by its memberships all the same.
+    expect_blocked(client=amy, sql="ALTER USER parked ENABLE", why=held(target="parked", role="readers_all"))
+    assert world.signs_in(user="carol", secret=carol_password)
+    # Dropping the role, or a role that inherits it by the administrator's hand, takes away what amy lacks.
+    expect_blocked(client=amy, sql="DROP ROLE readers_all",
+                   why="Hardcharger blocked DROP ROLE: role readers_all is, or inherits, role readers_all through a "
+                       "membership an administrator granted, and user amy holds it in this session only through one")
+    expect_blocked(client=amy, sql="DROP ROLE readers_lead",
+                   why="Hardcharger blocked DROP ROLE: role readers_lead inherits role readers_all through a membership "
+                       "an administrator granted")
+
+    # The twin: the administrator's own grant of amy's memberships makes them carry it, and the
+    # same statements are in reach.
+    world.setup("GRANT readers_all TO amy", "GRANT ops TO amy")
+    assert len(rows(client=amy, sql="SELECT * FROM ledger")) == 2
+    assert carried(client=amy) == [("DROP USER", "ops"), ("EXEMPT ROW POLICIES", "readers_all")]
+    reset = password(name="carol")
+    expect_allowed(client=amy, sql=f"ALTER USER carol WITH PASSWORD '{reset}'")
+    assert world.signs_in(user="carol", secret=reset)
+    expect_allowed(client=amy, sql="ALTER USER parked ENABLE")
+    expect_allowed(client=amy, sql="ALTER USER erin PASSWORD EXPIRE")
+    expect_allowed(client=amy, sql="DROP USER erin")
+    expect_allowed(client=amy, sql="DROP ROLE readers_lead")
+
+
 def test_role_inheritance_carries_the_privileges(world):
     world.setup("CREATE ROLE support", "GRANT helpdesk TO ROLE support", "CREATE USER sue", "GRANT support TO sue")
     sue = world.as_user(user="sue")
