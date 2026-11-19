@@ -171,6 +171,19 @@ struct SystemAdminRecord {
   std::string granted_by;
 };
 
+// A password someone other than its user set and the user must change before doing anything
+// else (2.14): one a delegate (an ALTER USER or CREATE USER privilege holder, a tenant admin)
+// set, or one an administrator set WITH ... EXPIRE (or ALTER USER ... PASSWORD EXPIRE). It
+// holds only for the password it was made for (`password_fingerprint`, PasswordFingerprint
+// of the stored hash): any later password, set by anyone, leaves the record standing for
+// nothing.
+struct PasswordResetRecord {
+  std::string user_id;
+  std::string password_fingerprint;
+  std::string set_by;  // user id of who set it; empty for the administrator
+  int64_t set_at_ms = 0;
+};
+
 // The capability's name, as GRANT, SET ROLE and the audit records write it.
 constexpr const char* kSystemAdminName = "SYSTEM ADMIN";
 // The active role of a session that said SET ROLE SYSTEM ADMIN: the id of no role (role
@@ -320,7 +333,8 @@ class Snapshot {
            std::vector<CatalogTenantRecord> catalog_tenants = {},
            std::vector<GroupMappingRecord> group_mappings = {},
            std::vector<ScopedTokenRecord> scoped_tokens = {},
-           std::vector<SystemAdminRecord> system_admins = {});
+           std::vector<SystemAdminRecord> system_admins = {},
+           std::vector<PasswordResetRecord> password_resets = {});
 
   int64_t version() const { return version_; }
 
@@ -351,6 +365,10 @@ class Snapshot {
   // that is not built in. A record that names anything else (a principal that is gone, a
   // tenant's, PUBLIC) is left out when the snapshot is made, so it gives nothing.
   const std::vector<SystemAdminRecord>& system_admins() const { return system_admins_; }
+  // The user's password must be changed before anything else (its temporary-password record,
+  // when it was made for the password the user has now); nullptr when not.
+  const PasswordResetRecord* PasswordMustChange(const std::string& user_id) const;
+  const std::vector<PasswordResetRecord>& password_resets() const { return password_resets_; }
   const ScopedTokenRecord* FindScopedToken(const std::string& id) const;
   // The scope of a token that still stands for `user_id` at `now` (its user's
   // own, unexpired, and every token it was minted under still there).
@@ -542,6 +560,7 @@ class Snapshot {
   std::vector<GroupMappingRecord> group_mappings_;
   std::vector<ScopedTokenRecord> scoped_tokens_;
   std::vector<SystemAdminRecord> system_admins_;
+  std::vector<PasswordResetRecord> password_resets_;
   std::map<std::string, size_t> user_by_key_, user_by_id_, role_by_key_, role_by_id_;
   std::map<std::string, std::vector<const ObjectGrantRecord*>> grants_by_role_;
 };

@@ -144,6 +144,14 @@ int VerifyCredentials(const Config& config, std::istream& in, std::ostream& out)
                                {"role", principal.role},
                                {"method", scoped ? std::string("scoped_token") : principal.auth_method},
                                {"would_provision", access ? access->would_provision() : false}};
+    // A temporary password (one someone else set) is a valid credential: the cluster may wake
+    // for it, and the sessions it opens run nothing but the change of that password.
+    // (Said only when it is, so the answer for every other credential stays as it was.)
+    const auto* credential = principal.claims.if_contains("credential");
+    if (access && credential && credential->is_string() &&
+        access->PasswordMustChange(principal.name, std::string(credential->as_string()))) {
+      answer["password_must_change"] = true;
+    }
     if (access) access->Shutdown();
     return Answer(out, kVerifiedExit, std::move(answer));
   } catch (const chargewire::Error& e) {

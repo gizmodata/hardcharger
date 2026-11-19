@@ -914,6 +914,13 @@ arrow::Status RbacStore::InitializeSchema() {
       "CREATE TABLE IF NOT EXISTS " + T("system_admins") +
           " (principal_kind VARCHAR NOT NULL, principal_id VARCHAR NOT NULL, granted_by VARCHAR NOT NULL, "
           "PRIMARY KEY (principal_kind, principal_id))",
+      // 2.14: temporary passwords (PasswordResetRecord): the user must change one before doing
+      // anything else. A table of its own, which a server that predates it never reads (to it,
+      // no password is temporary). A record holds only for the password it names, so a
+      // password an older server sets afterwards leaves it standing for nothing.
+      "CREATE TABLE IF NOT EXISTS " + T("password_resets") +
+          " (user_id VARCHAR PRIMARY KEY, password_fingerprint VARCHAR NOT NULL, set_by VARCHAR NOT NULL, "
+          "set_at_ms BIGINT NOT NULL)",
   };
   ARROW_RETURN_NOT_OK(Exec(conn, ddl[0]));  // meta, which says the schema's version
   {
@@ -1211,12 +1218,30 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
     }
   }
 
+  // Temporary passwords. A store no 2.14 server has opened has no such table (only a read-only
+  // opening sees one): none is temporary there, as none could have been made so.
+  std::vector<PasswordResetRecord> password_resets;
+  {
+    auto pr = Run(conn, "SELECT user_id, password_fingerprint, set_by, set_at_ms FROM " + T("password_resets"));
+    if (pr.ok()) {
+      for (dd::idx_t r = 0; r < RowCount(**pr); ++r) {
+        password_resets.push_back({GetString(**pr, 0, r), GetString(**pr, 1, r), GetString(**pr, 2, r),
+                                   (*pr)->GetValue(3, r).IsNull() ? 0 : (*pr)->GetValue(3, r).GetValue<int64_t>()});
+      }
+    } else {
+      const std::string message = pr.status().message();
+      const bool absent = message.find("does not exist") != std::string::npos ||
+                          message.find("not found") != std::string::npos;
+      if (!(options_.read_only && absent)) return pr.status();
+    }
+  }
+
   return std::make_shared<const Snapshot>(
       version, std::move(users), std::move(roles), std::move(memberships), std::move(grants),
       std::move(owners), std::move(system_privileges), std::move(row_policies),
       std::move(masking_policies), std::move(mask_bindings), std::move(tenants),
       std::move(principal_tenants), std::move(catalog_tenants), std::move(group_mappings),
-      std::move(scoped_tokens), std::move(system_admins));
+      std::move(scoped_tokens), std::move(system_admins), std::move(password_resets));
 }
 
 arrow::Status RbacStore::Mutate(
@@ -1472,6 +1497,7 @@ arrow::Status StoreTransaction::DeleteUser(const std::string& user_id) {
       Run(conn_, "DELETE FROM " + T("scoped_tokens") + " WHERE user_id = $1", {Text(user_id)})
           .status());
   ARROW_RETURN_NOT_OK(DeleteSystemAdmin(PrincipalKind::kUser, user_id));
+  ARROW_RETURN_NOT_OK(SetPasswordReset(user_id, std::nullopt));
   return Run(conn_, "DELETE FROM " + T("users") + " WHERE user_id = $1", {Text(user_id)}).status();
 }
 
@@ -1591,6 +1617,17 @@ arrow::Status StoreTransaction::DeleteSystemPrivilege(const SystemPrivilegeRecor
              "DELETE FROM " + T("system_privileges") +
                  " WHERE role_id = $1 AND privilege = $2 AND granted_by = $3",
              {Text(r.role_id), Text(SystemPrivilegeName(r.privilege)), Text(r.granted_by)})
+      .status();
+}
+
+arrow::Status StoreTransaction::SetPasswordReset(const std::string& user_id,
+                                                 const std::optional<PasswordResetRecord>& record) {
+  ARROW_RETURN_NOT_OK(
+      Run(conn_, "DELETE FROM " + T("password_resets") + " WHERE user_id = $1", {Text(user_id)}).status());
+  if (!record) return arrow::Status::OK();
+  return Run(conn_, "INSERT INTO " + T("password_resets") + " VALUES ($1, $2, $3, $4)",
+             {Text(user_id), Text(record->password_fingerprint), Text(record->set_by),
+              dd::Value::BIGINT(record->set_at_ms)})
       .status();
 }
 

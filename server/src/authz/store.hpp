@@ -231,6 +231,8 @@ class StoreTransaction {
   arrow::Status UpsertSystemPrivilege(const SystemPrivilegeRecord& record);
   arrow::Status DeleteSystemPrivilege(const SystemPrivilegeRecord& record);
   // One record per user or role (SYSTEM ADMIN has no options to tell records apart).
+  // The user's temporary-password record (PasswordResetRecord); nullopt removes it.
+  arrow::Status SetPasswordReset(const std::string& user_id, const std::optional<PasswordResetRecord>& record);
   arrow::Status UpsertSystemAdmin(const SystemAdminRecord& record);
   arrow::Status DeleteSystemAdmin(PrincipalKind kind, const std::string& principal_id);
   arrow::Status DeleteOwner(const ObjectPath& object, ObjectType type);

@@ -484,6 +484,7 @@ class Parser {
     if (AcceptKeyword("PASSWORD")) {
       ARROW_ASSIGN_OR_RAISE(auto password, ParseStringLiteral("the password"));
       cmd.password = std::move(password);
+      cmd.expire = AcceptKeyword("EXPIRE");
     }
     return cmd;
   }
@@ -497,14 +498,34 @@ class Parser {
 
   arrow::Result<RbacCommand> ParseAlterUser() {
     AlterUserCommand cmd;
-    ARROW_ASSIGN_OR_RAISE(cmd.name, ParsePrincipalName("a user name"));
+    // CURRENT_USER (unquoted): the session's own user. A user named so is written quoted.
+    if (Peek().type == TokenType::kWord && PeekKeyword("CURRENT_USER")) {
+      ++pos_;
+      cmd.current_user = true;
+    } else {
+      ARROW_ASSIGN_OR_RAISE(cmd.name, ParsePrincipalName("a user name"));
+    }
     AcceptKeyword("WITH");
     if (AcceptKeyword("PASSWORD")) {
       if (AcceptKeyword("NULL")) {
         cmd.action = AlterUserCommand::Action::kClearPassword;
+      } else if (AcceptKeyword("EXPIRE")) {
+        cmd.action = AlterUserCommand::Action::kExpirePassword;
       } else {
         cmd.action = AlterUserCommand::Action::kSetPassword;
         ARROW_ASSIGN_OR_RAISE(cmd.password, ParseStringLiteral("the password"));
+        // REPLACE 'current' (a user's own change) and EXPIRE (a temporary password), either order.
+        for (int i = 0; i < 2; ++i) {
+          if (!cmd.current_password && AcceptKeyword("REPLACE")) {
+            ARROW_ASSIGN_OR_RAISE(auto current, ParseStringLiteral("the current password"));
+            cmd.current_password = std::move(current);
+          } else if (!cmd.expire && AcceptKeyword("EXPIRE")) {
+            cmd.expire = true;
+          }
+        }
+        if (cmd.current_password && cmd.expire) {
+          return SyntaxError("a password you set for yourself (REPLACE) is not temporary: leave out EXPIRE");
+        }
       }
     } else if (AcceptKeyword("ENABLE")) {
       cmd.action = AlterUserCommand::Action::kEnable;
@@ -524,7 +545,7 @@ class Parser {
       return SyntaxError(
           "expected PASSWORD, ENABLE, DISABLE, SET ATTRIBUTE or UNSET ATTRIBUTE "
           "after ALTER USER " +
-          cmd.name);
+          (cmd.current_user ? std::string("CURRENT_USER") : cmd.name));
     }
     return cmd;
   }

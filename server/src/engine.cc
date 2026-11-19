@@ -1451,6 +1451,8 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
   }
   if (!rbac_) RefuseAccessControlStatement(sql);
   const bool has_parameters = !parameters.is_null();
+  // A session signed in with a temporary password runs only the statement that changes it.
+  if (guard_) guard_->RefuseUntilPasswordChanged("this statement", sql);
   // The statement's Chargewire id (q_...): its sql_statements row, and its execution's.
   const std::string statement_id = RequestStatementId();
   // An access-control statement (GRANT, CREATE USER, ...) is the guard's, text and all:
@@ -1570,6 +1572,7 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
 
 std::unique_ptr<chargewire::PreparedStatement> Session::Prepare(std::string_view sql) {
   CheckAlive();
+  if (guard_) guard_->RefuseUntilPasswordChanged("preparing a statement", std::nullopt);
   SessionScope scope(this);
   read_only_function_refused_ = false;
   if (sql.find('\0') != std::string_view::npos) {
@@ -1615,6 +1618,7 @@ std::unique_ptr<chargewire::PreparedStatement> Session::Prepare(std::string_view
 chargewire::StatementOutcome Session::ExecutePrepared(chargewire::PreparedStatement& statement,
                                                    const chargewire::Parameters& parameters) {
   CheckAlive();
+  if (guard_) guard_->RefuseUntilPasswordChanged("a prepared statement", std::nullopt);
   SessionScope scope(this);
   BeginStatement();
   auto& prepared = dynamic_cast<LoggedPrepared&>(statement);
@@ -1635,6 +1639,7 @@ chargewire::StatementOutcome Session::ExecutePrepared(chargewire::PreparedStatem
 
 int64_t Session::Ingest(const chargewire::IngestTarget& target, std::shared_ptr<arrow::RecordBatchReader> rows) {
   CheckAlive();
+  if (guard_) guard_->RefuseUntilPasswordChanged("an ingest", std::nullopt);
   SessionScope scope(this);
   if (principal_.role == "readonly") {
     throw Error(ErrorCode::kPermissionDenied,
@@ -1690,6 +1695,7 @@ int64_t Session::Ingest(const chargewire::IngestTarget& target, std::shared_ptr<
 std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(chargewire::MetadataKind kind,
                                                             const chargewire::MetadataFilter& filter) {
   CheckAlive();
+  if (guard_) guard_->RefuseUntilPasswordChanged("a metadata request", std::nullopt);
   SessionScope scope(this);
   if (runtime_.config.print_queries) {
     // Metadata requests run SQL of the server's own: logged only at DEBUG.

@@ -13,6 +13,7 @@
 #include "authz/audit_fields.hpp"
 #include "authz/ddl.hpp"
 #include "authz/model.hpp"
+#include "authz/password.hpp"
 
 using namespace hardcharger::authz;  // NOLINT: the tests read as the module does
 
@@ -183,6 +184,50 @@ TEST(AccountPrivilegesAudit, ValuesNeverCarryACredentialOrAnAttributesValue) {
             std::make_pair(std::string("none"), std::string("none")));
   EXPECT_FALSE(AccountChangeValues(*ParseRbacStatement("GRANT SELECT ON t TO r"), before, after).has_value());
   EXPECT_FALSE(AccountChangeValues(*ParseRbacStatement("GRANT READ FILESYSTEM TO r"), before, after).has_value());
+}
+
+TEST(TemporaryPasswords, HeldOnlyForThePasswordTheyWereMadeFor) {
+  Store store;
+  const std::string temporary = "pbkdf2-sha256$1$c2FsdA==$dGVtcA==";
+  store.users[2].password_hash = temporary;  // carl
+  Snapshot with = Snapshot(1, store.users, store.roles, {}, {}, {}, {}, {}, {}, {}, store.tenants,
+                           store.principal_tenants, {}, {}, {}, {},
+                           {{"u-carl", PasswordFingerprint(temporary), "u-amy", 1}});
+  ASSERT_NE(with.PasswordMustChange("u-carl"), nullptr);
+  EXPECT_EQ(with.PasswordMustChange("u-carl")->set_by, "u-amy");
+  EXPECT_EQ(with.PasswordMustChange("u-amy"), nullptr);
+  // Another password since (set by anyone, an older server included): the record holds nothing.
+  store.users[2].password_hash = "pbkdf2-sha256$1$c2FsdA==$b3du";
+  Snapshot after = Snapshot(2, store.users, store.roles, {}, {}, {}, {}, {}, {}, {}, store.tenants,
+                            store.principal_tenants, {}, {}, {}, {},
+                            {{"u-carl", PasswordFingerprint(temporary), "u-amy", 1}});
+  EXPECT_EQ(after.PasswordMustChange("u-carl"), nullptr);
+  EXPECT_EQ(PasswordFingerprint(temporary).size(), 32u);
+  EXPECT_EQ(PasswordFingerprint(std::nullopt), "");
+}
+
+TEST(TemporaryPasswords, Grammar) {
+  auto own = ParseRbacStatement("ALTER USER CURRENT_USER WITH PASSWORD 'new' REPLACE 'old'");
+  ASSERT_TRUE(own.ok()) << own.status().ToString();
+  const auto* change = std::get_if<AlterUserCommand>(&*own);
+  ASSERT_NE(change, nullptr);
+  EXPECT_TRUE(change->current_user);
+  EXPECT_EQ(change->current_password, std::optional<std::string>("old"));
+  EXPECT_FALSE(change->expire);
+  auto expire = ParseRbacStatement("ALTER USER carl WITH PASSWORD 'x' EXPIRE");
+  ASSERT_TRUE(expire.ok());
+  EXPECT_TRUE(std::get<AlterUserCommand>(*expire).expire);
+  auto only = ParseRbacStatement("ALTER USER carl PASSWORD EXPIRE");
+  ASSERT_TRUE(only.ok());
+  EXPECT_EQ(std::get<AlterUserCommand>(*only).action, AlterUserCommand::Action::kExpirePassword);
+  auto created = ParseRbacStatement("CREATE USER newbie WITH PASSWORD 'x' EXPIRE");
+  ASSERT_TRUE(created.ok());
+  EXPECT_TRUE(std::get<CreateUserCommand>(*created).expire);
+  // A user called current_user is written quoted.
+  auto quoted = ParseRbacStatement("ALTER USER \"current_user\" DISABLE");
+  ASSERT_TRUE(quoted.ok());
+  EXPECT_FALSE(std::get<AlterUserCommand>(*quoted).current_user);
+  EXPECT_FALSE(ParseRbacStatement("ALTER USER CURRENT_USER WITH PASSWORD 'a' REPLACE 'b' EXPIRE").ok());
 }
 
 }  // namespace

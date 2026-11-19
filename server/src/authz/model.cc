@@ -1,5 +1,7 @@
 #include "authz/model.hpp"
 
+#include "authz/password.hpp"
+
 #include <algorithm>
 #include <deque>
 #include <string_view>
@@ -58,7 +60,8 @@ Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users, std::vector<R
                    std::vector<CatalogTenantRecord> catalog_tenants,
                    std::vector<GroupMappingRecord> group_mappings,
                    std::vector<ScopedTokenRecord> scoped_tokens,
-                   std::vector<SystemAdminRecord> system_admins)
+                   std::vector<SystemAdminRecord> system_admins,
+                   std::vector<PasswordResetRecord> password_resets)
     : version_(version),
       users_(std::move(users)),
       roles_(std::move(roles)),
@@ -73,7 +76,8 @@ Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users, std::vector<R
       principal_tenants_(std::move(principal_tenants)),
       catalog_tenants_(std::move(catalog_tenants)),
       group_mappings_(std::move(group_mappings)),
-      scoped_tokens_(std::move(scoped_tokens)) {
+      scoped_tokens_(std::move(scoped_tokens)),
+      password_resets_(std::move(password_resets)) {
   for (size_t i = 0; i < users_.size(); ++i) {
     user_by_key_[FoldIdentifier(users_[i].name)] = i;
     user_by_id_[users_[i].id] = i;
@@ -185,7 +189,7 @@ std::shared_ptr<const Snapshot> Snapshot::WithOwner(int64_t version, const Objec
   return std::make_shared<const Snapshot>(version, users_, roles_, memberships_, grants_, std::move(owners),
                                           system_privileges_, row_policies_, masking_policies_, mask_bindings_,
                                           tenants_, principal_tenants_, catalog_tenants_, group_mappings_,
-                                          scoped_tokens_, system_admins_);
+                                          scoped_tokens_, system_admins_, password_resets_);
 }
 
 const OwnerRecord* Snapshot::FindOwner(const ObjectPath& object) const {
@@ -227,6 +231,16 @@ std::set<std::string> Snapshot::RolesOf(const Principal& principal) const {
   std::set<std::string> active = RoleClosure(tenant_public ? tenant_public->id : kPublicRoleId);
   for (const auto& r : RoleClosure(principal.active_role_id)) active.insert(r);
   return active;
+}
+
+const PasswordResetRecord* Snapshot::PasswordMustChange(const std::string& user_id) const {
+  const UserRecord* user = FindUserById(user_id);
+  if (!user || !user->password_hash) return nullptr;
+  const std::string fingerprint = PasswordFingerprint(user->password_hash);
+  for (const auto& r : password_resets_) {
+    if (r.user_id == user_id && r.password_fingerprint == fingerprint) return &r;
+  }
+  return nullptr;
 }
 
 const ScopedTokenRecord* Snapshot::FindScopedToken(const std::string& id) const {

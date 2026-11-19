@@ -5,6 +5,7 @@
 
 #include <arrow/result.h>
 
+#include <optional>
 #include <string>
 
 namespace hardcharger::authz {
@@ -17,5 +18,10 @@ arrow::Result<std::string> HashPassword(const std::string& password,
 
 // Constant-time comparison; false for a malformed stored hash.
 bool VerifyPassword(const std::string& password, const std::string& stored_hash);
+
+// A short fingerprint of a stored password hash (the first 16 bytes of its SHA-256, in hex),
+// which says which password something was made for without carrying the hash: an access
+// token's `credential` claim, a temporary password's mark. Empty for no password.
+std::string PasswordFingerprint(const std::optional<std::string>& password_hash);
 
 }  // namespace hardcharger::authz

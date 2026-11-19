@@ -7,6 +7,7 @@
 #include <sstream>
 
 #include "authz/audit_fields.hpp"
+#include "authz/password.hpp"
 #include "authz/policies.hpp"
 #include "logging.hpp"
 #include "platform.hpp"
@@ -87,6 +88,10 @@ arrow::Result<ResolvedGrantee> ResolveGrantee(const Snapshot& snap, const Grante
 arrow::Status CheckNameFree(const Snapshot& snap, const std::string& name) {
   if (IdentifiersEqual(name, kPublicRoleName)) {
     return AccessControlError("PUBLIC is a reserved role name");
+  }
+  if (IdentifiersEqual(name, "CURRENT_USER")) {
+    return AccessControlError("CURRENT_USER is how ALTER USER names the session's own user: no user or role can "
+                              "take it");
   }
   if (IdentifiersEqual(name, kSystemAdminName)) {
     return AccessControlError(std::string(kSystemAdminName) +
@@ -202,11 +207,19 @@ std::string RoleNamesOf(const Snapshot& snap, const std::set<std::string>& ids) 
 // privilege, which then limits whom it reaches (RequireUserWithinReach,
 // RequireRoleWithinReach).
 struct AccountAuthority {
-  enum class Kind { kAdministrator, kTenantAdmin, kPrivilege };
+  enum class Kind { kAdministrator, kTenantAdmin, kPrivilege, kSelf };
   Kind kind = Kind::kAdministrator;
   std::string text;  // the audit record's authorized_by
   bool delegated() const { return kind == Kind::kPrivilege; }
+  // A password this authority sets for another user is temporary, whatever the statement
+  // says: everyone's but the administrator's (an unrestricted one decides with EXPIRE).
+  bool sets_temporary_passwords() const { return kind == Kind::kTenantAdmin || kind == Kind::kPrivilege; }
 };
+
+int64_t NowMilliseconds() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
 
 arrow::Result<AccountAuthority> AuthorizeAccountStatement(const Snapshot& snap, const Principal& actor,
                                                           const RbacCommand& command, const std::string& name) {
@@ -1136,11 +1149,47 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
   // ADMIN OPTION passes that on.
   std::string account_name;
   if (const auto* c = std::get_if<CreateUserCommand>(&command)) account_name = c->name;
-  if (const auto* c = std::get_if<AlterUserCommand>(&command)) account_name = c->name;
   if (const auto* c = std::get_if<DropUserCommand>(&command)) account_name = c->name;
   if (const auto* c = std::get_if<CreateRoleCommand>(&command)) account_name = c->name;
   if (const auto* c = std::get_if<DropRoleCommand>(&command)) account_name = c->name;
-  const bool account_statement = AccountPrivilegeOf(command).has_value();
+  // The session's own store user (a user acting as System Admin: that user); empty for the
+  // administrator.
+  const std::string own_id = actor.acts_as_system_admin() ? actor.acting_user_id : actor.user_id;
+  // ALTER USER ... REPLACE 'current': a user changing its own password, which it proves by
+  // giving the current one. No account privilege is needed or used.
+  bool self_service = false;
+  if (const auto* c = std::get_if<AlterUserCommand>(&command)) {
+    // ALTER USER CURRENT_USER is ALTER USER <the session's own user>.
+    if (c->current_user) {
+      const UserRecord* own = own_id.empty() ? nullptr : snapshot()->FindUserById(own_id);
+      if (!own) {
+        return AccessControlError(
+            "Hardcharger blocked ALTER USER CURRENT_USER: the administrator is not a user of the access control "
+            "store; its password is set in the server's configuration");
+      }
+      AlterUserCommand resolved = *c;
+      resolved.current_user = false;
+      resolved.name = own->name;
+      return Execute(resolved, actor, resolver, notes);
+    }
+    account_name = c->name;
+    const bool own_user = !own_id.empty() && IdentifiersEqual(account_name, actor.user_name);
+    self_service = c->current_password.has_value();
+    if (self_service && !own_user) {
+      return AccessControlError("Hardcharger blocked ALTER USER: REPLACE gives your own current password, so it "
+                                "changes only your own password, not user " +
+                                account_name + "'s");
+    }
+    // A session alone never changes its own password: whoever holds it (a stolen access token
+    // included) must also know the current one.
+    if (!self_service && own_user && !actor.is_unrestricted_administrator() &&
+        c->action == AlterUserCommand::Action::kSetPassword) {
+      return AccessControlError(
+          "Hardcharger blocked ALTER USER: to change your own password, give the current one: ALTER USER "
+          "CURRENT_USER WITH PASSWORD '<new>' REPLACE '<current>'");
+    }
+  }
+  const bool account_statement = AccountPrivilegeOf(command).has_value() && !self_service;
   // Asked first of this replica's snapshot (and, when that refuses, of the store again, so a
   // grant made on another replica counts at once), before any password is hashed; then again,
   // authoritatively, inside the change's own store transaction (`authorize`).
@@ -1153,6 +1202,11 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
   }
   AccountAuthority authority;
   auto authorize = [&](const Snapshot& snap) -> arrow::Status {
+    if (self_service) {
+      authority = AccountAuthority{AccountAuthority::Kind::kSelf, "the user's own current password"};
+      if (notes) *notes = {{"authorized_by", authority.text}};
+      return arrow::Status::OK();
+    }
     ARROW_ASSIGN_OR_RAISE(authority, AuthorizeAccountStatement(snap, actor, command, account_name));
     if (notes) *notes = {{"authorized_by", authority.text}};
     return arrow::Status::OK();
@@ -1240,6 +1294,16 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       message = "User " + c->name + " created";
       UserRecord user{StoreTransaction::NewId(), c->name, hash, true, {}};
       ARROW_RETURN_NOT_OK(txn.InsertUser(user));
+      // A password someone else chose is the user's to replace before anything else: always
+      // when a delegate chose it, and when the administrator says EXPIRE.
+      if (hash && (authority.sets_temporary_passwords() || c->expire)) {
+        ARROW_RETURN_NOT_OK(txn.SetPasswordReset(
+            user.id, PasswordResetRecord{user.id, PasswordFingerprint(hash), own_id, NowMilliseconds()}));
+        message += ", with a temporary password: it must be changed at the first sign-in";
+        if (notes) notes->emplace_back("password", "temporary password set");
+      } else if (hash && notes) {
+        notes->emplace_back("password", "password set");
+      }
       return txn.SetPrincipalTenant(PrincipalKind::kUser, user.id, tenant);
     }));
     return Message(message);
@@ -1247,8 +1311,35 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
 
   // ---- ALTER USER --------------------------------------------------------
   if (const auto* c = std::get_if<AlterUserCommand>(&command)) {
+    using Action = AlterUserCommand::Action;
     std::optional<std::string> hash;
-    if (c->action == AlterUserCommand::Action::kSetPassword) {
+    // A user's own change: the current password, checked against what this replica has (and,
+    // when that fails, against the store again), before anything is hashed; the store
+    // transaction then confirms the password is still that one.
+    std::string replaced;
+    if (self_service) {
+      auto verify = [&]() -> std::optional<std::string> {
+        const UserRecord* own = snapshot()->FindUserById(own_id);
+        if (own && own->password_hash && VerifyPassword(*c->current_password, *own->password_hash)) {
+          return *own->password_hash;
+        }
+        return std::nullopt;
+      };
+      auto verified = verify();
+      if (!verified && Refresh().ok()) verified = verify();
+      const UserRecord* own = snapshot()->FindUserById(own_id);
+      if (own && !own->password_hash) {
+        return AccessControlError("Hardcharger blocked ALTER USER: user " + own->name +
+                                  " has no password to replace (it signs in another way); an administrator sets "
+                                  "its first one");
+      }
+      if (!verified) {
+        return AccessControlError("Hardcharger blocked ALTER USER: the current password given with REPLACE is not "
+                                  "user " + account_name + "'s password");
+      }
+      replaced = *verified;
+    }
+    if (c->action == Action::kSetPassword) {
       ARROW_RETURN_NOT_OK(CheckNewPassword(c->password));
       ARROW_ASSIGN_OR_RAISE(auto h, HashPassword(c->password, options_.password_iterations));
       hash = std::move(h);
@@ -1256,10 +1347,9 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
     std::string user_id;
     ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
       ARROW_RETURN_NOT_OK(authorize(snap));
-      const bool attribute = c->action == AlterUserCommand::Action::kSetAttribute ||
-                             c->action == AlterUserCommand::Action::kUnsetAttribute;
+      const bool attribute = c->action == Action::kSetAttribute || c->action == Action::kUnsetAttribute;
       if (authority.delegated()) {
-        ARROW_RETURN_NOT_OK(RefuseAdministratorAccount(c->name, "ALTER USER", options_));
+        ARROW_RETURN_NOT_OK(RefuseAdministratorAccount(account_name, "ALTER USER", options_));
         // Session attributes decide what row and masking policies show: setting one is
         // granting data, not managing an account.
         if (attribute) {
@@ -1269,11 +1359,15 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
               "users)");
         }
       }
-      const auto* existing = snap.FindUserByName(c->name);
-      if (!existing) return AccessControlError("user " + c->name + " does not exist");
+      const auto* existing = snap.FindUserByName(account_name);
+      if (!existing) return AccessControlError("user " + account_name + " does not exist");
+      if (self_service && existing->password_hash != replaced) {
+        return AccessControlError("Hardcharger blocked ALTER USER: the password of user " + existing->name +
+                                  " changed while this statement ran; sign in again");
+      }
       // A new password, ENABLE or an attribute of a user that can act as System Admin would
-      // hand that to whoever makes the change.
-      if (!actor.is_unrestricted_administrator() && snap.UserCarriesSystemAdmin(existing->id)) {
+      // hand that to whoever makes the change (its own change, proven, is its own).
+      if (!self_service && !actor.is_unrestricted_administrator() && snap.UserCarriesSystemAdmin(existing->id)) {
         return AccessControlError("Hardcharger blocked ALTER USER: user " + existing->name + " holds " +
                                   kSystemAdminName + "; " + kOnlySystemAdministrators + " changes it");
       }
@@ -1282,36 +1376,64 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       }
       UserRecord user = *existing;
       user_id = user.id;
+      auto temporary = [&](const std::optional<std::string>& password_hash) -> arrow::Status {
+        return txn.SetPasswordReset(user.id, PasswordResetRecord{user.id, PasswordFingerprint(password_hash),
+                                                                 own_id, NowMilliseconds()});
+      };
+      auto note = [&](const char* what) {
+        if (notes) notes->emplace_back("password", what);
+      };
       switch (c->action) {
-        case AlterUserCommand::Action::kSetPassword:
+        case Action::kSetPassword:
           user.password_hash = hash;
-          message = "Password changed for user " + user.name;
+          if (self_service) {
+            message = "Password changed for user " + user.name + ": sign in again with the new one";
+            note("password changed by the user");
+            ARROW_RETURN_NOT_OK(txn.SetPasswordReset(user.id, std::nullopt));
+          } else if (authority.sets_temporary_passwords() || c->expire) {
+            message = "Temporary password set for user " + user.name +
+                      ": it must be changed at the next sign-in (ALTER USER CURRENT_USER WITH PASSWORD ... REPLACE "
+                      "...)";
+            note("temporary password set");
+            ARROW_RETURN_NOT_OK(temporary(hash));
+          } else {
+            message = "Password changed for user " + user.name;
+            note("password set");
+            ARROW_RETURN_NOT_OK(txn.SetPasswordReset(user.id, std::nullopt));
+          }
           break;
-        case AlterUserCommand::Action::kClearPassword:
+        case Action::kClearPassword:
           user.password_hash.reset();
           message = "Password login removed for user " + user.name;
+          note("password removed");
+          ARROW_RETURN_NOT_OK(txn.SetPasswordReset(user.id, std::nullopt));
           break;
-        case AlterUserCommand::Action::kEnable:
+        case Action::kExpirePassword:
+          if (!user.password_hash) {
+            return AccessControlError("user " + user.name + " has no password to expire");
+          }
+          message = "Password of user " + user.name + " expired: it must be changed at the next statement";
+          note("password expired");
+          return temporary(user.password_hash);
+        case Action::kEnable:
           user.enabled = true;
           message = "User " + user.name + " enabled";
           break;
-        case AlterUserCommand::Action::kDisable:
+        case Action::kDisable:
           user.enabled = false;
           message = "User " + user.name + " disabled";
           break;
-        case AlterUserCommand::Action::kSetAttribute:
+        case Action::kSetAttribute:
           message = "Attribute " + c->attribute + " set for user " + user.name;
           return txn.SetUserAttribute(user.id, c->attribute, c->value);
-        case AlterUserCommand::Action::kUnsetAttribute:
+        case Action::kUnsetAttribute:
           message = "Attribute " + c->attribute + " removed for user " + user.name;
           return txn.SetUserAttribute(user.id, c->attribute, std::nullopt);
       }
       return txn.UpdateUser(user);
     }));
     result = Message(message);
-    if (c->action == AlterUserCommand::Action::kDisable ||
-        c->action == AlterUserCommand::Action::kSetPassword ||
-        c->action == AlterUserCommand::Action::kClearPassword) {
+    if (c->action == Action::kDisable || c->action == Action::kSetPassword || c->action == Action::kClearPassword) {
       result.terminate_user_ids.push_back(user_id);
     }
     return result;

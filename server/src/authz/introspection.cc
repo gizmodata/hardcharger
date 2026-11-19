@@ -147,7 +147,8 @@ const std::vector<Column>& ColumnsOf(AccessTable table) {
       {"name", Kind::kText}, {"builtin", Kind::kBool}, {"tenant", Kind::kText}, {"is_active", Kind::kBool}};
   static const std::vector<Column> kUsers = {
       {"name", Kind::kText},           {"enabled", Kind::kBool},       {"has_password", Kind::kBool},
-      {"tenant", Kind::kText},         {"attributes", Kind::kTextMap}, {"is_current", Kind::kBool}};
+      {"tenant", Kind::kText},         {"attributes", Kind::kTextMap}, {"is_current", Kind::kBool},
+      {"password_must_change", Kind::kBool}};
   static const std::vector<Column> kPolicies = {
       {"name", Kind::kText},           {"kind", Kind::kText},           {"catalog_name", Kind::kText},
       {"schema_name", Kind::kText},    {"table_name", Kind::kText},     {"column_name", Kind::kText},
@@ -493,8 +494,13 @@ std::shared_ptr<arrow::RecordBatch> Users(const Snapshot& snapshot, const Princi
     const bool current = u.id == (viewer.superuser ? viewer.acting_user_id : viewer.user_id);
     if (visibility.kind() == ViewerKind::kUser && !current && !visibility.InTenant(PrincipalKind::kUser, u.id)) continue;
     // Never the password hash: only whether there is one.
+    // Whether its password is temporary (must be changed before anything else): for the
+    // administrator (a System Admin included) and the user's own row; NULL to anyone else.
+    const Cell must_change =
+        viewer.superuser || current ? Cell(snapshot.PasswordMustChange(u.id) != nullptr) : Cell{};
     rows.Add({u.name, u.enabled, u.password_hash.has_value() && !u.password_hash->empty(),
-              names.Tenant(PrincipalKind::kUser, u.id), TextMap(u.attributes.begin(), u.attributes.end()), current});
+              names.Tenant(PrincipalKind::kUser, u.id), TextMap(u.attributes.begin(), u.attributes.end()), current,
+              must_change});
   }
   return rows.Finish();
 }

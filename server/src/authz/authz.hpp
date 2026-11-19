@@ -248,6 +248,10 @@ class AccessControl {
   };
   TokenStanding CheckToken(const Identity& who) const;
 
+  // A sign-in with this credential (Identity::credential) is to a temporary password: its
+  // sessions run nothing but the statement that changes it (SessionGuard::PasswordMustChange).
+  bool PasswordMustChange(const std::string& user_name, const std::string& credential) const;
+
   // Binds a new session's connection to `who`. Throws chargewire::Error when the session
   // is refused (unknown or disabled user, revoked scoped token, policy service).
   std::shared_ptr<SessionGuard> Bind(duckdb_v2_connection_handle connection, Identity who);
@@ -309,6 +313,16 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // the access-control audit records carry as statement_id; empty: none. The session sets it
   // around each access-control statement.
   void SetRequestId(std::string id) { request_id_ = std::move(id); }
+
+  // The session signed in with a temporary password (one someone else set: a delegate, or an
+  // administrator WITH ... EXPIRE) that is still the user's: it must change it before doing
+  // anything else. Asked of the current snapshot each time.
+  bool PasswordMustChange() const;
+  // When the password must change, throws (permission denied, saying how to change it) for
+  // anything but the session's own change (`sql`: ALTER USER CURRENT_USER | <own name> WITH
+  // PASSWORD '...' REPLACE '...'); `sql` nullopt is a request that runs no statement text
+  // (prepare, a prepared statement, metadata, ingest), refused too. Each refusal is audited.
+  void RefuseUntilPasswordChanged(std::string_view what, std::optional<std::string_view> sql) const;
 
   // Runs one statement text. An access-control statement (GRANT, CREATE USER, SHOW
   // GRANTS, ...) runs here; anything else passes the pre-bind gate and is run by `run`

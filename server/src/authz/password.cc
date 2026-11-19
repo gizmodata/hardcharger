@@ -89,4 +89,18 @@ bool VerifyPassword(const std::string& password, const std::string& stored_hash)
   return CRYPTO_memcmp(actual, expected.data(), kHashBytes) == 0;
 }
 
+std::string PasswordFingerprint(const std::optional<std::string>& password_hash) {
+  if (!password_hash || password_hash->empty()) return {};
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int length = 0;
+  EVP_Digest(password_hash->data(), password_hash->size(), digest, &length, EVP_sha256(), nullptr);
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string hex;
+  for (unsigned int i = 0; i < 16 && i < length; i++) {
+    hex += kHex[digest[i] >> 4];
+    hex += kHex[digest[i] & 15];
+  }
+  return hex;
+}
+
 }  // namespace hardcharger::authz

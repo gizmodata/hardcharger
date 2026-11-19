@@ -86,6 +86,9 @@ struct Describe {
       case AlterUserCommand::Action::kUnsetAttribute:
         change = "attribute " + c.attribute + " removed";
         break;
+      case AlterUserCommand::Action::kExpirePassword:
+        change = "password expired";
+        break;
     }
     fields.emplace_back("change", change);
     return fields;
@@ -271,6 +274,7 @@ std::string UserState(const Snapshot& snap, const std::string& name, const UserR
   std::vector<std::string> attributes;
   for (const auto& [key, value] : user->attributes) attributes.push_back(key);  // never the value
   if (!attributes.empty()) out += "; attributes: " + Joined(attributes);
+  if (snap.PasswordMustChange(user->id)) out += "; password must be changed";
   return out;
 }
 

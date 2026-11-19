@@ -17,6 +17,7 @@
 
 #include "audit.hpp"
 #include "authz/audit_fields.hpp"
+#include "authz/password.hpp"
 #include "authz/ddl.hpp"
 #include "authz/enforcement.hpp"
 #include "authz/engine.hpp"
@@ -50,17 +51,7 @@ int64_t NowSeconds() {
 // What a token carries of a user's password: a fingerprint of its stored hash, so a
 // token stops working when the password changes, and the hash itself never leaves.
 std::string Fingerprint(const std::optional<std::string>& password_hash) {
-  if (!password_hash || password_hash->empty()) return {};
-  unsigned char digest[EVP_MAX_MD_SIZE];
-  unsigned int length = 0;
-  EVP_Digest(password_hash->data(), password_hash->size(), digest, &length, EVP_sha256(), nullptr);
-  static constexpr char kHex[] = "0123456789abcdef";
-  std::string hex;
-  for (unsigned int i = 0; i < 16 && i < length; i++) {
-    hex += kHex[digest[i] >> 4];
-    hex += kHex[digest[i] & 15];
-  }
-  return hex;
+  return PasswordFingerprint(password_hash);
 }
 
 // An access-control failure as a Chargewire error: refusals are permission_denied, the
@@ -456,6 +447,14 @@ AccessControl::TokenStanding AccessControl::CheckToken(const Identity& who) cons
   return {user->id, snapshot->TenantOf(PrincipalKind::kUser, user->id)};
 }
 
+bool AccessControl::PasswordMustChange(const std::string& user_name, const std::string& credential) const {
+  if (catalog_rules_only_ || credential.empty()) return false;
+  const auto snapshot = engine_->snapshot();
+  const UserRecord* user = snapshot->FindUserByName(user_name);
+  const PasswordResetRecord* reset = user ? snapshot->PasswordMustChange(user->id) : nullptr;
+  return reset != nullptr && reset->password_fingerprint == credential;
+}
+
 std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle connection,
                                                   Identity who) {
   auto snapshot = engine_->snapshot();
@@ -766,6 +765,40 @@ void SessionGuard::AuditSystemAdminStatement(std::string_view sql, const std::st
   if (!commands.empty()) fields.emplace_back("administrative", commands);
   if (error) fields.emplace_back("error", LoggableError(sql, error->what()));
   Audit(error ? LogLevel::kWarning : LogLevel::kInfo, "statement run as System Admin", std::move(fields));
+}
+
+bool SessionGuard::PasswordMustChange() const {
+  if (unrestricted_ || user_id_.empty() || identity_.credential.empty() || owner_.catalog_rules_only_) return false;
+  const auto snapshot = owner_.engine_->snapshot();
+  const PasswordResetRecord* reset = snapshot->PasswordMustChange(user_id_);
+  return reset != nullptr && reset->password_fingerprint == identity_.credential;
+}
+
+void SessionGuard::RefuseUntilPasswordChanged(std::string_view what, std::optional<std::string_view> sql) const {
+  if (!PasswordMustChange()) return;
+  if (sql && LooksLikeRbacStatement(std::string(*sql))) {
+    auto parsed = ParseRbacStatement(std::string(*sql));
+    if (parsed.ok()) {
+      const auto* change = std::get_if<AlterUserCommand>(&*parsed);
+      if (change && change->action == AlterUserCommand::Action::kSetPassword && change->current_password &&
+          (change->current_user || IdentifiersEqual(change->name, identity_.user_name))) {
+        return;  // the one statement such a session runs
+      }
+    }
+  }
+  const Error refused(ErrorCode::kPermissionDenied,
+                      "Hardcharger blocked " + std::string(what) + ": the password of user " + identity_.user_name +
+                          " was set by someone else and must be changed before anything else runs: ALTER USER "
+                          "CURRENT_USER WITH PASSWORD '<new>' REPLACE '<current>'",
+                      "42501");
+  LogFields fields = AuditWho(false);
+  if (!request_id_.empty()) fields.emplace_back("statement_id", request_id_);
+  fields.emplace_back("status", "rejected");
+  fields.emplace_back("reason", "password must be changed");
+  fields.emplace_back("request", std::string(what));
+  if (sql) fields.emplace_back("sql", LoggableSql(*sql));
+  Audit(LogLevel::kWarning, "statement refused until the password is changed", std::move(fields));
+  throw refused;
 }
 
 std::optional<std::string> SessionGuard::SystemAdminRefusal() const {
@@ -1136,8 +1169,14 @@ chargewire::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parse
   const std::string kind = elevating ? std::string("SET ROLE ") + kSystemAdminName : parsed.kind;
   // What the statement names (never a password or a token): who it is about, and the
   // privilege or membership it changes, with the store's ids for the users and roles.
+  // ALTER USER CURRENT_USER is described as the session's own user.
+  RbacCommand audited = parsed.command;
+  if (auto* own = std::get_if<AlterUserCommand>(&audited); own && own->current_user && !user_id_.empty()) {
+    own->current_user = false;
+    own->name = identity_.user_name;
+  }
   auto described = [&](LogFields fields, const Snapshot& after) {
-    for (auto& field : AuditFieldsOf(parsed.command, *before, after)) fields.push_back(std::move(field));
+    for (auto& field : AuditFieldsOf(audited, *before, after)) fields.push_back(std::move(field));
     return fields;
   };
   // Which statement of the session this is (the client's request id, its sql_statements

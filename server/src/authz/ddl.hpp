@@ -40,6 +40,9 @@ struct CreateUserCommand {
   std::string name;
   std::optional<std::string> password;  // nullopt: token-only user
   bool if_not_exists = false;
+  // WITH PASSWORD '...' EXPIRE: the user must change it at its first sign-in (always so for
+  // a password a delegate sets).
+  bool expire = false;
 };
 
 struct AlterUserCommand {
@@ -49,13 +52,20 @@ struct AlterUserCommand {
     kEnable,
     kDisable,
     kSetAttribute,
-    kUnsetAttribute
+    kUnsetAttribute,
+    kExpirePassword  // ALTER USER name PASSWORD EXPIRE: the current password must be changed
   };
-  std::string name;
+  std::string name;  // empty with `current_user`
   Action action;
   std::string password;   // kSetPassword
   std::string attribute;  // kSetAttribute / kUnsetAttribute
   std::string value;      // kSetAttribute
+  // ALTER USER CURRENT_USER ...: the session's own user.
+  bool current_user = false;
+  // kSetPassword ... EXPIRE: the user must change it before anything else.
+  bool expire = false;
+  // kSetPassword ... REPLACE 'current': a user changing its own password gives the one it has.
+  std::optional<std::string> current_password;
 };
 
 struct DropUserCommand {
