@@ -181,6 +181,148 @@ final class HardchargerUITests: XCTestCase {
             .waitForExistence(timeout: 30), ".tables lists people")
     }
 
+    /// #57: a very wide result, `.tables` with several tables and every boxed `.mode` keep
+    /// their shape (no line wraps: each result scrolls sideways), and the console stays
+    /// responsive while it lays them out. Screenshots go to HC_SCREENSHOT_DIR when the run names one.
+    func testConsoleWideResultsAtTheDefaultTextSize() throws {
+        try consoleWideResults(name: "default", size: .large)
+    }
+
+    /// The smallest accessibility text size: here a transcript in a lazy stack re-laid itself out
+    /// without end once `.tables` followed a wide result, hanging the app (2.14.0's first try at
+    /// #57 found it). Every step has a time bound, so a hang fails in seconds, not a stalled run.
+    func testConsoleWideResultsAtAnAccessibilityTextSize() throws {
+        try consoleWideResults(name: "ax1", size: .accessibilityMedium)
+    }
+
+    /// The largest accessibility text size, where the prompt beside the input once left the input
+    /// no width at all (it now goes above the input).
+    func testConsoleWideResultsAtTheLargestAccessibilityTextSize() throws {
+        try consoleWideResults(name: "ax5", size: .accessibilityExtraExtraExtraLarge)
+    }
+
+    private func consoleWideResults(name: String, size: UIContentSizeCategory) throws {
+        app.launchArguments = ["-HCResetState", "YES", "-HCPort", "0", "-HCSplashMinimum", "0.2",
+                               "-HCInitialTab", "console", "-UIPreferredContentSizeCategoryName", size.rawValue]
+        app.launch()
+        waitForApp()
+        let input = app.textViews["sqlconsole.input"]
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Statements end with'"))
+            .firstMatch.waitForExistence(timeout: 30), "connected")
+        XCTAssertGreaterThan(input.frame.width, app.windows.firstMatch.frame.width / 2, "the input has room to type in")
+        // A step that lays a wide result out must finish well inside XCUITest's own 60 s wait
+        // for the app to go idle: a hung main thread makes every step take at least that long.
+        let scale = Double(ProcessInfo.processInfo.environment["HARDCHARGER_TEST_TIMEOUT_SCALE"] ?? "") ?? 1
+        let bound = 25 * scale
+        func step(_ what: String, _ body: () -> Void) {
+            let started = Date()
+            body()
+            let took = Date().timeIntervalSince(started)
+            XCTAssertLessThan(took, bound, "\(what) took \(Int(took)) s at \(size.rawValue): the console hung")
+        }
+        input.tap()
+        input.typeText("CREATE TABLE orders AS SELECT range AS order_id, 'customer ' || range AS customer_name, " +
+            "range * 1.25 AS amount, DATE '2026-01-01' + range::INTEGER AS order_date, range % 3 = 0 AS priority, " +
+            "'warehouse ' || (range % 4) AS warehouse, 'note for order ' || range AS note FROM range(5);\n")
+        XCTAssertTrue(app.consoleOutput(containing: "OK").waitForExistence(timeout: 30))
+        input.typeText("CREATE TABLE customers AS SELECT 1 AS id; CREATE TABLE regions AS SELECT 1 AS id;\n")
+        step("a wide SELECT") {
+            input.typeText("SELECT * FROM orders;\n")
+            XCTAssertTrue(app.consoleOutput(containing: "warehouse 1").waitForExistence(timeout: 30))
+        }
+        // `.tables` after a wide result: the hang's trigger. The layout loop depended on where
+        // the results fell on screen, so a few more rounds give it more chances (a lazy
+        // transcript hung by the fourth here).
+        step(".tables") {
+            input.typeText(".tables\n")
+            XCTAssertTrue(app.consoleOutput(containing: "regions").waitForExistence(timeout: 30))
+        }
+        for round in 1...4 {
+            step("round \(round) of a result and .tables") {
+                input.typeText("SELECT *, \(round) AS round FROM orders LIMIT \(round);\n")
+                input.typeText(".tables\n")
+            }
+        }
+        app.buttons["sqlconsole.hideKeyboard"].tap()
+        try screenshot("console-\(name)-tables")
+        input.tap()
+        // 22 columns, several screens wide at any text size.
+        step("a very wide SELECT") {
+            input.typeText("SELECT *, 'the wide one' AS marker FROM orders a, orders b, orders c ORDER BY ALL LIMIT 3;\n")
+            XCTAssertTrue(app.consoleOutput(containing: "the wide one").waitForExistence(timeout: 30))
+            app.buttons["sqlconsole.hideKeyboard"].tap()
+        }
+        try screenshot("console-\(name)-wide")
+        // The very wide SELECT: unwrapped (its longest line is one line on screen, as wide as
+        // it is in the console's font) and it scrolls sideways.
+        let wide = app.consoleOutput(containing: "the wide one")
+        let longest = assertUnwrapped(wide, size: size)
+        XCTAssertGreaterThan(longest.frame.width, app.windows.firstMatch.frame.width, "the sample is wider than the screen")
+        // Swipe the result's own scroll view (its bottom is on screen) and watch its last line.
+        let scroller = app.scrollViews.matching(identifier: "sqlconsole.outputScroll")
+            .containing(NSPredicate(format: "identifier == 'sqlconsole.output' AND value CONTAINS 'the wide one'")).firstMatch
+        XCTAssertTrue(scroller.isHittable, "the wide SELECT is on screen")
+        let last = String(((wide.value as? String) ?? "").split(separator: "\n").last ?? "")
+        let line = wide.descendants(matching: .any).matching(NSPredicate(format: "label == %@", last)).firstMatch
+        let before = line.frame.minX
+        step("scrolling the wide SELECT sideways") {
+            // Drag along the part of the result the transcript shows (at the largest sizes its
+            // bottom can be under the input).
+            let visible = scroller.frame.intersection(app.descendants(matching: .any)["sqlconsole.transcript"].firstMatch.frame)
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            origin.withOffset(CGVector(dx: visible.maxX - 20, dy: visible.maxY - 20))
+                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: visible.minX + 20, dy: visible.maxY - 20)))
+        }
+        XCTAssertLessThan(line.frame.minX, before - 50, "the wide SELECT scrolls sideways")
+        try screenshot("console-\(name)-wide-scrolled")
+        input.tap()
+        // Each boxed mode's output, unwrapped too: checked as it arrives, while it is on screen
+        // (the transcript only keeps the results on screen).
+        for (mode, marker) in [("box", "┌──"), ("table", "+--"), ("markdown", "| order_id")] {
+            step(".mode \(mode)") {
+                input.typeText(".mode \(mode)\n")
+                input.typeText("SELECT order_id, customer_name, amount, '\(mode) mode' AS mode FROM orders LIMIT 2;\n")
+            }
+            let output = app.textViews.matching(NSPredicate(
+                format: "identifier == 'sqlconsole.output' AND value CONTAINS %@ AND value CONTAINS %@", marker, "\(mode) mode")).firstMatch
+            XCTAssertTrue(output.waitForExistence(timeout: 30), "\(mode): \(marker)")
+            assertUnwrapped(output, size: size)
+        }
+        app.buttons["sqlconsole.hideKeyboard"].tap()
+        try screenshot("console-\(name)-modes")
+    }
+
+    /// Asserts the output's longest line is on screen as one line (UITextView exposes a line
+    /// per line fragment: a wrapped line would be two, neither the whole line) as wide as the
+    /// line is in the console's font, and returns that line's element.
+    @discardableResult
+    private func assertUnwrapped(_ output: XCUIElement, size: UIContentSizeCategory,
+                                 file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
+        let text = (output.value as? String) ?? ""
+        let longest = text.split(separator: "\n").map(String.init)
+            .max { Self.consoleWidth(of: $0, size: size) < Self.consoleWidth(of: $1, size: size) } ?? ""
+        let width = Self.consoleWidth(of: longest, size: size)
+        let element = output.descendants(matching: .any).matching(NSPredicate(format: "label == %@", longest)).firstMatch
+        XCTAssertTrue(element.exists, "\(longest.prefix(40))… is not one line: it wrapped", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(element.frame.width + 1, width, "\(longest.prefix(40))… is cut short", file: file, line: line)
+        return element
+    }
+
+    /// A line's width in the console's font (SQLConsoleScreen.font) at a text size.
+    private static func consoleWidth(of line: String, size: UIContentSizeCategory) -> CGFloat {
+        let font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
+            for: .monospacedSystemFont(ofSize: 13, weight: .regular),
+            compatibleWith: UITraitCollection(preferredContentSizeCategory: size))
+        return (line as NSString).size(withAttributes: [.font: font]).width
+    }
+
+    private func screenshot(_ name: String) throws {
+        guard let directory = ProcessInfo.processInfo.environment["HC_SCREENSHOT_DIR"] else { return }
+        Thread.sleep(forTimeInterval: 1.0)
+        try XCUIScreen.main.screenshot().pngRepresentation
+            .write(to: URL(filePath: directory).appending(path: "\(name).png"))
+    }
+
     func testSettingsTogglesStick() throws {
         app.launchArguments += ["-HCInitialTab", "settings"]
         app.launch()

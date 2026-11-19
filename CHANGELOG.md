@@ -48,6 +48,14 @@ own changelog in `python/CHANGELOG.md`.
   rows: Android's monospace font has no box-drawing characters, so they came from a wider
   fallback font. The console now uses JetBrains Mono (no ligatures), bundled under the SIL Open
   Font License, in which every character is one cell wide.
+- **iOS console: results wider than the screen scroll sideways, at every text size**
+  ([#57](https://github.com/gizmodata/hardcharger/issues/57)). A line wider than the screen
+  wrapped, so a wide table's borders broke across lines; each result now keeps its lines whole
+  and scrolls sideways on its own, from the smallest text size to the largest accessibility
+  size. The console also no longer stops responding when `.tables` follows a few other results
+  (its transcript could re-lay itself out without end, at any text size). At the larger
+  accessibility text sizes the catalog and schema prompt moves above the input instead of
+  leaving it little or no room to type, and Run and Cancel show their icons alone.
 
 ### Changed
 
