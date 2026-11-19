@@ -254,7 +254,8 @@ int VerifyCredentials(const Config& config, std::istream& in, std::ostream& out)
     // stopped answering in between (permission_denied from a stale snapshot) is no answer.
     if (e.code() == chargewire::ErrorCode::kInvalidCredentials || e.code() == chargewire::ErrorCode::kInvalidToken) {
       // A failure the store doesn't hold would be a check that counts toward no limit.
-      if (!unrecorded.empty()) {
+      // (A store a server older than 2.14 made keeps no sign-in records at all: as before.)
+      if (!unrecorded.empty() && !authz::IsMissingSignInRecords(unrecorded)) {
         return Undecided(out, StoreProblem(unrecorded),
                          "this check's failed sign-in could not be recorded in the store: " + unrecorded);
       }

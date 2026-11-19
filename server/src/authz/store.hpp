@@ -102,6 +102,10 @@ bool IsStoreUnavailable(const arrow::Status& status);
 // A PostgreSQL store's connection string as the store connects with it: with libpq's
 // connect_timeout, keepalives, tcp_user_timeout and statement_timeout (from `timeout`)
 // added, each unless `uri` sets it. (Exposed for the unit tests.)
+// Does this error say the store has no table of sign-in records (a store a server older than
+// 2.14 created, opened read-only: it keeps none, so there is nothing to record or take turns on)?
+bool IsMissingSignInRecords(const std::string& message);
+
 std::string StoreConnectionWithTimeouts(const std::string& uri, std::chrono::milliseconds timeout);
 
 class RbacStore {
@@ -155,6 +159,7 @@ class RbacStore {
   arrow::Result<bool> TakeLoginLock(const std::string& key, const std::string& holder, int64_t now_ms,
                                     int64_t stale_before_ms);
   arrow::Status ReleaseLoginLock(const std::string& key, const std::string& holder);
+  arrow::Status ReleaseLoginLockRow(const std::string& key, const std::string& holder);
 
   const std::string& description() const { return description_; }
   // A DuckDB store's file, absolute; empty for any other store.

@@ -289,6 +289,11 @@ dd::Value Bool(bool b) { return dd::Value::BOOLEAN(b); }
 dd::Value BigInt(int64_t v) { return dd::Value::BIGINT(v); }
 
 // A statement failed because its table isn't there (a store an older server created).
+bool IsMissingTableMessage(const std::string& text) {
+  const std::string message = Lower(text);
+  return message.find("does not exist") != std::string::npos || message.find("not found") != std::string::npos;
+}
+
 bool IsMissingTable(const arrow::Status& status) {
   const std::string message = Lower(status.message());
   return message.find("does not exist") != std::string::npos ||
@@ -551,6 +556,10 @@ arrow::Result<std::string> PrepareStoreFile(const std::string& given) {
 // ---------------------------------------------------------------------------
 
 std::string DuckDBStoreFile(const std::string& store_uri) { return RbacStore::DuckDBFile(store_uri); }
+
+bool IsMissingSignInRecords(const std::string& message) {
+  return message.find("login_events") != std::string::npos && IsMissingTableMessage(message);
+}
 
 std::string StoreConnectionWithTimeouts(const std::string& uri, std::chrono::milliseconds timeout) {
   return WithTimeouts(uri, timeout);
@@ -1441,6 +1450,11 @@ arrow::Result<bool> RbacStore::TakeLoginLock(const std::string& key, const std::
     CheckpointFile();
     return true;
   }
+  if (options_.read_only && IsMissingTable(status)) {
+    // A store a server older than 2.14 made keeps no sign-in records: none to take turns on.
+    (void)Query(conn, "ROLLBACK");
+    return true;
+  }
   if (status.message().find("timed out after") == std::string::npos) (void)Query(conn, "ROLLBACK");
   // Another holder has it: its row's key (PostgreSQL's unique violation, DuckDB's duplicate
   // key or a write-write conflict with a holder taking it at the same moment).
@@ -1454,6 +1468,12 @@ arrow::Result<bool> RbacStore::TakeLoginLock(const std::string& key, const std::
 
 arrow::Status RbacStore::ReleaseLoginLock(const std::string& key, const std::string& holder) {
   if (exclusive_file_) return arrow::Status::OK();
+  auto released = ReleaseLoginLockRow(key, holder);
+  if (!released.ok() && options_.read_only && IsMissingTable(released)) return arrow::Status::OK();
+  return released;
+}
+
+arrow::Status RbacStore::ReleaseLoginLockRow(const std::string& key, const std::string& holder) {
   StoreTurn turn;
   ARROW_RETURN_NOT_OK(Lock(turn));
   ARROW_RETURN_NOT_OK(EnableSignInWrites());
