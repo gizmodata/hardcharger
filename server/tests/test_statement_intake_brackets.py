@@ -35,6 +35,7 @@ SIZES = [8_000, 500_000]
 # What a refusal may take: it is one pass over the text. (Generous for a busy machine.)
 REFUSAL_SECONDS = 2.0 * TIMEOUT_SCALE
 LIMIT = 1000  # max_sql_nesting's default: what the statement threads' 8 MB stacks take
+JOINED = 64  # max_joined_tables' default (hc-v214-notes/masking-parser/join-cap: measured planning times)
 
 
 @pytest.fixture(scope="module")
@@ -327,15 +328,14 @@ def test_wide_lists_that_are_no_from_clause_are_not_counted_as_tables(user):
 @pytest.mark.parametrize("shape", sorted(CHAINS))
 @pytest.mark.parametrize("depth", [990, 5_000])
 def test_nesting_without_brackets_is_refused_by_duckdbs_limit_not_by_a_crash(server, user, shape, depth):
-    if shape == "joins" and depth < LIMIT:
-        # (A 990-way join binds, and DuckDB's join-order optimizer then takes minutes, which no
-        # statement timeout interrupts: a planning cost, not a parse or a stack one. The joins
-        # DuckDB's limit refuses are tested here; a 300-way join below.)
-        depth = LIMIT + 100
     error, took = outcome(session=user, sql=CHAINS[shape](depth))
-    if depth > LIMIT:
-        assert error is not None and ("Max expression depth limit of 1000 exceeded" in error
-                                      or f"names {depth} tables" in error), error
+    if shape == "joins":
+        # (A 990-way join binds, and DuckDB's join-order optimizer then takes minutes, which no
+        # statement timeout interrupts: max_joined_tables refuses it before DuckDB parses it.)
+        assert error is not None and (f"a FROM clause of the statement joins {depth} tables, and this server takes {JOINED}"
+                                      in error or f"names {depth} tables" in error), error
+    elif depth > LIMIT:
+        assert error is not None and "Max expression depth limit of 1000 exceeded" in error, error
     assert took < 30 * TIMEOUT_SCALE
     assert server.admin().scalar(sql="SELECT 1") == 1, "the server stopped"
 
@@ -349,7 +349,8 @@ UNDER_THE_LIMIT = {
     "990 nested CASE": (CHAINS["case"](990), None),
     "240 nested FROM subqueries": (DEEP["from-subqueries"](240), None),
     "300 nested scalar subqueries": (DEEP["scalar-subqueries"](300), "Max expression depth limit of 1000 exceeded"),
-    "a 300-table join": (CHAINS["joins"](300), None),
+    "a 300-table join": (CHAINS["joins"](300), f"a FROM clause of the statement joins 300 tables, and this server takes {JOINED}"),
+    "a 60-table join": (CHAINS["joins"](60), None),
 }
 
 
@@ -494,3 +495,146 @@ def test_the_init_sql_runs_on_a_thread_with_the_statement_threads_stack(launcher
     admin = running.admin()
     assert admin.scalar(sql="SELECT length(s) FROM deep") == 901
     assert admin.scalar(sql="SELECT one FROM nested") == 1
+
+
+# ---- Tables joined in one statement ----------------------------------------------------
+#
+# DuckDB's join-order search takes time that grows steeply with the tables one FROM clause
+# joins (measured on this project's laptop under load: a chain of 128 tables 0.7 s, 256 16 s; a
+# join graph with cycles, 96 tables 1.9 s, 128 7 s, 192 82 s), and neither the statement timeout
+# nor a cancel interrupts it. max_joined_tables (64) refuses more in one clause, and more than
+# eight times that in all a statement's clauses, before DuckDB parses the text, wherever the
+# text reaches the parser. (hc-v214-notes/masking-parser/join-cap/measurements.md)
+
+WHY_JOINS = ("DuckDB's time to choose a join order grows steeply with the tables joined, and neither a statement "
+             "timeout nor a cancel stops it")
+
+
+def joined(n: int, first: int = 0, table: str = "t") -> str:
+    return (f"SELECT count(*) FROM {table}{first} " +
+            " ".join(f"JOIN {table}{first + k} ON {table}{first + k - 1}.a = {table}{first + k}.a" for k in range(1, n)))
+
+
+def joined_refusal(n: int, limit: int = JOINED) -> str:
+    return (f"a FROM clause of the statement joins {n} tables, and this server takes {limit} in one "
+            f"(its max_joined_tables option): {WHY_JOINS}")
+
+
+def spread(groups: int, size: int = 60) -> str:
+    """`groups` derived tables of `size` joined tables each, joined to one another."""
+    parts = [f"({joined(n=size, first=g * size, table='j')}) s{g}" for g in range(groups)]
+    return "SELECT count(*) FROM " + parts[0] + " " + " ".join(f"JOIN {parts[g]} ON true" for g in range(1, groups))
+
+
+@pytest.fixture(scope="module")
+def join_tables(server):
+    admin = server.admin()
+    for first in range(0, 600, 100):
+        admin.execute(sql="; ".join(f"CREATE TABLE IF NOT EXISTS j{k} (a INTEGER)" for k in range(first, first + 100)))
+    return admin
+
+
+@pytest.mark.parametrize("route", ["statement", "second-of-several", "prepared", "comma-list", "in-a-subquery", "in-a-cte"])
+def test_a_from_clause_joining_more_tables_than_the_limit_is_refused_at_once(server, join_tables, route):
+    admin = server.admin()
+    n = JOINED + 1
+    sql = {
+        "statement": joined(n=n, table="j"),
+        "second-of-several": "SELECT 1; " + joined(n=n, table="j"),
+        "prepared": joined(n=n, table="j") + " WHERE j0.a = ?",
+        "comma-list": "SELECT count(*) FROM " + ", ".join(f"j{k}" for k in range(n)),
+        "in-a-subquery": f"SELECT * FROM ({joined(n=n, table='j')}) s",
+        "in-a-cte": f"WITH c AS ({joined(n=n, table='j')}) SELECT * FROM c",
+    }[route]
+    error, took = outcome(session=admin, sql=sql, parameters=[1] if route == "prepared" else None)
+    assert error is not None and joined_refusal(n=n) in error, error
+    assert took < REFUSAL_SECONDS, f"the refusal took {took:.2f} s"
+    # The twin: at the limit, the statement is planned and runs.
+    assert admin.scalar(sql=joined(n=JOINED, table="j")) == 0
+
+
+def test_the_tables_all_a_statements_from_clauses_join_are_bounded_too(server, join_tables):
+    admin = server.admin()
+    # Nine derived tables of 60 joined tables each: 549 in all, past 8 x 64 = 512.
+    error, took = outcome(session=admin, sql=spread(groups=9))
+    assert error == ("Parser Error: the statement's FROM clauses join 549 tables in all, and this server takes 512 "
+                     f"(eight times its max_joined_tables option): {WHY_JOINS}"), error
+    assert took < REFUSAL_SECONDS, f"the refusal took {took:.2f} s"
+    # The twin: eight of them (488) are planned, each derived table's join on its own.
+    error, took = outcome(session=admin, sql=spread(groups=8))
+    assert error is None, error
+    assert took < 30 * TIMEOUT_SCALE
+
+
+def test_tables_joined_in_sql_built_at_run_time_are_refused_on_every_route(server, user, join_tables, tmp_path):
+    admin = server.admin()
+    n = JOINED + 1
+    # (Built by an expression, not a subquery: query() takes no subquery in its argument.)
+    built = ("'SELECT count(*) FROM j0 ' || array_to_string(list_transform(range(1, " + str(n) + "), "
+             "lambda k: 'JOIN j' || k || ' ON j' || (k - 1) || '.a = j' || k || '.a'), ' ')")
+    # query() (the administrator's under access control), computed.
+    error, took = outcome(session=admin, sql=f"SELECT * FROM query({built})")
+    assert error is not None and joined_refusal(n=n) in error, error
+    assert took < REFUSAL_SECONDS
+    # json_serialize_sql(), anyone's, and json_serialize_plan(): the error is in their result.
+    answer, took = timed_scalar(session=user, sql=f"SELECT json_serialize_sql({built})::JSON->>'error_message'")
+    assert answer == joined_refusal(n=n), answer
+    assert took < REFUSAL_SECONDS
+    answer, _ = timed_scalar(session=admin, sql=f"SELECT json_serialize_plan({built})::JSON->>'error_message'")
+    assert answer == joined_refusal(n=n), answer
+    # On DuckDB's worker threads: a column of SQL over a parallel scan.
+    answer, took = timed_scalar(session=user, sql=(
+        f"SELECT max(json_serialize_sql(CASE WHEN i % 100000 = 7 THEN {built} ELSE 'SELECT 1' END)::JSON->>'error_message') "
+        "FROM range(3000000) t(i)"))
+    assert answer == joined_refusal(n=n), answer
+    assert took < 10 * TIMEOUT_SCALE
+    # IMPORT DATABASE's load.sql.
+    directory = tmp_path / "joined"
+    directory.mkdir()
+    (directory / "schema.sql").write_text("")
+    (directory / "load.sql").write_text(f"COPY ({joined(n=n, table='j')}) TO '{tmp_path / 'out.csv'}';\n")
+    error, took = outcome(session=admin, sql=f"IMPORT DATABASE '{directory}'")
+    assert error is not None and joined_refusal(n=n) in error, error
+    assert took < REFUSAL_SECONDS
+    # The twins: at the limit, each route plans.
+    at_limit = built.replace(f"range(1, {n})", f"range(1, {JOINED})")
+    assert at_limit != built
+    assert admin.scalar(sql=f"SELECT * FROM query({at_limit})") == 0
+    assert user.scalar(sql=f"SELECT json_serialize_sql({at_limit})::JSON->>'error'") == "false"
+
+
+def test_many_one_table_selects_and_wide_lists_join_nothing(user):
+    # A UNION of thousands of one-table SELECTs, an IN list, a VALUES list: no join to plan.
+    assert user.scalar(sql="SELECT count(*) FROM (" + " UNION ALL ".join(f"SELECT {k} AS n FROM range(1)" for k in range(2_000)) + ")") == 2_000
+    assert user.scalar(sql="SELECT count(*) FROM range(3) WHERE range IN (" + ", ".join(str(k) for k in range(6_000)) + ")") == 3
+    # Statements of a request are counted one by one.
+    many = "; ".join(f"SELECT count(*) FROM range(1) a{k} JOIN range(1) b{k} ON true" for k in range(300))
+    error, _ = outcome(session=user, sql=many)
+    assert error is None, error
+
+
+def test_init_sql_joining_more_tables_than_the_limit_stops_the_server_at_once(launcher):
+    tables = ";\n".join(f"CREATE TABLE j{k} (a INTEGER)" for k in range(JOINED + 1))
+    failed = launcher.start(env={"HARDCHARGER_INIT_SQL_COMMANDS": tables + ";\n" + joined(n=JOINED + 1, table="j")}, expect_up=False)
+    assert failed.process.wait(timeout=60 * TIMEOUT_SCALE) == 1
+    assert f"init SQL failed: Parser Error: {joined_refusal(n=JOINED + 1)}" in failed.log(), failed.log()[-600:]
+
+
+def test_max_joined_tables_sets_the_limit(launcher):
+    running = launcher.start(args=["--max-joined-tables", "8"])
+    admin = running.admin()
+    admin.execute(sql="; ".join(f"CREATE TABLE j{k} (a INTEGER)" for k in range(12)))
+    assert admin.scalar(sql=joined(n=8, table="j")) == 0
+    error, _ = outcome(session=admin, sql=joined(n=9, table="j"))
+    assert error == "Parser Error: " + joined_refusal(n=9, limit=8), error
+    rows = admin.query(sql="SELECT value, cli_flag FROM hardcharger_settings() WHERE name = 'hardcharger.max_joined_tables'").to_pylist()
+    assert rows == [{"value": "8", "cli_flag": "--max-joined-tables"}], rows
+    # 0: no limit.
+    unlimited = launcher.start(env={"HARDCHARGER_MAX_JOINED_TABLES": "0"})
+    other = unlimited.admin()
+    other.execute(sql="; ".join(f"CREATE TABLE j{k} (a INTEGER)" for k in range(JOINED + 20)))
+    assert other.scalar(sql=joined(n=JOINED + 20, table="j")) == 0
+    # Out of range: the server does not start.
+    bad = launcher.start(args=["--max-joined-tables", "-1"], expect_up=False)
+    assert bad.process.wait(timeout=30 * TIMEOUT_SCALE) != 0
+    assert "max_joined_tables must be from 0 (no limit) to 100000, not -1" in bad.log(), bad.log()[-600:]

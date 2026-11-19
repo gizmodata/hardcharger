@@ -622,6 +622,7 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
   // the init SQL's included, goes through the parse guard's checks first.
   parse_guard_ = ParseGuard::Install(
       instance(), static_cast<std::size_t>(SqlNestingLimit(runtime_.config)),
+      static_cast<std::size_t>(runtime_.config.max_joined_tables),
       AutoCompletePolicy{.enabled = runtime_.config.enable_sql_auto_complete, .is_administrator = [] {
                            const Session* session = CurrentSession();
                            return session != nullptr && session->admin();

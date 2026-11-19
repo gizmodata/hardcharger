@@ -309,6 +309,11 @@ std::vector<Setting> Build() {
            .description = "The deepest nesting a statement may have: DuckDB's max_expression_depth, which no "
                           "session can raise past it (default: what the statement threads' 8 MB stacks take, 1000).",
            .get_global = config_value([](const Runtime& r) { return std::to_string(SqlNestingLimit(r.config)); })});
+  startup({.name = "max_joined_tables", .input_type = "INTEGER", .option = "max_joined_tables",
+           .default_value = number(kDefaults.max_joined_tables),
+           .description = "The most tables one FROM clause may join (all of a statement's together: eight times as many); a "
+                          "statement that joins more is refused before DuckDB plans it (0: no limit).",
+           .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.max_joined_tables); })});
   startup({.name = "enable_sql_auto_complete", .input_type = "BOOLEAN", .option = "enable_sql_auto_complete",
            .default_value = Bool(kDefaults.enable_sql_auto_complete),
            .description = "DuckDB's autocomplete functions (sql_auto_complete and its siblings) run, for administrators "

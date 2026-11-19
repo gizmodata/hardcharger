@@ -105,12 +105,19 @@ class ShapeReader final : public dd::TokenizerBehavior {
       shape_.position = first_;
     }
     open_ = brackets_ = 0;
+    joined_ = 0;
     from_.assign(1, 0);
     parts_ = 0;
     after_dot_ = false;
   }
 
-  void Counted(std::size_t tables) { shape_.tables = std::max(shape_.tables, tables); }
+  // A FROM clause has named one more table, `tables` so far: the most one clause names, and the
+  // tables the statement's FROM clauses join in all (a clause's every table once it names two).
+  void Counted(std::size_t tables) {
+    shape_.tables = std::max(shape_.tables, tables);
+    if (tables >= 2) joined_ += tables == 2 ? 2 : 1;
+    shape_.joined = std::max(shape_.joined, joined_);
+  }
 
   void Read(dd::TokenType type, std::string_view text, std::size_t offset) {
     if (type == dd::TokenType::COMMENT) return;  // (nothing to DuckDB's parser)
@@ -177,6 +184,7 @@ class ShapeReader final : public dd::TokenizerBehavior {
   }
 
   SqlShape shape_;
+  std::size_t joined_ = 0;     // tables this statement's FROM clauses join, in all
   std::size_t open_ = 0;       // parentheses open in this statement
   std::size_t first_ = 0;      // where the outermost of them is
   std::size_t brackets_ = 0;   // ( [ { open in this statement
@@ -210,14 +218,41 @@ const dd::Tokenizer& DefaultTokenizer() {
 
 SqlShape MeasureSql(const std::string& sql) { return Measure(sql, DefaultTokenizer()); }
 
-std::string ShapeRefusal(const SqlShape& shape, std::size_t nesting_limit) {
+static std::string NestingRefusal(const SqlShape& shape, std::size_t nesting_limit);
+
+constexpr std::size_t kJoinedPerStatement = 8;
+constexpr char kWhyJoins[] =
+    "DuckDB's time to choose a join order grows steeply with the tables joined, and neither a statement timeout nor "
+    "a cancel stops it";
+
+std::string ShapeRefusal(const SqlShape& shape, std::size_t nesting_limit, std::size_t joined_limit) {
   if (shape.refused_by_tokenizer) return {};  // DuckDB's error is the right one, and is at once
   if (shape.unclosed > 0) {
     return "syntax error: " + std::to_string(shape.unclosed) +
            (shape.unclosed == 1 ? " opening parenthesis is" : " opening parentheses are") +
            " never closed (the first \"(\" at position " + std::to_string(shape.position + 1) + ")";
   }
-  if (nesting_limit == 0) return {};
+  if (nesting_limit > 0) {
+    if (const std::string refusal = NestingRefusal(shape, nesting_limit); !refusal.empty()) return refusal;
+  }
+  // DuckDB plans each FROM clause's join on its own (a derived table or a CTE is one table of
+  // the clause that joins it, with a join of its own): what one clause joins is what costs
+  // most, and what a statement's clauses join together is bounded too.
+  if (joined_limit > 0 && shape.tables > joined_limit) {
+    return "a FROM clause of the statement joins " + std::to_string(shape.tables) + " tables, and this server takes " +
+           std::to_string(joined_limit) + " in one (its max_joined_tables option): " + kWhyJoins;
+  }
+  if (joined_limit > 0 && shape.joined > kJoinedPerStatement * joined_limit) {
+    return "the statement's FROM clauses join " + std::to_string(shape.joined) + " tables in all, and this server takes " +
+           std::to_string(kJoinedPerStatement * joined_limit) + " (eight times its max_joined_tables option): " +
+           kWhyJoins;
+  }
+  return {};
+}
+
+// What max_sql_nesting refuses (the stack's limits): checked before the tables joined, so a
+// text that could not even be parsed safely is refused for that.
+static std::string NestingRefusal(const SqlShape& shape, std::size_t nesting_limit) {
   if (shape.nesting > nesting_limit) {
     return "the statement's brackets nest " + std::to_string(shape.nesting) + " deep, and this server takes " +
            std::to_string(nesting_limit) + " (its max_sql_nesting option)";
@@ -236,8 +271,10 @@ std::string ShapeRefusal(const SqlShape& shape, std::size_t nesting_limit) {
 // ---- The hook and the setting guard ----
 
 struct ParseGuard::State : dd::ParserExtensionInfo, dd::PlannerExtensionInfo {
-  State(std::size_t limit, AutoCompletePolicy policy) : nesting_limit(limit), autocomplete(std::move(policy)) {}
+  State(std::size_t limit, std::size_t joined, AutoCompletePolicy policy)
+      : nesting_limit(limit), joined_limit(joined), autocomplete(std::move(policy)) {}
   const std::size_t nesting_limit;
+  const std::size_t joined_limit;
   const AutoCompletePolicy autocomplete;
   std::atomic<bool> locked = false;
 };
@@ -252,7 +289,7 @@ dd::ParserOverrideResult GuardParse(dd::ParserExtensionInfo* info, const dd::str
   const auto& state = static_cast<const ParseGuard::State&>(*info);
   // DuckDB's tokenizer class, the one its grammar's parser runs (a grammar extension changes
   // only which words are keywords, which the counts here do not depend on; sql_lex.hpp).
-  const std::string refusal = ShapeRefusal(Measure(query, DefaultTokenizer()), state.nesting_limit);
+  const std::string refusal = ShapeRefusal(Measure(query, DefaultTokenizer()), state.nesting_limit, state.joined_limit);
   if (!refusal.empty()) throw dd::ParserException(refusal);
   return dd::ParserOverrideResult();  // not claimed: DuckDB's own parser parses it
 }
@@ -479,10 +516,10 @@ class AutoCompleteLoads final : public dd::ExtensionCallback {
 }  // namespace
 
 std::shared_ptr<ParseGuard> ParseGuard::Install(duckdb_v2_instance_handle instance, std::size_t nesting_limit,
-                                               AutoCompletePolicy autocomplete) {
+                                               std::size_t joined_limit, AutoCompletePolicy autocomplete) {
   auto& database = *dd::capiv2::Convert(instance)->GetDatabase().instance;
   auto& config = dd::DBConfig::GetConfig(database);
-  auto state = dd::make_shared_ptr<State>(nesting_limit, std::move(autocomplete));
+  auto state = dd::make_shared_ptr<State>(nesting_limit, joined_limit, std::move(autocomplete));
   dd::ParserExtension parser;
   parser.parser_override = GuardParse;
   parser.parser_info = dd::shared_ptr<dd::ParserExtensionInfo>(state, static_cast<dd::ParserExtensionInfo*>(state.get()));

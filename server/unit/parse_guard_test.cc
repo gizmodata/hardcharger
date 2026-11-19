@@ -114,3 +114,67 @@ TEST(ParseGuard, TheErrorsThatRefuseAText) {
   // Parentheses never closed are refused whatever the limit, 0 included.
   EXPECT_EQ(Refusal("SELECT (1", 0), "syntax error: 1 opening parenthesis is never closed (the first \"(\" at position 8)");
 }
+
+TEST(ParseGuard, TablesJoinedInAStatementAreCountedOverAllItsFromClauses) {
+  auto joined = [](const std::string& sql) { return MeasureSql(sql).joined; };
+  auto chain = [](int n, int first = 0) {
+    std::string sql = "SELECT t" + std::to_string(first) + ".a FROM t" + std::to_string(first);
+    for (int i = first + 1; i < first + n; i++) sql += " JOIN t" + std::to_string(i) + " USING (a)";
+    return sql;
+  };
+  EXPECT_EQ(joined("SELECT 1"), 0u);
+  EXPECT_EQ(joined("SELECT * FROM t"), 0u);  // one table joins nothing
+  EXPECT_EQ(joined("SELECT * FROM a, b"), 2u);
+  EXPECT_EQ(joined("SELECT * FROM a JOIN b ON a.x = b.x LEFT JOIN c USING (x), d"), 4u);
+  EXPECT_EQ(joined(chain(100)), 100u);
+  // Derived tables and CTEs: their FROM clauses add up with the one that joins them.
+  EXPECT_EQ(joined("SELECT * FROM (" + chain(10) + ") s JOIN (" + chain(10, 10) + ") r USING (a)"), 22u);
+  EXPECT_EQ(joined("WITH c AS (" + chain(30) + ") SELECT * FROM c JOIN (" + chain(30, 30) + ") d USING (a)"), 62u);
+  EXPECT_EQ(joined(chain(30) + " UNION ALL " + chain(30)), 60u);
+  // One-table SELECTs in a UNION, a VALUES list, a function's arguments: no join.
+  std::string unions = "SELECT a FROM t0";
+  for (int i = 1; i < 2000; i++) unions += " UNION ALL SELECT a FROM t" + std::to_string(i);
+  EXPECT_EQ(joined(unions), 0u);
+  EXPECT_EQ(joined("SELECT * FROM read_csv(['a.csv', 'b.csv', 'c.csv'])"), 0u);
+  EXPECT_EQ(joined("SELECT * FROM (VALUES (1), (2), (3)) v(x)"), 0u);
+  EXPECT_EQ(joined("SELECT x IS DISTINCT FROM y, extract(year FROM d) FROM t"), 0u);
+  // Statements of a request are counted one by one.
+  EXPECT_EQ(joined(chain(60) + "; " + chain(60)), 60u);
+  // In a literal, a quoted name or a comment, nothing is a table.
+  EXPECT_EQ(joined("SELECT 'FROM a, b, c' AS \"FROM d, e\" -- FROM f, g"), 0u);
+}
+
+TEST(ParseGuard, TablesJoinedBeyondTheLimitAreRefusedNamingTheOption) {
+  auto chain = [](int n, int first = 0) {
+    std::string sql = "SELECT t" + std::to_string(first) + ".a FROM t" + std::to_string(first);
+    for (int i = first + 1; i < first + n; i++) sql += " JOIN t" + std::to_string(i) + " ON t" + std::to_string(i - 1) + ".a = t" + std::to_string(i) + ".a";
+    return sql;
+  };
+  const std::string why =
+      "DuckDB's time to choose a join order grows steeply with the tables joined, and neither a statement timeout nor a "
+      "cancel stops it";
+  // One FROM clause: what one join is planned over.
+  EXPECT_EQ(ShapeRefusal(MeasureSql(chain(65)), 1000, 64),
+            "a FROM clause of the statement joins 65 tables, and this server takes 64 in one (its max_joined_tables option): " + why);
+  EXPECT_TRUE(ShapeRefusal(MeasureSql("SELECT 1; " + chain(65)), 1000, 64).starts_with("a FROM clause of the statement joins 65 tables, "));
+  EXPECT_EQ(ShapeRefusal(MeasureSql(chain(64)), 1000, 64), "");  // the twin: at the limit, it goes on
+  EXPECT_EQ(ShapeRefusal(MeasureSql(chain(65)), 1000, 0), "");   // 0: no limit
+  EXPECT_EQ(ShapeRefusal(MeasureSql(chain(65)), 1000), "");      // (the default argument: none)
+  // A derived table is one table of the clause that joins it: eight of 60 each are taken, nine
+  // are more than the statement's FROM clauses may join together (8 x 64 = 512).
+  auto spread = [&](int groups) {
+    std::string sql = "SELECT count(*) FROM (" + chain(60) + ") s0";
+    for (int g = 1; g < groups; g++) sql += " JOIN (" + chain(60, 60 * g) + ") s" + std::to_string(g) + " USING (a)";
+    return sql;
+  };
+  EXPECT_EQ(MeasureSql(spread(8)).joined, 8u * 60 + 8);
+  EXPECT_EQ(ShapeRefusal(MeasureSql(spread(8)), 1000, 64), "");
+  EXPECT_EQ(ShapeRefusal(MeasureSql(spread(9)), 1000, 64),
+            "the statement's FROM clauses join 549 tables in all, and this server takes 512 (eight times its "
+            "max_joined_tables option): " + why);
+  // The stack's limits are checked first: a FROM clause the parser could not take safely is
+  // refused for that.
+  std::string huge = "SELECT 1 FROM t0";
+  for (int i = 1; i < 5000; i++) huge += ", t" + std::to_string(i);
+  EXPECT_TRUE(ShapeRefusal(MeasureSql(huge), 1000, 64).starts_with("a FROM clause of the statement names 5000 tables, "));
+}

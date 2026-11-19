@@ -12,6 +12,11 @@
 //   parser recurses once per level before any limit of its own is checked;
 // - more than four times that many tables in one FROM clause: the parser recurses once per
 //   table as well;
+// - more tables in one FROM clause than max_joined_tables, or more than eight times that in
+//   all the statement's FROM clauses together: DuckDB's join-order search takes time that
+//   grows steeply with the tables one clause joins (on a busy laptop: a chain of 128 tables
+//   0.7 s, 256 16 s; a join graph with cycles, 96 tables 1.9 s, 128 7 s; 600 over 2 minutes),
+//   and no timeout or cancel interrupts it (hc-v214-notes/masking-parser/join-cap);
 // - a dotted name (a.b.c...) of more parts than the limit: DuckDB's binder takes time
 //   quadratic in their number (20,000 parts: 45 s), uninterrupted.
 // Anything else goes on to DuckDB's own parser unchanged. The hook needs DuckDB's setting
@@ -36,6 +41,9 @@ struct SqlShape {
   std::size_t position = 0;    // of that statement's first one, in bytes from the start of the text
   std::size_t nesting = 0;     // the deepest the text's brackets nest
   std::size_t tables = 0;      // the most tables one FROM clause names (joined, or listed with commas)
+  // The most tables one statement's FROM clauses join in all: of every clause in it that names
+  // two or more (a derived table's and a CTE's included), all of them, added up.
+  std::size_t joined = 0;
   std::size_t name_parts = 0;  // the most parts one dotted name has (a.b.c: 3)
   // The text ends in a string literal, a quoted name or a /* comment that never ends: DuckDB's
   // tokenizer refuses it at once (an unterminated dollar-quoted string it does not: that one
@@ -48,9 +56,10 @@ struct SqlShape {
 SqlShape MeasureSql(const std::string& sql);
 
 // The error that refuses a text of that shape on a server whose limit is `nesting_limit`
-// (0: no limit on nesting, tables or names), without DuckDB's "Parser Error: " prefix; ""
-// when the text may go on to DuckDB's parser.
-std::string ShapeRefusal(const SqlShape& shape, std::size_t nesting_limit);
+// (0: no limit on nesting, tables or names) and whose limit on the tables a statement joins
+// is `joined_limit` (0: none), without DuckDB's "Parser Error: " prefix; "" when the text may
+// go on to DuckDB's parser.
+std::string ShapeRefusal(const SqlShape& shape, std::size_t nesting_limit, std::size_t joined_limit = 0);
 
 // DuckDB's autocomplete extension: sql_auto_complete(), sql_tokenize(), check_peg_parser() and
 // duckdb_format_sql() run DuckDB's PEG matcher (or formatter) on their argument directly, not
@@ -73,6 +82,7 @@ class ParseGuard {
   // setting must already be 'fallback' (an instance option, DuckDBBackend's): from here on
   // every parse is checked.
   static std::shared_ptr<ParseGuard> Install(duckdb_v2_instance_handle instance, std::size_t nesting_limit,
+                                             std::size_t joined_limit,
                                              AutoCompletePolicy autocomplete);
 
   // The end of startup, before any session: the autocomplete extension's functions, if it is

@@ -112,6 +112,10 @@ struct Config {
   // The deepest nesting a statement may have (DuckDB's max_expression_depth, which sessions
   // cannot raise past it). 0 = what the statement threads' 8 MB stacks take: 1000.
   int64_t max_sql_nesting = 0;
+  // The most tables one FROM clause may join (and eight times that, all of a statement's FROM
+  // clauses together); 0: no limit. DuckDB's join-order search is not interrupted by a
+  // timeout or a cancel: 64 keeps it well under a second (README; hc-v214-notes join-cap).
+  int64_t max_joined_tables = 64;
   // DuckDB's autocomplete functions (sql_auto_complete, sql_tokenize, check_peg_parser,
   // duckdb_format_sql), for administrators: off, they are refused to everyone (parse_guard.hpp).
   bool enable_sql_auto_complete = false;

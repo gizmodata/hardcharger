@@ -1067,6 +1067,16 @@ DATABASE's `load.sql`. It refuses:
   with commas (the parser recurses once per table as well).
 - **A dotted name of more parts than `max_sql_nesting`** (`a.b.c…`): DuckDB's binder takes
   time quadratic in their number (20,000 parts: 45 seconds), and no timeout interrupts it.
+- **More tables in one `FROM` clause than `max_joined_tables`** (64 by default), joined or
+  listed with commas, and more than eight times that in all a statement's `FROM` clauses
+  together: `Parser Error: a FROM clause of the statement joins 65 tables, and this server
+  takes 64 in one (its max_joined_tables option): …`. DuckDB's time to choose a join order
+  grows steeply with the tables one clause joins, and neither the statement timeout nor a
+  cancel interrupts it. Measured on a busy laptop (planning only): a chain of 64 tables 0.08
+  s, 128 tables 0.7 s, 256 tables 16 s; a join graph with cycles, 64 tables 0.4 s, 96 tables
+  1.9 s, 128 tables 7 s, 192 tables 82 s. A derived table or a CTE is one table of the clause
+  that joins it (DuckDB plans its own join on its own: 600 tables in derived tables of ten take
+  about 2.5 s), and a request's statements are counted one by one.
 
 Anything else goes on to DuckDB's parser unchanged: its errors, their positions and `EXPLAIN`
 are what DuckDB says. No session can switch the check off: a `SET`, `RESET` or `PRAGMA` of
@@ -1092,9 +1102,11 @@ stacks to match: DuckDB's own worker threads, which run parts of queries (and pa
 `json_serialize_sql()` is given row by row), keep the platform's default stack, and were
 measured to take twice the default limit on macOS.
 
-What the check does not bound: a statement that parses and binds can still take long to
-**plan** (DuckDB's join-order optimizer took 11 seconds for a 300-way join and minutes for 600),
-and planning is not interrupted by the statement timeout or a cancel.
+`max_joined_tables` (`--max-joined-tables`, `HARDCHARGER_MAX_JOINED_TABLES`, default `64`,
+`0` for no limit) is the most tables one `FROM` clause may join; all of a statement's `FROM`
+clauses together may join eight times as many. It bounds what DuckDB's join-order search, which
+nothing interrupts, is given: raise it only knowing that each table past a hundred or so in one
+clause can add seconds to minutes of planning on one core.
 
 ### DuckDB's autocomplete functions
 

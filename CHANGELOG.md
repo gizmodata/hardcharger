@@ -90,6 +90,13 @@ own changelog in `python/CHANGELOG.md`.
     than `max_sql_nesting` is refused.
   - No session can switch the check off: `SET`, `RESET` and `PRAGMA` of
     `allow_parser_override_extension`, in any scope and for an administrator too, are refused.
+  - **A statement can no longer hold a core for minutes in DuckDB's join-order search.** That
+    search takes time that grows steeply with the tables one `FROM` clause joins (on a busy
+    laptop, a join graph with cycles: 96 tables 1.9 s, 128 7 s, 192 82 s; a 600-table join
+    over two minutes), and no statement timeout or cancel interrupts it. The new
+    `max_joined_tables` option (64) bounds the tables one `FROM` clause joins, and eight times
+    that all of a statement's `FROM` clauses together; more is refused by the same check, before
+    DuckDB parses the text, with an error that names the option.
   See README, "Statements refused before DuckDB parses them".
 - **DuckDB's autocomplete functions are off unless `enable_sql_auto_complete` turns them on,
   and then they are for administrators only.** `sql_auto_complete()` takes unfinished SQL by
@@ -159,6 +166,11 @@ own changelog in `python/CHANGELOG.md`.
   `FROM` clause may name four times as many tables). DuckDB's `max_expression_depth` is set to
   it at startup, and no session can raise that setting past it. `0`, the default, is what the
   8 MB stack of the threads that run statements takes: 1000, on every platform.
+- `max_joined_tables` (`--max-joined-tables`, `HARDCHARGER_MAX_JOINED_TABLES`, default 64, `0`
+  for no limit): the most tables one `FROM` clause may join (a derived table or a CTE counts as
+  one there); all of a statement's `FROM` clauses together may join eight times as many. The
+  default comes from measured planning times (README, "Statements refused before DuckDB parses
+  them").
 - `enable_sql_auto_complete` (`--enable-sql-auto-complete`,
   `HARDCHARGER_ENABLE_SQL_AUTO_COMPLETE`, off by default): DuckDB's autocomplete functions
   (`sql_auto_complete`, `sql_tokenize`, `check_peg_parser`, `duckdb_format_sql`), for
@@ -166,11 +178,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Notes on what these limits leave
 
-- A statement that parses and binds can still take long to plan, and planning is not
-  interrupted by a statement timeout or a cancel: DuckDB's join-order optimizer took 11 s for a
-  300-way join of subqueries and over two minutes for 600 (DuckDB's limit admits a join of up
-  to about 1000). This predates these changes on Linux; on macOS such joins were refused by the
-  lower limit of 128 that 2.13.x had there.
+- Planning is still not interrupted by a statement timeout or a cancel. `max_joined_tables`
+  bounds the join-order search, its steepest part (64 tables in one `FROM` clause: under half a
+  second for the hardest shape measured); a server that raises it takes on longer planning.
 - With `enable_sql_auto_complete` on, an administrator's `sql_auto_complete()` still runs to
   its end before a timeout or a cancel takes effect.
 - DuckDB's own worker threads keep the platform's default stack (512 KB on macOS); they parse
