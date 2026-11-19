@@ -176,6 +176,9 @@ std::optional<std::pair<StorageKind, StorageMode>> StorageOf(SystemPrivilege pri
 }
 
 bool IsOriginalSystemPrivilege(SystemPrivilege privilege) {
+  // The account privileges are 2.14's: a 2.13 server refuses a store whose system_privileges
+  // table names one, and skips one in storage_privileges.
+  if (IsAccountPrivilege(privilege)) return false;
   const auto storage = StorageOf(privilege);
   return !storage || storage->first == StorageKind::kFilesystem;
 }

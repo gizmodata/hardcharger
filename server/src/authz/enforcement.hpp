@@ -37,6 +37,9 @@ constexpr const char* kRbacSessionStateName = "hardcharger_authz";
 // (the server's own, the engine's internals, and the ones that run SQL or reach memory).
 std::optional<std::string> UngrantableTableFunction(const std::string& name_lower);
 
+// What a session that said SET ROLE SYSTEM ADMIN is told once its user no longer holds it.
+std::string SystemAdminLostMessage(const std::string& user_name);
+
 // Ownership bookkeeping a statement asks for once it has run successfully.
 struct PendingOwnership {
   enum class Kind { kCreate, kDrop, kRename };
@@ -62,11 +65,37 @@ class RbacSessionState : public duckdb::ClientContextState {
  public:
   RbacSessionState(std::shared_ptr<RbacEngine> engine, Principal principal);
 
-  // A copy: SET ROLE may change it between statements.
-  Principal principal() const {
+  // Who the session acts as now. A copy: SET ROLE may change it between statements. A
+  // session that said SET ROLE SYSTEM ADMIN acts as the administrator (a superuser that
+  // names its user, Principal::acting_user_id) for as long as its user holds SYSTEM ADMIN
+  // in the snapshot the engine holds at this call: asked again on every call, so nothing
+  // here remembers that it did. Once the user does not, this is the user with no role at
+  // all, until RESET ROLE.
+  Principal principal() const;
+  // The store user (or the administrator) the session signed in as, with its SET ROLE
+  // choice, whatever it acts as now.
+  Principal session_principal() const {
     std::lock_guard<std::mutex> lock(principal_mutex_);
     return principal_;
   }
+  // The session said SET ROLE SYSTEM ADMIN and has not said otherwise since (whether or
+  // not its user still holds it).
+  bool asks_system_admin() const {
+    std::lock_guard<std::mutex> lock(principal_mutex_);
+    return principal_.asks_system_admin();
+  }
+  // Acting as System Admin rests on the store's own word, read before each request of a
+  // session that asks for it (SessionGuard::VerifySystemAdmin): `error` is why that could
+  // not be had (the store did not answer), or empty when it was. While it is not empty the
+  // session acts as nobody: principal() is its user with no role, as when it no longer
+  // holds SYSTEM ADMIN.
+  void SetSystemAdminUnverified(std::string error) {
+    std::lock_guard<std::mutex> lock(principal_mutex_);
+    system_admin_unverified_ = std::move(error);
+  }
+  // What a statement of this session is told when it asked for SYSTEM ADMIN and does not
+  // act as one: the store did not answer, or its user no longer holds it.
+  std::string SystemAdminRefusal() const;
   // SET ROLE (empty: all roles). Statements prepared before are checked again.
   void SetActiveRole(std::string role_id, std::string role_name);
   // The SET ROLE role's name, for audit records (empty: all roles).
@@ -89,7 +118,9 @@ class RbacSessionState : public duckdb::ClientContextState {
     duckdb::shared_ptr<RbacSessionState> state_;
   };
   bool bypassed() const { return bypass_depth_.load() > 0; }
-  bool unchecked() const { return principal_.superuser || bypassed(); }
+  // The administrator's statements, a user's while it acts as System Admin (principal()),
+  // and Hardcharger's own.
+  bool unchecked() const { return bypassed() || administrator_ || principal().superuser; }
 
   // Called by the pre-optimize hook once a plan passed (or needs no check).
   // `prepare_only`: the plan is a PREPARE (DuckDB 2.x prepares a client-side
@@ -133,8 +164,10 @@ class RbacSessionState : public duckdb::ClientContextState {
                                                 duckdb::PreparedStatementMode mode, bool& runs_now);
 
   std::weak_ptr<RbacEngine> engine_;
+  const bool administrator_;  // the session signed in as the administrator: never looked up
   mutable std::mutex principal_mutex_;
   Principal principal_;
+  std::string system_admin_unverified_;  // guarded by principal_mutex_
   std::atomic<int64_t> persona_version_{0};
   std::atomic<int> bypass_depth_{0};
 
@@ -197,7 +230,7 @@ void RegisterRbacEnforcement(duckdb::DBConfig& config);
 
 // Give a session connection its principal. Every client session connection on
 // an access-control server gets one; a connection without it is Hardcharger's own.
-void AttachRbacSession(duckdb::ClientContext& context, std::shared_ptr<RbacEngine> engine,
-                       Principal principal);
+duckdb::shared_ptr<RbacSessionState> AttachRbacSession(duckdb::ClientContext& context,
+                                                       std::shared_ptr<RbacEngine> engine, Principal principal);
 
 }  // namespace hardcharger::authz

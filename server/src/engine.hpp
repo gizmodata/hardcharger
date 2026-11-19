@@ -150,7 +150,15 @@ class Session : public chargewire_duckdb::DuckDBSession {
   // ---- What the settings, SQL functions and KILL SESSION read ----
   const std::string& id() const { return id_; }
   const chargewire::Principal& principal() const { return principal_; }
-  bool admin() const { return principal_.role == "admin"; }
+  // The administrator (its sign-in's role), or a store user acting as System Admin right
+  // now (SET ROLE SYSTEM ADMIN, asked of the grants at each call): everything keyed on
+  // "this is an administrator" holds for both, and stops holding for the second at RESET
+  // ROLE or once its user no longer holds SYSTEM ADMIN. Safe from any thread.
+  bool admin() const { return principal_.role == "admin" || system_admin(); }
+  // A store user's session acting as System Admin right now.
+  bool system_admin() const { return guard_ && guard_->system_admin(); }
+  // What SET ROLE made the session act as: a role's name, "SYSTEM ADMIN", or empty.
+  std::string active_role() const { return guard_ ? guard_->active_role() : std::string(); }
   bool read_only_session() const { return read_only_session_; }
   // Native SQL callbacks lose their typed error through DuckDB's C API. Remember
   // this refusal so the statement boundary can return read_only / 25006.

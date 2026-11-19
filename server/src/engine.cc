@@ -890,7 +890,11 @@ Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb
   // session is listed anywhere, so a refused one leaves nothing behind).
   // Enable estimates without printing progress bars in server logs.
   chargewire_duckdb::RunSql(connection(), "SET enable_progress_bar = true; SET enable_progress_bar_print = false");
-  if (access_controlled_) guard_ = access->Bind(connection(), IdentityOf(principal_));
+  if (access_controlled_) {
+    authz::Identity who = IdentityOf(principal_);
+    who.session_id = id_;
+    guard_ = access->Bind(connection(), std::move(who));
+  }
   if (principal_.role == "readonly") authz::BindReadOnlySession(connection(), principal_.name);
   runtime_.sessions.Add(this, capped);
   runtime_.metrics.CountSessionOpened();
@@ -950,6 +954,9 @@ void Session::CheckAlive() const {
     throw Error(ErrorCode::kPermissionDenied,
                 "Hardcharger blocked this request: the session is not bound to access control", "42501");
   }
+  // Before anything in this request asks whether the session is an administrator's: a
+  // session acting as System Admin is one only on the store's own word, as of now.
+  guard_->VerifySystemAdmin();
   guard_->RequireLive();
 }
 
@@ -1235,8 +1242,16 @@ void Session::GuardManagedCatalog(const Piece& piece, DUCKDB_V2_STATEMENT_TYPE t
 }
 
 chargewire::StatementOutcome Session::RunCommand(const Piece& piece) {
+  // (A session that asked for SYSTEM ADMIN and no longer acts as one runs nothing until
+  // RESET ROLE, these commands included.)
+  if (guard_) guard_->RefuseIfSystemAdminLost();
   if (auto setting = ParseSettingCommand(piece)) {
     ApplySetting(*this, *setting);
+    if (guard_) {
+      guard_->AuditAdministrativeCommand(
+          std::string(setting->reset ? "RESET" : "SET") +
+              (setting->scope == SettingCommand::Scope::kGlobal ? " GLOBAL" : "") + " hardcharger." + setting->name);
+    }
     return {};
   }
   const std::string target = ParseKillSession(piece).value_or("");
@@ -1276,6 +1291,7 @@ chargewire::StatementOutcome Session::RunCommand(const Piece& piece) {
   }
   if (runtime_.server != nullptr) runtime_.server->EndSession(wanted, KilledError());
   Log(LogLevel::kInfo, "KILL SESSION", {{"target", wanted}, {"user", principal_.name}, {"session_id", id_}});
+  if (guard_) guard_->AuditAdministrativeCommand("KILL SESSION", {{"target_session", wanted}});
   return {};
 }
 
@@ -1435,6 +1451,8 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
   }
   if (!rbac_) RefuseAccessControlStatement(sql);
   const bool has_parameters = !parameters.is_null();
+  // A session signed in with a temporary password runs only the statement that changes it.
+  if (guard_) guard_->RefuseUntilPasswordChanged("this statement", sql);
   // The statement's Chargewire id (q_...): its sql_statements row, and its execution's.
   const std::string statement_id = RequestStatementId();
   // An access-control statement (GRANT, CREATE USER, ...) is the guard's, text and all:
@@ -1449,6 +1467,14 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
                {{"session_id", id_}, {"user", principal_.name}, {"role", principal_.role},
                 {"statement_id", statement_id}, {"kind", "sql"}, {"is_internal", "false"}, {"sql", Abbreviate(sql)}});
     }
+    // Its audit records say which statement they are about.
+    struct RequestId {
+      authz::SessionGuard* guard;
+      ~RequestId() {
+        if (guard) guard->SetRequestId({});
+      }
+    } request_id{guard_.get()};
+    if (guard_) guard_->SetRequestId(statement_id);
     // (The statement as written: Track redacts what it logs, and its error's redaction
     // must see the statement, not its redacted form.)
     return Track(StatementKind::kOther, sql, {.statement = statement_id, .execution = statement_id}, [&] {
@@ -1546,6 +1572,7 @@ chargewire::StatementOutcome Session::Execute(std::string_view sql, const json::
 
 std::unique_ptr<chargewire::PreparedStatement> Session::Prepare(std::string_view sql) {
   CheckAlive();
+  if (guard_) guard_->RefuseUntilPasswordChanged("preparing a statement", std::nullopt);
   SessionScope scope(this);
   read_only_function_refused_ = false;
   if (sql.find('\0') != std::string_view::npos) {
@@ -1591,6 +1618,7 @@ std::unique_ptr<chargewire::PreparedStatement> Session::Prepare(std::string_view
 chargewire::StatementOutcome Session::ExecutePrepared(chargewire::PreparedStatement& statement,
                                                    const chargewire::Parameters& parameters) {
   CheckAlive();
+  if (guard_) guard_->RefuseUntilPasswordChanged("a prepared statement", std::nullopt);
   SessionScope scope(this);
   BeginStatement();
   auto& prepared = dynamic_cast<LoggedPrepared&>(statement);
@@ -1611,6 +1639,7 @@ chargewire::StatementOutcome Session::ExecutePrepared(chargewire::PreparedStatem
 
 int64_t Session::Ingest(const chargewire::IngestTarget& target, std::shared_ptr<arrow::RecordBatchReader> rows) {
   CheckAlive();
+  if (guard_) guard_->RefuseUntilPasswordChanged("an ingest", std::nullopt);
   SessionScope scope(this);
   if (principal_.role == "readonly") {
     throw Error(ErrorCode::kPermissionDenied,
@@ -1666,6 +1695,7 @@ int64_t Session::Ingest(const chargewire::IngestTarget& target, std::shared_ptr<
 std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(chargewire::MetadataKind kind,
                                                             const chargewire::MetadataFilter& filter) {
   CheckAlive();
+  if (guard_) guard_->RefuseUntilPasswordChanged("a metadata request", std::nullopt);
   SessionScope scope(this);
   if (runtime_.config.print_queries) {
     // Metadata requests run SQL of the server's own: logged only at DEBUG.

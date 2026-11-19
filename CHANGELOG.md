@@ -7,13 +7,79 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- `SYSTEM ADMIN`: named users act as the administrator, under their own names. `GRANT SYSTEM
+  ADMIN TO alice` (or `TO ROLE dba`) lets the user say `SET ROLE SYSTEM ADMIN` in a session,
+  which then does everything the administrator does (users, roles, grants, policies,
+  tenants, administrative commands; no grant, row policy or mask applies to it) until
+  `RESET ROLE`. Holding it changes nothing by itself, and no new, reconnected or replaced
+  session inherits it. Only the administrator or a session acting as System Admin grants and
+  revokes it: it has no admin option, is no part of `ALL PRIVILEGES`, and a role carries it
+  only through memberships they granted (and identity-provider group mappings). It is asked
+  of the grants on every statement, prepared ones included, so a revoke, a dropped role or a
+  removed membership ends it for open sessions at their next statement, on every replica
+  at once: such a session asks the store itself before every statement, and runs nothing as
+  System Admin while the store does not answer.
+  Sessions limited by a scoped token, `catalog_access` rules, a read-only connection, the
+  `readonly` role or a tenant are refused. The administrator stays outside it, as the way in.
+  `SHOW GRANTS`, `hardcharger_grants()` and `hardcharger_effective_privileges()` show who
+  holds it; `HARDCHARGER_IS_SYSTEM_ADMIN()`, `HARDCHARGER_ACTIVE_ROLE()` and a `system_admin`
+  column in `hardcharger_sessions()` and `hardcharger_active_connections()` show which
+  sessions act as one. The store gains one table on the first start; a 2.13 store is
+  upgraded in place.
+- The access-control audit records name who and what: `user_id` and `session_id` on every
+  record, and on access-control statements the users and roles they are about (`target`,
+  `target_ids`) and the privilege, membership or object they change. Acting as System Admin
+  adds `acting_as`, records each start, refusal and end of it, and records every statement
+  run that way. No record holds a password, hash, token or secret; chains written by earlier
+  versions still verify.
+- Delegated account management: `CREATE USER`, `ALTER USER`, `DROP USER`, `CREATE ROLE` and
+  `DROP ROLE` are system privileges (`GRANT CREATE USER, ALTER USER TO helpdesk`), so a help
+  desk manages accounts without reading data or holding `SYSTEM ADMIN`. A holder reaches only
+  the server's own users and roles that are no more than its session: never a `SYSTEM ADMIN`
+  holder or the server administrator, nor a user holding a role, admin option or session
+  attribute the session lacks, nor (for a password or `ENABLE`) one that owns objects; a role
+  is dropped only when nothing beyond the session goes with it and no policy names it. Session
+  attributes stay the administrator's, a new role holds nothing and gives its creator no
+  admin option, and tenants stay with their tenant admins. Only an unrestricted administrator
+  grants them (no admin option, not to `PUBLIC` or a tenant's role), a role carries them only
+  through memberships the administrator granted, scoped tokens and `catalog_access` tokens
+  never use them, and a revoke counts at the next statement on every replica. A 2.13 server
+  on the same store keeps working (to it, nobody holds them).
+- Temporary passwords and self-service password changes. A password a delegate sets for
+  someone else (a holder of `CREATE USER` / `ALTER USER`, a tenant admin), or an administrator
+  sets with `WITH PASSWORD '…' EXPIRE` (or `ALTER USER name PASSWORD EXPIRE`), must be changed
+  before anything else: its sign-in succeeds, but the session runs only `ALTER USER
+  CURRENT_USER WITH PASSWORD '<new>' REPLACE '<current>'`, which every user may run for itself
+  and which needs the current password. `hardcharger_users()` gains `password_must_change`,
+  `--verify-credentials` says `"password_must_change": true`, and the web UI asks for a new
+  password when it signs in with a temporary one.
+- Access-control audit records of account changes (users, roles, memberships, account
+  privileges) carry what authorized them (`authorized_by`), the account's sanitized state
+  `before` and `after` (never a password, hash or attribute value), and the privilege the
+  statement needs; every access-control record carries the statement's Chargewire id
+  (`statement_id`) and the session's `active_role`, refusals included.
+- Web UI: a tab whose session acts as System Admin says so (a "System Admin" badge in the tab
+  and the header), and while one does, the UI offers the administrator's pages (Server
+  Configuration, SQL Monitor, every session with End on the Sessions page), each through a
+  session of its own that says `SET ROLE SYSTEM ADMIN` too. It follows the server, never a
+  remembered flag: the tab asks its session after `SET ROLE`, `RESET ROLE`, a refused
+  statement or a refusal on one of those pages, so `RESET ROLE`, a revoke, or a new session
+  closes them again.
+
 ### Changed
 
+- Changing one's own password through `ALTER USER <own name> WITH PASSWORD '…'` needs the
+  current one (`… REPLACE '<current>'`), for every user but the administrator; `CURRENT_USER`
+  in `ALTER USER` names the session's own user (a user named `current_user` is written quoted).
 - **Android builds reach internal testers automatically.** Each release publishes its Android
   build to Google Play's internal testing track, as iOS builds reach TestFlight, instead of
   leaving a draft to publish by hand in Play Console. A leftover draft no longer stops the
   upload (2.13.1's was refused because 2.13.0's draft was still there), and an older build never
   replaces a newer one. Closed and open testing and production stay manual in Play Console.
+- `SYSTEM ADMIN` is no longer available as a user's or role's name (`CREATE ROLE "SYSTEM
+  ADMIN"` is refused). One a store already has stays an ordinary role, written quoted.
 
 ## [2.13.1] - 2026-11-15
 

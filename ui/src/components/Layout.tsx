@@ -8,11 +8,13 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  ShieldAlert,
   Sun,
   Users,
 } from "lucide-react";
 import { Suspense, lazy, useState } from "react";
 
+import { useAdminAccess } from "../lib/adminConnection";
 import { useStoredSize } from "../lib/storedSize";
 import type { Page } from "../lib/route";
 import { loadModule } from "../lib/stale";
@@ -98,6 +100,9 @@ export function Layout({ theme, page, go }: Props) {
     }
   };
   const local = session.localServer;
+  // The administrator, or a user while one of their tabs acts as System Admin (as its session
+  // last answered): the admin pages are offered, and open sessions of their own that do too.
+  const access = useAdminAccess();
 
   const nav = (target: Page, label: string, icon: React.ReactNode, disabled = false) => (
     <button
@@ -135,7 +140,7 @@ export function Layout({ theme, page, go }: Props) {
           <nav className="header-nav" aria-label="Pages">
             {nav("query", "Query", <Database size={15} />)}
             {local && nav("sessions", "Sessions", <Users size={15} />)}
-            {local && session.isAdmin && session.identity.fullAdmin !== false && (
+            {local && access.allowed && (
               <>
                 {nav(
                   "monitor",
@@ -162,7 +167,20 @@ export function Layout({ theme, page, go }: Props) {
               {session.identity.user}
               <span className="chip-role">{session.identity.role}</span>
             </span>
-          ) : (
+          ) : null}
+          {local && access.systemAdmin ? (
+            <span
+              className="chip chip-system-admin"
+              title={
+                "An editor tab acts as System Admin (SET ROLE SYSTEM ADMIN): it does what the administrator does. " +
+                "RESET ROLE in that tab ends it."
+              }
+              data-testid="header-system-admin"
+            >
+              <ShieldAlert size={13} /> System Admin
+            </span>
+          ) : null}
+          {local ? null : (
             <span
               className="chip chip-user"
               title="This UI has no server of its own: add servers in the schema browser"

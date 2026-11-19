@@ -1,5 +1,7 @@
 #include "authz/model.hpp"
 
+#include "authz/password.hpp"
+
 #include <algorithm>
 #include <deque>
 #include <string_view>
@@ -57,7 +59,9 @@ Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users, std::vector<R
                    std::vector<PrincipalTenantRecord> principal_tenants,
                    std::vector<CatalogTenantRecord> catalog_tenants,
                    std::vector<GroupMappingRecord> group_mappings,
-                   std::vector<ScopedTokenRecord> scoped_tokens)
+                   std::vector<ScopedTokenRecord> scoped_tokens,
+                   std::vector<SystemAdminRecord> system_admins,
+                   std::vector<PasswordResetRecord> password_resets)
     : version_(version),
       users_(std::move(users)),
       roles_(std::move(roles)),
@@ -72,7 +76,8 @@ Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users, std::vector<R
       principal_tenants_(std::move(principal_tenants)),
       catalog_tenants_(std::move(catalog_tenants)),
       group_mappings_(std::move(group_mappings)),
-      scoped_tokens_(std::move(scoped_tokens)) {
+      scoped_tokens_(std::move(scoped_tokens)),
+      password_resets_(std::move(password_resets)) {
   for (size_t i = 0; i < users_.size(); ++i) {
     user_by_key_[FoldIdentifier(users_[i].name)] = i;
     user_by_id_[users_[i].id] = i;
@@ -82,6 +87,36 @@ Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users, std::vector<R
     role_by_id_[roles_[i].id] = i;
   }
   for (const auto& grant : grants_) grants_by_role_[grant.role_id].push_back(&grant);
+  // SYSTEM ADMIN is held by system-scope users and roles only, never by a built-in role
+  // (PUBLIC is everyone): a record that says otherwise (a store edited by hand, a
+  // principal an older replica dropped) counts for nothing, here and in every listing.
+  std::set<std::pair<PrincipalKind, std::string>> seen;
+  for (auto& record : system_admins) {
+    if (!TenantOf(record.kind, record.principal_id).empty()) continue;
+    if (record.kind == PrincipalKind::kUser) {
+      if (!FindUserById(record.principal_id)) continue;
+    } else {
+      const RoleRecord* role = FindRoleById(record.principal_id);
+      if (!role || role->builtin || role->id == kPublicRoleId || role->id == kSystemAdminRoleId) continue;
+    }
+    if (!seen.insert({record.kind, record.principal_id}).second) continue;
+    system_admins_.push_back(std::move(record));
+  }
+  // The account privileges are held everywhere, with no admin option, by system-scope roles
+  // that are not built in: a record that says otherwise (a store edited by hand) is read as
+  // that or left out.
+  system_privileges_.erase(
+      std::remove_if(system_privileges_.begin(), system_privileges_.end(),
+                     [&](const SystemPrivilegeRecord& r) {
+                       if (!IsAccountPrivilege(r.privilege)) return false;
+                       const RoleRecord* role = FindRoleById(r.role_id);
+                       return !r.location.empty() || !role || role->builtin || role->id == kPublicRoleId ||
+                              !TenantOf(PrincipalKind::kRole, r.role_id).empty();
+                     }),
+      system_privileges_.end());
+  for (auto& r : system_privileges_) {
+    if (IsAccountPrivilege(r.privilege)) r.admin_option = false;
+  }
   for (const auto& r : system_privileges_) {
     const auto storage = StorageOf(r.privilege);
     if (storage && storage->first == StorageKind::kFilesystem) NoteLocalFileGrant();
@@ -154,7 +189,7 @@ std::shared_ptr<const Snapshot> Snapshot::WithOwner(int64_t version, const Objec
   return std::make_shared<const Snapshot>(version, users_, roles_, memberships_, grants_, std::move(owners),
                                           system_privileges_, row_policies_, masking_policies_, mask_bindings_,
                                           tenants_, principal_tenants_, catalog_tenants_, group_mappings_,
-                                          scoped_tokens_);
+                                          scoped_tokens_, system_admins_, password_resets_);
 }
 
 const OwnerRecord* Snapshot::FindOwner(const ObjectPath& object) const {
@@ -182,6 +217,10 @@ std::set<std::string> Snapshot::RolesOf(const Principal& principal) const {
   }
   const UserRecord* user = FindUserById(principal.user_id);
   if (!user || !user->enabled) return {};
+  // SET ROLE SYSTEM ADMIN names no role: a principal that still carries it here is one
+  // whose session lost SYSTEM ADMIN (one that holds it is the superuser, never looked up),
+  // and acts with nothing until it says RESET ROLE.
+  if (principal.asks_system_admin()) return {};
   auto roles = HeldRoleIds(principal);
   if (principal.active_role_id.empty()) return roles;
   // SET ROLE: PUBLIC (the tenant's) and the active role with what it inherits.
@@ -192,6 +231,16 @@ std::set<std::string> Snapshot::RolesOf(const Principal& principal) const {
   std::set<std::string> active = RoleClosure(tenant_public ? tenant_public->id : kPublicRoleId);
   for (const auto& r : RoleClosure(principal.active_role_id)) active.insert(r);
   return active;
+}
+
+const PasswordResetRecord* Snapshot::PasswordMustChange(const std::string& user_id) const {
+  const UserRecord* user = FindUserById(user_id);
+  if (!user || !user->password_hash) return nullptr;
+  const std::string fingerprint = PasswordFingerprint(user->password_hash);
+  for (const auto& r : password_resets_) {
+    if (r.user_id == user_id && r.password_fingerprint == fingerprint) return &r;
+  }
+  return nullptr;
 }
 
 const ScopedTokenRecord* Snapshot::FindScopedToken(const std::string& id) const {
@@ -228,7 +277,103 @@ std::optional<TokenScope> Snapshot::ValidScope(const std::string& token_id,
 
 bool Snapshot::HoldsActiveRole(const Principal& principal) const {
   if (principal.active_role_id.empty() || principal.superuser || principal.is_role()) return true;
+  if (principal.asks_system_admin()) return HoldsSystemAdmin(principal);
   return HeldRoleIds(principal).count(principal.active_role_id) > 0;
+}
+
+std::set<std::string> Snapshot::AdministratorGrantedClosure(const std::string& role_id) const {
+  std::set<std::string> seen{role_id};
+  std::deque<std::string> queue{role_id};
+  while (!queue.empty()) {
+    const std::string current = queue.front();
+    queue.pop_front();
+    for (const auto& m : memberships_) {
+      if (m.member_kind == PrincipalKind::kRole && m.member_id == current && m.granted_by.empty() &&
+          seen.insert(m.role_id).second) {
+        queue.push_back(m.role_id);
+      }
+    }
+  }
+  return seen;
+}
+
+std::set<std::string> Snapshot::AdministratorGrantedRolesOf(const Principal& principal) const {
+  // The roles the user holds by the administrator's own hand.
+  std::set<std::string> roles;
+  for (const auto& m : memberships_) {
+    if (m.member_kind == PrincipalKind::kUser && m.member_id == principal.user_id && m.granted_by.empty()) {
+      for (const auto& r : AdministratorGrantedClosure(m.role_id)) roles.insert(r);
+    }
+  }
+  for (const auto& m : group_mappings_) {
+    if (!m.issuer.empty() && m.issuer != principal.idp_issuer) continue;
+    if (std::find(principal.idp_groups.begin(), principal.idp_groups.end(), m.group) == principal.idp_groups.end()) {
+      continue;
+    }
+    if (!FindRoleById(m.role_id) || !TenantOf(PrincipalKind::kRole, m.role_id).empty()) continue;
+    for (const auto& r : AdministratorGrantedClosure(m.role_id)) roles.insert(r);
+  }
+  return roles;
+}
+
+std::set<std::string> Snapshot::AccountPrivilegeRoles(const Principal& principal) const {
+  if (principal.superuser || principal.is_role() || principal.user_id.empty() || principal.scope ||
+      principal.catalog_rules || principal.catalog_access_token) {
+    return {};
+  }
+  const UserRecord* user = FindUserById(principal.user_id);
+  if (!user || !user->enabled) return {};
+  // A tenant's user stays inside its tenant (its tenant admin manages its accounts).
+  if (!TenantOf(PrincipalKind::kUser, user->id).empty()) return {};
+  // Of the roles the session acts with, those an administrator's grants reach.
+  const auto acting = RolesOf(principal);
+  std::set<std::string> roles;
+  for (const auto& r : AdministratorGrantedRolesOf(principal)) {
+    if (acting.count(r) && TenantOf(PrincipalKind::kRole, r).empty()) roles.insert(r);
+  }
+  return roles;
+}
+
+bool Snapshot::RoleCarriesAccountPrivilege(const std::string& role_id) const {
+  const auto closure = RoleClosure(role_id);
+  return std::any_of(system_privileges_.begin(), system_privileges_.end(), [&](const SystemPrivilegeRecord& r) {
+    return IsAccountPrivilege(r.privilege) && closure.count(r.role_id) > 0;
+  });
+}
+
+std::vector<std::string> Snapshot::SystemAdminSources(const Principal& principal) const {
+  std::vector<std::string> sources;
+  if (system_admins_.empty() || principal.superuser || principal.is_role() || principal.user_id.empty()) return sources;
+  const UserRecord* user = FindUserById(principal.user_id);
+  if (!user || !user->enabled) return sources;
+  // A tenant's user stays inside its tenant, whatever the store says.
+  if (!TenantOf(PrincipalKind::kUser, user->id).empty()) return sources;
+  const std::set<std::string> roles = AdministratorGrantedRolesOf(principal);
+  for (const auto& record : system_admins_) {
+    if (record.kind == PrincipalKind::kUser ? record.principal_id == user->id : roles.count(record.principal_id) > 0) {
+      sources.push_back(record.kind == PrincipalKind::kUser ? std::string() : record.principal_id);
+    }
+  }
+  return sources;
+}
+
+bool Snapshot::RoleCarriesSystemAdmin(const std::string& role_id) const {
+  if (system_admins_.empty()) return false;
+  const auto closure = RoleClosure(role_id);
+  return std::any_of(system_admins_.begin(), system_admins_.end(), [&](const SystemAdminRecord& record) {
+    return record.kind == PrincipalKind::kRole && closure.count(record.principal_id) > 0;
+  });
+}
+
+bool Snapshot::UserCarriesSystemAdmin(const std::string& user_id) const {
+  if (system_admins_.empty()) return false;
+  for (const auto& record : system_admins_) {
+    if (record.kind == PrincipalKind::kUser && record.principal_id == user_id) return true;
+  }
+  for (const auto& m : memberships_) {
+    if (m.member_kind == PrincipalKind::kUser && m.member_id == user_id && RoleCarriesSystemAdmin(m.role_id)) return true;
+  }
+  return false;
 }
 
 std::set<std::string> Snapshot::HeldRoleIds(const Principal& principal) const {
@@ -665,7 +810,8 @@ bool Snapshot::HasSystemPrivilege(const Principal& principal, SystemPrivilege pr
   // allow, read the database file, an extension's scanner, a secret's remote storage.
   if (principal.catalog_rules) return principal.rules_administrator && IsRulesAdministratorPrivilege(privilege);
   if (principal.scope) return false;  // a scoped token holds none
-  const auto roles = RolesOf(principal);
+  // An account privilege counts only through the administrator's own memberships.
+  const auto roles = IsAccountPrivilege(privilege) ? AccountPrivilegeRoles(principal) : RolesOf(principal);
   for (const auto& r : system_privileges_) {
     if (r.privilege == privilege && r.location.empty() && roles.count(r.role_id)) return true;
   }
@@ -703,7 +849,9 @@ std::optional<std::vector<std::string>> Snapshot::StorageLocationsOf(const Princ
 
 bool Snapshot::CanGrantSystemPrivilege(const Principal& principal, SystemPrivilege privilege,
                                        const std::string& location) const {
-  if (principal.superuser) return true;
+  if (principal.is_unrestricted_administrator()) return true;
+  // Never delegated: no admin option passes an account privilege on.
+  if (IsAccountPrivilege(privilege)) return false;
   const auto roles = RolesOf(principal);
   for (const auto& r : system_privileges_) {
     if (r.privilege == privilege && r.admin_option && roles.count(r.role_id) &&
@@ -1026,7 +1174,8 @@ Snapshot::Fallen Snapshot::FallenDelegations() const {
     for (size_t i = 0; i < system_privileges_.size(); ++i) {
       if (s_ok[i]) continue;
       const auto& r = system_privileges_[i];
-      if (!FindUserById(r.granted_by)) continue;
+      // An account privilege stands only as the administrator's grant.
+      if (IsAccountPrivilege(r.privilege) || !FindUserById(r.granted_by)) continue;
       const auto roles = roles_of(r.granted_by);
       for (size_t j = 0; j < system_privileges_.size(); ++j) {
         const auto& h = system_privileges_[j];

@@ -40,6 +40,9 @@ struct CreateUserCommand {
   std::string name;
   std::optional<std::string> password;  // nullopt: token-only user
   bool if_not_exists = false;
+  // WITH PASSWORD '...' EXPIRE: the user must change it at its first sign-in (always so for
+  // a password a delegate sets).
+  bool expire = false;
 };
 
 struct AlterUserCommand {
@@ -49,13 +52,20 @@ struct AlterUserCommand {
     kEnable,
     kDisable,
     kSetAttribute,
-    kUnsetAttribute
+    kUnsetAttribute,
+    kExpirePassword  // ALTER USER name PASSWORD EXPIRE: the current password must be changed
   };
-  std::string name;
+  std::string name;  // empty with `current_user`
   Action action;
   std::string password;   // kSetPassword
   std::string attribute;  // kSetAttribute / kUnsetAttribute
   std::string value;      // kSetAttribute
+  // ALTER USER CURRENT_USER ...: the session's own user.
+  bool current_user = false;
+  // kSetPassword ... EXPIRE: the user must change it before anything else.
+  bool expire = false;
+  // kSetPassword ... REPLACE 'current': a user changing its own password gives the one it has.
+  std::optional<std::string> current_password;
 };
 
 struct DropUserCommand {
@@ -107,6 +117,17 @@ struct SystemPrivilegeCommand {
   bool cascade = true;
   // ON LOCATION '<path or URL>' (storage privileges only), as written; empty: everywhere.
   std::optional<std::string> location;
+};
+
+// GRANT SYSTEM ADMIN TO [USER | ROLE] name, ...   /   REVOKE SYSTEM ADMIN FROM name, ...
+// The capability to act as the administrator in a session that says SET ROLE SYSTEM ADMIN.
+// Two words, like the system privileges, so it is no role's name: a store an earlier
+// version made may hold a role called sysadmin, which stays the ordinary role it was. It
+// is granted on its own, with no ON clause and no option: only the administrator, or a
+// user acting as System Admin, grants and revokes it.
+struct SystemAdminCommand {
+  bool grant = true;
+  std::vector<Grantee> grantees;
 };
 
 // CREATE [OR REPLACE] ROW POLICY name ON table [AS PERMISSIVE | RESTRICTIVE]
@@ -207,8 +228,10 @@ struct GroupMappingCommand {
 
 // SET ROLE role | SET ROLE ALL | SET ROLE NONE | RESET ROLE
 // (no role: act with all of the user's roles again)
+// SET ROLE SYSTEM ADMIN: act as the administrator, until one of the above.
 struct SetRoleCommand {
   std::optional<std::string> role;
+  bool system_admin = false;
 };
 
 // ALTER TABLE | VIEW obj OWNER TO principal
@@ -226,7 +249,7 @@ struct ShowGrantsCommand {
 using RbacCommand =
     std::variant<CreateUserCommand, AlterUserCommand, DropUserCommand, CreateRoleCommand,
                  DropRoleCommand, RoleMembershipCommand, ObjectPrivilegeCommand,
-                 SystemPrivilegeCommand, AlterOwnerCommand, ShowGrantsCommand,
+                 SystemPrivilegeCommand, SystemAdminCommand, AlterOwnerCommand, ShowGrantsCommand,
                  CreateRowPolicyCommand, DropRowPolicyCommand, CreateMaskingPolicyCommand,
                  DropMaskingPolicyCommand, SetColumnMaskCommand, ShowPoliciesCommand, TenantCommand,
                  CatalogTenantCommand, TenantDefaultCatalogCommand, ShowTenantsCommand,
@@ -244,5 +267,9 @@ arrow::Result<RbacCommand> ParseRbacStatement(const std::string& sql);
 
 // The SQL statement kind for logs and audit ("GRANT", "CREATE ROLE", ...).
 std::string CommandKind(const RbacCommand& command);
+
+// The account privilege a non-administrator needs for the statement (CREATE USER for
+// CREATE USER, ...), or nullopt for a statement no account privilege covers.
+std::optional<SystemPrivilege> AccountPrivilegeOf(const RbacCommand& command);
 
 }  // namespace hardcharger::authz

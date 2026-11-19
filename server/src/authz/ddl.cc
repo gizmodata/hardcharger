@@ -359,6 +359,14 @@ class Parser {
       ARROW_RETURN_NOT_OK(ExpectKeyword("ROLE"));
       SetRoleCommand cmd;
       if (AcceptKeyword("ALL") || AcceptKeyword("NONE")) return cmd;
+      // SYSTEM ADMIN, unquoted and in two words, is the capability: no role's name is two
+      // words (a role called "SYSTEM ADMIN" is written quoted, and one called system
+      // stands alone).
+      if (PeekSystemAdmin()) {
+        pos_ += 2;
+        cmd.system_admin = true;
+        return cmd;
+      }
       ARROW_ASSIGN_OR_RAISE(auto name, ParsePrincipalName("a role name"));
       cmd.role = std::move(name);
       return cmd;
@@ -476,6 +484,7 @@ class Parser {
     if (AcceptKeyword("PASSWORD")) {
       ARROW_ASSIGN_OR_RAISE(auto password, ParseStringLiteral("the password"));
       cmd.password = std::move(password);
+      cmd.expire = AcceptKeyword("EXPIRE");
     }
     return cmd;
   }
@@ -489,14 +498,34 @@ class Parser {
 
   arrow::Result<RbacCommand> ParseAlterUser() {
     AlterUserCommand cmd;
-    ARROW_ASSIGN_OR_RAISE(cmd.name, ParsePrincipalName("a user name"));
+    // CURRENT_USER (unquoted): the session's own user. A user named so is written quoted.
+    if (Peek().type == TokenType::kWord && PeekKeyword("CURRENT_USER")) {
+      ++pos_;
+      cmd.current_user = true;
+    } else {
+      ARROW_ASSIGN_OR_RAISE(cmd.name, ParsePrincipalName("a user name"));
+    }
     AcceptKeyword("WITH");
     if (AcceptKeyword("PASSWORD")) {
       if (AcceptKeyword("NULL")) {
         cmd.action = AlterUserCommand::Action::kClearPassword;
+      } else if (AcceptKeyword("EXPIRE")) {
+        cmd.action = AlterUserCommand::Action::kExpirePassword;
       } else {
         cmd.action = AlterUserCommand::Action::kSetPassword;
         ARROW_ASSIGN_OR_RAISE(cmd.password, ParseStringLiteral("the password"));
+        // REPLACE 'current' (a user's own change) and EXPIRE (a temporary password), either order.
+        for (int i = 0; i < 2; ++i) {
+          if (!cmd.current_password && AcceptKeyword("REPLACE")) {
+            ARROW_ASSIGN_OR_RAISE(auto current, ParseStringLiteral("the current password"));
+            cmd.current_password = std::move(current);
+          } else if (!cmd.expire && AcceptKeyword("EXPIRE")) {
+            cmd.expire = true;
+          }
+        }
+        if (cmd.current_password && cmd.expire) {
+          return SyntaxError("a password you set for yourself (REPLACE) is not temporary: leave out EXPIRE");
+        }
       }
     } else if (AcceptKeyword("ENABLE")) {
       cmd.action = AlterUserCommand::Action::kEnable;
@@ -516,7 +545,7 @@ class Parser {
       return SyntaxError(
           "expected PASSWORD, ENABLE, DISABLE, SET ATTRIBUTE or UNSET ATTRIBUTE "
           "after ALTER USER " +
-          cmd.name);
+          (cmd.current_user ? std::string("CURRENT_USER") : cmd.name));
     }
     return cmd;
   }
@@ -727,6 +756,30 @@ class Parser {
     return std::nullopt;
   }
 
+  // SYSTEM ADMIN starting here (two unquoted words).
+  bool PeekSystemAdmin() const { return PeekKeyword("SYSTEM") && PeekKeyword("ADMIN", 1); }
+
+  // GRANT SYSTEM ADMIN TO grantee, ...   /   REVOKE SYSTEM ADMIN FROM grantee, ...
+  arrow::Result<RbacCommand> ParseSystemAdmin(bool grant) {
+    SystemAdminCommand cmd;
+    cmd.grant = grant;
+    pos_ += 2;
+    if (PeekSymbol(",")) {
+      return SyntaxError("SYSTEM ADMIN is granted and revoked on its own, not in a list with other privileges "
+                         "or roles");
+    }
+    if (PeekKeyword("ON")) {
+      return SyntaxError("SYSTEM ADMIN applies to the whole server: no ON clause");
+    }
+    ARROW_RETURN_NOT_OK(ExpectKeyword(grant ? "TO" : "FROM"));
+    ARROW_ASSIGN_OR_RAISE(cmd.grantees, ParseGranteeList());
+    if (PeekKeyword("WITH")) {
+      return SyntaxError("SYSTEM ADMIN has no ADMIN OPTION or GRANT OPTION: only the administrator, or a user "
+                         "acting as System Admin (SET ROLE SYSTEM ADMIN), grants and revokes it");
+    }
+    return cmd;
+  }
+
   // A system privilege phrase starting here: its privilege and length.
   std::optional<std::pair<SystemPrivilege, size_t>> PeekSystemPrivilege() const {
     if (PeekKeyword("CHECKPOINT")) return std::make_pair(SystemPrivilege::kCheckpoint, size_t{1});
@@ -749,6 +802,13 @@ class Parser {
         {"WRITE", "HTTP", nullptr, SystemPrivilege::kWriteHttp},
         {"EXPORT", "DATABASE", nullptr, SystemPrivilege::kExportDatabase},
         {"IMPORT", "DATABASE", nullptr, SystemPrivilege::kImportDatabase},
+        // The account privileges. No role is named by two unquoted words, so GRANT CREATE USER
+        // TO helpdesk was a syntax error before 2.14, never a role grant.
+        {"CREATE", "USER", nullptr, SystemPrivilege::kCreateUser},
+        {"ALTER", "USER", nullptr, SystemPrivilege::kAlterUser},
+        {"DROP", "USER", nullptr, SystemPrivilege::kDropUser},
+        {"CREATE", "ROLE", nullptr, SystemPrivilege::kCreateRole},
+        {"DROP", "ROLE", nullptr, SystemPrivilege::kDropRole},
     };
     for (const auto& phrase : kPhrases) {
       if (PeekKeyword(phrase.first) && PeekKeyword(phrase.second, 1) &&
@@ -765,6 +825,10 @@ class Parser {
     cmd.with_admin_option = admin_option_for;
     do {
       auto found = PeekSystemPrivilege();
+      if (!found && PeekSystemAdmin()) {
+        return SyntaxError("SYSTEM ADMIN is granted and revoked on its own, not in a list with other privileges "
+                           "or roles");
+      }
       if (!found) {
         return SyntaxError("expected a system privilege but found '" + Describe(Peek()) + "'");
       }
@@ -828,6 +892,13 @@ class Parser {
       }
     }
 
+    if (PeekSystemAdmin()) {
+      if (option_for || admin_option_for) {
+        return SyntaxError("SYSTEM ADMIN has no ADMIN OPTION or GRANT OPTION to revoke: REVOKE SYSTEM ADMIN FROM "
+                           "the user or role takes it away");
+      }
+      return ParseSystemAdmin(grant);
+    }
     if (!option_for && PeekSystemPrivilege()) return ParseSystemPrivileges(grant, admin_option_for);
     if (!admin_option_for && PeekPrivilege()) {
       ObjectPrivilegeCommand cmd;
@@ -835,6 +906,10 @@ class Parser {
       cmd.with_grant_option = option_for;  // for REVOKE: "only the grant option"
       do {
         auto found = PeekPrivilege();
+        if (!found && PeekSystemAdmin()) {
+          return SyntaxError("SYSTEM ADMIN is granted and revoked on its own, not in a list with other "
+                             "privileges or roles");
+        }
         if (!found) {
           return SyntaxError("expected a privilege but found '" + Describe(Peek()) + "'");
         }
@@ -916,6 +991,10 @@ class Parser {
     cmd.grant = grant;
     cmd.with_admin_option = admin_option_for;
     do {
+      if (PeekSystemAdmin()) {
+        return SyntaxError("SYSTEM ADMIN is granted and revoked on its own, not in a list with other privileges "
+                           "or roles");
+      }
       ARROW_ASSIGN_OR_RAISE(auto role, ParsePrincipalName("a role name or privilege"));
       cmd.roles.push_back(std::move(role));
     } while (PeekSymbol(",") && (++pos_, true));
@@ -1161,6 +1240,15 @@ arrow::Result<RbacCommand> ParseRbacStatement(const std::string& sql) {
   return parser.ParseStatement();
 }
 
+std::optional<SystemPrivilege> AccountPrivilegeOf(const RbacCommand& command) {
+  if (std::holds_alternative<CreateUserCommand>(command)) return SystemPrivilege::kCreateUser;
+  if (std::holds_alternative<AlterUserCommand>(command)) return SystemPrivilege::kAlterUser;
+  if (std::holds_alternative<DropUserCommand>(command)) return SystemPrivilege::kDropUser;
+  if (std::holds_alternative<CreateRoleCommand>(command)) return SystemPrivilege::kCreateRole;
+  if (std::holds_alternative<DropRoleCommand>(command)) return SystemPrivilege::kDropRole;
+  return std::nullopt;
+}
+
 std::string CommandKind(const RbacCommand& command) {
   struct Visitor {
     std::string operator()(const CreateUserCommand&) const { return "CREATE USER"; }
@@ -1176,6 +1264,9 @@ std::string CommandKind(const RbacCommand& command) {
     }
     std::string operator()(const SystemPrivilegeCommand& c) const {
       return c.grant ? "GRANT" : "REVOKE";
+    }
+    std::string operator()(const SystemAdminCommand& c) const {
+      return c.grant ? "GRANT SYSTEM ADMIN" : "REVOKE SYSTEM ADMIN";
     }
     std::string operator()(const AlterOwnerCommand& c) const {
       return c.is_view ? "ALTER VIEW OWNER" : "ALTER TABLE OWNER";

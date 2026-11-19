@@ -43,6 +43,7 @@ struct SessionSummary {
   std::string auth_method;
   int64_t started_at_us = 0;  // since the epoch
   bool running = false;       // a statement is running
+  bool system_admin = false;  // a store user's session acting as System Admin right now
 };
 
 class SessionRegistry {

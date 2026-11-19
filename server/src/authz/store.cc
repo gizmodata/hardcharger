@@ -21,6 +21,7 @@
 
 #include "authz/authz.hpp"
 #include "authz/duckdb_internal.hpp"
+#include "logging.hpp"
 #include "redact.hpp"
 
 #ifndef _WIN32
@@ -654,6 +655,7 @@ arrow::Status RbacStore::OpenStore() {
 
   if (options_.read_only) {
     ARROW_RETURN_NOT_OK(RequireSchema());
+    ARROW_RETURN_NOT_OK(ProbeSystemAdmins());
     return CheckOwnership();
   }
   // Two replicas starting at once can race on CREATE ... IF NOT EXISTS.
@@ -664,8 +666,30 @@ arrow::Status RbacStore::OpenStore() {
     std::this_thread::sleep_for(std::chrono::milliseconds(100 * (attempt + 1)));
   }
   ARROW_RETURN_NOT_OK(init);
+  ARROW_RETURN_NOT_OK(ProbeSystemAdmins());
   ARROW_RETURN_NOT_OK(CheckOwnership());
   CheckpointFile();
+  return arrow::Status::OK();
+}
+
+arrow::Status RbacStore::ProbeSystemAdmins() {
+  // Outside any transaction, so a table that can't be read fails only this statement.
+  auto probe = Run(*link_, "SELECT principal_kind, principal_id, granted_by FROM " + T("system_admins") + " LIMIT 0");
+  if (probe.ok()) {
+    system_admins_readable_ = true;
+    return arrow::Status::OK();
+  }
+  if (IsStoreUnavailable(probe.status())) return probe.status();
+  system_admins_readable_ = false;
+  // A store an earlier version made, opened read-only, has no such table: nothing to say.
+  const bool expected = options_.read_only && probe.status().message().find("does not exist") != std::string::npos;
+  if (!expected) {
+    Log(LogLevel::kWarning,
+        "the access control store's SYSTEM ADMIN grants can't be read: nobody holds SYSTEM ADMIN, and it can't be "
+        "granted, until the table hardcharger_rbac.system_admins is repaired (or dropped: a server creates it "
+        "when it starts) and this server restarted. The administrator is not affected",
+        {{"error", Redact(probe.status().message())}});
+  }
   return arrow::Status::OK();
 }
 
@@ -882,6 +906,21 @@ arrow::Status RbacStore::InitializeSchema() {
           " (role_id VARCHAR NOT NULL, privilege VARCHAR NOT NULL, location VARCHAR NOT NULL, "
           "admin_option BOOLEAN NOT NULL, granted_by VARCHAR NOT NULL, "
           "PRIMARY KEY (role_id, privilege, location, granted_by))",
+      // SYSTEM ADMIN (2.14): who may act as the administrator in a session that asks to.
+      // A table of its own, created in a store an earlier version made the first time a
+      // 2.14 server opens it, and never read by a server that predates it: to that server
+      // nobody holds it. The schema version stays the same, so such a server still opens
+      // the store.
+      "CREATE TABLE IF NOT EXISTS " + T("system_admins") +
+          " (principal_kind VARCHAR NOT NULL, principal_id VARCHAR NOT NULL, granted_by VARCHAR NOT NULL, "
+          "PRIMARY KEY (principal_kind, principal_id))",
+      // 2.14: temporary passwords (PasswordResetRecord): the user must change one before doing
+      // anything else. A table of its own, which a server that predates it never reads (to it,
+      // no password is temporary). A record holds only for the password it names, so a
+      // password an older server sets afterwards leaves it standing for nothing.
+      "CREATE TABLE IF NOT EXISTS " + T("password_resets") +
+          " (user_id VARCHAR PRIMARY KEY, password_fingerprint VARCHAR NOT NULL, set_by VARCHAR NOT NULL, "
+          "set_at_ms BIGINT NOT NULL)",
   };
   ARROW_RETURN_NOT_OK(Exec(conn, ddl[0]));  // meta, which says the schema's version
   {
@@ -1060,7 +1099,15 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   for (dd::idx_t r = 0; r < RowCount(*stp); ++r) {
     // A privilege a later Hardcharger added: this server doesn't know it, so nobody holds it.
     auto privilege = SystemPrivilegeFromName(GetString(*stp, 1, r));
-    if (!privilege || !StorageOf(*privilege)) continue;
+    if (!privilege) continue;
+    if (IsAccountPrivilege(*privilege)) {
+      // The account privileges (2.14) live here too, everywhere and with no admin option,
+      // where a 2.13 server skips them: a row that says otherwise gives nothing more.
+      if (!GetString(*stp, 2, r).empty()) continue;
+      system_privileges.push_back({GetString(*stp, 0, r), *privilege, false, GetString(*stp, 4, r)});
+      continue;
+    }
+    if (!StorageOf(*privilege)) continue;
     system_privileges.push_back({GetString(*stp, 0, r), *privilege, GetBool(*stp, 3, r), GetString(*stp, 4, r),
                                  GetString(*stp, 2, r)});
   }
@@ -1153,12 +1200,48 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
     scoped_tokens.push_back(std::move(t));
   }
 
+  // SYSTEM ADMIN grants: read only from a table that was there, in the shape this server
+  // writes, when the store was opened (ProbeSystemAdmins). The administrator is the way
+  // back in when it wasn't, so that never stops the server, a sign-in or another
+  // access-control change: nobody holds SYSTEM ADMIN, and the log says why.
+  std::vector<SystemAdminRecord> system_admins;
+  if (system_admins_readable_) {
+    ARROW_ASSIGN_OR_RAISE(auto sa, Run(conn, "SELECT principal_kind, principal_id, granted_by FROM " +
+                                                 T("system_admins") + " ORDER BY principal_kind, principal_id"));
+    for (dd::idx_t r = 0; r < RowCount(*sa); ++r) {
+      const std::string kind = GetString(*sa, 0, r);
+      const std::string id = GetString(*sa, 1, r);
+      // A row that is not a user's or a role's names nobody.
+      if ((kind != "user" && kind != "role") || id.empty()) continue;
+      system_admins.push_back(
+          {kind == "role" ? PrincipalKind::kRole : PrincipalKind::kUser, id, GetString(*sa, 2, r)});
+    }
+  }
+
+  // Temporary passwords. A store no 2.14 server has opened has no such table (only a read-only
+  // opening sees one): none is temporary there, as none could have been made so.
+  std::vector<PasswordResetRecord> password_resets;
+  {
+    auto pr = Run(conn, "SELECT user_id, password_fingerprint, set_by, set_at_ms FROM " + T("password_resets"));
+    if (pr.ok()) {
+      for (dd::idx_t r = 0; r < RowCount(**pr); ++r) {
+        password_resets.push_back({GetString(**pr, 0, r), GetString(**pr, 1, r), GetString(**pr, 2, r),
+                                   (*pr)->GetValue(3, r).IsNull() ? 0 : (*pr)->GetValue(3, r).GetValue<int64_t>()});
+      }
+    } else {
+      const std::string message = pr.status().message();
+      const bool absent = message.find("does not exist") != std::string::npos ||
+                          message.find("not found") != std::string::npos;
+      if (!(options_.read_only && absent)) return pr.status();
+    }
+  }
+
   return std::make_shared<const Snapshot>(
       version, std::move(users), std::move(roles), std::move(memberships), std::move(grants),
       std::move(owners), std::move(system_privileges), std::move(row_policies),
       std::move(masking_policies), std::move(mask_bindings), std::move(tenants),
       std::move(principal_tenants), std::move(catalog_tenants), std::move(group_mappings),
-      std::move(scoped_tokens));
+      std::move(scoped_tokens), std::move(system_admins), std::move(password_resets));
 }
 
 arrow::Status RbacStore::Mutate(
@@ -1413,6 +1496,8 @@ arrow::Status StoreTransaction::DeleteUser(const std::string& user_id) {
   ARROW_RETURN_NOT_OK(
       Run(conn_, "DELETE FROM " + T("scoped_tokens") + " WHERE user_id = $1", {Text(user_id)})
           .status());
+  ARROW_RETURN_NOT_OK(DeleteSystemAdmin(PrincipalKind::kUser, user_id));
+  ARROW_RETURN_NOT_OK(SetPasswordReset(user_id, std::nullopt));
   return Run(conn_, "DELETE FROM " + T("users") + " WHERE user_id = $1", {Text(user_id)}).status();
 }
 
@@ -1441,6 +1526,7 @@ arrow::Status StoreTransaction::DeleteRole(const std::string& role_id) {
   ARROW_RETURN_NOT_OK(
       Run(conn_, "DELETE FROM " + T("group_mappings") + " WHERE role_id = $1", {Text(role_id)})
           .status());
+  ARROW_RETURN_NOT_OK(DeleteSystemAdmin(PrincipalKind::kRole, role_id));
   return Run(conn_, "DELETE FROM " + T("roles") + " WHERE role_id = $1", {Text(role_id)}).status();
 }
 
@@ -1497,8 +1583,8 @@ arrow::Status StoreTransaction::UpsertOwner(const OwnerRecord& o) {
 }
 
 // A system privilege granted everywhere lives in system_privileges, where every server
-// reads it, unless it is one of the storage privileges 2.1 and earlier don't know; those,
-// and every location grant, live in storage_privileges.
+// reads it, unless it is one of the storage privileges 2.1 and earlier don't know or an
+// account privilege (2.14); those, and every location grant, live in storage_privileges.
 namespace {
 bool InStorageTable(const SystemPrivilegeRecord& r) {
   return !r.location.empty() || !IsOriginalSystemPrivilege(r.privilege);
@@ -1531,6 +1617,38 @@ arrow::Status StoreTransaction::DeleteSystemPrivilege(const SystemPrivilegeRecor
              "DELETE FROM " + T("system_privileges") +
                  " WHERE role_id = $1 AND privilege = $2 AND granted_by = $3",
              {Text(r.role_id), Text(SystemPrivilegeName(r.privilege)), Text(r.granted_by)})
+      .status();
+}
+
+arrow::Status StoreTransaction::SetPasswordReset(const std::string& user_id,
+                                                 const std::optional<PasswordResetRecord>& record) {
+  ARROW_RETURN_NOT_OK(
+      Run(conn_, "DELETE FROM " + T("password_resets") + " WHERE user_id = $1", {Text(user_id)}).status());
+  if (!record) return arrow::Status::OK();
+  return Run(conn_, "INSERT INTO " + T("password_resets") + " VALUES ($1, $2, $3, $4)",
+             {Text(user_id), Text(record->password_fingerprint), Text(record->set_by),
+              dd::Value::BIGINT(record->set_at_ms)})
+      .status();
+}
+
+arrow::Status StoreTransaction::UpsertSystemAdmin(const SystemAdminRecord& r) {
+  if (!store_.system_admins_readable_) {
+    return StoreError("SYSTEM ADMIN can't be granted",
+                      "the store's table hardcharger_rbac.system_admins could not be read when this server "
+                      "started (see its log)");
+  }
+  ARROW_RETURN_NOT_OK(DeleteSystemAdmin(r.kind, r.principal_id));
+  return Run(conn_, "INSERT INTO " + T("system_admins") + " VALUES ($1, $2, $3)",
+             {Text(r.kind == PrincipalKind::kRole ? "role" : "user"), Text(r.principal_id), Text(r.granted_by)})
+      .status();
+}
+
+arrow::Status StoreTransaction::DeleteSystemAdmin(PrincipalKind kind, const std::string& principal_id) {
+  // Nothing is read from a table that could not be read, so there is nothing to take away
+  // (and DROP USER / DROP ROLE, which come through here, must go on working).
+  if (!store_.system_admins_readable_) return arrow::Status::OK();
+  return Run(conn_, "DELETE FROM " + T("system_admins") + " WHERE principal_kind = $1 AND principal_id = $2",
+             {Text(kind == PrincipalKind::kRole ? "role" : "user"), Text(principal_id)})
       .status();
 }
 

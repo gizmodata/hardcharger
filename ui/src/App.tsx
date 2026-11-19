@@ -6,6 +6,7 @@ import { Layout } from "./components/Layout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ConfirmWorkspaceCloseDialog } from "./components/ConfirmWorkspaceCloseDialog";
 import { SignInPage } from "./components/SignInPage";
+import { ChangePasswordPage } from "./components/ChangePasswordPage";
 import { type SignedIn, clearSignIn, loadSignIn, saveSignIn } from "./lib/auth";
 import { endSessionsOnExit } from "./lib/pageExit";
 import { useRoute } from "./lib/route";
@@ -13,7 +14,9 @@ import { useTheme } from "./lib/theme";
 import { loadModule } from "./lib/stale";
 import { type ConnectionOptions, discover, openConnection } from "./lib/chargewire";
 import { internalQueryTag } from "./lib/queryTags";
+import { passwordMustChange } from "./lib/passwordChange";
 import { type AppContract, RelayApi, ServersStore } from "./lib/servers";
+import { SystemAdminTabs } from "./lib/systemAdmin";
 import {
   type AppSession,
   type Identity,
@@ -27,6 +30,8 @@ import {
 type Phase =
   | { kind: "signed-out"; notice?: string }
   | { kind: "connecting"; auth: SignedIn }
+  // Signed in with a temporary password: the session runs nothing until it is changed.
+  | { kind: "must-change"; auth: SignedIn; connection: Connection }
   | { kind: "ready"; auth: SignedIn; connection: Connection; identity: Identity }
   // The UI without a server behind it (`hardcharger ui`): nothing local to sign in to.
   | { kind: "ready-without-local"; identity: Identity };
@@ -118,6 +123,9 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [storeKey],
   );
+  // Which tabs act as System Admin: one record per sign-in, as the servers store.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const systemAdminTabs = useMemo(() => new SystemAdminTabs(), [storeKey]);
   const servers = useRef<ServersStore | undefined>(undefined);
   useEffect(() => {
     servers.current = store;
@@ -216,7 +224,7 @@ export function App() {
   const signOut = useCallback((notice?: string) => {
     clearSignIn();
     setPhase((current) => {
-      if (current.kind === "ready") void current.connection.close().catch(() => {});
+      if (current.kind === "ready" || current.kind === "must-change") void current.connection.close().catch(() => {});
       return notice === undefined ? { kind: "signed-out" } : { kind: "signed-out", notice };
     });
     for (const c of extra.current) void c.close().catch(() => {});
@@ -239,6 +247,10 @@ export function App() {
         }
         setPhase({ kind: "ready", auth, connection, identity });
       } catch (err) {
+        if (connection && !controller.signal.aborted && passwordMustChange(err)) {
+          setPhase({ kind: "must-change", auth, connection });
+          return;
+        }
         void connection?.close().catch(() => {});
         if (controller.signal.aborted) return;
         clearSignIn();
@@ -299,6 +311,7 @@ export function App() {
       connection,
       identity,
       isAdmin: local && identity.role === "admin",
+      systemAdmin: systemAdminTabs,
       contract,
       localServer: local,
       servers: store,
@@ -327,6 +340,7 @@ export function App() {
     server,
     contract,
     store,
+    systemAdminTabs,
     signOut,
     openExtraConnection,
     requestQuery,
@@ -362,6 +376,22 @@ export function App() {
         {closeDialog}
         <DialogHost />
       </SessionContext>
+    );
+  }
+  if (phase.kind === "must-change") {
+    return (
+      <>
+        <ChangePasswordPage
+          auth={phase.auth}
+          connection={phase.connection}
+          onChanged={(auth) => {
+            saveSignIn(auth);
+            setPhase({ kind: "connecting", auth });
+          }}
+          onSignOut={() => signOut()}
+        />
+        <DialogHost />
+      </>
     );
   }
   // Until the contract says what serves the UI, the sign-in page waits with "Connecting…".

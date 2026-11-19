@@ -365,3 +365,22 @@ def test_scoped_token_bound_to_the_issuing_instance(scoped_tokens):
     code, answer, err = verify(credential=password(username="token", password=live), env=env, secrets=(live,))
     assert code == 1 and answer["reason"] == "invalid_credentials", answer
     assert "no secret_key" in err, err
+
+
+def test_a_temporary_password_is_verified_and_says_so(launcher, store):
+    """A temporary password (one someone else set, which the user must change first) is a
+    valid credential: the cluster may wake for it, and the answer says that its sessions run
+    nothing but the change of that password."""
+    uri = store.new_database()
+    server = start_rbac_server(launcher=launcher, store_uri=uri, env={"HARDCHARGER_CLUSTER_ID": CLUSTER_A})
+    admin = server.admin()
+    for sql in ["CREATE USER tim WITH PASSWORD 'tim-pw:1' EXPIRE", "CREATE USER pat WITH PASSWORD 'pat-pw:1'"]:
+        expect_allowed(client=admin, sql=sql)
+    server.running.stop()
+    code, answer, _ = verify(credential=password(username="tim", password="tim-pw:1"), env=store_env(uri),
+                             secrets=("tim-pw:1",))
+    assert code == 0 and answer == {"verified": True, "user": "tim", "role": "user", "method": "password",
+                                    "would_provision": False, "password_must_change": True}, answer
+    code, answer, _ = verify(credential=password(username="pat", password="pat-pw:1"), env=store_env(uri),
+                             secrets=("pat-pw:1",))
+    assert code == 0 and "password_must_change" not in answer, answer

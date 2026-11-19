@@ -147,7 +147,8 @@ const std::vector<Column>& ColumnsOf(AccessTable table) {
       {"name", Kind::kText}, {"builtin", Kind::kBool}, {"tenant", Kind::kText}, {"is_active", Kind::kBool}};
   static const std::vector<Column> kUsers = {
       {"name", Kind::kText},           {"enabled", Kind::kBool},       {"has_password", Kind::kBool},
-      {"tenant", Kind::kText},         {"attributes", Kind::kTextMap}, {"is_current", Kind::kBool}};
+      {"tenant", Kind::kText},         {"attributes", Kind::kTextMap}, {"is_current", Kind::kBool},
+      {"password_must_change", Kind::kBool}};
   static const std::vector<Column> kPolicies = {
       {"name", Kind::kText},           {"kind", Kind::kText},           {"catalog_name", Kind::kText},
       {"schema_name", Kind::kText},    {"table_name", Kind::kText},     {"column_name", Kind::kText},
@@ -209,6 +210,7 @@ class Visibility {
   bool SeesRole(const std::string& role_id) const { return Holds(role_id) || InTenant(PrincipalKind::kRole, role_id); }
 
   ViewerKind kind() const { return kind_; }
+  const Principal& viewer() const { return viewer_; }
   const std::set<std::string>& held() const { return held_; }
   bool Holds(const std::string& role_id) const { return held_.count(role_id) > 0; }
   bool Active(const std::string& role_id) const { return active_.count(role_id) > 0; }
@@ -385,6 +387,21 @@ std::shared_ptr<arrow::RecordBatch> Grants(const Snapshot& snapshot, const Visib
                 names.Grantor(r.granted_by), r.admin_option, names.Tenant(PrincipalKind::kRole, r.role_id)});
     }
   }
+  // SYSTEM ADMIN: who may act as the administrator (in a session that says SET ROLE
+  // SYSTEM ADMIN). The administrator sees every grant of it; a user, the one to itself and
+  // those to roles it holds. It reaches no catalog: a restricted administrator sees none.
+  if (visibility.kind() != ViewerKind::kRestrictedAdministrator) {
+    for (const auto& r : snapshot.system_admins()) {
+      const bool user = r.kind == PrincipalKind::kUser;
+      if (visibility.kind() == ViewerKind::kUser &&
+          !(user ? r.principal_id == visibility.viewer().user_id : visibility.SeesRole(r.principal_id))) {
+        continue;
+      }
+      rows.Add({user ? names.User(r.principal_id) : names.Role(r.principal_id), std::string(user ? "USER" : "ROLE"),
+                std::string(kSystemAdminName), std::string("SYSTEM"), Cell{}, Cell{}, Cell{}, Cell{},
+                names.Grantor(r.granted_by), false, Cell{}});
+    }
+  }
   // An owner holds every privilege on what it owns, and may grant them.
   for (const auto& o : snapshot.owners()) {
     if (!visibility.OwnerVisible(o)) continue;
@@ -473,11 +490,17 @@ std::shared_ptr<arrow::RecordBatch> Users(const Snapshot& snapshot, const Princi
   Rows rows(ColumnsOf(AccessTable::kUsers));
   if (visibility.kind() == ViewerKind::kRestrictedAdministrator) return rows.Finish();
   for (const auto& u : snapshot.users()) {
-    const bool current = !viewer.superuser && u.id == viewer.user_id;
+    // (A user acting as System Admin sees every user, and is still the one it is.)
+    const bool current = u.id == (viewer.superuser ? viewer.acting_user_id : viewer.user_id);
     if (visibility.kind() == ViewerKind::kUser && !current && !visibility.InTenant(PrincipalKind::kUser, u.id)) continue;
     // Never the password hash: only whether there is one.
+    // Whether its password is temporary (must be changed before anything else): for the
+    // administrator (a System Admin included) and the user's own row; NULL to anyone else.
+    const Cell must_change =
+        viewer.superuser || current ? Cell(snapshot.PasswordMustChange(u.id) != nullptr) : Cell{};
     rows.Add({u.name, u.enabled, u.password_hash.has_value() && !u.password_hash->empty(),
-              names.Tenant(PrincipalKind::kUser, u.id), TextMap(u.attributes.begin(), u.attributes.end()), current});
+              names.Tenant(PrincipalKind::kUser, u.id), TextMap(u.attributes.begin(), u.attributes.end()), current,
+              must_change});
   }
   return rows.Finish();
 }
@@ -584,8 +607,10 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
     }
   }
   if (asked_for_self && kind == ViewerKind::kAdministrator) {
+    // A store user acting as System Admin holds what the administrator holds, and the row
+    // says through what.
     rows.Add({viewer.user_name, std::string("ALL"), std::string("SERVER"), Cell{}, Cell{}, Cell{}, Cell{},
-              std::string("SUPERUSER"), true});
+              std::string(viewer.acts_as_system_admin() ? kSystemAdminName : "SUPERUSER"), true});
     return rows.Finish();
   }
   if (asked_for_self && kind == ViewerKind::kRestrictedAdministrator) {
@@ -663,12 +688,24 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
                 true});
     }
   }
+  // SYSTEM ADMIN, once for each way the user holds it: `via` is the role granted it, or
+  // the user itself. It gives nothing until the session says SET ROLE SYSTEM ADMIN, which a
+  // scoped token's session never may.
+  if (!who.scope) {
+    for (const auto& source : snapshot.SystemAdminSources(who)) {
+      rows.Add({who.user_name, std::string(kSystemAdminName), std::string("SYSTEM"), Cell{}, Cell{}, Cell{}, Cell{},
+                source.empty() ? who.user_name : names.Role(source), false});
+    }
+  }
+  const auto account_roles = snapshot.AccountPrivilegeRoles(who);
   for (const auto p : AllSystemPrivileges()) {
-    // The roles that give it, everywhere or on a location.
+    // The roles that give it, everywhere or on a location (an account privilege: only through
+    // the administrator's own memberships).
     const bool system = snapshot.HasSystemPrivilege(who, p);
     if (!system && (!StorageOf(p) || who.catalog_rules || who.scope)) continue;
+    const auto& giving = IsAccountPrivilege(p) ? account_roles : roles;
     for (const auto& r : snapshot.system_privileges()) {
-      if (r.privilege != p || !roles.count(r.role_id) || (system && !r.location.empty())) continue;
+      if (r.privilege != p || !giving.count(r.role_id) || (system && !r.location.empty())) continue;
       const Cell location = r.location.empty() ? Cell{} : Text(r.location);
       rows.Add({who.user_name, SystemPrivilegeName(p), std::string(r.location.empty() ? "SYSTEM" : "LOCATION"),
                 Cell{}, Cell{}, location, Cell{}, names.Role(r.role_id), r.admin_option});

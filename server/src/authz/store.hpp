@@ -149,6 +149,9 @@ class RbacStore {
   // Read-only: the schema must already be there (and not be newer than this server's).
   arrow::Status RequireSchema();
   arrow::Status CheckOwnership();
+  // Whether the SYSTEM ADMIN grants can be read (a store an earlier version made, opened
+  // read-only, has none; a damaged table is reported in the log). Never fails for that.
+  arrow::Status ProbeSystemAdmins();
   void CheckpointFile();
   arrow::Result<std::shared_ptr<const Snapshot>> LoadLocked();
   // One store transaction: BEGIN, the data version bumped (and read into `version`, when
@@ -181,6 +184,9 @@ class RbacStore {
   std::string secret_dir_;   // the private instance's (empty) secret directory
   std::string file_path_;    // a DuckDB store's file
   std::string cluster_id_;
+  // Whether the store's SYSTEM ADMIN table was there, in this server's shape, when the
+  // store was opened (ProbeSystemAdmins). Not: it is neither read nor written.
+  bool system_admins_readable_ = false;
 
   friend class StoreTransaction;
   friend class StoreTurn;
@@ -224,6 +230,11 @@ class StoreTransaction {
   // One record per (role, privilege, grantor).
   arrow::Status UpsertSystemPrivilege(const SystemPrivilegeRecord& record);
   arrow::Status DeleteSystemPrivilege(const SystemPrivilegeRecord& record);
+  // One record per user or role (SYSTEM ADMIN has no options to tell records apart).
+  // The user's temporary-password record (PasswordResetRecord); nullopt removes it.
+  arrow::Status SetPasswordReset(const std::string& user_id, const std::optional<PasswordResetRecord>& record);
+  arrow::Status UpsertSystemAdmin(const SystemAdminRecord& record);
+  arrow::Status DeleteSystemAdmin(PrincipalKind kind, const std::string& principal_id);
   arrow::Status DeleteOwner(const ObjectPath& object, ObjectType type);
 
   // A fresh random id (UUID v4 text).

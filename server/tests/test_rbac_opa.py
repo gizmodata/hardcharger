@@ -78,6 +78,9 @@ class FakeOpa:
         user = input_.get("user", "")
         if input_.get("action") == "connect" and user == "mallory":
             allow = False
+        # Acting as System Admin is asked for once, when a session says SET ROLE SYSTEM ADMIN.
+        if input_.get("action") == "system_admin" and user != "ann":
+            allow = False
         for obj in input_.get("objects", []):
             if obj.get("name") == "payroll" and user != "hr_bot":
                 allow = False
@@ -198,3 +201,37 @@ def test_a_policy_service_needs_access_control(launcher, opa):
     running = launcher.start(env={"HARDCHARGER_RBAC_OPA_URL": opa.url}, expect_up=False)
     assert running.process.wait(timeout=20) == 2
     assert "rbac_opa_url needs rbac_store_uri" in running.log()
+
+
+def test_the_service_is_asked_before_a_session_acts_as_system_admin(server, opa):
+    admin = server.admin_client
+    expect_allowed(client=admin, sql="GRANT SYSTEM ADMIN TO ann")
+    expect_allowed(client=admin, sql="GRANT SYSTEM ADMIN TO hr_bot")
+    try:
+        # The service refuses hr_bot, who holds it; the session stays what it was.
+        hr_bot = server.user(name="hr_bot")
+        assert error(client=hr_bot, sql="SET ROLE SYSTEM ADMIN") == \
+            "Hardcharger blocked SET ROLE SYSTEM ADMIN: the access policy service refused it"
+        assert "no SELECT privilege on table" in error(client=hr_bot, sql="SELECT * FROM secrets")
+        # No answer means no.
+        ann = server.user(name="ann")
+        opa.mode = "error500"
+        assert error(client=ann, sql="SET ROLE SYSTEM ADMIN") == \
+            "Hardcharger blocked SET ROLE SYSTEM ADMIN: Hardcharger could not get an answer from the access policy service"
+        opa.mode = "policy"
+        assert "no SELECT privilege on table" in error(client=ann, sql="SELECT * FROM secrets")
+        # Positive twin: allowed, ann acts as the administrator, whose statements the service
+        # is not asked about (payroll, which it refuses ann as herself).
+        before = opa.statements
+        assert error(client=ann, sql="SET ROLE SYSTEM ADMIN") == ""
+        assert error(client=ann, sql="SELECT * FROM secrets") == ""
+        assert error(client=ann, sql="SELECT * FROM payroll") == ""
+        assert opa.statements == before, "a System Admin's statement was sent to the service"
+        opa.mode = "error500"  # the service is down: a session already acting as one goes on
+        assert error(client=ann, sql="SELECT * FROM payroll") == ""
+        opa.mode = "policy"
+        assert error(client=ann, sql="RESET ROLE") == ""
+        assert "the access policy service denied it" in error(client=ann, sql="SELECT * FROM payroll")
+    finally:
+        opa.mode = "policy"
+        expect_allowed(client=admin, sql="REVOKE SYSTEM ADMIN FROM ann, hr_bot")  # as the other tests found it

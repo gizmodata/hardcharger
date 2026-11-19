@@ -14,6 +14,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { useAdminConnection } from "../lib/adminConnection";
+import { SystemAdminHint, SystemAdminNotice } from "./SystemAdminNotice";
 import {
   activeQuery,
   defaultMonitorSort,
@@ -52,7 +53,7 @@ const sortColumns: { key: MonitorSortKey; label: string }[] = [
 
 export default function SqlMonitorPage() {
   const session = useSession();
-  const { connection, error: connectionError, allowed } = useAdminConnection("sql-monitor");
+  const { connection, error: connectionError, allowed, systemAdmin } = useAdminConnection("sql-monitor");
   const [sort, setSort] = useState(defaultMonitorSort);
   const [minutes, setMinutes] = useState(10);
   const [statusDisplay, setStatusDisplay] = useState(storedStatusDisplay);
@@ -182,6 +183,7 @@ export default function SqlMonitorPage() {
       <div className="sessions-page">
         <h2>SQL Monitor</h2>
         <p>Only unrestricted administrators can view SQL Monitor.</p>
+        <SystemAdminHint />
       </div>
     );
   const disabled = info?.instrumentation_enabled === false || session.identity.instrumentationEnabled === false;
@@ -229,6 +231,7 @@ export default function SqlMonitorPage() {
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
+      {systemAdmin && <SystemAdminNotice />}
       {(connectionError || error) && (
         <div className="result-error" role="alert">
           <pre>{connectionError ?? error}</pre>
