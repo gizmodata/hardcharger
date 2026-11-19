@@ -9,7 +9,8 @@
 # through the `production` environment's OIDC credential) before the zip and the MSI are
 # made from them, and the msi job signs each MSI; without it, everything stays unsigned.
 # With `warm` (server.yml's `windows-warm` job, on a push to main whose tests are skipped),
-# only the compile-cache warm-up jobs at the end run, for the platforms it lists.
+# only the compile-cache warm-up jobs at the end run, for the platforms it lists. With
+# `platforms` (server.yml's `only` input), only those legs are built, tested and packaged.
 name: windows
 
 on:
@@ -33,6 +34,10 @@ on:
         description: Sign the executables and the MSIs (production environment; server.yml decides)
         type: boolean
         default: false
+      platforms:
+        description: A JSON list of the legs to build, test and package (empty for both)
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -42,27 +47,43 @@ defaults:
     shell: bash
 
 jobs:
+  # The legs (the one place they are defined: the build, signing, MSI and warm-up jobs take
+  # theirs from here), as `platforms` (or `warm`) selects them.
+  plan:
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      build_legs: ${{ steps.legs.outputs.build_legs }}
+      legs: ${{ steps.legs.outputs.legs }}
+    steps:
+      - id: legs
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+          # windows-arm64: psycopg-binary and pyarrow publish no win_arm64 wheels, so the
+          # test harnesses run on x64 Python (emulated); the server under test is the native
+          # arm64 build.
+          LEGS: >-
+            [{"name": "windows-amd64", "runner": "windows-latest", "arch": "x64", "wix_arch": "x64",
+              "test_python": "3.14"},
+             {"name": "windows-arm64", "runner": "windows-11-arm", "arch": "arm64", "wix_arch": "arm64",
+              "test_python": "cpython-3.14-windows-x86_64-none"}]
+        run: |
+          platforms="${PLATFORMS:-[\"windows-amd64\",\"windows-arm64\"]}"
+          build=$(jq -c --argjson want "$platforms" '[.[] | select(.name as $n | $want | index($n))]' <<<"$LEGS")
+          [ "$(jq length <<<"$build")" -eq "$(jq length <<<"$platforms")" ] \
+            || { echo "unknown platform in $platforms" >&2; exit 1; }
+          echo "build_legs=$build" | tee -a "$GITHUB_OUTPUT"
+          echo "legs=$(jq -c 'map({(.name): [.]}) | add' <<<"$LEGS")" | tee -a "$GITHUB_OUTPUT"
+
   build:
     name: build and test (${{ matrix.name }})
-    if: inputs.warm == ''
+    needs: plan
+    if: inputs.warm == '' && needs.plan.outputs.build_legs != '[]'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # (Each leg and step marked &name is reused, unchanged, by the compile-cache
-          # warm-up jobs at the end; YAML anchors.)
-          - &leg-windows-amd64
-            name: windows-amd64
-            runner: windows-latest
-            arch: x64
-            test_python: "3.14"
-          - &leg-windows-arm64
-            name: windows-arm64
-            runner: windows-11-arm
-            arch: arm64
-            # psycopg-binary and pyarrow publish no win_arm64 wheels: the test harnesses run
-            # on x64 Python (emulated); the server under test is the native arm64 build.
-            test_python: cpython-3.14-windows-x86_64-none
+        # (Each step marked &name is reused, unchanged, by the compile-cache warm-up jobs at
+        # the end; YAML anchors.)
+        include: ${{ fromJSON(needs.plan.outputs.build_legs) }}
     runs-on: ${{ matrix.runner }}
     env: &build-env
       # OpenSSL from vcpkg: static libraries on the static C runtime (/MT), as everything
@@ -506,14 +527,12 @@ jobs:
   # signature and changes nothing else, and the zip is checked to differ only there.
   sign:
     name: sign (${{ matrix.name }})
-    needs: build
+    needs: [plan, build]
     if: inputs.sign
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: windows-amd64
-          - name: windows-arm64
+        include: ${{ fromJSON(needs.plan.outputs.build_legs) }}
     runs-on: windows-latest
     environment: production
     permissions:
@@ -597,7 +616,7 @@ jobs:
   # before the install test runs it).
   msi:
     name: msi (${{ matrix.name }})
-    needs: [build, sign]
+    needs: [plan, build, sign]
     if: >-
       ${{ !cancelled() && needs.build.result == 'success'
           && ((inputs.sign && needs.sign.result == 'success') || (!inputs.sign && needs.sign.result == 'skipped')) }}
@@ -609,11 +628,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: windows-amd64
-            wix_arch: x64
-          - name: windows-arm64
-            wix_arch: arm64
+        include: ${{ fromJSON(needs.plan.outputs.build_legs) }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -708,11 +723,11 @@ jobs:
   # platform, since a job's `if` can't see its matrix leg.
   warm-windows-amd64:
     name: warm compile cache (${{ matrix.name }})
+    needs: plan
     if: contains(inputs.warm, '"windows-amd64"')
     strategy:
       matrix:
-        include:
-          - *leg-windows-amd64
+        include: ${{ fromJSON(needs.plan.outputs.legs)['windows-amd64'] }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     permissions:
@@ -758,11 +773,11 @@ jobs:
 
   warm-windows-arm64:
     name: warm compile cache (${{ matrix.name }})
+    needs: plan
     if: contains(inputs.warm, '"windows-arm64"')
     strategy:
       matrix:
-        include:
-          - *leg-windows-arm64
+        include: ${{ fromJSON(needs.plan.outputs.legs)['windows-arm64'] }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     permissions:

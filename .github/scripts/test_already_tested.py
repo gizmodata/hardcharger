@@ -14,7 +14,7 @@ RELEASE_JOBS = [
     "web UI e2e (chromium)", "web UI e2e (webkit)",
     "windows / build and test (windows-amd64)", "windows / build and test (windows-arm64)",
     "windows / msi (windows-amd64)", "windows / msi (windows-arm64)", "checksums", "image",
-    "address sanitizer (linux-amd64)", "thread sanitizer (linux-amd64)", "release", "downstream",
+    "address and undefined-behavior sanitizers (linux-arm64)", "thread sanitizer (linux-arm64)", "release", "downstream",
 ]
 CACHE = "warm sanitizer dependency caches (${{ matrix.name }})"
 
@@ -65,7 +65,7 @@ else:
         self.assertEqual(self.check_run(cache="failure")["tested"], "false")
 
     def test_failed_sanitizer_still_blocks_reuse(self):
-        self.assertEqual(self.check_run(failed="thread sanitizer (linux-amd64)")["tested"], "false")
+        self.assertEqual(self.check_run(failed="thread sanitizer (linux-arm64)")["tested"], "false")
 
     def test_unknown_skipped_job_still_blocks_reuse(self):
         self.assertEqual(self.check_run(extra=("skipped", "new release gate"))["tested"], "false")
