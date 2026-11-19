@@ -938,15 +938,27 @@ form has a test (`server/unit/redaction_test.cc`, `server/tests/test_log_masking
 
 A statement is read as DuckDB's own tokenizer reads it, so a value is found where DuckDB finds
 it, whatever comments, quoting or Unicode white space surround it. In a name, case is ignored
-and `-` reads as `_`. A **credential name** is one that ends in `password`, `passwd`, `pwd`,
-`passphrase`, `secret`, `token`, `access_key`, `secret_key`, `accountkey`, `account_key`,
-`apikey`, `api_key`, `private_key`, `encryption_key`, `subscription_key`, `sig`, `signature`,
-`auth`, `authorization`, `credential`, `credentials`, `cookie`, `jwt` or `bearer`, or is
-`pass` or `pw`, or ends in `_pass` or `_pw` (`s3_secret_access_key`, `X-API-Key`,
-`Proxy-Authorization`, `bearer_token`). Characters that are not ASCII and control characters
-are left out of a name before it is compared, so a name pasted with an invisible character on
-it (`ENCRYPTION_KEY<U+180E>'…'`, which DuckDB refuses as an unknown option) still has its
-value masked.
+and `-` reads as `_`. Characters that are not ASCII and control characters are left out of a
+name before it is compared, so a name pasted with an invisible character on it
+(`ENCRYPTION_KEY<U+180E>'…'`, which DuckDB refuses as an unknown option) still has its value
+masked. Two lists of names are used:
+
+- A **credential name** is one that ends in `password`, `passwd`, `pwd`, `passphrase`,
+  `secret`, `token`, `access_key`, `secret_key`, `accountkey`, `account_key`, `apikey`,
+  `api_key`, `private_key`, `encryption_key`, `subscription_key`, `sig`, `signature`, `auth`,
+  `authorization`, `credential`, `credentials`, `cookie`, `jwt` or `bearer`, or is `pass` or
+  `pw`, or ends in `_pass` or `_pw` (`s3_secret_access_key`, `X-API-Key`,
+  `Proxy-Authorization`, `bearer_token`). It masks a **setting's, an option's and a named
+  argument's** value, and every key in a connection string, a URL or other text.
+- Some of those words name ordinary data as well (a `token` column of a text-analysis table,
+  `auth` for an authentication method, `pwd` for a directory, `first_pass`), so **a column, a
+  struct or MAP key and a name/value pair** mask their value only under a name **only a
+  credential has**: one that ends in `password`, `passwd`, `passphrase`, `secret`, `apikey` or
+  `accountkey`, or that is (or ends in `_` and) `secret_key`, `access_key`, `api_key`,
+  `private_key`, `encryption_key`, `account_key`, `subscription_key`, `access_token`,
+  `refresh_token`, `auth_token`, `bearer_token`, `api_token`, `id_token`, `session_token` or
+  `security_token`. A key may also be an HTTP header that carries a credential
+  (`{'Authorization': …}`, `MAP {'Cookie': …}`).
 
 **Statements replaced whole**, by their own first words (not by words in a comment or a
 string). In a request of several statements only that statement is replaced:
@@ -957,25 +969,28 @@ string). In a request of several statements only that statement is replaced:
 | `CREATE USER …` / `ALTER USER …` with a literal or a credential name in it (`PASSWORD '…'`) | `[REDACTED: user DDL]` |
 | `SET` / `PRAGMA` `[GLOBAL \| SESSION \| LOCAL]` of a setting whose name has `password`, `passwd`, `pwd`, `passphrase`, `secret`, `token`, `access_key`, `accountkey`, `account_key`, `apikey`, `api_key`, `private_key`, `encryption_key`, `signature`, `credential`, `bearer`, `authorization`, `cookie` or `jwt` in it, or is a credential name, with `=` or `TO` (not `SET VARIABLE`, whose value is masked instead) | `[REDACTED: a credential setting]` |
 
-**The value given to a credential name** in any other statement. The whole value is replaced,
-whether it is one literal or an expression (`'a' || 'b'`, `upper('…')`, a subquery):
+**The value given to a name** in any other statement. The whole value is replaced, whether it
+is one literal or an expression (`'a' || 'b'`, `upper('…')`, a subquery):
 
-| Form | Example |
-|---|---|
-| a named argument | `f(token => v)`, `f(token := v)`, `f(token = v)` |
-| a struct, MAP or JSON key | `{password: v}`, `{'password': v}`, `MAP {'api_key': v}` |
-| an option list | `ATTACH '…' (ENCRYPTION_KEY 'v')`, `(TOKEN v)` with a bare word in an `ATTACH` |
-| `SET VARIABLE` | `SET VARIABLE my_api_key = v` |
-| a comparison with a literal or an expression | `password = v`, `==`, `<>`, `!=`, `<`, `>`, `<=`, `>=`, `~`, `!~`, `IN (…)`, `[NOT] LIKE`, `ILIKE`, `GLOB`, `REGEXP`, `SIMILAR TO`, `BETWEEN … AND …`, `IS [NOT] DISTINCT FROM`; also `v = password`, `lower(password) = v`, `password::TEXT = v`, `CAST(password AS TEXT) = v` |
-| an `UPDATE`'s assignment | `SET password = v` |
-| an `INSERT` with a column list and `VALUES` rows | `INSERT INTO users (name, password) VALUES ('eve', v), …` |
-| a name and its value as two literals | `json_object('api_key', 'v')`, `VALUES ('api_key', 'v')`, `map_from_entries([('Authorization', 'v')])`, `MAP(['Authorization'], ['v'])` |
-| DuckDB's key function | `PRAGMA add_parquet_key('name', 'v')` (all arguments) |
-| a password clause of another engine | `IDENTIFIED BY 'v'`, `IDENTIFIED WITH plugin BY 'v'` / `AS 'v'` |
-| an `Authorization` value on its own | a literal that is `Bearer <token>` or `Basic <base64>` |
+| Form | Names | Example |
+|---|---|---|
+| a named argument | credential names | `f(token => v)`, `f(token := v)`, `f(token = v)` |
+| an option list | credential names | `ATTACH '…' (ENCRYPTION_KEY 'v')`, `(ENCRYPTION_KEY (SELECT …))`, `(TOKEN v)` with a bare word in an `ATTACH`; `(PASSWORD 'v')`, `(PASSWORD upper('…'))` in `COPY` and `EXPORT DATABASE` |
+| a struct, MAP or JSON key | only a credential's, or a credential header | `{password: v}`, `{'password': v}`, `MAP {'api_key': v}`, `{'Authorization': v}` |
+| `SET VARIABLE` | only a credential's | `SET VARIABLE my_api_key = v` |
+| a comparison with a literal or an expression | only a credential's | `password = v`, `==`, `<>`, `!=`, `<`, `>`, `<=`, `>=`, `~`, `!~`, `IN (…)`, `[NOT] LIKE`, `ILIKE`, `GLOB`, `REGEXP`, `SIMILAR TO`, `BETWEEN … AND …`, `IS [NOT] DISTINCT FROM`; also `v = password` and `upper('…') = password` (a literal, a call or a bracket on the left of `=`, `<>` or `!=`), `lower(password) = v`, `trim(lower(password)) = v`, `password::TEXT = v`, `CAST(password AS TEXT) = v` |
+| an `UPDATE`'s assignment | only a credential's | `SET password = v` |
+| an `INSERT` with a column list and `VALUES` rows | only a credential's | `INSERT INTO users (name, password) VALUES ('eve', v), …`, also behind `WITH`, `EXPLAIN` or `PREPARE … AS`, and `MERGE`'s `WHEN NOT MATCHED THEN INSERT (…) VALUES (…)` |
+| a name and its value as two literals | only a credential's, or a credential header | `json_object('api_key', 'v')`, `VALUES ('api_key', 'v')`, `map_from_entries([('Authorization', 'v')])`, `MAP(['Authorization'], ['v'])`; not in an `IN (…)` list, and not when the second literal is a credential name too (`note IN ('password', 'token')` is a list of words) |
+| DuckDB's key function | | `PRAGMA add_parquet_key('name', 'v')` (all arguments) |
+| a password clause of another engine | | `IDENTIFIED BY 'v'`, `IDENTIFIED WITH plugin BY 'v'` / `AS 'v'` |
+| an `Authorization` value on its own | | a literal that is `Bearer <token>` or `Basic <base64>` |
 
-A comparison of two columns (`a.access_token = b.access_token`), `IS NULL`, and a name with no
-value (`SELECT token FROM t`, `CREATE TABLE t (password VARCHAR)`) hide nothing. A bind
+A comparison with what holds no value (no literal, number or placeholder: another column,
+`a.access_token = b.access_token`; a function of columns, `lower(a.password) =
+lower(b.password)`; a subquery of them, `api_key IN (SELECT api_key FROM revoked WHERE id =
+3)`, where a number belongs to the subquery's own clauses), `IS NULL`, and a name with no value
+(`SELECT token FROM t`, `CREATE TABLE t (password VARCHAR)`) hide nothing. A bind
 placeholder (`token => ?`, `$1`, `$name`) is kept as written; the value bound to it is a
 credential for the statement's errors (below).
 
@@ -983,12 +998,12 @@ credential for the statement's errors (below).
 
 | Form | What is masked |
 |---|---|
-| a URL's userinfo, `scheme://user:password@host` | the password, up to the last `@` before the host (so one with `@`, `:`, `/`, quotes, brackets or a space in it goes whole); for `http` and `https` the user as well: `https://TOKEN@host`, `https://TOKEN:x-oauth-basic@host` |
-| a URL's query parameters | the value of a parameter with a credential name (`?auth=`, `?api-key=`, `?jwt=`, `?access_token=`, `?sig=`, `?X-Goog-Signature=`), of any `X-Amz-…` parameter, and of `key`, `code`, `sessionid` and `session_id`, up to the next `&` or `#` |
+| a URL's userinfo, `scheme://user:password@host` | the password, up to the URL's last `@` (so one with `@`, `:`, `/`, quotes, brackets or a space in it goes whole); for `http` and `https` the user as well: `https://TOKEN@host`, `https://TOKEN:x-oauth-basic@host`. The URL runs to the next white space, or where it is quoted to the quote that closes it (one followed by white space or the text's end, directly or after `:` `,` `.` `;` `)` `]` `}`); past white space (a password with a space in it) only in a literal that is the URL alone, inside a quote up to that quote's close, or else on the same line before any `=`, quote or other URL. An authority that is `host:port` (digits after the colon, then the URL's end, `/`, `?`, `#` or a closing quote or bracket) has no userinfo: a later `@` is the path's or the query's (`http://h:8080/users/bob@example.com` is logged as written, and so is `postgresql://u:1234/x@h`, which libpq reads as host `u`, port `1234`) |
+| a URL's query parameters | the value of a parameter with a credential name (`?auth=`, `?api-key=`, `?jwt=`, `?access_token=`, `?sig=`, `?X-Goog-Signature=`), of any `X-Amz-…` parameter, and of `key`, `sessionid` and `session_id`, up to the next `&` or `#` |
 | `key=value` with a credential name as the key | libpq's keyword form (to the next white space, a backslash taking the next character; or `'…'`), also behind `postgres:` and `ducklake:postgres:`; `"…"` (MySQL); `{…}` (ODBC); a `;`-separated list, to the next `;` (ADO, Azure's `AccountKey=…;`) |
 | `key => value`, `key := value`, `'key': 'value'`, `"key": "value"` | the value (JSON and struct text) |
 | a header line | `Authorization:`, `Proxy-Authorization:`, `Cookie:`, `Set-Cookie:`, `X-API-Key:`, `X-Auth-Token:`, `X-Amz-Security-Token:`, to the end of the line |
-| SQL given as text | a literal or a comment that holds a statement (`postgres_execute('pg', 'ALTER ROLE app PASSWORD ''v''')`, `query('…')`, a statement commented out) is read again with every rule above, four levels deep; one DuckDB cannot tokenize, or with a backslash before a quote, that names a credential before a quote is masked whole |
+| SQL given as text | a literal or a comment that holds a statement (`postgres_execute('pg', 'ALTER ROLE app PASSWORD ''v''')`, `query('…')`, a statement commented out) is read again with every rule above, four levels deep (text that begins as a statement does, `SELECT`, `ALTER`, `INSERT` and the like, is read as SQL only, so a literal inside it is read with its quotes resolved at each level); one DuckDB cannot tokenize, or with a backslash before a quote, that names a credential before a quote is masked whole |
 | a value built from pieces | when a credential's value runs to the end of a literal that is joined to something (`'host=h password=' \|\| x`), the rest of the concatenation; when the literal is a function's argument and the value is a placeholder (`format('…?token={}', x)`, `%s`), the function's other arguments |
 
 **Text DuckDB cannot tokenize** (an unterminated string literal, quoted identifier, `/*`
@@ -1000,7 +1015,10 @@ its error by `[REDACTED: error of a statement that could not be read: <which>]`.
 (`LINE 1: …`), with every value the statement's masking hid replaced wherever the error quotes
 it (in any letter case, as the literal's value with its quotes and escapes resolved, joined
 when it was written as `'a' || 'b'`, and each piece of a password that a connection-string
-parser split at its punctuation), with the values bound to the statement's masked
+parser split at its punctuation; a value of letters only, which the error's own wording may
+use, only where it is a word of its own and written as it was hidden, so `password = 'error'`
+leaves `Binder Error:` as it is; in a request of several statements, each statement's error
+with the values that statement hid), with the values bound to the statement's masked
 placeholders replaced the same way (JSON parameters and Arrow parameter rows), and then with
 the forms of the table above masked in the error's own text (DuckDB quotes an `ATTACH`'s
 connection string in its errors). The reason an error gives is kept. Two errors are replaced
@@ -1019,8 +1037,10 @@ as the log shows it>)`.
 
 Among what is **not** masked: an argument given by position (`hmac('key', msg)`), a value
 under a name that is not a credential name (`key => …`, `tokens => […]`, `client_key_pem`), a
-credential in a URL's path, an `INSERT` without a column list or from a `SELECT`, and a value
-an error quotes after the statement transformed it (a substring, a hash, an encoding).
+column, key or pair under a credential name that is not one only a credential has (`token =
+'cat'`, `auth = 'basic'`, `{'token': …}`, `INSERT INTO t (token) VALUES …`), a credential in a
+URL's path, a URL query's `code`, an `INSERT` without a column list or from a `SELECT`, and a
+value an error quotes after the statement transformed it (a substring, a hash, an encoding).
 
 ### Credential and system files
 

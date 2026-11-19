@@ -210,13 +210,24 @@ TEST(Redaction, EveryKindOfLiteralAndExpressionValueIsMasked) {
   }
   // What follows the value stays: the next argument, the rest of a WHERE clause.
   EXPECT_EQ(LoggableSql("SELECT probe(token => 'a' || 'S3CR3T', mode => 'fast')"), "SELECT probe(token => ***, mode => 'fast')");
-  EXPECT_EQ(LoggableSql("SELECT * FROM t WHERE token = 'S3CR3T' AND id = 7 ORDER BY id"),
-            "SELECT * FROM t WHERE token = *** AND id = 7 ORDER BY id");
+  EXPECT_EQ(LoggableSql("SELECT * FROM t WHERE password = 'S3CR3T' AND id = 7 ORDER BY id"),
+            "SELECT * FROM t WHERE password = *** AND id = 7 ORDER BY id");
   EXPECT_EQ(LoggableSql("UPDATE users SET name = 'bob', password = 'S3CR3T' WHERE id = 7"),
             "UPDATE users SET name = 'bob', password = *** WHERE id = 7");
   // A comparison with another column hides nothing; one with a literal does.
-  EXPECT_EQ(LoggableSql("SELECT * FROM a JOIN b ON a.token = b.token JOIN c USING (id) WHERE a.pwd <> 'S3CR3T' OR a.id = 7"),
-            "SELECT * FROM a JOIN b ON a.token = b.token JOIN c USING (id) WHERE a.pwd <> *** OR a.id = 7");
+  EXPECT_EQ(LoggableSql("SELECT * FROM a JOIN b ON a.api_key = b.api_key JOIN c USING (id) WHERE a.passwd <> 'S3CR3T' OR a.id = 7"),
+            "SELECT * FROM a JOIN b ON a.api_key = b.api_key JOIN c USING (id) WHERE a.passwd <> *** OR a.id = 7");
+  // A column whose name ordinary data has too (token, pwd, auth, sig, ...) is compared and set
+  // as written: only a credential setting, option, named argument or connection string masks it.
+  for (const char* sql : {"SELECT * FROM t WHERE token = 'S3CR3T' AND id = 7 ORDER BY id",
+                          "SELECT * FROM a JOIN b ON a.token = b.token WHERE a.pwd <> 'S3CR3T' OR a.id = 7",
+                          "UPDATE t SET auth = 'S3CR3T', sig = 'S3CR3T' WHERE credential = 'S3CR3T' OR bearer = 'S3CR3T'",
+                          "SELECT * FROM t WHERE first_pass IN (1, 2) AND token LIKE 'S3CR3T%' AND signature BETWEEN 'a' AND 'S3CR3T'",
+                          "INSERT INTO tokens (doc, token, cookie) VALUES (1, 'S3CR3T', 'S3CR3T')",
+                          "SELECT {'token': 'S3CR3T'}, MAP {'jwt': 'S3CR3T'}, json_object('auth', 'S3CR3T')",
+                          "SET VARIABLE page_token = 'S3CR3T'"}) {
+    EXPECT_EQ(LoggableSql(sql), sql);
+  }
 }
 
 TEST(Redaction, OptionListsStructKeysAndKeyFunctions) {
@@ -320,9 +331,9 @@ TEST(Redaction, EveryPrefixOfAStatementIsMaskedOrRedacted) {
   // "S3" appears nowhere else in these statements.
   for (const std::string sql : {"CALL serve('h', token => E'S3CR3T\\'S3' || $q$S3CR3T$q$, mode => 'fast')",
                                 "ATTACH 'quack:h:1' AS q (TYPE quack, TOKEN /* c */ 'S3CR3T''S3', MODE 'x')",
-                                "SELECT {'password': 'S3CR3T', \"api_key\": $$S3CR3T$$} /* c */ FROM t WHERE token = 'S3CR3T' AND i = 1",
+                                "SELECT {'password': 'S3CR3T', \"api_key\": $$S3CR3T$$} /* c */ FROM t WHERE password = 'S3CR3T' AND i = 1",
                                 "ATTACH 'dbname=x password=''S3CR3T S3'' host=h' AS d (TYPE postgres, SECRET \"S3CR3T\")",
-                                "PRAGMA add_parquet_key('k', 'S3CR3T'); SET VARIABLE pwd = -- c\n 'S3CR3T'"}) {
+                                "PRAGMA add_parquet_key('k', 'S3CR3T'); SET VARIABLE api_key = -- c\n 'S3CR3T'"}) {
     for (std::size_t length = 0; length <= sql.size(); length++) {
       const std::string prefix = sql.substr(0, length);
       const std::string logged = LoggableSql(prefix);
@@ -688,7 +699,7 @@ TEST(RedactionTokens, ADollarInANameIsNoDollarQuote) {
             "SELECT 1 AS a$q$; ATTACH 'f.db' AS d2 (ENCRYPTION_KEY ***); SELECT 2 AS b$q$");
   EXPECT_EQ(LoggableSql("UPDATE acct SET bal$usd$ = 1, password = lower('S3CR3T') WHERE bal$usd$ = 0"),
             "UPDATE acct SET bal$usd$ = 1, password = *** WHERE bal$usd$ = 0");
-  EXPECT_EQ(LoggableSql("SELECT * FROM t$x$ WHERE token = 'S3CR3T' AND c$x$ = 1"), "SELECT * FROM t$x$ WHERE token = *** AND c$x$ = 1");
+  EXPECT_EQ(LoggableSql("SELECT * FROM t$x$ WHERE password = 'S3CR3T' AND c$x$ = 1"), "SELECT * FROM t$x$ WHERE password = *** AND c$x$ = 1");
   // A statement with such a name is logged as written (it was hidden whole as "unreadable").
   for (const char* sql : {"DELETE FROM victim WHERE i = 1 AND 0 = (SELECT 0 AS a$q$)", "SELECT 1 AS a$b$", "SELECT a$ FROM t$",
                           "SELECT $1, $name, a$1 FROM t"}) {
@@ -778,7 +789,7 @@ TEST(RedactionForms, ATokenAsTheUrlUser) {
 
 TEST(RedactionForms, UrlQueryParameters) {
   for (const char* name : {"token", "access_token", "id_token", "refresh_token", "sig", "signature", "key", "api_key", "apiKey",
-                           "api-key", "apikey", "password", "passwd", "pwd", "secret", "client_secret", "auth", "jwt", "code",
+                           "api-key", "apikey", "password", "passwd", "pwd", "secret", "client_secret", "auth", "jwt",
                            "credential", "subscription-key", "sessionid", "session_id", "X-Amz-Signature", "X-Amz-Credential",
                            "X-Amz-Security-Token", "X-Goog-Signature", "x-goog-credential", "AUTH", "Api-Key"}) {
     for (const std::string url : {std::string("https://h.example/f.csv?") + name + "=S3CR3T", std::string("https://h.example/f.csv?v=1&") + name + "=S3CR3T&z=9",
@@ -791,8 +802,9 @@ TEST(RedactionForms, UrlQueryParameters) {
   }
   EXPECT_EQ(RedactCredentials("https://h/f?v=1&auth=S3CR3T&z=9"), "https://h/f?v=1&auth=***&z=9");
   EXPECT_EQ(RedactCredentials("https://h/f?jwt=S3CR3T#frag"), "https://h/f?jwt=***#frag");
-  // Parameters that are no credentials, and `key` or `code` outside a query string, are kept.
-  for (const char* plain : {"https://h/f.csv?version=3&format=csv&keyword=x&encode=1", "SELECT * FROM t WHERE code = 'US' AND key = 'k1'",
+  // Parameters that are no credentials (`code` is a product's or a country's as often as
+  // OAuth's), and `key` outside a query string, are kept.
+  for (const char* plain : {"https://h/f.csv?version=3&format=csv&keyword=x&encode=1&code=US", "SELECT * FROM t WHERE code = 'US' AND key = 'k1'",
                             "SELECT sessionid, session_id FROM hardcharger_sessions() WHERE session_id = 'abc'"}) {
     EXPECT_EQ(LoggableSql(plain), plain);
     EXPECT_EQ(RedactCredentials(plain), plain);
@@ -901,14 +913,211 @@ TEST(RedactionForms, EveryComparisonOfACredentialColumnAndInsertedValues) {
   for (const char* sql : {"SELECT * FROM users WHERE name IN ('eve', 'bob') AND status LIKE 'a%'", "INSERT INTO users (name, age) VALUES ('eve', 3)",
                           "INSERT INTO users VALUES ('eve', 'x')", "SELECT * FROM users WHERE password IS NULL OR password IS NOT NULL",
                           "SELECT * FROM users u JOIN logins l ON u.password IS NOT DISTINCT FROM l.password",
-                          "SELECT * FROM a WHERE a.token IN (SELECT token FROM b)"}) {
-    if (std::string_view(sql).find("IN (SELECT") != std::string_view::npos) continue;  // (a subquery is a value: see below)
+                          "SELECT * FROM a WHERE a.token IN (SELECT token FROM b)",
+                          // A subquery or a function of columns holds no value either (review of 2.14.0, finding 50).
+                          "SELECT * FROM a WHERE a.api_key IN (SELECT api_key FROM b)",
+                          "SELECT * FROM a WHERE a.api_key NOT IN (SELECT api_key FROM revoked WHERE user_id = 3) AND a.id = 7",
+                          "SELECT * FROM a WHERE a.password = (SELECT max(password) FROM s WHERE id = 3)",
+                          "SELECT * FROM a WHERE password = upper(other_col)",
+                          "SELECT * FROM a JOIN b ON lower(a.password) = lower(b.password)"}) {
     EXPECT_EQ(LoggableSql(sql), sql);
     EXPECT_FALSE(hardcharger::IsCredentialStatement(sql)) << sql;
   }
 }
 
 // ---- Finding 6: cost ----------------------------------------------------------------------
+
+// ---- The review of 2.14.0's masking (hc-v214-notes/review-masking-fix), findings 01-06 ----
+//
+// Each test is the finding's own repro. The passwords carry the punctuation a password has:
+// ; ) " ' @ : / %.
+
+namespace {
+
+const std::string kHard = "Zk7;)\"'@:/%CANARY";  // what a password may hold
+
+// `value` written as a SQL string literal.
+std::string Lit(const std::string& value) {
+  std::string out = "'";
+  for (const char c : value) {
+    out += c;
+    if (c == '\'') out += '\'';
+  }
+  return out + "'";
+}
+
+}  // namespace
+
+TEST(RedactionReview, F01AStatementKeepsTheValuesItHidWhenTheOneBeforeHidTheSame) {
+  // In a request of several statements, each statement's error is redacted with its own list of
+  // hidden values; the request's list keeps a value once when two statements in a row hid it.
+  for (const std::string value : {std::string("CANARYlive1"), kHard}) {
+    for (const std::string sql : {"INSERT INTO s (id, password) VALUES (7, " + Lit(value) + "); UPDATE u SET password = " + Lit(value) + " WHERE id = 1",
+                                  "SELECT * FROM s WHERE password = " + Lit(value) + "; SELECT * FROM u WHERE password = " + Lit(value),
+                                  "SET s3_secret_access_key = " + Lit(value) + "; SELECT * FROM u WHERE password = " + Lit(value),
+                                  "SELECT f(token => 'A', password => " + Lit(value) + "); SELECT g(password => " + Lit(value) + ", token => 'B')",
+                                  "SELECT * FROM s WHERE password = " + Lit(value) + "; SELECT 1; SELECT * FROM u WHERE password = " + Lit(value)}) {
+      const hardcharger::MaskedSql masked = MaskSql(sql);
+      ASSERT_GE(masked.statements.size(), 2u) << sql;
+      for (const auto& statement : masked.statements) {
+        if (!statement.credentials) continue;
+        EXPECT_NE(std::find(statement.secrets.begin(), statement.secrets.end(), value), statement.secrets.end()) << sql;
+        const std::string error = "Conversion Error: Could not convert string '" + value + "' to INT32";
+        const std::string stored = RedactError(error, statement);
+        EXPECT_EQ(stored, "Conversion Error: Could not convert string '***' to INT32") << sql;
+      }
+    }
+  }
+  // Two ATTACHes with one password: the second's error is redacted, each piece of it too.
+  const hardcharger::MaskedSql attaches = MaskSql(
+      "ATTACH 'postgresql://u:CANARY@same2@h1/db' AS a (TYPE postgres); ATTACH 'postgresql://u:CANARY@same2@h2/db' AS b (TYPE postgres)");
+  ASSERT_EQ(attaches.statements.size(), 2u);
+  EXPECT_EQ(RedactError("IO Error: could not translate host name \"same2@h2\" to address", attaches.statements[1]),
+            "IO Error: could not translate host name \"***@h2\" to address");
+}
+
+TEST(RedactionReview, F02SqlGivenAsTextTwoOrMoreLevelsDownHasItsValueFound) {
+  auto as_text = [](std::string sql, int depth) {
+    for (int level = 0; level < depth; level++) sql = "SELECT * FROM query(" + Lit(sql) + ")";
+    return sql;
+  };
+  for (const std::string value : {std::string("CANARYnest"), std::string("CANARY;)@:/%nest")}) {
+    for (const std::string inner : {"SELECT * FROM u WHERE password = " + Lit(value), "SELECT fm(1, token => " + Lit(value) + ")",
+                                    "SELECT fm(1, token := " + Lit(value) + ")", "UPDATE u SET password = " + Lit(value),
+                                    "INSERT INTO u (id, password) VALUES (1, " + Lit(value) + ")", "ALTER ROLE app PASSWORD " + Lit(value),
+                                    "SELECT {'password': " + Lit(value) + "}", "SELECT " + Lit("host=h password=" + value + " dbname=d")}) {
+      for (int depth = 0; depth <= 4; depth++) {
+        const std::string sql = as_text(inner, depth);
+        const hardcharger::MaskedSql masked = MaskSql(sql);
+        EXPECT_EQ(masked.text.find("CANARY"), std::string::npos) << sql << "\n  logged: " << masked.text;
+        const std::string stored = RedactError("Conversion Error: Could not convert string '" + value + "' to INT32", masked);
+        EXPECT_EQ(stored.find("CANARY"), std::string::npos) << sql << "\n  stored: " << stored;
+        EXPECT_TRUE(stored.starts_with("Conversion Error: Could not convert string '")) << stored;
+      }
+    }
+  }
+  // No string of quotes is taken for a hidden value (it garbled the error's punctuation).
+  const hardcharger::MaskedSql nested = MaskSql(as_text("SELECT * FROM u WHERE password = 'CANARYnest'", 3));
+  for (const auto& secret : nested.secrets) EXPECT_NE(secret.find_first_not_of("'\" "), std::string::npos) << secret;
+  EXPECT_EQ(RedactError("Binder Error: 'x' and \"y\": ''", nested), "Binder Error: 'x' and \"y\": ''");
+  // The twin: SQL given as text with nothing in it is kept as written, three levels down.
+  const std::string plain = as_text("SELECT * FROM u WHERE name = 'kept'", 3);
+  EXPECT_EQ(LoggableSql(plain), plain);
+}
+
+TEST(RedactionReview, F03EveryFormTheReadmeListsIsMasked) {
+  for (const std::string sql : {
+           // (a) an INSERT behind WITH, EXPLAIN or PREPARE, and MERGE's INSERT
+           "WITH x AS (SELECT 1) INSERT INTO s (id, name, password) VALUES (3, 'kept', " + Lit(kHard) + ")",
+           "EXPLAIN INSERT INTO s (id, name, password) VALUES (4, 'kept', " + Lit(kHard) + ")",
+           "PREPARE gp AS INSERT INTO s (id, name, password) VALUES (5, 'kept', " + Lit(kHard) + ")",
+           "MERGE INTO s USING t ON s.id = t.id WHEN NOT MATCHED THEN INSERT (id, password) VALUES (t.id, " + Lit(kHard) + ") -- kept",
+           // (b) an expression on the left of `= password`
+           "SELECT * FROM s WHERE upper(" + Lit(kHard) + ") = password AND kept = 1",
+           "SELECT * FROM s WHERE (SELECT " + Lit(kHard) + ") = password AND kept = 1",
+           // (c) a function of a function of the column
+           "SELECT * FROM s WHERE trim(lower(password)) = " + Lit(kHard) + " AND kept = 1",
+           "SELECT * FROM s WHERE ((password)) = " + Lit(kHard) + " AND kept = 1",
+           // (d) an option whose value is computed
+           "COPY t TO 'f.parquet' (FORMAT parquet, PASSWORD upper(" + Lit(kHard) + ")) -- kept",
+           "ATTACH 'x.db' AS e (ENCRYPTION_KEY (SELECT " + Lit(kHard) + ")) -- kept"}) {
+    const std::string logged = LoggableSql(sql);
+    EXPECT_EQ(logged.find("CANARY"), std::string::npos) << sql << "\n  logged: " << logged;
+    EXPECT_EQ(logged.find("Zk7"), std::string::npos) << sql << "\n  logged: " << logged;
+    EXPECT_NE(logged.find("kept"), std::string::npos) << sql << "\n  logged: " << logged;
+    EXPECT_EQ(LoggableSql(logged), logged) << sql;
+  }
+  EXPECT_EQ(LoggableSql("EXPLAIN INSERT INTO s (id, password) VALUES (4, 'x')"), "EXPLAIN INSERT INTO s (id, password) VALUES (4, ***)");
+  EXPECT_EQ(LoggableSql("SELECT * FROM s WHERE upper('x') = password"), "SELECT * FROM s WHERE *** = password");
+  EXPECT_EQ(LoggableSql("SELECT * FROM s WHERE trim(lower(password)) = 'x'"), "SELECT * FROM s WHERE trim(lower(password)) = ***");
+  // The twins, kept as written.
+  for (const char* sql : {"WITH x AS (SELECT 1) INSERT INTO s (id, name) VALUES (3, 'w')", "EXPLAIN INSERT INTO s (id, name) VALUES (4, 'e')",
+                          "PREPARE gp AS INSERT INTO s (id, name) VALUES (5, 'p')", "SELECT * FROM s WHERE upper('w') = name",
+                          "SELECT * FROM s WHERE (SELECT 'w') = name", "SELECT * FROM s WHERE trim(lower(name)) = 'w'",
+                          "COPY t TO 'f.parquet' (FORMAT parquet, COMPRESSION upper('zstd'))", "SELECT insert, values FROM t",
+                          "COPY t TO 'f.csv' (FORMAT csv, HEADER true)"}) {
+    EXPECT_EQ(LoggableSql(sql), sql);
+  }
+}
+
+TEST(RedactionReview, F04AUrlWithAPortHasNoUserinfo) {
+  // A credential with an '@' in it, in a query parameter or a later field, after a URL whose
+  // authority is host:port: the whole credential is masked, and nothing else.
+  for (const std::string value : {std::string("P@ssCANARY"), std::string("ab@CANARY"), std::string("Zk7;)@:/%CANARY")}) {
+    std::string encoded;  // (in a query string, a ';' or '%' would end or encode the value: percent-encode them)
+    for (const char c : value) encoded += c == ';' ? std::string("%3B") : c == '%' ? std::string("%25") : std::string(1, c);
+    for (const std::string text :
+         {"postgresql://127.0.0.1:1/app?user=svc&password=" + encoded + "&connect_timeout=2",
+          "jdbc:postgresql://db.example.com:5432/app?user=svc&password=" + encoded,
+          "jdbc:mysql://db.example.com:3306/app?user=svc&password=" + encoded + "&useSSL=true",
+          "http://127.0.0.1:1/data.csv?access_token=" + encoded,
+          "http://minio.local:9000/b/f.parquet?X-Amz-Signature=" + encoded,
+          "{\"url\": \"http://db.example.com:8080/api\", \"user\": \"svc\", \"password\": \"" + encoded + "\"}",
+          "host=h sslrootcert=https://ca.example.com:443/root.pem password=" + encoded + " dbname=d",
+          "{'endpoint': 'http://minio.local:9000', 'secret': '" + encoded + "'}",
+          "POST http://api.example.com:8080/v1\nAuthorization: Bearer " + encoded}) {
+      for (const std::string& shown : {RedactCredentials("IO Error: cannot open \"" + text + "\""),
+                                       LoggableSql("SELECT * FROM read_text(" + Lit(text) + ")"),
+                                       LoggableError("SELECT 1", "IO Error: cannot open \"" + text + "\"")}) {
+        EXPECT_EQ(shown.find("CANARY"), std::string::npos) << text << "\n  shown: " << shown;
+        EXPECT_EQ(shown.find("ss@"), std::string::npos) << text << "\n  shown: " << shown;
+      }
+    }
+  }
+  EXPECT_EQ(LoggableSql("ATTACH 'postgresql://127.0.0.1:1/app?user=svc&password=P@ssw0rd&connect_timeout=2' AS pg1 (TYPE postgres)"),
+            "ATTACH 'postgresql://127.0.0.1:1/app?user=svc&password=***&connect_timeout=2' AS pg1 (TYPE postgres)");
+  EXPECT_EQ(LoggableSql("SELECT * FROM read_csv('http://127.0.0.1:1/data.csv?access_token=abc@CANARY')"),
+            "SELECT * FROM read_csv('http://127.0.0.1:1/data.csv?access_token=***')");
+  // A userinfo is still one, with a port after its host, and with an '@' or a ':' in its password.
+  EXPECT_EQ(RedactCredentials("postgresql://u:12345@h:5432/db"), "postgresql://u:***@h:5432/db");
+  EXPECT_EQ(RedactCredentials("postgresql://u:Zk7:9@x@h:5432/db"), "postgresql://u:***@h:5432/db");
+  EXPECT_EQ(RedactCredentials("at \"postgresql://u:Zk7\"x@h:1/db\": refused"), "at \"postgresql://u:***@h:1/db\": refused");
+}
+
+TEST(RedactionReview, F05OrdinaryStatementsAreKeptAsWritten) {
+  // The review's false-positive list: none of these holds a credential.
+  for (const char* sql : {"SELECT * FROM customers WHERE first_pass = 3", "SELECT * FROM customers WHERE first_pass IN (1, 2, 3)",
+                          "UPDATE customers SET first_pass = first_pass + 1 WHERE id = 3", "SELECT * FROM s WHERE auth = 'basic'",
+                          "SELECT CASE WHEN auth = 'basic' THEN 1 END FROM s", "SELECT * FROM s WHERE auth IS DISTINCT FROM 'none'",
+                          "SELECT * FROM s WHERE sig = 'x' AND bearer = 'b' AND credential = 'cert'",
+                          "SELECT * FROM tokens WHERE token IN ('cat', 'mat')", "SELECT * FROM tokens WHERE token LIKE 'c%'",
+                          "SELECT * FROM tokens WHERE token BETWEEN 'a' AND 'm'", "SELECT * FROM tokens WHERE token NOT IN (SELECT token FROM stopwords)",
+                          "SELECT count(*) FROM sessions WHERE session_token IN (SELECT session_token FROM sessions WHERE user_id = 3)",
+                          "SELECT * FROM t JOIN s ON lower(t.token) = lower(s.token)", "SELECT * FROM tokens WHERE length(token) > 2",
+                          "INSERT INTO tokens (doc_id, pos, token, tag) VALUES (99, 1, 'dog', 'NOUN'), (99, 2, 'ran', 'VERB')",
+                          "SELECT json_object('token', 'cat', 'pos', 3)", "SELECT * FROM notes WHERE note IN ('password', 'token', 'api_key')",
+                          "SELECT * FROM s WHERE auth = 'password'", "SELECT * FROM events WHERE url LIKE 'https://example.com/p/%?code=%'",
+                          "SELECT * FROM events WHERE url = 'https://example.com/cb?state=1&code=4/0Ab'",
+                          "SELECT count(*) FROM events WHERE url LIKE 'https://%@%'",
+                          "SELECT 'see http://wiki.local:8080/page or mail ops@example.com' AS note",
+                          "SELECT 'http://api.local:8080/users/bob@example.com/orders' AS u",
+                          "SELECT 'docker://registry.local:5000/img@sha256:abc' AS image", "SELECT * FROM s WHERE pwd = '/home'",
+                          "SELECT * FROM s WHERE is_secret = false", "SET VARIABLE page_token = 'p2'"}) {
+    EXPECT_EQ(LoggableSql(sql), sql);
+    EXPECT_FALSE(hardcharger::IsCredentialStatement(sql)) << sql;
+  }
+}
+
+TEST(RedactionReview, F06AnOrdinaryErrorKeepsItsWords) {
+  // 1. A hidden value that is a word is replaced only where it is a word of its own.
+  EXPECT_EQ(LoggableError("SELECT * FROM s WHERE password = 'error' AND nope = 1",
+                          "Binder Error: Referenced column \"nope\" not found in FROM clause!\nCandidate bindings: \"pos\""),
+            "Binder Error: Referenced column \"nope\" not found in FROM clause!\nCandidate bindings: \"pos\"");
+  EXPECT_EQ(LoggableError("SELECT * FROM s WHERE password = 'error'", "Conversion Error: Could not convert string 'error' to INT32"),
+            "Conversion Error: Could not convert string '***' to INT32");
+  // 2. libpq's split of a password: the pieces are hidden, the message's own words are not.
+  EXPECT_EQ(LoggableError("ATTACH 'postgresql://u:Qx7@Zt9@127.0.0.1:1/db' AS p (TYPE postgres)",
+                          "IO Error: Unable to connect to Postgres at \"postgresql://u:Qx7@Zt9@127.0.0.1:1/db\": could not translate host name "
+                          "\"Zt9@127.0.0.1\" to address: nodename nor servname provided, or not known"),
+            "IO Error: Unable to connect to Postgres at \"postgresql://u:***@127.0.0.1:1/db\": could not translate host name "
+            "\"***@127.0.0.1\" to address: nodename nor servname provided, or not known");
+  // 3. A URL with a port, and an '@' later on the line: no credential, nothing replaced.
+  for (const char* error : {"Invalid Input Error: sync from http://idp.local:8080/users failed for user bob@example.com: 404",
+                            "IO Error: cannot open \"http://minio.local:9000/bucket/exports/2024/bob@example.com.csv\": No such file"}) {
+    EXPECT_EQ(LoggableError("SELECT 1", error), error);
+    EXPECT_EQ(RedactCredentials(error), error);
+  }
+}
 
 namespace {
 
@@ -984,4 +1193,70 @@ TEST(RedactionCost, InputsBuiltToCostMoreStayLinear) {
     });
     EXPECT_LT(took.count(), 4.0 * TimeoutScale()) << input.substr(0, 40) << "... took " << took.count() << " s";
   }
+}
+
+TEST(RedactionCost, DocumentsAndPairsAreReadInLinearTime) {
+  // Review of 2.14.0, finding 40: a look-ahead that searched the rest of the text once per URL or
+  // per pair made a 4 MB JSON document with a URL per record take 18 s (16 MB: 5 minutes), in
+  // statement text, error text and bound text parameters alike. Each shape is timed at 1 MB and
+  // 4 MB: linear is 4 times as long, quadratic 16.
+  auto fill = [](const std::string& unit, std::size_t size) {
+    std::string out;
+    out.reserve(size + unit.size());
+    while (out.size() < size) out += unit;
+    return out;
+  };
+  auto json_doc = [](std::size_t size) {
+    std::string out = "[";
+    for (int i = 0; out.size() < size; i++) {
+      out += "{\"id\": " + std::to_string(i) + ", \"url\": \"https://example.com/items/" + std::to_string(i) +
+             "\", \"title\": \"Item number " + std::to_string(i) + "\"}, ";
+    }
+    return out + "{}]";
+  };
+  auto html_doc = [](std::size_t size) {
+    std::string out = "<ul>";
+    for (int i = 0; out.size() < size; i++) out += "<li><a href=\"https://example.com/p/" + std::to_string(i) + "\">Page</a> text</li>";
+    return out + "</ul>";
+  };
+  struct Shape {
+    const char* name;
+    std::function<std::string(std::size_t)> text;
+  };
+  const std::vector<Shape> shapes = {
+      {"a JSON document with a URL per record", json_doc},
+      {"an HTML list of links", html_doc},
+      {"x://h repeated", [&](std::size_t n) { return fill("x://h ", n); }},
+      {"x://h:1 repeated", [&](std::size_t n) { return fill("x://h:1 ", n); }},
+      {"a quote, then x://h repeated", [&](std::size_t n) { return "\"" + fill("x://h ", n); }},
+      {";password=v pairs, no white space", [&](std::size_t n) { return fill(";password=v", n); }},
+      {"password=v and a word", [&](std::size_t n) { return fill("password=v x ", n); }},
+      {"Failed to parse connection string, repeated", [&](std::size_t n) { return fill("Failed to parse connection string ", n); }},
+      {"token words and a quote at the end", [&](std::size_t n) { return fill("token ", n) + "'"; }},
+  };
+  // (The best of three runs, on a machine that may be busy with other work.)
+  auto best_of_three = [](const std::function<void()>& work) {
+    return std::min({Timed(work).count(), Timed(work).count(), Timed(work).count()});
+  };
+  for (const Shape& shape : shapes) {
+    std::vector<double> took;
+    for (const std::size_t size : {std::size_t{1} << 20, std::size_t{4} << 20}) {
+      const std::string text = shape.text(size);
+      std::string literal = "SELECT '";
+      for (const char c : text) literal += c == '\'' ? std::string("''") : std::string(1, c);
+      literal += "'";
+      const hardcharger::MaskedSql statement = MaskSql("SELECT * FROM t WHERE password = 'abcdefgh'");
+      took.push_back(best_of_three([&] {
+        MaskSql(literal);                                           // statement text
+        RedactError("Invalid Input Error: " + text, statement);    // error text
+        hardcharger::CredentialsIn(text);                          // a bound text parameter
+      }));
+    }
+    EXPECT_LT(took[1], 10.0 * std::max(took[0], 0.05)) << shape.name << ": 1 MB " << took[0] << " s, 4 MB " << took[1] << " s";
+    EXPECT_LT(took[1], 4.0 * TimeoutScale()) << shape.name << ": 4 MB took " << took[1] << " s";
+  }
+  // And the review's own case at 16 MB (2.13.1: 2.6 s; before the fix: over 5 minutes).
+  std::string doc = json_doc(16u << 20);
+  const auto sixteen = Timed([&] { MaskSql("INSERT INTO docs VALUES ('" + doc + "')"); });
+  EXPECT_LT(sixteen.count(), 8.0 * TimeoutScale()) << "a 16 MB JSON document took " << sixteen.count() << " s";
 }

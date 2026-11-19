@@ -31,13 +31,16 @@ own changelog in `python/CHANGELOG.md`.
   - **Forms that were not recognised**: HTTP header maps (`Authorization`,
     `Proxy-Authorization`, `X-API-Key`, `Cookie`, in any case, as `MAP {…}`, a struct,
     `MAP([…], […])` or `map_from_entries`); a token as a URL's user (`https://TOKEN@host`,
-    `https://TOKEN:x-oauth-basic@host`); the URL parameters `auth`, `api-key`, `jwt`, `code`,
+    `https://TOKEN:x-oauth-basic@host`); the URL parameters `auth`, `api-key`, `jwt`,
     `credential`, `subscription-key`, `sessionid`; SQL given to a function as text
     (`postgres_execute('pg', 'ALTER ROLE app PASSWORD ''…''')`, MySQL's `IDENTIFIED BY`,
     nested to four levels); a credential built from pieces (`'… password=' || x`,
     `format('…?token={}', x)`: the whole expression); `IN`, `LIKE`, `BETWEEN` and the other
-    comparisons of a credential column, a comparison written the other way round or through
-    a function or a cast, and `INSERT … (name, password) VALUES …`; `SET <credential
+    comparisons of a credential column, a comparison written the other way round
+    (`'…' = password`, `upper('…') = password`) or through functions or a cast
+    (`trim(lower(password)) = '…'`), `INSERT … (name, password) VALUES …` (also behind `WITH`,
+    `EXPLAIN` or `PREPARE`, and in `MERGE`), and an option whose value is computed
+    (`ENCRYPTION_KEY (SELECT …)`, `PASSWORD upper('…')` in `COPY`); `SET <credential
     setting> TO '…'` for every credential word (2.13.0 knew seven of them, and `=`); a
     literal that is `Bearer <token>`.
   - **An error message no longer re-exposes what the statement's masking hid.** The values
@@ -45,7 +48,14 @@ own changelog in `python/CHANGELOG.md`.
     parameters), are replaced wherever the error quotes them. 2.13.0's changelog said stored
     errors were suppressed "for credential-bearing statements, including prepared executions";
     that held only where the placeholder followed a credential name, and an error could still
-    quote a bound value or the tail of a password.
+    quote a bound value or the tail of a password. In a request of several statements, each
+    statement's error is redacted with the values that statement hid, and a value SQL given as
+    text hid several levels down is found as itself.
+  - **A URL with a port no longer takes a later `@` for the end of a password**, so a
+    credential with an `@` in it after such a URL is masked whole: a query parameter
+    (`postgresql://h:5432/app?password=P@ss…`, `http://h:9000/f?X-Amz-Signature=…@…`), and a
+    field later in the same text (`{"url": "http://h:8080/api", "password": "P@ss…"}`). A quoted
+    URL ends at its closing quote.
 
 ### Changed
 
@@ -60,9 +70,22 @@ own changelog in `python/CHANGELOG.md`.
   comparison of two credential-named columns (`a.access_token = b.access_token`) or an escaped
   literal had its comment blanked, its stored error replaced by `[REDACTED: error of a
   credential statement]` and its query profile dropped. A comment is now kept as written (a
-  credential inside one is still masked), such a comparison hides nothing, and an error is
-  redacted by value, as above: the reason it gives survives. Only the error of a statement
-  that computes a credential value (`token => upper('…')`) is replaced whole.
+  credential inside one is still masked), a comparison with what holds no value (another
+  column, a function of columns, a subquery: `api_key IN (SELECT api_key FROM revoked)`) hides
+  nothing, and an error is redacted by value, as above: the reason it gives survives, and a
+  hidden value that is a word (`password = 'error'`) no longer replaces the error's own words.
+  Only the error of a statement that computes a credential value (`token => upper('…')`) is
+  replaced whole.
+- **Columns whose names ordinary data has too are compared and set as written.** A column, a
+  struct or MAP key, or a name/value pair now masks its value only under a name only a
+  credential has (`password`, `secret`, `api_key`, `private_key`, `access_token` and the like;
+  README, "What the statement log masks"): `token = 'cat'`, `auth = 'basic'`, `pwd = '/home'`,
+  `first_pass = 3`, `{'token': 'cat'}` and `INSERT INTO tokens (token) VALUES ('dog')` are
+  logged as written, with their errors and query profiles, as 2.13.1 logged most of them. The
+  broader list (`token`, `auth`, `sig`, `cookie`, `pwd`, …) still masks a setting's, an
+  option's and a named argument's value, and every key of a connection string or URL. A URL
+  query's `code` is no longer masked, and a URL with a port and an `@` later in the text
+  (`http://h:8080/users/bob@example.com`) is logged as written.
 - **A failed init SQL statement says which statement failed and why**: `init SQL failed:
   <reason> (init SQL statement 2 of 5: <the statement as the log shows it>)`. With 2.13.0 a
   failing `ATTACH` with a password, `CREATE SECRET` or `CREATE USER` stopped the server with
@@ -75,11 +98,13 @@ own changelog in `python/CHANGELOG.md`.
   hidden whole only when DuckDB cannot tokenize it (and so cannot run it), and the placeholder
   says why: `[REDACTED: a statement that could not be read: an unterminated string literal]`.
   `CREATE USER` and `ALTER USER` without a password are logged as written.
-- **A statement is read once for all its sinks.** The masking ran two to five times per
-  statement, each pass costing about 0.18 s per MB, most of it in six regular-expression
-  searches: a 16 MB `INSERT` spent over 14 s in it. It is one pass of about 25 ms per MB now
-  (0.4 s for 16 MB), shared by the log, instrumentation, the monitoring functions and the
-  audit record, with no `std::regex` on statement text.
+- **A statement is read once for all its sinks, in time linear in its size.** The masking ran
+  two to five times per statement, each pass costing about 0.18 s per MB, most of it in six
+  regular-expression searches: a 16 MB `INSERT` spent over 14 s in it. It is one pass of about
+  25 ms per MB now (0.4 s for a 16 MB `INSERT` or a 16 MB JSON or HTML document in one
+  literal), shared by the log, instrumentation, the monitoring functions and the audit record,
+  with no `std::regex` on statement text; error text and bound text parameters are read in
+  linear time too.
 
 ### Notes on the 2.13.0 entries
 
@@ -96,6 +121,13 @@ own changelog in `python/CHANGELOG.md`.
 - "Comment bodies and escaped literals are concealed conservatively" (2.13.0, Security) did
   not say that such a statement also lost its stored error and its query profile; see
   "Changed" above.
+- 2.13.0 replaced the whole stored error of any statement with a credential in it. This release
+  redacts such an error by value instead (above), which reverses that: a value the error
+  quotes after the statement transformed it (a substring, a hash, an encoding of it) is not
+  among the values replaced, and is logged as the error gives it (README, "What the statement
+  log masks", under what is not masked). The error of a statement whose credential value is
+  computed is still replaced whole.
+
 ## [2.13.1] - 2026-11-15
 
 ### Fixed

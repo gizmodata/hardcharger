@@ -14,16 +14,29 @@ namespace {
 constexpr std::string_view kMask = "***";
 constexpr std::string_view kCut = "\xe2\x80\xa6";  // …
 
-// What a credential's name ends in, in lower case with '_' for '-'. One list, for the names
-// MaskSql looks at in a statement and the keys RedactCredentials reads in other text.
+// What a credential's name ends in, in lower case with '_' for '-': the keys of connection
+// strings, URL query parameters and other text RedactCredentials reads, a setting's or an
+// option's name, and a named argument's. Some of these name ordinary data as well (a `token`
+// column of a text-analysis table, `auth` for an authentication method, `pwd` for a
+// directory), so a statement's other forms use the narrower list below.
 constexpr std::string_view kCredentialNames[] = {
     "password",    "passwd",       "pwd",            "passphrase",       "secret",    "token",
     "access_key",  "secret_key",   "accountkey",     "account_key",      "apikey",    "api_key",
     "private_key", "encryption_key", "subscription_key", "sig",          "signature", "auth",
     "authorization", "credential", "credentials",    "cookie",           "jwt",       "bearer"};
 
+// The names that are a credential's and nothing else's: what a statement's column, struct key,
+// MAP key or name/value pair must be called for the value it is compared with or given to be
+// masked. A name ends in one of the words, or is one of the compounds (or ends in '_' and one).
+constexpr std::string_view kUnambiguousWords[] = {"password", "passwd", "passphrase", "secret", "apikey", "accountkey"};
+constexpr std::string_view kUnambiguousCompounds[] = {
+    "secret_key",   "access_key",    "api_key",    "private_key",  "encryption_key", "account_key",
+    "subscription_key", "access_token", "refresh_token", "auth_token", "bearer_token", "api_token",
+    "id_token",     "session_token", "security_token"};
+
 // Parameters of a URL's query that are credentials under these exact names as well.
-constexpr std::string_view kQueryCredentialNames[] = {"key", "code", "sessionid", "session_id"};
+// (Not `code`: a product's, a country's or an error's as often as OAuth's.)
+constexpr std::string_view kQueryCredentialNames[] = {"key", "sessionid", "session_id"};
 
 // HTTP headers that are credentials, as `Name: value` text.
 constexpr std::string_view kHeaderNames[] = {"authorization", "proxy_authorization", "cookie", "set_cookie",
@@ -82,6 +95,27 @@ bool EndsInCredentialName(std::string_view normal) {
                      [&](std::string_view known) { return normal.ends_with(known); });
 }
 
+bool IsUnambiguousNormal(std::string_view normal) {
+  if (std::any_of(std::begin(kUnambiguousWords), std::end(kUnambiguousWords),
+                  [&](std::string_view word) { return normal.ends_with(word); })) {
+    return true;
+  }
+  return std::any_of(std::begin(kUnambiguousCompounds), std::end(kUnambiguousCompounds), [&](std::string_view compound) {
+    return normal == compound ||
+           (normal.size() > compound.size() && normal.ends_with(compound) && normal[normal.size() - compound.size() - 1] == '_');
+  });
+}
+
+// A name only a credential has (kUnambiguousWords, kUnambiguousCompounds).
+bool IsUnambiguousCredentialName(std::string_view name) { return IsUnambiguousNormal(Normal(name)); }
+
+// A struct's, a MAP's or a name/value pair's key whose value is masked: such a name, or an
+// HTTP header that carries a credential (`{'Authorization': ...}`).
+bool IsCredentialKey(std::string_view name) {
+  const std::string normal = Normal(name);
+  return IsUnambiguousNormal(normal) || Among(kHeaderNames, normal);
+}
+
 // `Bearer <token>` or `Basic <base64>` and nothing else: an Authorization header's value,
 // wherever it is written.
 bool IsAuthorizationValue(std::string_view text) {
@@ -101,16 +135,26 @@ struct Found {
 
   void Secret(std::string_view value) {
     if (value.empty() || AllStars(value)) return;
+    // (Quotes and spaces alone are what surrounds a value, never one worth replacing.)
+    if (value.find_first_not_of("'\" ") == std::string_view::npos) return;
     if (!secrets.empty() && secrets.back() == value) return;
     if (secrets.size() >= kMostSecrets) {
       computed = true;  // too many to list: errors are not shown at all
       return;
     }
     secrets.emplace_back(value);
-    // `Bearer <token>`: an error may quote the token without the scheme.
+    // `Bearer <token>`: an error may quote the token without the scheme. (Once, and only a
+    // token with no white space in it: `token token token ...` is no such value, and taking
+    // its words off one by one would keep a copy of the rest for each.)
     for (const std::string_view scheme : {"bearer ", "basic ", "token ", "digest ", "negotiate ", "apikey "}) {
       if (value.size() > scheme.size() && Lower(value.substr(0, scheme.size())) == scheme) {
-        Secret(value.substr(value.find_first_not_of(' ', scheme.size() - 1)));
+        const std::size_t token = value.find_first_not_of(' ', scheme.size() - 1);
+        if (token == std::string_view::npos) break;
+        const std::string_view rest = value.substr(token);
+        if (std::none_of(rest.begin(), rest.end(), IsSpace) && !(!secrets.empty() && secrets.back() == rest) &&
+            secrets.size() < kMostSecrets) {
+          secrets.emplace_back(rest);
+        }
         break;
       }
     }
@@ -189,8 +233,36 @@ class TextMasker {
     while (at < n_ && IsSpace(t_[at]) && t_[at] != '\n') at++;
     return at;
   }
-  std::size_t LineEnd(std::size_t at) const {
-    const auto end = t_.find('\n', at);
+
+  // Where the characters the look-aheads search for stand in the text, found in one pass the
+  // first time one is asked for: no search runs over the text again per value or per URL.
+  static constexpr std::string_view kIndexed = "@\"'\n;";
+  const std::vector<std::size_t>& Where(char c) {
+    if (!indexed_) {
+      indexed_ = true;
+      for (std::size_t i = 0; i < n_; i++) {
+        if (const auto slot = kIndexed.find(t_[i]); slot != std::string_view::npos) index_[slot].push_back(i);
+      }
+    }
+    return index_[kIndexed.find(c)];
+  }
+  // The first `c` in [from, to), or npos.
+  std::size_t FirstOf(char c, std::size_t from, std::size_t to) {
+    const auto& where = Where(c);
+    const auto it = std::lower_bound(where.begin(), where.end(), from);
+    return it != where.end() && *it < to ? *it : std::string_view::npos;
+  }
+  // The last `c` in [from, to), or npos.
+  std::size_t LastOf(char c, std::size_t from, std::size_t to) {
+    if (from >= to) return std::string_view::npos;
+    const auto& where = Where(c);
+    auto it = std::lower_bound(where.begin(), where.end(), to);
+    if (it == where.begin()) return std::string_view::npos;
+    --it;
+    return *it >= from ? *it : std::string_view::npos;
+  }
+  std::size_t LineEnd(std::size_t at) {
+    const auto end = FirstOf('\n', at, n_);
     return end == std::string_view::npos ? n_ : end;
   }
 
@@ -337,12 +409,16 @@ class TextMasker {
     return at < n_ && t_[at] == '=';
   }
 
-  std::size_t ValueEnd(std::size_t value, Kind kind) const {
+  std::size_t ValueEnd(std::size_t value, Kind kind) {
     if (value >= n_) return n_;
     if (t_.substr(value).starts_with(kMask)) {
-      // Masked already: the mask is the whole value.
-      while (value < n_ && t_[value] == '*') value++;
-      return value;
+      // Masked already, when the mask is the whole value (a value that only begins with
+      // stars is read as any other).
+      std::size_t stars = value;
+      while (stars < n_ && t_[stars] == '*') stars++;
+      if (stars >= n_ || IsSpace(t_[stars]) || std::string_view("&#;,)]}'\"").find(t_[stars]) != std::string_view::npos) {
+        return stars;
+      }
     }
     if (kind == Kind::kQuery) {
       std::size_t at = value;
@@ -366,89 +442,122 @@ class TextMasker {
     // A connection string's pair. Its grammars disagree about where an unquoted value ends
     // (libpq: at white space, so ';' and quotes are the password's; ODBC, ADO and Azure: at
     // ';', so spaces are), and about "..": the value ends where the later of them puts it.
-    const std::size_t word = WordEnd(value);
+    // (WordEnd is asked only where the value is read to it: in a ;-separated list with no white
+    // space, every pair would otherwise read to the text's end.)
     if (t_[value] == '"' || t_[value] == '{') {
       const std::size_t closed = QuotedEnd(value, t_[value], /*doubling=*/last_solid_before_key_ == ';' || t_[value] == '{');
       if (closed == n_ && (n_ == 0 || t_[n_ - 1] != (t_[value] == '{' ? '}' : '"'))) return n_;  // never closed
-      if (closed >= word || last_solid_before_key_ == ';') return closed;
+      if (last_solid_before_key_ == ';' || closed >= WordEnd(value)) return closed;
     }
     if (last_solid_before_key_ == ';') {
       // One pair of a ;-separated list: to the next ';', or to the end of the line (to the
       // last quote on it, when the list sits in quotes).
       const std::size_t line = LineEnd(value);
-      const std::size_t semicolon = t_.substr(0, line).find(';', value);
+      const std::size_t semicolon = FirstOf(';', value, line);
       if (semicolon != std::string_view::npos) return semicolon;
       const char closer = double_quotes_ % 2 == 1 ? '"' : single_quotes_ % 2 == 1 ? '\'' : '\0';
-      const std::size_t last = closer == '\0' ? std::string_view::npos : t_.substr(0, line).rfind(closer);
-      return last != std::string_view::npos && last >= value ? last : line;
+      const std::size_t last = closer == '\0' ? std::string_view::npos : LastOf(closer, value, line);
+      return last != std::string_view::npos ? last : line;
     }
+    const std::size_t word = WordEnd(value);
     const std::size_t end = WithoutCloser(value, word);
     // What follows decides between the grammars: another `name=` pair, or nothing, is
     // libpq's. Anything else before a `;name=` is the rest of a value with spaces in it.
     const std::size_t next = Spaces(word);
     if (next >= n_ || t_[next] == '\n' || PairStarts(next)) return end;
-    const std::size_t limit = std::min({n_, LineEnd(word), word + kLookAhead});
-    for (std::size_t at = word; at < limit; at++) {
-      if (t_[at] == ';' && PairStarts(Spaces(at + 1))) return at;
+    const std::size_t limit = std::min(LineEnd(word), word + kLookAhead);
+    for (std::size_t at = FirstOf(';', word, limit); at != std::string_view::npos; at = FirstOf(';', at + 1, limit)) {
+      if (PairStarts(Spaces(at + 1))) return at;
     }
     return end;
   }
 
+  // The quote that closes a quoted URL, in [from, to): the first `quote` followed by white
+  // space, the text's end, or nothing but `: , . ; ) ] }` up to either (`"..."`, `"...":`,
+  // `"...",`). One followed by anything else is inside the URL (a password's). Only the first
+  // few are looked at: npos when none of them closes.
+  std::size_t Closing(char quote, std::size_t from, std::size_t to) {
+    std::size_t at = FirstOf(quote, from, to);
+    for (int looked = 0; at != std::string_view::npos && looked < 64; looked++, at = FirstOf(quote, at + 1, to)) {
+      std::size_t after = at + 1;
+      while (after < n_ && after - at <= 4 && std::string_view(":,.;)]}").find(t_[after]) != std::string_view::npos) after++;
+      if (after >= n_ || IsSpace(t_[after])) return at;
+    }
+    return std::string_view::npos;
+  }
+
+  // `host:port` from `at` (the colon's next character) to the end of the authority: digits,
+  // then the URL's end, white space, / ? # or a character that closes what the URL sits in.
+  bool PortFollows(std::size_t at, std::size_t end) const {
+    std::size_t digits = at;
+    while (digits < end && digits - at < 6 && std::isdigit(static_cast<unsigned char>(t_[digits])) != 0) digits++;
+    if (digits == at || digits - at > 5) return false;
+    return digits >= end || IsSpace(t_[digits]) || std::string_view("/?#\"'),;]}>").find(t_[digits]) != std::string_view::npos;
+  }
+
   // scheme://userinfo@host at the "://" at `at`. Returns where reading goes on.
+  //
+  // The userinfo ends at the URL's last '@', so a password with '@', ':', '/', a quote or a
+  // bracket in it is masked whole. Where that '@' may be is bounded: the URL runs to the next
+  // white space, or to the quote that closes it in a message that quotes it; past white space
+  // (a password with a space in it) only in a text that is the URL alone, inside a quote up to
+  // that quote's close, or else on the same line before any `=`, quote or other URL. And an
+  // authority that is `host:port` has no userinfo: a later '@' is the path's or the query's.
   std::size_t Url(std::size_t at) {
     std::size_t scheme_start = at;
     while (scheme_start > 0 && IsSchemeChar(t_[scheme_start - 1])) scheme_start--;
     const std::string scheme = Lower(t_.substr(scheme_start, at - scheme_start));
     const std::size_t start = at + 3;
     Plain("://");
-    // The URL runs to the next white space; its last '@' ends the userinfo.
     if (start < segment_start_ || start >= segment_end_) {
       segment_start_ = start;
       segment_end_ = start;
       while (segment_end_ < n_ && !IsSpace(t_[segment_end_])) segment_end_++;
-      const auto last = t_.substr(0, segment_end_).rfind('@');
-      segment_last_at_ = last != std::string_view::npos && last >= start ? last : std::string_view::npos;
     }
+    const char quote = double_quotes_ % 2 == 1 ? '"' : single_quotes_ % 2 == 1 ? '\'' : '\0';
     std::size_t end = segment_end_;
-    std::size_t last_at = segment_last_at_ != std::string_view::npos && segment_last_at_ >= start ? segment_last_at_
-                                                                                                 : std::string_view::npos;
-    // A password with a space in it puts the last '@' past the white space. Where the URL's
-    // end is known it is looked for up to there: the end of a text that is this one URL, or
-    // the quote that closes the URL in a message that quotes it (never past another URL).
-    std::size_t reach = end;
-    if (whole_ && NextUrl(start) == std::string_view::npos) {
-      reach = n_;
-    } else if (double_quotes_ % 2 == 1 || single_quotes_ % 2 == 1) {
-      const std::size_t limit = std::min({LineEnd(end), end + 2 * kLookAhead, NextUrl(start)});
-      const auto closing = t_.substr(0, limit).rfind(double_quotes_ % 2 == 1 ? '"' : '\'');
-      if (closing != std::string_view::npos && closing > end) reach = closing;
+    if (quote != '\0') {
+      if (const std::size_t closing = Closing(quote, start, end); closing != std::string_view::npos) end = closing;
     }
-    if (reach > end) {
-      const auto far = t_.substr(0, reach).rfind('@');
-      if (far != std::string_view::npos && far >= end) last_at = far;
+    const bool closed = end < segment_end_;
+    std::size_t last_at = LastOf('@', start, end);
+    if (!closed) {
+      std::size_t reach = end;
+      if (quote != '\0') {
+        const std::size_t limit = std::min({LineEnd(end), end + 2 * kLookAhead, NextUrl(start)});
+        if (const std::size_t closing = Closing(quote, end, limit); closing != std::string_view::npos) reach = closing;
+      } else if (whole_ && NextUrl(start) == std::string_view::npos &&
+                 t_.substr(0, scheme_start).find_first_not_of(" \t\r\n") == std::string_view::npos) {
+        reach = n_;
+      }
+      if (const std::size_t far = LastOf('@', end, reach); far != std::string_view::npos) last_at = far;
     }
     // An '@' with no host after it (a letter, a digit or an IPv6 '[') is the password's own.
     if (last_at != std::string_view::npos && (last_at + 1 >= n_ || !(IsAlnum(t_[last_at + 1]) || t_[last_at + 1] == '['))) {
-      end = last_at + 1;
-      while (end < n_ && !IsSpace(t_[end])) end++;
       last_at = std::string_view::npos;
     }
-    std::size_t first = start;  // the first of : / ? # @
+    std::size_t first = start;  // the first of : / ? # @ (past an IPv6 address's brackets)
+    if (first < end && t_[first] == '[') {
+      while (first < end && t_[first] != ']') first++;
+    }
     while (first < end && std::string_view(":/?#@").find(t_[first]) == std::string_view::npos) first++;
     const bool http = Among(kHttpSchemes, scheme);
     if (first < end && t_[first] == ':') {
-      if (last_at == std::string_view::npos) {
-        // user:password with a space in the password: the '@' is further on, before any
-        // other URL starts.
-        const std::size_t limit = std::min({n_, LineEnd(end), end + kLookAhead});
+      if (PortFollows(first + 1, end)) return start;  // host:port
+      if (last_at == std::string_view::npos && !closed && quote == '\0') {
+        // user:password with a space in the password: the '@' is further on the line.
+        const std::size_t limit = std::min({LineEnd(end), end + kLookAhead, NextUrl(start)});
         for (std::size_t i = end; i < limit; i++) {
-          if (t_[i] == ':' && t_.substr(i, 3) == "://") break;
+          if (t_[i] == '=' || t_[i] == '"' || t_[i] == '\'') break;
           if (t_[i] != '@') continue;
           while (i < limit && !IsSpace(t_[i])) {
             if (t_[i] == '@') last_at = i;
             i++;
           }
           break;
+        }
+        if (last_at != std::string_view::npos && (last_at + 1 >= n_ || !(IsAlnum(t_[last_at + 1]) || t_[last_at + 1] == '['))) {
+          last_at = std::string_view::npos;
         }
       }
       if (last_at != std::string_view::npos) {
@@ -477,7 +586,9 @@ class TextMasker {
       // A token as the user: https://TOKEN@host. (The last '@' before the path.)
       std::size_t path = first;
       while (path < end && std::string_view("/?#").find(t_[path]) == std::string_view::npos) path++;
-      const std::size_t user_end = t_.substr(0, path).rfind('@');
+      const std::size_t user_end = LastOf('@', first, path);
+      // (`https://%@%`: a LIKE pattern's wildcards, no user.)
+      if (t_.substr(start, user_end - start).find_first_not_of("%_") == std::string_view::npos) return start;
       Masked(start, user_end, kMask, /*joins=*/false);
       return user_end;
     }
@@ -511,7 +622,8 @@ class TextMasker {
   char last_solid_before_key_ = 0;
   std::size_t segment_start_ = 1;
   std::size_t segment_end_ = 0;
-  std::size_t segment_last_at_ = std::string_view::npos;
+  bool indexed_ = false;
+  std::vector<std::size_t> index_[kIndexed.size()];
 
 };
 
@@ -528,13 +640,15 @@ bool IsCredentialName(std::string_view name) { return EndsInCredentialName(Norma
 // percent-encoded token: "<piece>""`. What that message quotes is masked, the message kept.
 static std::string WithoutUnparsedPieces(std::string text) {
   static constexpr std::string_view kPhrase = "Failed to parse connection string";
-  for (std::size_t at = 0; (at = text.find(kPhrase, at)) != std::string::npos;) {
-    at += kPhrase.size();
-    const std::size_t outer = text.find('"', at);
-    const std::size_t inner = outer == std::string::npos ? outer : text.find('"', outer + 1);
-    const std::size_t last = text.rfind('"');  // closes the message; the one before it closes the piece
-    const std::size_t close = last == std::string::npos || last == 0 ? std::string::npos : text.rfind('"', last - 1);
-    if (inner == std::string::npos || close == std::string::npos || close <= inner) continue;
+  const std::size_t at = text.find(kPhrase);
+  if (at == std::string::npos) return text;
+  // The quoted piece: from the second '"' after the phrase to the one before the last, which
+  // closes the message. (A later phrase lies inside that piece or after its end.)
+  const std::size_t outer = text.find('"', at + kPhrase.size());
+  const std::size_t inner = outer == std::string::npos ? outer : text.find('"', outer + 1);
+  const std::size_t last = text.rfind('"');
+  const std::size_t close = last == std::string::npos || last == 0 ? std::string::npos : text.rfind('"', last - 1);
+  if (inner != std::string::npos && close != std::string::npos && close > inner) {
     text.replace(inner + 1, close - inner - 1, kMask);
   }
   return text;
@@ -551,10 +665,16 @@ std::string RedactCredentials(std::string text) {
 
 std::string RedactCredentials(std::string text, const std::vector<std::string>& secrets) {
   for (const auto& secret : secrets) {
-    if (secret.empty()) continue;
-    for (std::size_t at; (at = text.find(secret)) != std::string::npos;) {
-      text.replace(at, secret.size(), "<connection string>");
+    if (secret.empty() || text.find(secret) == std::string::npos) continue;
+    std::string out;
+    out.reserve(text.size());
+    std::size_t from = 0;
+    for (std::size_t at; (at = text.find(secret, from)) != std::string::npos; from = at + secret.size()) {
+      out.append(text, from, at - from);
+      out += "<connection string>";
     }
+    out.append(text, from, std::string::npos);
+    text = std::move(out);
   }
   return RedactCredentials(std::move(text));
 }
@@ -567,39 +687,68 @@ std::vector<std::string> CredentialsIn(std::string_view value) {
 
 std::string RedactSecrets(std::string text, const std::vector<std::string>& secrets) {
   if (secrets.empty() || text.empty()) return text;
-  std::vector<std::string> wanted;
+  struct Wanted {
+    std::string lower;     // what is looked for, whatever its case
+    std::string spelled;   // as it was hidden
+  };
+  std::vector<Wanted> wanted;
   for (const auto& secret : secrets) {
     if (secret.empty() || AllStars(secret)) continue;
-    wanted.push_back(Lower(secret));
+    wanted.push_back({Lower(secret), secret});
     // And its pieces: a reader that splits the value where it has a delimiter (libpq, given
     // a URL whose password has an '@' or a ':' in it) quotes one piece of it in its error.
     static constexpr std::string_view kDelimiters = " \t\r\n:/@?#;&='\"%\\()[]{},";
     if (secret.find_first_of(kDelimiters) == std::string::npos) continue;
     for (std::size_t at = 0; at < secret.size();) {
       const std::size_t end = std::min(secret.find_first_of(kDelimiters, at), secret.size());
-      if (end - at >= 3) wanted.push_back(Lower(std::string_view(secret).substr(at, end - at)));
+      if (end - at >= 3) wanted.push_back({Lower(std::string_view(secret).substr(at, end - at)), secret.substr(at, end - at)});
       at = end + 1;
     }
   }
   // The longest first, so a value that begins another is not what gets replaced.
-  std::sort(wanted.begin(), wanted.end(), [](const std::string& a, const std::string& b) {
-    return a.size() != b.size() ? a.size() > b.size() : a < b;
+  std::sort(wanted.begin(), wanted.end(), [](const Wanted& a, const Wanted& b) {
+    if (a.lower.size() != b.lower.size()) return a.lower.size() > b.lower.size();
+    return a.lower != b.lower ? a.lower < b.lower : a.spelled < b.spelled;
   });
-  wanted.erase(std::unique(wanted.begin(), wanted.end()), wanted.end());
   std::string lowered = Lower(text);
-  for (const auto& secret : wanted) {
-    std::size_t from = 0;
+  for (std::size_t first = 0; first < wanted.size();) {
+    const std::string& secret = wanted[first].lower;
+    std::size_t last = first + 1;
+    while (last < wanted.size() && wanted[last].lower == secret) last++;
+    // A value of letters only (a word an error's own wording may use: 'error', 'name') is
+    // replaced only where it is a word of its own and written as it was hidden; any value
+    // shorter than four bytes only where it is a word of its own.
+    const bool letters = std::all_of(secret.begin(), secret.end(), [](unsigned char c) { return std::isalpha(c) != 0; });
+    const bool word = secret.size() < 4 || letters;
+    auto as_hidden = [&](std::size_t at) {
+      for (std::size_t i = first; i < last; i++) {
+        if (text.compare(at, wanted[i].spelled.size(), wanted[i].spelled) == 0) return true;
+      }
+      return false;
+    };
+    std::string out, out_lowered;
+    std::size_t from = 0, copied = 0;
     for (std::size_t at; (at = lowered.find(secret, from)) != std::string::npos;) {
       const std::size_t end = at + secret.size();
-      const bool alone = (at == 0 || !IsAlnum(lowered[at - 1])) && (end >= lowered.size() || !IsAlnum(lowered[end]));
-      if (secret.size() < 4 && !alone) {
+      // (Right after a replacement counts as a word's start: the mask is no letter.)
+      const bool alone = (at == 0 || (copied > 0 && at == copied) || !IsAlnum(lowered[at - 1])) &&
+                         (end >= lowered.size() || !IsAlnum(lowered[end]));
+      if ((word && !alone) || (letters && !as_hidden(at))) {
         from = at + 1;
         continue;
       }
-      text.replace(at, secret.size(), kMask);
-      lowered.replace(at, secret.size(), kMask);
-      from = at + kMask.size();
+      out.append(text, copied, at - copied);
+      out_lowered.append(lowered, copied, at - copied);
+      out += kMask;
+      out_lowered += kMask;
+      copied = from = end;
     }
+    first = last;
+    if (copied == 0) continue;  // (nothing replaced: a replacement always moves past 0)
+    out.append(text, copied, std::string::npos);
+    out_lowered.append(lowered, copied, std::string::npos);
+    text = std::move(out);
+    lowered = std::move(out_lowered);
   }
   return text;
 }
@@ -718,15 +867,48 @@ bool MayHoldSql(std::string_view text) {
                      [&](std::string_view word) { return lower.find(word) != std::string::npos; });
 }
 
+// The words a statement begins with.
+constexpr std::string_view kStatementWords[] = {
+    "select", "insert", "update", "delete", "with",   "create",  "alter",   "drop",     "attach",  "detach", "copy",
+    "set",    "reset",  "pragma", "call",   "values", "from",    "explain", "prepare",  "execute", "merge",  "install",
+    "load",   "export", "import", "describe", "show", "summarize", "pivot", "unpivot",  "use",     "grant",  "revoke",
+    "truncate", "comment", "upsert", "replace", "table"};
+
+// Whether text begins as a statement does: (after white space, comments and opening
+// brackets) one of those words, not followed by what makes it a key (`set=`, `from:`).
+bool StartsAStatement(std::string_view text) {
+  std::size_t at = 0;
+  while (at < text.size()) {
+    if (IsSpace(text[at]) || text[at] == '(') {
+      at++;
+    } else if (text.substr(at, 2) == "--") {
+      const std::size_t line = text.find('\n', at);
+      at = line == std::string_view::npos ? text.size() : line + 1;
+    } else if (text.substr(at, 2) == "/*") {
+      const std::size_t close = text.find("*/", at + 2);
+      if (close == std::string_view::npos) return false;
+      at = close + 2;
+    } else {
+      break;
+    }
+  }
+  std::size_t word_end = at;
+  while (word_end < text.size() && std::isalpha(static_cast<unsigned char>(text[word_end])) != 0) word_end++;
+  if (word_end == at || !Among(kStatementWords, Lower(text.substr(at, word_end - at)))) return false;
+  if (word_end < text.size() && (IsNameChar(text[word_end]) || text[word_end] == '$')) return false;  // (selection, set_x)
+  std::size_t next = word_end;
+  while (next < text.size() && IsSpace(text[next])) next++;
+  return next >= text.size() || !(text[next] == '=' || text[next] == ':');
+}
+
 // Text DuckDB cannot tokenize that names a credential and then opens a quote: a value may
 // follow the name in a grammar that is not DuckDB's (a backslash-escaped quote in MySQL's).
 bool NamesAQuotedCredential(std::string_view text) {
   const std::string lower = Lower(text);
+  const std::size_t last_quote = lower.find_last_of("'\"$");
   auto before_a_quote = [&](std::string_view word) {
-    for (std::size_t at = 0; (at = lower.find(word, at)) != std::string::npos; at++) {
-      if (lower.find_first_of("'\"$", at + word.size()) != std::string::npos) return true;
-    }
-    return false;
+    const std::size_t at = lower.find(word);  // (its first occurrence: the one most text follows)
+    return at != std::string::npos && last_quote != std::string::npos && last_quote >= at + word.size();
   };
   return before_a_quote("identified") ||
          std::any_of(std::begin(kCredentialNames), std::end(kCredentialNames), before_a_quote);
@@ -742,8 +924,11 @@ class SqlMasker {
   // are several (`limit` bounds each text). Nested (depth > 0): only the whole, unbounded.
   void Run(MaskedSql& out, std::size_t limit) {
     struct Span {
-      std::size_t begin, end;      // tokens
-      std::size_t secrets, parameters;  // where its findings start in found_
+      std::size_t begin, end;  // tokens
+      // Its own findings. (Not a slice of the request's list, which keeps a value once
+      // where two statements running one after the other both hid it.)
+      std::vector<std::string> secrets;
+      std::vector<MaskedParameter> parameters;
       bool credentials, computed;
     };
     std::vector<Span> spans;
@@ -754,7 +939,8 @@ class SqlMasker {
         Found before = std::move(found_);
         found_ = Found{};
         Statement(begin, end);
-        spans.push_back({begin, end, before.secrets.size(), before.parameters.size(), found_.credentials, found_.computed});
+        if (depth_ == 0) spans.push_back({begin, end, found_.secrets, found_.parameters, found_.credentials, found_.computed});
+        else spans.push_back({begin, end, {}, {}, false, false});
         // Fold this statement's findings into the request's.
         for (auto& secret : found_.secrets) before.Secret(secret);
         for (auto& parameter : found_.parameters) before.parameters.push_back(std::move(parameter));
@@ -774,15 +960,11 @@ class SqlMasker {
     out.computed = found_.computed;
     if (depth_ > 0 || spans.size() < 2) return;
     for (std::size_t i = 0; i < spans.size(); i++) {
-      const Span& span = spans[i];
+      Span& span = spans[i];
       MaskedStatement statement;
       statement.text = Text(Sig(span.begin, span.end), span.end, limit);
-      const std::size_t secrets_end = i + 1 < spans.size() ? spans[i + 1].secrets : found_.secrets.size();
-      const std::size_t parameters_end = i + 1 < spans.size() ? spans[i + 1].parameters : found_.parameters.size();
-      for (std::size_t s = span.secrets; s < secrets_end && s < found_.secrets.size(); s++) {
-        statement.secrets.push_back(found_.secrets[s]);
-      }
-      for (std::size_t p = span.parameters; p < parameters_end; p++) statement.parameters.push_back(found_.parameters[p]);
+      statement.secrets = std::move(span.secrets);
+      statement.parameters = std::move(span.parameters);
       statement.credentials = span.credentials;
       // (Past the cap on listed values, which statement the rest belong to is not kept.)
       statement.computed = span.computed || found_.secrets.size() >= Found::kMostSecrets;
@@ -818,14 +1000,24 @@ class SqlMasker {
   bool IsMask(std::size_t i) const { return t_.kind(i) == Kind::kOperator && text(i).ends_with(kMask); }
   bool Opens(std::size_t i) const { return IsOp(i, "(") || IsOp(i, "[") || IsOp(i, "{"); }
   bool Closes(std::size_t i) const { return IsOp(i, ")") || IsOp(i, "]") || IsOp(i, "}"); }
-  // The token that closes the bracket opened at `open`, or `end`.
+  // The token that closes the bracket opened at `open`, or `end`. (Every bracket's match is
+  // found in one pass the first time: no reading looks for one again per value.)
   std::size_t Matching(std::size_t open, std::size_t end) const {
-    std::size_t depth = 0;
-    for (std::size_t i = open; i < end; i++) {
-      if (Opens(i)) depth++;
-      else if (Closes(i) && --depth == 0) return i;
+    if (matches_.empty()) {
+      matches_.assign(n_, n_);
+      std::vector<std::size_t> opened;
+      for (std::size_t i = 0; i < n_; i++) {
+        if (t_.kind(i) == Kind::kTerminator) {
+          opened.clear();
+        } else if (Opens(i)) {
+          opened.push_back(i);
+        } else if (Closes(i) && !opened.empty()) {
+          matches_[opened.back()] = i;
+          opened.pop_back();
+        }
+      }
     }
-    return end;
+    return open < n_ && matches_[open] < end ? matches_[open] : end;
   }
   // The name a token is, when it is one (an unquoted word or a quoted name), lower case.
   std::optional<std::string> NameAt(std::size_t i) const {
@@ -888,25 +1080,31 @@ class SqlMasker {
 
   // One past the last token of the value that starts at `start`. Unsure means further.
   std::size_t ValueEnd(std::size_t start, std::size_t end, Shape shape) const {
-    std::size_t depth = 0, cases = 0, parts = 0, last = start;
+    std::size_t cases = 0, parts = 0, last = start;
     for (std::size_t i = start; i < end; i++) {
       if (trivia(i)) continue;
-      if (depth == 0) {
-        if (Closes(i) || t_.kind(i) == Kind::kTerminator || (IsOp(i, ",") && shape != Shape::kGroup)) break;
-        if (shape == Shape::kOperand && t_.kind(i) == Kind::kWord) {
-          const std::string word = Lower(text(i));
-          if (word == "case") {
-            cases++;
-          } else if (word == "end" && cases > 0) {
-            cases--;
-          } else if (parts > 0 && cases == 0 && Among(kNextClause, word)) {
-            break;
-          }
+      if (Closes(i) || t_.kind(i) == Kind::kTerminator || (IsOp(i, ",") && shape != Shape::kGroup)) break;
+      if (shape == Shape::kOperand && t_.kind(i) == Kind::kWord) {
+        const std::string word = Lower(text(i));
+        if (word == "case") {
+          cases++;
+        } else if (word == "end" && cases > 0) {
+          cases--;
+        } else if (parts > 0 && cases == 0 && Among(kNextClause, word)) {
+          break;
         }
       }
-      if (Opens(i)) depth++;
-      if (Closes(i) && depth > 0) depth--;
       parts++;
+      if (Opens(i)) {
+        // A bracket is the value's, whatever is in it.
+        const std::size_t close = Matching(i, end);
+        if (close >= end) {
+          last = end;
+          while (last > i + 1 && trivia(last - 1)) last--;
+          return last;
+        }
+        i = close;
+      }
       last = i + 1;
     }
     return last;
@@ -1011,13 +1209,31 @@ class SqlMasker {
     Replace(first, last, std::string(kMask));
   }
 
-  // Whether [first, last) is only a column's name (a, a.b, "a".b).
-  bool IsColumn(std::size_t first, std::size_t last) const {
+  // Whether [first, last) holds no value: no literal, number or placeholder, only names
+  // (another column, a function of columns, a subquery of them: `a.b`, `lower(b)`,
+  // `SELECT token FROM b`). In a subquery a number is its own clauses' (WHERE id = 3), not a
+  // value compared.
+  bool HoldsNoValue(std::size_t first, std::size_t last) const {
+    std::size_t lead = first;
+    while (lead < last && (trivia(lead) || IsOp(lead, "("))) lead++;
+    const bool subquery = lead < last && (IsWord(lead, "select") || IsWord(lead, "with") || IsWord(lead, "from"));
     bool any = false;
     for (std::size_t i = first; i < last; i++) {
       if (trivia(i)) continue;
-      if (t_.kind(i) == Kind::kWord || t_.kind(i) == Kind::kQuotedName) any = true;
-      else if (!(t_.kind(i) == Kind::kNumber && text(i) == ".")) return false;
+      switch (t_.kind(i)) {
+        case Kind::kWord:
+        case Kind::kQuotedName:
+          any = true;
+          break;
+        case Kind::kNumber:
+          if (text(i) != "." && !subquery) return false;
+          break;
+        case Kind::kOperator:
+          if (IsOp(i, "?") || IsOp(i, "$") || IsMask(i)) return false;
+          break;
+        default:
+          return false;
+      }
     }
     return any;
   }
@@ -1026,8 +1242,28 @@ class SqlMasker {
 
   // Text inside a literal, a quoted name or a comment: read as text that is not a statement
   // and, when it may be one, as SQL of its own. Returns the masked text when it differs.
+  //
+  // Text that begins as a statement does (SELECT, ALTER ROLE, ...) is SQL given as text and
+  // is read as SQL only: its own literals are read in their turn with their quotes resolved,
+  // so a value two levels down (`password = ''v''` in the body) is found as `v`, which the
+  // text reading, taking `''` for an empty value, would not.
   std::optional<std::string> MaskBody(std::string_view body, bool sql, bool* open, bool whole = true) {
     if (body.size() < 4) return std::nullopt;
+    if (sql && depth_ < kDeepestNesting && StartsAStatement(body) && MayHoldSql(body) &&
+        body.find("\\'") == std::string_view::npos && body.find("\\\"") == std::string_view::npos) {
+      const SqlTokens tokens = LexSql(body);
+      if (!tokens.unreadable()) {
+        SqlMasker nested(tokens, depth_ + 1);
+        MaskedSql result;
+        nested.Run(result, std::string::npos);
+        for (auto& secret : nested.found().secrets) found_.Secret(secret);
+        for (auto& parameter : nested.found().parameters) found_.parameters.push_back(std::move(parameter));
+        found_.credentials = found_.credentials || nested.found().credentials;
+        found_.computed = found_.computed || nested.found().computed;
+        if (!nested.changed()) return std::nullopt;
+        return std::move(result.text);
+      }
+    }
     Found inner;
     std::string masked = MaskText(body, inner, open, whole);
     bool changed = masked != body;
@@ -1201,36 +1437,53 @@ class SqlMasker {
   }
 
   // INSERT INTO t (a, password, c) VALUES (..), (..): the values given to the credential
-  // columns, row by row. Returns ranges of tokens, in order.
+  // columns, row by row, for every INSERT in the statement (behind WITH, EXPLAIN or PREPARE,
+  // and MERGE's WHEN NOT MATCHED THEN INSERT (..) VALUES (..)). Ranges of tokens, in order.
   std::vector<std::pair<std::size_t, std::size_t>> InsertedCredentials(std::size_t first, std::size_t end) const {
     std::vector<std::pair<std::size_t, std::size_t>> values;
-    if (!IsWord(first, "insert")) return values;
-    std::size_t at = Sig(first + 1, end);
-    while (at < end && !IsWord(at, "into")) at = Sig(at + 1, end);  // OR REPLACE, OR IGNORE
-    // The table's name, then the column list.
-    for (at = Sig(at + 1, end); at < end && !IsOp(at, "("); at = Sig(at + 1, end)) {
-      if (IsWord(at, "values") || IsWord(at, "select") || IsWord(at, "by") || IsWord(at, "default")) return values;
+    for (std::size_t insert = first; insert < end; insert++) {
+      if (IsWord(insert, "insert")) Inserted(insert, end, values);
     }
+    return values;
+  }
+
+  void Inserted(std::size_t insert, std::size_t end, std::vector<std::pair<std::size_t, std::size_t>>& values) const {
+    std::size_t at = Sig(insert + 1, end);
+    if (at < end && IsWord(at, "or")) at = Sig(Sig(at + 1, end) + 1, end);  // OR REPLACE, OR IGNORE
+    if (at < end && IsWord(at, "into")) {
+      // The table's name (a, a.b, "a"."b") and an alias, then the column list.
+      for (at = Sig(at + 1, end); at < end && !IsOp(at, "("); at = Sig(at + 1, end)) {
+        if (!(t_.kind(at) == Kind::kWord || t_.kind(at) == Kind::kQuotedName || (t_.kind(at) == Kind::kNumber && text(at) == "."))) {
+          return;
+        }
+        if (IsWord(at, "values") || IsWord(at, "select") || IsWord(at, "by") || IsWord(at, "default")) return;
+      }
+    }
+    if (at >= end || !IsOp(at, "(")) return;
     const std::size_t close = Matching(at, end);
     std::vector<std::size_t> columns;
     std::size_t column = 0;
     for (std::size_t i = Sig(at + 1, close); i < close; i = Sig(i + 1, close)) {
-      if (IsOp(i, ",")) {
+      if (Opens(i)) {
+        i = Matching(i, close);  // (no column list has brackets; nothing in them is one)
+      } else if (IsOp(i, ",")) {
         column++;
-      } else if (const auto name = NameAt(i); name && IsCredentialName(*name)) {
+      } else if (const auto name = NameAt(i); name && IsUnambiguousCredentialName(*name)) {
         if (columns.empty() || columns.back() != column) columns.push_back(column);
       }
     }
-    if (columns.empty()) return values;
+    if (columns.empty()) return;
     std::size_t row = Sig(close + 1, end);
-    if (row >= end || !IsWord(row, "values")) return values;
+    if (row >= end || !IsWord(row, "values")) return;
     for (row = Sig(row + 1, end); row < end && IsOp(row, "("); ) {
       const std::size_t row_close = Matching(row, end);
-      std::size_t index = 0, start = row + 1, depth = 0;
+      std::size_t index = 0, start = row + 1;
       for (std::size_t i = row + 1; i <= row_close && i < end; i++) {
-        if (i < row_close && Opens(i)) depth++;
-        else if (i < row_close && Closes(i) && depth > 0) depth--;
-        if (i == row_close || (depth == 0 && IsOp(i, ","))) {
+        if (i < row_close && Opens(i)) {
+          i = std::min(Matching(i, row_close), row_close - 1);  // (a bracket: part of one value)
+          continue;
+        }
+        if (i == row_close || IsOp(i, ",")) {
           if (std::binary_search(columns.begin(), columns.end(), index)) {
             const std::size_t value = Sig(start, i);
             std::size_t last = value;
@@ -1245,7 +1498,6 @@ class SqlMasker {
       if (row >= end || !IsOp(row, ",")) break;
       row = Sig(row + 1, end);
     }
-    return values;
   }
 
   // MAP([k1, k2], [v1, v2]) at the word `map`: the values under credential keys.
@@ -1259,19 +1511,21 @@ class SqlMasker {
     std::size_t index = 0;
     for (std::size_t i = Sig(keys + 1, keys_close); i < keys_close; i = Sig(i + 1, keys_close)) {
       if (IsOp(i, ",")) index++;
-      else if (t_.kind(i) == Kind::kString && IsCredentialName(LiteralBody(text(i)))) wanted.push_back(index);
+      else if (t_.kind(i) == Kind::kString && IsCredentialKey(LiteralBody(text(i)))) wanted.push_back(index);
     }
     std::size_t values = Sig(keys_close + 1, end);
     if (wanted.empty() || values >= end || !IsOp(values, ",")) return;
     values = Sig(values + 1, end);
     if (values >= end || !IsOp(values, "[")) return;
     const std::size_t values_close = Matching(values, end);
-    std::size_t start = values + 1, depth = 0;
+    std::size_t start = values + 1;
     index = 0;
     for (std::size_t i = values + 1; i <= values_close && i < end; i++) {
-      if (i < values_close && Opens(i)) depth++;
-      else if (i < values_close && Closes(i) && depth > 0) depth--;
-      if (i == values_close || (depth == 0 && IsOp(i, ","))) {
+      if (i < values_close && Opens(i)) {
+        i = std::min(Matching(i, values_close), values_close - 1);  // (a nested list: part of one value)
+        continue;
+      }
+      if (i == values_close || IsOp(i, ",")) {
         if (std::binary_search(wanted.begin(), wanted.end(), index)) {
           const std::size_t value = Sig(start, i);
           std::size_t last = value;
@@ -1302,15 +1556,29 @@ class SqlMasker {
   // An ordinary statement, token by token.
   void Walk(const std::size_t first, const std::size_t end) {
     const bool attach = IsWord(first, "attach");
-    const bool set = IsWord(first, "set") || IsWord(first, "reset") || IsWord(first, "pragma");
+    // A statement whose option lists (NAME value, ...) may give a credential option a value.
+    const bool options = attach || IsWord(first, "copy") || IsWord(first, "export");
+    const bool variable = IsWord(Sig(first + 1, end), "variable");
+    // A setting's name is one only a credential has, or the broader kind (SET, RESET, PRAGMA).
+    const bool set = (IsWord(first, "set") || IsWord(first, "reset") || IsWord(first, "pragma")) && !variable;
     // Values found ahead of the reading position (an INSERT's rows, a MAP's second list).
     std::vector<std::pair<std::size_t, std::size_t>> ahead = InsertedCredentials(first, end);
     std::size_t ahead_at = 0;
-    std::vector<bool> calls;  // for each open bracket: whether it is a function's argument list
-    std::vector<bool> named;  // ... and whether a credential name stands in it: lower(password), CAST(password AS TEXT)
+    struct Bracket {
+      std::size_t open;    // the token
+      std::size_t callee;  // the function's name, for a function's argument list; else `end`
+      bool call;           // a function's argument list
+      bool named;          // a credential name stands in it: lower(password), CAST(password AS TEXT)
+      bool list;           // the list of IN (...): its literals are no key/value pairs
+    };
+    std::vector<Bracket> brackets;
+    std::size_t closed = end, closed_from = end;  // the last bracket closed: its ')' and where it starts
     enum class After { kNothing, kName, kWrappedName, kLiteralKey, kKeyFunction };
     After after = After::kNothing;
     bool name_is_argument = false;  // the credential name starts a function's argument
+    bool name_is_item = false;      // ... or an item of a list in brackets: (NAME value, ...)
+    bool name_strict = false;       // the name is one only a credential has
+    bool name_key = false;          // ... or an HTTP header's that carries one
     std::size_t previous = end;     // the significant token before this one
     std::size_t chain_before = end; // the significant token before the name chain (a.b.c) being read
 
@@ -1327,7 +1595,7 @@ class SqlMasker {
         }
       }
       const std::size_t last = ValueEnd(value, end, shape);
-      if (!(column_is_no_value && IsColumn(value, last))) MaskValue(value, last);
+      if (!(column_is_no_value && HoldsNoValue(value, last))) MaskValue(value, last);
       return std::max(last, value);
     };
     // After the name and the token at `i`: where reading goes on when `i` gives the name a
@@ -1335,6 +1603,8 @@ class SqlMasker {
     std::function<std::optional<std::size_t>(std::size_t, After, int)> value_after =
         [&](std::size_t i, After was, int casts) -> std::optional<std::size_t> {
       const bool name = was == After::kName || was == After::kWrappedName;
+      // (A wrapped name is always one only a credential has: only those mark their bracket.)
+      const bool strict = was == After::kWrappedName || (was == After::kName && name_strict);
       const std::size_t next = Sig(i + 1, end);
       if (t_.kind(i) == Kind::kOperator) {
         const std::string_view op = text(i);
@@ -1347,10 +1617,19 @@ class SqlMasker {
           MaskValue(next, last);
           return close;
         }
-        if (op == "=>" || op == ":=" || op == ":") return operand(next, Shape::kArgument, false);
+        // A named argument (=>, :=) takes any credential name; a struct's key (:) one only a
+        // credential or a credential header has (a literal key was checked when it was read).
+        if (op == "=>" || op == ":=") return operand(next, Shape::kArgument, false);
+        if (op == ":") {
+          if (was == After::kName && !name_key) return std::nullopt;
+          return operand(next, Shape::kArgument, false);
+        }
         if (!name) {
-          // 'key', 'value': a pair of literals, as an argument list or a row gives them.
-          if (op == "," && next < end && t_.kind(next) == Kind::kString) {
+          // 'key', 'value': a pair of literals, as an argument list or a row gives them (not
+          // the list of an IN, and not when the second is a credential's name as well: a list
+          // of the words themselves).
+          if (op == "," && next < end && t_.kind(next) == Kind::kString && !(brackets.size() > 0 && brackets.back().list) &&
+              !IsCredentialName(LiteralBody(text(next)))) {
             const std::size_t then = Sig(next + 1, end);
             if (then >= end || IsOp(then, ",") || Closes(then) || t_.kind(then) == Kind::kTerminator) {
               MaskValue(next, next + 1);
@@ -1361,17 +1640,26 @@ class SqlMasker {
         }
         if (op == "::" && casts < 4) {
           // name::TYPE = value: past the type (and its (n)), the same question again.
+          if (!strict) return std::nullopt;
           std::size_t type_end = Sig(next + 1, end);
           if (type_end < end && IsOp(type_end, "(")) type_end = Sig(Matching(type_end, end) + 1, end);
           if (type_end >= end) return std::nullopt;
           return value_after(type_end, After::kWrappedName, casts + 1);
         }
+        if (op == "(" && was == After::kName && (name_is_item || name_is_argument) && options) {
+          return operand(i, Shape::kArgument, false);  // an option's value in brackets: (ENCRYPTION_KEY (SELECT ..))
+        }
         const bool comparison = op.starts_with('=') || op.starts_with('<') || op.starts_with('>') ||
                                 op.starts_with("!=") || op.starts_with("~") || op.starts_with("!~");
         if (!comparison) return std::nullopt;
-        // `name = other_column` compares two columns: nothing to hide. In a function's
-        // argument list (f(token = x)), in SET and in ATTACH a bare word is a value.
-        return operand(next, Shape::kOperand, !(name_is_argument || set || attach));
+        // In a function's argument list (f(token = x)), in SET and in ATTACH the name is an
+        // argument's, a setting's or an option's, and a bare word is a value. Elsewhere it is a
+        // column compared or set, which only the names only a credential has are masked for;
+        // and compared with what holds no value (another column, a function of columns, a
+        // subquery of them), there is nothing to hide.
+        const bool option = (was == After::kName && name_is_argument) || set || attach;
+        if (!option && !strict) return std::nullopt;
+        return operand(next, Shape::kOperand, !option);
       }
       if (was != After::kName) {
         if (was == After::kWrappedName && t_.kind(i) == Kind::kWord) {
@@ -1385,8 +1673,18 @@ class SqlMasker {
           (t_.kind(i) == Kind::kWord || t_.kind(i) == Kind::kQuotedName || t_.kind(i) == Kind::kNumber)) {
         return operand(i, Shape::kOperand, false);  // an ATTACH option's bare value: (TOKEN abc)
       }
+      if (options && was == After::kName && name_is_item &&
+          (t_.kind(i) == Kind::kWord || t_.kind(i) == Kind::kQuotedName || t_.kind(i) == Kind::kNumber) &&
+          !Among(kNextClause, Lower(text(i)))) {
+        return operand(i, Shape::kArgument, false);  // a COPY or EXPORT option's value: (PASSWORD upper('..'))
+      }
       if (t_.kind(i) != Kind::kWord || next >= end) return std::nullopt;
       std::string word = Lower(text(i));
+      if (word == "to" && set) {
+        if (was == After::kName) return operand(next, Shape::kOperand, false);  // SET name TO value
+        return std::nullopt;
+      }
+      if (!strict) return std::nullopt;
       std::size_t at = i, value = next;
       if (word == "not" && t_.kind(next) == Kind::kWord) {
         at = next;
@@ -1400,6 +1698,8 @@ class SqlMasker {
         const std::size_t inner = Sig(value + 1, close);
         std::size_t last = inner;
         for (std::size_t j = inner; j < close; j++) last = trivia(j) ? last : j + 1;
+        // IN (SELECT other FROM t): a semi-join, which holds no value.
+        if (HoldsNoValue(inner, last)) return std::nullopt;
         MaskValue(inner, last);
         return close;
       }
@@ -1422,7 +1722,6 @@ class SqlMasker {
         }
         return std::nullopt;
       }
-      if (word == "to" && set && at == i) return operand(value, Shape::kOperand, false);
       return std::nullopt;
     };
 
@@ -1471,10 +1770,13 @@ class SqlMasker {
           if (auto masked = MaskBody(NameBody(text(i)), /*sql=*/false, nullptr)) Replace(i, i + 1, Quoted(*masked, text(i).front()));
         }
         if (IsCredentialName(name)) {
-          if (!named.empty()) named.back() = true;
+          name_strict = IsUnambiguousCredentialName(name);
+          name_key = IsCredentialKey(name);
+          if (name_strict && !brackets.empty()) brackets.back().named = true;
           after = After::kName;
-          name_is_argument = chain_before < end && (IsOp(chain_before, "(") || IsOp(chain_before, ",")) &&
-                             !calls.empty() && calls.back();
+          const bool in_brackets = chain_before < end && (IsOp(chain_before, "(") || IsOp(chain_before, ","));
+          name_is_argument = in_brackets && !brackets.empty() && brackets.back().call;
+          name_is_item = in_brackets && !brackets.empty() && !brackets.back().call;
         } else if (IsKeyFunction(name)) {
           after = After::kKeyFunction;
         } else if (name == "identified" && kind == Kind::kWord) {
@@ -1491,7 +1793,7 @@ class SqlMasker {
           MaskValue(i, i + 1);  // 'value' = password; 'Bearer <token>'
         } else {
           const bool open = Literal(i);
-          if (IsCredentialName(body)) after = After::kLiteralKey;  // {'password': '..'}
+          if (IsCredentialKey(body)) after = After::kLiteralKey;  // {'password': '..'}
           if (open && next < end && IsOp(next, "||")) {
             // A connection string or URL put together: 'host=h password=' || <the password>.
             const std::size_t last = ValueEnd(next, end, Shape::kOperand);
@@ -1500,7 +1802,7 @@ class SqlMasker {
             i = std::max(last, i + 1);
             continue;
           }
-          if (open && next < end && IsOp(next, ",") && !calls.empty() && calls.back()) {
+          if (open && next < end && IsOp(next, ",") && !brackets.empty() && brackets.back().call) {
             // format('https://h/f?token={}', <the token>): the other arguments.
             const std::size_t value = Sig(next + 1, end);
             const std::size_t last = ValueEnd(value, end, Shape::kGroup);
@@ -1515,15 +1817,23 @@ class SqlMasker {
           const bool call = IsOp(i, "(") && previous < end &&
                             (t_.kind(previous) == Kind::kQuotedName ||
                              (t_.kind(previous) == Kind::kWord && !Among(kNotFunctions, Lower(text(previous)))));
-          calls.push_back(call);
-          named.push_back(false);
+          brackets.push_back({i, call ? previous : end, call, false, previous < end && IsWord(previous, "in")});
         } else if (Closes(i)) {
-          // lower(password) = '..': the name still stands after the bracket.
-          if (IsOp(i, ")") && !named.empty() && named.back()) after = After::kWrappedName;
-          if (!calls.empty()) {
-            calls.pop_back();
-            named.pop_back();
+          if (!brackets.empty()) {
+            const Bracket bracket = brackets.back();
+            brackets.pop_back();
+            // lower(password) = '..', trim(lower(password)) = '..': the name still stands
+            // after the bracket, and in the brackets around it.
+            if (bracket.named) {
+              if (IsOp(i, ")")) after = After::kWrappedName;
+              if (!brackets.empty()) brackets.back().named = true;
+            }
+            closed = i;
+            closed_from = bracket.callee < end ? bracket.callee : bracket.open;
           }
+        } else if (previous == closed && previous < end && ComparedWithCredential(i, end)) {
+          // upper('..') = password, (SELECT '..') = password: the bracket (and its function).
+          MaskValue(closed_from, closed + 1);
         }
       }
       previous = i;
@@ -1531,8 +1841,8 @@ class SqlMasker {
     }
   }
 
-  // After a string literal: `= name` (or <>, !=, ==) where the name is a credential's and
-  // not a function's.
+  // At `op`: `= name` (or <>, !=, ==) where the name is one only a credential has and not a
+  // function's. (What stands before it is compared with a credential.)
   bool ComparedWithCredential(std::size_t op, std::size_t end) const {
     if (op >= end || t_.kind(op) != Kind::kOperator) return false;
     const std::string_view o = text(op);
@@ -1548,7 +1858,7 @@ class SqlMasker {
       }
       at = Sig(dot + 1, end);
     }
-    return last && IsCredentialName(*last) && !(at < end && IsOp(at, "("));
+    return last && IsUnambiguousCredentialName(*last) && !(at < end && IsOp(at, "("));
   }
 
   // IDENTIFIED BY 'password', IDENTIFIED WITH plugin BY 'password' / AS 'hash' (MySQL, Oracle).
@@ -1570,6 +1880,7 @@ class SqlMasker {
   std::vector<Edit> edits_;
   std::size_t statement_begin_ = 0;
   mutable std::size_t counted_from_ = 0, counted_to_ = 0, counted_ = 0;  // OrdinalOf's
+  mutable std::vector<std::size_t> matches_;                              // Matching's
 };
 
 }  // namespace

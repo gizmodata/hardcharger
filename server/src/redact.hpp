@@ -38,7 +38,10 @@ std::string RedactCredentials(std::string text, const std::vector<std::string>& 
 
 // Whether a name is one whose value is a credential, whatever its case and whether it is
 // written with '-' or '_': it ends in password, secret, token, api_key, authorization and
-// the like (s3_secret_access_key, bearer_token, X-API-Key, Proxy-Authorization).
+// the like (s3_secret_access_key, bearer_token, X-API-Key, Proxy-Authorization). The broad
+// list: what a connection string's key, a setting, an option or a named argument is called.
+// (A statement's columns, struct keys and name/value pairs use a narrower one, of the names
+// only a credential has: README, "What the statement log masks".)
 bool IsCredentialName(std::string_view name);
 
 // A bind placeholder in a place whose value is masked (`token => ?`): the value bound to it
@@ -78,8 +81,10 @@ struct MaskedSql : MaskedStatement {
 // Reads `sql` once. `limit`: the longest text kept, for the request and for each statement.
 MaskedSql MaskSql(std::string_view sql, std::size_t limit = 4000);
 
-// `text` with every occurrence of each of `secrets` replaced by ***, whatever its case. A
-// value shorter than four bytes is replaced only where it stands alone (not inside a word).
+// `text` with every occurrence of each of `secrets` (and of each piece of one that has a
+// delimiter in it) replaced by ***, whatever its case. A value shorter than four bytes is
+// replaced only where it stands alone (not inside a word); a value of letters only, only
+// where it stands alone and is written as it was hidden. Each value costs one pass.
 std::string RedactSecrets(std::string text, const std::vector<std::string>& secrets);
 
 // An error of `statement` as it may be logged and stored. DuckDB's excerpt of the statement

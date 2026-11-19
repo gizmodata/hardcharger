@@ -437,13 +437,13 @@ def test_user_ddl_error_and_audit_record_under_access_control(launcher, store):
     cleo = server.user(name="cleo", password="cleo-pass-1")
     tag = tagged()
     with pytest.raises(Exception, match="Hardcharger blocked"):
-        cleo.run(sql=f"SELECT i, {{'token': '{m}'}} AS {tag} FROM guarded")
+        cleo.run(sql=f"SELECT i, {{'api_token': '{m}'}} AS {tag} FROM guarded")
     failed = wait_for(read=lambda: len(found := [line for line in server.log().splitlines()
                                                  if '"statement failed"' in line and "[REDACTED: user DDL]" in line])
                       >= len(mistyped) and found)
     assert failed and len(failed) == len(mistyped), failed
     audit = [line for line in server.log().splitlines() if '"kind":"access_control"' in line and tag in line]
-    assert len(audit) == 1 and '"status":"denied"' in audit[0] and "{'token': ***}" in audit[0], audit
+    assert len(audit) == 1 and '"status":"denied"' in audit[0] and "{'api_token': ***}" in audit[0], audit
     assert m not in server.log(), "the marker reached the log"
     errors = wait_for(read=lambda: len(found := admin.run(
         sql="SELECT error_message FROM _hardcharger_instr.sql_executions WHERE error_message IS NOT NULL").to_pylist())

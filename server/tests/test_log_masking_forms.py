@@ -622,3 +622,232 @@ def test_running_statements_are_masked_in_the_monitoring_functions(server, admin
         assert admin.scalar(sql=f"SELECT hardcharger_cancel('{worker.id}')") is True
         thread.join(timeout=60 * TIMEOUT_SCALE)
     assert_in_no_sink(server=server, admin=admin, secret=secret)
+
+
+# ---- The review of 2.14.0's masking (findings 01-06) --------------------------------------
+#
+# Each test is a finding's repro, with a password that holds what ends a value somewhere:
+# ; ) " ' @ : / %. Every sink is read: the server log, every instrumentation table, the
+# catalog log, the monitoring functions, and under access control the audit record.
+
+def hard_canary() -> str:
+    return "Zk7;)\"'@:/%" + canary()
+
+
+def assert_hard_in_no_sink(server, admin, secret: str):
+    assert_in_no_sink(server=server, admin=admin, secret=secret.split("%", 1)[1], also=("Zk7;", "Zk7)"))
+
+
+def nested(sql: str, depth: int) -> str:
+    """`sql` given to query() as text, `depth` levels down."""
+    for _ in range(depth):
+        sql = f"SELECT * FROM query({literal(text=sql)})"
+    return sql
+
+
+@pytest.fixture(scope="module")
+def review_tables(server):
+    admin = server.admin()
+    admin.execute(sql="CREATE TABLE mask_int (id INTEGER, password INTEGER)")
+    admin.execute(sql="INSERT INTO mask_int VALUES (1, 1)")
+    admin.execute(sql="CREATE TABLE mask_words (doc INTEGER, token VARCHAR, auth VARCHAR, first_pass INTEGER, url VARCHAR, "
+                      "session_token VARCHAR, api_key VARCHAR, note VARCHAR, pwd VARCHAR)")
+    admin.execute(sql="INSERT INTO mask_words VALUES (1, 'cat', 'basic', 1, 'https://example.com/cb?state=1&code=4/0Ab', 's1', 'k1', "
+                      "'password', '/home')")
+    return admin
+
+
+def failed_records(server, tag: str) -> list[dict]:
+    return wait_for(read=lambda: [r for r in statement_records(server=server, tag=tag) if r["message"] == "statement failed"])
+
+
+# (id, the statement built from (tag, the password as a literal), whether its error is replaced whole)
+REVIEW_FORMS = [
+    # finding 01: two statements in a row hide the same value; the second one's error quotes it
+    ("f01-insert-then-update", lambda t, v: f"INSERT INTO mask_users (name, password, age) VALUES ('{t}', {v}, 1); "
+                                            f"UPDATE mask_int SET password = {v} WHERE id = 1 /* {t} */", False),
+    ("f01-compare-twice", lambda t, v: f"SELECT 1 AS {t} FROM mask_users WHERE password = {v}; "
+                                       f"SELECT 2 AS {t} FROM mask_int WHERE password = {v}", False),
+    ("f01-setting-then-compare", lambda t, v: f"SET s3_secret_access_key = {v}; SELECT 2 AS {t} FROM mask_int WHERE password = {v}", False),
+    # finding 02: SQL given as text two and three levels down
+    ("f02-nested-two", lambda t, v: nested(sql=f"SELECT 1 AS {t} FROM mask_int WHERE password = {v}", depth=2), False),
+    ("f02-nested-three", lambda t, v: nested(sql=f"SELECT 1 AS {t} FROM mask_int WHERE password = {v}", depth=3), False),
+    # finding 03: forms the README lists
+    ("f03-with-insert", lambda t, v: f"WITH x AS (SELECT 1) INSERT INTO mask_users (name, password, age) VALUES ('{t}', {v}, 1)", False),
+    ("f03-explain-insert", lambda t, v: f"EXPLAIN INSERT INTO mask_users (name, password, age) VALUES ('{t}', {v}, 1)", False),
+    ("f03-prepare-insert", lambda t, v: f"PREPARE {t} AS INSERT INTO mask_users (name, password, age) VALUES ('{t}', {v}, 1)", False),
+    ("f03-expression-on-the-left", lambda t, v: f"SELECT 1 AS {t} FROM mask_int WHERE upper({v}) = password", True),
+    ("f03-function-of-a-function", lambda t, v: f"SELECT 1 AS {t} FROM mask_int WHERE trim(lower(password::VARCHAR)) = {v} AND nope = 1", False),
+    ("f03-computed-option", lambda t, v: f"ATTACH '/no-such-dir/{t}.duckdb' AS {t} (ENCRYPTION_KEY (SELECT {v}))", True),
+    # finding 04: a URL with a port, then a credential with an '@' in it
+    ("f04-libpq-uri-with-port", lambda t, v: "ATTACH " + literal(text="postgresql://127.0.0.1:1/" + t + "?user=svc&password=P@ss" +
+                                                                 v[1:-1].replace("''", "'").replace("%", "%25").replace(";", "%3B") +
+                                                                 "&connect_timeout=2") + f" AS {t} (TYPE postgres)", False),
+    ("f04-token-parameter-with-port", lambda t, v: "SELECT * FROM read_csv(" + literal(text=f"http://127.0.0.1:1/{t}.csv?access_token=abc@" +
+                                                                                        v[1:-1].replace("''", "'").replace("%", "%25")) + ")", False),
+    ("f04-json-with-a-url-and-a-password", lambda t, v: "SELECT " + literal(text='{"url": "http://db.example.com:8080/api", "user": "svc", '
+                                                                             '"password": "P@ss' + v[1:-1].replace("''", "'").replace('"', '\\"') +
+                                                                             '"}') + f" AS {t}", False),
+]
+
+
+@pytest.mark.parametrize("form,build,computed", REVIEW_FORMS, ids=[form[0] for form in REVIEW_FORMS])
+def test_review_form_with_a_hard_password_is_masked_in_every_sink(server, admin, review_tables, form, build, computed):
+    secret, tag = hard_canary(), tagged()
+    sql = build(tag, literal(text=secret))
+    failure = run(admin=admin, sql=sql)
+    rows = wait_for(read=lambda: stored(admin=admin, tag=tag))
+    assert rows and all("***" in row["sql_text"] for row in rows), rows
+    # (A statement DuckDB refuses while preparing it has no line in the log: its record above does.)
+    if not any(row["prepare_error"] for row in rows):
+        records = wait_for(read=lambda: [r for r in statement_records(server=server, tag=tag) if r["message"] == "statement"])
+        assert records and all("***" in r["sql"] for r in records), records
+    if form.startswith("f01") or form.startswith("f02"):
+        # The value is quoted by DuckDB's error: what the finding was about.
+        assert failure is not None and "Conversion Error" in failure, failure
+    if failure is not None:
+        # (A statement DuckDB's parser refuses has no failure line in the log: its record does.)
+        failed = [r["error"] for r in statement_records(server=server, tag=tag) if r["message"] == "statement failed"]
+        errors = wait_for(read=lambda: [e for e in failed + [row["error_message"] or row["prepare_error"] or ""
+                                                              for row in stored(admin=admin, tag=tag)] if e])
+        assert errors, f"no error recorded for {tag}"
+        if not computed:
+            assert not any(error.startswith("[REDACTED") for error in errors), errors
+            if "Conversion Error" in failure:
+                assert any("Could not convert string '***'" in error for error in errors), errors
+    assert_hard_in_no_sink(server=server, admin=admin, secret=secret)
+
+
+# Finding 05 (and 50): ordinary statements, none holding a credential, kept as written with their
+# errors and query profiles. ({t}: the tag.)
+ORDINARY = [
+    "SELECT doc AS {t} FROM mask_words WHERE first_pass = 3",
+    "SELECT doc AS {t} FROM mask_words WHERE first_pass IN (1, 2, 3)",
+    "UPDATE mask_words SET first_pass = first_pass + 1 WHERE doc = 3 AND note <> '{t}'",
+    "SELECT doc AS {t} FROM mask_words WHERE auth = 'basic'",
+    "SELECT doc AS {t} FROM mask_words WHERE token IN ('cat', 'mat') AND token LIKE 'c%' AND token BETWEEN 'a' AND 'm'",
+    "SELECT doc AS {t} FROM mask_words WHERE token NOT IN (SELECT token FROM mask_words WHERE doc = 2)",
+    "SELECT doc AS {t} FROM mask_words WHERE session_token IN (SELECT session_token FROM mask_words WHERE doc = 3)",
+    "SELECT doc AS {t} FROM mask_words WHERE api_key IN (SELECT api_key FROM mask_words WHERE doc = 3)",
+    "SELECT a.doc AS {t} FROM mask_words a JOIN mask_words b ON lower(a.api_key) = lower(b.api_key)",
+    "SELECT doc AS {t} FROM mask_words WHERE length(token) > 2",
+    "INSERT INTO mask_words (doc, token, note) VALUES (99, 'dog', '{t}')",
+    "SELECT json_object('token', 'cat', 'pos', 3) AS {t}",
+    "SELECT doc AS {t} FROM mask_words WHERE note IN ('password', 'token', 'api_key')",
+    "SELECT doc AS {t} FROM mask_words WHERE url LIKE 'https://example.com/p/%?code=%' OR url LIKE 'https://%@%'",
+    "SELECT doc AS {t} FROM mask_words WHERE url = 'https://example.com/cb?state=1&code=4/0Ab'",
+    "SELECT 'see http://wiki.local:8080/page or mail ops@example.com' AS {t}",
+    "SELECT doc AS {t} FROM mask_words WHERE pwd = '/home'",
+    "SELECT doc AS {t} FROM mask_words WHERE no_such_column = 1 AND token = 'cat'",
+    "SELECT doc AS {t} FROM mask_words WHERE api_key IN (SELECT api_key FROM no_such_table_{t})",
+]
+
+
+@pytest.mark.parametrize("template", ORDINARY, ids=range(len(ORDINARY)))
+def test_review_ordinary_statement_is_kept_with_its_error_and_profile(server, admin, review_tables, template):
+    tag = tagged()
+    sql = template.format(t=tag)
+    admin.execute(sql="SET hardcharger.capture_query_profile = 'standard'")
+    try:
+        failure = run(admin=admin, sql=sql)
+    finally:
+        admin.execute(sql="SET hardcharger.capture_query_profile = 'off'")
+    records = wait_for(read=lambda: [r for r in statement_records(server=server, tag=tag) if r["message"] == "statement"])
+    assert records and records[0]["sql"] == sql, (sql, records)
+    rows = wait_for(read=lambda: admin.query(
+        sql="SELECT s.sql_text, e.status, e.error_message, e.query_profile IS NOT NULL AS has_profile "
+            "FROM _hardcharger_instr.sql_statements s JOIN _hardcharger_instr.sql_executions e USING (statement_id) "
+            f"WHERE s.sql_text LIKE '%{tag}%' AND e.status IN ('success', 'error')").to_pylist())
+    assert rows and rows[0]["sql_text"] == sql, rows
+    if failure is None:
+        assert rows[0]["has_profile"], f"no query profile for: {sql}"
+    else:
+        reason = failure.splitlines()[0]
+        failed = failed_records(server=server, tag=tag)
+        assert failed and failed[0]["sql"] == sql and failed[0]["error"].startswith(reason), (failure, failed)
+        assert rows[0]["error_message"].startswith(reason), (failure, rows)
+
+
+@pytest.mark.parametrize("template,expected", [
+    # finding 06: a hidden value that is a word does not replace the error's own words
+    ("SELECT 1 AS {t} FROM mask_users WHERE password = 'error' AND nope = 1", 'Binder Error: Referenced column "nope" not found'),
+    ("SELECT 1 AS {t} FROM mask_int WHERE password = 'name'", "Conversion Error: Could not convert string '***' to INT32"),
+    # a URL with a port and an e-mail address later in the text: nothing to hide
+    ("SELECT error('sync from http://idp.local:8080/users failed for user bob@example.com: 404') AS {t}",
+     "Invalid Input Error: sync from http://idp.local:8080/users failed for user bob@example.com: 404"),
+    ("SELECT * FROM read_csv('http://127.0.0.1:1/exports/2024/bob@example.com.csv') AS {t}", "http://127.0.0.1:1/exports/2024/bob@example.com.csv"),
+])
+def test_review_an_ordinary_error_keeps_its_words(server, admin, review_tables, template, expected):
+    tag = tagged()
+    failure = run(admin=admin, sql=template.format(t=tag))
+    assert failure is not None
+    failed = failed_records(server=server, tag=tag)
+    assert failed and expected in failed[0]["error"], (failure, failed)
+    rows = wait_for(read=lambda: [row for row in stored(admin=admin, tag=tag) if row["error_message"]])
+    assert rows and expected in rows[0]["error_message"], rows
+
+
+def test_review_forms_with_a_hard_password_in_the_monitoring_functions(server, admin, review_tables):
+    secret, tag = hard_canary(), tagged()
+    worker = server.admin()
+    url = literal(text="postgresql://127.0.0.1:1/db?user=svc&password=P@ss" + secret.replace("%", "%25").replace(";", "%3B"))
+    slow = (f"SELECT count(*), {url} AS {tag} FROM range(10000000000) a, range(1000) b, mask_users m "
+            f"WHERE trim(lower(m.password)) <> {literal(text=secret)} AND upper({literal(text=secret)}) <> m.password")
+    thread = threading.Thread(target=lambda: worker.submit(sql=slow, timeout=300), daemon=True)
+    thread.start()
+    try:
+        rows = wait_for(read=lambda: [row for row in admin.query(
+            sql="SELECT statement FROM hardcharger_active_connections() WHERE statement IS NOT NULL").to_pylist()
+            if tag in row["statement"]], timeout=30)
+        assert rows and rows[0]["statement"] == (
+            f"SELECT count(*), 'postgresql://127.0.0.1:1/db?user=svc&password=***' AS {tag} FROM range(10000000000) a, "
+            "range(1000) b, mask_users m WHERE trim(lower(m.password)) <> *** AND *** <> m.password"), rows
+        live = [row for row in admin.query(sql="SELECT sql_text FROM hardcharger_live_queries()").to_pylist() if tag in row["sql_text"]]
+        assert live and "CANARY" not in repr(live) and "Zk7" not in repr(live), live
+        assert_hard_in_no_sink(server=server, admin=admin, secret=secret)
+    finally:
+        assert admin.scalar(sql=f"SELECT hardcharger_cancel('{worker.id}')") is True
+        thread.join(timeout=60 * TIMEOUT_SCALE)
+    assert_hard_in_no_sink(server=server, admin=admin, secret=secret)
+
+
+def test_review_forms_with_a_hard_password_in_the_audit_record(launcher, store):
+    """Under access control, a refused statement of each form the review found goes into the audit
+    record as the log shows it: masked, with a password holding ; ) " ' @ : / %."""
+    from rbac import start_rbac_server
+
+    server = start_rbac_server(launcher=launcher, store_uri=store.new_database(),
+                               env={"HARDCHARGER_LOG_FORMAT": "json", "HARDCHARGER_PRINT_QUERIES": "true",
+                                    "HARDCHARGER_ENABLE_INSTRUMENTATION": "true", "HARDCHARGER_LOG_LEVEL": "debug"})
+    admin = server.admin()
+    secret = hard_canary()
+    value = literal(text=secret)
+    admin.run(sql="CREATE ROLE readers")
+    admin.run(sql="CREATE USER dana WITH PASSWORD 'dana-pass-1'")
+    admin.run(sql="GRANT readers TO dana")
+    admin.run(sql="CREATE TABLE guarded (i INTEGER, password VARCHAR)")
+    dana = server.user(name="dana", password="dana-pass-1")
+    refused = {
+        "f01": f"SELECT i AS {{t}} FROM guarded WHERE password = {value}; SELECT i AS {{t}}_2 FROM guarded WHERE password = {value}",
+        "f02": nested(sql=f"SELECT i AS {{t}} FROM guarded WHERE password = {value}", depth=2),
+        "f03-with-insert": f"WITH x AS (SELECT 1) INSERT INTO guarded (i, password) VALUES (1, {value}) RETURNING i AS {{t}}",
+        "f03-left": f"SELECT i AS {{t}} FROM guarded WHERE upper({value}) = password",
+        "f03-wrapped": f"SELECT i AS {{t}} FROM guarded WHERE trim(lower(password)) = {value}",
+        "f04": "SELECT i, " + literal(text="postgresql://127.0.0.1:1/db?user=svc&password=P@ss" + secret.replace("%", "%25")) +
+               " AS {t} FROM guarded",
+    }
+    tags = {}
+    for name, template in refused.items():
+        tags[name] = tagged()
+        with pytest.raises(Exception, match="Hardcharger blocked"):
+            dana.run(sql=template.replace("{t}", tags[name]))
+    log = wait_for(read=lambda: all(tag in server.log() for tag in tags.values()) and server.log())
+    assert log, "not every refused statement reached the log"
+    audit = [json.loads(line) for line in log.splitlines() if '"kind":"access_control"' in line and '"status":"denied"' in line]
+    for name, tag in tags.items():
+        records = [record for record in audit if tag in record.get("sql", "")]
+        assert len(records) == 1 and "***" in records[0]["sql"], (name, records)
+    assert secret.split("%", 1)[1] not in log and "Zk7" not in log, "the canary reached the log"
+    for table in ("sql_statements", "sql_executions"):
+        rows = repr(admin.run(sql=f"SELECT * FROM _hardcharger_instr.main.{table}").to_pylist())
+        assert secret.split("%", 1)[1] not in rows and "Zk7" not in rows, f"the canary reached {table}"
