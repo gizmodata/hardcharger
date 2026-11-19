@@ -135,8 +135,7 @@ class RbacSessionState : public duckdb::ClientContextState {
  private:
   duckdb::RebindQueryInfo RebindIfGrantsChanged(const duckdb::PreparedStatementData& prepared);
   duckdb::RebindQueryInfo FinalizePrepareLocked(duckdb::PreparedStatementData& prepared,
-                                                duckdb::PreparedStatementMode mode, bool& runs_now)
-      HC_REQUIRES(mutex_);
+                                                duckdb::PreparedStatementMode mode, bool& runs_now) HC_REQUIRES(mutex_);
 
   std::weak_ptr<RbacEngine> engine_;
   mutable Mutex principal_mutex_;

@@ -128,9 +128,9 @@ class PrivateFiles {
  private:
   struct Keyed {
     Entry entry{};
-    std::vector<std::string> keys{};  // of the file and each file beside it
-    std::vector<std::string> twins{}; // the tmp_ twins' keys
-    std::vector<std::string> names{}; // the file names of all of them (case-folded where the file system is)
+    std::vector<std::string> keys{};   // of the file and each file beside it
+    std::vector<std::string> twins{};  // the tmp_ twins' keys
+    std::vector<std::string> names{};  // the file names of all of them (case-folded where the file system is)
   };
   std::vector<std::string> CandidateKeys(const std::string& path, bool resolve) const;
 

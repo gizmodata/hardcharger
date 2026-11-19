@@ -25,8 +25,8 @@ enum class SettingScope { kSession, kGlobal, kSessionOrGlobal, kStartup };
 struct Setting {
   std::string name{};  // without the prefix: "query_timeout"
   SettingScope scope{};
-  std::string input_type{};     // VARCHAR, INTEGER or BOOLEAN
-  std::string option{};         // Hardcharger's configuration option, if any ("query_timeout_seconds")
+  std::string input_type{};  // VARCHAR, INTEGER or BOOLEAN
+  std::string option{};      // Hardcharger's configuration option, if any ("query_timeout_seconds")
   std::string default_value{};
   std::string description{};
   bool admin_only = false;  // listed only to admins

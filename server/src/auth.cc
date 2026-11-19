@@ -196,8 +196,8 @@ chargewire::Principal Authenticator::AuthenticatePassword(std::string_view usern
     if (store_user && !user_ok) {
       LogAt(log_level_, LogLevel::kInfo, "signed in",
             {{"user", store_user->user_name}, {"method", "password"}, {"role", "user"}});
-      return chargewire::Principal{store_user->user_name, "user", "password",
-                                {{"credential", store_user->credential}}, {}, {}};
+      return chargewire::Principal{
+          store_user->user_name, "user", "password", {{"credential", store_user->credential}}, {}, {}};
     }
   }
   // The name is the client's, unauthenticated: cut, so a refusal can't fill the log.

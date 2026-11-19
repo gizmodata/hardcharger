@@ -2256,9 +2256,8 @@ dd::RebindQueryInfo RbacSessionState::FinalizePrepareLocked(dd::PreparedStatemen
     // The plan never reached the check (the optimizer was skipped). Refuse it.
     pending_ownership_.clear();
     prepared_ownership_.clear();
-    throw dd::PermissionException(
-        "Hardcharger blocked this statement: its plan could not be checked against user " +
-        principal().user_name + "'s grants");
+    throw dd::PermissionException("Hardcharger blocked this statement: its plan could not be checked against user " +
+                                  principal().user_name + "'s grants");
   }
   if (prepared_versions_.size() > 4096) prepared_versions_.clear();
   prepared_versions_[&prepared] = {last_checked_version_, last_checked_persona_};

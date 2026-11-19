@@ -4,13 +4,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <format>
 #include <mutex>
-#include <cctype>
 #include <optional>
 #include <regex>
 #include <sstream>

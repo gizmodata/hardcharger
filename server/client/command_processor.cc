@@ -731,8 +731,8 @@ CommandResult CommandProcessor::Process(const std::string& line) {
       const char* home = std::getenv("HOME");
 #endif
       if (home && chdir(home) != 0) {
-        std::cerr << ErrorStyle() << "Error: cannot change to directory '" << home << "'"
-                  << ErrorStyleReset() << std::endl;
+        std::cerr << ErrorStyle() << "Error: cannot change to directory '" << home << "'" << ErrorStyleReset()
+                  << std::endl;
       }
     } else {
       if (chdir(args[1].c_str()) != 0) {

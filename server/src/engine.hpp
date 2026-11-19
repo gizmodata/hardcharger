@@ -12,12 +12,12 @@
 #include <string_view>
 
 #include "authz/authz.hpp"
+#include "catalog_log.hpp"
 #include "config.hpp"
 #include "duckdb_backend.hpp"
 #include "duckdb_session.hpp"
 #include "guards.hpp"
 #include "health.hpp"
-#include "catalog_log.hpp"
 #include "instrumentation.hpp"
 #include "logging.hpp"
 #include "runtime.hpp"
@@ -276,7 +276,6 @@ class Session : public chargewire_duckdb::DuckDBSession {
   Settings settings_ HC_GUARDED_BY(settings_mutex_);
   mutable Mutex activity_mutex_;
   Activity activity_ HC_GUARDED_BY(activity_mutex_);
-
 };
 
 // The session whose statement this thread is running, for the SQL functions; null

@@ -16,8 +16,8 @@
 #include <arrow/table.h>
 #include <boost/json.hpp>
 
-#include "client_config.hpp"
 #include "chargewire/client.hpp"
+#include "client_config.hpp"
 #include "thread_annotations.hpp"
 
 namespace hardcharger::client {

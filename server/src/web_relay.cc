@@ -485,8 +485,8 @@ class Relay::Impl {
     return std::string(header);
   }
 
-  std::shared_ptr<RelaySession> Make(const std::string& key, std::string owner, bool signed_in,
-                                     Clock::time_point now) HC_REQUIRES(mutex_) {
+  std::shared_ptr<RelaySession> Make(const std::string& key, std::string owner, bool signed_in, Clock::time_point now)
+      HC_REQUIRES(mutex_) {
     if (sessions_.size() >= options_.max_sessions) {
       throw Problem(429, "rate_limited", "too many relay sessions on this server; try again later");
     }

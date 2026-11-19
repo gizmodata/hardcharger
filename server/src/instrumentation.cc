@@ -829,7 +829,8 @@ void Instrumentation::Write(std::vector<Event>& events, std::size_t first, std::
     for (int attempt = 0; attempt < 3; attempt++) {
       {
         UniqueMutexLock lock(mutex_);
-        if (wake_.wait_for(lock.native(), std::chrono::seconds(1), [this]() HC_REQUIRES(mutex_) { return stopping_; })) break;
+        if (wake_.wait_for(lock.native(), std::chrono::seconds(1), [this]() HC_REQUIRES(mutex_) { return stopping_; }))
+          break;
       }
       if (Reachable()) {
         if (TryWrite(events, first, last, error)) return;
