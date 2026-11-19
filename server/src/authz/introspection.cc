@@ -701,7 +701,7 @@ std::shared_ptr<arrow::RecordBatch> EffectivePrivileges(const Snapshot& snapshot
     if (IsPolicyExemption(p) && !snapshot.ExemptFromPolicies(who, p)) continue;
     // The roles that give it, everywhere or on a location.
     const bool system = snapshot.HasSystemPrivilege(who, p);
-    if (!system && (!StorageOf(p) || who.catalog_rules || who.scope)) continue;
+    if (!system && (!StorageOf(p) || who.catalog_rules || who.token_holds_no_system_privilege())) continue;
     for (const auto& r : snapshot.system_privileges()) {
       if (r.privilege != p || !roles.count(r.role_id) || (system && !r.location.empty())) continue;
       const Cell location = r.location.empty() ? Cell{} : Text(r.location);

@@ -216,6 +216,9 @@ CatalogAccessLevel CatalogRuleLevel(const std::vector<CatalogRule>& rules, const
 bool IsRulesAdministratorPrivilege(SystemPrivilege privilege);
 // The words of a refusal of one of the others to it.
 std::string RulesAdministratorRefusal(const std::string& what, SystemPrivilege privilege);
+// The words of a refusal of a system privilege to a store user's session whose sign-in
+// token carries catalog_access rules (Principal::catalog_access_token): it uses none.
+std::string CatalogAccessTokenRefusal(const std::string& what, SystemPrivilege privilege, const std::string& user);
 // The words of a catalog_access refusal.
 std::string CatalogAccessDenied(const std::string& catalog, CatalogAccessLevel needed, const std::string& user);
 
@@ -256,7 +259,8 @@ struct Principal {
   // applies (Snapshot::ExemptFromPolicies). Only RbacSessionState::principal() sets it.
   bool policy_exemptions_unverified = false;
   // A store user's session whose sign-in token carries catalog_access rules (which grant a
-  // store user nothing under access control): it never holds a policy exemption.
+  // store user nothing under access control): like a scoped token's, it uses no system
+  // privilege (token_holds_no_system_privilege).
   bool catalog_access_token = false;
 
   static Principal Superuser(std::string name) {
@@ -278,6 +282,11 @@ struct Principal {
     return p;
   }
   bool is_role() const { return !superuser && user_id.empty() && !role_id.empty(); }
+  // THE question for every system privilege (READ FILESYSTEM, MANAGE CATALOGS, the policy
+  // exemptions, ...), everywhere and on a location, used or granted on: a session limited by
+  // its sign-in token, a scoped token or a store user's token with catalog_access rules,
+  // uses none of them, whatever its user's roles hold.
+  bool token_holds_no_system_privilege() const { return scope.has_value() || catalog_access_token; }
   // A store user's session that asked for SYSTEM ADMIN (whether or not it still holds it).
   bool asks_system_admin() const { return active_role_id == kSystemAdminRoleId; }
   bool acts_as_system_admin() const { return superuser && !acting_user_id.empty(); }

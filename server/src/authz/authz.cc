@@ -1127,6 +1127,11 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
           throw Error(ErrorCode::kPermissionDenied,
                       "Hardcharger blocked " + RulesAdministratorRefusal(*category, *privilege), "42501");
         }
+        if (principal.catalog_access_token && !principal.scope) {
+          throw Error(ErrorCode::kPermissionDenied,
+                      "Hardcharger blocked " + CatalogAccessTokenRefusal(*category, *privilege, identity_.user_name),
+                      "42501");
+        }
         throw Error(ErrorCode::kPermissionDenied,
                     "Hardcharger blocked " + *category + ", which needs the " +
                         SystemPrivilegeName(*privilege) + " system privilege. User " +

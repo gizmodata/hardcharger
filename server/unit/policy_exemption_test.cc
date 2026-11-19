@@ -122,3 +122,25 @@ TEST(PolicyExemption, ParsedAsSystemPrivilegesAndKeptWhereOlderServersSkipThem) 
 }
 
 }  // namespace
+
+namespace {
+
+TEST(CatalogAccessToken, UsesNoSystemPrivilegeAsAScopedTokenUsesNone) {
+  const Snapshot snap = Make({{"r-repl", SystemPrivilege::kManageConfig, true, ""},
+                              {"r-repl", SystemPrivilege::kReadFilesystem, false, "", "/data/in/"}});
+  Principal limited = Principal::User("u-rep", "rep");
+  limited.catalog_access_token = true;
+  EXPECT_TRUE(limited.token_holds_no_system_privilege());
+  EXPECT_FALSE(snap.HasSystemPrivilege(limited, SystemPrivilege::kManageConfig));
+  EXPECT_FALSE(snap.CanGrantSystemPrivilege(limited, SystemPrivilege::kManageConfig));
+  EXPECT_EQ(snap.StorageLocationsOf(limited, SystemPrivilege::kReadFilesystem), std::vector<std::string>{});
+  // The twin: the same user without the rules.
+  const Principal plain = Principal::User("u-rep", "rep");
+  EXPECT_FALSE(plain.token_holds_no_system_privilege());
+  EXPECT_TRUE(snap.HasSystemPrivilege(plain, SystemPrivilege::kManageConfig));
+  EXPECT_TRUE(snap.CanGrantSystemPrivilege(plain, SystemPrivilege::kManageConfig));
+  EXPECT_EQ(snap.StorageLocationsOf(plain, SystemPrivilege::kReadFilesystem),
+            std::optional<std::vector<std::string>>(std::vector<std::string>{"/data/in/"}));
+}
+
+}  // namespace

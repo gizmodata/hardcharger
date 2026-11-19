@@ -1376,6 +1376,17 @@ lets a role's admin-option holder grant does not carry it), but grant it only on
 replica runs 2.14, so that every replica also shows and audits it. The reasons for each
 rule are in [docs/security-administration-design.md](docs/security-administration-design.md).
 
+### Tokens with `catalog_access` rules under access control
+
+Under access control a store user's grants decide what it may read and write; the
+`catalog_access` rules of its sign-in token grant it nothing more. A session that signed in
+with such a token also uses none of the system privileges its roles hold, as a scoped
+token's session uses none: no `READ FILESYSTEM`, `MANAGE CATALOGS`, storage privilege on a
+location, policy exemption, or admin option to grant one. It is told so: `Hardcharger blocked
+ATTACH needs the MANAGE CATALOGS system privilege, which this session does not use: it signed
+in with a token that carries catalog_access rules ...`. The same user signed in without the
+rules uses them as before (changed in 2.14).
+
 ### Exemptions from row and masking policies
 
 A trusted job, such as a replication service that keeps a table in step with its source,

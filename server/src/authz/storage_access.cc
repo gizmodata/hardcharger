@@ -133,6 +133,9 @@ std::optional<std::string> StorageAccess::Refusal(const Snapshot& snapshot, cons
   const auto lacks = [&](const Principal& principal, SystemPrivilege privilege, const std::string& path) -> std::string {
     const std::string what = request.what + (path.empty() ? "" : " of '" + path + "'");
     if (principal.rules_administrator) return "Hardcharger blocked " + RulesAdministratorRefusal(what, privilege);
+    if (principal.catalog_access_token && !principal.scope) {
+      return "Hardcharger blocked " + CatalogAccessTokenRefusal(what, privilege, principal.user_name);
+    }
     const std::string needs = "Hardcharger blocked " + what + ", which needs the " + SystemPrivilegeName(privilege) +
                               " system privilege" +
                               (path.empty() ? " everywhere" : ", everywhere or on a location that covers it");
@@ -149,7 +152,7 @@ std::optional<std::string> StorageAccess::Refusal(const Snapshot& snapshot, cons
       const auto privilege = StoragePrivilege(kind, request.mode);
       for (const auto* principal : restricted) {
         if (snapshot.HasSystemPrivilege(*principal, privilege)) continue;
-        if (principal->rules_administrator) return lacks(*principal, privilege, {});
+        if (principal->rules_administrator || principal->catalog_access_token) return lacks(*principal, privilege, {});
         return blocked + ": its path is an expression or a parameter without a known string value, which Hardcharger can't check before DuckDB "
                          "reads it. Use a string literal or a direct JSON string bind (a computed path needs " +
                Joined({SystemPrivilegeName(StoragePrivilege(StorageKind::kFilesystem, request.mode)),

@@ -79,6 +79,15 @@ own changelog in `python/CHANGELOG.md`.
   replaces a newer one. Closed and open testing and production stay manual in Play Console.
 - `SYSTEM ADMIN` is no longer available as a user's or role's name (`CREATE ROLE "SYSTEM
   ADMIN"` is refused). One a store already has stays an ordinary role, written quoted.
+- **Behaviour change for sign-in tokens with `catalog_access` rules under access control.** A
+  store user's session that signed in with a token carrying `catalog_access` rules no longer
+  uses any system privilege its roles hold (`READ FILESYSTEM`, `WRITE FILESYSTEM`, `MANAGE
+  CATALOGS`, `MANAGE EXTENSIONS`, `MANAGE SECRETS`, `MANAGE CONFIG`, `EXPORT DATABASE`, `IMPORT
+  DATABASE`, `CHECKPOINT`, the object storage and HTTP privileges, everywhere or on a location,
+  and the policy exemptions), nor grants one with an admin option, the same as a scoped token's
+  session. Until 2.13 such a session used them. Its statements that need one are refused, saying
+  the token's rules are why; the same user signed in without `catalog_access` rules is not
+  affected, and the rules still grant a store user no table access of their own.
 - `current_user`, `session_user`, `user` and `current_role()` answer for the session (above)
   everywhere, so a view or query that compared them with `'duckdb'` sees the Hardcharger user
   now. A user's new macro can't be named `is_role_active` or `session_attribute` (they are

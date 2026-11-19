@@ -1075,6 +1075,9 @@ class PlanChecker {
                              "the view reads");
       }
       if (rights.principal.rules_administrator) Deny(principal_, RulesAdministratorRefusal(what, privilege));
+      if (rights.principal.catalog_access_token && !rights.principal.scope) {
+        Deny(principal_, CatalogAccessTokenRefusal(what, privilege, principal_.user_name));
+      }
       Deny(principal_, what + " needs the " + SystemPrivilegeName(privilege) +
                            " privilege, which user " + principal_.user_name + " does not hold");
     }
