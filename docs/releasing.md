@@ -1,8 +1,8 @@
 # Releasing the server
 
 A server release is a `v*` tag on a commit of `main`. The tag runs `.github/workflows/server.yml`
-on that commit: the full matrix (Linux, macOS, Windows, the web UI, the AddressSanitizer and
-ThreadSanitizer jobs, iOS, desktop and Android) gates everything, and only then are the images pushed and the GitHub
+on that commit: the full matrix (Linux, macOS, Windows, the web UI, the AddressSanitizer (with
+UndefinedBehaviorSanitizer) and ThreadSanitizer jobs, iOS, desktop and Android) gates everything, and only then are the images pushed and the GitHub
 Release created. The version arithmetic lives in `.github/scripts/release.sh`, which the
 workflows call and `.github/scripts/test-release.sh` tests on every run.
 
@@ -176,6 +176,11 @@ or the file's Properties > Digital Signatures on Windows.
    server release and all download/integration checks to pass.
    To run the whole gate first, signed, publishing nothing:
    `gh workflow run server.yml --ref release/v2.0.0-rc.1 -f sign=true -f full=true -f ios=true -f android=true`.
+   To prove a fix on one leg or job before that (after one failed), run only it:
+   `gh workflow run server.yml --ref <branch> -f only=<leg or job>` (`linux-amd64`, `linux-arm64`,
+   `macos-arm64`, `windows-amd64`, `windows-arm64`, `web-ui`, `asan`, `tsan`, `ios`, `android`;
+   `.github/scripts/select-jobs.sh` lists what each keeps). Such a run never counts as a tested
+   commit for main, and packages and publishes nothing.
 5. Merge the pull request (squash: the commit on main is a new one, with the same tree). Fetch,
    check that `origin/main` is that commit, tag **it** and push **only the tag**:
    `git fetch origin && git tag v2.0.0-rc.1 origin/main && git push origin v2.0.0-rc.1`. Its run
