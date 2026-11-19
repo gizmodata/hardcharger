@@ -1,0 +1,4 @@
+# The suite's client side (bench/regress); the same versions for every server compared.
+httpx==0.28.1
+pyarrow==26.0.1
+psutil==7.2.2

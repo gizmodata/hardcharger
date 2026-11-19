@@ -1006,3 +1006,96 @@ kept running unattended until the coordinator terminated them) and 40 minutes on
 was tagged `Purpose=hardcharger-benchmark` and deleted; describe calls in both regions showed
 no instances other than terminated ones, and no volumes, security groups, key pairs,
 placement groups or open Spot requests.
+
+## Performance regression suite (`bench/regress`, issue #6)
+
+A repeatable comparison of a candidate server with published releases: the same workloads,
+data, settings, client and transport for every version, on one machine, interleaved. It is not a
+release gate; it runs by hand or weekly, and its report is a lead to look at before a release.
+
+### What it runs
+
+`bench/regress/run.py` takes servers as published versions (`--release 2.13.1`, installed into
+its work directory by the official installer, `install.sh --version <v> --prefix <dir>`) and as
+binaries (`--server 2.14.0-dev=server/build/hardcharger-server`). The last one listed is the
+candidate. Every version gets the same environment (`HARDCHARGER_*`, which every release since
+2.0 reads): `SET threads = N` as init SQL, `memory_limit`, a database file of its own loaded from
+the same Parquet files, plaintext Chargewire over loopback. On Linux the server is pinned to
+`--server-cores` (taskset) and the client processes to `--client-cores`. The client is one
+Python Chargewire client (`client.py`, httpx and pyarrow at pinned versions), so a difference
+between versions is the server's; timings include reading every row as Arrow.
+
+Each repetition starts every version once, in a rotated order (round-robin: drift and order
+effects spread evenly over the versions), with `--drop-caches` emptying the OS page cache first,
+and runs:
+
+| Workload | What it measures |
+|---|---|
+| `tpch` | One session: the 22 TPC-H queries once right after the start (cold), then `--warm-passes` times (warm). Per-query latency, suite time. |
+| `many-pipelines` | One session: a 30-way `UNION ALL` of small aggregates joined to one more (DB Olympics q311's shape) and a statement of 30 scalar subqueries, `--mp-runs` times each. p50, p90, p99, max. These plans regressed in 2.9.0-2.13.1 (per-session progress tracking) without any TPC-H query showing it. |
+| `concurrent` | 1, 4 and 10 client processes (`--clients`), one session each, each running the 22 queries `--concurrent-passes` times from its own starting point. Throughput, latency p50/p90/p99, errors. |
+| `tpch-10x22` | Ten sessions, each running the 22 queries once from q01: the ten-client case of `server/tests/test_tpch_benchmark.py`. Wall time, errors. |
+
+Recorded with every run: host (instance type from EC2 metadata, CPU model, CPUs, memory,
+kernel), the settings above, each binary's version, DuckDB version and sha256, the client's
+Python/httpx/pyarrow versions and the suite's git commit, each server's CPU seconds per
+workload and peak resident set (VmHWM on Linux), its start time, the load average, and whether
+the page cache was dropped. Load time from Parquet is recorded once per version (informational).
+
+### Correctness, separately from timing
+
+Every result is checked, in every workload and repetition: TPC-H against DuckDB's published
+answers (`tpch_answers()`, scale factors 0.01, 0.1 and 1; numbers to a relative 1e-6, rows that
+tie on the `ORDER BY` in any order), the many-pipelines statements against answers computed in
+Python from the generating expressions. At other scale factors the first server's own answers
+are the reference. A wrong answer or a failed statement is listed first in the report and makes
+`run.py` exit 1, however fast it was.
+
+### Comparing
+
+`compare.py` (also run at the end of `run.py`) compares the candidate with every other version.
+Per metric the statistic is the median over all repetitions; its uncertainty is a two-level
+bootstrap (draw repetitions with replacement, then each one's samples), so what varies between
+server starts stays in the interval. A metric is a **regression** when the whole 95% interval of
+the candidate/baseline ratio is past its threshold, *possible* when the median ratio is past it
+and the whole interval is slower than no change. Thresholds are settings
+(`bench/regress/thresholds.json`): latency 10%, suite time 5%, tail latency (p90/p99) 25%,
+throughput 10%, server CPU 15%, peak memory 20%; changes under 1 ms (0.05 s CPU, 16 MiB) are never
+flagged. Outputs: `results.json` (raw: every timing), `report.md` (correctness, flagged changes,
+every metric with its interval, per-repetition order and load) and `verdict.json`.
+
+`compare.py --save-baselines bench/regress/baselines` stores each version of a run as
+`baselines/<host class>/<version>.json`; `--with-baseline <file>` adds a stored version to a
+later run's report (refused unless the host class and settings match; marked as not interleaved).
+Host classes are `aws-<instance type>`, `gha-<runner label>` or `<os>-<arch>-local`.
+
+### Where it runs
+
+- **AWS (release decisions):** `bench/regress/aws.sh` launches one on-demand c8a.8xlarge (AMD
+  EPYC 9R45, 32 cores without SMT, 64 GB; the class DB Olympics uses), with a new key pair and a
+  security group admitting SSH from the operator's address only, tagged
+  `Purpose=hardcharger-perf-regress`. The instance terminates itself `LIFETIME_MIN` after boot
+  (`shutdown -h +N` from user data, `--instance-initiated-shutdown-behavior terminate`).
+  `aws.sh build <ref> <label>` builds any commit there in the manylinux_2_28 image server.yml
+  pins, as a release is built. `down` terminates it and deletes the group and key pair by tag;
+  `check` lists anything still tagged; `cost` prices the hours.
+
+  ```bash
+  set -a; . <infra repo>/aws/.env; set +a; export REGION=us-east-2
+  bench/regress/aws.sh up && bench/regress/aws.sh setup
+  bench/regress/aws.sh build release/v2.14.0 2.14.0-dev     # optional; ~N min
+  bench/regress/aws.sh run -- --release 2.4.1 --release 2.13.1 \
+      --server 2.14.0-dev=/home/ubuntu/build/2.14.0-dev/server/build/hardcharger-server \
+      --scale 1 --threads 8 --memory-limit 16GiB --server-cores 0-7 --client-cores 8-31 \
+      --repetitions 10 --drop-caches
+  bench/regress/aws.sh log run; bench/regress/aws.sh fetch results/aws
+  bench/regress/aws.sh down; bench/regress/aws.sh cost
+  ```
+
+- **GitHub Actions:** `.github/workflows/perf-regression.yml`, `workflow_dispatch` (releases,
+  candidate = `main`'s latest `server.yml` build or a run id, scale, repetitions, runner) and
+  Mondays for `main`. It runs on the standard Arm runner (4 vCPUs: server 2 pinned cores, clients
+  2), puts the report in the job summary and uploads the results. A shared runner is noisy;
+  treat its flags as leads. A wrong answer fails the job; a regression only warns.
+- **Locally**, for development: `--scale 0.01 --repetitions 2 --warm-passes 1 --mp-runs 5`
+  finishes in a minute. A laptop under load measures the load.
