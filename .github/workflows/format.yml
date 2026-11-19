@@ -1,0 +1,40 @@
+# The C/C++ lines a pull request changes are formatted as .clang-format says
+# (.github/scripts/check-format.sh, with clang-format pinned there). Only changed lines: the
+# rest of the code is formatted in a commit of its own (.git-blame-ignore-revs).
+name: format
+
+on:
+  pull_request:
+    paths:
+      - "**/*.c"
+      - "**/*.cc"
+      - "**/*.cpp"
+      - "**/*.h"
+      - "**/*.hpp"
+      - ".clang-format"
+      - ".github/scripts/check-format.sh"
+      - ".github/workflows/format.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  clang-format:
+    name: clang-format (changed lines)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # the merge base with the pull request's base
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Changed C/C++ lines are formatted
+        env:
+          # A pull request: its base; a manual run: main.
+          BASE: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+        run: .github/scripts/check-format.sh "$BASE"

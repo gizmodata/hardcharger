@@ -1,0 +1,9 @@
+# The C++ style of the server, the client and the Android bridge (server/, android/native/),
+# as close to the code as written as clang-format gets: Google's style, 120 columns, include
+# blocks kept as they are (sorted within each). CI checks the lines a pull request changes
+# (.github/scripts/check-format.sh, with the clang-format version pinned there); the rest of the
+# code is formatted in one commit of its own, listed in .git-blame-ignore-revs.
+BasedOnStyle: Google
+Standard: c++20
+ColumnLimit: 120
+IncludeBlocks: Preserve
