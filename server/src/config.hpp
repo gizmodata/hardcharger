@@ -12,6 +12,10 @@
 
 namespace hardcharger {
 
+// The request header a reverse proxy carries trusted_proxy_secret in. Always removed from a
+// request before anything reads it.
+inline constexpr const char* kTrustedProxySecretHeader = "X-Hardcharger-Proxy-Secret";
+
 struct Config {
   // Listener
   std::string host = "0.0.0.0";
@@ -28,6 +32,9 @@ struct Config {
   // name the client in logs, audit, sessions and the per-address sign-in bound; never
   // used for authentication or TLS. Empty: trust none.
   std::vector<std::string> trusted_proxies;
+  // A secret a reverse proxy adds in kTrustedProxySecretHeader: a request carrying it is read
+  // as from a trusted proxy, whatever its address. Never logged or listed.
+  std::string trusted_proxy_secret;
 
   // TLS
   std::string tls_cert;   // PEM certificate chain; with tls_key, turns TLS on

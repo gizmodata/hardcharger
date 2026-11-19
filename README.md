@@ -876,10 +876,28 @@ trusted_proxies: [10.0.0.0/8, fd00::/8]   # flag: --trusted-proxies 10.0.0.0/8,f
   request has arrived yet.
 - List only proxies that append to or overwrite these headers: one that passes a client's
   header through lets that client choose the address it is recorded under.
+- **A proxy you can't trust by its address** (one whose pods share an address range with other
+  workloads, as a shared ingress in Kubernetes often does) can be trusted by a secret instead.
+  Set `trusted_proxy_secret` (at least 32 characters; prefer `HARDCHARGER_TRUSTED_PROXY_SECRET`,
+  as a flag is visible in process listings) and have the proxy add it to every request it
+  forwards in the `X-Hardcharger-Proxy-Secret` header, overwriting any value a client sent. A
+  request carrying it is read exactly as one from a listed proxy, whatever its address; with
+  both settings, either trust is enough. The header is compared in constant time and removed
+  from every request before anything reads it (it is never logged, listed, echoed or passed on
+  by the web UI's relay). A wrong or missing secret leaves the connection's own address as the
+  client's, answers exactly as no header would, and a wrong one is logged once an hour without
+  its value. Like `trusted_proxies`, it is never used for authentication or TLS.
+
+  ```nginx
+  # nginx in front of Hardcharger: replace the client's forwarding and secret headers
+  proxy_set_header X-Forwarded-For $remote_addr;
+  proxy_set_header X-Hardcharger-Proxy-Secret "<the server's trusted_proxy_secret>";
+  ```
 - The limits on failed sign-ins (below) count by this address too. Behind a proxy that isn't
-  listed, every client has the proxy's address, so a lock of one user from "one address" keeps
-  that user out through the whole proxy: list your proxies. A password sign-in that carries
-  a forwarding header the server doesn't believe is logged once an hour, saying so.
+  listed (or sending `trusted_proxy_secret`), every client has the proxy's address, so a lock of
+  one user from "one address" keeps that user out through the whole proxy: list your proxies,
+  or, until you can, set `login_lockout_threshold: 0` (the delays stay on). A password sign-in
+  that carries a forwarding header the server doesn't believe is logged once an hour, saying so.
 
 ### Failed sign-ins
 

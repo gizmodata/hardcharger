@@ -123,6 +123,13 @@ const std::vector<Option>& Options() {
        "hop that is not itself a trusted proxy. Never used for authentication or TLS. Empty: trust "
        "none (the TCP peer is the client)",
        LIST(trusted_proxies)},
+      {"trusted_proxy_secret", Kind::kString,
+       "a secret (at least 32 characters) a reverse proxy adds to each request in the "
+       "X-Hardcharger-Proxy-Secret header: a request carrying it is read as from a trusted proxy "
+       "(its X-Forwarded-For or Forwarded names the client), whatever its address; for a proxy whose "
+       "address range other workloads share. Never used for authentication or TLS (prefer the "
+       "environment variable)",
+       TEXT(trusted_proxy_secret)},
       // TLS
       {"tls_cert", Kind::kString, "TLS certificate chain (PEM)",
        TEXT(tls_cert)},
@@ -593,6 +600,10 @@ void Validate(Loaded& loaded) {
     throw std::invalid_argument("ports must be between 0 and 65535");
   }
   if (c.oauth_max_flows < 1) throw std::invalid_argument("oauth_max_flows must be positive");
+  // (Never quoted: a refused value is still the operator's secret.)
+  if (!c.trusted_proxy_secret.empty() && c.trusted_proxy_secret.size() < 32) {
+    throw std::invalid_argument("trusted_proxy_secret must be at least 32 characters (openssl rand -hex 32)");
+  }
   for (const auto& [name, value] : std::initializer_list<std::pair<const char*, int64_t>>{
            {"login_lockout_threshold", c.login_lockout_threshold},
            {"login_user_backoff_after", c.login_user_backoff_after},
@@ -823,6 +834,10 @@ Loaded LoadConfig(int argc, char** argv) {
       if (option.name == "admin_password") {
         loaded.notes.push_back("--admin-password is visible in process listings; prefer HARDCHARGER_ADMIN_PASSWORD");
       }
+      if (option.name == "trusted_proxy_secret") {
+        loaded.notes.push_back(
+            "--trusted-proxy-secret is visible in process listings; prefer HARDCHARGER_TRUSTED_PROXY_SECRET");
+      }
     } else if (auto env = Env(EnvName(option.name))) {
       value = env;
       source = "env " + EnvName(option.name);
@@ -868,7 +883,8 @@ std::string Usage() {
       << "      check the access-control audit records in a JSON log and exit (0: intact)\n"
       << "  --verify-credentials  (with the server's configuration: read one JSON credential, as a client\n"
       << "      sends it to /chargewire/v1/auth/token, on stdin; decide it as the server would, writing\n"
-      << "      nothing; print one JSON line; exit 0 verified, 1 refused, 2 bad input, 3 undecided)\n"
+      << "      only a refused password's sign-in record; print one JSON line; exit 0 verified, 1 refused,\n"
+      << "      2 bad input, 3 undecided)\n"
       << "  --print-options-json  (every option, with its flag, variable, YAML key and default, as JSON)\n"
       << "  --licenses  (the third-party software in this binary and its embedded web UI, and their licences)\n"
       << "  --version, --print-duckdb-version, --help\n";

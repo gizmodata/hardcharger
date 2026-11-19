@@ -492,3 +492,116 @@ def test_an_expired_password_stops_signing_in_until_it_is_set_again(launcher, st
     assert "expired" not in sign_in(server=again, user="joe", password="wrong-password").json()["detail"]
     expect_allowed(client=again.admin(), sql="ALTER USER joe WITH PASSWORD 'a-brand-new-password'")
     assert sign_in(server=again, user="joe", password="a-brand-new-password").status_code == 200
+
+
+# ---- trusted_proxy_secret: a proxy trusted by a secret header, not its address ----
+
+PROXY_SECRET = "proxy-" + "7f3c9a" * 8  # 54 characters
+SECRET_HEADER = "X-Hardcharger-Proxy-Secret"
+NO_USER_DELAY = {"HARDCHARGER_LOGIN_USER_BACKOFF_AFTER": "0"}
+
+
+def proxied_sign_in(server, user: str, password: str, address: str, secret: str | None) -> httpx.Response:
+    headers = {"X-Forwarded-For": address}
+    if secret is not None:
+        headers[SECRET_HEADER] = secret
+    return httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token", headers=headers, timeout=120,
+                      json={"grant_type": "password", "username": user, "password": password})
+
+
+def start_with_secret(launcher, store_uri: str, args: list[str] | None = None, **env: str):
+    # Not through start(): no trusted_proxies unless a test asks for them.
+    return start_rbac_server(launcher=launcher, store_uri=store_uri, args=args,
+                             env={**DEFAULTS, **NO_USER_DELAY, "HARDCHARGER_TRUSTED_PROXY_SECRET": PROXY_SECRET,
+                                  **env})
+
+
+def test_with_the_right_secret_the_forwarded_address_is_the_client(launcher, store):
+    server = start_with_secret(launcher=launcher, store_uri=store.new_database())
+    for _ in range(5):
+        refused(proxied_sign_in(server=server, user="admin", password="wrong-password", address="203.0.113.9",
+                                secret=PROXY_SECRET))
+    limited(proxied_sign_in(server=server, user="admin", password=admin_password(server), address="203.0.113.9",
+                            secret=PROXY_SECRET))
+    # Another client behind the same proxy: its own pair, not locked.
+    response = proxied_sign_in(server=server, user="admin", password=admin_password(server), address="198.51.100.7",
+                               secret=PROXY_SECRET)
+    assert response.status_code == 200, response.text
+    log = server.log()
+    assert "client_address=203.0.113.9" in log, log
+    assert PROXY_SECRET not in log
+
+
+@pytest.mark.parametrize("secret", ["wrong-" + "0" * 40, None])
+def test_without_the_right_secret_a_forged_forwarding_header_is_ignored(launcher, store, secret):
+    # A tenant pod next to the proxy forging X-Forwarded-For: every attempt counts against its own
+    # address (127.0.0.1 here), so changing the forged address dodges nothing.
+    server = start_with_secret(launcher=launcher, store_uri=store.new_database())
+    for i in range(5):
+        refused(proxied_sign_in(server=server, user="admin", password="wrong-password", address=f"192.0.2.{i + 1}",
+                                secret=secret))
+    locked = proxied_sign_in(server=server, user="admin", password=admin_password(server), address="192.0.2.99",
+                             secret=secret)
+    limited(locked)
+    log = server.log()
+    assert "client_address=127.0.0.1" in log and "client_address=192.0.2." not in log, log
+    if secret is not None:
+        # Said once (rate-limited), never with the value.
+        assert log.count("with a value that is not trusted_proxy_secret") == 1, log
+        assert secret not in log and PROXY_SECRET not in log
+
+
+def test_a_wrong_secret_answers_exactly_as_no_secret(launcher, store):
+    server = start_with_secret(launcher=launcher, store_uri=store.new_database())
+
+    def answer(secret: str | None) -> tuple:
+        response = proxied_sign_in(server=server, user="nobody", password="wrong-password", address="192.0.2.1",
+                                   secret=secret)
+        body = response.json()
+        body.pop("request_id")
+        headers = {k.lower() for k in response.headers} - {"chargewire-request-id", "date"}
+        return response.status_code, body, headers
+
+    assert answer(secret="wrong-" + "1" * 40) == answer(secret=None)
+    assert answer(secret=PROXY_SECRET)[0] == 401  # (counted under 192.0.2.1 instead)
+
+
+def test_secret_and_cidr_trust_together(launcher, store):
+    server = start_with_secret(launcher=launcher, store_uri=store.new_database(), args=PROXIED)
+    # A CIDR-trusted peer (127.0.0.1) needs no secret, and a wrong one doesn't take its trust away.
+    for secret in (None, "wrong-" + "2" * 40, PROXY_SECRET):
+        for _ in range(5):
+            refused(proxied_sign_in(server=server, user="ann", password="wrong-password", address="203.0.113.9",
+                                    secret=secret))
+        limited(proxied_sign_in(server=server, user="ann", password="anything", address="203.0.113.9", secret=secret))
+        assert server.admin().run(sql="SELECT hardcharger_clear_login_lock('ann', NULL) AS n").to_pylist()[0]["n"] >= 1
+    assert "client_address=127.0.0.1" not in "\n".join(
+        line for line in server.log().splitlines() if "user=ann" in line), server.log()
+
+
+def test_the_secret_is_never_shown(launcher, store):
+    server = start_with_secret(launcher=launcher, store_uri=store.new_database(), args=["--log-level", "debug"])
+    admin = server.admin()
+    proxied_sign_in(server=server, user="admin", password="wrong-password", address="192.0.2.1", secret=PROXY_SECRET)
+    proxied_sign_in(server=server, user="admin", password="wrong-password", address="192.0.2.1", secret="x" * 40)
+    for sql in ("SELECT * FROM hardcharger_settings()", "SELECT * FROM hardcharger_server_settings()",
+                "SELECT * FROM hardcharger_server_info()", "SELECT * FROM hardcharger_login_locks()"):
+        assert PROXY_SECRET not in str(admin.run(sql=sql).to_pylist()), sql
+    assert PROXY_SECRET not in server.log()
+    # --help and --print-options-json describe the option, never a value.
+    for flag in ("--help", "--print-options-json"):
+        run = subprocess.run(args=[str(BINARY), flag], env={**clean_environment(),
+                                                             "HARDCHARGER_TRUSTED_PROXY_SECRET": PROXY_SECRET},
+                             capture_output=True, text=True, timeout=60)
+        assert "trusted-proxy-secret" in run.stdout or "trusted_proxy_secret" in run.stdout, run.stdout[:500]
+        assert PROXY_SECRET not in run.stdout + run.stderr
+
+
+def test_a_short_secret_stops_the_server_without_quoting_it(launcher):
+    short = "short-secret-1234"
+    running = launcher.start(env={"HARDCHARGER_TRUSTED_PROXY_SECRET": short}, expect_up=False)
+    running.process.wait(timeout=60 * TIMEOUT_SCALE)
+    assert running.process.returncode != 0
+    log = running.log()
+    assert "trusted_proxy_secret must be at least 32 characters" in log, log
+    assert short not in log

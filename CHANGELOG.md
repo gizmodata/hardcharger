@@ -22,6 +22,11 @@ own changelog in `python/CHANGELOG.md`.
   classes (`password_min_character_classes`) and expiry (`password_max_age_days`) are optional.
   Existing passwords keep working.
 - **`hardcharger_users()` shows `last_sign_in_at` and `failed_sign_ins`.**
+- **`trusted_proxy_secret`: trust a reverse proxy by a secret header, not its address.** A
+  request carrying the secret in `X-Hardcharger-Proxy-Secret` has its `X-Forwarded-For` /
+  `Forwarded` read as from a listed proxy, for proxies whose address range other workloads share.
+  The header is compared in constant time, always removed from requests, and the secret is never
+  logged or listed.
 
 ### Changed
 

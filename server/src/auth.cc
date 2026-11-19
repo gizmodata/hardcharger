@@ -203,8 +203,9 @@ chargewire::Principal Authenticator::AuthenticatePassword(std::string_view usern
       if ((last == 0 || now - last > 3600 * 1000) && forwarding_warned_ms_.compare_exchange_strong(last, now)) {
         Log(LogLevel::kWarning,
             "a password sign-in carried X-Forwarded-For or Forwarded from an address that is not in "
-            "trusted_proxies: the header is ignored, so failed sign-ins through that proxy count against the "
-            "proxy's address. List the proxy in trusted_proxies",
+            "trusted_proxies, without trusted_proxy_secret: the header is ignored, so failed sign-ins through "
+            "that proxy count against the proxy's address. List the proxy in trusted_proxies, or have it send "
+            "trusted_proxy_secret",
             {{"client_address", context.client_address}});
       }
     }

@@ -111,6 +111,24 @@ chargewire::ServerOptions ServerOptionsFrom(const hc::Config& config) {
   options.cors_allowed_origins = config.cors_origins;
   // Validated at startup (config.cc): only the address recorded for the client changes.
   for (const auto& proxy : config.trusted_proxies) options.trusted_proxies.push_back(chargewire::ParseIpNetwork(proxy));
+  // Or by a secret the proxy adds. The header is always taken out of requests (a relay to
+  // another server must never pass it on), set or not.
+  options.trusted_proxy_secret = config.trusted_proxy_secret;
+  options.trusted_proxy_secret_header = hc::kTrustedProxySecretHeader;
+  options.on_proxy_secret_mismatch = [](const std::string& peer) {
+    // Once an hour: a proxy with a stale secret sends it on every request.
+    static std::atomic<int64_t> last{0};
+    const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count();
+    int64_t seen = last.load();
+    if (seen != 0 && now - seen < 3600) return;
+    if (!last.compare_exchange_strong(seen, now)) return;
+    hc::Log(hc::LogLevel::kWarning,
+            std::string("a request carried ") + hc::kTrustedProxySecretHeader +
+                " with a value that is not trusted_proxy_secret: its forwarding headers are ignored and the "
+                "connection's address is the client's. Check the proxy's secret (repeats are not logged for an hour)",
+            {{"peer", peer}});
+  };
   // Certificate refusals (a replayed bound token, another identity's sign-in, a revoked
   // certificate, an unknown identity): a security warning and an audit record each.
   // The SDK rate-limits them per source: a summary (suppressed > 0) stands for the
