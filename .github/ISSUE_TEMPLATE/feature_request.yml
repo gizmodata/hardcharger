@@ -1,0 +1,31 @@
+name: Feature request
+description: An idea for something Hardcharger should do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem first: a clear picture of what you are trying to do helps more than a
+        proposed solution. For anything large, we agree on the design here before a pull request.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like to happen
+      description: How it could work (SQL, flags, client commands, UI), if you have an idea.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+      description: Anything you tried or considered instead.
+  - type: input
+    id: version
+    attributes:
+      label: Hardcharger version you use
+      placeholder: "2.13.1"

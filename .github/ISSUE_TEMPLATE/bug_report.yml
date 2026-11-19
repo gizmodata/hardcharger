@@ -1,0 +1,71 @@
+name: Bug report
+description: Something in Hardcharger doesn't work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. **Security problems don't belong here:** report
+        them privately (Security tab, "Report a vulnerability", or security@gizmodata.com; see
+        [SECURITY.md](https://github.com/gizmodata/hardcharger/blob/main/SECURITY.md)).
+
+        Leave out passwords, tokens, customer data and internal host names, in logs too.
+  - type: input
+    id: version
+    attributes:
+      label: Hardcharger version
+      description: The output of `hardcharger-server --version` (and `hardcharger --version` for a client problem).
+      placeholder: hardcharger-server 2.13.1 (DuckDB v2.0.0 ...)
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it is installed
+      options:
+        - Release tarball / zip (Linux, macOS, Windows)
+        - Container image (ghcr.io or Docker Hub)
+        - Homebrew
+        - Windows MSI
+        - Python package (pip install hardcharger)
+        - Desktop app
+        - iOS or Android app
+        - GizmoData Cloud
+        - Built from source
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: Ubuntu 24.04 x86-64, macOS 26 arm64, Windows 11 arm64, ...
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead (the exact error message, if any).
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The smallest set of steps, SQL statements or client commands that shows the problem, starting from a fresh server where possible.
+      render: sql
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Server configuration
+      description: The flags, environment variables or config file the server runs with (with every secret removed), and whether access control is on.
+      render: shell
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server or client log
+      description: The relevant lines, with secrets removed.
+      render: text
