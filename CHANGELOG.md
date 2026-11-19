@@ -100,8 +100,9 @@ own changelog in `python/CHANGELOG.md`.
 - **Limits on failed password sign-ins.** After 5 wrong passwords for one user from one client
   address, that pair is locked for 15 minutes; per user across addresses, and per address
   across users, there is a growing delay (at most 30 s), never a lock, so no account can be
-  locked out from everywhere. Refusals are `429 rate_limited` with `Retry-After`, the same for
-  every user name. Every number is a setting (`login_*`); counts are shared through the
+  locked out from everywhere. Attempts in flight count toward each limit, so a delay lets one
+  attempt through when it ends however many arrive at once. Refusals are `429 rate_limited`
+  with `Retry-After`, the same for every user name. Every number is a setting (`login_*`); counts are shared through the
   access-control store by every replica and by `--verify-credentials`, which takes an optional
   `client_address`. Administrators list and clear them with `hardcharger_login_locks()` and
   `hardcharger_clear_login_lock(user, address)`; locks are logged and audited, with new metrics.

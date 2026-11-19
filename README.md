@@ -919,6 +919,10 @@ client address, and while that pair is locked the change is refused the same way
   address the user signed in from within `login_known_address_days` (30) skips it.
 - **One address trying any users**: the same delay after `login_address_backoff_after` (20)
   failures from that address.
+- **Attempts at once** count as failures until they end, for all three: no more than the
+  threshold's worth are checked before the first of them fails, and once a delay applies, one
+  attempt is checked at a time when it ends (the others are refused with `Retry-After: 1`),
+  however many arrive together.
 - **The answer** is `429 rate_limited` with `Retry-After` (seconds) and the detail `too many
   failed sign-in attempts: try again in N s`, the same whether the user exists or not (an
   unknown name is counted like a known one). A successful sign-in resets its pair's count. An

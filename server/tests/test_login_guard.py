@@ -180,6 +180,38 @@ def test_many_addresses_guessing_one_user_are_slowed_but_never_lock_it(launcher,
     assert sign_in(server=server, user="admin", password=admin_password(server), address="198.51.100.99").status_code == 200
 
 
+def burst(server, pairs: list[tuple[str, str]]) -> list[int]:
+    """Wrong passwords for each (user, address), all at once; the answers' status codes."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(pairs)) as pool:
+        return list(pool.map(lambda pair: sign_in(server=server, user=pair[0], password="wrong-password",
+                                                  address=pair[1]).status_code, pairs))
+
+
+def test_a_delay_that_ends_lets_one_guess_through_however_many_arrive(launcher, store):
+    # Many attempts at once when a user's (or an address's) delay ends: one password is checked,
+    # the others are refused unchecked, as a single attempt sooner would be.
+    server = start(launcher=launcher, store_uri=store.new_database(),
+                   env={"HARDCHARGER_LOGIN_BACKOFF_BASE_SECONDS": "2", "HARDCHARGER_LOGIN_ADDRESS_BACKOFF_AFTER": "3"})
+    create_joe(server=server)
+    for i in range(5):
+        fail(server=server, user="joe", address=f"198.51.100.{i + 1}")
+    time.sleep(limited(sign_in(server=server, user="joe", password="wrong-password", address="198.51.100.99")))
+    statuses = burst(server=server, pairs=[("joe", f"203.0.113.{i + 1}") for i in range(30)])
+    assert statuses.count(401) == 1 and statuses.count(429) == 29, statuses
+    # Before any failure, as many as the delay's threshold at once, and not more.
+    statuses = burst(server=server, pairs=[("fresh", f"192.0.2.{i + 1}") for i in range(30)])
+    assert 1 <= statuses.count(401) <= 5 and statuses.count(401) + statuses.count(429) == 30, statuses
+    # One address, many user names.
+    for name in ("u1", "u2", "u3"):
+        fail(server=server, user=name, address="198.18.0.7")
+    time.sleep(limited(sign_in(server=server, user="u4", password="wrong-password", address="198.18.0.7")))
+    statuses = burst(server=server, pairs=[(f"other{i}", "198.18.0.7") for i in range(30)])
+    assert statuses.count(401) == 1 and statuses.count(429) == 29, statuses
+    # The twin: the right password, after the delay, is checked and signs in.
+    time.sleep(limited(sign_in(server=server, user="joe", password=JOE_PASSWORD, address="198.51.100.200")))
+    assert sign_in(server=server, user="joe", password=JOE_PASSWORD, address="198.51.100.200").status_code == 200
+
+
 # ---- Behind a proxy ----
 
 def test_a_forwarding_header_from_an_untrusted_peer_is_ignored_and_said_so(launcher, store):
