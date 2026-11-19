@@ -5,7 +5,7 @@ import { version as appVersion } from "../package.json";
 import { connectionPanel, bindConnectionPanel } from "./connectionPanel";
 import { localAdminCard, localAdminDialog, bindLocalAdmin, forgetRevealedPassword, confirmingNewPassword, type LocalAdminStatus } from "./localAdmin";
 import { updateBadge, updateAbout, updateDialogs, bindUpdates, startUpdates } from "./updates";
-import { defaultNetwork, networkErrors, certificateCovers, lostAddress, normalHost, isGizmoDataCloudHost, type NetworkSettings, type NetworkInfo, type GeneratedCertificate, type WorkspaceTrust } from "./network";
+import { defaultNetwork, minPasswordCharacters, storedSecret, networkErrors, certificateCovers, lostAddress, normalHost, isGizmoDataCloudHost, type NetworkSettings, type NetworkInfo, type GeneratedCertificate, type WorkspaceTrust } from "./network";
 import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, type ServerOption } from "./configuration";
 import "./style.css";
 import "./palette.css";
@@ -23,6 +23,8 @@ interface Status {
   leftover?: { pid: number; host: string; port: number } | null;
   /** Only this computer: the administrator's user name (the password only on Reveal or Copy). */
   localAdmin?: LocalAdminStatus | null;
+  /** Network access with a saved administrator password under 12 characters (set before 2.14.0). */
+  networkPasswordShort?: boolean;
 }
 
 const native = isTauri();
@@ -186,7 +188,7 @@ function readSettings(): Settings {
     enabled: data["network-mode"] === "network", listen_address: data["network-listen"].trim(),
     server_name: data["network-name"].trim(), tls: data["network-transport"] === "tls",
     tls_cert: data["network-cert"].trim(), tls_key: data["network-key"].trim(), username: data["network-user"].trim(),
-    password: data["network-password"] || (previous.password === "__HARDCHARGER_STORED_SECRET__" ? previous.password : ""),
+    password: data["network-password"] || (previous.password === storedSecret ? previous.password : ""),
   };
   const remote_servers = readRemoteServers(data);
   fieldErrors = networkErrors(network);
@@ -332,6 +334,12 @@ async function switchAddress(address: string) {
   render();
 }
 
+/** A network setup whose administrator password is under 12 characters (saved before 2.14.0). */
+function passwordNotice(s: Status | null) {
+  if (!s?.networkPasswordShort || !s.settings.network?.enabled) return "";
+  return `<div class="pending-settings password-short" role="status"><div><strong>Change the administrator password</strong><p>The network administrator password is shorter than ${minPasswordCharacters} characters, the least Hardcharger accepts for new passwords. It still works, so nothing stops; choose a longer one in Settings.${s.running ? " Stop the server to change it." : ""}</p></div><button data-change-password class="button">Change password</button></div>`;
+}
+
 function addressNotice(s: Status | null) {
   const lost = lostAddress(effectiveNetwork(), detectedNetwork);
   if (!lost) return "";
@@ -385,7 +393,7 @@ function render() {
         <div id="error" role="alert" ${error || s?.error ? "" : "hidden"}>${esc(error || s?.error || "")}</div>
         <div class="pending-settings leftover-server" role="status" ${!running && s?.leftover ? "" : "hidden"}><div><strong>A server from a previous run is still running</strong><p>Hardcharger server PID ${s?.leftover?.pid ?? ""} kept running on port ${s?.leftover?.port ?? ""} after the app closed. Stop it to free the port, then start the server.</p></div><button data-stop-leftover class="button" ${busy ? "disabled" : ""}>Stop it</button></div>
         <div class="pending-settings" role="status" ${draftDirty || s?.settingsPending ? "" : "hidden"}><div><strong>Unsaved server settings</strong><p>${draft ? draft["network-mode"] === "network" ? "Network access requested. Save and complete setup before starting; the server will not fall back to local mode." : "Save or explicitly discard your changes before starting." : "A previous setup was not saved. Review Settings or explicitly discard it before starting."}</p></div><button data-review-settings class="button">Review settings</button><button data-discard-settings class="button" ${busy ? "disabled" : ""}>Discard changes</button></div>
-        ${tab === "server" || tab === "settings" ? addressNotice(s) : ""}
+        ${tab === "server" || tab === "settings" ? addressNotice(s) + passwordNotice(s) : ""}
         ${tab === "server" ? serverView(s) : tab === "settings" ? settingsView(s) : tab === "logs" ? logsView() : aboutView()}
       </div>
       <footer><span>${esc(s?.version ?? "Hardcharger")} <span class="footer-dot">·</span> Chargewire</span><span>Fast, secure, remote DuckDB.</span></footer>
@@ -457,6 +465,11 @@ function render() {
   form?.addEventListener("change", markChange);
   restoreDraft();
   document.querySelector("[data-review-settings]")?.addEventListener("click", () => { tab = "settings"; render(); });
+  document.querySelector("[data-change-password]")?.addEventListener("click", () => {
+    tab = "settings"; render();
+    const field = document.querySelector<HTMLInputElement>('[name="network-password"]');
+    field?.scrollIntoView({ block: "center" }); field?.focus();
+  });
   document.querySelector("[data-discard-settings]")?.addEventListener("click", () => void discardSettings());
   document.querySelector("[data-stop-leftover]")?.addEventListener("click", () => void stopLeftover());
   const updateNetwork = () => {
@@ -639,7 +652,7 @@ function networkView(s: Status | null) {
       </div>
       <div class="network-grid">
         <label class="field"><span>Administrator user name ${required("network-user")}</span><input name="network-user" aria-label="Administrator user name" value="${esc(n.username)}" autocomplete="off" ${disabled}>${fieldError("network-user")}</label>
-        <label class="field"><span>Administrator password ${required("network-password")}</span><input name="network-password" aria-label="Administrator password" type="password" autocomplete="new-password" placeholder="${n.password ? "Saved in OS credential store — leave blank to keep" : "Set a strong password"}" ${disabled}><small>${n.password ? "Already saved; leave blank to keep it. " : ""}Stored in the OS credential store. Other users can sign in through the server's configured access control or identity provider.</small>${fieldError("network-password")}</label>
+        <label class="field"><span>Administrator password ${required("network-password")}</span><input name="network-password" aria-label="Administrator password" type="password" autocomplete="new-password" minlength="${minPasswordCharacters}" placeholder="${n.password ? "Saved in OS credential store — leave blank to keep" : `At least ${minPasswordCharacters} characters`}" ${disabled}>${s?.networkPasswordShort ? `<p class="network-warning" role="status" id="network-password-short">The saved password is shorter than ${minPasswordCharacters} characters, the least Hardcharger accepts for new passwords. It still works; type a new one here and save to change it.</p>` : ""}<small>${n.password ? "Already saved; leave blank to keep it. " : ""}At least ${minPasswordCharacters} characters. Stored in the OS credential store. Other users can sign in through the server's configured access control or identity provider.</small>${fieldError("network-password")}</label>
       </div>
     </div>
   </section>`;

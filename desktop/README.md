@@ -59,8 +59,11 @@ x64/Arm64. Linux packaging and testing are follow-up work.
 - **Settings → Network access** switches between **Only this computer** (the default)
   and **Allow network connections**. Stop the server, choose a listen IP (all IPv4:
   `0.0.0.0`, all IPv6: `::`, or a specific interface), enter this computer's client-facing
-  DNS name/IP, and set the administrator user name and password. The password persists
-  in the OS credential store. Save and start the server; the dashboard shows the actual
+  DNS name/IP, and set the administrator user name and password (at least 12 characters,
+  counted as characters, not bytes: 2.14.0's password policy; Settings refuses a shorter one
+  before saving). The password persists in the OS credential store. A setup saved earlier with
+  a shorter password keeps working, and the dashboard and Settings ask for a longer one
+  (`networkPasswordShort` in the status). Save and start the server; the dashboard shows the actual
   endpoint, transport, listen address, and URLs for other computers.
 - **Only this computer** keeps a generated administrator password (`hardcharger`, at least
   12 characters) in the OS credential store (account `local-admin-password` under the app's

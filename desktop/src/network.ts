@@ -14,6 +14,20 @@ export const defaultNetwork: NetworkSettings = {
   tls_cert: "", tls_key: "", username: "hardcharger", password: "",
 };
 
+/**
+ * The fewest characters a network-mode administrator password may have: the server's password
+ * policy from 2.14.0, counted in characters (code points), not bytes. The server only warns about a
+ * short bootstrap administrator password, so the app refuses a new one itself (the Rust side too).
+ */
+export const minPasswordCharacters = 12;
+
+/** The saved password, as the app's status reports it (never the password itself). */
+export const storedSecret = "__HARDCHARGER_STORED_SECRET__";
+
+export function passwordTooShort(password: string): boolean {
+  return password !== "" && password !== storedSecret && [...password].length < minPasswordCharacters;
+}
+
 export interface NetworkInfo { hostname: string; addresses: { address: string; interface: string }[] }
 export interface GeneratedCertificate {
   certificate: string; privateKey: string; trustCertificate: string;
@@ -34,6 +48,8 @@ export function networkErrors(network: NetworkSettings): Record<string, string> 
   } catch { errors["network-name"] = "Enter a valid server DNS name or IP address, without a port."; }
   if (!network.username.trim()) errors["network-user"] = "Network access requires a user name.";
   if (!network.password) errors["network-password"] = "Set a password before allowing network connections.";
+  else if (passwordTooShort(network.password))
+    errors["network-password"] = `The administrator password needs at least ${minPasswordCharacters} characters.`;
   if (network.tls && !network.tls_cert) errors["network-cert"] = "TLS requires both a PEM certificate chain and private key path. Generate them below or supply your own.";
   if (network.tls && !network.tls_key) errors["network-key"] = "TLS requires both a PEM certificate chain and private key path. Generate them below or supply your own.";
   return errors;

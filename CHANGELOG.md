@@ -51,6 +51,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- **Desktop app: a network administrator password has at least 12 characters**, as 2.14.0's
+  password policy asks of every new password. Settings refuses a shorter one with a message
+  before saving. A network setup saved earlier with a shorter password keeps working; the
+  dashboard and Settings ask you to choose a longer one.
 - **Android builds reach internal testers automatically.** Each release publishes its Android
   build to Google Play's internal testing track, as iOS builds reach TestFlight, instead of
   leaving a draft to publish by hand in Play Console. A leftover draft no longer stops the

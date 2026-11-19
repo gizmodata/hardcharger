@@ -134,6 +134,9 @@ pub struct Status {
     pub leftover: Option<Leftover>,
     /// Only this computer: the administrator's user name, never the password (#56).
     pub local_admin: Option<LocalAdminStatus>,
+    /// Network access with a saved administrator password shorter than 2.14.0's 12 characters:
+    /// it still works (the server only warns), and the app asks for a new one.
+    pub network_password_short: bool,
 }
 
 /// What the dashboard shows about local-only mode's administrator, without the password: Reveal
@@ -212,6 +215,28 @@ const SIDECAR_FILE: &str = "sidecar.json";
 const REDACTED: &str = "__HARDCHARGER_STORED_SECRET__";
 const NETWORK_PASSWORD: &str = "__desktop_network_password__";
 
+/// The fewest characters a network-mode administrator password may have: the server's own
+/// password policy from 2.14.0 (characters, not bytes). The server only warns about a short
+/// bootstrap administrator password, so the app refuses a new one itself.
+pub const MIN_PASSWORD_CHARACTERS: usize = 12;
+
+/// Why a newly typed network-mode administrator password can't be saved, if it can't. A
+/// password saved before 2.14.0 isn't checked here (the dashboard asks for a new one instead):
+/// refusing it at load or start would break a running setup.
+fn new_network_password_error(password: &str) -> Option<String> {
+    (!password.is_empty() && password.chars().count() < MIN_PASSWORD_CHARACTERS).then(|| {
+        format!("The administrator password needs at least {MIN_PASSWORD_CHARACTERS} characters.")
+    })
+}
+
+/// Whether the saved network-mode administrator password is shorter than the 2.14.0 policy.
+fn network_password_short(network: &NetworkSettings) -> bool {
+    network.enabled
+        && !network.password.is_empty()
+        && network.password != REDACTED
+        && network.password.chars().count() < MIN_PASSWORD_CHARACTERS
+}
+
 // Fixed string domains validated by server/src/config.cc. Keep free-form strings
 // (paths, catalog names, roles, DuckDB memory/storage settings) as text fields.
 fn option_choices(name: &str) -> &'static [&'static str] {
@@ -287,11 +312,14 @@ fn managed(name: &str) -> bool {
 }
 
 fn credential_store() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(
-        "com.gizmodata.hardcharger.desktop.preview",
-        "server-options",
-    )
-    .map_err(|e| e.to_string())
+    // Tests never reach the app's own entry: a save test that got past its expected refusal
+    // would otherwise overwrite (or ask the Keychain for) a real setup's stored secrets.
+    let service = if cfg!(test) {
+        "com.gizmodata.hardcharger.desktop.test"
+    } else {
+        "com.gizmodata.hardcharger.desktop.preview"
+    };
+    keyring::Entry::new(service, "server-options").map_err(|e| e.to_string())
 }
 
 fn public_settings(settings: &Settings) -> Settings {
@@ -685,6 +713,7 @@ impl Server {
                     format!("The password could not be saved in the OS credential store, so it changes at every start ({e}).")
                 }),
             }),
+            network_password_short: network_password_short(&self.settings.network),
         })
     }
 
@@ -992,6 +1021,12 @@ impl Server {
     pub fn save_settings(&mut self, settings: Settings) -> Result<Status, String> {
         settings.validate()?;
         let mut settings = settings;
+        // Only a password typed now (the saved one comes back as REDACTED).
+        if settings.network.password != REDACTED {
+            if let Some(error) = new_network_password_error(&settings.network.password) {
+                return Err(error);
+            }
+        }
         if settings.network.password == REDACTED {
             settings.network.password = self.settings.network.password.clone();
         }
@@ -1646,6 +1681,94 @@ mod tests {
             assert!(TcpListener::bind((bind, server.settings.port)).is_ok());
             fs::remove_dir_all(directory).unwrap();
         }
+    }
+
+    #[test]
+    fn a_new_network_password_needs_twelve_characters() {
+        let error = "The administrator password needs at least 12 characters.";
+        for short in [
+            "",
+            "x",
+            "eleven-char",
+            "ééééééééééé",
+            "🔑🔑🔑🔑🔑🔑🔑🔑🔑🔑🔑",
+        ] {
+            // Characters, not bytes: 11 two- or four-byte characters are still 11.
+            let expected = (!short.is_empty()).then(|| error.to_string());
+            assert_eq!(new_network_password_error(short), expected, "{short}");
+        }
+        for long in [
+            "twelve-chars",
+            "éééééééééééé",
+            "🔑🔑🔑🔑🔑🔑🔑🔑🔑🔑🔑🔑",
+            "synthetic-network-test-password",
+        ] {
+            assert_eq!(new_network_password_error(long), None, "{long}");
+        }
+        let mut network = NetworkSettings {
+            enabled: true,
+            password: "eleven-char".into(),
+            ..NetworkSettings::default()
+        };
+        assert!(network_password_short(&network));
+        network.password = "twelve-chars".into();
+        assert!(!network_password_short(&network));
+        network.password = "eleven-char".into();
+        network.enabled = false; // Only this computer: the network password isn't used.
+        assert!(!network_password_short(&network));
+    }
+
+    /// A network setup saved before 2.14.0 with a password under 12 characters keeps working (the
+    /// server starts and signs the administrator in; it only warns), the dashboard is told so,
+    /// and the settings form can't save another short one: the stored setup stays as it was.
+    #[test]
+    fn a_saved_short_network_password_still_starts_and_a_new_one_is_refused() {
+        let Some(binary) = std::env::var_os("HARDCHARGER_DESKTOP_TEST_SERVER") else {
+            return;
+        };
+        let directory = std::env::temp_dir().join(format!(
+            "hardcharger-short-password-test-{}",
+            random_secret().unwrap()
+        ));
+        let mut server = Server::new(binary.into(), directory.clone()).unwrap();
+        server.settings.network = NetworkSettings {
+            enabled: true,
+            listen_address: "127.0.0.1".into(),
+            server_name: "127.0.0.1".into(),
+            tls: false,
+            username: "desktop-network-admin".into(),
+            password: "short-pw-11".into(),
+            ..NetworkSettings::default()
+        };
+        assert!(server.status().unwrap().network_password_short);
+        assert!(start_on_a_free_port(&mut server, "127.0.0.1").running);
+        assert_eq!(
+            server.sign_in().unwrap()["username"],
+            "desktop-network-admin"
+        );
+        assert!(server.stop().is_ok());
+        let before = server.settings.clone();
+        let saved = fs::read(directory.join("settings.json")).ok();
+        let mut typed = server.settings.clone();
+        typed.network.password = "still-short".into();
+        assert_eq!(
+            server.save_settings(typed).err().unwrap(),
+            "The administrator password needs at least 12 characters."
+        );
+        assert_eq!(server.settings.network.password, before.network.password);
+        assert_eq!(
+            fs::read(directory.join("settings.json")).ok(),
+            saved,
+            "nothing was saved"
+        );
+        assert!(server.status().unwrap().network_password_short);
+        let status = serde_json::to_value(server.status().unwrap()).unwrap();
+        assert_eq!(status["networkPasswordShort"], true);
+        assert_eq!(
+            status["settings"]["network"]["password"], REDACTED,
+            "the password itself never leaves"
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
