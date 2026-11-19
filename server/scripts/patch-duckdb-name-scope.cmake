@@ -15,9 +15,12 @@
 #   catalog.cpp                 Catalog::GetEntry(retriever, ...) asks the hook first when the
 #       retriever has a scope.
 #   bind_basetableref.cpp       a view's binder gets the view's scope (reading a view).
-#   bind_insert/update/merge_into.cpp   column defaults are bound under their table's scope.
-#   bind_create_table.cpp       Binder::BindConstraints(table), the CHECKs of a table being
-#       written, binds under the table's scope.
+#   bind_insert/update/merge_into.cpp   column defaults are bound under their table's scope,
+#       also where a default is written into the statement (VALUES (..., DEFAULT); the columns
+#       an INSERT ... ON CONFLICT leaves out).
+#   bind_create_table.cpp, table_catalog_entry.cpp   Binder::BindConstraints(table), the CHECKs
+#       of a table being written, and TableCatalogEntry::BindUpdateConstraints, which binds them
+#       again to learn which columns an UPDATE must carry, bind under the table's scope.
 #   bind_context.cpp, binder.hpp/.cpp, expression_binder.cpp, column_qualifier.cpp
 #       a generated column's expression, which the binder splices into the reading statement's
 #       own expression, is wrapped in a marker call that carries its table's scope to wherever
@@ -186,11 +189,49 @@ foreach(dml insert update merge_into)
           "\t{\n\t\t// Hardcharger: a default's functions and types are found in its table's schema\n\t\tHardchargerNameScopeGuard hc_scope(entry_retriever, HardchargerNameScope::Of(table, \"table\"));\n\t\tBindDefaultValues(table.GetColumns(), ${dml}->bound_defaults, catalog_name.GetIdentifierName(),\n\t\t                  schema_name.GetIdentifierName());\n\t}\n")
 endforeach()
 
+# A default written into the statement itself (VALUES (..., DEFAULT), in an INSERT and in a
+# MERGE's INSERT; the columns an INSERT ... ON CONFLICT with a column list leaves out): a parsed
+# copy, bound with the statement, so it carries its table's scope in a marker (section 6).
+hc_edit("src/planner/binder/statement/bind_insert.cpp"
+        "\t\t\tTryReplaceDefaultExpression(expr_list.values[list_idx][col_idx], column);\n" [==[
+			auto &hc_value = expr_list.values[list_idx][col_idx];
+			const bool hc_default =
+			    hc_value->GetExpressionType() == ExpressionType::VALUE_DEFAULT && column.HasDefaultValue();
+			TryReplaceDefaultExpression(hc_value, column);
+			if (hc_default) {
+				// Hardcharger: the column's default, written into the statement: still its table's names
+				hc_value = HardchargerScoped(std::move(hc_value), HardchargerNameScope::Of(table, "table"));
+			}
+]==])
+hc_after("src/planner/binder/statement/bind_insert.cpp" "\t\t\t\t\t\texpr = column.DefaultValue().Copy();\n" [==[
+						// Hardcharger: bound with the statement's source: still its table's names
+						expr = HardchargerScoped(std::move(expr), HardchargerNameScope::Of(table, "table"));
+]==])
+hc_edit("src/planner/binder/statement/bind_merge_into.cpp"
+        "\t\t\tTryReplaceDefaultExpression(action.expressions[i], column);\n" [==[
+			const bool hc_default =
+			    action.expressions[i]->GetExpressionType() == ExpressionType::VALUE_DEFAULT && column.HasDefaultValue();
+			TryReplaceDefaultExpression(action.expressions[i], column);
+			if (hc_default) {
+				// Hardcharger: the column's default, written into the statement: still its table's names
+				action.expressions[i] =
+				    HardchargerScoped(std::move(action.expressions[i]), HardchargerNameScope::Of(table, "table"));
+			}
+]==])
+
 # ---- 5. CHECK constraints of a table being written ----
 hc_after("src/planner/binder/statement/bind_create_table.cpp"
          "vector<unique_ptr<BoundConstraint>> Binder::BindConstraints(const TableCatalogEntry &table) {\n" [==[
 	// Hardcharger: a CHECK's functions and types are found in its table's schema, whoever writes
 	HardchargerNameScopeGuard hc_scope(entry_retriever, HardchargerNameScope::Of(table, "table"));
+]==])
+# An UPDATE binds the CHECKs once more, to learn which columns it must carry for them: under the
+# same scope, or the two bindings disagree about the columns (DuckDB then fails the statement
+# with a fatal error that invalidates the database).
+hc_before("src/catalog/catalog_entry/table_catalog_entry.cpp"
+          "\tauto bound_constraints = binder.BindConstraints(constraints, name, GetColumns());\n" [==[
+	// Hardcharger: as Binder::BindConstraints(table) binds them (patch-duckdb-name-scope.cmake)
+	HardchargerNameScopeGuard hc_scope(binder.EntryRetriever(), HardchargerNameScope::Of(*this, "table"));
 ]==])
 
 # ---- 6. Generated columns: a marker carries the scope with the spliced expression ----

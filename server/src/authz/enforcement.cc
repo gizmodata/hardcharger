@@ -381,6 +381,19 @@ bool ChangesWholeServer(dd::ClientContext& context, const dd::Identifier& name,
 // view only), view inside view, each against its own owner. A view without a
 // valid owner record reads with the caller's rights, in addition to the
 // rights of any view it sits in.
+// CREATE INDEX: an index's expressions are kept as written and bound again, under their
+// table's name scope, when the index is first needed after a start (name_scope.hpp). Why the
+// functions and types they name would then not be what they are in this session; "" if they are.
+std::string IndexStoredNamesProblem(dd::ClientContext& context, dd::LogicalCreateIndex& index) {
+  if (!index.info) return "";
+  const ObjectPath table = PathOfEntry(index.table);
+  std::vector<const dd::ParsedExpression*> expressions;
+  for (const auto& expression : index.info->parsed_expressions) expressions.push_back(expression.get());
+  for (const auto& expression : index.info->expressions) expressions.push_back(expression.get());
+  return StoredNamesProblem(context, table.catalog, table.schema_path,
+                            "an index on table " + table.ToString(), nullptr, expressions);
+}
+
 // ALTER TABLE ... ADD COLUMN (a generated one, or one with a CHECK) and ADD CONSTRAINT CHECK:
 // the macros they call given their schema, as CREATE TABLE does (QualifyTableExpressions).
 void QualifyAlterExpressions(dd::ClientContext& context, const std::string& catalog, dd::AlterInfo& info) {
@@ -594,6 +607,7 @@ class PlanChecker {
         auto& index = op.Cast<dd::LogicalCreateIndex>();
         if (!IsTempCatalog(compat::Str(index.table.ParentCatalog().GetName()))) {
           Require(index.table, Privilege::kAlterTable, {});
+          if (auto problem = IndexStoredNamesProblem(context_, index); !problem.empty()) Deny(principal_, problem);
         }
         VisitChildren(op, nullptr);
         return;
@@ -2228,6 +2242,14 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
           auto& info = *op.Cast<dd::LogicalAlter>().info;
           const auto parts = PartsOf(info);
           if (info.type == dd::AlterType::ALTER_TABLE && !parts.empty()) QualifyAlterExpressions(context, parts[0], info);
+        }
+        if (op.type == OpType::LOGICAL_CREATE_INDEX) {
+          auto& index = op.Cast<dd::LogicalCreateIndex>();
+          if (!IsTempCatalog(compat::Str(index.table.ParentCatalog().GetName()))) {
+            if (auto problem = IndexStoredNamesProblem(context, index); !problem.empty()) {
+              ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
+            }
+          }
         }
         if (op.type == OpType::LOGICAL_CREATE_TABLE) {
           auto parts = PartsOf(*op.Cast<dd::LogicalCreateTable>().info->base);

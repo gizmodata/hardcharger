@@ -1205,7 +1205,7 @@ belongs to, and no session's search path, current catalog or temporary objects a
 
 | Expression | Where its functions, macros and types are found |
 |---|---|
-| A table's `CHECK` constraints, generated columns, column defaults | the table's schema |
+| A table's `CHECK` constraints, generated columns, column defaults, index expressions | the table's schema |
 | A trigger's body | its table's schema |
 | A view's query | the view's schema |
 | A row or masking policy | `main` of the protected table's database |
@@ -1216,9 +1216,9 @@ that schema of the same database, `catalog.schema.name` exactly there. A macro i
 method inside one of these (`x.is_valid()`; DuckDB's own functions are: `x.lower()`). So a macro or
 type in another schema is named with its schema: `CHECK (main.is_valid(x))`. `CREATE TABLE` and
 `CREATE TRIGGER` store the macros they call that way, as the creating session finds them
-(`duckdb_tables()` shows `CHECK(main.is_valid(x))`); `CREATE VIEW`, `CREATE ROW POLICY`,
-`CREATE MASKING POLICY` and `SET MASKING POLICY` refuse a definition whose names would not be
-found, with the name to write. An administrator's session gets the same answers as anyone's.
+(`duckdb_tables()` shows `CHECK(main.is_valid(x))`); `CREATE VIEW`, `CREATE INDEX`,
+`CREATE ROW POLICY` and `SET MASKING POLICY` refuse a definition whose names would not be found,
+with the name to write. An administrator's session gets the same answers as anyone's.
 
 Views, triggers, policies and tables from before 2.14 are looked up the same way. One that names
 a macro of another schema without it, or calls a macro as a method, is refused when it is used,

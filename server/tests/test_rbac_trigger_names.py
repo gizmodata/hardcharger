@@ -663,7 +663,7 @@ def test_a_writers_macro_does_not_run_in_a_users_trigger_through_a_generated_col
     for client, use in [(wes, "USE main"), (wes, USE_WS), (admin, USE_WS)]:
         expect_allowed(client=client, sql=use)
         error = expect_blocked(client=client, sql=f"INSERT INTO {LEGACY}.app.gmine VALUES (1)", code="sql_error", why=NOT_FOUND)
-        assert f"function fmt, which a CHECK constraint, generated column or column default of table {LEGACY}.app.gvault calls" in error.detail
+        assert f"function fmt, which a CHECK constraint, generated column, column default or index of table {LEGACY}.app.gvault calls" in error.detail
         assert f"an administrator can create a macro of that name in {LEGACY}.app that calls the one meant" in error.detail
         assert "FORGED" not in error.detail
     assert count(client=admin, table="app.glabels") == 0

@@ -155,13 +155,24 @@ def test_a_statement_prepared_before_or_after_use_binds_a_check_the_same(legacy)
         assert CHECK_FAILED in raised.value.detail, raised.value.detail
         wes.execute_prepared(prepared_id=prepared, parameters=[2])
     assert rows(client=legacy.admin(), sql="SELECT x FROM main.checked") == [(2,), (2,)]
+    # A generated column read, and a default written into the statement, by statements prepared
+    # before USE and run on both sides of it (DuckDB binds them again after USE).
+    wes = legacy.user(name="wes")
+    read = wes.prepare(sql=f"SELECT shown FROM {L}.rpt.people WHERE name = ?")
+    write = wes.prepare(sql=f"INSERT INTO {L}.main.dflt_pk VALUES (?, DEFAULT)")
+    for key, use in enumerate(["", "USE ws", f"SET search_path = '{L}.ws,{L}.main'"]):
+        if use:
+            expect_allowed(client=wes, sql=use)
+        assert wes.execute_prepared(prepared_id=read, parameters=["ann"]).to_pylist() == [{"shown": "***11"}], use
+        wes.execute_prepared(prepared_id=write, parameters=[900 + key])
+    assert rows(client=legacy.admin(), sql="SELECT DISTINCT note FROM main.dflt_pk") == [("genuine default",)]
 
 
 def test_a_method_call_of_a_macro_from_before_is_refused_not_guessed(legacy):
     # Second review g02 A and D, g03 shape 3: `x.is_valid()` was read as is_valid(x), the
     # session's. Only DuckDB's own functions are called that way in a stored expression now.
     admin = legacy.admin()
-    table = "a CHECK constraint, generated column or column default of table"
+    table = "a CHECK constraint, generated column, column default or index of table"
     for user in ["wes", "admin"]:
         for path, client in sessions(server=legacy, catalog=L, user=user):
             for value in [1, -1]:
@@ -218,7 +229,7 @@ def test_a_generated_column_from_before_is_its_tables_in_views_and_trigger_bodie
     # session (never the session's own fmt), with the two ways out.
     for path, wes in sessions(server=legacy, catalog=L):
         detail = not_found(client=wes, sql=f"INSERT INTO {L}.app.mine VALUES (1)", name="function fmt",
-                           whose=f"a CHECK constraint, generated column or column default of table {L}.app.mvault",
+                           whose=f"a CHECK constraint, generated column, column default or index of table {L}.app.mvault",
                            remedy=f"an administrator can create a macro of that name in {L}.app that calls the one meant")
         assert f"a name without a schema is looked up in {L}.app and among DuckDB's own only" in detail, detail
     assert rows(client=admin, sql="SELECT count(*) FROM app.mlabels") == [(0,)]
@@ -259,13 +270,47 @@ def test_a_default_from_before_is_its_tables(legacy):
     assert rows(client=admin, sql="SELECT DISTINCT note FROM main.dflt_t") == [("genuine default",)]
     for path, wes in sessions(server=legacy, catalog=L):
         not_found(client=wes, sql=f"INSERT INTO {L}.app.msrc VALUES (1)", name="function stamp",
-                  whose=f"a CHECK constraint, generated column or column default of table {L}.app.mlog",
+                  whose=f"a CHECK constraint, generated column, column default or index of table {L}.app.mlog",
                   remedy="a column default can be changed with ALTER TABLE")
     assert rows(client=admin, sql="SELECT count(*) FROM app.mlog") == [(0,)]
     expect_allowed(client=admin, sql="ALTER TABLE app.mlog ALTER COLUMN approved_by SET DEFAULT util.stamp()")
     for path, wes in sessions(server=legacy, catalog=L):
         expect_allowed(client=wes, sql=f"INSERT INTO {L}.app.msrc VALUES (1)")
     assert rows(client=admin, sql="SELECT DISTINCT approved_by FROM app.mlog") == [("genuine stamp",)]
+
+
+def test_a_default_written_into_the_statement_is_its_tables(legacy):
+    # Not in either review. DuckDB writes a copy of the default into the statement itself for
+    # VALUES (..., DEFAULT), for a MERGE's INSERT, and for the columns an INSERT ... ON CONFLICT
+    # with a column list leaves out, and binds it with the statement.
+    admin = legacy.admin()
+    written = 0
+    for user in ["wes", "admin"]:
+        for path, client in sessions(server=legacy, catalog=L, user=user):
+            for sql in [f"INSERT INTO {L}.main.dflt_pk VALUES ({written + 1}, DEFAULT)",
+                        f"INSERT INTO {L}.main.dflt_pk (id) VALUES ({written + 2}) ON CONFLICT DO NOTHING",
+                        f"INSERT OR IGNORE INTO {L}.main.dflt_pk (id) VALUES ({written + 3})",
+                        f"MERGE INTO {L}.main.dflt_pk t USING (SELECT {written + 4} AS id) s ON t.id = s.id "
+                        "WHEN NOT MATCHED THEN INSERT VALUES (s.id, DEFAULT)",
+                        f"INSERT INTO {L}.main.dflt_pk (id) VALUES ({written + 5})"]:
+                expect_allowed(client=client, sql=sql)
+            written += 5
+    assert rows(client=admin, sql="SELECT note, count(*) FROM main.dflt_pk GROUP BY note") == [("genuine default", written)]
+
+
+def test_an_update_carries_the_columns_the_tables_own_check_needs(legacy):
+    # Not in either review. For an UPDATE DuckDB binds the table's CHECKs a second time, to
+    # learn which columns it must carry for them. Bound through the session, a macro of the
+    # writer's that uses no column carried none: the CHECK over (i, j) was then not checked for
+    # an UPDATE of i (and, once the CHECK itself had its table's scope, DuckDB failed with a
+    # fatal error that invalidated the database for everyone).
+    admin = legacy.admin()
+    for user in ["wes", "admin"]:
+        for path, client in sessions(server=legacy, catalog=L, user=user):
+            fails(client=client, sql=f"UPDATE {L}.main.pairs SET i = 100", why=CHECK_FAILED)
+            expect_allowed(client=client, sql=f"UPDATE {L}.main.pairs SET i = 2")
+            fails(client=client, sql=f"UPDATE {L}.main.pairs SET j = 0", why=CHECK_FAILED)
+            assert rows(client=admin, sql="SELECT i, j FROM main.pairs") == [(2, 5)], path
 
 
 def test_policies_from_before_compute_the_same_for_every_reader(legacy):
@@ -442,6 +487,12 @@ def test_a_definition_whose_names_its_scope_would_not_find_is_refused_at_create(
         expect_allowed(client=wes, sql=f"INSERT INTO {c}.app.src VALUES (1, 'EMEA')")
         expect_allowed(client=wes, sql=f"INSERT INTO {c}.app.rsrc VALUES (1, 'EMEA')")
     assert rows(client=admin, sql="SELECT DISTINCT note FROM app.sink ORDER BY note") == [("genuine EMEA",), ("genuine EMEA row",)]
+    # An index over a macro of another schema, named bare: it would not be found when the index
+    # is bound again after the next start.
+    detail = fails(client=admin, sql="CREATE INDEX src_fmt ON app.src (fmt(region))",
+                   why=f"an index on table {c}.app.src calls function fmt, which is {c}.main.fmt in this session but would not be found")
+    assert "name it with its schema (schema.name): main.fmt" in detail, detail
+    expect_allowed(client=admin, sql="CREATE INDEX src_fmt ON app.src (main.fmt(region))")
     # A macro that calls a macro: its body is bound where it is used. Named bare in there, the
     # inner one is main's only for an object of main.
     expect_allowed(client=admin, sql="CREATE TABLE main.n1 (x INT CHECK (outer_ok(x)))")

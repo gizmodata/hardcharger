@@ -18,6 +18,13 @@ namespace compat = hardcharger::authz::ddb;
 
 const char kSystemCatalog[] = "system";
 
+// Does a name without a schema that its scope's schema does not have fall back to schema main
+// of the scope's catalog, before DuckDB's own? DuckDB's own rule for a view and a default is
+// "its schema, then main". Off: a stored expression finds a bare name in its own schema and
+// among DuckDB's own only, and names a macro of main as main.f (2.14.0, as decided). Turning it
+// on is this one line; the definition-time checks follow, since they ask FindUnderScope.
+constexpr bool kBareNamesFallBackToMain = false;
+
 // The entry at exactly this catalog, schema path and name; null when there is none (or no
 // such schema, or catalog).
 dd::optional_ptr<dd::CatalogEntry> ExactlyAt(dd::ClientContext& context, const dd::EntryLookupInfo& lookup,
@@ -67,6 +74,9 @@ dd::optional_ptr<dd::CatalogEntry> Find(dd::ClientContext& context, const dd::En
   if (written.size() == 1) {
     // f: the scope's schema, else DuckDB's own.
     if (auto entry = ExactlyAt(context, lookup, scope_catalog, scope_schema, name)) return entry;
+    if (kBareNamesFallBackToMain) {
+      if (auto entry = ExactlyAt(context, lookup, scope_catalog, {DEFAULT_SCHEMA}, name)) return entry;
+    }
     return DuckDbsOwn(context, lookup, "", name);
   }
   if (written.size() == 2) {
@@ -222,10 +232,10 @@ std::string NotFoundUnderScope(const std::string& noun, const std::string& writt
     whose = "a row or masking policy on table " + subject;
     remedy = "An administrator can re-create the policy with the " + noun + " named with its schema (schema.name)";
   } else {
-    whose = "a CHECK constraint, generated column or column default of table " + subject;
+    whose = "a CHECK constraint, generated column, column default or index of table " + subject;
     remedy = "Re-create the table with the " + noun + " named with its schema (schema.name; a column default can be "
-             "changed with ALTER TABLE), or an administrator can create a macro of that name in " + scope_schema +
-             " that calls the one meant";
+             "changed with ALTER TABLE, an index dropped and created again), or an administrator can create a macro "
+             "of that name in " + scope_schema + " that calls the one meant";
   }
   std::string text = "Hardcharger access control: " + noun + " " + written + ", which " + whose + " " +
                      (noun == "type" ? "names" : "calls") + ", was not found. There a " + noun +

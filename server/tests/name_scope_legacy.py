@@ -21,6 +21,7 @@ LEGACY_OBJECTS = [
     "CREATE MACRO main.mask_ssn(x) AS '***-**-' || right(x, 4)", "CREATE MACRO main.in_region(x) AS x = 'EMEA'",
     "CREATE MACRO main.in_region2(x) AS x <> 'LATAM'", "CREATE MACRO main.dflt() AS 'genuine default'",
     "CREATE MACRO main.inner_ok(x) AS x > 0", "CREATE MACRO main.outer_ok(x) AS inner_ok(x)",
+    "CREATE MACRO main.pair_ok(a, b) AS a < b",
     "CREATE TYPE main.mood AS ENUM ('ok', 'sad')",
     "CREATE TABLE main.other_secret (note VARCHAR)", "INSERT INTO main.other_secret VALUES ('other-secret-A'), ('other-secret-B')",
     "CREATE TABLE main.audit_log (what VARCHAR, n BIGINT)",
@@ -46,6 +47,9 @@ LEGACY_OBJECTS = [
     "CREATE TABLE main.moods (m VARCHAR, mm VARCHAR AS (CAST(CAST(m AS mood) AS VARCHAR)))",
     "INSERT INTO main.moods (m) VALUES ('ok')",
     "CREATE TABLE main.dflt_t (id INT, note VARCHAR DEFAULT dflt())",
+    "CREATE TABLE main.dflt_pk (id INT PRIMARY KEY, note VARCHAR DEFAULT dflt())",
+    # A CHECK over two columns: an UPDATE of one must carry the other for it.
+    "CREATE TABLE main.pairs (i INT, j INT, CHECK (pair_ok(i, j)))", "INSERT INTO main.pairs VALUES (1, 5)",
     # A generated column DuckDB computes again when rows are appended (by a trigger, here).
     "CREATE TABLE main.gen_src (secret VARCHAR)", "CREATE TABLE main.gen_sink (secret VARCHAR, label VARCHAR AS (fmt(secret)))",
     # Policies' tables.
@@ -63,7 +67,8 @@ LEGACY_WES = [
     "CREATE MACRO ws.has_text(x) AS error('LEAK: ' || x), (a, b) AS error('LEAK: ' || b)",
     "CREATE MACRO ws.mask(x) AS error('LEAK: ' || x)", "CREATE MACRO ws.amask(x) AS error('LEAK: ' || x)",
     f"CREATE MACRO rpt.mask(x) AS error('LEAK: ' || x || ' / ' || (SELECT string_agg(note, ',') FROM {LEGACY}.main.other_secret))",
-    "CREATE MACRO ws.stamp() AS 'FORGED BY WES'", "CREATE MACRO ws.dflt() AS 'FORGED DEFAULT'",
+    "CREATE MACRO ws.stamp() AS 'FORGED BY WES'", "CREATE MACRO ws.dflt() AS 'FORGED DEFAULT', (m) AS 'FORGED DEFAULT'",
+    "CREATE MACRO ws.pair_ok(a, b) AS true, (m, a, b) AS true",
     "CREATE MACRO ws.mask_ssn(x) AS x, (a, b) AS b", "CREATE MACRO ws.in_region(x) AS true, (a, b) AS true",
     "CREATE MACRO ws.in_region2(x) AS true", "CREATE MACRO ws.inner_ok(x) AS true",
     "CREATE TYPE ws.mood AS ENUM ('ok', 'LEAK')",
@@ -109,6 +114,7 @@ LEGACY_ACCESS = [
     "GRANT SELECT ON main.cards_v TO writers", "GRANT INSERT ON main.req TO writers",
     "GRANT INSERT ON main.outbox TO writers", "GRANT SELECT ON main.moods TO writers",
     "GRANT INSERT ON main.dflt_t TO writers", "GRANT INSERT ON main.gen_src TO writers",
+    "GRANT SELECT, INSERT ON main.dflt_pk TO writers", "GRANT SELECT, UPDATE ON main.pairs TO writers",
     "GRANT INSERT ON main.gen_sink TO writers", "GRANT SELECT ON main.fmt_v TO writers",
     "GRANT SELECT ON rpt.fmt_v TO writers", "GRANT SELECT ON main.emp TO writers",
     "GRANT SELECT ON main.emp2 TO writers", "GRANT SELECT ON main.emp3 TO writers",

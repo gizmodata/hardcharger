@@ -24,7 +24,7 @@ own changelog in `python/CHANGELOG.md`.
   control the functions, macros and types they name are no longer found through that session
   (its search path, `USE`, its current catalog, its temporary objects). Each has one schema to
   look in, fixed by what it belongs to: a table's own schema for its constraints, generated
-  columns and defaults; the trigger table's for a trigger's body; the view's for a view; `main`
+  columns, defaults and index expressions; the trigger table's for a trigger's body; the view's for a view; `main`
   of the table's database for a policy (a policy belongs to no schema). A name is found there or
   among DuckDB's own functions; `schema.name` in that schema of the same database; and a macro
   is not called as a method (`x.is_valid()`), which only DuckDB's own functions are. The same
@@ -32,8 +32,8 @@ own changelog in `python/CHANGELOG.md`.
   included. Affected: every release with access control, through 2.13.1.
   - What to write: name a macro or type that is in another schema with its schema
     (`main.is_valid(x)`). `CREATE TABLE` and `CREATE TRIGGER` store the macros they call that
-    way for you, as the creating session finds them; `CREATE VIEW`, `CREATE ROW POLICY`,
-    `CREATE MASKING POLICY` and setting a masking policy on a column refuse a definition whose
+    way for you, as the creating session finds them; `CREATE VIEW`, `CREATE INDEX`,
+    `CREATE ROW POLICY` and setting a masking policy on a column refuse a definition whose
     names would not be found, saying what to write.
   - Objects made before this release are looked up the same way. One whose macro is in its
     own schema (or is named with its schema) works as before. One that names a macro of another
