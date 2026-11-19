@@ -291,6 +291,46 @@ def test_a_view_from_before_finds_its_functions_in_its_own_schema(legacy):
         assert rows(client=wes, sql=f"SELECT f FROM {L}.rpt.fmt_v ORDER BY f") == [("genuine ann",), ("genuine bob",)], path
 
 
+def test_an_index_over_a_macro_is_its_tables_when_bound_after_a_start(launcher, store, tmp_path):
+    # Not in either review: an index's expression is kept as written and bound again when the
+    # index is first needed after a start, in the session that needs it. A unique index over a
+    # macro; the first writer after the start has a macro of that name ahead in its search path.
+    # (Without a scope his macro was bound into the index, for every session until the next start.)
+    database, uri = tmp_path / "ix.duckdb", store.new_database()
+    first = start_rbac_server(launcher=launcher, store_uri=uri, args=["--database", str(database)])
+    admin = first.admin()
+    for sql in ["CREATE SCHEMA ws", "CREATE ROLE writers", "CREATE USER wes", "GRANT writers TO wes",
+                "CREATE MACRO main.norm(x) AS lower(x)",
+                "CREATE MACRO ws.norm(x) AS error('LEAK: ' || x), (a, b) AS error('LEAK: ' || b)",
+                "CREATE TABLE main.ix_bare (id INT, name VARCHAR)", "CREATE UNIQUE INDEX ix_bare_norm ON main.ix_bare (norm(name))",
+                "CREATE TABLE main.ix_full (id INT, name VARCHAR)", "CREATE UNIQUE INDEX ix_full_norm ON main.ix_full (main.norm(name))",
+                "INSERT INTO main.ix_bare VALUES (0, 'Zed')", "INSERT INTO main.ix_full VALUES (0, 'Zed')",
+                "GRANT INSERT ON main.ix_bare TO writers", "GRANT INSERT ON main.ix_full TO writers", "CHECKPOINT"]:
+        expect_allowed(client=admin, sql=sql)
+    first.running.stop()
+    second = start_rbac_server(launcher=launcher, store_uri=uri, args=["--database", str(database)])
+    for table, path in [("ix_full", "SET search_path = 'temp.main,ix.ws'"), ("ix_bare", "USE ix.ws")]:
+        wes = second.user(name="wes")
+        expect_allowed(client=wes, sql=path)
+        expect_allowed(client=wes, sql=f"INSERT INTO ix.main.{table} VALUES (1, 'Ann')")
+        fails(client=wes, sql=f"INSERT INTO ix.main.{table} VALUES (2, 'ANN')", why='Duplicate key "lower(name): ann"')
+    assert rows(client=second.admin(), sql="SELECT (SELECT count(*) FROM main.ix_bare), (SELECT count(*) FROM main.ix_full)") == [(2, 2)]
+
+
+def test_a_nested_schemas_macro_is_found_from_any_session(legacy):
+    # A name with a nested schema path and no catalog (DuckDB 2.0) is in its table's catalog,
+    # not wherever the session's search path finds a schema of the first name.
+    admin = legacy.admin()
+    for sql in ["CREATE SCHEMA app.deep", "CREATE MACRO app.deep.is_valid(x) AS x > 0",
+                "CREATE TABLE app.deep.t (x INT CHECK (app.deep.is_valid(x)), y INT CHECK (is_valid(y)))",
+                "GRANT INSERT ON app.deep.t TO writers"]:
+        expect_allowed(client=admin, sql=sql)
+    for path, wes in sessions(server=legacy, catalog=L):
+        fails(client=wes, sql=f"INSERT INTO {L}.app.deep.t VALUES (-1, 1)", why=CHECK_FAILED)
+        fails(client=wes, sql=f"INSERT INTO {L}.app.deep.t VALUES (1, -1)", why=CHECK_FAILED)
+        expect_allowed(client=wes, sql=f"INSERT INTO {L}.app.deep.t VALUES (1, 1)")
+
+
 # ---- new databases ----
 
 @pytest.fixture(scope="module")
