@@ -1685,7 +1685,12 @@ user can check what their policies will see:
 
 Each answer is worked out when the statement runs, so `SET ROLE` counts at the next
 statement, prepared ones included. For the administrator, and on a server without access
-control, every role is active and there are no attributes.
+control, every role is active and there are no attributes. Like a policy `TO` a role,
+`is_role_active()` follows `SET ROLE`: once a user acts with one of its roles, the policies `TO`
+its other roles, restrictive ones included, no longer apply to it, and `is_role_active()` is
+false for them (as in PostgreSQL). A restriction that must hold whatever role a user acts with
+is written for everyone (`TO PUBLIC`, or no `TO`), with a condition on `current_user` or
+`session_attribute()`, not on `is_role_active()`.
 
 ### When the store is down
 
