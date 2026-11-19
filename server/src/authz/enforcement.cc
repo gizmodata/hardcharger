@@ -63,6 +63,7 @@
 
 #include "authz/duckdb_internal.hpp"
 #include "authz/macros.hpp"
+#include "authz/name_scope.hpp"
 #include "logging.hpp"
 #include "authz/policies.hpp"
 #include "authz/resolver.hpp"
@@ -561,9 +562,16 @@ class PlanChecker {
           }
         }
         CheckCreate(*create.info->base, ObjectType::kTable, Privilege::kCreateTable);
-        // The macros its CHECK constraints and generated columns call, given their schema.
+        // The macros its CHECK constraints, generated columns and defaults call, given their
+        // schema; then every name in them is what its table's name scope will find.
         if (const auto parts = PartsOf(*create.info->base); !parts.empty()) {
           QualifyTableExpressions(context_, parts[0], create.info->Base());
+          if (parts.size() >= 3) {
+            const ObjectPath table{parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()};
+            if (auto problem = TableStoredNamesProblem(context_, table, create.info->Base()); !problem.empty()) {
+              Deny(principal_, problem);
+            }
+          }
         }
         VisitChildren(op, nullptr);  // CREATE TABLE AS reads its source
         return;
@@ -1544,6 +1552,8 @@ class PlanChecker {
     // The trigger is stored with the names in its action given their schema, as this session
     // resolves them, and its owner record is of that definition.
     if (auto problem = QualifyTriggerNames(context_, table_path, info); !problem.empty()) Deny(principal_, problem);
+    // And the functions and types it calls are what its table's name scope will find.
+    if (auto problem = TriggerStoredNamesProblem(context_, table_path, info); !problem.empty()) Deny(principal_, problem);
     ownership_.push_back({PendingOwnership::Kind::kCreate, TriggerOwnerPath(table_path, trigger.object_name),
                           ObjectType::kTrigger, TriggerDefinitionHash(info)});
   }
@@ -1718,6 +1728,17 @@ class PlanChecker {
     search_path.emplace_back(catalog.GetName(), schema.name);
     search_path.emplace_back(catalog.GetName(), dd::Identifier(INVALID_SCHEMA), true);
     binder->EntryRetriever().SetSearchPath(std::move(search_path));
+    // And the view's name scope (name_scope.hpp): what its functions and types will be for
+    // every reader. Bound that way here, so a name the scope does not find is said now.
+    if (!info.temporary && !IsTempCatalog(compat::Str(catalog.GetName()))) {
+      binder->EntryRetriever().SetNameScope(NameScopeIn(schema, "view", compat::Str(info.GetViewName())));
+      ObjectPath in = PathOfEntry(schema);
+      const std::string what = "view " + in.ToString() + "." + QuoteIdentifierIfNeeded(compat::Str(info.GetViewName()));
+      if (auto problem = StoredNamesProblem(context_, in.catalog, in.schema_path, what, info.query->node.get(), {});
+          !problem.empty()) {
+        Deny(principal_, problem);
+      }
+    }
     auto copy = info.query->Copy();
     auto bound = binder->Bind(*copy);
     if (!bound.plan) Deny(principal_, "the new view's query could not be checked");
@@ -2212,6 +2233,13 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
           auto parts = PartsOf(*op.Cast<dd::LogicalCreateTable>().info->base);
           auto& info = *op.Cast<dd::LogicalCreateTable>().info->base;
           if (!parts.empty()) QualifyTableExpressions(context, parts[0], op.Cast<dd::LogicalCreateTable>().info->Base());
+          if (parts.size() >= 3) {
+            const ObjectPath table{parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()};
+            if (auto problem = TableStoredNamesProblem(context, table, op.Cast<dd::LogicalCreateTable>().info->Base());
+                !problem.empty()) {
+              ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
+            }
+          }
           auto existing = LookUp(context, dd::CatalogType::TABLE_ENTRY, parts);
           if (parts.size() >= 3 && !IsTempCatalog(parts[0]) &&
               !(existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT)) {
@@ -2225,6 +2253,17 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
           auto existing = LookUp(context, dd::CatalogType::TABLE_ENTRY, parts);
           if (parts.size() >= 3 && !IsTempCatalog(parts[0]) &&
               !(existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT)) {
+            // An administrator's view too finds its functions and types under its name scope when
+            // it is read: say now what its query names that the scope would not find.
+            const ObjectPath view{parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()};
+            auto& view_info = info.Cast<dd::CreateViewInfo>();
+            if (!view_info.temporary && view_info.query && view_info.query->node) {
+              if (auto problem = StoredNamesProblem(context, view.catalog, view.schema_path, "view " + view.ToString(),
+                                                    view_info.query->node.get(), {});
+                  !problem.empty()) {
+                ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
+              }
+            }
             ownership.push_back({PendingOwnership::Kind::kCreate,
                                  {parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()},
                                  ObjectType::kView, DefinitionHashOf(info), false, {}, !existing});
@@ -2282,6 +2321,9 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
               if (auto problem = QualifyTriggerNames(context, table, info); !problem.empty()) {
                 ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
               }
+              if (auto problem = TriggerStoredNamesProblem(context, table, info); !problem.empty()) {
+                ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
+              }
               ownership.push_back({PendingOwnership::Kind::kCreate, TriggerOwnerPath(table, parts.back()),
                                    ObjectType::kTrigger, TriggerDefinitionHash(info)});
             }
@@ -2321,11 +2363,6 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
   const auto trigger_bodies = FindTriggerBodies(context, *snapshot, *plan);
   PlanChecker checker(context, *snapshot, principal, view_columns, trigger_bodies);
   checker.Visit(*plan);
-  // The CHECK constraints and generated columns of what it writes and reads: their macros are
-  // bound in this session too (triggers.hpp).
-  if (auto problem = StatementTableExpressionProblem(context, *plan); !problem.empty()) {
-    ::hardcharger::authz::Deny(principal, problem);
-  }
   RemoveViewMarkers(plan);
   // The external policy service may refuse what passed.
   if (const auto* service = engine->policy_service()) {
@@ -2381,9 +2418,6 @@ void PostBind(dd::PlannerExtensionInput& input, dd::BoundStatement& statement) {
   const auto trigger_bodies = FindTriggerBodies(input.context, *snapshot, *statement.plan);
   PlanChecker checker(input.context, *snapshot, principal, view_columns, trigger_bodies);
   checker.Visit(*statement.plan);
-  if (auto problem = StatementTableExpressionProblem(input.context, *statement.plan); !problem.empty()) {
-    ::hardcharger::authz::Deny(principal, problem);
-  }
   state->NoteBindChecked();
 }
 
@@ -2762,6 +2796,7 @@ std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(const std::string
 
 void RegisterRbacEnforcement(dd::DBConfig& config) {
   InstallViewHook();
+  InstallNameScopeHook();
   dd::OptimizerExtension extension;
   extension.pre_optimize_function = PreOptimize;
   dd::OptimizerExtension::Register(config, std::move(extension));

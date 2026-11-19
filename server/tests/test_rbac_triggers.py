@@ -364,15 +364,26 @@ def test_a_triggers_body_may_call_only_what_its_creator_may(admin, mia, tmp_path
     assert triggers_of(admin=admin, table="items") == set()
 
 
-def test_a_triggers_body_pins_the_functions_it_calls(admin, mia, cal):
+def test_a_triggers_body_keeps_the_functions_it_calls(admin, mia, cal):
+    # The macro mia's session finds (main.fmt) is stored with its schema, and the body is bound
+    # under its table's name scope (name_scope.hpp): a macro of that name in the table's schema
+    # no longer stands in for it, so cal may have one.
     expect_allowed(client=mia, sql="CREATE TRIGGER fmt_orders AFTER INSERT ON app.orders FOR EACH STATEMENT "
                                    "INSERT INTO app.order_log SELECT fmt(1)")
     try:
-        # cal's macro app.fmt would be found before main.fmt where the body is bound.
-        expect_blocked(client=cal, sql="CREATE MACRO app.fmt(x) AS 'mine'",
-                       why="would change what a view, a trigger, a row or masking policy")
-        # Twin: another name.
-        expect_allowed(client=cal, sql="CREATE MACRO app.fmt_other(x) AS 'mine'")
+        stored = expect_allowed(client=admin, sql="SELECT sql FROM duckdb_triggers() WHERE trigger_name = 'fmt_orders'")
+        assert "main.fmt(1)" in stored.column(0).to_pylist()[0]
+        expect_allowed(client=cal, sql="CREATE MACRO app.fmt(x) AS 'mine'")
+        try:
+            before = expect_allowed(client=admin, sql="SELECT count(*) FROM app.order_log WHERE what = 'order 1'").column(0).to_pylist()[0]
+            expect_allowed(client=admin, sql="INSERT INTO app.orders VALUES (901, 'x')")
+            after = expect_allowed(client=admin, sql="SELECT count(*) FROM app.order_log WHERE what IN ('order 1', 'mine')").column(0).to_pylist()[0]
+            mine = expect_allowed(client=admin, sql="SELECT count(*) FROM app.order_log WHERE what = 'mine'").column(0).to_pylist()[0]
+            assert after == before + 1 and mine == 0
+        finally:
+            expect_allowed(client=admin, sql="DELETE FROM app.orders WHERE id = 901")
+            expect_allowed(client=admin, sql="DELETE FROM app.order_log WHERE what = 'order 1'")
+            expect_allowed(client=admin, sql="DROP MACRO app.fmt")
     finally:
         expect_allowed(client=mia, sql="DROP TRIGGER fmt_orders ON app.orders")
 

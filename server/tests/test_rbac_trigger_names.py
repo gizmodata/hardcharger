@@ -634,64 +634,53 @@ def test_a_name_a_trigger_from_before_reads_bare_cant_be_made_two(legacy):
 # ---- CHECK constraints, generated columns, defaults: bound in the writer's session too ----
 
 USE_WS = "USE ws"
-TABLE_MACRO = "and in this session that is another macro than it is for its table"
+NOT_FOUND = "was not found. There a function is never looked up through the session's search path"
 
 
 def test_a_writers_macro_does_not_stand_in_for_one_a_check_calls(legacy):
     # Fix round 2, finding 01: a CHECK constraint is bound again at every write, in the
     # writer's session, so a macro of the writer's named like the one it calls bare (made
     # in a schema of the writer's, put first with USE) let rows the CHECK forbids through:
-    # directly, and through an administrator's trigger.
+    # directly, and through an administrator's trigger. Round 3 (name_scope.hpp): the CHECK
+    # finds its macro in its table's schema, whatever the session; nothing is refused for it.
     admin, wes = legacy.admin(), legacy.user(name="wes")
-    expect_blocked(client=wes, sql="INSERT INTO main.checked VALUES (-1)", code="execution_error", why="CHECK constraint failed")
-    expect_allowed(client=wes, sql=USE_WS)
-    for sql, prefix in [(f"INSERT INTO {LEGACY}.main.checked VALUES (-1)", ""),
-                        (f"INSERT INTO {LEGACY}.main.chk_pay VALUES (-2)", "trigger chk_pay_ins on table")]:
-        error = expect_blocked(client=wes, sql=sql, why=TABLE_MACRO)
-        assert f"a CHECK constraint or generated column of table {LEGACY}.main.checked calls is_valid" in error.detail
-        assert prefix in error.detail and "RESET search_path" in error.detail
-    assert count(client=admin, table="main.checked") == 0 and count(client=admin, table="main.chk_pay") == 0
-    # Twin: the writer's own search path back, the table's macro holds.
-    expect_allowed(client=wes, sql="USE main")
-    expect_blocked(client=wes, sql="INSERT INTO main.chk_pay VALUES (-2)", code="execution_error", why="CHECK constraint failed")
-    expect_allowed(client=wes, sql="INSERT INTO main.chk_pay VALUES (2)")
-    assert values(client=admin, sql="SELECT x FROM main.checked") == ["2"]
+    for use in ["USE main", USE_WS, f"SET search_path = '{LEGACY}.ws,{LEGACY}.main'"]:
+        expect_allowed(client=wes, sql=use)
+        for sql in [f"INSERT INTO {LEGACY}.main.checked VALUES (-1)", f"INSERT INTO {LEGACY}.main.chk_pay VALUES (-2)"]:
+            expect_blocked(client=wes, sql=sql, code="execution_error", why="CHECK constraint failed")
+        expect_allowed(client=wes, sql=f"INSERT INTO {LEGACY}.main.chk_pay VALUES (2)")
+    assert values(client=admin, sql="SELECT DISTINCT x FROM main.checked") == ["2"]
+    assert count(client=admin, table="main.chk_pay") == 3
 
 
 def test_a_writers_macro_does_not_run_in_a_users_trigger_through_a_generated_column(legacy):
     # Fix round 2, finding 02: a generated column is bound where it is read, in the reader's
     # session. Read by mia's trigger, the writer's macro of its name ran in her body with her
-    # rights (reading what she may read, deciding what her trigger wrote).
+    # rights (reading what she may read, deciding what her trigger wrote). Round 3: the column
+    # finds its macro in its table's schema (app) and among DuckDB's own. This one named main's
+    # bare, which only mia's search path found: refused for every session, saying how to mend it.
     admin, wes = legacy.admin(), legacy.user(name="wes")
-    expect_allowed(client=wes, sql=USE_WS)
-    error = expect_blocked(client=wes, sql=f"INSERT INTO {LEGACY}.app.gmine VALUES (1)", why=TABLE_MACRO)
-    assert "trigger gmine_ins on table" in error.detail and f"table {LEGACY}.app.gvault calls fmt" in error.detail
+    for client, use in [(wes, "USE main"), (wes, USE_WS), (admin, USE_WS)]:
+        expect_allowed(client=client, sql=use)
+        error = expect_blocked(client=client, sql=f"INSERT INTO {LEGACY}.app.gmine VALUES (1)", code="sql_error", why=NOT_FOUND)
+        assert f"function fmt, which a CHECK constraint, generated column or column default of table {LEGACY}.app.gvault calls" in error.detail
+        assert f"an administrator can create a macro of that name in {LEGACY}.app that calls the one meant" in error.detail
+        assert "FORGED" not in error.detail
     assert count(client=admin, table="app.glabels") == 0
-    # An administrator's session is held to it too, for a user's trigger (on this store's
-    # fixture the trigger has no owner on record, so it is the administrator's own statement).
-    if OWNERS_ON_RECORD:
-        expect_allowed(client=admin, sql=USE_WS)
-        expect_blocked(client=admin, sql=f"INSERT INTO {LEGACY}.app.gmine VALUES (2)", why=TABLE_MACRO)
-        expect_allowed(client=admin, sql=f"USE {LEGACY}")
-    # Twin.
-    expect_allowed(client=wes, sql="USE main")
-    expect_allowed(client=wes, sql="INSERT INTO app.gmine VALUES (3)")
+    # Mended the way it says: the table's own schema has the macro, and no session has another.
+    expect_allowed(client=admin, sql=f"USE {LEGACY}")
+    expect_allowed(client=admin, sql="CREATE MACRO app.fmt(x) AS main.fmt(x)")
+    expect_allowed(client=wes, sql=f"INSERT INTO {LEGACY}.app.gmine VALUES (3)")
     assert values(client=admin, sql="SELECT label FROM app.glabels") == ["genuine vault-secret-1"]
 
 
 def test_a_cast_in_a_generated_column_finds_its_tables_type(legacy):
-    # Types: a generated column that casts to a type by a bare name finds it where it is read.
-    # The writer's type of that name (made before it was pinned) is refused, not used.
+    # Types: a generated column that casts to a type by a bare name finds it in its table's
+    # schema, whatever the reader's search path. The reader's type of that name is never used.
     wes = legacy.user(name="wes")
-    assert values(client=wes, sql="SELECT mm FROM main.moods") == ["ok"]
-    expect_allowed(client=wes, sql=USE_WS)
-    error = expect_blocked(client=wes, sql=f"SELECT mm FROM {LEGACY}.main.moods",
-                           why="casts to type mood, and in this session that is another type than it is for its table")
-    assert f"table {LEGACY}.main.moods" in error.detail
-    # Twin: the other column reads (a scan of the table is checked as a whole, fail closed) only
-    # back in main.
-    expect_allowed(client=wes, sql="USE main")
-    assert values(client=wes, sql="SELECT m FROM main.moods") == ["ok"]
+    for use in ["USE main", USE_WS, f"SET search_path = '{LEGACY}.ws,{LEGACY}.main'"]:
+        expect_allowed(client=wes, sql=use)
+        assert values(client=wes, sql=f"SELECT mm FROM {LEGACY}.main.moods") == ["ok"], use
 
 
 def test_a_default_is_bound_where_its_table_is(legacy):

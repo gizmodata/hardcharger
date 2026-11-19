@@ -197,6 +197,7 @@
 #include <duckdb/parser/parsed_data/create_trigger_info.hpp>
 #include <duckdb/parser/parsed_data/create_table_info.hpp>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -278,20 +279,28 @@ std::string TriggerBodyNameProblem(duckdb::ClientContext& context, const Trigger
 // not a table's name); empty when it can.
 std::string QualifyTriggerNames(duckdb::ClientContext& context, const ObjectPath& table, duckdb::CreateTriggerInfo& info);
 
-// A table's CHECK constraints and generated columns are kept as written and bound again in
-// the session of each statement that writes the table (CHECK) or reads a generated column.
-// Why the macros they call (and the macros those call, and the tables, views and sequences
-// those name) are not, in this session, what their names are for the table ("Names in a
-// body" applied to the table); empty when they are.
-std::string TableExpressionProblem(duckdb::ClientContext& context, duckdb::TableCatalogEntry& table);
+// Definition time (name_scope.hpp): why a stored expression being created must not be stored as
+// written: a function, macro or type it names (or one a macro it calls names) is, in this
+// session, something its name scope `catalog`.`schema_path` will not find when the expression
+// is bound (another schema's by the search path, a temporary one, a method-style call of a
+// macro). In words for a refusal that say what to write; "" when every name is the same.
+// `what`: "view c.s.v". `aliases`: CTE names in scope around `node` (transition tables).
+std::string StoredNamesProblem(duckdb::ClientContext& context, const std::string& catalog,
+                               const std::vector<std::string>& schema_path, const std::string& what,
+                               const duckdb::QueryNode* node,
+                               const std::vector<const duckdb::ParsedExpression*>& expressions,
+                               const std::set<std::string>& aliases = {});
+// The same for a new table's CHECK constraints, generated columns and column defaults (after
+// QualifyTableExpressions), and for a new trigger's action.
+std::string TableStoredNamesProblem(duckdb::ClientContext& context, const ObjectPath& table,
+                                    const duckdb::CreateTableInfo& info);
+std::string TriggerStoredNamesProblem(duckdb::ClientContext& context, const ObjectPath& table,
+                                      const duckdb::CreateTriggerInfo& info);
 
-// The same for every table a statement writes or scans outside a view's query (a view's
-// query is bound with its own search path). In words for a refusal; empty when none.
-std::string StatementTableExpressionProblem(duckdb::ClientContext& context, const duckdb::LogicalOperator& plan);
-
-// CREATE TABLE / ALTER TABLE: the macros a CHECK constraint or a generated column calls, as
-// this session resolves them, given their schema (as a trigger's names are), so that no
-// session's search path decides them later. What can't be resolved is left as written.
+// CREATE TABLE / ALTER TABLE: the macros a CHECK constraint, a generated column or a column
+// default calls, as this session resolves them, given their schema, so that the definition
+// says what its creator meant and its name scope finds it (name_scope.hpp). A convenience:
+// what this leaves as written is found under the scope or refused, never by a session.
 void QualifyTableExpressions(duckdb::ClientContext& context, const std::string& catalog,
                              duckdb::CreateTableInfo& info);
 void QualifyTableExpression(duckdb::ClientContext& context, const std::string& catalog,

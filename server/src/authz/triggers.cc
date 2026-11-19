@@ -63,6 +63,7 @@
 #include <unordered_set>
 
 #include "authz/duckdb_internal.hpp"
+#include "authz/name_scope.hpp"
 #include "authz/resolver.hpp"
 #include "authz/views.hpp"
 
@@ -598,6 +599,7 @@ struct WrittenName {
 struct CalledFunction {
   std::vector<std::string> parts;
   bool table = false;  // FROM f(...): a table function or a table macro
+  dd::FunctionExpression* call = nullptr;  // where it stands, so CREATE TRIGGER can write its schema there
 };
 
 bool IsSequenceFunctionName(const std::string& name) {
@@ -821,6 +823,7 @@ class ActionNames {
     CalledFunction called;
     called.parts = Parts(function.GetQualifiedName());
     called.table = true;
+    called.call = &function;
     if (called.parts.empty()) return;
     const std::string name = FoldIdentifier(called.parts.back());
     if (called.parts.size() == 1 && (name == "query_table" || name == "query")) {
@@ -906,6 +909,7 @@ class ActionNames {
       } else if (!path.empty()) {
         CalledFunction called;
         called.parts = Parts(function.GetQualifiedName());
+        called.call = &function;
         if (!called.parts.empty()) functions.push_back(std::move(called));
       }
     }
@@ -1102,14 +1106,6 @@ class NameCheck {
   NameCheck(dd::ClientContext& context, const ObjectPath& table, std::string what)
       : context_(context), table_(table), what_(std::move(what)) {}
 
-  // The names are a table's CHECK constraints' and generated columns' (bound again where the
-  // table is written or read), not a trigger's.
-  void ForTableExpressions() {
-    for_table_ = true;
-    subject_ = "its table";
-    purpose_ = "what the table's definition says";
-  }
-
   std::set<const dd::CatalogEntry*> meant;
   // Every name of one part (folded) the body and its macros give a table, view or CTE.
   std::set<std::string> bare_names;
@@ -1162,56 +1158,26 @@ class NameCheck {
       }
       if (here.get() != for_the_table.get()) return what_ + named + Mismatch(*here, name, macro);
     }
-    for (const auto& type_name : written.types) {
-      // A type a cast names is found by name where it is bound: one of the session's own (a
-      // user's, earlier in its search path) would change what the cast does.
-      dd::optional_ptr<dd::CatalogEntry> here;
-      try {
-        here = InThisSession(context_, dd::CatalogType::TYPE_ENTRY, type_name);
-      } catch (const std::exception&) {
-        continue;
-      }
-      if (!here || here->internal) continue;  // DuckDB's own types
-      bool ambiguous = false;
-      auto for_the_table = ForTheTable(context_, dd::CatalogType::TYPE_ENTRY, type_name, table_, ambiguous);
-      if (ambiguous || here.get() != for_the_table.get()) {
-        return what_ + where + " casts to type " + Written(type_name) + ", and in this session that is " +
-               (ambiguous ? std::string("one of two types of that name (in the table's own schema and in main)")
-                          : std::string("another type than it is for ") + subject_) +
-               ": the statement is refused rather than guessed at";
-      }
-    }
     for (const auto& function : written.functions) {
+      // Which function a name is, is not this session's to decide: the body is bound under its
+      // table's name scope (name_scope.hpp). A macro found that way is expanded into the body,
+      // so the tables, views and sequences its own text names are held like the body's.
       const auto type = function.table ? dd::CatalogType::TABLE_FUNCTION_ENTRY : dd::CatalogType::SCALAR_FUNCTION_ENTRY;
-      dd::optional_ptr<dd::CatalogEntry> here;
+      dd::optional_ptr<dd::CatalogEntry> called;
       try {
-        here = InThisSession(context_, type, function.parts);
+        called = FindUnderScope(context_, type, table_.catalog, table_.schema_path, function.parts);
       } catch (const std::exception&) {
-        continue;  // no function by that name here (DuckDB reports it)
+        continue;  // nothing the scope finds: DuckDB's binder has said so
       }
-      if (!here || here->internal ||
-          (here->type != dd::CatalogType::MACRO_ENTRY && here->type != dd::CatalogType::TABLE_MACRO_ENTRY)) {
+      if (!called || IsDuckDbsOwn(*called) ||
+          (called->type != dd::CatalogType::MACRO_ENTRY && called->type != dd::CatalogType::TABLE_MACRO_ENTRY)) {
         continue;  // a function: what it reads, if anything, is not named in SQL
       }
-      const std::string called = Written(function.parts);
-      bool ambiguous = false;
-      auto for_the_table = ForTheTable(context_, type, function.parts, table_, ambiguous);
-      if (ambiguous || here.get() != for_the_table.get()) {
-        return what_ + where + " calls " + called + ", and in this session that is " +
-               (ambiguous ? std::string("one of two macros of that name (in the table's own schema and in main)")
-                          : std::string("another macro than it is for ") + subject_) +
-               ": the statement is refused rather than guessed at" +
-               (for_table_ && macro.empty()
-                    ? std::string(". Run it where the search path finds the table's own (RESET search_path, or USE the "
-                                  "table's schema); an administrator can name the macro with its schema in the table's "
-                                  "definition")
-                    : std::string());
-      }
-      if (!seen_.insert(here.get()).second) continue;
+      if (!seen_.insert(called.get()).second) continue;
       if (depth >= 16) return what_ + " calls macros nested too deeply to check; ask an administrator";
       ActionNames inside;
-      MacroNames(here->Cast<dd::MacroCatalogEntry>(), inside);
-      auto problem = Names(inside, QuoteIdentifierIfNeeded(compat::Str(here->name)), depth + 1);
+      MacroNames(called->Cast<dd::MacroCatalogEntry>(), inside);
+      auto problem = Names(inside, QuoteIdentifierIfNeeded(compat::Str(called->name)), depth + 1);
       if (!problem.empty()) return problem;
     }
     return "";
@@ -1223,17 +1189,17 @@ class NameCheck {
     const bool bare = name.parts.size() == 1;
     if (IsTemporary(here)) {
       return ", and in this session that is a temporary object of the session's own (a name without its catalog "
-             "finds the session's temporary objects first): the statement would not do " + purpose_ +
-             ". Drop or rename the temporary object to write this table";
+             "finds the session's temporary objects first): the statement would not do what the trigger is there to "
+             "do. Drop or rename the temporary object to write this table";
     }
-    std::string text = ", and in this session that is another object than it is for " + subject_ +
-                       " (a name without its catalog follows the session's current catalog and search path): the "
-                       "statement would not do " + purpose_;
+    std::string text = ", and in this session that is another object than it is for the trigger's own table (a name "
+                       "without its catalog follows the session's current catalog and search path): the statement "
+                       "would not do what the trigger is there to do";
     if (!IdentifiersEqual(PathOfEntry(here).catalog, table_.catalog)) {
       text += ". Run USE " + QuoteIdentifierIfNeeded(table_.catalog) + " first";
     } else if (bare) {
-      text += macro.empty() && !for_table_ ? "." + std::string(kOwnerRestores)
-                                           : std::string(". An administrator can name it with its schema in the macro");
+      text += macro.empty() ? "." + std::string(kOwnerRestores)
+                            : std::string(". An administrator can name it with its schema in the macro");
     }
     return text;
   }
@@ -1242,58 +1208,7 @@ class NameCheck {
   const ObjectPath& table_;
   std::string what_;
   std::set<const dd::CatalogEntry*> seen_;
-  bool for_table_ = false;
-  std::string subject_ = "the trigger's own table";
-  std::string purpose_ = "what the trigger is there to do";
 };
-
-// The names a table's CHECK constraints and generated columns use: DuckDB keeps them as
-// written and binds them again where the table is written (CHECK) or a generated column is
-// read, in that statement's session.
-void TableExpressionNames(const dd::TableCatalogEntry& table, ActionNames& names) {
-  for (const auto& constraint : table.GetConstraints()) {
-    if (!constraint || constraint->type != dd::ConstraintType::CHECK) continue;
-    auto& check = constraint->Cast<dd::CheckConstraint>();
-    if (!check.expression) continue;
-    auto copy = check.expression->Copy();
-    names.Expression(copy);
-  }
-  for (const auto& column : table.GetColumns().Logical()) {
-    if (!column.Generated()) continue;
-    auto copy = column.GeneratedExpression().Copy();
-    names.Expression(copy);
-  }
-}
-
-bool HasTableExpressions(const dd::TableCatalogEntry& table) {
-  for (const auto& constraint : table.GetConstraints()) {
-    if (constraint && constraint->type == dd::ConstraintType::CHECK) return true;
-  }
-  return table.HasGeneratedColumns();
-}
-
-// The CHECK constraints and generated columns of `table`, held against this session like a
-// trigger's names: every macro they call (and the macros those call) must be the one its
-// name is for the table, and so must each table, view and sequence those macros name. What
-// those names stand for goes into `meant`. "" when they are.
-std::string TableExpressionProblemIn(dd::ClientContext& context, dd::TableCatalogEntry& table,
-                                     std::set<const dd::CatalogEntry*>* meant) {
-  if (!HasTableExpressions(table)) return "";
-  const ObjectPath path = PathOfEntry(table);
-  if (IdentifiersEqual(path.catalog, TEMP_CATALOG)) return "";  // the session's own
-  const std::string what = "a CHECK constraint or generated column of table " + path.ToString();
-  try {
-    NameCheck check(context, path, what);
-    check.ForTableExpressions();
-    ActionNames names;
-    TableExpressionNames(table, names);
-    auto problem = check.Names(names, "", 0);
-    if (meant) meant->insert(check.meant.begin(), check.meant.end());
-    return problem;
-  } catch (...) {
-    return what + " could not be checked against this session; ask an administrator";
-  }
-}
 
 // ---- Carried columns (triggers.hpp) ----
 
@@ -2022,14 +1937,6 @@ std::string TriggerBodyNameProblem(dd::ClientContext& context, const TriggerBodi
         }
       }
     }
-    // The CHECK constraints and generated columns of the tables the body reaches are bound in
-    // the body too: their macros are held to this session like the body's own.
-    std::set<const dd::CatalogEntry*> tables_checked;
-    for (dd::CatalogEntry* entry : reached) {
-      if (entry->type != dd::CatalogType::TABLE_ENTRY || !tables_checked.insert(entry).second) continue;
-      auto problem = TableExpressionProblemIn(context, entry->Cast<dd::TableCatalogEntry>(), &check.meant);
-      if (!problem.empty()) return what + ": " + problem;
-    }
     for (dd::CatalogEntry* entry : reached) {
       if (check.meant.count(entry)) continue;
       if (entry->internal) continue;
@@ -2102,27 +2009,31 @@ std::string QualifyTriggerNames(dd::ClientContext& context, const ObjectPath& ta
     if (name.insert) name.insert->qualified_name = qualified;
     if (name.ref) name.ref->SetQualifiedName(qualified);
   }
+  // The macros (and table macros) it calls, given their schema too: the body is bound under its
+  // table's name scope (name_scope.hpp), which finds a bare name in the table's own schema
+  // only. A convenience: what is left as written is found under the scope or refused
+  // (TriggerStoredNamesProblem says so at once), never looked up in a writer's session.
+  for (auto& function : written.functions) {
+    if (!function.call || function.parts.empty() || function.parts.size() > 2) continue;
+    const auto type = function.table ? dd::CatalogType::TABLE_FUNCTION_ENTRY : dd::CatalogType::SCALAR_FUNCTION_ENTRY;
+    dd::optional_ptr<dd::CatalogEntry> entry;
+    try {
+      entry = InThisSession(context, type, function.parts);
+    } catch (const std::exception&) {
+      continue;
+    }
+    if (!entry || entry->internal || IsDuckDbsOwn(*entry) || IsTemporary(*entry)) continue;
+    if (entry->type != dd::CatalogType::MACRO_ENTRY && entry->type != dd::CatalogType::TABLE_MACRO_ENTRY) continue;
+    const ObjectPath path = PathOfEntry(*entry);
+    if (!IdentifiersEqual(path.catalog, table.catalog) || path.schema_path.empty()) continue;
+    dd::vector<dd::Identifier> schema;
+    for (const auto& part : path.schema_path) schema.emplace_back(part);
+    function.call->SetQualifiedName(dd::QualifiedName(std::move(schema), dd::Identifier(path.object_name)));
+  }
   return "";
 }
 
-std::string TableExpressionProblem(dd::ClientContext& context, dd::TableCatalogEntry& table) {
-  return TableExpressionProblemIn(context, table, nullptr);
-}
-
 namespace {
-void CollectStatementTables(const dd::LogicalOperator& op, std::vector<dd::TableCatalogEntry*>& tables) {
-  // A view's query is bound by the view's own binder, its search path anchored at the view.
-  if (op.type == OpType::LOGICAL_EXTENSION_OPERATOR && dynamic_cast<const ViewMarker*>(&op)) return;
-  dd::TableCatalogEntry* table = WrittenTable(op);
-  if (!table && op.type == OpType::LOGICAL_GET) {
-    if (auto scanned = op.Cast<dd::LogicalGet>().GetTable()) table = scanned.get();
-  }
-  if (table && std::find(tables.begin(), tables.end(), table) == tables.end()) tables.push_back(table);
-  for (const auto& child : op.children) {
-    if (child) CollectStatementTables(*child, tables);
-  }
-}
-
 // A scalar function call, as written, to a macro of this session's: given its schema.
 void QualifyMacroCalls(dd::ClientContext& context, const std::string& catalog, dd::ParsedExpression& expression,
                        int depth) {
@@ -2155,16 +2066,6 @@ void QualifyMacroCalls(dd::ClientContext& context, const std::string& catalog, d
 }
 }  // namespace
 
-std::string StatementTableExpressionProblem(dd::ClientContext& context, const dd::LogicalOperator& plan) {
-  std::vector<dd::TableCatalogEntry*> tables;
-  CollectStatementTables(plan, tables);
-  for (dd::TableCatalogEntry* table : tables) {
-    auto problem = TableExpressionProblemIn(context, *table, nullptr);
-    if (!problem.empty()) return problem;
-  }
-  return "";
-}
-
 void QualifyTableExpression(dd::ClientContext& context, const std::string& catalog,
                             dd::unique_ptr<dd::ParsedExpression>& expression) {
   if (!expression || IdentifiersEqual(catalog, TEMP_CATALOG)) return;
@@ -2191,6 +2092,160 @@ void QualifyTableExpressions(dd::ClientContext& context, const std::string& cata
     QualifyTableExpression(context, catalog, copy);
     column.SetGeneratedExpression(std::move(copy));
   }
+  for (dd::idx_t i = 0; i < info.columns.LogicalColumnCount(); ++i) {
+    auto& column = info.columns.GetColumnMutable(dd::LogicalIndex(i));
+    if (column.Generated() || !column.HasDefaultValue()) continue;
+    auto copy = column.DefaultValue().Copy();
+    QualifyTableExpression(context, catalog, copy);
+    column.SetDefaultValue(std::move(copy));
+  }
+}
+
+namespace {
+
+// Definition time (name_scope.hpp): the functions, macros and types `written` names, as this
+// session (the definer's) finds them, against what the stored expression's scope will find
+// when it is bound. Looks into the macros it calls, whose bodies are bound under the same
+// scope. Only what the session finds that is not DuckDB's own is compared: a name DuckDB
+// itself did not bind to a catalog entry (unnest, a lambda's parameter) is not a name.
+std::string ScopeProblem(dd::ClientContext& context, const std::string& catalog,
+                         const std::vector<std::string>& schema_path, const std::string& what, ActionNames& written,
+                         const std::string& macro, int depth, std::set<const dd::CatalogEntry*>& seen) {
+  ObjectPath scope{catalog, schema_path, {}};
+  const std::string where = macro.empty() ? "" : " calls macro " + macro + ", which";
+  const std::string fix = macro.empty() ? std::string("name it with its schema (schema.name)")
+                                        : "name it with its schema (schema.name) in macro " + macro;
+  auto in_session = [&](dd::CatalogType type, const std::vector<std::string>& parts) {
+    dd::optional_ptr<dd::CatalogEntry> entry;
+    try {
+      entry = InThisSession(context, type, parts);
+    } catch (const std::exception&) {
+    }
+    return entry;
+  };
+  auto under_scope = [&](dd::CatalogType type, const std::vector<std::string>& parts) {
+    dd::optional_ptr<dd::CatalogEntry> entry;
+    try {
+      entry = FindUnderScope(context, type, catalog, schema_path, parts);
+    } catch (const std::exception&) {
+    }
+    return entry;
+  };
+  // schema.name: what to write (never the catalog: a renamed database keeps its objects).
+  auto with_schema = [](dd::CatalogEntry& entry) {
+    ObjectPath path = PathOfEntry(entry);
+    path.catalog.clear();
+    std::string text;
+    for (const auto& part : path.schema_path) text += QuoteIdentifierIfNeeded(part) + ".";
+    return text + QuoteIdentifierIfNeeded(path.object_name);
+  };
+  auto mismatch = [&](const std::string& noun, const std::string& verb, const std::vector<std::string>& parts,
+                      dd::CatalogEntry& here, dd::optional_ptr<dd::CatalogEntry> there) {
+    return what + where + " " + verb + " " + noun + " " + Written(parts) + ", which is " +
+           (IsTemporary(here) ? std::string("a temporary one of this session") : PathOfEntry(here).ToString()) +
+           " in this session but " +
+           (there ? "would be " + PathOfEntry(*there).ToString() : std::string("would not be found")) + " where " +
+           what + " is evaluated: there a name is looked up in " + scope.ToString() +
+           " and among DuckDB's own, and a name with a schema in that schema of catalog " +
+           QuoteIdentifierIfNeeded(catalog) + ", whatever the session's search path. " +
+           (IsTemporary(here) ? std::string("It cannot use a temporary ") + noun
+                              : "So that it means the same for everyone, " + fix + ": " + with_schema(here));
+  };
+  for (const auto& type_name : written.types) {
+    auto here = in_session(dd::CatalogType::TYPE_ENTRY, type_name);
+    if (!here || here->internal || IsDuckDbsOwn(*here)) continue;
+    auto there = under_scope(dd::CatalogType::TYPE_ENTRY, type_name);
+    if (there.get() != here.get()) return mismatch("type", "names", type_name, *here, there);
+  }
+  for (const auto& function : written.functions) {
+    const auto type = function.table ? dd::CatalogType::TABLE_FUNCTION_ENTRY : dd::CatalogType::SCALAR_FUNCTION_ENTRY;
+    auto here = in_session(type, function.parts);
+    bool method = false;
+    if (!here && function.parts.size() >= 2 && !function.table) {
+      // DuckDB reads value.f() as f(value) when no schema of that name has an f.
+      here = in_session(type, {function.parts.back()});
+      method = here != nullptr;
+    }
+    if (!here || here->internal || IsDuckDbsOwn(*here)) continue;
+    if (method) {
+      return what + where + " calls " + Written(function.parts) + ", a method-style call (value.function()) of " +
+             PathOfEntry(*here).ToString() + ". Where " + what + " is evaluated only DuckDB's own functions can be "
+             "called that way (so that no session's macro of that name is ever taken for it): write it as " +
+             with_schema(*here) + "(value)";
+    }
+    auto there = under_scope(type, function.parts);
+    if (there.get() != here.get()) {
+      return mismatch(function.table ? "table function" : "function", "calls", function.parts, *here, there);
+    }
+    if (here->type != dd::CatalogType::MACRO_ENTRY && here->type != dd::CatalogType::TABLE_MACRO_ENTRY) continue;
+    if (!seen.insert(here.get()).second) continue;
+    if (depth >= 16) return what + " calls macros nested too deeply to check; ask an administrator";
+    ActionNames inside;
+    MacroNames(here->Cast<dd::MacroCatalogEntry>(), inside);
+    auto problem = ScopeProblem(context, catalog, schema_path, what, inside,
+                                QuoteIdentifierIfNeeded(compat::Str(here->name)), depth + 1, seen);
+    if (!problem.empty()) return problem;
+  }
+  return "";
+}
+
+}  // namespace
+
+std::string StoredNamesProblem(dd::ClientContext& context, const std::string& catalog,
+                               const std::vector<std::string>& schema_path, const std::string& what,
+                               const dd::QueryNode* node, const std::vector<const dd::ParsedExpression*>& expressions,
+                               const std::set<std::string>& aliases) {
+  if (catalog.empty() || schema_path.empty() || IdentifiersEqual(catalog, TEMP_CATALOG)) return "";
+  try {
+    ActionNames written(aliases);
+    if (node) {
+      auto copy = node->Copy();
+      written.Node(*copy);
+    }
+    for (const dd::ParsedExpression* expression : expressions) {
+      if (!expression) continue;
+      auto copy = expression->Copy();
+      written.Expression(copy);
+    }
+    std::set<const dd::CatalogEntry*> seen;
+    return ScopeProblem(context, catalog, schema_path, what, written, "", 0, seen);
+  } catch (const std::exception&) {
+    // SQL this can't read to the end: the binder holds it where it is bound.
+    return "";
+  }
+}
+
+std::string TableStoredNamesProblem(dd::ClientContext& context, const ObjectPath& table, const dd::CreateTableInfo& info) {
+  if (info.temporary) return "";
+  std::vector<const dd::ParsedExpression*> expressions;
+  for (const auto& constraint : info.constraints) {
+    if (constraint && constraint->type == dd::ConstraintType::CHECK) {
+      expressions.push_back(constraint->Cast<dd::CheckConstraint>().expression.get());
+    }
+  }
+  for (const auto& column : info.columns.Logical()) {
+    if (column.Generated()) {
+      expressions.push_back(&column.GeneratedExpression());
+    } else if (column.HasDefaultValue()) {
+      expressions.push_back(&column.DefaultValue());
+    }
+  }
+  return StoredNamesProblem(context, table.catalog, table.schema_path,
+                            "a CHECK constraint, generated column or column default of table " + table.ToString(), nullptr,
+                            expressions);
+}
+
+std::string TriggerStoredNamesProblem(dd::ClientContext& context, const ObjectPath& table,
+                                      const dd::CreateTriggerInfo& info) {
+  if (!info.trigger_action || info.temporary) return "";
+  std::set<std::string> aliases;
+  for (const auto& alias : {info.referencing_new_table, info.referencing_old_table}) {
+    if (!compat::Str(alias).empty()) aliases.insert(FoldIdentifier(compat::Str(alias)));
+  }
+  return StoredNamesProblem(context, table.catalog, table.schema_path,
+                            "trigger " + QuoteIdentifierIfNeeded(compat::Str(info.GetTriggerName())) + " on table " +
+                                table.ToString(),
+                            info.trigger_action.get(), {}, aliases);
 }
 
 // A type named in a cast that is one of DuckDB's own (in the system catalog), nested ones too.

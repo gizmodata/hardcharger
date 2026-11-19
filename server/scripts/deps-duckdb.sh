@@ -122,5 +122,7 @@ if [ -z "${HARDCHARGER_IOS_SDK:-}${HARDCHARGER_ANDROID_ABI:-}" ]; then
 fi
 grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_basetableref.cpp" \
   || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
+grep -q hardcharger_scoped_lookup_hook "$SRC/src/catalog/catalog.cpp" \
+  || { echo "DuckDB lost the name scope patch" >&2; exit 1; }
 grep -q HardchargerDecimal38Converter "$SRC/src/common/arrow/arrow_appender.cpp" \
   || { echo "DuckDB lost the HUGEINT / UHUGEINT Arrow export patch" >&2; exit 1; }
