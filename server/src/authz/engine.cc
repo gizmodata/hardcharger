@@ -20,6 +20,23 @@ arrow::Status AccessControlError(const std::string& message) {
 
 namespace {
 
+// Marks the refusal IsWrongCurrentPassword() recognizes (never shown to the client).
+class WrongCurrentPasswordDetail : public arrow::StatusDetail {
+ public:
+  static constexpr const char* kTypeId = "hardcharger.authz.wrong_current_password";
+  const char* type_id() const override { return kTypeId; }
+  std::string ToString() const override { return "wrong current password"; }
+};
+
+}  // namespace
+
+bool IsWrongCurrentPassword(const arrow::Status& status) {
+  const auto& detail = status.detail();
+  return detail != nullptr && std::string(detail->type_id()) == WrongCurrentPasswordDetail::kTypeId;
+}
+
+namespace {
+
 int64_t NowMilliseconds() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::system_clock::now().time_since_epoch())
@@ -1340,7 +1357,19 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       }
       if (!verified) {
         return AccessControlError("Hardcharger blocked ALTER USER: the current password given with REPLACE is not "
-                                  "user " + account_name + "'s password");
+                                  "user " + account_name + "'s password")
+            .WithDetail(std::make_shared<WrongCurrentPasswordDetail>());
+      }
+      // A temporary password past password_temporary_max_age_hours no longer replaces itself
+      // either (said only to whoever knows it): an administrator sets a new one.
+      if (snapshot()
+              ->PasswordStandingOf(own_id, options_.password_policy.max_age_days,
+                                   options_.password_policy.temporary_max_age_hours, NowMilliseconds())
+              .temporary_expired) {
+        return AccessControlError("Hardcharger blocked ALTER USER: the temporary password of user " + account_name +
+                                  " has expired (it was set more than " +
+                                  std::to_string(options_.password_policy.temporary_max_age_hours) +
+                                  " hours ago): an administrator must set a new one");
       }
       replaced = *verified;
     }

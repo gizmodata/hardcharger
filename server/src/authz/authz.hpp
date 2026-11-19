@@ -39,6 +39,7 @@
 #include <vector>
 
 #include "authz/login_events.hpp"
+#include "authz/types.hpp"
 #include "chargewire/backend.hpp"
 
 namespace hardcharger::authz {
@@ -81,10 +82,12 @@ struct Options {
   // check counts toward its limits (--verify-credentials).
   bool record_sign_ins = false;
   // The password policy (password.hpp): what CREATE USER and ALTER USER ... WITH PASSWORD
-  // accept, and when a password stops signing in (0: never).
+  // accept, when a password must be changed (0: never), and how long a temporary one lasts
+  // (0: no limit).
   int64_t password_min_length = 12;
   int64_t password_min_character_classes = 0;
   int64_t password_max_age_days = 0;
+  int64_t password_temporary_max_age_hours = 72;
 };
 
 // What hardcharger_users() shows of a user's sign-ins (from the login guard).
@@ -94,6 +97,24 @@ struct SignInSummary {
   std::optional<int64_t> last_failed_sign_in_ms;
 };
 using SignInSummaries = std::function<SignInSummary(const std::string& user_name)>;
+
+// A user's own password change (ALTER USER ... REPLACE '<current>') as the login guard sees
+// it: a guess at the current password is a guess at the password, so it is limited and
+// counted like a sign-in of that user from the session's client address.
+class PasswordAttempt {
+ public:
+  // Ended neither way (the current password was right, or the statement failed before it
+  // was checked): its place in the guard is given back, and nothing is counted.
+  virtual ~PasswordAttempt() = default;
+  // Seconds until the guard takes an attempt for this user and address (a locked pair, a
+  // delay): the change is refused unchecked. 0: it goes on.
+  virtual int64_t refused_for_seconds() const = 0;
+  // The current password was wrong: one failed sign-in.
+  virtual void Failed() = 0;
+};
+// (the session's user name, its session id) -> the attempt; null: nothing limits it.
+using PasswordAttempts =
+    std::function<std::unique_ptr<PasswordAttempt>(const std::string& user_name, const std::string& session_id)>;
 
 // One catalog_access rule of a sign-in token: a catalog name or glob ('*', '?') and
 // "read", "write" or "none". The first rule that matches a catalog decides.
@@ -244,8 +265,13 @@ class AccessControl {
   struct SignIn {
     std::string user_name;
     std::string credential;  // for Identity::credential
-    // The password was right, and older than password_max_age_days: refuse the sign-in.
+    // The password was right, and older than password_max_age_days: the sign-in goes
+    // through, held like a temporary password's (SessionGuard::PasswordMustChange).
     bool password_expired = false;
+    // The password was right, and a temporary one older than password_temporary_max_age_hours:
+    // refuse the sign-in (an administrator sets a new one).
+    bool temporary_expired = false;
+    int64_t temporary_max_age_hours = 0;  // the limit it passed, for the message
   };
   std::optional<SignIn> AuthenticatePassword(std::string_view user_name,
                                              std::string_view password) const;
@@ -320,6 +346,8 @@ class AccessControl {
 
   // Where hardcharger_users() reads each user's sign-ins from (unset: no values).
   void SetSignInSummaries(SignInSummaries summaries);
+  // Where a user's own password change asks the login guard (unset: nothing limits it).
+  void SetPasswordAttempts(PasswordAttempts attempts);
 
  private:
   void OnSnapshot(const Snapshot& snapshot);
@@ -333,7 +361,11 @@ class AccessControl {
   std::vector<std::string> hidden_catalogs_;
   ScopedTokenSigner signer_;
   SignInSummaries sign_in_summaries_;
+  PasswordAttempts password_attempts_;
+  // The policy's expiry limits (password.hpp), as of now.
+  PasswordStanding StandingOf(const Snapshot& snapshot, const std::string& user_id) const;
   int64_t password_max_age_days_ = 0;
+  int64_t password_temporary_max_age_hours_ = 0;
   std::mutex sessions_mutex_;
   std::vector<std::weak_ptr<SessionGuard>> sessions_;
   std::shared_ptr<const Snapshot> seen_;  // the snapshot sessions were last compared with
@@ -375,6 +407,8 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // administrator WITH ... EXPIRE) that is still the user's: it must change it before doing
   // anything else. Asked of the current snapshot each time.
   bool PasswordMustChange() const;
+  // Why: a temporary password, or one past password_max_age_days (empty when not held).
+  PasswordStanding HeldUntilPasswordChanged() const;
   // When the password must change, throws (permission denied, saying how to change it) for
   // anything but the session's own change (`sql`: ALTER USER CURRENT_USER | <own name> WITH
   // PASSWORD '...' REPLACE '...'); `sql` nullopt is a request that runs no statement text

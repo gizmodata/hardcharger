@@ -117,6 +117,11 @@ int VerifyCredentials(const Config& config, std::istream& in, std::ostream& out)
     options.read_only = true;
     // ... but a password check counts toward the login guard's limits, as on the server.
     options.record_sign_ins = true;
+    // The password lifetimes, so the answer is the sign-in's (held, or a temporary one refused).
+    options.password_min_length = config.password_min_length;
+    options.password_min_character_classes = config.password_min_character_classes;
+    options.password_max_age_days = config.password_max_age_days;
+    options.password_temporary_max_age_hours = config.password_temporary_max_age_hours;
     // Not asked: the policy service decides statements, not sign-ins.
     try {
       access = std::make_shared<authz::AccessControl>(options);

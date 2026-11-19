@@ -266,4 +266,9 @@ class RbacEngine {
 // "Hardcharger access control: ..." — the prefix every RBAC error carries.
 arrow::Status AccessControlError(const std::string& message);
 
+// A user's own password change (ALTER USER ... REPLACE '<current>') was refused because the
+// current password was wrong: the server's login guard counts it as a failed sign-in of that
+// user from the session's client address.
+bool IsWrongCurrentPassword(const arrow::Status& status);
+
 }  // namespace hardcharger::authz

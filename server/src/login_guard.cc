@@ -652,6 +652,40 @@ std::shared_ptr<LoginEventStore> StoreLoginEvents(std::shared_ptr<authz::AccessC
   return std::make_shared<AccessControlEvents>(std::move(access));
 }
 
+namespace {
+
+class GuardedPasswordAttempt : public authz::PasswordAttempt {
+ public:
+  GuardedPasswordAttempt(std::shared_ptr<LoginGuard> guard, std::string user_name, std::string client_address)
+      : guard_(std::move(guard)), user_(std::move(user_name)), address_(std::move(client_address)) {
+    decision_ = guard_->Check(user_, address_);
+  }
+  ~GuardedPasswordAttempt() override {
+    if (decision_.allowed && !ended_) guard_->Release(user_, address_);
+  }
+  int64_t refused_for_seconds() const override {
+    return decision_.allowed ? 0 : std::max<int64_t>(1, decision_.retry_after_seconds);
+  }
+  void Failed() override {
+    if (!decision_.allowed || ended_) return;
+    ended_ = true;
+    guard_->RecordFailure(user_, address_);
+  }
+
+ private:
+  std::shared_ptr<LoginGuard> guard_;
+  std::string user_, address_;
+  LoginGuard::Decision decision_;
+  bool ended_ = false;
+};
+
+}  // namespace
+
+std::unique_ptr<authz::PasswordAttempt> GuardPasswordAttempt(std::shared_ptr<LoginGuard> guard, std::string user_name,
+                                                             std::string client_address) {
+  return std::make_unique<GuardedPasswordAttempt>(std::move(guard), std::move(user_name), std::move(client_address));
+}
+
 LoginGuardSettings LoginGuardSettingsFrom(const Config& config) {
   LoginGuardSettings settings;
   settings.lockout_threshold = config.login_lockout_threshold;

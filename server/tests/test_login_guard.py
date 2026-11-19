@@ -21,11 +21,10 @@ import subprocess
 import time
 
 import httpx
-import psycopg
 import pytest
 
 from conftest import BINARY, TIMEOUT_SCALE, clean_environment
-from rbac import SECRET_KEY, STORE_KIND, ChargewireError, expect_allowed, start_rbac_server
+from rbac import SECRET_KEY, ChargewireError, expect_allowed, start_rbac_server
 
 pytestmark = pytest.mark.rbac_store
 
@@ -472,26 +471,8 @@ def test_character_classes_when_asked_for(launcher, store):
     expect_allowed(client=admin, sql="CREATE USER amy WITH PASSWORD 'Lowercase4567'")
 
 
-@pytest.mark.skipif(STORE_KIND != "postgres", reason="the DuckDB store's dates are set in unit/login_guard_test.cc's "
-                                                     "and the store unit tests (Python can't write a DuckDB 2.0 file)")
-def test_an_expired_password_stops_signing_in_until_it_is_set_again(launcher, store):
-    uri = store.new_database()
-    server = start(launcher=launcher, store_uri=uri, env={"HARDCHARGER_PASSWORD_MAX_AGE_DAYS": "90"})
-    create_joe(server=server)
-    assert sign_in(server=server, user="joe", password=JOE_PASSWORD).status_code == 200
-    with psycopg.connect(conninfo=uri, autocommit=True) as connection:
-        changed = connection.execute(query="UPDATE hardcharger_rbac.password_changes SET changed_at_ms = "
-                                           "changed_at_ms - 91::bigint * 86400000").rowcount
-    assert changed == 1
-    server.running.stop()
-    again = start(launcher=launcher, store_uri=uri, env={"HARDCHARGER_PASSWORD_MAX_AGE_DAYS": "90"})
-    response = sign_in(server=again, user="joe", password=JOE_PASSWORD)
-    assert response.status_code == 401, response.text
-    assert "the password of user joe has expired" in response.json()["detail"], response.text
-    # A wrong password is the ordinary refusal: expiry is only said to the password's holder.
-    assert "expired" not in sign_in(server=again, user="joe", password="wrong-password").json()["detail"]
-    expect_allowed(client=again.admin(), sql="ALTER USER joe WITH PASSWORD 'a-brand-new-password'")
-    assert sign_in(server=again, user="joe", password="a-brand-new-password").status_code == 200
+# An expired password (password_max_age_days) signs in held until its user changes it, and a
+# temporary password stops working after password_temporary_max_age_hours: test_password_lifetimes.py.
 
 
 # ---- trusted_proxy_secret: a proxy trusted by a secret header, not its address ----

@@ -469,7 +469,11 @@ store transaction confirms the hash is still the one verified. Without `REPLACE`
 non-administrator's change of its own password is refused. The alternative was a fresh sign-in
 check (a token newer than N minutes). Rejected: a stolen access token is fresh, and a reauthentication
 step would need protocol support in every client; the current password is what proves the
-person. A wrong current password fails the statement and is audited. The change ends the user's
+person. A wrong current password fails the statement and is audited, and the login guard counts
+it as a failed sign-in of the user from the session's client address (a locked pair refuses the
+change unchecked, as it refuses a sign-in): otherwise a session, or a stolen token, would be an
+unlimited guessing channel for the password. A right one is no sign-in and resets nothing. The
+change ends the user's
 sessions, the one that ran it included (its access token names the old password), as every
 password change does, and the client signs in again; the web UI does that by itself.
 
@@ -483,6 +487,13 @@ stopped cluster for it so the user can change it there. The verifier's answer sa
 `password removed`; the account's `before` / `after` state ends in `; password must be
 changed` while it must. `hardcharger_users()` has `password_must_change` for administrators and
 the user's own row (NULL in other rows).
+
+**Lifetimes.** A temporary password works for `password_temporary_max_age_hours` (72; 0: no
+limit) from when it was set (`set_at_ms`): after that its sign-in, and its own change, are
+refused with a message telling the holder an administrator must set a new one, and neither
+counts as a failure. A password older than `password_max_age_days` holds its sessions the same
+way a temporary one does (the refusal says it has expired), so users renew expired passwords
+themselves; `--verify-credentials` says `"password_must_change": true` for it too.
 
 **Mixed versions.** A 2.13 replica does not hold such sessions. Use temporary passwords once
 every replica runs 2.14, as for `SYSTEM ADMIN`.

@@ -517,7 +517,8 @@ std::shared_ptr<arrow::RecordBatch> Roles(const Snapshot& snapshot, const Visibi
 // ---- hardcharger_users() ----
 
 std::shared_ptr<arrow::RecordBatch> Users(const Snapshot& snapshot, const Principal& viewer,
-                                          const Visibility& visibility, const SignInSummaries& summaries) {
+                                          const Visibility& visibility, const SignInSummaries& summaries,
+                                          const std::function<bool(const std::string& user_id)>& must_change_of) {
   Names names(snapshot);
   Rows rows(ColumnsOf(AccessTable::kUsers));
   if (visibility.kind() == ViewerKind::kRestrictedAdministrator) return rows.Finish();
@@ -533,10 +534,11 @@ std::shared_ptr<arrow::RecordBatch> Users(const Snapshot& snapshot, const Princi
       failed = summary.failed_sign_ins;
     }
     // Never the password hash: only whether there is one.
-    // Whether its password is temporary (must be changed before anything else): for the
+    // Whether its password is temporary or past password_max_age_days (must be changed before
+    // anything else): for the
     // administrator (a System Admin included) and the user's own row; NULL to anyone else.
     const Cell must_change = visibility.kind() == ViewerKind::kAdministrator || current
-                                 ? Cell(snapshot.PasswordMustChange(u.id) != nullptr)
+                                 ? Cell(must_change_of ? must_change_of(u.id) : snapshot.PasswordMustChange(u.id) != nullptr)
                                  : Cell{};
     rows.Add({u.name, u.enabled, u.password_hash.has_value() && !u.password_hash->empty(),
               names.Tenant(PrincipalKind::kUser, u.id), TextMap(u.attributes.begin(), u.attributes.end()), current,
@@ -788,7 +790,9 @@ std::shared_ptr<arrow::RecordBatch> EmptyAccessTable(AccessTable table) { return
 std::shared_ptr<arrow::RecordBatch> AccessTableRows(AccessTable table, const Snapshot& snapshot,
                                                     const Principal& viewer,
                                                     const std::optional<std::string>& user_name,
-                                                    const SignInSummaries& summaries) {
+                                                    const SignInSummaries& summaries,
+                                                    const std::function<bool(const std::string& user_id)>&
+                                                        password_must_change) {
   const Visibility visibility(snapshot, viewer);
   switch (table) {
     case AccessTable::kGrants:
@@ -798,7 +802,7 @@ std::shared_ptr<arrow::RecordBatch> AccessTableRows(AccessTable table, const Sna
     case AccessTable::kRoles:
       return Roles(snapshot, visibility);
     case AccessTable::kUsers:
-      return Users(snapshot, viewer, visibility, summaries);
+      return Users(snapshot, viewer, visibility, summaries, password_must_change);
     case AccessTable::kPolicies:
       return Policies(snapshot, viewer, visibility);
     case AccessTable::kEffectivePrivileges:

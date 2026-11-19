@@ -243,14 +243,19 @@ chargewire::Principal Authenticator::AuthenticatePassword(std::string_view usern
     // it, so this always refuses): every refusal then costs the same password check,
     // and timing does not say which name is the administrator's.
     auto store_user = access_->AuthenticatePassword(username, password);
-    if (store_user && !user_ok && store_user->password_expired) {
-      // The right password, too old (password_max_age_days): neither a failure nor a sign-in.
-      LogAt(log_level_, LogLevel::kInfo, "sign-in refused: the password has expired",
+    if (store_user && !user_ok && store_user->temporary_expired) {
+      // The right password, but a temporary one set longer ago than
+      // password_temporary_max_age_hours: neither a failure nor a sign-in. Said only to someone
+      // who gave the right password.
+      LogAt(log_level_, LogLevel::kInfo, "sign-in refused: the temporary password has expired",
             {{"user", store_user->user_name}, {"method", "password"}});
       throw Error(ErrorCode::kInvalidCredentials,
-                  "the password of user " + store_user->user_name +
-                      " has expired: an administrator sets a new one with ALTER USER ... WITH PASSWORD");
+                  "the temporary password of user " + store_user->user_name + " has expired (it was set more than " +
+                      std::to_string(store_user->temporary_max_age_hours) +
+                      " hours ago): an administrator must set a new one");
     }
+    // A password past password_max_age_days signs in like a temporary one: its session runs
+    // nothing but the user's own change of it (SessionGuard::PasswordMustChange).
     if (store_user && !user_ok) {
       held.done = true;
       if (guard_) guard_->RecordSuccess(username, context.client_address);

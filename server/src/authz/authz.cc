@@ -293,8 +293,9 @@ AccessControl::AccessControl(const Options& options)
   engine_options.read_only = read_only_;
   engine_options.record_sign_ins = read_only_ && options.record_sign_ins;
   engine_options.password_policy = {options.password_min_length, options.password_min_character_classes,
-                                    options.password_max_age_days};
+                                    options.password_max_age_days, options.password_temporary_max_age_hours};
   password_max_age_days_ = options.password_max_age_days;
+  password_temporary_max_age_hours_ = options.password_temporary_max_age_hours;
   engine_options.store_timeout = options.store_timeout;
   if (!catalog_rules_only_) {
     engine_options.cluster_id = options.cluster_id;
@@ -354,14 +355,18 @@ std::optional<AccessControl::SignIn> AccessControl::AuthenticatePassword(
   const UserRecord* user = engine_->snapshot()->FindUserById(principal->user_id);
   if (user == nullptr) return std::nullopt;
   SignIn out{user->name, Fingerprint(user->password_hash)};
-  // A password set before 2.14 (or by an older server) has no date and never expires.
-  if (password_max_age_days_ > 0 && user->password_changed_at_ms) {
-    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch())
-                            .count();
-    out.password_expired = now - *user->password_changed_at_ms > password_max_age_days_ * 86400000;
-  }
+  const auto standing = StandingOf(*engine_->snapshot(), user->id);
+  out.password_expired = standing.too_old;
+  out.temporary_expired = standing.temporary_expired;
+  out.temporary_max_age_hours = password_temporary_max_age_hours_;
   return out;
+}
+
+PasswordStanding AccessControl::StandingOf(const Snapshot& snapshot, const std::string& user_id) const {
+  const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::system_clock::now().time_since_epoch())
+                          .count();
+  return snapshot.PasswordStandingOf(user_id, password_max_age_days_, password_temporary_max_age_hours_, now);
 }
 
 arrow::Status AccessControl::AppendLoginEvents(const std::vector<LoginEventRecord>& events) {
@@ -377,6 +382,8 @@ arrow::Status AccessControl::PruneLoginEvents(int64_t failures_before_ms, int64_
 }
 
 void AccessControl::SetSignInSummaries(SignInSummaries summaries) { sign_in_summaries_ = std::move(summaries); }
+
+void AccessControl::SetPasswordAttempts(PasswordAttempts attempts) { password_attempts_ = std::move(attempts); }
 
 namespace {
 
@@ -478,8 +485,9 @@ bool AccessControl::PasswordMustChange(const std::string& user_name, const std::
   if (catalog_rules_only_ || credential.empty()) return false;
   const auto snapshot = engine_->snapshot();
   const UserRecord* user = snapshot->FindUserByName(user_name);
-  const PasswordResetRecord* reset = user ? snapshot->PasswordMustChange(user->id) : nullptr;
-  return reset != nullptr && reset->password_fingerprint == credential;
+  // Only a session that signed in with the password the user has now.
+  if (!user || Fingerprint(user->password_hash) != credential) return false;
+  return StandingOf(*snapshot, user->id).must_change();
 }
 
 std::shared_ptr<SessionGuard> AccessControl::Bind(duckdb_v2_connection_handle connection,
@@ -844,15 +852,21 @@ void SessionGuard::AuditSystemAdminStatement(std::string_view sql, const std::st
   Audit(error ? LogLevel::kWarning : LogLevel::kInfo, "statement run as System Admin", std::move(fields));
 }
 
-bool SessionGuard::PasswordMustChange() const {
-  if (unrestricted_ || user_id_.empty() || identity_.credential.empty() || owner_.catalog_rules_only_) return false;
+bool SessionGuard::PasswordMustChange() const { return HeldUntilPasswordChanged().must_change(); }
+
+PasswordStanding SessionGuard::HeldUntilPasswordChanged() const {
+  if (unrestricted_ || user_id_.empty() || identity_.credential.empty() || owner_.catalog_rules_only_) return {};
   const auto snapshot = owner_.engine_->snapshot();
-  const PasswordResetRecord* reset = snapshot->PasswordMustChange(user_id_);
-  return reset != nullptr && reset->password_fingerprint == identity_.credential;
+  // Only a session that signed in with the password the user has now (a temporary one, or
+  // one past password_max_age_days) is held by it.
+  const UserRecord* user = snapshot->FindUserById(user_id_);
+  if (!user || Fingerprint(user->password_hash) != identity_.credential) return {};
+  return owner_.StandingOf(*snapshot, user_id_);
 }
 
 void SessionGuard::RefuseUntilPasswordChanged(std::string_view what, std::optional<std::string_view> sql) const {
-  if (!PasswordMustChange()) return;
+  const auto held = HeldUntilPasswordChanged();
+  if (!held.must_change()) return;
   if (sql && LooksLikeRbacStatement(std::string(*sql))) {
     auto parsed = ParseRbacStatement(std::string(*sql));
     if (parsed.ok()) {
@@ -863,10 +877,13 @@ void SessionGuard::RefuseUntilPasswordChanged(std::string_view what, std::option
       }
     }
   }
+  // (Every such refusal says "must be changed before anything else runs": the web UI and
+  // clients look for it.)
   const Error refused(ErrorCode::kPermissionDenied,
                       "Hardcharger blocked " + std::string(what) + ": the password of user " + identity_.user_name +
-                          " was set by someone else and must be changed before anything else runs: ALTER USER "
-                          "CURRENT_USER WITH PASSWORD '<new>' REPLACE '<current>'",
+                          (held.temporary ? " was set by someone else" : " has expired (password_max_age_days)") +
+                          " and must be changed before anything else runs: ALTER USER CURRENT_USER WITH PASSWORD "
+                          "'<new>' REPLACE '<current>'",
                       "42501");
   LogFields fields = AuditWho(false);
   if (!request_id_.empty()) fields.emplace_back("statement_id", request_id_);
@@ -912,8 +929,10 @@ std::shared_ptr<arrow::RecordBatch> SessionGuard::AccessTableRows(
     }
     principal = state->principal();
   }
-  return authz::AccessTableRows(table, *owner_.engine_->snapshot(), principal, user_name,
-                                owner_.sign_in_summaries_);
+  const auto snapshot = owner_.engine_->snapshot();
+  return authz::AccessTableRows(
+      table, *snapshot, principal, user_name, owner_.sign_in_summaries_,
+      [&](const std::string& user_id) { return owner_.StandingOf(*snapshot, user_id).must_change(); });
 }
 
 void SessionGuard::RequireLive() const {
@@ -1323,10 +1342,27 @@ chargewire::StatementOutcome SessionGuard::RunCommand(const ParsedCommand& parse
       }
     }
   }
+  // A user's own password change gives the current password: the login guard limits and
+  // counts it as it does a sign-in of that user from this session's client address.
+  std::unique_ptr<PasswordAttempt> attempt;
+  if (const auto* own = std::get_if<AlterUserCommand>(&parsed.command);
+      own && own->current_password && owner_.password_attempts_ && !identity_.superuser &&
+      !identity_.user_name.empty()) {
+    attempt = owner_.password_attempts_(identity_.user_name, identity_.session_id);
+    if (attempt && attempt->refused_for_seconds() > 0) {
+      const int64_t seconds = attempt->refused_for_seconds();
+      const Error refused = Error::RetryAfter(ErrorCode::kRateLimited, std::chrono::seconds(seconds),
+                                              "Hardcharger blocked ALTER USER: too many failed sign-in attempts: "
+                                              "try again in " + std::to_string(seconds) + " s");
+      refuse(refused, false);
+      throw refused;
+    }
+  }
   SessionObjectResolver resolver(*dd::capiv2::Convert(connection_));
   RbacEngine::AuditNotes notes;
   auto executed = engine->Execute(parsed.command, actor, resolver, &notes);
   if (!executed.ok()) {
+    if (attempt && IsWrongCurrentPassword(executed.status())) attempt->Failed();
     const Error error = FromStatus(executed.status());
     refuse(error, as_system_admin);
     throw ForTenant(error);

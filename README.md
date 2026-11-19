@@ -901,9 +901,11 @@ trusted_proxies: [10.0.0.0/8, fd00::/8]   # flag: --trusted-proxies 10.0.0.0/8,f
 
 ### Failed sign-ins
 
-Every password check (the Chargewire password grant, the web UI's sign-in, and
-`--verify-credentials`) goes through the same limits, for the administrator and store users
-alike:
+Every password check (the Chargewire password grant, the web UI's sign-in,
+`--verify-credentials`, and the current password a user gives in `ALTER USER ... REPLACE`)
+goes through the same limits, for the administrator and store users alike. A wrong current
+password in a user's own change counts as a failed sign-in of that user from the session's
+client address, and while that pair is locked the change is refused the same way, unchecked:
 
 - **One user from one client address**: after `login_lockout_threshold` (5) failed
   passwords within `login_failure_window_seconds` (900) of each other, that pair is locked for
@@ -944,8 +946,10 @@ SELECT hardcharger_clear_login_lock(NULL, NULL);            -- everything
   "user_backoff"|"address_backoff"}`, `hardcharger_login_locks_total` and
   `hardcharger_login_locks_active`. `hardcharger_users()` shows each user's `last_sign_in_at`
   and `failed_sign_ins` to the administrator, and a user its own.
-- Setting `login_lockout_threshold` to 0 turns pair locks off; `login_backoff_max_seconds`
-  0 turns the delays off.
+- Setting `login_lockout_threshold` to 0 turns pair locks off; `login_address_backoff_after`
+  0 turns the per-address delay off (with both 0, only the per-user delay is left: for
+  servers behind a proxy whose clients all share its address until `trusted_proxy_secret` or
+  `trusted_proxies` is set); `login_backoff_max_seconds` 0 turns the delays off.
 
 ### DuckDB files and DuckLake metadata
 
@@ -1269,10 +1273,12 @@ A password set by `CREATE USER` or `ALTER USER ... WITH PASSWORD` needs `passwor
 `password_min_length` may be set as low as 1; below 8 the server logs a warning at startup
 naming the setting, its value and the recommended 12.
 `password_min_character_classes` (0 to 4) asks for that many kinds among lowercase letters,
-uppercase letters, digits and other characters, and `password_max_age_days` (0: never) stops a
-password from signing in once it is that old, until an administrator sets a new one
-(`the password of user joe has expired: ...`, said only to whoever gave the right password). The
-policy is checked only when a password is set: existing passwords keep working, a password set
+uppercase letters, digits and other characters, and `password_max_age_days` (0: never) makes a
+password that old one its user must change: it still signs in, held like a temporary password
+(below), so the session runs nothing but `ALTER USER CURRENT_USER WITH PASSWORD '<new>' REPLACE
+'<current>'` (`the password of user joe has expired (password_max_age_days) and must be changed
+before anything else runs: ...`), and the user renews it without an administrator. The rules
+are checked only when a password is set: existing passwords keep working, a password set
 before 2.14 never expires, and `CREATE USER IF NOT EXISTS` for a user that exists sets nothing
 and checks nothing. The administrator's password (`admin_password`) is the operator's: one
 the policy would refuse is a warning at startup.
@@ -1540,6 +1546,11 @@ must be changed before anything else runs: ALTER USER CURRENT_USER WITH PASSWORD
 REPLACE '<current>'`. A sign-in that does not use the password (an identity provider's token,
 a client certificate) is not held. `--verify-credentials` verifies a temporary password (a
 stopped cluster may start for it) and adds `"password_must_change": true` to its answer.
+
+A temporary password lasts `password_temporary_max_age_hours` (72; 0: no limit) from when it
+was set. After that it neither signs in nor replaces itself: `the temporary password of user
+carl has expired (it was set more than 72 hours ago): an administrator must set a new one`
+(said only to whoever gave it; `--verify-credentials` refuses it the same way).
 
 Every user changes its own password, with no privilege, by giving the current one:
 

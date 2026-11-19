@@ -54,7 +54,8 @@ own changelog in `python/CHANGELOG.md`.
   CURRENT_USER WITH PASSWORD '<new>' REPLACE '<current>'`, which every user may run for itself
   and which needs the current password. `hardcharger_users()` gains `password_must_change`,
   `--verify-credentials` says `"password_must_change": true`, and the web UI asks for a new
-  password when it signs in with a temporary one.
+  password when it signs in with a temporary one. A temporary password stops working after
+  `password_temporary_max_age_hours` (72; 0: no limit), and an administrator then sets a new one.
 - Access-control audit records of account changes (users, roles, memberships, account
   privileges) carry what authorized them (`authorized_by`), the account's sanitized state
   `before` and `after` (never a password, hash or attribute value), and the privilege the
@@ -103,9 +104,11 @@ own changelog in `python/CHANGELOG.md`.
   access-control store by every replica and by `--verify-credentials`, which takes an optional
   `client_address`. Administrators list and clear them with `hardcharger_login_locks()` and
   `hardcharger_clear_login_lock(user, address)`; locks are logged and audited, with new metrics.
-  The client address honours `trusted_proxies`.
+  The client address honours `trusted_proxies`. The current password a user gives in `ALTER USER
+  ... REPLACE` counts the same way, as a sign-in from the session's client address.
 - **A password policy.** New passwords need 12 characters (`password_min_length`); character
   classes (`password_min_character_classes`) and expiry (`password_max_age_days`) are optional.
+  An expired password still signs in, held like a temporary one until its user changes it.
   Existing passwords keep working.
 - **`hardcharger_users()` shows `last_sign_in_at` and `failed_sign_ins`.**
 - **`trusted_proxy_secret`: trust a reverse proxy by a secret header, not its address.** A

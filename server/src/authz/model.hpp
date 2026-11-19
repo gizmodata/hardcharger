@@ -384,6 +384,11 @@ class Snapshot {
   // The user's password must be changed before anything else (its temporary-password record,
   // when it was made for the password the user has now); nullptr when not.
   const PasswordResetRecord* PasswordMustChange(const std::string& user_id) const;
+  // Where the user's current password stands at `now_ms`, under password_max_age_days and
+  // password_temporary_max_age_hours (0: no limit). Only a password-signed-in session that
+  // used this password is held by it (its credential is the password's fingerprint).
+  PasswordStanding PasswordStandingOf(const std::string& user_id, int64_t max_age_days,
+                                      int64_t temporary_max_age_hours, int64_t now_ms) const;
   const std::vector<PasswordResetRecord>& password_resets() const { return password_resets_; }
   const ScopedTokenRecord* FindScopedToken(const std::string& id) const;
   // The scope of a token that still stands for `user_id` at `now` (its user's

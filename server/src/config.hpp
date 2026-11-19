@@ -117,6 +117,7 @@ struct Config {
   int64_t password_min_length = 12;
   int64_t password_min_character_classes = 0;  // of lower, upper, digit, other (0-4)
   int64_t password_max_age_days = 0;            // 0: never expires
+  int64_t password_temporary_max_age_hours = 72;  // a temporary password's lifetime; 0: no limit
 
   // Sessions
   int64_t max_sessions = 0;  // non-admin sessions at once; 0 = unlimited

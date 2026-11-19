@@ -18,6 +18,7 @@
 
 #include <arrow/api.h>
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -35,6 +36,8 @@ struct Principal;
 std::shared_ptr<arrow::RecordBatch> AccessTableRows(AccessTable table, const Snapshot& snapshot,
                                                     const Principal& viewer,
                                                     const std::optional<std::string>& user_name,
-                                                    const SignInSummaries& summaries = {});
+                                                    const SignInSummaries& summaries = {},
+                                                    const std::function<bool(const std::string& user_id)>&
+                                                        password_must_change = {});
 
 }  // namespace hardcharger::authz

@@ -560,6 +560,7 @@ int main(int argc, char** argv) {
       options.password_min_length = config.password_min_length;
       options.password_min_character_classes = config.password_min_character_classes;
       options.password_max_age_days = config.password_max_age_days;
+      options.password_temporary_max_age_hours = config.password_temporary_max_age_hours;
       // Access-control audit records form a hash chain from here on.
       hc::StartAuditChain(config.audit_chain_key);
       access = std::make_shared<hc::authz::AccessControl>(options);
@@ -656,6 +657,21 @@ int main(int argc, char** argv) {
         }
         return out;
       });
+      // ALTER USER ... REPLACE '<current>': limited and counted like a sign-in of the user from
+      // the session's client address (its latest request's, trusted_proxies applied).
+      store_access->SetPasswordAttempts([guard = std::weak_ptr<hc::LoginGuard>(login_guard), &runtime](
+                                            const std::string& user, const std::string& session_id)
+                                            -> std::unique_ptr<hc::authz::PasswordAttempt> {
+        auto g = guard.lock();
+        if (!g) return nullptr;
+        std::string address;
+        if (runtime.server != nullptr) {
+          for (const auto& activity : runtime.server->Sessions()) {
+            if (activity.session_id == session_id) address = activity.client_address;
+          }
+        }
+        return hc::GuardPasswordAttempt(std::move(g), user, address);
+      });
     }
     runtime.metrics.AddCollector([guard = std::weak_ptr<hc::LoginGuard>(login_guard)](std::vector<hc::Sample>& out) {
       auto g = guard.lock();
@@ -680,7 +696,7 @@ int main(int argc, char** argv) {
     {
       // The administrator's password is the operator's (not checked like a store user's), so
       // one the policy would refuse is only a warning.
-      hc::authz::PasswordPolicy policy{config.password_min_length, config.password_min_character_classes, 0};
+      hc::authz::PasswordPolicy policy{config.password_min_length, config.password_min_character_classes, 0, 0};
       if (!config.admin_password.empty() && !hc::authz::CheckPasswordPolicy(config.admin_password, policy).ok()) {
         hc::Log(hc::LogLevel::kWarning,
                 "the administrator's password is weaker than the password policy asks of store users "

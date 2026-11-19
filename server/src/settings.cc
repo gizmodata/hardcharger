@@ -514,9 +514,16 @@ std::vector<Setting> Build() {
            .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.password_min_character_classes); })});
   startup({.name = "password_max_age_days", .input_type = "INTEGER", .option = "password_max_age_days",
            .default_value = number(kDefaults.password_max_age_days),
-           .description = "Days after which a store user's password stops signing in (0: never).",
+           .description = "Days after which a store user's password must be changed at its next sign-in (0: never).",
            .admin_only = true,
            .get_global = config_value([](const Runtime& r) { return std::to_string(r.config.password_max_age_days); })});
+  startup({.name = "password_temporary_max_age_hours", .input_type = "INTEGER",
+           .option = "password_temporary_max_age_hours",
+           .default_value = number(kDefaults.password_temporary_max_age_hours),
+           .description = "Hours after which a temporary password stops signing in (0: no limit).",
+           .admin_only = true,
+           .get_global = config_value(
+               [](const Runtime& r) { return std::to_string(r.config.password_temporary_max_age_hours); })});
   return s;
 }
 

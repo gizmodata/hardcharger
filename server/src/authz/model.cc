@@ -233,6 +233,22 @@ std::set<std::string> Snapshot::RolesOf(const Principal& principal) const {
   return active;
 }
 
+PasswordStanding Snapshot::PasswordStandingOf(const std::string& user_id, int64_t max_age_days,
+                                               int64_t temporary_max_age_hours, int64_t now_ms) const {
+  PasswordStanding standing;
+  const UserRecord* user = FindUserById(user_id);
+  if (!user || !user->password_hash || user->password_hash->empty()) return standing;
+  if (const PasswordResetRecord* reset = PasswordMustChange(user_id)) {
+    standing.temporary = true;
+    standing.temporary_expired =
+        temporary_max_age_hours > 0 && now_ms - reset->set_at_ms > temporary_max_age_hours * int64_t{3600000};
+  }
+  // A password set before 2.14 (or by an older server) has no date and never expires.
+  standing.too_old = max_age_days > 0 && user->password_changed_at_ms &&
+                     now_ms - *user->password_changed_at_ms > max_age_days * int64_t{86400000};
+  return standing;
+}
+
 const PasswordResetRecord* Snapshot::PasswordMustChange(const std::string& user_id) const {
   const UserRecord* user = FindUserById(user_id);
   if (!user || !user->password_hash) return nullptr;

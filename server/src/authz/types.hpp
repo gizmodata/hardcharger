@@ -155,4 +155,13 @@ std::string SchemaPathText(const std::vector<std::string>& path);
 // The parts of a schema name written that way (the inverse of SchemaPathText).
 std::vector<std::string> ParseSchemaPathText(const std::string& text);
 
+// Where a user's current password stands (Snapshot::PasswordStandingOf).
+struct PasswordStanding {
+  bool temporary = false;          // someone else set it (Snapshot::PasswordMustChange)
+  bool temporary_expired = false;  // ... longer ago than password_temporary_max_age_hours: refused
+  bool too_old = false;            // set longer ago than password_max_age_days (never if undated)
+  // A session signed in with it runs nothing but the user's own change of it.
+  bool must_change() const { return temporary || too_old; }
+};
+
 }  // namespace hardcharger::authz

@@ -275,9 +275,14 @@ const std::vector<Option>& Options() {
        "kinds of characters (lowercase, uppercase, digits, others) a new password needs, 0 to 4",
        NUMBER(password_min_character_classes)},
       {"password_max_age_days", Kind::kInt,
-       "days after which a store user's password stops signing in until an administrator sets a new "
-       "one (0: never; a password set before 2.14 never expires)",
+       "days after which a store user's password must be changed: it still signs in, but its session "
+       "runs only ALTER USER CURRENT_USER ... REPLACE until it is (0: never; a password set before 2.14 "
+       "never expires)",
        NUMBER(password_max_age_days)},
+      {"password_temporary_max_age_hours", Kind::kInt,
+       "hours after which a temporary password (one a help desk or an administrator's EXPIRE set) "
+       "stops signing in; an administrator then sets a new one (0: no limit)",
+       NUMBER(password_temporary_max_age_hours)},
       // Sessions
       {"max_sessions", Kind::kInt,
        "most non-admin sessions at once (0: unlimited)", NUMBER(max_sessions)},
@@ -611,7 +616,8 @@ void Validate(Loaded& loaded) {
            {"login_backoff_base_seconds", c.login_backoff_base_seconds},
            {"login_backoff_max_seconds", c.login_backoff_max_seconds},
            {"login_known_address_days", c.login_known_address_days},
-           {"password_max_age_days", c.password_max_age_days}}) {
+           {"password_max_age_days", c.password_max_age_days},
+           {"password_temporary_max_age_hours", c.password_temporary_max_age_hours}}) {
     if (value < 0) throw std::invalid_argument(std::string(name) + " must not be negative");
   }
   for (const auto& [name, value] : std::initializer_list<std::pair<const char*, int64_t>>{

@@ -40,6 +40,10 @@
 
 #include "authz/login_events.hpp"
 
+namespace hardcharger::authz {
+class PasswordAttempt;
+}
+
 namespace hardcharger {
 
 struct LoginGuardSettings {
@@ -224,6 +228,12 @@ std::shared_ptr<LoginEventStore> StoreLoginEvents(std::shared_ptr<authz::AccessC
 
 struct Config;
 // The login_* settings.
+// A user's own password change (ALTER USER ... REPLACE) through the guard: checked like a
+// sign-in of `user_name` from `client_address` when made, a failure if its current password
+// was wrong, else its place given back (a right one ends no failures and is no sign-in).
+std::unique_ptr<authz::PasswordAttempt> GuardPasswordAttempt(std::shared_ptr<LoginGuard> guard, std::string user_name,
+                                                             std::string client_address);
+
 LoginGuardSettings LoginGuardSettingsFrom(const Config& config);
 
 }  // namespace hardcharger
