@@ -1548,8 +1548,9 @@ ALTER USER carl WITH PASSWORD '…';              -- an administrator's, without
 ```
 
 A sign-in with a temporary password succeeds, but its session runs nothing (statements,
-prepared statements, metadata requests, ingest) except the change of that password, and says
-so: `Hardcharger blocked this statement: the password of user carl was set by someone else and
+prepared statements, metadata requests, ingest, partitioned ingest, changes of its session
+options) except the change of that password, and says so (it opens where the server's sessions
+start, with the options its client asked for left unapplied): `Hardcharger blocked this statement: the password of user carl was set by someone else and
 must be changed before anything else runs: ALTER USER CURRENT_USER WITH PASSWORD '<new>'
 REPLACE '<current>'`. A sign-in that does not use the password (an identity provider's token,
 a client certificate) is not held. `--verify-credentials` verifies a temporary password (a

@@ -51,7 +51,8 @@ own changelog in `python/CHANGELOG.md`.
 - Temporary passwords and self-service password changes. A password a delegate sets for
   someone else (a holder of `CREATE USER` / `ALTER USER`, a tenant admin), or an administrator
   sets with `WITH PASSWORD '…' EXPIRE` (or `ALTER USER name PASSWORD EXPIRE`), must be changed
-  before anything else: its sign-in succeeds, but the session runs only `ALTER USER
+  before anything else: its sign-in succeeds, but the session (which opens with the server's
+  default options and may not change them) runs only `ALTER USER
   CURRENT_USER WITH PASSWORD '<new>' REPLACE '<current>'`, which every user may run for itself
   and which needs the current password (and a new one that differs from it). `hardcharger_users()` gains `password_must_change`,
   `--verify-credentials` says `"password_must_change": true`, and the web UI asks for a new

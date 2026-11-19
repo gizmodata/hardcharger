@@ -856,6 +856,26 @@ std::unique_ptr<chargewire::EngineSession> Backend::NewSession(const chargewire:
   }
 }
 
+std::unique_ptr<chargewire::EngineSession> Backend::OpenSession(const chargewire::Principal& principal,
+                                                           const std::string& session_id,
+                                                           const json::object& options) {
+  auto session = NewSession(principal, session_id);
+  if (options.empty()) return session;
+  auto& own = static_cast<Session&>(*session);
+  if (own.HeldUntilPasswordChanged()) {
+    own.RefuseOptionsUntilPasswordChanged();
+    return session;
+  }
+  auto errors = session->SetOptions(options);
+  if (!errors.empty()) {
+    // The first failure, with its own code (unknown_option or invalid_option_value), as
+    // DuckDBBackend::OpenSession answers it.
+    const auto& [name, error] = *errors.begin();
+    throw chargewire::Error(error.code(), name + ": " + error.what());
+  }
+  return session;
+}
+
 // ---- Session ----
 
 Session::Session(Runtime& runtime, const SensitivePaths& sensitive_paths, duckdb_v2_instance_handle instance,
@@ -1733,8 +1753,27 @@ std::shared_ptr<arrow::RecordBatchReader> Session::Metadata(chargewire::Metadata
   return WithoutCatalogs(std::move(rows), hidden);
 }
 
+bool Session::HeldUntilPasswordChanged() const {
+  return guard_ && guard_->HeldUntilPasswordChanged().must_change();
+}
+
+void Session::RefuseOptionsUntilPasswordChanged() const {
+  try {
+    if (guard_) guard_->RefuseUntilPasswordChanged("the session's options", std::nullopt);
+  } catch (const chargewire::Error&) {
+    // Audited; the session opens without them.
+  }
+}
+
+void Session::OpeningIngest(const chargewire::IngestTarget& target) {
+  (void)target;
+  CheckAlive();
+  if (guard_) guard_->RefuseUntilPasswordChanged("an ingest", std::nullopt);
+}
+
 chargewire::OptionErrors Session::SetOptions(const json::object& options) {
   CheckAlive();
+  if (guard_) guard_->RefuseUntilPasswordChanged("changing the session's options", std::nullopt);
   SessionScope scope(this);
   if (const auto* catalog = options.if_contains("catalog"); catalog && catalog->is_string()) {
     for (const auto& managed : ManagedCatalogs()) {

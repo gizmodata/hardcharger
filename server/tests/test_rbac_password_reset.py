@@ -145,6 +145,43 @@ def test_a_password_is_never_changed_to_itself(world):
     assert world.signs_in(user="carl", secret=chosen)
 
 
+def test_a_held_session_neither_sets_options_nor_opens_an_ingest(world):
+    # Options would tell an existing catalog or schema from a missing one: a held session
+    # opens without the client's, PATCH is refused, and so is opening a partitioned ingest.
+    amy = world.as_user(user="amy")
+    temporary = password(name="carl-temporary")
+    expect_allowed(client=amy, sql=f"ALTER USER carl WITH PASSWORD '{temporary}'")
+    token = world.server.password_token(user="carl", password=temporary)
+    plain = world.server.client(token=token)
+    for options in ({"catalog": "memory"}, {"catalog": "no_such_catalog"}, {"session_tag": {"a": "b"}}):
+        held = world.server.client(token=token, options=options)  # opens: the options wait
+        document = held.http.get(url=held.url, headers=held.headers()).json()
+        assert document["options"] == plain.http.get(url=plain.url, headers=plain.headers()).json()["options"]
+        patched = held.http.patch(url=held.url, headers=held.headers(), json={"options": options})
+        assert patched.status_code == 403, patched.text
+        assert (patched.json()["code"], patched.json()["detail"]) == (
+            "permission_denied", "Hardcharger blocked changing the session's options: " + must_change(user="carl"))
+        with pytest.raises(ChargewireError) as refused:
+            held.open_ingest(table="carl_rows")
+        assert (refused.value.code, refused.value.detail) == ("permission_denied",
+                                                              "Hardcharger blocked an ingest: " + must_change(user="carl"))
+        assert_restricted(client=held, user="carl")
+    records = audit_records(server=world.server)
+    requests = {r["request"] for r in about(records, message="statement refused until the password is changed",
+                                            user="carl")}
+    assert {"the session's options", "changing the session's options", "an ingest"} <= requests, requests
+    # The twin: once carl has changed it, options apply and an ingest opens.
+    chosen = password(name="carl-chosen")
+    expect_allowed(client=plain, sql=change(new=chosen, current=temporary))
+    world.setup("GRANT CREATE TABLE ON SCHEMA main TO PUBLIC")
+    carl = world.server.client(token=world.server.password_token(user="carl", password=chosen),
+                               options={"session_tag": {"a": "b"}})
+    assert carl.http.get(url=carl.url, headers=carl.headers()).json()["options"]["session_tag"] == {"a": "b"}
+    patched = carl.http.patch(url=carl.url, headers=carl.headers(), json={"options": {"catalog": "no_such_catalog"}})
+    assert patched.status_code == 200 and "catalog" in patched.json()["errors"], patched.text
+    assert carl.open_ingest(table="carl_rows").startswith(f"{carl.url}/ingests/")
+
+
 def test_every_user_changes_its_own_password_with_the_current_one(world):
     world.setup("CREATE USER nopw")
     current = world.passwords["carl"]
