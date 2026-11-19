@@ -671,6 +671,12 @@ int main(int argc, char** argv) {
                      static_cast<double>(counts.throttled_address)});
       out.push_back({"hardcharger_login_locks_active", {}, static_cast<double>(counts.active_locks)});
     });
+    if (config.password_min_length < 8) {
+      hc::Log(hc::LogLevel::kWarning,
+              "password_min_length is below 8: short passwords fall to guessing quickly; 12 or more is recommended",
+              {{"setting", "password_min_length"}, {"value", std::to_string(config.password_min_length)},
+               {"recommended_minimum", "12"}});
+    }
     {
       // The administrator's password is the operator's (not checked like a store user's), so
       // one the policy would refuse is only a warning.

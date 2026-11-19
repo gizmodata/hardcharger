@@ -605,3 +605,15 @@ def test_a_short_secret_stops_the_server_without_quoting_it(launcher):
     log = running.log()
     assert "trusted_proxy_secret must be at least 32 characters" in log, log
     assert short not in log
+
+
+@pytest.mark.parametrize("length, warned", [("4", True), ("7", True), ("8", False), ("12", False)])
+def test_a_minimum_length_below_eight_is_allowed_with_one_warning(launcher, length, warned):
+    server = launcher.start(env={"HARDCHARGER_PASSWORD_MIN_LENGTH": length})
+    log = server.log()
+    lines = [line for line in log.splitlines() if "password_min_length is below 8" in line]
+    if warned:
+        assert len(lines) == 1, log
+        assert "warning" in lines[0] and f"value={length}" in lines[0] and "recommended_minimum=12" in lines[0], lines
+    else:
+        assert lines == [], lines

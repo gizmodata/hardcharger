@@ -1266,6 +1266,8 @@ enabled on this server`).
 
 A password set by `CREATE USER` or `ALTER USER ... WITH PASSWORD` needs `password_min_length`
 (12) characters; there are no composition rules and no expiry by default (NIST SP 800-63B).
+`password_min_length` may be set as low as 1; below 8 the server logs a warning at startup
+naming the setting, its value and the recommended 12.
 `password_min_character_classes` (0 to 4) asks for that many kinds among lowercase letters,
 uppercase letters, digits and other characters, and `password_max_age_days` (0: never) stops a
 password from signing in once it is that old, until an administrator sets a new one
