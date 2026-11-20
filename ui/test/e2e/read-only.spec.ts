@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { Locator, Page, TestInfo } from "@playwright/test";
 
-import { activeTab, expect, expectProblem, gridRows, runDone, signIn, test } from "./fixtures.ts";
+import { activeTab, expect, expectProblem, gridRows, runDone, signIn, test, openRowMenu } from "./fixtures.ts";
 
 test("a tab can become read-only, locks the choice, and a new session permits writes", async ({
   page,
@@ -368,8 +368,7 @@ test("the schema browser offers Upload only where its session can write", async 
   const schema = catalog.getByRole("treeitem", { name: "main", exact: true });
   const serverItemOf = async () => {
     const row = server.locator(":scope > .tree-row-wrap");
-    await row.hover();
-    await row.getByRole("button", { name: "More for Uploads" }).click();
+    await openRowMenu(row, "More for Uploads");
     return page.getByRole("menuitem", { name: "Upload data…" });
   };
 

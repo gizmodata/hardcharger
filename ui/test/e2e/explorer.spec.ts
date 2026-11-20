@@ -16,6 +16,7 @@ import {
   signIn,
   test,
   editorTabs,
+  openRowMenu,
 } from "./fixtures.ts";
 
 test.beforeEach(async ({ page, harness }) => {
@@ -37,8 +38,7 @@ async function openSales(page: Page, catalog: string) {
 }
 async function menu(page: Page, item: import("@playwright/test").Locator, label: string) {
   const row = item.locator(":scope > .tree-row-wrap");
-  await row.hover(); // the … button shows on hover (and on focus)
-  await row.getByRole("button", { name: /^More for/ }).click();
+  await openRowMenu(row); // the … button shows on hover (and on focus)
   await page.getByRole("menuitem", { name: label }).click();
 }
 

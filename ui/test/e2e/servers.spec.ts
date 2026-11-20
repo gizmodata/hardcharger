@@ -20,6 +20,7 @@ import {
   setSql,
   signIn,
   test,
+  openRowMenu,
 } from "./fixtures.ts";
 
 function tree(page: Page) {
@@ -177,8 +178,7 @@ test("a plain server: a red open lock, sign-in, its catalogs, a tab on it, a pre
 
   // A preview opens a tab bound to the server and runs there.
   const row = main.getByRole("treeitem", { name: "remote", exact: true }).locator(":scope > .tree-row-wrap");
-  await row.hover();
-  await row.getByRole("button", { name: /^More for/ }).click();
+  await openRowMenu(row);
   await page.getByRole("menuitem", { name: "Preview data" }).click();
   await expect(activeTab(page).getByTestId("tab-connection").locator("option:checked")).toHaveText("Plain");
   await expect.poll(async () => (await gridRows(page)).length).toBe(4);
@@ -200,8 +200,7 @@ test("a plain server: a red open lock, sign-in, its catalogs, a tab on it, a pre
   await page.getByLabel("Clear the search").click();
 
   const serverRow = plain.locator(":scope > .tree-row-wrap");
-  await serverRow.hover();
-  await serverRow.getByRole("button", { name: "More for Plain" }).click();
+  await openRowMenu(serverRow, "More for Plain");
   await page.getByRole("menuitem", { name: "Disconnect" }).click();
   await expect(plain).toHaveAttribute("data-connected", "false");
   await expect(plain).toContainText("not signed in");
@@ -373,8 +372,7 @@ test("a connection not saved for later is this tab's only", async ({ page, harne
 
 async function serverMenu(page: Page, name: string, item: string): Promise<void> {
   const row = serverItem(page, name).locator(":scope > .tree-row-wrap");
-  await row.hover();
-  await row.getByRole("button", { name: `More for ${name}` }).click();
+  await openRowMenu(row, `More for ${name}`);
   await page.getByRole("menuitem", { name: item }).click();
 }
 

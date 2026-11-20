@@ -1,6 +1,6 @@
 import { connect } from "@gizmodata/chargewire";
 
-import { activeTab, editorFocused, expect, pasted, runDone, signIn, test, watchPage } from "./fixtures.ts";
+import { activeTab, editorFocused, expect, pasted, runDone, signIn, test, watchPage, openRowMenu } from "./fixtures.ts";
 import { startOwnServer } from "./harness.ts";
 
 test("query windows retain profiles and refresh independently of the monitor", async ({ page }, testInfo) => {
@@ -313,8 +313,7 @@ test("Query result details and profiles follow the remote server even when local
     const main = catalog.getByRole("treeitem", { name: "main", exact: true });
     await main.getByRole("button", { name: "main", exact: true }).click();
     const row = main.getByRole("treeitem", { name: "remote_details", exact: true }).locator(":scope > .tree-row-wrap");
-    await row.hover();
-    await row.getByRole("button", { name: /^More for/ }).click();
+    await openRowMenu(row);
     await page.getByRole("menuitem", { name: "Preview data" }).click();
     await expect(activeTab(page).getByTestId("tab-connection").locator("option:checked")).toHaveText("Details remote");
     await expect(activeTab(page).getByTestId("results-grid")).toBeVisible();

@@ -4,7 +4,17 @@
 // saying why; asking a tab to use such a catalog is refused with that note, the pickers back
 // where they were. Before, the preview failed with "Permission Denied" before it ran.
 import { type IdleServer, startOwnServer } from "./harness.ts";
-import { activeTab, editorTabs, expect, expectProblem, gridRows, runDone, signIn, test } from "./fixtures.ts";
+import {
+  activeTab,
+  editorTabs,
+  expect,
+  expectProblem,
+  gridRows,
+  runDone,
+  signIn,
+  test,
+  openRowMenu,
+} from "./fixtures.ts";
 
 let server: IdleServer;
 
@@ -27,8 +37,7 @@ test("a preview of the log catalog's table runs, in the tab's own catalog, sayin
   const main = logs.getByRole("treeitem", { name: "main", exact: true });
   await main.getByRole("button", { name: "main", exact: true }).click();
   const table = main.getByRole("treeitem", { name: "logs", exact: true }).locator(":scope > .tree-row-wrap");
-  await table.hover();
-  await table.getByRole("button", { name: /^More for/ }).click();
+  await openRowMenu(table);
   await page.getByRole("menuitem", { name: "Preview data" }).click();
   const tab = activeTab(page);
   await expect(tab.getByTestId("query-error")).toHaveCount(0);
@@ -50,8 +59,7 @@ test("asking a tab to use the log catalog is refused with the note, the pickers 
   const logs = tree.getByRole("treeitem", { name: "_hardcharger_logs", exact: true });
   await logs.getByRole("button", { name: "_hardcharger_logs", exact: true }).click();
   const main = logs.getByRole("treeitem", { name: "main", exact: true }).locator(":scope > .tree-row-wrap");
-  await main.hover();
-  await main.getByRole("button", { name: /^More for/ }).click();
+  await openRowMenu(main);
   await page.getByRole("menuitem", { name: "Use this catalog and schema" }).click();
   await expect(tab.getByTestId("tab-notice")).toContainText(note);
   await expect(catalog).toHaveValue(before);
