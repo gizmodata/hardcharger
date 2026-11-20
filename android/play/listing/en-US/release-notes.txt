@@ -1,2 +1,2 @@
-Read-only connections refuse more statements that could change data, and keep uncommitted work when switched on.
-Triggers that fire other triggers, and INSERT ... ON CONFLICT on tables with triggers, work with access control.
+Hardcharger 2.13.2, a maintenance release: Linux servers on older or virtual CPUs without AVX2 get a build of their own.
+The app itself has no changes.

@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.13.2] - 2026-11-20
+
 ### Added
 
 - **The baseline Linux x86_64 server, for CPUs without AVX2**

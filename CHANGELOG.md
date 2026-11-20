@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.13.2] - 2026-11-20
+
 ### Added
 
 - **A Linux x86_64 build for CPUs without AVX2**
