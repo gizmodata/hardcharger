@@ -320,6 +320,15 @@ IVY_BRIDGE_CPUINFO = (
 )
 
 
+#: Rosetta's x86_64 Linux (Docker Desktop on Apple silicon): AVX2 and BMI2, but no abm or xsave
+#: in /proc/cpuinfo.
+ROSETTA_CPUINFO = (
+    "flags\t\t: fpu tsc de cx8 apic sep cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx lm "
+    "rep_good nopl pni pclmulqdq ssse3 cx16 sse4_1 popcnt sse4_2 aes lahf_lm movbe fma avx f16c "
+    "rdrand bmi1 avx2 bmi2\n"
+)
+
+
 @pytest.fixture
 def linux_amd64(monkeypatch):
     """This machine is linux-amd64, whatever it really is."""
@@ -340,9 +349,10 @@ def test_missing_cpu_features():
         "bmi1",
         "bmi2",
         "fma",
-        "abm",
         "movbe",
     ]
+    # Rosetta (Docker on Apple silicon) lists neither abm nor xsave, and runs the optimized build.
+    assert _install.missing_cpu_features(cpuinfo=ROSETTA_CPUINFO) == []
     assert _install.missing_cpu_features(cpuinfo="processor\t: 0\n") is None
 
 
@@ -352,6 +362,7 @@ def test_missing_cpu_features():
         ("auto", None, "linux-amd64"),  # the conftest's x86-64-v3 CPU
         ("auto", KVM64_CPUINFO, "linux-amd64-baseline"),
         ("auto", IVY_BRIDGE_CPUINFO, "linux-amd64-baseline"),
+        ("auto", ROSETTA_CPUINFO, "linux-amd64"),
         ("auto", "no flags here\n", "linux-amd64"),  # unreadable: the default build
         ("optimized", KVM64_CPUINFO, "linux-amd64"),
         ("baseline", None, "linux-amd64-baseline"),

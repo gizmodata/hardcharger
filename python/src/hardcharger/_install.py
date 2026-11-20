@@ -121,9 +121,12 @@ CPU_TARGETS = ("auto", "optimized", "baseline")
 #: ``hardcharger-<this>.tar.gz``, and it is cached under this name.
 BASELINE_PLATFORM = "linux-amd64-baseline"
 
-#: The CPU features (``/proc/cpuinfo`` flags) the optimized linux-amd64 build needs: the
-#: x86-64-v3 level its DuckDB is compiled for, and the x86-64-v2 level below it. The kernel
-#: lists ``avx`` only when it saves the AVX registers. ``abm`` is LZCNT, ``pni`` SSE3.
+#: The CPU features (``/proc/cpuinfo`` flags) that tell whether this CPU runs the optimized
+#: linux-amd64 build (x86-64-v3, which its DuckDB is compiled for, and x86-64-v2 below it).
+#: ``pni`` is SSE3. Two v3 features are left out: the kernel lists ``avx`` only when it saves
+#: the AVX registers (so ``xsave`` adds nothing), every CPU with AVX2 and BMI2 has LZCNT
+#: (``abm``), and Rosetta's x86_64 Linux lists neither although the optimized build runs there.
+#: The binaries check every feature themselves (CPUID) when they start.
 X86_64_V3_FLAGS = (
     "cx16",
     "lahf_lm",
@@ -138,9 +141,7 @@ X86_64_V3_FLAGS = (
     "bmi2",
     "f16c",
     "fma",
-    "abm",
     "movbe",
-    "xsave",
 )
 
 #: Where the image keeps the release tarball's tree (docker/Dockerfile:
