@@ -70,6 +70,11 @@ curl -sf "$base/sessions/$session/statements/$id/result" "${auth[@]}" \
   -H 'Accept: application/vnd.apache.arrow.stream' -o https.arrows
 grep -aq 'https-true' https.arrows || { echo "the httpfs read returned no https-true"; exit 1; }
 if [ "${HARDCHARGER_SMOKE_OLD_CPU:-}" = 1 ]; then
+  # DuckDB's usual recipe for a built-in extension works there: nothing to download.
+  statement=$(curl -sf -X POST "$base/sessions/$session/statements" "${auth[@]}" -H 'Accept: application/json' \
+                -H 'Prefer: wait=60' -d '{"sql": "INSTALL httpfs; LOAD httpfs; INSTALL postgres; INSTALL ducklake; LOAD ducklake"}') \
+    || { echo "INSTALL/LOAD of the built-in extensions failed"; exit 1; }
+  [ "$(echo "$statement" | json state)" = succeeded ] || { echo "INSTALL of a built-in extension failed: $statement"; exit 1; }
   statement=$(curl -s -X POST "$base/sessions/$session/statements" "${auth[@]}" -H 'Accept: application/json' \
                 -H 'Prefer: wait=60' -d '{"sql": "INSTALL spatial"}')
   echo "$statement"

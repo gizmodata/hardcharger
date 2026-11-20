@@ -5,14 +5,18 @@
 // s3:// path, crashed the server on QEMU's kvm64 CPU model). So on such a CPU this build
 // installs and loads no extension at all from outside the binary: DuckDB's extension
 // provider is replaced by one that refuses both, with a message that says why and names
-// the extensions built into this build (which load as they always do). On a CPU that has
-// x86-64-v3, nothing changes.
+// the extensions built into this build. Those load as they always do, and INSTALL of one
+// (DuckDB's usual recipe, `INSTALL httpfs; LOAD httpfs`) succeeds without downloading
+// anything, as DuckDB calls the provider for it too. On a CPU that has x86-64-v3, nothing
+// changes.
 #include <duckdb.hpp>
 #include <duckdb/common/exception.hpp>
 #include <duckdb/main/capi_v2/capi_v2_internal.hpp>
 #include <duckdb/main/config.hpp>
 #include <duckdb/main/database.hpp>
 #include <duckdb/main/extension/external_extension_provider.hpp>
+#include <duckdb/main/extension_helper.hpp>
+#include <duckdb/main/extension_install_info.hpp>
 
 #include <string>
 
@@ -33,9 +37,16 @@ class RefusingExtensionProvider : public dd::ExternalExtensionProvider {
   std::string GetName() const override { return "hardcharger-baseline"; }
   bool SupportsExternalExtensions() const override { return true; }
 
-  dd::unique_ptr<dd::ExtensionInstallInfo> Install(dd::DatabaseInstance&, dd::FileSystem&, const std::string&,
+  dd::unique_ptr<dd::ExtensionInstallInfo> Install(dd::DatabaseInstance& db, dd::FileSystem& fs, const std::string&,
                                                    const std::string& extension, dd::ExtensionInstallOptions&,
                                                    dd::optional_ptr<dd::ClientContext>) override {
+    // The name DuckDB's own install would use (an alias such as postgres, or a path's base name).
+    const auto name = dd::ExtensionHelper::ApplyExtensionAlias(fs.ExtractBaseName(extension));
+    if (db.ExtensionIsLoaded(name)) {
+      auto info = dd::make_uniq<dd::ExtensionInstallInfo>();
+      info->mode = dd::ExtensionInstallMode::STATICALLY_LINKED;
+      return info;
+    }
     throw dd::IOException(Message(extension));
   }
   void* OpenLibrary(const std::string& filename, const std::string&) override {
