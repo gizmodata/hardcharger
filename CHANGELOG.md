@@ -42,6 +42,9 @@ also closes gaps there.
 
 ### Fixed
 
+- The concurrent-DDL test under access control no longer fails when the store itself is slower
+  than the test's deliberately short timeout (an emulated PostgreSQL on a Windows arm64 runner);
+  only such an attempt is run again, and any other failure still fails at once.
 - **DuckLake functions work for tokens with `catalog_access` rules.** Every `ducklake_*` function,
   and a DuckLake catalog's own calls such as `lake.snapshots()`, was refused for a `user` token
   (and for an administrator's token with rules), because it needed an `EXECUTE` grant such a token
@@ -144,6 +147,11 @@ also closes gaps there.
 
 ### Changed
 
+- **A slow access control store is told apart from one that is down.** When a statement to the
+  store takes the whole `rbac_store_timeout_seconds`, its caller is still told the store is
+  unavailable; once the store does answer, the server now also logs a warning naming the
+  statement (such as `COMMIT`) and how long it took. A store that never answers logs nothing
+  more, as before.
 - **DuckDB v2.0.1.** The server runs DuckDB's v2.0.1 bug-fix release (commit `8d78114e90`), with its
   fixes to decorrelation, join ordering and runtime filters, Parquet statistics and casts. The
   extensions the iOS app and the baseline Linux x86_64 build compile in move to the commits DuckDB
