@@ -203,11 +203,23 @@ also closes gaps there.
   and writes a DuckLake catalog's files. The migration guide says so.
 - Hardcharger's port of GizmoSQL's test battery is brought up to GizmoSQL 1.42.3 (`main` at
   b820719d): 605 cases, 565 passing, 37 not applicable, and the same 3 failing as before.
-- **ADBC driver 2.7.0**: the `X.Y.Z-adbc` images bundle `hardcharger-adbc` 2.7.0, and the Python
-  package's `adbc` extra needs it. Its options are all named `hardcharger.*`, as the
+- **ADBC driver 2.7.0**: the Python package's `adbc` extra needs `hardcharger-adbc` 2.7.0 or later
+  (the `X.Y.Z-adbc` images bundle 2.7.2, below). Its options are all named `hardcharger.*`, as the
   [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html) asks
   (`hardcharger.ingest.parts`, `hardcharger.query.result_partitions`); the names from before
   still work but print a deprecation warning. The README and docs use the new names.
+- **The `-adbc` image bundles the latest releases of the GizmoData ADBC drivers it carries**:
+  Hardcharger 2.7.2 (from 2.7.0), Quack 1.1.0 (from 1.0.4), Oracle 1.1.0 (from 1.0.6) and Db2 0.3.0
+  (from 0.2.6); GizmoSQL stays at 2.0.18. Quack, Oracle and Db2 now name their options as the
+  ADBC driver style guide asks, `quack.*` (`quack.auth.token`, `quack.tls.enabled`), `oracle.*`
+  (`oracle.query.batch_size`, `oracle.connect_timeout_seconds`) and `db2.*`
+  (`db2.query.batch_rows`, `db2.session.current_schema`); the old `adbc.<driver>.*` names still
+  work but print a deprecation warning. Behaviour changes to check when upgrading: Quack refuses
+  unknown `quack.*` and `adbc.quack.*` keys and unrecognised boolean values instead of ignoring
+  them; Db2 applies `db2.session.current_schema` (and `?schema=`), which it ignored before, so
+  that schema must exist; Oracle's and Db2's `GetOption("uri")` hides the password; every
+  driver's errors start with its name (`[quack]`, `[oracle]`, `[db2]`). The image's smoke test
+  sets every driver's options under the new names and fails on any deprecation warning.
 
 ## [2.13.3] - 2026-11-20
 

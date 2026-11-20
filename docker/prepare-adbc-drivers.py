@@ -27,19 +27,19 @@ import tomllib
 DRIVERS = {
     "gizmosql": {"repo": "gizmosql-adbc", "tag": "v2.0.18",
                  "asset": "libadbc_driver_gizmosql-{tag}-linux_{arch}.tar.gz"},
-    "oracle": {"repo": "adbc-driver-oracle", "tag": "v1.0.6",
+    "oracle": {"repo": "adbc-driver-oracle", "tag": "v1.1.0",
                "asset": "libadbc_driver_oracle-linux-{arch}.tar.gz",
                "entrypoint": "AdbcDriverOracleInit", "license": "MIT"},
-    "db2": {"repo": "adbc-driver-db2", "tag": "v0.2.6",
+    "db2": {"repo": "adbc-driver-db2", "tag": "v0.3.0",
             "asset": "libadbc_driver_db2-linux-{arch}.tar.gz",
             "entrypoint": "AdbcDriverDb2Init", "license": "MIT"},
     # 1.x speaks Quack protocol 3 (DuckDB 2.0 servers); 0.1.0-alpha.11 spoke DuckDB 1.5's.
-    "quack": {"repo": "adbc-driver-quack", "tag": "v1.0.4",
+    "quack": {"repo": "adbc-driver-quack", "tag": "v1.1.0",
               "asset": "libadbc_driver_quack-linux-{arch}.tar.gz",
               "entrypoint": "AdbcDriverQuackInit", "license": "MIT"},
     # The release workflow passes --hardcharger-tag (the newest stable release); this tag is
     # the default for a run by hand.
-    "hardcharger": {"repo": "hardcharger-adbc", "tag": "v2.7.0",
+    "hardcharger": {"repo": "hardcharger-adbc", "tag": "v2.7.2",
                     "asset": "libadbc_driver_hardcharger-{tag}-linux_{arch}.tar.gz"},
 }
 # What a LICENSE file must start with before a manifest written here may name the license.
