@@ -103,7 +103,8 @@ also closes gaps there.
   (`CREATE MACRO route(s) AS TABLE SELECT * FROM query(s)`) had DuckDB bind the caller's SQL before
   the plan check refused it (a `postgres_query()` prepared on the remote database, a file sniffed).
   The macro's body is now checked with the caller's arguments first, wherever the macro is stored (a
-  DuckLake catalog included); SQL the caller may run itself still works through it (GizmoSQL 1.42.3).
+  DuckLake catalog included, whatever the macro's name: only DuckDB's and DuckLake's own built-in
+  macros are left out); SQL the caller may run itself still works through it (GizmoSQL 1.42.3).
 - `PRAGMA json_execute_serialized_sql` is the administrator's, like the table function of that name
   (GizmoSQL 1.42.3).
 - The check before binding refuses a kind of statement it has no rule for. It now also reads `PIVOT`

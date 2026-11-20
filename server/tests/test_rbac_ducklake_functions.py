@@ -373,3 +373,42 @@ def test_ducklake_calls_in_places_the_walk_does_not_read_are_refused(world):
         error = expect_error(call=lambda sql=sql: rita.run(sql=sql), code="sql_error")
         assert why in error.detail, error.detail
     assert rita.run(sql="SELECT (SELECT count(*) FROM ducklake_snapshots('lake_a')) > 0 AS ok").column(0).to_pylist() == [True]
+
+
+# Review finding 14: an administrator's ordinary macro stored in a DuckLake catalog under a name GizmoSQL
+# gives a DuckLake method (list_files, branches, get_option: DuckLake defines no catalog macro by those names)
+# is a user macro: its body is walked with the caller's arguments before DuckDB binds it.
+LAKE_NAMED = ["list_files", "branches", "get_option"]
+
+
+def test_a_lake_macro_named_like_a_ducklake_method_is_walked(world):
+    admin, rita = world["admin"], world["rita"]
+    for sql in ["CREATE SEQUENCE IF NOT EXISTS home.main.seq14", "SELECT setval('home.main.seq14', 1)",
+                "CREATE OR REPLACE MACRO lake_a.main.ordinary(s) AS TABLE SELECT * FROM query(s)",
+                *[f"CREATE OR REPLACE MACRO lake_a.main.{name}(s) AS TABLE SELECT * FROM query(s)" for name in LAKE_NAMED]]:
+        expect_allowed(client=admin, sql=sql)
+    seq = lambda: admin.run(sql="SELECT last_value FROM duckdb_sequences() WHERE sequence_name = 'seq14'").column(0).to_pylist()[0]
+    try:
+        for name in ["ordinary", *LAKE_NAMED]:
+            expect_blocked(client=rita, sql=f"SELECT * FROM lake_a.main.{name}('SELECT * FROM range(setval(''home.main.seq14'', 7))')",
+                           why="user rita may not setval() of sequence")
+            assert seq() == 1, name
+        # A table of a catalog it holds nothing on answers through the macro exactly as the statement itself
+        # does (a store user is told a table does not exist, and refused one it may not read).
+        for table in ("secret_b", "no_such_table"):
+            def answer(sql):
+                try:
+                    rita.run(sql=sql)
+                except Exception as error:  # noqa: BLE001 - the answer is what is compared
+                    return error.code, error.detail.split("\n")[0]
+                return None
+            direct = answer(f"SELECT * FROM lake_b.main.{table}")
+            assert direct is not None
+            assert answer(f"SELECT * FROM lake_a.main.list_files('SELECT * FROM lake_b.main.{table}')") == direct, table
+        # The twins: DuckLake's own catalog macro, and what rita may run herself through the macros.
+        assert rita.run(sql="SELECT count(*) AS n FROM lake_a.snapshots()").column("n").to_pylist()[0] > 0
+        assert rita.run(sql="SELECT * FROM lake_a.main.ordinary('SELECT 42 AS answer')").to_pylist() == [{"answer": 42}]
+        assert rita.run(sql="SELECT * FROM lake_a.main.list_files('SELECT 42 AS answer')").to_pylist() == [{"answer": 42}]
+    finally:
+        for name in ["ordinary", *LAKE_NAMED]:
+            expect_allowed(client=admin, sql=f"DROP MACRO TABLE lake_a.main.{name}")

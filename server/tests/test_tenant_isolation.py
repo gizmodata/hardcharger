@@ -613,3 +613,27 @@ def test_a_macro_stored_in_a_ducklake_catalog_is_walked_before_binding(world, la
     # The twin: what the token may run itself runs through the macro.
     assert session.scalar(sql=f"SELECT * FROM {catalog}.main.run_sql('SELECT 42 AS answer')") == 42
     assert session.scalar(sql=f"SELECT count(*) FROM {catalog}.main.run_sql('SELECT * FROM {A}.main.mine')") >= 100
+
+
+# Review finding 14: the same for a macro stored under a name GizmoSQL gives a DuckLake method that DuckLake
+# itself defines no catalog macro by (list_files, branches, get_option), for a token with read rules on the lake.
+@pytest.mark.parametrize("name", ["list_files", "branches", "get_option", "ordinary"])
+def test_a_lake_macro_named_like_a_ducklake_method_is_walked(world, lake_macros, name):
+    admin = world["server"].admin()
+    admin.execute(sql=f"CREATE OR REPLACE MACRO {A}.main.{name}(s) AS TABLE SELECT * FROM query(s)")
+    inspector = world["server"].as_role(role="user", subject="app_a_inspector",
+                                        catalog_access=[{"catalog": A, "access": "read"}, {"catalog": HOME, "access": "read"},
+                                                        {"catalog": "*", "access": "none"}])
+    try:
+        before = home_seq(world)
+        refused(session=inspector, sql=f"SELECT * FROM {A}.main.{name}('SELECT * FROM range(setval(''{HOME}.main.seq'', 7))')",
+                why=f"write access to catalog '{HOME}'")
+        assert home_seq(world) == before
+        for table in ("secret_b", "no_such_table"):
+            refused(session=inspector, sql=f"SELECT * FROM {A}.main.{name}('SELECT * FROM {B}.main.{table}')",
+                    why=f"read access to catalog '{B}'")
+        # The twins: DuckLake's own catalog macro, and what the token may run itself.
+        assert inspector.query(sql=f"SELECT * FROM {A}.snapshots()").num_rows > 0
+        assert inspector.scalar(sql=f"SELECT * FROM {A}.main.{name}('SELECT 42 AS answer')") == 42
+    finally:
+        admin.execute(sql=f"DROP MACRO TABLE {A}.main.{name}")
