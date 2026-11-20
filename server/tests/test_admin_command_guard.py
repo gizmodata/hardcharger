@@ -140,8 +140,8 @@ REACH_SETUP = [
 @pytest.fixture(scope="module")
 def reach(module_launcher, tmp_path_factory):
     files = tmp_path_factory.mktemp("reach_files")
-    (files / "passwd.csv").write_text("a\nfile-secret-word\n")
-    (files / "hosts").write_text("host-secret-word\n")
+    (files / "passwd.csv").write_text("a\nfile-secret-word\n", newline="\n")  # LF on Windows too
+    (files / "hosts").write_text("host-secret-word\n", newline="\n")  # read back byte for byte
     server = module_launcher.start(args=["--database", "reach.db"])
     admin = server.admin()
     for sql in REACH_SETUP:
