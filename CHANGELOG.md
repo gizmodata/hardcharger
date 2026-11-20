@@ -50,8 +50,10 @@ also closes gaps there.
 - Isolate the DuckLake plan-check unit fixture from built-in extensions, so the baseline
   and sanitizer builds can register its test function without colliding with DuckLake's.
   Failed C++ unit cases now include their original diagnostics in the Python test report.
-- Keep downloaded, uninstrumented Delta code out of the TSan bind-time permission fixtures;
+- Keep downloaded, uninstrumented Delta code out of the TSan permission fixtures;
   all permission cases still run there, while native and ASan jobs exercise the real extension.
+- Match terminal progress-line escapes in the read-only CLI test and observe the queued
+  state independently of its timeout in the SQL-monitor test, avoiding sanitizer-only flakes.
 - Dismiss the soft keyboard before checking Android console output in the UI test, so
   the small emulator's keyboard does not hide the transcript. Preserve release-tag build
   caches before tests run so a failed gate can reuse them on its next attempt.

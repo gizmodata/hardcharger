@@ -343,7 +343,9 @@ def test_connect_from_a_read_only_shell_stays_read_only(launcher, recorder_for, 
             child.expect(PROMPT)
             child.send(f"CREATE TABLE {table} (n INTEGER);\r")
             # The refusal, or the write's OK, then the prompt again.
-            shown = child.expect([re.escape(READ_ONLY_REFUSAL.strip()), r"\bOK\b"])
+            # A progress line is cleared with ESC[2K immediately before OK. Its K
+            # is a word character, so a word-boundary matcher misses the real OK.
+            shown = child.expect([re.escape(READ_ONLY_REFUSAL.strip()), r"(?:^|[\r\n]|\x1b\[2K)OK\r?\n"])
             assert shown == (0 if read_only else 1), child.before
             child.expect(PROMPT)
             child.send(".quit\r")

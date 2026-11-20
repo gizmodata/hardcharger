@@ -20,6 +20,7 @@ catalog ...").
 
 import pytest
 
+from conftest import TSAN_EXTENSIONS, TSAN_PERMISSION_INIT
 
 DEFAULT = "catalog_access_test"
 VISIBLE_ALWAYS = {"system", "temp", "_hardcharger_system"}
@@ -27,7 +28,12 @@ VISIBLE_ALWAYS = {"system", "temp", "_hardcharger_system"}
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
-    return module_launcher.start(args=["--database", f"{DEFAULT}.db", "--enable-instrumentation"])
+    server = module_launcher.start(args=["--database", f"{DEFAULT}.db", "--enable-instrumentation",
+                                         *TSAN_PERMISSION_INIT])
+    yield server
+    if TSAN_EXTENSIONS:
+        assert server.admin().scalar(sql="SELECT count(*) FROM duckdb_extensions() "
+                                         "WHERE loaded AND extension_name IN ('delta', 'iceberg')") == 0
 
 
 @pytest.fixture(scope="module")

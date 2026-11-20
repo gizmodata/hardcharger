@@ -13,7 +13,7 @@ server's own format (1.x: role "analyst"). All 42 apply.
 
 import pytest
 
-from conftest import run_unit_tests
+from conftest import TSAN_EXTENSIONS, TSAN_PERMISSION_INIT, run_unit_tests
 
 UNIT_CASES = [
     "AdminCommandGuard.AttachIsGated", "AdminCommandGuard.DetachIsGated",
@@ -142,11 +142,14 @@ def reach(module_launcher, tmp_path_factory):
     files = tmp_path_factory.mktemp("reach_files")
     (files / "passwd.csv").write_text("a\nfile-secret-word\n", newline="\n")  # LF on Windows too
     (files / "hosts").write_text("host-secret-word\n", newline="\n")  # read back byte for byte
-    server = module_launcher.start(args=["--database", "reach.db"])
+    server = module_launcher.start(args=["--database", "reach.db", *TSAN_PERMISSION_INIT])
     admin = server.admin()
     for sql in REACH_SETUP:
         admin.execute(sql=sql)
-    return {"server": server, "F": str(files / "passwd.csv"), "H": str(files / "hosts"), "D": str(files)}
+    yield {"server": server, "F": str(files / "passwd.csv"), "H": str(files / "hosts"), "D": str(files)}
+    if TSAN_EXTENSIONS:
+        assert admin.scalar(sql="SELECT count(*) FROM duckdb_extensions() "
+                                "WHERE loaded AND extension_name IN ('delta', 'iceberg')") == 0
 
 
 @pytest.fixture(params=["token without rules", "catalog_access token"])
@@ -163,8 +166,11 @@ def sql_of(reach, template: str) -> str:
 
 
 def refused(session, sql: str, why: str) -> None:
-    problem = session.error(sql=sql)
-    assert problem["code"] == "permission_denied" and problem["status"] == 403, (sql, problem)
+    # Resolving a function may load its extension. Wait for the refusal rather than
+    # treating an asynchronous statement's initial 201 as the permission status.
+    response = session.submit(sql=sql, headers={"Prefer": "wait=30"})
+    problem = response.json()
+    assert response.status_code == 403 and problem["code"] == "permission_denied", (sql, problem)
     assert why in problem["detail"], f"{sql}: expected {why!r} in {problem['detail']}"
 
 

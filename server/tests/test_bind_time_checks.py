@@ -13,7 +13,7 @@ refuses a statement kind it has no rule for; every refusal here has a twin that 
 
 import pytest
 
-from conftest import TSAN_EXTENSIONS
+from conftest import TSAN_EXTENSIONS, TSAN_PERMISSION_INIT
 from rbac import expect_allowed, expect_blocked, start_rbac_server
 
 READER_RULES = [{"catalog": "bind", "access": "read"}, {"catalog": "*", "access": "none"}]
@@ -24,13 +24,11 @@ WRITER_RULES = [{"catalog": "bind", "access": "write"}, {"catalog": "*", "access
 # access-control cases running there, including the allowed twin's missing-extension
 # error, without loading that module into the instrumented engine. Native/ASan jobs
 # exercise the real module. httpfs is built in under TSan and supplies the S3 secret.
-TSAN_INIT = (["--init-sql-commands", "LOAD httpfs; SET autoload_known_extensions = false;"]
-             if TSAN_EXTENSIONS else [])
 
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
-    server = module_launcher.start(args=["--database", "bind.db", *TSAN_INIT])
+    server = module_launcher.start(args=["--database", "bind.db", *TSAN_PERMISSION_INIT])
     admin = server.admin()
     for sql in ["CREATE SEQUENCE seq", "CREATE TABLE t (x INTEGER)", "INSERT INTO t VALUES (1), (2)",
                 "PREPARE nothing AS SELECT 1",
@@ -159,7 +157,7 @@ def test_pragma_json_execute_serialized_sql_is_the_administrators(server):
 def rbac(module_launcher, store, tmp_path_factory):
     work = tmp_path_factory.mktemp("bind_rbac")
     server = start_rbac_server(launcher=module_launcher, store_uri=store.new_database(),
-                               args=["--database", str(work / "bind_rbac.duckdb"), *TSAN_INIT])
+                               args=["--database", str(work / "bind_rbac.duckdb"), *TSAN_PERMISSION_INIT])
     admin = server.admin()
     for sql in ["CREATE SEQUENCE seq", "CREATE ROLE users", "CREATE USER una", "CREATE USER uri",
                 "GRANT users TO uri", "GRANT USAGE ON SEQUENCE main.seq TO users",
