@@ -204,6 +204,9 @@ std::vector<std::shared_ptr<dd::MacroFunction>> SessionObjectResolver::MacroDefi
   auto status = InTransaction(connection_, [&]() -> arrow::Status {
     ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context, wanted, name));
     if (!entry || entry->type != wanted || entry->internal) return arrow::Status::OK();
+    // A DuckLake catalog's own macros (lake.snapshots()) are DuckLake calls, which the gate's
+    // ducklake_call decides by the catalog they act on.
+    if (compat::Str(entry->ParentCatalog().GetCatalogType()) == "ducklake") return arrow::Status::OK();
     for (const auto& macro : entry->Cast<dd::MacroCatalogEntry>().macros) {
       if (macro) definitions.push_back(std::shared_ptr<dd::MacroFunction>(macro->Copy().release()));
     }
@@ -211,6 +214,21 @@ std::vector<std::shared_ptr<dd::MacroFunction>> SessionObjectResolver::MacroDefi
   });
   if (!status.ok()) definitions.clear();
   return definitions;
+}
+
+std::optional<std::string> SessionObjectResolver::DuckLakeMacroCatalog(const QualifiedName& name) {
+  std::optional<std::string> catalog;
+  // A table function is looked up as one; DuckLake answers with its macro (it loads its
+  // built-in macros only for that lookup).
+  auto status = InTransaction(connection_, [&]() -> arrow::Status {
+    ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context, dd::CatalogType::TABLE_FUNCTION_ENTRY, name));
+    if (entry && entry->type == dd::CatalogType::TABLE_MACRO_ENTRY &&
+        compat::Str(entry->ParentCatalog().GetCatalogType()) == "ducklake") {
+      catalog = compat::Str(entry->ParentCatalog().GetName());
+    }
+    return arrow::Status::OK();
+  });
+  return status.ok() ? catalog : std::nullopt;
 }
 
 arrow::Result<ObjectPath> SessionObjectResolver::ResolveSchema(const QualifiedName& name) {

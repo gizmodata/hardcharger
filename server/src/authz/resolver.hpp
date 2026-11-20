@@ -42,6 +42,10 @@ class SessionObjectResolver : public ObjectResolver {
   // macro when `table`, else a scalar one. None for anything else, and for DuckDB's own
   // (internal) macros.
   std::vector<std::shared_ptr<duckdb::MacroFunction>> MacroDefinitions(const QualifiedName& name, bool table);
+  // The DuckLake catalog whose own macro `name` (as a FROM clause or CALL names a table
+  // function) finds, as DuckDB would: lake.snapshots(), or snapshots() in a session whose
+  // current catalog is lake. Nullopt when it finds anything else, or nothing.
+  std::optional<std::string> DuckLakeMacroCatalog(const QualifiedName& name);
 
  private:
   duckdb::Connection& connection_;

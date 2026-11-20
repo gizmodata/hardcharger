@@ -219,6 +219,24 @@ const dd::ParsedExpression* DeclaredArgument(const dd::FunctionExpression& funct
   return nullptr;
 }
 
+// A table function call as the DuckLake callback sees it: its name parts and its first
+// positional argument if that is a string literal (never a bound parameter: the catalog
+// must be checkable from the text alone).
+TableFunctionCall CallOf(const dd::FunctionExpression& function, const std::string& wrapper) {
+  TableFunctionCall call;
+  for (const auto& part : function.GetQualifiedName().Path()) {
+    if (!Str(part).empty()) call.parts.push_back(Str(part));
+  }
+  if (call.parts.empty()) call.parts.push_back(Str(function.FunctionName()));
+  if (const auto* first = FirstPositional(function); first && first->GetExpressionClass() == dd::ExpressionClass::CONSTANT) {
+    const auto value = ddb::ConstantValue(first->Cast<dd::ConstantExpression>());
+    if (!value.IsNull() && value.type().id() == dd::LogicalTypeId::VARCHAR) call.first_literal = value.ToString();
+  }
+  call.wrapper = wrapper;
+  call.id = &function;
+  return call;
+}
+
 // The path a COPY names: its literal, or nullopt when it is an expression.
 std::optional<std::vector<std::string>> CopyPaths(const dd::CopyInfo& info, const PathParameterCallback& parameters) {
   if (info.file_path_expression) return LiteralPaths(info.file_path_expression.get(), parameters);
@@ -237,11 +255,15 @@ class Walker {
   Walker(const std::function<bool(const std::string&)>& permitted,
          const NamedTableCallback& named_table, const TableFunctionCallback& table_function_allowed,
          const StorageCallback& storage, const PathParameterCallback& parameters,
-         const BindTimeCallbacks& bind_time)
+         const DuckLakeCallCallback& ducklake_call, const BindTimeCallbacks& bind_time)
       : permitted_(permitted),
         named_table_(named_table),
         table_function_allowed_(table_function_allowed),
-        storage_(storage), parameters_(parameters), bind_time_(bind_time) {}
+        storage_(storage), parameters_(parameters), ducklake_call_(ducklake_call), bind_time_(bind_time) {}
+
+  // What the walk is inside: "" for the statement itself, else the body of a view, macro
+  // or trigger, whose calls run later, with whoever uses it.
+  void SetWrapper(std::string wrapper) { wrapper_ = std::move(wrapper); }
 
   // An expression DuckDB evaluates while it binds the statement (a table function's or a
   // PRAGMA's argument, a setting's value, AT, EXECUTE's values, COPY's options): every
@@ -397,6 +419,9 @@ class Walker {
       scopes_.push_back(std::move(scope));
       const std::size_t outer = level_;
       level_ = scopes_.size();
+      // A DuckLake call in the body is one the statement does not make itself.
+      const std::string outer_wrapper = wrapper_;
+      if (wrapper_.empty()) wrapper_ = "a macro";
       if (definition->type == dd::MacroType::TABLE_MACRO) {
         auto& body = definition->Cast<dd::TableMacroFunction>();
         if (body.query_node) WalkNode(*body.query_node);
@@ -404,6 +429,7 @@ class Walker {
         auto& body = definition->Cast<dd::ScalarMacroFunction>();
         if (body.expression) CheckExpression(*body.expression);
       }
+      wrapper_ = outer_wrapper;
       level_ = outer;
       scopes_.pop_back();
     }
@@ -594,6 +620,8 @@ class Walker {
     } else if (AlwaysGated(name) || IsRemoteQueryFunction(name) || name == "query" ||
         name == "query_table") {
       Flag(name + "()");
+    } else if (ducklake_call_ && ducklake_call_(CallOf(ref.function->Cast<dd::FunctionExpression>(), wrapper_))) {
+      // A DuckLake call, checked against the catalog_access rules by the callback.
     } else if (ddb::IsFileReadingTableFunction(name)) {
       Storage({name + "()", false, Strings(FirstPositional(call))}, name + "() (files and URLs)");
     } else if (name == "checkpoint" || name == "force_checkpoint") {
@@ -634,7 +662,9 @@ class Walker {
   const TableFunctionCallback& table_function_allowed_;
   const StorageCallback& storage_;
   const PathParameterCallback& parameters_;
+  const DuckLakeCallCallback& ducklake_call_;
   const BindTimeCallbacks& bind_time_;
+  std::string wrapper_;
   int describing_ = 0;  // inside a DESCRIBE
   std::vector<MacroScope> scopes_;  // the macros whose bodies are being walked, innermost last
   std::vector<std::string> macro_names_;  // and their names
@@ -665,13 +695,13 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
                                     const NamedTableCallback& named_table,
                                     const TableFunctionCallback& table_function_allowed,
                                     const StorageCallback& storage, const PathParameterCallback& parameters,
-                                    const BindTimeCallbacks& bind_time) {
-  Walker walker(permitted, named_table, table_function_allowed, storage, parameters, bind_time);
+                                    const DuckLakeCallCallback& ducklake_call, const BindTimeCallbacks& bind_time) {
+  Walker walker(permitted, named_table, table_function_allowed, storage, parameters, ducklake_call, bind_time);
   const auto again = [&](dd::SQLStatement& inner) {
-    return Classify(inner, permitted, named_table, table_function_allowed, storage, parameters, bind_time);
+    return Classify(inner, permitted, named_table, table_function_allowed, storage, parameters, ducklake_call, bind_time);
   };
   walker.classify_ = [&](dd::SQLStatement& inner) {
-    return Classify(inner, permitted, named_table, table_function_allowed, storage, nullptr, bind_time);
+    return Classify(inner, permitted, named_table, table_function_allowed, storage, nullptr, ducklake_call, bind_time);
   };
   auto gate = [&](std::string category) -> std::optional<std::string> {
     if (permitted && permitted(category)) return std::nullopt;
@@ -742,6 +772,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       // A view's query is bound when it is created (and checked when it is read).
       if (create.info && create.info->type == dd::CatalogType::VIEW_ENTRY) {
         auto& view = create.info->Cast<dd::CreateViewInfo>();
+        walker.SetWrapper("a view");
         if (view.query && view.query->node) walker.WalkNode(*view.query->node);
       }
       // A trigger's body, as its creator could run it: it is bound again inside every
@@ -749,6 +780,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       // as a macro's body (below). A type's enum query runs when the type is created.
       if (create.info && create.info->type == dd::CatalogType::TRIGGER_ENTRY) {
         auto& trigger = create.info->Cast<dd::CreateTriggerInfo>();
+        walker.SetWrapper("a trigger");
         if (trigger.trigger_action) walker.WalkNode(*trigger.trigger_action);
       }
       if (create.info && create.info->type == dd::CatalogType::TYPE_ENTRY) {
@@ -765,6 +797,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       // and object storage only within the creator's storage privileges.
       if (create.info && (create.info->type == dd::CatalogType::MACRO_ENTRY ||
                           create.info->type == dd::CatalogType::TABLE_MACRO_ENTRY)) {
+        walker.SetWrapper("a macro");
         for (auto& macro : create.info->Cast<dd::CreateMacroInfo>().macros) {
           if (!macro) continue;
           for (auto& parameter : macro->default_parameters) {
@@ -829,9 +862,12 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
           return gate(name + "()");
         }
         // CALL f(...) binds f as SELECT * FROM f(...) does: its arguments are evaluated, and a
-        // table macro's body is bound with them.
+        // table macro's body is bound with them (a DuckLake call's too).
         walker.CallBindTime(call.function->Cast<dd::FunctionExpression>());
         if (walker.violation) return walker.violation;
+        if (ducklake_call && ducklake_call(CallOf(call.function->Cast<dd::FunctionExpression>(), ""))) {
+          return std::nullopt;  // a DuckLake call, checked against the catalog_access rules
+        }
         if (ddb::IsFileReadingTableFunction(name)) {
           if (!storage) return gate(name + "() (files and URLs)");
           storage({name + "()", false, LiteralPaths(FirstPositional(call.function->Cast<dd::FunctionExpression>()), parameters)});
@@ -955,8 +991,8 @@ std::optional<std::string> GatedCategory(dd::SQLStatement& statement,
                                          const NamedTableCallback& named_table,
                                          const TableFunctionCallback& table_function_allowed,
                                          const StorageCallback& storage, const PathParameterCallback& parameters,
-                                         const BindTimeCallbacks& bind_time) {
-  return Classify(statement, permitted, named_table, table_function_allowed, storage, parameters, bind_time);
+                                         const DuckLakeCallCallback& ducklake_call, const BindTimeCallbacks& bind_time) {
+  return Classify(statement, permitted, named_table, table_function_allowed, storage, parameters, ducklake_call, bind_time);
 }
 
 }  // namespace hardcharger::authz

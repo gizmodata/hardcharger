@@ -57,10 +57,12 @@
 #include <duckdb/planner/operator/logical_vacuum.hpp>
 #include <duckdb/planner/parsed_data/bound_create_table_info.hpp>
 #include <duckdb/planner/planner_extension.hpp>
+#include <functional>
 #include <set>
 #include <unordered_set>
 
 #include "authz/duckdb_internal.hpp"
+#include "authz/ducklake_calls.hpp"
 #include "authz/macros.hpp"
 #include "logging.hpp"
 #include "authz/policies.hpp"
@@ -610,6 +612,14 @@ class PlanChecker {
           VisitView(*marker);
           return;
         }
+        // DuckLake's compaction and inlined-data flush, which ducklake_merge_adjacent_files,
+        // ducklake_rewrite_data_files and ducklake_flush_inlined_data bind to: a catalog_access
+        // principal's, when the gate checked such a call on the catalog it rewrites.
+        if (principal_.catalog_rules &&
+            op.Cast<dd::LogicalExtensionOperator>().GetExtensionName() == "ducklake") {
+          CheckDuckLakeRewrite(op);
+          return;
+        }
         Deny(principal_, "extension operators are not available under access control");
       case OpType::LOGICAL_TRANSACTION:
         return;
@@ -816,6 +826,14 @@ class PlanChecker {
     auto table = get.GetTable();
     if (!table) {
       const std::string name = Lower(TableFunctionName(get));
+      // A catalog_access principal's DuckLake call: its catalog's rules decide, wherever it
+      // sits (store users' DuckLake functions are table functions like any other, below).
+      if (principal_.catalog_rules) {
+        if (const auto access = DuckLakeFunctionAccess(name)) {
+          CheckDuckLakeCall(get, name, *access);
+          return;
+        }
+      }
       if (OnlySuperusers()) return;  // in a view an administrator owns
       if (ddb::IsFileReadingTableFunction(name)) {
         RequireStorage(name + "()", StorageMode::kRead, PathsOf(get));
@@ -1128,6 +1146,108 @@ class PlanChecker {
     return std::nullopt;
   }
 
+  // A catalog_access principal's DuckLake call, as bound: the pre-bind gate checked the
+  // calls the statement names itself (authz/ducklake_calls.hpp); this refuses any other
+  // (in a view or macro, or where the gate's walk does not reach) and checks the bound
+  // catalog against the rules again.
+  void CheckDuckLakeCall(dd::LogicalGet& get, const std::string& name, DuckLakeAccess access) {
+    if (access == DuckLakeAccess::kAdministrator) throw dd::PermissionException(DuckLakeAdministratorRefusal(name));
+    if (access == DuckLakeAccess::kUnknown) throw dd::PermissionException(DuckLakeUnknownRefusal(name));
+    if (view_depth_ > 0 || !creating_view_.empty()) {
+      throw dd::PermissionException(DuckLakeWrappedRefusal(name, "a view"));
+    }
+    const bool literal = !get.parameters.empty() && !get.parameters[0].IsNull() &&
+                         get.parameters[0].type().id() == dd::LogicalTypeId::VARCHAR;
+    if (!literal) throw dd::PermissionException(DuckLakeComputedCatalogRefusal(name));
+    std::string catalog = get.parameters[0].ToString();
+    if (auto db = dd::DatabaseManager::Get(context_).GetDatabase(context_, dd::Identifier(catalog))) {
+      catalog = compat::Str(db->GetName());
+    }
+    const auto needed = access == DuckLakeAccess::kWrite ? CatalogAccessLevel::kWrite : CatalogAccessLevel::kRead;
+    RequireDuckLakeAccess(catalog, needed);
+    if (needed == CatalogAccessLevel::kWrite) {
+      if (auto readonly = ReadOnlyRefusal(context_)) throw dd::PermissionException(*readonly);
+    }
+    auto state = context_.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
+    if (!state || !state->DuckLakeCallChecked(name, FoldIdentifier(catalog))) {
+      throw dd::PermissionException(DuckLakeUncheckedRefusal(name));
+    }
+    NoteAccess("EXECUTE " + name + "() on catalog " + catalog, {});
+  }
+
+  // DuckLake's own rewrite of a table's files (compaction, or flushing inlined rows to
+  // Parquet): it reads the table and writes new files into its catalog's storage, through a
+  // COPY TO whose path DuckLake takes from the catalog (no option a user may set moves it).
+  // Allowed for a catalog_access principal only when the statement itself called one of the
+  // functions that plan it on that catalog (checked against the rules before binding), and
+  // the principal may write the catalog; the table reads below are checked as any read.
+  void CheckDuckLakeRewrite(dd::LogicalOperator& op) {
+    static const char* kRewriters[] = {"ducklake_merge_adjacent_files", "ducklake_rewrite_data_files",
+                                       "ducklake_flush_inlined_data"};
+    if (view_depth_ > 0 || !creating_view_.empty()) {
+      throw dd::PermissionException(DuckLakeWrappedRefusal("a DuckLake maintenance function", "a view"));
+    }
+    std::set<std::string> catalogs;
+    std::function<void(dd::LogicalOperator&)> collect = [&](dd::LogicalOperator& node) {
+      if (node.type == OpType::LOGICAL_GET) {
+        if (auto table = node.Cast<dd::LogicalGet>().GetTable()) {
+          catalogs.insert(compat::Str(table->ParentCatalog().GetName()));
+          // The row and masking policies would be applied to DuckLake's own read of the
+          // table (policies.hpp), and the rewrite would then replace the table's files with
+          // the filtered or masked rows, for everyone: refused, as any write into a
+          // table with policies is.
+          const ObjectPath path = PathOf(*table);
+          if (!snapshot_.RowPoliciesOn(path).empty() || !snapshot_.ApplicableMasks(principal_, path).empty()) {
+            Deny(principal_, "DuckLake's rewrite of the files of " + path.ToString() +
+                                 ", which has row or masking policies, is not available under access control yet");
+          }
+        }
+      }
+      for (auto& child : node.children) {
+        if (child) collect(*child);
+      }
+    };
+    collect(op);
+    if (catalogs.empty()) Deny(principal_, "extension operators are not available under access control");
+    auto state = context_.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
+    if (auto readonly = ReadOnlyRefusal(context_)) throw dd::PermissionException(*readonly);
+    for (const auto& catalog : catalogs) {
+      RequireDuckLakeAccess(catalog, CatalogAccessLevel::kWrite);
+      const bool called = state && std::any_of(std::begin(kRewriters), std::end(kRewriters), [&](const char* f) {
+                            return state->DuckLakeCallChecked(f, FoldIdentifier(catalog));
+                          });
+      if (!called) {
+        throw dd::PermissionException(
+            "Hardcharger blocked DuckLake's rewrite of files of catalog " + catalog +
+            ": it runs only for a ducklake_merge_adjacent_files(), ducklake_rewrite_data_files() or "
+            "ducklake_flush_inlined_data() call that the statement makes itself (not inside a macro)");
+      }
+      NoteAccess("DuckLake rewrite of files of catalog " + catalog, {});
+    }
+    for (auto& child : op.children) {
+      if (!child) continue;
+      // DuckLake's own write into its catalog's storage: what it copies is checked below.
+      if (child->type == OpType::LOGICAL_COPY_TO_FILE) {
+        VisitChildren(*child, nullptr);
+      } else {
+        Visit(*child, nullptr);
+      }
+    }
+  }
+
+  // The rules' access to a DuckLake function's catalog: the server's own catalogs read as
+  // missing, any other refusal names the access the call needs.
+  void RequireDuckLakeAccess(const std::string& catalog, CatalogAccessLevel needed) {
+    const bool servers = std::any_of(principal_.hidden_catalogs.begin(), principal_.hidden_catalogs.end(),
+                                     [&](const std::string& c) { return IdentifiersEqual(c, catalog); });
+    if (servers) RequireVisible(catalog);
+    const auto level = snapshot_.CatalogVisible(principal_, catalog) ? CatalogRuleLevel(*principal_.catalog_rules, catalog)
+                                                                     : CatalogAccessLevel::kNone;
+    if (level == CatalogAccessLevel::kNone || (needed == CatalogAccessLevel::kWrite && level != needed)) {
+      DenyByCatalogAccess(catalog, needed);
+    }
+  }
+
   bool OnlySuperusers() const {
     for (const auto& rights : rights_) {
       if (!rights.principal.superuser) return false;
@@ -1138,6 +1258,11 @@ class PlanChecker {
   // The caller needs SELECT on the view (on the columns the statement uses);
   // the view's body is then checked with its owner's rights.
   void VisitView(ViewMarker& view) {
+    ++view_depth_;
+    struct Leave {
+      int& depth;
+      ~Leave() { --depth; }
+    } leave{view_depth_};
     const std::string name = view.view.ToString();
     if (view.temporary) {
       if (in_owned_view_) {
@@ -1841,6 +1966,7 @@ class PlanChecker {
   const ViewColumns& view_columns_;
   const TriggerBodies& trigger_bodies_;
   std::vector<Rights> rights_;
+  int view_depth_ = 0;  // inside a view's body
   // The sequences the column defaults of the table being written advance (Visit).
   std::vector<const dd::CatalogEntry*> default_sequences_;
   bool in_owned_view_ = false;
