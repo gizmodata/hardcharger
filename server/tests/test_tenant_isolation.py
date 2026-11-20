@@ -96,12 +96,11 @@ def test_finding_2_no_write_reaches_another_catalogs_storage(tenant_a, world):
     for sql, why in [
         (f"COPY (SELECT 1 AS i) TO '{s3}/{B}/main/secret_b/injected-by-a.parquet' (FORMAT parquet)",
          f"reaches into the storage of DuckLake catalog {B}"),
-        # Its own catalog's storage too: only DuckLake writes there.
-        (f"COPY (SELECT 1 AS i) TO '{s3}/{A}/main/mine/own-prefix.parquet' (FORMAT parquet)",
-         f"reaches into the storage of DuckLake catalog {A}"),
         (f"COPY (SELECT 1 AS i) TO '{s3}/elsewhere/x.parquet' (FORMAT parquet)", "WRITE OBJECT STORAGE"),
     ]:
         refused(session=tenant_a, sql=sql, why=why)
+    # Its own catalog's storage is its own (GizmoSQL 1.42.3: a catalog_access token reaches the
+    # data path of a DuckLake catalog its rules let it write): test_own_catalogs_storage_stays_reachable.
 
 
 def test_finding_3_ducklake_functions_dont_reach_another_catalog(tenant_a):
@@ -124,3 +123,76 @@ def test_no_read_reaches_another_catalogs_files(tenant_a, world):
     for sql in [f"SELECT * FROM read_parquet('{b_file}')", f"SELECT * FROM glob('{s3}/{B}/**')",
                 f"SELECT * FROM read_parquet('{s3}/{B}/main/*/*.parquet')", f"SELECT * FROM parquet_metadata('{b_file}')"]:
         refused(session=tenant_a, sql=sql, why=f"reaches into the storage of DuckLake catalog {B}")
+
+
+# ---- GizmoSQL 1.42.3: object storage limited to the data paths of the token's DuckLake catalogs ----
+#
+# Port of test_catalog_access.cpp's RemotePathScopeFixture (1.x checks it in its file system; here
+# the storage check does, on the paths a statement names before binding and on the paths DuckDB
+# bound). A catalog_access token holds no storage privilege; it reaches inside the data path of a
+# DuckLake catalog its rules let it read (reads) or write (writes), and nothing else.
+
+@pytest.fixture
+def reader_a(world):
+    return world["server"].as_role(role="user", subject="app_a_reader",
+                                   catalog_access=[{"catalog": A, "access": "read"}, {"catalog": "*", "access": "none"}])
+
+
+def test_scoped_token_cannot_read_another_catalogs_storage(tenant_a, world):
+    s3, b_file = world["s3"], world["b_file"]
+    for sql, why in [
+        (f"SELECT * FROM read_parquet('{b_file}')", f"reaches into the storage of DuckLake catalog {B}"),
+        (f"SELECT * FROM glob('{s3}/{B}/*')", f"reaches into the storage of DuckLake catalog {B}"),
+        (f"SELECT * FROM read_csv('{s3}/{B}/x.csv')", f"reaches into the storage of DuckLake catalog {B}"),
+        (f"SELECT * FROM '{b_file}'", f"reaches into the storage of DuckLake catalog {B}"),
+        (f"COPY (SELECT 1 AS a) TO '{s3}/{B}/x.parquet' (FORMAT parquet)", f"reaches into the storage of DuckLake catalog {B}"),
+        # Indirect: the statement's text does not hold the path.
+        (f"SELECT * FROM query('SELECT * FROM read_parquet(''{b_file}'')')", "Hardcharger blocked query()"),
+        (f"SELECT * FROM read_parquet(concat('s3', '://{s3[5:]}/{B}/x.parquet'))", "Hardcharger blocked read_parquet()"),
+        (f"SELECT * FROM read_parquet(chr(115) || '3://{s3[5:]}/{B}/x.parquet')", "Hardcharger blocked read_parquet()"),
+        # Beside the data path on a name boundary, out of it through '..', a glob from above.
+        (f"SELECT * FROM read_parquet('{s3}/{A}x/x.parquet')", "READ OBJECT STORAGE"),
+        (f"SELECT * FROM read_parquet('{s3}/{A}/../{B}/x.parquet')", "'..'"),
+        (f"SELECT * FROM glob('{s3}/*/main/*')", f"reaches into the storage of DuckLake catalog"),
+        # A macro hides the path from the statement that uses it: refused at its creation.
+        (f"CREATE TEMP MACRO scope_m() AS TABLE SELECT * FROM read_parquet('{b_file}')",
+         f"reaches into the storage of DuckLake catalog {B}"),
+    ]:
+        refused(session=tenant_a, sql=sql, why=why)
+
+
+def test_own_catalogs_storage_stays_reachable(tenant_a, world):
+    s3 = world["s3"]
+    mine = tenant_a.query(sql=f"SELECT * FROM glob('{s3}/{A}/**')").column(0).to_pylist()
+    assert mine and all(f"/{A}/" in path for path in mine), mine
+    assert tenant_a.scalar(sql=f"SELECT count(*) FROM read_parquet('{s3}/{A}/**/*.parquet')") >= 100
+    name = f"{s3}/{A}/exports/{secrets.token_hex(nbytes=8)}.parquet"
+    tenant_a.execute(sql=f"COPY (SELECT 7 AS a) TO '{name}' (FORMAT parquet)")
+    assert tenant_a.scalar(sql=f"SELECT a FROM read_parquet('{name}')") == 7
+    # Through its own catalog, DuckLake's statements are unaffected.
+    assert tenant_a.scalar(sql=f"SELECT count(*) AS n FROM {A}.main.mine") >= 100
+
+
+def test_read_access_does_not_allow_writing_to_the_catalogs_storage(reader_a, world):
+    s3 = world["s3"]
+    assert reader_a.scalar(sql=f"SELECT count(*) FROM read_parquet('{s3}/{A}/**/*.parquet')") >= 100
+    refused(session=reader_a, sql=f"COPY (SELECT 1 AS a) TO '{s3}/{A}/exports/r.parquet' (FORMAT parquet)",
+            why=f"reaches into the storage of DuckLake catalog {A}")
+    refused(session=reader_a, sql=f"SELECT * FROM read_parquet('{world['b_file']}')",
+            why=f"reaches into the storage of DuckLake catalog {B}")
+
+
+def test_unscoped_sessions_and_object_storage(world):
+    s3, b_file = world["s3"], world["b_file"]
+    # The administrator keeps object storage, the DuckLake data paths included.
+    admin = world["server"].admin()
+    assert admin.scalar(sql=f"SELECT count(*) FROM read_parquet('{b_file}')") == 100
+    # 1.x's single-tenant non-admin token keeps all object storage. Hardcharger's reads and writes
+    # every catalog (rules-only access control gives it '*': write), so it reaches every DuckLake
+    # catalog's data path, and holds no storage privilege for anything else (object storage is a
+    # store user's grant, READ / WRITE OBJECT STORAGE).
+    plain = world["server"].as_role(role="user", subject="unscoped_user")
+    assert plain.scalar(sql=f"SELECT count(*) FROM read_parquet('{b_file}')") == 100
+    refused(session=plain, sql=f"SELECT * FROM read_parquet('{s3}/elsewhere/x.parquet')", why="READ OBJECT STORAGE")
+    refused(session=plain, sql=f"COPY (SELECT 1 AS a) TO '{s3}/elsewhere/x.parquet' (FORMAT parquet)",
+            why="WRITE OBJECT STORAGE")

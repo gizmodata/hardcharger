@@ -5,7 +5,12 @@
 // principal but the administrator reads or writes, lists or globs anything in an attached
 // DuckLake catalog's storage, whatever it was granted: DuckLake itself reads and writes there,
 // for statements on its tables, and only DuckLake may (a file written there could be
-// registered as a table's data; a listing shows another catalog's files).
+// registered as a table's data; a listing shows another catalog's files). The one exception is
+// a catalog_access token (GizmoSQL 1.x's model, which gives it whole catalogs): it may read
+// inside the data path of a DuckLake catalog its rules let it read, and write inside one they
+// let it write, when every DuckLake catalog the path reaches is one of those (a token without
+// rules on a server without a store has '*': write, so it reaches every catalog's). It holds no
+// storage privilege, so nothing else is open to it.
 #pragma once
 
 #include <optional>
@@ -52,6 +57,10 @@ class StorageAccess {
   };
   // Where each attached DuckLake catalog keeps its data, or why that isn't known.
   arrow::Result<std::vector<LakeArea>> LakeAreas();
+  // Whether `principal` (a catalog_access token) may reach `path`, which reaches the DuckLake
+  // storage areas `reached`, in `mode` (the class comment).
+  bool WithinGrantedLake(const Principal& principal, const StoragePath& path, StorageMode mode,
+                         const std::vector<const LakeArea*>& reached) const;
 
   duckdb::ClientContext& context_;
   LocalPathContext local_;
