@@ -11,6 +11,9 @@ name: hardcharger-tests
 services:
   postgres:
     image: postgres:18
+    # PostgreSQL takes ~46 MB of Docker's default 64 MB /dev/shm at startup, so parallel queries
+    # (the DuckLake instrumentation tests) failed with "could not resize shared memory segment".
+    shm_size: 256mb
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: testpassword
