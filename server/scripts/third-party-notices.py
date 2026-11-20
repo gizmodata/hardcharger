@@ -34,7 +34,8 @@ OUTPUT = ROOT / "THIRD_PARTY_NOTICES.md"
 
 # Where the build declares its dependencies: each must be some component's (or not shipped).
 FETCHCONTENT_FILES = ["server/CMakeLists.txt", "third_party/chargewire/cpp/CMakeLists.txt"]
-EXTENSIONS_FILE = "server/scripts/duckdb-extensions-ios.cmake"
+# The builds that compile extensions in: the mobile apps, and the baseline Linux x86_64 build.
+EXTENSIONS_FILES = ["server/scripts/duckdb-extensions-ios.cmake", "server/scripts/duckdb-extensions-baseline.cmake"]
 EXTENSION_DEPS_FILE = "server/scripts/build-extension-deps.sh"
 VCPKG_FILE = ".github/windows-vcpkg-packages.txt"
 
@@ -205,12 +206,13 @@ def check(manifest: dict) -> list[str]:
     for file in FETCHCONTENT_FILES:
         content = (ROOT / file).read_text(encoding="utf-8")
         require(kind="fetchcontent", names=re.findall(r"FetchContent_Declare\(\s*([\w.+-]+)", content), where=file)
-    content = (ROOT / EXTENSIONS_FILE).read_text(encoding="utf-8")
-    require(
-        kind="duckdb_extensions",
-        names=re.findall(r"^duckdb_extension_load\((\w+)", content, flags=re.MULTILINE),
-        where=EXTENSIONS_FILE,
-    )
+    for file in EXTENSIONS_FILES:
+        content = (ROOT / file).read_text(encoding="utf-8")
+        require(
+            kind="duckdb_extensions",
+            names=re.findall(r"^duckdb_extension_load\((\w+)", content, flags=re.MULTILINE),
+            where=file,
+        )
     content = (ROOT / EXTENSION_DEPS_FILE).read_text(encoding="utf-8")
     require(
         kind="extension_deps",

@@ -12,8 +12,8 @@ All notable changes to this project are documented here. The format follows
 
 - Downloads Hardcharger server 2.13.4 by default: DuckLake functions work for tokens with
   `catalog_access` rules, store users need a privilege on the catalog a DuckLake function names,
-  and access control checks what DuckDB evaluates while it binds a statement (see the server's
-  CHANGELOG).
+  and access control checks what DuckDB evaluates while it binds a statement; the server runs
+  DuckDB v2.0.1 (see the server's CHANGELOG).
 
 ## [2.13.3] - 2026-11-20
 
