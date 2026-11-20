@@ -1830,29 +1830,35 @@ class PlanChecker {
     ownership_.push_back({PendingOwnership::Kind::kDrop, path, type});
   }
 
-  // The table a trigger is on (a trigger lives in its table's schema).
+  // The table named `table_name` in the very schema `entry` lives in (an index and a trigger
+  // live in their table's schema, nested ones included): found in that schema object itself,
+  // never by a name path, so a top-level schema named like a nested one's last part is never
+  // taken for it.
+  dd::optional_ptr<dd::CatalogEntry> TableInSchemaOf(dd::CatalogEntry& entry, const std::string& table_name) {
+    if (table_name.empty()) return nullptr;
+    try {
+      auto& schema = entry.ParentSchema();
+      auto transaction = schema.ParentCatalog().GetCatalogTransaction(context_);
+      auto table = schema.GetEntry(transaction, dd::CatalogType::TABLE_ENTRY, dd::Identifier(table_name));
+      if (!table || table->type != dd::CatalogType::TABLE_ENTRY) return nullptr;
+      return table;
+    } catch (const std::exception&) {
+      return nullptr;
+    }
+  }
+
+  // The table a trigger is on (DuckDB puts a trigger in its table's schema).
   dd::optional_ptr<dd::CatalogEntry> TriggerTable(dd::CatalogEntry& trigger) {
     auto& entry = trigger.Cast<dd::TriggerCatalogEntry>();
     if (!entry.base_table) return nullptr;
     auto parts = NameParts(entry.base_table->GetQualifiedName());
     if (parts.empty()) return nullptr;
-    ObjectPath path = PathOf(trigger);
-    std::vector<std::string> lookup{path.catalog};
-    lookup.insert(lookup.end(), path.schema_path.begin(), path.schema_path.end());
-    lookup.push_back(parts.back());
-    auto table = LookUp(context_, dd::CatalogType::TABLE_ENTRY, lookup);
-    if (!table || table->type != dd::CatalogType::TABLE_ENTRY) return nullptr;
-    return table;
+    return TableInSchemaOf(trigger, parts.back());
   }
 
-  // The table an index is on.
+  // The table an index is on (an index lives in its table's schema).
   dd::optional_ptr<dd::CatalogEntry> IndexTable(dd::CatalogEntry& entry) {
-    auto& index = entry.Cast<dd::IndexCatalogEntry>();
-    auto table = LookUp(context_, dd::CatalogType::TABLE_ENTRY,
-                        {compat::Str(entry.ParentCatalog().GetName()), compat::Str(index.GetSchemaName()),
-                         compat::Str(index.GetTableName())});
-    if (!table || table->type != dd::CatalogType::TABLE_ENTRY) return nullptr;
-    return table;
+    return TableInSchemaOf(entry, compat::Str(entry.Cast<dd::IndexCatalogEntry>().GetTableName()));
   }
 
   // What the principal sees of a catalog entry, as the metadata views list it (Chargewire
@@ -1866,9 +1872,8 @@ class PlanChecker {
       case dd::CatalogType::VIEW_ENTRY:
         return snapshot_.ObjectListed(principal_, path);
       case dd::CatalogType::INDEX_ENTRY: {
-        ObjectPath table = path;
-        table.object_name = compat::Str(entry.Cast<dd::IndexCatalogEntry>().GetTableName());
-        return snapshot_.ObjectListed(principal_, table);
+        auto table = IndexTable(entry);
+        return table && snapshot_.ObjectListed(principal_, PathOf(*table));
       }
       case dd::CatalogType::TRIGGER_ENTRY: {
         auto table = TriggerTable(entry);
@@ -2392,10 +2397,8 @@ class PlanChecker {
       case dd::CatalogType::INDEX_ENTRY: {
         auto entry = LookUp(context_, dd::CatalogType::INDEX_ENTRY, parts);
         if (!entry) return;
-        auto& index = entry->Cast<dd::IndexCatalogEntry>();
-        auto table = LookUp(context_, dd::CatalogType::TABLE_ENTRY,
-                            {compat::Str(entry->ParentCatalog().GetName()), compat::Str(index.GetSchemaName()),
-                             compat::Str(index.GetTableName())});
+        // In the index's own schema (nested ones included), not by its last name part.
+        auto table = IndexTable(*entry);
         if (!table) Deny(principal_, "the table of index " + PathOf(*entry).ToString() + " could not be found");
         return require_alter(*table, "index " + PathOf(*entry).ToString());
       }

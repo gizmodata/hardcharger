@@ -111,7 +111,8 @@ also closes gaps there.
   drop the administrator's tables in another. Each object a drop takes with it now needs the right
   to drop it, as if it were named (a trigger or index that goes with its own table needs nothing
   more; a trigger on another table needs `DROP TRIGGER` or owning it; an index whose table stays, taken
-  because a macro its expression calls is dropped, needs what `DROP INDEX` needs, the administrator),
+  because a macro its expression calls is dropped, needs what `DROP INDEX` needs, the administrator;
+  an index's or trigger's table is the one in its own schema, nested schemas included),
   and a sequence `OWNED BY` a dropped table needs it with or without `CASCADE`.
 - **Refusals named objects the user cannot see.** DuckDB's refusal of a drop that other objects
   depend on ("Cannot drop entry ... because there are entries that depend on it"), with `CASCADE`

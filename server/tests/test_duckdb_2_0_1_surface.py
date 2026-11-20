@@ -595,3 +595,140 @@ def test_a_table_dropped_with_the_right_takes_its_index(idx):
         expect_allowed(client=admin, sql="REVOKE DROP TABLE ON SCHEMA app FROM keepers")
     # Twin: the administrator's own DROP MACRO ... CASCADE takes the index, as DuckDB does.
     expect_allowed(client=admin, sql="DROP MACRO lib.norm3 CASCADE")
+
+
+# ---- Nested schemas, and top-level schemas named like a nested one's last part (review L7) ----
+#
+# For each kind, lou holds rights on a top-level schema k_<kind>; the administrator's objects in
+# the nested schema n.k_<kind>, which lou cannot see, depend on lou's. Objects of the same name
+# sit in both schemas side by side, so a lookup by the last part of a schema path finds the wrong
+# one.
+
+NEST = "nest"
+
+
+@pytest.fixture(scope="module")
+def nest(module_launcher, store, tmp_path_factory):
+    work = tmp_path_factory.mktemp("nest")
+    server = start_rbac_server(launcher=module_launcher, store_uri=store.new_database(),
+                               args=["--database", str(work / "nest.duckdb")])
+    admin = server.admin()
+    kinds = ["k_idx", "k_trg", "k_seq", "k_fk", "k_typ", "k_mac"]
+    setup = ["CREATE SCHEMA n", "CREATE SCHEMA sales", "CREATE SCHEMA sales.payroll"]
+    for kind in kinds:
+        setup += [f"CREATE SCHEMA {kind}", f"CREATE SCHEMA n.{kind}"]
+    setup += [
+        # index (L7 b): the macro's cascade takes k_idx.acc (its default) and the UNIQUE index on n.k_idx.acc.
+        "CREATE MACRO k_idx.norm(x) AS lower(x)", "CREATE TABLE n.k_idx.acc (e VARCHAR)",
+        "CREATE UNIQUE INDEX acc_uq ON n.k_idx.acc (k_idx.norm(e))", "INSERT INTO n.k_idx.acc VALUES ('a@x.org')",
+        "CREATE TABLE k_idx.acc (e VARCHAR DEFAULT k_idx.norm('X'))",
+        # trigger: on n.k_trg.src, writing k_trg.target; k_trg.src is its top-level namesake.
+        "CREATE TABLE k_trg.target (i INT)", "CREATE TABLE k_trg.src (i INT)", "CREATE TABLE n.k_trg.src (i INT)",
+        "CREATE TRIGGER adm_trg AFTER INSERT ON n.k_trg.src FOR EACH STATEMENT INSERT INTO k_trg.target VALUES (1)",
+        # owned sequence: n.k_seq.s OWNED BY k_seq.lt, called by n.k_seq.payroll; k_seq.s is its namesake.
+        "CREATE SEQUENCE n.k_seq.s", "CREATE TABLE n.k_seq.payroll (id BIGINT DEFAULT nextval('n.k_seq.s'))",
+        "CREATE TABLE k_seq.lt (i INT)", "ALTER SEQUENCE n.k_seq.s OWNED BY k_seq.lt", "CREATE SEQUENCE k_seq.s",
+        # foreign keys (DuckDB keeps them within a schema): one pair in k_fk, its namesakes in n.k_fk.
+        "CREATE TABLE k_fk.parent (id INT PRIMARY KEY)", "CREATE TABLE k_fk.child (pid INT REFERENCES k_fk.parent(id))",
+        "CREATE TABLE n.k_fk.parent (id INT PRIMARY KEY)",
+        "CREATE TABLE n.k_fk.child (pid INT REFERENCES n.k_fk.parent(id))",
+        # type: n.k_typ.moods has a column of k_typ.mood; k_typ.moods is its namesake.
+        "CREATE TYPE k_typ.mood AS ENUM ('a')", "CREATE TABLE n.k_typ.moods (m k_typ.mood)",
+        "CREATE TABLE k_typ.moods (i INT)",
+        # macro: n.k_mac.t's default calls k_mac.m; k_mac.t is its namesake.
+        "CREATE MACRO k_mac.m() AS 7", "CREATE TABLE n.k_mac.t (i INT DEFAULT k_mac.m())", "CREATE TABLE k_mac.t (i INT)",
+        "CREATE ROLE keepers", "CREATE USER lou", "GRANT keepers TO lou",
+        "GRANT CREATE TABLE, DROP TABLE, SELECT ON SCHEMA sales.payroll TO keepers",
+        "GRANT DROP TABLE ON SCHEMA n.k_fk TO keepers", "GRANT SELECT ON n.k_fk.parent TO keepers",
+    ]
+    for kind in kinds:
+        setup.append(f"GRANT CREATE TABLE, DROP TABLE, DROP SCHEMA, CREATE MACRO, DROP MACRO, DROP TYPE, DROP SEQUENCE, "
+                     f"SELECT ON SCHEMA {kind} TO keepers")
+    # lou sees k_fk.parent only, not its referencing table.
+    setup.append("REVOKE SELECT ON SCHEMA k_fk FROM keepers")
+    setup.append("GRANT SELECT ON k_fk.parent TO keepers")
+    for sql in setup:
+        expect_allowed(client=admin, sql=sql)
+    server.admin_client = admin
+    return server
+
+
+def nest_quiet(statement: str) -> str:
+    return (f"{BLOCKED_PREFIX}{statement} would also drop objects that depend on it, which user lou may not drop; "
+            f"ask an administrator{LOU_SUFFIX}")
+
+
+def nested_tables(admin) -> set[str]:
+    rows = expect_allowed(client=admin, sql="SELECT schema_name || '.' || table_name AS t FROM duckdb_tables()")
+    return set(rows.column("t").to_pylist())
+
+
+def test_an_owners_table_in_a_nested_schema_drops_with_its_index(nest):
+    # L7 (a): the index goes with its own table in sales.payroll.
+    lou, admin = nest.user(name="lou"), nest.admin_client
+    expect_allowed(client=lou, sql="CREATE TABLE sales.payroll.t (j INT)")
+    expect_allowed(client=admin, sql="CREATE INDEX t_ix ON sales.payroll.t (j)")
+    expect_allowed(client=lou, sql="DROP TABLE sales.payroll.t")
+    assert "t_ix" not in indexes(admin)
+
+
+def test_a_cascade_does_not_take_an_index_in_a_nested_schema_named_like_a_taken_tables(nest):
+    # L7 (b): k_idx.acc is taken, n.k_idx.acc (the index's table) is not.
+    lou, admin = nest.user(name="lou"), nest.admin_client
+    assert refusal(client=lou, sql="DROP MACRO k_idx.norm CASCADE").detail == \
+        nest_quiet(f"DROP ... CASCADE of macro {NEST}.k_idx.norm")
+    assert "acc_uq" in indexes(admin)
+    still_unique(admin=admin, table="n.k_idx.acc", duplicate="A@X.ORG")
+
+
+def test_a_trigger_on_a_nested_table_named_like_a_taken_one_is_not_taken(nest):
+    lou, admin = nest.user(name="lou"), nest.admin_client
+    assert refusal(client=lou, sql="DROP SCHEMA k_trg CASCADE").detail == \
+        nest_quiet(f"DROP ... CASCADE of schema {NEST}.k_trg")
+    assert {"k_trg.target", "k_trg.src"} <= nested_tables(admin)
+    assert expect_allowed(client=admin, sql="SELECT count(*) AS n FROM duckdb_triggers() WHERE trigger_name = 'adm_trg'") \
+        .column("n")[0].as_py() == 1
+    assert refusal(client=lou, sql="DROP TABLE k_trg.target").detail == \
+        dependency_refusal("drop", f"table {NEST}.k_trg.target")
+
+
+def test_an_owned_sequence_in_a_nested_schema(nest):
+    lou, admin = nest.user(name="lou"), nest.admin_client
+    assert refusal(client=lou, sql="DROP TABLE k_seq.lt CASCADE").detail == \
+        nest_quiet(f"DROP ... CASCADE of table {NEST}.k_seq.lt")
+    assert refusal(client=lou, sql="DROP TABLE k_seq.lt").detail == dependency_refusal("drop", f"table {NEST}.k_seq.lt")
+    # The top-level namesake drops as any sequence lou may drop.
+    expect_allowed(client=lou, sql="DROP SEQUENCE k_seq.s")
+    rows = expect_allowed(client=admin, sql="SELECT sequence_name FROM duckdb_sequences() WHERE sequence_name = 's'")
+    assert rows.num_rows == 1
+
+
+def test_foreign_keys_in_a_nested_schema_and_its_top_level_namesake(nest):
+    lou, admin = nest.user(name="lou"), nest.admin_client
+    for parent in ["k_fk.parent", "n.k_fk.parent"]:
+        for sql in [f"DROP TABLE {parent}", f"DROP TABLE {parent} CASCADE"]:
+            assert refusal(client=lou, sql=sql).detail == \
+                dependency_refusal("drop", f"table {NEST}.{parent}", cascade=sql.endswith("CASCADE")), sql
+    assert {"k_fk.parent", "k_fk.child"} <= nested_tables(admin)
+
+
+def test_a_type_used_in_a_nested_schema_and_named_when_seen(nest):
+    lou, admin = nest.user(name="lou"), nest.admin_client
+    assert refusal(client=lou, sql="DROP TYPE k_typ.mood CASCADE").detail == \
+        nest_quiet(f"DROP ... CASCADE of type {NEST}.k_typ.mood")
+    assert refusal(client=lou, sql="DROP TYPE k_typ.mood").detail == dependency_refusal("drop", f"type {NEST}.k_typ.mood")
+    # Twin: seen, the nested table is named by its whole path.
+    expect_allowed(client=admin, sql="GRANT SELECT ON n.k_typ.moods TO keepers")
+    try:
+        assert refusal(client=lou, sql="DROP TYPE k_typ.mood").detail == \
+            dependency_refusal("drop", f"type {NEST}.k_typ.mood", f" (table {NEST}.n.k_typ.moods)")
+    finally:
+        expect_allowed(client=admin, sql="REVOKE SELECT ON n.k_typ.moods FROM keepers")
+
+
+def test_a_macro_used_in_a_nested_schema(nest):
+    lou = nest.user(name="lou")
+    assert refusal(client=lou, sql="DROP MACRO k_mac.m CASCADE").detail == \
+        nest_quiet(f"DROP ... CASCADE of macro {NEST}.k_mac.m")
+    assert refusal(client=lou, sql="CREATE OR REPLACE MACRO k_mac.m() AS 9").detail == \
+        dependency_refusal("replace", f"macro {NEST}.k_mac.m")
