@@ -14,6 +14,10 @@ All notable changes to this project are documented here. The format follows
   `catalog_access` rules, store users need a privilege on the catalog a DuckLake function names,
   and access control checks what DuckDB evaluates while it binds a statement (see the server's
   CHANGELOG).
+- The `adbc` extra (`pip install "hardcharger[adbc]"`, for `Server.connect()`) needs
+  `adbc-driver-hardcharger` 2.7.0 or later, whose options are all named `hardcharger.*`
+  (`hardcharger.tls.root_certs`, `hardcharger.session.query_tag`, ...), as the ADBC driver style
+  guide asks. `connect()`'s keyword arguments (`tls_root_certs=`, `db_kwargs=`, ...) are unchanged.
 
 ## [2.13.3] - 2026-11-20
 

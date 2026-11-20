@@ -122,6 +122,11 @@ also closes gaps there.
   and writes a DuckLake catalog's files. The migration guide says so.
 - Hardcharger's port of GizmoSQL's test battery is brought up to GizmoSQL 1.42.3 (`main` at
   b820719d): 605 cases, 565 passing, 37 not applicable, and the same 3 failing as before.
+- **ADBC driver 2.7.0**: the `X.Y.Z-adbc` images bundle `hardcharger-adbc` 2.7.0, and the Python
+  package's `adbc` extra needs it. Its options are all named `hardcharger.*`, as the
+  [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html) asks
+  (`hardcharger.ingest.parts`, `hardcharger.query.result_partitions`); the names from before
+  still work but print a deprecation warning. The README and docs use the new names.
 
 ## [2.13.3] - 2026-11-20
 

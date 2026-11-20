@@ -37,7 +37,9 @@ DRIVERS = {
     "quack": {"repo": "adbc-driver-quack", "tag": "v1.0.4",
               "asset": "libadbc_driver_quack-linux-{arch}.tar.gz",
               "entrypoint": "AdbcDriverQuackInit", "license": "MIT"},
-    "hardcharger": {"repo": "hardcharger-adbc", "tag": "v2.0.0",
+    # The release workflow passes --hardcharger-tag (the newest stable release); this tag is
+    # the default for a run by hand.
+    "hardcharger": {"repo": "hardcharger-adbc", "tag": "v2.7.0",
                     "asset": "libadbc_driver_hardcharger-{tag}-linux_{arch}.tar.gz"},
 }
 # What a LICENSE file must start with before a manifest written here may name the license.
@@ -168,7 +170,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("drivers"))
     parser.add_argument("--arch", choices=("amd64", "arm64"), action="append")
-    parser.add_argument("--hardcharger-tag", default="v2.0.0")
+    parser.add_argument("--hardcharger-tag", default=DRIVERS["hardcharger"]["tag"])
     options = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", options.hardcharger_tag):
         parser.error(message="Invalid driver release tag")
