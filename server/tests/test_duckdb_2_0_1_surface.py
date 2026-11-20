@@ -219,7 +219,14 @@ def test_the_administrator_may_read_live_query_metrics(rbac):
     assert expect_allowed(client=rbac.admin_client, sql="SELECT * FROM duckdb_live_query_metrics()").num_rows > 0
 
 
-# ---- DROP ... CASCADE drops what depends on the object, in any schema ----
+# ---- DROP and DROP ... CASCADE of what other objects depend on, in any schema ----
+#
+# lou may drop types and sequences in lib. Tables in app depend on some of them: moods and rows
+# (the administrator's, which lou cannot see) and tones and counts (lou may SELECT them). A
+# refusal names only what lou sees, as the metadata views list it.
+
+CAT = "surface"
+
 
 @pytest.fixture(scope="module")
 def cascade(rbac):
@@ -227,9 +234,12 @@ def cascade(rbac):
     for sql in [
         "CREATE SCHEMA lib", "CREATE SCHEMA app",
         "CREATE TYPE lib.mood AS ENUM ('ok')", "CREATE SEQUENCE lib.ids",
+        "CREATE TYPE lib.tone AS ENUM ('low')", "CREATE SEQUENCE lib.nums",
         "CREATE TABLE app.moods (m lib.mood)", "CREATE TABLE app.rows (id BIGINT DEFAULT nextval('lib.ids'))",
+        "CREATE TABLE app.tones (t lib.tone)", "CREATE TABLE app.counts (id BIGINT DEFAULT nextval('lib.nums'))",
         "CREATE ROLE lib_keepers", "CREATE USER lou", "GRANT lib_keepers TO lou",
         "GRANT DROP TYPE, DROP SEQUENCE, DROP SCHEMA ON SCHEMA lib TO lib_keepers",
+        "GRANT SELECT ON app.tones TO lib_keepers", "GRANT SELECT ON app.counts TO lib_keepers",
     ]:
         expect_allowed(client=admin, sql=sql)
     return rbac
@@ -240,27 +250,80 @@ def app_tables(admin) -> set[str]:
     return set(rows.column("table_name").to_pylist())
 
 
-@pytest.mark.parametrize("sql, table", [
-    ("DROP TYPE lib.mood CASCADE", "app.moods"),
-    ("DROP SEQUENCE lib.ids CASCADE", "app.rows"),
-    ("DROP SCHEMA lib CASCADE", "app."),
-])
-def test_cascade_needs_the_right_to_drop_what_depends_on_it(cascade, sql, table):
-    lou, admin = cascade.user(name="lou"), cascade.admin_client
-    expect_blocked(client=lou, sql=sql, why=f"may not drop table")
-    assert app_tables(admin) == {"moods", "rows"}
-    # Without CASCADE DuckDB refuses the drop while anything depends on it.
+def refusal(client, sql: str) -> ChargewireError:
     with pytest.raises(ChargewireError) as raised:
-        lou.run(sql=sql.removesuffix(" CASCADE"))
-    assert "depend" in raised.value.detail, raised.value.detail
-    assert app_tables(admin) == {"moods", "rows"}
+        client.run(sql=sql)
+    return raised.value
+
+
+ALL_APP = {"moods", "rows", "tones", "counts"}
+NOT_LOU = "which user lou may not drop; ask an administrator. Access control on this server lets user lou do only " \
+          "what their roles are granted (see SHOW GRANTS)"
+
+
+@pytest.mark.parametrize("kind, name", [("type", "mood"), ("sequence", "ids")])
+def test_a_drop_blocked_by_objects_the_user_cannot_see_does_not_name_them(cascade, kind, name):
+    lou, admin = cascade.user(name="lou"), cascade.admin_client
+    plain = refusal(client=lou, sql=f"DROP {kind.upper()} lib.{name}")
+    assert plain.detail == (f"Dependency Error: Cannot drop {kind} {CAT}.lib.{name}: other objects depend on it. "
+                            "Drop them first, or use DROP ... CASCADE"), plain.detail
+    with_cascade = refusal(client=lou, sql=f"DROP {kind.upper()} lib.{name} CASCADE")
+    assert with_cascade.code == "permission_denied", with_cascade
+    assert with_cascade.detail == (f"Permission Error: Hardcharger blocked this statement: DROP ... CASCADE of {kind} "
+                                   f"{CAT}.lib.{name} would also drop objects that depend on it, {NOT_LOU}"), \
+        with_cascade.detail
+    for detail in (plain.detail, with_cascade.detail):
+        assert "app" not in detail and "moods" not in detail and "rows" not in detail, detail
+    assert app_tables(admin) == ALL_APP
+
+
+@pytest.mark.parametrize("kind, name, table", [("type", "tone", "tones"), ("sequence", "nums", "counts")])
+def test_a_dependent_the_user_sees_is_named(cascade, kind, name, table):
+    lou, admin = cascade.user(name="lou"), cascade.admin_client
+    plain = refusal(client=lou, sql=f"DROP {kind.upper()} lib.{name}")
+    assert plain.detail == (f"Dependency Error: Cannot drop {kind} {CAT}.lib.{name}: other objects depend on it "
+                            f"(table {CAT}.app.{table}). Drop them first, or use DROP ... CASCADE"), plain.detail
+    with_cascade = refusal(client=lou, sql=f"DROP {kind.upper()} lib.{name} CASCADE")
+    assert with_cascade.detail == (f"Permission Error: Hardcharger blocked this statement: user lou may not drop table "
+                                   f"{CAT}.app.{table} (only its owner, or a role granted DROP TABLE). Access control "
+                                   "on this server lets user lou do only what their roles are granted (see SHOW GRANTS)"), \
+        with_cascade.detail
+    assert app_tables(admin) == ALL_APP
+
+
+def test_drop_schema_names_only_what_the_user_sees(cascade):
+    lou, admin = cascade.user(name="lou"), cascade.admin_client
+    admin.run(sql="CREATE TABLE lib.hidden_table (i INT)")
+    try:
+        plain = refusal(client=lou, sql="DROP SCHEMA lib")
+        assert plain.detail.startswith(f"Dependency Error: Cannot drop schema {CAT}.lib: other objects depend on it ("), \
+            plain.detail
+        assert "hidden_table" not in plain.detail and "app" not in plain.detail, plain.detail
+        assert f"type {CAT}.lib.mood" in plain.detail and f"sequence {CAT}.lib.ids" in plain.detail, plain.detail
+        # With CASCADE the first dependent lou sees and may not drop is named (by name: counts,
+        # then tones); moods and rows, which lou cannot see, never are.
+        with_cascade = refusal(client=lou, sql="DROP SCHEMA lib CASCADE")
+        assert with_cascade.detail == ("Permission Error: Hardcharger blocked this statement: user lou may not drop "
+                                       f"table {CAT}.app.counts (only its owner, or a role granted DROP TABLE). Access "
+                                       "control on this server lets user lou do only what their roles are granted "
+                                       "(see SHOW GRANTS)"), with_cascade.detail
+        assert app_tables(admin) == ALL_APP
+    finally:
+        admin.run(sql="DROP TABLE lib.hidden_table")
+
+
+def test_the_administrator_gets_duckdbs_own_answer(cascade):
+    # Twin: the administrator sees everything, and DuckDB's own message names it all.
+    detail = refusal(client=cascade.admin_client, sql="DROP TYPE lib.mood").detail
+    assert 'table "moods" depends on type "mood"' in detail, detail
 
 
 def test_cascade_with_the_right_to_drop_the_dependents(cascade):
-    # Twin: with DROP TABLE on app, lou's cascades go through, and take the tables with them.
+    # Twin: with DROP TABLE on app (and still no SELECT on moods or rows), lou's cascades go
+    # through and take the tables with them.
     lou, admin = cascade.user(name="lou"), cascade.admin_client
     expect_allowed(client=admin, sql="GRANT DROP TABLE ON SCHEMA app TO lib_keepers")
     expect_allowed(client=lou, sql="DROP TYPE lib.mood CASCADE")
-    assert app_tables(admin) == {"rows"}
+    assert app_tables(admin) == ALL_APP - {"moods"}
     expect_allowed(client=lou, sql="DROP SCHEMA lib CASCADE")
     assert app_tables(admin) == set()

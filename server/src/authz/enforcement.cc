@@ -1803,13 +1803,152 @@ class PlanChecker {
     ownership_.push_back({PendingOwnership::Kind::kDrop, path, type});
   }
 
-  // DROP ... CASCADE drops, with what it names, everything DuckDB records as depending on it,
-  // in any schema: a table whose column has a user type (recorded again since DuckDB 2.0.1),
-  // a table whose default calls a sequence, and for a schema, whatever outside it depends on
-  // an object in it. Each object dropped that way needs the right to drop it, as if named.
-  // `targets`: what the statement names (a schema with the schemas nested in it).
-  void CheckCascade(const std::vector<dd::reference<dd::CatalogEntry>>& targets) {
-    if (targets.empty()) return;
+  // What the principal sees of a catalog entry, as the metadata views list it (Chargewire
+  // §9.4): a table or view (an index with its table) when it holds a privilege on it, a
+  // sequence when it may use or drop it, a type or macro with its schema. A refusal names
+  // only what this says the principal sees.
+  bool EntryListed(dd::CatalogEntry& entry, const ObjectPath& path) {
+    if (principal_.superuser) return true;
+    switch (entry.type) {
+      case dd::CatalogType::TABLE_ENTRY:
+      case dd::CatalogType::VIEW_ENTRY:
+        return snapshot_.ObjectListed(principal_, path);
+      case dd::CatalogType::INDEX_ENTRY: {
+        ObjectPath table = path;
+        table.object_name = compat::Str(entry.Cast<dd::IndexCatalogEntry>().GetTableName());
+        return snapshot_.ObjectListed(principal_, table);
+      }
+      case dd::CatalogType::SEQUENCE_ENTRY:
+        return snapshot_.SequenceListed(principal_, path);
+      case dd::CatalogType::SCHEMA_ENTRY:
+        return snapshot_.SchemaListed(principal_, path);
+      case dd::CatalogType::TYPE_ENTRY:
+      case dd::CatalogType::MACRO_ENTRY:
+      case dd::CatalogType::TABLE_MACRO_ENTRY: {
+        ObjectPath schema = path;
+        schema.object_name.clear();
+        return snapshot_.SchemaListed(principal_, schema);
+      }
+      default:
+        return false;
+    }
+  }
+
+  static std::string EntryWord(const dd::CatalogEntry& entry) {
+    switch (entry.type) {
+      case dd::CatalogType::VIEW_ENTRY: return "view";
+      case dd::CatalogType::INDEX_ENTRY: return "index";
+      case dd::CatalogType::SEQUENCE_ENTRY: return "sequence";
+      case dd::CatalogType::SCHEMA_ENTRY: return "schema";
+      case dd::CatalogType::TYPE_ENTRY: return "type";
+      case dd::CatalogType::MACRO_ENTRY:
+      case dd::CatalogType::TABLE_MACRO_ENTRY: return "macro";
+      default: return "table";
+    }
+  }
+
+  // Whether the principal may drop the entry, without saying why: for one it cannot see.
+  bool MayDropQuietly(dd::CatalogEntry& entry, const ObjectPath& path) {
+    if (principal_.superuser) return true;
+    if (IsTempCatalog(path.catalog)) return true;
+    if (!snapshot_.CatalogVisible(principal_, path.catalog)) return false;
+    if (principal_.catalog_rules) {
+      return CatalogRuleLevel(*principal_.catalog_rules, path.catalog) == CatalogAccessLevel::kWrite;
+    }
+    auto on_schema = [&](Privilege privilege) {
+      ObjectPath schema = path;
+      schema.object_name.clear();
+      return snapshot_.Check(principal_, AccessRequest{schema, ObjectType::kSchema, privilege, {}}).allowed;
+    };
+    switch (entry.type) {
+      case dd::CatalogType::TABLE_ENTRY:
+      case dd::CatalogType::VIEW_ENTRY:
+      case dd::CatalogType::SCHEMA_ENTRY: {
+        const ObjectType type = ObjectTypeOf(entry);
+        const Privilege privilege = type == ObjectType::kView     ? Privilege::kDropView
+                                    : type == ObjectType::kSchema ? Privilege::kDropSchema
+                                                                  : Privilege::kDropTable;
+        return snapshot_.Check(principal_, AccessRequest{path, type, privilege, {}}).allowed;
+      }
+      case dd::CatalogType::SEQUENCE_ENTRY: return on_schema(Privilege::kDropSequence);
+      case dd::CatalogType::TYPE_ENTRY: return on_schema(Privilege::kDropType);
+      case dd::CatalogType::MACRO_ENTRY:
+      case dd::CatalogType::TABLE_MACRO_ENTRY: return on_schema(Privilege::kDropMacro);
+      default: return false;
+    }
+  }
+
+  // Dropping an entry the statement takes with what it names (a cascade's dependent, a
+  // nested schema): the right to drop it, as if named. One the principal cannot see is
+  // refused without its name (`what`: the statement, said from what the principal named).
+  void RequireDropOfTaken(dd::CatalogEntry& entry, const std::string& what) {
+    const ObjectPath path = PathOf(entry);
+    if (!EntryListed(entry, path)) {
+      if (!MayDropQuietly(entry, path)) {
+        Deny(principal_, what + " would also drop objects that depend on it, which user " + principal_.user_name +
+                             " may not drop; ask an administrator");
+      }
+      if (entry.type == dd::CatalogType::SEQUENCE_ENTRY) {
+        ownership_.push_back({PendingOwnership::Kind::kDrop, path, ObjectType::kSequence});
+      } else if (entry.type == dd::CatalogType::TABLE_ENTRY || entry.type == dd::CatalogType::VIEW_ENTRY ||
+                 entry.type == dd::CatalogType::SCHEMA_ENTRY) {
+        if (!IsTempCatalog(path.catalog)) ownership_.push_back({PendingOwnership::Kind::kDrop, path, ObjectTypeOf(entry)});
+      }
+      return;
+    }
+    switch (entry.type) {
+      case dd::CatalogType::TABLE_ENTRY:
+      case dd::CatalogType::VIEW_ENTRY:
+      case dd::CatalogType::SCHEMA_ENTRY:
+        CheckDropOf(entry);
+        break;
+      case dd::CatalogType::INDEX_ENTRY:
+        break;  // an index goes with its table, which is in the list
+      case dd::CatalogType::SEQUENCE_ENTRY:
+        RequireSchemaPrivilege(path, Privilege::kDropSequence, "drop sequence");
+        ownership_.push_back({PendingOwnership::Kind::kDrop, path, ObjectType::kSequence});
+        break;
+      case dd::CatalogType::TYPE_ENTRY:
+        RequireSchemaPrivilege(path, Privilege::kDropType, "drop type");
+        break;
+      case dd::CatalogType::MACRO_ENTRY:
+      case dd::CatalogType::TABLE_MACRO_ENTRY:
+        RequireMacroPrivilege(path, Privilege::kDropMacro, "drop");
+        break;
+      default:
+        Deny(principal_, what + " would also drop " + EntryWord(entry) + " " + path.ToString() +
+                             ", which only an administrator may drop that way; drop it first");
+    }
+  }
+
+  // DuckDB's refusal of a DROP without CASCADE that something depends on names every
+  // dependent, also ones the principal cannot see. This one says that other objects depend
+  // on it and names only those the principal sees.
+  [[noreturn]] void RefuseDependents(const std::string& what, const std::vector<dd::CatalogEntry*>& dependents) {
+    std::string seen;
+    std::set<std::string> named;
+    for (auto* dependent : dependents) {
+      const ObjectPath path = PathOf(*dependent);
+      if (!EntryListed(*dependent, path)) continue;
+      const std::string name = EntryWord(*dependent) + " " + path.ToString();
+      if (!named.insert(name).second) continue;
+      seen += (seen.empty() ? "" : ", ") + name;
+    }
+    throw dd::DependencyException("Cannot drop " + what + ": other objects depend on it" +
+                                  (seen.empty() ? std::string() : " (" + seen + ")") +
+                                  ". Drop them first, or use DROP ... CASCADE");
+  }
+
+  // The objects a DROP takes or is blocked by, besides what it names, in any schema: what
+  // DuckDB records as depending on it (a table whose column has a user type, recorded again
+  // since DuckDB 2.0.1; a table whose default calls a sequence; for a schema, whatever
+  // outside it depends on an object in it). With CASCADE each one is dropped too, so each
+  // needs the right to drop it, as if named; without, DuckDB refuses the drop, and so does
+  // this, naming only the dependents the principal sees. `targets`: what the statement names
+  // (a schema with the schemas nested in it); `what`: the target as the refusal says it.
+  void CheckDependents(const std::vector<dd::reference<dd::CatalogEntry>>& targets, bool cascade,
+                       const std::string& what) {
+    if (targets.empty() || principal_.superuser) return;
     auto& catalog = targets.front().get().ParentCatalog();
     auto manager = catalog.GetDependencyManager();
     if (!manager) return;  // a catalog without DuckDB's dependency records cascades nothing through them
@@ -1821,13 +1960,20 @@ class PlanChecker {
         schemas.insert(&target.get().Cast<dd::SchemaCatalogEntry>());
       }
     }
-    std::vector<std::pair<dd::CatalogEntry*, dd::CatalogEntry*>> edges;  // (object, its dependent)
+    struct Edge {
+      dd::CatalogEntry* object;
+      dd::CatalogEntry* dependent;
+      bool blocking;
+    };
+    std::vector<Edge> edges;
     try {
       manager->Scan(context_, [&](dd::CatalogEntry& object, dd::CatalogEntry& dependent,
-                                  const dd::DependencyDependentFlags&) { edges.emplace_back(&object, &dependent); });
-    } catch (const std::exception& e) {
-      Deny(principal_, std::string("what DROP ... CASCADE would drop with it could not be listed (") + e.what() +
-                           "); drop the objects that depend on it first, or ask an administrator");
+                                  const dd::DependencyDependentFlags& flags) {
+        edges.push_back({&object, &dependent, flags.IsBlocking()});
+      });
+    } catch (const std::exception&) {
+      Deny(principal_, "what depends on " + what + " could not be listed; drop the objects that depend on it "
+                       "first, or ask an administrator");
     }
     auto in_dropped_schema = [&](const dd::CatalogEntry& entry) {
       if (schemas.empty() || entry.type == dd::CatalogType::SCHEMA_ENTRY) return false;
@@ -1837,42 +1983,63 @@ class PlanChecker {
         return false;
       }
     };
+    auto taken = [&](const dd::CatalogEntry* entry) { return dropped.contains(entry) || in_dropped_schema(*entry); };
+    if (!cascade) {
+      std::vector<dd::CatalogEntry*> blocking;
+      for (auto& edge : edges) {
+        if (edge.blocking && taken(edge.object) && !taken(edge.dependent)) blocking.push_back(edge.dependent);
+      }
+      if (!blocking.empty()) RefuseDependents(what, blocking);
+      return;
+    }
     std::vector<dd::CatalogEntry*> cascaded;
     for (bool grew = true; grew;) {
       grew = false;
-      for (auto& [object, dependent] : edges) {
-        if (!(dropped.contains(object) || in_dropped_schema(*object))) continue;
-        if (dropped.contains(dependent) || in_dropped_schema(*dependent)) continue;
-        dropped.insert(dependent);
-        cascaded.push_back(dependent);
+      for (auto& edge : edges) {
+        if (!taken(edge.object) || taken(edge.dependent)) continue;
+        dropped.insert(edge.dependent);
+        cascaded.push_back(edge.dependent);
         grew = true;
       }
     }
+    // What the principal sees first, by name, so that the refusal names the first of them;
+    // then what it does not see, which no refusal names.
+    std::vector<std::pair<std::string, dd::CatalogEntry*>> seen;
+    std::vector<dd::CatalogEntry*> unseen;
     for (auto* entry : cascaded) {
       const ObjectPath path = PathOf(*entry);
-      switch (entry->type) {
-        case dd::CatalogType::TABLE_ENTRY:
-        case dd::CatalogType::VIEW_ENTRY:
-          CheckDropOf(*entry);
-          break;
-        case dd::CatalogType::INDEX_ENTRY:
-          break;  // an index goes with its table, which is in the list
-        case dd::CatalogType::SEQUENCE_ENTRY:
-          RequireSchemaPrivilege(path, Privilege::kDropSequence, "drop sequence");
-          ownership_.push_back({PendingOwnership::Kind::kDrop, path, ObjectType::kSequence});
-          break;
-        case dd::CatalogType::TYPE_ENTRY:
-          RequireSchemaPrivilege(path, Privilege::kDropType, "drop type");
-          break;
-        case dd::CatalogType::MACRO_ENTRY:
-        case dd::CatalogType::TABLE_MACRO_ENTRY:
-          RequireMacroPrivilege(path, Privilege::kDropMacro, "drop");
-          break;
-        default:
-          Deny(principal_, "DROP ... CASCADE would also drop " + path.ToString() +
-                               ", which only an administrator may drop that way; drop it first");
+      if (EntryListed(*entry, path)) {
+        seen.emplace_back(path.ToString(), entry);
+      } else {
+        unseen.push_back(entry);
       }
     }
+    std::sort(seen.begin(), seen.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (auto& [name, entry] : seen) RequireDropOfTaken(*entry, "DROP ... CASCADE of " + what);
+    for (auto* entry : unseen) RequireDropOfTaken(*entry, "DROP ... CASCADE of " + what);
+  }
+
+  // DROP SCHEMA without CASCADE: DuckDB refuses a schema with anything in it and names it all,
+  // also what the principal cannot see. Refused here the same way, naming what it sees.
+  void CheckSchemaEmpty(dd::SchemaCatalogEntry& schema, const std::string& what) {
+    if (principal_.superuser) return;
+    std::vector<dd::CatalogEntry*> contents;
+    try {
+      auto transaction = schema.ParentCatalog().GetCatalogTransaction(context_);
+      for (auto type : {dd::CatalogType::TABLE_ENTRY, dd::CatalogType::SEQUENCE_ENTRY, dd::CatalogType::TYPE_ENTRY,
+                        dd::CatalogType::MACRO_ENTRY, dd::CatalogType::TABLE_MACRO_ENTRY,
+                        dd::CatalogType::INDEX_ENTRY}) {
+        schema.Scan(transaction, type, [&](dd::CatalogEntry& entry) {
+          if (!entry.internal) contents.push_back(&entry);
+        });
+      }
+      schema.ScanSchemaTree(transaction, [&](dd::SchemaCatalogEntry& found) {
+        if (&found != &schema) contents.push_back(&found);
+      });
+    } catch (const std::exception&) {
+      Deny(principal_, "what is in " + what + " could not be listed; ask an administrator");
+    }
+    if (!contents.empty()) RefuseDependents(what, contents);
   }
 
   void CheckDrop(dd::LogicalOperator& op) {
@@ -1907,10 +2074,13 @@ class PlanChecker {
             Deny(principal_, "the schemas nested in " + PathOf(*entry).ToString() +
                                  " could not be listed, so DROP SCHEMA ... CASCADE can't check them; ask an administrator");
           }
-          for (auto& child : children) CheckDropOf(child.get());
+          const std::string what = "schema " + PathOf(*entry).ToString();
+          for (auto& child : children) RequireDropOfTaken(child.get(), "DROP SCHEMA ... CASCADE of " + what);
           std::vector<dd::reference<dd::CatalogEntry>> targets{*entry};
           for (auto& child : children) targets.emplace_back(child.get());
-          CheckCascade(targets);
+          CheckDependents(targets, true, what);
+        } else {
+          CheckSchemaEmpty(entry->Cast<dd::SchemaCatalogEntry>(), "schema " + PathOf(*entry).ToString());
         }
         return;
       }
@@ -1920,7 +2090,7 @@ class PlanChecker {
         auto entry = LookUp(context_, dd::CatalogType::TABLE_ENTRY, parts);
         if (!entry) return;  // DROP ... IF EXISTS of nothing; DuckDB reports a missing object
         CheckDropOf(*entry);
-        if (info.cascade) CheckCascade({*entry});
+        CheckDependents({*entry}, info.cascade, EntryWord(*entry) + " " + PathOf(*entry).ToString());
         return;
       }
       case dd::CatalogType::SEQUENCE_ENTRY: {
@@ -1930,7 +2100,7 @@ class PlanChecker {
         if (IsTempCatalog(sequence.catalog)) return;
         RequireSchemaPrivilege(sequence, Privilege::kDropSequence, "drop sequence");
         ownership_.push_back({PendingOwnership::Kind::kDrop, sequence, ObjectType::kSequence});
-        if (info.cascade) CheckCascade({*entry});
+        CheckDependents({*entry}, info.cascade, EntryWord(*entry) + " " + PathOf(*entry).ToString());
         return;
       }
       case dd::CatalogType::MACRO_ENTRY:
@@ -1940,7 +2110,7 @@ class PlanChecker {
         ObjectPath macro = PathOf(*entry);
         if (IsTempCatalog(macro.catalog)) return;
         RequireMacroPrivilege(macro, Privilege::kDropMacro, "drop");
-        if (info.cascade) CheckCascade({*entry});
+        CheckDependents({*entry}, info.cascade, EntryWord(*entry) + " " + PathOf(*entry).ToString());
         return;
       }
       case dd::CatalogType::TYPE_ENTRY: {
@@ -1952,7 +2122,7 @@ class PlanChecker {
         // Also with CASCADE: what names the type keeps naming it, and would mean something
         // else or nothing.
         if (auto refusal = TypeNameRefusal(context_, snapshot_, type, "drop")) Deny(principal_, *refusal);
-        if (info.cascade) CheckCascade({*entry});
+        CheckDependents({*entry}, info.cascade, EntryWord(*entry) + " " + PathOf(*entry).ToString());
         return;
       }
       case dd::CatalogType::TRIGGER_ENTRY: {

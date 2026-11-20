@@ -250,14 +250,19 @@ def test_a_type_a_macro_uses_keeps_its_meaning(admin, mia, joe):
 def test_a_table_column_keeps_its_type(admin, mia, joe):
     # DuckDB 2.0.1 records a column's type as a dependency of its table (2.0.0 copied it):
     # the type can't be dropped from under the table, and DROP TYPE ... CASCADE, which would
-    # drop the table with it, is refused to a user who may not drop the table.
+    # drop the table with it, is refused to a user who may not drop the table. mia cannot see
+    # tools.keeps, so neither refusal names it.
     expect_allowed(client=mia, sql="CREATE TYPE tools.copied AS ENUM ('kept')")
     expect_allowed(client=admin, sql="CREATE TABLE tools.keeps (v tools.copied)")
     expect_allowed(client=admin, sql="INSERT INTO tools.keeps VALUES ('kept')")
     with pytest.raises(ChargewireError) as raised:
         mia.run(sql="DROP TYPE tools.copied")
-    assert 'table "keeps" depends on type "copied"' in raised.value.detail, raised.value.detail
-    expect_blocked(client=mia, sql="DROP TYPE tools.copied CASCADE", why="may not drop table")
+    assert raised.value.detail == ("Dependency Error: Cannot drop type rbac_types.tools.copied: other objects "
+                                   "depend on it. Drop them first, or use DROP ... CASCADE"), raised.value.detail
+    error = expect_blocked(client=mia, sql="DROP TYPE tools.copied CASCADE",
+                           why="DROP ... CASCADE of type rbac_types.tools.copied would also drop objects that depend "
+                               "on it, which user mia may not drop")
+    assert "keeps" not in error.detail, error.detail
     assert expect_allowed(client=admin, sql="SELECT v FROM tools.keeps").to_pylist() == [{"v": "kept"}]
     # Twin: the administrator, who may drop the table, drops both.
     expect_allowed(client=admin, sql="DROP TYPE tools.copied CASCADE")

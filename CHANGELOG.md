@@ -90,7 +90,12 @@ also closes gaps there.
   dependency on its columns' user types again, a table whose column has the type
   (`DROP TYPE ... CASCADE`) or a type in a dropped schema (`DROP SCHEMA ... CASCADE`). A role with
   `DROP SEQUENCE` or `DROP TYPE` on one schema could drop the administrator's tables in another.
-  Each object a cascade would drop now needs the right to drop it, as if it were named.
+  Each object a cascade would drop now needs the right to drop it, as if it were named. And the
+  refusal of a drop that other objects depend on, with `CASCADE` or without (DuckDB's own
+  "Cannot drop entry ... because there are entries that depend on it", `DROP SCHEMA` of a schema
+  that is not empty included), named every one of them to any user, also tables in schemas the
+  user cannot see. For a user or token that is not the unrestricted administrator it now says that
+  other objects depend on it and names only those the user sees, as the metadata views list them.
 - **A user could read tables it held no grant on through a table function's argument.** A subquery
   handed to a table function that takes its input as rows (`SELECT * FROM unnest((SELECT list(v) FROM
   t))`, `range((SELECT count(*) FROM t))`, `generate_series(1, (SELECT max(n) FROM t))`, also with
