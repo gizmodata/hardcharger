@@ -52,6 +52,9 @@ also closes gaps there.
   Failed C++ unit cases now include their original diagnostics in the Python test report.
 - Keep downloaded, uninstrumented Delta code out of the TSan bind-time permission fixtures;
   all permission cases still run there, while native and ASan jobs exercise the real extension.
+- Dismiss the soft keyboard before checking Android console output in the UI test, so
+  the small emulator's keyboard does not hide the transcript. Preserve release-tag build
+  caches before tests run so a failed gate can reuse them on its next attempt.
 - The concurrent-DDL test under access control no longer fails when the store itself is slower
   than the test's deliberately short timeout (an emulated PostgreSQL on a Windows arm64 runner);
   only such an attempt is run again, and any other failure still fails at once.
