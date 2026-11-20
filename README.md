@@ -284,7 +284,7 @@ flowchart LR
   single core. The order is kept when the query asks for one. The server sizes the split by
   the result: a few batches get a partition per two batches, a large result as many as the
   client reads (the Go/Python driver asks for up to 32, JDBC and the `hardcharger` CLI for
-  8; `result_partitions`, `--result-partitions` change it). Small results still come as one
+  8; `hardcharger.query.result_partitions`, `--result-partitions` change it). Small results still come as one
   stream.
 - 📦 **Big batches.** Results go out in 122,880-row batches, so per-batch overhead is
   negligible; small queries still answer in one round trip.
@@ -292,7 +292,7 @@ flowchart LR
   threads, in one transaction: a failed load leaves nothing behind.
 - 📤 **Partitioned uploads.** The Go/Python driver sends a load in 16,384-row slices as up to
   16 parts over separate connections at once (32 on a high-latency link; fewer for a small
-  load; `adbc.chargewire.ingest.parts`), inserted from all of them in parallel and committed as
+  load; `hardcharger.ingest.parts`), inserted from all of them in parallel and committed as
   one: all or nothing.
 
 Correctness is never traded for speed: a result is complete only when every partition has

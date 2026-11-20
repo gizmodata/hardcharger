@@ -26,8 +26,8 @@ def main() -> None:
         for p in [int(x) for x in args.partitions.split(",")]:
             conn = dbapi.connect(uri=f"chargewire://{args.host}:31337", username="bench", password=PASSWORD,
                                  tls_root_certs=args.cert,
-                                 db_kwargs={"adbc.chargewire.ipc_compression": args.codec,
-                                            "adbc.chargewire.statement.result_partitions": str(p)})
+                                 db_kwargs={"chargewire.ipc.compression": args.codec,
+                                            "chargewire.query.result_partitions": str(p)})
             cur = conn.cursor()
             times = []
             for rep in range(args.reps + 1):

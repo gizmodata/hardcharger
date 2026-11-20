@@ -291,16 +291,16 @@ or to retry a failed run:
 ```bash
 # Build and test first without publishing.
 gh workflow run adbc-images.yml --ref main \
-  -f server_version=2.0.0 -f driver_tag=v2.0.0 -f publish=false
+  -f server_version=2.13.4 -f driver_tag=v2.7.0 -f publish=false
 # After it succeeds, publish the same pinned versions.
 gh workflow run adbc-images.yml --ref main \
-  -f server_version=2.0.0 -f driver_tag=v2.0.0 -f publish=true
+  -f server_version=2.13.4 -f driver_tag=v2.7.0 -f publish=true
 ```
 
 The native pins in `docker/prepare-adbc-drivers.py` are GizmoSQL 2.0.18, Oracle
-1.0.6, Db2 0.2.6 and Quack 1.0.4; Hardcharger defaults to 2.0.0 and can
-be selected with `driver_tag`. Every native release asset is checked against
-GitHub's SHA-256 digest before it enters the Docker context, and its library
+1.0.6, Db2 0.2.6 and Quack 1.0.4; Hardcharger defaults to 2.7.0 for a run by hand
+and is selected with `driver_tag` (a server release passes the newest stable one).
+Every native release asset is checked against GitHub's SHA-256 digest before it enters the Docker context, and its library
 must be an ELF shared object for the architecture being staged that exports the
 entrypoint its manifest names. GizmoSQL's and Hardcharger's archives carry their
 manifest template; Oracle's, Db2's and Quack's carry none, so the script writes
