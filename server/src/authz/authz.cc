@@ -1015,11 +1015,9 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
   // user needs EXECUTE on the function and, on the catalog, SELECT (inspection) or
   // MAINTAIN (maintenance) granted ON CATALOG.
   std::set<std::pair<std::string, std::string>> ducklake_checked;
-  std::set<const void*> ducklake_inspected;  // calls the walk met that read like DuckLake calls
   DuckLakeCallCallback ducklake_call;
   if (!principal.superuser) {
     ducklake_call = [&](const TableFunctionCall& call) -> bool {
-      if (LooksLikeDuckLakeCall(call.parts)) ducklake_inspected.insert(call.id);
       std::string name = call.parts.back();
       std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
       std::string function;
@@ -1069,7 +1067,7 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
           if (!snapshot->TableFunctionPathArguments(principal, bound)) refuse(DuckLakeExecuteRefusal(bound));
         }
         if (!snapshot->HoldsOnCatalog(principal, DuckLakeCatalogPrivilege(*access), lake)) {
-          refuse(DuckLakeCatalogPrivilegeRefusal(function, lake, *access, principal.user_name));
+          refuse(DuckLakeCatalogPrivilegeRefusal(function + "()", lake, *access, principal.user_name));
         }
       } else if (needed == CatalogAccessLevel::kWrite &&
                  CatalogRuleLevel(*principal.catalog_rules, lake) != CatalogAccessLevel::kWrite) {
@@ -1142,17 +1140,13 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
           FoldIdentifier(statement.Cast<dd::PrepareStatement>().name.GetIdentifierName()), std::move(calls));
     }
   }
-  if (!principal.superuser) {
-    // The walk reaches FROM and CALL; SQL can hold a call in places it does not (a SET
-    // VARIABLE's query, ...). A DuckLake call the text names that the walk did not
-    // inspect is refused: its catalog was never checked.
-    std::string first;
-    const int named = CountDuckLakeCallTokens(std::string(sql), &first);
-    if (named > static_cast<int>(ducklake_inspected.size())) {
-      throw Error(ErrorCode::kPermissionDenied, DuckLakeUncheckedRefusal(first), "42501");
-    }
-    state->SetCheckedDuckLakeCalls(std::move(ducklake_checked));
-  }
+  // The calls checked here are the only DuckLake calls the plan check lets run: one the walk
+  // did not reach (a macro's body, a form it does not read) is refused there, as bound, and
+  // DuckLake's binds change nothing (the maintenance functions act when they execute). A
+  // walk of the parse tree, not the statement's text: a table or column list named like a
+  // DuckLake function (INSERT INTO s.settings(k, v), CREATE TABLE ducklake_log (...)) is no
+  // call.
+  if (!principal.superuser) state->SetCheckedDuckLakeCalls(std::move(ducklake_checked));
 }
 
 void SessionGuard::CheckReadOnlyCommand(const ParsedCommand& parsed) const {

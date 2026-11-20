@@ -2,21 +2,12 @@
 
 #include <algorithm>
 #include <cctype>
-#include <duckdb/parser/parser.hpp>
-#include <duckdb/parser/simplified_token.hpp>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace hardcharger::authz {
 
 namespace {
-
-namespace dd = duckdb;
-
-std::string Lower(std::string s) {
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
-  return s;
-}
 
 // Every ducklake_* table function DuckDB 2.0's DuckLake has (2026-11-20: SELECT function_name
 // FROM duckdb_functions() WHERE function_name LIKE 'ducklake%'), GizmoSQL 1.42.3's names, and
@@ -56,29 +47,6 @@ const std::unordered_map<std::string, DuckLakeAccess>& KnownFunctions() {
       {"ducklake_commit", DuckLakeAccess::kAdministrator},
   };
   return kFunctions;
-}
-
-bool IsWordToken(const dd::SimplifiedToken& token) {
-  return token.type == dd::SimplifiedTokenType::SIMPLIFIED_TOKEN_IDENTIFIER ||
-         token.type == dd::SimplifiedTokenType::SIMPLIFIED_TOKEN_KEYWORD;
-}
-
-// The token's text: up to the next token, without trailing blanks; a quoted identifier
-// without its quotes.
-std::string TokenText(const std::string& sql, const std::vector<dd::SimplifiedToken>& tokens, size_t i) {
-  const size_t start = std::min<size_t>(tokens[i].start, sql.size());
-  const size_t end = i + 1 < tokens.size() ? std::min<size_t>(tokens[i + 1].start, sql.size()) : sql.size();
-  std::string text = sql.substr(start, end > start ? end - start : 0);
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) text.pop_back();
-  if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
-    std::string unquoted;
-    for (size_t k = 1; k + 1 < text.size(); ++k) {
-      unquoted.push_back(text[k]);
-      if (text[k] == '"' && k + 2 < text.size() && text[k + 1] == '"') ++k;
-    }
-    return unquoted;
-  }
-  return text;
 }
 
 }  // namespace
@@ -122,13 +90,14 @@ std::string DuckLakeExecuteRefusal(const std::string& function) {
          "TABLE FUNCTION " + function;
 }
 
-std::string DuckLakeCatalogPrivilegeRefusal(const std::string& function, const std::string& catalog,
+std::string DuckLakeCatalogPrivilegeRefusal(const std::string& what, const std::string& catalog,
                                             DuckLakeAccess access, const std::string& user) {
   const std::string privilege = PrivilegeName(DuckLakeCatalogPrivilege(access));
-  return "Hardcharger blocked " + function + "() on catalog " + catalog + ": it " +
+  const bool function = what.ends_with("()");
+  return "Hardcharger blocked " + what + " on catalog " + catalog + ": it " +
          (access == DuckLakeAccess::kRead ? "reads" : "maintains") + " the whole catalog, which needs " + privilege +
-         " ON CATALOG " + catalog + ", and user " + user +
-         " does not hold it (EXECUTE on the function does not reach a catalog by itself)";
+         " ON CATALOG " + catalog + ", and user " + user + " does not hold it" +
+         (function ? " (EXECUTE on the function does not reach a catalog by itself)" : "");
 }
 
 std::string DuckLakeAdministratorRefusal(const std::string& function) {
@@ -159,48 +128,6 @@ std::string DuckLakeUncheckedRefusal(const std::string& function) {
   return "Hardcharger blocked " + function +
          "(): it is called where access control cannot check its catalog before it runs (inside a macro, "
          "or in a statement form the check does not read); call it directly, in FROM or with CALL";
-}
-
-int CountDuckLakeCallTokens(const std::string& sql, std::string* first) {
-  std::vector<dd::SimplifiedToken> all;
-  try {
-    all = dd::Parser::Tokenize(sql);
-  } catch (const std::exception&) {
-    return 0;  // the parser reports what it makes of the text
-  }
-  // Tokens without comments, keeping their text.
-  std::vector<std::string> text;
-  std::vector<bool> word;
-  for (size_t i = 0; i < all.size(); ++i) {
-    if (all[i].type == dd::SimplifiedTokenType::SIMPLIFIED_TOKEN_COMMENT) continue;
-    text.push_back(TokenText(sql, all, i));
-    word.push_back(IsWordToken(all[i]));
-  }
-  int count = 0;
-  for (size_t i = 0; i < text.size(); ++i) {
-    if (!word[i] || i + 1 >= text.size() || text[i + 1].empty() || text[i + 1][0] != '(') continue;
-    const std::string name = Lower(text[i]);
-    const bool prefixed = name.rfind("ducklake_", 0) == 0;
-    const bool method = i > 0 && text[i - 1] == "." && IsDuckLakeCatalogMethod(name);
-    if (!prefixed && !method) continue;
-    // CREATE MACRO name(...) defines `name`, it does not call it (GizmoSQL 6a458ca7): also
-    // qualified, after OR REPLACE, TEMP or IF NOT EXISTS. The body is still counted.
-    size_t chain = i;
-    while (chain >= 2 && text[chain - 1] == "." && word[chain - 2]) chain -= 2;
-    if (chain >= 1 && word[chain - 1]) {
-      const std::string before = Lower(text[chain - 1]);
-      if (before == "macro" || before == "function" || before == "exists") continue;
-    }
-    if (first && first->empty()) *first = prefixed ? name : "ducklake_" + name;
-    ++count;
-  }
-  return count;
-}
-
-bool LooksLikeDuckLakeCall(const std::vector<std::string>& parts) {
-  if (parts.empty()) return false;
-  const std::string name = Lower(parts.back());
-  return name.rfind("ducklake_", 0) == 0 || (parts.size() >= 2 && IsDuckLakeCatalogMethod(name));
 }
 
 }  // namespace hardcharger::authz
