@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The baseline Linux x86_64 server, for CPUs without AVX2**
+  ([#62](https://github.com/gizmodata/hardcharger/issues/62)). On linux-amd64 the launcher
+  installs the optimized build as before, unless this CPU lacks an instruction it needs
+  (`/proc/cpuinfo`, x86-64-v3): then it installs `hardcharger-linux-amd64-baseline.tar.gz`
+  (released from server 2.13.2 on) and says why. `HARDCHARGER_CPU_TARGET=optimized` or
+  `=baseline` chooses the build; the default is `auto`. The baseline build is cached apart
+  (`~/.cache/hardcharger/v<version>/linux-amd64-baseline/`) and comes from GitHub Releases only,
+  as the container image holds the optimized build.
+
 ## [2.13.1] - 2026-11-15
 
 ### Added

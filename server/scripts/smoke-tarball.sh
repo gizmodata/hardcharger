@@ -9,32 +9,38 @@
 #
 # Needs only bash, tar, curl and a Python 3 for reading JSON (EL8's platform-python).
 # (The server listens on 31337, health 31338.)
+#
+# HARDCHARGER_SMOKE_EXEC: a command that runs each binary, e.g. QEMU user-mode emulation
+# with a chosen CPU model, so the whole smoke test runs on that CPU (CI runs the baseline
+# tarball on QEMU's kvm64, an x86-64-v1 CPU: "/qemu/qemu-x86_64-static -cpu kvm64").
 set -euo pipefail
 tarball="${1:?tarball}"
+read -ra exec_prefix <<< "${HARDCHARGER_SMOKE_EXEC:-}"
+run() { ${exec_prefix[@]+"${exec_prefix[@]}"} "$@"; }
 prefix=$(mktemp -d)
 tar -C "$prefix" -xzf "$tarball"
 bin=$(echo "$prefix"/hardcharger-*/bin/hardcharger-server)
 python=$(command -v python3 || echo /usr/libexec/platform-python)
 json() { "$python" -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
 
-"$bin" --version
+run "$bin" --version
 # The licence and the third-party notices travel with the binaries, which print them too.
 root=$(dirname "$(dirname "$bin")")
 grep -q "Apache License" "$root/LICENSE"
 grep -qx "# Third-party software in Hardcharger" "$root/THIRD_PARTY_NOTICES.md"
 grep -q "^Hardcharger web UI .*: third-party software notices" "$root/THIRD_PARTY_NOTICES-web-ui.txt"
-"$bin" --licenses > "$prefix/licenses.txt"
+run "$bin" --licenses > "$prefix/licenses.txt"
 grep -qx "# Third-party software in Hardcharger" "$prefix/licenses.txt"
 grep -q "^Hardcharger web UI .*: third-party software notices" "$prefix/licenses.txt"
-"$bin" --verify-tls https://token.actions.githubusercontent.com/.well-known/openid-configuration
+run "$bin" --verify-tls https://token.actions.githubusercontent.com/.well-known/openid-configuration
 
 work=$(mktemp -d)
 cd "$work"
 HARDCHARGER_ADMIN_USERNAME=smoke HARDCHARGER_ADMIN_PASSWORD=smoke-password HARDCHARGER_HEALTH_PORT=31338 \
-  "$bin" --host 127.0.0.1 --port 31337 2> server.log &
+  run "$bin" --host 127.0.0.1 --port 31337 2> server.log &
 server=$!
 trap 'kill "$server" 2>/dev/null || true; cat "$work/server.log"' EXIT
-for _ in $(seq 1 30); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
+for _ in $(seq 1 120); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
 echo
 curl -sf http://127.0.0.1:31338/health | grep -q serving
 
@@ -62,8 +68,8 @@ curl -sf "$base/sessions/$session/statements/$id/result" "${auth[@]}" \
 grep -aq 'https-true' https.arrows || { echo "the httpfs read returned no https-true"; exit 1; }
 # The command-line client from the same tarball, against the same server.
 client="$(dirname "$bin")/hardcharger"
-"$client" --version
-answer=$(HARDCHARGER_PASSWORD=smoke-password "$client" --host 127.0.0.1 --port 31337 --tls=false --username smoke \
+run "$client" --version
+answer=$(HARDCHARGER_PASSWORD=smoke-password run "$client" --host 127.0.0.1 --port 31337 --tls=false --username smoke \
            --csv --no-header -c "SELECT 'client-' || (40 + 2)")
 [ "$answer" = client-42 ] || { echo "the client answered '$answer'"; exit 1; }
-echo "smoke test passed: $("$bin" --version | head -1)"
+echo "smoke test passed: $(run "$bin" --version | head -1)${HARDCHARGER_SMOKE_EXEC:+ (run by $HARDCHARGER_SMOKE_EXEC)}"

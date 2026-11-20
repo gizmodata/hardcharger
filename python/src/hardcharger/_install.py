@@ -57,6 +57,13 @@ Environment variables:
     direct download is not used: the API answers for that server.
 ``HARDCHARGER_RELEASE_REPO``
     Repository the releases come from (default ``gizmodata/hardcharger``).
+``HARDCHARGER_CPU_TARGET``
+    Which Linux x86_64 build to install: ``auto`` (default: the optimized build, or the
+    baseline build when this CPU lacks an instruction the optimized one needs), ``optimized``
+    (built for x86-64-v3: AVX2) or ``baseline`` (any x86-64 CPU, such as a VM with QEMU's
+    ``kvm64`` CPU model; slower). The baseline build is released from 2.13.2 on, as
+    ``hardcharger-linux-amd64-baseline.tar.gz``, and comes from GitHub Releases only: the
+    container image holds the optimized build. Other platforms have one build.
 
 Standard library only, so the package keeps zero dependencies.
 """
@@ -94,6 +101,7 @@ API_URL_ENV = "HARDCHARGER_RELEASE_API_URL"
 DOWNLOAD_URL_ENV = "HARDCHARGER_RELEASE_DOWNLOAD_URL"
 REPO_ENV = "HARDCHARGER_RELEASE_REPO"
 TOKEN_ENV = "HARDCHARGER_INSTALL_TOKEN"
+CPU_TARGET_ENV = "HARDCHARGER_CPU_TARGET"
 
 DEFAULT_API_URL = "https://api.github.com"
 DEFAULT_DOWNLOAD_URL = "https://github.com"
@@ -105,6 +113,35 @@ SOURCES = ("auto", "github", "ghcr")
 
 #: Platforms hardcharger-server is released for.
 PLATFORMS = ("linux-amd64", "linux-arm64", "macos-arm64")
+
+#: The values of ``HARDCHARGER_CPU_TARGET``.
+CPU_TARGETS = ("auto", "optimized", "baseline")
+
+#: The Linux x86_64 build for any x86-64 CPU (released from 2.13.2): its release asset is
+#: ``hardcharger-<this>.tar.gz``, and it is cached under this name.
+BASELINE_PLATFORM = "linux-amd64-baseline"
+
+#: The CPU features (``/proc/cpuinfo`` flags) the optimized linux-amd64 build needs: the
+#: x86-64-v3 level its DuckDB is compiled for, and the x86-64-v2 level below it. The kernel
+#: lists ``avx`` only when it saves the AVX registers. ``abm`` is LZCNT, ``pni`` SSE3.
+X86_64_V3_FLAGS = (
+    "cx16",
+    "lahf_lm",
+    "popcnt",
+    "pni",
+    "sse4_1",
+    "sse4_2",
+    "ssse3",
+    "avx",
+    "avx2",
+    "bmi1",
+    "bmi2",
+    "f16c",
+    "fma",
+    "abm",
+    "movbe",
+    "xsave",
+)
 
 #: Where the image keeps the release tarball's tree (docker/Dockerfile:
 #: ``COPY dist/hardcharger-linux-<arch>/ /opt/hardcharger/``).
@@ -146,6 +183,74 @@ def detect_platform(system: str | None = None, machine: str | None = None) -> st
 
 #: A PEP 440 release candidate (``2.0.0rc1``, how this package's own version spells one).
 _PEP440_RC = re.compile(r"(\d+\.\d+\.\d+)rc(\d+)")
+
+
+def _cpuinfo_text() -> str | None:
+    try:
+        return Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def missing_cpu_features(cpuinfo: str | None = None) -> list[str] | None:
+    """The x86-64-v3 features this CPU lacks (``[]``: none), from ``/proc/cpuinfo``'s
+    first ``flags`` line; None when that can't be read."""
+    if cpuinfo is None:
+        cpuinfo = _cpuinfo_text()
+        if cpuinfo is None:
+            return None
+    for line in cpuinfo.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "flags":
+            flags = set(value.split())
+            return [flag for flag in X86_64_V3_FLAGS if flag not in flags]
+    return None
+
+
+def cpu_target() -> str:
+    """``HARDCHARGER_CPU_TARGET``: auto (the default), optimized or baseline."""
+    value = os.environ.get(CPU_TARGET_ENV, "").strip().lower() or "auto"
+    if value not in CPU_TARGETS:
+        raise InstallError(
+            f"{CPU_TARGET_ENV} must be one of {', '.join(CPU_TARGETS)}, not {value!r}"
+        )
+    return value
+
+
+def select_build(
+    platform_name: str,
+    *,
+    target: str | None = None,
+    cpuinfo: str | None = None,
+    progress: bool = False,
+) -> str:
+    """The release build to install on ``platform_name``: the platform itself, or on
+    linux-amd64 the baseline build when asked for, or (``auto``) when this CPU lacks a
+    feature the optimized build needs."""
+    target = target or cpu_target()
+    if platform_name != "linux-amd64":
+        if target == "baseline":
+            raise InstallError(
+                f"{CPU_TARGET_ENV}=baseline: the baseline build is for linux-amd64 only, and "
+                f"this is {platform_name}, which has one build for every CPU"
+            )
+        return platform_name
+    if target == "optimized":
+        return platform_name
+    if target == "baseline":
+        return BASELINE_PLATFORM
+    missing = missing_cpu_features(cpuinfo=cpuinfo)
+    if not missing:
+        return platform_name
+    if progress:
+        print(
+            f"hardcharger: this CPU lacks {', '.join(missing)}, which the optimized linux-amd64 "
+            f"build needs (x86-64-v3); installing the baseline build, which runs on any x86-64 "
+            f"CPU but slower. (A virtual machine may hide its host's CPU features: see its CPU "
+            f"model setting. {CPU_TARGET_ENV}=optimized or =baseline chooses the build.)",
+            file=sys.stderr,
+        )
+    return BASELINE_PLATFORM
 
 
 def normalize_version(version: str) -> str:
@@ -918,20 +1023,27 @@ def ensure_server(version: str | None = None, *, progress: bool = True) -> Path:
 
     source = install_source()
     version = resolve_version(version=version)
-    platform_name = detect_platform()
+    platform_name = select_build(platform_name=detect_platform(), progress=progress)
     target = install_dir(version=version, platform_name=platform_name)
     binary = target / "bin" / "hardcharger-server"
     if binary.is_file() and os.access(binary, os.X_OK):
         return binary
 
     on_linux = platform_name.startswith("linux-")
+    baseline = platform_name == BASELINE_PLATFORM
     if source == "ghcr" and not on_linux:
         raise InstallError(
             f"{SOURCE_ENV}=ghcr works on Linux only: the container image holds Linux "
             f"binaries, and this is {platform_name}. Use {SOURCE_ENV}=github, or leave it unset."
         )
+    if source == "ghcr" and baseline:
+        raise InstallError(
+            f"{SOURCE_ENV}=ghcr: the container image holds the optimized build, and this "
+            f"install needs the baseline build ({CPU_TARGET_ENV}), which comes from GitHub "
+            f"Releases only. Use {SOURCE_ENV}=github, or leave it unset."
+        )
     use_github = source != "ghcr"
-    use_image = source == "ghcr" or (source == "auto" and on_linux)
+    use_image = not baseline and (source == "ghcr" or (source == "auto" and on_linux))
     image = f"{image_reference()[2]}:{version}"
 
     try:
@@ -971,6 +1083,12 @@ def ensure_server(version: str | None = None, *, progress: bool = True) -> Path:
                 failures.append(
                     f"Container image {image}: not tried, it holds Linux binaries and "
                     f"this is {platform_name}"
+                )
+            if baseline:
+                failures.append(
+                    f"Container image {image}: not tried, it holds the optimized build only "
+                    f"(the baseline build is released from 2.13.2 on; {CPU_TARGET_ENV}=optimized "
+                    f"installs the optimized one)"
                 )
             raise InstallError(
                 f"couldn't download Hardcharger {version} for {platform_name}. Tried:\n"

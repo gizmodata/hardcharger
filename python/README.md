@@ -110,6 +110,20 @@ server version is the tag): `docker.io/gizmodata/hardcharger`, or a mirror in an
 network such as `registry.example.com/mirror/hardcharger` (`http://` in front for a registry
 without TLS). The image must be one that can be pulled without signing in.
 
+On Linux x86_64 there are two builds. The optimized one (`hardcharger-linux-amd64.tar.gz`) needs
+an x86-64-v3 CPU (AVX2: Intel Haswell, AMD Excavator or newer). The baseline one
+(`hardcharger-linux-amd64-baseline.tar.gz`, from server 2.13.2 on) runs on any x86-64 CPU,
+such as a virtual machine whose CPU model is QEMU's `kvm64`, but slower. The launcher installs
+the optimized build unless this CPU lacks an instruction it needs; then it installs the
+baseline build and says why. `HARDCHARGER_CPU_TARGET=optimized` or `=baseline` chooses:
+
+```bash
+HARDCHARGER_CPU_TARGET=baseline python -m hardcharger download
+```
+
+The baseline build comes from GitHub Releases only (the container image holds the optimized
+build), and is cached apart from the optimized one.
+
 A GitHub token is optional: `HARDCHARGER_INSTALL_TOKEN`, else `GH_TOKEN`, else the token of
 a signed-in [`gh`](https://cli.github.com) (`gh auth token`). With one, the GitHub API is
 asked first, which is how a GitHub Enterprise Server or a private copy of the repository is
@@ -130,6 +144,7 @@ registry, and is never printed.
 | `HARDCHARGER_RELEASE_API_URL` | the GitHub API's base URL (default `https://api.github.com`), e.g. GitHub Enterprise Server |
 | `HARDCHARGER_RELEASE_DOWNLOAD_URL` | the base of the direct download URLs (default `https://github.com`); with only the API URL set, the API is used |
 | `HARDCHARGER_RELEASE_REPO` | the repository the releases come from (default `gizmodata/hardcharger`) |
+| `HARDCHARGER_CPU_TARGET` | Linux x86_64: `auto` (default: optimized, or baseline when this CPU needs it), `optimized` or `baseline` |
 
 ## Tests
 

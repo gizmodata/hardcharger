@@ -32,8 +32,8 @@ from pathlib import Path
 
 import pytest
 
-from hardcharger import SERVER_VERSION
-from hardcharger._install import detect_platform
+from hardcharger import SERVER_VERSION, _install
+from hardcharger._install import X86_64_V3_FLAGS, detect_platform
 
 TEST_BINARY_ENV = "HARDCHARGER_PY_TEST_SERVER_BINARY"
 TEST_TOKEN_ENV = "HARDCHARGER_PY_TEST_TOKEN"
@@ -50,6 +50,7 @@ PACKAGE_ENV = (
     "HARDCHARGER_RELEASE_REPO",
     "HARDCHARGER_INSTALL_TOKEN",
     "HARDCHARGER_INSTALL_SOURCE",
+    "HARDCHARGER_CPU_TARGET",
     "HARDCHARGER_INSTALL_REGISTRY_IMAGE",
     "GH_TOKEN",
     "XDG_CACHE_HOME",
@@ -73,6 +74,11 @@ def clean_env(monkeypatch, tmp_path):
     monkeypatch.setenv("HARDCHARGER_RELEASE_API_URL", f"http://{nowhere}/api")
     monkeypatch.setenv("HARDCHARGER_RELEASE_DOWNLOAD_URL", f"http://{nowhere}/web")
     monkeypatch.setenv("HARDCHARGER_INSTALL_REGISTRY_IMAGE", f"http://{nowhere}/test/hardcharger")
+    # An x86-64-v3 CPU, whatever this one is: the auto CPU target picks the optimized build
+    # unless a test says otherwise (cpu fixture).
+    monkeypatch.setattr(
+        _install, "_cpuinfo_text", lambda: f"flags\t: {' '.join(X86_64_V3_FLAGS)} sse sse2\n"
+    )
 
 
 @pytest.fixture
@@ -169,6 +175,8 @@ class FakeGitHub:
         #: Whether the release has a SHA256SUMS asset in the API's answer.
         self.api_lists_sums = True
         self.require_token = True
+        #: The build the release serves (its asset name); None: this machine's platform.
+        self.platform_name: str | None = None
         self.api_error: tuple[int, dict[str, str]] | None = None
         self.web_error: tuple[int, dict[str, str]] | None = None
         self.storage_error: int | None = None
@@ -179,7 +187,7 @@ class FakeGitHub:
         github = self
 
         def asset_name() -> str:
-            return f"hardcharger-{detect_platform()}.tar.gz"
+            return f"hardcharger-{github.platform_name or detect_platform()}.tar.gz"
 
         def sums_bytes() -> bytes:
             if github.sums is not None:

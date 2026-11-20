@@ -425,6 +425,14 @@ tar -xzf hardcharger-macos-arm64.tar.gz
 HARDCHARGER_ADMIN_PASSWORD='change-me' ./hardcharger-macos-arm64/bin/hardcharger-server --database my.duckdb
 ```
 
+Linux x86-64 comes in two builds. `hardcharger-linux-amd64.tar.gz` is optimized for x86-64-v3
+CPUs (AVX2: Intel Haswell, AMD Excavator or newer) and checks the CPU when it starts.
+`hardcharger-linux-amd64-baseline.tar.gz` (from 2.13.2 on) runs on any x86-64 CPU, such as a
+virtual machine whose CPU model hides AVX2 (QEMU's `kvm64`), but slower. Use it only where the
+optimized build says the CPU is too old; changing the VM's CPU model (to `host` or `x86-64-v3`)
+is often the better fix. The one-line installer and the Python package pick the baseline build
+on such a CPU by themselves.
+
 On Windows (PowerShell), unzip `hardcharger-windows-amd64.zip` or `-arm64.zip`, or run
 `Hardcharger-windows-amd64.msi` / `-arm64.msi`, which installs under Program Files and
 puts `hardcharger-server.exe` and the `hardcharger.exe` client on the PATH. Ctrl+C or

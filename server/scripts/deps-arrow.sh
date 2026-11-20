@@ -19,8 +19,18 @@ if [ -n "${HARDCHARGER_ANDROID_ABI:-}" ]; then
   # configure. Apply this as a compile definition in the Android toolchain instead.
   export HARDCHARGER_ANDROID_ARROW=ON
 fi
-CHARGEWIRE_DEPS_DIR="$DEPS" "$HERE/../third_party/chargewire/cpp/scripts/build-arrow.sh"
+# HARDCHARGER_CPU_TARGET (server/scripts/cpu-target.sh): optimized keeps Arrow's default SIMD
+# level (SSE4.2 on x86_64), baseline builds for any x86-64 CPU. Always passed explicitly, so a
+# reused build directory never keeps the other target's setting.
+CPU_TARGET=$("$HERE/scripts/cpu-target.sh")
+SIMD_LEVEL=DEFAULT
+[ "$CPU_TARGET" != baseline ] || SIMD_LEVEL=NONE
+CHARGEWIRE_ARROW_SIMD_LEVEL="$SIMD_LEVEL" CHARGEWIRE_DEPS_DIR="$DEPS" \
+  "$HERE/../third_party/chargewire/cpp/scripts/build-arrow.sh"
 # CMake installs libraries into lib64 on RPM-based systems; the server's CMake uses lib.
 if [ -d "$DEPS/arrow-install/lib64" ] && [ ! -e "$DEPS/arrow-install/lib" ]; then
   ln -s lib64 "$DEPS/arrow-install/lib"
 fi
+# What the server's CMake reads to know which CPUs this Arrow runs on (cpu-target.sh).
+mkdir -p "$DEPS/arrow-install/share"
+echo "$CPU_TARGET" > "$DEPS/arrow-install/share/hardcharger-cpu-target"

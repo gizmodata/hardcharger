@@ -12,7 +12,7 @@ set -euo pipefail
 image="${HARDCHARGER_MANYLINUX_IMAGE:?the manylinux_2_28 image to build in}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 args=(--rm -v "$ROOT:$ROOT" -w "$ROOT" -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)"
-      -e CMAKE_BUILD_PARALLEL_LEVEL)
+      -e CMAKE_BUILD_PARALLEL_LEVEL -e HARDCHARGER_CPU_TARGET -e HARDCHARGER_DEPS_DIR)
 if [ -n "${SCCACHE_PATH:-}" ]; then
   args+=(-v "$SCCACHE_PATH:/usr/local/bin/sccache:ro" -e SCCACHE_DIR -e SCCACHE_CACHE_SIZE)
 fi

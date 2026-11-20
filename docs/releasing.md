@@ -65,7 +65,7 @@ Two places can't hold `-rc.N` and use numbers instead:
 | GitHub Release | pre-release, never "latest" | release, made "latest" |
 | Release notes | CHANGELOG `## [2.0.0-rc.1]` | CHANGELOG `## [2.0.0]` |
 | Images, ghcr.io and docker.io | `:2.0.0-rc.1`, `:sha-<short>` | `:2.0.0`, `:latest` |
-| Tarballs and zips | `hardcharger-<platform>.tar.gz` / `.zip` | the same names |
+| Tarballs and zips | `hardcharger-<platform>.tar.gz` / `.zip`, plus `hardcharger-linux-amd64-baseline.tar.gz` (any x86-64 CPU) | the same names |
 | MSIs | `Hardcharger-windows-<arch>.msi`, ProductVersion `2.0.0.1` | the same names, `2.0.0` |
 | Web UI tarball | `hardcharger-ui-2.0.0-rc.1.tar.gz` | `hardcharger-ui-2.0.0.tar.gz` |
 | `SHA256SUMS` | every tarball, zip and MSI | the same |

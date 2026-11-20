@@ -66,7 +66,13 @@ if [ -n "${HARDCHARGER_ANDROID_ABI:-}" ]; then
   cmake --install "$CHARGEWIRE_DEPS_DIR/duckdb-build"
   cp "$SRC/src/include/duckdb_v2.h" "$CHARGEWIRE_DEPS_DIR/duckdb-install/include/"
 elif [ -z "${HARDCHARGER_IOS_SDK:-}" ]; then
-  CHARGEWIRE_DUCKDB_EXTENSION_CONFIGS="$EXTENSIONS" "$CHARGEWIRE/build-duckdb.sh"
+  # HARDCHARGER_CPU_TARGET (scripts/cpu-target.sh): optimized keeps DuckDB's default profile
+  # (CLI: x86-64-v3 on Linux x86_64), baseline builds for any x86-64 CPU (NONE). Always
+  # passed explicitly, so a reused build directory never keeps the other target's setting.
+  PROFILE=CLI
+  [ "$("$HERE/scripts/cpu-target.sh")" != baseline ] || PROFILE=NONE
+  CHARGEWIRE_DUCKDB_OPTIMIZATION_PROFILE="$PROFILE" CHARGEWIRE_DUCKDB_EXTENSION_CONFIGS="$EXTENSIONS" \
+    "$CHARGEWIRE/build-duckdb.sh"
 else
   # The iOS app (ios/scripts/build-server-ios.sh): build-duckdb.sh's build of the same
   # commit, cross-compiled with CMAKE_TOOLCHAIN_FILE (ios/cmake/ios.toolchain.cmake), and
@@ -120,6 +126,9 @@ fi
 if [ -z "${HARDCHARGER_IOS_SDK:-}${HARDCHARGER_ANDROID_ABI:-}" ]; then
   cmake -DDUCKDB_INSTALL_DIR="$CHARGEWIRE_DEPS_DIR/duckdb-install" -P "$HERE/scripts/prune-duckdb-install.cmake"
 fi
+# What the server's CMake reads to know which CPUs this DuckDB runs on (cpu-target.sh).
+mkdir -p "$CHARGEWIRE_DEPS_DIR/duckdb-install/share"
+"$HERE/scripts/cpu-target.sh" > "$CHARGEWIRE_DEPS_DIR/duckdb-install/share/hardcharger-cpu-target"
 grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_basetableref.cpp" \
   || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
 grep -q HardchargerDecimal38Converter "$SRC/src/common/arrow/arrow_appender.cpp" \
