@@ -20,7 +20,7 @@ import time
 import pytest
 
 from conftest import TIMEOUT_SCALE
-from rbac import Client, expect_allowed, expect_blocked, mint, start_rbac_server
+from rbac import ChargewireError, Client, RbacServer, expect_allowed, expect_blocked, mint, start_rbac_server
 
 CLIENTS = 10
 # Passes over the 22 queries per client (long enough runs for stable ratios).
@@ -43,6 +43,18 @@ DDL_EXISTING = 600
 DDL_STORE_TIMEOUT = str(max(3 if sys.platform == "win32" else 1, round(TIMEOUT_SCALE)))
 
 
+# A store statement that itself takes the whole timeout is a store that does not answer in
+# time, whatever is behind it: the server rightly fails what waited on it, and logs, when the
+# store does answer, how long it took. The emulated x64 PostgreSQL of the windows-arm64 jobs
+# once took over 3 s to COMMIT one setup CREATE with nothing else on that server (2026-11-20,
+# run 44750753453). That run says nothing about the line of callers, so it is taken again on a
+# fresh store, up to DDL_ATTEMPTS times; a failure the server's log does not show the store
+# being that slow for fails the test at once, and so does a store that is that slow every time.
+DDL_ATTEMPTS = 3
+STORE_SLOW = ("the access control store answered after its caller had given up",
+              "the access control store took the whole rbac_store_timeout_seconds")
+
+
 def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
     """A dbt run's shape: sessions that each create a table, grant on it and drop it, all at
     once. On 2.1.2 some failed with "the owner of what it creates could not be recorded (...
@@ -52,18 +64,43 @@ def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
     answered everyone ahead of it. With a 1 s store timeout (longer in sanitizer builds) none
     may fail, the server may not report the store down, and each table's owner (who alone may
     grant on it) is right."""
+    stalls: list[str] = []
+    for _ in range(DDL_ATTEMPTS):
+        failures, server = concurrent_ddl(launcher=launcher, store=store)
+        if not failures:
+            return
+        # A statement the server gave up on is logged when the store answers it, which may be
+        # a while after the caller was told.
+        deadline = time.monotonic() + 60 * TIMEOUT_SCALE
+        while True:
+            slow = [line for line in server.log().splitlines() if any(text in line for text in STORE_SLOW)]
+            if slow or time.monotonic() > deadline:
+                break
+            time.sleep(0.2)
+        timed_out = all("timed out after" in failure for failure in failures)
+        assert slow and timed_out, (f"{len(failures)} statements failed (or the server reported the store down) "
+                                    f"although no store statement took the whole store timeout, e.g. {failures[:3]}")
+        print(f"\nthe store itself took the whole timeout ({slow[0]}): {failures[0]}; taken again")
+        stalls.append(f"{failures[0]} / {slow[0]}")
+    pytest.fail(f"the store took the whole timeout on every one of {DDL_ATTEMPTS} attempts: {stalls}")
+
+
+def concurrent_ddl(launcher, store) -> tuple[list[str], RbacServer]:
+    """One run of the dbt shape on a fresh store: what failed (nothing, if all went right), and
+    the server."""
     server = start_rbac_server(launcher=launcher, store_uri=store.new_database(),
                                env={"HARDCHARGER_RBAC_STORE_TIMEOUT_SECONDS": DDL_STORE_TIMEOUT,
                                     "HARDCHARGER_PRINT_QUERIES": "false"})
     admin = server.admin()
-    for sql in ["CREATE ROLE builder", "GRANT CREATE TABLE, DROP TABLE ON SCHEMA main TO builder",
-                "CREATE ROLE readers"]:
-        expect_allowed(client=admin, sql=sql)
+    setup = ["CREATE ROLE builder", "GRANT CREATE TABLE, DROP TABLE ON SCHEMA main TO builder", "CREATE ROLE readers"]
     for c in range(DDL_CLIENTS):
-        expect_allowed(client=admin, sql=f"CREATE USER dbt{c}")
-        expect_allowed(client=admin, sql=f"GRANT builder TO USER dbt{c}")
-    for i in range(DDL_EXISTING):
-        expect_allowed(client=admin, sql=f"CREATE TABLE existing_{i} AS SELECT {i} AS x")
+        setup += [f"CREATE USER dbt{c}", f"GRANT builder TO USER dbt{c}"]
+    setup += [f"CREATE TABLE existing_{i} AS SELECT {i} AS x" for i in range(DDL_EXISTING)]
+    for sql in setup:
+        try:
+            admin.run(sql=sql)
+        except ChargewireError as error:
+            return [f"admin: {sql}: {error}"], server
     sessions = [Client(base_url=server.base_url, token=mint(user=f"dbt{c}")) for c in range(DDL_CLIENTS)]
     failures: list[str] = []
     slowest = [0.0]
@@ -91,8 +128,12 @@ def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
         thread.start()
     for thread in threads:
         thread.join()
-    assert failures == [], f"{len(failures)} statements failed, e.g. {failures[:3]}"
-    assert "does not answer" not in server.log(), "the server reported a healthy store as down"
+    log = server.log()
+    if "does not answer" in log:
+        failures.append("the server reported the store down: the access control store does not answer "
+                        "(timed out after the store timeout)")
+    if failures:
+        return failures, server
     # Owners as the store recorded them: dbt{c} may grant on its table, the next user may not.
     for c in range(DDL_CLIENTS):
         table = f"model_{c}_{DDL_ROUNDS - 1}__dbt_tmp"
@@ -102,6 +143,7 @@ def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
     print(f"\nconcurrent DDL: {DDL_CLIENTS} sessions x {DDL_ROUNDS} rounds, slowest statement {slowest[0]:.2f} s")
     for session in sessions:
         session.close()
+    return [], server
 
 
 def prepare(admin, rbac: bool) -> list[str]:
