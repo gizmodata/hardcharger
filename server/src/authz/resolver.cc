@@ -202,7 +202,11 @@ std::vector<std::shared_ptr<dd::MacroFunction>> SessionObjectResolver::MacroDefi
   std::vector<std::shared_ptr<dd::MacroFunction>> definitions;
   const auto wanted = table ? dd::CatalogType::TABLE_MACRO_ENTRY : dd::CatalogType::MACRO_ENTRY;
   auto status = InTransaction(connection_, [&]() -> arrow::Status {
-    ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context, wanted, name));
+    // FROM f(...) is looked up as a table function, as DuckDB's binder looks it up: that finds what the
+    // call binds to (DuckLake answers that lookup with its own catalog macro first, so its snapshots()
+    // wins over a user's macro stored in the lake under the same name).
+    ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context,
+                                                table ? dd::CatalogType::TABLE_FUNCTION_ENTRY : wanted, name));
     // DuckDB's and its extensions' own macros (lake.snapshots() and DuckLake's other catalog
     // macros, which DuckLake generates on lookup, as DuckDB does its defaults) are made internal;
     // CREATE MACRO never makes one. So what is not internal is a user's macro, wherever it is

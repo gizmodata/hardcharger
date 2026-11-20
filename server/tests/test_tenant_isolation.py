@@ -635,5 +635,10 @@ def test_a_lake_macro_named_like_a_ducklake_method_is_walked(world, lake_macros,
         # The twins: DuckLake's own catalog macro, and what the token may run itself.
         assert inspector.query(sql=f"SELECT * FROM {A}.snapshots()").num_rows > 0
         assert inspector.scalar(sql=f"SELECT * FROM {A}.main.{name}('SELECT 42 AS answer')") == 42
+        # A user macro stored under the name of a macro DuckLake defines: DuckDB binds DuckLake's own,
+        # and so does the check (lake.snapshots() keeps working).
+        admin.execute(sql=f"CREATE OR REPLACE MACRO {A}.main.snapshots(s) AS TABLE SELECT * FROM query(s)")
+        assert inspector.query(sql=f"SELECT * FROM {A}.snapshots()").num_rows > 0
     finally:
         admin.execute(sql=f"DROP MACRO TABLE {A}.main.{name}")
+        admin.execute(sql=f"DROP MACRO TABLE IF EXISTS {A}.main.snapshots")
