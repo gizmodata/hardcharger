@@ -1,2 +1,2 @@
-Hardcharger 2.13.3, a maintenance release: the Linux build for older or virtual CPUs without AVX2 also has SQLite (and DuckLake's SQLite catalog) built in.
+Hardcharger 2.13.4, a security release: DuckLake functions for per-catalog tokens, and tighter access-control checks on the server.
 The app itself has no changes.

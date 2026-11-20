@@ -7,6 +7,94 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.13.4] - 2026-11-20
+
+A security and compatibility release for access control. Tokens with `catalog_access` rules, the
+per-catalog tokens GizmoSQL 1.x servers use, can use DuckLake's functions on their own catalogs again.
+Hardcharger's port of GizmoSQL's test battery is brought up to GizmoSQL 1.42.3, closing what that
+release closed. Roles and grants (RBAC) remain the recommended way to control access; this release
+also closes gaps there.
+
+**Upgrading.** What changes on purpose:
+
+- a role that holds `EXECUTE` on a `ducklake_*` function now also needs a privilege on the catalog
+  the call names: `SELECT ON CATALOG` to inspect, `MAINTAIN ON CATALOG` to maintain
+  (`GRANT ALL ON CATALOG` includes both);
+- a view or macro that wraps a DuckLake function is refused for everyone but an administrator
+  without `catalog_access` rules; call the function directly;
+- `delta_*()` and `iceberg_*()` need `READ FILESYSTEM`, `READ OBJECT STORAGE` and `READ HTTP`
+  everywhere, not a location grant;
+- `setval()` and `nextval()` are checked wherever DuckDB evaluates them, including while it binds a
+  statement, so they need the same privileges everywhere (`USAGE` on the sequence, `DROP SEQUENCE`
+  on its schema for `setval()`).
+
+### Fixed
+
+- **DuckLake functions work for tokens with `catalog_access` rules.** Every `ducklake_*` function,
+  and a DuckLake catalog's own calls such as `lake.snapshots()`, was refused for a `user` token
+  (and for an administrator's token with rules), because it needed an `EXECUTE` grant such a token
+  can't hold. As in GizmoSQL 1.42.3, a call is now checked against the token's access to the catalog
+  it names. Inspection (`ducklake_snapshots`, `ducklake_table_info`, `ducklake_list_files`,
+  `ducklake_table_changes`, `ducklake_options`, `ducklake_settings`, ...) needs read access.
+  Maintenance (`ducklake_merge_adjacent_files`, `ducklake_expire_snapshots`,
+  `ducklake_cleanup_old_files`, `ducklake_delete_orphaned_files`, `ducklake_rewrite_data_files`,
+  `ducklake_flush_inlined_data`, `ducklake_set_option`, `ducklake_set_commit_message`) needs write
+  access. In DuckLake builds with branches, `ducklake_branches`, `ducklake_current_branch` and
+  `ducklake_branch_table` need read access, and the other branch functions need write access.
+- **Store users can compact and flush DuckLake tables.** With `MAINTAIN ON CATALOG`,
+  `ducklake_merge_adjacent_files`, `ducklake_rewrite_data_files` and `ducklake_flush_inlined_data`
+  now run when there is work to do (they were refused as extension operators), and a DuckLake
+  catalog's own functions (`lake.snapshots()`) can be called. The `EXECUTE` hint for
+  `lake.snapshots()` names `ducklake_snapshots`, the function that runs.
+- A non-administrator's `CREATE MACRO IF NOT EXISTS sniff_csv(x) AS ...` was refused as a read of
+  `sniff_csv()`: a macro's own name is not a call (GizmoSQL 1.42.3).
+- The release gate waits on each downstream publish's own conclusion, so a run that the API
+  doesn't show yet right after it is dispatched no longer fails a release that published.
+
+### Security
+
+- **A store user's `EXECUTE` on a DuckLake function no longer reaches every catalog.** It reached
+  every DuckLake catalog on the server, including ones the user held no grant on; see Upgrading.
+- **Compacting a DuckLake table with row or masking policies is refused** for everyone but an
+  administrator without rules. For an administrator's token with `catalog_access` rules on a server
+  with an access-control store, DuckLake read the table through the policy and failed to commit,
+  which invalidated the database until a restart. Had the commit gone through, the table's files
+  would have kept only the rows the policy shows.
+- For tokens with `catalog_access` rules, a DuckLake function must name its catalog as a string
+  literal, may not be wrapped in a view or macro, and is refused where the server can't check it
+  before it runs. `ducklake_add_data_files`, `ducklake_scan` and `ducklake_commit` stay the
+  administrator's, and a `ducklake_*` function the server doesn't know is refused. A `readonly`
+  token can't change a DuckLake catalog through these functions, whatever its rules (before, a
+  `SELECT` from `ducklake_expire_snapshots(...)` or `ducklake_set_option(...)` did).
+- **What DuckDB evaluates while it binds a statement is checked first.** DuckDB evaluates a table
+  function's arguments, a PRAGMA's parameters, an `AT` clause and `EXECUTE`'s values while it binds,
+  before access control checks the plan. So `SELECT * FROM range(setval('c.main.seq', 1))` (also
+  through `CALL`, `EXPLAIN`, `DESCRIBE`, `SUMMARIZE`, `PIVOT`, `SET VARIABLE` or an administrator's
+  macro) moved a sequence that a read-only token or a store user without the privilege could not
+  otherwise change. Such calls are now checked before binding, by the rules the plan check applies.
+- **An administrator's macro no longer has DuckDB bind what a non-administrator hands it.** A macro
+  that passes its argument to `query()` or to a table function
+  (`CREATE MACRO route(s) AS TABLE SELECT * FROM query(s)`) had DuckDB bind the caller's SQL before
+  the plan check refused it (a `postgres_query()` prepared on the remote database, a file sniffed).
+  The macro's body is now checked with the caller's arguments first; SQL the caller may run itself
+  still works through it (GizmoSQL 1.42.3).
+- `PRAGMA json_execute_serialized_sql` is the administrator's, like the table function of that name
+  (GizmoSQL 1.42.3).
+- The check before binding refuses a kind of statement it has no rule for. It now also reads `PIVOT`
+  without an `IN` list, `SET VARIABLE` values, `EXECUTE` values and `PRAGMA` parameters (a
+  `PIVOT '<file>'` was bound, reading the file, before the plan check refused it).
+
+### Changed
+
+- **`delta_*()` and `iceberg_*()` need the storage privileges everywhere.** They read the files their
+  table's log or manifest names, wherever those are, with a storage client of their own, so a
+  location grant never bounded what they could read; see Upgrading.
+- A token with `catalog_access` rules still reaches no DuckLake catalog's data files directly, its
+  own catalog's included, where GizmoSQL 1.42.3 lets it read and write there: only DuckLake reads
+  and writes a DuckLake catalog's files. The migration guide says so.
+- Hardcharger's port of GizmoSQL's test battery is brought up to GizmoSQL 1.42.3 (`main` at
+  b820719d): 605 cases, 565 passing, 37 not applicable, and the same 3 failing as before.
+
 ## [2.13.3] - 2026-11-20
 
 ### Added
