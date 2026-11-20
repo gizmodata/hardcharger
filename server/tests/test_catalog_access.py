@@ -412,6 +412,8 @@ def test_own_storage_client_functions_are_refused_when_scoped(server, admin, sql
 
 
 def test_indirect_routes_are_refused_when_scoped(server, admin):
+    admin.execute(sql=f"ATTACH IF NOT EXISTS ':memory:' AS {OTHER}")
+    admin.execute(sql=f"CREATE TABLE IF NOT EXISTS {OTHER}.main.leak_t (id INTEGER)")
     admin.execute(sql="CREATE OR REPLACE MACRO scope_route(s) AS TABLE SELECT * FROM query(s)")
     session = user(server=server, name="scoped_route_user",
                    rules=[{"catalog": DEFAULT, "access": "write"}, {"catalog": "*", "access": "none"}])
