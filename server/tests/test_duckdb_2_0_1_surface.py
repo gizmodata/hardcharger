@@ -395,8 +395,9 @@ def quiet_refusal(statement: str) -> str:
             f"ask an administrator{LOU_SUFFIX}")
 
 
-def dependency_refusal(verb: str, what: str, seen: str = "") -> str:
-    tail = ", or use DROP ... CASCADE" if verb == "drop" else ""
+def dependency_refusal(verb: str, what: str, seen: str = "", cascade: bool = False) -> str:
+    # The suggestion to use CASCADE only where the statement did not.
+    tail = ", or use DROP ... CASCADE" if verb == "drop" and not cascade else ""
     return f"Dependency Error: Cannot {verb} {what}: other objects depend on it{seen}. Drop them first{tail}"
 
 
@@ -421,10 +422,11 @@ def test_a_cascade_through_an_owned_sequence_needs_the_right_to_drop_what_it_tak
 def test_foreign_keys_block_a_drop_with_or_without_cascade_and_name_only_what_is_seen(late):
     lou = late.user(name="lou")
     for sql in ["DROP TABLE lib.parent", "DROP TABLE lib.parent CASCADE"]:
-        assert refusal(client=lou, sql=sql).detail == dependency_refusal("drop", f"table {LATE}.lib.parent"), sql
+        assert refusal(client=lou, sql=sql).detail == \
+            dependency_refusal("drop", f"table {LATE}.lib.parent", cascade=sql.endswith("CASCADE")), sql
     # Twin: the referencing table lou sees is named.
     assert refusal(client=lou, sql="DROP TABLE lib.parent2 CASCADE").detail == \
-        dependency_refusal("drop", f"table {LATE}.lib.parent2", f" (table {LATE}.lib.child_seen)")
+        dependency_refusal("drop", f"table {LATE}.lib.parent2", f" (table {LATE}.lib.child_seen)", cascade=True)
 
 
 def test_create_or_replace_names_only_the_dependents_the_user_sees(late):
@@ -501,3 +503,95 @@ def test_only_the_administrator_changes_allow_extension_repositories(late):
     expect_allowed(client=admin, sql="SET GLOBAL allow_extension_repositories = 'allowed'")
     assert expect_allowed(client=admin, sql="SELECT current_setting('allow_extension_repositories') AS v") \
         .column("v")[0].as_py() == "allowed"
+
+
+# ---- An index taken without its table (review L6) ----
+#
+# A DROP MACRO ... CASCADE takes the indexes whose expressions call the macro, while their
+# tables stay. Dropping an index is DROP INDEX's right: the administrator's (as DROP INDEX
+# app.x is for lou). lou may create and drop macros and tables in lib, sees
+# app.visible_accounts, and owns lib.own_t.
+
+IDX = "idx"
+
+
+@pytest.fixture(scope="module")
+def idx(module_launcher, store, tmp_path_factory):
+    work = tmp_path_factory.mktemp("idx")
+    server = start_rbac_server(launcher=module_launcher, store_uri=store.new_database(),
+                               args=["--database", str(work / "idx.duckdb")])
+    admin = server.admin()
+    for sql in [
+        "CREATE SCHEMA lib", "CREATE SCHEMA app",
+        "CREATE MACRO lib.norm(x) AS lower(x)", "CREATE MACRO lib.norm2(x) AS upper(x)",
+        "CREATE MACRO lib.norm3(x) AS trim(x)",
+        "CREATE TABLE app.payroll_accounts (email VARCHAR)",
+        "CREATE UNIQUE INDEX payroll_email_uq ON app.payroll_accounts (lib.norm(email))",
+        "INSERT INTO app.payroll_accounts VALUES ('a@x.org')",
+        "CREATE TABLE app.visible_accounts (email VARCHAR)",
+        "CREATE UNIQUE INDEX visible_email_uq ON app.visible_accounts (lib.norm2(email))",
+        "INSERT INTO app.visible_accounts VALUES ('b@x.org')",
+        "CREATE TABLE app.drop_me (email VARCHAR)", "CREATE INDEX drop_me_ix ON app.drop_me (lib.norm3(email))",
+        "CREATE ROLE keepers", "CREATE USER lou", "GRANT keepers TO lou",
+        "GRANT CREATE MACRO, DROP MACRO, CREATE TABLE, DROP TABLE ON SCHEMA lib TO keepers",
+        "GRANT SELECT ON app.visible_accounts TO keepers",
+    ]:
+        expect_allowed(client=admin, sql=sql)
+    server.admin_client = admin
+    return server
+
+
+def indexes(admin) -> set[str]:
+    rows = expect_allowed(client=admin, sql="SELECT index_name FROM duckdb_indexes()")
+    return set(rows.column("index_name").to_pylist())
+
+
+def still_unique(admin, table: str, duplicate: str) -> None:
+    with pytest.raises(ChargewireError) as raised:
+        admin.run(sql=f"INSERT INTO {table} VALUES ('{duplicate}')")
+    assert "Duplicate key" in raised.value.detail or "unique" in raised.value.detail.lower(), raised.value.detail
+
+
+def test_drop_macro_cascade_does_not_take_an_index_on_a_hidden_table(idx):
+    lou, admin = idx.user(name="lou"), idx.admin_client
+    assert refusal(client=lou, sql="DROP MACRO lib.norm CASCADE").detail == \
+        (f"{BLOCKED_PREFIX}DROP ... CASCADE of macro {IDX}.lib.norm would also drop objects that depend on it, which "
+         f"user lou may not drop; ask an administrator{LOU_SUFFIX}")
+    assert "payroll_email_uq" in indexes(admin)
+    still_unique(admin=admin, table="app.payroll_accounts", duplicate="A@X.ORG")
+
+
+def test_drop_macro_cascade_names_an_index_on_a_visible_table_and_keeps_it(idx):
+    lou, admin = idx.user(name="lou"), idx.admin_client
+    assert refusal(client=lou, sql="DROP MACRO lib.norm2 CASCADE").detail == \
+        (f"{BLOCKED_PREFIX}DROP ... CASCADE of macro {IDX}.lib.norm2 would also drop index {IDX}.app.visible_email_uq, "
+         f"which only an administrator may drop (as DROP INDEX){LOU_SUFFIX}")
+    assert "visible_email_uq" in indexes(admin)
+    still_unique(admin=admin, table="app.visible_accounts", duplicate="b@X.org")
+
+
+def test_an_owner_drops_its_table_with_its_index_but_not_the_index_alone(idx):
+    lou, admin = idx.user(name="lou"), idx.admin_client
+    for sql in ["CREATE MACRO lib.norm4(x) AS lower(x)", "CREATE TABLE lib.own_t (email VARCHAR)",
+                "CREATE INDEX own_ix ON lib.own_t (lib.norm4(email))"]:
+        expect_allowed(client=lou, sql=sql)
+    # The index alone, through its macro: DROP INDEX's right, the owner's as everyone's.
+    assert refusal(client=lou, sql="DROP MACRO lib.norm4 CASCADE").detail == \
+        (f"{BLOCKED_PREFIX}DROP ... CASCADE of macro {IDX}.lib.norm4 would also drop index {IDX}.lib.own_ix, which only "
+         f"an administrator may drop (as DROP INDEX){LOU_SUFFIX}")
+    assert "own_ix" in indexes(admin)
+    # Twin: the index goes with its own table.
+    expect_allowed(client=lou, sql="DROP TABLE lib.own_t")
+    assert "own_ix" not in indexes(admin)
+
+
+def test_a_table_dropped_with_the_right_takes_its_index(idx):
+    lou, admin = idx.user(name="lou"), idx.admin_client
+    expect_allowed(client=admin, sql="GRANT DROP TABLE ON SCHEMA app TO keepers")
+    try:
+        expect_allowed(client=lou, sql="DROP TABLE app.drop_me CASCADE")
+        assert "drop_me_ix" not in indexes(admin)
+    finally:
+        expect_allowed(client=admin, sql="REVOKE DROP TABLE ON SCHEMA app FROM keepers")
+    # Twin: the administrator's own DROP MACRO ... CASCADE takes the index, as DuckDB does.
+    expect_allowed(client=admin, sql="DROP MACRO lib.norm3 CASCADE")

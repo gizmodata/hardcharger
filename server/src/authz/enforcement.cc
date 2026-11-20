@@ -1845,6 +1845,16 @@ class PlanChecker {
     return table;
   }
 
+  // The table an index is on.
+  dd::optional_ptr<dd::CatalogEntry> IndexTable(dd::CatalogEntry& entry) {
+    auto& index = entry.Cast<dd::IndexCatalogEntry>();
+    auto table = LookUp(context_, dd::CatalogType::TABLE_ENTRY,
+                        {compat::Str(entry.ParentCatalog().GetName()), compat::Str(index.GetSchemaName()),
+                         compat::Str(index.GetTableName())});
+    if (!table || table->type != dd::CatalogType::TABLE_ENTRY) return nullptr;
+    return table;
+  }
+
   // What the principal sees of a catalog entry, as the metadata views list it (Chargewire
   // §9.4): a table or view (an index or trigger with its table) when it holds a privilege on
   // it, a sequence when it may use or drop it, a type or macro with its schema. A refusal
@@ -1940,6 +1950,8 @@ class PlanChecker {
         return snapshot_.Check(principal_, AccessRequest{schema, ObjectType::kSchema, Privilege::kDropTrigger, {}})
             .allowed;
       }
+      // DROP INDEX: the administrator's (a catalog_access principal's with write, above).
+      case dd::CatalogType::INDEX_ENTRY: return false;
       case dd::CatalogType::SEQUENCE_ENTRY: return on_schema(Privilege::kDropSequence);
       case dd::CatalogType::TYPE_ENTRY: return on_schema(Privilege::kDropType);
       case dd::CatalogType::MACRO_ENTRY:
@@ -1979,7 +1991,15 @@ class PlanChecker {
         CheckDropOf(entry);
         break;
       case dd::CatalogType::INDEX_ENTRY:
-        break;  // an index goes with its table, which is in the list
+        // Taken without its table (a macro its expression calls is dropped): as DROP INDEX, the
+        // administrator's, or a catalog_access principal's with write access to the catalog.
+        if (IsTempCatalog(path.catalog)) break;
+        if (principal_.catalog_rules) {
+          RequireRuleWrite(path.catalog);
+          break;
+        }
+        Deny(principal_, what + " would also drop " + Describe(entry) +
+                             ", which only an administrator may drop (as DROP INDEX)");
       case dd::CatalogType::TRIGGER_ENTRY: {
         auto table = TriggerTable(entry);
         if (!table) Deny(principal_, what + " would also drop " + Describe(entry) + ", whose table was not found");
@@ -2011,7 +2031,7 @@ class PlanChecker {
   // that something depends on names every dependent, also ones the principal cannot see.
   // This one says that other objects depend on it and names only those the principal sees.
   [[noreturn]] void RefuseDependents(const std::string& verb, const std::string& what,
-                                     const std::vector<dd::CatalogEntry*>& dependents) {
+                                     const std::vector<dd::CatalogEntry*>& dependents, bool cascade = false) {
     std::set<std::string> named;
     for (auto* dependent : dependents) {
       if (!EntryListed(*dependent, PathOf(*dependent))) continue;
@@ -2021,7 +2041,7 @@ class PlanChecker {
     for (const auto& name : named) seen += (seen.empty() ? "" : ", ") + name;
     throw dd::DependencyException("Cannot " + verb + " " + what + ": other objects depend on it" +
                                   (seen.empty() ? std::string() : " (" + seen + ")") + ". Drop them first" +
-                                  (verb == "drop" ? ", or use DROP ... CASCADE" : ""));
+                                  (verb == "drop" && !cascade ? ", or use DROP ... CASCADE" : ""));
   }
 
   // What a DROP (or a CREATE OR REPLACE) takes with what it names, or is blocked by, in any
@@ -2111,20 +2131,23 @@ class PlanChecker {
     for (auto* blocker : blockers) {
       if (!taken(blocker)) blocking.push_back(blocker);
     }
-    if (!blocking.empty()) RefuseDependents(verb, what, blocking);
+    if (!blocking.empty()) RefuseDependents(verb, what, blocking, cascade);
     // What the principal sees first, by name, so that a refusal names the first of them;
     // then what it does not see, which no refusal names.
     std::vector<std::pair<std::string, dd::CatalogEntry*>> seen;
     std::vector<dd::CatalogEntry*> unseen;
     for (auto* entry : order) {
-      const Reason reason = taken_by.at(entry);
-      // Without CASCADE a dependent is taken only when nothing blocks: a trigger or index
-      // that goes with its table, which the drop of the table covers.
-      if (!cascade && reason == Reason::kDependent) continue;
-      if (entry->type == dd::CatalogType::INDEX_ENTRY) continue;
+      // An index or trigger whose own table the statement takes goes with it, which the drop
+      // of the table covers. Anything else taken, also an index or trigger whose table stays
+      // (taken because a macro its expression calls, or a table its body writes, is dropped),
+      // needs the right to drop it.
+      if (entry->type == dd::CatalogType::INDEX_ENTRY) {
+        auto table = IndexTable(*entry);
+        if (table && taken(table.get())) continue;
+      }
       if (entry->type == dd::CatalogType::TRIGGER_ENTRY) {
         auto table = TriggerTable(*entry);
-        if (table && taken(table.get())) continue;  // it goes with its table
+        if (table && taken(table.get())) continue;
       }
       const ObjectPath path = PathOf(*entry);
       if (EntryListed(*entry, path)) {

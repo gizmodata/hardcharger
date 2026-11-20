@@ -110,8 +110,9 @@ also closes gaps there.
   in a dropped schema. A role with `DROP SEQUENCE`, `DROP TYPE` or `DROP TABLE` on one schema could
   drop the administrator's tables in another. Each object a drop takes with it now needs the right
   to drop it, as if it were named (a trigger or index that goes with its own table needs nothing
-  more; a trigger on another table needs `DROP TRIGGER` or owning it), and a sequence `OWNED BY` a
-  dropped table needs it with or without `CASCADE`.
+  more; a trigger on another table needs `DROP TRIGGER` or owning it; an index whose table stays, taken
+  because a macro its expression calls is dropped, needs what `DROP INDEX` needs, the administrator),
+  and a sequence `OWNED BY` a dropped table needs it with or without `CASCADE`.
 - **Refusals named objects the user cannot see.** DuckDB's refusal of a drop that other objects
   depend on ("Cannot drop entry ... because there are entries that depend on it"), with `CASCADE`
   or without, also of `DROP SCHEMA` of a schema that is not empty, of a sequence an `OWNED BY` links
