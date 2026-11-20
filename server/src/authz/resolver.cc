@@ -17,7 +17,6 @@
 #include <duckdb/main/extension_entries.hpp>
 
 #include "authz/duckdb_internal.hpp"
-#include "authz/ducklake_calls.hpp"
 #include "authz/enforcement.hpp"
 #include "authz/policies.hpp"
 
@@ -203,15 +202,17 @@ std::vector<std::shared_ptr<dd::MacroFunction>> SessionObjectResolver::MacroDefi
   std::vector<std::shared_ptr<dd::MacroFunction>> definitions;
   const auto wanted = table ? dd::CatalogType::TABLE_MACRO_ENTRY : dd::CatalogType::MACRO_ENTRY;
   auto status = InTransaction(connection_, [&]() -> arrow::Status {
-    ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context, wanted, name));
+    // FROM f(...) is looked up as a table function, as DuckDB's binder looks it up: that finds what the
+    // call binds to (DuckLake answers that lookup with its own catalog macro first, so its snapshots()
+    // wins over a user's macro stored in the lake under the same name).
+    ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context,
+                                                table ? dd::CatalogType::TABLE_FUNCTION_ENTRY : wanted, name));
+    // DuckDB's and its extensions' own macros (lake.snapshots() and DuckLake's other catalog
+    // macros, which DuckLake generates on lookup, as DuckDB does its defaults) are made internal;
+    // CREATE MACRO never makes one. So what is not internal is a user's macro, wherever it is
+    // stored and whatever its name, and is walked. DuckLake's own are DuckLake calls, which the
+    // gate's ducklake_call decides by the catalog they act on.
     if (!entry || entry->type != wanted || entry->internal) return arrow::Status::OK();
-    // A DuckLake catalog's own macros (lake.snapshots(), lake.set_option(), ...) are DuckLake
-    // calls, which the gate's ducklake_call decides by the catalog they act on. A user's macro
-    // stored in a DuckLake catalog is a macro like any other, and is walked.
-    if (table && compat::Str(entry->ParentCatalog().GetCatalogType()) == "ducklake" &&
-        IsDuckLakeCatalogMethod(FoldIdentifier(compat::Str(entry->name)))) {
-      return arrow::Status::OK();
-    }
     for (const auto& macro : entry->Cast<dd::MacroCatalogEntry>().macros) {
       if (macro) definitions.push_back(std::shared_ptr<dd::MacroFunction>(macro->Copy().release()));
     }

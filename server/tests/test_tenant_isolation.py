@@ -314,7 +314,8 @@ def test_ducklake_prepared_statements(tenant_a):
 def test_ducklake_calls_in_views_and_macros_are_refused(world, tenant_a, request):
     admin = world["server"].admin()
     wrapped = "a view or macro cannot wrap a DuckLake function"
-    unchecked = "it is called where access control cannot check its catalog before it runs"
+    # (A DuckLake call that reaches the plan check without the gate having checked it is refused
+    # there: no SQL reaches that today, so unit/ducklake_plan_check_test.cc tests it.)
     # A view of the token's own would run the call with the access of whoever reads it.
     refused(session=tenant_a, sql=f"CREATE VIEW {A}.main.v_lake AS SELECT * FROM ducklake_snapshots('{A}')",
             why=f"Hardcharger blocked ducklake_snapshots() in a view: {wrapped}")
@@ -441,7 +442,7 @@ def test_tables_named_like_ducklake_functions_are_ordinary_tables(world, tenant_
 def test_ducklake_calls_in_places_the_walk_does_not_read_are_refused(tenant_a):
     """Where a DuckLake call sits in a statement decides nothing: one on a catalog the rules deny is
     refused wherever it is, by the rules when access control reads that place, else by DuckDB,
-    which binds no subquery there, else by the plan check (an administrator's macro, above)."""
+    which binds no subquery there, else by the plan check (unit/ducklake_plan_check_test.cc)."""
     on_b = f"(SELECT count(*) FROM ducklake_snapshots('{B}'))"
     for sql, why in [(f"SET VARIABLE v = {on_b}", READ_B), (f"SELECT {on_b}", READ_B), (f"VALUES ({on_b})", READ_B),
                      (f"SELECT * FROM {A}.main.mine WHERE i IN (SELECT snapshot_id FROM ducklake_snapshots('{B}'))",
@@ -613,3 +614,32 @@ def test_a_macro_stored_in_a_ducklake_catalog_is_walked_before_binding(world, la
     # The twin: what the token may run itself runs through the macro.
     assert session.scalar(sql=f"SELECT * FROM {catalog}.main.run_sql('SELECT 42 AS answer')") == 42
     assert session.scalar(sql=f"SELECT count(*) FROM {catalog}.main.run_sql('SELECT * FROM {A}.main.mine')") >= 100
+
+
+# Review finding 14: the same for a macro stored under a name GizmoSQL gives a DuckLake method that DuckLake
+# itself defines no catalog macro by (list_files, branches, get_option), for a token with read rules on the lake.
+@pytest.mark.parametrize("name", ["list_files", "branches", "get_option", "ordinary"])
+def test_a_lake_macro_named_like_a_ducklake_method_is_walked(world, lake_macros, name):
+    admin = world["server"].admin()
+    admin.execute(sql=f"CREATE OR REPLACE MACRO {A}.main.{name}(s) AS TABLE SELECT * FROM query(s)")
+    inspector = world["server"].as_role(role="user", subject="app_a_inspector",
+                                        catalog_access=[{"catalog": A, "access": "read"}, {"catalog": HOME, "access": "read"},
+                                                        {"catalog": "*", "access": "none"}])
+    try:
+        before = home_seq(world)
+        refused(session=inspector, sql=f"SELECT * FROM {A}.main.{name}('SELECT * FROM range(setval(''{HOME}.main.seq'', 7))')",
+                why=f"write access to catalog '{HOME}'")
+        assert home_seq(world) == before
+        for table in ("secret_b", "no_such_table"):
+            refused(session=inspector, sql=f"SELECT * FROM {A}.main.{name}('SELECT * FROM {B}.main.{table}')",
+                    why=f"read access to catalog '{B}'")
+        # The twins: DuckLake's own catalog macro, and what the token may run itself.
+        assert inspector.query(sql=f"SELECT * FROM {A}.snapshots()").num_rows > 0
+        assert inspector.scalar(sql=f"SELECT * FROM {A}.main.{name}('SELECT 42 AS answer')") == 42
+        # A user macro stored under the name of a macro DuckLake defines: DuckDB binds DuckLake's own,
+        # and so does the check (lake.snapshots() keeps working).
+        admin.execute(sql=f"CREATE OR REPLACE MACRO {A}.main.snapshots(s) AS TABLE SELECT * FROM query(s)")
+        assert inspector.query(sql=f"SELECT * FROM {A}.snapshots()").num_rows > 0
+    finally:
+        admin.execute(sql=f"DROP MACRO TABLE {A}.main.{name}")
+        admin.execute(sql=f"DROP MACRO TABLE IF EXISTS {A}.main.snapshots")
