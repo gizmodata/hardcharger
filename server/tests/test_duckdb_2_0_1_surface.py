@@ -5,7 +5,9 @@
   (allow_extension_repositories = 'hosts'), also spelled as a string; INSTALL x FROM <host>.
   Each is a LOAD statement: the admin guard, access control (MANAGE EXTENSIONS), readonly
   principals and read-only connections refuse every form, as they refused the prefix form.
-  allow_extension_repositories = 'forbidden' in startup SQL refuses it for the administrator too.
+  Hardcharger keeps DuckDB 2.0.0's rule (scripts/patch-duckdb-extension-repositories.cmake): no
+  repository is added, by host or by prefix, the administrator's included, until an administrator
+  sets allow_extension_repositories to 'allowed' (or 'hosts_only'); 'forbidden' refuses it for good.
 - parquet_page_index(path): reads a Parquet file's page index (each page's min and max), like
   parquet_metadata(): a local file read, refused for a non-admin by the admin guard and needing
   READ FILESYSTEM under access control.
@@ -90,6 +92,60 @@ def test_a_read_only_connection_cannot_touch_extension_repositories_or_the_gramm
         reader.close()
 
 
+NOT_YET = "this server adds none until an administrator allows it"
+
+
+def public_key_pem() -> str:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key()
+    return key.public_bytes(encoding=serialization.Encoding.PEM,
+                            format=serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+
+
+def test_no_repository_is_added_until_an_administrator_allows_it(server):
+    admin = server.admin()
+    assert admin.scalar(sql="SELECT current_setting('allow_extension_repositories')") == "hosts"
+    for sql in ["CREATE EXTENSION REPOSITORY hc.example.invalid",
+                "CREATE EXTENSION REPOSITORY 'hc-repo.example.invalid'",
+                "CREATE OR REPLACE EXTENSION REPOSITORY hc.example.invalid"]:
+        problem = admin.error(sql=sql)
+        assert NOT_YET in problem["detail"] and "allow_extension_repositories = 'allowed'" in problem["detail"], \
+            (sql, problem)
+    # The prefix form, as before.
+    problem = admin.error(sql="CREATE EXTENSION REPOSITORY hc_repo WITH PREFIX 'https://hc.example.invalid/repo'")
+    assert NOT_YET in problem["detail"], problem
+    # What was there before is unchanged: DROP, and INSTALL from a repository by name or URL.
+    admin.execute(sql="DROP EXTENSION REPOSITORY IF EXISTS hc.example.invalid")
+    assert admin.rows(sql="SELECT repository_name FROM duckdb_extension_repositories() WHERE repository_name = 'core'")
+
+
+def test_an_administrator_allows_new_repositories(module_launcher, tmp_path):
+    # Repositories are kept under ~/.duckdb/extension_repositories (the setting that moves them is
+    # fixed before the instance opens): a home of its own keeps these out of the real one.
+    home = {"HOME": str(tmp_path)}
+    admin = module_launcher.start(env=home).admin()
+    key = public_key_pem().replace("'", "''")
+    create = f"CREATE EXTENSION REPOSITORY hc_repo WITH PREFIX 'https://hc.example.invalid/repo' USING PUBLIC KEY '{key}'"
+    assert NOT_YET in admin.error(sql=create)["detail"]
+    assert NOT_YET in admin.error(sql="CREATE EXTENSION REPOSITORY hc.example.invalid")["detail"]
+    admin.execute(sql="SET GLOBAL allow_extension_repositories = 'allowed'")
+    admin.execute(sql=create)
+    listed = "SELECT prefix FROM duckdb_extension_repositories() WHERE repository_name = 'hc_repo'"
+    assert admin.scalar(sql=listed) == "https://hc.example.invalid/repo"
+    # The host form now gets past the opt-in, to the host itself (which does not resolve).
+    problem = admin.error(sql="CREATE EXTENSION REPOSITORY hc.example.invalid")
+    assert NOT_YET not in problem["detail"] and "allow_extension_repositories" not in problem["detail"], problem
+    # It cannot be loosened back to the default while the server runs.
+    assert "can only be tightened" in admin.error(sql="SET GLOBAL allow_extension_repositories = 'hosts'")["detail"]
+    # A repository added once stays after a restart, under the default again, and drops as before.
+    again = module_launcher.start(env=home).admin()
+    assert again.scalar(sql="SELECT current_setting('allow_extension_repositories')") == "hosts"
+    assert again.scalar(sql=listed) == "https://hc.example.invalid/repo"
+    again.execute(sql="DROP EXTENSION REPOSITORY hc_repo")
+    assert again.rows(sql=listed) == []
+
+
 def test_startup_sql_can_forbid_extension_repositories(module_launcher):
     locked = module_launcher.start(
         env={"HARDCHARGER_INIT_SQL_COMMANDS": "SET GLOBAL allow_extension_repositories = 'forbidden'"})
@@ -122,6 +178,10 @@ def test_every_extension_repository_form_needs_manage_extensions(rbac):
     expect_allowed(client=admin, sql="GRANT MANAGE EXTENSIONS TO surface_ops")
     try:
         expect_allowed(client=sue, sql="DROP EXTENSION REPOSITORY IF EXISTS hc.example.invalid")
+        # MANAGE EXTENSIONS does not add a repository by itself: the administrator's opt-in comes first.
+        with pytest.raises(ChargewireError) as raised:
+            sue.run(sql="CREATE EXTENSION REPOSITORY hc.example.invalid")
+        assert NOT_YET in raised.value.detail, raised.value.detail
     finally:
         expect_allowed(client=admin, sql="REVOKE MANAGE EXTENSIONS FROM surface_ops")
 

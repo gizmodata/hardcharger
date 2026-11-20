@@ -37,7 +37,8 @@ also closes gaps there.
   `CASCADE` needs the right to drop every table it would take with it;
 - extensions are installed for DuckDB v2.0.1 (`extensions.duckdb.org/v2.0.1`), so ones installed
   for v2.0.0 must be installed again, and `allow_extension_repositories` no longer
-  accepts `'undecided'` (see Changed).
+  accepts `'undecided'`: its default, `'hosts'`, refuses new repositories as `'undecided'` did
+  (see Security), so drop the setting from startup SQL that sets `'undecided'`.
 
 ### Fixed
 
@@ -73,6 +74,16 @@ also closes gaps there.
 
 ### Security
 
+- **No extension repository is added until an administrator allows it, as on DuckDB 2.0.0.** DuckDB
+  2.0.1 lets `CREATE EXTENSION REPOSITORY <host>` add a repository named by its host by default:
+  its `allow_extension_repositories` defaults to `'hosts'`, and `'undecided'`, 2.0.0's default that
+  refused every new repository, is gone. Adding a repository trusts a new signing key, whose
+  extensions then run inside the server, so a role with `MANAGE EXTENSIONS` could have trusted
+  any host's key. Hardcharger keeps 2.0.0's rule: under the default, `CREATE EXTENSION REPOSITORY`
+  is refused in both forms, the administrator's included, with a message that says so, until an
+  administrator runs `SET GLOBAL allow_extension_repositories = 'allowed'` (or `'hosts_only'`,
+  for repositories named by their host only), which cannot be undone while the server runs.
+  Repositories added before stay, and `DROP EXTENSION REPOSITORY` and `INSTALL` are unchanged.
 - **`DROP ... CASCADE` could drop tables the user may not drop.** It drops, with what it names,
   every object DuckDB records as depending on it, in any schema: a table whose column default
   calls a sequence (`DROP SEQUENCE ... CASCADE`), and with DuckDB 2.0.1, which records a table's
@@ -143,12 +154,9 @@ also closes gaps there.
   `parquet_metadata()`); `duckdb_live_query_metrics()`, which shows every connection's counters,
   and `add_grammar_extension()` / `remove_grammar_extension()`, which change the SQL grammar as
   `SET active_grammar_extensions` does, stay the administrator's under access control and are
-  refused in read-only sessions. DuckDB 2.0.1 lets `CREATE EXTENSION REPOSITORY <host>` add a
-  repository named by its host by default (`allow_extension_repositories` is now `'hosts'`;
-  `'undecided'` is gone, replaced by `'hosts'`, `'allowed'`, `'hosts_only'` and `'forbidden'`).
-  Every form of it, and `INSTALL ... FROM <host>`, takes the administrator or `MANAGE EXTENSIONS`,
-  as `CREATE EXTENSION REPOSITORY ... WITH PREFIX` did; to refuse it to everyone, put
-  `SET GLOBAL allow_extension_repositories = 'forbidden'` in the startup SQL.
+  refused in read-only sessions. Every form of `CREATE EXTENSION REPOSITORY`, and
+  `INSTALL ... FROM <host>`, takes the administrator or `MANAGE EXTENSIONS`, as before (see
+  Security for when a repository may be added at all).
 - **`delta_*()` and `iceberg_*()` need the storage privileges everywhere.** They read the files their
   table's log or manifest names, wherever those are, with a storage client of their own, so a
   location grant never bounded what they could read; see Upgrading. (A user's own table macro named
