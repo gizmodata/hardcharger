@@ -24,7 +24,6 @@ WRITE = ["ducklake_merge_adjacent_files", "ducklake_expire_snapshots", "ducklake
          "ducklake_delete_orphaned_files", "ducklake_flush_inlined_data", "ducklake_rewrite_data_files",
          "ducklake_set_option", "ducklake_set_commit_message"]
 WRAPPED = "a view or macro cannot wrap a DuckLake function"
-UNCHECKED = "it is called where access control cannot check its catalog before it runs"
 
 
 def needs(function: str, privilege: str, catalog: str, user: str) -> str:
@@ -212,8 +211,12 @@ def test_views_and_macros_over_ducklake_calls_are_refused(world):
     # ... and the administrator's view and macros over it do not.
     expect_blocked(client=rita, sql="SELECT * FROM lake_a.main.admin_view",
                    why=f"Hardcharger blocked ducklake_snapshots() in a view: {WRAPPED}")
-    expect_blocked(client=rita, sql="SELECT * FROM lake_a.main.admin_macro()", why=UNCHECKED)
-    expect_blocked(client=rita, sql="SELECT lake_a.main.admin_count()", why=UNCHECKED)
+    # (A macro's body is walked before binding wherever it is stored, a DuckLake catalog included: the
+    # call in it is refused there as wrapped, before DuckDB binds it.)
+    expect_blocked(client=rita, sql="SELECT * FROM lake_a.main.admin_macro()",
+                   why=f"Hardcharger blocked ducklake_snapshots() in a macro: {WRAPPED}")
+    expect_blocked(client=rita, sql="SELECT lake_a.main.admin_count()",
+                   why=f"Hardcharger blocked ducklake_snapshots() in a macro: {WRAPPED}")
     # SET VARIABLE's query is read by the gate: its DuckLake call is held to the rule (lake_b refused before binding),
     # and SET VARIABLE itself is not available to a store user under access control.
     expect_blocked(client=rita, sql="SET VARIABLE n = (SELECT count(*) FROM ducklake_snapshots('lake_b'))",
@@ -227,9 +230,7 @@ def test_views_and_macros_over_ducklake_calls_are_refused(world):
     expect_allowed(client=admin, sql="CREATE OR REPLACE MACRO lake_a.main.admin_merge() AS TABLE "
                                      "SELECT * FROM ducklake_merge_adjacent_files('lake_a')")
     expect_blocked(client=world["max"], sql="SELECT * FROM lake_a.main.admin_merge()",
-                   why="Hardcharger blocked DuckLake's rewrite of files of catalog lake_a: it runs only for a "
-                       "ducklake_merge_adjacent_files(), ducklake_rewrite_data_files() or ducklake_flush_inlined_data() "
-                       "call that the statement makes itself")
+                   why=f"Hardcharger blocked ducklake_merge_adjacent_files() in a macro: {WRAPPED}")
     assert files_of(admin=admin, lake="lake_a", table="wrapped") == 4
     for sql in ["DROP MACRO TABLE lake_a.main.admin_merge", "DROP MACRO TABLE lake_a.main.admin_macro",
                 "DROP MACRO lake_a.main.admin_count", "DROP VIEW lake_a.main.admin_view", "DROP TABLE lake_a.main.wrapped"]:
