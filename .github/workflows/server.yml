@@ -1986,12 +1986,31 @@ jobs:
           ADBC_RUN: ${{ steps.dispatch.outputs.adbc }}
           HOMEBREW_RUN: ${{ steps.dispatch.outputs.homebrew }}
         run: |
+          # The run's own conclusion decides, never gh's exit status: a run dispatched seconds
+          # ago can answer 404 until the API has it (2.13.3's gate failed on that while the
+          # Homebrew run went on to succeed), and a watch can drop on any API error.
+          wait_for() {
+            local id="$1" what="$2" url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$1" conclusion="" found=""
+            for _ in $(seq 1 24); do
+              if gh run view "$id" --json status > /dev/null 2>&1; then found=1; break; fi
+              sleep 5
+            done
+            [ -n "$found" ] || { echo "::error::the $what run never appeared: $url"; return 1; }
+            for _ in $(seq 1 10); do
+              gh run watch "$id" --interval 30 > /dev/null 2>&1 || true
+              conclusion=$(gh run view "$id" --json status,conclusion --jq 'select(.status == "completed") | .conclusion' 2> /dev/null || true)
+              [ -z "$conclusion" ] || break
+              sleep 15
+            done
+            [ "$conclusion" = success ] || { echo "::error::the $what run did not succeed (${conclusion:-not finished}): $url"; return 1; }
+            echo "$what: $conclusion ($url)"
+          }
           failed=0
           if [ -n "$HOMEBREW_RUN" ]; then
-            gh run watch "$HOMEBREW_RUN" --exit-status --interval 30 > /dev/null || { echo "::error::the Homebrew run failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$HOMEBREW_RUN"; failed=1; }
+            wait_for "$HOMEBREW_RUN" Homebrew || failed=1
           fi
-          gh run watch "$PYTHON_RUN" --exit-status --interval 30 > /dev/null || { echo "::error::the Python package run failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$PYTHON_RUN"; failed=1; }
-          gh run watch "$ADBC_RUN" --exit-status --interval 30 > /dev/null || { echo "::error::the ADBC images run failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$ADBC_RUN"; failed=1; }
+          wait_for "$PYTHON_RUN" "Python package" || failed=1
+          wait_for "$ADBC_RUN" "ADBC images" || failed=1
           exit "$failed"
       - name: Confirm PyPI, the registries and the Homebrew tap have them
         env:
