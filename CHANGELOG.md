@@ -22,6 +22,10 @@ also closes gaps there.
   (`GRANT ALL ON CATALOG` includes both);
 - a view or macro that wraps a DuckLake function is refused for everyone but an administrator
   without `catalog_access` rules; call the function directly;
+- `CHECKPOINT` of a DuckLake catalog runs DuckLake's maintenance on it (compaction, expiring
+  snapshots, removing old files), so it needs what that maintenance needs: write access for a token
+  with `catalog_access` rules, and `MAINTAIN ON CATALOG` beside the `CHECKPOINT` privilege for a
+  store user. Checkpoints of other databases are unchanged;
 - `delta_*()` and `iceberg_*()` need `READ FILESYSTEM`, `READ OBJECT STORAGE` and `READ HTTP`
   everywhere, not a location grant;
 - `setval()` and `nextval()` are checked wherever DuckDB evaluates them, including while it binds a
@@ -41,10 +45,12 @@ also closes gaps there.
   `ducklake_flush_inlined_data`, `ducklake_set_option`, `ducklake_set_commit_message`) needs write
   access. In DuckLake builds with branches, `ducklake_branches`, `ducklake_current_branch` and
   `ducklake_branch_table` need read access, and the other branch functions need write access.
-- **Store users can compact and flush DuckLake tables.** With `MAINTAIN ON CATALOG`,
-  `ducklake_merge_adjacent_files`, `ducklake_rewrite_data_files` and `ducklake_flush_inlined_data`
-  now run when there is work to do (they were refused as extension operators), and a DuckLake
-  catalog's own functions (`lake.snapshots()`) can be called. The `EXECUTE` hint for
+- **Store users can compact and flush DuckLake tables.** With `MAINTAIN ON CATALOG` (and `EXECUTE`
+  on the function), `ducklake_merge_adjacent_files`, `ducklake_rewrite_data_files` and
+  `ducklake_flush_inlined_data` now run when there is work to do (they were refused as extension
+  operators). `MAINTAIN` is enough: the rows DuckLake reads to rewrite a table are not handed back, so
+  a maintenance role needs no `SELECT` and still can't read the tables. A DuckLake catalog's own
+  functions (`lake.snapshots()`) can be called. The `EXECUTE` hint for
   `lake.snapshots()` names `ducklake_snapshots`, the function that runs.
 - A non-administrator's `CREATE MACRO IF NOT EXISTS sniff_csv(x) AS ...` was refused as a read of
   `sniff_csv()`: a macro's own name is not a call (GizmoSQL 1.42.3).
@@ -55,6 +61,10 @@ also closes gaps there.
 
 - **A store user's `EXECUTE` on a DuckLake function no longer reaches every catalog.** It reached
   every DuckLake catalog on the server, including ones the user held no grant on; see Upgrading.
+- **`CHECKPOINT` of a DuckLake catalog follows the DuckLake maintenance rules.** An administrator's
+  token with `catalog_access` rules could checkpoint a DuckLake catalog its rules deny or allow only
+  to read, which compacted it, wrote a snapshot into it and, with `expire_older_than` set, expired its
+  snapshots; so could a store user holding only the `CHECKPOINT` privilege; see Upgrading.
 - **Compacting a DuckLake table with row or masking policies is refused** for everyone but an
   administrator without rules. For an administrator's token with `catalog_access` rules on a server
   with an access-control store, DuckLake read the table through the policy and failed to commit,
@@ -62,7 +72,8 @@ also closes gaps there.
   would have kept only the rows the policy shows.
 - For tokens with `catalog_access` rules, a DuckLake function must name its catalog as a string
   literal, may not be wrapped in a view or macro, and is refused where the server can't check it
-  before it runs. `ducklake_add_data_files`, `ducklake_scan` and `ducklake_commit` stay the
+  before it runs. Tables, views and columns named like DuckLake's functions (`settings`, `options`,
+  `snapshots`, `ducklake_*`) are ordinary names: `INSERT INTO s.settings(k, v) ...` works as before. `ducklake_add_data_files`, `ducklake_scan` and `ducklake_commit` stay the
   administrator's, and a `ducklake_*` function the server doesn't know is refused. A `readonly`
   token can't change a DuckLake catalog through these functions, whatever its rules (before, a
   `SELECT` from `ducklake_expire_snapshots(...)` or `ducklake_set_option(...)` did).
