@@ -63,7 +63,8 @@ def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
     and a caller that waited longer than the store timeout gave up although the store had
     answered everyone ahead of it. With a 1 s store timeout (longer in sanitizer builds) none
     may fail, the server may not report the store down, and each table's owner (who alone may
-    grant on it) is right."""
+    grant on it) is right, unless a store statement itself took the whole timeout (then the
+    attempt is taken again: DDL_ATTEMPTS)."""
     stalls: list[str] = []
     for _ in range(DDL_ATTEMPTS):
         failures, server = concurrent_ddl(launcher=launcher, store=store)
@@ -128,21 +129,27 @@ def concurrent_ddl(launcher, store) -> tuple[list[str], RbacServer]:
         thread.start()
     for thread in threads:
         thread.join()
-    log = server.log()
-    if "does not answer" in log:
+    if not failures:
+        # Owners as the store recorded them: dbt{c} may grant on its table, the next user may
+        # not. A store timeout here is a failure of the attempt like any other.
+        for c in range(DDL_CLIENTS):
+            table = f"model_{c}_{DDL_ROUNDS - 1}__dbt_tmp"
+            grant = f"GRANT SELECT ON TABLE {table} TO builder"
+            try:
+                expect_allowed(client=sessions[c], sql=grant)
+                expect_blocked(client=sessions[(c + 1) % DDL_CLIENTS], sql=grant, why="may not grant")
+            except (AssertionError, pytest.fail.Exception) as error:
+                if "timed out after" not in str(error):
+                    raise
+                failures.append(f"owner check of {table}: {error}")
+    if "does not answer" in server.log():
         failures.append("the server reported the store down: the access control store does not answer "
                         "(timed out after the store timeout)")
-    if failures:
-        return failures, server
-    # Owners as the store recorded them: dbt{c} may grant on its table, the next user may not.
-    for c in range(DDL_CLIENTS):
-        table = f"model_{c}_{DDL_ROUNDS - 1}__dbt_tmp"
-        expect_allowed(client=sessions[c], sql=f"GRANT SELECT ON TABLE {table} TO builder")
-        other = sessions[(c + 1) % DDL_CLIENTS]
-        expect_blocked(client=other, sql=f"GRANT SELECT ON TABLE {table} TO builder", why="may not grant")
-    print(f"\nconcurrent DDL: {DDL_CLIENTS} sessions x {DDL_ROUNDS} rounds, slowest statement {slowest[0]:.2f} s")
     for session in sessions:
         session.close()
+    if failures:
+        return failures, server
+    print(f"\nconcurrent DDL: {DDL_CLIENTS} sessions x {DDL_ROUNDS} rounds, slowest statement {slowest[0]:.2f} s")
     return [], server
 
 
