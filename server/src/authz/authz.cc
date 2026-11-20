@@ -19,7 +19,10 @@
 #include <duckdb/main/client_context.hpp>
 #include <duckdb/main/config.hpp>
 #include <duckdb/main/database_manager.hpp>
+#include <duckdb/parser/parsed_data/create_type_info.hpp>
+#include <duckdb/parser/statement/create_statement.hpp>
 #include <duckdb/parser/statement/execute_statement.hpp>
+#include <duckdb/parser/statement/explain_statement.hpp>
 #include <duckdb/parser/statement/prepare_statement.hpp>
 
 #include "audit.hpp"
@@ -47,6 +50,28 @@ struct ParsedCommand {
 };
 
 namespace {
+
+// Does the statement as written (or as PREPARE or EXPLAIN wraps it) create a type named like
+// the temporary enum DuckDB makes for a PIVOT without an IN list? (Not one of the statements
+// DuckDB makes of a PIVOT: those come inside its MULTI_STATEMENT.)
+bool WritesPivotEnumName(dd::SQLStatement& statement) {
+  dd::SQLStatement* current = &statement;
+  for (int depth = 0; current && depth < 8; ++depth) {
+    if (current->type == dd::StatementType::PREPARE_STATEMENT) {
+      current = current->Cast<dd::PrepareStatement>().statement.get();
+    } else if (current->type == dd::StatementType::EXPLAIN_STATEMENT) {
+      current = current->Cast<dd::ExplainStatement>().stmt.get();
+    } else {
+      break;
+    }
+  }
+  if (!current || current->type != dd::StatementType::CREATE_STATEMENT) return false;
+  auto& create = current->Cast<dd::CreateStatement>();
+  if (!create.info || create.info->type != dd::CatalogType::TYPE_ENTRY) return false;
+  std::string name = create.info->Cast<dd::CreateTypeInfo>().GetTypeName().GetIdentifierName();
+  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+  return name.starts_with("__pivot_enum_");
+}
 
 int64_t NowSeconds() {
   return std::chrono::duration_cast<std::chrono::seconds>(
@@ -1097,6 +1122,14 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
       throw Error(ErrorCode::kSqlError,
                   "Hardcharger access control: access-control statements run on their own, "
                   "not in a batch with other statements");
+    }
+    // PIVOT without an IN list makes DuckDB create a temporary enum named __pivot_enum_<id>
+    // (one statement of the several it makes of the PIVOT), which the plan check lets a user
+    // create. A statement the user writes may not take that name.
+    if (WritesPivotEnumName(statement)) {
+      throw Error(ErrorCode::kPermissionDenied,
+                  "Hardcharger blocked this statement: type names starting with __pivot_enum_ are DuckDB's own, for "
+                  "PIVOT", "42501");
     }
     // EXECUTE name runs what PREPARE name checked.
     if (!principal.superuser && statement.type == dd::StatementType::EXECUTE_STATEMENT) {

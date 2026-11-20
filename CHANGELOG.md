@@ -60,6 +60,18 @@ also closes gaps there.
 
 ### Security
 
+- **A user could read tables it held no grant on through a table function's argument.** A subquery
+  handed to a table function that takes its input as rows (`SELECT * FROM unnest((SELECT list(v) FROM
+  t))`, `range((SELECT count(*) FROM t))`, `generate_series(1, (SELECT max(n) FROM t))`, also with
+  `CALL`) was not checked, so a user under access control read a table it held no privilege on, and
+  `range((SELECT setval('s', 9)))` moved a sequence without the privilege (row and masking policies
+  still applied). Every operator's input is now checked as any query's. Also in 2.13.3 and earlier.
+- **A user could read any column through a temporary type named like PIVOT's.** DuckDB makes a
+  temporary enum named `__pivot_enum_...` for a `PIVOT` without an `IN` list, and access control let a
+  type of that name through without checking its query, so `CREATE TEMP TYPE __pivot_enum_x AS ENUM
+  (SELECT v FROM t)` read a column of a table the user held no grant on. A statement may no longer
+  create a type of that name, and PIVOT's own enum is checked as the user's own `SELECT`: a `PIVOT`
+  of a table the user may read works as before. Also in 2.13.3 and earlier.
 - **A store user's `EXECUTE` on a DuckLake function no longer reaches every catalog.** It reached
   every DuckLake catalog on the server, including ones the user held no grant on; see Upgrading.
 - **`CHECKPOINT` of a DuckLake catalog follows the DuckLake maintenance rules.** An administrator's

@@ -430,9 +430,13 @@ class PlanChecker {
     CheckSettingReads(op);
     switch (op.type) {
       // ---- reads ----------------------------------------------------------
+      // A table function's input (range((SELECT ...)), unnest((SELECT list(v) FROM t))) is
+      // planned as its child: what it reads, and the sequences it moves, are checked as any
+      // query's.
       case OpType::LOGICAL_GET:
         VisitGet(op.Cast<dd::LogicalGet>(), dml_target);
-        break;
+        VisitChildren(op, nullptr);
+        return;
 
       // ---- writes ---------------------------------------------------------
       case OpType::LOGICAL_INSERT: {
@@ -515,15 +519,17 @@ class PlanChecker {
       case OpType::LOGICAL_CREATE_VIEW: {
         auto& create = op.Cast<dd::LogicalCreate>();
         const size_t before = ownership_.size();
-        if (!CheckCreate(*create.info, ObjectType::kView, Privilege::kCreateView)) return;
-        if (ownership_.size() > before)
-          ownership_.back().definition_hash = DefinitionHashOf(*create.info);
-        CheckViewQuery(create);
+        if (CheckCreate(*create.info, ObjectType::kView, Privilege::kCreateView)) {
+          if (ownership_.size() > before) ownership_.back().definition_hash = DefinitionHashOf(*create.info);
+          CheckViewQuery(create);  // the view's query, bound on its own
+        }
+        VisitChildren(op, nullptr);
         return;
       }
       case OpType::LOGICAL_CREATE_SCHEMA: {
         auto& create = op.Cast<dd::LogicalCreate>();
         CheckCreate(*create.info, ObjectType::kSchema, Privilege::kCreateSchema);
+        VisitChildren(op, nullptr);
         return;
       }
       case OpType::LOGICAL_CREATE_INDEX: {
@@ -536,28 +542,36 @@ class PlanChecker {
       }
       case OpType::LOGICAL_CREATE_SEQUENCE: {
         auto& create = op.Cast<dd::LogicalCreate>();
-        if (principal_.catalog_rules) return RequireRuleWrite(CatalogOf(*create.info, create.info->temporary));
-        if (create.info->temporary) return;  // session-local
-        CheckCreateSequence(*create.info);
+        if (principal_.catalog_rules) {
+          RequireRuleWrite(CatalogOf(*create.info, create.info->temporary));
+        } else if (!create.info->temporary) {  // a temporary one is session-local
+          CheckCreateSequence(*create.info);
+        }
+        VisitChildren(op, nullptr);
         return;
       }
       // CREATE MACRO in a schema: the CREATE MACRO privilege (macros.hpp).
       case OpType::LOGICAL_CREATE_MACRO:
         CheckCreateMacro(*op.Cast<dd::LogicalCreate>().info);
+        VisitChildren(op, nullptr);
         return;
       // CREATE TYPE in a schema: the CREATE TYPE privilege (and TypeNameRefusal).
       case OpType::LOGICAL_CREATE_TYPE:
         CheckCreateType(op);
+        VisitChildren(op, nullptr);  // CREATE TYPE ... AS ENUM (SELECT ...) reads its query
         return;
       // CREATE TRIGGER on a table the user owns: the CREATE TRIGGER privilege (triggers.hpp).
       case OpType::LOGICAL_CREATE_TRIGGER:
         CheckCreateTrigger(op.Cast<dd::LogicalCreate>());
+        VisitChildren(op, nullptr);
         return;
       case OpType::LOGICAL_DROP:
         CheckDrop(op);
+        VisitChildren(op, nullptr);
         return;
       case OpType::LOGICAL_ALTER:
         CheckAlter(op);
+        VisitChildren(op, nullptr);
         return;
 
       // ---- session statements --------------------------------------------
@@ -603,6 +617,7 @@ class PlanChecker {
             ChangesWholeServer(context_, reset.name, reset.scope)) {
           RequireSystem(SystemPrivilege::kManageConfig, "RESET GLOBAL");
         }
+        VisitChildren(op, nullptr);
         return;
       }
 
@@ -622,15 +637,18 @@ class PlanChecker {
         }
         Deny(principal_, "extension operators are not available under access control");
       case OpType::LOGICAL_TRANSACTION:
+        VisitChildren(op, nullptr);
         return;
 
       // ---- system privileges ---------------------------------------------
       case OpType::LOGICAL_ATTACH:
       case OpType::LOGICAL_DETACH:
         RequireSystem(SystemPrivilege::kManageCatalogs, "ATTACH and DETACH");
+        VisitChildren(op, nullptr);
         return;
       case OpType::LOGICAL_LOAD:
         RequireSystem(SystemPrivilege::kManageExtensions, "INSTALL and LOAD");
+        VisitChildren(op, nullptr);
         return;
       // ANALYZE and VACUUM of one table: MAINTAIN on it (its owner holds it). Of every
       // table at once: the administrator's (it would touch tables the user can't see).
@@ -652,9 +670,11 @@ class PlanChecker {
       // FORCE INSTALL of every installed extension that has a newer build.
       case OpType::LOGICAL_UPDATE_EXTENSIONS:
         RequireSystem(SystemPrivilege::kManageExtensions, "UPDATE EXTENSIONS");
+        VisitChildren(op, nullptr);
         return;
       case OpType::LOGICAL_CREATE_SECRET:
         RequireSystem(SystemPrivilege::kManageSecrets, "CREATE SECRET");
+        VisitChildren(op, nullptr);
         return;
       case OpType::LOGICAL_COPY_TO_FILE: {
         const auto& copy = op.Cast<dd::LogicalCopyToFile>();
@@ -1479,7 +1499,10 @@ class PlanChecker {
     auto& info = *create.info;
     const auto parts = PartsOf(info);
     if (info.temporary || (!parts.empty() && IsTempCatalog(parts[0]))) {
-      // PIVOT without an IN list creates its own temporary enum, which reads nothing.
+      // PIVOT without an IN list creates its own temporary enum of the ON column's values:
+      // not refused as a temporary type (its name shadows nothing), but its query is checked
+      // as the user's own SELECT (by the caller, which visits this operator's children). A
+      // statement the user writes cannot use that name (CheckBeforeBind).
       if (!parts.empty() && parts.back().rfind("__pivot_enum_", 0) == 0) return;
       Deny(principal_,
            "creating temporary types needs an administrator: a session's type is found before every other type, "
@@ -1503,7 +1526,6 @@ class PlanChecker {
     } else if (auto refusal = TypeNameRefusal(context_, snapshot_, type, "create")) {
       Deny(principal_, *refusal);
     }
-    VisitChildren(op, nullptr);  // CREATE TYPE ... AS ENUM (SELECT ...) reads its query
   }
 
   // CREATE [OR REPLACE] TRIGGER by a user other than the administrator: the trigger's
