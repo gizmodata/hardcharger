@@ -1,7 +1,10 @@
-"""Port of GizmoSQL 1.x tests/integration/test_admin_command_guard.cpp (42 cases).
+"""Port of GizmoSQL 1.x tests/integration/test_admin_command_guard.cpp (42 cases at v1.42.0, 67 at
+b820719d / v1.42.3: see the 1.42.3 section at the end).
 
-36 cases unit-test the classifier: they are C++ unit tests against a real DuckDB
-connection (server/unit/guards_test.cc, the 1.x bodies verbatim), run here. 1.x
+1.42.0's 36 classifier cases are C++ unit tests against a real DuckDB connection
+(server/unit/guards_test.cc, the 1.x bodies verbatim), run here; 1.42.3 replaced three of them
+(CopyRemoteIsAllowed, ReadFunctionsRemoteAreAllowed, RemoteReplacementScanIsAllowed) with
+network-URL cases, which run against a server below, and the three stay as tests of this guard. 1.x
 classified from DuckDB's parse tree; Hardcharger classifies from DuckDB's tokens and
 statement types through the v2 C API, failing closed where a path is not a literal
 remote URL. The 6 server cases run below, with non-admin principals from tokens in the

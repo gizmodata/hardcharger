@@ -34,8 +34,8 @@ rows = [
  ("integration/test_max_metadata_size.cpp", 4, 4, 0, 0, 0, "test_max_metadata_size.py", "431 headers_too_large"),
  ("integration/test_tpch_benchmark.cpp", 2, 2, 0, 0, 0, "test_tpch_benchmark.py", "checked against tpch_answers()"),
  # SQL surface
- ("integration/test_admin_command_guard.cpp", 42, 42, 0, 0, 0, "test_admin_command_guard.py", "36 as C++ unit tests"),
- ("integration/test_sensitive_path_guard.cpp", 10, 10, 0, 0, 0, "test_sensitive_path_guard.py", "glob() refuses instead of hiding"),
+ ("integration/test_admin_command_guard.cpp", 67, 60, 0, 0, 7, "test_admin_command_guard.py", "33 of 1.42.0's 36 classifier cases as C++ unit tests (1.42.3 replaced the other 3 with the network-URL cases); 1.42.3's 3 server cases, 5 rewritten and 13 new classifier cases as statements against a server, for a token without rules and a catalog_access token (stricter by design where noted: object storage, query(), macros); not yet: the 7 ducklake_*() classification cases, which v2.13.4's DuckLake catalog-access change ports"),
+ ("integration/test_sensitive_path_guard.cpp", 15, 15, 0, 0, 0, "test_sensitive_path_guard.py", "glob() refuses instead of hiding; 1.42.3's RemotePathScopeTest: 3 C++ unit tests, 2 server cases in test_tenant_isolation.py"),
  ("integration/test_allow_unsigned_extensions.cpp", 2, 2, 0, 0, 0, "test_allow_unsigned_extensions.py", ""),
  ("integration/test_storage_version.cpp", 3, 3, 0, 0, 0, "test_storage_version.py", "+1 (a new ATTACH file)"),
  ("integration/test_set_query_log_level.cpp", 2, 2, 0, 0, 0, "test_set_query_log_level.py", ""),
@@ -50,7 +50,7 @@ rows = [
  ("integration/test_statement_queue.cpp", 8, 8, 0, 0, 0, "test_statement_queue.py", "+1"),
  ("integration/test_admission_queue_telemetry.cpp", 2, 0, 0, 2, 0, "", "N/A: no OTLP export (decision pending); hardcharger_queue_depth on /metrics"),
  # Catalog access and system catalog
- ("integration/test_catalog_access.cpp", 42, 42, 0, 0, 0, "test_catalog_access.py", "enforced by access control's plan check (rules only, no store); 7 SQL forms as one parametrized case"),
+ ("integration/test_catalog_access.cpp", 52, 49, 0, 0, 3, "test_catalog_access.py", "enforced by access control's plan check (rules only, no store); 7 SQL forms as one parametrized case; 1.42.3's object-storage cases (RemotePathScopeFixture) on real DuckLake catalogs in test_tenant_isolation.py; not yet: the 3 ducklake_*() cases (DuckLakeFunctionsRespectCatalogAccess, ViewCannotWrapADuckLakeCall, QualifiedUserFunctionIsNotTreatedAsDuckLake), which v2.13.4's DuckLake catalog-access change ports"),
  ("integration/test_catalog_wildcards.cpp", 12, 12, 0, 0, 0, "test_catalog_wildcards.py", "C++ unit tests; +2"),
  ("integration/test_system_managed_catalog_visibility.cpp", 2, 2, 0, 0, 0, "test_system_managed_catalog_visibility.py", "SQL's catalog functions filtered by access control's plan rewrite"),
  ("integration/test_system_catalog.cpp", 4, 4, 0, 0, 0, "test_system_catalog.py", "+1 (DETACH)"),
@@ -137,7 +137,8 @@ server_cases = t[0] - client
 server_pass = t[1] - client_pass
 doc = f"""# The GizmoSQL 1.x test battery on Hardcharger
 
-Every GizmoSQL 1.x test file (gizmosql `main` at v1.42.0), what became of it here, and
+Every GizmoSQL 1.x test file (gizmosql `main` at b820719d, 2026-11-10: v1.42.3 and the two
+commits after it), what became of it here, and
 the counts. "Failing" cases run as strict expected failures (`xfail(strict=True)`): they
 run every time, and the suite turns red the day one starts to pass, so this page gets
 updated. Nothing is skipped; a missing dependency fails its test.
@@ -167,6 +168,13 @@ updated. Nothing is skipped; a missing dependency fails its test.
     it can't read. It keeps the read-time check through a REVOKE after the view was
     created; `test_rbac_enforcement.py` covers a temporary view over a protected table the
     same way, and `test_rbac_view_creation.py` (23 tests) covers the rule.
+- **GizmoSQL 1.42.3's catalog-isolation fixes** (v1.42.0..b820719d, ported in
+  `test_admin_command_guard.py`, `test_catalog_access.py`, `test_tenant_isolation.py` and
+  `test_sensitive_path_guard.py`): `test_bind_time_checks.py` covers what the port
+  found besides: DuckDB evaluates table-function arguments, PRAGMA parameters, AT clauses and
+  EXECUTE values while it binds, and the bodies of the macros a statement calls, so those are
+  checked before binding (for catalog_access tokens; the store-user case is a strict expected
+  failure until access control decides it).
 - **Security regression suites** (from two security reviews, all pass):
   `test_rules_security.py` — rules-only access control and plain-server non-admin token
   principals hold no system privilege: no file/URL reads (also through `query()`,

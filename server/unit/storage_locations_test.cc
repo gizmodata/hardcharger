@@ -196,3 +196,52 @@ TEST_F(LocalLocationsTest, OverlapIsBySpellingAndBySymlink) {
 }
 
 }  // namespace
+
+// GizmoSQL 1.42.3's RemotePathScopeTest (test_sensitive_path_guard.cpp): which object-storage paths
+// lie under a DuckLake catalog's data path. 1.x compares in its file system (RemotePathScope::
+// PathIsUnder); Hardcharger with the storage locations' comparison (LocationCovers), which its
+// storage check uses for a catalog_access token's DuckLake data paths too (storage_access.hpp).
+namespace {
+bool Under(const std::string& path, const std::string& prefix) {
+  auto location = ParseGrantLocation(prefix);
+  auto parsed = ParseStoragePath(path, {}, true);
+  return location.ok() && parsed.ok() && LocationCovers(location->first, location->second, *parsed, {});
+}
+}  // namespace
+
+TEST(RemotePathScope, PathIsUnderItsPrefixOnASegmentBoundary) {
+  EXPECT_TRUE(Under("s3://b/own/x.parquet", "s3://b/own/"));
+  EXPECT_TRUE(Under("s3://b/own/main/t/x.parquet", "s3://b/own"));
+  EXPECT_TRUE(Under("s3://b/own/*.parquet", "s3://b/own/"));
+  EXPECT_TRUE(Under("s3://b/own", "s3://b/own/"));
+  EXPECT_TRUE(Under("s3://b/own/", "s3://b/own"));
+  // Another catalog, a sibling sharing a name prefix, and the bucket itself.
+  EXPECT_FALSE(Under("s3://b/other/x.parquet", "s3://b/own/"));
+  EXPECT_FALSE(Under("s3://b/own_other/x.parquet", "s3://b/own/"));
+  EXPECT_FALSE(Under("s3://b/ownx", "s3://b/own"));
+  EXPECT_FALSE(Under("s3://b/", "s3://b/own/"));
+  EXPECT_FALSE(Under("s3://b/*/x.parquet", "s3://b/own/"));
+  EXPECT_FALSE(Under("s3://other/own/x.parquet", "s3://b/own/"));
+}
+
+TEST(RemotePathScope, DotDotNeverMatches) {
+  // Stricter than 1.x: a path with '..' is refused outright, wherever it points.
+  EXPECT_FALSE(Under("s3://b/own/../other/x", "s3://b/own/"));
+  EXPECT_FALSE(Under("s3://b/own/..", "s3://b/own/"));
+  EXPECT_FALSE(Under("s3://b/own/a/../../other/x", "s3://b/own/"));
+  EXPECT_NE(Refusal("s3://b/own/../other/x").find("'..'"), std::string::npos);
+  // A name that merely contains dots is fine.
+  EXPECT_TRUE(Under("s3://b/own/a..b/x", "s3://b/own/"));
+}
+
+TEST(RemotePathScope, SchemeIsCaseInsensitiveTheRestIsNot) {
+  EXPECT_TRUE(Under("S3://b/own/x", "s3://b/own/"));
+  // 1.x keeps a bucket's case; Hardcharger folds it (S3 and GCS bucket names are lower case: an
+  // upper-case one names no other bucket).
+  EXPECT_TRUE(Under("s3://B/own/x", "s3://b/own/"));
+  EXPECT_FALSE(Under("s3://b/OWN/x", "s3://b/own/"));
+  // A different scheme is a different location, even for the same bucket.
+  EXPECT_FALSE(Under("gs://b/own/x", "s3://b/own/"));
+  EXPECT_FALSE(Under("", "s3://b/own/"));
+  EXPECT_FALSE(Under("s3://b/own/x", ""));
+}

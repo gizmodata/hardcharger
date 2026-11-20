@@ -1,16 +1,17 @@
 # The GizmoSQL 1.x test battery on Hardcharger
 
-Every GizmoSQL 1.x test file (gizmosql `main` at v1.42.0), what became of it here, and
+Every GizmoSQL 1.x test file (gizmosql `main` at b820719d, 2026-11-10: v1.42.3 and the two
+commits after it), what became of it here, and
 the counts. "Failing" cases run as strict expected failures (`xfail(strict=True)`): they
 run every time, and the suite turns red the day one starts to pass, so this page gets
 updated. Nothing is skipped; a missing dependency fails its test.
 
 ## Totals
 
-- **59 C++ test files, 565 gtest cases:** 525 passing, 3 failing, 37 not applicable, 0 not yet.
-  - by file: 47 ported & passing, 6 passing except their not-applicable cases, 0 partly ported (the rest not yet), 2 ported & partly failing, 4 not applicable, 0 not yet.
-  - server-side cases (all but the 142 that test the client): 423, of which
-    383 pass (91%) and 3 fail.
+- **59 C++ test files, 605 gtest cases:** 555 passing, 3 failing, 37 not applicable, 10 not yet.
+  - by file: 45 ported & passing, 6 passing except their not-applicable cases, 2 partly ported (the rest not yet), 2 ported & partly failing, 4 not applicable, 0 not yet.
+  - server-side cases (all but the 142 that test the client): 463, of which
+    413 pass (89%) and 3 fail.
   - client cases (1.x's `gizmosql_client`, now `hardcharger`, against a real
     hardcharger-server): 142, of which 142 pass.
 - **Scripts and driver suites (12 files, 131 cases or checks):** 81 passing, 0 failing, 22 not applicable, 28 not yet.
@@ -30,6 +31,13 @@ updated. Nothing is skipped; a missing dependency fails its test.
     it can't read. It keeps the read-time check through a REVOKE after the view was
     created; `test_rbac_enforcement.py` covers a temporary view over a protected table the
     same way, and `test_rbac_view_creation.py` (23 tests) covers the rule.
+- **GizmoSQL 1.42.3's catalog-isolation fixes** (v1.42.0..b820719d, ported in
+  `test_admin_command_guard.py`, `test_catalog_access.py`, `test_tenant_isolation.py` and
+  `test_sensitive_path_guard.py`): `test_bind_time_checks.py` covers what the port
+  found besides: DuckDB evaluates table-function arguments, PRAGMA parameters, AT clauses and
+  EXECUTE values while it binds, and the bodies of the macros a statement calls, so those are
+  checked before binding (for catalog_access tokens; the store-user case is a strict expected
+  failure until access control decides it).
 - **Security regression suites** (from two security reviews, all pass):
   `test_rules_security.py` — rules-only access control and plain-server non-admin token
   principals hold no system privilege: no file/URL reads (also through `query()`,
@@ -84,8 +92,8 @@ run the same way against the `hardcharger` client's (`server/client/tests/`, bin
 | `integration/test_session_options_probe.cpp` | 3 | 3 | 0 | 0 | 0 | `test_session_options_probe.py` | ported & passing |
 | `integration/test_max_metadata_size.cpp` | 4 | 4 | 0 | 0 | 0 | `test_max_metadata_size.py` | ported & passing; 431 headers_too_large |
 | `integration/test_tpch_benchmark.cpp` | 2 | 2 | 0 | 0 | 0 | `test_tpch_benchmark.py` | ported & passing; checked against tpch_answers() |
-| `integration/test_admin_command_guard.cpp` | 42 | 42 | 0 | 0 | 0 | `test_admin_command_guard.py` | ported & passing; 36 as C++ unit tests |
-| `integration/test_sensitive_path_guard.cpp` | 10 | 10 | 0 | 0 | 0 | `test_sensitive_path_guard.py` | ported & passing; glob() refuses instead of hiding |
+| `integration/test_admin_command_guard.cpp` | 67 | 60 | 0 | 0 | 7 | `test_admin_command_guard.py` | mixed; 33 of 1.42.0's 36 classifier cases as C++ unit tests (1.42.3 replaced the other 3 with the network-URL cases); 1.42.3's 3 server cases, 5 rewritten and 13 new classifier cases as statements against a server, for a token without rules and a catalog_access token (stricter by design where noted: object storage, query(), macros); not yet: the 7 ducklake_*() classification cases, which v2.13.4's DuckLake catalog-access change ports |
+| `integration/test_sensitive_path_guard.cpp` | 15 | 15 | 0 | 0 | 0 | `test_sensitive_path_guard.py` | ported & passing; glob() refuses instead of hiding; 1.42.3's RemotePathScopeTest: 3 C++ unit tests, 2 server cases in test_tenant_isolation.py |
 | `integration/test_allow_unsigned_extensions.cpp` | 2 | 2 | 0 | 0 | 0 | `test_allow_unsigned_extensions.py` | ported & passing |
 | `integration/test_storage_version.cpp` | 3 | 3 | 0 | 0 | 0 | `test_storage_version.py` | ported & passing; +1 (a new ATTACH file) |
 | `integration/test_set_query_log_level.cpp` | 2 | 2 | 0 | 0 | 0 | `test_set_query_log_level.py` | ported & passing |
@@ -98,7 +106,7 @@ run the same way against the `hardcharger` client's (`server/client/tests/`, bin
 | `integration/test_admission_controller.cpp` | 14 | 14 | 0 | 0 | 0 | `test_admission_controller.py` | ported & passing; C++ unit tests |
 | `integration/test_statement_queue.cpp` | 8 | 8 | 0 | 0 | 0 | `test_statement_queue.py` | ported & passing; +1 |
 | `integration/test_admission_queue_telemetry.cpp` | 2 | 0 | 0 | 2 | 0 | — | not applicable; N/A: no OTLP export (decision pending); hardcharger_queue_depth on /metrics |
-| `integration/test_catalog_access.cpp` | 42 | 42 | 0 | 0 | 0 | `test_catalog_access.py` | ported & passing; enforced by access control's plan check (rules only, no store); 7 SQL forms as one parametrized case |
+| `integration/test_catalog_access.cpp` | 52 | 49 | 0 | 0 | 3 | `test_catalog_access.py` | mixed; enforced by access control's plan check (rules only, no store); 7 SQL forms as one parametrized case; 1.42.3's object-storage cases (RemotePathScopeFixture) on real DuckLake catalogs in test_tenant_isolation.py; not yet: the 3 ducklake_*() cases (DuckLakeFunctionsRespectCatalogAccess, ViewCannotWrapADuckLakeCall, QualifiedUserFunctionIsNotTreatedAsDuckLake), which v2.13.4's DuckLake catalog-access change ports |
 | `integration/test_catalog_wildcards.cpp` | 12 | 12 | 0 | 0 | 0 | `test_catalog_wildcards.py` | ported & passing; C++ unit tests; +2 |
 | `integration/test_system_managed_catalog_visibility.cpp` | 2 | 2 | 0 | 0 | 0 | `test_system_managed_catalog_visibility.py` | ported & passing; SQL's catalog functions filtered by access control's plan rewrite |
 | `integration/test_system_catalog.cpp` | 4 | 4 | 0 | 0 | 0 | `test_system_catalog.py` | ported & passing; +1 (DETACH) |
@@ -114,7 +122,7 @@ run the same way against the `hardcharger` client's (`server/client/tests/`, bin
 | `integration/test_memory_limit.cpp` | 2 | 2 | 0 | 0 | 0 | `test_memory_limit.py` | ported & passing |
 | `integration/test_init_sql_splitting.cpp` | 7 | 7 | 0 | 0 | 0 | `test_init_sql_splitting.py` | ported & passing; splitter cases as C++ unit tests |
 | `integration/test_inline_license_key.cpp` | 10 | 0 | 0 | 10 | 0 | — | not applicable; N/A: Hardcharger has no license (a license flag is an unknown option) |
-| `integration/test_interactive_client.cpp` | 115 | 115 | 0 | 0 | 0 | `test_interactive_client.py` | ported & passing; C++ against the client's classes (client/tests/interactive_client_test.cc); 2 re-expressed: --tls-skip-verify with mTLS is allowed (Chargewire sends the certificate), .show has no edition |
+| `integration/test_interactive_client.cpp` | 115 | 115 | 0 | 0 | 0 | `test_interactive_client.py` | ported & passing; C++ against the client's classes (client/tests/interactive_client_test.cc); 8 re-expressed: --tls-skip-verify with mTLS is allowed (Chargewire sends the certificate), .show has no edition, and the 6 URI cases follow the ADBC driver's URIs (HTTPS unless ?tls=false, only tls as a parameter) |
 | `integration/test_client_cli.cpp` | 18 | 18 | 0 | 0 | 0 | `test_client_cli.py` | ported & passing; the hardcharger binary; +21: the shell at a terminal (pexpect: prompt, history, completion, pager, password prompt, Ctrl-C), Ctrl-C in scripts, TLS, mutual TLS, browser sign-in, session recovery, .once/.read, option errors |
 | `integration/test_client_config.cpp` | 5 | 5 | 0 | 0 | 0 | `test_client_config.py` | ported & passing; HARDCHARGER_* names (C++, client/tests/client_config_test.cc); +2 |
 

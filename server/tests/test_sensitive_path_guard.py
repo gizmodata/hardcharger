@@ -1,4 +1,5 @@
-"""Port of GizmoSQL 1.x tests/integration/test_sensitive_path_guard.cpp (10 cases: 5 unit, 5 server).
+"""Port of GizmoSQL 1.x tests/integration/test_sensitive_path_guard.cpp (15 cases at 1.42.3: 5 unit, 5 server,
+5 RemotePathScopeTest).
 
 block_sensitive_paths (default on, HARDCHARGER_BLOCK_SENSITIVE_PATHS) keeps credential and
 system files out of SQL's reach for every user, admins included; sensitive_paths
@@ -11,6 +12,13 @@ server/src/authz/file_guard.cc), so a path is checked as DuckDB resolved it, how
 statement computed it. A glob that reaches a protected path from above lists its other
 matches only (1.x's "ProtectedEntriesHiddenFromGlob"); one whose fixed part is protected
 is refused. test_sensitive_path_fs_layer.py covers every way SQL reaches a file.
+
+1.42.3's RemotePathScopeTest (which object-storage paths lie under a DuckLake catalog's data path) is
+three C++ unit tests of the storage locations' comparison (server/unit/storage_locations_test.cc,
+RemotePathScope.*), run here; its two others (reads and writes tracked apart, a refusal reported as
+permission denied) are server cases in test_tenant_isolation.py
+(test_read_access_does_not_allow_writing_to_the_catalogs_storage and its refusals, which assert the
+code and the path).
 """
 
 import sys
@@ -201,3 +209,17 @@ def test_brace_literals_in_masking_policies(home_launcher, home_dir, store):
         expect_allowed(client=admin, sql=sql)
     rows = expect_allowed(client=server.user(name="ann"), sql="SELECT ssn, prefs FROM people").to_pylist()
     assert rows == [{"ssn": "***-**-6789", "prefs": '{"masked": true}'}]
+
+
+REMOTE_PATH_SCOPE_CASES = ["PathIsUnderItsPrefixOnASegmentBoundary", "DotDotNeverMatches",
+                           "SchemeIsCaseInsensitiveTheRestIsNot"]
+
+
+@pytest.fixture(scope="module")
+def remote_path_scope_results():
+    return run_unit_tests(gtest_filter="RemotePathScope.*")
+
+
+@pytest.mark.parametrize("case", REMOTE_PATH_SCOPE_CASES)
+def test_remote_path_scope_unit_case(remote_path_scope_results, case):
+    assert remote_path_scope_results[f"RemotePathScope.{case}"] is True
