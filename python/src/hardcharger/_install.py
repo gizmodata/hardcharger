@@ -1001,9 +1001,14 @@ def server_version_of(binary: Path) -> str:
     words = result.stdout.split()
     if result.returncode != 0 or len(words) < 2 or words[0] != "Hardcharger":
         output = (result.stdout + result.stderr).strip()[-500:]
+        hint = ""
+        if "baseline build" in output or result.returncode == 132:
+            # The optimized linux-amd64 build on a CPU it can't run (issue #62), where
+            # /proc/cpuinfo didn't tell (an emulator).
+            hint = f" ({CPU_TARGET_ENV}=baseline installs the build for any x86-64 CPU)"
         raise InstallError(
             f"{binary} --version didn't report a Hardcharger version "
-            f"(exit {result.returncode}): {output}"
+            f"(exit {result.returncode}): {output}{hint}"
         )
     return normalize_version(words[1])
 

@@ -444,3 +444,19 @@ def test_the_baseline_build_is_not_taken_from_the_image(linux_amd64, monkeypatch
     with pytest.raises(expected_exception=InstallError) as error:
         ensure_server(progress=False)
     assert "not tried, it holds the optimized build only" in str(error.value)
+
+
+def test_a_build_refusing_this_cpu_names_the_baseline_setting(tmp_path):
+    binary = tmp_path / "hardcharger-server"
+    binary.write_text(
+        "#!/bin/sh\n"
+        "echo 'hardcharger-server: this build needs an x86-64-v3 CPU (AVX2) ... "
+        "Download the baseline build, which runs on any x86-64 CPU' >&2\n"
+        "exit 1\n"
+    )
+    binary.chmod(0o755)
+    with pytest.raises(expected_exception=InstallError) as error:
+        _install.server_version_of(binary=binary)
+    assert "HARDCHARGER_CPU_TARGET=baseline installs the build for any x86-64 CPU" in str(
+        error.value
+    )

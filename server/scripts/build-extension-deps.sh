@@ -42,7 +42,7 @@ fetch() {  # url sha256 dir: download, verify, unpack into dir
 
 mkdir -p "$DEPS"
 ROARING="$DEPS/roaring-install"
-if [ ! -f "$ROARING/.roaring-$ROARING_VERSION.stamp" ]; then
+if [ ! -f "$ROARING/.roaring-$ROARING_VERSION-nonative.stamp" ]; then
   src=$(mktemp -d)
   fetch "https://github.com/RoaringBitmap/CRoaring/archive/refs/tags/v$ROARING_VERSION.tar.gz" \
     "$ROARING_SHA256" "$src/roaring"
@@ -54,7 +54,7 @@ if [ ! -f "$ROARING/.roaring-$ROARING_VERSION.stamp" ]; then
   cmake --build "$src/build" >/dev/null
   cmake --install "$src/build" >/dev/null
   rm -rf "$src"
-  touch "$ROARING/.roaring-$ROARING_VERSION.stamp"
+  touch "$ROARING/.roaring-$ROARING_VERSION-nonative.stamp"
 fi
 
 LIBPQ="$DEPS/libpq-install"

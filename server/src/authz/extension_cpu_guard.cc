@@ -72,6 +72,15 @@ class RefusingExtensionProvider : public dd::ExternalExtensionProvider {
 
 }  // namespace
 
+bool BaselineCpuLacksV3() {
+#if defined(HARDCHARGER_BASELINE_BUILD) && defined(HARDCHARGER_HAVE_CPU_FEATURES)
+  char missing[256];
+  return hardcharger_cpu_missing(3, missing, sizeof missing) > 0;
+#else
+  return false;
+#endif
+}
+
 bool InstallExtensionCpuGuard(duckdb_v2_instance_handle instance, const std::string& built_in) {
 #if defined(HARDCHARGER_BASELINE_BUILD) && defined(HARDCHARGER_HAVE_CPU_FEATURES)
   char missing[256];
