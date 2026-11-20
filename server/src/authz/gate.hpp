@@ -57,11 +57,26 @@ using TableFunctionCallback =
 // Resolve only actual bind values; never evaluate a SQL expression to discover a path.
 using PathParameterCallback = std::function<std::optional<std::vector<std::string>>(const std::string&)>;
 using StorageCallback = std::function<void(const StorageUse&)>;
+// `ducklake_call`, if set (a catalog_access principal's statements only: authz/ducklake_calls.hpp),
+// is called first for every table function in FROM and every CALL, with the call's name
+// parts, its first positional argument if that is a string literal, what wraps the call
+// ("" when the statement runs it itself, else "the view <name>", "a macro", "a trigger")
+// and an id for the call (the same each time the walk meets it). It says whether the call
+// is a DuckLake call, which it then has decided (it throws to refuse); other calls go on
+// to the rules above.
+struct TableFunctionCall {
+  std::vector<std::string> parts;
+  std::optional<std::string> first_literal;
+  std::string wrapper;
+  const void* id = nullptr;
+};
+using DuckLakeCallCallback = std::function<bool(const TableFunctionCall&)>;
 std::optional<std::string> GatedCategory(
     duckdb::SQLStatement& statement, const std::function<bool(const std::string&)>& permitted,
     const NamedTableCallback& named_table = nullptr,
     const TableFunctionCallback& table_function_allowed = nullptr,
     const StorageCallback& storage = nullptr,
-    const PathParameterCallback& parameters = nullptr);
+    const PathParameterCallback& parameters = nullptr,
+    const DuckLakeCallCallback& ducklake_call = nullptr);
 
 }  // namespace hardcharger::authz

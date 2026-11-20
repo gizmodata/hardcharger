@@ -1,5 +1,7 @@
 #include "authz/authz.hpp"
 #include <charconv>
+#include <iterator>
+#include <set>
 
 #include <arrow/api.h>
 #include <arrow/io/memory.h>
@@ -14,9 +16,12 @@
 #include <duckdb/main/client_context.hpp>
 #include <duckdb/main/config.hpp>
 #include <duckdb/main/database_manager.hpp>
+#include <duckdb/parser/statement/execute_statement.hpp>
+#include <duckdb/parser/statement/prepare_statement.hpp>
 
 #include "audit.hpp"
 #include "authz/ddl.hpp"
+#include "authz/ducklake_calls.hpp"
 #include "authz/enforcement.hpp"
 #include "authz/engine.hpp"
 #include "authz/gate.hpp"
@@ -926,6 +931,64 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
     if (!value || !value->is_string()) return std::nullopt;
     return std::vector<std::string>{std::string(value->as_string())};
   };
+  // A catalog_access principal's DuckLake calls (ducklake_snapshots('lake'),
+  // CALL lake.merge_adjacent_files()): checked here against its rules, before binding runs
+  // them, and remembered for the plan check, which refuses any other DuckLake call
+  // (authz/ducklake_calls.hpp). A store user's are table functions like any other.
+  std::set<std::pair<std::string, std::string>> ducklake_checked;
+  std::set<const void*> ducklake_inspected;  // calls the walk met that read like DuckLake calls
+  DuckLakeCallCallback ducklake_call;
+  if (principal.catalog_rules) {
+    ducklake_call = [&](const TableFunctionCall& call) -> bool {
+      if (LooksLikeDuckLakeCall(call.parts)) ducklake_inspected.insert(call.id);
+      std::string name = call.parts.back();
+      std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+      std::string function;
+      std::optional<std::string> catalog;
+      std::optional<DuckLakeAccess> access = DuckLakeFunctionAccess(name);
+      if (access) {
+        function = name;
+        catalog = call.first_literal;
+      } else if (IsDuckLakeCatalogMethod(name)) {
+        // lake.snapshots(): DuckLake's own macro, if that is what the name finds.
+        catalog = functions.DuckLakeMacroCatalog(QualifiedName{call.parts});
+        if (!catalog) return false;
+        function = "ducklake_" + name;
+        access = DuckLakeFunctionAccess(function);
+      } else {
+        return false;
+      }
+      auto refuse = [](const std::string& message) {
+        throw Error(ErrorCode::kPermissionDenied, message, "42501");
+      };
+      if (!call.wrapper.empty()) refuse(DuckLakeWrappedRefusal(function, call.wrapper));
+      if (*access == DuckLakeAccess::kAdministrator) refuse(DuckLakeAdministratorRefusal(function));
+      if (*access == DuckLakeAccess::kUnknown) refuse(DuckLakeUnknownRefusal(function));
+      if (!catalog) refuse(DuckLakeComputedCatalogRefusal(function));
+      // The catalog as DuckDB finds it (the rules match its own name).
+      std::string lake = *catalog;
+      if (auto resolved = functions.ResolveCatalog(lake); resolved.ok()) lake = *resolved;
+      const auto needed = *access == DuckLakeAccess::kWrite ? CatalogAccessLevel::kWrite : CatalogAccessLevel::kRead;
+      if (!snapshot->CatalogVisible(principal, lake)) {
+        // The server's own catalogs read as missing; any other refusal says why.
+        const bool servers = std::any_of(principal.hidden_catalogs.begin(), principal.hidden_catalogs.end(),
+                                         [&](const std::string& c) { return IdentifiersEqual(c, lake); });
+        if (servers) throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name), "42501");
+        refuse(CatalogAccessDenied(lake, needed, principal.user_name));
+      }
+      if (needed == CatalogAccessLevel::kWrite &&
+          CatalogRuleLevel(*principal.catalog_rules, lake) != CatalogAccessLevel::kWrite) {
+        refuse(CatalogAccessDenied(lake, needed, principal.user_name));
+      }
+      // A readonly principal's session changes nothing, whatever its rules (DuckDB does not
+      // count DuckLake's maintenance in FROM as a change).
+      if (needed == CatalogAccessLevel::kWrite) {
+        if (auto readonly = ReadOnlyRefusal(ContextOf(connection_))) refuse(*readonly);
+      }
+      for (const auto& bound : DuckLakeBoundFunctions(function)) ducklake_checked.insert({bound, FoldIdentifier(lake)});
+      return true;
+    };
+  }
   for (auto& handle : statements) {
     auto& statement = *dd::capiv2::Convert(handle.get());
     // SHOW GRANTS parses as a SELECT and RESET ROLE as a SET: in a batch they would
@@ -935,7 +998,15 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
                   "Hardcharger access control: access-control statements run on their own, "
                   "not in a batch with other statements");
     }
-    if (auto category = GatedCategory(statement, permitted, named_table, table_function_allowed, storage, paths_of_parameter)) {
+    // EXECUTE name runs what PREPARE name checked.
+    if (principal.catalog_rules && statement.type == dd::StatementType::EXECUTE_STATEMENT) {
+      const auto prepared =
+          state->PreparedDuckLakeCalls(FoldIdentifier(statement.Cast<dd::ExecuteStatement>().name.GetIdentifierName()));
+      ducklake_checked.insert(prepared.begin(), prepared.end());
+    }
+    const auto checked_before = ducklake_checked;
+    if (auto category = GatedCategory(statement, permitted, named_table, table_function_allowed, storage,
+                                      paths_of_parameter, ducklake_call)) {
       if (auto privilege = SystemPrivilegeForGatedCategory(*category)) {
         if (principal.rules_administrator) {
           throw Error(ErrorCode::kPermissionDenied,
@@ -957,6 +1028,24 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
                       ": under access control it is available to the administrator only" + hint,
                   "42501");
     }
+    if (principal.catalog_rules && statement.type == dd::StatementType::PREPARE_STATEMENT) {
+      std::set<std::pair<std::string, std::string>> calls;
+      std::set_difference(ducklake_checked.begin(), ducklake_checked.end(), checked_before.begin(),
+                          checked_before.end(), std::inserter(calls, calls.end()));
+      state->SetPreparedDuckLakeCalls(
+          FoldIdentifier(statement.Cast<dd::PrepareStatement>().name.GetIdentifierName()), std::move(calls));
+    }
+  }
+  if (principal.catalog_rules) {
+    // The walk reaches FROM and CALL; SQL can hold a call in places it does not (a SET
+    // VARIABLE's query, ...). A DuckLake call the text names that the walk did not
+    // inspect is refused: its catalog was never checked.
+    std::string first;
+    const int named = CountDuckLakeCallTokens(std::string(sql), &first);
+    if (named > static_cast<int>(ducklake_inspected.size())) {
+      throw Error(ErrorCode::kPermissionDenied, DuckLakeUncheckedRefusal(first), "42501");
+    }
+    state->SetCheckedDuckLakeCalls(std::move(ducklake_checked));
   }
 }
 

@@ -34,6 +34,10 @@ class SessionObjectResolver : public ObjectResolver {
 
   // Does `name` (as a FROM clause names it) find a table macro, as DuckDB would?
   bool IsTableMacro(const QualifiedName& name);
+  // The DuckLake catalog whose own macro `name` (as a FROM clause or CALL names a table
+  // function) finds, as DuckDB would: lake.snapshots(), or snapshots() in a session whose
+  // current catalog is lake. Nullopt when it finds anything else, or nothing.
+  std::optional<std::string> DuckLakeMacroCatalog(const QualifiedName& name);
 
  private:
   duckdb::Connection& connection_;

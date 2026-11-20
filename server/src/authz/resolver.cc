@@ -196,6 +196,21 @@ bool SessionObjectResolver::IsTableMacro(const QualifiedName& name) {
   return status.ok() && found;
 }
 
+std::optional<std::string> SessionObjectResolver::DuckLakeMacroCatalog(const QualifiedName& name) {
+  std::optional<std::string> catalog;
+  // A table function is looked up as one; DuckLake answers with its macro (it loads its
+  // built-in macros only for that lookup).
+  auto status = InTransaction(connection_, [&]() -> arrow::Status {
+    ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context, dd::CatalogType::TABLE_FUNCTION_ENTRY, name));
+    if (entry && entry->type == dd::CatalogType::TABLE_MACRO_ENTRY &&
+        compat::Str(entry->ParentCatalog().GetCatalogType()) == "ducklake") {
+      catalog = compat::Str(entry->ParentCatalog().GetName());
+    }
+    return arrow::Status::OK();
+  });
+  return status.ok() ? catalog : std::nullopt;
+}
+
 arrow::Result<ObjectPath> SessionObjectResolver::ResolveSchema(const QualifiedName& name) {
   ObjectPath resolved;
   bool found = false;

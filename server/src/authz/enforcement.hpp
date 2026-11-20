@@ -17,6 +17,8 @@
 #include <duckdb/main/client_context_state.hpp>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -76,6 +78,28 @@ class RbacSessionState : public duckdb::ClientContextState {
   }
   std::shared_ptr<RbacEngine> engine() const { return engine_.lock(); }
 
+  // The DuckLake calls (function and catalog, folded) that the pre-bind gate checked in the
+  // statement a catalog_access principal is running, as that statement names them itself
+  // (authz/ducklake_calls.hpp). The plan check refuses any other DuckLake call it finds.
+  void SetCheckedDuckLakeCalls(std::set<std::pair<std::string, std::string>> calls) {
+    std::lock_guard<std::mutex> lock(ducklake_mutex_);
+    ducklake_calls_ = std::move(calls);
+  }
+  bool DuckLakeCallChecked(const std::string& function, const std::string& catalog) const {
+    std::lock_guard<std::mutex> lock(ducklake_mutex_);
+    return ducklake_calls_.contains({function, catalog});
+  }
+  // Those of a statement prepared in SQL (PREPARE name AS ...), for its EXECUTE name.
+  void SetPreparedDuckLakeCalls(const std::string& name, std::set<std::pair<std::string, std::string>> calls) {
+    std::lock_guard<std::mutex> lock(ducklake_mutex_);
+    prepared_ducklake_calls_[name] = std::move(calls);
+  }
+  std::set<std::pair<std::string, std::string>> PreparedDuckLakeCalls(const std::string& name) const {
+    std::lock_guard<std::mutex> lock(ducklake_mutex_);
+    auto it = prepared_ducklake_calls_.find(name);
+    return it == prepared_ducklake_calls_.end() ? std::set<std::pair<std::string, std::string>>{} : it->second;
+  }
+
   // Hardcharger's own statements on the session connection (metadata queries for
   // the Flight SQL catalog calls, SET handling, ...) are not checked.
   class BypassScope {
@@ -133,6 +157,9 @@ class RbacSessionState : public duckdb::ClientContextState {
                                                 duckdb::PreparedStatementMode mode, bool& runs_now);
 
   std::weak_ptr<RbacEngine> engine_;
+  mutable std::mutex ducklake_mutex_;
+  std::set<std::pair<std::string, std::string>> ducklake_calls_;
+  std::unordered_map<std::string, std::set<std::pair<std::string, std::string>>> prepared_ducklake_calls_;
   mutable std::mutex principal_mutex_;
   Principal principal_;
   std::atomic<int64_t> persona_version_{0};
@@ -190,6 +217,12 @@ arrow::Status RecordCreatedOwners(RbacEngine& engine, const Principal& principal
 
 // The statement failed: puts back what RecordCreatedOwners replaced (best effort, logged).
 void UndoRecordedOwners(RbacEngine& engine, const std::vector<RecordedOwnership>& undo);
+
+// On a "readonly" principal's session (read_only.cc): the refusal of anything that changes
+// state ("User '<user>' has a readonly session and cannot run statements that modify
+// state."); nullopt on any other session. For writes DuckDB's own analysis does not see
+// (DuckLake's maintenance functions in FROM).
+std::optional<std::string> ReadOnlyRefusal(duckdb::ClientContext& context);
 
 // Install the pre-optimize hook on a database configuration (once, before the
 // database is opened).
