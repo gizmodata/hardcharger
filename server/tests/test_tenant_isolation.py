@@ -399,6 +399,99 @@ def test_settings_is_a_ducklake_call_only_on_a_ducklake_catalog(world, tenant_a_
             why="You do not have write access to catalog 'tenants'")
 
 
+def test_tables_named_like_ducklake_functions_are_ordinary_tables(world, tenant_a, request):
+    """A table, view, column or alias named like a DuckLake function or one of its catalog's macros
+    (settings, options, snapshots, ducklake_*) followed by a column list is no call: as on 2.13.3,
+    a token that may write its catalog creates and fills it (review finding 01). Also a token
+    without rules on this server (no store: it may write every catalog but the server's own)."""
+    no_rules = world["server"].as_role(role=request.node.callspec.params["tenant_a"],
+                                       subject=f"app_no_rules_{request.node.callspec.id}")
+    for session, suffix in ((tenant_a, "r"), (no_rules, "n")):
+        tag = f"{request.node.callspec.id}_{suffix}"
+        statements = [
+            f"CREATE OR REPLACE TABLE {A}.main.settings_{tag} (k VARCHAR, v VARCHAR)",
+            f"CREATE OR REPLACE TABLE {A}.main.settings (k VARCHAR, v VARCHAR)",
+            f"INSERT INTO {A}.main.settings(k, v) VALUES ('a', 'b')",
+            f"CREATE OR REPLACE TABLE {A}.main.ducklake_events_{tag} (id INT)",
+            f"INSERT INTO {A}.main.ducklake_events_{tag}(id) VALUES (1)",
+            f"CREATE OR REPLACE TABLE {A}.main.options (snapshots INT, ducklake_snapshots INT)",
+            f"INSERT INTO {A}.main.options(snapshots, ducklake_snapshots) VALUES (1, 2)",
+            f"CREATE OR REPLACE TABLE {A}.main.snapshots (id INT)",
+            f"INSERT INTO {A}.main.snapshots(id) VALUES (3)",
+            f"UPDATE {A}.main.snapshots SET id = 4 WHERE id = 3",
+            f"CREATE OR REPLACE VIEW {A}.main.ducklake_view_{tag}(a) AS SELECT 1",
+            f"CREATE OR REPLACE TABLE {A}.main.ducklake_copy_{tag}(i) AS SELECT i FROM {A}.main.mine",
+        ]
+        for sql in statements:
+            session.execute(sql=sql)
+        assert session.query(sql=f"SELECT v FROM {A}.main.settings").column(0).to_pylist() == ["b"]
+        assert session.query(sql=f"SELECT ducklake_snapshots FROM {A}.main.options").column(0).to_pylist() == [2]
+        assert session.query(sql=f"SELECT id FROM {A}.main.snapshots").column(0).to_pylist() == [4]
+        assert session.query(sql=f"SELECT count(*) AS n FROM {A}.main.ducklake_copy_{tag}").column(0).to_pylist() == [100]
+        # A CTE's and a table alias's column lists are no calls either.
+        assert session.query(sql="WITH settings(a) AS (SELECT 1) SELECT a FROM settings").column(0).to_pylist() == [1]
+        assert session.query(sql=f"SELECT count(*) AS n FROM {A}.main.mine AS ducklake_m(x) WHERE x < 10"
+                             ).column(0).to_pylist() == [10]
+        for sql in [f"DROP VIEW {A}.main.ducklake_view_{tag}", f"DROP TABLE {A}.main.ducklake_copy_{tag}",
+                    f"DROP TABLE {A}.main.ducklake_events_{tag}", f"DROP TABLE {A}.main.settings_{tag}",
+                    f"DROP TABLE {A}.main.settings", f"DROP TABLE {A}.main.options", f"DROP TABLE {A}.main.snapshots"]:
+            session.execute(sql=sql)
+
+
+def test_ducklake_calls_in_places_the_walk_does_not_read_are_refused(tenant_a):
+    """Where a DuckLake call sits in a statement decides nothing: one on a catalog the rules deny is
+    refused wherever it is, by the rules when access control reads that place, else by DuckDB,
+    which binds no subquery there, else by the plan check (an administrator's macro, above)."""
+    on_b = f"(SELECT count(*) FROM ducklake_snapshots('{B}'))"
+    for sql, why in [(f"SET VARIABLE v = {on_b}", READ_B), (f"SELECT {on_b}", READ_B), (f"VALUES ({on_b})", READ_B),
+                     (f"SELECT * FROM {A}.main.mine WHERE i IN (SELECT snapshot_id FROM ducklake_snapshots('{B}'))",
+                      READ_B),
+                     (f"ALTER TABLE {A}.main.mine ADD COLUMN z BIGINT DEFAULT {on_b}", READ_B),
+                     (f"CREATE TABLE {A}.main.x2 (i BIGINT DEFAULT {on_b})", "DEFAULT value cannot contain subqueries"),
+                     (f"CREATE TABLE {A}.main.x3 (i BIGINT CHECK (i > {on_b}))", "subqueries prohibited in CHECK"),
+                     (f"SELECT * FROM {A}.main.mine AT (VERSION => {on_b})", "AT clause cannot contain subqueries"),
+                     (f"ALTER TABLE {A}.main.mine ALTER i SET DEFAULT {on_b}", "subqueries are not yet supported"),
+                     (f"ALTER TABLE {A}.main.mine ALTER i TYPE BIGINT USING i + {on_b}", "cannot be modified")]:
+        refused(session=tenant_a, sql=sql, why=why)
+    # Their twins on the token's own catalog run.
+    on_a = f"(SELECT count(*) FROM ducklake_snapshots('{A}'))"
+    for sql in [f"SELECT {on_a}", f"VALUES ({on_a})"]:
+        assert tenant_a.query(sql=sql).column(0).to_pylist()[0] > 0
+    assert tenant_a.query(sql=f"SELECT count(*) AS n FROM {A}.main.mine").column("n").to_pylist() == [100]
+
+
+def ruled_admin(world, subject: str, access: str):
+    return world["server"].as_role(role="admin", subject=subject,
+                                   catalog_access=[{"catalog": A, "access": access}, {"catalog": "*", "access": "none"}])
+
+
+def test_checkpoint_of_a_ducklake_catalog_needs_write_access(world, request):
+    """CHECKPOINT of a DuckLake catalog runs all of DuckLake's maintenance on it (compaction,
+    expiring snapshots, cleaning files): an administrator's token with rules needs write access to
+    it, as for those functions (review finding 05). Other catalogs' checkpoints are unchanged."""
+    admin = world["server"].admin()
+    table = f"cp_{secrets.token_hex(nbytes=3)}"
+    fragmented(admin=admin, name=table, deleted=False)
+    reader = ruled_admin(world=world, subject="cp_reader", access="read")
+    writer = ruled_admin(world=world, subject="cp_writer", access="write")
+    for sql in [f"CHECKPOINT {B}", f"FORCE CHECKPOINT {B}", f"CALL checkpoint('{B}')",
+                f"SELECT * FROM force_checkpoint('{B}')"]:
+        refused(session=writer, sql=sql, why=f"You do not have write access to catalog '{B}'")
+    for sql in [f"CHECKPOINT {A}", f"CALL checkpoint('{A}')", f"SELECT * FROM force_checkpoint('{A}')"]:
+        refused(session=reader, sql=sql, why=WRITE_A)
+    # The bare form checkpoints the session's catalog.
+    reader.execute(sql=f"USE {A}")
+    refused(session=reader, sql="CHECKPOINT", why=WRITE_A)
+    assert files_of(admin=admin, name=table) == 4
+    # The twin: a token that may write its catalog checkpoints it, and DuckLake compacts it.
+    writer.execute(sql=f"CHECKPOINT {A}")
+    assert files_of(admin=admin, name=table) == 1
+    assert admin.query(sql=f"SELECT count(*) AS n FROM {A}.main.{table}").column("n").to_pylist() == [4000]
+    # A checkpoint of the server's own database is not DuckLake's: unchanged (the CHECKPOINT privilege).
+    reader.execute(sql="CHECKPOINT tenants")
+    admin.execute(sql=f"DROP TABLE {A}.main.{table}")
+
+
 def test_finding_4_no_outbound_http(tenant_a):
     for sql in ["SELECT * FROM read_csv('https://example.invalid/')", "FROM 'https://example.invalid/x.csv'",
                 "SELECT * FROM read_text('http://127.0.0.1:9/')", "SELECT * FROM read_json('hf://datasets/x/y/z.json')"]:

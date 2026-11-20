@@ -1168,7 +1168,39 @@ the files their table's log or manifest names, wherever they are, with a storage
 own, so whatever path they are handed they need `READ FILESYSTEM`, `READ OBJECT STORAGE` and
 `READ HTTP` everywhere (a location grant can't bound them); grant those to the roles that use them
 when upgrading from 2.13.3, where `EXECUTE` and a location grant were enough. A user's own table
-macro named like them is a macro, and is unaffected. Nested schemas (DuckDB 2.0) are
+macro named like them is a macro, and is unaffected.
+
+DuckLake's functions act on the whole catalog they name, so besides `EXECUTE` on the function a
+user needs a privilege on that catalog, granted `ON CATALOG` (a grant on one of its schemas or
+tables doesn't reach it). To inspect (`ducklake_snapshots`, `ducklake_table_info`,
+`ducklake_list_files`, `ducklake_table_changes`, `ducklake_options`, `ducklake_settings`,
+`lake.snapshots()`, ...):
+
+```sql
+GRANT EXECUTE ON TABLE FUNCTION ducklake_snapshots TO analyst;   -- one GRANT per function used
+GRANT SELECT ON CATALOG lake TO analyst;
+```
+
+To maintain (`ducklake_expire_snapshots`, `ducklake_cleanup_old_files`,
+`ducklake_delete_orphaned_files`, `ducklake_set_option`, `ducklake_set_commit_message`) and to
+compact (`ducklake_merge_adjacent_files`, `ducklake_rewrite_data_files`,
+`ducklake_flush_inlined_data`):
+
+```sql
+GRANT EXECUTE ON TABLE FUNCTION ducklake_merge_adjacent_files TO lake_maintenance;
+GRANT MAINTAIN ON CATALOG lake TO lake_maintenance;   -- no SELECT needed: compaction hands back no rows
+GRANT CHECKPOINT TO lake_maintenance;                 -- for CHECKPOINT lake, which runs all of the above
+```
+
+`ducklake_table_changes` runs `ducklake_table_insertions` and `ducklake_table_deletions`, so it
+needs `EXECUTE` on those two; its rows go through the table's row and masking policies like any
+read. A table with row or masking policies is not compacted. The catalog must be written as a
+string (`ducklake_snapshots('lake')`), and a view or macro that wraps a DuckLake function is refused:
+call it directly. A token with `catalog_access` rules needs no grants: its rules decide, read access
+to inspect and write access to maintain, compact or `CHECKPOINT` a DuckLake catalog.
+`ducklake_add_data_files` stays the administrator's for such tokens.
+
+Nested schemas (DuckDB 2.0) are
 granted by their path: a grant on `sales.payroll` covers `sales.payroll.*` and nothing alike,
 one on `sales` covers its children, and `CREATE SCHEMA ON SCHEMA sales` lets a role nest
 schemas in it.
