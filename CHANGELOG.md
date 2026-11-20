@@ -33,12 +33,17 @@ also closes gaps there.
   the sequence, `DROP SEQUENCE` on its schema for `setval()`), and a `readonly` token's session moves
   no sequence at all;
 - on DuckDB 2.0.1 a table depends on the user types of its columns: `DROP TYPE` of one a table uses
-  is refused (DuckDB's dependency error), and `DROP TYPE`, `DROP SEQUENCE` or `DROP SCHEMA` with
-  `CASCADE` needs the right to drop every table it would take with it;
+  is refused (other objects depend on it), and `DROP TYPE`, `DROP SEQUENCE`, `DROP TABLE` or
+  `DROP SCHEMA` with `CASCADE` needs the right to drop everything it would take with it;
 - extensions are installed for DuckDB v2.0.1 (`extensions.duckdb.org/v2.0.1`), so ones installed
   for v2.0.0 must be installed again, and `allow_extension_repositories` no longer
   accepts `'undecided'`: its default, `'hosts'`, refuses new repositories as `'undecided'` did
-  (see Security), so drop the setting from startup SQL that sets `'undecided'`.
+  (see Security), so drop the setting from startup SQL that sets `'undecided'`. Changing
+  `allow_extension_repositories` takes an administrator without `catalog_access` rules; a role
+  with `MANAGE CONFIG` is refused it;
+- a sequence `OWNED BY` a table now needs the right to be dropped (`DROP SEQUENCE` on its schema)
+  when its table is dropped or replaced, and a drop whose dependents a user cannot see is refused
+  with a message that does not name them.
 
 ### Fixed
 
@@ -84,21 +89,31 @@ also closes gaps there.
   extensions then run inside the server, so a role with `MANAGE EXTENSIONS` could have trusted
   any host's key. Hardcharger keeps 2.0.0's rule: under the default, `CREATE EXTENSION REPOSITORY`
   is refused in both forms, the administrator's included, with a message that says so, until an
-  administrator runs `SET GLOBAL allow_extension_repositories = 'allowed'` (or `'hosts_only'`,
-  for repositories named by their host only), which cannot be undone while the server runs.
-  Repositories added before stay, and `DROP EXTENSION REPOSITORY` and `INSTALL` are unchanged.
+  administrator without `catalog_access` rules runs `SET GLOBAL allow_extension_repositories =
+  'allowed'` (or `'hosts_only'`, for repositories named by their host only), which cannot be undone
+  while the server runs. Setting or resetting it takes that administrator; `MANAGE CONFIG` is not
+  enough. Repositories added before stay, and `DROP EXTENSION REPOSITORY` and `INSTALL` are
+  unchanged.
 - **`DROP ... CASCADE` could drop tables the user may not drop.** It drops, with what it names,
-  every object DuckDB records as depending on it, in any schema: a table whose column default
-  calls a sequence (`DROP SEQUENCE ... CASCADE`), and with DuckDB 2.0.1, which records a table's
-  dependency on its columns' user types again, a table whose column has the type
-  (`DROP TYPE ... CASCADE`) or a type in a dropped schema (`DROP SCHEMA ... CASCADE`). A role with
-  `DROP SEQUENCE` or `DROP TYPE` on one schema could drop the administrator's tables in another.
-  Each object a cascade would drop now needs the right to drop it, as if it were named. And the
-  refusal of a drop that other objects depend on, with `CASCADE` or without (DuckDB's own
-  "Cannot drop entry ... because there are entries that depend on it", `DROP SCHEMA` of a schema
-  that is not empty included), named every one of them to any user, also tables in schemas the
-  user cannot see. For a user or token that is not the unrestricted administrator it now says that
-  other objects depend on it and names only those the user sees, as the metadata views list them.
+  every object DuckDB records as depending on it, in any schema, and what a dropped object owns:
+  a table whose column default calls a sequence (`DROP SEQUENCE ... CASCADE`); a sequence
+  `OWNED BY` a dropped table, and the tables whose defaults call it (`DROP TABLE ... CASCADE`,
+  `DROP SCHEMA ... CASCADE`); and with DuckDB 2.0.1, which records a table's dependency on its
+  columns' user types again, a table whose column has the type (`DROP TYPE ... CASCADE`) or a type
+  in a dropped schema. A role with `DROP SEQUENCE`, `DROP TYPE` or `DROP TABLE` on one schema could
+  drop the administrator's tables in another. Each object a drop takes with it now needs the right
+  to drop it, as if it were named (a trigger or index that goes with its own table needs nothing
+  more; a trigger on another table needs `DROP TRIGGER` or owning it), and a sequence `OWNED BY` a
+  dropped table needs it with or without `CASCADE`.
+- **Refusals named objects the user cannot see.** DuckDB's refusal of a drop that other objects
+  depend on ("Cannot drop entry ... because there are entries that depend on it"), with `CASCADE`
+  or without, also of `DROP SCHEMA` of a schema that is not empty, of a sequence an `OWNED BY` links
+  to a table, and of the old object a `CREATE OR REPLACE` drops first, named every dependent, and
+  the foreign-key refusal of `DROP TABLE ... CASCADE` ("this table is main key table of the table
+  ...") named the referencing table, to any user, also tables, indexes and triggers in schemas the
+  user cannot see. For a user or token that is not the unrestricted administrator these are now
+  refused by access control first, saying that other objects depend on it and naming only those the
+  user sees, as the metadata views list them.
 - **A user could read tables it held no grant on through a table function's argument.** A subquery
   handed to a table function that takes its input as rows (`SELECT * FROM unnest((SELECT list(v) FROM
   t))`, `range((SELECT count(*) FROM t))`, `generate_series(1, (SELECT max(n) FROM t))`, also with

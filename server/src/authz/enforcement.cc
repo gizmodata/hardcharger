@@ -8,6 +8,7 @@
 #include <duckdb/catalog/catalog_search_path.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
+#include <duckdb/catalog/catalog_entry/trigger_catalog_entry.hpp>
 #include <duckdb/execution/expression_executor.hpp>
 #include <duckdb/function/scalar/sequence_utils.hpp>
 #include <duckdb/execution/operator/helper/physical_set.hpp>
@@ -349,6 +350,16 @@ std::string ScopeLimits(const TokenScope& scope) {
                                 " do only what their roles are granted (see SHOW GRANTS)");
 }
 
+// allow_extension_repositories decides whether a new extension repository, and with it a new
+// signing key whose extensions run in the server, may be added (scripts/
+// patch-duckdb-extension-repositories.cmake): the unrestricted administrator's decision only,
+// not MANAGE CONFIG's.
+std::string AdminOnlyRepositorySetting(const std::string& verb) {
+  return verb + " allow_extension_repositories decides whether new extension repositories, whose signing keys "
+                "the server then trusts, may be added; only an administrator without catalog_access rules may "
+                "change it";
+}
+
 bool WritesFiles(const std::string& setting) {
   return setting == "log_query_path" || setting == "profiling_output" ||
          setting == "profile_output";
@@ -591,6 +602,9 @@ class PlanChecker {
         if (BlockedSettings().count(Lower(compat::Str(set.name)))) {
           Deny(principal_, "changing " + compat::Str(set.name) + " is not allowed");
         }
+        if (Lower(compat::Str(set.name)) == "allow_extension_repositories") {
+          Deny(principal_, AdminOnlyRepositorySetting("SET"));
+        }
         if (ChangesWholeServer(context_, set.name, set.scope)) {
           RequireSystem(SystemPrivilege::kManageConfig, "SET GLOBAL");
         }
@@ -616,6 +630,9 @@ class PlanChecker {
         if (reset.scope != dd::SetScope::VARIABLE &&
             BlockedSettings().count(Lower(compat::Str(reset.name)))) {
           Deny(principal_, "changing " + compat::Str(reset.name) + " is not allowed");
+        }
+        if (Lower(compat::Str(reset.name)) == "allow_extension_repositories") {
+          Deny(principal_, AdminOnlyRepositorySetting("RESET"));
         }
         if (reset.scope != dd::SetScope::VARIABLE &&
             ChangesWholeServer(context_, reset.name, reset.scope)) {
@@ -1434,6 +1451,9 @@ class PlanChecker {
     if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return false;
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       CheckDropOf(*existing);
+      if (type != ObjectType::kSchema) {
+        CheckDependents({*existing}, false, Describe(*existing), "replace");
+      }
     }
     RequireVisible(target.catalog);
     AccessRequest request{target, type, privilege, {}};
@@ -1482,13 +1502,16 @@ class PlanChecker {
     macro.catalog = parts[0];
     macro.schema_path.assign(parts.begin() + 1, parts.end() - 1);
     macro.object_name = parts.back();
-    const auto existing = LookUp(context_, info.type, parts);
+    auto existing = LookUp(context_, info.type, parts);
     if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return;
     RequireMacroPrivilege(macro, Privilege::kCreateMacro, "create");
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       RequireMacroPrivilege(macro, Privilege::kDropMacro, "replace");
     }
     if (auto refusal = MacroNameRefusal(context_, snapshot_, macro)) Deny(principal_, *refusal);
+    if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
+      CheckDependents({*existing}, false, Describe(*existing), "replace");
+    }
   }
 
   // CREATE [OR REPLACE] TYPE by a user other than the administrator: the CREATE TYPE
@@ -1521,12 +1544,13 @@ class PlanChecker {
     type.catalog = parts[0];
     type.schema_path.assign(parts.begin() + 1, parts.end() - 1);
     type.object_name = parts.back();
-    const auto existing = LookUp(context_, dd::CatalogType::TYPE_ENTRY, parts);
+    auto existing = LookUp(context_, dd::CatalogType::TYPE_ENTRY, parts);
     if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return;
     RequireSchemaPrivilege(type, Privilege::kCreateType, "create type");
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       RequireSchemaPrivilege(type, Privilege::kDropType, "replace type");
       if (auto refusal = TypeNameRefusal(context_, snapshot_, type, "replace")) Deny(principal_, *refusal);
+      CheckDependents({*existing}, false, Describe(*existing), "replace");
     } else if (auto refusal = TypeNameRefusal(context_, snapshot_, type, "create")) {
       Deny(principal_, *refusal);
     }
@@ -1644,13 +1668,16 @@ class PlanChecker {
     sequence.catalog = parts[0];
     sequence.schema_path.assign(parts.begin() + 1, parts.end() - 1);
     sequence.object_name = parts.back();
-    const auto existing = LookUp(context_, dd::CatalogType::SEQUENCE_ENTRY, parts);
+    auto existing = LookUp(context_, dd::CatalogType::SEQUENCE_ENTRY, parts);
     if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return;
     RequireSchemaPrivilege(sequence, Privilege::kCreateSequence, "create sequence");
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       RequireSchemaPrivilege(sequence, Privilege::kDropSequence, "replace sequence");
     }
     if (auto refusal = SequenceNameRefusal(context_, sequence)) Deny(principal_, *refusal);
+    if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
+      CheckDependents({*existing}, false, Describe(*existing), "replace");
+    }
   }
 
   // The sequences an INSERT, UPDATE or MERGE target's own column defaults advance, as
@@ -1803,10 +1830,25 @@ class PlanChecker {
     ownership_.push_back({PendingOwnership::Kind::kDrop, path, type});
   }
 
+  // The table a trigger is on (a trigger lives in its table's schema).
+  dd::optional_ptr<dd::CatalogEntry> TriggerTable(dd::CatalogEntry& trigger) {
+    auto& entry = trigger.Cast<dd::TriggerCatalogEntry>();
+    if (!entry.base_table) return nullptr;
+    auto parts = NameParts(entry.base_table->GetQualifiedName());
+    if (parts.empty()) return nullptr;
+    ObjectPath path = PathOf(trigger);
+    std::vector<std::string> lookup{path.catalog};
+    lookup.insert(lookup.end(), path.schema_path.begin(), path.schema_path.end());
+    lookup.push_back(parts.back());
+    auto table = LookUp(context_, dd::CatalogType::TABLE_ENTRY, lookup);
+    if (!table || table->type != dd::CatalogType::TABLE_ENTRY) return nullptr;
+    return table;
+  }
+
   // What the principal sees of a catalog entry, as the metadata views list it (Chargewire
-  // §9.4): a table or view (an index with its table) when it holds a privilege on it, a
-  // sequence when it may use or drop it, a type or macro with its schema. A refusal names
-  // only what this says the principal sees.
+  // §9.4): a table or view (an index or trigger with its table) when it holds a privilege on
+  // it, a sequence when it may use or drop it, a type or macro with its schema. A refusal
+  // names only what this says the principal sees.
   bool EntryListed(dd::CatalogEntry& entry, const ObjectPath& path) {
     if (principal_.superuser) return true;
     switch (entry.type) {
@@ -1817,6 +1859,10 @@ class PlanChecker {
         ObjectPath table = path;
         table.object_name = compat::Str(entry.Cast<dd::IndexCatalogEntry>().GetTableName());
         return snapshot_.ObjectListed(principal_, table);
+      }
+      case dd::CatalogType::TRIGGER_ENTRY: {
+        auto table = TriggerTable(entry);
+        return table && snapshot_.ObjectListed(principal_, PathOf(*table));
       }
       case dd::CatalogType::SEQUENCE_ENTRY:
         return snapshot_.SequenceListed(principal_, path);
@@ -1838,6 +1884,7 @@ class PlanChecker {
     switch (entry.type) {
       case dd::CatalogType::VIEW_ENTRY: return "view";
       case dd::CatalogType::INDEX_ENTRY: return "index";
+      case dd::CatalogType::TRIGGER_ENTRY: return "trigger";
       case dd::CatalogType::SEQUENCE_ENTRY: return "sequence";
       case dd::CatalogType::SCHEMA_ENTRY: return "schema";
       case dd::CatalogType::TYPE_ENTRY: return "type";
@@ -1845,6 +1892,16 @@ class PlanChecker {
       case dd::CatalogType::TABLE_MACRO_ENTRY: return "macro";
       default: return "table";
     }
+  }
+
+  // An entry as a message names it: "table c.s.t", "trigger g on table c.s.t".
+  std::string Describe(dd::CatalogEntry& entry) {
+    if (entry.type == dd::CatalogType::TRIGGER_ENTRY) {
+      auto table = TriggerTable(entry);
+      return "trigger " + QuoteIdentifierIfNeeded(compat::Str(entry.name)) +
+             (table ? " on table " + PathOf(*table).ToString() : std::string());
+    }
+    return EntryWord(entry) + " " + PathOf(entry).ToString();
   }
 
   // Whether the principal may drop the entry, without saying why: for one it cannot see.
@@ -1870,6 +1927,19 @@ class PlanChecker {
                                                                   : Privilege::kDropTable;
         return snapshot_.Check(principal_, AccessRequest{path, type, privilege, {}}).allowed;
       }
+      case dd::CatalogType::TRIGGER_ENTRY: {
+        auto table = TriggerTable(entry);
+        if (!table) return false;
+        const ObjectPath table_path = PathOf(*table);
+        if (const OwnerRecord* owner =
+                snapshot_.FindTriggerOwner(TriggerOwnerPath(table_path, compat::Str(entry.name)))) {
+          if (snapshot_.IsOwner(principal_, *owner)) return true;
+        }
+        ObjectPath schema = table_path;
+        schema.object_name.clear();
+        return snapshot_.Check(principal_, AccessRequest{schema, ObjectType::kSchema, Privilege::kDropTrigger, {}})
+            .allowed;
+      }
       case dd::CatalogType::SEQUENCE_ENTRY: return on_schema(Privilege::kDropSequence);
       case dd::CatalogType::TYPE_ENTRY: return on_schema(Privilege::kDropType);
       case dd::CatalogType::MACRO_ENTRY:
@@ -1879,8 +1949,9 @@ class PlanChecker {
   }
 
   // Dropping an entry the statement takes with what it names (a cascade's dependent, a
-  // nested schema): the right to drop it, as if named. One the principal cannot see is
-  // refused without its name (`what`: the statement, said from what the principal named).
+  // sequence a dropped table owns, a nested schema): the right to drop it, as if named.
+  // One the principal cannot see is refused without its name (`what`: the statement, said
+  // from what the principal named).
   void RequireDropOfTaken(dd::CatalogEntry& entry, const std::string& what) {
     const ObjectPath path = PathOf(entry);
     if (!EntryListed(entry, path)) {
@@ -1890,6 +1961,11 @@ class PlanChecker {
       }
       if (entry.type == dd::CatalogType::SEQUENCE_ENTRY) {
         ownership_.push_back({PendingOwnership::Kind::kDrop, path, ObjectType::kSequence});
+      } else if (entry.type == dd::CatalogType::TRIGGER_ENTRY) {
+        if (auto table = TriggerTable(entry)) {
+          ownership_.push_back({PendingOwnership::Kind::kDrop,
+                                TriggerOwnerPath(PathOf(*table), compat::Str(entry.name)), ObjectType::kTrigger});
+        }
       } else if (entry.type == dd::CatalogType::TABLE_ENTRY || entry.type == dd::CatalogType::VIEW_ENTRY ||
                  entry.type == dd::CatalogType::SCHEMA_ENTRY) {
         if (!IsTempCatalog(path.catalog)) ownership_.push_back({PendingOwnership::Kind::kDrop, path, ObjectTypeOf(entry)});
@@ -1904,6 +1980,16 @@ class PlanChecker {
         break;
       case dd::CatalogType::INDEX_ENTRY:
         break;  // an index goes with its table, which is in the list
+      case dd::CatalogType::TRIGGER_ENTRY: {
+        auto table = TriggerTable(entry);
+        if (!table) Deny(principal_, what + " would also drop " + Describe(entry) + ", whose table was not found");
+        const ObjectPath table_path = PathOf(*table);
+        if (IsTempCatalog(table_path.catalog)) break;
+        RequireTriggerDrop(table_path, compat::Str(entry.name), "drop");
+        ownership_.push_back({PendingOwnership::Kind::kDrop, TriggerOwnerPath(table_path, compat::Str(entry.name)),
+                              ObjectType::kTrigger});
+        break;
+      }
       case dd::CatalogType::SEQUENCE_ENTRY:
         RequireSchemaPrivilege(path, Privilege::kDropSequence, "drop sequence");
         ownership_.push_back({PendingOwnership::Kind::kDrop, path, ObjectType::kSequence});
@@ -1916,46 +2002,55 @@ class PlanChecker {
         RequireMacroPrivilege(path, Privilege::kDropMacro, "drop");
         break;
       default:
-        Deny(principal_, what + " would also drop " + EntryWord(entry) + " " + path.ToString() +
+        Deny(principal_, what + " would also drop " + Describe(entry) +
                              ", which only an administrator may drop that way; drop it first");
     }
   }
 
-  // DuckDB's refusal of a DROP without CASCADE that something depends on names every
-  // dependent, also ones the principal cannot see. This one says that other objects depend
-  // on it and names only those the principal sees.
-  [[noreturn]] void RefuseDependents(const std::string& what, const std::vector<dd::CatalogEntry*>& dependents) {
-    std::string seen;
+  // DuckDB's refusal of a DROP (or of a CREATE OR REPLACE, which drops the old entry first)
+  // that something depends on names every dependent, also ones the principal cannot see.
+  // This one says that other objects depend on it and names only those the principal sees.
+  [[noreturn]] void RefuseDependents(const std::string& verb, const std::string& what,
+                                     const std::vector<dd::CatalogEntry*>& dependents) {
     std::set<std::string> named;
     for (auto* dependent : dependents) {
-      const ObjectPath path = PathOf(*dependent);
-      if (!EntryListed(*dependent, path)) continue;
-      const std::string name = EntryWord(*dependent) + " " + path.ToString();
-      if (!named.insert(name).second) continue;
-      seen += (seen.empty() ? "" : ", ") + name;
+      if (!EntryListed(*dependent, PathOf(*dependent))) continue;
+      named.insert(Describe(*dependent));
     }
-    throw dd::DependencyException("Cannot drop " + what + ": other objects depend on it" +
-                                  (seen.empty() ? std::string() : " (" + seen + ")") +
-                                  ". Drop them first, or use DROP ... CASCADE");
+    std::string seen;
+    for (const auto& name : named) seen += (seen.empty() ? "" : ", ") + name;
+    throw dd::DependencyException("Cannot " + verb + " " + what + ": other objects depend on it" +
+                                  (seen.empty() ? std::string() : " (" + seen + ")") + ". Drop them first" +
+                                  (verb == "drop" ? ", or use DROP ... CASCADE" : ""));
   }
 
-  // The objects a DROP takes or is blocked by, besides what it names, in any schema: what
-  // DuckDB records as depending on it (a table whose column has a user type, recorded again
-  // since DuckDB 2.0.1; a table whose default calls a sequence; for a schema, whatever
-  // outside it depends on an object in it). With CASCADE each one is dropped too, so each
-  // needs the right to drop it, as if named; without, DuckDB refuses the drop, and so does
-  // this, naming only the dependents the principal sees. `targets`: what the statement names
-  // (a schema with the schemas nested in it); `what`: the target as the refusal says it.
+  // What a DROP (or a CREATE OR REPLACE) takes with what it names, or is blocked by, in any
+  // schema, as DuckDB's DependencyManager::DropObject decides it, applied again to each entry
+  // it takes:
+  // - a dependent (a table whose column has a user type, recorded again since DuckDB 2.0.1;
+  //   whose default calls a sequence; a trigger on a table or writing to it; for a sequence,
+  //   the table that owns it) is taken with CASCADE; without, it blocks the drop if it is a
+  //   blocking or an owning one, and goes with it otherwise (a trigger or index with its table);
+  // - what the entry owns (a sequence OWNED BY a dropped table) is taken, with or without
+  //   CASCADE, and its own dependents follow the same rules;
+  // - a table that references a dropped table by foreign key is never taken: DuckDB refuses.
+  // A blocked drop is refused naming only the dependents the principal sees; each object
+  // taken needs the right to drop it, as if named (with CASCADE, everything taken; without,
+  // what a dropped object owns). `targets`: what the statement names (a schema with the
+  // schemas nested in it); `what`: the target as the refusal says it; `verb`: "drop" or
+  // "replace".
   void CheckDependents(const std::vector<dd::reference<dd::CatalogEntry>>& targets, bool cascade,
-                       const std::string& what) {
+                       const std::string& what, const std::string& verb = "drop") {
     if (targets.empty() || principal_.superuser) return;
     auto& catalog = targets.front().get().ParentCatalog();
     auto manager = catalog.GetDependencyManager();
     if (!manager) return;  // a catalog without DuckDB's dependency records cascades nothing through them
-    std::unordered_set<const dd::CatalogEntry*> dropped;
+    enum class Reason { kNamed, kDependent, kOwned };
+    std::unordered_map<const dd::CatalogEntry*, Reason> taken_by;
+    std::vector<dd::CatalogEntry*> order;
     std::unordered_set<const dd::SchemaCatalogEntry*> schemas;
     for (auto& target : targets) {
-      dropped.insert(&target.get());
+      taken_by.emplace(&target.get(), Reason::kNamed);
       if (target.get().type == dd::CatalogType::SCHEMA_ENTRY) {
         schemas.insert(&target.get().Cast<dd::SchemaCatalogEntry>());
       }
@@ -1964,12 +2059,13 @@ class PlanChecker {
       dd::CatalogEntry* object;
       dd::CatalogEntry* dependent;
       bool blocking;
+      bool owned_by;  // `dependent` owns `object` (ALTER SEQUENCE object OWNED BY dependent)
     };
     std::vector<Edge> edges;
     try {
       manager->Scan(context_, [&](dd::CatalogEntry& object, dd::CatalogEntry& dependent,
                                   const dd::DependencyDependentFlags& flags) {
-        edges.push_back({&object, &dependent, flags.IsBlocking()});
+        edges.push_back({&object, &dependent, flags.IsBlocking(), flags.IsOwnedBy()});
       });
     } catch (const std::exception&) {
       Deny(principal_, "what depends on " + what + " could not be listed; drop the objects that depend on it "
@@ -1983,40 +2079,63 @@ class PlanChecker {
         return false;
       }
     };
-    auto taken = [&](const dd::CatalogEntry* entry) { return dropped.contains(entry) || in_dropped_schema(*entry); };
-    if (!cascade) {
-      std::vector<dd::CatalogEntry*> blocking;
-      for (auto& edge : edges) {
-        if (edge.blocking && taken(edge.object) && !taken(edge.dependent)) blocking.push_back(edge.dependent);
-      }
-      if (!blocking.empty()) RefuseDependents(what, blocking);
-      return;
-    }
-    std::vector<dd::CatalogEntry*> cascaded;
+    auto taken = [&](const dd::CatalogEntry* entry) {
+      return taken_by.contains(entry) || in_dropped_schema(*entry);
+    };
+    auto take = [&](dd::CatalogEntry* entry, Reason reason) {
+      taken_by.emplace(entry, reason);
+      order.push_back(entry);
+    };
+    std::vector<dd::CatalogEntry*> blockers;
     for (bool grew = true; grew;) {
       grew = false;
       for (auto& edge : edges) {
+        if (edge.owned_by && taken(edge.dependent) && !taken(edge.object)) {
+          take(edge.object, Reason::kOwned);
+          grew = true;
+        }
         if (!taken(edge.object) || taken(edge.dependent)) continue;
-        dropped.insert(edge.dependent);
-        cascaded.push_back(edge.dependent);
+        const bool foreign_key = edge.blocking && edge.object->type == dd::CatalogType::TABLE_ENTRY &&
+                                 edge.dependent->type == dd::CatalogType::TABLE_ENTRY;
+        if (foreign_key || (!cascade && (edge.blocking || edge.owned_by))) {
+          blockers.push_back(edge.dependent);
+          continue;
+        }
+        take(edge.dependent, Reason::kDependent);
         grew = true;
       }
     }
-    // What the principal sees first, by name, so that the refusal names the first of them;
+    std::vector<dd::CatalogEntry*> blocking;
+    for (auto* blocker : blockers) {
+      if (!taken(blocker)) blocking.push_back(blocker);
+    }
+    if (!blocking.empty()) RefuseDependents(verb, what, blocking);
+    // What the principal sees first, by name, so that a refusal names the first of them;
     // then what it does not see, which no refusal names.
     std::vector<std::pair<std::string, dd::CatalogEntry*>> seen;
     std::vector<dd::CatalogEntry*> unseen;
-    for (auto* entry : cascaded) {
+    for (auto* entry : order) {
+      const Reason reason = taken_by.at(entry);
+      // Without CASCADE a dependent is taken only when nothing blocks: a trigger or index
+      // that goes with its table, which the drop of the table covers.
+      if (!cascade && reason == Reason::kDependent) continue;
+      if (entry->type == dd::CatalogType::INDEX_ENTRY) continue;
+      if (entry->type == dd::CatalogType::TRIGGER_ENTRY) {
+        auto table = TriggerTable(*entry);
+        if (table && taken(table.get())) continue;  // it goes with its table
+      }
       const ObjectPath path = PathOf(*entry);
       if (EntryListed(*entry, path)) {
-        seen.emplace_back(path.ToString(), entry);
+        seen.emplace_back(Describe(*entry), entry);
       } else {
         unseen.push_back(entry);
       }
     }
     std::sort(seen.begin(), seen.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    for (auto& [name, entry] : seen) RequireDropOfTaken(*entry, "DROP ... CASCADE of " + what);
-    for (auto* entry : unseen) RequireDropOfTaken(*entry, "DROP ... CASCADE of " + what);
+    const std::string statement = (verb == "drop" ? std::string(cascade ? "DROP ... CASCADE of " : "DROP of ")
+                                                  : std::string("CREATE OR REPLACE of ")) + what;
+    for (auto& [name, entry] : seen) RequireDropOfTaken(*entry, statement);
+    for (auto* entry : unseen) RequireDropOfTaken(*entry, statement);
   }
 
   // DROP SCHEMA without CASCADE: DuckDB refuses a schema with anything in it and names it all,
@@ -2039,7 +2158,7 @@ class PlanChecker {
     } catch (const std::exception&) {
       Deny(principal_, "what is in " + what + " could not be listed; ask an administrator");
     }
-    if (!contents.empty()) RefuseDependents(what, contents);
+    if (!contents.empty()) RefuseDependents("drop", what, contents);
   }
 
   void CheckDrop(dd::LogicalOperator& op) {
@@ -2090,7 +2209,7 @@ class PlanChecker {
         auto entry = LookUp(context_, dd::CatalogType::TABLE_ENTRY, parts);
         if (!entry) return;  // DROP ... IF EXISTS of nothing; DuckDB reports a missing object
         CheckDropOf(*entry);
-        CheckDependents({*entry}, info.cascade, EntryWord(*entry) + " " + PathOf(*entry).ToString());
+        CheckDependents({*entry}, info.cascade, Describe(*entry));
         return;
       }
       case dd::CatalogType::SEQUENCE_ENTRY: {
@@ -2100,7 +2219,7 @@ class PlanChecker {
         if (IsTempCatalog(sequence.catalog)) return;
         RequireSchemaPrivilege(sequence, Privilege::kDropSequence, "drop sequence");
         ownership_.push_back({PendingOwnership::Kind::kDrop, sequence, ObjectType::kSequence});
-        CheckDependents({*entry}, info.cascade, EntryWord(*entry) + " " + PathOf(*entry).ToString());
+        CheckDependents({*entry}, info.cascade, Describe(*entry));
         return;
       }
       case dd::CatalogType::MACRO_ENTRY:
@@ -2110,7 +2229,7 @@ class PlanChecker {
         ObjectPath macro = PathOf(*entry);
         if (IsTempCatalog(macro.catalog)) return;
         RequireMacroPrivilege(macro, Privilege::kDropMacro, "drop");
-        CheckDependents({*entry}, info.cascade, EntryWord(*entry) + " " + PathOf(*entry).ToString());
+        CheckDependents({*entry}, info.cascade, Describe(*entry));
         return;
       }
       case dd::CatalogType::TYPE_ENTRY: {
@@ -2122,7 +2241,7 @@ class PlanChecker {
         // Also with CASCADE: what names the type keeps naming it, and would mean something
         // else or nothing.
         if (auto refusal = TypeNameRefusal(context_, snapshot_, type, "drop")) Deny(principal_, *refusal);
-        CheckDependents({*entry}, info.cascade, EntryWord(*entry) + " " + PathOf(*entry).ToString());
+        CheckDependents({*entry}, info.cascade, Describe(*entry));
         return;
       }
       case dd::CatalogType::TRIGGER_ENTRY: {

@@ -327,3 +327,177 @@ def test_cascade_with_the_right_to_drop_the_dependents(cascade):
     assert app_tables(admin) == ALL_APP - {"moods"}
     expect_allowed(client=lou, sql="DROP SCHEMA lib CASCADE")
     assert app_tables(admin) == set()
+
+
+# ---- What a DROP or CREATE OR REPLACE takes through ownership, triggers and foreign keys ----
+#
+# lou may drop tables, sequences and macros in lib (and create tables, macros and triggers
+# there), and sees only lib.lt, lib.parent, lib.parent2, lib.child_seen and what it creates.
+# The administrator's objects in app (and lib.child_hidden, lib.t) are hidden from lou.
+
+LATE = "late"
+
+
+@pytest.fixture(scope="module")
+def late(module_launcher, store, tmp_path_factory):
+    work = tmp_path_factory.mktemp("late")
+    server = start_rbac_server(launcher=module_launcher, store_uri=store.new_database(),
+                               args=["--database", str(work / "late.duckdb")])
+    admin = server.admin()
+    for sql in [
+        "CREATE SCHEMA lib", "CREATE SCHEMA app",
+        # A sequence of app's, OWNED BY lib.lt: dropping lib.lt drops it, and with CASCADE app.payroll.
+        "CREATE SEQUENCE app.admin_seq", "CREATE TABLE app.payroll (id BIGINT DEFAULT nextval('app.admin_seq'))",
+        "CREATE TABLE lib.lt (i INT)", "ALTER SEQUENCE app.admin_seq OWNED BY lib.lt",
+        # A sequence of lib's OWNED BY a hidden table in app.
+        "CREATE SEQUENCE lib.s_owned", "CREATE TABLE app.hidden_owner (i INT)",
+        "ALTER SEQUENCE lib.s_owned OWNED BY app.hidden_owner",
+        # Foreign keys: DuckDB never cascades to a referencing table.
+        "CREATE TABLE lib.parent (id INT PRIMARY KEY)", "CREATE TABLE lib.child_hidden (pid INT REFERENCES lib.parent(id))",
+        "CREATE TABLE lib.parent2 (id INT PRIMARY KEY)", "CREATE TABLE lib.child_seen (pid INT REFERENCES lib.parent2(id))",
+        # CREATE OR REPLACE drops the old entry first.
+        "CREATE MACRO lib.m_def() AS 7", "CREATE TABLE app.payroll_def (i INT DEFAULT lib.m_def())",
+        "CREATE MACRO lib.m_seen() AS 7", "CREATE TABLE app.seen_def (i INT DEFAULT lib.m_seen())",
+        "CREATE TABLE lib.t (i INT)", "CREATE TABLE app.src (i INT)", "CREATE TABLE app.secret_audit (n BIGINT)",
+        "CREATE TRIGGER payroll_trg AFTER INSERT ON app.src FOR EACH STATEMENT "
+        "INSERT INTO app.secret_audit SELECT count(*) FROM lib.t",
+        "CREATE ROLE keepers", "CREATE USER lou", "GRANT keepers TO lou",
+        "GRANT CREATE TABLE, DROP TABLE, DROP SCHEMA, DROP SEQUENCE, CREATE MACRO, DROP MACRO, CREATE TRIGGER, "
+        "DROP TRIGGER ON SCHEMA lib TO keepers",
+        "GRANT SELECT ON lib.lt TO keepers", "GRANT SELECT ON lib.parent TO keepers",
+        "GRANT SELECT ON lib.parent2 TO keepers", "GRANT SELECT ON lib.child_seen TO keepers",
+        "GRANT SELECT ON app.seen_def TO keepers",
+        "CREATE ROLE configurers", "CREATE USER cora", "GRANT configurers TO cora",
+        "GRANT MANAGE CONFIG TO configurers",
+    ]:
+        expect_allowed(client=admin, sql=sql)
+    server.admin_client = admin
+    return server
+
+
+def tables_of(admin, schema: str) -> set[str]:
+    rows = expect_allowed(client=admin, sql=f"SELECT table_name FROM duckdb_tables() WHERE schema_name = '{schema}'")
+    return set(rows.column("table_name").to_pylist())
+
+
+def sequences_of(admin, schema: str) -> set[str]:
+    rows = expect_allowed(client=admin,
+                          sql=f"SELECT sequence_name FROM duckdb_sequences() WHERE schema_name = '{schema}'")
+    return set(rows.column("sequence_name").to_pylist())
+
+
+BLOCKED_PREFIX = "Permission Error: Hardcharger blocked this statement: "
+LOU_SUFFIX = ". Access control on this server lets user lou do only what their roles are granted (see SHOW GRANTS)"
+
+
+def quiet_refusal(statement: str) -> str:
+    return (f"{BLOCKED_PREFIX}{statement} would also drop objects that depend on it, which user lou may not drop; "
+            f"ask an administrator{LOU_SUFFIX}")
+
+
+def dependency_refusal(verb: str, what: str, seen: str = "") -> str:
+    tail = ", or use DROP ... CASCADE" if verb == "drop" else ""
+    return f"Dependency Error: Cannot {verb} {what}: other objects depend on it{seen}. Drop them first{tail}"
+
+
+def test_a_cascade_through_an_owned_sequence_needs_the_right_to_drop_what_it_takes(late):
+    lou, admin = late.user(name="lou"), late.admin_client
+    # L1: lib.lt owns app.admin_seq, which app.payroll's default calls.
+    assert refusal(client=lou, sql="DROP TABLE lib.lt CASCADE").detail == \
+        quiet_refusal(f"DROP ... CASCADE of table {LATE}.lib.lt")
+    # The schema's cascade also reaches app.seen_def (through lib.m_seen), which lou sees: named
+    # first; app.payroll, behind the owned sequence, never is.
+    assert refusal(client=lou, sql="DROP SCHEMA lib CASCADE").detail == \
+        (f"{BLOCKED_PREFIX}user lou may not drop table {LATE}.app.seen_def (only its owner, or a role granted DROP "
+         f"TABLE){LOU_SUFFIX}")
+    # L2: without CASCADE the owned sequence goes with the table, and app.payroll blocks it.
+    assert refusal(client=lou, sql="DROP TABLE lib.lt").detail == dependency_refusal("drop", f"table {LATE}.lib.lt")
+    # L2: a sequence owned by a hidden table.
+    assert refusal(client=lou, sql="DROP SEQUENCE lib.s_owned").detail == \
+        dependency_refusal("drop", f"sequence {LATE}.lib.s_owned")
+    assert tables_of(admin, "app") >= {"payroll", "hidden_owner"} and "admin_seq" in sequences_of(admin, "app")
+
+
+def test_foreign_keys_block_a_drop_with_or_without_cascade_and_name_only_what_is_seen(late):
+    lou = late.user(name="lou")
+    for sql in ["DROP TABLE lib.parent", "DROP TABLE lib.parent CASCADE"]:
+        assert refusal(client=lou, sql=sql).detail == dependency_refusal("drop", f"table {LATE}.lib.parent"), sql
+    # Twin: the referencing table lou sees is named.
+    assert refusal(client=lou, sql="DROP TABLE lib.parent2 CASCADE").detail == \
+        dependency_refusal("drop", f"table {LATE}.lib.parent2", f" (table {LATE}.lib.child_seen)")
+
+
+def test_create_or_replace_names_only_the_dependents_the_user_sees(late):
+    lou = late.user(name="lou")
+    assert refusal(client=lou, sql="CREATE OR REPLACE MACRO lib.m_def() AS 9").detail == \
+        dependency_refusal("replace", f"macro {LATE}.lib.m_def")
+    assert refusal(client=lou, sql="CREATE OR REPLACE TABLE lib.t (i INT, j INT)").detail == \
+        dependency_refusal("replace", f"table {LATE}.lib.t")
+    assert refusal(client=lou, sql="CREATE OR REPLACE TABLE lib.lt (i INT)").detail == \
+        dependency_refusal("replace", f"table {LATE}.lib.lt")
+    # Twin: a dependent lou sees is named.
+    assert refusal(client=lou, sql="CREATE OR REPLACE MACRO lib.m_seen() AS 9").detail == \
+        dependency_refusal("replace", f"macro {LATE}.lib.m_seen", f" (table {LATE}.app.seen_def)")
+
+
+def test_an_owner_drops_its_own_table_with_its_own_trigger(late):
+    lou, admin = late.user(name="lou"), late.admin_client
+    for sql in ["CREATE TABLE lib.mine (i INT)", "CREATE TABLE lib.mine_log (i INT)",
+                "CREATE TRIGGER mine_trg AFTER INSERT ON lib.mine FOR EACH STATEMENT INSERT INTO lib.mine_log VALUES (1)"]:
+        expect_allowed(client=lou, sql=sql)
+    # L3: the trigger goes with its table, and the table its body writes goes with its trigger.
+    expect_allowed(client=lou, sql="DROP TABLE lib.mine_log CASCADE")
+    expect_allowed(client=lou, sql="DROP TABLE lib.mine CASCADE")
+    assert not tables_of(admin, "lib") & {"mine", "mine_log"}
+
+
+def test_an_administrators_trigger_on_a_hidden_table_is_not_named_or_dropped(late):
+    lou, admin = late.user(name="lou"), late.admin_client
+    expect_allowed(client=lou, sql="CREATE TABLE lib.lou_target (i INT)")
+    for sql in ["CREATE TABLE app.adm_src (i INT)",
+                "CREATE TRIGGER adm_trg AFTER INSERT ON app.adm_src FOR EACH STATEMENT INSERT INTO lib.lou_target VALUES (1)"]:
+        expect_allowed(client=admin, sql=sql)
+    assert refusal(client=lou, sql="DROP TABLE lib.lou_target").detail == \
+        dependency_refusal("drop", f"table {LATE}.lib.lou_target")
+    assert refusal(client=lou, sql="DROP TABLE lib.lou_target CASCADE").detail == \
+        quiet_refusal(f"DROP ... CASCADE of table {LATE}.lib.lou_target")
+    # Twin: once lou sees app.adm_src, the trigger is named, and its drop needs DROP TRIGGER on app.
+    expect_allowed(client=admin, sql="GRANT SELECT ON app.adm_src TO keepers")
+    try:
+        assert refusal(client=lou, sql="DROP TABLE lib.lou_target").detail == \
+            dependency_refusal("drop", f"table {LATE}.lib.lou_target", f" (trigger adm_trg on table {LATE}.app.adm_src)")
+        detail = refusal(client=lou, sql="DROP TABLE lib.lou_target CASCADE").detail
+        assert detail == (f"{BLOCKED_PREFIX}user lou may not drop trigger adm_trg on table {LATE}.app.adm_src (only its "
+                          f"owner, or a role granted DROP TRIGGER on schema {LATE}.app or its catalog, or owning the "
+                          f"schema){LOU_SUFFIX}"), detail
+    finally:
+        expect_allowed(client=admin, sql="REVOKE SELECT ON app.adm_src FROM keepers")
+
+
+def test_cascades_go_through_with_the_rights_to_what_they_take(late):
+    lou, admin = late.user(name="lou"), late.admin_client
+    expect_allowed(client=admin, sql="GRANT DROP TABLE, DROP SEQUENCE ON SCHEMA app TO keepers")
+    try:
+        expect_allowed(client=lou, sql="DROP TABLE lib.lt CASCADE")
+        assert "payroll" not in tables_of(admin, "app") and "admin_seq" not in sequences_of(admin, "app")
+    finally:
+        expect_allowed(client=admin, sql="REVOKE DROP TABLE, DROP SEQUENCE ON SCHEMA app FROM keepers")
+
+
+def test_only_the_administrator_changes_allow_extension_repositories(late):
+    cora, admin = late.user(name="cora"), late.admin_client
+    why = ("allow_extension_repositories decides whether new extension repositories, whose signing keys the server "
+           "then trusts, may be added; only an administrator without catalog_access rules may change it")
+    for sql, verb in [("SET GLOBAL allow_extension_repositories = 'allowed'", "SET"),
+                      ("SET allow_extension_repositories = 'allowed'", "SET"),
+                      ("RESET GLOBAL allow_extension_repositories", "RESET")]:
+        error = expect_blocked(client=cora, sql=sql, why=f"{verb} {why}")
+        assert error.detail == f"Permission Error: {BLOCKED_PREFIX.split(': ', 1)[1]}{verb} {why}. Access control on " \
+                               "this server lets user cora do only what their roles are granted (see SHOW GRANTS)", \
+            error.detail
+    # Twin: MANAGE CONFIG still sets the other global settings, and the administrator this one.
+    threads = expect_allowed(client=admin, sql="SELECT current_setting('threads') AS t").column("t")[0].as_py()
+    expect_allowed(client=cora, sql=f"SET GLOBAL threads = {threads}")
+    expect_allowed(client=admin, sql="SET GLOBAL allow_extension_repositories = 'allowed'")
+    assert expect_allowed(client=admin, sql="SELECT current_setting('allow_extension_repositories') AS v") \
+        .column("v")[0].as_py() == "allowed"
