@@ -47,12 +47,17 @@ DDL_STORE_TIMEOUT = str(max(3 if sys.platform == "win32" else 1, round(TIMEOUT_S
 # time, whatever is behind it: the server rightly fails what waited on it, and logs, when the
 # store does answer, how long it took. The emulated x64 PostgreSQL of the windows-arm64 jobs
 # once took over 3 s to COMMIT one setup CREATE with nothing else on that server (2026-11-20,
-# run 44750753453). That run says nothing about the line of callers, so it is taken again on a
-# fresh store, up to DDL_ATTEMPTS times; a failure the server's log does not show the store
-# being that slow for fails the test at once, and so does a store that is that slow every time.
-DDL_ATTEMPTS = 3
+# run 44750753453), and a PostgreSQL container on a laptop under load (8 of these tests at
+# once) cancelled `SELECT 1` at its 1 s statement_timeout, in bursts of up to 15 s that also
+# failed servers opening the store. Such a run says nothing about the line of callers, so it
+# is taken again on a fresh store, after a pause that outlasts a burst, up to DDL_ATTEMPTS
+# times. A failure the server's log does not show the store being that slow for fails the test
+# at once, and so does a store that is that slow every time.
+DDL_ATTEMPTS = 5
+DDL_PAUSE_SECONDS = 20 * TIMEOUT_SCALE
 STORE_SLOW = ("the access control store answered after its caller had given up",
               "the access control store took the whole rbac_store_timeout_seconds")
+STORE_TIMED_OUT = "access control store unavailable: timed out after"
 
 
 def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
@@ -66,32 +71,44 @@ def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
     grant on it) is right, unless a store statement itself took the whole timeout (then the
     attempt is taken again: DDL_ATTEMPTS)."""
     stalls: list[str] = []
-    for _ in range(DDL_ATTEMPTS):
+    for attempt in range(DDL_ATTEMPTS):
+        if attempt:
+            time.sleep(DDL_PAUSE_SECONDS)
         failures, server = concurrent_ddl(launcher=launcher, store=store)
         if not failures:
             return
-        # A statement the server gave up on is logged when the store answers it, which may be
-        # a while after the caller was told.
-        deadline = time.monotonic() + 60 * TIMEOUT_SCALE
-        while True:
-            slow = [line for line in server.log().splitlines() if any(text in line for text in STORE_SLOW)]
-            if slow or time.monotonic() > deadline:
-                break
-            time.sleep(0.2)
+        if server is None:
+            # The server could not open the store in time: one caller, nothing in line.
+            slow = failures
+        else:
+            # A statement the server gave up on is logged when the store answers it, which may
+            # be a while after the caller was told.
+            deadline = time.monotonic() + 60 * TIMEOUT_SCALE
+            while True:
+                slow = [line for line in server.log().splitlines() if any(text in line for text in STORE_SLOW)]
+                if slow or time.monotonic() > deadline:
+                    break
+                time.sleep(0.2)
         timed_out = all("timed out after" in failure for failure in failures)
         assert slow and timed_out, (f"{len(failures)} statements failed (or the server reported the store down) "
                                     f"although no store statement took the whole store timeout, e.g. {failures[:3]}")
-        print(f"\nthe store itself took the whole timeout ({slow[0]}): {failures[0]}; taken again")
-        stalls.append(f"{failures[0]} / {slow[0]}")
+        print(f"\nthe store itself took the whole timeout ({slow[0][:300]}): {failures[0][:300]}; taken again")
+        stalls.append(f"{failures[0][:300]} / {slow[0][:300]}")
     pytest.fail(f"the store took the whole timeout on every one of {DDL_ATTEMPTS} attempts: {stalls}")
 
 
-def concurrent_ddl(launcher, store) -> tuple[list[str], RbacServer]:
+def concurrent_ddl(launcher, store) -> tuple[list[str], RbacServer | None]:
     """One run of the dbt shape on a fresh store: what failed (nothing, if all went right), and
-    the server."""
-    server = start_rbac_server(launcher=launcher, store_uri=store.new_database(),
-                               env={"HARDCHARGER_RBAC_STORE_TIMEOUT_SECONDS": DDL_STORE_TIMEOUT,
-                                    "HARDCHARGER_PRINT_QUERIES": "false"})
+    the server (None: it could not open the store in time)."""
+    try:
+        server = start_rbac_server(launcher=launcher, store_uri=store.new_database(),
+                                   env={"HARDCHARGER_RBAC_STORE_TIMEOUT_SECONDS": DDL_STORE_TIMEOUT,
+                                        "HARDCHARGER_PRINT_QUERIES": "false"})
+    except pytest.fail.Exception as error:
+        opening = [line for line in str(error).splitlines() if STORE_TIMED_OUT in line]
+        if not opening:
+            raise
+        return [f"server start: {opening[-1]}"], None
     admin = server.admin()
     setup = ["CREATE ROLE builder", "GRANT CREATE TABLE, DROP TABLE ON SCHEMA main TO builder", "CREATE ROLE readers"]
     for c in range(DDL_CLIENTS):
