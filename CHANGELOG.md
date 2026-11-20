@@ -55,6 +55,8 @@ also closes gaps there.
 - Dismiss the soft keyboard before checking Android console output in the UI test, so
   the small emulator's keyboard does not hide the transcript. Preserve release-tag build
   caches before tests run so a failed gate can reuse them on its next attempt.
+- Test the idle-session wait exemption with one continuous request, avoiding a legitimate
+  idle eviction between separate long polls on a slow Windows arm64 runner.
 - The concurrent-DDL test under access control no longer fails when the store itself is slower
   than the test's deliberately short timeout (an emulated PostgreSQL on a Windows arm64 runner);
   only such an attempt is run again, and any other failure still fails at once.

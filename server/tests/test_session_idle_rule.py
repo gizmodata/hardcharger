@@ -51,17 +51,15 @@ def test_a_running_statement_keeps_the_session_only_while_a_request_waits_on_it(
                            headers={"Prefer": "respond-async", "Chargewire-Retain-Result": "false"})
     assert response.status_code in (200, 201, 202), response.text
     gone_id = response.json()["statement_id"]
-    # Submitted, then asked about with long-polls of IDLE + 1 s each: a request is always in
-    # flight (and each one is activity), so the session stays however long the statement runs.
+    # Hold one request across the timeout and a sweep. Consecutive shorter long-polls
+    # leave a gap between responses and requests; because the preceding request began
+    # more than IDLE seconds ago, a sweep in that gap may legitimately evict the session.
     polled = server.admin()
-    response = polled.submit(sql="SELECT sleep_ms(12000) AS slept",
-                             headers={"Prefer": "respond-async", "Chargewire-Retain-Result": "false"})
-    assert response.status_code in (200, 201, 202), response.text
-    polled_id = response.json()["statement_id"]
     started = time.monotonic()
-    doc = polled.status(statement_id=polled_id, wait=IDLE + 1)
-    while doc["state"] == "running" and time.monotonic() - started < 60:
-        doc = polled.status(statement_id=polled_id, wait=IDLE + 1)
+    response = polled.submit(sql="SELECT sleep_ms(12000) AS slept",
+                             headers={"Prefer": "wait=30", "Chargewire-Retain-Result": "false"})
+    assert response.status_code in (200, 201, 202), response.text
+    doc = response.json()
     assert doc["state"] == "succeeded", doc
     assert time.monotonic() - started > IDLE + SWEEP + SLACK, "the statement must outlast the timeout and a sweep"
     assert status_of(session=polled) == 200
