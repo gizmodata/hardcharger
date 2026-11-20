@@ -368,6 +368,24 @@ class Walker {
           if (names && names->size() == 1) sequence = names->front();
         }
         bind_time_.sequence(name, sequence);
+      } else if (bind_time_.macros) {
+        // A user's scalar macro: DuckDB expands its body in place, with these arguments, and
+        // evaluates it here too (range(bump_to(77)) with bump_to(n) AS setval('s', n)).
+        const auto definitions = bind_time_.macros(PartsOf(function), false);
+        if (!definitions.empty() && scopes_.size() >= kMaxMacroDepth) {
+          Flag("macros that call macros more than " + std::to_string(kMaxMacroDepth) + " deep");
+          return;
+        }
+        for (const auto& definition : definitions) {
+          if (!definition || violation || definition->type != dd::MacroType::SCALAR_MACRO) continue;
+          auto& body = definition->Cast<dd::ScalarMacroFunction>();
+          for (auto& parameter : definition->default_parameters) {
+            if (parameter.second) Sequences(*parameter.second, 0);
+          }
+          scopes_.push_back(ScopeOf(function, *definition, level));
+          if (body.expression) Sequences(*body.expression, scopes_.size());
+          scopes_.pop_back();
+        }
       }
     }
     dd::ParsedExpressionIterator::EnumerateChildren(expression, [&](const dd::ParsedExpression& child) {
@@ -375,15 +393,42 @@ class Walker {
     });
   }
 
-  // The bodies of the user macros a call names, walked as DuckDB binds them: with the call's
-  // arguments (and the defaults it leaves out) in place of the parameters.
-  void WalkMacros(const dd::FunctionExpression& call, bool table) {
-    if (violation || !bind_time_.macros) return;
+  // The name parts a call names a function by.
+  static std::vector<std::string> PartsOf(const dd::FunctionExpression& call) {
     std::vector<std::string> parts;
     for (const auto& part : call.GetQualifiedName().Path()) {
       if (!Str(part).empty()) parts.push_back(Str(part));
     }
     if (parts.empty()) parts.push_back(Str(call.FunctionName()));
+    return parts;
+  }
+
+  // A macro's parameters, as a call at `level` binds them: its arguments by position and by
+  // name, and the defaults it leaves out (constants of the definition's, read at the statement's level).
+  static MacroScope ScopeOf(const dd::FunctionExpression& call, const dd::MacroFunction& definition, std::size_t level) {
+    MacroScope scope;
+    std::size_t position = 0;
+    for (const auto& argument : call.GetArguments()) {
+      if (argument.HasName()) {
+        scope[Lower(Str(argument.GetName()))] = {&argument.GetExpression(), level};
+      } else if (position < definition.parameters.size()) {
+        const auto& parameter = *definition.parameters[position++];
+        if (parameter.GetExpressionClass() == dd::ExpressionClass::COLUMN_REF) {
+          scope[Lower(Str(parameter.Cast<dd::ColumnRefExpression>().GetColumnName()))] = {&argument.GetExpression(), level};
+        }
+      }
+    }
+    for (const auto& parameter : definition.default_parameters) {
+      if (parameter.second) scope.emplace(Lower(Str(parameter.first)), MacroArgument{parameter.second.get(), 0});
+    }
+    return scope;
+  }
+
+  // The bodies of the user macros a call names, walked as DuckDB binds them: with the call's
+  // arguments (and the defaults it leaves out) in place of the parameters.
+  void WalkMacros(const dd::FunctionExpression& call, bool table) {
+    if (violation || !bind_time_.macros) return;
+    const auto parts = PartsOf(call);
     const auto definitions = bind_time_.macros(parts, table);
     if (definitions.empty()) return;
     if (scopes_.size() >= kMaxMacroDepth) {
@@ -397,26 +442,11 @@ class Walker {
     } pop_name{macro_names_};
     for (const auto& definition : definitions) {
       if (!definition || violation) continue;
-      MacroScope scope;
-      std::size_t position = 0;
-      for (const auto& argument : call.GetArguments()) {
-        if (argument.HasName()) {
-          scope[Lower(Str(argument.GetName()))] = {&argument.GetExpression(), level_};
-        } else if (position < definition->parameters.size()) {
-          const auto& parameter = *definition->parameters[position++];
-          if (parameter.GetExpressionClass() == dd::ExpressionClass::COLUMN_REF) {
-            scope[Lower(Str(parameter.Cast<dd::ColumnRefExpression>().GetColumnName()))] = {&argument.GetExpression(), level_};
-          }
-        }
-      }
       // A default is a constant of the definition's: read as written, at the statement's level.
       for (auto& parameter : definition->default_parameters) {
-        if (parameter.second) {
-          CheckExpression(*parameter.second);
-          scope.emplace(Lower(Str(parameter.first)), MacroArgument{parameter.second.get(), 0});
-        }
+        if (parameter.second) CheckExpression(*parameter.second);
       }
-      scopes_.push_back(std::move(scope));
+      scopes_.push_back(ScopeOf(call, *definition, level_));
       const std::size_t outer = level_;
       level_ = scopes_.size();
       // A DuckLake call in the body is one the statement does not make itself.
@@ -641,8 +671,9 @@ class Walker {
         return;
       }
       // A function that reads through its own client reads what its table's metadata names:
-      // like a computed path, whatever path it is handed.
-      if (ddb::ReadsThroughItsOwnClient(name)) {
+      // like a computed path, whatever path it is handed. (A user's table macro named like one is
+      // a macro: its body, walked above, decides.)
+      if (ddb::ReadsThroughItsOwnClient(name) && !IsUserTableMacro(call)) {
         if (storage_) storage_({name + "()", false, std::nullopt, false, true});
         else Flag(name + "() (files and URLs)");
         return;
@@ -671,6 +702,11 @@ class Walker {
   std::size_t level_ = 0;           // the scope the expressions walked now belong to (0: the statement's)
 
  public:
+  // Whether `call` names a user's table macro (not a table function).
+  bool IsUserTableMacro(const dd::FunctionExpression& call) {
+    return bind_time_.macros && !bind_time_.macros(PartsOf(call), true).empty();
+  }
+
   // CALL f(...): f's arguments, evaluated while DuckDB binds it (subqueries in them are
   // planned, and walked like any other), and the body of f when it is a user's table macro.
   void CallBindTime(const dd::FunctionExpression& call) {
@@ -876,7 +912,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
         if (table_function_allowed) {
           const auto declared = table_function_allowed({name});
           if (!declared) return gate("the table function " + name);
-          if (ddb::ReadsThroughItsOwnClient(name)) {
+          if (ddb::ReadsThroughItsOwnClient(name) && !walker.IsUserTableMacro(call.function->Cast<dd::FunctionExpression>())) {
             if (!storage) return gate(name + "() (files and URLs)");
             storage({name + "()", false, std::nullopt, false, true});
             return std::nullopt;

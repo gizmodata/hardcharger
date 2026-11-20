@@ -471,3 +471,47 @@ def test_unscoped_sessions_and_object_storage(world):
     plain = world["server"].as_role(role="user", subject="unscoped_user")
     refused(session=plain, sql=f"SELECT * FROM read_parquet('{s3}/elsewhere/x.parquet')", why="READ OBJECT STORAGE")
     refused(session=plain, sql=f"SELECT * FROM read_parquet('{b_file}')", why=f"reaches into the storage of DuckLake catalog {B}")
+
+
+# ---- Review 2026-11-20 (finding 06): a user macro stored in a DuckLake catalog is a macro like any other ----
+
+HOME = "tenants"  # the server's own database (--database tenants.duckdb)
+
+
+@pytest.fixture
+def lake_macros(world):
+    admin = world["server"].admin()
+    for sql in [f"CREATE SEQUENCE IF NOT EXISTS {HOME}.main.seq",
+                f"SELECT setval('{HOME}.main.seq', 222)"]:
+        admin.execute(sql=sql)
+    for catalog in (HOME, A):
+        admin.execute(sql=f"CREATE OR REPLACE MACRO {catalog}.main.peek(p) AS TABLE SELECT * FROM read_csv(p)")
+        admin.execute(sql=f"CREATE OR REPLACE MACRO {catalog}.main.run_sql(s) AS TABLE SELECT * FROM query(s)")
+    return world["server"].as_role(role="user", subject="app_a_lake_macros",
+                                   catalog_access=[{"catalog": A, "access": "write"}, {"catalog": HOME, "access": "read"},
+                                                   {"catalog": "*", "access": "none"}])
+
+
+def home_seq(world):
+    return world["server"].admin().scalar(sql=f"SELECT last_value FROM duckdb_sequences() "
+                                              f"WHERE database_name = '{HOME}' AND sequence_name = 'seq'")
+
+
+@pytest.mark.parametrize("catalog", [HOME, A])
+def test_a_macro_stored_in_a_ducklake_catalog_is_walked_before_binding(world, lake_macros, catalog):
+    session = lake_macros
+    # Refused before DuckDB binds the body: a missing file answers as an existing one does...
+    refused(session=session, sql=f"SELECT * FROM {catalog}.main.peek('/no/such/file.csv')",
+            why="Hardcharger blocked read_csv() of '/no/such/file.csv'")
+    # ...and a missing table of a denied catalog as an existing one does.
+    for table in ("secret_b", "no_such_table"):
+        refused(session=session, sql=f"SELECT * FROM {catalog}.main.run_sql('SELECT * FROM {B}.main.{table}')",
+                why=f"read access to catalog '{B}'")
+    # A sequence of a catalog it may only read stays put.
+    before = home_seq(world)
+    refused(session=session, sql=f"SELECT * FROM {catalog}.main.run_sql('SELECT * FROM range(setval(''{HOME}.main.seq'', 333))')",
+            why=f"write access to catalog '{HOME}'")
+    assert home_seq(world) == before
+    # The twin: what the token may run itself runs through the macro.
+    assert session.scalar(sql=f"SELECT * FROM {catalog}.main.run_sql('SELECT 42 AS answer')") == 42
+    assert session.scalar(sql=f"SELECT count(*) FROM {catalog}.main.run_sql('SELECT * FROM {A}.main.mine')") >= 100

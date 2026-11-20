@@ -17,6 +17,7 @@
 #include <duckdb/main/extension_entries.hpp>
 
 #include "authz/duckdb_internal.hpp"
+#include "authz/ducklake_calls.hpp"
 #include "authz/enforcement.hpp"
 #include "authz/policies.hpp"
 
@@ -204,9 +205,13 @@ std::vector<std::shared_ptr<dd::MacroFunction>> SessionObjectResolver::MacroDefi
   auto status = InTransaction(connection_, [&]() -> arrow::Status {
     ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context, wanted, name));
     if (!entry || entry->type != wanted || entry->internal) return arrow::Status::OK();
-    // A DuckLake catalog's own macros (lake.snapshots()) are DuckLake calls, which the gate's
-    // ducklake_call decides by the catalog they act on.
-    if (compat::Str(entry->ParentCatalog().GetCatalogType()) == "ducklake") return arrow::Status::OK();
+    // A DuckLake catalog's own macros (lake.snapshots(), lake.set_option(), ...) are DuckLake
+    // calls, which the gate's ducklake_call decides by the catalog they act on. A user's macro
+    // stored in a DuckLake catalog is a macro like any other, and is walked.
+    if (table && compat::Str(entry->ParentCatalog().GetCatalogType()) == "ducklake" &&
+        IsDuckLakeCatalogMethod(FoldIdentifier(compat::Str(entry->name)))) {
+      return arrow::Status::OK();
+    }
     for (const auto& macro : entry->Cast<dd::MacroCatalogEntry>().macros) {
       if (macro) definitions.push_back(std::shared_ptr<dd::MacroFunction>(macro->Copy().release()));
     }

@@ -958,6 +958,13 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
     bind_time.sequence = [&](const std::string& function, const std::optional<std::string>& name) {
       const std::string blocked = "Hardcharger blocked " + function + "()";
       const std::string why = ": DuckDB runs it while it binds the statement, before access control checks the plan";
+      // A readonly principal's session changes nothing, whatever its rules or grants: nextval()
+      // and setval() move the sequence while DuckDB binds, before the readonly check of the plan.
+      if (function != "currval") {
+        if (auto readonly = ReadOnlyRefusal(ContextOf(connection_))) {
+          throw Error(ErrorCode::kPermissionDenied, *readonly, "42501");
+        }
+      }
       if (!name) {
         throw Error(ErrorCode::kPermissionDenied, blocked + why + ", and its sequence is not named by a string literal",
                     "42501");

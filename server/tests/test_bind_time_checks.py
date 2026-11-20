@@ -28,7 +28,18 @@ def server(module_launcher):
                 "CREATE MACRO route_sql(s) AS TABLE SELECT * FROM query(s)",
                 "CREATE MACRO route_scalar(s) AS (SELECT count(*) FROM query(s))",
                 "CREATE MACRO first_n(n) AS TABLE SELECT * FROM range(n)",
-                "CREATE MACRO twice(n) AS TABLE SELECT * FROM first_n(n * 2)"]:
+                "CREATE MACRO twice(n) AS TABLE SELECT * FROM first_n(n * 2)",
+                # Scalar macros that move the sequence (review finding 03).
+                "CREATE MACRO bump() AS nextval('bind.main.seq')",
+                "CREATE MACRO bump_to(n) AS setval('bind.main.seq', n)",
+                "CREATE MACRO ident(x) AS x",
+                "CREATE MACRO bump_via(n) AS ident(bump_to(n))",
+                # Table macros named like delta_*() / iceberg_*() (review finding 04).
+                "CREATE MACRO delta_summary() AS TABLE SELECT 1 AS x",
+                "CREATE MACRO iceberg_report(n) AS TABLE SELECT * FROM range(n)",
+                # A chain of scalar macros, each calling the one before (depth).
+                "CREATE MACRO chain_0(n) AS n",
+                *[f"CREATE MACRO chain_{i}(n) AS chain_{i - 1}(n)" for i in range(1, 18)]]:
         admin.execute(sql=sql)
     return server
 
@@ -56,6 +67,21 @@ BIND_TIME_FORMS = [
     "SELECT * FROM first_n(setval('bind.main.seq', 23))",
     "SELECT * FROM twice(setval('bind.main.seq', 24))",
 ]
+
+
+# Through a user's scalar macro: DuckDB expands it in place and evaluates its body while binding.
+MACRO_FORMS = [
+    "SELECT * FROM range(bump())",
+    "SELECT * FROM range(bump_to(77))",
+    "SELECT * FROM range(ident(bump_to(78)))",
+    "SELECT * FROM range(bump_via(79))",
+    "CALL range(bump_to(80))",
+    "SELECT * FROM generate_series(1, bump_to(81)::BIGINT)",
+    "SELECT * FROM first_n(bump_to(82))",
+    "PRAGMA table_info(bump_to(83)::VARCHAR)",
+    "EXPLAIN SELECT * FROM range(bump_to(84))",
+]
+BIND_TIME_FORMS += MACRO_FORMS
 
 
 @pytest.mark.parametrize("sql", BIND_TIME_FORMS)
@@ -141,7 +167,13 @@ def rbac(module_launcher, store, tmp_path_factory):
                 "GRANT READ HTTP TO lakes_all",
                 # Nothing listens there: the twin's read fails at once, without the network.
                 "CREATE SECRET lake_nowhere (TYPE s3, KEY_ID 'k', SECRET 's', ENDPOINT '127.0.0.1:9', USE_SSL false, "
-                "URL_STYLE 'path', REGION 'us-east-1')"]:
+                "URL_STYLE 'path', REGION 'us-east-1')",
+                # Review finding 03: a user who may create macros, and holds nothing on the sequence.
+                "CREATE ROLE makers", "CREATE USER mack", "GRANT makers TO mack",
+                "GRANT CREATE MACRO, DROP MACRO ON SCHEMA main TO makers",
+                "CREATE MACRO main.bump_to(n) AS setval('seq', n)",
+                # Review finding 04.
+                "CREATE MACRO main.delta_summary() AS TABLE SELECT 1 AS x"]:
         expect_allowed(client=admin, sql=sql)
     server.admin_client = admin
     return server
@@ -186,3 +218,99 @@ def test_delta_and_iceberg_need_the_storage_privileges_everywhere(rbac, sql):
         rbac.user(name="all_over").run(sql=sql)
     except Exception as error:  # noqa: BLE001 - any failure but access control's
         assert "Hardcharger blocked" not in str(error) and "permission_denied" not in str(error), error
+
+
+# ---- Review 2026-11-20 ----
+
+READONLY_FORMS = [
+    "SELECT * FROM range(setval('bind.main.seq', 200))",
+    "SELECT * FROM range(nextval('bind.main.seq'))",
+    "SELECT * FROM generate_series(1, setval('bind.main.seq', 400))",
+    "EXPLAIN SELECT * FROM range(setval('bind.main.seq', 500))",
+    "DESCRIBE SELECT * FROM range(setval('bind.main.seq', 600))",
+    "SELECT * FROM range(bump_to(700))",
+]
+
+
+@pytest.mark.parametrize("rules", [WRITER_RULES, None], ids=["write rules", "no rules"])
+@pytest.mark.parametrize("sql", READONLY_FORMS)
+def test_a_readonly_token_moves_no_sequence_while_binding_whatever_its_rules(server, rules, sql):
+    # 02: a readonly principal's session changes nothing; its write rules (or none, which is '*': write)
+    # don't make a sequence call DuckDB evaluates while binding a write it may do. EXPLAIN included.
+    claims = {} if rules is None else {"catalog_access": rules}
+    readonly = server.as_role(role="readonly", subject="ro_w", **claims)
+    before = last_value(server)
+    problem = readonly.error(sql=sql)
+    assert problem["code"] == "permission_denied", problem
+    assert "has a readonly session and cannot run statements that modify state" in problem["detail"], problem
+    assert last_value(server) == before
+
+
+def test_a_readonly_token_reads_a_sequence_while_binding(server):
+    # The twin: currval() changes nothing.
+    server.as_role(role="user", subject="writer", catalog_access=WRITER_RULES).execute(
+        sql="SELECT * FROM range(nextval('bind.main.seq'))")
+    before = last_value(server)
+    readonly = server.as_role(role="readonly", subject="ro_w", catalog_access=WRITER_RULES)
+    assert readonly.query(sql="SELECT * FROM range(currval('bind.main.seq'))").num_rows == before
+    assert last_value(server) == before
+
+
+def test_a_scalar_macro_moves_the_sequence_for_whoever_may(server):
+    # 03's twin: with write access the same macro forms run, and move the sequence.
+    writer = server.as_role(role="user", subject="writer", catalog_access=WRITER_RULES)
+    assert writer.query(sql="SELECT * FROM range(bump_to(5))").num_rows == 5
+    assert last_value(server) == 5
+    assert writer.query(sql="SELECT * FROM range(bump_via(6))").num_rows == 6
+    assert last_value(server) == 6
+
+
+def test_macros_nested_too_deep_fail_closed_while_binding(server):
+    writer = server.as_role(role="user", subject="writer", catalog_access=WRITER_RULES)
+    problem = writer.error(sql="SELECT * FROM range(chain_17(3))")
+    assert problem["code"] == "permission_denied", problem
+    assert "macros that call macros more than 16 deep" in problem["detail"], problem
+    assert writer.query(sql="SELECT * FROM range(chain_3(3))").num_rows == 3  # the twin
+
+
+@pytest.mark.parametrize("who", ["token without rules", "catalog_access token"])
+def test_table_macros_named_like_delta_or_iceberg_run_as_macros(server, who):
+    # 04: a user's table macro is a macro, whatever its name; only DuckDB's delta_*() / iceberg_*()
+    # functions need the storage privileges everywhere.
+    claims = {} if who == "token without rules" else {"catalog_access": WRITER_RULES}
+    session = server.as_role(role="user", subject="macro_user", **claims)
+    assert session.query(sql="SELECT * FROM delta_summary()").to_pylist() == [{"x": 1}]
+    assert session.query(sql="SELECT * FROM iceberg_report(2)").num_rows == 2
+    assert session.query(sql="CALL iceberg_report(3)").num_rows == 3
+    problem = session.error(sql="SELECT * FROM delta_scan('s3://lake-bucket/tables/t')")
+    assert problem["code"] == "permission_denied" and "delta_scan" in problem["detail"], problem
+
+
+def test_unit_gate_refuses_a_statement_kind_without_a_rule():
+    # 10 (mutation M1): GatedCategory's refusal of a kind it has no rule for, which no SQL reaches.
+    from conftest import run_unit_tests
+    results = run_unit_tests(gtest_filter="AuthzGate.*")
+    assert results == {"AuthzGate.AStatementKindWithoutARuleIsRefused": True,
+                       "AuthzGate.KindsLeftToThePlanCheckAreNotRefusedForTheirKind": True}, results
+
+
+def test_a_store_user_moves_no_sequence_through_a_scalar_macro(rbac):
+    # 03: mack may create macros, and holds no USAGE / DROP SEQUENCE on seq.
+    mack, uri = rbac.user(name="mack"), rbac.user(name="uri")
+    expect_allowed(client=mack, sql="CREATE OR REPLACE MACRO main.mine_to(n) AS setval('seq', n)")
+    expect_allowed(client=mack, sql="CREATE OR REPLACE MACRO main.mine_next() AS nextval('seq')")
+    before = rbac_last_value(rbac)
+    for sql, why in [("SELECT * FROM range(main.mine_to(501))", "may not setval() of sequence"),
+                     ("SELECT * FROM range(main.mine_next())", "has no USAGE privilege on sequence"),
+                     ("SELECT * FROM range(main.bump_to(77))", "may not setval() of sequence")]:
+        expect_blocked(client=mack, sql=sql, why=why)
+        assert rbac_last_value(rbac) == before, sql
+    # The twin: uri holds USAGE, so nextval() through the macro runs (and moves the sequence).
+    expect_allowed(client=uri, sql="SELECT * FROM range(main.mine_next())")
+    assert rbac_last_value(rbac) == (before or 0) + 1
+
+
+def test_a_store_users_table_macro_named_like_delta_runs(rbac):
+    # 04: a user's table macro named delta_* is a macro (v2.13.3 ran it), not delta_scan().
+    rows = rbac.user(name="una").run(sql="SELECT * FROM main.delta_summary()")
+    assert rows.to_pylist() == [{"x": 1}]
