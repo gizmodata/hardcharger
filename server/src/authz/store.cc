@@ -21,6 +21,7 @@
 
 #include "authz/authz.hpp"
 #include "authz/duckdb_internal.hpp"
+#include "logging.hpp"
 #include "redact.hpp"
 
 #ifndef _WIN32
@@ -40,13 +41,16 @@ namespace dd = duckdb;
 // transaction before it runs anything else, so a change a caller was told failed never
 // commits (a COMMIT already sent may still land, and the caller is told so). The thread
 // only ever holds what a statement owns (its SQL and values), never a caller's data, and
-// keeps the DuckDB instance alive for as long as it runs.
+// keeps the DuckDB instance alive for as long as it runs. A statement that outlasts the
+// timeout is logged when it does answer, with how long it took: a store that is slow (a
+// commit waiting on a disk) is told apart from one that is down, which never answers.
 class StoreLink {
  public:
   using Work = std::function<dd::unique_ptr<dd::QueryResult>(dd::Connection&)>;
 
   StoreLink(std::unique_ptr<dd::DuckDB> db, std::chrono::milliseconds timeout)
       : state_(std::make_shared<State>()), timeout_(timeout) {
+    state_->timeout = timeout;
     state_->db = std::move(db);
     state_->conn = std::make_unique<dd::Connection>(*state_->db);
     thread_ = std::thread([state = state_] { Loop(*state); });
@@ -80,9 +84,11 @@ class StoreLink {
   }
 
   // Runs `work` on the store's thread, waiting at most the timeout. Ok: its result.
-  arrow::Result<dd::unique_ptr<dd::QueryResult>> Call(Work work) {
+  // `what` names the statement in the log (its first keyword: no values).
+  arrow::Result<dd::unique_ptr<dd::QueryResult>> Call(Work work, std::string what = {}) {
     auto task = std::make_shared<Task>();
     task->work = std::move(work);
+    task->what = std::move(what);
     std::unique_lock lock(state_->mutex);
     const auto now = std::chrono::steady_clock::now();
     // A statement that has hung for the whole timeout already: no use queueing behind it.
@@ -102,22 +108,27 @@ class StoreLink {
   }
 
   arrow::Status TimedOut() const {
-    const auto ms = timeout_.count();
-    std::string seconds = std::to_string(ms / 1000);
-    if (ms % 1000 != 0) seconds += "." + std::to_string(ms % 1000 / 100);
-    return arrow::Status::IOError("Hardcharger ", kStoreUnavailable, ": timed out after ", seconds,
+    return arrow::Status::IOError("Hardcharger ", kStoreUnavailable, ": timed out after ", Seconds(timeout_.count()),
                                   " s (rbac_store_timeout_seconds)");
   }
 
  private:
+  static std::string Seconds(int64_t ms) {
+    std::string seconds = std::to_string(ms / 1000);
+    if (ms % 1000 >= 100) seconds += "." + std::to_string(ms % 1000 / 100);
+    return seconds;
+  }
+
   struct Task {
     Work work;
+    std::string what;
     bool done = false;
     bool abandoned = false;
     dd::unique_ptr<dd::QueryResult> result;
     std::string error;
   };
   struct State {
+    std::chrono::milliseconds timeout{0};
     std::unique_ptr<dd::DuckDB> db;
     std::unique_ptr<dd::Connection> conn;
     std::mutex mutex;
@@ -134,6 +145,23 @@ class StoreLink {
     }
   };
 
+  // A statement that took the whole timeout or longer, said when it answers. Called with the
+  // lock held; logs without it. Not while the link is going away (its thread may outlive the
+  // server's logging).
+  static void NoteSlow(State& state, std::unique_lock<std::mutex>& lock, std::chrono::steady_clock::duration took,
+                       const std::string& what, bool caller_gave_up) {
+    if (took < state.timeout || state.stopping) return;
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(took).count();
+    lock.unlock();
+    Log(LogLevel::kWarning,
+        caller_gave_up ? "the access control store answered after its caller had given up: it is slow, not down"
+                       : "the access control store took the whole rbac_store_timeout_seconds to answer",
+        {{"statement", what.empty() ? std::string("statement") : what},
+         {"seconds", Seconds(ms)},
+         {"rbac_store_timeout_seconds", Seconds(state.timeout.count())}});
+    lock.lock();
+  }
+
   static void Loop(State& state) {
     std::unique_lock lock(state.mutex);
     while (true) {
@@ -144,12 +172,15 @@ class StoreLink {
         state.rollback_pending = false;
         state.busy = true;
         state.busy_since = std::chrono::steady_clock::now();
+        const auto since = state.busy_since;
         lock.unlock();
         try {
           (void)state.conn->Query("ROLLBACK");
         } catch (const std::exception&) {
         }
+        const auto took = std::chrono::steady_clock::now() - since;
         lock.lock();
+        NoteSlow(state, lock, took, "ROLLBACK", false);
         state.busy = false;
         continue;
       }
@@ -159,6 +190,7 @@ class StoreLink {
       if (task->abandoned) continue;
       state.busy = true;
       state.busy_since = std::chrono::steady_clock::now();
+      const auto since = state.busy_since;
       lock.unlock();
       dd::unique_ptr<dd::QueryResult> result;
       std::string error;
@@ -168,7 +200,9 @@ class StoreLink {
         error = e.what();
         if (error.empty()) error = "unknown error";
       }
+      const auto took = std::chrono::steady_clock::now() - since;
       lock.lock();
+      NoteSlow(state, lock, took, task->what, task->abandoned);
       state.busy = false;
       if (!task->abandoned) {
         task->result = std::move(result);
@@ -237,8 +271,20 @@ arrow::Status Refile(const arrow::Status& status, const std::string& what) {
   return StoreError(what, message.substr(kPrefix.size()));
 }
 
+// The first word of a store statement (the server's own SQL), to name it in the log
+// without its values.
+std::string Keyword(const std::string& sql) {
+  const auto start = sql.find_first_not_of(" \t\n");
+  if (start == std::string::npos) return {};
+  const auto end = sql.find_first_of(" \t\n(", start);
+  std::string word = sql.substr(start, end == std::string::npos ? std::string::npos : end - start);
+  std::transform(word.begin(), word.end(), word.begin(), [](unsigned char c) { return std::toupper(c); });
+  return word;
+}
+
 arrow::Result<dd::unique_ptr<dd::QueryResult>> Query(StoreLink& conn, const std::string& sql) {
-  auto result = conn.Call([sql](dd::Connection& c) -> dd::unique_ptr<dd::QueryResult> { return c.Query(sql); });
+  auto result = conn.Call([sql](dd::Connection& c) -> dd::unique_ptr<dd::QueryResult> { return c.Query(sql); },
+                          Keyword(sql));
   if (!result.ok()) return Refile(result.status(), "statement failed");
   return result;
 }
@@ -275,7 +321,7 @@ arrow::Result<std::unique_ptr<StoreRows>> Run(StoreLink& conn, const std::string
     auto out = compat::ExecuteMaterialized(*stmt, params);
     if (out->HasError()) throw std::runtime_error(out->GetError());
     return out;
-  });
+  }, Keyword(sql));
   if (!result.ok()) return Refile(result.status(), "statement failed");
   return std::make_unique<StoreRows>(std::move(*result));
 }
