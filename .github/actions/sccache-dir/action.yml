@@ -56,10 +56,10 @@ runs:
         after=$(find "$SCCACHE_DIR" -type f | wc -l)
         echo "sccache directory: ${SCCACHE_FILES_BEFORE:-0} files restored, $after now"
         echo "grew=$([ "$after" -gt "${SCCACHE_FILES_BEFORE:-0}" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-    # A tag's caches can't be restored by any other ref, so only branch runs save (main
-    # included: every branch restores main's entries when it has none of its own).
+    # Keep tag caches too: a retry of that tag can reuse the objects even after tests
+    # fail. Other refs continue to start from main's entries when they have none.
     - if: >-
-        inputs.mode == 'save' && !startsWith(github.ref, 'refs/tags/')
+        inputs.mode == 'save'
         && (steps.grew.outputs.grew == 'true' || inputs.force == 'true')
       uses: actions/cache/save@v6
       with:
