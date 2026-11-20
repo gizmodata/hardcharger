@@ -29,7 +29,8 @@ own changelog in `python/CHANGELOG.md`.
   httpfs, ducklake and postgres_scanner in, next to core_functions, parquet, json and icu, and on a
   CPU without x86-64-v3 it installs and loads no other extension: `INSTALL` and `LOAD` fail with a
   message that says why and names the built-in ones, and the server logs a warning at startup. On a
-  CPU with AVX2 it loads every extension, as the optimized build does.
+  CPU with AVX2 it loads every extension, as the optimized build does. As in any build once httpfs
+  is loaded, DuckDB asks a custom extension repository given as `http://` over https.
 - **Building from source for a CPU target.** `HARDCHARGER_CPU_TARGET=baseline` (or `optimized`,
   the default) chooses the target for `server/scripts/build-deps.sh`; the server's CMake reads the
   target from the dependency installs and refuses a mix. See `server/scripts/cpu-target.sh`.

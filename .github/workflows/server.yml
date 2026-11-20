@@ -404,6 +404,8 @@ jobs:
       HARDCHARGER_MANYLINUX_IMAGE: ${{ matrix.manylinux }}
       # optimized (each dependency's default) or baseline (any x86-64 CPU): server/scripts/cpu-target.sh.
       HARDCHARGER_CPU_TARGET: ${{ matrix.cpu_target }}
+      # The suites' expectations for the baseline build's built-in extensions (server/tests/conftest.py).
+      HARDCHARGER_TEST_BASELINE_BUILD: ${{ matrix.cpu_target == 'baseline' && '1' || '0' }}
     steps:
       - &build-checkout
         uses: actions/checkout@v7

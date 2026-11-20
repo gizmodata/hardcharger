@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-from conftest import TSAN_EXTENSIONS
+from conftest import BASELINE_BUILD, TSAN_EXTENSIONS
 
 # These two tests specifically replace/download signed public modules. They run on
 # all native release targets and ASan; TSan's instrumented built-ins cannot be replaced.
@@ -63,6 +63,13 @@ def test_signed_optional_module_can_be_force_installed_from_a_customer_repositor
         url = f"http://127.0.0.1:{http_server.server_port}"
         target = launcher.start(args=["--init-sql-commands", f"SET extension_directory = '{tmp_path / 'target-cache'}';"])
         client = target.admin()
+        if BASELINE_BUILD:
+            # httpfs is built in and loaded there, and DuckDB then asks a plain-http repository
+            # over https (extension_install_dynamic.cpp: BumpToSecureProtocol), as any build
+            # does once httpfs is loaded: a customer repository must serve https.
+            detail = client.error(sql=f"FORCE INSTALL tpch FROM '{url}'")["detail"]
+            assert f"https://127.0.0.1:{http_server.server_port}/" in detail, detail
+            return
         client.execute(sql=f"FORCE INSTALL tpch FROM '{url}'; LOAD tpch;")
         client.execute(sql="CALL dbgen(sf = 0.001)")
         assert client.scalar(sql="SELECT count(*) FROM nation") == 25

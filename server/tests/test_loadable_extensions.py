@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from conftest import TSAN_EXTENSIONS
+from conftest import BASELINE_BUILT_IN, TSAN_EXTENSIONS
 
 from services import PG_DATABASE, PG_HOST, PG_PASSWORD, PG_PORT, PG_USER, S3_PORT, pg_conninfo, require
 
@@ -29,7 +29,8 @@ def test_optional_extensions_are_loaded_from_the_repository(server):
     by_name = {r["extension_name"]: r for r in rows}
     for name in OPTIONAL:
         assert by_name[name]["loaded"], by_name[name]
-        assert (by_name[name]["install_mode"] == "STATICALLY_LINKED") is TSAN_EXTENSIONS, by_name[name]
+        built_in = TSAN_EXTENSIONS or name in BASELINE_BUILT_IN
+        assert (by_name[name]["install_mode"] == "STATICALLY_LINKED") is built_in, by_name[name]
 
 
 def test_httpfs_reads_and_writes_s3(server):
