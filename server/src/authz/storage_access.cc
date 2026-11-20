@@ -173,23 +173,12 @@ std::optional<std::string> StorageAccess::Refusal(const Snapshot& snapshot, cons
       if (!parsed.ok()) return blocked + ": " + parsed.status().message();
       if (!lakes_) lakes_ = LakeAreas();
       if (!lakes_->ok()) return blocked + " of '" + path + "': " + lakes_->status().message();
-      std::vector<const LakeArea*> reached;
       for (const auto& lake : **lakes_) {
-        if (StorageOverlaps(*parsed, request.directory, lake.area)) reached.push_back(&lake);
-      }
-      if (!reached.empty()) {
-        for (const auto* principal : restricted) {
-          if (WithinGrantedLake(*principal, *parsed, request.mode, reached)) continue;
-          const LakeArea& lake = *reached.front();
+        if (StorageOverlaps(*parsed, request.directory, lake.area)) {
           return blocked + " of '" + path + "': it reaches into the storage of DuckLake catalog " + lake.catalog +
                  " ('" + lake.area.text + "'), which only DuckLake itself reads and writes, for statements on its "
-                 "tables" +
-                 (principal->catalog_rules ? std::string(" (a catalog_access token reaches only the data path of a "
-                                                         "DuckLake catalog its rules let it ") +
-                                                 (request.mode == StorageMode::kWrite ? "write" : "read") + ")"
-                                           : std::string());
+                 "tables";
         }
-        continue;  // inside a lake every principal here may reach: no storage privilege is asked
       }
       const auto privilege = StoragePrivilege(parsed->kind, request.mode);
       for (const auto* principal : restricted) {
@@ -198,28 +187,6 @@ std::optional<std::string> StorageAccess::Refusal(const Snapshot& snapshot, cons
     }
   }
   return std::nullopt;
-}
-
-bool StorageAccess::WithinGrantedLake(const Principal& principal, const StoragePath& path, StorageMode mode,
-                                      const std::vector<const LakeArea*>& reached) const {
-  // Only a catalog_access token: its rules give it whole catalogs, a DuckLake catalog's data
-  // files included, as GizmoSQL 1.42.3 gives it them. A store user's grants never reach into
-  // DuckLake's storage (the header says why).
-  if (!principal.catalog_rules) return false;
-  const auto needed = mode == StorageMode::kWrite ? CatalogAccessLevel::kWrite : CatalogAccessLevel::kRead;
-  const auto allows = [&](const LakeArea& lake) {
-    const auto level = CatalogRuleLevel(*principal.catalog_rules, lake.catalog);
-    return level == CatalogAccessLevel::kWrite || (level == needed && level != CatalogAccessLevel::kNone);
-  };
-  bool inside = false;
-  for (const auto* lake : reached) {
-    // Every lake the path reaches must be one its rules allow (a glob from above, or a lake
-    // whose data path lies inside another's, reaches several).
-    if (!allows(*lake)) return false;
-    if (!lake->area.keys.empty() && LocationCovers(lake->area.kind, lake->area.keys.front(), path, local_)) inside = true;
-  }
-  // And it must lie inside one of them: nothing beside or above a lake's data path.
-  return inside;
 }
 
 std::vector<std::string> KnownLakeDataPaths() {

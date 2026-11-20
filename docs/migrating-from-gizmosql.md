@@ -312,20 +312,6 @@ SESSION and every session in `hardcharger_sessions()`. Hardcharger differs on pu
 | access-control statements (CREATE USER, GRANT, ...) on a server with access control | (none: 1.x has no access control statements) | refused, and the rules still hold |
 | a claim that isn't a non-empty list (`[]`, a string, an object, `null`) | no rules: unrestricted | grants nothing |
 
-### Object storage for a `catalog_access` token
-
-GizmoSQL 1.42.3 limits a session whose token carries `catalog_access` rules to the object storage under
-the `data_path` of the DuckLake catalogs its rules grant: read access for reads, write access for
-writes. Hardcharger does the same, for a non-administrator's token and a restricted administrator's
-alike: inside the data path of a DuckLake catalog its rules let it read (write), it may read (write)
-directly, `read_parquet('s3://lake/a/...')`, `glob(...)`, `COPY ... TO 's3://lake/a/exports/x.parquet'`,
-when every DuckLake catalog the path reaches is one its rules allow. Everything else stays refused, as
-in 1.42.3 or more strictly: other object storage (the token holds no storage privilege; 1.42.3 gives a
-token without rules all object storage, Hardcharger gives it only the DuckLake catalogs' data paths), a
-path computed by an expression, `delta_scan()` / `iceberg_scan()`, and `query()`. A store user's access
-to object storage is its grants' (`READ` / `WRITE OBJECT STORAGE`), which never reach into a DuckLake
-catalog's data path.
-
 ### The `readonly` role
 
 Both refuse a `readonly` token's writes with `User '<name>' has a readonly session and cannot
