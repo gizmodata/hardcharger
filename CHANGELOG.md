@@ -7,6 +7,16 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Driver option names follow the [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html)**
+  in the README, the benchmark scripts and the benchmarks write-up (`hardcharger.ingest.parts`,
+  `chargewire.query.result_partitions`, ...; the old `adbc.*` names still work in the drivers,
+  with a deprecation warning). The `:X.Y.Z-adbc` images bundle adbc-driver-quack 1.1.0 (from
+  1.0.4), whose options are `quack.*` (`quack.auth.token`) and which refuses unknown `quack.*`
+  and `adbc.quack.*` keys instead of ignoring them. The Python package's `adbc` extra requires
+  `adbc-driver-hardcharger>=2.7.0` (its own changelog has the details).
+
 ## [2.13.3] - 2026-11-20
 
 ### Added

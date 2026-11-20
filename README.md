@@ -292,7 +292,7 @@ flowchart LR
   threads, in one transaction: a failed load leaves nothing behind.
 - 📤 **Partitioned uploads.** The Go/Python driver sends a load in 16,384-row slices as up to
   16 parts over separate connections at once (32 on a high-latency link; fewer for a small
-  load; `adbc.chargewire.ingest.parts`), inserted from all of them in parallel and committed as
+  load; `hardcharger.ingest.parts`), inserted from all of them in parallel and committed as
   one: all or nothing.
 
 Correctness is never traded for speed: a result is complete only when every partition has

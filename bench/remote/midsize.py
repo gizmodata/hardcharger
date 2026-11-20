@@ -8,7 +8,7 @@ import os
 import statistics
 import time
 
-from adbc_driver_chargewire import dbapi
+from adbc_driver_chargewire import StatementOptions, dbapi
 
 PASSWORD = os.environ.get("BENCH_PASSWORD", "bench-password-not-secret")
 
@@ -26,8 +26,8 @@ def main() -> None:
         for p in [int(x) for x in args.partitions.split(",")]:
             conn = dbapi.connect(uri=f"chargewire://{args.host}:31337", username="bench", password=PASSWORD,
                                  tls_root_certs=args.cert,
-                                 db_kwargs={"adbc.chargewire.ipc_compression": args.codec,
-                                            "adbc.chargewire.statement.result_partitions": str(p)})
+                                 db_kwargs={StatementOptions.IPC_COMPRESSION.value: args.codec,
+                                            StatementOptions.RESULT_PARTITIONS.value: str(p)})
             cur = conn.cursor()
             times = []
             for rep in range(args.reps + 1):

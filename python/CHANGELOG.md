@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The `adbc` extra requires `adbc-driver-hardcharger>=2.7.0` (from 2.5.0), the release whose
+  option names follow the [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html)
+  (`hardcharger.*`). `Server.connect()` passes your keyword arguments through unchanged.
+
 ## [2.13.3] - 2026-11-20
 
 ### Changed

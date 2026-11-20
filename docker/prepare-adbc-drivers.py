@@ -34,7 +34,7 @@ DRIVERS = {
             "asset": "libadbc_driver_db2-linux-{arch}.tar.gz",
             "entrypoint": "AdbcDriverDb2Init", "license": "MIT"},
     # 1.x speaks Quack protocol 3 (DuckDB 2.0 servers); 0.1.0-alpha.11 spoke DuckDB 1.5's.
-    "quack": {"repo": "adbc-driver-quack", "tag": "v1.0.4",
+    "quack": {"repo": "adbc-driver-quack", "tag": "v1.1.0",
               "asset": "libadbc_driver_quack-linux-{arch}.tar.gz",
               "entrypoint": "AdbcDriverQuackInit", "license": "MIT"},
     "hardcharger": {"repo": "hardcharger-adbc", "tag": "v2.0.0",

@@ -26,11 +26,13 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# The client used by Server.connect(): 2.5.0 opens a connection in the catalog and schema it is
-# given (earlier releases often set the schema before the catalog and failed, or opened in the
-# catalog's default schema), and has revoked-token recovery after Stop, the ADBC conformance
-# fixes and restricted native symbol exports of 2.4.9.
-adbc = ["adbc-driver-hardcharger>=2.5.0"]
+# The client used by Server.connect(): 2.7.0 names its options as the ADBC driver style guide
+# asks (hardcharger.*; the old adbc.* names print a deprecation warning), on top of 2.5.0's fix
+# that opens a connection in the catalog and schema it is given (earlier releases often set the
+# schema before the catalog and failed, or opened in the catalog's default schema), and the
+# revoked-token recovery after Stop, ADBC conformance fixes and restricted native symbol
+# exports of 2.4.9.
+adbc = ["adbc-driver-hardcharger>=2.7.0"]
 
 [project.scripts]
 hardcharger-server = "hardcharger.__main__:server_main"

@@ -66,7 +66,7 @@ with dbapi.connect(driver="hardcharger", autocommit=True, db_kwargs={
 print("Hardcharger manifest discovery and SELECT 42 passed", flush=True)
 
 with dbapi.connect(driver="quack", db_kwargs={
-    "uri": "quack://localhost:9494", "adbc.quack.token": QUACK_TOKEN,
+    "uri": "quack://localhost:9494", "quack.auth.token": QUACK_TOKEN,
 }) as connection:
     check_version(name="quack", connection=connection, vendor="DuckDB (via Quack)")
     with connection.cursor() as cursor:

@@ -166,16 +166,16 @@ class AdbcSystem:
                 },
             )
         else:
-            from adbc_driver_chargewire import dbapi
+            from adbc_driver_chargewire import StatementOptions, dbapi
 
             # Set both explicitly (the driver's defaults are 8 each): result partitions, which
             # the driver fetches at once over separate connections (Chargewire §6.10), and
             # ingest parts, uploaded at once and committed as one (§8.3). 1: one stream.
             db_kwargs = {
-                "adbc.chargewire.ipc_compression": compression,
-                "adbc.chargewire.statement.result_partitions": str(partitions),
-                "adbc.chargewire.statement.result_order": order,
-                "adbc.chargewire.ingest.parts": str(ingest_parts),
+                StatementOptions.IPC_COMPRESSION.value: compression,
+                StatementOptions.RESULT_PARTITIONS.value: str(partitions),
+                StatementOptions.RESULT_ORDER.value: order,
+                StatementOptions.INGEST_PARTS.value: str(ingest_parts),
             }
             if driver_defaults:
                 db_kwargs = {}  # what an application gets without setting anything
