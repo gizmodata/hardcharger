@@ -903,7 +903,8 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
   const StorageCallback storage = [&](const StorageUse& use) {
     if (principal.superuser) return;
     if (!storage_access) storage_access.emplace(*dd::capiv2::Convert(connection_)->context);
-    StorageRequest request{use.what, use.write ? StorageMode::kWrite : StorageMode::kRead, use.paths, use.directory};
+    StorageRequest request{use.what, use.write ? StorageMode::kWrite : StorageMode::kRead, use.paths, use.directory,
+                           use.own_client};
     if (auto refusal = storage_access->Refusal(*snapshot, {principal}, request, identity_.user_name)) {
       throw Error(ErrorCode::kPermissionDenied, *refusal, "42501");
     }

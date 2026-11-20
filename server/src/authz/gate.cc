@@ -612,6 +612,13 @@ class Walker {
         Flag("the table function " + name + (macro_names_.empty() ? "" : kInMacro + macro_names_.back()));
         return;
       }
+      // A function that reads through its own client reads what its table's metadata names:
+      // like a computed path, whatever path it is handed.
+      if (ddb::ReadsThroughItsOwnClient(name)) {
+        if (storage_) storage_({name + "()", false, std::nullopt, false, true});
+        else Flag(name + "() (files and URLs)");
+        return;
+      }
       // The paths an EXECUTE grant declared, as written, before binding opens them.
       auto& function = ref.function->Cast<dd::FunctionExpression>();
       for (const auto& argument : *declared) {
@@ -833,6 +840,11 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
         if (table_function_allowed) {
           const auto declared = table_function_allowed({name});
           if (!declared) return gate("the table function " + name);
+          if (ddb::ReadsThroughItsOwnClient(name)) {
+            if (!storage) return gate(name + "() (files and URLs)");
+            storage({name + "()", false, std::nullopt, false, true});
+            return std::nullopt;
+          }
           auto& function = call.function->Cast<dd::FunctionExpression>();
           for (const auto& argument : *declared) {
             const auto* expression = DeclaredArgument(function, argument);

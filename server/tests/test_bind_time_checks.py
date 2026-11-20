@@ -127,7 +127,21 @@ def rbac(module_launcher, store, tmp_path_factory):
                                args=["--database", str(work / "bind_rbac.duckdb")])
     admin = server.admin()
     for sql in ["CREATE SEQUENCE seq", "CREATE ROLE users", "CREATE USER una", "CREATE USER uri",
-                "GRANT users TO uri", "GRANT USAGE ON SEQUENCE main.seq TO users"]:
+                "GRANT users TO uri", "GRANT USAGE ON SEQUENCE main.seq TO users",
+                # delta_scan / iceberg_scan granted with a location-only storage grant, and with the
+                # storage privileges everywhere.
+                "CREATE ROLE lakes_at", "CREATE ROLE lakes_all", "CREATE USER loc", "CREATE USER all_over",
+                "GRANT lakes_at TO loc", "GRANT lakes_all TO all_over",
+                "GRANT EXECUTE ON TABLE FUNCTION delta_scan (PATH ARGUMENT 1) TO lakes_at",
+                "GRANT EXECUTE ON TABLE FUNCTION iceberg_scan (PATH ARGUMENT 1) TO lakes_at",
+                "GRANT READ OBJECT STORAGE ON LOCATION 's3://lake-bucket/tables/' TO lakes_at",
+                "GRANT EXECUTE ON TABLE FUNCTION delta_scan (PATH ARGUMENT 1) TO lakes_all",
+                "GRANT EXECUTE ON TABLE FUNCTION iceberg_scan (PATH ARGUMENT 1) TO lakes_all",
+                "GRANT READ FILESYSTEM TO lakes_all", "GRANT READ OBJECT STORAGE TO lakes_all",
+                "GRANT READ HTTP TO lakes_all",
+                # Nothing listens there: the twin's read fails at once, without the network.
+                "CREATE SECRET lake_nowhere (TYPE s3, KEY_ID 'k', SECRET 's', ENDPOINT '127.0.0.1:9', USE_SSL false, "
+                "URL_STYLE 'path', REGION 'us-east-1')"]:
         expect_allowed(client=admin, sql=sql)
     server.admin_client = admin
     return server
@@ -154,3 +168,21 @@ def test_a_store_user_needs_usage_for_a_sequence_moved_while_binding(rbac):
         assert rbac_last_value(rbac) == 50
     finally:
         expect_allowed(client=rbac.admin_client, sql="REVOKE DROP SEQUENCE ON SCHEMA main FROM users")
+
+
+# delta_scan() / iceberg_scan() read, with a storage client of their own, the files their table's
+# log or manifest names, wherever they are: a location grant can't bound that (GizmoSQL 1.42.3 refuses
+# them to catalog-scoped sessions for the same reason). So a store user needs the storage privileges
+# everywhere for them, as for a computed path, whatever path it hands them.
+@pytest.mark.parametrize("sql", ["SELECT * FROM delta_scan('s3://lake-bucket/tables/t')",
+                                 "SELECT * FROM iceberg_scan('s3://lake-bucket/tables/t')",
+                                 "CALL delta_scan('s3://lake-bucket/tables/t')",
+                                 "DESCRIBE SELECT * FROM delta_scan('s3://lake-bucket/tables/t')"])
+def test_delta_and_iceberg_need_the_storage_privileges_everywhere(rbac, sql):
+    expect_blocked(client=rbac.user(name="loc"), sql=sql, why="no location can bound it")
+    # The twin: with the privileges everywhere, access control lets it through to DuckDB (which then
+    # fails for want of the table, or of the extension, but not for access).
+    try:
+        rbac.user(name="all_over").run(sql=sql)
+    except Exception as error:  # noqa: BLE001 - any failure but access control's
+        assert "Hardcharger blocked" not in str(error) and "permission_denied" not in str(error), error

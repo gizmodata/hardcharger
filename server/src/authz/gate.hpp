@@ -55,6 +55,7 @@ struct StorageUse {
   bool write = false;
   std::optional<std::vector<std::string>> paths;
   bool directory = false;  // writes (or reads) a directory of files
+  bool own_client = false;  // delta_*() / iceberg_*(): reads what its table's metadata names (paths unknown)
 };
 using NamedTableCallback = std::function<void(const std::vector<std::string>&, bool described)>;
 using TableFunctionCallback =

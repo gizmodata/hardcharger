@@ -30,6 +30,9 @@ struct StorageRequest {
   std::optional<std::vector<std::string>> paths;
   // It writes a directory of files (COPY ... TO with PARTITION_BY, EXPORT DATABASE).
   bool directory = false;
+  // It reads through a client of its own what its table's metadata names (delta_*(), iceberg_*()):
+  // `paths` is nullopt, and the refusal says why.
+  bool own_client = false;
 };
 
 // One session's storage checks (on one statement): reads the session's home directory and
