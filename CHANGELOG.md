@@ -22,6 +22,14 @@ own changelog in `python/CHANGELOG.md`.
   as `host` or `x86-64-v3`, is often the better fix). Every release gate runs its smoke test on an
   emulated `kvm64` CPU on Oracle Linux 8, and its full test suite. The container image keeps the
   optimized build. Thanks to jhonvirtucio for the report and the diagnosis.
+- **The baseline build has httpfs, ducklake and postgres_scanner built in, and never loads an
+  extension that would crash it.** The extensions DuckDB publishes for download are compiled for
+  x86-64-v3 too, so on an older CPU loading one (httpfs, autoloaded by any `https://` or `s3://`
+  path) died with "Illegal instruction" and took the server down. The baseline build compiles
+  httpfs, ducklake and postgres_scanner in, next to core_functions, parquet, json and icu, and on a
+  CPU without x86-64-v3 it installs and loads no other extension: `INSTALL` and `LOAD` fail with a
+  message that says why and names the built-in ones, and the server logs a warning at startup. On a
+  CPU with AVX2 it loads every extension, as the optimized build does.
 - **Building from source for a CPU target.** `HARDCHARGER_CPU_TARGET=baseline` (or `optimized`,
   the default) chooses the target for `server/scripts/build-deps.sh`; the server's CMake reads the
   target from the dependency installs and refuses a mix. See `server/scripts/cpu-target.sh`.

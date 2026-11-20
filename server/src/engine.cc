@@ -537,6 +537,16 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
   // startup is over (below), a sensitive path.
   if (access_) private_files_->Add(access_->store_file(), "the access-control store", /*attached=*/false);
   authz::InstallFileGuard(instance(), private_files_, sensitive_paths_);
+  // The baseline build on a CPU too old for DuckDB's downloadable extensions: only the
+  // built-in ones load (issue #62).
+#ifdef HARDCHARGER_BUILT_IN_EXTENSIONS
+  if (authz::InstallExtensionCpuGuard(instance(), HARDCHARGER_BUILT_IN_EXTENSIONS)) {
+    Log(LogLevel::kWarning,
+        "this CPU lacks x86-64-v3 (AVX2), which DuckDB's downloadable extensions need: this baseline build "
+        "loads only its built-in extensions",
+        {{"built_in_extensions", HARDCHARGER_BUILT_IN_EXTENSIONS}});
+  }
+#endif
   chargewire_duckdb::Connection connection;
   chargewire_duckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), connection.out(), err); });
   // An attached file is registered under the path DuckDB recorded for it, which its

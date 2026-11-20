@@ -13,6 +13,9 @@
 # HARDCHARGER_SMOKE_EXEC: a command that runs each binary, e.g. QEMU user-mode emulation
 # with a chosen CPU model, so the whole smoke test runs on that CPU (CI runs the baseline
 # tarball on QEMU's kvm64, an x86-64-v1 CPU: "/qemu/qemu-x86_64-static -cpu kvm64").
+# HARDCHARGER_SMOKE_OLD_CPU=1: the baseline build on a CPU without x86-64-v3 also refuses a
+# downloadable extension with its message (src/authz/extension_cpu_guard.cc), and keeps
+# serving; the HTTPS read above it uses the built-in httpfs.
 set -euo pipefail
 tarball="${1:?tarball}"
 read -ra exec_prefix <<< "${HARDCHARGER_SMOKE_EXEC:-}"
@@ -66,6 +69,15 @@ id=$(echo "$statement" | json statement_id)
 curl -sf "$base/sessions/$session/statements/$id/result" "${auth[@]}" \
   -H 'Accept: application/vnd.apache.arrow.stream' -o https.arrows
 grep -aq 'https-true' https.arrows || { echo "the httpfs read returned no https-true"; exit 1; }
+if [ "${HARDCHARGER_SMOKE_OLD_CPU:-}" = 1 ]; then
+  statement=$(curl -s -X POST "$base/sessions/$session/statements" "${auth[@]}" -H 'Accept: application/json' \
+                -H 'Prefer: wait=60' -d '{"sql": "INSTALL spatial"}')
+  echo "$statement"
+  grep -q "baseline build" <<< "$statement" || { echo "INSTALL spatial was not refused by the baseline guard"; exit 1; }
+  grep -q "httpfs" <<< "$statement" || { echo "the refusal does not name the built-in extensions"; exit 1; }
+  curl -sf http://127.0.0.1:31338/health | grep -q serving || { echo "the server stopped after the refusal"; exit 1; }
+  grep -q "loads only its built-in extensions" server.log || { echo "no startup warning about the CPU"; exit 1; }
+fi
 # The command-line client from the same tarball, against the same server.
 client="$(dirname "$bin")/hardcharger"
 run "$client" --version

@@ -61,6 +61,19 @@ foreach(_dep_prefix "${CHARGEWIRE_DUCKDB_PREFIX}" "${CHARGEWIRE_ARROW_PREFIX}")
 endforeach()
 set(HARDCHARGER_CPU_SERVER_LEVEL 0)
 set(HARDCHARGER_CPU_CLIENT_LEVEL 0)
+# The baseline Linux x86_64 build also builds in the extensions people load most (httpfs,
+# ducklake, postgres_scanner: DuckDB's downloadable ones need x86-64-v3, so on an older CPU
+# the server refuses to load any, src/authz/extension_cpu_guard.cc), with the libraries they
+# link (scripts/build-extension-deps.sh), as the mobile builds do.
+set(HARDCHARGER_BASELINE_LINUX OFF)
+set(HARDCHARGER_NATIVE_EXTENSIONS core_functions parquet json icu)
+if(HARDCHARGER_CPU_TARGET STREQUAL "baseline" AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  set(HARDCHARGER_BASELINE_LINUX ON)
+  list(APPEND HARDCHARGER_NATIVE_EXTENSIONS httpfs ducklake postgres_scanner)
+  string(JOIN ", " _built_in ${HARDCHARGER_NATIVE_EXTENSIONS})
+  add_compile_definitions(HARDCHARGER_BASELINE_BUILD "HARDCHARGER_BUILT_IN_EXTENSIONS=\"${_built_in}\"")
+endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$"
    AND CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang)$" AND HARDCHARGER_CPU_TARGET STREQUAL "optimized")
   set(HARDCHARGER_CPU_SERVER_LEVEL 3)  # DuckDB's CLI profile
@@ -104,7 +117,7 @@ if(HARDCHARGER_STATIC)
   else()
     # Explicitly limit native builds, even if an old install prefix contains extra archives.
     set(_duckdb_extensions)
-    foreach(_extension core_functions parquet json icu)
+    foreach(_extension IN LISTS HARDCHARGER_NATIVE_EXTENSIONS)
       list(APPEND _duckdb_extensions "${_duckdb_lib}/lib${_extension}_extension.a")
     endforeach()
   endif()
@@ -123,7 +136,7 @@ if(HARDCHARGER_STATIC)
     set(_duckdb_loader "${CMAKE_CURRENT_SOURCE_DIR}/../android/native/bundled_extensions.c")
   endif()
   set(_duckdb_archives ${_duckdb_extensions} ${_duckdb_vendored} "${_duckdb_lib}/libduckdb_static.a")
-  if(IOS OR ANDROID)
+  if(IOS OR ANDROID OR HARDCHARGER_BASELINE_LINUX)
     list(APPEND _duckdb_archives "${_duckdb_lib}/static-deps/libpq.a"
          "${_duckdb_lib}/static-deps/libroaring.a" "${_duckdb_lib}/static-deps/libcurl.a")
   endif()
@@ -229,6 +242,7 @@ add_library(hardcharger_authz OBJECT
   src/authz/ddl.cc
   src/authz/enforcement.cc
   src/authz/engine.cc
+  src/authz/extension_cpu_guard.cc
   src/authz/file_guard.cc
   src/authz/gate.cc
   src/authz/introspection.cc

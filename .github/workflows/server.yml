@@ -1006,7 +1006,10 @@ jobs:
           done
           qemu=$(command -v qemu-x86_64-static)
           "$qemu" --version | head -1
-          "$qemu" -cpu help | grep -E "^ *(kvm64|Nehalem|Haswell) " || { echo "QEMU lacks a CPU model the checks use"; exit 1; }
+          models=$("$qemu" -cpu help)
+          for model in kvm64 Nehalem Haswell; do
+            grep -qw -- "$model" <<< "$models" || { echo "QEMU lacks the CPU model $model"; exit 1; }
+          done
           echo "QEMU_X86_64=$qemu" >> "$GITHUB_ENV"
       - name: Install and run on Oracle Linux 8
         env:
@@ -1015,7 +1018,8 @@ jobs:
           cp server/scripts/smoke-tarball.sh dist/
           emulate=()
           if [ -n "$QEMU_CPU" ]; then
-            emulate=(-v "$QEMU_X86_64:/qemu/qemu-x86_64-static:ro" -e HARDCHARGER_SMOKE_EXEC="/qemu/qemu-x86_64-static -cpu $QEMU_CPU")
+            emulate=(-v "$QEMU_X86_64:/qemu/qemu-x86_64-static:ro" -e HARDCHARGER_SMOKE_EXEC="/qemu/qemu-x86_64-static -cpu $QEMU_CPU"
+                     -e HARDCHARGER_SMOKE_OLD_CPU=1)
           fi
           docker run --rm ${emulate[@]+"${emulate[@]}"} -v "$PWD/dist:/dist:ro" oraclelinux:8 \
             bash /dist/smoke-tarball.sh "/dist/hardcharger-${{ matrix.name }}.tar.gz"
