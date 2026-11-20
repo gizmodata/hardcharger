@@ -429,8 +429,8 @@ Linux x86-64 comes in two builds. `hardcharger-linux-amd64.tar.gz` is optimized 
 CPUs (AVX2: Intel Haswell, AMD Excavator or newer) and checks the CPU when it starts.
 `hardcharger-linux-amd64-baseline.tar.gz` (from 2.13.2 on) runs on any x86-64 CPU, such as a
 virtual machine whose CPU model hides AVX2 (QEMU's `kvm64`), but slower. Use it only where the
-optimized build says the CPU is too old; changing the VM's CPU model (to `host` or `x86-64-v3`)
-is often the better fix. The one-line installer and the Python package pick the baseline build
+optimized build says the CPU is too old; changing the VM's CPU model (to `host`, or a model
+with AVX2 such as QEMU's `Haswell` or Proxmox's `x86-64-v3`) is often the better fix. The one-line installer and the Python package pick the baseline build
 on such a CPU by themselves. DuckDB's downloadable extensions need AVX2 as well, so the baseline
 build has httpfs, ducklake and postgres_scanner built in (with core_functions, parquet, json and
 icu) and, on a CPU without AVX2, refuses to install or load any other extension.

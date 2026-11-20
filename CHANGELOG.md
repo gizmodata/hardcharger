@@ -19,7 +19,7 @@ own changelog in `python/CHANGELOG.md`.
   hides those instructions, such as QEMU's `kvm64` ("Common KVM processor"), and for older
   processors. It is slower than the optimized build, because DuckDB does not choose instructions
   at run time, so use it only where the optimized one can't run (a VM's CPU model setting, such
-  as `host` or `x86-64-v3`, is often the better fix). Every release gate runs its smoke test on an
+  as `host`, QEMU's `Haswell` or Proxmox's `x86-64-v3`, is often the better fix). Every release gate runs its smoke test on an
   emulated `kvm64` CPU on Oracle Linux 8, and its full test suite. The container image keeps the
   optimized build. Thanks to jhonvirtucio for the report and the diagnosis.
 - **The baseline build has httpfs, ducklake and postgres_scanner built in, and never loads an
