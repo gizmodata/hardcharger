@@ -314,7 +314,8 @@ def test_ducklake_prepared_statements(tenant_a):
 def test_ducklake_calls_in_views_and_macros_are_refused(world, tenant_a, request):
     admin = world["server"].admin()
     wrapped = "a view or macro cannot wrap a DuckLake function"
-    unchecked = "it is called where access control cannot check its catalog before it runs"
+    # (A DuckLake call that reaches the plan check without the gate having checked it is refused
+    # there: no SQL reaches that today, so unit/ducklake_plan_check_test.cc tests it.)
     # A view of the token's own would run the call with the access of whoever reads it.
     refused(session=tenant_a, sql=f"CREATE VIEW {A}.main.v_lake AS SELECT * FROM ducklake_snapshots('{A}')",
             why=f"Hardcharger blocked ducklake_snapshots() in a view: {wrapped}")
@@ -441,7 +442,7 @@ def test_tables_named_like_ducklake_functions_are_ordinary_tables(world, tenant_
 def test_ducklake_calls_in_places_the_walk_does_not_read_are_refused(tenant_a):
     """Where a DuckLake call sits in a statement decides nothing: one on a catalog the rules deny is
     refused wherever it is, by the rules when access control reads that place, else by DuckDB,
-    which binds no subquery there, else by the plan check (an administrator's macro, above)."""
+    which binds no subquery there, else by the plan check (unit/ducklake_plan_check_test.cc)."""
     on_b = f"(SELECT count(*) FROM ducklake_snapshots('{B}'))"
     for sql, why in [(f"SET VARIABLE v = {on_b}", READ_B), (f"SELECT {on_b}", READ_B), (f"VALUES ({on_b})", READ_B),
                      (f"SELECT * FROM {A}.main.mine WHERE i IN (SELECT snapshot_id FROM ducklake_snapshots('{B}'))",
