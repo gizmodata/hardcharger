@@ -40,8 +40,8 @@ run "$bin" --verify-tls https://token.actions.githubusercontent.com/.well-known/
 work=$(mktemp -d)
 cd "$work"
 HARDCHARGER_ADMIN_USERNAME=smoke HARDCHARGER_ADMIN_PASSWORD=smoke-password HARDCHARGER_HEALTH_PORT=31338 \
-  run "$bin" --host 127.0.0.1 --port 31337 2> server.log &
-server=$!
+  ${exec_prefix[@]+"${exec_prefix[@]}"} "$bin" --host 127.0.0.1 --port 31337 2> server.log &
+server=$!  # the server's own PID (or its emulator's): run() in the background would be a subshell
 trap 'kill "$server" 2>/dev/null || true; cat "$work/server.log"' EXIT
 for _ in $(seq 1 120); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
 echo
