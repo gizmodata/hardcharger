@@ -69,15 +69,17 @@ also closes gaps there.
 - **What DuckDB evaluates while it binds a statement is checked first.** DuckDB evaluates a table
   function's arguments, a PRAGMA's parameters, an `AT` clause and `EXECUTE`'s values while it binds,
   before access control checks the plan. So `SELECT * FROM range(setval('c.main.seq', 1))` (also
-  through `CALL`, `EXPLAIN`, `DESCRIBE`, `SUMMARIZE`, `PIVOT`, `SET VARIABLE` or an administrator's
-  macro) moved a sequence that a read-only token or a store user without the privilege could not
-  otherwise change. Such calls are now checked before binding, by the rules the plan check applies.
+  through `CALL`, `EXPLAIN`, `DESCRIBE`, `SUMMARIZE`, `PIVOT`, `SET VARIABLE`, a scalar macro whose
+  body calls `setval()` or `nextval()`, or an administrator's table macro) moved a sequence that a
+  token with read-only rules, a `readonly` token or a store user without the privilege could not
+  otherwise change. Such calls are now checked before binding, by the rules the plan check applies,
+  and refused in a `readonly` token's session whatever its rules.
 - **An administrator's macro no longer has DuckDB bind what a non-administrator hands it.** A macro
   that passes its argument to `query()` or to a table function
   (`CREATE MACRO route(s) AS TABLE SELECT * FROM query(s)`) had DuckDB bind the caller's SQL before
   the plan check refused it (a `postgres_query()` prepared on the remote database, a file sniffed).
-  The macro's body is now checked with the caller's arguments first; SQL the caller may run itself
-  still works through it (GizmoSQL 1.42.3).
+  The macro's body is now checked with the caller's arguments first, wherever the macro is stored (a
+  DuckLake catalog included); SQL the caller may run itself still works through it (GizmoSQL 1.42.3).
 - `PRAGMA json_execute_serialized_sql` is the administrator's, like the table function of that name
   (GizmoSQL 1.42.3).
 - The check before binding refuses a kind of statement it has no rule for. It now also reads `PIVOT`
@@ -88,7 +90,8 @@ also closes gaps there.
 
 - **`delta_*()` and `iceberg_*()` need the storage privileges everywhere.** They read the files their
   table's log or manifest names, wherever those are, with a storage client of their own, so a
-  location grant never bounded what they could read; see Upgrading.
+  location grant never bounded what they could read; see Upgrading. (A user's own table macro named
+  like them, `delta_summary()`, is a macro and is unaffected.)
 - A token with `catalog_access` rules still reaches no DuckLake catalog's data files directly, its
   own catalog's included, where GizmoSQL 1.42.3 lets it read and write there: only DuckLake reads
   and writes a DuckLake catalog's files. The migration guide says so.

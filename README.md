@@ -1150,12 +1150,25 @@ Each statement is checked inside DuckDB against its own plan, after binding and 
 before optimizing, so nested SQL, views and macros can't route around a grant. Anything the
 check can't classify is refused. Changes reach every replica within about a second.
 
+Some things DuckDB runs while it binds a statement, before there is a plan to check: a table
+function's arguments, a PRAGMA's parameters, an `AT` clause, `EXECUTE`'s values, and the body of
+any user macro the statement calls, with the caller's arguments. Those are checked first, on the
+parsed statement, by the same rules: `nextval()` / `currval()` there need `USAGE` on the sequence
+and `setval()` `DROP SEQUENCE` on its schema (for a `catalog_access` token: write, or read for
+`currval()`, on the sequence's catalog), a `readonly` session moves no sequence at all, and a macro
+that hands the caller's string to `query()` or `read_csv()` is checked with that string. A kind of
+statement the check has no rule for is refused. Upgrading from 2.13.3: a role that called
+`range(nextval('s'))` or `SELECT * FROM t AT (VERSION => setval(...))` without those privileges,
+directly or through a macro, now needs them.
+
 Users can call an extension's table function: `GRANT EXECUTE ON TABLE FUNCTION read_hl7 (PATH
 ARGUMENT 2) TO analyst` opens it to a role, and the arguments the grant declares as paths go
 through the storage privileges as `read_csv()`'s path does. `delta_*()` and `iceberg_*()` read
 the files their table's log or manifest names, wherever they are, with a storage client of their
 own, so whatever path they are handed they need `READ FILESYSTEM`, `READ OBJECT STORAGE` and
-`READ HTTP` everywhere (a location grant can't bound them). Nested schemas (DuckDB 2.0) are
+`READ HTTP` everywhere (a location grant can't bound them); grant those to the roles that use them
+when upgrading from 2.13.3, where `EXECUTE` and a location grant were enough. A user's own table
+macro named like them is a macro, and is unaffected. Nested schemas (DuckDB 2.0) are
 granted by their path: a grant on `sales.payroll` covers `sales.payroll.*` and nothing alike,
 one on `sales` covers its children, and `CREATE SCHEMA ON SCHEMA sales` lets a role nest
 schemas in it.
