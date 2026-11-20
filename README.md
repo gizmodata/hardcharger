@@ -1152,7 +1152,10 @@ check can't classify is refused. Changes reach every replica within about a seco
 
 Users can call an extension's table function: `GRANT EXECUTE ON TABLE FUNCTION read_hl7 (PATH
 ARGUMENT 2) TO analyst` opens it to a role, and the arguments the grant declares as paths go
-through the storage privileges as `read_csv()`'s path does. Nested schemas (DuckDB 2.0) are
+through the storage privileges as `read_csv()`'s path does. `delta_*()` and `iceberg_*()` read
+the files their table's log or manifest names, wherever they are, with a storage client of their
+own, so whatever path they are handed they need `READ FILESYSTEM`, `READ OBJECT STORAGE` and
+`READ HTTP` everywhere (a location grant can't bound them). Nested schemas (DuckDB 2.0) are
 granted by their path: a grant on `sales.payroll` covers `sales.payroll.*` and nothing alike,
 one on `sales` covers its children, and `CREATE SCHEMA ON SCHEMA sales` lets a role nest
 schemas in it.
