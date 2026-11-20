@@ -73,6 +73,13 @@ also closes gaps there.
 - The release gate waits on each downstream publish's own conclusion, so a run that the API
   doesn't show yet right after it is dispatched no longer fails a release that published.
 
+- **A prepared statement was refused now and then under access control** ("its plan could not be
+  checked against user ...'s grants"). The session skipped re-planning a run when the statement
+  sat at the address of one checked earlier at the same grants version; the statement DuckDB runs
+  is never the one checked at PREPARE, so a match came only from another, freed statement whose
+  address the allocator had reused, and that run reached no check. Every run is now planned and
+  checked again. A plan that reaches no check is still refused, now saying that it is not about
+  the user's grants, and the server logs the details.
 - **`THIRD_PARTY_NOTICES.md` lists what the baseline Linux x86_64 build contains.** Since 2.13.2
   that build compiles in httpfs, DuckLake and the PostgreSQL extension with CRoaring, libpq and
   libcurl, and since 2.13.3 the SQLite extension, but the notices named them for iOS only and left

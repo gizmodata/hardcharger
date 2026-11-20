@@ -427,6 +427,7 @@ add_executable(hardcharger-unit-tests
   unit/authz_gate_test.cc
   unit/catalog_log_test.cc
   unit/ducklake_calls_test.cc
+  unit/prepared_rebind_test.cc
   unit/ducklake_plan_check_test.cc
   unit/extension_hint_test.cc
   unit/guards_test.cc

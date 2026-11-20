@@ -178,8 +178,6 @@ class RbacSessionState : public duckdb::ClientContextState {
   bool planned_prepare_only_ = false;
   std::vector<PendingOwnership> prepared_ownership_;
   std::vector<std::string> last_accesses_;
-  // Which snapshot version each prepared statement was checked against.
-  std::unordered_map<const void*, std::pair<int64_t, int64_t>> prepared_versions_;
   std::vector<PendingOwnership> pending_ownership_;
   // Owners recorded for the statement now running, before it ran (undone if it fails).
   std::vector<RecordedOwnership> recorded_ownership_;

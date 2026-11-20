@@ -2067,9 +2067,11 @@ class PlanChecker {
                                   const dd::DependencyDependentFlags& flags) {
         edges.push_back({&object, &dependent, flags.IsBlocking(), flags.IsOwnedBy()});
       });
-    } catch (const std::exception&) {
-      Deny(principal_, "what depends on " + what + " could not be listed; drop the objects that depend on it "
-                       "first, or ask an administrator");
+    } catch (const std::exception& e) {
+      Log(LogLevel::kWarning, "access control could not list what depends on an object",
+          {{"user", principal_.user_name}, {"object", what}, {"error", e.what()}});
+      throw dd::CatalogException("Hardcharger could not list what depends on " + what +
+                                 ", so the statement was not run (the server log says why)");
     }
     auto in_dropped_schema = [&](const dd::CatalogEntry& entry) {
       if (schemas.empty() || entry.type == dd::CatalogType::SCHEMA_ENTRY) return false;
@@ -2155,8 +2157,11 @@ class PlanChecker {
       schema.ScanSchemaTree(transaction, [&](dd::SchemaCatalogEntry& found) {
         if (&found != &schema) contents.push_back(&found);
       });
-    } catch (const std::exception&) {
-      Deny(principal_, "what is in " + what + " could not be listed; ask an administrator");
+    } catch (const std::exception& e) {
+      Log(LogLevel::kWarning, "access control could not list what is in a schema",
+          {{"user", principal_.user_name}, {"object", what}, {"error", e.what()}});
+      throw dd::CatalogException("Hardcharger could not list what is in " + what +
+                                 ", so the statement was not run (the server log says why)");
     }
     if (!contents.empty()) RefuseDependents("drop", what, contents);
   }
@@ -2832,31 +2837,35 @@ dd::RebindQueryInfo RbacSessionState::FinalizePrepareLocked(dd::PreparedStatemen
     return dd::RebindQueryInfo::DO_NOT_REBIND;
   } else if (!unchecked()) {
     // The plan never reached the check (the optimizer was skipped). Refuse it.
+    Log(LogLevel::kWarning, "a prepared plan reached no access-control check",
+        {{"user", principal_.user_name},
+         {"statement_type", dd::StatementTypeToString(prepared.statement_type)},
+         {"mode", mode == dd::PreparedStatementMode::PREPARE_ONLY ? "prepare_only" : "prepare_and_execute"},
+         {"bound_all_parameters", prepared.properties.bound_all_parameters ? "true" : "false"},
+         {"always_require_rebind", prepared.properties.always_require_rebind ? "true" : "false"},
+         {"bind_checked", bind_checked ? "true" : "false"},
+         {"unplanned", unplanned ? "true" : "false"},
+         {"planned_prepare_only", prepare_only ? "true" : "false"},
+         {"has_physical_plan", prepared.physical_plan ? "true" : "false"}});
     pending_ownership_.clear();
     prepared_ownership_.clear();
     throw dd::PermissionException(
-        "Hardcharger blocked this statement: its plan could not be checked against user " +
-        principal_.user_name + "'s grants");
+        "Hardcharger blocked this statement: access control did not see its plan (it was not planned for this run), "
+        "so it was not run; this is not about user " + principal_.user_name + "'s grants. Run it again, and if it "
+        "keeps happening, report it with the server log");
   }
-  if (prepared_versions_.size() > 4096) prepared_versions_.clear();
-  prepared_versions_[&prepared] = {last_checked_version_, last_checked_persona_};
   return dd::RebindQueryInfo::DO_NOT_REBIND;
 }
 
 dd::RebindQueryInfo RbacSessionState::RebindIfGrantsChanged(
-    const dd::PreparedStatementData& prepared) {
+    const dd::PreparedStatementData&) {
   if (unchecked()) return dd::RebindQueryInfo::DO_NOT_REBIND;
-  auto engine = engine_.lock();
-  if (!engine) return dd::RebindQueryInfo::ATTEMPT_TO_REBIND;
-  const int64_t current = engine->snapshot()->version();
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto it = prepared_versions_.find(&prepared);
-  if (it != prepared_versions_.end() && it->second.first == current &&
-      it->second.second == persona_version_.load()) {
-    return dd::RebindQueryInfo::DO_NOT_REBIND;
-  }
-  // Grants changed since this statement was checked (or it was never seen):
-  // re-plan it, which runs the check again.
+  // Every run of a prepared statement is planned again, so the plan that runs is checked
+  // against the grants of the moment. (This used to skip the re-plan for a statement whose
+  // address had been checked at the current snapshot version, kept by address. The statement
+  // DuckDB runs is never the object finalized at PREPARE, so a match only ever came from
+  // another, freed statement whose address the allocator had reused: the run then skipped the
+  // optimizer and the check, and was refused as unchecked, now and then.)
   return dd::RebindQueryInfo::ATTEMPT_TO_REBIND;
 }
 
