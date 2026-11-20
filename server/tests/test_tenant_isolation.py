@@ -332,9 +332,14 @@ def test_ducklake_calls_in_views_and_macros_are_refused(world, tenant_a, request
     admin.execute(sql=f"CREATE OR REPLACE MACRO {A}.main.admin_other_macro() AS TABLE SELECT * FROM ducklake_snapshots('{B}')")
     refused(session=tenant_a, sql=f"SELECT * FROM {A}.main.admin_lake_view",
             why=f"Hardcharger blocked ducklake_snapshots() in a view: {wrapped}")
-    refused(session=tenant_a, sql=f"SELECT * FROM {A}.main.admin_lake_macro()", why=unchecked)
-    refused(session=tenant_a, sql=f"SELECT {A}.main.admin_lake_count()", why=unchecked)
-    refused(session=tenant_a, sql=f"SELECT * FROM {A}.main.admin_other_macro()", why=READ_B)
+    # (A macro's body is walked before binding wherever the macro is stored, a DuckLake catalog
+    # included: the call in it is refused there as wrapped, before DuckDB binds it.)
+    refused(session=tenant_a, sql=f"SELECT * FROM {A}.main.admin_lake_macro()",
+            why=f"Hardcharger blocked ducklake_snapshots() in a macro: {wrapped}")
+    refused(session=tenant_a, sql=f"SELECT {A}.main.admin_lake_count()",
+            why=f"Hardcharger blocked ducklake_snapshots() in a macro: {wrapped}")
+    refused(session=tenant_a, sql=f"SELECT * FROM {A}.main.admin_other_macro()",
+            why=f"Hardcharger blocked ducklake_snapshots() in a macro: {wrapped}")
     # ... while the administrator's own use of them works (their positive twin).
     assert admin.query(sql=f"SELECT count(*) AS n FROM {A}.main.admin_lake_view").column("n").to_pylist()[0] > 0
     assert admin.query(sql=f"SELECT count(*) AS n FROM {A}.main.admin_lake_macro()").column("n").to_pylist()[0] > 0
@@ -355,10 +360,10 @@ def test_ducklake_calls_in_views_and_macros_are_refused(world, tenant_a, request
     fragmented(admin=admin, name=f"wrapped_{suffix}", deleted=False)
     admin.execute(sql=f"CREATE OR REPLACE MACRO {A}.main.admin_merge() AS TABLE "
                       f"SELECT * FROM ducklake_merge_adjacent_files('{A}')")
+    # (Refused before binding, as a wrapped call, now that a macro stored in a DuckLake catalog is
+    # walked; the plan check's refusal of DuckLake's own rewrite operator stays behind it.)
     refused(session=tenant_a, sql=f"SELECT * FROM {A}.main.admin_merge()",
-            why=f"Hardcharger blocked DuckLake's rewrite of files of catalog {A}: it runs only for a "
-                f"ducklake_merge_adjacent_files(), ducklake_rewrite_data_files() or ducklake_flush_inlined_data() call "
-                f"that the statement makes itself")
+            why="Hardcharger blocked ducklake_merge_adjacent_files() in a macro: a view or macro cannot wrap a DuckLake function")
     assert files_of(admin=admin, name=f"wrapped_{suffix}") == 4
     admin.execute(sql=f"DROP MACRO TABLE {A}.main.admin_merge")
     admin.execute(sql=f"DROP TABLE {A}.main.wrapped_{suffix}")
