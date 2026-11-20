@@ -50,6 +50,8 @@ also closes gaps there.
 - Isolate the DuckLake plan-check unit fixture from built-in extensions, so the baseline
   and sanitizer builds can register its test function without colliding with DuckLake's.
   Failed C++ unit cases now include their original diagnostics in the Python test report.
+- Keep downloaded, uninstrumented Delta code out of the TSan bind-time permission fixtures;
+  all permission cases still run there, while native and ASan jobs exercise the real extension.
 - The concurrent-DDL test under access control no longer fails when the store itself is slower
   than the test's deliberately short timeout (an emulated PostgreSQL on a Windows arm64 runner);
   only such an attempt is run again, and any other failure still fails at once.

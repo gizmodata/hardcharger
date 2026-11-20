@@ -13,15 +13,24 @@ refuses a statement kind it has no rule for; every refusal here has a twin that 
 
 import pytest
 
+from conftest import TSAN_EXTENSIONS
 from rbac import expect_allowed, expect_blocked, start_rbac_server
 
 READER_RULES = [{"catalog": "bind", "access": "read"}, {"catalog": "*", "access": "none"}]
 WRITER_RULES = [{"catalog": "bind", "access": "write"}, {"catalog": "*", "access": "none"}]
 
+# Delta's downloaded C++/Rust module is not instrumented. Its Tokio atomics and
+# DuckDB callback-registry reference counts are invisible to TSan. Keep these
+# access-control cases running there, including the allowed twin's missing-extension
+# error, without loading that module into the instrumented engine. Native/ASan jobs
+# exercise the real module. httpfs is built in under TSan and supplies the S3 secret.
+TSAN_INIT = (["--init-sql-commands", "LOAD httpfs; SET autoload_known_extensions = false;"]
+             if TSAN_EXTENSIONS else [])
+
 
 @pytest.fixture(scope="module")
 def server(module_launcher):
-    server = module_launcher.start(args=["--database", "bind.db"])
+    server = module_launcher.start(args=["--database", "bind.db", *TSAN_INIT])
     admin = server.admin()
     for sql in ["CREATE SEQUENCE seq", "CREATE TABLE t (x INTEGER)", "INSERT INTO t VALUES (1), (2)",
                 "PREPARE nothing AS SELECT 1",
@@ -150,7 +159,7 @@ def test_pragma_json_execute_serialized_sql_is_the_administrators(server):
 def rbac(module_launcher, store, tmp_path_factory):
     work = tmp_path_factory.mktemp("bind_rbac")
     server = start_rbac_server(launcher=module_launcher, store_uri=store.new_database(),
-                               args=["--database", str(work / "bind_rbac.duckdb")])
+                               args=["--database", str(work / "bind_rbac.duckdb"), *TSAN_INIT])
     admin = server.admin()
     for sql in ["CREATE SEQUENCE seq", "CREATE ROLE users", "CREATE USER una", "CREATE USER uri",
                 "GRANT users TO uri", "GRANT USAGE ON SEQUENCE main.seq TO users",
@@ -218,6 +227,9 @@ def test_delta_and_iceberg_need_the_storage_privileges_everywhere(rbac, sql):
         rbac.user(name="all_over").run(sql=sql)
     except Exception as error:  # noqa: BLE001 - any failure but access control's
         assert "Hardcharger blocked" not in str(error) and "permission_denied" not in str(error), error
+    if TSAN_EXTENSIONS:
+        assert rbac.admin_client.run(sql="SELECT * FROM duckdb_extensions() WHERE loaded "
+                                         "AND extension_name IN ('delta', 'iceberg')").num_rows == 0
 
 
 # ---- Review 2026-11-20 ----
@@ -284,6 +296,9 @@ def test_table_macros_named_like_delta_or_iceberg_run_as_macros(server, who):
     assert session.query(sql="CALL iceberg_report(3)").num_rows == 3
     problem = session.error(sql="SELECT * FROM delta_scan('s3://lake-bucket/tables/t')")
     assert problem["code"] == "permission_denied" and "delta_scan" in problem["detail"], problem
+    if TSAN_EXTENSIONS:
+        assert server.admin().scalar(sql="SELECT count(*) FROM duckdb_extensions() "
+                                         "WHERE loaded AND extension_name IN ('delta', 'iceberg')") == 0
 
 
 def test_unit_gate_refuses_a_statement_kind_without_a_rule():

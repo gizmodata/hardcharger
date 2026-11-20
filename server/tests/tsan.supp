@@ -57,3 +57,7 @@ race:pqSaveParameterStatus
 # is decremented in uninstrumented code. Not a DuckDB bug; tests that need such an
 # extension load it in the init SQL, before the server runs anything else
 # (test_geoarrow.py), so nothing races it.
+# The bind-time permission fixtures instead disable automatic loading under TSan:
+# Delta's prebuilt Rust/Tokio engine also uses uninstrumented atomics during queries.
+# Their allowed twins accept DuckDB's missing-extension error; native/ASan jobs retain
+# automatic loading and exercise Delta itself. No reports from that module are suppressed.
