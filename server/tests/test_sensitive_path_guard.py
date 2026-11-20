@@ -17,8 +17,9 @@ is refused. test_sensitive_path_fs_layer.py covers every way SQL reaches a file.
 three C++ unit tests of the storage locations' comparison (server/unit/storage_locations_test.cc,
 RemotePathScope.*), run here; its two others (reads and writes tracked apart, a refusal reported as
 permission denied) are server cases in test_tenant_isolation.py
-(test_read_access_does_not_allow_writing_to_the_catalogs_storage and its refusals, which assert the
-code and the path).
+(test_own_catalogs_storage_is_reached_through_the_catalog_only and the refusals there, which assert
+the reason and the path; Hardcharger is stricter than 1.42.3: no principal but the administrator
+reaches a DuckLake catalog's data path directly).
 """
 
 import sys
