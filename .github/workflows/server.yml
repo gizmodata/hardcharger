@@ -1007,8 +1007,9 @@ jobs:
             [ "$attempt" -lt 3 ] && sleep 20
           done
           qemu=$(command -v qemu-x86_64-static)
-          "$qemu" --version | head -1
-          models=$("$qemu" -cpu help)
+          "$qemu" --version | sed -n 1p
+          # (-cpu help lists the models and exits 1.)
+          models=$("$qemu" -cpu help || true)
           for model in kvm64 Nehalem Haswell; do
             grep -qw -- "$model" <<< "$models" || { echo "QEMU lacks the CPU model $model"; exit 1; }
           done
