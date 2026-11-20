@@ -3,11 +3,15 @@
 
 #pragma once
 
+#include <memory>
+#include <vector>
+
 #include "authz/engine.hpp"
 
 namespace duckdb {
 class Connection;
 class CatalogEntry;
+class MacroFunction;
 class SelectStatement;
 class ViewCatalogEntry;
 }  // namespace duckdb
@@ -34,6 +38,10 @@ class SessionObjectResolver : public ObjectResolver {
 
   // Does `name` (as a FROM clause names it) find a table macro, as DuckDB would?
   bool IsTableMacro(const QualifiedName& name);
+  // Copies of the definitions (one per overload) of the user macro `name` finds: a table
+  // macro when `table`, else a scalar one. None for anything else, and for DuckDB's own
+  // (internal) macros.
+  std::vector<std::shared_ptr<duckdb::MacroFunction>> MacroDefinitions(const QualifiedName& name, bool table);
 
  private:
   duckdb::Connection& connection_;

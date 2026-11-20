@@ -7,9 +7,12 @@
 #include <openssl/evp.h>
 
 #include <algorithm>
+#include <map>
 
 #include <duckdb.hpp>
+#include <duckdb/function/macro_function.hpp>
 #include <duckdb/main/attached_database.hpp>
+#include <duckdb/parser/qualified_name.hpp>
 #include <duckdb/main/capi_v2/capi_v2_internal.hpp>
 #include <duckdb/main/client_context.hpp>
 #include <duckdb/main/config.hpp>
@@ -926,6 +929,60 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
     if (!value || !value->is_string()) return std::nullopt;
     return std::vector<std::string>{std::string(value->as_string())};
   };
+  // What DuckDB evaluates while it binds (gate.hpp): sequences moved by a table function's
+  // arguments, and the bodies of the user macros a statement calls, which the plan check sees
+  // only after binding has run them.
+  BindTimeCallbacks bind_time;
+  std::map<std::string, std::vector<std::shared_ptr<dd::MacroFunction>>> macro_definitions;
+  if (!principal.superuser) {
+    bind_time.macros = [&](const std::vector<std::string>& parts, bool table) {
+      std::string key = table ? "table" : "scalar";
+      for (const auto& part : parts) key += '\x1f' + part;
+      auto found = macro_definitions.find(key);
+      if (found != macro_definitions.end()) return found->second;
+      auto definitions = functions.MacroDefinitions(QualifiedName{parts}, table);
+      macro_definitions.emplace(key, definitions);
+      return definitions;
+    };
+  }
+  // Sequences moved while binding: checked here for catalog_access principals (and tokens without
+  // rules on a server without a store), by their rules. A read-only session's own screen (the SDK's,
+  // after this gate) refuses every call DuckDB would evaluate while binding, with read_only's answer:
+  // it is left to that. Store users are not checked here yet: test_connection_read_only.py's
+  // read-write twin moves a sequence with setval() through EXPLAIN CALL range(...) as a user without
+  // DROP SEQUENCE (hc-v2134-notes/port/F1).
+  if (!principal.superuser && !read_only_ && principal.catalog_rules) {
+    bind_time.sequence = [&](const std::string& function, const std::optional<std::string>& name) {
+      const std::string blocked = "Hardcharger blocked " + function + "()";
+      const std::string why = ": DuckDB runs it while it binds the statement, before access control checks the plan";
+      if (!name) {
+        throw Error(ErrorCode::kPermissionDenied, blocked + why + ", and its sequence is not named by a string literal",
+                    "42501");
+      }
+      std::vector<std::string> parts;
+      try {
+        for (const auto& part : dd::QualifiedName::ParseComponents(*name)) parts.push_back(part.GetIdentifierName());
+      } catch (const std::exception&) {
+        parts.clear();
+      }
+      arrow::Result<ObjectPath> sequence = arrow::Status::Invalid("no name");
+      if (!parts.empty()) sequence = functions.ResolveSequence(QualifiedName{parts});
+      if (!sequence.ok()) {
+        throw Error(ErrorCode::kPermissionDenied, blocked + why + ", and access control cannot find the sequence it names",
+                    "42501");
+      }
+      if (!snapshot->CatalogVisible(principal, sequence->catalog)) {
+        throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name), "42501");
+      }
+      // The rule the plan check applies to the same call (enforcement.cc, CheckSequenceUse).
+      const auto level = CatalogRuleLevel(*principal.catalog_rules, sequence->catalog);
+      const auto needed = function == "currval" ? CatalogAccessLevel::kRead : CatalogAccessLevel::kWrite;
+      if (level == CatalogAccessLevel::kNone || (needed == CatalogAccessLevel::kWrite && level != needed)) {
+        throw Error(ErrorCode::kPermissionDenied, CatalogAccessDenied(sequence->catalog, needed, principal.user_name),
+                    "42501");
+      }
+    };
+  }
   for (auto& handle : statements) {
     auto& statement = *dd::capiv2::Convert(handle.get());
     // SHOW GRANTS parses as a SELECT and RESET ROLE as a SET: in a batch they would
@@ -935,7 +992,8 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
                   "Hardcharger access control: access-control statements run on their own, "
                   "not in a batch with other statements");
     }
-    if (auto category = GatedCategory(statement, permitted, named_table, table_function_allowed, storage, paths_of_parameter)) {
+    if (auto category =
+            GatedCategory(statement, permitted, named_table, table_function_allowed, storage, paths_of_parameter, bind_time)) {
       if (auto privilege = SystemPrivilegeForGatedCategory(*category)) {
         if (principal.rules_administrator) {
           throw Error(ErrorCode::kPermissionDenied,
@@ -945,6 +1003,17 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
                     "Hardcharger blocked " + *category + ", which needs the " +
                         SystemPrivilegeName(*privilege) + " system privilege. User " +
                         identity_.user_name + " does not hold it (see SHOW GRANTS)",
+                    "42501");
+      }
+      if (const auto at = category->find(kInMacro); category->starts_with("the table function ") && at != std::string::npos) {
+        // Worded as the plan check words the same refusal once the macro is expanded.
+        const std::string name = category->substr(std::string("the table function ").size(),
+                                                  at - std::string("the table function ").size());
+        throw Error(ErrorCode::kPermissionDenied,
+                    "Hardcharger blocked this statement: the table function " + name +
+                        " is not available under access control (an administrator can GRANT EXECUTE ON TABLE FUNCTION " +
+                        name + " to a role); the macro " + category->substr(at + kInMacro.size()) +
+                        " that the statement calls runs it",
                     "42501");
       }
       std::string hint;

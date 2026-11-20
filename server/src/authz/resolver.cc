@@ -4,6 +4,7 @@
 
 #include <duckdb.hpp>
 #include <duckdb/catalog/catalog.hpp>
+#include <duckdb/catalog/catalog_entry/macro_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry_retriever.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
@@ -194,6 +195,22 @@ bool SessionObjectResolver::IsTableMacro(const QualifiedName& name) {
     return arrow::Status::OK();
   });
   return status.ok() && found;
+}
+
+std::vector<std::shared_ptr<dd::MacroFunction>> SessionObjectResolver::MacroDefinitions(const QualifiedName& name,
+                                                                                       bool table) {
+  std::vector<std::shared_ptr<dd::MacroFunction>> definitions;
+  const auto wanted = table ? dd::CatalogType::TABLE_MACRO_ENTRY : dd::CatalogType::MACRO_ENTRY;
+  auto status = InTransaction(connection_, [&]() -> arrow::Status {
+    ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context, wanted, name));
+    if (!entry || entry->type != wanted || entry->internal) return arrow::Status::OK();
+    for (const auto& macro : entry->Cast<dd::MacroCatalogEntry>().macros) {
+      if (macro) definitions.push_back(std::shared_ptr<dd::MacroFunction>(macro->Copy().release()));
+    }
+    return arrow::Status::OK();
+  });
+  if (!status.ok()) definitions.clear();
+  return definitions;
 }
 
 arrow::Result<ObjectPath> SessionObjectResolver::ResolveSchema(const QualifiedName& name) {
