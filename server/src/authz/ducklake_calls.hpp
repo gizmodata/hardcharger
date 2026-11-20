@@ -1,4 +1,4 @@
-// DuckLake's table functions for a catalog_access principal (a `user` token, or an
+// DuckLake's table functions for a non-administrator: a catalog_access principal (a `user` token, or an
 // administrator's token, with catalog_access rules), as GizmoSQL 1.42.3 checks them.
 //
 // A DuckLake function names the catalog it works on as its first argument
@@ -11,13 +11,17 @@
 // checks each bound call again and refuses one the statement did not name itself
 // (inside a view or macro, or anywhere the gate's walk does not reach).
 //
-// Store users (RBAC) are not affected: for them a DuckLake function is a table function
-// like any other, opened by an EXECUTE grant.
+// A store user (RBAC) needs EXECUTE on the function, as on any table function, and on the
+// catalog the call names a privilege granted ON CATALOG: SELECT to inspect, MAINTAIN to
+// maintain, with the same pre-bind and plan checks. Its administrator-only and unknown
+// DuckLake functions are what they were: table functions an EXECUTE grant opens.
 #pragma once
 
 #include <optional>
 #include <string>
 #include <vector>
+
+#include "authz/types.hpp"
 
 namespace hardcharger::authz {
 
@@ -39,7 +43,14 @@ bool IsDuckLakeCatalogMethod(const std::string& name_lower);
 // macro over ducklake_table_insertions and ducklake_table_deletions).
 std::vector<std::string> DuckLakeBoundFunctions(const std::string& function_lower);
 
+// What a store user's call needs on the catalog it names, granted ON CATALOG (besides
+// EXECUTE on the function): SELECT to inspect, MAINTAIN to maintain.
+Privilege DuckLakeCatalogPrivilege(DuckLakeAccess access);
+
 // Refusals, worded the same by the gate and the plan check.
+std::string DuckLakeExecuteRefusal(const std::string& function);
+std::string DuckLakeCatalogPrivilegeRefusal(const std::string& function, const std::string& catalog,
+                                            DuckLakeAccess access, const std::string& user);
 std::string DuckLakeAdministratorRefusal(const std::string& function);
 std::string DuckLakeUnknownRefusal(const std::string& function);
 std::string DuckLakeWrappedRefusal(const std::string& function, const std::string& wrapper);

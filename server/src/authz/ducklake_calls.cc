@@ -111,6 +111,26 @@ std::vector<std::string> DuckLakeBoundFunctions(const std::string& function_lowe
   return {function_lower};
 }
 
+Privilege DuckLakeCatalogPrivilege(DuckLakeAccess access) {
+  return access == DuckLakeAccess::kRead ? Privilege::kSelect : Privilege::kMaintain;
+}
+
+std::string DuckLakeExecuteRefusal(const std::string& function) {
+  // As the gate words any table function without a grant, naming the function that runs.
+  return "Hardcharger blocked the table function " + function +
+         ": under access control it is available to the administrator only, or to a role granted EXECUTE ON "
+         "TABLE FUNCTION " + function;
+}
+
+std::string DuckLakeCatalogPrivilegeRefusal(const std::string& function, const std::string& catalog,
+                                            DuckLakeAccess access, const std::string& user) {
+  const std::string privilege = PrivilegeName(DuckLakeCatalogPrivilege(access));
+  return "Hardcharger blocked " + function + "() on catalog " + catalog + ": it " +
+         (access == DuckLakeAccess::kRead ? "reads" : "maintains") + " the whole catalog, which needs " + privilege +
+         " ON CATALOG " + catalog + ", and user " + user +
+         " does not hold it (EXECUTE on the function does not reach a catalog by itself)";
+}
+
 std::string DuckLakeAdministratorRefusal(const std::string& function) {
   return "Hardcharger blocked " + function +
          "(): it reaches files or metadata by path, not through a catalog's access rules, so only an "

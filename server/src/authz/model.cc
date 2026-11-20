@@ -331,6 +331,21 @@ std::string CatalogAccessDenied(const std::string& catalog, CatalogAccessLevel n
          " access to catalog '" + catalog + "' (catalog_access of user " + user + ")";
 }
 
+bool Snapshot::HoldsOnCatalog(const Principal& principal, Privilege privilege, const std::string& catalog) const {
+  // An object no schema- or object-scope grant can name, owned by no one (\x1f is never
+  // part of an identifier), read on a column no column grant can name: only a grant on
+  // the whole catalog covers it. Check() applies scoped tokens and disabled users as for
+  // any request.
+  AccessRequest request;
+  request.object.catalog = catalog;
+  request.object.schema_path = {"\x1f"};
+  request.object.object_name = "\x1f";
+  request.type = ObjectType::kTable;
+  request.privilege = privilege;
+  request.columns = {"\x1f"};
+  return Check(principal, request).allowed;
+}
+
 AccessDecision Snapshot::Check(const Principal& principal, const AccessRequest& request) const {
   if (principal.superuser) return {true, "superuser", "superuser"};
   // The server's system catalog holds only read-only views, which read with the

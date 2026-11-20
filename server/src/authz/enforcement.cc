@@ -615,7 +615,7 @@ class PlanChecker {
         // DuckLake's compaction and inlined-data flush, which ducklake_merge_adjacent_files,
         // ducklake_rewrite_data_files and ducklake_flush_inlined_data bind to: a catalog_access
         // principal's, when the gate checked such a call on the catalog it rewrites.
-        if (principal_.catalog_rules &&
+        if (!principal_.superuser &&
             op.Cast<dd::LogicalExtensionOperator>().GetExtensionName() == "ducklake") {
           CheckDuckLakeRewrite(op);
           return;
@@ -826,10 +826,13 @@ class PlanChecker {
     auto table = get.GetTable();
     if (!table) {
       const std::string name = Lower(TableFunctionName(get));
-      // A catalog_access principal's DuckLake call: its catalog's rules decide, wherever it
-      // sits (store users' DuckLake functions are table functions like any other, below).
-      if (principal_.catalog_rules) {
-        if (const auto access = DuckLakeFunctionAccess(name)) {
+      // A DuckLake call: the catalog it names decides, wherever it sits. A store user's
+      // administrator-only and unknown DuckLake functions are table functions like any
+      // other (EXECUTE, below).
+      if (!principal_.superuser) {
+        if (const auto access = DuckLakeFunctionAccess(name);
+            access && (principal_.catalog_rules ||
+                       (*access != DuckLakeAccess::kAdministrator && *access != DuckLakeAccess::kUnknown))) {
           CheckDuckLakeCall(get, name, *access);
           return;
         }
@@ -1158,9 +1161,8 @@ class PlanChecker {
     if (auto db = dd::DatabaseManager::Get(context_).GetDatabase(context_, dd::Identifier(catalog))) {
       catalog = compat::Str(db->GetName());
     }
-    const auto needed = access == DuckLakeAccess::kWrite ? CatalogAccessLevel::kWrite : CatalogAccessLevel::kRead;
-    RequireDuckLakeAccess(catalog, needed);
-    if (needed == CatalogAccessLevel::kWrite) {
+    RequireDuckLakeAccess(name, catalog, access);
+    if (access == DuckLakeAccess::kWrite) {
       if (auto readonly = ReadOnlyRefusal(context_)) throw dd::PermissionException(*readonly);
     }
     auto state = context_.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
@@ -1207,7 +1209,9 @@ class PlanChecker {
     auto state = context_.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
     if (auto readonly = ReadOnlyRefusal(context_)) throw dd::PermissionException(*readonly);
     for (const auto& catalog : catalogs) {
-      RequireDuckLakeAccess(catalog, CatalogAccessLevel::kWrite);
+      RequireDuckLakeAccess("DuckLake's rewrite of files of catalog " + catalog + " by ducklake_merge_adjacent_files, "
+                            "ducklake_rewrite_data_files or ducklake_flush_inlined_data",
+                            catalog, DuckLakeAccess::kWrite);
       const bool called = state && std::any_of(std::begin(kRewriters), std::end(kRewriters), [&](const char* f) {
                             return state->DuckLakeCallChecked(f, FoldIdentifier(catalog));
                           });
@@ -1230,12 +1234,24 @@ class PlanChecker {
     }
   }
 
-  // The rules' access to a DuckLake function's catalog: the server's own catalogs read as
-  // missing, any other refusal names the access the call needs.
-  void RequireDuckLakeAccess(const std::string& catalog, CatalogAccessLevel needed) {
+  // A DuckLake function's access to its catalog: the server's own catalogs (and, for a
+  // store user, any it cannot see) read as missing. A catalog_access principal's rules
+  // decide; a store user needs EXECUTE on the function and SELECT or MAINTAIN ON CATALOG.
+  void RequireDuckLakeAccess(const std::string& function, const std::string& catalog, DuckLakeAccess access) {
+    const auto needed = access == DuckLakeAccess::kWrite ? CatalogAccessLevel::kWrite : CatalogAccessLevel::kRead;
     const bool servers = std::any_of(principal_.hidden_catalogs.begin(), principal_.hidden_catalogs.end(),
                                      [&](const std::string& c) { return IdentifiersEqual(c, catalog); });
-    if (servers) RequireVisible(catalog);
+    if (servers || !principal_.catalog_rules) RequireVisible(catalog);
+    if (!principal_.catalog_rules) {
+      if (function.starts_with("ducklake_") && !snapshot_.TableFunctionPathArguments(principal_, function)) {
+        throw dd::PermissionException(DuckLakeExecuteRefusal(function));
+      }
+      if (!snapshot_.HoldsOnCatalog(principal_, DuckLakeCatalogPrivilege(access), catalog)) {
+        throw dd::PermissionException(DuckLakeCatalogPrivilegeRefusal(
+            function.starts_with("ducklake_") ? function : "DuckLake's rewrite", catalog, access, principal_.user_name));
+      }
+      return;
+    }
     const auto level = snapshot_.CatalogVisible(principal_, catalog) ? CatalogRuleLevel(*principal_.catalog_rules, catalog)
                                                                      : CatalogAccessLevel::kNone;
     if (level == CatalogAccessLevel::kNone || (needed == CatalogAccessLevel::kWrite && level != needed)) {
