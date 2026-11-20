@@ -337,15 +337,21 @@ Images are multi-architecture (`linux/amd64`, `linux/arm64`) and published to bo
 `ghcr.io/gizmodata/hardcharger` and `docker.io/gizmodata/hardcharger`. Port 31337 speaks
 Chargewire; 31338 answers `/health`.
 
-The `:2.0.0-adbc` and `:latest-adbc` variants on both registries include the same
+The `:X.Y.Z-adbc` and `:latest-adbc` variants on both registries include the same
 server and CLI plus 15 native ADBC drivers: BigQuery, Databricks, Exasol, Flight SQL,
 SQL Server, MySQL, PostgreSQL, Redshift, Snowflake, Trino, GizmoSQL, Oracle, Db2,
-Quack and Hardcharger. Both `linux/amd64` and `linux/arm64` are supported. For example:
+Quack and Hardcharger. From 2.13.4 the GizmoData drivers among them are Hardcharger 2.7.2,
+Quack 1.1.0, Oracle 1.1.0, Db2 0.3.0 and GizmoSQL 2.0.18; Hardcharger's, Quack's, Oracle's
+and Db2's options are named as the
+[ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html) asks
+(`hardcharger.*`, `quack.*`, `oracle.*`, `db2.*`; the older `adbc.<driver>.*` names still
+work but print a deprecation warning). Both `linux/amd64` and `linux/arm64` are supported.
+For example:
 
 ```bash
 docker run --rm -p 31337:31337 -p 31338:31338 \
   -e HARDCHARGER_ADMIN_PASSWORD='change-me' \
-  ghcr.io/gizmodata/hardcharger:2.0.0-adbc
+  ghcr.io/gizmodata/hardcharger:latest-adbc
 ```
 
 Driver manifests are installed system-wide in `/etc/adbc/drivers`; stable library
