@@ -885,6 +885,11 @@ class PlanChecker {
           paths.insert(paths.end(), some->begin(), some->end());
         }
         NoteAccess("EXECUTE " + name + "()", {});
+        if (ddb::ReadsThroughItsOwnClient(name)) {
+          // Whatever its declared path, it reads what its table's metadata names (storage_access.hpp).
+          RequireStorage(name + "()", StorageMode::kRead, std::nullopt, false, true);
+          return;
+        }
         if (!paths.empty()) RequireStorage(name + "()", StorageMode::kRead, paths);
         return;
       }
@@ -1105,7 +1110,7 @@ class PlanChecker {
   // apply needs the storage privilege there, and none of them may reach DuckLake's storage
   // (storage_access.hpp).
   void RequireStorage(const std::string& what, StorageMode mode, std::optional<std::vector<std::string>> paths,
-                      bool directory = false) {
+                      bool directory = false, bool own_client = false) {
     if (paths) {
       for (const auto& path : *paths) {
         auto parsed = ParseStoragePath(path, {}, mode == StorageMode::kRead);
@@ -1116,7 +1121,7 @@ class PlanChecker {
     std::vector<Principal> principals;
     for (const auto& rights : rights_) principals.push_back(rights.principal);
     if (!storage_) storage_.emplace(context_);
-    if (auto refusal = storage_->Refusal(snapshot_, principals, {what, mode, std::move(paths), directory},
+    if (auto refusal = storage_->Refusal(snapshot_, principals, {what, mode, std::move(paths), directory, own_client},
                                          principal_.user_name)) {
       throw dd::PermissionException(*refusal);
     }

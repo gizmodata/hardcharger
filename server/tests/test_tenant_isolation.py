@@ -341,9 +341,11 @@ def test_ducklake_calls_in_views_and_macros_are_refused(world, tenant_a, request
     # query() runs SQL from a string: refused for every non-administrator, whatever it calls.
     refused(session=tenant_a, sql=f"SELECT * FROM query('SELECT * FROM ducklake_snapshots(''{A}'')')", why="query()")
     refused(session=tenant_a, sql=f"CALL query('SELECT * FROM ducklake_snapshots(''{A}'')')", why="query()")
-    # A statement form the gate's walk does not read: refused (SET VARIABLE's query).
-    refused(session=tenant_a, sql=f"SET VARIABLE n = (SELECT count(*) FROM ducklake_snapshots('{A}'))", why=unchecked)
-    refused(session=tenant_a, sql=f"SET VARIABLE n = (SELECT count(*) FROM ducklake_snapshots('{B}'))", why=unchecked)
+    # SET VARIABLE's query: the gate reads it (v2.13.4), so its DuckLake call is held to the rules
+    # like any other: positive on A, refused on B.
+    tenant_a.execute(sql=f"SET VARIABLE n = (SELECT count(*) FROM ducklake_snapshots('{A}'))")
+    assert tenant_a.scalar(sql="SELECT getvariable('n') AS n") > 0
+    refused(session=tenant_a, sql=f"SET VARIABLE n = (SELECT count(*) FROM ducklake_snapshots('{B}'))", why=READ_B)
     # CALL is held to the same check as FROM: positive on A, refused on B.
     assert tenant_a.query(sql=f"CALL ducklake_snapshots('{A}')").num_rows > 0
     refused(session=tenant_a, sql=f"CALL ducklake_snapshots('{B}')", why=READ_B)
@@ -403,3 +405,69 @@ def test_no_read_reaches_another_catalogs_files(tenant_a, world):
     for sql in [f"SELECT * FROM read_parquet('{b_file}')", f"SELECT * FROM glob('{s3}/{B}/**')",
                 f"SELECT * FROM read_parquet('{s3}/{B}/main/*/*.parquet')", f"SELECT * FROM parquet_metadata('{b_file}')"]:
         refused(session=tenant_a, sql=sql, why=f"reaches into the storage of DuckLake catalog {B}")
+
+
+# ---- GizmoSQL 1.42.3: object storage for a catalog-scoped session ----
+#
+# Port of test_catalog_access.cpp's RemotePathScopeFixture. 1.42.3 limits a catalog-scoped session
+# to object storage under the data paths of the DuckLake catalogs its token grants, its own data
+# path included. Hardcharger is stricter by design: no principal but the administrator reads or
+# writes a DuckLake catalog's data path directly (only DuckLake does, for statements on its
+# tables), because a direct write can overwrite or inject data files behind DuckLake's snapshots,
+# and a catalog_access token holds no storage privilege for anything else. Its own catalog's data
+# stays reachable through the catalog.
+
+@pytest.fixture
+def reader_a(world):
+    return world["server"].as_role(role="user", subject="app_a_reader",
+                                   catalog_access=[{"catalog": A, "access": "read"}, {"catalog": "*", "access": "none"}])
+
+
+def test_scoped_token_cannot_read_another_catalogs_storage(tenant_a, world):
+    s3, b_file = world["s3"], world["b_file"]
+    for sql, why in [
+        (f"SELECT * FROM read_parquet('{b_file}')", f"reaches into the storage of DuckLake catalog {B}"),
+        (f"SELECT * FROM glob('{s3}/{B}/*')", f"reaches into the storage of DuckLake catalog {B}"),
+        (f"SELECT * FROM read_csv('{s3}/{B}/x.csv')", f"reaches into the storage of DuckLake catalog {B}"),
+        (f"SELECT * FROM '{b_file}'", f"reaches into the storage of DuckLake catalog {B}"),
+        (f"COPY (SELECT 1 AS a) TO '{s3}/{B}/x.parquet' (FORMAT parquet)", f"reaches into the storage of DuckLake catalog {B}"),
+        # Indirect: the statement's text does not hold the path.
+        (f"SELECT * FROM query('SELECT * FROM read_parquet(''{b_file}'')')", "Hardcharger blocked query()"),
+        (f"SELECT * FROM read_parquet(concat('s3', '://{s3[5:]}/{B}/x.parquet'))", "Hardcharger blocked read_parquet()"),
+        (f"SELECT * FROM read_parquet(chr(115) || '3://{s3[5:]}/{B}/x.parquet')", "Hardcharger blocked read_parquet()"),
+        # Beside a data path on a name boundary, out of it through '..', a glob from above.
+        (f"SELECT * FROM read_parquet('{s3}/{A}x/x.parquet')", "READ OBJECT STORAGE"),
+        (f"SELECT * FROM read_parquet('{s3}/{A}/../{B}/x.parquet')", "'..'"),
+        (f"SELECT * FROM glob('{s3}/*/main/*')", "reaches into the storage of DuckLake catalog"),
+        # A macro hides the path from the statement that uses it: refused at its creation.
+        (f"CREATE TEMP MACRO scope_m() AS TABLE SELECT * FROM read_parquet('{b_file}')",
+         f"reaches into the storage of DuckLake catalog {B}"),
+    ]:
+        refused(session=tenant_a, sql=sql, why=why)
+
+
+def test_own_catalogs_storage_is_reached_through_the_catalog_only(tenant_a, reader_a, world):
+    # 1.42.3's ScopedTokenKeepsItsOwnCatalogsStorage and ReadAccessDoesNotAllowWriting...: stricter here.
+    s3 = world["s3"]
+    for session in (tenant_a, reader_a):
+        for sql, why in [
+            (f"SELECT * FROM glob('{s3}/{A}/**')", f"reaches into the storage of DuckLake catalog {A}"),
+            (f"SELECT count(*) FROM read_parquet('{s3}/{A}/**/*.parquet')", f"reaches into the storage of DuckLake catalog {A}"),
+            (f"COPY (SELECT 7 AS a) TO '{s3}/{A}/exports/e.parquet' (FORMAT parquet)",
+             f"reaches into the storage of DuckLake catalog {A}"),
+        ]:
+            refused(session=session, sql=sql, why=why)
+        # The twin: the catalog's data, through the catalog.
+        assert session.scalar(sql=f"SELECT count(*) AS n FROM {A}.main.mine") >= 100
+    refused(session=reader_a, sql=f"INSERT INTO {A}.main.mine VALUES (1)", why=f"write access to catalog '{A}'")
+
+
+def test_unscoped_sessions_and_object_storage(world):
+    s3, b_file = world["s3"], world["b_file"]
+    # The administrator keeps object storage, the DuckLake data paths included.
+    assert world["server"].admin().scalar(sql=f"SELECT count(*) FROM read_parquet('{b_file}')") == 100
+    # 1.x's single-tenant non-admin token keeps object storage; Hardcharger's holds no storage
+    # privilege (object storage is a store user's grant, READ / WRITE OBJECT STORAGE).
+    plain = world["server"].as_role(role="user", subject="unscoped_user")
+    refused(session=plain, sql=f"SELECT * FROM read_parquet('{s3}/elsewhere/x.parquet')", why="READ OBJECT STORAGE")
+    refused(session=plain, sql=f"SELECT * FROM read_parquet('{b_file}')", why=f"reaches into the storage of DuckLake catalog {B}")

@@ -1,4 +1,5 @@
-"""Port of GizmoSQL 1.x tests/integration/test_catalog_access.cpp (42 cases).
+"""Port of GizmoSQL 1.x tests/integration/test_catalog_access.cpp (42 cases at v1.42.0, 52 at v1.42.3:
+see the 1.42.3 section at the end).
 
 catalog_access rules in a sign-in token: a list of
 {"catalog": pattern, "access": "read" | "write" | "none"}, first match wins, no match is
@@ -346,3 +347,82 @@ def test_read_only_principals_can_run_pivot(server, admin):
             assert ("cannot run statements that modify state" in detail
                     or "do not have write access to catalog 'temp'" in detail
                     or "needs an administrator" in detail), f"{sql}: {detail}"
+
+
+# ---- GizmoSQL 1.42.3 (v1.42.0..b820719d) ----
+#
+# 10 cases were added. 7 run here, 3 with object storage in test_tenant_isolation.py; the parts
+# that classify ducklake_*() calls and catalog.snapshots() / settings() against the rules
+# (DuckLakeFunctionsRespectCatalogAccess, ViewCannotWrapADuckLakeCall,
+# QualifiedUserFunctionIsNotTreatedAsDuckLake, and the DuckLake halves of
+# IndirectRoutesAreRefusedWhenScoped) come with that classification (v2.13.4's DuckLake catalog-access
+# change, which ports them).
+
+OTHER = "other_tenant_lake"
+
+
+def test_scoped_token_cannot_enumerate_other_catalogs(server, admin):
+    admin.execute(sql=f"ATTACH IF NOT EXISTS ':memory:' AS {OTHER}")
+    admin.execute(sql=f"CREATE TABLE IF NOT EXISTS {OTHER}.main.leak_t (id INTEGER)")
+    session = user(server=server, name="enumeration_user", rules=[{"catalog": DEFAULT, "access": "write"}])
+    queries = [
+        "SELECT database_name FROM duckdb_databases()", "SELECT * FROM duckdb_databases()",
+        "SELECT * FROM duckdb_databases() d", "WITH d AS (SELECT * FROM duckdb_databases()) SELECT * FROM d",
+        "SELECT * FROM pragma_database_list", "SELECT * FROM pragma_database_list()", "PRAGMA database_list",
+        "SELECT * FROM pragma_database_size()", "PRAGMA database_size", "SELECT * FROM (SHOW DATABASES)",
+        "SHOW DATABASES", "SHOW ALL TABLES", "SELECT catalog_name FROM information_schema.schemata",
+        "SELECT database_name, schema_name FROM duckdb_schemas()", "SELECT database_name FROM duckdb_tables()",
+        "SELECT database_name FROM duckdb_settings() WHERE false UNION ALL SELECT database_name FROM duckdb_databases()",
+        "SELECT current_database()", "SELECT * FROM duckdb_dependencies()", "SELECT * FROM duckdb_temporary_files()",
+        "SELECT * FROM duckdb_memory()",
+    ]
+    answered = 0
+    for sql in queries:
+        problem = None
+        try:
+            table = session.query(sql=sql)
+        except Exception as error:  # a refusal is fine: it names nothing
+            problem = str(error)
+            assert OTHER not in problem, f"{sql}: {problem}"
+            continue
+        answered += 1
+        for column in table.columns:
+            for value in column.to_pylist():
+                assert OTHER not in str(value), f"'{OTHER}' leaked via {sql}: {value}"
+    assert answered >= 15, answered  # most of them answer, with the other catalog filtered out
+    # The twin: the administrator sees it through the same functions.
+    for sql in ["SELECT * FROM pragma_database_list", "PRAGMA database_size", "SELECT database_name FROM duckdb_databases()"]:
+        assert OTHER in str(admin.query(sql=sql).to_pylist()), sql
+
+
+@pytest.mark.parametrize("sql,why", [
+    # 1.42.3: delta/iceberg read object storage through their own client; refused here for
+    # every non-administrator without a grant (Hardcharger has no catalog-scoped exception).
+    ("SELECT * FROM delta_scan('s3://scope-bucket/other/t')", "the table function delta_scan"),
+    ("SELECT * FROM iceberg_scan('s3://scope-bucket/other/t')", "the table function iceberg_scan"),
+    ("SELECT * FROM query('SELECT * FROM delta_scan(''s3://scope-bucket/other/t'')')", "Hardcharger blocked query()"),
+    ("DESCRIBE SELECT * FROM delta_scan('s3://scope-bucket/other/t')", "the table function delta_scan"),
+    ("CREATE OR REPLACE MACRO scope_d() AS TABLE SELECT * FROM delta_scan('s3://scope-bucket/other/t')",
+     "the table function delta_scan"),
+])
+def test_own_storage_client_functions_are_refused_when_scoped(server, admin, sql, why):
+    session = user(server=server, name="scoped_delta_user",
+                   rules=[{"catalog": DEFAULT, "access": "write"}, {"catalog": "*", "access": "none"}])
+    assert why in denied(session=session, sql=sql, why="Hardcharger blocked")
+
+
+def test_indirect_routes_are_refused_when_scoped(server, admin):
+    admin.execute(sql="CREATE OR REPLACE MACRO scope_route(s) AS TABLE SELECT * FROM query(s)")
+    session = user(server=server, name="scoped_route_user",
+                   rules=[{"catalog": DEFAULT, "access": "write"}, {"catalog": "*", "access": "none"}])
+    # The administrator's macro is usable with what the token may run itself...
+    assert session.scalar(sql="SELECT * FROM scope_route('SELECT 42 AS answer')") == 42
+    # ...and not as a way around its rules or the gated functions.
+    denied(session=session, sql=f"SELECT * FROM scope_route('SELECT * FROM {OTHER}.main.leak_t')",
+           why=f"read access to catalog '{OTHER}'")
+    denied(session=session, sql="SELECT * FROM scope_route('SELECT * FROM delta_scan(''s3://scope-bucket/other/t'')')",
+           why="the table function delta_scan")
+    denied(session=session, sql="CREATE OR REPLACE TEMP MACRO mine(s) AS TABLE SELECT * FROM query(s)",
+           why="Hardcharger blocked query()")
+    denied(session=session, sql="CALL query('SELECT * FROM ducklake_add_data_files(''x'', ''t'', ''s3://b/x.parquet'')')",
+           why="Hardcharger blocked query()")

@@ -74,6 +74,11 @@ TEST(DuckLakeCalls, TokenCount) {
   EXPECT_EQ(CountDuckLakeCallTokens("SELECT 'ducklake_snapshots(' AS s -- ducklake_snapshots('a')"), 0);
   EXPECT_EQ(CountDuckLakeCallTokens("SELECT ducklake_snapshots FROM t"), 0);
   EXPECT_EQ(CountDuckLakeCallTokens("SELECT * FROM snapshots()"), 0);
+  // A macro's own name is no call (GizmoSQL 6a458ca7); its body still counts.
+  EXPECT_EQ(CountDuckLakeCallTokens("CREATE OR REPLACE MACRO myschema.settings() AS 42"), 0);
+  EXPECT_EQ(CountDuckLakeCallTokens("CREATE FUNCTION main.snapshots() AS TABLE SELECT 1 AS x"), 0);
+  EXPECT_EQ(CountDuckLakeCallTokens("CREATE MACRO IF NOT EXISTS ducklake_x(a) AS a + 1"), 0);
+  EXPECT_EQ(CountDuckLakeCallTokens("CREATE MACRO s.settings() AS TABLE SELECT * FROM lake.snapshots()"), 1);
 }
 
 TEST(DuckLakeCalls, LooksLikeACall) {

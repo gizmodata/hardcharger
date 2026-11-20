@@ -183,6 +183,14 @@ int CountDuckLakeCallTokens(const std::string& sql, std::string* first) {
     const bool prefixed = name.rfind("ducklake_", 0) == 0;
     const bool method = i > 0 && text[i - 1] == "." && IsDuckLakeCatalogMethod(name);
     if (!prefixed && !method) continue;
+    // CREATE MACRO name(...) defines `name`, it does not call it (GizmoSQL 6a458ca7): also
+    // qualified, after OR REPLACE, TEMP or IF NOT EXISTS. The body is still counted.
+    size_t chain = i;
+    while (chain >= 2 && text[chain - 1] == "." && word[chain - 2]) chain -= 2;
+    if (chain >= 1 && word[chain - 1]) {
+      const std::string before = Lower(text[chain - 1]);
+      if (before == "macro" || before == "function" || before == "exists") continue;
+    }
     if (first && first->empty()) *first = prefixed ? name : "ducklake_" + name;
     ++count;
   }

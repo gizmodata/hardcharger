@@ -493,3 +493,17 @@ TEST(AdminCommandGuard, ExplainParenthesizedQueriesKeepTheirWholeBody) {
     EXPECT_EQ(hardcharger::ExecutedType(Connection(), pieces[0], type), DUCKDB_V2_STATEMENT_TYPE_SELECT);
   }
 }
+
+// GizmoSQL 1.42.3 (6a458ca7, in MacroBodiesAreChecked): defining a macro that shares a name
+// with a gated function is not a call of it; its body is still read.
+TEST(AdminCommandGuard, MacroDefinitionIsNotACall) {
+  EXPECT_FALSE(Gated("CREATE OR REPLACE MACRO myschema.settings() AS 42"));
+  EXPECT_FALSE(Gated("CREATE MACRO IF NOT EXISTS sniff_csv(x) AS x + 1"));
+  EXPECT_FALSE(Gated("CREATE FUNCTION main.snapshots() AS TABLE SELECT 1 AS x"));
+  EXPECT_FALSE(Gated("CREATE OR REPLACE TEMP MACRO main.read_text(x) AS x"));
+  EXPECT_FALSE(Gated("CREATE MACRO glob(x) AS TABLE SELECT x AS y"));
+  EXPECT_TRUE(Gated("CREATE MACRO sniff_csv(p) AS TABLE SELECT * FROM read_csv(p)"));
+  EXPECT_TRUE(Gated("CREATE MACRO s.settings() AS (SELECT count(*) FROM duckdb_secrets())"));
+  // A call right after the definition's name still counts.
+  EXPECT_TRUE(Gated("CREATE MACRO m(x) AS TABLE SELECT * FROM read_text('/etc/hosts')"));
+}

@@ -44,6 +44,13 @@ inline duckdb::Value ConstantValue(const duckdb::ConstantExpression& constant) {
   return constant.GetLiteral().ToValue();
 }
 
+// Table functions that read storage through a client of their own, following their table's
+// metadata (a Delta log, an Iceberg manifest) to files it names anywhere: no location can bound
+// what they read, so under access control they count as reading a computed path.
+inline bool ReadsThroughItsOwnClient(const std::string& name_lower) {
+  return name_lower.rfind("delta_", 0) == 0 || name_lower.rfind("iceberg_", 0) == 0;
+}
+
 // Table functions that read files or URLs (DuckDB's own and its bundled extensions').
 // Under access control they need the READ FILESYSTEM system privilege.
 inline bool IsFileReadingTableFunction(const std::string& name_lower) {

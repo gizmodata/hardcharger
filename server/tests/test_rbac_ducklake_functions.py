@@ -214,8 +214,12 @@ def test_views_and_macros_over_ducklake_calls_are_refused(world):
                    why=f"Hardcharger blocked ducklake_snapshots() in a view: {WRAPPED}")
     expect_blocked(client=rita, sql="SELECT * FROM lake_a.main.admin_macro()", why=UNCHECKED)
     expect_blocked(client=rita, sql="SELECT lake_a.main.admin_count()", why=UNCHECKED)
+    # SET VARIABLE's query is read by the gate: its DuckLake call is held to the rule (lake_b refused before binding),
+    # and SET VARIABLE itself is not available to a store user under access control.
+    expect_blocked(client=rita, sql="SET VARIABLE n = (SELECT count(*) FROM ducklake_snapshots('lake_b'))",
+                   why=needs(function="ducklake_snapshots", privilege="SELECT", catalog="lake_b", user="rita"))
     expect_blocked(client=rita, sql="SET VARIABLE n = (SELECT count(*) FROM ducklake_snapshots('lake_a'))",
-                   why=UNCHECKED)
+                   why="SET VARIABLE is not available under access control")
     expect_blocked(client=rita, sql="SELECT * FROM query('SELECT * FROM ducklake_snapshots(''lake_a'')')",
                    why="query()")
     # A maintenance call in a macro, with files to compact: nothing is compacted.
