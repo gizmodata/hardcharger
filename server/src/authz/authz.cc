@@ -945,13 +945,10 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
       return definitions;
     };
   }
-  // Sequences moved while binding: checked here for catalog_access principals (and tokens without
-  // rules on a server without a store), by their rules. A read-only session's own screen (the SDK's,
-  // after this gate) refuses every call DuckDB would evaluate while binding, with read_only's answer:
-  // it is left to that. Store users are not checked here yet: test_connection_read_only.py's
-  // read-write twin moves a sequence with setval() through EXPLAIN CALL range(...) as a user without
-  // DROP SEQUENCE (hc-v2134-notes/port/F1).
-  if (!principal.superuser && !read_only_ && principal.catalog_rules) {
+  // Sequences moved while binding: checked here by the rule the plan check applies to the same call
+  // (enforcement.cc, CheckSequenceUse). A read-only session's own screen (the SDK's, after this gate)
+  // refuses every call DuckDB would evaluate while binding, with read_only's answer: it is left to that.
+  if (!principal.superuser && !read_only_) {
     bind_time.sequence = [&](const std::string& function, const std::optional<std::string>& name) {
       const std::string blocked = "Hardcharger blocked " + function + "()";
       const std::string why = ": DuckDB runs it while it binds the statement, before access control checks the plan";
@@ -974,11 +971,33 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
       if (!snapshot->CatalogVisible(principal, sequence->catalog)) {
         throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name), "42501");
       }
-      // The rule the plan check applies to the same call (enforcement.cc, CheckSequenceUse).
-      const auto level = CatalogRuleLevel(*principal.catalog_rules, sequence->catalog);
-      const auto needed = function == "currval" ? CatalogAccessLevel::kRead : CatalogAccessLevel::kWrite;
-      if (level == CatalogAccessLevel::kNone || (needed == CatalogAccessLevel::kWrite && level != needed)) {
-        throw Error(ErrorCode::kPermissionDenied, CatalogAccessDenied(sequence->catalog, needed, principal.user_name),
+      // A catalog_access principal: its rules (nextval / setval write, currval read; temp included).
+      if (principal.catalog_rules) {
+        const auto level = CatalogRuleLevel(*principal.catalog_rules, sequence->catalog);
+        const auto needed = function == "currval" ? CatalogAccessLevel::kRead : CatalogAccessLevel::kWrite;
+        if (level == CatalogAccessLevel::kNone || (needed == CatalogAccessLevel::kWrite && level != needed)) {
+          throw Error(ErrorCode::kPermissionDenied, CatalogAccessDenied(sequence->catalog, needed, principal.user_name),
+                      "42501");
+        }
+        return;
+      }
+      // A store user: USAGE for nextval / currval, DROP SEQUENCE on the schema for setval (which
+      // resets the sequence, as dropping and recreating it would). Its own temp sequences are its own.
+      if (IdentifiersEqual(sequence->catalog, "temp")) return;
+      if (function == "setval") {
+        ObjectPath schema = *sequence;
+        schema.object_name.clear();
+        if (!snapshot->Check(principal, AccessRequest{schema, ObjectType::kSchema, Privilege::kDropSequence, {}}).allowed) {
+          throw Error(ErrorCode::kPermissionDenied,
+                      blocked + ": user " + principal.user_name + " may not setval() of sequence " + sequence->ToString() +
+                          " (it needs DROP SEQUENCE on schema " + schema.ToString() + " or its catalog, or to own the schema)",
+                      "42501");
+        }
+        return;
+      }
+      if (!snapshot->Check(principal, AccessRequest{*sequence, ObjectType::kSequence, Privilege::kUsage, {}}).allowed) {
+        throw Error(ErrorCode::kPermissionDenied,
+                    blocked + ": user " + principal.user_name + " has no USAGE privilege on sequence " + sequence->ToString(),
                     "42501");
       }
     };

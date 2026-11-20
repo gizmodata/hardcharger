@@ -167,7 +167,11 @@ class Controlled:
                     "CREATE ROLE ro_reader_role", f"CREATE USER ro_reader WITH PASSWORD '{READER_PASSWORD}'",
                     "GRANT ro_reader_role TO ro_reader", "GRANT SELECT ON ro_orders TO ro_reader_role",
                     "GRANT INSERT ON ro_orders TO ro_reader_role", "GRANT SELECT ON ro_orders_view TO ro_reader_role",
-                    "GRANT USAGE ON SEQUENCE ro_ids TO ro_reader_role"):
+                    "GRANT USAGE ON SEQUENCE ro_ids TO ro_reader_role",
+                    # setval() resets the sequence, which needs DROP SEQUENCE on its schema: the
+                    # read-write twin below may then move it with setval() too (2.13.4 checks a
+                    # sequence call DuckDB evaluates while binding as the plan check would).
+                    "GRANT DROP SEQUENCE ON SCHEMA main TO ro_reader_role"):
             self.admin.run(sql=sql)
 
     def session(self, who: str, read_only: bool):

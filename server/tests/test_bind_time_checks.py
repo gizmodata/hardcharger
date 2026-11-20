@@ -118,7 +118,7 @@ def test_pragma_json_execute_serialized_sql_is_the_administrators(server):
     assert admin.query(sql=sql).num_rows == 2
 
 
-# ---- Store users: the same calls should be held to their grants (USAGE, DROP SEQUENCE) ----
+# ---- Store users: the same calls are held to their grants (USAGE, DROP SEQUENCE) ----
 
 @pytest.fixture(scope="module")
 def rbac(module_launcher, store, tmp_path_factory):
@@ -138,9 +138,6 @@ def rbac_last_value(rbac):
     return rows.column(0).to_pylist()[0]
 
 
-@pytest.mark.xfail(strict=True, reason="store users: the pre-bind sequence check is for catalog_access principals only "
-                   "until test_connection_read_only.py's read-write twin stops relying on setval() while binding "
-                   "(hc-v2134-notes/port/F1); RBAC's call")
 def test_a_store_user_needs_usage_for_a_sequence_moved_while_binding(rbac):
     una, uri = rbac.user(name="una"), rbac.user(name="uri")
     before = rbac_last_value(rbac)
