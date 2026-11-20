@@ -1185,7 +1185,18 @@ class PlanChecker {
     std::set<std::string> catalogs;
     std::function<void(dd::LogicalOperator&)> collect = [&](dd::LogicalOperator& node) {
       if (node.type == OpType::LOGICAL_GET) {
-        if (auto table = node.Cast<dd::LogicalGet>().GetTable()) catalogs.insert(compat::Str(table->ParentCatalog().GetName()));
+        if (auto table = node.Cast<dd::LogicalGet>().GetTable()) {
+          catalogs.insert(compat::Str(table->ParentCatalog().GetName()));
+          // The row and masking policies would be applied to DuckLake's own read of the
+          // table (policies.hpp), and the rewrite would then replace the table's files with
+          // the filtered or masked rows, for everyone: refused, as any write into a
+          // table with policies is.
+          const ObjectPath path = PathOf(*table);
+          if (!snapshot_.RowPoliciesOn(path).empty() || !snapshot_.ApplicableMasks(principal_, path).empty()) {
+            Deny(principal_, "DuckLake's rewrite of the files of " + path.ToString() +
+                                 ", which has row or masking policies, is not available under access control yet");
+          }
+        }
       }
       for (auto& child : node.children) {
         if (child) collect(*child);
