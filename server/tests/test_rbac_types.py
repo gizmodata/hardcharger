@@ -4,7 +4,8 @@ A type is found by name where SQL is bound (a view's query, a macro's or trigger
 policy, a column default or CHECK constraint), so a user's type could stand in for one of
 those, and dropping or replacing one they name changes what they compute: both are refused,
 as is the name of a built-in type or of one an extension provides. Temporary types stay the
-administrator's. A table's columns copy the type at CREATE TABLE, so they pin nothing. Every
+administrator's. A table's columns depend on their type (DuckDB 2.0.1), so dropping the type
+with CASCADE needs the right to drop each such table. Every
 refusal is asserted by its reason, next to the twin that succeeds."""
 
 import pytest
@@ -246,13 +247,22 @@ def test_a_type_a_macro_uses_keeps_its_meaning(admin, mia, joe):
     assert "Could not convert" in raised.value.detail
 
 
-def test_a_table_column_pins_nothing(admin, mia, joe):
-    # A column copies its type: dropping the type changes nothing for the table.
+def test_a_table_column_keeps_its_type(admin, mia, joe):
+    # DuckDB 2.0.1 records a column's type as a dependency of its table (2.0.0 copied it):
+    # the type can't be dropped from under the table, and DROP TYPE ... CASCADE, which would
+    # drop the table with it, is refused to a user who may not drop the table.
     expect_allowed(client=mia, sql="CREATE TYPE tools.copied AS ENUM ('kept')")
     expect_allowed(client=admin, sql="CREATE TABLE tools.keeps (v tools.copied)")
     expect_allowed(client=admin, sql="INSERT INTO tools.keeps VALUES ('kept')")
-    expect_allowed(client=mia, sql="DROP TYPE tools.copied")
+    with pytest.raises(ChargewireError) as raised:
+        mia.run(sql="DROP TYPE tools.copied")
+    assert 'table "keeps" depends on type "copied"' in raised.value.detail, raised.value.detail
+    expect_blocked(client=mia, sql="DROP TYPE tools.copied CASCADE", why="may not drop table")
     assert expect_allowed(client=admin, sql="SELECT v FROM tools.keeps").to_pylist() == [{"v": "kept"}]
+    # Twin: the administrator, who may drop the table, drops both.
+    expect_allowed(client=admin, sql="DROP TYPE tools.copied CASCADE")
+    assert expect_allowed(client=admin, sql="SELECT count(*) AS n FROM duckdb_tables() "
+                                            "WHERE schema_name = 'tools' AND table_name = 'keeps'").to_pylist() == [{"n": 0}]
 
 
 # ---- what users see ----

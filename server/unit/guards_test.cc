@@ -303,6 +303,7 @@ TEST(AdminCommandGuard, ReadFunctionsLocalAreGated) {
   EXPECT_TRUE(Gated("SELECT * FROM read_blob('/etc/shadow')"));
   EXPECT_TRUE(Gated("SELECT * FROM glob('/home/*')"));
   EXPECT_TRUE(Gated("SELECT * FROM parquet_scan('local.parquet')"));
+  EXPECT_TRUE(Gated("SELECT * FROM parquet_page_index('/data/x.parquet')"));  // DuckDB 2.0.1
 }
 
 TEST(AdminCommandGuard, ReadFunctionsRemoteAreAllowed) {

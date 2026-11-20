@@ -196,7 +196,7 @@ const std::set<std::string>& FileReadingFunctions() {
       "read_csv", "read_csv_auto", "read_parquet", "parquet_scan", "read_json", "read_json_auto",
       "read_json_objects", "read_json_objects_auto", "read_ndjson", "read_ndjson_auto",
       "read_ndjson_objects", "read_text", "read_blob", "glob", "sniff_csv", "parquet_metadata",
-      "parquet_schema", "parquet_file_metadata", "parquet_kv_metadata", "parquet_bloom_probe",
+      "parquet_schema", "parquet_file_metadata", "parquet_kv_metadata", "parquet_bloom_probe", "parquet_page_index",
       "read_text_auto", "read_single_csv_file", "read_single_json_file", "read_xlsx", "st_read",
       "read_duckdb", "iceberg_scan", "delta_scan"};
   return kFunctions;

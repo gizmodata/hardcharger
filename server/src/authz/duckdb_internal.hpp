@@ -80,6 +80,8 @@ inline bool IsFileReadingTableFunction(const std::string& name_lower) {
                                                          "read_duckdb",
                                                          "read_xlsx",
                                                          "parquet_bloom_probe",
+                                                         // DuckDB 2.0.1: each page's offsets, and its min and max.
+                                                         "parquet_page_index",
                                                          "read_json_objects_auto",
                                                          "read_ndjson_objects_auto"};
   return kNames.contains(name_lower);

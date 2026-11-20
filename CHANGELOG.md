@@ -58,8 +58,22 @@ also closes gaps there.
 - The release gate waits on each downstream publish's own conclusion, so a run that the API
   doesn't show yet right after it is dispatched no longer fails a release that published.
 
+- **`THIRD_PARTY_NOTICES.md` lists what the baseline Linux x86_64 build contains.** Since 2.13.2
+  that build compiles in httpfs, DuckLake and the PostgreSQL extension with CRoaring, libpq and
+  libcurl, and since 2.13.3 the SQLite extension, but the notices named them for iOS only and left
+  the SQLite extension out. They now name the baseline build for each, and list the SQLite
+  extension (MIT) and the public-domain SQLite library it builds in; the notices check reads the
+  baseline build's extension list too.
+
 ### Security
 
+- **`DROP ... CASCADE` could drop tables the user may not drop.** It drops, with what it names,
+  every object DuckDB records as depending on it, in any schema: a table whose column default
+  calls a sequence (`DROP SEQUENCE ... CASCADE`), and with DuckDB 2.0.1, which records a table's
+  dependency on its columns' user types again, a table whose column has the type
+  (`DROP TYPE ... CASCADE`) or a type in a dropped schema (`DROP SCHEMA ... CASCADE`). A role with
+  `DROP SEQUENCE` or `DROP TYPE` on one schema could drop the administrator's tables in another.
+  Each object a cascade would drop now needs the right to drop it, as if it were named.
 - **A user could read tables it held no grant on through a table function's argument.** A subquery
   handed to a table function that takes its input as rows (`SELECT * FROM unnest((SELECT list(v) FROM
   t))`, `range((SELECT count(*) FROM t))`, `generate_series(1, (SELECT max(n) FROM t))`, also with
@@ -112,6 +126,22 @@ also closes gaps there.
 
 ### Changed
 
+- **DuckDB v2.0.1.** The server runs DuckDB's v2.0.1 bug-fix release (commit `8d78114e90`), with its
+  fixes to decorrelation, join ordering and runtime filters, Parquet statistics and casts. The
+  extensions the iOS app and the baseline Linux x86_64 build compile in move to the commits DuckDB
+  2.0.1 builds: httpfs (retries when S3 throttles, per-file credentials), DuckLake (the latest
+  v2.0 branch) and the PostgreSQL and SQLite extensions 2.0.1. `INSTALL` fetches from
+  `extensions.duckdb.org/v2.0.1`, so extensions installed for v2.0.0 are installed once more.
+  What 2.0.1 adds is classified: `parquet_page_index()` reads a file (`READ FILESYSTEM`, like
+  `parquet_metadata()`); `duckdb_live_query_metrics()`, which shows every connection's counters,
+  and `add_grammar_extension()` / `remove_grammar_extension()`, which change the SQL grammar as
+  `SET active_grammar_extensions` does, stay the administrator's under access control and are
+  refused in read-only sessions. DuckDB 2.0.1 lets `CREATE EXTENSION REPOSITORY <host>` add a
+  repository named by its host by default (`allow_extension_repositories` is now `'hosts'`;
+  `'undecided'` is gone, replaced by `'hosts'`, `'allowed'`, `'hosts_only'` and `'forbidden'`).
+  Every form of it, and `INSTALL ... FROM <host>`, takes the administrator or `MANAGE EXTENSIONS`,
+  as `CREATE EXTENSION REPOSITORY ... WITH PREFIX` did; to refuse it to everyone, put
+  `SET GLOBAL allow_extension_repositories = 'forbidden'` in the startup SQL.
 - **`delta_*()` and `iceberg_*()` need the storage privileges everywhere.** They read the files their
   table's log or manifest names, wherever those are, with a storage client of their own, so a
   location grant never bounded what they could read; see Upgrading. (A user's own table macro named
