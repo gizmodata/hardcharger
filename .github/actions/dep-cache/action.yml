@@ -55,8 +55,9 @@ runs:
       run: |
         read -r -a build <<< "$DEPCACHE_BUILD"
         "${build[@]}" "$DEPCACHE_DEP"
-    # A tag's caches can't be restored by any other ref, so only branch runs save.
-    - if: steps.restore.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
+    # Tags can restore their own caches on a retry. Save before the tests so a failed
+    # gate does not throw away a dependency build; main still supplies other refs.
+    - if: steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
       with:
         path: server/.deps/${{ inputs.dependency }}-install
