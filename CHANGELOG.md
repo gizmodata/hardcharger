@@ -31,7 +31,13 @@ also closes gaps there.
 - `setval()` and `nextval()` are checked wherever DuckDB evaluates them, including while it binds a
   statement and inside the macros it calls, so they need the same privileges everywhere (`USAGE` on
   the sequence, `DROP SEQUENCE` on its schema for `setval()`), and a `readonly` token's session moves
-  no sequence at all.
+  no sequence at all;
+- on DuckDB 2.0.1 a table depends on the user types of its columns: `DROP TYPE` of one a table uses
+  is refused (DuckDB's dependency error), and `DROP TYPE`, `DROP SEQUENCE` or `DROP SCHEMA` with
+  `CASCADE` needs the right to drop every table it would take with it;
+- extensions are installed for DuckDB v2.0.1 (`extensions.duckdb.org/v2.0.1`), so ones installed
+  for v2.0.0 must be installed again, and `allow_extension_repositories` no longer
+  accepts `'undecided'` (see Changed).
 
 ### Fixed
 
@@ -132,7 +138,7 @@ also closes gaps there.
   extensions the iOS app and the baseline Linux x86_64 build compile in move to the commits DuckDB
   2.0.1 builds: httpfs (retries when S3 throttles, per-file credentials), DuckLake (the latest
   v2.0 branch) and the PostgreSQL and SQLite extensions 2.0.1. `INSTALL` fetches from
-  `extensions.duckdb.org/v2.0.1`, so extensions installed for v2.0.0 are installed once more.
+  `extensions.duckdb.org/v2.0.1`, so extensions installed for v2.0.0 must be installed again.
   What 2.0.1 adds is classified: `parquet_page_index()` reads a file (`READ FILESYSTEM`, like
   `parquet_metadata()`); `duckdb_live_query_metrics()`, which shows every connection's counters,
   and `add_grammar_extension()` / `remove_grammar_extension()`, which change the SQL grammar as
