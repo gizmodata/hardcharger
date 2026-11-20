@@ -31,7 +31,14 @@ duckdb_extension_load(postgres_scanner
     SUBMODULES database-connector
 )
 
-duckdb_extension_statically_link(core_functions parquet json icu httpfs ducklake postgres_scanner)
+# DuckLake's SQLite catalog, and SQLite files (issue #62: the reporter's DuckLake catalog is SQLite).
+duckdb_extension_load(sqlite_scanner
+    GIT_URL https://github.com/duckdb/duckdb-sqlite
+    GIT_TAG e223dc01493414cef6d5960744f1e048d59fc592
+    SUBMODULES database-connector
+)
+
+duckdb_extension_statically_link(core_functions parquet json icu httpfs ducklake postgres_scanner sqlite_scanner)
 
 function(hardcharger_link_libpq)
   find_package(PostgreSQL REQUIRED)

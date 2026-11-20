@@ -75,6 +75,19 @@ if [ "${HARDCHARGER_SMOKE_OLD_CPU:-}" = 1 ]; then
                 -H 'Prefer: wait=60' -d '{"sql": "INSTALL httpfs; LOAD httpfs; INSTALL postgres; INSTALL ducklake; LOAD ducklake"}') \
     || { echo "INSTALL/LOAD of the built-in extensions failed"; exit 1; }
   [ "$(echo "$statement" | json state)" = succeeded ] || { echo "INSTALL of a built-in extension failed: $statement"; exit 1; }
+  # DuckLake with a SQLite catalog (the built-in sqlite_scanner): issue #62's setup.
+  sql="INSTALL sqlite; LOAD sqlite; ATTACH 'ducklake:sqlite:$work/lake.sqlite' AS lake (DATA_PATH '$work/lake/'); CREATE TABLE lake.t AS SELECT 'sqlite-lake-' || (40 + 2) AS v"
+  statement=$(curl -s -X POST "$base/sessions/$session/statements" "${auth[@]}" -H 'Accept: application/json' \
+                -H 'Prefer: wait=120' -d "{\"sql\": \"$sql\"}")
+  [ "$(echo "$statement" | json state)" = succeeded ] || { echo "DuckLake with a SQLite catalog failed: $statement"; exit 1; }
+  statement=$(curl -s -X POST "$base/sessions/$session/statements" "${auth[@]}" -H 'Accept: application/json' \
+                -H 'Prefer: wait=60' -d '{"sql": "SELECT v FROM lake.t"}')
+  [ "$(echo "$statement" | json state)" = succeeded ] || { echo "reading the SQLite-catalog DuckLake failed: $statement"; exit 1; }
+  id=$(echo "$statement" | json statement_id)
+  curl -sf "$base/sessions/$session/statements/$id/result" "${auth[@]}" \
+    -H 'Accept: application/vnd.apache.arrow.stream' -o lake.arrows
+  grep -aq 'sqlite-lake-42' lake.arrows || { echo "the SQLite-catalog DuckLake returned no sqlite-lake-42"; exit 1; }
+  [ -s "$work/lake.sqlite" ] || { echo "no SQLite catalog file at $work/lake.sqlite"; exit 1; }
   statement=$(curl -s -X POST "$base/sessions/$session/statements" "${auth[@]}" -H 'Accept: application/json' \
                 -H 'Prefer: wait=60' -d '{"sql": "INSTALL spatial"}')
   echo "$statement"

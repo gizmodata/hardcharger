@@ -1,2 +1,2 @@
-Hardcharger 2.13.2, a maintenance release: Linux servers on older or virtual CPUs without AVX2 get a build of their own.
+Hardcharger 2.13.3, a maintenance release: the Linux build for older or virtual CPUs without AVX2 also has SQLite (and DuckLake's SQLite catalog) built in.
 The app itself has no changes.

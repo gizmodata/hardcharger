@@ -47,7 +47,7 @@ TSAN_EXTENSIONS = os.environ.get("HARDCHARGER_TEST_TSAN_EXTENSIONS") == "1"
 # CI sets the variable on that leg; a baseline build tested without it fails
 # test_builtin_extensions.py.
 BASELINE_BUILD = os.environ.get("HARDCHARGER_TEST_BASELINE_BUILD") == "1"
-BASELINE_BUILT_IN = ["httpfs", "ducklake", "postgres_scanner"] if BASELINE_BUILD else []
+BASELINE_BUILT_IN = ["httpfs", "ducklake", "postgres_scanner", "sqlite_scanner"] if BASELINE_BUILD else []
 UNIT_TEST_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_UNIT_BINARY",
                                                BUILD / f"hardcharger-unit-tests{EXE}")).resolve()
 CLIENT_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_CLIENT_BINARY", BUILD / f"hardcharger{EXE}")).resolve()

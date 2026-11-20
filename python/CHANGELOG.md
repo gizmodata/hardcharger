@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.13.3] - 2026-11-20
+
+### Changed
+
+- Downloads Hardcharger server 2.13.3 by default, whose baseline Linux x86_64 build (the one the
+  launcher installs on a CPU without AVX2) has sqlite_scanner built in, for DuckLake's SQLite
+  catalog ([#62](https://github.com/gizmodata/hardcharger/issues/62)).
+
 ## [2.13.2] - 2026-11-20
 
 ### Added

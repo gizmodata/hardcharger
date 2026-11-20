@@ -49,7 +49,9 @@ fi
 if [ -n "${HARDCHARGER_IOS_SDK:-}${HARDCHARGER_ANDROID_ABI:-}" ] || $BASELINE_LINUX; then
   EXTENSIONS="$HERE/scripts/duckdb-extensions-ios.cmake"
   $BASELINE_LINUX && EXTENSIONS="$HERE/scripts/duckdb-extensions-baseline.cmake"
-  for name in httpfs ducklake postgres_scanner; do
+  pinned="httpfs ducklake postgres_scanner"
+  $BASELINE_LINUX && pinned="$pinned sqlite_scanner"
+  for name in $pinned; do
     ours=$(awk -v n="$name" '$0 ~ "duckdb_extension_load\\(" n "$" {f = 1} f && /GIT_TAG/ {print $2; exit}' "$EXTENSIONS")
     theirs=$(awk '/GIT_TAG/ {print $2; exit}' "$SRC/.github/config/extensions/$name.cmake")
     [ -n "$ours" ] && [ "$ours" = "$theirs" ] \

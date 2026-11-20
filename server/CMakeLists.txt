@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(hardcharger VERSION 2.13.2 LANGUAGES C CXX)
+project(hardcharger VERSION 2.13.3 LANGUAGES C CXX)
 # The pre-release part of the version, after PROJECT_VERSION (which takes numbers only): ""
 # for a release (tag vX.Y.Z), "-rc.N" for a release candidate (tag vX.Y.Z-rc.N). Every
 # reported version is HARDCHARGER_VERSION, the two together. .github/scripts/release.sh
@@ -62,7 +62,7 @@ endforeach()
 set(HARDCHARGER_CPU_SERVER_LEVEL 0)
 set(HARDCHARGER_CPU_CLIENT_LEVEL 0)
 # The baseline Linux x86_64 build also builds in the extensions people load most (httpfs,
-# ducklake, postgres_scanner: DuckDB's downloadable ones need x86-64-v3, so on an older CPU
+# ducklake, postgres_scanner, sqlite_scanner: DuckDB's downloadable ones need x86-64-v3, so on an older CPU
 # the server refuses to load any, src/authz/extension_cpu_guard.cc), with the libraries they
 # link (scripts/build-extension-deps.sh), as the mobile builds do.
 set(HARDCHARGER_BASELINE_LINUX OFF)
@@ -70,7 +70,7 @@ set(HARDCHARGER_NATIVE_EXTENSIONS core_functions parquet json icu)
 if(HARDCHARGER_CPU_TARGET STREQUAL "baseline" AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID
    AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
   set(HARDCHARGER_BASELINE_LINUX ON)
-  list(APPEND HARDCHARGER_NATIVE_EXTENSIONS httpfs ducklake postgres_scanner)
+  list(APPEND HARDCHARGER_NATIVE_EXTENSIONS httpfs ducklake postgres_scanner sqlite_scanner)
   string(JOIN ", " _built_in ${HARDCHARGER_NATIVE_EXTENSIONS})
   add_compile_definitions(HARDCHARGER_BASELINE_BUILD "HARDCHARGER_BUILT_IN_EXTENSIONS=\"${_built_in}\"")
 endif()

@@ -7,6 +7,20 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.13.3] - 2026-11-20
+
+### Added
+
+- **The baseline Linux x86_64 build has sqlite_scanner built in**
+  ([#62](https://github.com/gizmodata/hardcharger/issues/62)). On a CPU without AVX2 the
+  baseline build loads only its built-in extensions, and 2.13.2's set (httpfs, ducklake,
+  postgres_scanner) left out SQLite, so DuckLake with a SQLite catalog (`ATTACH
+  'ducklake:sqlite:...'`) and SQLite files were refused there. sqlite_scanner is now compiled in
+  too, at the commit DuckDB's own build uses; `INSTALL sqlite; LOAD sqlite` succeeds without
+  downloading anything. The server's guard on its own files covers SQLite's paths as before.
+  Every release gate now also runs a DuckLake with a SQLite catalog in its emulated `kvm64` smoke
+  test. The optimized build and the container image are unchanged.
+
 ## [2.13.2] - 2026-11-20
 
 ### Added
