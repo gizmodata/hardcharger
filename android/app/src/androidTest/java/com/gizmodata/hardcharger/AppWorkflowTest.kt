@@ -108,12 +108,21 @@ class AppWorkflowTest {
         compose.onNodeWithContentDescription("Console", useUnmergedTree = true).performClick()
         compose.onNodeWithText("SQL or .help").performTextInput("SELECT 4242 AS android_ui_answer;")
         compose.onNodeWithText("Run", useUnmergedTree = true).performClick()
+        // On a small phone the IME can consume the transcript's weighted viewport.
+        // Dismiss it before asserting output visibility, just as a user would.
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
         // The model finishes before Compose/IME layout has necessarily made the
         // transcript visible. Wait for the same UI condition asserted below.
-        compose.waitUntil(30_000) {
-            !model.querying && runCatching {
-                compose.onNodeWithText("4242", substring = true).assertIsDisplayed()
-            }.isSuccess
+        try {
+            compose.waitUntil(30_000) {
+                !model.querying && runCatching {
+                    compose.onNodeWithText("4242", substring = true).assertIsDisplayed()
+                }.isSuccess
+            }
+        } catch (failure: Throwable) {
+            compose.onRoot(useUnmergedTree = true).printToLog("ConsoleWorkflowFailure")
+            android.util.Log.e("ConsoleWorkflowFailure", "querying=${model.querying}; transcript=${model.transcript}")
+            throw failure
         }
         compose.onNodeWithText("4242", substring = true).assertIsDisplayed()
         compose.onNodeWithContentDescription("Previous command").performClick()
