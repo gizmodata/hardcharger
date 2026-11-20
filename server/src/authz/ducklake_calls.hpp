@@ -49,7 +49,8 @@ Privilege DuckLakeCatalogPrivilege(DuckLakeAccess access);
 
 // Refusals, worded the same by the gate and the plan check.
 std::string DuckLakeExecuteRefusal(const std::string& function);
-std::string DuckLakeCatalogPrivilegeRefusal(const std::string& function, const std::string& catalog,
+// `what`: "ducklake_x()", or what else runs DuckLake's maintenance ("CHECKPOINT", ...).
+std::string DuckLakeCatalogPrivilegeRefusal(const std::string& what, const std::string& catalog,
                                             DuckLakeAccess access, const std::string& user);
 std::string DuckLakeAdministratorRefusal(const std::string& function);
 std::string DuckLakeUnknownRefusal(const std::string& function);
@@ -57,14 +58,5 @@ std::string DuckLakeWrappedRefusal(const std::string& function, const std::strin
 std::string DuckLakeComputedCatalogRefusal(const std::string& function);
 std::string DuckLakeUncheckedRefusal(const std::string& function);
 
-// Counts the calls in `sql` that look like DuckLake calls to a token reader: a name
-// starting with ducklake_ followed by "(", or ".<catalog method>(" (the lower-case name
-// of the first goes to `first`). Comments and string literals do not count. The gate
-// compares this with the calls its walk inspected and refuses a statement that names
-// more (its walk does not reach every place SQL can hold a call).
-int CountDuckLakeCallTokens(const std::string& sql, std::string* first = nullptr);
-
-// Does the call's name look like a DuckLake call to CountDuckLakeCallTokens?
-bool LooksLikeDuckLakeCall(const std::vector<std::string>& parts);
 
 }  // namespace hardcharger::authz

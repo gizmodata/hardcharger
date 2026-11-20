@@ -11,7 +11,7 @@ import secrets
 
 import pytest
 
-from rbac import expect_allowed, expect_blocked, start_rbac_server
+from rbac import expect_allowed, expect_blocked, expect_error, start_rbac_server
 from services import PG_PORT, S3_PORT, pg_conninfo, require
 
 # PostgreSQL and the S3 gateway run in Docker, on the Linux runners only.
@@ -262,3 +262,113 @@ def test_tables_with_row_or_masking_policies(world):
     assert files_of(admin=admin, lake="lake_p", table="governed") == 1
     assert admin.run(sql="SELECT count(*) AS n FROM lake_p.main.governed").column("n").to_pylist() == [4000]
 
+
+
+def test_tables_named_like_ducklake_functions_are_ordinary_tables(world):
+    """A store user with the grants creates and fills tables named settings, options, snapshots or
+    ducklake_*, with column lists, as on 2.13.3 (review finding 07): none of them is a call."""
+    admin = world["admin"]
+    for sql in ["CREATE SCHEMA IF NOT EXISTS home.s", "CREATE OR REPLACE TABLE home.s.settings (k VARCHAR, v VARCHAR)",
+                "CREATE OR REPLACE TABLE home.s.ducklake_events (id INT)",
+                "CREATE OR REPLACE TABLE lake_a.main.options (k VARCHAR)",
+                "CREATE ROLE IF NOT EXISTS worker", "CREATE USER IF NOT EXISTS wanda", "GRANT worker TO wanda",
+                "GRANT ALL ON SCHEMA home.s TO worker", "GRANT ALL ON CATALOG lake_a TO worker"]:
+        expect_allowed(client=admin, sql=sql)
+    wanda = world["server"].user(name="wanda")
+    for sql in ["INSERT INTO home.s.settings(k, v) VALUES ('a', 'b')", "INSERT INTO s.settings(k, v) VALUES ('c', 'd')",
+                "CREATE TABLE home.s.options (k VARCHAR)", "CREATE INDEX ix ON home.s.settings(k)",
+                "INSERT INTO home.s.ducklake_events(id) VALUES (1)", "CREATE TABLE home.s.ducklake_more (id INT)",
+                "INSERT INTO lake_a.main.options(k) VALUES ('x')", "CREATE TABLE lake_a.main.snapshots (id INT)",
+                "INSERT INTO lake_a.main.snapshots(id) VALUES (7)",
+                "CREATE TABLE lake_a.main.ducklake_copy(i) AS SELECT i FROM lake_a.main.t"]:
+        expect_allowed(client=wanda, sql=sql)
+    assert wanda.run(sql="SELECT count(*) AS n FROM home.s.settings").column("n").to_pylist() == [2]
+    assert wanda.run(sql="SELECT id FROM lake_a.main.snapshots").column("id").to_pylist() == [7]
+    assert wanda.run(sql="SELECT count(*) AS n FROM lake_a.main.ducklake_copy").column("n").to_pylist() == [100]
+    for sql in ["DROP TABLE lake_a.main.snapshots", "DROP TABLE lake_a.main.options", "DROP TABLE lake_a.main.ducklake_copy",
+                "DROP SCHEMA home.s CASCADE"]:
+        expect_allowed(client=admin, sql=sql)
+
+
+def test_maintain_on_the_catalog_alone_compacts(world):
+    """DuckLake's compaction reads the tables it rewrites and hands back counts, not rows: with
+    MAINTAIN ON CATALOG (and EXECUTE) and no SELECT, a maintenance role compacts and still can't
+    read a row (review finding 08). A table with row or masking policies stays refused."""
+    admin = world["admin"]
+    setup = ["CREATE ROLE IF NOT EXISTS m_only", "CREATE USER IF NOT EXISTS mona", "GRANT m_only TO mona",
+             "GRANT MAINTAIN ON CATALOG lake_a TO m_only", "GRANT MAINTAIN ON CATALOG lake_p TO m_only"]
+    setup += [f"GRANT EXECUTE ON TABLE FUNCTION {f} TO m_only" for f in WRITE]
+    for sql in setup:
+        expect_allowed(client=admin, sql=sql)
+    mona = world["server"].user(name="mona")
+    fragmented(admin=admin, table="lake_a.main.mona_merge", deleted=False)
+    fragmented(admin=admin, table="lake_a.main.mona_rewrite", deleted=True)
+    expect_allowed(client=mona, sql="CALL ducklake_merge_adjacent_files('lake_a')")
+    assert files_of(admin=admin, lake="lake_a", table="mona_merge") == 1
+    rewritten = mona.run(sql="CALL ducklake_rewrite_data_files('lake_a', delete_threshold => 0.1)").to_pylist()
+    assert any(r["table_name"] == "mona_rewrite" for r in rewritten), rewritten
+    assert files_of(admin=admin, lake="lake_a", table="mona_rewrite") == 1
+    expect_allowed(client=admin, sql="CREATE OR REPLACE TABLE lake_a.main.mona_inlined (i INT)")
+    expect_allowed(client=admin, sql="CALL ducklake_set_option('lake_a', 'data_inlining_row_limit', 100, "
+                                     "table_name => 'mona_inlined')")
+    expect_allowed(client=admin, sql="INSERT INTO lake_a.main.mona_inlined SELECT range FROM range(5)")
+    expect_allowed(client=mona, sql="CALL ducklake_flush_inlined_data('lake_a')")
+    assert files_of(admin=admin, lake="lake_a", table="mona_inlined") == 1
+    # ... and still reads nothing: the rewrite's own scans are the only reads MAINTAIN covers.
+    for table in ("mona_merge", "mona_rewrite", "mona_inlined"):
+        expect_blocked(client=mona, sql=f"SELECT count(*) FROM lake_a.main.{table}",
+                       why=f"user mona has no SELECT privilege on table lake_a.main.{table}")
+    for table, rows in (("mona_merge", 4000), ("mona_rewrite", 2666), ("mona_inlined", 5)):
+        assert admin.run(sql=f"SELECT count(*) AS n FROM lake_a.main.{table}").column("n").to_pylist() == [rows]
+    # A table with a row policy: refused, files and rows kept.
+    fragmented(admin=admin, table="lake_p.main.mona_governed", deleted=False)
+    expect_allowed(client=admin, sql="CREATE ROW POLICY mona_eu ON lake_p.main.mona_governed USING (region = 'EU')")
+    expect_blocked(client=mona, sql="CALL ducklake_merge_adjacent_files('lake_p')",
+                   why="DuckLake's rewrite of the files of lake_p.main.mona_governed, which has row or masking policies")
+    assert files_of(admin=admin, lake="lake_p", table="mona_governed") == 4
+    for sql in ["DROP ROW POLICY mona_eu ON lake_p.main.mona_governed", "DROP TABLE lake_p.main.mona_governed",
+                "DROP TABLE lake_a.main.mona_merge", "DROP TABLE lake_a.main.mona_rewrite",
+                "DROP TABLE lake_a.main.mona_inlined"]:
+        expect_allowed(client=admin, sql=sql)
+
+
+def test_checkpoint_of_a_ducklake_catalog_needs_maintain(world):
+    """CHECKPOINT of a DuckLake catalog runs DuckLake's maintenance on it: the CHECKPOINT privilege
+    and MAINTAIN ON CATALOG (review finding 05). Other databases' checkpoints keep needing only
+    CHECKPOINT."""
+    admin = world["admin"]
+    for sql in ["CREATE ROLE IF NOT EXISTS cp", "CREATE ROLE IF NOT EXISTS cp_maint", "CREATE USER IF NOT EXISTS chip",
+                "CREATE USER IF NOT EXISTS cleo", "GRANT CHECKPOINT TO cp", "GRANT CHECKPOINT TO cp_maint",
+                "GRANT MAINTAIN ON CATALOG lake_a TO cp_maint", "GRANT cp TO chip", "GRANT cp_maint TO cleo"]:
+        expect_allowed(client=admin, sql=sql)
+    chip, cleo = world["server"].user(name="chip"), world["server"].user(name="cleo")
+    fragmented(admin=admin, table="lake_a.main.cp_frag", deleted=False)
+    for sql in ["CHECKPOINT lake_a", "FORCE CHECKPOINT lake_a", "CALL checkpoint('lake_a')",
+                "SELECT * FROM force_checkpoint('lake_a')"]:
+        expect_blocked(client=chip, sql=sql,
+                       why="Hardcharger blocked CHECKPOINT on catalog lake_a: it maintains the whole catalog, which needs "
+                           "MAINTAIN ON CATALOG lake_a, and user chip does not hold it")
+    expect_blocked(client=cleo, sql="CHECKPOINT lake_b", why="needs MAINTAIN ON CATALOG lake_b, and user cleo does not hold it")
+    assert files_of(admin=admin, lake="lake_a", table="cp_frag") == 4
+    # The twins: with MAINTAIN on the lake, CHECKPOINT compacts it; any holder of CHECKPOINT checkpoints home.
+    expect_allowed(client=cleo, sql="CHECKPOINT lake_a")
+    assert files_of(admin=admin, lake="lake_a", table="cp_frag") == 1
+    assert admin.run(sql="SELECT count(*) AS n FROM lake_a.main.cp_frag").column("n").to_pylist() == [4000]
+    expect_allowed(client=chip, sql="CHECKPOINT home")
+    expect_allowed(client=admin, sql="DROP TABLE lake_a.main.cp_frag")
+
+
+def test_ducklake_calls_in_places_the_walk_does_not_read_are_refused(world):
+    rita = world["rita"]  # SELECT ON CATALOG lake_a, nothing on lake_b
+    on_b = "(SELECT count(*) FROM ducklake_snapshots('lake_b'))"
+    denied = needs(function="ducklake_snapshots", privilege="SELECT", catalog="lake_b", user="rita")
+    for sql, why in [(f"SELECT {on_b}", denied), (f"VALUES ({on_b})", denied),
+                     (f"SET VARIABLE v = {on_b}", denied),
+                     (f"SELECT * FROM lake_a.main.t WHERE i IN (SELECT snapshot_id FROM ducklake_snapshots('lake_b'))",
+                      denied)]:
+        expect_blocked(client=rita, sql=sql, why=why)
+    for sql, why in [(f"SELECT * FROM lake_a.main.t AT (VERSION => {on_b})", "AT clause cannot contain subqueries"),
+                     (f"CREATE TABLE lake_a.main.x2 (i BIGINT DEFAULT {on_b})", "DEFAULT value cannot contain subqueries")]:
+        error = expect_error(call=lambda sql=sql: rita.run(sql=sql), code="sql_error")
+        assert why in error.detail, error.detail
+    assert rita.run(sql="SELECT (SELECT count(*) FROM ducklake_snapshots('lake_a')) > 0 AS ok").column(0).to_pylist() == [True]

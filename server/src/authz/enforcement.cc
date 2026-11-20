@@ -844,6 +844,7 @@ class PlanChecker {
       }
       if (name == "checkpoint" || name == "force_checkpoint") {
         RequireSystem(SystemPrivilege::kCheckpoint, "CHECKPOINT");
+        RequireDuckLakeCheckpoint(get, name);
         return;
       }
       if (name == "duckdb_secrets") {
@@ -907,6 +908,13 @@ class PlanChecker {
     // The row-locating scan under the statement's own UPDATE / DELETE target
     // needs no SELECT unless it reads columns (in WHERE or SET), as in Postgres.
     if (columns.empty() && dml_target && table.get() == dml_target.get()) return;
+    // DuckLake's own read of a table it is compacting or flushing (CheckDuckLakeRewrite): part
+    // of the maintenance MAINTAIN ON CATALOG allows, which hands back counts, not rows. Only a
+    // table of the catalog being rewritten, and only under DuckLake's own operator.
+    if (!ducklake_rewrite_catalogs_.empty() &&
+        ducklake_rewrite_catalogs_.contains(FoldIdentifier(compat::Str(table->ParentCatalog().GetName())))) {
+      return;
+    }
     Require(*table, Privilege::kSelect, columns);
   }
 
@@ -1214,9 +1222,7 @@ class PlanChecker {
     auto state = context_.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
     if (auto readonly = ReadOnlyRefusal(context_)) throw dd::PermissionException(*readonly);
     for (const auto& catalog : catalogs) {
-      RequireDuckLakeAccess("DuckLake's rewrite of files of catalog " + catalog + " by ducklake_merge_adjacent_files, "
-                            "ducklake_rewrite_data_files or ducklake_flush_inlined_data",
-                            catalog, DuckLakeAccess::kWrite);
+      RequireDuckLakeAccess("DuckLake's rewrite of its files", catalog, DuckLakeAccess::kWrite);
       const bool called = state && std::any_of(std::begin(kRewriters), std::end(kRewriters), [&](const char* f) {
                             return state->DuckLakeCallChecked(f, FoldIdentifier(catalog));
                           });
@@ -1230,9 +1236,13 @@ class PlanChecker {
     }
     for (auto& child : op.children) {
       if (!child) continue;
-      // DuckLake's own write into its catalog's storage: what it copies is checked below.
+      // DuckLake's own write into its catalog's storage: what it copies is checked below. Its
+      // scans of the catalog's tables are the maintenance itself (VisitGet): no SELECT on them.
       if (child->type == OpType::LOGICAL_COPY_TO_FILE) {
+        const auto saved = ducklake_rewrite_catalogs_;
+        for (const auto& catalog : catalogs) ducklake_rewrite_catalogs_.insert(FoldIdentifier(catalog));
         VisitChildren(*child, nullptr);
+        ducklake_rewrite_catalogs_ = saved;
       } else {
         Visit(*child, nullptr);
       }
@@ -1242,6 +1252,8 @@ class PlanChecker {
   // A DuckLake function's access to its catalog: the server's own catalogs (and, for a
   // store user, any it cannot see) read as missing. A catalog_access principal's rules
   // decide; a store user needs EXECUTE on the function and SELECT or MAINTAIN ON CATALOG.
+  // `function`: the ducklake_* function (its EXECUTE is checked too), or what else runs DuckLake's
+  // maintenance, named for the refusal ("CHECKPOINT", "DuckLake's rewrite of its files").
   void RequireDuckLakeAccess(const std::string& function, const std::string& catalog, DuckLakeAccess access) {
     const auto needed = access == DuckLakeAccess::kWrite ? CatalogAccessLevel::kWrite : CatalogAccessLevel::kRead;
     const bool servers = std::any_of(principal_.hidden_catalogs.begin(), principal_.hidden_catalogs.end(),
@@ -1253,7 +1265,7 @@ class PlanChecker {
       }
       if (!snapshot_.HoldsOnCatalog(principal_, DuckLakeCatalogPrivilege(access), catalog)) {
         throw dd::PermissionException(DuckLakeCatalogPrivilegeRefusal(
-            function.starts_with("ducklake_") ? function : "DuckLake's rewrite", catalog, access, principal_.user_name));
+            function.starts_with("ducklake_") ? function + "()" : function, catalog, access, principal_.user_name));
       }
       return;
     }
@@ -1262,6 +1274,29 @@ class PlanChecker {
     if (level == CatalogAccessLevel::kNone || (needed == CatalogAccessLevel::kWrite && level != needed)) {
       DenyByCatalogAccess(catalog, needed);
     }
+  }
+
+  // CHECKPOINT of a DuckLake catalog runs all of DuckLake's maintenance on it (flush, expire,
+  // compact, rewrite, clean up), on a connection of its own, outside the checks on this
+  // statement: it needs what those functions need. A catalog_access principal: write access to
+  // the catalog. A store user: MAINTAIN ON CATALOG, beside the CHECKPOINT privilege. Other
+  // catalogs' checkpoints are unchanged (the CHECKPOINT privilege alone).
+  void RequireDuckLakeCheckpoint(dd::LogicalGet& get, const std::string& name) {
+    if (principal_.superuser) return;
+    std::string catalog;
+    if (get.parameters.empty()) {
+      catalog = compat::Str(dd::DatabaseManager::GetDefaultDatabase(context_));
+    } else if (!get.parameters[0].IsNull() && get.parameters[0].type().id() == dd::LogicalTypeId::VARCHAR) {
+      catalog = get.parameters[0].ToString();
+    } else {
+      Deny(principal_, name + "() must name its database as a string");
+    }
+    auto db = dd::DatabaseManager::Get(context_).GetDatabase(context_, dd::Identifier(catalog));
+    if (!db || compat::Str(db->GetCatalog().GetCatalogType()) != "ducklake") return;
+    catalog = compat::Str(db->GetName());
+    RequireDuckLakeAccess("CHECKPOINT", catalog, DuckLakeAccess::kWrite);
+    if (auto readonly = ReadOnlyRefusal(context_)) throw dd::PermissionException(*readonly);
+    NoteAccess("CHECKPOINT of DuckLake catalog " + catalog, {});
   }
 
   bool OnlySuperusers() const {
@@ -1983,6 +2018,8 @@ class PlanChecker {
   const TriggerBodies& trigger_bodies_;
   std::vector<Rights> rights_;
   int view_depth_ = 0;  // inside a view's body
+  // Under DuckLake's own compaction or flush: the catalogs it rewrites (folded).
+  std::set<std::string> ducklake_rewrite_catalogs_;
   // The sequences the column defaults of the table being written advance (Visit).
   std::vector<const dd::CatalogEntry*> default_sequences_;
   bool in_owned_view_ = false;

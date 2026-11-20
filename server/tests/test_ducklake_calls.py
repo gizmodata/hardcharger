@@ -8,7 +8,7 @@ import pytest
 from conftest import run_unit_tests
 
 CASES = ["InspectionNeedsReadAccess", "MaintenanceNeedsWriteAccess", "PathFunctionsAreTheAdministrators",
-         "AnUnknownFunctionFailsClosed", "CatalogMethods", "TokenCount", "LooksLikeACall"]
+         "AnUnknownFunctionFailsClosed", "CatalogMethods"]
 
 
 @pytest.fixture(scope="module")
