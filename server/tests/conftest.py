@@ -445,6 +445,10 @@ def run_unit_tests(gtest_filter: str, env: dict[str, str] | None = None) -> dict
             if line.startswith(marker) and "(" in line:
                 results[line[len(marker):].split(" (")[0]] = passed
     assert results, f"no unit test matched {gtest_filter}:\n{out.stdout}\n{out.stderr}"
+    if not all(results.values()):
+        # Pytest includes fixture output on failure: keep the C++ assertion or setup
+        # exception, rather than reporting only a dictionary of failed test names.
+        print(out.stdout + out.stderr)
     assert out.returncode == 0 or not all(results.values()), out.stdout + out.stderr
     return results
 

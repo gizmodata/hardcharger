@@ -3,8 +3,9 @@
 // sends reaches this refusal today: it is the guard for whatever the walk might miss, so it is
 // tested here, below the gate. A session of a principal with catalog_access rules runs a
 // statement straight on its DuckDB connection (as the gate never sees it), against a table
-// function named like DuckLake's (DuckLake itself is a downloaded extension; the plan check knows
-// a DuckLake call by its function's name). The server-side behaviour is in
+// function named like DuckLake's (the plan check knows a DuckLake call by its function's
+// name). Disable built-in extension loading in this isolated database so the baseline and
+// sanitizer builds' real DuckLake does not register the same function first. The server-side behaviour is in
 // server/tests/test_tenant_isolation.py and server/tests/test_rbac_ducklake_functions.py.
 #include <gtest/gtest.h>
 
@@ -60,6 +61,7 @@ void Snapshots(dd::ClientContext&, dd::TableFunctionInput& input, dd::DataChunk&
 class DuckLakePlanCheck : public ::testing::Test {
  protected:
   void SetUp() override {
+    config_.options.load_extensions = false;
     RegisterRbacEnforcement(config_);
     db_ = std::make_unique<dd::DuckDB>(nullptr, &config_);
     dd::TableFunction function(dd::Identifier("ducklake_snapshots"), {dd::LogicalType::VARCHAR}, Snapshots, Bind, Init);
