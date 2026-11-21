@@ -105,6 +105,10 @@ def test_what_a_system_admin_does_is_recorded_under_its_own_name(server, tmp_pat
     mine = about(records, session_id=alice.session_id)
     done = {"message": "access-control statement", "status": "success"}
     ran = {"message": "statement run as System Admin", "status": "success"}
+    # Literal URI passwords are masked in the diagnostic too. libpq supplies the
+    # platform-specific connection failure after the redacted URI.
+    attach_error, = [r["error"] for r in mine if r.get("administrative") == "ATTACH" and r["status"] == "failed"]
+    assert attach_error.startswith('IO Error: Unable to connect to Postgres at "postgresql://someone:***@127.0.0.1:1/db"')
     expected = [
         as_admin | {"message": "System Admin elevation", "status": "success", "statement": ELEVATE,
                     "held_through": "a grant to the user"},
@@ -146,7 +150,7 @@ def test_what_a_system_admin_does_is_recorded_under_its_own_name(server, tmp_pat
                     "statement": "KILL SESSION", "target_session": bob.session_id},
         as_admin | {"message": "statement run as System Admin", "status": "failed", "administrative": "ATTACH",
                     "sql": "ATTACH 'postgresql://someone:***@127.0.0.1:1/db' AS x (TYPE postgres)",
-                    "error": "[REDACTED: error of a credential statement]"},
+                    "error": attach_error},
         as_admin | {"message": "access-control statement refused", "status": "rejected", "statement": "DROP USER",
                     "error": "Hardcharger access control: user nobody_at_all does not exist",
                     "target": "user nobody_at_all", "target_ids": "?", "privilege": "DROP USER"},
