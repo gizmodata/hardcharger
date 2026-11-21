@@ -442,6 +442,17 @@ def test_create_or_replace_names_only_the_dependents_the_user_sees(late):
         dependency_refusal("replace", f"macro {LATE}.lib.m_seen", f" (table {LATE}.app.seen_def)")
 
 
+def test_replacing_a_macro_checks_drop_privilege_before_dependencies(late):
+    lou, admin = late.user(name="lou"), late.admin_client
+    expect_allowed(client=admin, sql="REVOKE DROP MACRO ON SCHEMA lib FROM keepers")
+    try:
+        detail = refusal(client=lou, sql="CREATE OR REPLACE MACRO lib.m_seen() AS 9").detail
+        assert f"{BLOCKED_PREFIX}user lou may not replace macro {LATE}.lib.m_seen" in detail
+        assert f"{LATE}.app.seen_def" not in detail
+    finally:
+        expect_allowed(client=admin, sql="GRANT DROP MACRO ON SCHEMA lib TO keepers")
+
+
 def test_an_owner_drops_its_own_table_with_its_own_trigger(late):
     lou, admin = late.user(name="lou"), late.admin_client
     for sql in ["CREATE TABLE lib.mine (i INT)", "CREATE TABLE lib.mine_log (i INT)",

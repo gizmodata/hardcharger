@@ -735,8 +735,12 @@ def test_a_macro_named_like_one_an_object_finds_in_main_is_the_administrators_to
     try:
         # In the view's own schema, where it would be found before main's.
         expect_blocked(client=wes, sql="CREATE MACRO rpt.pin_fmt(x) AS 'mine'", why=pinned)
-        # In main: the ones the table's CHECK, the view and the policy call there.
-        for name, body in [("pin_ok", "true"), ("pin_fmt", "'mine'"), ("pin_region", "true")]:
+        # DuckDB records the CHECK's dependency on the macro, so the replacement reports
+        # the table wes can see. The view and the policy still rely on the name guard.
+        expect_blocked(client=wes, sql="CREATE OR REPLACE MACRO main.pin_ok(x) AS true", code="execution_error",
+                       why=f"Dependency Error: Cannot replace macro {c}.main.pin_ok: "
+                           f"other objects depend on it (table {c}.main.pin_t). Drop them first")
+        for name, body in [("pin_fmt", "'mine'"), ("pin_region", "true")]:
             expect_blocked(client=wes, sql=f"CREATE OR REPLACE MACRO main.{name}(x) AS {body}", why=pinned)
         # Twin: a name nothing calls, in both schemas.
         for schema in ["rpt", "main"]:

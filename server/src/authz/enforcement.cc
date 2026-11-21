@@ -1703,11 +1703,11 @@ class PlanChecker {
     RequireMacroPrivilege(macro, Privilege::kCreateMacro, "create");
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       RequireMacroPrivilege(macro, Privilege::kDropMacro, "replace");
-    }
-    if (auto refusal = MacroNameRefusal(context_, snapshot_, macro)) Deny(principal_, *refusal);
-    if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
+      // Replacement drops the old entry first. Report recorded blockers with the
+      // same visibility rules as DROP before checking names the replacement could shadow.
       CheckDependents({*existing}, false, Describe(*existing), "replace");
     }
+    if (auto refusal = MacroNameRefusal(context_, snapshot_, macro)) Deny(principal_, *refusal);
   }
 
   // CREATE [OR REPLACE] TYPE by a user other than the administrator: the CREATE TYPE
