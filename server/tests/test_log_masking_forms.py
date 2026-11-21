@@ -650,7 +650,7 @@ def review_tables(server):
     admin = server.admin()
     admin.execute(sql="CREATE TABLE mask_int (id INTEGER, password INTEGER)")
     admin.execute(sql="INSERT INTO mask_int VALUES (1, 1)")
-    admin.execute(sql="CREATE TABLE mask_words (doc INTEGER, token VARCHAR, auth VARCHAR, first_pass INTEGER, url VARCHAR, "
+    admin.execute(sql="CREATE TABLE mask_words (doc INTEGER, page_token VARCHAR, auth VARCHAR, first_pass INTEGER, url VARCHAR, "
                       "session_token VARCHAR, api_key VARCHAR, note VARCHAR, pwd VARCHAR)")
     admin.execute(sql="INSERT INTO mask_words VALUES (1, 'cat', 'basic', 1, 'https://example.com/cb?state=1&code=4/0Ab', 's1', 'k1', "
                       "'password', '/home')")
@@ -725,20 +725,21 @@ ORDINARY = [
     "SELECT doc AS {t} FROM mask_words WHERE first_pass IN (1, 2, 3)",
     "UPDATE mask_words SET first_pass = first_pass + 1 WHERE doc = 3 AND note <> '{t}'",
     "SELECT doc AS {t} FROM mask_words WHERE auth = 'basic'",
-    "SELECT doc AS {t} FROM mask_words WHERE token IN ('cat', 'mat') AND token LIKE 'c%' AND token BETWEEN 'a' AND 'm'",
-    "SELECT doc AS {t} FROM mask_words WHERE token NOT IN (SELECT token FROM mask_words WHERE doc = 2)",
+    "SELECT doc AS {t} FROM mask_words WHERE page_token IN ('cat', 'mat') "
+    "AND page_token LIKE 'c%' AND page_token BETWEEN 'a' AND 'm'",
+    "SELECT doc AS {t} FROM mask_words WHERE page_token NOT IN (SELECT page_token FROM mask_words WHERE doc = 2)",
     "SELECT doc AS {t} FROM mask_words WHERE session_token IN (SELECT session_token FROM mask_words WHERE doc = 3)",
     "SELECT doc AS {t} FROM mask_words WHERE api_key IN (SELECT api_key FROM mask_words WHERE doc = 3)",
     "SELECT a.doc AS {t} FROM mask_words a JOIN mask_words b ON lower(a.api_key) = lower(b.api_key)",
-    "SELECT doc AS {t} FROM mask_words WHERE length(token) > 2",
-    "INSERT INTO mask_words (doc, token, note) VALUES (99, 'dog', '{t}')",
+    "SELECT doc AS {t} FROM mask_words WHERE length(page_token) > 2",
+    "INSERT INTO mask_words (doc, page_token, note) VALUES (99, 'dog', '{t}')",
     "SELECT json_object('token', 'cat', 'pos', 3) AS {t}",
     "SELECT doc AS {t} FROM mask_words WHERE note IN ('password', 'token', 'api_key')",
     "SELECT doc AS {t} FROM mask_words WHERE url LIKE 'https://example.com/p/%?code=%' OR url LIKE 'https://%@%'",
     "SELECT doc AS {t} FROM mask_words WHERE url = 'https://example.com/cb?state=1&code=4/0Ab'",
     "SELECT 'see http://wiki.local:8080/page or mail ops@example.com' AS {t}",
     "SELECT doc AS {t} FROM mask_words WHERE pwd = '/home'",
-    "SELECT doc AS {t} FROM mask_words WHERE no_such_column = 1 AND token = 'cat'",
+    "SELECT doc AS {t} FROM mask_words WHERE no_such_column = 1 AND page_token = 'cat'",
     "SELECT doc AS {t} FROM mask_words WHERE api_key IN (SELECT api_key FROM no_such_table_{t})",
 ]
 

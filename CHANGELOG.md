@@ -7,6 +7,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Align statement logging examples and integration coverage with masking for columns named `token`.
+
 ## [2.14.0] - 2026-11-21
 
 ### Added

@@ -1140,8 +1140,8 @@ as the log shows it>)`.
 
 Among what is **not** masked: an argument given by position (`hmac('key', msg)`), a value
 under a name that is not a credential name (`key => …`, `tokens => […]`, `client_key_pem`), a
-column, key or pair under a credential name that is not one only a credential has (`token =
-'cat'`, `auth = 'basic'`, `{'token': …}`, `INSERT INTO t (token) VALUES …`), a credential in a
+column, key or pair under an ambiguous credential name (`page_token = 'cat'`,
+`auth = 'basic'`, `{'token': …}`, `INSERT INTO t (page_token) VALUES …`), a credential in a
 URL's path, a URL query's `code`, an `INSERT` without a column list or from a `SELECT`, and a
 value an error quotes after the statement transformed it (a substring, a hash, an encoding).
 
