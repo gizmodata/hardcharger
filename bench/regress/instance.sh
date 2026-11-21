@@ -47,12 +47,13 @@ case "${1:-}" in
     tar -xf "$tarball" -C "$root"
     cd "$root"
     case "$(uname -m)" in
-      x86_64) pattern='manylinux: quay.io/pypa/manylinux_2_28_x86_64' ;;
-      aarch64) pattern='manylinux: quay.io/pypa/manylinux_2_28_aarch64' ;;
+      x86_64) build_arch=x86_64 ;;
+      aarch64) build_arch=aarch64 ;;
       *) echo "no manylinux image for $(uname -m)" >&2; exit 1 ;;
     esac
-    image=$(grep -m1 "$pattern" .github/workflows/server.yml | sed -E 's/.*manylinux: //')
-    [ -n "$image" ] || { echo "no pinned manylinux image in server.yml" >&2; exit 1; }
+    # Both YAML matrix entries and the JSON leg selector contain the pinned image reference.
+    image=$(grep -Eom1 "quay\.io/pypa/manylinux_2_28_${build_arch}:[[:alnum:]_.-]+@sha256:[[:xdigit:]]{64}" \
+      .github/workflows/server.yml) || { echo "no pinned $build_arch manylinux image in server.yml" >&2; exit 1; }
     export HARDCHARGER_MANYLINUX_IMAGE="$image"
     CMAKE_BUILD_PARALLEL_LEVEL="${JOBS:-$(nproc)}"
     export CMAKE_BUILD_PARALLEL_LEVEL
