@@ -138,6 +138,7 @@ test("temporary sequences: the server's refusal leaves the session and its tempo
   expect(await gridRows(page)).toEqual([["v"], ["42"]]);
   await keepScreenshot(page, testInfo, "read-only-locked.png");
   // And the lock is the server's: a write is refused with its read_only error.
+  expectProblem(page, { status: 403, url: /\/chargewire\/v1\/sessions\/[^/]+\/statements$/, required: false });
   await runDone(page, "CREATE TEMP TABLE refused (i INTEGER)");
   await expect(ro.error).toHaveText("read onlyCREATE is not allowed in a read-only session");
 });
@@ -212,6 +213,9 @@ test("re-adding a connected server with Read-only sessions never shows a writabl
   /** A write with the box checked is refused by the server: never checked and writable. */
   const neverCheckedAndWritable = async (table: string): Promise<boolean> => {
     const checked = await ro.box.isChecked();
+    // A fast refusal is HTTP 403; a later one arrives in the accepted statement's
+    // document. Both must still show the exact read_only error below.
+    expectProblem(page, { status: 403, url: /\/chargewire\/v1\/sessions\/[^/]+\/statements$/, required: false });
     await runDone(page, `CREATE TEMP TABLE ${table} (i INTEGER)`);
     const refused = (await ro.error.count()) > 0;
     if (refused) await expect(ro.error).toHaveText("read onlyCREATE is not allowed in a read-only session");
@@ -288,6 +292,7 @@ test("a reload shows the new session's real state, read-write as well as read-on
   await runDone(page, "SELECT 2 AS n");
   await created;
   await expect(ro.mode).toHaveAttribute("data-state", "on");
+  expectProblem(page, { status: 403, url: /\/chargewire\/v1\/sessions\/[^/]+\/statements$/, required: false });
   await runDone(page, "CREATE TEMP TABLE refused (i INTEGER)");
   await expect(ro.error).toHaveText("read onlyCREATE is not allowed in a read-only session");
 

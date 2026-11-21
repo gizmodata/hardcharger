@@ -54,6 +54,8 @@ also closes gaps there.
   all permission cases still run there, while native and ASan jobs exercise the real extension.
 - Match terminal progress-line escapes in the read-only CLI test and observe the queued
   state independently of its timeout in the SQL-monitor test, avoiding sanitizer-only flakes.
+- Declare the expected HTTP refusal in read-only browser tests, which already assert the
+  exact read-only error, whether it arrives immediately or in an asynchronous statement.
 - Dismiss the soft keyboard before checking Android console output in the UI test, so
   the small emulator's keyboard does not hide the transcript. Preserve release-tag build
   caches before tests run so a failed gate can reuse them on its next attempt.
