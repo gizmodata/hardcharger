@@ -232,6 +232,43 @@ def test_only_the_provisioning_issuers_tokens_create_users(launcher, store, idp)
     assert "eve@example.com" in users(admin=server.admin())
 
 
+def test_first_match_on_two_replicas_records_one_identity(launcher, pg_store, idp):
+    uri = pg_store.new_database()
+    env = idp_env(idp=idp, issuer=None)
+    first = start_rbac_server(launcher=launcher, store_uri=uri, env=env)
+    admin = first.admin()
+    admin.run(sql="CREATE USER reader")
+    admin.run(sql="CREATE USER other_reader")
+    second = start_rbac_server(launcher=launcher, store_uri=uri, env=env)
+    for claims in ({"issuer": ""}, {"sub": ""}):
+        with pytest.raises(ChargewireError, match="issuer and subject"):
+            exchange(server=first, subject_token=idp["token"](email="reader", role="user", **claims))
+    account = "SELECT idp_issuer, idp_subject FROM hardcharger_users() WHERE name = 'reader'"
+    assert first.admin().run(sql=account).to_pylist() == [{"idp_issuer": None, "idp_subject": None}]
+
+    def sign_in(replica, issuer):
+        try:
+            exchange(server=replica, subject_token=idp["token"](issuer=issuer, email="reader", sub="123", role="user"))
+        except ChargewireError as error:
+            assert error.code == "invalid_credentials" and "identity does not match" in error.detail
+            return None
+        return issuer
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = [pool.submit(sign_in, first, ISSUER), pool.submit(sign_in, second, OTHER_ISSUER)]
+        winners = [issuer for job in jobs if (issuer := job.result()) is not None]
+    assert len(winners) == 1
+    for replica in (first, second):
+        assert sign_in(replica, winners[0]) == winners[0]
+        assert replica.admin().run(sql=account).to_pylist() == [{"idp_issuer": winners[0], "idp_subject": "123"}]
+    with pytest.raises(ChargewireError, match="already linked to another user"):
+        exchange(server=first, subject_token=idp["token"](issuer=winners[0], email="other_reader", sub="123", role="user"))
+    assert admin.run(sql="SELECT has_sso_link FROM hardcharger_users() WHERE name = 'other_reader'").column(0)[0].as_py() is False
+    links = [r for replica in (first, second) for r in replica.running.log_records()
+             if r.get("message") == "linked an existing user on its first SSO sign-in"]
+    assert len(links) == 1 and links[0]["issuer"] == winners[0] and links[0].get("audit_hash")
+
+
 def test_first_sign_ins_on_two_replicas_at_once_all_succeed(launcher, pg_store, idp):
     uri = pg_store.new_database()
     env = idp_env(idp=idp, HARDCHARGER_TOKEN_AUTO_PROVISION_USERS="true")

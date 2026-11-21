@@ -1809,9 +1809,12 @@ WHERE enabled AND has_sso_link AND has_password;
 ```
 
 The provider fields and `has_sso_link` are visible to the administrator and sessions acting as
-System Admin. Existing users start with NULL provider fields. Session history does not supply
-those identifiers. The first writable 2.14 server adds the columns in place to an existing
-DuckDB or PostgreSQL RBAC store. Run 2.14 on all replicas before relying on the links.
+System Admin. Existing users start with NULL provider fields. On the first verified SSO
+sign-in that matches an enabled user's name, Hardcharger records the token's issuer and
+subject on that account. Later SSO sign-ins for that name must present the same pair.
+The existing password and grants continue to work. A read-only credential check leaves
+the link for the first actual sign-in. The first writable 2.14 server adds the columns
+in place to an existing DuckDB or PostgreSQL RBAC store. Run 2.14 on all replicas before relying on the links.
 Earlier DuckDB-store writers use positional inserts and cannot create users on the expanded schema.
 
 Under access control, a sign-in token (`token_exchange`, browser sign-in, or the token sent as

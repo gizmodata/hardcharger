@@ -297,7 +297,8 @@ class AccessControl {
     bool created = false;
   };
 
-  // Refuses a sign-in token's user when it is not one of the store's enabled users.
+  // Match the verified token to an enabled user and record the first issuer/subject pair.
+  // The read-only credential verifier checks the same match without writing it.
   // Throws chargewire::Error(kInvalidCredentials).
   TokenUser RequireStoreUser(const std::string& user_name, const std::string& issuer, const std::string& subject) const;
 

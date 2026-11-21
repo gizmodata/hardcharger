@@ -179,6 +179,10 @@ class RbacEngine {
                                          const std::map<std::string, std::string>& attributes,
                                          const ProviderIdentity& identity, bool* created);
 
+  // Bind the first verified SSO identity to this existing user. Returns true for the
+  // transaction that linked it, false if another sign-in already linked the same pair.
+  arrow::Result<bool> LinkOnSignIn(const std::string& user_id, const ProviderIdentity& identity);
+
   // Is the principal still allowed to run anything (exists, enabled)?
   bool IsActive(const Principal& principal) const;
 

@@ -8,8 +8,9 @@ import time
 import psycopg
 import pytest
 
-from rbac import rbac_env, start_rbac_server
+from rbac import ChargewireError, rbac_env, start_rbac_server
 from test_rbac_system_admin_upgrade import wait_for
+from test_rbac_token_provisioning import ISSUER, exchange, idp, idp_env
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "combined_upgrade"
 PASSWORD = "reader-upgrade-fixture"
@@ -65,16 +66,19 @@ def inspect_rbac(launcher, uri, statements):
 
 @pytest.mark.parametrize("version", ["2.10.0", "2.13.4"])
 @pytest.mark.parametrize("kind", ["duckdb", "postgres"])
-def test_upgrade_with_rbac_and_instrumentation(launcher, request, tmp_path, version, kind):
+@pytest.mark.parametrize("auto_provision", ["false", "true"])
+def test_upgrade_with_rbac_and_instrumentation(launcher, request, tmp_path, version, kind, auto_provision, idp):
     files = FIXTURES / version
     old_session = json.loads((files / "sessions.json").read_text())[kind]
     uri, args, history = restore(files, kind, tmp_path, request)
     user_id = "SELECT user_id FROM users WHERE name = 'reader'"
     original_id, old_format = inspect_rbac(launcher, uri, [user_id, VERSION.format("meta")])
     assert old_format == [{"value": "1"}] and len(original_id) == 1
+    env = idp_env(idp=idp, HARDCHARGER_TOKEN_AUTO_PROVISION_USERS=auto_provision)
+    token = idp["token"](email="reader", sub="reader-id", role="user")
     sessions = []
     for startup in range(2):
-        server = start_rbac_server(launcher=launcher, store_uri=uri, args=args)
+        server = start_rbac_server(launcher=launcher, store_uri=uri, args=args, env=env)
         admin = server.admin()
         reader = server.user(name="reader", password=PASSWORD)
         assert admin.run(sql=VERSION.format(history + ".store_metadata")).to_pylist() == [{"value": "1.1"}]
@@ -85,21 +89,27 @@ def test_upgrade_with_rbac_and_instrumentation(launcher, request, tmp_path, vers
                                "auth_method": "password", "execution_status": "success"}]
         admin.run(sql="CREATE TABLE ledger AS SELECT 18 AS amount")
         assert reader.run(sql="SELECT amount FROM ledger").to_pylist() == [{"amount": 18}]
-        methods = admin.run(sql="SELECT has_password, has_sso_link, idp_subject "
-                                "FROM hardcharger_users() WHERE name = 'reader'").to_pylist()
+        account = "SELECT has_password, has_sso_link, idp_issuer, idp_subject FROM hardcharger_users() WHERE name = 'reader'"
+        methods = admin.run(sql=account).to_pylist()
         assert methods == [{"has_password": True, "has_sso_link": bool(startup),
-                            "idp_subject": "reader-id" if startup else None}]
+                            "idp_issuer": ISSUER if startup else None, "idp_subject": "reader-id" if startup else None}]
+        sso = exchange(server=server, subject_token=token)
+        assert sso.run(sql="SELECT amount FROM ledger").to_pylist() == [{"amount": 18}]
+        assert admin.run(sql=account).to_pylist() == [{"has_password": True, "has_sso_link": True,
+                                                       "idp_issuer": ISSUER, "idp_subject": "reader-id"}]
+        with pytest.raises(ChargewireError, match="identity does not match"):
+            exchange(server=server, subject_token=idp["token"](email="reader", sub="other-reader", role="user"))
         if startup == 0:
-            admin.run(sql="ALTER USER reader SET IDENTITY PROVIDER 'https://id.example.test' SUBJECT 'reader-id'")
             admin.run(sql="CREATE USER created_after_upgrade")
         else:
             assert admin.run(sql="SELECT name FROM hardcharger_users() WHERE name = 'created_after_upgrade'").num_rows == 1
-        sessions.append(reader.session_id)
-        for sid in sessions:
+        sessions.extend([(reader.session_id, "password"), (sso.session_id, "token")])
+        for sid, method in sessions:
             count = (f"SELECT count(*) FROM {history}.execution_details WHERE session_id = '{sid}' "
-                     "AND sql_text = 'SELECT amount FROM ledger' AND auth_method = 'password' AND status = 'success'")
+                     f"AND sql_text = 'SELECT amount FROM ledger' AND auth_method = '{method}' AND status = 'success'")
             wait_for(condition=lambda: admin.run(sql=count).column(0)[0].as_py() == 1,
                      timeout=20, what="query history from this session")
+        sso.close()
         reader.close()
         admin.close()
         server.running.stop()

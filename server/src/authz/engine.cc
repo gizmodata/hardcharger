@@ -601,6 +601,26 @@ arrow::Result<Principal> RbacEngine::PrincipalForUser(const std::string& user_na
   return Principal::User(user->id, user->name);
 }
 
+arrow::Result<bool> RbacEngine::LinkOnSignIn(const std::string& user_id, const ProviderIdentity& identity) {
+  bool linked = false;
+  ARROW_RETURN_NOT_OK(store_->Mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
+    // The version row serializes this check with other sign-ins and administrative edits.
+    linked = false;
+    const auto* user = snap.FindUserById(user_id);
+    if (!user || !user->enabled || (user->sso_identity && *user->sso_identity != identity)) {
+      return AccessControlError("the sign-in identity does not match an enabled user");
+    }
+    if (user->sso_identity) return arrow::Status::OK();
+    if (snap.FindUserByIdentity(identity))
+      return AccessControlError("the SSO identity is already linked to another user");
+    ARROW_RETURN_NOT_OK(txn.LinkIdentity(user_id, identity));
+    linked = true;
+    return arrow::Status::OK();
+  }));
+  ARROW_RETURN_NOT_OK(Refresh());
+  return linked;
+}
+
 arrow::Result<Principal> RbacEngine::ProvisionUser(const std::string& user_name,
                                                    const std::map<std::string, std::string>& attributes,
                                                    const ProviderIdentity& identity, bool* created) {

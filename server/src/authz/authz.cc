@@ -420,13 +420,32 @@ void AccessControl::SetPasswordAttempts(PasswordAttempts attempts) { password_at
 
 namespace {
 
-AccessControl::TokenUser TokenUserOf(const Snapshot& snapshot, const std::string& user_id,
-                                     const ProviderIdentity& identity) {
+AccessControl::TokenUser MatchTokenUser(RbacEngine& engine, const std::string& user_id,
+                                        const ProviderIdentity& identity, bool read_only) {
+  if (identity.issuer.empty() || identity.subject.empty()) {
+    throw Error(ErrorCode::kInvalidCredentials, "SSO sign-in requires a verified issuer and subject");
+  }
   AccessControl::TokenUser out;
-  const UserRecord* user = snapshot.FindUserById(user_id);
-  const UserRecord* linked = snapshot.FindUserByIdentity(identity);
+  auto snapshot = engine.snapshot();
+  auto* user = snapshot->FindUserById(user_id);
+  if (user && user->enabled && !user->sso_identity && !read_only) {
+    auto linked = engine.LinkOnSignIn(user_id, identity);
+    if (!linked.ok()) throw Error(ErrorCode::kInvalidCredentials, linked.status().message());
+    if (*linked) {
+      Audit(LogLevel::kInfo, "linked an existing user on its first SSO sign-in",
+            {{"kind", "access_control"},
+             {"status", "success"},
+             {"method", "sso"},
+             {"user", user->name},
+             {"user_id", user_id},
+             {"issuer", identity.issuer}});
+    }
+    snapshot = engine.snapshot();
+    user = snapshot->FindUserById(user_id);
+  }
+  const auto* linked = snapshot->FindUserByIdentity(identity);
   if (!user || !user->enabled || (linked && linked != user) ||
-      (user->sso_identity && *user->sso_identity != identity)) {
+      (user->sso_identity ? *user->sso_identity != identity : !read_only)) {
     throw Error(ErrorCode::kInvalidCredentials, "the sign-in identity does not match an enabled user");
   }
   const auto role = user->attributes.find(kProvisionedRoleAttribute);
@@ -441,7 +460,7 @@ AccessControl::TokenUser AccessControl::RequireStoreUser(const std::string& user
   RequireFresh(*engine_);
   auto principal = engine_->PrincipalForUser(user_name);
   if (!principal.ok()) throw Error(ErrorCode::kInvalidCredentials, principal.status().message());
-  return TokenUserOf(*engine_->snapshot(), principal->user_id, {issuer, subject});
+  return MatchTokenUser(*engine_, principal->user_id, {issuer, subject}, read_only_);
 }
 
 AccessControl::TokenUser AccessControl::ProvisionStoreUser(const std::string& user_name, const std::string& token_role,
@@ -472,7 +491,7 @@ AccessControl::TokenUser AccessControl::ProvisionStoreUser(const std::string& us
            {"method", "token_auto_provision"}, {"user", user_name}, {"issuer", issuer}, {"role", token_role}});
   }
   if (created && read_only_) return {.readonly = token_role == "readonly", .created = true};
-  TokenUser out = TokenUserOf(*engine_->snapshot(), principal->user_id, {issuer, subject});
+  TokenUser out = MatchTokenUser(*engine_, principal->user_id, {issuer, subject}, read_only_);
   out.created = created;
   return out;
 }
