@@ -47,3 +47,6 @@ verification enabled; this entitlement does not replace it.
 - Model configured account sign-in methods in RBAC. Record the method used for an
   individual session in instrumentation. Historical session activity does not establish
   an identity-provider link.
+- Version the RBAC and instrumentation store formats independently. Treat an absent or NULL
+  legacy version as 1.0, validate the format before migration, and record the new version only
+  after success. Test upgrades with both services enabled and populated released stores.

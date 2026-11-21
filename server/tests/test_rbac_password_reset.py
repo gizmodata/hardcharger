@@ -213,9 +213,9 @@ def test_the_reset_marks_only_that_password(world, store):
     if store.kind == "postgres":
         import psycopg
         with psycopg.connect(conninfo=world.server.store_uri, autocommit=True) as connection:
-            stored = connection.execute(query="SELECT r.password_fingerprint, u.password_hash FROM "
-                                              "hardcharger_rbac.password_resets r JOIN hardcharger_rbac.users u "
-                                              "USING (user_id) WHERE u.name = 'carl'").fetchall()
+            stored = connection.execute(query="SELECT password_reset_fingerprint, password_hash FROM "
+                                              "hardcharger_rbac.users "
+                                              "WHERE name = 'carl'").fetchall()
         assert len(stored) == 1 and len(stored[0][0]) == 32 and stored[0][0] not in stored[0][1], stored
     plain = password(name="plain")
     world.setup(f"ALTER USER carl WITH PASSWORD '{plain}'")
@@ -226,7 +226,7 @@ def test_the_reset_marks_only_that_password(world, store):
     if store.kind == "postgres":
         import psycopg
         with psycopg.connect(conninfo=world.server.store_uri, autocommit=True) as connection:
-            assert connection.execute(query="SELECT count(*) FROM hardcharger_rbac.password_resets").fetchone() == (0,)
+            assert connection.execute(query="SELECT count(*) FROM hardcharger_rbac.users WHERE password_reset_fingerprint IS NOT NULL").fetchone() == (0,)
 
 
 def test_the_command_line_client_changes_a_temporary_password(world):

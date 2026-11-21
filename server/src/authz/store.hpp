@@ -64,10 +64,6 @@ class StoreTurn {
   friend class RbacStore;
 };
 
-// The version of the store's schema this server writes and reads. A store whose schema
-// is newer (a later server migrated it) is refused at startup.
-constexpr int64_t kStoreSchemaVersion = 1;
-
 struct StoreOptions {
   // A PostgreSQL connection string or URI ("postgresql://...", "postgres://...", or libpq
   // "host=... dbname=..."), a DuckDB file ("duckdb:<path>", or a path ending in .duckdb),
@@ -162,8 +158,9 @@ class RbacStore {
   RbacStore() = default;
   arrow::Status OpenStore();
   arrow::Status InitializeSchema();
+  arrow::Status UpgradeUserColumns();
   // Read-only: the schema must already be there (and not be newer than this server's).
-  arrow::Status RequireSchema();
+  arrow::Result<std::string> ReadSchemaVersion();
   arrow::Status CheckOwnership();
   // Whether the SYSTEM ADMIN grants can be read (a store an earlier version made, opened
   // read-only, has none; a damaged table is reported in the log). Never fails for that.
@@ -213,6 +210,7 @@ class RbacStore {
 class StoreTransaction {
  public:
   arrow::Status InsertUser(const UserRecord& user);
+  arrow::Status LinkIdentity(const std::string& user_id, const ProviderIdentity& identity);
   arrow::Status UpdateUser(const UserRecord& user);
   arrow::Status DeleteUser(const std::string& user_id);
   arrow::Status InsertRole(const RoleRecord& role);

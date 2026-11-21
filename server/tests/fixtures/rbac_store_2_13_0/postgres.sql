@@ -126,31 +126,31 @@ CREATE TABLE hardcharger_rbac.users (
     password_hash character varying,
     enabled boolean NOT NULL
 );
-INSERT INTO hardcharger_rbac.group_mappings VALUES ('6245b920-e06c-41b9-acf8-1ef61ff1de0f', '', 'ops', 'aded4c29-e056-412d-ac59-d013cd7d2f03');
-INSERT INTO hardcharger_rbac.memberships VALUES ('user', 'd98d3f50-efaf-470e-969f-d7811de3416a', 'e9404300-0889-44ef-996e-fc6d7ced3751', false, '');
-INSERT INTO hardcharger_rbac.memberships VALUES ('user', 'bbdf1245-d293-4081-8068-2ce3e31fdce3', 'aded4c29-e056-412d-ac59-d013cd7d2f03', true, '');
-INSERT INTO hardcharger_rbac.memberships VALUES ('user', '21e66a0b-5b91-4852-88d5-d49a670b78fd', '008bf9a9-e6aa-4856-b0a5-34dbbd924eb9', false, '');
-INSERT INTO hardcharger_rbac.memberships VALUES ('user', '6f056549-ad85-4486-81c5-d4a3d83efe7c', 'aded4c29-e056-412d-ac59-d013cd7d2f03', false, 'bbdf1245-d293-4081-8068-2ce3e31fdce3');
-INSERT INTO hardcharger_rbac.meta VALUES ('schema_version', '1');
-INSERT INTO hardcharger_rbac.meta VALUES ('storage_privileges_split', '1');
-INSERT INTO hardcharger_rbac.meta VALUES ('data_version', '17');
-INSERT INTO hardcharger_rbac.object_grants VALUES ('c6173145-fc40-47ad-bbe7-f80f5fee3f2c', 'e9404300-0889-44ef-996e-fc6d7ced3751', 'schema', 'memory', '["main"]', '', 'SELECT', '[]', false, '');
-INSERT INTO hardcharger_rbac.principal_tenants VALUES ('role', 'ca3cbb49-4a3d-4b58-9e99-20da3f06170c', '18a9b5f2-7ea0-42a0-9886-93c648cb4e57');
-INSERT INTO hardcharger_rbac.principal_tenants VALUES ('role', '3c8e2e49-b1f4-4daf-83b7-28e75d47ddbb', '18a9b5f2-7ea0-42a0-9886-93c648cb4e57');
-INSERT INTO hardcharger_rbac.principal_tenants VALUES ('user', 'bcc85091-089e-4845-96b2-6df8a05953ac', '18a9b5f2-7ea0-42a0-9886-93c648cb4e57');
-INSERT INTO hardcharger_rbac.roles VALUES ('public', 'PUBLIC', 'public', true);
-INSERT INTO hardcharger_rbac.roles VALUES ('e9404300-0889-44ef-996e-fc6d7ced3751', 'analysts', 'analysts', false);
-INSERT INTO hardcharger_rbac.roles VALUES ('aded4c29-e056-412d-ac59-d013cd7d2f03', 'sysadmin', 'sysadmin', false);
-INSERT INTO hardcharger_rbac.roles VALUES ('008bf9a9-e6aa-4856-b0a5-34dbbd924eb9', 'SYSTEM ADMIN', 'system admin', false);
-INSERT INTO hardcharger_rbac.roles VALUES ('ca3cbb49-4a3d-4b58-9e99-20da3f06170c', 'acme/PUBLIC', 'acme/public', true);
-INSERT INTO hardcharger_rbac.roles VALUES ('3c8e2e49-b1f4-4daf-83b7-28e75d47ddbb', 'acme/tenant_admin', 'acme/tenant_admin', true);
-INSERT INTO hardcharger_rbac.system_privileges VALUES ('aded4c29-e056-412d-ac59-d013cd7d2f03', 'READ FILESYSTEM', false, '');
-INSERT INTO hardcharger_rbac.tenants VALUES ('18a9b5f2-7ea0-42a0-9886-93c648cb4e57', 'acme', 'acme', '');
-INSERT INTO hardcharger_rbac.users VALUES ('d98d3f50-efaf-470e-969f-d7811de3416a', 'ann', 'ann', 'pbkdf2-sha256$600000$aTE5I7LwgSMfmsr+JjjN4Q==$njoyKSEqJtnHsaAfsX9RebMQvBGW/HGv/IpmZfrdHE0=', true);
-INSERT INTO hardcharger_rbac.users VALUES ('bbdf1245-d293-4081-8068-2ce3e31fdce3', 'bob', 'bob', NULL, true);
-INSERT INTO hardcharger_rbac.users VALUES ('21e66a0b-5b91-4852-88d5-d49a670b78fd', 'cleo', 'cleo', NULL, true);
-INSERT INTO hardcharger_rbac.users VALUES ('6f056549-ad85-4486-81c5-d4a3d83efe7c', 'dora', 'dora', NULL, true);
-INSERT INTO hardcharger_rbac.users VALUES ('bcc85091-089e-4845-96b2-6df8a05953ac', 'acme/amy', 'acme/amy', NULL, true);
+INSERT INTO hardcharger_rbac.group_mappings (mapping_id, issuer, group_name, role_id) VALUES ('6245b920-e06c-41b9-acf8-1ef61ff1de0f', '', 'ops', 'aded4c29-e056-412d-ac59-d013cd7d2f03');
+INSERT INTO hardcharger_rbac.memberships (member_kind, member_id, role_id, admin_option, granted_by) VALUES ('user', 'd98d3f50-efaf-470e-969f-d7811de3416a', 'e9404300-0889-44ef-996e-fc6d7ced3751', false, '');
+INSERT INTO hardcharger_rbac.memberships (member_kind, member_id, role_id, admin_option, granted_by) VALUES ('user', 'bbdf1245-d293-4081-8068-2ce3e31fdce3', 'aded4c29-e056-412d-ac59-d013cd7d2f03', true, '');
+INSERT INTO hardcharger_rbac.memberships (member_kind, member_id, role_id, admin_option, granted_by) VALUES ('user', '21e66a0b-5b91-4852-88d5-d49a670b78fd', '008bf9a9-e6aa-4856-b0a5-34dbbd924eb9', false, '');
+INSERT INTO hardcharger_rbac.memberships (member_kind, member_id, role_id, admin_option, granted_by) VALUES ('user', '6f056549-ad85-4486-81c5-d4a3d83efe7c', 'aded4c29-e056-412d-ac59-d013cd7d2f03', false, 'bbdf1245-d293-4081-8068-2ce3e31fdce3');
+INSERT INTO hardcharger_rbac.meta (key, value) VALUES ('schema_version', '1');
+INSERT INTO hardcharger_rbac.meta (key, value) VALUES ('storage_privileges_split', '1');
+INSERT INTO hardcharger_rbac.meta (key, value) VALUES ('data_version', '17');
+INSERT INTO hardcharger_rbac.object_grants (grant_id, role_id, scope, catalog_name, schema_path, object_name, privilege, columns, grant_option, granted_by) VALUES ('c6173145-fc40-47ad-bbe7-f80f5fee3f2c', 'e9404300-0889-44ef-996e-fc6d7ced3751', 'schema', 'memory', '["main"]', '', 'SELECT', '[]', false, '');
+INSERT INTO hardcharger_rbac.principal_tenants (principal_kind, principal_id, tenant_id) VALUES ('role', 'ca3cbb49-4a3d-4b58-9e99-20da3f06170c', '18a9b5f2-7ea0-42a0-9886-93c648cb4e57');
+INSERT INTO hardcharger_rbac.principal_tenants (principal_kind, principal_id, tenant_id) VALUES ('role', '3c8e2e49-b1f4-4daf-83b7-28e75d47ddbb', '18a9b5f2-7ea0-42a0-9886-93c648cb4e57');
+INSERT INTO hardcharger_rbac.principal_tenants (principal_kind, principal_id, tenant_id) VALUES ('user', 'bcc85091-089e-4845-96b2-6df8a05953ac', '18a9b5f2-7ea0-42a0-9886-93c648cb4e57');
+INSERT INTO hardcharger_rbac.roles (role_id, name, name_key, builtin) VALUES ('public', 'PUBLIC', 'public', true);
+INSERT INTO hardcharger_rbac.roles (role_id, name, name_key, builtin) VALUES ('e9404300-0889-44ef-996e-fc6d7ced3751', 'analysts', 'analysts', false);
+INSERT INTO hardcharger_rbac.roles (role_id, name, name_key, builtin) VALUES ('aded4c29-e056-412d-ac59-d013cd7d2f03', 'sysadmin', 'sysadmin', false);
+INSERT INTO hardcharger_rbac.roles (role_id, name, name_key, builtin) VALUES ('008bf9a9-e6aa-4856-b0a5-34dbbd924eb9', 'SYSTEM ADMIN', 'system admin', false);
+INSERT INTO hardcharger_rbac.roles (role_id, name, name_key, builtin) VALUES ('ca3cbb49-4a3d-4b58-9e99-20da3f06170c', 'acme/PUBLIC', 'acme/public', true);
+INSERT INTO hardcharger_rbac.roles (role_id, name, name_key, builtin) VALUES ('3c8e2e49-b1f4-4daf-83b7-28e75d47ddbb', 'acme/tenant_admin', 'acme/tenant_admin', true);
+INSERT INTO hardcharger_rbac.system_privileges (role_id, privilege, admin_option, granted_by) VALUES ('aded4c29-e056-412d-ac59-d013cd7d2f03', 'READ FILESYSTEM', false, '');
+INSERT INTO hardcharger_rbac.tenants (tenant_id, name, name_key, default_catalog) VALUES ('18a9b5f2-7ea0-42a0-9886-93c648cb4e57', 'acme', 'acme', '');
+INSERT INTO hardcharger_rbac.users (user_id, name, name_key, password_hash, enabled) VALUES ('d98d3f50-efaf-470e-969f-d7811de3416a', 'ann', 'ann', 'pbkdf2-sha256$600000$aTE5I7LwgSMfmsr+JjjN4Q==$njoyKSEqJtnHsaAfsX9RebMQvBGW/HGv/IpmZfrdHE0=', true);
+INSERT INTO hardcharger_rbac.users (user_id, name, name_key, password_hash, enabled) VALUES ('bbdf1245-d293-4081-8068-2ce3e31fdce3', 'bob', 'bob', NULL, true);
+INSERT INTO hardcharger_rbac.users (user_id, name, name_key, password_hash, enabled) VALUES ('21e66a0b-5b91-4852-88d5-d49a670b78fd', 'cleo', 'cleo', NULL, true);
+INSERT INTO hardcharger_rbac.users (user_id, name, name_key, password_hash, enabled) VALUES ('6f056549-ad85-4486-81c5-d4a3d83efe7c', 'dora', 'dora', NULL, true);
+INSERT INTO hardcharger_rbac.users (user_id, name, name_key, password_hash, enabled) VALUES ('bcc85091-089e-4845-96b2-6df8a05953ac', 'acme/amy', 'acme/amy', NULL, true);
 ALTER TABLE ONLY hardcharger_rbac.catalog_tenants
     ADD CONSTRAINT catalog_tenants_pkey PRIMARY KEY (catalog_key);
 ALTER TABLE ONLY hardcharger_rbac.group_mappings

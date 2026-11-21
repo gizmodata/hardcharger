@@ -15,6 +15,7 @@
 #include "platform.hpp"
 #include "runtime.hpp"
 #include "sql_text.hpp"
+#include "store_format.hpp"
 #include "version.hpp"
 
 namespace hardcharger {
@@ -105,7 +106,6 @@ JOIN {P}.sessions s ON st.session_id = s.session_id;
 // natively so it gets what PostgreSQL can enforce: keys, and foreign keys that cascade
 // (deleting an instance removes its sessions, statements and executions).
 constexpr const char* kPostgresSchemaSql = R"SQL(
-CREATE SCHEMA IF NOT EXISTS {S};
 CREATE TABLE IF NOT EXISTS {S}.instances (
     instance_id UUID PRIMARY KEY, cluster_id UUID, hardcharger_version VARCHAR NOT NULL,
     duckdb_version VARCHAR NOT NULL, arrow_version VARCHAR NOT NULL, hostname VARCHAR, hostname_arg VARCHAR,
@@ -312,51 +312,54 @@ void AppendTimeText(std::string& out, WallTime time) {
                  of_day / 60 % 60, of_day % 60, fraction);
 }
 
-// One JSON object per row, keyed c0, c1, ... in column order; a NULL is left out.
+// Batch fields use the destination column names. A missing field becomes SQL NULL.
 class JsonRows {
  public:
   JsonRows() : out_("[") {}
   void Begin() {
     if (rows_++ > 0) out_.push_back(',');
     out_.push_back('{');
-    column_ = 0;
     first_ = true;
   }
   void End() { out_.push_back('}'); }
-  void Null() { column_++; }
-  void Str(std::string_view text) {
-    Key();
+  void Str(std::string_view name, std::string_view text) {
+    Key(name);
     AppendJsonString(out_, NeedsCleaning(text) ? std::string_view(cleaned_ = Clean(text)) : text);
   }
-  void StrOrNull(std::string_view text) { text.empty() ? Null() : Str(text); }
-  void Time(WallTime time) {
-    Key();
+  void StrOrNull(std::string_view name, std::string_view text) {
+    if (!text.empty()) Str(name, text);
+  }
+  void Time(std::string_view name, WallTime time) {
+    Key(name);
     out_.push_back('"');
     AppendTimeText(out_, time);
     out_.push_back('"');
   }
-  void Time(const std::optional<WallTime>& time) { time ? Time(*time) : Null(); }
-  void Int(std::optional<int64_t> value) {
-    if (!value) return Null();
-    Key();
+  void Time(std::string_view name, const std::optional<WallTime>& time) {
+    if (time) Time(name, *time);
+  }
+  void Int(std::string_view name, std::optional<int64_t> value) {
+    if (!value) return;
+    Key(name);
     std::format_to(std::back_inserter(out_), "{}", *value);
   }
-  void Bool(bool value) {
-    Key();
+  void Bool(std::string_view name, bool value) {
+    Key(name);
     out_ += value ? "true" : "false";
   }
   std::string Finish() { return std::move(out_) + "]"; }
 
  private:
-  void Key() {
+  void Key(std::string_view name) {
     if (!first_) out_.push_back(',');
     first_ = false;
-    std::format_to(std::back_inserter(out_), "\"c{}\":", column_++);
+    out_.push_back('"');
+    out_.append(name);
+    out_ += "\":";
   }
   std::string out_;
   std::string cleaned_;
   std::size_t rows_ = 0;
-  std::size_t column_ = 0;
   bool first_ = true;
 };
 
@@ -368,10 +371,7 @@ std::string DollarQuoted(const std::string& text) {
   return tag + text + tag;
 }
 
-// The rows as a relation with the columns' names and types:
-//   (SELECT r.c0 AS name, r.c1::TIMESTAMPTZ AS ..., ... FROM (SELECT unnest(from_json(...)) AS r))
-// in DuckDB, and in PostgreSQL
-//   (SELECT r.c0 AS name, r.c1 AS ..., ... FROM json_to_recordset($hc$...$hc$) AS r (c0 varchar, ...))
+// Decode the named JSON fields into the SQL types expected by both backends.
 std::string Relation(bool postgres, const std::vector<Column>& columns, JsonRows& rows) {
   std::string select, structure, types;
   for (std::size_t i = 0; i < columns.size(); i++) {
@@ -382,15 +382,15 @@ std::string Relation(bool postgres, const std::vector<Column>& columns, JsonRows
                                                              : kind == Kind::kBool ? "boolean"
                                                                                    : "varchar";
       const char* cast = kind == Kind::kJson ? "::json" : kind == Kind::kUuid ? "::uuid" : "";
-      std::format_to(std::back_inserter(select), "{}r.c{}{} AS {}", sep, i, cast, columns[i].name);
-      std::format_to(std::back_inserter(types), "{}c{} {}", sep, i, type);
+      std::format_to(std::back_inserter(select), "{}r.{}{} AS {}", sep, columns[i].name, cast, columns[i].name);
+      std::format_to(std::back_inserter(types), "{}{} {}", sep, columns[i].name, type);
     } else {
       const char* type = kind == Kind::kInt ? "BIGINT" : kind == Kind::kBool ? "BOOLEAN" : "VARCHAR";
       const char* cast = kind == Kind::kTime ? "::TIMESTAMPTZ" : kind == Kind::kJson ? "::JSON"
                                                                : kind == Kind::kUuid ? "::UUID"
                                                                                      : "";
-      std::format_to(std::back_inserter(select), "{}r.c{}{} AS {}", sep, i, cast, columns[i].name);
-      std::format_to(std::back_inserter(structure), "{}\"c{}\":\"{}\"", i ? "," : "", i, type);
+      std::format_to(std::back_inserter(select), "{}r.{}{} AS {}", sep, columns[i].name, cast, columns[i].name);
+      std::format_to(std::back_inserter(structure), "{}\"{}\":\"{}\"", i ? "," : "", columns[i].name, type);
     }
   }
   if (postgres) {
@@ -553,29 +553,25 @@ void Instrumentation::Attach() {
   chargewire_duckdb::RunSql(connection_.get(), "ATTACH " + Literal(path) + " AS " + Quoted(catalog_) + " (READ_WRITE)");
 }
 
-void Instrumentation::Start() {
-  const std::string prefix = Quoted(catalog_) + "." + Quoted(schema_);
-  if (external_) {
-    // The two backends: the DuckDB file (no instrumentation_catalog) and PostgreSQL.
-    const std::string type = chargewire_duckdb::QueryText(
-        connection_.get(), "SELECT type FROM duckdb_databases() WHERE database_name = " + Literal(catalog_));
-    if (type == "ducklake") {
-      throw std::runtime_error(
-          "Hardcharger can't keep instrumentation in catalog '" + catalog_ +
-          "': it is a DuckLake catalog, which instrumentation doesn't support. Use PostgreSQL (recommended in "
-          "production: attach it in the init SQL and name it in instrumentation_catalog), or leave "
-          "instrumentation_catalog unset for the DuckDB file next to the database (instrumentation_db_path).");
-    }
-    if (type != "postgres") {
-      throw std::runtime_error(
-          "Hardcharger can't keep instrumentation in catalog '" + catalog_ + "': " +
-          (type.empty() ? std::string("no catalog has that name (the init SQL must attach it)")
-                        : "it is a " + type + " catalog") +
-          ". instrumentation_catalog names a PostgreSQL catalog (recommended in production); leave it unset "
-          "for the DuckDB file next to the database (instrumentation_db_path).");
-    }
-    postgres_ = true;
+void Instrumentation::InitializeSchema() {
+  static constexpr StoreFormat format{1, 1};
+  auto native = [&](const std::string& sql) {
+    chargewire_duckdb::RunSql(
+        connection_.get(), postgres_ ? "CALL postgres_execute(" + Literal(catalog_) + ", " + Literal(sql) + ")" : sql);
+  };
+  const auto prefix = Quoted(catalog_) + "." + Quoted(schema_);
+  const auto meta = postgres_ ? NativeTable("store_metadata") : Table("store_metadata");
+  if (postgres_) native("CREATE SCHEMA IF NOT EXISTS " + Quoted(schema_));
+  native("CREATE TABLE IF NOT EXISTS " + meta + " (key VARCHAR PRIMARY KEY, value VARCHAR)");
+  if (postgres_) {
+    native("LOCK TABLE " + meta + " IN SHARE ROW EXCLUSIVE MODE");
+    chargewire_duckdb::RunSql(connection_.get(), "CALL postgres_clear_cache()");
   }
+  auto version =
+      chargewire_duckdb::QueryText(connection_.get(), "SELECT COALESCE((SELECT value FROM " + Table("store_metadata") +
+                                                          " WHERE key = 'schema_version'), '1')");
+  auto error = format.Check("the instrumentation store's schema", version);
+  if (!error.empty()) throw std::runtime_error(error);
   if (postgres_) {
     // Native DDL through the postgres extension, one command at a time (the schema text
     // has no ';' inside a statement); then DuckDB rereads the catalog.
@@ -584,7 +580,7 @@ void Instrumentation::Start() {
     for (std::size_t end = ddl.find(';'); end != std::string::npos; start = end + 1, end = ddl.find(';', start)) {
       const std::string command = ddl.substr(start, end - start);
       if (command.find_first_not_of(" \t\r\n") == std::string::npos) continue;
-      chargewire_duckdb::RunSql(connection_.get(), "CALL postgres_execute(" + Literal(catalog_) + ", " + Literal(command) + ")");
+      native(command);
     }
     chargewire_duckdb::RunSql(connection_.get(), "CALL postgres_clear_cache()");
   } else {
@@ -625,6 +621,45 @@ void Instrumentation::Start() {
                                "(ALTER TABLE ... RENAME TO ...), or use a new instrumentation database, and start "
                                "the server again.");
     }
+  }
+  native("INSERT INTO " + meta + " (key, value) VALUES ('schema_version', " + Literal(format.Text()) +
+         ") ON CONFLICT (key) DO UPDATE SET value = excluded.value WHERE " + Quoted("store_metadata") +
+         ".value IS DISTINCT FROM excluded.value");
+}
+
+void Instrumentation::Start() {
+  if (external_) {
+    // The two backends: the DuckDB file (no instrumentation_catalog) and PostgreSQL.
+    const std::string type = chargewire_duckdb::QueryText(
+        connection_.get(), "SELECT type FROM duckdb_databases() WHERE database_name = " + Literal(catalog_));
+    if (type == "ducklake") {
+      throw std::runtime_error(
+          "Hardcharger can't keep instrumentation in catalog '" + catalog_ +
+          "': it is a DuckLake catalog, which instrumentation doesn't support. Use PostgreSQL (recommended in "
+          "production: attach it in the init SQL and name it in instrumentation_catalog), or leave "
+          "instrumentation_catalog unset for the DuckDB file next to the database (instrumentation_db_path).");
+    }
+    if (type != "postgres") {
+      throw std::runtime_error(
+          "Hardcharger can't keep instrumentation in catalog '" + catalog_ + "': " +
+          (type.empty() ? std::string("no catalog has that name (the init SQL must attach it)")
+                        : "it is a " + type + " catalog") +
+          ". instrumentation_catalog names a PostgreSQL catalog (recommended in production); leave it unset "
+          "for the DuckDB file next to the database (instrumentation_db_path).");
+    }
+    postgres_ = true;
+  }
+  chargewire_duckdb::RunSql(connection_.get(), "BEGIN");
+  try {
+    InitializeSchema();
+    chargewire_duckdb::RunSql(connection_.get(), "COMMIT");
+  } catch (...) {
+    try {
+      chargewire_duckdb::RunSql(connection_.get(), "ROLLBACK");
+    } catch (...) {
+      // A failed commit may already have ended the transaction.
+    }
+    throw;
   }
   // Rows a previous run left open (it was killed). Only in our own file: a shared
   // catalog's open rows may belong to live peers.
@@ -874,14 +909,23 @@ std::vector<std::string> Instrumentation::Render(const Batch& b) const {
     JsonRows rows;
     for (const auto& s : b.new_sessions) {
       rows.Begin();
-      rows.Str(s.row.session_id), rows.Str(runtime_.instance_id), rows.Str(s.row.username), rows.Str(s.row.role);
-      rows.Str(s.row.auth_method), rows.Str(""), rows.Str(s.row.connection_protocol), rows.Time(s.row.start);
-      rows.Str(s.stop ? "closed" : "active"), rows.Time(s.stop), rows.StrOrNull(s.stop_reason);
-      rows.StrOrNull(s.tag);
+      rows.Str("session_id", s.row.session_id);
+      rows.Str("instance_id", runtime_.instance_id);
+      rows.Str("username", s.row.username);
+      rows.Str("role", s.row.role);
+      rows.Str("auth_method", s.row.auth_method);
+      rows.Str("peer", "");
+      rows.Str("connection_protocol", s.row.connection_protocol);
+      rows.Time("start_time", s.row.start);
+      rows.Str("status", s.stop ? "closed" : "active");
+      rows.Time("stop_time", s.stop);
+      rows.StrOrNull("stop_reason", s.stop_reason);
+      rows.StrOrNull("session_tag", s.tag);
       rows.End();
     }
-    out.push_back("INSERT INTO " + table("sessions") + " (" + ColumnNames(columns) + ") SELECT * FROM " +
-                  Relation(pg, columns, rows) + " AS v" + (pg ? " ON CONFLICT DO NOTHING" : ""));
+    out.push_back("INSERT INTO " + table("sessions") + " (" + ColumnNames(columns) + ") SELECT " +
+                  ColumnNames(columns) + " FROM " + Relation(pg, columns, rows) + " AS v" +
+                  (pg ? " ON CONFLICT DO NOTHING" : ""));
   }
   if (!b.statements.empty()) {
     static const std::vector<Column> columns = {
@@ -891,12 +935,20 @@ std::vector<std::string> Instrumentation::Render(const Batch& b) const {
     JsonRows rows;
     for (const auto& s : b.statements) {
       rows.Begin();
-      rows.Str(s.statement_id), rows.Str(s.session_id), rows.Str(s.sql), rows.StrOrNull(s.kind), rows.Bool(false);
-      rows.Bool(s.accepted), rows.StrOrNull(s.error), rows.Time(s.created), rows.StrOrNull(s.query_tag);
+      rows.Str("statement_id", s.statement_id);
+      rows.Str("session_id", s.session_id);
+      rows.Str("sql_text", s.sql);
+      rows.StrOrNull("statement_kind", s.kind);
+      rows.Bool("is_internal", false);
+      rows.Bool("prepare_success", s.accepted);
+      rows.StrOrNull("prepare_error", s.error);
+      rows.Time("created_time", s.created);
+      rows.StrOrNull("query_tag", s.query_tag);
       rows.End();
     }
-    out.push_back("INSERT INTO " + table("sql_statements") + " (" + ColumnNames(columns) + ") SELECT * FROM " +
-                  Relation(pg, columns, rows) + " AS v" + parent("sessions", "session_id"));
+    out.push_back("INSERT INTO " + table("sql_statements") + " (" + ColumnNames(columns) + ") SELECT " +
+                  ColumnNames(columns) + " FROM " + Relation(pg, columns, rows) + " AS v" +
+                  parent("sessions", "session_id"));
   }
   // An execution's row as of its latest event: in flight (queued, executing) only its times
   // so far, finished everything, with durations as date_diff('millisecond') counts them.
@@ -912,21 +964,29 @@ std::vector<std::string> Instrumentation::Render(const Batch& b) const {
     const auto end = finished ? r.end : std::nullopt;
     const auto total_end = finished ? (r.fetch_end ? r.fetch_end : r.end) : std::nullopt;
     rows.Begin();
-    rows.Str(r.execution_id), rows.Str(r.statement_id), rows.Time(r.start), rows.Time(end);
-    rows.Time(r.enqueue_time), rows.Time(finished ? r.fetch_start : std::nullopt);
-    rows.Time(finished ? r.fetch_end : std::nullopt), rows.Time(finished ? r.cursor_close : std::nullopt);
-    rows.Int(finished ? std::optional<int64_t>(r.rows) : std::nullopt);
-    rows.Str(StatusOf(e)), rows.StrOrNull(finished ? r.error : "");
-    rows.Int(end ? std::optional<int64_t>(MillisBetween(r.start, *end)) : std::nullopt);
-    rows.Int(total_end ? std::optional<int64_t>(MillisBetween(r.start, *total_end)) : std::nullopt);
-    rows.StrOrNull(finished ? r.query_profile : ""), rows.StrOrNull(finished ? r.cancel_reason : "");
+    rows.Str("execution_id", r.execution_id);
+    rows.Str("statement_id", r.statement_id);
+    rows.Time("execution_start_time", r.start);
+    rows.Time("execution_end_time", end);
+    rows.Time("enqueue_time", r.enqueue_time);
+    rows.Time("fetch_start_time", finished ? r.fetch_start : std::nullopt);
+    rows.Time("fetch_end_time", finished ? r.fetch_end : std::nullopt);
+    rows.Time("cursor_close_time", finished ? r.cursor_close : std::nullopt);
+    rows.Int("rows_fetched", finished ? std::optional<int64_t>(r.rows) : std::nullopt);
+    rows.Str("status", StatusOf(e));
+    rows.StrOrNull("error_message", finished ? r.error : "");
+    rows.Int("duration_ms", end ? std::optional<int64_t>(MillisBetween(r.start, *end)) : std::nullopt);
+    rows.Int("total_duration_ms",
+             total_end ? std::optional<int64_t>(MillisBetween(r.start, *total_end)) : std::nullopt);
+    rows.StrOrNull("query_profile", finished ? r.query_profile : "");
+    rows.StrOrNull("cancel_reason", finished ? r.cancel_reason : "");
     rows.End();
   };
   if (!b.new_executions.empty()) {
     JsonRows rows;
     for (const auto& e : b.new_executions) execution_row(rows, e);
-    out.push_back("INSERT INTO " + table("sql_executions") + " (" + ColumnNames(execution_columns) +
-                  ") SELECT * FROM " + Relation(pg, execution_columns, rows) + " AS v" +
+    out.push_back("INSERT INTO " + table("sql_executions") + " (" + ColumnNames(execution_columns) + ") SELECT " +
+                  ColumnNames(execution_columns) + " FROM " + Relation(pg, execution_columns, rows) + " AS v" +
                   parent("sql_statements", "statement_id"));
   }
   if (!b.session_changes.empty()) {
@@ -939,8 +999,11 @@ std::vector<std::string> Instrumentation::Render(const Batch& b) const {
     WallTime oldest = WallTime::max();
     for (const auto& c : b.session_changes) {
       rows.Begin();
-      rows.Str(c.session_id), rows.Time(c.stop), rows.StrOrNull(c.stop_reason), rows.Bool(c.tag.has_value());
-      rows.StrOrNull(c.tag ? *c.tag : "");
+      rows.Str("session_id", c.session_id);
+      rows.Time("stop_time", c.stop);
+      rows.StrOrNull("stop_reason", c.stop_reason);
+      rows.Bool("tag_set", c.tag.has_value());
+      rows.StrOrNull("session_tag", c.tag ? *c.tag : "");
       rows.End();
       oldest = std::min(oldest, c.session_start);
     }

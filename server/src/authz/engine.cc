@@ -603,12 +603,17 @@ arrow::Result<Principal> RbacEngine::PrincipalForUser(const std::string& user_na
 
 arrow::Result<Principal> RbacEngine::ProvisionUser(const std::string& user_name,
                                                    const std::map<std::string, std::string>& attributes,
-                                                   bool* created) {
+                                                   const ProviderIdentity& identity, bool* created) {
   *created = false;
   if (snapshot()->FindUserByName(user_name)) return PrincipalForUser(user_name);  // disabled stays disabled
+  if (identity.issuer.empty() || identity.subject.empty()) {
+    return AccessControlError("provisioning an SSO user requires a verified issuer and subject");
+  }
   if (options_.read_only) {
     // The same checks a creation makes, with nothing written: the answer a server would give.
     const auto snap = snapshot();
+    if (snap->FindUserByIdentity(identity))
+      return AccessControlError("the SSO identity is already linked to another user");
     ARROW_RETURN_NOT_OK(CheckNewUserName(*snap, user_name, options_));
     ARROW_RETURN_NOT_OK(TenantForName(*snap, user_name).status());
     *created = true;
@@ -624,6 +629,7 @@ arrow::Result<Principal> RbacEngine::ProvisionUser(const std::string& user_name,
     ARROW_ASSIGN_OR_RAISE(auto tenant, TenantForName(snap, user_name));
     UserRecord user{StoreTransaction::NewId(), user_name, std::nullopt, true, {}, std::nullopt};
     ARROW_RETURN_NOT_OK(txn.InsertUser(user));
+    ARROW_RETURN_NOT_OK(txn.LinkIdentity(user.id, identity));
     for (const auto& [attribute, value] : attributes) {
       ARROW_RETURN_NOT_OK(txn.SetUserAttribute(user.id, attribute, value));
     }
@@ -1381,6 +1387,9 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
     std::string user_id;
     ARROW_RETURN_NOT_OK(mutate([&](StoreTransaction& txn, const Snapshot& snap) -> arrow::Status {
       ARROW_RETURN_NOT_OK(authorize(snap));
+      if (c->action == Action::kLinkIdentity && !actor.is_unrestricted_administrator()) {
+        return AccessControlError("only an unrestricted administrator can link an SSO identity");
+      }
       const bool attribute = c->action == Action::kSetAttribute || c->action == Action::kUnsetAttribute;
       if (authority.delegated()) {
         ARROW_RETURN_NOT_OK(RefuseAdministratorAccount(account_name, "ALTER USER", options_));
@@ -1460,6 +1469,17 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
           user.enabled = false;
           message = "User " + user.name + " disabled";
           break;
+        case Action::kLinkIdentity: {
+          const ProviderIdentity identity{c->issuer, c->subject};
+          if (user.sso_identity && *user.sso_identity != identity)
+            return AccessControlError("user already has another SSO identity");
+          if (const auto* linked = snap.FindUserByIdentity(identity); linked && linked->id != user.id) {
+            return AccessControlError("the SSO identity is already linked to another user");
+          }
+          message = "SSO identity linked to user " + user.name;
+          if (user.sso_identity) return arrow::Status::OK();
+          return txn.LinkIdentity(user.id, identity);
+        }
         case Action::kSetAttribute:
           message = "Attribute " + c->attribute + " set for user " + user.name;
           return txn.SetUserAttribute(user.id, c->attribute, c->value);

@@ -81,6 +81,7 @@ Snapshot::Snapshot(int64_t version, std::vector<UserRecord> users, std::vector<R
   for (size_t i = 0; i < users_.size(); ++i) {
     user_by_key_[FoldIdentifier(users_[i].name)] = i;
     user_by_id_[users_[i].id] = i;
+    if (users_[i].sso_identity) user_by_identity_[*users_[i].sso_identity] = i;
   }
   for (size_t i = 0; i < roles_.size(); ++i) {
     role_by_key_[FoldIdentifier(roles_[i].name)] = i;
@@ -127,6 +128,11 @@ const UserRecord* Snapshot::FindUserByName(const std::string& name) const {
   auto it = user_by_key_.find(FoldIdentifier(name));
   return it == user_by_key_.end() ? nullptr : &users_[it->second];
 }
+const UserRecord* Snapshot::FindUserByIdentity(const ProviderIdentity& identity) const {
+  auto it = user_by_identity_.find(identity);
+  return it == user_by_identity_.end() ? nullptr : &users_[it->second];
+}
+
 const UserRecord* Snapshot::FindUserById(const std::string& id) const {
   auto it = user_by_id_.find(id);
   return it == user_by_id_.end() ? nullptr : &users_[it->second];

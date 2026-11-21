@@ -31,6 +31,8 @@ def idp(tmp_path_factory):
 
     def sign_in_token(issuer: str = ISSUER, **claims) -> str:
         now = datetime.datetime.now(tz=datetime.UTC)
+        if "sub" not in claims and "email" in claims:
+            claims["sub"] = claims["email"]
         return jwt.encode(payload={"iss": issuer, "aud": AUDIENCE, "iat": now,
                                    "exp": now + datetime.timedelta(minutes=10), **claims},
                           key=key, algorithm="RS256")
@@ -94,13 +96,45 @@ def test_on_the_first_sign_in_creates_the_user_with_no_grants(provisioning, idp)
         expect_allowed(client=admin, sql=sql)
     assert pat.run(sql="SELECT amount FROM sales").to_pylist() == [{"amount": 100}]
     # The next sign-in finds the user (nothing created twice), with its grant.
-    again = exchange(server=server, subject_token=idp["token"](email="pat@example.com", role="user"))
+    again = exchange(server=server, subject_token=idp["token"](sub="ignored-sub", email="pat@example.com", role="user"))
     assert again.run(sql="SELECT count(*) AS n FROM sales").to_pylist() == [{"n": 1}]
     assert list(users(admin=admin)).count("pat@example.com") == 1
     # No password was set, so there is no password sign-in.
     response = httpx.post(url=f"{server.base_url}/chargewire/v1/auth/token",
                           json={"grant_type": "password", "username": "pat@example.com", "password": ""}, timeout=60)
     assert response.status_code in (400, 401), response.text
+
+
+def test_password_and_sso_share_one_user_across_restart(launcher, store, idp):
+    uri = store.new_database()
+    env = idp_env(idp=idp, HARDCHARGER_TOKEN_AUTO_PROVISION_USERS="true")
+    server = start_rbac_server(launcher=launcher, store_uri=uri, env=env)
+    admin = server.admin()
+    name = "dual@example.test"
+    token = idp["token"](email=name, sub="provider-user-007", role="user")
+    sso = exchange(server=server, subject_token=token)
+    identity = "SELECT idp_issuer, idp_subject FROM hardcharger_users() WHERE has_password AND has_sso_link"
+    assert admin.run(sql=identity).num_rows == 0
+    assert sso.run(sql="SELECT idp_subject FROM hardcharger_users() WHERE is_current").to_pylist() == [{"idp_subject": None}]
+    admin.run(sql=f"""ALTER USER "{name}" WITH PASSWORD 'local-test-password'""")
+    server.running.stop()
+
+    server = start_rbac_server(launcher=launcher, store_uri=uri, env=env)
+    admin = server.admin()
+    assert admin.run(sql=identity).to_pylist() == [{"idp_issuer": ISSUER, "idp_subject": "provider-user-007"}]
+    method = "SELECT auth_method FROM hardcharger_sessions() WHERE is_current"
+    assert server.user(name=name, password="local-test-password").run(sql=method).to_pylist() == [{"auth_method": "password"}]
+    assert exchange(server=server, subject_token=token).run(sql=method).to_pylist() == [{"auth_method": "token"}]
+
+    admin.run(sql="""CREATE USER "local@example.test" WITH PASSWORD 'original-password'""")
+    admin.run(sql=f"""ALTER USER "local@example.test" SET IDENTITY PROVIDER '{ISSUER}' SUBJECT 'local-subject'""")
+    local = server.user(name="local@example.test", password="original-password")
+    assert local.run(sql=method).to_pylist() == [{"auth_method": "password"}]
+    linked_token = idp["token"](email="local@example.test", sub="local-subject", role="user")
+    assert exchange(server=server, subject_token=linked_token).run(sql=method).to_pylist() == [{"auth_method": "token"}]
+    with pytest.raises(ChargewireError, match="identity does not match"):
+        exchange(server=server, subject_token=idp["token"](email=name, sub="different", role="user"))
+    assert admin.run(sql=identity).num_rows == 2
 
 
 def test_the_user_name_is_the_subject_without_an_email(provisioning, idp):

@@ -174,7 +174,7 @@ TEST(InstrumentationTest, FailedWriteDoesNotAffectOtherWrites) {
     Instrumentation instrumentation(*f.runtime, f.db.instance.get(), "v2.0.0");
     instrumentation.Attach();
     instrumentation.Start();
-    instrumentation.EnqueueForTesting("INSERT INTO _hardcharger_instr.main.no_such_table VALUES (1)");
+    instrumentation.EnqueueForTesting("INSERT INTO _hardcharger_instr.main.no_such_table (id) VALUES (1)");
     instrumentation.EnqueueForTesting(
         "UPDATE _hardcharger_instr.main.instances SET instance_tag = '{\"after\": \"failure\"}' "
         "WHERE instance_id = '00000000-0000-0000-0000-0000000000aa'");

@@ -9,6 +9,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- RBAC and instrumentation now record their own store format versions. Version 2.14 upgrades
+  existing version 1 stores in place to format 1.1.
+- Administrators can link SSO identities to RBAC users and list accounts with both SSO and password sign-in in `hardcharger_users()`. Existing stores gain the user metadata columns on startup.
 - **Web UI: start read-only from the sign-in page, or from a link**
   ([#61](https://github.com/gizmodata/hardcharger/issues/61)). The sign-in page has **Start
   sessions read-only**, for password, client-certificate and browser (single sign-on) sign-in:

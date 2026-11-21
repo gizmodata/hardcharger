@@ -531,6 +531,13 @@ class Parser {
       cmd.action = AlterUserCommand::Action::kEnable;
     } else if (AcceptKeyword("DISABLE")) {
       cmd.action = AlterUserCommand::Action::kDisable;
+    } else if (PeekKeyword("SET") && PeekKeyword("IDENTITY", 1)) {
+      pos_ += 2;
+      ARROW_RETURN_NOT_OK(ExpectKeyword("PROVIDER"));
+      cmd.action = AlterUserCommand::Action::kLinkIdentity;
+      ARROW_ASSIGN_OR_RAISE(cmd.issuer, ParseStringLiteral("the identity provider issuer"));
+      ARROW_RETURN_NOT_OK(ExpectKeyword("SUBJECT"));
+      ARROW_ASSIGN_OR_RAISE(cmd.subject, ParseStringLiteral("the identity provider subject"));
     } else if (PeekKeyword("SET") && PeekKeyword("ATTRIBUTE", 1)) {
       pos_ += 2;
       cmd.action = AlterUserCommand::Action::kSetAttribute;
@@ -543,7 +550,7 @@ class Parser {
       ARROW_ASSIGN_OR_RAISE(cmd.attribute, ParseIdentifier("an attribute name"));
     } else {
       return SyntaxError(
-          "expected PASSWORD, ENABLE, DISABLE, SET ATTRIBUTE or UNSET ATTRIBUTE "
+          "expected PASSWORD, ENABLE, DISABLE, SET IDENTITY PROVIDER, SET ATTRIBUTE or UNSET ATTRIBUTE "
           "after ALTER USER " +
           (cmd.current_user ? std::string("CURRENT_USER") : cmd.name));
     }

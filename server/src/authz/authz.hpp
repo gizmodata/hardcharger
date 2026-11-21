@@ -299,7 +299,7 @@ class AccessControl {
 
   // Refuses a sign-in token's user when it is not one of the store's enabled users.
   // Throws chargewire::Error(kInvalidCredentials).
-  TokenUser RequireStoreUser(const std::string& user_name) const;
+  TokenUser RequireStoreUser(const std::string& user_name, const std::string& issuer, const std::string& subject) const;
 
   // RequireStoreUser for token_auto_provision_users: a user the store doesn't have is
   // created first, with no password and no grants, and the token's role ("user" or
@@ -307,8 +307,8 @@ class AccessControl {
   // refused). Throws chargewire::Error(kInvalidCredentials) when the user can't be created
   // (its name is a role's, the administrator's, or an unknown tenant's) or is disabled.
   // Each creation, and each refusal to create, is an audit record naming `issuer`.
-  TokenUser ProvisionStoreUser(const std::string& user_name, const std::string& token_role,
-                               const std::string& issuer);
+  TokenUser ProvisionStoreUser(const std::string& user_name, const std::string& token_role, const std::string& issuer,
+                               const std::string& subject);
 
   // A client certificate's identity (spec §4.4): the store's name of the enabled user it
   // names, or nullopt. An e-mail or CN identity compares as user names do (ignoring ASCII

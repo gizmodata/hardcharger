@@ -26,6 +26,12 @@ constexpr const char* kServerSystemCatalog = "_hardcharger_system";
 constexpr const char* kPublicRoleId = "public";
 constexpr const char* kPublicRoleName = "PUBLIC";
 
+struct ProviderIdentity {
+  std::string issuer;
+  std::string subject;
+  auto operator<=>(const ProviderIdentity&) const = default;
+};
+
 struct UserRecord {
   std::string id;
   std::string name;
@@ -37,6 +43,7 @@ struct UserRecord {
   // When the password was last set (ms since the epoch), from 2.14 on; nullopt for a
   // password set before (or by an older server), which never expires.
   std::optional<int64_t> password_changed_at_ms;
+  std::optional<ProviderIdentity> sso_identity = std::nullopt;
 };
 
 struct RoleRecord {
@@ -361,6 +368,7 @@ class Snapshot {
                                             const OwnerRecord* owner) const;
 
   const UserRecord* FindUserByName(const std::string& name) const;
+  const UserRecord* FindUserByIdentity(const ProviderIdentity& identity) const;
   const UserRecord* FindUserById(const std::string& id) const;
   const RoleRecord* FindRoleByName(const std::string& name) const;
   const RoleRecord* FindRoleById(const std::string& id) const;
@@ -586,6 +594,7 @@ class Snapshot {
 
   int64_t version_;
   std::vector<UserRecord> users_;
+  std::map<ProviderIdentity, size_t> user_by_identity_;
   std::vector<RoleRecord> roles_;
   std::vector<MembershipRecord> memberships_;
   std::vector<ObjectGrantRecord> grants_;

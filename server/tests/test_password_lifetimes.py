@@ -42,7 +42,7 @@ def start(launcher, store_uri: str, env: dict[str, str] | None = None) -> RbacSe
 
 def move_back(launcher, store_uri: str, table: str, column: str, by_ms: int) -> None:
     """Moves `column` of every row of the store's `table` back by `by_ms` (the server is stopped)."""
-    sql = f"UPDATE {{schema}}.{table} SET {column} = {column} - {by_ms}"
+    sql = f"UPDATE {{schema}}.{table} SET {column} = {column} - {by_ms} WHERE {column} IS NOT NULL"
     if store_uri.startswith("duckdb:"):
         plain = RbacServer(running=launcher.start(), store_uri="")
         file = pathlib.Path(store_uri.removeprefix("duckdb:"))
@@ -93,7 +93,7 @@ def test_a_password_past_its_max_age_signs_in_held_until_its_user_changes_it(lau
     expect_allowed(client=server.admin(), sql=f"CREATE USER joe WITH PASSWORD '{JOE_PASSWORD}'")
     admin_password = server.running.password
     server.running.stop()
-    move_back(launcher=launcher, store_uri=uri, table="password_changes", column="changed_at_ms",
+    move_back(launcher=launcher, store_uri=uri, table="users", column="password_changed_at_ms",
               by_ms=age_days * DAY_MS)
     code, answer = verify(store_uri=uri, admin_password=admin_password, credential=joe(password=JOE_PASSWORD), env=env)
     assert code == 0 and answer["verified"] is True, answer
@@ -128,7 +128,7 @@ def test_a_temporary_password_stops_working_after_its_limit(launcher, store, age
     expect_allowed(client=admin, sql=f"CREATE USER joe WITH PASSWORD '{JOE_PASSWORD}' EXPIRE")
     admin_password = server.running.password
     server.running.stop()
-    move_back(launcher=launcher, store_uri=uri, table="password_resets", column="set_at_ms", by_ms=age_hours * HOUR_MS)
+    move_back(launcher=launcher, store_uri=uri, table="users", column="password_reset_at_ms", by_ms=age_hours * HOUR_MS)
     # (A DuckDB store serves one process at a time: the verifier first.)
     code, answer = verify(store_uri=uri, admin_password=admin_password, credential=joe(password=JOE_PASSWORD), env=env)
     server = start(launcher=launcher, store_uri=uri, env=env)

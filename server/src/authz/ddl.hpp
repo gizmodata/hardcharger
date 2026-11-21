@@ -51,6 +51,7 @@ struct AlterUserCommand {
     kClearPassword,
     kEnable,
     kDisable,
+    kLinkIdentity,
     kSetAttribute,
     kUnsetAttribute,
     kExpirePassword  // ALTER USER name PASSWORD EXPIRE: the current password must be changed
@@ -58,6 +59,7 @@ struct AlterUserCommand {
   std::string name;  // empty with `current_user`
   Action action;
   std::string password;   // kSetPassword
+  std::string issuer, subject;  // kLinkIdentity
   std::string attribute;  // kSetAttribute / kUnsetAttribute
   std::string value;      // kSetAttribute
   // ALTER USER CURRENT_USER ...: the session's own user.

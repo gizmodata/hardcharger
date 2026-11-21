@@ -132,10 +132,10 @@ def test_a_2_13_0_store_is_upgraded_in_place(launcher, request, tmp_path, kind):
     assert holders(admin=admin) == ["ann", "sysadmin"]
 
     if kind == "postgres":
-        # In place: the table is new, the schema's version is the one 2.13.0 opens.
+        # In place: the table is new, the store now records the migrated format.
         assert in_store(uri=uri, query="SELECT principal_kind, granted_by <> '' FROM hardcharger_rbac.system_admins "
                                        "ORDER BY principal_kind") == [("role", True), ("user", False)]
-        assert in_store(uri=uri, query="SELECT value FROM hardcharger_rbac.meta WHERE key = 'schema_version'") == [("1",)]
+        assert in_store(uri=uri, query="SELECT value FROM hardcharger_rbac.meta WHERE key = 'schema_version'") == [("1.1",)]
     # And it is the store's: there after a restart.
     server.running.stop()
     restarted = start_rbac_server(launcher=launcher, store_uri=uri)
@@ -194,7 +194,7 @@ def test_the_administrator_is_the_way_in_when_the_grants_are_missing_or_damaged(
     tom, = in_store(uri=uri, query="SELECT user_id FROM hardcharger_rbac.users WHERE name = 'acme/tom'")[0]
     staff, tenant_admin = (in_store(uri=uri, query=f"SELECT role_id FROM hardcharger_rbac.roles WHERE name = '{n}'")[0][0]
                            for n in ("acme/staff", "acme/tenant_admin"))
-    in_store(uri=uri, query="INSERT INTO hardcharger_rbac.system_admins VALUES "
+    in_store(uri=uri, query="INSERT INTO hardcharger_rbac.system_admins (principal_kind, principal_id, granted_by) VALUES "
                             "('user', '00000000-0000-4000-8000-000000000000', ''), ('robot', 'public', ''), "
                             f"('role', 'public', ''), ('user', '{tom}', ''), ('role', '{staff}', ''), "
                             f"('role', '{tenant_admin}', ''), ('user', '', ''), ('role', '\x1dsystem-admin', '')")
@@ -211,7 +211,7 @@ def test_the_administrator_is_the_way_in_when_the_grants_are_missing_or_damaged(
     # nobody holds SYSTEM ADMIN; everything else, the administrator's included, goes on.
     in_store(uri=uri, query="ALTER TABLE hardcharger_rbac.system_admins RENAME TO system_admins_kept")
     in_store(uri=uri, query="CREATE TABLE hardcharger_rbac.system_admins (principal_kind INT, note VARCHAR)")
-    in_store(uri=uri, query="INSERT INTO hardcharger_rbac.system_admins VALUES (1, 'alice')")
+    in_store(uri=uri, query="INSERT INTO hardcharger_rbac.system_admins (principal_kind, note) VALUES (1, 'alice')")
     server, admin = restart()
     assert "the access control store's SYSTEM ADMIN grants can't be read: nobody holds SYSTEM ADMIN" in server.log()
     assert holders(admin=admin) == []

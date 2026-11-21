@@ -155,7 +155,8 @@ def test_legacy_stale_owners_do_not_prevent_drop_user(launcher, pg_store):
         user_id = connection.execute(query="SELECT user_id FROM hardcharger_rbac.users WHERE name = 'legacy_owner'").fetchone()[0]
         for schema, table, kind in [('main', 'gone', 'table'), ('gone_schema', '', 'schema')]:
             import json
-            connection.execute(query="INSERT INTO hardcharger_rbac.owners VALUES (%s,%s,%s,%s,%s,'user',%s,'')",
+            connection.execute(query="INSERT INTO hardcharger_rbac.owners (object_key, catalog_name, schema_path, object_name, "
+                                     "object_type, owner_kind, owner_id, definition_hash) VALUES (%s,%s,%s,%s,%s,'user',%s,'')",
                                params=(f'{catalog}\x1f{schema}\x1e{table}', catalog, json.dumps(obj=[schema]), table, kind, user_id))
         connection.execute(query="UPDATE hardcharger_rbac.meta SET value = (value::bigint + 1)::varchar WHERE key = 'data_version'")
     admin.run(sql="DROP USER legacy_owner")

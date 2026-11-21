@@ -177,7 +177,7 @@ class RbacEngine {
   // replicas at once all succeed: the store serializes them, and the later ones find it.
   arrow::Result<Principal> ProvisionUser(const std::string& user_name,
                                          const std::map<std::string, std::string>& attributes,
-                                         bool* created);
+                                         const ProviderIdentity& identity, bool* created);
 
   // Is the principal still allowed to run anything (exists, enabled)?
   bool IsActive(const Principal& principal) const;

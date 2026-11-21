@@ -73,7 +73,7 @@ def test_store_users_cannot_read_or_list_the_servers_catalogs(joe):
 
 def test_store_users_cannot_write_or_detach_them(joe):
     for sql in ["DELETE FROM _hardcharger_logs.main.logs", "DETACH _hardcharger_instr",
-                "INSERT INTO _hardcharger_instr.main.sessions SELECT * FROM _hardcharger_instr.main.sessions",
+                "INSERT INTO _hardcharger_instr.main.sessions (session_id) SELECT session_id FROM _hardcharger_instr.main.sessions",
                 "USE _hardcharger_logs"]:
         with pytest.raises(ChargewireError) as raised:
             joe.run(sql=sql)

@@ -348,11 +348,12 @@ chargewire::Principal Authenticator::ExchangeToken(std::string_view subject_toke
   // token_auto_provision_users, the first sign-in of a token from that issuer does.
   if (access_ && principal.role != "admin") {
     const std::string issuer = decoded.has_issuer() ? decoded.get_issuer() : std::string();
+    const std::string subject = decoded.has_subject() ? decoded.get_subject() : std::string();
     authz::AccessControl::TokenUser user;
     if (auto_provision_users_ && issuer == auto_provision_issuer_) {
-      user = access_->ProvisionStoreUser(principal.name, principal.role, issuer);
+      user = access_->ProvisionStoreUser(principal.name, principal.role, issuer, subject);
     } else {
-      user = access_->RequireStoreUser(principal.name);
+      user = access_->RequireStoreUser(principal.name, issuer, subject);
     }
     // A user provisioned from a readonly token stays readonly, whatever later tokens say,
     // until an administrator removes its provisioned_role attribute.

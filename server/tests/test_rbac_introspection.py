@@ -110,7 +110,8 @@ def test_each_function_has_its_columns(alice):
         "hardcharger_role_members()": ("role", "member", "member_type", "admin_option", "grantor", "issuer", "tenant"),
         "hardcharger_roles()": ("name", "builtin", "tenant", "is_active"),
         "hardcharger_users()": ("name", "enabled", "has_password", "tenant", "attributes", "is_current",
-                                "last_sign_in_at", "failed_sign_ins", "password_must_change"),
+                                "last_sign_in_at", "failed_sign_ins", "password_must_change", "has_sso_link",
+                                "idp_issuer", "idp_subject"),
         "hardcharger_policies()": ("name", "kind", "catalog_name", "schema_name", "table_name", "column_name",
                                    "permissive", "roles", "exempt_roles", "expression", "applies_to_current_user"),
         "hardcharger_effective_privileges()": ("user_name", "privilege", "object_type", "catalog_name", "schema_name",
@@ -187,7 +188,7 @@ def test_a_user_sees_only_the_roles_it_holds_and_its_own_user_row(alice, bob):
     assert me[0].pop("last_sign_in_at") is not None, me
     assert me == [{"name": "bob", "enabled": True, "has_password": True, "tenant": None,
                    "attributes": [("region", "US")], "is_current": True, "failed_sign_ins": 0,
-                   "password_must_change": False}], me
+                   "password_must_change": False, "has_sso_link": None, "idp_issuer": None, "idp_subject": None}], me
     assert [r["name"] for r in rows(client=alice, sql="SELECT name FROM hardcharger_users()")] == ["alice"]
 
 

@@ -420,30 +420,36 @@ void AccessControl::SetPasswordAttempts(PasswordAttempts attempts) { password_at
 
 namespace {
 
-AccessControl::TokenUser TokenUserOf(const Snapshot& snapshot, const std::string& user_id) {
+AccessControl::TokenUser TokenUserOf(const Snapshot& snapshot, const std::string& user_id,
+                                     const ProviderIdentity& identity) {
   AccessControl::TokenUser out;
-  if (const UserRecord* user = snapshot.FindUserById(user_id)) {
-    const auto role = user->attributes.find(kProvisionedRoleAttribute);
-    out.readonly = role != user->attributes.end() && role->second == "readonly";
+  const UserRecord* user = snapshot.FindUserById(user_id);
+  const UserRecord* linked = snapshot.FindUserByIdentity(identity);
+  if (!user || !user->enabled || (linked && linked != user) ||
+      (user->sso_identity && *user->sso_identity != identity)) {
+    throw Error(ErrorCode::kInvalidCredentials, "the sign-in identity does not match an enabled user");
   }
+  const auto role = user->attributes.find(kProvisionedRoleAttribute);
+  out.readonly = role != user->attributes.end() && role->second == "readonly";
   return out;
 }
 
 }  // namespace
 
-AccessControl::TokenUser AccessControl::RequireStoreUser(const std::string& user_name) const {
+AccessControl::TokenUser AccessControl::RequireStoreUser(const std::string& user_name, const std::string& issuer,
+                                                         const std::string& subject) const {
   RequireFresh(*engine_);
   auto principal = engine_->PrincipalForUser(user_name);
   if (!principal.ok()) throw Error(ErrorCode::kInvalidCredentials, principal.status().message());
-  return TokenUserOf(*engine_->snapshot(), principal->user_id);
+  return TokenUserOf(*engine_->snapshot(), principal->user_id, {issuer, subject});
 }
 
-AccessControl::TokenUser AccessControl::ProvisionStoreUser(const std::string& user_name,
-                                                           const std::string& token_role,
-                                                           const std::string& issuer) {
+AccessControl::TokenUser AccessControl::ProvisionStoreUser(const std::string& user_name, const std::string& token_role,
+                                                           const std::string& issuer, const std::string& subject) {
   RequireFresh(*engine_);
   bool created = false;
-  auto principal = engine_->ProvisionUser(user_name, {{kProvisionedRoleAttribute, token_role}}, &created);
+  auto principal =
+      engine_->ProvisionUser(user_name, {{kProvisionedRoleAttribute, token_role}}, {issuer, subject}, &created);
   if (!principal.ok()) {
     // A user that exists (a disabled one) was refused as any sign-in is; one that couldn't
     // be created is an access-control refusal.
@@ -465,7 +471,8 @@ AccessControl::TokenUser AccessControl::ProvisionStoreUser(const std::string& us
           {{"kind", "access_control"}, {"status", "success"}, {"statement", "CREATE USER"},
            {"method", "token_auto_provision"}, {"user", user_name}, {"issuer", issuer}, {"role", token_role}});
   }
-  TokenUser out = TokenUserOf(*engine_->snapshot(), principal->user_id);
+  if (created && read_only_) return {.readonly = token_role == "readonly", .created = true};
+  TokenUser out = TokenUserOf(*engine_->snapshot(), principal->user_id, {issuer, subject});
   out.created = created;
   return out;
 }

@@ -63,9 +63,7 @@ stores that already have that role.
 ## How it works
 
 **In the store.** One table, `system_admins (principal_kind, principal_id, granted_by)`,
-created `IF NOT EXISTS` when a 2.14 server opens a store. The schema version is unchanged
-(as for `storage_privileges` in 2.2), so a 2.13 server still opens the store and simply does
-not read the table. Records are by id, so a dropped and recreated name holds nothing.
+created when a 2.14 server migrates the RBAC store to format 1.1. Records are by id, so a dropped and recreated name holds nothing.
 `granted_by` is the id of the System Admin who granted it, for `SHOW GRANTS`; the grant
 stands without them.
 
@@ -372,9 +370,7 @@ for; and no session state remembers a holding, so there is nothing to invalidate
 (location `''`, no admin option), not `system_privileges`: a 2.13 server refuses to load a
 store whose `system_privileges` names a privilege it does not know ("corrupt store"), and
 skips unknown names in `storage_privileges`. 2.13's `DROP ROLE` already deletes a role's rows
-there. No table, no schema version bump; on a 2.13 replica nobody holds them, so it refuses
-those statements to everyone but the administrator (checked by hand with a 2.13.1 binary:
-it opens such a store, refuses the holder, and its `DROP ROLE` removes the role's rows). A
+there. Upgrade all replicas before using these privileges. A
 record with a location, an admin option, a built-in or tenant role or a role that is gone
 counts for nothing when the snapshot is built.
 
@@ -441,9 +437,8 @@ name PASSWORD EXPIRE` for the password the user has now (a delegate may do that 
 reach). An administrator's password without `EXPIRE`, `PASSWORD NULL` and the user's own change
 end it.
 
-**How it is kept.** `password_resets (user_id, password_fingerprint, set_by, set_at_ms)`, a
-table of its own created `IF NOT EXISTS` (no schema bump; a 2.13 server never reads it). The
-record names the password it was made for by `PasswordFingerprint` (the first 16 bytes of the
+**How it is kept.** The user row holds `password_reset_fingerprint`, `password_reset_by` and
+`password_reset_at_ms`. The record names the password it was made for by `PasswordFingerprint` (the first 16 bytes of the
 SHA-256 of the stored hash, as an access token's `credential` claim does), and
 `Snapshot::PasswordMustChange` honours it only while the user's password is still that one. So
 a password set later by anyone, a 2.13 replica included, leaves it standing for nothing, and no

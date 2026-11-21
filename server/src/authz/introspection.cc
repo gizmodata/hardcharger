@@ -175,12 +175,20 @@ const std::vector<Column>& ColumnsOf(AccessTable table) {
   static const std::vector<Column> kRoles = {
       {"name", Kind::kText}, {"builtin", Kind::kBool}, {"tenant", Kind::kText}, {"is_active", Kind::kBool}};
   static const std::vector<Column> kUsers = {
-      {"name", Kind::kText},           {"enabled", Kind::kBool},       {"has_password", Kind::kBool},
-      {"tenant", Kind::kText},         {"attributes", Kind::kTextMap}, {"is_current", Kind::kBool},
+      {"name", Kind::kText},
+      {"enabled", Kind::kBool},
+      {"has_password", Kind::kBool},
+      {"tenant", Kind::kText},
+      {"attributes", Kind::kTextMap},
+      {"is_current", Kind::kBool},
       // 2.14, from the login guard: shown to the administrator, and to each user for itself.
-      {"last_sign_in_at", Kind::kTimestampMs}, {"failed_sign_ins", Kind::kInt64},
+      {"last_sign_in_at", Kind::kTimestampMs},
+      {"failed_sign_ins", Kind::kInt64},
       // 2.14: a temporary password (or one past password_max_age_days) must be changed first.
-      {"password_must_change", Kind::kBool}};
+      {"password_must_change", Kind::kBool},
+      {"has_sso_link", Kind::kBool},
+      {"idp_issuer", Kind::kText},
+      {"idp_subject", Kind::kText}};
   static const std::vector<Column> kPolicies = {
       {"name", Kind::kText},           {"kind", Kind::kText},           {"catalog_name", Kind::kText},
       {"schema_name", Kind::kText},    {"table_name", Kind::kText},     {"column_name", Kind::kText},
@@ -540,9 +548,12 @@ std::shared_ptr<arrow::RecordBatch> Users(const Snapshot& snapshot, const Princi
     const Cell must_change = visibility.kind() == ViewerKind::kAdministrator || current
                                  ? Cell(must_change_of ? must_change_of(u.id) : snapshot.PasswordMustChange(u.id) != nullptr)
                                  : Cell{};
+    const bool admin = visibility.kind() == ViewerKind::kAdministrator;
     rows.Add({u.name, u.enabled, u.password_hash.has_value() && !u.password_hash->empty(),
               names.Tenant(PrincipalKind::kUser, u.id), TextMap(u.attributes.begin(), u.attributes.end()), current,
-              last_sign_in, failed, must_change});
+              last_sign_in, failed, must_change, admin ? Cell(u.sso_identity.has_value()) : Cell{},
+              admin && u.sso_identity ? Cell(u.sso_identity->issuer) : Cell{},
+              admin && u.sso_identity ? Cell(u.sso_identity->subject) : Cell{}});
   }
   return rows.Finish();
 }

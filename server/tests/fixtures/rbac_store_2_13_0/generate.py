@@ -2,7 +2,7 @@
 current build (test_rbac_system_admin_upgrade.py, test_rbac_system_admin_audit.py):
 
   rbac.duckdb.gz     a DuckDB-file access-control store (gzip: the file is mostly empty blocks)
-  postgres.sql       a PostgreSQL store, as pg_dump --inserts wrote its hardcharger_rbac schema
+  postgres.sql       a PostgreSQL store, as pg_dump --column-inserts wrote its hardcharger_rbac schema
   audit-chain.jsonl  the access-control audit chain of a 2.13.0 server (log_format json),
                      sealed with the audit tests' key
 
@@ -79,7 +79,7 @@ def main() -> None:
             parts = urllib.parse.urlsplit(uri)
             dump = subprocess.run(
                 args=["docker", "exec", "-e", f"PGPASSWORD={parts.password}", "hardcharger-test-pg", "pg_dump",
-                      "--inserts", "--no-owner", "--no-privileges", "--schema=hardcharger_rbac",
+                      "--column-inserts", "--no-owner", "--no-privileges", "--schema=hardcharger_rbac",
                       "-U", parts.username, parts.path.lstrip("/")],
                 capture_output=True, text=True, check=True).stdout
             # Statements only: psql's own commands (\restrict, \connect) and the session

@@ -1523,8 +1523,8 @@ PASSWORD` is recorded as `change`: `password`, a scoped token by its name. The `
 runs the statement; a log an earlier version wrote still verifies (`--verify-audit-log`),
 since each record says which fields its digest covers.
 
-Upgrading needs nothing: the first 2.14 server to open a store adds one table to it and
-leaves the rest, the schema version included, as it was. A 2.13 replica on the same store
+The first 2.14 server to open an existing store creates the SYSTEM ADMIN grants table
+and adds the user metadata columns in place. A 2.13 replica on the same store
 does not read that table, so there nobody holds `SYSTEM ADMIN`, `SET ROLE SYSTEM ADMIN` is
 a syntax error, and the rules above about roles that carry it are not applied: nothing such
 a replica lets a non-administrator write can give anyone `SYSTEM ADMIN` (a membership it
@@ -1658,10 +1658,9 @@ password, a hash, a token or an attribute's value. Membership grants (`user carl
 clerks: no` → `yes, WITH ADMIN OPTION`) and grants of these privileges carry `before` and
 `after` too.
 
-The privileges are kept where a 2.13 server does not read them, so mixed versions and a
-rollback keep working: on a 2.13 replica nobody holds them (it refuses those statements to
-everyone but the administrator). The reasons for each rule are in
-[docs/security-administration-design.md](docs/security-administration-design.md).
+Upgrade every replica before granting delegated account privileges. Their enforcement and
+audit behavior are described in [the security administration design](docs/security-administration-design.md).
+
 ### Tokens with `catalog_access` rules under access control
 
 Under access control a store user's grants decide what it may read and write; the
@@ -1775,10 +1774,45 @@ the first server that opens it, and a server with another `cluster_id` refuses t
 (`the access control store belongs to cluster ...`). Replicas and restarts of the same
 cluster share it as before. To share users, roles and grants between clusters on purpose,
 set `rbac_store_shared: true` on the clusters that join. A server with no `cluster_id`
-opens any store, with a warning when the store belongs to a cluster. The store also
-records its schema version, and a server refuses a store a later version has upgraded.
+opens any store, with a warning when the store belongs to a cluster.
+
+### RBAC and instrumentation store formats
+
+Hardcharger 2.14 writes format `1.1` separately to each enabled store. In RBAC, the
+`schema_version` key lives in `hardcharger_rbac.meta`. In instrumentation, it lives
+in `store_metadata` in the configured instrumentation schema. For the default DuckDB
+instrumentation file an administrator can read it with:
+
+```sql
+SELECT value FROM _hardcharger_instr.main.store_metadata WHERE key = 'schema_version';
+```
+
+A missing or NULL version in an existing store means format 1.0. Released RBAC stores
+spell it `1`. Writable startup migrates the store in place and records its new version
+after the migration succeeds. The read-only credential verifier leaves the RBAC
+store unchanged. Hardcharger 2.14 refuses an unsupported format and reports which
+store needs attention. The RBAC `data_version` continues to track changes to grants
+and accounts independently of the schema version.
 
 ### Users from the identity provider
+
+A newly auto-provisioned account stores the verified issuer and subject from its sign-in token
+on its RBAC user row. The issuer and subject must both be present. An administrator can also
+link an existing account explicitly. Linking preserves the password, grants and ownership.
+An administrator can give an SSO user a password with the usual `ALTER USER … WITH PASSWORD`.
+
+```sql
+ALTER USER "pat@example.com" SET IDENTITY PROVIDER 'https://id.example.com' SUBJECT '00u123abc';
+SELECT name, idp_issuer, idp_subject
+FROM hardcharger_users()
+WHERE enabled AND has_sso_link AND has_password;
+```
+
+The provider fields and `has_sso_link` are visible to the administrator and sessions acting as
+System Admin. Existing users start with NULL provider fields. Session history does not supply
+those identifiers. The first writable 2.14 server adds the columns in place to an existing
+DuckDB or PostgreSQL RBAC store. Run 2.14 on all replicas before relying on the links.
+Earlier DuckDB-store writers use positional inserts and cannot create users on the expanded schema.
 
 Under access control, a sign-in token (`token_exchange`, browser sign-in, or the token sent as
 user `token`'s password) signs in a user of the store, the administrator role aside: an

@@ -1,5 +1,7 @@
 #include "authz/store.hpp"
 
+#include "store_format.hpp"
+
 #include <openssl/rand.h>
 
 #include <algorithm>
@@ -41,6 +43,7 @@ namespace {
 
 namespace compat = hardcharger::authz::ddb;
 
+constexpr StoreFormat kRbacFormat{1, 1};
 constexpr const char* kSchema = "rbac_store.hardcharger_rbac";
 
 std::string T(const char* table) { return std::string(kSchema) + "." + table; }
@@ -516,7 +519,7 @@ arrow::Status RbacStore::OpenStore() {
   }
 
   if (options_.read_only) {
-    ARROW_RETURN_NOT_OK(RequireSchema());
+    ARROW_RETURN_NOT_OK(ReadSchemaVersion().status());
     ARROW_RETURN_NOT_OK(ProbeSystemAdmins());
     return CheckOwnership();
   }
@@ -628,7 +631,7 @@ arrow::Status RbacStore::CheckOwnership() {
   if (cluster_id_.empty() && !options_.cluster_id.empty() && !options_.read_only) {
     ARROW_RETURN_NOT_OK(Run(conn,
                             "INSERT INTO " + T("meta") +
-                                " SELECT 'cluster_id', $1 WHERE NOT EXISTS (SELECT 1 FROM " + T("meta") +
+                                " (key, value) SELECT 'cluster_id', $1 WHERE NOT EXISTS (SELECT 1 FROM " + T("meta") +
                                 " WHERE key = 'cluster_id')",
                             {Text(options_.cluster_id)})
                             .status());
@@ -646,9 +649,9 @@ arrow::Status RbacStore::CheckOwnership() {
   return arrow::Status::OK();
 }
 
-arrow::Status RbacStore::RequireSchema() {
+arrow::Result<std::string> RbacStore::ReadSchemaVersion() {
   auto& conn = *link_;
-  auto rows = Run(conn, "SELECT value FROM " + T("meta") + " WHERE key = 'schema_version'");
+  auto rows = Run(conn, "SELECT COALESCE((SELECT value FROM " + T("meta") + " WHERE key = 'schema_version'), '1')");
   if (!rows.ok() && IsStoreUnavailable(rows.status())) return rows.status();
   if (!rows.ok() || RowCount(**rows) == 0) {
     return arrow::Status::Invalid(
@@ -656,18 +659,79 @@ arrow::Status RbacStore::RequireSchema() {
         " schema with a version): a server creates it when it first opens the store",
         rows.ok() ? std::string() : " (" + rows.status().message() + ")");
   }
-  const std::string text = GetString(**rows, 0, 0);
-  int64_t version = 0;
-  try {
-    version = std::stoll(text);
-  } catch (const std::exception&) {
-    return arrow::Status::Invalid("Hardcharger access control: the store's schema version '", text,
-                                  "' is not a number");
+  const auto version = GetString(**rows, 0, 0);
+  const auto error = kRbacFormat.Check("the access control store's schema", version);
+  if (!error.empty()) return arrow::Status::Invalid("Hardcharger access control: ", error);
+  return version;
+}
+
+namespace {
+struct UserColumn {
+  const char* name;
+  const char* type;
+};
+constexpr UserColumn kUserColumns214[] = {{"idp_issuer", "VARCHAR"},
+                                          {"idp_subject", "VARCHAR"},
+                                          {"password_changed_at_ms", "BIGINT"},
+                                          {"password_reset_fingerprint", "VARCHAR"},
+                                          {"password_reset_by", "VARCHAR"},
+                                          {"password_reset_at_ms", "BIGINT"}};
+
+arrow::Result<std::set<std::string>> UserColumns(StoreLink& conn) {
+  ARROW_ASSIGN_OR_RAISE(
+      auto rows, Run(conn,
+                     "SELECT column_name FROM information_schema.columns WHERE "
+                     "table_catalog = 'rbac_store' AND table_schema = 'hardcharger_rbac' AND table_name = 'users'"));
+  std::set<std::string> names;
+  for (dd::idx_t r = 0; r < RowCount(*rows); ++r) names.insert(GetString(*rows, 0, r));
+  return names;
+}
+arrow::Result<std::set<std::string>> PreviewPasswordTables(StoreLink& conn) {
+  ARROW_ASSIGN_OR_RAISE(auto tables, Run(conn,
+                                         "SELECT table_name FROM information_schema.tables WHERE "
+                                         "table_catalog = 'rbac_store' AND table_schema = 'hardcharger_rbac' "
+                                         "AND table_name IN ('password_changes', 'password_resets')"));
+  std::set<std::string> names;
+  for (dd::idx_t r = 0; r < RowCount(*tables); ++r) names.insert(GetString(*tables, 0, r));
+  return names;
+}
+}  // namespace
+
+arrow::Status RbacStore::UpgradeUserColumns() {
+  auto& conn = *link_;
+  const bool postgres = !connect_uri_.empty();
+  const auto users = postgres ? "hardcharger_rbac.users" : T("users");
+  auto native = [&](const std::string& sql) {
+    return Exec(conn, postgres ? "CALL postgres_execute('rbac_store', " + Quote(sql) + ")" : sql);
+  };
+  ARROW_ASSIGN_OR_RAISE(auto columns, UserColumns(conn));
+  for (const auto& col : kUserColumns214) {
+    if (!columns.contains(col.name)) {
+      ARROW_RETURN_NOT_OK(native("ALTER TABLE " + users + " ADD COLUMN IF NOT EXISTS " + col.name + " " + col.type));
+    }
   }
-  if (version > kStoreSchemaVersion) {
-    return arrow::Status::Invalid("Hardcharger access control: the access control store's schema is version ",
-                                  version, ", newer than this server's (", kStoreSchemaVersion,
-                                  "): a later Hardcharger has upgraded it. Run that version (or later)");
+  ARROW_RETURN_NOT_OK(
+      native("CREATE UNIQUE INDEX IF NOT EXISTS users_sso_identity ON " + users + " (idp_issuer, idp_subject)"));
+  if (postgres) ARROW_RETURN_NOT_OK(Exec(conn, "CALL postgres_clear_cache()"));
+
+  // Early local 2.14 builds kept password metadata in two one-to-one tables.
+  // Copy and retire each table in one transaction so restarting cannot replay stale data.
+  ARROW_ASSIGN_OR_RAISE(auto legacy, PreviewPasswordTables(conn));
+  for (const auto& name : legacy) {
+    const std::string assignments = name == "password_changes"
+                                        ? "password_changed_at_ms = p.changed_at_ms"
+                                        : "password_reset_fingerprint = p.password_fingerprint, password_reset_by = "
+                                          "p.set_by, password_reset_at_ms = p.set_at_ms";
+    const auto table = T(name.c_str());
+    ARROW_RETURN_NOT_OK(Exec(conn, "BEGIN TRANSACTION"));
+    auto status = Exec(conn, "UPDATE " + T("users") + " AS u SET " + assignments + " FROM " + table +
+                                 " AS p WHERE u.user_id = p.user_id");
+    if (status.ok()) status = Exec(conn, "DROP TABLE " + table);
+    if (status.ok()) status = Exec(conn, "COMMIT");
+    if (!status.ok()) {
+      (void)Exec(conn, "ROLLBACK");
+      return status;
+    }
   }
   return arrow::Status::OK();
 }
@@ -676,8 +740,7 @@ arrow::Status RbacStore::InitializeSchema() {
   auto& conn = *link_;
   ARROW_RETURN_NOT_OK(Exec(conn, std::string("CREATE SCHEMA IF NOT EXISTS ") + kSchema));
   const std::string ddl[] = {
-      "CREATE TABLE IF NOT EXISTS " + T("meta") +
-          " (key VARCHAR PRIMARY KEY, value VARCHAR NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS " + T("meta") + " (key VARCHAR PRIMARY KEY, value VARCHAR NOT NULL)",
       "CREATE TABLE IF NOT EXISTS " + T("users") +
           " (user_id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL, name_key VARCHAR NOT "
           "NULL "
@@ -770,25 +833,10 @@ arrow::Status RbacStore::InitializeSchema() {
           "admin_option BOOLEAN NOT NULL, granted_by VARCHAR NOT NULL, "
           "PRIMARY KEY (role_id, privilege, location, granted_by))",
       // SYSTEM ADMIN (2.14): who may act as the administrator in a session that asks to.
-      // A table of its own, created in a store an earlier version made the first time a
-      // 2.14 server opens it, and never read by a server that predates it: to that server
-      // nobody holds it. The schema version stays the same, so such a server still opens
-      // the store.
+      // Format 1.1 records each grant against the principal that holds it.
       "CREATE TABLE IF NOT EXISTS " + T("system_admins") +
           " (principal_kind VARCHAR NOT NULL, principal_id VARCHAR NOT NULL, granted_by VARCHAR NOT NULL, "
           "PRIMARY KEY (principal_kind, principal_id))",
-      // 2.14: temporary passwords (PasswordResetRecord): the user must change one before doing
-      // anything else. A table of its own, which a server that predates it never reads (to it,
-      // no password is temporary). A record holds only for the password it names, so a
-      // password an older server sets afterwards leaves it standing for nothing.
-      "CREATE TABLE IF NOT EXISTS " + T("password_resets") +
-          " (user_id VARCHAR PRIMARY KEY, password_fingerprint VARCHAR NOT NULL, set_by VARCHAR NOT NULL, "
-          "set_at_ms BIGINT NOT NULL)",
-      // 2.14: when each user's password was last set (password_max_age_days). A table of its
-      // own, so an older server still reads and writes the store (it never updates the date:
-      // a password it sets keeps the date of the one before).
-      "CREATE TABLE IF NOT EXISTS " + T("password_changes") +
-          " (user_id VARCHAR PRIMARY KEY, changed_at_ms BIGINT NOT NULL)",
       // 2.14: the login guard's sign-in records (login_events.hpp). Not access-control data:
       // written without bumping the data version.
       "CREATE TABLE IF NOT EXISTS " + T("login_events") +
@@ -797,27 +845,9 @@ arrow::Status RbacStore::InitializeSchema() {
           "origin VARCHAR NOT NULL)",
   };
   ARROW_RETURN_NOT_OK(Exec(conn, ddl[0]));  // meta, which says the schema's version
-  {
-    ARROW_ASSIGN_OR_RAISE(auto r, Run(conn, "SELECT value FROM " + T("meta") + " WHERE key = 'schema_version'"));
-    if (RowCount(*r) == 1) {
-      const std::string text = GetString(*r, 0, 0);
-      int64_t version = 0;
-      try {
-        version = std::stoll(text);
-      } catch (const std::exception&) {
-        return arrow::Status::Invalid("Hardcharger access control: the store's schema version '", text,
-                                      "' is not a number");
-      }
-      if (version > kStoreSchemaVersion) {
-        return arrow::Status::Invalid(
-            "Hardcharger access control: the access control store's schema is version ", version,
-            ", newer than this server's (", kStoreSchemaVersion,
-            "): a later Hardcharger has upgraded it. Run that version (or later), or give this "
-            "server another store");
-      }
-    }
-  }
+  ARROW_ASSIGN_OR_RAISE(auto previous_version, ReadSchemaVersion());
   for (const auto& sql : ddl) ARROW_RETURN_NOT_OK(Exec(conn, sql));
+  ARROW_RETURN_NOT_OK(UpgradeUserColumns());
   if (!connect_uri_.empty()) {
     // Every replica reads the newest sign-in records about once a second: in PostgreSQL by
     // an index (DuckDB can't create one through the attachment; a missing index only costs
@@ -826,42 +856,59 @@ arrow::Status RbacStore::InitializeSchema() {
                           std::string("hardcharger_rbac.login_events (at_ms)')"));
   }
   ARROW_RETURN_NOT_OK(Run(conn, "INSERT INTO " + T("meta") +
-                                    " SELECT 'data_version', '1' WHERE NOT EXISTS (SELECT 1 FROM " +
+                                    " (key, value) SELECT 'data_version', '1' WHERE NOT EXISTS (SELECT 1 FROM " +
                                     T("meta") + " WHERE key = 'data_version')")
                           .status());
-  ARROW_RETURN_NOT_OK(
-      Run(conn, "INSERT INTO " + T("meta") +
-                    " SELECT 'schema_version', '" + std::to_string(kStoreSchemaVersion) +
-                    "' WHERE NOT EXISTS (SELECT 1 FROM " + T("meta") +
-                    " WHERE key = 'schema_version')")
-          .status());
   // Before 2.2, READ / WRITE FILESYSTEM also covered object storage and URLs: whoever held
   // one everywhere keeps that reach, once, as the new privileges everywhere (with its
   // admin option and grantor). An administrator can revoke them.
   ARROW_RETURN_NOT_OK(
-      Run(conn,
-          "INSERT INTO " + T("storage_privileges") +
-              " SELECT s.role_id, m.new_privilege, '', s.admin_option, s.granted_by FROM " +
-              T("system_privileges") +
-              " s JOIN (VALUES ('READ FILESYSTEM', 'READ OBJECT STORAGE'), ('READ FILESYSTEM', 'READ HTTP'), "
-              "('WRITE FILESYSTEM', 'WRITE OBJECT STORAGE'), ('WRITE FILESYSTEM', 'WRITE HTTP')) "
-              "m(old_privilege, new_privilege) ON s.privilege = m.old_privilege "
-              "WHERE NOT EXISTS (SELECT 1 FROM " + T("meta") + " WHERE key = 'storage_privileges_split') "
-              "AND NOT EXISTS (SELECT 1 FROM " + T("storage_privileges") +
-              " t WHERE t.role_id = s.role_id AND t.privilege = m.new_privilege AND t.location = '' "
-              "AND t.granted_by = s.granted_by)")
+      Run(conn, "INSERT INTO " + T("storage_privileges") +
+                    " (role_id, privilege, location, admin_option, granted_by) SELECT s.role_id, m.new_privilege, '', "
+                    "s.admin_option, s.granted_by FROM " +
+                    T("system_privileges") +
+                    " s JOIN (VALUES ('READ FILESYSTEM', 'READ OBJECT STORAGE'), ('READ FILESYSTEM', 'READ HTTP'), "
+                    "('WRITE FILESYSTEM', 'WRITE OBJECT STORAGE'), ('WRITE FILESYSTEM', 'WRITE HTTP')) "
+                    "m(old_privilege, new_privilege) ON s.privilege = m.old_privilege "
+                    "WHERE NOT EXISTS (SELECT 1 FROM " +
+                    T("meta") +
+                    " WHERE key = 'storage_privileges_split') "
+                    "AND NOT EXISTS (SELECT 1 FROM " +
+                    T("storage_privileges") +
+                    " t WHERE t.role_id = s.role_id AND t.privilege = m.new_privilege AND t.location = '' "
+                    "AND t.granted_by = s.granted_by)")
           .status());
-  ARROW_RETURN_NOT_OK(Run(conn, "INSERT INTO " + T("meta") +
-                                    " SELECT 'storage_privileges_split', '1' WHERE NOT EXISTS (SELECT 1 FROM " +
-                                    T("meta") + " WHERE key = 'storage_privileges_split')")
-                          .status());
+  ARROW_RETURN_NOT_OK(
+      Run(conn, "INSERT INTO " + T("meta") +
+                    " (key, value) SELECT 'storage_privileges_split', '1' WHERE NOT EXISTS (SELECT 1 FROM " +
+                    T("meta") + " WHERE key = 'storage_privileges_split')")
+          .status());
   ARROW_RETURN_NOT_OK(
       Run(conn,
           "INSERT INTO " + T("roles") +
-              " SELECT $1, $2, $3, true WHERE NOT EXISTS (SELECT 1 FROM " + T("roles") +
-              " WHERE role_id = $1)",
+              " (role_id, name, name_key, builtin) SELECT $1, $2, $3, true WHERE NOT EXISTS (SELECT 1 FROM " +
+              T("roles") + " WHERE role_id = $1)",
           {Text(kPublicRoleId), Text(kPublicRoleName), Text(FoldIdentifier(kPublicRoleName))})
           .status());
+  // Publish the format only after every migration and seed has succeeded. A failed
+  // migration can be retried from the legacy marker.
+  if (previous_version == kRbacFormat.Text()) return arrow::Status::OK();
+  const auto meta = T("meta");
+  const auto version = Text(kRbacFormat.Text());
+  ARROW_RETURN_NOT_OK(Run(conn,
+                          "INSERT INTO " + meta +
+                              " (key, value) SELECT 'schema_version', $1 WHERE NOT EXISTS (SELECT 1 FROM " + meta +
+                              " WHERE key = 'schema_version')",
+                          {version})
+                          .status());
+  ARROW_RETURN_NOT_OK(Run(conn,
+                          "UPDATE " + meta +
+                              " SET value = $1 WHERE key = 'schema_version' "
+                              "AND COALESCE(value, '1') = $2",
+                          {version, Text(previous_version)})
+                          .status());
+  ARROW_ASSIGN_OR_RAISE(auto recorded, ReadSchemaVersion());
+  if (recorded != kRbacFormat.Text()) return StoreError("schema migration", "version changed during startup");
   return arrow::Status::OK();
 }
 
@@ -890,26 +937,36 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
   const int64_t version = std::stoll(GetString(*version_result, 0, 0));
 
   std::vector<UserRecord> users;
-  ARROW_ASSIGN_OR_RAISE(auto u, Run(conn, "SELECT user_id, name, password_hash, enabled FROM " +
-                                              T("users") + " ORDER BY name_key"));
-  for (dd::idx_t r = 0; r < RowCount(*u); ++r) {
-    users.push_back(
-        {GetString(*u, 0, r), GetString(*u, 1, r), GetOptString(*u, 2, r), GetBool(*u, 3, r), {}, std::nullopt});
-  }
-  {
-    // A store no 2.14 server has opened yet has no such table (read-only openings only:
-    // every other opening creates it): no dates.
-    auto pc = Run(conn, "SELECT user_id, changed_at_ms FROM " + T("password_changes"));
-    if (!pc.ok() && !(options_.read_only && IsMissingTable(pc.status()))) return pc.status();
-    if (pc.ok()) {
-      std::map<std::string, int64_t> changed;
-      for (dd::idx_t r = 0; r < RowCount(**pc); ++r) {
-        changed[GetString(**pc, 0, r)] = (*pc)->GetValue(1, r).GetValue<int64_t>();
-      }
-      for (auto& user : users) {
-        if (auto it = changed.find(user.id); it != changed.end()) user.password_changed_at_ms = it->second;
-      }
+  std::vector<PasswordResetRecord> password_resets;
+  std::set<std::string> columns;
+  if (options_.read_only) {
+    ARROW_ASSIGN_OR_RAISE(columns, UserColumns(conn));
+    ARROW_ASSIGN_OR_RAISE(auto preview, PreviewPasswordTables(conn));
+    if (!preview.empty()) {
+      return arrow::Status::Invalid(
+          "open this pre-release 2.14 RBAC store with a writable server to migrate its password metadata before "
+          "verifying credentials");
     }
+  }
+  std::string projection = "user_id, name, password_hash, enabled";
+  for (const auto& col : kUserColumns214) {
+    projection += ", ";
+    projection += !options_.read_only || columns.contains(col.name) ? col.name : "NULL";
+  }
+  ARROW_ASSIGN_OR_RAISE(auto u, Run(conn, "SELECT " + projection + " FROM " + T("users") + " ORDER BY name_key"));
+  for (dd::idx_t r = 0; r < RowCount(*u); ++r) {
+    UserRecord user{GetString(*u, 0, r), GetString(*u, 1, r), GetOptString(*u, 2, r), GetBool(*u, 3, r), {},
+                    std::nullopt};
+    const auto issuer = GetOptString(*u, 4, r);
+    const auto subject = GetOptString(*u, 5, r);
+    if (issuer.has_value() != subject.has_value())
+      return StoreError("corrupt store", "incomplete SSO identity for user " + user.name);
+    if (issuer) user.sso_identity = ProviderIdentity{*issuer, *subject};
+    if (!u->GetValue(6, r).IsNull()) user.password_changed_at_ms = u->GetValue(6, r).GetValue<int64_t>();
+    if (const auto reset = GetOptString(*u, 7, r)) {
+      password_resets.push_back({user.id, *reset, GetString(*u, 8, r), u->GetValue(9, r).GetValue<int64_t>()});
+    }
+    users.push_back(std::move(user));
   }
   ARROW_ASSIGN_OR_RAISE(auto ua,
                         Run(conn, "SELECT user_id, attribute, value FROM " + T("user_attributes")));
@@ -1115,21 +1172,6 @@ arrow::Result<std::shared_ptr<const Snapshot>> RbacStore::LoadLocked() {
     }
   }
 
-  // Temporary passwords. A store no 2.14 server has opened has no such table (only a read-only
-  // opening sees one): none is temporary there, as none could have been made so.
-  std::vector<PasswordResetRecord> password_resets;
-  {
-    auto pr = Run(conn, "SELECT user_id, password_fingerprint, set_by, set_at_ms FROM " + T("password_resets"));
-    if (pr.ok()) {
-      for (dd::idx_t r = 0; r < RowCount(**pr); ++r) {
-        password_resets.push_back({GetString(**pr, 0, r), GetString(**pr, 1, r), GetString(**pr, 2, r),
-                                   (*pr)->GetValue(3, r).IsNull() ? 0 : (*pr)->GetValue(3, r).GetValue<int64_t>()});
-      }
-    } else if (!(options_.read_only && IsMissingTable(pr.status()))) {
-      return pr.status();
-    }
-  }
-
   return std::make_shared<const Snapshot>(
       version, std::move(users), std::move(roles), std::move(memberships), std::move(grants),
       std::move(owners), std::move(system_privileges), std::move(row_policies),
@@ -1231,10 +1273,13 @@ arrow::Status RbacStore::AppendLoginEvents(const std::vector<LoginEventRecord>& 
   ARROW_RETURN_NOT_OK(Redacted(Exec(conn, "BEGIN TRANSACTION")));
   auto body = [&]() -> arrow::Status {
     for (const auto& e : events) {
-      ARROW_RETURN_NOT_OK(Run(conn, "INSERT INTO " + T("login_events") + " VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                              {Text(e.id), BigInt(e.at_ms), Text(e.kind), Text(e.user_key), Text(e.user_name),
-                               Text(e.address), Text(e.origin)})
-                              .status());
+      ARROW_RETURN_NOT_OK(
+          Run(conn,
+              "INSERT INTO " + T("login_events") +
+                  " (event_id, at_ms, kind, user_key, user_name, address, origin) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+              {Text(e.id), BigInt(e.at_ms), Text(e.kind), Text(e.user_key), Text(e.user_name), Text(e.address),
+               Text(e.origin)})
+              .status());
     }
     return Exec(conn, "COMMIT");
   };
@@ -1313,9 +1358,19 @@ std::string StoreTransaction::NewId() {
 }
 
 arrow::Status StoreTransaction::InsertUser(const UserRecord& user) {
-  return Run(conn_, "INSERT INTO " + T("users") + " VALUES ($1, $2, $3, $4, $5)",
-             {Text(user.id), Text(user.name), Text(FoldIdentifier(user.name)),
-              OptText(user.password_hash), Bool(user.enabled)})
+  return Run(conn_,
+             "INSERT INTO " + T("users") +
+                 " (user_id, name, name_key, password_hash, enabled) VALUES ($1, $2, $3, $4, $5)",
+             {Text(user.id), Text(user.name), Text(FoldIdentifier(user.name)), OptText(user.password_hash),
+              Bool(user.enabled)})
+      .status();
+}
+
+arrow::Status StoreTransaction::LinkIdentity(const std::string& user_id, const ProviderIdentity& identity) {
+  if (identity.issuer.empty() || identity.subject.empty())
+    return arrow::Status::Invalid("SSO requires both issuer and subject");
+  return Run(conn_, "UPDATE " + T("users") + " SET idp_issuer = $2, idp_subject = $3 WHERE user_id = $1",
+             {Text(user_id), Text(identity.issuer), Text(identity.subject)})
       .status();
 }
 
@@ -1334,23 +1389,22 @@ arrow::Status StoreTransaction::SetUserAttribute(const std::string& user_id,
           {Text(user_id), Text(attribute)})
           .status());
   if (!value) return arrow::Status::OK();
-  return Run(conn_, "INSERT INTO " + T("user_attributes") + " VALUES ($1, $2, $3)",
+  return Run(conn_, "INSERT INTO " + T("user_attributes") + " (user_id, attribute, value) VALUES ($1, $2, $3)",
              {Text(user_id), Text(attribute), Text(*value)})
       .status();
 }
 
 arrow::Status StoreTransaction::SetPasswordChangedAt(const std::string& user_id, std::optional<int64_t> at_ms) {
-  ARROW_RETURN_NOT_OK(
-      Run(conn_, "DELETE FROM " + T("password_changes") + " WHERE user_id = $1", {Text(user_id)}).status());
-  if (!at_ms) return arrow::Status::OK();
-  return Run(conn_, "INSERT INTO " + T("password_changes") + " VALUES ($1, $2)", {Text(user_id), BigInt(*at_ms)})
+  return Run(conn_, "UPDATE " + T("users") + " SET password_changed_at_ms = $2 WHERE user_id = $1",
+             {Text(user_id), at_ms ? BigInt(*at_ms) : dd::Value(dd::LogicalType::BIGINT)})
       .status();
 }
 
 arrow::Status StoreTransaction::UpsertTenant(const TenantRecord& t) {
   ARROW_RETURN_NOT_OK(
       Run(conn_, "DELETE FROM " + T("tenants") + " WHERE tenant_id = $1", {Text(t.id)}).status());
-  return Run(conn_, "INSERT INTO " + T("tenants") + " VALUES ($1, $2, $3, $4)",
+  return Run(conn_,
+             "INSERT INTO " + T("tenants") + " (tenant_id, name, name_key, default_catalog) VALUES ($1, $2, $3, $4)",
              {Text(t.id), Text(t.name), Text(FoldIdentifier(t.name)), Text(t.default_catalog)})
       .status();
 }
@@ -1375,7 +1429,8 @@ arrow::Status StoreTransaction::SetPrincipalTenant(PrincipalKind kind, const std
                           {Text(kind_name), Text(id)})
                           .status());
   if (tenant_id.empty()) return arrow::Status::OK();
-  return Run(conn_, "INSERT INTO " + T("principal_tenants") + " VALUES ($1, $2, $3)",
+  return Run(conn_,
+             "INSERT INTO " + T("principal_tenants") + " (principal_kind, principal_id, tenant_id) VALUES ($1, $2, $3)",
              {Text(kind_name), Text(id), Text(tenant_id)})
       .status();
 }
@@ -1386,7 +1441,8 @@ arrow::Status StoreTransaction::SetCatalogTenant(const std::string& catalog,
                           {Text(FoldIdentifier(catalog))})
                           .status());
   if (tenant_id.empty()) return arrow::Status::OK();
-  return Run(conn_, "INSERT INTO " + T("catalog_tenants") + " VALUES ($1, $2, $3)",
+  return Run(conn_,
+             "INSERT INTO " + T("catalog_tenants") + " (catalog_key, catalog_name, tenant_id) VALUES ($1, $2, $3)",
              {Text(FoldIdentifier(catalog)), Text(catalog), Text(tenant_id)})
       .status();
 }
@@ -1395,10 +1451,12 @@ arrow::Status StoreTransaction::InsertScopedToken(const ScopedTokenRecord& t) {
   std::vector<std::string> privileges;
   for (auto p : t.privileges) privileges.push_back(PrivilegeName(p));
   return Run(conn_,
-             "INSERT INTO " + T("scoped_tokens") + " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-             {Text(t.id), Text(t.name), Text(FoldIdentifier(t.name)), Text(t.user_id),
-              Text(t.parent_id), Text(ToJson(privileges)), Text(ToJson(t.catalogs)),
-              Text(std::to_string(t.expires_at)), Text(t.created_by)})
+             "INSERT INTO " + T("scoped_tokens") +
+                 " (token_id, name, name_key, user_id, parent_id, privileges, catalogs, expires_at, created_by) VALUES "
+                 "($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             {Text(t.id), Text(t.name), Text(FoldIdentifier(t.name)), Text(t.user_id), Text(t.parent_id),
+              Text(ToJson(privileges)), Text(ToJson(t.catalogs)), Text(std::to_string(t.expires_at)),
+              Text(t.created_by)})
       .status();
 }
 
@@ -1408,7 +1466,9 @@ arrow::Status StoreTransaction::DeleteScopedToken(const std::string& token_id) {
 }
 
 arrow::Status StoreTransaction::InsertGroupMapping(const GroupMappingRecord& m) {
-  return Run(conn_, "INSERT INTO " + T("group_mappings") + " VALUES ($1, $2, $3, $4)",
+  return Run(conn_,
+             "INSERT INTO " + T("group_mappings") +
+                 " (mapping_id, issuer, group_name, role_id) VALUES ($1, $2, $3, $4)",
              {Text(m.id), Text(m.issuer), Text(m.group), Text(m.role_id)})
       .status();
 }
@@ -1422,7 +1482,9 @@ arrow::Status StoreTransaction::DeleteGroupMapping(const std::string& mapping_id
 arrow::Status StoreTransaction::UpsertRowPolicy(const RowPolicyRecord& p) {
   ARROW_RETURN_NOT_OK(DeleteRowPolicy(p.id));
   return Run(conn_,
-             "INSERT INTO " + T("row_policies") + " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             "INSERT INTO " + T("row_policies") +
+                 " (policy_id, name, table_key, catalog_name, schema_path, object_name, permissive, role_ids, "
+                 "predicate) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
              {Text(p.id), Text(p.name), Text(ObjectKey(p.table)), Text(p.table.catalog),
               Text(ToJson(p.table.schema_path)), Text(p.table.object_name), Bool(p.permissive),
               Text(ToJson(p.role_ids)), Text(p.predicate)})
@@ -1438,9 +1500,12 @@ arrow::Status StoreTransaction::UpsertMaskingPolicy(const MaskingPolicyRecord& m
   ARROW_RETURN_NOT_OK(
       Run(conn_, "DELETE FROM " + T("masking_policies") + " WHERE policy_id = $1", {Text(m.id)})
           .status());
-  return Run(conn_, "INSERT INTO " + T("masking_policies") + " VALUES ($1, $2, $3, $4, $5, $6, $7)",
-             {Text(m.id), Text(m.name), Text(FoldIdentifier(m.name)), Text(m.parameter),
-              Text(m.parameter_type), Text(m.return_type), Text(m.body)})
+  return Run(conn_,
+             "INSERT INTO " + T("masking_policies") +
+                 " (policy_id, name, name_key, parameter, parameter_type, return_type, body) VALUES ($1, $2, $3, $4, "
+                 "$5, $6, $7)",
+             {Text(m.id), Text(m.name), Text(FoldIdentifier(m.name)), Text(m.parameter), Text(m.parameter_type),
+              Text(m.return_type), Text(m.body)})
       .status();
 }
 
@@ -1460,10 +1525,12 @@ arrow::Status StoreTransaction::SetMaskBinding(const MaskBindingRecord& b, bool 
           .status());
   if (remove) return arrow::Status::OK();
   return Run(conn_,
-             "INSERT INTO " + T("mask_bindings") + " VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+             "INSERT INTO " + T("mask_bindings") +
+                 " (table_key, column_key, catalog_name, schema_path, object_name, column_name, policy_id, "
+                 "exempt_role_ids) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
              {Text(ObjectKey(b.table)), Text(FoldIdentifier(b.column)), Text(b.table.catalog),
-              Text(ToJson(b.table.schema_path)), Text(b.table.object_name), Text(b.column),
-              Text(b.policy_id), Text(ToJson(b.exempt_role_ids))})
+              Text(ToJson(b.table.schema_path)), Text(b.table.object_name), Text(b.column), Text(b.policy_id),
+              Text(ToJson(b.exempt_role_ids))})
       .status();
 }
 
@@ -1474,20 +1541,17 @@ arrow::Status StoreTransaction::DeleteUser(const std::string& user_id) {
           {Text(user_id)})
           .status());
   ARROW_RETURN_NOT_OK(
-      Run(conn_, "DELETE FROM " + T("user_attributes") + " WHERE user_id = $1", {Text(user_id)})
-          .status());
-  ARROW_RETURN_NOT_OK(SetPasswordChangedAt(user_id, std::nullopt));
+      Run(conn_, "DELETE FROM " + T("user_attributes") + " WHERE user_id = $1", {Text(user_id)}).status());
   ARROW_RETURN_NOT_OK(SetPrincipalTenant(PrincipalKind::kUser, user_id, ""));
   ARROW_RETURN_NOT_OK(
       Run(conn_, "DELETE FROM " + T("scoped_tokens") + " WHERE user_id = $1", {Text(user_id)})
           .status());
   ARROW_RETURN_NOT_OK(DeleteSystemAdmin(PrincipalKind::kUser, user_id));
-  ARROW_RETURN_NOT_OK(SetPasswordReset(user_id, std::nullopt));
   return Run(conn_, "DELETE FROM " + T("users") + " WHERE user_id = $1", {Text(user_id)}).status();
 }
 
 arrow::Status StoreTransaction::InsertRole(const RoleRecord& role) {
-  return Run(conn_, "INSERT INTO " + T("roles") + " VALUES ($1, $2, $3, $4)",
+  return Run(conn_, "INSERT INTO " + T("roles") + " (role_id, name, name_key, builtin) VALUES ($1, $2, $3, $4)",
              {Text(role.id), Text(role.name), Text(FoldIdentifier(role.name)), Bool(role.builtin)})
       .status();
 }
@@ -1516,9 +1580,11 @@ arrow::Status StoreTransaction::DeleteRole(const std::string& role_id) {
 }
 
 arrow::Status StoreTransaction::InsertMembership(const MembershipRecord& m) {
-  return Run(conn_, "INSERT INTO " + T("memberships") + " VALUES ($1, $2, $3, $4, $5)",
-             {Text(m.member_kind == PrincipalKind::kRole ? "role" : "user"), Text(m.member_id),
-              Text(m.role_id), Bool(m.admin_option), Text(m.granted_by)})
+  return Run(conn_,
+             "INSERT INTO " + T("memberships") +
+                 " (member_kind, member_id, role_id, admin_option, granted_by) VALUES ($1, $2, $3, $4, $5)",
+             {Text(m.member_kind == PrincipalKind::kRole ? "role" : "user"), Text(m.member_id), Text(m.role_id),
+              Bool(m.admin_option), Text(m.granted_by)})
       .status();
 }
 
@@ -1536,11 +1602,11 @@ arrow::Status StoreTransaction::DeleteMembership(PrincipalKind member_kind,
 arrow::Status StoreTransaction::InsertGrant(const ObjectGrantRecord& g) {
   return Run(conn_,
              "INSERT INTO " + T("object_grants") +
-                 " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                 " (grant_id, role_id, scope, catalog_name, schema_path, object_name, privilege, columns, "
+                 "grant_option, granted_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
              {Text(g.id), Text(g.role_id), Text(ScopeName(g.scope)), Text(g.target.catalog),
-              Text(ToJson(g.target.schema_path)), Text(g.target.object_name),
-              Text(PrivilegeName(g.privilege)), Text(ToJson(g.columns)), Bool(g.grant_option),
-              Text(g.granted_by)})
+              Text(ToJson(g.target.schema_path)), Text(g.target.object_name), Text(PrivilegeName(g.privilege)),
+              Text(ToJson(g.columns)), Bool(g.grant_option), Text(g.granted_by)})
       .status();
 }
 
@@ -1560,10 +1626,13 @@ arrow::Status StoreTransaction::DeleteGrant(const std::string& grant_id) {
 
 arrow::Status StoreTransaction::UpsertOwner(const OwnerRecord& o) {
   ARROW_RETURN_NOT_OK(DeleteOwner(o.object, o.type));
-  return Run(conn_, "INSERT INTO " + T("owners") + " VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+  return Run(conn_,
+             "INSERT INTO " + T("owners") +
+                 " (object_key, catalog_name, schema_path, object_name, object_type, owner_kind, owner_id, "
+                 "definition_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
              {Text(OwnerKey(o.type, o.object)), Text(o.object.catalog), Text(ToJson(o.object.schema_path)),
-              Text(o.object.object_name), Text(ObjectTypeName(o.type)),
-              Text(OwnerKindName(o.owner_kind)), Text(o.owner_id), Text(o.definition_hash)})
+              Text(o.object.object_name), Text(ObjectTypeName(o.type)), Text(OwnerKindName(o.owner_kind)),
+              Text(o.owner_id), Text(o.definition_hash)})
       .status();
 }
 
@@ -1579,14 +1648,17 @@ bool InStorageTable(const SystemPrivilegeRecord& r) {
 arrow::Status StoreTransaction::UpsertSystemPrivilege(const SystemPrivilegeRecord& r) {
   ARROW_RETURN_NOT_OK(DeleteSystemPrivilege(r));
   if (InStorageTable(r)) {
-    return Run(conn_, "INSERT INTO " + T("storage_privileges") + " VALUES ($1, $2, $3, $4, $5)",
+    return Run(conn_,
+               "INSERT INTO " + T("storage_privileges") +
+                   " (role_id, privilege, location, admin_option, granted_by) VALUES ($1, $2, $3, $4, $5)",
                {Text(r.role_id), Text(SystemPrivilegeName(r.privilege)), Text(r.location), Bool(r.admin_option),
                 Text(r.granted_by)})
         .status();
   }
-  return Run(conn_, "INSERT INTO " + T("system_privileges") + " VALUES ($1, $2, $3, $4)",
-             {Text(r.role_id), Text(SystemPrivilegeName(r.privilege)), Bool(r.admin_option),
-              Text(r.granted_by)})
+  return Run(conn_,
+             "INSERT INTO " + T("system_privileges") +
+                 " (role_id, privilege, admin_option, granted_by) VALUES ($1, $2, $3, $4)",
+             {Text(r.role_id), Text(SystemPrivilegeName(r.privilege)), Bool(r.admin_option), Text(r.granted_by)})
       .status();
 }
 
@@ -1607,12 +1679,19 @@ arrow::Status StoreTransaction::DeleteSystemPrivilege(const SystemPrivilegeRecor
 
 arrow::Status StoreTransaction::SetPasswordReset(const std::string& user_id,
                                                  const std::optional<PasswordResetRecord>& record) {
-  ARROW_RETURN_NOT_OK(
-      Run(conn_, "DELETE FROM " + T("password_resets") + " WHERE user_id = $1", {Text(user_id)}).status());
-  if (!record) return arrow::Status::OK();
-  return Run(conn_, "INSERT INTO " + T("password_resets") + " VALUES ($1, $2, $3, $4)",
-             {Text(user_id), Text(record->password_fingerprint), Text(record->set_by),
-              dd::Value::BIGINT(record->set_at_ms)})
+  if (!record) {
+    return Run(conn_,
+               "UPDATE " + T("users") +
+                   " SET password_reset_fingerprint = NULL, password_reset_by = NULL, password_reset_at_ms = NULL "
+                   "WHERE user_id = $1",
+               {Text(user_id)})
+        .status();
+  }
+  return Run(conn_,
+             "UPDATE " + T("users") +
+                 " SET password_reset_fingerprint = $2, password_reset_by = $3, password_reset_at_ms = $4 WHERE "
+                 "user_id = $1",
+             {Text(user_id), Text(record->password_fingerprint), Text(record->set_by), BigInt(record->set_at_ms)})
       .status();
 }
 
@@ -1623,7 +1702,8 @@ arrow::Status StoreTransaction::UpsertSystemAdmin(const SystemAdminRecord& r) {
                       "started (see its log)");
   }
   ARROW_RETURN_NOT_OK(DeleteSystemAdmin(r.kind, r.principal_id));
-  return Run(conn_, "INSERT INTO " + T("system_admins") + " VALUES ($1, $2, $3)",
+  return Run(conn_,
+             "INSERT INTO " + T("system_admins") + " (principal_kind, principal_id, granted_by) VALUES ($1, $2, $3)",
              {Text(r.kind == PrincipalKind::kRole ? "role" : "user"), Text(r.principal_id), Text(r.granted_by)})
       .status();
 }

@@ -113,6 +113,7 @@ class Instrumentation {
   // (file mode only: a shared catalog has live peers), records this instance and starts
   // the writer.
   void Start();
+  void InitializeSchema();
   // Stops taking events, writes the backlog (for at most the drain deadline; what is left
   // then is dropped and counted), closes this instance's open sessions and executions and
   // the instance row (graceful), and stops the writer.
