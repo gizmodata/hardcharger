@@ -6,6 +6,40 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.13.4] - 2026-11-20
+
+### Changed
+
+- Downloads Hardcharger server 2.13.4 by default: DuckLake functions work for tokens with
+  `catalog_access` rules, store users need a privilege on the catalog a DuckLake function names,
+  and access control checks what DuckDB evaluates while it binds a statement; the server runs
+  DuckDB v2.0.1 (see the server's CHANGELOG).
+- The `adbc` extra (`pip install "hardcharger[adbc]"`, for `Server.connect()`) needs
+  `adbc-driver-hardcharger` 2.7.0 or later, whose options are all named `hardcharger.*`
+  (`hardcharger.tls.root_certs`, `hardcharger.session.query_tag`, ...), as the ADBC driver style
+  guide asks. `connect()`'s keyword arguments (`tls_root_certs=`, `db_kwargs=`, ...) are unchanged.
+
+## [2.13.3] - 2026-11-20
+
+### Changed
+
+- Downloads Hardcharger server 2.13.3 by default, whose baseline Linux x86_64 build (the one the
+  launcher installs on a CPU without AVX2) has sqlite_scanner built in, for DuckLake's SQLite
+  catalog ([#62](https://github.com/gizmodata/hardcharger/issues/62)).
+
+## [2.13.2] - 2026-11-20
+
+### Added
+
+- **The baseline Linux x86_64 server, for CPUs without AVX2**
+  ([#62](https://github.com/gizmodata/hardcharger/issues/62)). On linux-amd64 the launcher
+  installs the optimized build as before, unless this CPU lacks an instruction it needs
+  (`/proc/cpuinfo`, x86-64-v3): then it installs `hardcharger-linux-amd64-baseline.tar.gz`
+  (released from server 2.13.2 on) and says why. `HARDCHARGER_CPU_TARGET=optimized` or
+  `=baseline` chooses the build; the default is `auto`. The baseline build is cached apart
+  (`~/.cache/hardcharger/v<version>/linux-amd64-baseline/`) and comes from GitHub Releases only,
+  as the container image holds the optimized build.
+
 ## [2.13.1] - 2026-11-15
 
 ### Added

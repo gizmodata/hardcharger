@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <duckdb/parser/expression/columnref_expression.hpp>
 #include <duckdb/parser/expression/constant_expression.hpp>
 #include <duckdb/parser/expression/parameter_expression.hpp>
 #include <duckdb/parser/expression/function_expression.hpp>
@@ -27,16 +28,19 @@
 #include <duckdb/parser/statement/create_statement.hpp>
 #include <duckdb/parser/statement/delete_statement.hpp>
 #include <duckdb/parser/statement/drop_statement.hpp>
+#include <duckdb/parser/statement/execute_statement.hpp>
 #include <duckdb/parser/statement/explain_statement.hpp>
 #include <duckdb/parser/statement/export_statement.hpp>
 #include <duckdb/parser/statement/insert_statement.hpp>
 #include <duckdb/parser/statement/load_statement.hpp>
 #include <duckdb/parser/statement/merge_into_statement.hpp>
+#include <duckdb/parser/statement/multi_statement.hpp>
 #include <duckdb/parser/statement/pragma_statement.hpp>
 #include <duckdb/parser/statement/prepare_statement.hpp>
 #include <duckdb/parser/statement/select_statement.hpp>
 #include <duckdb/parser/statement/set_statement.hpp>
 #include <duckdb/parser/statement/update_statement.hpp>
+#include <duckdb/parser/tableref/at_clause.hpp>
 #include <duckdb/parser/tableref/basetableref.hpp>
 #include <duckdb/parser/tableref/showref.hpp>
 #include <duckdb/parser/tableref/subqueryref.hpp>
@@ -142,12 +146,21 @@ bool LooksLikePath(const std::string& name) {
   return false;
 }
 
+// What a column reference stands for, if it is a macro's parameter: the strings of the
+// argument the call gave for it (nullopt when that is not a literal, or when the reference is
+// no parameter).
+using ColumnCallback = std::function<std::optional<std::vector<std::string>>(const dd::ParsedExpression&)>;
+
 // Literal strings, direct bind values, or lists of those. Unknown parameters and
 // computed expressions (including casts) stay unresolved; never evaluate them here.
-std::optional<std::vector<std::string>> LiteralPaths(const dd::ParsedExpression* expression, const PathParameterCallback& parameters) {
+std::optional<std::vector<std::string>> LiteralPaths(const dd::ParsedExpression* expression, const PathParameterCallback& parameters,
+                                                     const ColumnCallback& column = nullptr) {
   if (!expression) return std::nullopt;
   if (expression->GetExpressionClass() == dd::ExpressionClass::PARAMETER) {
     return parameters ? parameters(Str(expression->Cast<dd::ParameterExpression>().Identifier())) : std::nullopt;
+  }
+  if (expression->GetExpressionClass() == dd::ExpressionClass::COLUMN_REF) {
+    return column ? column(*expression) : std::nullopt;
   }
   auto literal = [](const dd::ParsedExpression& e) -> std::optional<std::string> {
     if (e.GetExpressionClass() != dd::ExpressionClass::CONSTANT) return std::nullopt;
@@ -173,7 +186,7 @@ std::optional<std::vector<std::string>> LiteralPaths(const dd::ParsedExpression*
     std::vector<std::string> paths;
     for (const auto& argument : function.GetArguments()) {
       if (argument.HasName()) return std::nullopt;
-      auto some = LiteralPaths(&argument.GetExpression(), parameters);
+      auto some = LiteralPaths(&argument.GetExpression(), parameters, column);
       if (!some) return std::nullopt;
       paths.insert(paths.end(), some->begin(), some->end());
     }
@@ -206,21 +219,63 @@ const dd::ParsedExpression* DeclaredArgument(const dd::FunctionExpression& funct
   return nullptr;
 }
 
+// A table function call as the DuckLake callback sees it: its name parts and its first
+// positional argument if that is a string literal (never a bound parameter: the catalog
+// must be checkable from the text alone).
+TableFunctionCall CallOf(const dd::FunctionExpression& function, const std::string& wrapper) {
+  TableFunctionCall call;
+  for (const auto& part : function.GetQualifiedName().Path()) {
+    if (!Str(part).empty()) call.parts.push_back(Str(part));
+  }
+  if (call.parts.empty()) call.parts.push_back(Str(function.FunctionName()));
+  if (const auto* first = FirstPositional(function); first && first->GetExpressionClass() == dd::ExpressionClass::CONSTANT) {
+    const auto value = ddb::ConstantValue(first->Cast<dd::ConstantExpression>());
+    if (!value.IsNull() && value.type().id() == dd::LogicalTypeId::VARCHAR) call.first_literal = value.ToString();
+  }
+  call.wrapper = wrapper;
+  call.id = &function;
+  return call;
+}
+
 // The path a COPY names: its literal, or nullopt when it is an expression.
 std::optional<std::vector<std::string>> CopyPaths(const dd::CopyInfo& info, const PathParameterCallback& parameters) {
   if (info.file_path_expression) return LiteralPaths(info.file_path_expression.get(), parameters);
   return std::vector<std::string>{info.file_path};
 }
 
+bool IsSequenceFunction(const std::string& name_lower) {
+  return name_lower == "nextval" || name_lower == "currval" || name_lower == "setval";
+}
+
+// How deep macros may call macros before the gate stops following them (and refuses).
+constexpr std::size_t kMaxMacroDepth = 16;
+
 class Walker {
  public:
   Walker(const std::function<bool(const std::string&)>& permitted,
          const NamedTableCallback& named_table, const TableFunctionCallback& table_function_allowed,
-         const StorageCallback& storage, const PathParameterCallback& parameters)
+         const StorageCallback& storage, const PathParameterCallback& parameters,
+         const DuckLakeCallCallback& ducklake_call, const BindTimeCallbacks& bind_time)
       : permitted_(permitted),
         named_table_(named_table),
         table_function_allowed_(table_function_allowed),
-        storage_(storage), parameters_(parameters) {}
+        storage_(storage), parameters_(parameters), ducklake_call_(ducklake_call), bind_time_(bind_time) {}
+
+  // What the walk is inside: "" for the statement itself, else the body of a view, macro
+  // or trigger, whose calls run later, with whoever uses it.
+  void SetWrapper(std::string wrapper) { wrapper_ = std::move(wrapper); }
+
+  // An expression DuckDB evaluates while it binds the statement (a table function's or a
+  // PRAGMA's argument, a setting's value, AT, EXECUTE's values, COPY's options): every
+  // sequence call in it goes to the sequence callback, with the macro arguments its
+  // parameters stand for followed. Subqueries are not evaluated there (they are planned).
+  void BindTimeExpression(const dd::ParsedExpression& expression) { Sequences(expression, level_); }
+
+  // The strings `expression` names: literals, bind values, or the literal argument of the
+  // macro parameter it is.
+  std::optional<std::vector<std::string>> Strings(const dd::ParsedExpression* expression) {
+    return StringsAt(expression, level_);
+  }
 
   // A read or write of storage: to the callback with its paths, or flagged as a category.
   void Storage(StorageUse use, const std::string& category) {
@@ -269,6 +324,196 @@ class Walker {
   void WalkExpression(dd::ParsedExpression& expression) { CheckExpression(expression); }
 
  private:
+  // A macro's parameter, while its body is walked: the argument the call gave for it, and
+  // the depth (in scopes_) that argument itself is to be read at.
+  struct MacroArgument {
+    const dd::ParsedExpression* expression;
+    std::size_t level;
+  };
+  using MacroScope = std::unordered_map<std::string, MacroArgument>;
+
+  // The argument a column reference at `level` stands for, if it names a parameter of the
+  // macro whose body is walked there.
+  std::optional<MacroArgument> ArgumentOf(const dd::ParsedExpression& expression, std::size_t level) const {
+    if (level == 0 || level > scopes_.size()) return std::nullopt;
+    if (expression.GetExpressionClass() != dd::ExpressionClass::COLUMN_REF) return std::nullopt;
+    const auto& column = expression.Cast<dd::ColumnRefExpression>();
+    if (column.IsQualified()) return std::nullopt;
+    const auto& scope = scopes_[level - 1];
+    auto it = scope.find(Lower(Str(column.GetColumnName())));
+    if (it == scope.end()) return std::nullopt;
+    return it->second;
+  }
+
+  std::optional<std::vector<std::string>> StringsAt(const dd::ParsedExpression* expression, std::size_t level) {
+    return LiteralPaths(expression, parameters_, [this, level](const dd::ParsedExpression& column) {
+      auto argument = ArgumentOf(column, level);
+      return argument ? StringsAt(argument->expression, argument->level) : std::nullopt;
+    });
+  }
+
+  void Sequences(const dd::ParsedExpression& expression, std::size_t level) {
+    if (violation || !bind_time_.sequence) return;
+    if (auto argument = ArgumentOf(expression, level)) {
+      if (argument->expression) Sequences(*argument->expression, argument->level);
+      return;
+    }
+    if (expression.GetExpressionClass() == dd::ExpressionClass::FUNCTION) {
+      const auto& function = expression.Cast<dd::FunctionExpression>();
+      const std::string name = Lower(Str(function.FunctionName()));
+      if (IsSequenceFunction(name)) {
+        std::optional<std::string> sequence;
+        if (const auto* first = FirstPositional(function)) {
+          auto names = StringsAt(first, level);
+          if (names && names->size() == 1) sequence = names->front();
+        }
+        bind_time_.sequence(name, sequence);
+      } else if (bind_time_.macros) {
+        // A user's scalar macro: DuckDB expands its body in place, with these arguments, and
+        // evaluates it here too (range(bump_to(77)) with bump_to(n) AS setval('s', n)).
+        const auto definitions = bind_time_.macros(PartsOf(function), false);
+        if (!definitions.empty() && scopes_.size() >= kMaxMacroDepth) {
+          Flag("macros that call macros more than " + std::to_string(kMaxMacroDepth) + " deep");
+          return;
+        }
+        for (const auto& definition : definitions) {
+          if (!definition || violation || definition->type != dd::MacroType::SCALAR_MACRO) continue;
+          auto& body = definition->Cast<dd::ScalarMacroFunction>();
+          for (auto& parameter : definition->default_parameters) {
+            if (parameter.second) Sequences(*parameter.second, 0);
+          }
+          scopes_.push_back(ScopeOf(function, *definition, level));
+          if (body.expression) Sequences(*body.expression, scopes_.size());
+          scopes_.pop_back();
+        }
+      }
+    }
+    dd::ParsedExpressionIterator::EnumerateChildren(expression, [&](const dd::ParsedExpression& child) {
+      Sequences(child, level);
+    });
+  }
+
+  // The name parts a call names a function by.
+  static std::vector<std::string> PartsOf(const dd::FunctionExpression& call) {
+    std::vector<std::string> parts;
+    for (const auto& part : call.GetQualifiedName().Path()) {
+      if (!Str(part).empty()) parts.push_back(Str(part));
+    }
+    if (parts.empty()) parts.push_back(Str(call.FunctionName()));
+    return parts;
+  }
+
+  // A macro's parameters, as a call at `level` binds them: its arguments by position and by
+  // name, and the defaults it leaves out (constants of the definition's, read at the statement's level).
+  static MacroScope ScopeOf(const dd::FunctionExpression& call, const dd::MacroFunction& definition, std::size_t level) {
+    MacroScope scope;
+    std::size_t position = 0;
+    for (const auto& argument : call.GetArguments()) {
+      if (argument.HasName()) {
+        scope[Lower(Str(argument.GetName()))] = {&argument.GetExpression(), level};
+      } else if (position < definition.parameters.size()) {
+        const auto& parameter = *definition.parameters[position++];
+        if (parameter.GetExpressionClass() == dd::ExpressionClass::COLUMN_REF) {
+          scope[Lower(Str(parameter.Cast<dd::ColumnRefExpression>().GetColumnName()))] = {&argument.GetExpression(), level};
+        }
+      }
+    }
+    for (const auto& parameter : definition.default_parameters) {
+      if (parameter.second) scope.emplace(Lower(Str(parameter.first)), MacroArgument{parameter.second.get(), 0});
+    }
+    return scope;
+  }
+
+  // The bodies of the user macros a call names, walked as DuckDB binds them: with the call's
+  // arguments (and the defaults it leaves out) in place of the parameters.
+  void WalkMacros(const dd::FunctionExpression& call, bool table) {
+    if (violation || !bind_time_.macros) return;
+    const auto parts = PartsOf(call);
+    const auto definitions = bind_time_.macros(parts, table);
+    if (definitions.empty()) return;
+    if (scopes_.size() >= kMaxMacroDepth) {
+      Flag("macros that call macros more than " + std::to_string(kMaxMacroDepth) + " deep");
+      return;
+    }
+    macro_names_.push_back(parts.back());
+    struct PopName {
+      std::vector<std::string>& names;
+      ~PopName() { names.pop_back(); }
+    } pop_name{macro_names_};
+    for (const auto& definition : definitions) {
+      if (!definition || violation) continue;
+      // A default is a constant of the definition's: read as written, at the statement's level.
+      for (auto& parameter : definition->default_parameters) {
+        if (parameter.second) CheckExpression(*parameter.second);
+      }
+      scopes_.push_back(ScopeOf(call, *definition, level_));
+      const std::size_t outer = level_;
+      level_ = scopes_.size();
+      // A DuckLake call in the body is one the statement does not make itself.
+      const std::string outer_wrapper = wrapper_;
+      if (wrapper_.empty()) wrapper_ = "a macro";
+      if (definition->type == dd::MacroType::TABLE_MACRO) {
+        auto& body = definition->Cast<dd::TableMacroFunction>();
+        if (body.query_node) WalkNode(*body.query_node);
+      } else if (definition->type == dd::MacroType::SCALAR_MACRO) {
+        auto& body = definition->Cast<dd::ScalarMacroFunction>();
+        if (body.expression) CheckExpression(*body.expression);
+      }
+      wrapper_ = outer_wrapper;
+      level_ = outer;
+      scopes_.pop_back();
+    }
+  }
+
+  // query('<sql>') / query_table(...) inside a macro's body: what they are handed, followed.
+  void MacroQuery(const dd::FunctionExpression& function, const std::string& name) {
+    const auto* first = FirstPositional(function);
+    auto texts = first ? Strings(first) : std::nullopt;
+    if (!texts) {
+      Flag(name + "() with " + (name == "query" ? "SQL" : "a name") + " that is not a string literal");
+      return;
+    }
+    if (name == "query_table") {
+      for (const auto& text : *texts) {
+        if (LooksLikePath(text)) {
+          Storage({"query_table()", false, std::vector<std::string>{text}}, "query_table() (files and URLs)");
+        } else {
+          std::vector<std::string> parts;
+          try {
+            for (const auto& part : dd::QualifiedName::ParseComponents(text)) parts.push_back(Str(part));
+          } catch (const std::exception&) {
+            Flag("query_table() of a name that does not parse");
+            return;
+          }
+          if (named_table_ && !parts.empty()) named_table_(parts, false);
+        }
+        if (violation) return;
+      }
+      return;
+    }
+    for (const auto& text : *texts) {
+      auto parser = ddb::StandaloneParser();
+      try {
+        parser.ParseQuery(text);
+      } catch (const std::exception&) {
+        Flag("query() with SQL that does not parse");
+        return;
+      }
+      for (auto& inner : parser.statements) {
+        if (!inner) continue;
+        if (auto category = classify_(*inner)) {
+          Flag(*category);
+          return;
+        }
+      }
+    }
+  }
+
+ public:
+  // Classify(), for SQL a macro hands to query() (set by Classify).
+  std::function<std::optional<std::string>(dd::SQLStatement&)> classify_;
+
+ private:
   // DuckDB 2.0 parses COPY and DML as query nodes, and a CTE body may be any of them:
   // WITH x AS (COPY t TO '/file') SELECT 1.
   void CheckNodeTree(dd::QueryNode& node) {
@@ -280,6 +525,7 @@ class Walker {
           Flag("COPY");
           return;
         }
+        CopyBindTime(*copy.info);
         Storage({copy.info->is_from ? "COPY ... FROM" : "COPY ... TO", !copy.info->is_from, CopyPaths(*copy.info, parameters_),
                  !copy.info->is_from},
                 std::string(copy.info->is_from ? "COPY FROM" : "COPY TO") + " (files and URLs)");
@@ -314,6 +560,11 @@ class Walker {
 
   void CheckRef(dd::TableRef& ref) {
     if (violation) return;
+    // AT (VERSION => ...) / AT (TIMESTAMP => ...) is evaluated to find the version to read.
+    if (ref.type == dd::TableReferenceType::BASE_TABLE) {
+      auto& base = ref.Cast<dd::BaseTableRef>();
+      if (base.at_clause && base.at_clause->ExpressionMutable()) BindTimeExpression(*base.at_clause->ExpressionMutable());
+    }
     if (ref.type == dd::TableReferenceType::TABLE_FUNCTION) {
       auto& function = ref.Cast<dd::TableFunctionRef>();
       CheckTableFunction(function);
@@ -361,11 +612,15 @@ class Walker {
   void CheckExpression(dd::ParsedExpression& expression) {
     if (violation) return;
     if (expression.GetExpressionClass() == dd::ExpressionClass::FUNCTION) {
-      const std::string name = Lower(Str(expression.Cast<dd::FunctionExpression>().FunctionName()));
+      const auto& function = expression.Cast<dd::FunctionExpression>();
+      const std::string name = Lower(Str(function.FunctionName()));
       if (IsRemoteQueryFunction(name)) {
         Flag(name + "()");
         return;
       }
+      // A user's scalar macro: its body is bound here, with these arguments.
+      WalkMacros(function, /*table=*/false);
+      if (violation) return;
     }
     if (expression.GetExpressionClass() == dd::ExpressionClass::SUBQUERY) {
       auto& subquery = expression.Cast<dd::SubqueryExpression>().SubqueryMutable();
@@ -382,14 +637,23 @@ class Walker {
     if (!ref.function || ref.function->GetExpressionClass() != dd::ExpressionClass::FUNCTION) {
       return;
     }
-    const std::string name =
-        Lower(Str(ref.function->Cast<dd::FunctionExpression>().FunctionName()));
-    if (AlwaysGated(name) || IsRemoteQueryFunction(name) || name == "query" ||
+    const auto& call = ref.function->Cast<dd::FunctionExpression>();
+    const std::string name = Lower(Str(call.FunctionName()));
+    // DuckDB evaluates a table function's arguments while it binds the call.
+    for (const auto& argument : call.GetArguments()) BindTimeExpression(argument.GetExpression());
+    if (violation) return;
+    // A user's table macro (also one named like a built-in, which it would shadow).
+    WalkMacros(call, /*table=*/true);
+    if (violation) return;
+    if (!scopes_.empty() && (name == "query" || name == "query_table")) {
+      MacroQuery(call, name);
+    } else if (AlwaysGated(name) || IsRemoteQueryFunction(name) || name == "query" ||
         name == "query_table") {
       Flag(name + "()");
+    } else if (ducklake_call_ && ducklake_call_(CallOf(ref.function->Cast<dd::FunctionExpression>(), wrapper_))) {
+      // A DuckLake call, checked against the catalog_access rules by the callback.
     } else if (ddb::IsFileReadingTableFunction(name)) {
-      Storage({name + "()", false, LiteralPaths(FirstPositional(ref.function->Cast<dd::FunctionExpression>()), parameters_)},
-              name + "() (files and URLs)");
+      Storage({name + "()", false, Strings(FirstPositional(call))}, name + "() (files and URLs)");
     } else if (name == "checkpoint" || name == "force_checkpoint") {
       Flag("CHECKPOINT");
     } else if (table_function_allowed_) {
@@ -402,14 +666,23 @@ class Walker {
       parts.back() = name;  // folded, as the allowed list holds it
       const auto declared = table_function_allowed_(parts);
       if (!declared) {
-        Flag("the table function " + name);
+        // In a macro's body, say so (the caller named only the macro).
+        Flag("the table function " + name + (macro_names_.empty() ? "" : kInMacro + macro_names_.back()));
+        return;
+      }
+      // A function that reads through its own client reads what its table's metadata names:
+      // like a computed path, whatever path it is handed. (A user's table macro named like one is
+      // a macro: its body, walked above, decides.)
+      if (ddb::ReadsThroughItsOwnClient(name) && !IsUserTableMacro(call)) {
+        if (storage_) storage_({name + "()", false, std::nullopt, false, true});
+        else Flag(name + "() (files and URLs)");
         return;
       }
       // The paths an EXECUTE grant declared, as written, before binding opens them.
       auto& function = ref.function->Cast<dd::FunctionExpression>();
       for (const auto& argument : *declared) {
         if (const auto* expression = DeclaredArgument(function, argument)) {
-          Storage({name + "()", false, LiteralPaths(expression, parameters_)}, name + "() (files and URLs)");
+          Storage({name + "()", false, Strings(expression)}, name + "() (files and URLs)");
         }
       }
     }
@@ -420,15 +693,52 @@ class Walker {
   const TableFunctionCallback& table_function_allowed_;
   const StorageCallback& storage_;
   const PathParameterCallback& parameters_;
+  const DuckLakeCallCallback& ducklake_call_;
+  const BindTimeCallbacks& bind_time_;
+  std::string wrapper_;
   int describing_ = 0;  // inside a DESCRIBE
+  std::vector<MacroScope> scopes_;  // the macros whose bodies are being walked, innermost last
+  std::vector<std::string> macro_names_;  // and their names
+  std::size_t level_ = 0;           // the scope the expressions walked now belong to (0: the statement's)
+
+ public:
+  // Whether `call` names a user's table macro (not a table function).
+  bool IsUserTableMacro(const dd::FunctionExpression& call) {
+    return bind_time_.macros && !bind_time_.macros(PartsOf(call), true).empty();
+  }
+
+  // CALL f(...): f's arguments, evaluated while DuckDB binds it (subqueries in them are
+  // planned, and walked like any other), and the body of f when it is a user's table macro.
+  void CallBindTime(const dd::FunctionExpression& call) {
+    for (const auto& argument : call.GetArguments()) {
+      BindTimeExpression(argument.GetExpression());
+      CheckExpression(const_cast<dd::ParsedExpression&>(argument.GetExpression()));
+    }
+    WalkMacros(call, /*table=*/true);
+  }
+
+  // COPY's file name and options, which DuckDB evaluates while it binds.
+  void CopyBindTime(const dd::CopyInfo& info) {
+    if (info.file_path_expression) BindTimeExpression(*info.file_path_expression);
+    for (const auto& option : info.parsed_options) {
+      if (option.second) BindTimeExpression(*option.second);
+    }
+  }
 };
 
 std::optional<std::string> Classify(dd::SQLStatement& statement,
                                     const std::function<bool(const std::string&)>& permitted,
                                     const NamedTableCallback& named_table,
                                     const TableFunctionCallback& table_function_allowed,
-                                    const StorageCallback& storage, const PathParameterCallback& parameters) {
-  Walker walker(permitted, named_table, table_function_allowed, storage, parameters);
+                                    const StorageCallback& storage, const PathParameterCallback& parameters,
+                                    const DuckLakeCallCallback& ducklake_call, const BindTimeCallbacks& bind_time) {
+  Walker walker(permitted, named_table, table_function_allowed, storage, parameters, ducklake_call, bind_time);
+  const auto again = [&](dd::SQLStatement& inner) {
+    return Classify(inner, permitted, named_table, table_function_allowed, storage, parameters, ducklake_call, bind_time);
+  };
+  walker.classify_ = [&](dd::SQLStatement& inner) {
+    return Classify(inner, permitted, named_table, table_function_allowed, storage, nullptr, ducklake_call, bind_time);
+  };
   auto gate = [&](std::string category) -> std::optional<std::string> {
     if (permitted && permitted(category)) return std::nullopt;
     return category;
@@ -436,16 +746,42 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
   switch (statement.type) {
     case dd::StatementType::PREPARE_STATEMENT: {
       auto& prepare = statement.Cast<dd::PrepareStatement>();
-      return prepare.statement
-                 ? Classify(*prepare.statement, permitted, named_table, table_function_allowed, storage, parameters)
-                 : std::nullopt;
+      return prepare.statement ? again(*prepare.statement) : std::nullopt;
     }
     case dd::StatementType::EXPLAIN_STATEMENT: {
       // EXPLAIN ANALYZE runs what it wraps.
       auto& explain = statement.Cast<dd::ExplainStatement>();
-      return explain.stmt ? Classify(*explain.stmt, permitted, named_table, table_function_allowed, storage, parameters)
-                          : std::nullopt;
+      return explain.stmt ? again(*explain.stmt) : std::nullopt;
     }
+    // Several statements DuckDB made of one (PIVOT without an IN list: a CREATE TYPE ... AS
+    // ENUM of the values, then the query): each is bound in turn.
+    case dd::StatementType::MULTI_STATEMENT: {
+      for (auto& inner : statement.Cast<dd::MultiStatement>().statements) {
+        if (!inner) continue;
+        if (auto category = again(*inner)) return category;
+      }
+      return std::nullopt;
+    }
+    // EXECUTE evaluates its values while it binds; the prepared statement was gated when it
+    // was prepared.
+    case dd::StatementType::EXECUTE_STATEMENT: {
+      for (auto& value : statement.Cast<dd::ExecuteStatement>().named_values) {
+        if (!value.second) continue;
+        walker.BindTimeExpression(*value.second);
+        walker.WalkExpression(*value.second);
+      }
+      return walker.violation;
+    }
+    // Nothing in these is evaluated while binding, nor reaches outside the database: the plan
+    // check decides them.
+    case dd::StatementType::TRANSACTION_STATEMENT:
+    case dd::StatementType::ANALYZE_STATEMENT:
+    case dd::StatementType::VACUUM_STATEMENT:
+    case dd::StatementType::ALTER_STATEMENT:
+    case dd::StatementType::COPY_DATABASE_STATEMENT:
+    // The plan check asks MANAGE EXTENSIONS of it; it names extensions, nothing evaluated.
+    case dd::StatementType::UPDATE_EXTENSIONS_STATEMENT:
+      return std::nullopt;
     case dd::StatementType::ATTACH_STATEMENT:
       return gate("ATTACH");
     case dd::StatementType::DETACH_STATEMENT:
@@ -472,6 +808,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       // A view's query is bound when it is created (and checked when it is read).
       if (create.info && create.info->type == dd::CatalogType::VIEW_ENTRY) {
         auto& view = create.info->Cast<dd::CreateViewInfo>();
+        walker.SetWrapper("a view");
         if (view.query && view.query->node) walker.WalkNode(*view.query->node);
       }
       // A trigger's body, as its creator could run it: it is bound again inside every
@@ -479,6 +816,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       // as a macro's body (below). A type's enum query runs when the type is created.
       if (create.info && create.info->type == dd::CatalogType::TRIGGER_ENTRY) {
         auto& trigger = create.info->Cast<dd::CreateTriggerInfo>();
+        walker.SetWrapper("a trigger");
         if (trigger.trigger_action) walker.WalkNode(*trigger.trigger_action);
       }
       if (create.info && create.info->type == dd::CatalogType::TYPE_ENTRY) {
@@ -495,6 +833,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       // and object storage only within the creator's storage privileges.
       if (create.info && (create.info->type == dd::CatalogType::MACRO_ENTRY ||
                           create.info->type == dd::CatalogType::TABLE_MACRO_ENTRY)) {
+        walker.SetWrapper("a macro");
         for (auto& macro : create.info->Cast<dd::CreateMacroInfo>().macros) {
           if (!macro) continue;
           for (auto& parameter : macro->default_parameters) {
@@ -538,6 +877,14 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       if (set.set_type != dd::SetType::RESET && IsGrammarSetting(name)) {
         return gate("SET " + Str(set.name));
       }
+      // SET x = <value> and SET VARIABLE v = <value>: a setting's value is evaluated while
+      // DuckDB binds it; a variable's is planned (and checked) like a query, whose table
+      // functions bind first.
+      if (auto* variable = dynamic_cast<dd::SetVariableStatement*>(&set); variable && variable->value) {
+        if (set.scope != dd::SetScope::VARIABLE) walker.BindTimeExpression(*variable->value);
+        walker.WalkExpression(*variable->value);
+        return walker.violation;
+      }
       return std::nullopt;
     }
     case dd::StatementType::CALL_STATEMENT: {
@@ -550,6 +897,13 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
             name == "query_table") {
           return gate(name + "()");
         }
+        // CALL f(...) binds f as SELECT * FROM f(...) does: its arguments are evaluated, and a
+        // table macro's body is bound with them (a DuckLake call's too).
+        walker.CallBindTime(call.function->Cast<dd::FunctionExpression>());
+        if (walker.violation) return walker.violation;
+        if (ducklake_call && ducklake_call(CallOf(call.function->Cast<dd::FunctionExpression>(), ""))) {
+          return std::nullopt;  // a DuckLake call, checked against the catalog_access rules
+        }
         if (ddb::IsFileReadingTableFunction(name)) {
           if (!storage) return gate(name + "() (files and URLs)");
           storage({name + "()", false, LiteralPaths(FirstPositional(call.function->Cast<dd::FunctionExpression>()), parameters)});
@@ -558,6 +912,11 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
         if (table_function_allowed) {
           const auto declared = table_function_allowed({name});
           if (!declared) return gate("the table function " + name);
+          if (ddb::ReadsThroughItsOwnClient(name) && !walker.IsUserTableMacro(call.function->Cast<dd::FunctionExpression>())) {
+            if (!storage) return gate(name + "() (files and URLs)");
+            storage({name + "()", false, std::nullopt, false, true});
+            return std::nullopt;
+          }
           auto& function = call.function->Cast<dd::FunctionExpression>();
           for (const auto& argument : *declared) {
             const auto* expression = DeclaredArgument(function, argument);
@@ -581,6 +940,7 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
         storage({copy.info->is_from ? "COPY ... FROM" : "COPY ... TO", !copy.info->is_from, CopyPaths(*copy.info, parameters),
                  !copy.info->is_from});
       }
+      walker.CopyBindTime(*copy.info);
       if (copy.info->select_statement) walker.WalkNode(*copy.info->select_statement);
       return walker.violation;
     }
@@ -596,6 +956,25 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
     }
     case dd::StatementType::PRAGMA_STATEMENT: {
       auto& pragma = statement.Cast<dd::PragmaStatement>();
+      // PRAGMA json_execute_serialized_sql('<plan>') binds and runs a statement the text does
+      // not hold, as the table function of that name does (which stays the administrator's).
+      if (pragma.info && Lower(Str(pragma.info->name)) == "json_execute_serialized_sql") {
+        return gate("json_execute_serialized_sql()");
+      }
+      // A pragma's parameters are evaluated while DuckDB binds it.
+      if (pragma.info) {
+        for (auto& parameter : pragma.info->parameters) {
+          if (!parameter) continue;
+          walker.BindTimeExpression(*parameter);
+          walker.WalkExpression(*parameter);
+        }
+        for (auto& parameter : pragma.info->named_parameters) {
+          if (!parameter.second) continue;
+          walker.BindTimeExpression(*parameter.second);
+          walker.WalkExpression(*parameter.second);
+        }
+        if (walker.violation) return walker.violation;
+      }
       if (pragma.info && Lower(Str(pragma.info->name)) == "import_database") {
         if (auto category = gate("IMPORT DATABASE")) return category;
         if (storage) {
@@ -633,8 +1012,11 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       if (merge.node) walker.WalkNode(*merge.node);
       return walker.violation;
     }
+    // A kind without a rule here (one a later DuckDB adds, an extension's statement, or one
+    // no client's SQL produces) is never bound: refused, not left to the plan check.
     default:
-      return std::nullopt;
+      return gate("a statement of a kind access control has no rule for (" +
+                  dd::StatementTypeToString(statement.type) + ")");
   }
 }
 
@@ -644,8 +1026,9 @@ std::optional<std::string> GatedCategory(dd::SQLStatement& statement,
                                          const std::function<bool(const std::string&)>& permitted,
                                          const NamedTableCallback& named_table,
                                          const TableFunctionCallback& table_function_allowed,
-                                         const StorageCallback& storage, const PathParameterCallback& parameters) {
-  return Classify(statement, permitted, named_table, table_function_allowed, storage, parameters);
+                                         const StorageCallback& storage, const PathParameterCallback& parameters,
+                                         const DuckLakeCallCallback& ducklake_call, const BindTimeCallbacks& bind_time) {
+  return Classify(statement, permitted, named_table, table_function_allowed, storage, parameters, ducklake_call, bind_time);
 }
 
 }  // namespace hardcharger::authz

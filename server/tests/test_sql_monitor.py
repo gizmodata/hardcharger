@@ -61,16 +61,23 @@ def test_executing_queued_and_queue_timeout(launcher):
     admin, holder, waiter = server.admin(), server.admin(), server.admin()
     holder.execute(sql="SET hardcharger.bypass_queue = false")
     waiter.execute(sql="SET hardcharger.bypass_queue = false")
-    waiter.execute(sql="SET hardcharger.max_queue_wait = 1")
+    # Hold this queued statement until both independent monitor reads complete.
+    # A one-second deadline can expire between those reads on sanitizer builds.
+    waiter.execute(sql="SET hardcharger.max_queue_wait = 0")
     held = holder.submit(sql=CPU_BOUND, headers={"Prefer": "respond-async"}).json()["statement_id"]
     try:
         eventually(lambda: live(admin, holder), lambda rows: rows and rows[-1]["status"] == "executing")
-        waiter.submit(sql="SELECT 42 AS queue_timeout_probe", headers={"Prefer": "respond-async"})
+        waiting = waiter.submit(sql="SELECT 42 AS queue_monitor_probe", headers={"Prefer": "respond-async"}).json()["statement_id"]
         queued = eventually(lambda: live(admin, waiter), lambda rows: any(r["status"] == "queued" for r in rows))
         assert any(r["enqueue_time"] is not None for r in queued)
         [info] = admin.rows(sql="SELECT * FROM hardcharger_monitor_info()")
         assert info["queueing_enabled"] and info["slots_in_use"] == 1 and info["slots_available"] == 0
         assert info["queued_statements"] == 1
+        cancel(admin, waiter)
+        waiter.wait_done(statement_id=waiting)
+        # Separately prove that a finite queue deadline is reported as a timeout.
+        waiter.execute(sql="SET hardcharger.max_queue_wait = 1")
+        waiter.submit(sql="SELECT 42 AS queue_timeout_probe", headers={"Prefer": "respond-async"})
         timed_out = eventually(lambda: live(admin, waiter), lambda rows: any(r["status"] == "timeout" for r in rows))
         assert any(r["cancel_reason"] == "queue_timeout" for r in timed_out)
     finally:

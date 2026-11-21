@@ -4,9 +4,11 @@
 #include <chrono>
 #include <duckdb/catalog/catalog.hpp>
 #include <duckdb/catalog/catalog_entry_retriever.hpp>
+#include <duckdb/catalog/dependency_manager.hpp>
 #include <duckdb/catalog/catalog_search_path.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
+#include <duckdb/catalog/catalog_entry/trigger_catalog_entry.hpp>
 #include <duckdb/execution/expression_executor.hpp>
 #include <duckdb/function/scalar/sequence_utils.hpp>
 #include <duckdb/execution/operator/helper/physical_set.hpp>
@@ -57,10 +59,12 @@
 #include <duckdb/planner/operator/logical_vacuum.hpp>
 #include <duckdb/planner/parsed_data/bound_create_table_info.hpp>
 #include <duckdb/planner/planner_extension.hpp>
+#include <functional>
 #include <set>
 #include <unordered_set>
 
 #include "authz/duckdb_internal.hpp"
+#include "authz/ducklake_calls.hpp"
 #include "authz/macros.hpp"
 #include "logging.hpp"
 #include "authz/policies.hpp"
@@ -117,7 +121,10 @@ const std::unordered_set<std::string>& AdministratorOnlyTableFunctions() {
       "duckdb_temporary_files", "duckdb_memory", "duckdb_external_file_cache", "duckdb_external_resources",
       "duckdb_external_resource_types", "register_external_resource", "register_external_resource_type",
       "deregister_external_resource", "create_external_resource", "destroy_external_resource",
-      "pragma_storage_info", "pragma_metadata_info", "duckdb_table_sample", "dbgen", "dsdgen"};
+      "pragma_storage_info", "pragma_metadata_info", "duckdb_table_sample", "dbgen", "dsdgen",
+      // DuckDB 2.0.1: every connection's query counters, and the session's SQL grammar (what
+      // SET active_grammar_extensions changes, which BlockedSettings() refuses).
+      "duckdb_live_query_metrics", "add_grammar_extension", "remove_grammar_extension"};
   return kNames;
 }
 
@@ -343,6 +350,16 @@ std::string ScopeLimits(const TokenScope& scope) {
                                 " do only what their roles are granted (see SHOW GRANTS)");
 }
 
+// allow_extension_repositories decides whether a new extension repository, and with it a new
+// signing key whose extensions run in the server, may be added (scripts/
+// patch-duckdb-extension-repositories.cmake): the unrestricted administrator's decision only,
+// not MANAGE CONFIG's.
+std::string AdminOnlyRepositorySetting(const std::string& verb) {
+  return verb + " allow_extension_repositories decides whether new extension repositories, whose signing keys "
+                "the server then trusts, may be added; only an administrator without catalog_access rules may "
+                "change it";
+}
+
 bool WritesFiles(const std::string& setting) {
   return setting == "log_query_path" || setting == "profiling_output" ||
          setting == "profile_output";
@@ -428,9 +445,13 @@ class PlanChecker {
     CheckSettingReads(op);
     switch (op.type) {
       // ---- reads ----------------------------------------------------------
+      // A table function's input (range((SELECT ...)), unnest((SELECT list(v) FROM t))) is
+      // planned as its child: what it reads, and the sequences it moves, are checked as any
+      // query's.
       case OpType::LOGICAL_GET:
         VisitGet(op.Cast<dd::LogicalGet>(), dml_target);
-        break;
+        VisitChildren(op, nullptr);
+        return;
 
       // ---- writes ---------------------------------------------------------
       case OpType::LOGICAL_INSERT: {
@@ -513,15 +534,17 @@ class PlanChecker {
       case OpType::LOGICAL_CREATE_VIEW: {
         auto& create = op.Cast<dd::LogicalCreate>();
         const size_t before = ownership_.size();
-        if (!CheckCreate(*create.info, ObjectType::kView, Privilege::kCreateView)) return;
-        if (ownership_.size() > before)
-          ownership_.back().definition_hash = DefinitionHashOf(*create.info);
-        CheckViewQuery(create);
+        if (CheckCreate(*create.info, ObjectType::kView, Privilege::kCreateView)) {
+          if (ownership_.size() > before) ownership_.back().definition_hash = DefinitionHashOf(*create.info);
+          CheckViewQuery(create);  // the view's query, bound on its own
+        }
+        VisitChildren(op, nullptr);
         return;
       }
       case OpType::LOGICAL_CREATE_SCHEMA: {
         auto& create = op.Cast<dd::LogicalCreate>();
         CheckCreate(*create.info, ObjectType::kSchema, Privilege::kCreateSchema);
+        VisitChildren(op, nullptr);
         return;
       }
       case OpType::LOGICAL_CREATE_INDEX: {
@@ -534,28 +557,36 @@ class PlanChecker {
       }
       case OpType::LOGICAL_CREATE_SEQUENCE: {
         auto& create = op.Cast<dd::LogicalCreate>();
-        if (principal_.catalog_rules) return RequireRuleWrite(CatalogOf(*create.info, create.info->temporary));
-        if (create.info->temporary) return;  // session-local
-        CheckCreateSequence(*create.info);
+        if (principal_.catalog_rules) {
+          RequireRuleWrite(CatalogOf(*create.info, create.info->temporary));
+        } else if (!create.info->temporary) {  // a temporary one is session-local
+          CheckCreateSequence(*create.info);
+        }
+        VisitChildren(op, nullptr);
         return;
       }
       // CREATE MACRO in a schema: the CREATE MACRO privilege (macros.hpp).
       case OpType::LOGICAL_CREATE_MACRO:
         CheckCreateMacro(*op.Cast<dd::LogicalCreate>().info);
+        VisitChildren(op, nullptr);
         return;
       // CREATE TYPE in a schema: the CREATE TYPE privilege (and TypeNameRefusal).
       case OpType::LOGICAL_CREATE_TYPE:
         CheckCreateType(op);
+        VisitChildren(op, nullptr);  // CREATE TYPE ... AS ENUM (SELECT ...) reads its query
         return;
       // CREATE TRIGGER on a table the user owns: the CREATE TRIGGER privilege (triggers.hpp).
       case OpType::LOGICAL_CREATE_TRIGGER:
         CheckCreateTrigger(op.Cast<dd::LogicalCreate>());
+        VisitChildren(op, nullptr);
         return;
       case OpType::LOGICAL_DROP:
         CheckDrop(op);
+        VisitChildren(op, nullptr);
         return;
       case OpType::LOGICAL_ALTER:
         CheckAlter(op);
+        VisitChildren(op, nullptr);
         return;
 
       // ---- session statements --------------------------------------------
@@ -570,6 +601,9 @@ class PlanChecker {
         }
         if (BlockedSettings().count(Lower(compat::Str(set.name)))) {
           Deny(principal_, "changing " + compat::Str(set.name) + " is not allowed");
+        }
+        if (Lower(compat::Str(set.name)) == "allow_extension_repositories") {
+          Deny(principal_, AdminOnlyRepositorySetting("SET"));
         }
         if (ChangesWholeServer(context_, set.name, set.scope)) {
           RequireSystem(SystemPrivilege::kManageConfig, "SET GLOBAL");
@@ -597,10 +631,14 @@ class PlanChecker {
             BlockedSettings().count(Lower(compat::Str(reset.name)))) {
           Deny(principal_, "changing " + compat::Str(reset.name) + " is not allowed");
         }
+        if (Lower(compat::Str(reset.name)) == "allow_extension_repositories") {
+          Deny(principal_, AdminOnlyRepositorySetting("RESET"));
+        }
         if (reset.scope != dd::SetScope::VARIABLE &&
             ChangesWholeServer(context_, reset.name, reset.scope)) {
           RequireSystem(SystemPrivilege::kManageConfig, "RESET GLOBAL");
         }
+        VisitChildren(op, nullptr);
         return;
       }
 
@@ -610,17 +648,28 @@ class PlanChecker {
           VisitView(*marker);
           return;
         }
+        // DuckLake's compaction and inlined-data flush, which ducklake_merge_adjacent_files,
+        // ducklake_rewrite_data_files and ducklake_flush_inlined_data bind to: a catalog_access
+        // principal's, when the gate checked such a call on the catalog it rewrites.
+        if (!principal_.superuser &&
+            op.Cast<dd::LogicalExtensionOperator>().GetExtensionName() == "ducklake") {
+          CheckDuckLakeRewrite(op);
+          return;
+        }
         Deny(principal_, "extension operators are not available under access control");
       case OpType::LOGICAL_TRANSACTION:
+        VisitChildren(op, nullptr);
         return;
 
       // ---- system privileges ---------------------------------------------
       case OpType::LOGICAL_ATTACH:
       case OpType::LOGICAL_DETACH:
         RequireSystem(SystemPrivilege::kManageCatalogs, "ATTACH and DETACH");
+        VisitChildren(op, nullptr);
         return;
       case OpType::LOGICAL_LOAD:
         RequireSystem(SystemPrivilege::kManageExtensions, "INSTALL and LOAD");
+        VisitChildren(op, nullptr);
         return;
       // ANALYZE and VACUUM of one table: MAINTAIN on it (its owner holds it). Of every
       // table at once: the administrator's (it would touch tables the user can't see).
@@ -642,9 +691,11 @@ class PlanChecker {
       // FORCE INSTALL of every installed extension that has a newer build.
       case OpType::LOGICAL_UPDATE_EXTENSIONS:
         RequireSystem(SystemPrivilege::kManageExtensions, "UPDATE EXTENSIONS");
+        VisitChildren(op, nullptr);
         return;
       case OpType::LOGICAL_CREATE_SECRET:
         RequireSystem(SystemPrivilege::kManageSecrets, "CREATE SECRET");
+        VisitChildren(op, nullptr);
         return;
       case OpType::LOGICAL_COPY_TO_FILE: {
         const auto& copy = op.Cast<dd::LogicalCopyToFile>();
@@ -816,6 +867,17 @@ class PlanChecker {
     auto table = get.GetTable();
     if (!table) {
       const std::string name = Lower(TableFunctionName(get));
+      // A DuckLake call: the catalog it names decides, wherever it sits. A store user's
+      // administrator-only and unknown DuckLake functions are table functions like any
+      // other (EXECUTE, below).
+      if (!principal_.superuser) {
+        if (const auto access = DuckLakeFunctionAccess(name);
+            access && (principal_.catalog_rules ||
+                       (*access != DuckLakeAccess::kAdministrator && *access != DuckLakeAccess::kUnknown))) {
+          CheckDuckLakeCall(get, name, *access);
+          return;
+        }
+      }
       if (OnlySuperusers()) return;  // in a view an administrator owns
       if (ddb::IsFileReadingTableFunction(name)) {
         RequireStorage(name + "()", StorageMode::kRead, PathsOf(get));
@@ -823,6 +885,7 @@ class PlanChecker {
       }
       if (name == "checkpoint" || name == "force_checkpoint") {
         RequireSystem(SystemPrivilege::kCheckpoint, "CHECKPOINT");
+        RequireDuckLakeCheckpoint(get, name);
         return;
       }
       if (name == "duckdb_secrets") {
@@ -864,6 +927,11 @@ class PlanChecker {
           paths.insert(paths.end(), some->begin(), some->end());
         }
         NoteAccess("EXECUTE " + name + "()", {});
+        if (ddb::ReadsThroughItsOwnClient(name)) {
+          // Whatever its declared path, it reads what its table's metadata names (storage_access.hpp).
+          RequireStorage(name + "()", StorageMode::kRead, std::nullopt, false, true);
+          return;
+        }
         if (!paths.empty()) RequireStorage(name + "()", StorageMode::kRead, paths);
         return;
       }
@@ -881,6 +949,13 @@ class PlanChecker {
     // The row-locating scan under the statement's own UPDATE / DELETE target
     // needs no SELECT unless it reads columns (in WHERE or SET), as in Postgres.
     if (columns.empty() && dml_target && table.get() == dml_target.get()) return;
+    // DuckLake's own read of a table it is compacting or flushing (CheckDuckLakeRewrite): part
+    // of the maintenance MAINTAIN ON CATALOG allows, which hands back counts, not rows. Only a
+    // table of the catalog being rewritten, and only under DuckLake's own operator.
+    if (!ducklake_rewrite_catalogs_.empty() &&
+        ducklake_rewrite_catalogs_.contains(FoldIdentifier(compat::Str(table->ParentCatalog().GetName())))) {
+      return;
+    }
     Require(*table, Privilege::kSelect, columns);
   }
 
@@ -1087,7 +1162,7 @@ class PlanChecker {
   // apply needs the storage privilege there, and none of them may reach DuckLake's storage
   // (storage_access.hpp).
   void RequireStorage(const std::string& what, StorageMode mode, std::optional<std::vector<std::string>> paths,
-                      bool directory = false) {
+                      bool directory = false, bool own_client = false) {
     if (paths) {
       for (const auto& path : *paths) {
         auto parsed = ParseStoragePath(path, {}, mode == StorageMode::kRead);
@@ -1098,7 +1173,7 @@ class PlanChecker {
     std::vector<Principal> principals;
     for (const auto& rights : rights_) principals.push_back(rights.principal);
     if (!storage_) storage_.emplace(context_);
-    if (auto refusal = storage_->Refusal(snapshot_, principals, {what, mode, std::move(paths), directory},
+    if (auto refusal = storage_->Refusal(snapshot_, principals, {what, mode, std::move(paths), directory, own_client},
                                          principal_.user_name)) {
       throw dd::PermissionException(*refusal);
     }
@@ -1126,6 +1201,148 @@ class PlanChecker {
     return std::nullopt;
   }
 
+  // A catalog_access principal's DuckLake call, as bound: the pre-bind gate checked the
+  // calls the statement names itself (authz/ducklake_calls.hpp); this refuses any other
+  // (in a view or macro, or where the gate's walk does not reach) and checks the bound
+  // catalog against the rules again.
+  void CheckDuckLakeCall(dd::LogicalGet& get, const std::string& name, DuckLakeAccess access) {
+    if (access == DuckLakeAccess::kAdministrator) throw dd::PermissionException(DuckLakeAdministratorRefusal(name));
+    if (access == DuckLakeAccess::kUnknown) throw dd::PermissionException(DuckLakeUnknownRefusal(name));
+    if (view_depth_ > 0 || !creating_view_.empty()) {
+      throw dd::PermissionException(DuckLakeWrappedRefusal(name, "a view"));
+    }
+    const bool literal = !get.parameters.empty() && !get.parameters[0].IsNull() &&
+                         get.parameters[0].type().id() == dd::LogicalTypeId::VARCHAR;
+    if (!literal) throw dd::PermissionException(DuckLakeComputedCatalogRefusal(name));
+    std::string catalog = get.parameters[0].ToString();
+    if (auto db = dd::DatabaseManager::Get(context_).GetDatabase(context_, dd::Identifier(catalog))) {
+      catalog = compat::Str(db->GetName());
+    }
+    RequireDuckLakeAccess(name, catalog, access);
+    if (access == DuckLakeAccess::kWrite) {
+      if (auto readonly = ReadOnlyRefusal(context_)) throw dd::PermissionException(*readonly);
+    }
+    auto state = context_.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
+    if (!state || !state->DuckLakeCallChecked(name, FoldIdentifier(catalog))) {
+      throw dd::PermissionException(DuckLakeUncheckedRefusal(name));
+    }
+    NoteAccess("EXECUTE " + name + "() on catalog " + catalog, {});
+  }
+
+  // DuckLake's own rewrite of a table's files (compaction, or flushing inlined rows to
+  // Parquet): it reads the table and writes new files into its catalog's storage, through a
+  // COPY TO whose path DuckLake takes from the catalog (no option a user may set moves it).
+  // Allowed for a catalog_access principal only when the statement itself called one of the
+  // functions that plan it on that catalog (checked against the rules before binding), and
+  // the principal may write the catalog; the table reads below are checked as any read.
+  void CheckDuckLakeRewrite(dd::LogicalOperator& op) {
+    static const char* kRewriters[] = {"ducklake_merge_adjacent_files", "ducklake_rewrite_data_files",
+                                       "ducklake_flush_inlined_data"};
+    if (view_depth_ > 0 || !creating_view_.empty()) {
+      throw dd::PermissionException(DuckLakeWrappedRefusal("a DuckLake maintenance function", "a view"));
+    }
+    std::set<std::string> catalogs;
+    std::function<void(dd::LogicalOperator&)> collect = [&](dd::LogicalOperator& node) {
+      if (node.type == OpType::LOGICAL_GET) {
+        if (auto table = node.Cast<dd::LogicalGet>().GetTable()) {
+          catalogs.insert(compat::Str(table->ParentCatalog().GetName()));
+          // The row and masking policies would be applied to DuckLake's own read of the
+          // table (policies.hpp), and the rewrite would then replace the table's files with
+          // the filtered or masked rows, for everyone: refused, as any write into a
+          // table with policies is.
+          const ObjectPath path = PathOf(*table);
+          if (!snapshot_.RowPoliciesOn(path).empty() || !snapshot_.ApplicableMasks(principal_, path).empty()) {
+            Deny(principal_, "DuckLake's rewrite of the files of " + path.ToString() +
+                                 ", which has row or masking policies, is not available under access control yet");
+          }
+        }
+      }
+      for (auto& child : node.children) {
+        if (child) collect(*child);
+      }
+    };
+    collect(op);
+    if (catalogs.empty()) Deny(principal_, "extension operators are not available under access control");
+    auto state = context_.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
+    if (auto readonly = ReadOnlyRefusal(context_)) throw dd::PermissionException(*readonly);
+    for (const auto& catalog : catalogs) {
+      RequireDuckLakeAccess("DuckLake's rewrite of its files", catalog, DuckLakeAccess::kWrite);
+      const bool called = state && std::any_of(std::begin(kRewriters), std::end(kRewriters), [&](const char* f) {
+                            return state->DuckLakeCallChecked(f, FoldIdentifier(catalog));
+                          });
+      if (!called) {
+        throw dd::PermissionException(
+            "Hardcharger blocked DuckLake's rewrite of files of catalog " + catalog +
+            ": it runs only for a ducklake_merge_adjacent_files(), ducklake_rewrite_data_files() or "
+            "ducklake_flush_inlined_data() call that the statement makes itself (not inside a macro)");
+      }
+      NoteAccess("DuckLake rewrite of files of catalog " + catalog, {});
+    }
+    for (auto& child : op.children) {
+      if (!child) continue;
+      // DuckLake's own write into its catalog's storage: what it copies is checked below. Its
+      // scans of the catalog's tables are the maintenance itself (VisitGet): no SELECT on them.
+      if (child->type == OpType::LOGICAL_COPY_TO_FILE) {
+        const auto saved = ducklake_rewrite_catalogs_;
+        for (const auto& catalog : catalogs) ducklake_rewrite_catalogs_.insert(FoldIdentifier(catalog));
+        VisitChildren(*child, nullptr);
+        ducklake_rewrite_catalogs_ = saved;
+      } else {
+        Visit(*child, nullptr);
+      }
+    }
+  }
+
+  // A DuckLake function's access to its catalog: the server's own catalogs (and, for a
+  // store user, any it cannot see) read as missing. A catalog_access principal's rules
+  // decide; a store user needs EXECUTE on the function and SELECT or MAINTAIN ON CATALOG.
+  // `function`: the ducklake_* function (its EXECUTE is checked too), or what else runs DuckLake's
+  // maintenance, named for the refusal ("CHECKPOINT", "DuckLake's rewrite of its files").
+  void RequireDuckLakeAccess(const std::string& function, const std::string& catalog, DuckLakeAccess access) {
+    const auto needed = access == DuckLakeAccess::kWrite ? CatalogAccessLevel::kWrite : CatalogAccessLevel::kRead;
+    const bool servers = std::any_of(principal_.hidden_catalogs.begin(), principal_.hidden_catalogs.end(),
+                                     [&](const std::string& c) { return IdentifiersEqual(c, catalog); });
+    if (servers || !principal_.catalog_rules) RequireVisible(catalog);
+    if (!principal_.catalog_rules) {
+      if (function.starts_with("ducklake_") && !snapshot_.TableFunctionPathArguments(principal_, function)) {
+        throw dd::PermissionException(DuckLakeExecuteRefusal(function));
+      }
+      if (!snapshot_.HoldsOnCatalog(principal_, DuckLakeCatalogPrivilege(access), catalog)) {
+        throw dd::PermissionException(DuckLakeCatalogPrivilegeRefusal(
+            function.starts_with("ducklake_") ? function + "()" : function, catalog, access, principal_.user_name));
+      }
+      return;
+    }
+    const auto level = snapshot_.CatalogVisible(principal_, catalog) ? CatalogRuleLevel(*principal_.catalog_rules, catalog)
+                                                                     : CatalogAccessLevel::kNone;
+    if (level == CatalogAccessLevel::kNone || (needed == CatalogAccessLevel::kWrite && level != needed)) {
+      DenyByCatalogAccess(catalog, needed);
+    }
+  }
+
+  // CHECKPOINT of a DuckLake catalog runs all of DuckLake's maintenance on it (flush, expire,
+  // compact, rewrite, clean up), on a connection of its own, outside the checks on this
+  // statement: it needs what those functions need. A catalog_access principal: write access to
+  // the catalog. A store user: MAINTAIN ON CATALOG, beside the CHECKPOINT privilege. Other
+  // catalogs' checkpoints are unchanged (the CHECKPOINT privilege alone).
+  void RequireDuckLakeCheckpoint(dd::LogicalGet& get, const std::string& name) {
+    if (principal_.superuser) return;
+    std::string catalog;
+    if (get.parameters.empty()) {
+      catalog = compat::Str(dd::DatabaseManager::GetDefaultDatabase(context_));
+    } else if (!get.parameters[0].IsNull() && get.parameters[0].type().id() == dd::LogicalTypeId::VARCHAR) {
+      catalog = get.parameters[0].ToString();
+    } else {
+      Deny(principal_, name + "() must name its database as a string");
+    }
+    auto db = dd::DatabaseManager::Get(context_).GetDatabase(context_, dd::Identifier(catalog));
+    if (!db || compat::Str(db->GetCatalog().GetCatalogType()) != "ducklake") return;
+    catalog = compat::Str(db->GetName());
+    RequireDuckLakeAccess("CHECKPOINT", catalog, DuckLakeAccess::kWrite);
+    if (auto readonly = ReadOnlyRefusal(context_)) throw dd::PermissionException(*readonly);
+    NoteAccess("CHECKPOINT of DuckLake catalog " + catalog, {});
+  }
+
   bool OnlySuperusers() const {
     for (const auto& rights : rights_) {
       if (!rights.principal.superuser) return false;
@@ -1136,6 +1353,11 @@ class PlanChecker {
   // The caller needs SELECT on the view (on the columns the statement uses);
   // the view's body is then checked with its owner's rights.
   void VisitView(ViewMarker& view) {
+    ++view_depth_;
+    struct Leave {
+      int& depth;
+      ~Leave() { --depth; }
+    } leave{view_depth_};
     const std::string name = view.view.ToString();
     if (view.temporary) {
       if (in_owned_view_) {
@@ -1232,6 +1454,9 @@ class PlanChecker {
     if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return false;
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       CheckDropOf(*existing);
+      if (type != ObjectType::kSchema) {
+        CheckDependents({*existing}, false, Describe(*existing), "replace");
+      }
     }
     RequireVisible(target.catalog);
     AccessRequest request{target, type, privilege, {}};
@@ -1280,13 +1505,16 @@ class PlanChecker {
     macro.catalog = parts[0];
     macro.schema_path.assign(parts.begin() + 1, parts.end() - 1);
     macro.object_name = parts.back();
-    const auto existing = LookUp(context_, info.type, parts);
+    auto existing = LookUp(context_, info.type, parts);
     if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return;
     RequireMacroPrivilege(macro, Privilege::kCreateMacro, "create");
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       RequireMacroPrivilege(macro, Privilege::kDropMacro, "replace");
     }
     if (auto refusal = MacroNameRefusal(context_, snapshot_, macro)) Deny(principal_, *refusal);
+    if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
+      CheckDependents({*existing}, false, Describe(*existing), "replace");
+    }
   }
 
   // CREATE [OR REPLACE] TYPE by a user other than the administrator: the CREATE TYPE
@@ -1301,7 +1529,10 @@ class PlanChecker {
     auto& info = *create.info;
     const auto parts = PartsOf(info);
     if (info.temporary || (!parts.empty() && IsTempCatalog(parts[0]))) {
-      // PIVOT without an IN list creates its own temporary enum, which reads nothing.
+      // PIVOT without an IN list creates its own temporary enum of the ON column's values:
+      // not refused as a temporary type (its name shadows nothing), but its query is checked
+      // as the user's own SELECT (by the caller, which visits this operator's children). A
+      // statement the user writes cannot use that name (CheckBeforeBind).
       if (!parts.empty() && parts.back().rfind("__pivot_enum_", 0) == 0) return;
       Deny(principal_,
            "creating temporary types needs an administrator: a session's type is found before every other type, "
@@ -1316,16 +1547,16 @@ class PlanChecker {
     type.catalog = parts[0];
     type.schema_path.assign(parts.begin() + 1, parts.end() - 1);
     type.object_name = parts.back();
-    const auto existing = LookUp(context_, dd::CatalogType::TYPE_ENTRY, parts);
+    auto existing = LookUp(context_, dd::CatalogType::TYPE_ENTRY, parts);
     if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return;
     RequireSchemaPrivilege(type, Privilege::kCreateType, "create type");
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       RequireSchemaPrivilege(type, Privilege::kDropType, "replace type");
       if (auto refusal = TypeNameRefusal(context_, snapshot_, type, "replace")) Deny(principal_, *refusal);
+      CheckDependents({*existing}, false, Describe(*existing), "replace");
     } else if (auto refusal = TypeNameRefusal(context_, snapshot_, type, "create")) {
       Deny(principal_, *refusal);
     }
-    VisitChildren(op, nullptr);  // CREATE TYPE ... AS ENUM (SELECT ...) reads its query
   }
 
   // CREATE [OR REPLACE] TRIGGER by a user other than the administrator: the trigger's
@@ -1440,13 +1671,16 @@ class PlanChecker {
     sequence.catalog = parts[0];
     sequence.schema_path.assign(parts.begin() + 1, parts.end() - 1);
     sequence.object_name = parts.back();
-    const auto existing = LookUp(context_, dd::CatalogType::SEQUENCE_ENTRY, parts);
+    auto existing = LookUp(context_, dd::CatalogType::SEQUENCE_ENTRY, parts);
     if (existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT) return;
     RequireSchemaPrivilege(sequence, Privilege::kCreateSequence, "create sequence");
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       RequireSchemaPrivilege(sequence, Privilege::kDropSequence, "replace sequence");
     }
     if (auto refusal = SequenceNameRefusal(context_, sequence)) Deny(principal_, *refusal);
+    if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
+      CheckDependents({*existing}, false, Describe(*existing), "replace");
+    }
   }
 
   // The sequences an INSERT, UPDATE or MERGE target's own column defaults advance, as
@@ -1599,6 +1833,370 @@ class PlanChecker {
     ownership_.push_back({PendingOwnership::Kind::kDrop, path, type});
   }
 
+  // The table named `table_name` in the very schema `entry` lives in (an index and a trigger
+  // live in their table's schema, nested ones included): found in that schema object itself,
+  // never by a name path, so a top-level schema named like a nested one's last part is never
+  // taken for it.
+  dd::optional_ptr<dd::CatalogEntry> TableInSchemaOf(dd::CatalogEntry& entry, const std::string& table_name) {
+    if (table_name.empty()) return nullptr;
+    try {
+      auto& schema = entry.ParentSchema();
+      auto transaction = schema.ParentCatalog().GetCatalogTransaction(context_);
+      auto table = schema.GetEntry(transaction, dd::CatalogType::TABLE_ENTRY, dd::Identifier(table_name));
+      if (!table || table->type != dd::CatalogType::TABLE_ENTRY) return nullptr;
+      return table;
+    } catch (const std::exception&) {
+      return nullptr;
+    }
+  }
+
+  // The table a trigger is on (DuckDB puts a trigger in its table's schema).
+  dd::optional_ptr<dd::CatalogEntry> TriggerTable(dd::CatalogEntry& trigger) {
+    auto& entry = trigger.Cast<dd::TriggerCatalogEntry>();
+    if (!entry.base_table) return nullptr;
+    auto parts = NameParts(entry.base_table->GetQualifiedName());
+    if (parts.empty()) return nullptr;
+    return TableInSchemaOf(trigger, parts.back());
+  }
+
+  // The table an index is on (an index lives in its table's schema).
+  dd::optional_ptr<dd::CatalogEntry> IndexTable(dd::CatalogEntry& entry) {
+    return TableInSchemaOf(entry, compat::Str(entry.Cast<dd::IndexCatalogEntry>().GetTableName()));
+  }
+
+  // What the principal sees of a catalog entry, as the metadata views list it (Chargewire
+  // §9.4): a table or view (an index or trigger with its table) when it holds a privilege on
+  // it, a sequence when it may use or drop it, a type or macro with its schema. A refusal
+  // names only what this says the principal sees.
+  bool EntryListed(dd::CatalogEntry& entry, const ObjectPath& path) {
+    if (principal_.superuser) return true;
+    switch (entry.type) {
+      case dd::CatalogType::TABLE_ENTRY:
+      case dd::CatalogType::VIEW_ENTRY:
+        return snapshot_.ObjectListed(principal_, path);
+      case dd::CatalogType::INDEX_ENTRY: {
+        auto table = IndexTable(entry);
+        return table && snapshot_.ObjectListed(principal_, PathOf(*table));
+      }
+      case dd::CatalogType::TRIGGER_ENTRY: {
+        auto table = TriggerTable(entry);
+        return table && snapshot_.ObjectListed(principal_, PathOf(*table));
+      }
+      case dd::CatalogType::SEQUENCE_ENTRY:
+        return snapshot_.SequenceListed(principal_, path);
+      case dd::CatalogType::SCHEMA_ENTRY:
+        return snapshot_.SchemaListed(principal_, path);
+      case dd::CatalogType::TYPE_ENTRY:
+      case dd::CatalogType::MACRO_ENTRY:
+      case dd::CatalogType::TABLE_MACRO_ENTRY: {
+        ObjectPath schema = path;
+        schema.object_name.clear();
+        return snapshot_.SchemaListed(principal_, schema);
+      }
+      default:
+        return false;
+    }
+  }
+
+  static std::string EntryWord(const dd::CatalogEntry& entry) {
+    switch (entry.type) {
+      case dd::CatalogType::VIEW_ENTRY: return "view";
+      case dd::CatalogType::INDEX_ENTRY: return "index";
+      case dd::CatalogType::TRIGGER_ENTRY: return "trigger";
+      case dd::CatalogType::SEQUENCE_ENTRY: return "sequence";
+      case dd::CatalogType::SCHEMA_ENTRY: return "schema";
+      case dd::CatalogType::TYPE_ENTRY: return "type";
+      case dd::CatalogType::MACRO_ENTRY:
+      case dd::CatalogType::TABLE_MACRO_ENTRY: return "macro";
+      default: return "table";
+    }
+  }
+
+  // An entry as a message names it: "table c.s.t", "trigger g on table c.s.t".
+  std::string Describe(dd::CatalogEntry& entry) {
+    if (entry.type == dd::CatalogType::TRIGGER_ENTRY) {
+      auto table = TriggerTable(entry);
+      return "trigger " + QuoteIdentifierIfNeeded(compat::Str(entry.name)) +
+             (table ? " on table " + PathOf(*table).ToString() : std::string());
+    }
+    return EntryWord(entry) + " " + PathOf(entry).ToString();
+  }
+
+  // Whether the principal may drop the entry, without saying why: for one it cannot see.
+  bool MayDropQuietly(dd::CatalogEntry& entry, const ObjectPath& path) {
+    if (principal_.superuser) return true;
+    if (IsTempCatalog(path.catalog)) return true;
+    if (!snapshot_.CatalogVisible(principal_, path.catalog)) return false;
+    if (principal_.catalog_rules) {
+      return CatalogRuleLevel(*principal_.catalog_rules, path.catalog) == CatalogAccessLevel::kWrite;
+    }
+    auto on_schema = [&](Privilege privilege) {
+      ObjectPath schema = path;
+      schema.object_name.clear();
+      return snapshot_.Check(principal_, AccessRequest{schema, ObjectType::kSchema, privilege, {}}).allowed;
+    };
+    switch (entry.type) {
+      case dd::CatalogType::TABLE_ENTRY:
+      case dd::CatalogType::VIEW_ENTRY:
+      case dd::CatalogType::SCHEMA_ENTRY: {
+        const ObjectType type = ObjectTypeOf(entry);
+        const Privilege privilege = type == ObjectType::kView     ? Privilege::kDropView
+                                    : type == ObjectType::kSchema ? Privilege::kDropSchema
+                                                                  : Privilege::kDropTable;
+        return snapshot_.Check(principal_, AccessRequest{path, type, privilege, {}}).allowed;
+      }
+      case dd::CatalogType::TRIGGER_ENTRY: {
+        auto table = TriggerTable(entry);
+        if (!table) return false;
+        const ObjectPath table_path = PathOf(*table);
+        if (const OwnerRecord* owner =
+                snapshot_.FindTriggerOwner(TriggerOwnerPath(table_path, compat::Str(entry.name)))) {
+          if (snapshot_.IsOwner(principal_, *owner)) return true;
+        }
+        ObjectPath schema = table_path;
+        schema.object_name.clear();
+        return snapshot_.Check(principal_, AccessRequest{schema, ObjectType::kSchema, Privilege::kDropTrigger, {}})
+            .allowed;
+      }
+      // DROP INDEX: the administrator's (a catalog_access principal's with write, above).
+      case dd::CatalogType::INDEX_ENTRY: return false;
+      case dd::CatalogType::SEQUENCE_ENTRY: return on_schema(Privilege::kDropSequence);
+      case dd::CatalogType::TYPE_ENTRY: return on_schema(Privilege::kDropType);
+      case dd::CatalogType::MACRO_ENTRY:
+      case dd::CatalogType::TABLE_MACRO_ENTRY: return on_schema(Privilege::kDropMacro);
+      default: return false;
+    }
+  }
+
+  // Dropping an entry the statement takes with what it names (a cascade's dependent, a
+  // sequence a dropped table owns, a nested schema): the right to drop it, as if named.
+  // One the principal cannot see is refused without its name (`what`: the statement, said
+  // from what the principal named).
+  void RequireDropOfTaken(dd::CatalogEntry& entry, const std::string& what) {
+    const ObjectPath path = PathOf(entry);
+    if (!EntryListed(entry, path)) {
+      if (!MayDropQuietly(entry, path)) {
+        Deny(principal_, what + " would also drop objects that depend on it, which user " + principal_.user_name +
+                             " may not drop; ask an administrator");
+      }
+      if (entry.type == dd::CatalogType::SEQUENCE_ENTRY) {
+        ownership_.push_back({PendingOwnership::Kind::kDrop, path, ObjectType::kSequence});
+      } else if (entry.type == dd::CatalogType::TRIGGER_ENTRY) {
+        if (auto table = TriggerTable(entry)) {
+          ownership_.push_back({PendingOwnership::Kind::kDrop,
+                                TriggerOwnerPath(PathOf(*table), compat::Str(entry.name)), ObjectType::kTrigger});
+        }
+      } else if (entry.type == dd::CatalogType::TABLE_ENTRY || entry.type == dd::CatalogType::VIEW_ENTRY ||
+                 entry.type == dd::CatalogType::SCHEMA_ENTRY) {
+        if (!IsTempCatalog(path.catalog)) ownership_.push_back({PendingOwnership::Kind::kDrop, path, ObjectTypeOf(entry)});
+      }
+      return;
+    }
+    switch (entry.type) {
+      case dd::CatalogType::TABLE_ENTRY:
+      case dd::CatalogType::VIEW_ENTRY:
+      case dd::CatalogType::SCHEMA_ENTRY:
+        CheckDropOf(entry);
+        break;
+      case dd::CatalogType::INDEX_ENTRY:
+        // Taken without its table (a macro its expression calls is dropped): as DROP INDEX, the
+        // administrator's, or a catalog_access principal's with write access to the catalog.
+        if (IsTempCatalog(path.catalog)) break;
+        if (principal_.catalog_rules) {
+          RequireRuleWrite(path.catalog);
+          break;
+        }
+        Deny(principal_, what + " would also drop " + Describe(entry) +
+                             ", which only an administrator may drop (as DROP INDEX)");
+      case dd::CatalogType::TRIGGER_ENTRY: {
+        auto table = TriggerTable(entry);
+        if (!table) Deny(principal_, what + " would also drop " + Describe(entry) + ", whose table was not found");
+        const ObjectPath table_path = PathOf(*table);
+        if (IsTempCatalog(table_path.catalog)) break;
+        RequireTriggerDrop(table_path, compat::Str(entry.name), "drop");
+        ownership_.push_back({PendingOwnership::Kind::kDrop, TriggerOwnerPath(table_path, compat::Str(entry.name)),
+                              ObjectType::kTrigger});
+        break;
+      }
+      case dd::CatalogType::SEQUENCE_ENTRY:
+        RequireSchemaPrivilege(path, Privilege::kDropSequence, "drop sequence");
+        ownership_.push_back({PendingOwnership::Kind::kDrop, path, ObjectType::kSequence});
+        break;
+      case dd::CatalogType::TYPE_ENTRY:
+        RequireSchemaPrivilege(path, Privilege::kDropType, "drop type");
+        break;
+      case dd::CatalogType::MACRO_ENTRY:
+      case dd::CatalogType::TABLE_MACRO_ENTRY:
+        RequireMacroPrivilege(path, Privilege::kDropMacro, "drop");
+        break;
+      default:
+        Deny(principal_, what + " would also drop " + Describe(entry) +
+                             ", which only an administrator may drop that way; drop it first");
+    }
+  }
+
+  // DuckDB's refusal of a DROP (or of a CREATE OR REPLACE, which drops the old entry first)
+  // that something depends on names every dependent, also ones the principal cannot see.
+  // This one says that other objects depend on it and names only those the principal sees.
+  [[noreturn]] void RefuseDependents(const std::string& verb, const std::string& what,
+                                     const std::vector<dd::CatalogEntry*>& dependents, bool cascade = false) {
+    std::set<std::string> named;
+    for (auto* dependent : dependents) {
+      if (!EntryListed(*dependent, PathOf(*dependent))) continue;
+      named.insert(Describe(*dependent));
+    }
+    std::string seen;
+    for (const auto& name : named) seen += (seen.empty() ? "" : ", ") + name;
+    throw dd::DependencyException("Cannot " + verb + " " + what + ": other objects depend on it" +
+                                  (seen.empty() ? std::string() : " (" + seen + ")") + ". Drop them first" +
+                                  (verb == "drop" && !cascade ? ", or use DROP ... CASCADE" : ""));
+  }
+
+  // What a DROP (or a CREATE OR REPLACE) takes with what it names, or is blocked by, in any
+  // schema, as DuckDB's DependencyManager::DropObject decides it, applied again to each entry
+  // it takes:
+  // - a dependent (a table whose column has a user type, recorded again since DuckDB 2.0.1;
+  //   whose default calls a sequence; a trigger on a table or writing to it; for a sequence,
+  //   the table that owns it) is taken with CASCADE; without, it blocks the drop if it is a
+  //   blocking or an owning one, and goes with it otherwise (a trigger or index with its table);
+  // - what the entry owns (a sequence OWNED BY a dropped table) is taken, with or without
+  //   CASCADE, and its own dependents follow the same rules;
+  // - a table that references a dropped table by foreign key is never taken: DuckDB refuses.
+  // A blocked drop is refused naming only the dependents the principal sees; each object
+  // taken needs the right to drop it, as if named (with CASCADE, everything taken; without,
+  // what a dropped object owns). `targets`: what the statement names (a schema with the
+  // schemas nested in it); `what`: the target as the refusal says it; `verb`: "drop" or
+  // "replace".
+  void CheckDependents(const std::vector<dd::reference<dd::CatalogEntry>>& targets, bool cascade,
+                       const std::string& what, const std::string& verb = "drop") {
+    if (targets.empty() || principal_.superuser) return;
+    auto& catalog = targets.front().get().ParentCatalog();
+    auto manager = catalog.GetDependencyManager();
+    if (!manager) return;  // a catalog without DuckDB's dependency records cascades nothing through them
+    enum class Reason { kNamed, kDependent, kOwned };
+    std::unordered_map<const dd::CatalogEntry*, Reason> taken_by;
+    std::vector<dd::CatalogEntry*> order;
+    std::unordered_set<const dd::SchemaCatalogEntry*> schemas;
+    for (auto& target : targets) {
+      taken_by.emplace(&target.get(), Reason::kNamed);
+      if (target.get().type == dd::CatalogType::SCHEMA_ENTRY) {
+        schemas.insert(&target.get().Cast<dd::SchemaCatalogEntry>());
+      }
+    }
+    struct Edge {
+      dd::CatalogEntry* object;
+      dd::CatalogEntry* dependent;
+      bool blocking;
+      bool owned_by;  // `dependent` owns `object` (ALTER SEQUENCE object OWNED BY dependent)
+    };
+    std::vector<Edge> edges;
+    try {
+      manager->Scan(context_, [&](dd::CatalogEntry& object, dd::CatalogEntry& dependent,
+                                  const dd::DependencyDependentFlags& flags) {
+        edges.push_back({&object, &dependent, flags.IsBlocking(), flags.IsOwnedBy()});
+      });
+    } catch (const std::exception& e) {
+      Log(LogLevel::kWarning, "access control could not list what depends on an object",
+          {{"user", principal_.user_name}, {"object", what}, {"error", e.what()}});
+      throw dd::CatalogException("Hardcharger could not list what depends on " + what +
+                                 ", so the statement was not run (the server log says why)");
+    }
+    auto in_dropped_schema = [&](const dd::CatalogEntry& entry) {
+      if (schemas.empty() || entry.type == dd::CatalogType::SCHEMA_ENTRY) return false;
+      try {
+        return schemas.contains(&entry.ParentSchema());
+      } catch (const std::exception&) {
+        return false;
+      }
+    };
+    auto taken = [&](const dd::CatalogEntry* entry) {
+      return taken_by.contains(entry) || in_dropped_schema(*entry);
+    };
+    auto take = [&](dd::CatalogEntry* entry, Reason reason) {
+      taken_by.emplace(entry, reason);
+      order.push_back(entry);
+    };
+    std::vector<dd::CatalogEntry*> blockers;
+    for (bool grew = true; grew;) {
+      grew = false;
+      for (auto& edge : edges) {
+        if (edge.owned_by && taken(edge.dependent) && !taken(edge.object)) {
+          take(edge.object, Reason::kOwned);
+          grew = true;
+        }
+        if (!taken(edge.object) || taken(edge.dependent)) continue;
+        const bool foreign_key = edge.blocking && edge.object->type == dd::CatalogType::TABLE_ENTRY &&
+                                 edge.dependent->type == dd::CatalogType::TABLE_ENTRY;
+        if (foreign_key || (!cascade && (edge.blocking || edge.owned_by))) {
+          blockers.push_back(edge.dependent);
+          continue;
+        }
+        take(edge.dependent, Reason::kDependent);
+        grew = true;
+      }
+    }
+    std::vector<dd::CatalogEntry*> blocking;
+    for (auto* blocker : blockers) {
+      if (!taken(blocker)) blocking.push_back(blocker);
+    }
+    if (!blocking.empty()) RefuseDependents(verb, what, blocking, cascade);
+    // What the principal sees first, by name, so that a refusal names the first of them;
+    // then what it does not see, which no refusal names.
+    std::vector<std::pair<std::string, dd::CatalogEntry*>> seen;
+    std::vector<dd::CatalogEntry*> unseen;
+    for (auto* entry : order) {
+      // An index or trigger whose own table the statement takes goes with it, which the drop
+      // of the table covers. Anything else taken, also an index or trigger whose table stays
+      // (taken because a macro its expression calls, or a table its body writes, is dropped),
+      // needs the right to drop it.
+      if (entry->type == dd::CatalogType::INDEX_ENTRY) {
+        auto table = IndexTable(*entry);
+        if (table && taken(table.get())) continue;
+      }
+      if (entry->type == dd::CatalogType::TRIGGER_ENTRY) {
+        auto table = TriggerTable(*entry);
+        if (table && taken(table.get())) continue;
+      }
+      const ObjectPath path = PathOf(*entry);
+      if (EntryListed(*entry, path)) {
+        seen.emplace_back(Describe(*entry), entry);
+      } else {
+        unseen.push_back(entry);
+      }
+    }
+    std::sort(seen.begin(), seen.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    const std::string statement = (verb == "drop" ? std::string(cascade ? "DROP ... CASCADE of " : "DROP of ")
+                                                  : std::string("CREATE OR REPLACE of ")) + what;
+    for (auto& [name, entry] : seen) RequireDropOfTaken(*entry, statement);
+    for (auto* entry : unseen) RequireDropOfTaken(*entry, statement);
+  }
+
+  // DROP SCHEMA without CASCADE: DuckDB refuses a schema with anything in it and names it all,
+  // also what the principal cannot see. Refused here the same way, naming what it sees.
+  void CheckSchemaEmpty(dd::SchemaCatalogEntry& schema, const std::string& what) {
+    if (principal_.superuser) return;
+    std::vector<dd::CatalogEntry*> contents;
+    try {
+      auto transaction = schema.ParentCatalog().GetCatalogTransaction(context_);
+      for (auto type : {dd::CatalogType::TABLE_ENTRY, dd::CatalogType::SEQUENCE_ENTRY, dd::CatalogType::TYPE_ENTRY,
+                        dd::CatalogType::MACRO_ENTRY, dd::CatalogType::TABLE_MACRO_ENTRY,
+                        dd::CatalogType::INDEX_ENTRY}) {
+        schema.Scan(transaction, type, [&](dd::CatalogEntry& entry) {
+          if (!entry.internal) contents.push_back(&entry);
+        });
+      }
+      schema.ScanSchemaTree(transaction, [&](dd::SchemaCatalogEntry& found) {
+        if (&found != &schema) contents.push_back(&found);
+      });
+    } catch (const std::exception& e) {
+      Log(LogLevel::kWarning, "access control could not list what is in a schema",
+          {{"user", principal_.user_name}, {"object", what}, {"error", e.what()}});
+      throw dd::CatalogException("Hardcharger could not list what is in " + what +
+                                 ", so the statement was not run (the server log says why)");
+    }
+    if (!contents.empty()) RefuseDependents("drop", what, contents);
+  }
+
   void CheckDrop(dd::LogicalOperator& op) {
     auto& info = *op.Cast<dd::LogicalDrop>().info;
     auto parts = PartsOf(info);
@@ -1631,7 +2229,13 @@ class PlanChecker {
             Deny(principal_, "the schemas nested in " + PathOf(*entry).ToString() +
                                  " could not be listed, so DROP SCHEMA ... CASCADE can't check them; ask an administrator");
           }
-          for (auto& child : children) CheckDropOf(child.get());
+          const std::string what = "schema " + PathOf(*entry).ToString();
+          for (auto& child : children) RequireDropOfTaken(child.get(), "DROP SCHEMA ... CASCADE of " + what);
+          std::vector<dd::reference<dd::CatalogEntry>> targets{*entry};
+          for (auto& child : children) targets.emplace_back(child.get());
+          CheckDependents(targets, true, what);
+        } else {
+          CheckSchemaEmpty(entry->Cast<dd::SchemaCatalogEntry>(), "schema " + PathOf(*entry).ToString());
         }
         return;
       }
@@ -1641,6 +2245,7 @@ class PlanChecker {
         auto entry = LookUp(context_, dd::CatalogType::TABLE_ENTRY, parts);
         if (!entry) return;  // DROP ... IF EXISTS of nothing; DuckDB reports a missing object
         CheckDropOf(*entry);
+        CheckDependents({*entry}, info.cascade, Describe(*entry));
         return;
       }
       case dd::CatalogType::SEQUENCE_ENTRY: {
@@ -1650,6 +2255,7 @@ class PlanChecker {
         if (IsTempCatalog(sequence.catalog)) return;
         RequireSchemaPrivilege(sequence, Privilege::kDropSequence, "drop sequence");
         ownership_.push_back({PendingOwnership::Kind::kDrop, sequence, ObjectType::kSequence});
+        CheckDependents({*entry}, info.cascade, Describe(*entry));
         return;
       }
       case dd::CatalogType::MACRO_ENTRY:
@@ -1659,6 +2265,7 @@ class PlanChecker {
         ObjectPath macro = PathOf(*entry);
         if (IsTempCatalog(macro.catalog)) return;
         RequireMacroPrivilege(macro, Privilege::kDropMacro, "drop");
+        CheckDependents({*entry}, info.cascade, Describe(*entry));
         return;
       }
       case dd::CatalogType::TYPE_ENTRY: {
@@ -1670,6 +2277,7 @@ class PlanChecker {
         // Also with CASCADE: what names the type keeps naming it, and would mean something
         // else or nothing.
         if (auto refusal = TypeNameRefusal(context_, snapshot_, type, "drop")) Deny(principal_, *refusal);
+        CheckDependents({*entry}, info.cascade, Describe(*entry));
         return;
       }
       case dd::CatalogType::TRIGGER_ENTRY: {
@@ -1792,10 +2400,8 @@ class PlanChecker {
       case dd::CatalogType::INDEX_ENTRY: {
         auto entry = LookUp(context_, dd::CatalogType::INDEX_ENTRY, parts);
         if (!entry) return;
-        auto& index = entry->Cast<dd::IndexCatalogEntry>();
-        auto table = LookUp(context_, dd::CatalogType::TABLE_ENTRY,
-                            {compat::Str(entry->ParentCatalog().GetName()), compat::Str(index.GetSchemaName()),
-                             compat::Str(index.GetTableName())});
+        // In the index's own schema (nested ones included), not by its last name part.
+        auto table = IndexTable(*entry);
         if (!table) Deny(principal_, "the table of index " + PathOf(*entry).ToString() + " could not be found");
         return require_alter(*table, "index " + PathOf(*entry).ToString());
       }
@@ -1839,6 +2445,9 @@ class PlanChecker {
   const ViewColumns& view_columns_;
   const TriggerBodies& trigger_bodies_;
   std::vector<Rights> rights_;
+  int view_depth_ = 0;  // inside a view's body
+  // Under DuckLake's own compaction or flush: the catalogs it rewrites (folded).
+  std::set<std::string> ducklake_rewrite_catalogs_;
   // The sequences the column defaults of the table being written advance (Visit).
   std::vector<const dd::CatalogEntry*> default_sequences_;
   bool in_owned_view_ = false;
@@ -2308,35 +2917,33 @@ dd::RebindQueryInfo RbacSessionState::FinalizePrepareLocked(dd::PreparedStatemen
     return dd::RebindQueryInfo::DO_NOT_REBIND;
   } else if (!unchecked()) {
     // The plan never reached the check (the optimizer was skipped). Refuse it.
+    Log(LogLevel::kWarning, "a prepared plan reached no access-control check",
+        {{"user", principal_.user_name},
+         {"statement_type", dd::StatementTypeToString(prepared.statement_type)},
+         {"mode", mode == dd::PreparedStatementMode::PREPARE_ONLY ? "prepare_only" : "prepare_and_execute"},
+         {"bound_all_parameters", prepared.properties.bound_all_parameters ? "true" : "false"},
+         {"always_require_rebind", prepared.properties.always_require_rebind ? "true" : "false"},
+         {"bind_checked", bind_checked ? "true" : "false"},
+         {"unplanned", unplanned ? "true" : "false"},
+         {"planned_prepare_only", prepare_only ? "true" : "false"},
+         {"has_physical_plan", prepared.physical_plan ? "true" : "false"}});
     pending_ownership_.clear();
     prepared_ownership_.clear();
     throw dd::PermissionException(
-        "Hardcharger blocked this statement: its plan could not be checked against user " +
-        principal_.user_name + "'s grants");
+        "Hardcharger blocked this statement: access control did not see its plan (it was not planned for this run), "
+        "so it was not run; this is not about user " + principal_.user_name + "'s grants. Run it again, and if it "
+        "keeps happening, report it with the server log");
   }
-  if (prepared_versions_.size() > 4096) prepared_versions_.clear();
-  prepared_versions_[&prepared] = {last_checked_version_, last_checked_persona_};
   return dd::RebindQueryInfo::DO_NOT_REBIND;
 }
 
 dd::RebindQueryInfo RbacSessionState::RebindIfGrantsChanged(
-    const dd::PreparedStatementData& prepared) {
-  // A store user's statement is planned again whenever the grants or what the session acts
-  // as changed since it was checked, acting as System Admin included: a statement prepared
-  // as the user carries the user's row filters and masks, and one prepared as System Admin
-  // carries none.
+    const dd::PreparedStatementData&) {
   if (bypassed() || administrator_) return dd::RebindQueryInfo::DO_NOT_REBIND;
-  auto engine = engine_.lock();
-  if (!engine) return dd::RebindQueryInfo::ATTEMPT_TO_REBIND;
-  const int64_t current = engine->snapshot()->version();
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto it = prepared_versions_.find(&prepared);
-  if (it != prepared_versions_.end() && it->second.first == current &&
-      it->second.second == persona_version_.load()) {
-    return dd::RebindQueryInfo::DO_NOT_REBIND;
-  }
-  // Grants changed since this statement was checked (or it was never seen):
-  // re-plan it, which runs the check again.
+  // Every run is planned and checked again: a prepared statement's address can be reused
+  // by another statement, so it cannot identify a previously checked plan. Store users
+  // also re-plan while acting as System Admin, so SET/RESET ROLE and policy exemptions
+  // never reuse a plan carrying a different persona's filters or masks.
   return dd::RebindQueryInfo::ATTEMPT_TO_REBIND;
 }
 

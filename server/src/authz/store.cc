@@ -21,6 +21,7 @@
 
 #include "authz/authz.hpp"
 #include "authz/duckdb_internal.hpp"
+#include "authz/store_link.hpp"
 #include "logging.hpp"
 #include "redact.hpp"
 
@@ -31,165 +32,6 @@
 namespace hardcharger::authz {
 
 namespace dd = duckdb;
-
-// The store's DuckDB connection, which only a thread of its own uses, so that a store that
-// stops answering holds no caller longer than the store timeout. A PostgreSQL that is
-// paused, overloaded or cut off without a reset leaves libpq waiting in recv(), and
-// nothing in DuckDB can interrupt that. So a caller that has waited the timeout is told
-// the store is unavailable, and the statement is left to this thread. Whatever it was part
-// of is then cancelled: when the statement returns, the thread rolls back the open
-// transaction before it runs anything else, so a change a caller was told failed never
-// commits (a COMMIT already sent may still land, and the caller is told so). The thread
-// only ever holds what a statement owns (its SQL and values), never a caller's data, and
-// keeps the DuckDB instance alive for as long as it runs.
-class StoreLink {
- public:
-  using Work = std::function<dd::unique_ptr<dd::QueryResult>(dd::Connection&)>;
-
-  StoreLink(std::unique_ptr<dd::DuckDB> db, std::chrono::milliseconds timeout)
-      : state_(std::make_shared<State>()), timeout_(timeout) {
-    state_->db = std::move(db);
-    state_->conn = std::make_unique<dd::Connection>(*state_->db);
-    thread_ = std::thread([state = state_] { Loop(*state); });
-  }
-
-  ~StoreLink() {
-    std::unique_lock lock(state_->mutex);
-    state_->stopping = true;
-    state_->cv.notify_all();
-    // A thread still waiting on a store that hangs is left behind: it owns all it uses.
-    const bool finished =
-        state_->cv.wait_for(lock, timeout_, [this] { return state_->finished; });
-    lock.unlock();
-    if (finished) {
-      thread_.join();
-    } else {
-      thread_.detach();
-    }
-  }
-
-  StoreLink(const StoreLink&) = delete;
-  StoreLink& operator=(const StoreLink&) = delete;
-
-  std::chrono::milliseconds timeout() const { return timeout_; }
-
-  // Whether a statement has run for the whole timeout (one a caller gave up on included):
-  // the store doesn't answer.
-  bool Hung() const {
-    std::lock_guard lock(state_->mutex);
-    return state_->busy && std::chrono::steady_clock::now() - state_->busy_since >= timeout_;
-  }
-
-  // Runs `work` on the store's thread, waiting at most the timeout. Ok: its result.
-  arrow::Result<dd::unique_ptr<dd::QueryResult>> Call(Work work) {
-    auto task = std::make_shared<Task>();
-    task->work = std::move(work);
-    std::unique_lock lock(state_->mutex);
-    const auto now = std::chrono::steady_clock::now();
-    // A statement that has hung for the whole timeout already: no use queueing behind it.
-    if (state_->busy && now - state_->busy_since >= timeout_) return TimedOut();
-    state_->queue.push_back(task);
-    state_->cv.notify_all();
-    if (!state_->cv.wait_until(lock, now + timeout_, [&] { return task->done; })) {
-      task->abandoned = true;
-      state_->rollback_pending = true;  // whatever transaction it was part of is cancelled
-      state_->cv.notify_all();
-      return TimedOut();
-    }
-    if (!task->error.empty()) {
-      return arrow::Status::IOError("Hardcharger access-control store: statement failed: " + task->error);
-    }
-    return std::move(task->result);
-  }
-
-  arrow::Status TimedOut() const {
-    const auto ms = timeout_.count();
-    std::string seconds = std::to_string(ms / 1000);
-    if (ms % 1000 != 0) seconds += "." + std::to_string(ms % 1000 / 100);
-    return arrow::Status::IOError("Hardcharger ", kStoreUnavailable, ": timed out after ", seconds,
-                                  " s (rbac_store_timeout_seconds)");
-  }
-
- private:
-  struct Task {
-    Work work;
-    bool done = false;
-    bool abandoned = false;
-    dd::unique_ptr<dd::QueryResult> result;
-    std::string error;
-  };
-  struct State {
-    std::unique_ptr<dd::DuckDB> db;
-    std::unique_ptr<dd::Connection> conn;
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::deque<std::shared_ptr<Task>> queue;
-    bool stopping = false;
-    bool finished = false;
-    bool rollback_pending = false;
-    bool busy = false;  // running a statement (since busy_since)
-    std::chrono::steady_clock::time_point busy_since;
-    ~State() {
-      conn.reset();
-      db.reset();
-    }
-  };
-
-  static void Loop(State& state) {
-    std::unique_lock lock(state.mutex);
-    while (true) {
-      state.cv.wait(lock, [&] { return state.stopping || state.rollback_pending || !state.queue.empty(); });
-      if (state.rollback_pending) {
-        // A caller gave up on a statement of this connection's transaction: undo it
-        // before anything else runs (outside a transaction this only errs).
-        state.rollback_pending = false;
-        state.busy = true;
-        state.busy_since = std::chrono::steady_clock::now();
-        lock.unlock();
-        try {
-          (void)state.conn->Query("ROLLBACK");
-        } catch (const std::exception&) {
-        }
-        lock.lock();
-        state.busy = false;
-        continue;
-      }
-      if (state.stopping) break;
-      auto task = std::move(state.queue.front());
-      state.queue.pop_front();
-      if (task->abandoned) continue;
-      state.busy = true;
-      state.busy_since = std::chrono::steady_clock::now();
-      lock.unlock();
-      dd::unique_ptr<dd::QueryResult> result;
-      std::string error;
-      try {
-        result = task->work(*state.conn);
-      } catch (const std::exception& e) {
-        error = e.what();
-        if (error.empty()) error = "unknown error";
-      }
-      lock.lock();
-      state.busy = false;
-      if (!task->abandoned) {
-        task->result = std::move(result);
-        task->error = std::move(error);
-        task->done = true;
-        state.cv.notify_all();
-      } else {
-        lock.unlock();
-        result.reset();
-        lock.lock();
-      }
-    }
-    state.finished = true;
-    state.cv.notify_all();
-  }
-
-  std::shared_ptr<State> state_;
-  std::chrono::milliseconds timeout_;
-  std::thread thread_;
-};
 
 bool IsStoreUnavailable(const arrow::Status& status) {
   return !status.ok() && status.message().find(kStoreUnavailable) != std::string::npos;
@@ -238,8 +80,20 @@ arrow::Status Refile(const arrow::Status& status, const std::string& what) {
   return StoreError(what, message.substr(kPrefix.size()));
 }
 
+// The first word of a store statement (the server's own SQL), to name it in the log
+// without its values.
+std::string Keyword(const std::string& sql) {
+  const auto start = sql.find_first_not_of(" \t\n");
+  if (start == std::string::npos) return {};
+  const auto end = sql.find_first_of(" \t\n(", start);
+  std::string word = sql.substr(start, end == std::string::npos ? std::string::npos : end - start);
+  std::transform(word.begin(), word.end(), word.begin(), [](unsigned char c) { return std::toupper(c); });
+  return word;
+}
+
 arrow::Result<dd::unique_ptr<dd::QueryResult>> Query(StoreLink& conn, const std::string& sql) {
-  auto result = conn.Call([sql](dd::Connection& c) -> dd::unique_ptr<dd::QueryResult> { return c.Query(sql); });
+  auto result = conn.Call([sql](dd::Connection& c) -> dd::unique_ptr<dd::QueryResult> { return c.Query(sql); },
+                          Keyword(sql));
   if (!result.ok()) return Refile(result.status(), "statement failed");
   return result;
 }
@@ -276,7 +130,7 @@ arrow::Result<std::unique_ptr<StoreRows>> Run(StoreLink& conn, const std::string
     auto out = compat::ExecuteMaterialized(*stmt, params);
     if (out->HasError()) throw std::runtime_error(out->GetError());
     return out;
-  });
+  }, Keyword(sql));
   if (!result.ok()) return Refile(result.status(), "statement failed");
   return std::make_unique<StoreRows>(std::move(*result));
 }

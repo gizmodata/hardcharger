@@ -216,6 +216,19 @@ std::string DuckDBStoreFile(const std::string& store_uri);
 void InstallFileGuard(duckdb_v2_instance_handle instance, std::shared_ptr<const PrivateFiles> files,
                       std::shared_ptr<const SensitivePaths> sensitive);
 
+// The baseline Linux x86_64 build on a CPU without x86-64-v3 (issue #62): no extension is
+// installed or loaded from outside the binary, as DuckDB's downloadable ones would die with
+// "Illegal instruction" and take the server with them; each attempt fails with a message
+// naming `built_in`, the extensions in the binary (extension_cpu_guard.cc). True when the
+// guard was installed; false (nothing changed) in any other build or on a newer CPU.
+bool InstallExtensionCpuGuard(duckdb_v2_instance_handle instance, const std::string& built_in);
+
+// Whether this is the baseline build on a CPU without x86-64-v3, where the guard above is
+// needed. The instance then opens with extension autoinstall and autoload off, so opening
+// the main database cannot fetch a downloaded extension before the guard is in place
+// (engine.cc turns them back on once it is).
+bool BaselineCpuLacksV3();
+
 // A "readonly" principal's session (read_only.cc): from now on DuckDB's own analysis of
 // every statement it prepares on `connection` decides whether it writes, as in GizmoSQL
 // 1.x. One that modifies a database (the temp catalog included) or writes a file, wherever

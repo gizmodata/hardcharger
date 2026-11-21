@@ -6,7 +6,7 @@ coverage is in test_loadable_extensions.py and test_extension_loading.py.
 
 import pytest
 
-from conftest import TSAN_EXTENSIONS
+from conftest import BASELINE_BUILT_IN, TSAN_EXTENSIONS
 
 BUILT_IN = ["core_functions", "parquet", "json", "icu"]
 OPTIONAL = ["httpfs", "ducklake", "postgres_scanner", "autocomplete", "tpch"]
@@ -36,11 +36,11 @@ def test_repositories_are_out_of_reach_and_nothing_autoinstalls(server):
 def test_expected_extensions_are_linked_and_loaded(server):
     rows = server.admin().rows(sql="SELECT extension_name, loaded, install_mode FROM duckdb_extensions()")
     by_name = {r["extension_name"]: r for r in rows}
-    expected = BUILT_IN + OPTIONAL if TSAN_EXTENSIONS else BUILT_IN
+    expected = BUILT_IN + OPTIONAL if TSAN_EXTENSIONS else BUILT_IN + BASELINE_BUILT_IN
     assert {r["extension_name"] for r in rows if r["install_mode"] == "STATICALLY_LINKED"} == set(expected)
     for name in expected:
         assert by_name[name]["loaded"]
-    for name in ([] if TSAN_EXTENSIONS else OPTIONAL):
+    for name in ([] if TSAN_EXTENSIONS else [n for n in OPTIONAL if n not in BASELINE_BUILT_IN]):
         assert not by_name[name]["loaded"] and by_name[name]["install_mode"] != "STATICALLY_LINKED"
 
 

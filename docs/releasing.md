@@ -65,7 +65,7 @@ Two places can't hold `-rc.N` and use numbers instead:
 | GitHub Release | pre-release, never "latest" | release, made "latest" |
 | Release notes | CHANGELOG `## [2.0.0-rc.1]` | CHANGELOG `## [2.0.0]` |
 | Images, ghcr.io and docker.io | `:2.0.0-rc.1`, `:sha-<short>` | `:2.0.0`, `:latest` |
-| Tarballs and zips | `hardcharger-<platform>.tar.gz` / `.zip` | the same names |
+| Tarballs and zips | `hardcharger-<platform>.tar.gz` / `.zip`, plus `hardcharger-linux-amd64-baseline.tar.gz` (any x86-64 CPU) | the same names |
 | MSIs | `Hardcharger-windows-<arch>.msi`, ProductVersion `2.0.0.1` | the same names, `2.0.0` |
 | Web UI tarball | `hardcharger-ui-2.0.0-rc.1.tar.gz` | `hardcharger-ui-2.0.0.tar.gz` |
 | `SHA256SUMS` | every tarball, zip and MSI | the same |
@@ -281,7 +281,8 @@ tags are published. The same test queries a Quack server that the running server
 starts (`INSTALL quack`, so the test container needs the network) through the
 `quack` manifest, checks that both drivers report the version their manifest
 names, and loads GizmoSQL, Oracle and Db2 through the driver manager as far as
-their connection error (no such server runs in the test). The server image is
+their connection error (no such server runs in the test). It fails when any driver
+prints a deprecation warning on stderr. The server image is
 resolved to a digest before building.
 
 A server release runs this itself ([After the release](#after-the-release)). Run it by hand to
@@ -291,16 +292,23 @@ or to retry a failed run:
 ```bash
 # Build and test first without publishing.
 gh workflow run adbc-images.yml --ref main \
-  -f server_version=2.0.0 -f driver_tag=v2.0.0 -f publish=false
+  -f server_version=2.13.4 -f driver_tag=v2.7.2 -f publish=false
 # After it succeeds, publish the same pinned versions.
 gh workflow run adbc-images.yml --ref main \
-  -f server_version=2.0.0 -f driver_tag=v2.0.0 -f publish=true
+  -f server_version=2.13.4 -f driver_tag=v2.7.2 -f publish=true
 ```
 
 The native pins in `docker/prepare-adbc-drivers.py` are GizmoSQL 2.0.18, Oracle
-1.0.6, Db2 0.2.6 and Quack 1.0.4; Hardcharger defaults to 2.0.0 and can
-be selected with `driver_tag`. Every native release asset is checked against
-GitHub's SHA-256 digest before it enters the Docker context, and its library
+1.1.0, Db2 0.3.0 and Quack 1.1.0; Hardcharger defaults to 2.7.2 for a run by hand
+and is selected with `driver_tag` (a server release passes the newest stable one).
+The others stay pinned so a rebuild of an old release gets the drivers it shipped with.
+Oracle 1.1, Db2 0.3, Quack 1.1 and Hardcharger 2.7 name their options as the
+[ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html) asks
+(`oracle.*`, `db2.*`, `quack.*`, `hardcharger.*`) and print a deprecation warning on stderr
+for an old `adbc.<driver>.*` name; the smoke test sets each driver's options under the new
+names and fails when any driver's stderr says "deprecated". Read a driver's release notes for
+renamed options when moving its pin.
+Every native release asset is checked against GitHub's SHA-256 digest before it enters the Docker context, and its library
 must be an ELF shared object for the architecture being staged that exports the
 entrypoint its manifest names. GizmoSQL's and Hardcharger's archives carry their
 manifest template; Oracle's, Db2's and Quack's carry none, so the script writes

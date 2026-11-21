@@ -24,7 +24,10 @@ set -euo pipefail
 MODE="${1:?deps <dependency...> | server <build dir> [cmake args...] | build <build dir> [cmake --build args...]}"
 shift
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DEPS="$ROOT/server/.deps"
+# HARDCHARGER_DEPS_DIR: another dependency directory inside the checkout, e.g. one per CPU
+# target (scripts/cpu-target.sh); the server's build then uses it too.
+DEPS="${HARDCHARGER_DEPS_DIR:-$ROOT/server/.deps}"
+export HARDCHARGER_DEPS_DIR="$DEPS"
 OPENSSL_PREFIX="$DEPS/openssl-install"  # deps-openssl.sh's
 
 cd "$ROOT"
@@ -89,7 +92,7 @@ build_server() {
   # sccache's server started up front, or the launcher off when it won't answer.
   local launcher
   read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
-  cmake -S server -B "$build_dir" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  cmake -S server -B "$build_dir" -G Ninja -DCMAKE_BUILD_TYPE=Release -DHARDCHARGER_DEPS="$DEPS" \
     -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX" -DOPENSSL_USE_STATIC_LIBS=TRUE \
     "${launcher[@]}" "$@"
   cmake --build "$build_dir"

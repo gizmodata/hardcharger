@@ -98,8 +98,20 @@ chargewire_duckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
   options.instance_options.emplace_back("autoinstall_known_extensions", "false");
   options.instance_options.emplace_back("autoload_known_extensions", "false");
 #else
-  options.instance_options.emplace_back("autoinstall_known_extensions", "true");
-  options.instance_options.emplace_back("autoload_known_extensions", "true");
+  // The baseline build on a CPU too old for DuckDB's downloadable extensions (issue #62):
+  // off while the instance opens its main database, which could otherwise fetch one (a
+  // .sqlite file loads sqlite_scanner) before the guard is in place; on again once it is.
+  const bool guarded = authz::BaselineCpuLacksV3();
+#ifdef HARDCHARGER_BUILT_IN_EXTENSIONS
+  if (guarded) {
+    Log(LogLevel::kWarning,
+        "this CPU lacks x86-64-v3 (AVX2), which DuckDB's downloadable extensions need: this baseline build "
+        "loads only its built-in extensions",
+        {{"built_in_extensions", HARDCHARGER_BUILT_IN_EXTENSIONS}});
+  }
+#endif
+  options.instance_options.emplace_back("autoinstall_known_extensions", guarded ? "false" : "true");
+  options.instance_options.emplace_back("autoload_known_extensions", guarded ? "false" : "true");
 #endif
   for (auto& option : DuckDBDirectories(config)) options.instance_options.push_back(std::move(option));
   if (!config.storage_version.empty()) {
@@ -537,8 +549,21 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
   // startup is over (below), a sensitive path.
   if (access_) private_files_->Add(access_->store_file(), "the access-control store", /*attached=*/false);
   authz::InstallFileGuard(instance(), private_files_, sensitive_paths_);
+  // The baseline build on a CPU too old for DuckDB's downloadable extensions: only the
+  // built-in ones load (issue #62).
+#ifdef HARDCHARGER_BUILT_IN_EXTENSIONS
+  const bool cpu_guarded = authz::InstallExtensionCpuGuard(instance(), HARDCHARGER_BUILT_IN_EXTENSIONS);
+#endif
   chargewire_duckdb::Connection connection;
   chargewire_duckdb::Call([&](auto* err) { return duckdb_v2_connection_create(instance(), connection.out(), err); });
+#ifdef HARDCHARGER_BUILT_IN_EXTENSIONS
+  // The instance opened with autoinstall and autoload off (EngineOptions); with the guard in
+  // place they are back to the default, and each attempt gets the guard's message.
+  if (cpu_guarded) {
+    chargewire_duckdb::RunSql(connection.get(), "SET GLOBAL autoinstall_known_extensions = true");
+    chargewire_duckdb::RunSql(connection.get(), "SET GLOBAL autoload_known_extensions = true");
+  }
+#endif
   // An attached file is registered under the path DuckDB recorded for it, which its
   // storage opens it (and its WAL) by: DuckDB makes a relative one absolute.
   const auto add_attached = [&](const std::string& catalog_sql, const std::string& given, const char* category) {

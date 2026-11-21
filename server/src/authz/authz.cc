@@ -1,5 +1,7 @@
 #include "authz/authz.hpp"
 #include <charconv>
+#include <iterator>
+#include <set>
 
 #include <arrow/api.h>
 #include <arrow/io/memory.h>
@@ -7,18 +9,27 @@
 #include <openssl/evp.h>
 
 #include <algorithm>
+#include <map>
 
 #include <duckdb.hpp>
+#include <duckdb/function/macro_function.hpp>
 #include <duckdb/main/attached_database.hpp>
+#include <duckdb/parser/qualified_name.hpp>
 #include <duckdb/main/capi_v2/capi_v2_internal.hpp>
 #include <duckdb/main/client_context.hpp>
 #include <duckdb/main/config.hpp>
 #include <duckdb/main/database_manager.hpp>
+#include <duckdb/parser/parsed_data/create_type_info.hpp>
+#include <duckdb/parser/statement/create_statement.hpp>
+#include <duckdb/parser/statement/execute_statement.hpp>
+#include <duckdb/parser/statement/explain_statement.hpp>
+#include <duckdb/parser/statement/prepare_statement.hpp>
 
 #include "audit.hpp"
 #include "authz/audit_fields.hpp"
 #include "authz/password.hpp"
 #include "authz/ddl.hpp"
+#include "authz/ducklake_calls.hpp"
 #include "authz/enforcement.hpp"
 #include "authz/engine.hpp"
 #include "authz/gate.hpp"
@@ -42,6 +53,28 @@ struct ParsedCommand {
 };
 
 namespace {
+
+// Does the statement as written (or as PREPARE or EXPLAIN wraps it) create a type named like
+// the temporary enum DuckDB makes for a PIVOT without an IN list? (Not one of the statements
+// DuckDB makes of a PIVOT: those come inside its MULTI_STATEMENT.)
+bool WritesPivotEnumName(dd::SQLStatement& statement) {
+  dd::SQLStatement* current = &statement;
+  for (int depth = 0; current && depth < 8; ++depth) {
+    if (current->type == dd::StatementType::PREPARE_STATEMENT) {
+      current = current->Cast<dd::PrepareStatement>().statement.get();
+    } else if (current->type == dd::StatementType::EXPLAIN_STATEMENT) {
+      current = current->Cast<dd::ExplainStatement>().stmt.get();
+    } else {
+      break;
+    }
+  }
+  if (!current || current->type != dd::StatementType::CREATE_STATEMENT) return false;
+  auto& create = current->Cast<dd::CreateStatement>();
+  if (!create.info || create.info->type != dd::CatalogType::TYPE_ENTRY) return false;
+  std::string name = create.info->Cast<dd::CreateTypeInfo>().GetTypeName().GetIdentifierName();
+  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+  return name.starts_with("__pivot_enum_");
+}
 
 int64_t NowSeconds() {
   return std::chrono::duration_cast<std::chrono::seconds>(
@@ -1165,7 +1198,8 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
   const StorageCallback storage = [&](const StorageUse& use) {
     if (principal.superuser) return;
     if (!storage_access) storage_access.emplace(*dd::capiv2::Convert(connection_)->context);
-    StorageRequest request{use.what, use.write ? StorageMode::kWrite : StorageMode::kRead, use.paths, use.directory};
+    StorageRequest request{use.what, use.write ? StorageMode::kWrite : StorageMode::kRead, use.paths, use.directory,
+                           use.own_client};
     if (auto refusal = storage_access->Refusal(*snapshot, {principal}, request, identity_.user_name)) {
       throw Error(ErrorCode::kPermissionDenied, *refusal, "42501");
     }
@@ -1191,6 +1225,160 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
     if (!value || !value->is_string()) return std::nullopt;
     return std::vector<std::string>{std::string(value->as_string())};
   };
+  // What DuckDB evaluates while it binds (gate.hpp): sequences moved by a table function's
+  // arguments, and the bodies of the user macros a statement calls, which the plan check sees
+  // only after binding has run them.
+  BindTimeCallbacks bind_time;
+  std::map<std::string, std::vector<std::shared_ptr<dd::MacroFunction>>> macro_definitions;
+  if (!principal.superuser) {
+    bind_time.macros = [&](const std::vector<std::string>& parts, bool table) {
+      std::string key = table ? "table" : "scalar";
+      for (const auto& part : parts) key += '\x1f' + part;
+      auto found = macro_definitions.find(key);
+      if (found != macro_definitions.end()) return found->second;
+      auto definitions = functions.MacroDefinitions(QualifiedName{parts}, table);
+      macro_definitions.emplace(key, definitions);
+      return definitions;
+    };
+  }
+  // Sequences moved while binding: checked here by the rule the plan check applies to the same call
+  // (enforcement.cc, CheckSequenceUse). A read-only session's own screen (the SDK's, after this gate)
+  // refuses every call DuckDB would evaluate while binding, with read_only's answer: it is left to that.
+  if (!principal.superuser && !read_only_) {
+    bind_time.sequence = [&](const std::string& function, const std::optional<std::string>& name) {
+      const std::string blocked = "Hardcharger blocked " + function + "()";
+      const std::string why = ": DuckDB runs it while it binds the statement, before access control checks the plan";
+      // A readonly principal's session changes nothing, whatever its rules or grants: nextval()
+      // and setval() move the sequence while DuckDB binds, before the readonly check of the plan.
+      if (function != "currval") {
+        if (auto readonly = ReadOnlyRefusal(ContextOf(connection_))) {
+          throw Error(ErrorCode::kPermissionDenied, *readonly, "42501");
+        }
+      }
+      if (!name) {
+        throw Error(ErrorCode::kPermissionDenied, blocked + why + ", and its sequence is not named by a string literal",
+                    "42501");
+      }
+      std::vector<std::string> parts;
+      try {
+        for (const auto& part : dd::QualifiedName::ParseComponents(*name)) parts.push_back(part.GetIdentifierName());
+      } catch (const std::exception&) {
+        parts.clear();
+      }
+      arrow::Result<ObjectPath> sequence = arrow::Status::Invalid("no name");
+      if (!parts.empty()) sequence = functions.ResolveSequence(QualifiedName{parts});
+      if (!sequence.ok()) {
+        throw Error(ErrorCode::kPermissionDenied, blocked + why + ", and access control cannot find the sequence it names",
+                    "42501");
+      }
+      if (!snapshot->CatalogVisible(principal, sequence->catalog)) {
+        throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name), "42501");
+      }
+      // A catalog_access principal: its rules (nextval / setval write, currval read; temp included).
+      if (principal.catalog_rules) {
+        const auto level = CatalogRuleLevel(*principal.catalog_rules, sequence->catalog);
+        const auto needed = function == "currval" ? CatalogAccessLevel::kRead : CatalogAccessLevel::kWrite;
+        if (level == CatalogAccessLevel::kNone || (needed == CatalogAccessLevel::kWrite && level != needed)) {
+          throw Error(ErrorCode::kPermissionDenied, CatalogAccessDenied(sequence->catalog, needed, principal.user_name),
+                      "42501");
+        }
+        return;
+      }
+      // A store user: USAGE for nextval / currval, DROP SEQUENCE on the schema for setval (which
+      // resets the sequence, as dropping and recreating it would). Its own temp sequences are its own.
+      if (IdentifiersEqual(sequence->catalog, "temp")) return;
+      if (function == "setval") {
+        ObjectPath schema = *sequence;
+        schema.object_name.clear();
+        if (!snapshot->Check(principal, AccessRequest{schema, ObjectType::kSchema, Privilege::kDropSequence, {}}).allowed) {
+          throw Error(ErrorCode::kPermissionDenied,
+                      blocked + ": user " + principal.user_name + " may not setval() of sequence " + sequence->ToString() +
+                          " (it needs DROP SEQUENCE on schema " + schema.ToString() + " or its catalog, or to own the schema)",
+                      "42501");
+        }
+        return;
+      }
+      if (!snapshot->Check(principal, AccessRequest{*sequence, ObjectType::kSequence, Privilege::kUsage, {}}).allowed) {
+        throw Error(ErrorCode::kPermissionDenied,
+                    blocked + ": user " + principal.user_name + " has no USAGE privilege on sequence " + sequence->ToString(),
+                    "42501");
+      }
+    };
+  }
+  // A non-administrator's DuckLake calls (ducklake_snapshots('lake'),
+  // CALL lake.merge_adjacent_files()): checked here against the catalog they name, before
+  // binding runs them, and remembered for the plan check, which refuses any other DuckLake
+  // call (authz/ducklake_calls.hpp). A catalog_access principal's rules decide; a store
+  // user needs EXECUTE on the function and, on the catalog, SELECT (inspection) or
+  // MAINTAIN (maintenance) granted ON CATALOG.
+  std::set<std::pair<std::string, std::string>> ducklake_checked;
+  DuckLakeCallCallback ducklake_call;
+  if (!principal.superuser) {
+    ducklake_call = [&](const TableFunctionCall& call) -> bool {
+      std::string name = call.parts.back();
+      std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+      std::string function;
+      std::optional<std::string> catalog;
+      std::optional<DuckLakeAccess> access = DuckLakeFunctionAccess(name);
+      if (access) {
+        function = name;
+        catalog = call.first_literal;
+      } else if (IsDuckLakeCatalogMethod(name)) {
+        // lake.snapshots(): DuckLake's own macro, if that is what the name finds.
+        catalog = functions.DuckLakeMacroCatalog(QualifiedName{call.parts});
+        if (!catalog) return false;
+        function = "ducklake_" + name;
+        access = DuckLakeFunctionAccess(function);
+      } else {
+        return false;
+      }
+      auto refuse = [](const std::string& message) {
+        throw Error(ErrorCode::kPermissionDenied, message, "42501");
+      };
+      // A store user's administrator-only and unknown DuckLake functions stay what they
+      // were: table functions an EXECUTE grant opens (checked below, as any).
+      const bool store_user = !principal.catalog_rules;
+      if (store_user && (*access == DuckLakeAccess::kAdministrator || *access == DuckLakeAccess::kUnknown)) {
+        return false;
+      }
+      if (!call.wrapper.empty()) refuse(DuckLakeWrappedRefusal(function, call.wrapper));
+      if (*access == DuckLakeAccess::kAdministrator) refuse(DuckLakeAdministratorRefusal(function));
+      if (*access == DuckLakeAccess::kUnknown) refuse(DuckLakeUnknownRefusal(function));
+      if (!catalog) refuse(DuckLakeComputedCatalogRefusal(function));
+      // The catalog as DuckDB finds it (the rules and grants name its own name).
+      std::string lake = *catalog;
+      if (auto resolved = functions.ResolveCatalog(lake); resolved.ok()) lake = *resolved;
+      const auto needed = *access == DuckLakeAccess::kWrite ? CatalogAccessLevel::kWrite : CatalogAccessLevel::kRead;
+      if (!snapshot->CatalogVisible(principal, lake)) {
+        // The server's own catalogs (and another tenant's) read as missing; a catalog_access
+        // refusal says why.
+        const bool servers = std::any_of(principal.hidden_catalogs.begin(), principal.hidden_catalogs.end(),
+                                         [&](const std::string& c) { return IdentifiersEqual(c, lake); });
+        if (servers || store_user) {
+          throw Error(ErrorCode::kPermissionDenied, HiddenObjectMessage(identity_.user_name), "42501");
+        }
+        refuse(CatalogAccessDenied(lake, needed, principal.user_name));
+      }
+      if (store_user) {
+        for (const auto& bound : DuckLakeBoundFunctions(function)) {
+          if (!snapshot->TableFunctionPathArguments(principal, bound)) refuse(DuckLakeExecuteRefusal(bound));
+        }
+        if (!snapshot->HoldsOnCatalog(principal, DuckLakeCatalogPrivilege(*access), lake)) {
+          refuse(DuckLakeCatalogPrivilegeRefusal(function + "()", lake, *access, principal.user_name));
+        }
+      } else if (needed == CatalogAccessLevel::kWrite &&
+                 CatalogRuleLevel(*principal.catalog_rules, lake) != CatalogAccessLevel::kWrite) {
+        refuse(CatalogAccessDenied(lake, needed, principal.user_name));
+      }
+      // A readonly principal's session changes nothing, whatever its rules (DuckDB does not
+      // count DuckLake's maintenance in FROM as a change).
+      if (needed == CatalogAccessLevel::kWrite) {
+        if (auto readonly = ReadOnlyRefusal(ContextOf(connection_))) refuse(*readonly);
+      }
+      for (const auto& bound : DuckLakeBoundFunctions(function)) ducklake_checked.insert({bound, FoldIdentifier(lake)});
+      return true;
+    };
+  }
   for (auto& handle : statements) {
     auto& statement = *dd::capiv2::Convert(handle.get());
     // SHOW GRANTS parses as a SELECT and RESET ROLE as a SET: in a batch they would
@@ -1200,7 +1388,23 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
                   "Hardcharger access control: access-control statements run on their own, "
                   "not in a batch with other statements");
     }
-    if (auto category = GatedCategory(statement, permitted, named_table, table_function_allowed, storage, paths_of_parameter)) {
+    // PIVOT without an IN list makes DuckDB create a temporary enum named __pivot_enum_<id>
+    // (one statement of the several it makes of the PIVOT), which the plan check lets a user
+    // create. A statement the user writes may not take that name.
+    if (WritesPivotEnumName(statement)) {
+      throw Error(ErrorCode::kPermissionDenied,
+                  "Hardcharger blocked this statement: type names starting with __pivot_enum_ are DuckDB's own, for "
+                  "PIVOT", "42501");
+    }
+    // EXECUTE name runs what PREPARE name checked.
+    if (!principal.superuser && statement.type == dd::StatementType::EXECUTE_STATEMENT) {
+      const auto prepared =
+          state->PreparedDuckLakeCalls(FoldIdentifier(statement.Cast<dd::ExecuteStatement>().name.GetIdentifierName()));
+      ducklake_checked.insert(prepared.begin(), prepared.end());
+    }
+    const auto checked_before = ducklake_checked;
+    if (auto category = GatedCategory(statement, permitted, named_table, table_function_allowed, storage,
+                                      paths_of_parameter, ducklake_call, bind_time)) {
       if (auto privilege = SystemPrivilegeForGatedCategory(*category)) {
         if (principal.rules_administrator) {
           throw Error(ErrorCode::kPermissionDenied,
@@ -1217,6 +1421,17 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
                         identity_.user_name + " does not hold it (see SHOW GRANTS)",
                     "42501");
       }
+      if (const auto at = category->find(kInMacro); category->starts_with("the table function ") && at != std::string::npos) {
+        // Worded as the plan check words the same refusal once the macro is expanded.
+        const std::string name = category->substr(std::string("the table function ").size(),
+                                                  at - std::string("the table function ").size());
+        throw Error(ErrorCode::kPermissionDenied,
+                    "Hardcharger blocked this statement: the table function " + name +
+                        " is not available under access control (an administrator can GRANT EXECUTE ON TABLE FUNCTION " +
+                        name + " to a role); the macro " + category->substr(at + kInMacro.size()) +
+                        " that the statement calls runs it",
+                    "42501");
+      }
       std::string hint;
       if (category->starts_with("the table function ")) {
         const std::string name = category->substr(std::string("the table function ").size());
@@ -1227,7 +1442,21 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
                       ": under access control it is available to the administrator only" + hint,
                   "42501");
     }
+    if (!principal.superuser && statement.type == dd::StatementType::PREPARE_STATEMENT) {
+      std::set<std::pair<std::string, std::string>> calls;
+      std::set_difference(ducklake_checked.begin(), ducklake_checked.end(), checked_before.begin(),
+                          checked_before.end(), std::inserter(calls, calls.end()));
+      state->SetPreparedDuckLakeCalls(
+          FoldIdentifier(statement.Cast<dd::PrepareStatement>().name.GetIdentifierName()), std::move(calls));
+    }
   }
+  // The calls checked here are the only DuckLake calls the plan check lets run: one the walk
+  // did not reach (a macro's body, a form it does not read) is refused there, as bound, and
+  // DuckLake's binds change nothing (the maintenance functions act when they execute). A
+  // walk of the parse tree, not the statement's text: a table or column list named like a
+  // DuckLake function (INSERT INTO s.settings(k, v), CREATE TABLE ducklake_log (...)) is no
+  // call.
+  if (!principal.superuser) state->SetCheckedDuckLakeCalls(std::move(ducklake_checked));
 }
 
 void SessionGuard::CheckReadOnlyCommand(const ParsedCommand& parsed) const {

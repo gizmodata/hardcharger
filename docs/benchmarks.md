@@ -406,8 +406,8 @@ streams 99.8 Gbit/s.
   `2024a0a5` (chargewire `28e1164`; the branch was rebased on main afterwards, which changed
   no data-path code), default settings (122,880-row batches, `max_result_partitions` 32).
   Client: `adbc-driver-chargewire` from chargewire-adbc feature/throughput (`b0c4359`), built
-  for linux-arm64. "n partitions" rows set `adbc.chargewire.statement.result_partitions` = n and
-  `result_order` = `any` or `preserve` ("in order").
+  for linux-arm64. "n partitions" rows set `chargewire.query.result_partitions` = n and
+  `chargewire.query.result_order` = `any` or `preserve` ("in order").
 - **GizmoSQL** 1.42.0 and **Quack** (DuckDB `2.0.0.dev2610161340`) exactly as above.
 - **5 measured repetitions** (7 above), one warm-up. Every fetch is now checked in full:
   on the warm-up and on one extra untimed repetition the client sums three columns of
@@ -659,7 +659,7 @@ Two changes since the section above, measured on fresh VMs with the same scripts
    bounded queue (4 MiB). All or nothing: any failed part, refused batch or broken
    connection fails the ingest and nothing is written. Rows land in no defined order;
    ordered ingest is one part (or §8.1's single stream). The Go/Python ADBC driver
-   (`adbc.chargewire.ingest.parts`, default 8) and the C++ client (`IngestOptions::parts`,
+   (`chargewire.ingest.parts`, default 8) and the C++ client (`IngestOptions::parts`,
    default 8) use it for uploads of two batches or more when the server offers it.
 2. **Split results by default**: the Go/Python ADBC driver, JDBC, the C++ client and the
    `hardcharger` CLI ask for up to 8 partitions, in order. The server keeps results of
@@ -677,8 +677,8 @@ with one self-signed P-256 certificate, `threads=32`, `memory_limit=40GB`, the d
 - **Hardcharger**: the `hardcharger-linux-arm64` CI artifact of feature/ingest-partitions
   at `748961a5` (chargewire `80cb327`), default settings. Client: `adbc-driver-chargewire` from
   chargewire-adbc feature/ingest-partitions (`b418e16`), built for linux-arm64. "N upload
-  parts" rows set `adbc.chargewire.ingest.parts` = N; plain "Chargewire" rows set it, and
-  `result_partitions`, to 1.
+  parts" rows set `chargewire.ingest.parts` = N; plain "Chargewire" rows set it, and
+  `chargewire.query.result_partitions`, to 1.
 - **GizmoSQL** 1.42.0 and **Quack** (DuckDB `2.0.0.dev2610161340`) as before.
 - **5 measured repetitions**, one warm-up, `bench/remote/run_ingest_parts.sh lan|wan`.
   Every ingest repetition is checked (row count, `sum(l_extendedprice)`,

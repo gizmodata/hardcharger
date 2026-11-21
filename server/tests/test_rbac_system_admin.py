@@ -884,8 +884,9 @@ def test_a_disabled_holder_enabled_again_asks_again(world):
 
 def test_a_statement_still_running_is_stopped(world):
     alice = world.elevated(user="alice")
-    # Minutes of work for a session that reads a table it holds nothing on.
-    statement = alice.submit(sql="SELECT count(*) FROM range(100000000000) r, vault v WHERE r.range % 7 = v.secret")
+    # Minutes of work for a session that reads a table it holds nothing on. The modulus
+    # must include vault.secret (42), or DuckDB 2.0.1 folds the impossible join to no rows.
+    statement = alice.submit(sql="SELECT count(*) FROM range(100000000000) r, vault v WHERE r.range % 43 = v.secret")
     time.sleep(0.5)
     assert alice.wait(statement_id=statement, timeout=0.1)["state"] in ("running", "queued")
     expect_allowed(client=world.admin, sql="REVOKE SYSTEM ADMIN FROM alice")

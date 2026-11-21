@@ -284,7 +284,7 @@ flowchart LR
   single core. The order is kept when the query asks for one. The server sizes the split by
   the result: a few batches get a partition per two batches, a large result as many as the
   client reads (the Go/Python driver asks for up to 32, JDBC and the `hardcharger` CLI for
-  8; `result_partitions`, `--result-partitions` change it). Small results still come as one
+  8; `hardcharger.query.result_partitions`, `--result-partitions` change it). Small results still come as one
   stream.
 - 📦 **Big batches.** Results go out in 122,880-row batches, so per-batch overhead is
   negligible; small queries still answer in one round trip.
@@ -292,7 +292,7 @@ flowchart LR
   threads, in one transaction: a failed load leaves nothing behind.
 - 📤 **Partitioned uploads.** The Go/Python driver sends a load in 16,384-row slices as up to
   16 parts over separate connections at once (32 on a high-latency link; fewer for a small
-  load; `adbc.chargewire.ingest.parts`), inserted from all of them in parallel and committed as
+  load; `hardcharger.ingest.parts`), inserted from all of them in parallel and committed as
   one: all or nothing.
 
 Correctness is never traded for speed: a result is complete only when every partition has
@@ -337,15 +337,21 @@ Images are multi-architecture (`linux/amd64`, `linux/arm64`) and published to bo
 `ghcr.io/gizmodata/hardcharger` and `docker.io/gizmodata/hardcharger`. Port 31337 speaks
 Chargewire; 31338 answers `/health`.
 
-The `:2.0.0-adbc` and `:latest-adbc` variants on both registries include the same
+The `:X.Y.Z-adbc` and `:latest-adbc` variants on both registries include the same
 server and CLI plus 15 native ADBC drivers: BigQuery, Databricks, Exasol, Flight SQL,
 SQL Server, MySQL, PostgreSQL, Redshift, Snowflake, Trino, GizmoSQL, Oracle, Db2,
-Quack and Hardcharger. Both `linux/amd64` and `linux/arm64` are supported. For example:
+Quack and Hardcharger. From 2.13.4 the GizmoData drivers among them are Hardcharger 2.7.2,
+Quack 1.1.0, Oracle 1.1.0, Db2 0.3.0 and GizmoSQL 2.0.18; Hardcharger's, Quack's, Oracle's
+and Db2's options are named as the
+[ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html) asks
+(`hardcharger.*`, `quack.*`, `oracle.*`, `db2.*`; the older `adbc.<driver>.*` names still
+work but print a deprecation warning). Both `linux/amd64` and `linux/arm64` are supported.
+For example:
 
 ```bash
 docker run --rm -p 31337:31337 -p 31338:31338 \
   -e HARDCHARGER_ADMIN_PASSWORD='change-me' \
-  ghcr.io/gizmodata/hardcharger:2.0.0-adbc
+  ghcr.io/gizmodata/hardcharger:latest-adbc
 ```
 
 Driver manifests are installed system-wide in `/etc/adbc/drivers`; stable library
@@ -424,6 +430,16 @@ attached to every [release](https://github.com/gizmodata/hardcharger/releases/la
 tar -xzf hardcharger-macos-arm64.tar.gz
 HARDCHARGER_ADMIN_PASSWORD='change-me' ./hardcharger-macos-arm64/bin/hardcharger-server --database my.duckdb
 ```
+
+Linux x86-64 comes in two builds. `hardcharger-linux-amd64.tar.gz` is optimized for x86-64-v3
+CPUs (AVX2: Intel Haswell, AMD Excavator or newer) and checks the CPU when it starts.
+`hardcharger-linux-amd64-baseline.tar.gz` (from 2.13.2 on) runs on any x86-64 CPU, such as a
+virtual machine whose CPU model hides AVX2 (QEMU's `kvm64`), but slower. Use it only where the
+optimized build says the CPU is too old; changing the VM's CPU model (to `host`, or a model
+with AVX2 such as QEMU's `Haswell` or Proxmox's `x86-64-v3`) is often the better fix. The one-line installer and the Python package pick the baseline build
+on such a CPU by themselves. DuckDB's downloadable extensions need AVX2 as well, so the baseline
+build has httpfs, ducklake, postgres_scanner and (from 2.13.3) sqlite_scanner built in (with
+core_functions, parquet, json and icu) and, on a CPU without AVX2, refuses to install or load any other extension.
 
 On Windows (PowerShell), unzip `hardcharger-windows-amd64.zip` or `-arm64.zip`, or run
 `Hardcharger-windows-amd64.msi` / `-arm64.msi`, which installs under Program Files and
@@ -1214,9 +1230,57 @@ Each statement is checked inside DuckDB against its own plan, after binding and 
 before optimizing, so nested SQL, views and macros can't route around a grant. Anything the
 check can't classify is refused. Changes reach every replica within about a second.
 
+Some things DuckDB runs while it binds a statement, before there is a plan to check: a table
+function's arguments, a PRAGMA's parameters, an `AT` clause, `EXECUTE`'s values, and the body of
+any user macro the statement calls, with the caller's arguments. Those are checked first, on the
+parsed statement, by the same rules: `nextval()` / `currval()` there need `USAGE` on the sequence
+and `setval()` `DROP SEQUENCE` on its schema (for a `catalog_access` token: write, or read for
+`currval()`, on the sequence's catalog), a `readonly` session moves no sequence at all, and a macro
+that hands the caller's string to `query()` or `read_csv()` is checked with that string. A kind of
+statement the check has no rule for is refused. Upgrading from 2.13.3: a role that called
+`range(nextval('s'))` or `SELECT * FROM t AT (VERSION => setval(...))` without those privileges,
+directly or through a macro, now needs them.
+
 Users can call an extension's table function: `GRANT EXECUTE ON TABLE FUNCTION read_hl7 (PATH
 ARGUMENT 2) TO analyst` opens it to a role, and the arguments the grant declares as paths go
-through the storage privileges as `read_csv()`'s path does. Nested schemas (DuckDB 2.0) are
+through the storage privileges as `read_csv()`'s path does. `delta_*()` and `iceberg_*()` read
+the files their table's log or manifest names, wherever they are, with a storage client of their
+own, so whatever path they are handed they need `READ FILESYSTEM`, `READ OBJECT STORAGE` and
+`READ HTTP` everywhere (a location grant can't bound them); grant those to the roles that use them
+when upgrading from 2.13.3, where `EXECUTE` and a location grant were enough. A user's own table
+macro named like them is a macro, and is unaffected.
+
+DuckLake's functions act on the whole catalog they name, so besides `EXECUTE` on the function a
+user needs a privilege on that catalog, granted `ON CATALOG` (a grant on one of its schemas or
+tables doesn't reach it). To inspect (`ducklake_snapshots`, `ducklake_table_info`,
+`ducklake_list_files`, `ducklake_table_changes`, `ducklake_options`, `ducklake_settings`,
+`lake.snapshots()`, ...):
+
+```sql
+GRANT EXECUTE ON TABLE FUNCTION ducklake_snapshots TO analyst;   -- one GRANT per function used
+GRANT SELECT ON CATALOG lake TO analyst;
+```
+
+To maintain (`ducklake_expire_snapshots`, `ducklake_cleanup_old_files`,
+`ducklake_delete_orphaned_files`, `ducklake_set_option`, `ducklake_set_commit_message`) and to
+compact (`ducklake_merge_adjacent_files`, `ducklake_rewrite_data_files`,
+`ducklake_flush_inlined_data`):
+
+```sql
+GRANT EXECUTE ON TABLE FUNCTION ducklake_merge_adjacent_files TO lake_maintenance;
+GRANT MAINTAIN ON CATALOG lake TO lake_maintenance;   -- no SELECT needed: compaction hands back no rows
+GRANT CHECKPOINT TO lake_maintenance;                 -- for CHECKPOINT lake, which runs all of the above
+```
+
+`ducklake_table_changes` runs `ducklake_table_insertions` and `ducklake_table_deletions`, so it
+needs `EXECUTE` on those two; its rows go through the table's row and masking policies like any
+read. A table with row or masking policies is not compacted. The catalog must be written as a
+string (`ducklake_snapshots('lake')`), and a view or macro that wraps a DuckLake function is refused:
+call it directly. A token with `catalog_access` rules needs no grants: its rules decide, read access
+to inspect and write access to maintain, compact or `CHECKPOINT` a DuckLake catalog.
+`ducklake_add_data_files` stays the administrator's for such tokens.
+
+Nested schemas (DuckDB 2.0) are
 granted by their path: a grant on `sales.payroll` covers `sales.payroll.*` and nothing alike,
 one on `sales` covers its children, and `CREATE SCHEMA ON SCHEMA sales` lets a role nest
 schemas in it.

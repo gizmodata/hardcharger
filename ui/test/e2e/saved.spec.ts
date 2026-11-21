@@ -17,6 +17,7 @@ import {
   signIn,
   test,
   editorTabs,
+  openRowMenu,
 } from "./fixtures.ts";
 
 test.beforeEach(async ({ page, harness }) => {
@@ -39,8 +40,7 @@ async function saveAs(page: Page, name: string, folder?: string) {
 
 async function rowMenu(page: Page, name: string, item: string) {
   const row = savedTree(page).getByRole("treeitem", { name, exact: true }).locator(":scope > .tree-row-wrap");
-  await row.hover();
-  await row.getByRole("button", { name: `More for ${name}` }).click();
+  await openRowMenu(row, `More for ${name}`);
   await page.getByRole("menuitem", { name: item }).click();
 }
 

@@ -196,7 +196,7 @@ const std::set<std::string>& FileReadingFunctions() {
       "read_csv", "read_csv_auto", "read_parquet", "parquet_scan", "read_json", "read_json_auto",
       "read_json_objects", "read_json_objects_auto", "read_ndjson", "read_ndjson_auto",
       "read_ndjson_objects", "read_text", "read_blob", "glob", "sniff_csv", "parquet_metadata",
-      "parquet_schema", "parquet_file_metadata", "parquet_kv_metadata", "parquet_bloom_probe",
+      "parquet_schema", "parquet_file_metadata", "parquet_kv_metadata", "parquet_bloom_probe", "parquet_page_index",
       "read_text_auto", "read_single_csv_file", "read_single_json_file", "read_xlsx", "st_read",
       "read_duckdb", "iceberg_scan", "delta_scan"};
   return kFunctions;
@@ -291,6 +291,16 @@ std::optional<std::string> GatedFunction(const Piece& piece) {
   for (std::size_t i = 0; i + 1 < t.size(); i++) {
     if (!(t[i].Is(DUCKDB_V2_TOKEN_TYPE_IDENTIFIER) || t[i].Is(DUCKDB_V2_TOKEN_TYPE_KEYWORD))) continue;
     if (!t[i + 1].IsOp("(")) continue;
+    // CREATE MACRO name(...) defines `name`; it does not call it (also qualified, after OR
+    // REPLACE, TEMP or IF NOT EXISTS), as GizmoSQL 1.42.3 reads it. The body is still read.
+    std::size_t chain = i;
+    while (chain >= 2 && t[chain - 1].text == "." &&
+           (t[chain - 2].Is(DUCKDB_V2_TOKEN_TYPE_IDENTIFIER) || t[chain - 2].Is(DUCKDB_V2_TOKEN_TYPE_KEYWORD))) {
+      chain -= 2;
+    }
+    if (chain >= 1 && (t[chain - 1].IsWord("MACRO") || t[chain - 1].IsWord("FUNCTION") || t[chain - 1].IsWord("EXISTS"))) {
+      continue;
+    }
     const std::string name = t[i].Value();
     if (name == "duckdb_secrets") return "duckdb_secrets()";
     if (name.starts_with("quack_")) return name + "()";

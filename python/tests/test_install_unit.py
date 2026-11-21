@@ -303,3 +303,160 @@ def test_cache_root_defaults(monkeypatch, tmp_path):
     monkeypatch.delenv("HARDCHARGER_CACHE_DIR")
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
     assert _install.cache_root() == tmp_path / "xdg" / "hardcharger"
+
+
+# ---- the CPU target (linux-amd64: optimized or baseline, issue #62) ----------------------
+
+#: /proc/cpuinfo's flags on QEMU's kvm64 CPU model ("Common KVM processor", x86-64-v1), as a
+#: CentOS 8 guest shows them.
+KVM64_CPUINFO = (
+    "model name\t: Common KVM processor\n"
+    "flags\t\t: fpu de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx "
+    "fxsr sse sse2 ht syscall nx lm constant_tsc nopl xtopology cpuid pni cx16 hypervisor pti\n"
+)
+#: An Ivy Bridge (AVX, no AVX2): x86-64-v2 and AVX, not v3.
+IVY_BRIDGE_CPUINFO = (
+    "flags\t\t: fpu sse sse2 ssse3 cx16 sse4_1 sse4_2 popcnt pni lahf_lm xsave avx f16c\n"
+)
+
+
+#: Rosetta's x86_64 Linux (Docker Desktop on Apple silicon): AVX2 and BMI2, but no abm or xsave
+#: in /proc/cpuinfo.
+ROSETTA_CPUINFO = (
+    "flags\t\t: fpu tsc de cx8 apic sep cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx lm "
+    "rep_good nopl pni pclmulqdq ssse3 cx16 sse4_1 popcnt sse4_2 aes lahf_lm movbe fma avx f16c "
+    "rdrand bmi1 avx2 bmi2\n"
+)
+
+
+@pytest.fixture
+def linux_amd64(monkeypatch):
+    """This machine is linux-amd64, whatever it really is."""
+    monkeypatch.setattr(target=_install.platform, name="system", value=lambda: "Linux")
+    monkeypatch.setattr(target=_install.platform, name="machine", value=lambda: "x86_64")
+
+
+def test_missing_cpu_features():
+    assert (
+        _install.missing_cpu_features(cpuinfo=f"flags\t: {' '.join(_install.X86_64_V3_FLAGS)}\n")
+        == []
+    )
+    missing = _install.missing_cpu_features(cpuinfo=KVM64_CPUINFO)
+    assert "avx2" in missing and "sse4_2" in missing and "popcnt" in missing
+    assert "pni" not in missing and "cx16" not in missing
+    assert _install.missing_cpu_features(cpuinfo=IVY_BRIDGE_CPUINFO) == [
+        "avx2",
+        "bmi1",
+        "bmi2",
+        "fma",
+        "movbe",
+    ]
+    # Rosetta (Docker on Apple silicon) lists neither abm nor xsave, and runs the optimized build.
+    assert _install.missing_cpu_features(cpuinfo=ROSETTA_CPUINFO) == []
+    assert _install.missing_cpu_features(cpuinfo="processor\t: 0\n") is None
+
+
+@pytest.mark.parametrize(
+    argnames=("target", "cpuinfo", "expected"),
+    argvalues=[
+        ("auto", None, "linux-amd64"),  # the conftest's x86-64-v3 CPU
+        ("auto", KVM64_CPUINFO, "linux-amd64-baseline"),
+        ("auto", IVY_BRIDGE_CPUINFO, "linux-amd64-baseline"),
+        ("auto", ROSETTA_CPUINFO, "linux-amd64"),
+        ("auto", "no flags here\n", "linux-amd64"),  # unreadable: the default build
+        ("optimized", KVM64_CPUINFO, "linux-amd64"),
+        ("baseline", None, "linux-amd64-baseline"),
+    ],
+)
+def test_select_build_on_linux_amd64(target, cpuinfo, expected):
+    assert (
+        _install.select_build(platform_name="linux-amd64", target=target, cpuinfo=cpuinfo)
+        == expected
+    )
+
+
+@pytest.mark.parametrize(argnames="platform_name", argvalues=["linux-arm64", "macos-arm64"])
+def test_other_platforms_have_one_build(platform_name):
+    assert (
+        _install.select_build(platform_name=platform_name, target="auto", cpuinfo=KVM64_CPUINFO)
+        == platform_name
+    )
+    with pytest.raises(expected_exception=InstallError) as error:
+        _install.select_build(platform_name=platform_name, target="baseline")
+    assert "the baseline build is for linux-amd64 only" in str(error.value)
+
+
+def test_a_wrong_cpu_target_is_refused(monkeypatch):
+    monkeypatch.setenv("HARDCHARGER_CPU_TARGET", "fastest")
+    with pytest.raises(expected_exception=InstallError) as error:
+        _install.cpu_target()
+    assert "HARDCHARGER_CPU_TARGET must be one of auto, optimized, baseline, not 'fastest'" in str(
+        error.value
+    )
+
+
+def test_auto_installs_the_baseline_build_on_an_old_cpu(
+    linux_amd64, fake_github, monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setattr(target=_install, name="_cpuinfo_text", value=lambda: KVM64_CPUINFO)
+    fake_github.platform_name = "linux-amd64-baseline"
+    fake_github.tarball = make_tarball(platform_name="linux-amd64-baseline")
+    monkeypatch.setenv("HARDCHARGER_INSTALL_TOKEN", "none")
+    binary = ensure_server()
+    assert binary == (
+        tmp_path
+        / "cache"
+        / f"v{SERVER_VERSION}"
+        / "linux-amd64-baseline"
+        / "bin"
+        / "hardcharger-server"
+    )
+    err = capsys.readouterr().err
+    assert "this CPU lacks" in err and "avx2" in err and "installing the baseline build" in err
+    assert "downloading hardcharger-linux-amd64-baseline.tar.gz" in err
+    # From the release download; the API had nothing to do with it.
+    assert any(
+        r.path.endswith("/hardcharger-linux-amd64-baseline.tar.gz")
+        for r in fake_github.web_requests
+    )
+
+
+def test_optimized_on_request_installs_the_optimized_build(
+    linux_amd64, fake_github, monkeypatch, capsys
+):
+    monkeypatch.setattr(target=_install, name="_cpuinfo_text", value=lambda: KVM64_CPUINFO)
+    monkeypatch.setenv("HARDCHARGER_CPU_TARGET", "optimized")
+    monkeypatch.setenv("HARDCHARGER_INSTALL_TOKEN", "none")
+    fake_github.platform_name = "linux-amd64"
+    fake_github.tarball = make_tarball(platform_name="linux-amd64")
+    assert ensure_server().parent.parent.name == "linux-amd64"
+    assert "this CPU lacks" not in capsys.readouterr().err
+
+
+def test_the_baseline_build_is_not_taken_from_the_image(linux_amd64, monkeypatch):
+    monkeypatch.setenv("HARDCHARGER_CPU_TARGET", "baseline")
+    monkeypatch.setenv("HARDCHARGER_INSTALL_SOURCE", "ghcr")
+    with pytest.raises(expected_exception=InstallError) as error:
+        ensure_server()
+    assert "the container image holds the optimized build" in str(error.value)
+    # auto: GitHub is tried, and the failure says why the image was not.
+    monkeypatch.setenv("HARDCHARGER_INSTALL_SOURCE", "auto")
+    with pytest.raises(expected_exception=InstallError) as error:
+        ensure_server(progress=False)
+    assert "not tried, it holds the optimized build only" in str(error.value)
+
+
+def test_a_build_refusing_this_cpu_names_the_baseline_setting(tmp_path):
+    binary = tmp_path / "hardcharger-server"
+    binary.write_text(
+        "#!/bin/sh\n"
+        "echo 'hardcharger-server: this build needs an x86-64-v3 CPU (AVX2) ... "
+        "Download the baseline build, which runs on any x86-64 CPU' >&2\n"
+        "exit 1\n"
+    )
+    binary.chmod(0o755)
+    with pytest.raises(expected_exception=InstallError) as error:
+        _install.server_version_of(binary=binary)
+    assert "HARDCHARGER_CPU_TARGET=baseline installs the build for any x86-64 CPU" in str(
+        error.value
+    )

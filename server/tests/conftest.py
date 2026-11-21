@@ -42,6 +42,17 @@ PERF_SCALE = float(os.environ.get("HARDCHARGER_TEST_PERF_SCALE", "1"))
 # Unshipped sanitizer fixture: the same optional extension sources are instrumented
 # and linked into DuckDB. Release/native and ASan jobs verify signed runtime loading.
 TSAN_EXTENSIONS = os.environ.get("HARDCHARGER_TEST_TSAN_EXTENSIONS") == "1"
+# Permission fixtures probe Delta/Iceberg calls without loading their uninstrumented
+# runtime code into TSan. Keep the same cases with real extensions in native/ASan jobs.
+# httpfs is instrumented and built in under TSan; it supplies the S3 secret type.
+TSAN_PERMISSION_INIT = (["--init-sql-commands", "LOAD httpfs; SET autoload_known_extensions = false;"]
+                        if TSAN_EXTENSIONS else [])
+# The baseline Linux x86_64 build (HARDCHARGER_CPU_TARGET=baseline, issue #62) builds these in,
+# as DuckDB's downloadable ones need x86-64-v3 (server/scripts/duckdb-extensions-baseline.cmake).
+# CI sets the variable on that leg; a baseline build tested without it fails
+# test_builtin_extensions.py.
+BASELINE_BUILD = os.environ.get("HARDCHARGER_TEST_BASELINE_BUILD") == "1"
+BASELINE_BUILT_IN = ["httpfs", "ducklake", "postgres_scanner", "sqlite_scanner"] if BASELINE_BUILD else []
 UNIT_TEST_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_UNIT_BINARY",
                                                BUILD / f"hardcharger-unit-tests{EXE}")).resolve()
 CLIENT_BINARY = pathlib.Path(os.environ.get("HARDCHARGER_TEST_CLIENT_BINARY", BUILD / f"hardcharger{EXE}")).resolve()
@@ -450,6 +461,10 @@ def run_unit_tests(gtest_filter: str, env: dict[str, str] | None = None) -> dict
             if line.startswith(marker) and "(" in line:
                 results[line[len(marker):].split(" (")[0]] = passed
     assert results, f"no unit test matched {gtest_filter}:\n{out.stdout}\n{out.stderr}"
+    if not all(results.values()):
+        # Pytest includes fixture output on failure: keep the C++ assertion or setup
+        # exception, rather than reporting only a dictionary of failed test names.
+        print(out.stdout + out.stderr)
     assert out.returncode == 0 or not all(results.values()), out.stdout + out.stderr
     return results
 

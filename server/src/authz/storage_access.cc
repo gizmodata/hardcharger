@@ -153,6 +153,14 @@ std::optional<std::string> StorageAccess::Refusal(const Snapshot& snapshot, cons
       for (const auto* principal : restricted) {
         if (snapshot.HasSystemPrivilege(*principal, privilege)) continue;
         if (principal->rules_administrator || principal->catalog_access_token) return lacks(*principal, privilege, {});
+        if (request.own_client) {
+          return blocked + ": it reads, with a storage client of its own, the files its table's metadata names, wherever they "
+                           "are, so no location can bound it (it needs " +
+                 Joined({SystemPrivilegeName(StoragePrivilege(StorageKind::kFilesystem, request.mode)),
+                         SystemPrivilegeName(StoragePrivilege(StorageKind::kObjectStorage, request.mode)),
+                         SystemPrivilegeName(StoragePrivilege(StorageKind::kHttp, request.mode))}) +
+                 " everywhere, as a computed path does). User " + user_name + " does not hold them all (see SHOW GRANTS)";
+        }
         return blocked + ": its path is an expression or a parameter without a known string value, which Hardcharger can't check before DuckDB "
                          "reads it. Use a string literal or a direct JSON string bind (a computed path needs " +
                Joined({SystemPrivilegeName(StoragePrivilege(StorageKind::kFilesystem, request.mode)),

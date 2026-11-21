@@ -507,3 +507,16 @@ def test_a_tenant_admin_sees_nothing_of_another_tenant_or_the_system_scope(serve
     bea = server.user(name="beta/bea")
     assert "beta/r" in grantees(client=bea) and not {"acme/r", "acme/r2"} & grantees(client=bea)
     assert {r["name"] for r in rows(client=bea, sql="SELECT name FROM hardcharger_users()")} == {"beta/bea", "beta/bo"}
+
+
+# ---- Every run of a prepared statement is checked (finding 17) ----
+
+def test_every_run_of_a_prepared_statement_is_planned_and_checked_again():
+    # The session state used to let a run skip its re-plan when the statement sat at the address
+    # of one checked earlier at the same snapshot version; that run then reached no check and was
+    # refused, now and then (this file's bound-parameter step). The unit cases reuse an address
+    # on purpose.
+    from conftest import run_unit_tests
+    results = run_unit_tests(gtest_filter="PreparedRebind.*")
+    assert results == {"PreparedRebind.AStatementAtAReusedAddressIsPlannedAgain": True,
+                       "PreparedRebind.EveryRunIsPlannedAgain": True}, results

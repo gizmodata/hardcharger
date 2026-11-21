@@ -122,11 +122,6 @@ own changelog in `python/CHANGELOG.md`.
 - Changing one's own password through `ALTER USER <own name> WITH PASSWORD '…'` needs the
   current one (`… REPLACE '<current>'`), for every user but the administrator; `CURRENT_USER`
   in `ALTER USER` names the session's own user (a user named `current_user` is written quoted).
-- **Android builds reach internal testers automatically.** Each release publishes its Android
-  build to Google Play's internal testing track, as iOS builds reach TestFlight, instead of
-  leaving a draft to publish by hand in Play Console. A leftover draft no longer stops the
-  upload (2.13.1's was refused because 2.13.0's draft was still there), and an older build never
-  replaces a newer one. Closed and open testing and production stay manual in Play Console.
 - `SYSTEM ADMIN` is no longer available as a user's or role's name (`CREATE ROLE "SYSTEM
   ADMIN"` is refused). One a store already has stays an ordinary role, written quoted.
 - **Behaviour change for sign-in tokens with `catalog_access` rules under access control.** A
@@ -144,6 +139,294 @@ own changelog in `python/CHANGELOG.md`.
   built-in functions now), and a row or masking policy that reaches `current_role` through a
   macro or as a bare name, or calls `hardcharger_active_role()`, is refused when a table it
   protects is read, as a direct `current_role()` call always was.
+
+## [2.13.4] - 2026-11-20
+
+A security and compatibility release for access control. Tokens with `catalog_access` rules, the
+per-catalog tokens GizmoSQL 1.x servers use, can use DuckLake's functions on their own catalogs again.
+Hardcharger's port of GizmoSQL's test battery is brought up to GizmoSQL 1.42.3, closing what that
+release closed. Roles and grants (RBAC) remain the recommended way to control access; this release
+also closes gaps there.
+
+**Upgrading.** What changes on purpose:
+
+- a role that holds `EXECUTE` on a `ducklake_*` function now also needs a privilege on the catalog
+  the call names: `SELECT ON CATALOG` to inspect, `MAINTAIN ON CATALOG` to maintain
+  (`GRANT ALL ON CATALOG` includes both);
+- a view or macro that wraps a DuckLake function is refused for everyone but an administrator
+  without `catalog_access` rules; call the function directly;
+- `CHECKPOINT` of a DuckLake catalog runs DuckLake's maintenance on it (compaction, expiring
+  snapshots, removing old files), so it needs what that maintenance needs: write access for a token
+  with `catalog_access` rules, and `MAINTAIN ON CATALOG` beside the `CHECKPOINT` privilege for a
+  store user. Checkpoints of other databases are unchanged;
+- `delta_*()` and `iceberg_*()` need `READ FILESYSTEM`, `READ OBJECT STORAGE` and `READ HTTP`
+  everywhere, not a location grant;
+- `setval()` and `nextval()` are checked wherever DuckDB evaluates them, including while it binds a
+  statement and inside the macros it calls, so they need the same privileges everywhere (`USAGE` on
+  the sequence, `DROP SEQUENCE` on its schema for `setval()`), and a `readonly` token's session moves
+  no sequence at all;
+- on DuckDB 2.0.1 a table depends on the user types of its columns: `DROP TYPE` of one a table uses
+  is refused (other objects depend on it), and `DROP TYPE`, `DROP SEQUENCE`, `DROP TABLE` or
+  `DROP SCHEMA` with `CASCADE` needs the right to drop everything it would take with it;
+- extensions are installed for DuckDB v2.0.1 (`extensions.duckdb.org/v2.0.1`), so ones installed
+  for v2.0.0 must be installed again, and `allow_extension_repositories` no longer
+  accepts `'undecided'`: its default, `'hosts'`, refuses new repositories as `'undecided'` did
+  (see Security), so drop the setting from startup SQL that sets `'undecided'`. Changing
+  `allow_extension_repositories` takes an administrator without `catalog_access` rules; a role
+  with `MANAGE CONFIG` is refused it;
+- a sequence `OWNED BY` a table now needs the right to be dropped (`DROP SEQUENCE` on its schema)
+  when its table is dropped or replaced, and a drop whose dependents a user cannot see is refused
+  with a message that does not name them.
+
+### Fixed
+
+- Isolate the DuckLake plan-check unit fixture from built-in extensions, so the baseline
+  and sanitizer builds can register its test function without colliding with DuckLake's.
+  Failed C++ unit cases now include their original diagnostics in the Python test report.
+- Keep downloaded, uninstrumented Delta code out of the TSan permission fixtures;
+  all permission cases still run there, while native and ASan jobs exercise the real extension.
+- Match terminal progress-line escapes in the read-only CLI test and observe the queued
+  state independently of its timeout in the SQL-monitor test, avoiding sanitizer-only flakes.
+- Declare the expected HTTP refusal in read-only browser tests, which already assert the
+  exact read-only error, whether it arrives immediately or in an asynchronous statement.
+- Dismiss the soft keyboard before checking Android console output in the UI test, so
+  the small emulator's keyboard does not hide the transcript. Preserve release-tag build
+  caches before tests run so a failed gate can reuse them on its next attempt.
+- Test the idle-session wait exemption with one continuous request, avoiding a legitimate
+  idle eviction between separate long polls on a slow Windows arm64 runner.
+- The concurrent-DDL test under access control no longer fails when the store itself is slower
+  than the test's deliberately short timeout (an emulated PostgreSQL on a Windows arm64 runner);
+  only such an attempt is run again, and any other failure still fails at once.
+- **DuckLake functions work for tokens with `catalog_access` rules.** Every `ducklake_*` function,
+  and a DuckLake catalog's own calls such as `lake.snapshots()`, was refused for a `user` token
+  (and for an administrator's token with rules), because it needed an `EXECUTE` grant such a token
+  can't hold. As in GizmoSQL 1.42.3, a call is now checked against the token's access to the catalog
+  it names. Inspection (`ducklake_snapshots`, `ducklake_table_info`, `ducklake_list_files`,
+  `ducklake_table_changes`, `ducklake_options`, `ducklake_settings`, ...) needs read access.
+  Maintenance (`ducklake_merge_adjacent_files`, `ducklake_expire_snapshots`,
+  `ducklake_cleanup_old_files`, `ducklake_delete_orphaned_files`, `ducklake_rewrite_data_files`,
+  `ducklake_flush_inlined_data`, `ducklake_set_option`, `ducklake_set_commit_message`) needs write
+  access. In DuckLake builds with branches, `ducklake_branches`, `ducklake_current_branch` and
+  `ducklake_branch_table` need read access, and the other branch functions need write access.
+- **Store users can compact and flush DuckLake tables.** With `MAINTAIN ON CATALOG` (and `EXECUTE`
+  on the function), `ducklake_merge_adjacent_files`, `ducklake_rewrite_data_files` and
+  `ducklake_flush_inlined_data` now run when there is work to do (they were refused as extension
+  operators). `MAINTAIN` is enough: the rows DuckLake reads to rewrite a table are not handed back, so
+  a maintenance role needs no `SELECT` and still can't read the tables. A DuckLake catalog's own
+  functions (`lake.snapshots()`) can be called. The `EXECUTE` hint for
+  `lake.snapshots()` names `ducklake_snapshots`, the function that runs.
+- A non-administrator's `CREATE MACRO IF NOT EXISTS sniff_csv(x) AS ...` was refused as a read of
+  `sniff_csv()`: a macro's own name is not a call (GizmoSQL 1.42.3).
+- The release gate waits on each downstream publish's own conclusion, so a run that the API
+  doesn't show yet right after it is dispatched no longer fails a release that published.
+
+- **A prepared statement was refused now and then under access control** ("its plan could not be
+  checked against user ...'s grants"). The session skipped re-planning a run when the statement
+  sat at the address of one checked earlier at the same grants version; the statement DuckDB runs
+  is never the one checked at PREPARE, so a match came only from another, freed statement whose
+  address the allocator had reused, and that run reached no check. Every run is now planned and
+  checked again. A plan that reaches no check is still refused, now saying that it is not about
+  the user's grants, and the server logs the details.
+- **`THIRD_PARTY_NOTICES.md` lists what the baseline Linux x86_64 build contains.** Since 2.13.2
+  that build compiles in httpfs, DuckLake and the PostgreSQL extension with CRoaring, libpq and
+  libcurl, and since 2.13.3 the SQLite extension, but the notices named them for iOS only and left
+  the SQLite extension out. They now name the baseline build for each, and list the SQLite
+  extension (MIT) and the public-domain SQLite library it builds in; the notices check reads the
+  baseline build's extension list too.
+
+### Security
+
+- **No extension repository is added until an administrator allows it, as on DuckDB 2.0.0.** DuckDB
+  2.0.1 lets `CREATE EXTENSION REPOSITORY <host>` add a repository named by its host by default:
+  its `allow_extension_repositories` defaults to `'hosts'`, and `'undecided'`, 2.0.0's default that
+  refused every new repository, is gone. Adding a repository trusts a new signing key, whose
+  extensions then run inside the server, so a role with `MANAGE EXTENSIONS` could have trusted
+  any host's key. Hardcharger keeps 2.0.0's rule: under the default, `CREATE EXTENSION REPOSITORY`
+  is refused in both forms, the administrator's included, with a message that says so, until an
+  administrator without `catalog_access` rules runs `SET GLOBAL allow_extension_repositories =
+  'allowed'` (or `'hosts_only'`, for repositories named by their host only), which cannot be undone
+  while the server runs. Setting or resetting it takes that administrator; `MANAGE CONFIG` is not
+  enough. Repositories added before stay, and `DROP EXTENSION REPOSITORY` and `INSTALL` are
+  unchanged.
+- **`DROP ... CASCADE` could drop tables the user may not drop.** It drops, with what it names,
+  every object DuckDB records as depending on it, in any schema, and what a dropped object owns:
+  a table whose column default calls a sequence (`DROP SEQUENCE ... CASCADE`); a sequence
+  `OWNED BY` a dropped table, and the tables whose defaults call it (`DROP TABLE ... CASCADE`,
+  `DROP SCHEMA ... CASCADE`); and with DuckDB 2.0.1, which records a table's dependency on its
+  columns' user types again, a table whose column has the type (`DROP TYPE ... CASCADE`) or a type
+  in a dropped schema. A role with `DROP SEQUENCE`, `DROP TYPE` or `DROP TABLE` on one schema could
+  drop the administrator's tables in another. Each object a drop takes with it now needs the right
+  to drop it, as if it were named (a trigger or index that goes with its own table needs nothing
+  more; a trigger on another table needs `DROP TRIGGER` or owning it; an index whose table stays, taken
+  because a macro its expression calls is dropped, needs what `DROP INDEX` needs, the administrator;
+  an index's or trigger's table is the one in its own schema, nested schemas included),
+  and a sequence `OWNED BY` a dropped table needs it with or without `CASCADE`.
+- **Refusals named objects the user cannot see.** DuckDB's refusal of a drop that other objects
+  depend on ("Cannot drop entry ... because there are entries that depend on it"), with `CASCADE`
+  or without, also of `DROP SCHEMA` of a schema that is not empty, of a sequence an `OWNED BY` links
+  to a table, and of the old object a `CREATE OR REPLACE` drops first, named every dependent, and
+  the foreign-key refusal of `DROP TABLE ... CASCADE` ("this table is main key table of the table
+  ...") named the referencing table, to any user, also tables, indexes and triggers in schemas the
+  user cannot see. For a user or token that is not the unrestricted administrator these are now
+  refused by access control first, saying that other objects depend on it and naming only those the
+  user sees, as the metadata views list them.
+- **A user could read tables it held no grant on through a table function's argument.** A subquery
+  handed to a table function that takes its input as rows (`SELECT * FROM unnest((SELECT list(v) FROM
+  t))`, `range((SELECT count(*) FROM t))`, `generate_series(1, (SELECT max(n) FROM t))`, also with
+  `CALL`) was not checked, so a user under access control read a table it held no privilege on, and
+  `range((SELECT setval('s', 9)))` moved a sequence without the privilege (row and masking policies
+  still applied). Every operator's input is now checked as any query's. Also in 2.13.3 and earlier.
+- **A user could read any column through a temporary type named like PIVOT's.** DuckDB makes a
+  temporary enum named `__pivot_enum_...` for a `PIVOT` without an `IN` list, and access control let a
+  type of that name through without checking its query, so `CREATE TEMP TYPE __pivot_enum_x AS ENUM
+  (SELECT v FROM t)` read a column of a table the user held no grant on. A statement may no longer
+  create a type of that name, and PIVOT's own enum is checked as the user's own `SELECT`: a `PIVOT`
+  of a table the user may read works as before. Also in 2.13.3 and earlier.
+- **A store user's `EXECUTE` on a DuckLake function no longer reaches every catalog.** It reached
+  every DuckLake catalog on the server, including ones the user held no grant on; see Upgrading.
+- **`CHECKPOINT` of a DuckLake catalog follows the DuckLake maintenance rules.** An administrator's
+  token with `catalog_access` rules could checkpoint a DuckLake catalog its rules deny or allow only
+  to read, which compacted it, wrote a snapshot into it and, with `expire_older_than` set, expired its
+  snapshots; so could a store user holding only the `CHECKPOINT` privilege; see Upgrading.
+- **Compacting a DuckLake table with row or masking policies is refused** for everyone but an
+  administrator without rules. For an administrator's token with `catalog_access` rules on a server
+  with an access-control store, DuckLake read the table through the policy and failed to commit,
+  which invalidated the database until a restart. Had the commit gone through, the table's files
+  would have kept only the rows the policy shows.
+- For tokens with `catalog_access` rules, a DuckLake function must name its catalog as a string
+  literal, may not be wrapped in a view or macro, and is refused where the server can't check it
+  before it runs. Tables, views and columns named like DuckLake's functions (`settings`, `options`,
+  `snapshots`, `ducklake_*`) are ordinary names: `INSERT INTO s.settings(k, v) ...` works as before. `ducklake_add_data_files`, `ducklake_scan` and `ducklake_commit` stay the
+  administrator's, and a `ducklake_*` function the server doesn't know is refused. A `readonly`
+  token can't change a DuckLake catalog through these functions, whatever its rules (before, a
+  `SELECT` from `ducklake_expire_snapshots(...)` or `ducklake_set_option(...)` did).
+- **What DuckDB evaluates while it binds a statement is checked first.** DuckDB evaluates a table
+  function's arguments, a PRAGMA's parameters, an `AT` clause and `EXECUTE`'s values while it binds,
+  before access control checks the plan. So `SELECT * FROM range(setval('c.main.seq', 1))` (also
+  through `CALL`, `EXPLAIN`, `DESCRIBE`, `SUMMARIZE`, `PIVOT`, `SET VARIABLE`, a scalar macro whose
+  body calls `setval()` or `nextval()`, or an administrator's table macro) moved a sequence that a
+  token with read-only rules, a `readonly` token or a store user without the privilege could not
+  otherwise change. Such calls are now checked before binding, by the rules the plan check applies,
+  and refused in a `readonly` token's session whatever its rules.
+- **An administrator's macro no longer has DuckDB bind what a non-administrator hands it.** A macro
+  that passes its argument to `query()` or to a table function
+  (`CREATE MACRO route(s) AS TABLE SELECT * FROM query(s)`) had DuckDB bind the caller's SQL before
+  the plan check refused it (a `postgres_query()` prepared on the remote database, a file sniffed).
+  The macro's body is now checked with the caller's arguments first, wherever the macro is stored (a
+  DuckLake catalog included, whatever the macro's name: only DuckDB's and DuckLake's own built-in
+  macros are left out); SQL the caller may run itself still works through it (GizmoSQL 1.42.3).
+- `PRAGMA json_execute_serialized_sql` is the administrator's, like the table function of that name
+  (GizmoSQL 1.42.3).
+- The check before binding refuses a kind of statement it has no rule for. It now also reads `PIVOT`
+  without an `IN` list, `SET VARIABLE` values, `EXECUTE` values and `PRAGMA` parameters (a
+  `PIVOT '<file>'` was bound, reading the file, before the plan check refused it).
+
+### Changed
+
+- **A slow access control store is told apart from one that is down.** When a statement to the
+  store takes the whole `rbac_store_timeout_seconds`, its caller is still told the store is
+  unavailable; once the store does answer, the server now also logs a warning naming the
+  statement (such as `COMMIT`) and how long it took. A store that never answers logs nothing
+  more, as before.
+- **DuckDB v2.0.1.** The server runs DuckDB's v2.0.1 bug-fix release (commit `8d78114e90`), with its
+  fixes to decorrelation, join ordering and runtime filters, Parquet statistics and casts. The
+  extensions the iOS app and the baseline Linux x86_64 build compile in move to the commits DuckDB
+  2.0.1 builds: httpfs (retries when S3 throttles, per-file credentials), DuckLake (the latest
+  v2.0 branch) and the PostgreSQL and SQLite extensions 2.0.1. `INSTALL` fetches from
+  `extensions.duckdb.org/v2.0.1`, so extensions installed for v2.0.0 must be installed again.
+  What 2.0.1 adds is classified: `parquet_page_index()` reads a file (`READ FILESYSTEM`, like
+  `parquet_metadata()`); `duckdb_live_query_metrics()`, which shows every connection's counters,
+  and `add_grammar_extension()` / `remove_grammar_extension()`, which change the SQL grammar as
+  `SET active_grammar_extensions` does, stay the administrator's under access control and are
+  refused in read-only sessions. Every form of `CREATE EXTENSION REPOSITORY`, and
+  `INSTALL ... FROM <host>`, takes the administrator or `MANAGE EXTENSIONS`, as before (see
+  Security for when a repository may be added at all).
+- **`delta_*()` and `iceberg_*()` need the storage privileges everywhere.** They read the files their
+  table's log or manifest names, wherever those are, with a storage client of their own, so a
+  location grant never bounded what they could read; see Upgrading. (A user's own table macro named
+  like them, `delta_summary()`, is a macro and is unaffected.)
+- A token with `catalog_access` rules still reaches no DuckLake catalog's data files directly, its
+  own catalog's included, where GizmoSQL 1.42.3 lets it read and write there: only DuckLake reads
+  and writes a DuckLake catalog's files. The migration guide says so.
+- Hardcharger's port of GizmoSQL's test battery is brought up to GizmoSQL 1.42.3 (`main` at
+  b820719d): 605 cases, 565 passing, 37 not applicable, and the same 3 failing as before.
+- **ADBC driver 2.7.0**: the Python package's `adbc` extra needs `hardcharger-adbc` 2.7.0 or later
+  (the `X.Y.Z-adbc` images bundle 2.7.2, below). Its options are all named `hardcharger.*`, as the
+  [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html) asks
+  (`hardcharger.ingest.parts`, `hardcharger.query.result_partitions`); the names from before
+  still work but print a deprecation warning. The README and docs use the new names.
+- **The `-adbc` image bundles the latest releases of the GizmoData ADBC drivers it carries**:
+  Hardcharger 2.7.2 (from 2.7.0), Quack 1.1.0 (from 1.0.4), Oracle 1.1.0 (from 1.0.6) and Db2 0.3.0
+  (from 0.2.6); GizmoSQL stays at 2.0.18. Quack, Oracle and Db2 now name their options as the
+  ADBC driver style guide asks, `quack.*` (`quack.auth.token`, `quack.tls.enabled`), `oracle.*`
+  (`oracle.query.batch_size`, `oracle.connect_timeout_seconds`) and `db2.*`
+  (`db2.query.batch_rows`, `db2.session.current_schema`); the old `adbc.<driver>.*` names still
+  work but print a deprecation warning. Behaviour changes to check when upgrading: Quack refuses
+  unknown `quack.*` and `adbc.quack.*` keys and unrecognised boolean values instead of ignoring
+  them; Db2 applies `db2.session.current_schema` (and `?schema=`), which it ignored before, so
+  that schema must exist; Oracle's and Db2's `GetOption("uri")` hides the password; every
+  driver's errors start with its name (`[quack]`, `[oracle]`, `[db2]`). The image's smoke test
+  sets every driver's options under the new names and fails on any deprecation warning.
+
+## [2.13.3] - 2026-11-20
+
+### Added
+
+- **The baseline Linux x86_64 build has sqlite_scanner built in**
+  ([#62](https://github.com/gizmodata/hardcharger/issues/62)). On a CPU without AVX2 the
+  baseline build loads only its built-in extensions, and 2.13.2's set (httpfs, ducklake,
+  postgres_scanner) left out SQLite, so DuckLake with a SQLite catalog (`ATTACH
+  'ducklake:sqlite:...'`) and SQLite files were refused there. sqlite_scanner is now compiled in
+  too, at the commit DuckDB's own build uses; `INSTALL sqlite; LOAD sqlite` succeeds without
+  downloading anything. The server's guard on its own files covers SQLite's paths as before.
+  Every release gate now also runs a DuckLake with a SQLite catalog in its emulated `kvm64` smoke
+  test. The optimized build and the container image are unchanged.
+
+## [2.13.2] - 2026-11-20
+
+### Added
+
+- **A Linux x86_64 build for CPUs without AVX2**
+  ([#62](https://github.com/gizmodata/hardcharger/issues/62)). Each release now also ships
+  `hardcharger-linux-amd64-baseline.tar.gz`, which runs on any x86-64 CPU: DuckDB and Arrow are
+  built for the compiler's baseline (`DUCKDB_OPTIMIZATION_PROFILE=NONE`, `ARROW_SIMD_LEVEL=NONE`)
+  instead of x86-64-v3 (AVX2) and x86-64-v2 (SSE4.2). It is for virtual machines whose CPU model
+  hides those instructions, such as QEMU's `kvm64` ("Common KVM processor"), and for older
+  processors. It is slower than the optimized build, because DuckDB does not choose instructions
+  at run time, so use it only where the optimized one can't run (a VM's CPU model setting, such
+  as `host`, QEMU's `Haswell` or Proxmox's `x86-64-v3`, is often the better fix). Every release gate runs its smoke test on an
+  emulated `kvm64` CPU on Oracle Linux 8, and its full test suite. The container image keeps the
+  optimized build. Thanks to jhonvirtucio for the report and the diagnosis.
+- **The baseline build has httpfs, ducklake and postgres_scanner built in, and never loads an
+  extension that would crash it.** The extensions DuckDB publishes for download are compiled for
+  x86-64-v3 too, so on an older CPU loading one (httpfs, autoloaded by any `https://` or `s3://`
+  path) died with "Illegal instruction" and took the server down. The baseline build compiles
+  httpfs, ducklake and postgres_scanner in, next to core_functions, parquet, json and icu, and on a
+  CPU without x86-64-v3 it installs and loads no other extension: `INSTALL` and `LOAD` fail with a
+  message that says why and names the built-in ones, and the server logs a warning at startup. On a
+  CPU with AVX2 it loads every extension, as the optimized build does. As in any build once httpfs
+  is loaded, DuckDB asks a custom extension repository given as `http://` over https.
+- **Building from source for a CPU target.** `HARDCHARGER_CPU_TARGET=baseline` (or `optimized`,
+  the default) chooses the target for `server/scripts/build-deps.sh`; the server's CMake reads the
+  target from the dependency installs and refuses a mix. See `server/scripts/cpu-target.sh`.
+
+### Fixed
+
+- **The optimized Linux x86_64 binaries explain an unsupported CPU instead of crashing**
+  ([#62](https://github.com/gizmodata/hardcharger/issues/62)). On a CPU without the instructions
+  they were built for, `hardcharger-server` and `hardcharger` died with "Illegal instruction"
+  before printing anything, even for `--version`. They now check the CPU before any other code
+  runs and exit 1 with a message that names the missing features and the baseline build. The
+  server needs x86-64-v3 (AVX2: Intel Haswell, AMD Excavator or newer); the client needs
+  x86-64-v2 (SSE4.2), as before.
+
+### Changed
+
+- **Android builds reach internal testers automatically.** Each release publishes its Android
+  build to Google Play's internal testing track, as iOS builds reach TestFlight, instead of
+  leaving a draft to publish by hand in Play Console. A leftover draft no longer stops the
+  upload (2.13.1's was refused because 2.13.0's draft was still there), and an older build never
+  replaces a newer one. Closed and open testing and production stay manual in Play Console.
 
 ## [2.13.1] - 2026-11-15
 

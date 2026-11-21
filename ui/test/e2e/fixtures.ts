@@ -4,7 +4,7 @@
 // test then also fails if that error never happened (so a negative test can't pass by
 // accident).
 
-import { type Page, test as base, expect } from "@playwright/test";
+import { type Locator, type Page, test as base, expect } from "@playwright/test";
 
 import { type HarnessState, harnessState } from "./harness.ts";
 
@@ -160,6 +160,25 @@ export function activeTab(page: Page) {
 /** Waits until the cursor is in the shown tab's editor (each tab focuses its editor when shown). */
 export async function editorFocused(page: Page): Promise<void> {
   await expect(activeTab(page).locator(".monaco-editor.focused")).toBeVisible();
+}
+
+/**
+ * Opens a tree row's "…" menu (`row` is the row's `.tree-row-wrap`). The button shows only
+ * while the pointer is over its row, and a click's own retries never hover again: when the tree
+ * moves under the pointer between the hover and the click (the "Connected." notice above it goes
+ * 2.5 s after a sign-in), the click meets the next row's button, the pointer is left on that row,
+ * and this row's button stays hidden until the test times out. So hover and click again together,
+ * each with a short timeout, until the menu is open.
+ */
+export async function openRowMenu(row: Locator, name: string | RegExp = /^More for/): Promise<void> {
+  const menu = row.page().getByRole("menu");
+  await expect(async () => {
+    if (!(await menu.isVisible())) {
+      await row.hover({ timeout: 2_000 });
+      await row.getByRole("button", { name }).click({ timeout: 2_000 });
+    }
+    expect(await menu.isVisible()).toBe(true);
+  }).toPass({ timeout: 20_000 });
 }
 
 /** The grid's text: header names, then each row's cells. */

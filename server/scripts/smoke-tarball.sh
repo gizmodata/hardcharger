@@ -9,32 +9,41 @@
 #
 # Needs only bash, tar, curl and a Python 3 for reading JSON (EL8's platform-python).
 # (The server listens on 31337, health 31338.)
+#
+# HARDCHARGER_SMOKE_EXEC: a command that runs each binary, e.g. QEMU user-mode emulation
+# with a chosen CPU model, so the whole smoke test runs on that CPU (CI runs the baseline
+# tarball on QEMU's kvm64, an x86-64-v1 CPU: "/qemu/qemu-x86_64-static -cpu kvm64").
+# HARDCHARGER_SMOKE_OLD_CPU=1: the baseline build on a CPU without x86-64-v3 also refuses a
+# downloadable extension with its message (src/authz/extension_cpu_guard.cc), and keeps
+# serving; the HTTPS read above it uses the built-in httpfs.
 set -euo pipefail
 tarball="${1:?tarball}"
+read -ra exec_prefix <<< "${HARDCHARGER_SMOKE_EXEC:-}"
+run() { ${exec_prefix[@]+"${exec_prefix[@]}"} "$@"; }
 prefix=$(mktemp -d)
 tar -C "$prefix" -xzf "$tarball"
 bin=$(echo "$prefix"/hardcharger-*/bin/hardcharger-server)
 python=$(command -v python3 || echo /usr/libexec/platform-python)
 json() { "$python" -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
 
-"$bin" --version
+run "$bin" --version
 # The licence and the third-party notices travel with the binaries, which print them too.
 root=$(dirname "$(dirname "$bin")")
 grep -q "Apache License" "$root/LICENSE"
 grep -qx "# Third-party software in Hardcharger" "$root/THIRD_PARTY_NOTICES.md"
 grep -q "^Hardcharger web UI .*: third-party software notices" "$root/THIRD_PARTY_NOTICES-web-ui.txt"
-"$bin" --licenses > "$prefix/licenses.txt"
+run "$bin" --licenses > "$prefix/licenses.txt"
 grep -qx "# Third-party software in Hardcharger" "$prefix/licenses.txt"
 grep -q "^Hardcharger web UI .*: third-party software notices" "$prefix/licenses.txt"
-"$bin" --verify-tls https://token.actions.githubusercontent.com/.well-known/openid-configuration
+run "$bin" --verify-tls https://token.actions.githubusercontent.com/.well-known/openid-configuration
 
 work=$(mktemp -d)
 cd "$work"
 HARDCHARGER_ADMIN_USERNAME=smoke HARDCHARGER_ADMIN_PASSWORD=smoke-password HARDCHARGER_HEALTH_PORT=31338 \
-  "$bin" --host 127.0.0.1 --port 31337 2> server.log &
-server=$!
+  ${exec_prefix[@]+"${exec_prefix[@]}"} "$bin" --host 127.0.0.1 --port 31337 2> server.log &
+server=$!  # the server's own PID (or its emulator's): run() in the background would be a subshell
 trap 'kill "$server" 2>/dev/null || true; cat "$work/server.log"' EXIT
-for _ in $(seq 1 30); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
+for _ in $(seq 1 120); do curl -sf http://127.0.0.1:31338/health && break; sleep 1; done
 echo
 curl -sf http://127.0.0.1:31338/health | grep -q serving
 
@@ -60,10 +69,37 @@ id=$(echo "$statement" | json statement_id)
 curl -sf "$base/sessions/$session/statements/$id/result" "${auth[@]}" \
   -H 'Accept: application/vnd.apache.arrow.stream' -o https.arrows
 grep -aq 'https-true' https.arrows || { echo "the httpfs read returned no https-true"; exit 1; }
+if [ "${HARDCHARGER_SMOKE_OLD_CPU:-}" = 1 ]; then
+  # DuckDB's usual recipe for a built-in extension works there: nothing to download.
+  statement=$(curl -sf -X POST "$base/sessions/$session/statements" "${auth[@]}" -H 'Accept: application/json' \
+                -H 'Prefer: wait=60' -d '{"sql": "INSTALL httpfs; LOAD httpfs; INSTALL postgres; INSTALL ducklake; LOAD ducklake"}') \
+    || { echo "INSTALL/LOAD of the built-in extensions failed"; exit 1; }
+  [ "$(echo "$statement" | json state)" = succeeded ] || { echo "INSTALL of a built-in extension failed: $statement"; exit 1; }
+  # DuckLake with a SQLite catalog (the built-in sqlite_scanner): issue #62's setup.
+  sql="INSTALL sqlite; LOAD sqlite; ATTACH 'ducklake:sqlite:$work/lake.sqlite' AS lake (DATA_PATH '$work/lake/'); CREATE TABLE lake.t AS SELECT 'sqlite-lake-' || (40 + 2) AS v"
+  statement=$(curl -s -X POST "$base/sessions/$session/statements" "${auth[@]}" -H 'Accept: application/json' \
+                -H 'Prefer: wait=120' -d "{\"sql\": \"$sql\"}")
+  [ "$(echo "$statement" | json state)" = succeeded ] || { echo "DuckLake with a SQLite catalog failed: $statement"; exit 1; }
+  statement=$(curl -s -X POST "$base/sessions/$session/statements" "${auth[@]}" -H 'Accept: application/json' \
+                -H 'Prefer: wait=60' -d '{"sql": "SELECT v FROM lake.t"}')
+  [ "$(echo "$statement" | json state)" = succeeded ] || { echo "reading the SQLite-catalog DuckLake failed: $statement"; exit 1; }
+  id=$(echo "$statement" | json statement_id)
+  curl -sf "$base/sessions/$session/statements/$id/result" "${auth[@]}" \
+    -H 'Accept: application/vnd.apache.arrow.stream' -o lake.arrows
+  grep -aq 'sqlite-lake-42' lake.arrows || { echo "the SQLite-catalog DuckLake returned no sqlite-lake-42"; exit 1; }
+  [ -s "$work/lake.sqlite" ] || { echo "no SQLite catalog file at $work/lake.sqlite"; exit 1; }
+  statement=$(curl -s -X POST "$base/sessions/$session/statements" "${auth[@]}" -H 'Accept: application/json' \
+                -H 'Prefer: wait=60' -d '{"sql": "INSTALL spatial"}')
+  echo "$statement"
+  grep -q "baseline build" <<< "$statement" || { echo "INSTALL spatial was not refused by the baseline guard"; exit 1; }
+  grep -q "httpfs" <<< "$statement" || { echo "the refusal does not name the built-in extensions"; exit 1; }
+  curl -sf http://127.0.0.1:31338/health | grep -q serving || { echo "the server stopped after the refusal"; exit 1; }
+  grep -q "loads only its built-in extensions" server.log || { echo "no startup warning about the CPU"; exit 1; }
+fi
 # The command-line client from the same tarball, against the same server.
 client="$(dirname "$bin")/hardcharger"
-"$client" --version
-answer=$(HARDCHARGER_PASSWORD=smoke-password "$client" --host 127.0.0.1 --port 31337 --tls=false --username smoke \
+run "$client" --version
+answer=$(HARDCHARGER_PASSWORD=smoke-password run "$client" --host 127.0.0.1 --port 31337 --tls=false --username smoke \
            --csv --no-header -c "SELECT 'client-' || (40 + 2)")
 [ "$answer" = client-42 ] || { echo "the client answered '$answer'"; exit 1; }
-echo "smoke test passed: $("$bin" --version | head -1)"
+echo "smoke test passed: $(run "$bin" --version | head -1)${HARDCHARGER_SMOKE_EXEC:+ (run by $HARDCHARGER_SMOKE_EXEC)}"

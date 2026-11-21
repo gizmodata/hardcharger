@@ -9,8 +9,9 @@ import unittest
 SCRIPT = Path(__file__).with_name("already-tested.sh")
 RELEASE_JOBS = [
     "web UI (build)", "web UI (lint, typecheck, unit tests, client provenance)",
-    "build and test (linux-amd64)", "build and test (linux-arm64)", "build and test (macos-arm64)",
-    "install on glibc 2.28 (linux-amd64)", "install on glibc 2.28 (linux-arm64)",
+    "build and test (linux-amd64)", "build and test (linux-amd64-baseline)", "build and test (linux-arm64)",
+    "build and test (macos-arm64)", "install on glibc 2.28 (linux-amd64)",
+    "install on glibc 2.28 (linux-amd64-baseline)", "install on glibc 2.28 (linux-arm64)",
     "web UI e2e (chromium)", "web UI e2e (webkit)",
     "windows / build and test (windows-amd64)", "windows / build and test (windows-arm64)",
     "windows / msi (windows-amd64)", "windows / msi (windows-arm64)", "checksums", "image",

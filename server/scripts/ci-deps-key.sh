@@ -20,10 +20,13 @@ shift 3
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 case "$dep" in
-  arrow) recipes=(third_party/chargewire/cpp/scripts/build-arrow.sh server/scripts/deps-arrow.sh) ;;
+  arrow) recipes=(third_party/chargewire/cpp/scripts/build-arrow.sh server/scripts/deps-arrow.sh
+                  server/scripts/cpu-target.sh) ;;
   duckdb) recipes=(third_party/chargewire/cpp/scripts/build-duckdb.sh server/scripts/deps-duckdb.sh
                    server/scripts/patch-duckdb*.cmake server/scripts/duckdb-extensions.cmake
-                   server/scripts/retire-ducklake-patch.cmake server/scripts/prune-duckdb-install.cmake) ;;
+                   server/scripts/retire-ducklake-patch.cmake server/scripts/prune-duckdb-install.cmake
+                   server/scripts/cpu-target.sh server/scripts/duckdb-extensions-baseline.cmake
+                   server/scripts/build-extension-deps.sh) ;;
   replxx) recipes=(server/scripts/build-replxx.sh) ;;
   openssl) recipes=(server/scripts/deps-openssl.sh) ;;
   *) echo "ci-deps-key: no dependency '$dep'" >&2; exit 2 ;;

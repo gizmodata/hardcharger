@@ -24,6 +24,7 @@
 #include <duckdb/parser/statement/set_statement.hpp>
 
 #include <algorithm>
+#include <optional>
 #include <cctype>
 #include <string>
 #include <unordered_set>
@@ -94,6 +95,7 @@ bool PlanWritesOutsideCatalogs(const dd::PhysicalOperator& op) {
 class ReadOnlySessionState : public dd::ClientContextState {
  public:
   explicit ReadOnlySessionState(std::string user) : user_(std::move(user)) {}
+  const std::string& user() const { return user_; }
 
   // DuckDB calls OnFinalizePrepare only when a registered state may ask for a rebind;
   // this one never does, it only refuses.
@@ -180,6 +182,12 @@ bool AutomaticScopeIsSession(dd::ClientContext& context, const std::string& name
 }
 
 }  // namespace
+
+std::optional<std::string> ReadOnlyRefusal(dd::ClientContext& context) {
+  auto state = context.registered_state->Get<ReadOnlySessionState>(kReadOnlyStateName);
+  if (!state) return std::nullopt;
+  return RefusalMessage(state->user());
+}
 
 void BindReadOnlySession(duckdb_v2_connection_handle connection, const std::string& user_name) {
   auto& context = *dd::capiv2::Convert(connection)->context;

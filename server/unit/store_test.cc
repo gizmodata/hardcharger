@@ -7,6 +7,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <future>
+#include <mutex>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -14,6 +17,8 @@
 #include <vector>
 
 #include "authz/store.hpp"
+#include "authz/store_link.hpp"
+#include "logging.hpp"
 #include "redact.hpp"
 
 using hardcharger::RedactCredentials;
@@ -302,4 +307,103 @@ TEST(StoreTurns, ALongLineAtAnAnsweringStoreIsNotAnOutage) {
   auto snapshot = s.Load();
   ASSERT_TRUE(snapshot.ok());
   EXPECT_EQ((*snapshot)->owners().size(), static_cast<size_t>(kThreads * kCalls));
+}
+
+// ---- The store's thread: a statement past its timeout --------------------------------------
+
+namespace {
+
+using hardcharger::authz::StoreLink;
+
+constexpr std::string_view kGaveUp = "the access control store answered after its caller had given up";
+constexpr std::string_view kTookTheTimeout = "the access control store took the whole rbac_store_timeout_seconds";
+
+// The warnings the store's thread writes. `on_line` runs on the logging thread, for each line.
+class StoreWarnings {
+ public:
+  explicit StoreWarnings(std::function<void(std::string_view)> on_line = {}) : on_line_(std::move(on_line)) {
+    hardcharger::ConfigureLogging("info", "text");
+    hardcharger::SetLogCaptureForTesting([this](hardcharger::LogLevel, std::string_view message) {
+      if (on_line_) on_line_(message);
+      std::lock_guard lock(mutex_);
+      lines_.emplace_back(message);
+      cv_.notify_all();
+    });
+  }
+  ~StoreWarnings() { hardcharger::SetLogCaptureForTesting(nullptr); }
+  // Waits (at most 30 s: only a failing test waits that long) for a line containing `text`.
+  bool WaitFor(std::string_view text) {
+    std::unique_lock lock(mutex_);
+    return cv_.wait_for(lock, std::chrono::seconds(30), [&] {
+      for (const auto& line : lines_) {
+        if (line.find(text) != std::string::npos) return true;
+      }
+      return false;
+    });
+  }
+
+ private:
+  std::function<void(std::string_view)> on_line_;
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  std::vector<std::string> lines_;
+};
+
+std::unique_ptr<duckdb::DuckDB> MemoryDb() { return std::make_unique<duckdb::DuckDB>(nullptr); }
+
+}  // namespace
+
+// A statement the caller gave up on is logged when the store does answer, as slow, not down.
+// The statement waits for its caller to have been told the store timed out: no clock decides.
+TEST(StoreLinkSlowStatement, IsLoggedWhenItAnswersAfterItsCallerGaveUp) {
+  StoreWarnings warnings;
+  StoreLink link(MemoryDb(), std::chrono::milliseconds(100));
+  std::promise<void> caller_told;
+  auto told = caller_told.get_future().share();
+  auto result = link.Call([told](duckdb::Connection& c) {
+    told.wait();
+    return c.Query("SELECT 42");
+  }, "SELECT");
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.status().message().find("timed out after"), std::string::npos) << result.status().ToString();
+  caller_told.set_value();
+  EXPECT_TRUE(warnings.WaitFor(kGaveUp)) << "no warning that the store answered late";
+}
+
+// The warning never changes a caller's answer. The statement takes the whole timeout, and
+// the store's thread keeps the link's lock past the caller's deadline before it hands the
+// result over, so the caller waits for the lock and then finds its result (as it did before
+// there was a warning). The warning then holds the logging thread until the caller has its
+// answer: written before the handover (17340fc44), it gave the lock up to a caller that
+// found no result and was told the store timed out.
+TEST(StoreLinkSlowStatement, ACallerWaitingForTheLockGetsItsResultBeforeTheWarning) {
+  constexpr auto kTimeout = std::chrono::milliseconds(100);
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool answered = false;
+  StoreWarnings warnings([&](std::string_view line) {
+    if (line.find("the access control store") == std::string_view::npos) return;
+    std::unique_lock lock(mutex);
+    cv.wait_for(lock, std::chrono::seconds(30), [&] { return answered; });
+  });
+  StoreLink link(MemoryDb(), kTimeout);
+  std::atomic<std::chrono::steady_clock::time_point::rep> started{0};
+  // The caller's deadline is its call's start plus the timeout, no later than the statement's
+  // start plus the timeout: the lock is held until that has passed.
+  link.SetBeforeHandoverForTesting([&] {
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(started.load()));
+    std::this_thread::sleep_until(start + kTimeout + std::chrono::milliseconds(50));
+  });
+  auto result = link.Call([&](duckdb::Connection& c) {
+    started = std::chrono::steady_clock::now().time_since_epoch().count();
+    return c.Query("SELECT 42");
+  }, "SELECT");
+  {
+    std::lock_guard lock(mutex);
+    answered = true;
+  }
+  cv.notify_all();
+  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  EXPECT_EQ((*result)->Fetch()->GetValue(0, 0).GetValue<int32_t>(), 42);
+  EXPECT_TRUE(warnings.WaitFor(kTookTheTimeout)) << "no warning that the statement took the whole timeout";
 }

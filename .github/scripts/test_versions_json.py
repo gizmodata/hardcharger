@@ -22,9 +22,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-DUCKDB_COMMIT = "d54cbbe3df17e8e5ce68312f483b4155836112aa"
-HTTPFS = "77392a72077a85897db2519fae11e2c0da972b8a"
-DUCKLAKE = "417a9117f590e8141742ac0579d02f6a90162e37"
+DUCKDB_COMMIT = "8d78114e90a53823803660bf821f6073ac87da8c"
+HTTPFS = "f71cfdb4bff85b9e15b1f3b842d9aa395aff0167"
+DUCKLAKE = "08089b16dc8a18ce04abb6efd87e25cb4d64803a"
 
 CMAKELISTS = textwrap.dedent("""\
     cmake_minimum_required(VERSION 3.25)
@@ -45,7 +45,7 @@ EXTENSIONS = textwrap.dedent(f"""\
     )
     duckdb_extension_statically_link(tpch httpfs ducklake)
 """)
-BUILD_DUCKDB = f"#!/usr/bin/env bash\nDUCKDB_COMMIT={DUCKDB_COMMIT}\nDUCKDB_VERSION_NAME=v2.0.0\n"
+BUILD_DUCKDB = f"#!/usr/bin/env bash\nDUCKDB_COMMIT={DUCKDB_COMMIT}\nDUCKDB_VERSION_NAME=v2.0.1\n"
 CHARGEWIRE_CMAKELISTS = "cmake_minimum_required(VERSION 3.25)\nproject(chargewire VERSION 1.0.1 LANGUAGES C CXX)\n"
 OPENAPI = "openapi: 3.1.1\ninfo:\n  title: Chargewire\n  version: 1.0.1\n  summary: x\npaths: {}\n"
 
@@ -134,12 +134,12 @@ class VersionsJson(unittest.TestCase):
         self.assertEqual(self.ok(), {
             "hardcharger": {"version": "2.0.0", "commit": self.checkout.commit},
             "chargewire": {"version": "1.0.1", "spec_version": "1.0.1", "commit": self.checkout.chargewire_commit},
-            "duckdb": {"version": "v2.0.0", "commit": DUCKDB_COMMIT},
+            "duckdb": {"version": "v2.0.1", "commit": DUCKDB_COMMIT},
             "extensions": {
                 "built_in": ["core_functions", "parquet", "json", "icu", "tpch", "httpfs", "ducklake"],
                 "pinned": {"httpfs": {"repository": "https://github.com/duckdb/duckdb-httpfs", "commit": HTTPFS},
                            "ducklake": {"repository": "https://github.com/duckdb/ducklake", "commit": DUCKLAKE}},
-                "repository": "https://extensions.duckdb.org/v2.0.0",
+                "repository": "https://extensions.duckdb.org/v2.0.1",
             },
         })
 
@@ -152,9 +152,9 @@ class VersionsJson(unittest.TestCase):
         self.refused("tag v2.0.0-rc.2 != v2.0.0", "--tag", "v2.0.0-rc.2")
 
     def test_the_binary_must_say_the_same_versions(self):
-        self.ok("--binary", str(self.checkout.fake_server(version="2.0.0", duckdb="v2.0.0")))
+        self.ok("--binary", str(self.checkout.fake_server(version="2.0.0", duckdb="v2.0.1")))
         self.refused("--version says 'Hardcharger 2.0.0-rc.1'", "--binary",
-                     str(self.checkout.fake_server(version="2.0.0-rc.1", duckdb="v2.0.0")))
+                     str(self.checkout.fake_server(version="2.0.0-rc.1", duckdb="v2.0.1")))
         self.refused("--print-duckdb-version says 'v2.0.0-alpha48624'", "--binary",
                      str(self.checkout.fake_server(version="2.0.0", duckdb="v2.0.0-alpha48624")))
 
@@ -167,11 +167,11 @@ class VersionsJson(unittest.TestCase):
 
     def test_a_malformed_or_missing_duckdb_pin_is_refused(self):
         self.checkout.edit("third_party/chargewire/cpp/scripts/build-duckdb.sh", f"DUCKDB_COMMIT={DUCKDB_COMMIT}",
-                           "DUCKDB_COMMIT=d54cbbe3df")
+                           "DUCKDB_COMMIT=8d78114e90")
         self.refused("build-duckdb.sh's DUCKDB_COMMIT: expected exactly one match, found 0")
 
     def test_a_malformed_duckdb_version_name_is_refused(self):
-        self.checkout.edit("third_party/chargewire/cpp/scripts/build-duckdb.sh", "DUCKDB_VERSION_NAME=v2.0.0",
+        self.checkout.edit("third_party/chargewire/cpp/scripts/build-duckdb.sh", "DUCKDB_VERSION_NAME=v2.0.1",
                            "DUCKDB_VERSION_NAME=")
         self.refused("build-duckdb.sh's DUCKDB_VERSION_NAME: expected exactly one match, found 0")
 

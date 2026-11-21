@@ -9,7 +9,7 @@ import urllib.parse
 
 import pytest
 
-from conftest import STOP_SIGNAL, TSAN_EXTENSIONS, home_env
+from conftest import BASELINE_BUILT_IN, STOP_SIGNAL, TSAN_EXTENSIONS, home_env
 from rbac import ChargewireError, expect_allowed, rbac_env, start_rbac_server
 
 
@@ -131,7 +131,8 @@ def test_fresh_host_installs_only_the_store_extension_when_needed(launcher, stor
     server = start_rbac_server(launcher=launcher, store_uri=uri, env=home_env(home=home))
     expect_allowed(client=server.admin(), sql="CREATE ROLE installed")
     modules = list(home.rglob("*.duckdb_extension"))
-    expected = [] if TSAN_EXTENSIONS or uri.startswith("duckdb:") else ["postgres_scanner.duckdb_extension"]
+    built_in = TSAN_EXTENSIONS or "postgres_scanner" in BASELINE_BUILT_IN
+    expected = [] if built_in or uri.startswith("duckdb:") else ["postgres_scanner.duckdb_extension"]
     assert sorted(p.name for p in modules) == expected
 
 

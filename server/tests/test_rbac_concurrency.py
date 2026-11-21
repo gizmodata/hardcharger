@@ -20,7 +20,7 @@ import time
 import pytest
 
 from conftest import TIMEOUT_SCALE
-from rbac import Client, expect_allowed, expect_blocked, mint, start_rbac_server
+from rbac import ChargewireError, Client, RbacServer, expect_allowed, expect_blocked, mint, start_rbac_server
 
 CLIENTS = 10
 # Passes over the 22 queries per client (long enough runs for stable ratios).
@@ -43,6 +43,23 @@ DDL_EXISTING = 600
 DDL_STORE_TIMEOUT = str(max(3 if sys.platform == "win32" else 1, round(TIMEOUT_SCALE)))
 
 
+# A store statement that itself takes the whole timeout is a store that does not answer in
+# time, whatever is behind it: the server rightly fails what waited on it, and logs, when the
+# store does answer, how long it took. The emulated x64 PostgreSQL of the windows-arm64 jobs
+# once took over 3 s to COMMIT one setup CREATE with nothing else on that server (2026-11-20,
+# run 44750753453), and a PostgreSQL container on a laptop under load (8 of these tests at
+# once) cancelled `SELECT 1` at its 1 s statement_timeout, in bursts of up to 15 s that also
+# failed servers opening the store. Such a run says nothing about the line of callers, so it
+# is taken again on a fresh store, after a pause that outlasts a burst, up to DDL_ATTEMPTS
+# times. A failure the server's log does not show the store being that slow for fails the test
+# at once, and so does a store that is that slow every time.
+DDL_ATTEMPTS = 5
+DDL_PAUSE_SECONDS = 20 * TIMEOUT_SCALE
+STORE_SLOW = ("the access control store answered after its caller had given up",
+              "the access control store took the whole rbac_store_timeout_seconds")
+STORE_TIMED_OUT = "access control store unavailable: timed out after"
+
+
 def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
     """A dbt run's shape: sessions that each create a table, grant on it and drop it, all at
     once. On 2.1.2 some failed with "the owner of what it creates could not be recorded (...
@@ -51,19 +68,57 @@ def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
     and a caller that waited longer than the store timeout gave up although the store had
     answered everyone ahead of it. With a 1 s store timeout (longer in sanitizer builds) none
     may fail, the server may not report the store down, and each table's owner (who alone may
-    grant on it) is right."""
-    server = start_rbac_server(launcher=launcher, store_uri=store.new_database(),
-                               env={"HARDCHARGER_RBAC_STORE_TIMEOUT_SECONDS": DDL_STORE_TIMEOUT,
-                                    "HARDCHARGER_PRINT_QUERIES": "false"})
+    grant on it) is right, unless a store statement itself took the whole timeout (then the
+    attempt is taken again: DDL_ATTEMPTS)."""
+    stalls: list[str] = []
+    for attempt in range(DDL_ATTEMPTS):
+        if attempt:
+            time.sleep(DDL_PAUSE_SECONDS)
+        failures, server = concurrent_ddl(launcher=launcher, store=store)
+        if not failures:
+            return
+        if server is None:
+            # The server could not open the store in time: one caller, nothing in line.
+            slow = failures
+        else:
+            # A statement the server gave up on is logged when the store answers it, which may
+            # be a while after the caller was told.
+            deadline = time.monotonic() + 60 * TIMEOUT_SCALE
+            while True:
+                slow = [line for line in server.log().splitlines() if any(text in line for text in STORE_SLOW)]
+                if slow or time.monotonic() > deadline:
+                    break
+                time.sleep(0.2)
+        timed_out = all("timed out after" in failure for failure in failures)
+        assert slow and timed_out, (f"{len(failures)} statements failed (or the server reported the store down) "
+                                    f"although no store statement took the whole store timeout, e.g. {failures[:3]}")
+        print(f"\nthe store itself took the whole timeout ({slow[0][:300]}): {failures[0][:300]}; taken again")
+        stalls.append(f"{failures[0][:300]} / {slow[0][:300]}")
+    pytest.fail(f"the store took the whole timeout on every one of {DDL_ATTEMPTS} attempts: {stalls}")
+
+
+def concurrent_ddl(launcher, store) -> tuple[list[str], RbacServer | None]:
+    """One run of the dbt shape on a fresh store: what failed (nothing, if all went right), and
+    the server (None: it could not open the store in time)."""
+    try:
+        server = start_rbac_server(launcher=launcher, store_uri=store.new_database(),
+                                   env={"HARDCHARGER_RBAC_STORE_TIMEOUT_SECONDS": DDL_STORE_TIMEOUT,
+                                        "HARDCHARGER_PRINT_QUERIES": "false"})
+    except pytest.fail.Exception as error:
+        opening = [line for line in str(error).splitlines() if STORE_TIMED_OUT in line]
+        if not opening:
+            raise
+        return [f"server start: {opening[-1]}"], None
     admin = server.admin()
-    for sql in ["CREATE ROLE builder", "GRANT CREATE TABLE, DROP TABLE ON SCHEMA main TO builder",
-                "CREATE ROLE readers"]:
-        expect_allowed(client=admin, sql=sql)
+    setup = ["CREATE ROLE builder", "GRANT CREATE TABLE, DROP TABLE ON SCHEMA main TO builder", "CREATE ROLE readers"]
     for c in range(DDL_CLIENTS):
-        expect_allowed(client=admin, sql=f"CREATE USER dbt{c}")
-        expect_allowed(client=admin, sql=f"GRANT builder TO USER dbt{c}")
-    for i in range(DDL_EXISTING):
-        expect_allowed(client=admin, sql=f"CREATE TABLE existing_{i} AS SELECT {i} AS x")
+        setup += [f"CREATE USER dbt{c}", f"GRANT builder TO USER dbt{c}"]
+    setup += [f"CREATE TABLE existing_{i} AS SELECT {i} AS x" for i in range(DDL_EXISTING)]
+    for sql in setup:
+        try:
+            admin.run(sql=sql)
+        except ChargewireError as error:
+            return [f"admin: {sql}: {error}"], server
     sessions = [Client(base_url=server.base_url, token=mint(user=f"dbt{c}")) for c in range(DDL_CLIENTS)]
     failures: list[str] = []
     slowest = [0.0]
@@ -91,17 +146,28 @@ def test_concurrent_ddl_is_not_a_store_outage(launcher, store):
         thread.start()
     for thread in threads:
         thread.join()
-    assert failures == [], f"{len(failures)} statements failed, e.g. {failures[:3]}"
-    assert "does not answer" not in server.log(), "the server reported a healthy store as down"
-    # Owners as the store recorded them: dbt{c} may grant on its table, the next user may not.
-    for c in range(DDL_CLIENTS):
-        table = f"model_{c}_{DDL_ROUNDS - 1}__dbt_tmp"
-        expect_allowed(client=sessions[c], sql=f"GRANT SELECT ON TABLE {table} TO builder")
-        other = sessions[(c + 1) % DDL_CLIENTS]
-        expect_blocked(client=other, sql=f"GRANT SELECT ON TABLE {table} TO builder", why="may not grant")
-    print(f"\nconcurrent DDL: {DDL_CLIENTS} sessions x {DDL_ROUNDS} rounds, slowest statement {slowest[0]:.2f} s")
+    if not failures:
+        # Owners as the store recorded them: dbt{c} may grant on its table, the next user may
+        # not. A store timeout here is a failure of the attempt like any other.
+        for c in range(DDL_CLIENTS):
+            table = f"model_{c}_{DDL_ROUNDS - 1}__dbt_tmp"
+            grant = f"GRANT SELECT ON TABLE {table} TO builder"
+            try:
+                expect_allowed(client=sessions[c], sql=grant)
+                expect_blocked(client=sessions[(c + 1) % DDL_CLIENTS], sql=grant, why="may not grant")
+            except (AssertionError, pytest.fail.Exception) as error:
+                if "timed out after" not in str(error):
+                    raise
+                failures.append(f"owner check of {table}: {error}")
+    if "does not answer" in server.log():
+        failures.append("the server reported the store down: the access control store does not answer "
+                        "(timed out after the store timeout)")
     for session in sessions:
         session.close()
+    if failures:
+        return failures, server
+    print(f"\nconcurrent DDL: {DDL_CLIENTS} sessions x {DDL_ROUNDS} rounds, slowest statement {slowest[0]:.2f} s")
+    return [], server
 
 
 def prepare(admin, rbac: bool) -> list[str]:

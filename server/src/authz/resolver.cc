@@ -4,6 +4,7 @@
 
 #include <duckdb.hpp>
 #include <duckdb/catalog/catalog.hpp>
+#include <duckdb/catalog/catalog_entry/macro_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry_retriever.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
@@ -194,6 +195,46 @@ bool SessionObjectResolver::IsTableMacro(const QualifiedName& name) {
     return arrow::Status::OK();
   });
   return status.ok() && found;
+}
+
+std::vector<std::shared_ptr<dd::MacroFunction>> SessionObjectResolver::MacroDefinitions(const QualifiedName& name,
+                                                                                       bool table) {
+  std::vector<std::shared_ptr<dd::MacroFunction>> definitions;
+  const auto wanted = table ? dd::CatalogType::TABLE_MACRO_ENTRY : dd::CatalogType::MACRO_ENTRY;
+  auto status = InTransaction(connection_, [&]() -> arrow::Status {
+    // FROM f(...) is looked up as a table function, as DuckDB's binder looks it up: that finds what the
+    // call binds to (DuckLake answers that lookup with its own catalog macro first, so its snapshots()
+    // wins over a user's macro stored in the lake under the same name).
+    ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context,
+                                                table ? dd::CatalogType::TABLE_FUNCTION_ENTRY : wanted, name));
+    // DuckDB's and its extensions' own macros (lake.snapshots() and DuckLake's other catalog
+    // macros, which DuckLake generates on lookup, as DuckDB does its defaults) are made internal;
+    // CREATE MACRO never makes one. So what is not internal is a user's macro, wherever it is
+    // stored and whatever its name, and is walked. DuckLake's own are DuckLake calls, which the
+    // gate's ducklake_call decides by the catalog they act on.
+    if (!entry || entry->type != wanted || entry->internal) return arrow::Status::OK();
+    for (const auto& macro : entry->Cast<dd::MacroCatalogEntry>().macros) {
+      if (macro) definitions.push_back(std::shared_ptr<dd::MacroFunction>(macro->Copy().release()));
+    }
+    return arrow::Status::OK();
+  });
+  if (!status.ok()) definitions.clear();
+  return definitions;
+}
+
+std::optional<std::string> SessionObjectResolver::DuckLakeMacroCatalog(const QualifiedName& name) {
+  std::optional<std::string> catalog;
+  // A table function is looked up as one; DuckLake answers with its macro (it loads its
+  // built-in macros only for that lookup).
+  auto status = InTransaction(connection_, [&]() -> arrow::Status {
+    ARROW_ASSIGN_OR_RAISE(auto entry, FindEntry(*connection_.context, dd::CatalogType::TABLE_FUNCTION_ENTRY, name));
+    if (entry && entry->type == dd::CatalogType::TABLE_MACRO_ENTRY &&
+        compat::Str(entry->ParentCatalog().GetCatalogType()) == "ducklake") {
+      catalog = compat::Str(entry->ParentCatalog().GetName());
+    }
+    return arrow::Status::OK();
+  });
+  return status.ok() ? catalog : std::nullopt;
 }
 
 arrow::Result<ObjectPath> SessionObjectResolver::ResolveSchema(const QualifiedName& name) {

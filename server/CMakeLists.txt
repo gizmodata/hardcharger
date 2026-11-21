@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(hardcharger VERSION 2.13.1 LANGUAGES C CXX)
+project(hardcharger VERSION 2.13.4 LANGUAGES C CXX)
 # The pre-release part of the version, after PROJECT_VERSION (which takes numbers only): ""
 # for a release (tag vX.Y.Z), "-rc.N" for a release candidate (tag vX.Y.Z-rc.N). Every
 # reported version is HARDCHARGER_VERSION, the two together. .github/scripts/release.sh
@@ -38,6 +38,57 @@ set(HARDCHARGER_DEPS "${CMAKE_CURRENT_SOURCE_DIR}/.deps" CACHE PATH "Pinned depe
 set(CHARGEWIRE_ARROW_PREFIX "${HARDCHARGER_DEPS}/arrow-install" CACHE PATH "" FORCE)
 set(CHARGEWIRE_DUCKDB_PREFIX "${HARDCHARGER_DEPS}/duckdb-install" CACHE PATH "" FORCE)
 
+# The CPU target the dependencies were built for (scripts/cpu-target.sh: optimized or
+# baseline), as their installs record it; an install from before the record is optimized.
+# On Linux x86_64 the optimized build's DuckDB needs x86-64-v3 (AVX2) and its Arrow
+# x86-64-v2 (SSE4.2), so each program checks the CPU before anything else runs
+# (src/cpu_check.c, issue #62); the baseline build runs on any x86-64 CPU and checks nothing.
+set(HARDCHARGER_CPU_TARGET "")
+foreach(_dep_prefix "${CHARGEWIRE_DUCKDB_PREFIX}" "${CHARGEWIRE_ARROW_PREFIX}")
+  set(_dep_target optimized)
+  if(EXISTS "${_dep_prefix}/share/hardcharger-cpu-target")
+    file(STRINGS "${_dep_prefix}/share/hardcharger-cpu-target" _dep_target LIMIT_COUNT 1)
+  endif()
+  if(NOT _dep_target MATCHES "^(optimized|baseline)$")
+    message(FATAL_ERROR "${_dep_prefix}/share/hardcharger-cpu-target says '${_dep_target}'")
+  endif()
+  if(HARDCHARGER_CPU_TARGET STREQUAL "")
+    set(HARDCHARGER_CPU_TARGET "${_dep_target}")
+  elseif(NOT HARDCHARGER_CPU_TARGET STREQUAL _dep_target)
+    message(FATAL_ERROR "DuckDB and Arrow in ${HARDCHARGER_DEPS} were built for different CPU targets "
+                        "(${HARDCHARGER_CPU_TARGET}, ${_dep_target}): rebuild one with HARDCHARGER_CPU_TARGET")
+  endif()
+endforeach()
+set(HARDCHARGER_CPU_SERVER_LEVEL 0)
+set(HARDCHARGER_CPU_CLIENT_LEVEL 0)
+# The baseline Linux x86_64 build also builds in the extensions people load most (httpfs,
+# ducklake, postgres_scanner, sqlite_scanner: DuckDB's downloadable ones need x86-64-v3, so on an older CPU
+# the server refuses to load any, src/authz/extension_cpu_guard.cc), with the libraries they
+# link (scripts/build-extension-deps.sh), as the mobile builds do.
+set(HARDCHARGER_BASELINE_LINUX OFF)
+set(HARDCHARGER_NATIVE_EXTENSIONS core_functions parquet json icu)
+if(HARDCHARGER_CPU_TARGET STREQUAL "baseline" AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  set(HARDCHARGER_BASELINE_LINUX ON)
+  list(APPEND HARDCHARGER_NATIVE_EXTENSIONS httpfs ducklake postgres_scanner sqlite_scanner)
+  string(JOIN ", " _built_in ${HARDCHARGER_NATIVE_EXTENSIONS})
+  add_compile_definitions(HARDCHARGER_BASELINE_BUILD "HARDCHARGER_BUILT_IN_EXTENSIONS=\"${_built_in}\"")
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$"
+   AND CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang)$" AND HARDCHARGER_CPU_TARGET STREQUAL "optimized")
+  set(HARDCHARGER_CPU_SERVER_LEVEL 3)  # DuckDB's CLI profile
+  set(HARDCHARGER_CPU_CLIENT_LEVEL 2)  # Arrow's default SIMD level; the client has no DuckDB
+endif()
+message(STATUS "Hardcharger CPU target: ${HARDCHARGER_CPU_TARGET} (server checks x86-64-v${HARDCHARGER_CPU_SERVER_LEVEL}, "
+               "client x86-64-v${HARDCHARGER_CPU_CLIENT_LEVEL}; v0 = no check)")
+function(hardcharger_cpu_check target level)
+  if(level GREATER 0)
+    target_sources(${target} PRIVATE src/cpu_check.c)
+    target_compile_definitions(${target} PRIVATE HARDCHARGER_CPU_REQUIRE=${level}
+      "HARDCHARGER_CPU_BASELINE_NAME=\"hardcharger-linux-amd64-baseline.tar.gz at https://github.com/gizmodata/hardcharger/releases\"")
+  endif()
+endfunction()
+
 # HARDCHARGER_STATIC (the release builds): DuckDB, with its built-in extensions, links in
 # statically, as Arrow, Boost, yaml-cpp, replxx and (with OPENSSL_USE_STATIC_LIBS) OpenSSL
 # always do. The binaries then need only the C/C++ runtime and, on macOS, OS frameworks.
@@ -66,7 +117,7 @@ if(HARDCHARGER_STATIC)
   else()
     # Explicitly limit native builds, even if an old install prefix contains extra archives.
     set(_duckdb_extensions)
-    foreach(_extension core_functions parquet json icu)
+    foreach(_extension IN LISTS HARDCHARGER_NATIVE_EXTENSIONS)
       list(APPEND _duckdb_extensions "${_duckdb_lib}/lib${_extension}_extension.a")
     endforeach()
   endif()
@@ -85,7 +136,7 @@ if(HARDCHARGER_STATIC)
     set(_duckdb_loader "${CMAKE_CURRENT_SOURCE_DIR}/../android/native/bundled_extensions.c")
   endif()
   set(_duckdb_archives ${_duckdb_extensions} ${_duckdb_vendored} "${_duckdb_lib}/libduckdb_static.a")
-  if(IOS OR ANDROID)
+  if(IOS OR ANDROID OR HARDCHARGER_BASELINE_LINUX)
     list(APPEND _duckdb_archives "${_duckdb_lib}/static-deps/libpq.a"
          "${_duckdb_lib}/static-deps/libroaring.a" "${_duckdb_lib}/static-deps/libcurl.a")
   endif()
@@ -190,8 +241,10 @@ add_library(hardcharger_authz OBJECT
   src/authz/audit_fields.cc
   src/authz/authz.cc
   src/authz/ddl.cc
+  src/authz/ducklake_calls.cc
   src/authz/enforcement.cc
   src/authz/engine.cc
+  src/authz/extension_cpu_guard.cc
   src/authz/file_guard.cc
   src/authz/gate.cc
   src/authz/introspection.cc
@@ -359,6 +412,7 @@ endif()
 target_link_libraries(hardcharger-server PRIVATE hardcharger_core hardcharger_notices)
 target_compile_options(hardcharger-server PRIVATE ${HARDCHARGER_WARNINGS})
 hardcharger_rpath(hardcharger-server)
+hardcharger_cpu_check(hardcharger-server ${HARDCHARGER_CPU_SERVER_LEVEL})
 
 # Unit tests of components that have no SQL surface of their own (googletest 1.18.0).
 # server/tests runs them through the per-file wrappers.
@@ -373,7 +427,11 @@ add_executable(hardcharger-unit-tests
   unit/account_privileges_test.cc
   unit/admission_test.cc
   unit/authority_key_test.cc
+  unit/authz_gate_test.cc
   unit/catalog_log_test.cc
+  unit/ducklake_calls_test.cc
+  unit/prepared_rebind_test.cc
+  unit/ducklake_plan_check_test.cc
   unit/extension_hint_test.cc
   unit/guards_test.cc
   unit/http_client_test.cc
@@ -409,6 +467,7 @@ if(WIN32)
 endif()
 target_link_libraries(hardcharger-client PRIVATE hardcharger_client hardcharger_web hardcharger_notices)
 target_compile_options(hardcharger-client PRIVATE ${HARDCHARGER_WARNINGS})
+hardcharger_cpu_check(hardcharger-client ${HARDCHARGER_CPU_CLIENT_LEVEL})
 
 # The client's tests: GizmoSQL 1.x's client test files, ported (client/tests/). They run
 # against a real hardcharger-server, which server/tests starts and names in

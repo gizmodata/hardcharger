@@ -1,4 +1,5 @@
 .deps/
+.deps-*/
 build/
 build-*/
 .cache/

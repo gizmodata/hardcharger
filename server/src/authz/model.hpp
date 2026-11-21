@@ -464,6 +464,10 @@ class Snapshot {
 
   // The question every statement asks. Superusers are always allowed.
   AccessDecision Check(const Principal& principal, const AccessRequest& request) const;
+  // Does the principal hold `privilege` on all of catalog `catalog`: granted ON CATALOG (GRANT
+  // ALL ON CATALOG included), not only on some of its schemas, objects or columns? What a
+  // store user's DuckLake function on the catalog needs (authz/ducklake_calls.hpp).
+  bool HoldsOnCatalog(const Principal& principal, Privilege privilege, const std::string& catalog) const;
 
   // ---- listings (Chargewire §9.4: metadata shows only what the principal may access) ----
   // Every listing asks Check() above, so it follows the same rules as SQL. DuckDB's own
