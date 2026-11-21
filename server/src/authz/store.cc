@@ -1440,7 +1440,8 @@ arrow::Result<bool> RbacStore::TakeLoginLock(const std::string& key, const std::
     ARROW_RETURN_NOT_OK(Run(conn, "DELETE FROM " + T("login_events") + " WHERE event_id = $1 AND kind = 'lock' AND at_ms < $2",
                             {Text(key), BigInt(stale_before_ms)})
                             .status());
-    ARROW_RETURN_NOT_OK(Run(conn, "INSERT INTO " + T("login_events") + " VALUES ($1, $2, 'lock', '', '', '', $3)",
+    ARROW_RETURN_NOT_OK(Run(conn, "INSERT INTO " + T("login_events") +
+        " (event_id, at_ms, kind, user_key, user_name, address, origin) VALUES ($1, $2, 'lock', '', '', '', $3)",
                             {Text(key), BigInt(now_ms), Text(holder)})
                             .status());
     return Exec(conn, "COMMIT");
