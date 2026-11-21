@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+## [2.14.0] - 2026-11-21
+
 ### Added
 
 - RBAC and instrumentation now record their own store format versions. Version 2.14 upgrades

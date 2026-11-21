@@ -90,7 +90,7 @@ from pathlib import Path, PurePosixPath
 from urllib.error import HTTPError
 
 #: The hardcharger-server release this package runs by default.
-SERVER_VERSION = "2.13.4"
+SERVER_VERSION = "2.14.0"
 
 BINARY_ENV = "HARDCHARGER_SERVER_BINARY"
 VERSION_ENV = "HARDCHARGER_VERSION"

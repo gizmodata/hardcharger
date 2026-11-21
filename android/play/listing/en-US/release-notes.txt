@@ -1,2 +1,1 @@
-Hardcharger 2.13.4, a security release: DuckLake functions for per-catalog tokens, and tighter access-control checks on the server.
-The app itself has no changes.
+Hardcharger 2.14.0. SQL console result columns and borders stay aligned. The app includes the updated Hardcharger server and uses Android Gradle Plugin 9.

@@ -1559,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "hardcharger-desktop"
-version = "2.13.4"
+version = "2.14.0"
 dependencies = [
  "base64 0.22.1",
  "block2",

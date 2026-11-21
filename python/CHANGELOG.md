@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.14.0] - 2026-11-21
+
+- Downloads Hardcharger server 2.14.0 by default. The server upgrades existing RBAC and instrumentation stores on startup and supports SSO and password sign-in on the same account.
+
 ## [2.13.4] - 2026-11-20
 
 ### Changed
