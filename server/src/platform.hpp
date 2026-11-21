@@ -1,9 +1,12 @@
 // Operating-system differences (POSIX and Windows), kept out of the server's logic.
 #pragma once
 
+#include <functional>
+
 #include <boost/asio/ip/tcp.hpp>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -41,6 +44,22 @@ std::string MakePrivateTempDirectory(const std::string& prefix);
 
 std::tm UtcTime(std::time_t seconds);
 int64_t ProcessId();
+// The stack of the threads that run statements: the Chargewire SDK starts its engine pool's
+// threads with 8 MB on every platform (third_party/chargewire/cpp/src/sdk/engine_pool.hpp),
+// which is what DuckDB's recursion limits assume. (A thread started without saying gets 512
+// KB on macOS and iOS, 1 MB on Windows, the soft RLIMIT_STACK on Linux.)
+inline constexpr std::size_t kStatementThreadStackBytes = 8 * 1024 * 1024;
+
+// Runs `body` on a thread of its own with a stack of `stack_bytes`, and waits for it: what
+// the server runs outside the statement threads but with their stack (the init SQL, which
+// would otherwise run on the main thread, 1 MB on Windows, or an embedding's thread, 512 KB
+// on macOS and iOS). An exception `body` throws is rethrown here.
+void RunWithStack(std::size_t stack_bytes, const std::function<void()>& body);
+
+// The size of the calling thread's stack in bytes (the reserve on Windows), or 0 where the
+// platform cannot say.
+std::size_t CurrentThreadStackBytes();
+
 std::string HostName();
 // Current interface addresses; no DNS lookup. IPv4-mapped IPv6 is normalized to IPv4.
 std::vector<std::string> LocalIpAddresses();

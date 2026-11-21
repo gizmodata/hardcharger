@@ -1023,6 +1023,218 @@ connection of a streamed result), `timeout` (`Chargewire-Statement-Timeout` or
 `session_closed` (the session was deleted) or `server_shutdown`. A statement that
 ends on its own, or fails, gets none.
 
+### What the statement log masks
+
+Statement text and error text are kept in several places: the log's `statement`, `prepare`,
+`Client SQL command execution succeeded` and `statement failed` lines (at any level),
+`_hardcharger_instr.sql_statements` (`sql_text`, `prepare_error`) and `sql_executions`
+(`error_message`), the catalog log, `hardcharger_active_connections()` and
+`hardcharger_live_queries()`, the access-control audit record (`sql`, `error`) and the line a
+failed init SQL statement stops the server with. Before text reaches any of them, the credential
+values in it are replaced by `***`. The client that sent a statement still gets its own error
+as DuckDB gave it.
+
+A masker recognises forms; it does not understand statements. **What is masked is the list
+below, and nothing else: a credential written in any other form is logged as written.** Each
+form has a test (`server/unit/redaction_test.cc`, `server/tests/test_log_masking_forms.py`).
+
+A statement is read as DuckDB's own tokenizer reads it, so a value is found where DuckDB finds
+it, whatever comments, quoting or Unicode white space surround it. In a name, case is ignored
+and `-` reads as `_`. Characters that are not ASCII and control characters are left out of a
+name before it is compared, so a name pasted with an invisible character on it
+(`ENCRYPTION_KEY<U+180E>'…'`, which DuckDB refuses as an unknown option) still has its value
+masked. Two lists of names are used:
+
+- A **credential name** is one that ends in `password`, `passwd`, `pwd`, `passphrase`,
+  `secret`, `token`, `access_key`, `secret_key`, `accountkey`, `account_key`, `apikey`,
+  `api_key`, `private_key`, `encryption_key`, `subscription_key`, `sig`, `signature`, `auth`,
+  `authorization`, `credential`, `credentials`, `cookie`, `jwt` or `bearer`, or is `pass` or
+  `pw`, or ends in `_pass` or `_pw` (`s3_secret_access_key`, `X-API-Key`,
+  `Proxy-Authorization`, `bearer_token`). It masks a **setting's, an option's and a named
+  argument's** value, and every key in a connection string, a URL or other text.
+- Some of those words name ordinary data as well (`auth` for an authentication method, `pwd` for a directory, `first_pass`), so **a column, a
+  struct or MAP key and a name/value pair** mask their value only under a name **only a
+  credential has**: one that ends in `password`, `passwd`, `passphrase`, `secret`, `apikey` or
+  `accountkey`, or that is (or ends in `_` and) `secret_key`, `access_key`, `api_key`,
+  `private_key`, `encryption_key`, `account_key`, `subscription_key`, `access_token`,
+  `refresh_token`, `auth_token`, `bearer_token`, `api_token`, `id_token`, `session_token` or
+  `security_token`. A column named exactly `token` also masks its values. A key may also be an HTTP header that carries a credential
+  (`{'Authorization': …}`, `MAP {'Cookie': …}`).
+
+**Statements replaced whole**, by their own first words (not by words in a comment or a
+string). In a request of several statements only that statement is replaced:
+
+| Statement | Logged as |
+|---|---|
+| `CREATE [OR REPLACE] [PERSISTENT \| TEMPORARY \| TEMP] SECRET …` | `[REDACTED: secret DDL]` |
+| `CREATE USER …` / `ALTER USER …` with a literal or a credential name in it (`PASSWORD '…'`) | `[REDACTED: user DDL]` |
+| `SET` / `PRAGMA` `[GLOBAL \| SESSION \| LOCAL]` of a setting whose name has `password`, `passwd`, `pwd`, `passphrase`, `secret`, `token`, `access_key`, `accountkey`, `account_key`, `apikey`, `api_key`, `private_key`, `encryption_key`, `signature`, `credential`, `bearer`, `authorization`, `cookie` or `jwt` in it, or is a credential name, with `=` or `TO` (not `SET VARIABLE`, whose value is masked instead) | `[REDACTED: a credential setting]` |
+
+**The value given to a name** in any other statement. The whole value is replaced, whether it
+is one literal or an expression (`'a' || 'b'`, `upper('…')`, a subquery):
+
+| Form | Names | Example |
+|---|---|---|
+| a named argument | credential names | `f(token => v)`, `f(token := v)`, `f(token = v)` |
+| an option list | credential names | `ATTACH '…' (ENCRYPTION_KEY 'v')`, `(ENCRYPTION_KEY (SELECT …))`, `(TOKEN v)` with a bare word in an `ATTACH`; `(PASSWORD 'v')`, `(PASSWORD upper('…'))` in `COPY` and `EXPORT DATABASE` |
+| a struct, MAP or JSON key | only a credential's, or a credential header | `{password: v}`, `{'password': v}`, `MAP {'api_key': v}`, `{'Authorization': v}` |
+| `SET VARIABLE` | only a credential's | `SET VARIABLE my_api_key = v` |
+| a comparison with a literal or an expression | only a credential's | `password = v`, `==`, `<>`, `!=`, `<`, `>`, `<=`, `>=`, `~`, `!~`, `IN (…)`, `[NOT] LIKE`, `ILIKE`, `GLOB`, `REGEXP`, `SIMILAR TO`, `BETWEEN … AND …`, `IS [NOT] DISTINCT FROM`; also `v = password` and `upper('…') = password` (a literal, a call or a bracket on the left of `=`, `<>` or `!=`), `lower(password) = v`, `trim(lower(password)) = v`, `password::TEXT = v`, `CAST(password AS TEXT) = v` |
+| an `UPDATE`'s assignment | only a credential's | `SET password = v` |
+| an `INSERT` with a column list and `VALUES` rows | only a credential's | `INSERT INTO users (name, password) VALUES ('eve', v), …`, also behind `WITH`, `EXPLAIN` or `PREPARE … AS`, and `MERGE`'s `WHEN NOT MATCHED THEN INSERT (…) VALUES (…)` |
+| a name and its value as two literals | only a credential's, or a credential header | `json_object('api_key', 'v')`, `VALUES ('api_key', 'v')`, `map_from_entries([('Authorization', 'v')])`, `MAP(['Authorization'], ['v'])`; not in an `IN (…)` list, and not when the second literal is a credential name too (`note IN ('password', 'token')` is a list of words) |
+| DuckDB's key function | | `PRAGMA add_parquet_key('name', 'v')` (all arguments) |
+| a password clause of another engine | | `IDENTIFIED BY 'v'`, `IDENTIFIED WITH plugin BY 'v'` / `AS 'v'` |
+| an `Authorization` value on its own | | a literal that is `Bearer <token>` or `Basic <base64>` |
+
+A comparison with what holds no value (no literal, number or placeholder: another column,
+`a.access_token = b.access_token`; a function of columns, `lower(a.password) =
+lower(b.password)`; a subquery of them, `api_key IN (SELECT api_key FROM revoked WHERE id =
+3)`, where a number belongs to the subquery's own clauses), `IS NULL`, and a name with no value
+(`SELECT token FROM t`, `CREATE TABLE t (password VARCHAR)`) hide nothing. A bind
+placeholder (`token => ?`, `$1`, `$name`) is kept as written; the value bound to it is a
+credential for the statement's errors (below).
+
+**Inside a string literal, a quoted name and a comment**, and in error text:
+
+| Form | What is masked |
+|---|---|
+| a URL's userinfo, `scheme://user:password@host` | the password, up to the URL's last `@` (so one with `@`, `:`, `/`, quotes, brackets or a space in it goes whole); for `http` and `https` the user as well: `https://TOKEN@host`, `https://TOKEN:x-oauth-basic@host`. The URL runs to the next white space, or where it is quoted to the quote that closes it (one followed by white space or the text's end, directly or after `:` `,` `.` `;` `)` `]` `}`); past white space (a password with a space in it) only in a literal that is the URL alone, inside a quote up to that quote's close, or else on the same line before any `=`, quote or other URL. An authority that is `host:port` (digits after the colon, then the URL's end, `/`, `?`, `#` or a closing quote or bracket) has no userinfo: a later `@` is the path's or the query's (`http://h:8080/users/bob@example.com` is logged as written, and so is `postgresql://u:1234/x@h`, which libpq reads as host `u`, port `1234`) |
+| a URL's query parameters | the value of a parameter with a credential name (`?auth=`, `?api-key=`, `?jwt=`, `?access_token=`, `?sig=`, `?X-Goog-Signature=`), of any `X-Amz-…` parameter, and of `key`, `sessionid` and `session_id`, up to the next `&` or `#` |
+| `key=value` with a credential name as the key | libpq's keyword form (to the next white space, a backslash taking the next character; or `'…'`), also behind `postgres:` and `ducklake:postgres:`; `"…"` (MySQL); `{…}` (ODBC); a `;`-separated list, to the next `;` (ADO, Azure's `AccountKey=…;`) |
+| `key => value`, `key := value`, `'key': 'value'`, `"key": "value"` | the value (JSON and struct text) |
+| a header line | `Authorization:`, `Proxy-Authorization:`, `Cookie:`, `Set-Cookie:`, `X-API-Key:`, `X-Auth-Token:`, `X-Amz-Security-Token:`, to the end of the line |
+| SQL given as text | a literal or a comment that holds a statement (`postgres_execute('pg', 'ALTER ROLE app PASSWORD ''v''')`, `query('…')`, a statement commented out) is read again with every rule above, four levels deep (text that begins as a statement does, `SELECT`, `ALTER`, `INSERT` and the like, is read as SQL only, so a literal inside it is read with its quotes resolved at each level); one DuckDB cannot tokenize, or with a backslash before a quote, that names a credential before a quote is masked whole |
+| a value built from pieces | when a credential's value runs to the end of a literal that is joined to something (`'host=h password=' \|\| x`), the rest of the concatenation; when the literal is a function's argument and the value is a placeholder (`format('…?token={}', x)`, `%s`), the function's other arguments |
+
+An error over 64 KiB, or one whose credential replacements exceed the redaction work budget, is logged as `[REDACTED: error details omitted]`.
+
+**Text DuckDB cannot tokenize** (an unterminated string literal, quoted identifier, `/*`
+comment or dollar-quoted string, or invalid UTF-8) cannot be searched for values and never
+runs: all of it is replaced by `[REDACTED: a statement that could not be read: <which>]`, and
+its error by `[REDACTED: error of a statement that could not be read: <which>]`.
+
+**Errors.** An error is logged and stored without DuckDB's excerpt of the statement
+(`LINE 1: …`), with every value the statement's masking hid replaced wherever the error quotes
+it (in any letter case, as the literal's value with its quotes and escapes resolved, joined
+when it was written as `'a' || 'b'`, and each piece of a password that a connection-string
+parser split at its punctuation; a value of letters only, which the error's own wording may
+use, only where it is a word of its own and written as it was hidden, so `password = 'error'`
+leaves `Binder Error:` as it is; in a request of several statements, each statement's error
+with the values that statement hid), with the values bound to the statement's masked
+placeholders replaced the same way (JSON parameters and Arrow parameter rows), and then with
+the forms of the table above masked in the error's own text (DuckDB quotes an `ATTACH`'s
+connection string in its errors). The reason an error gives is kept. Two errors are replaced
+whole, because what they might quote cannot be listed: that of a statement whose credential
+value is computed (`token => upper('…')`), by
+`[REDACTED: error of a statement that computes a credential value]`, and that of an execution
+that binds more than 1,000 credential values.
+
+**Query profiles** (`capture_query_profile`) hold a statement's text and constants: none is
+captured for a statement in which a value was masked. A comment, a join on a credential-named
+column and an ordinary escaped literal mask nothing, and such statements keep their profile.
+
+A failed init SQL statement stops the server with one line that says why and which:
+`init SQL failed: <the error, redacted as above> (init SQL statement 2 of 5: <the statement
+as the log shows it>)`.
+
+Among what is **not** masked: an argument given by position (`hmac('key', msg)`), a value
+under a name that is not a credential name (`key => …`, `tokens => […]`, `client_key_pem`), a
+column, key or pair under a credential name that is not one only a credential has (`token =
+'cat'`, `auth = 'basic'`, `{'token': …}`, `INSERT INTO t (token) VALUES …`), a credential in a
+URL's path, a URL query's `code`, an `INSERT` without a column list or from a `SELECT`, and a
+value an error quotes after the statement transformed it (a substring, a hash, an encoding).
+
+### Statements refused before DuckDB parses them
+
+The server checks every text DuckDB is asked to parse, before DuckDB's parser sees it, in one
+pass over the text with DuckDB's own tokenizer (so a bracket in a string, a quoted name or a
+comment is not one). The check sits in DuckDB's parser hook (`allow_parser_override_extension`
+is `fallback` on this server), so it sees text however it reaches the parser: a statement, a
+request of several, a prepare, the init SQL, the SQL `query()` and `query_table()` are given
+(written out or computed, `query('SELECT ' || repeat('(', 8000))`), `json_serialize_sql()`
+and `json_serialize_plan()` (on any thread, DuckDB's worker threads included), and IMPORT
+DATABASE's `load.sql`. It refuses:
+
+- **Parentheses opened and never closed.** DuckDB 2.0's parser takes time quadratic in their
+  number to report the syntax error (8,000 of them: about 20 seconds; 500,000: hours), on one
+  core, and neither the statement timeout nor a cancel interrupts a parse:
+  `Parser Error: syntax error: 8000 opening parentheses are never closed (the first "(" at
+  position 8)`, at once. The position is in the text that has them (the statement of a
+  request, the SQL given to `query()`).
+- **Brackets nested deeper than `max_sql_nesting`** (`(`, `[` and `{` together):
+  `Parser Error: the statement's brackets nest 3000 deep, and this server takes 1000 (its
+  max_sql_nesting option)`. DuckDB's parser recurses once per level before its own limit is
+  checked: 8,000 nested subqueries stopped the server whatever that limit was.
+- **More than four times `max_sql_nesting` tables in one `FROM` clause**, joined or listed
+  with commas (the parser recurses once per table as well).
+- **A dotted name of more parts than `max_sql_nesting`** (`a.b.c…`): DuckDB's binder takes
+  time quadratic in their number (20,000 parts: 45 seconds), and no timeout interrupts it.
+- **More tables in one `FROM` clause than `max_joined_tables`** (64 by default), joined or
+  listed with commas, and more than eight times that in all a statement's `FROM` clauses
+  together: `Parser Error: a FROM clause of the statement joins 65 tables, and this server
+  takes 64 in one (its max_joined_tables option): …`. DuckDB's time to choose a join order
+  grows steeply with the tables one clause joins, and neither the statement timeout nor a
+  cancel interrupts it. Measured on a busy laptop (planning only): a chain of 64 tables 0.08
+  s, 128 tables 0.7 s, 256 tables 16 s; a join graph with cycles, 64 tables 0.4 s, 96 tables
+  1.9 s, 128 tables 7 s, 192 tables 82 s. A derived table or a CTE is one table of the clause
+  that joins it (DuckDB plans its own join on its own: 600 tables in derived tables of ten take
+  about 2.5 s), and a request's statements are counted one by one.
+
+Anything else goes on to DuckDB's parser unchanged: its errors, their positions and `EXPLAIN`
+are what DuckDB says. No session can switch the check off: a `SET`, `RESET` or `PRAGMA` of
+`allow_parser_override_extension`, in any scope, is refused, for an administrator too. An init
+SQL that changes it does not outlast startup.
+
+`max_sql_nesting` (`--max-sql-nesting`, `HARDCHARGER_MAX_SQL_NESTING`) is the deepest nesting a
+statement may have. DuckDB recurses once per level of a statement's nesting (brackets,
+subqueries, chained operators such as `a || b || c`, joins) on the thread that parses and binds
+it, and past what that thread's stack takes the server does not answer with an error: it stops.
+The server sets DuckDB's own limit, `max_expression_depth`, to `max_sql_nesting` at startup
+(after the init SQL), and no session can set it higher, for an administrator too: `SET`,
+`PRAGMA` or `RESET GLOBAL max_expression_depth` to anything above the limit is refused (a
+session may lower its own). DuckDB then refuses deeper nesting wherever it parses or binds, with
+its `Max expression depth limit of N exceeded`.
+
+The threads that run statements have an **8 MB stack on every platform** (the Chargewire SDK
+starts them so; a thread gets 512 KB by default on macOS and 1 MB on Windows), and so does the
+thread that runs the init SQL. Left at `0`, the default, `max_sql_nesting` is what that stack
+takes at 4 KB a level, at most DuckDB's own default: **1000 everywhere**. DuckDB counts some
+constructs as several levels (a nested scalar subquery as about four). Set it higher only with
+stacks to match: DuckDB's own worker threads, which run parts of queries (and parse the SQL
+`json_serialize_sql()` is given row by row), keep the platform's default stack, and were
+measured to take twice the default limit on macOS.
+
+`max_joined_tables` (`--max-joined-tables`, `HARDCHARGER_MAX_JOINED_TABLES`, default `64`,
+`0` for no limit) is the most tables one `FROM` clause may join; all of a statement's `FROM`
+clauses together may join eight times as many. It bounds what DuckDB's join-order search, which
+nothing interrupts, is given: raise it only knowing that each table past a hundred or so in one
+clause can add seconds to minutes of planning on one core.
+
+### DuckDB's autocomplete functions
+
+`sql_auto_complete()`, `sql_tokenize()`, `check_peg_parser()` and `duckdb_format_sql()` (DuckDB's
+autocomplete extension) run DuckDB's SQL matcher, or its formatter, on their argument directly,
+not through the parser and its check. `sql_auto_complete()`'s argument is unfinished SQL by
+design, and the matcher's time grows exponentially with the brackets the argument leaves open
+(`SELECT 1 + (` six times: 1.7 seconds; eight times: over 15; `sql_tokenize()` ran over two
+minutes on 2,000 open parentheses). `duckdb_format_sql()`'s time and result grow with the square
+of its argument (4,000 nested subqueries: 3 seconds and 64 MB). The work is done while DuckDB
+binds the call, so neither the statement timeout nor a cancel interrupts it: they take effect
+when it returns. No limit on the argument keeps every shape fast, so these functions are **off
+unless `enable_sql_auto_complete` is on** (`--enable-sql-auto-complete`,
+`HARDCHARGER_ENABLE_SQL_AUTO_COMPLETE`), and then **for administrators only**:
+
+- Off (the default), the extension is not loaded (`LOAD autocomplete`, in a session or the init
+  SQL, is refused), and a build that links it in (iOS, Android, the sanitizer builds) refuses its
+  functions: `sql_auto_complete() is turned off on this server: …`.
+- On, the server loads the extension at startup (installing it if
+  `autoinstall_known_extensions` allows), and no later load is allowed. The functions answer
+  administrators; to anyone else, wherever the call is (a statement, a view, `query()`), they
+  answer `sql_auto_complete() is for administrators on this server: …`.
+
+Nothing in Hardcharger's server, command-line client or web UI calls them.
+
 ### Credential and system files
 
 With `block_sensitive_paths` on (the default), no statement can open, list, write, move or

@@ -267,6 +267,17 @@ target_include_directories(hardcharger_authz SYSTEM PRIVATE
 target_link_libraries(hardcharger_authz PUBLIC chargewire_duckdb OpenSSL::Crypto)
 target_compile_options(hardcharger_authz PRIVATE ${HARDCHARGER_AUTHZ_WARNINGS})
 
+# SQL as DuckDB's own tokenizer reads it (src/sql_lex.hpp), for the log masking, and the
+# parse guard (src/parse_guard.hpp), DuckDB's parser hook that refuses the statement shapes
+# its parser cannot be handed safely. Like the access control they use DuckDB's C++ headers
+# (the tokenizer class its parser runs), so they are compiled the same way.
+add_library(hardcharger_sql_lex OBJECT src/sql_lex.cc src/parse_guard.cc)
+target_include_directories(hardcharger_sql_lex PRIVATE src)
+target_include_directories(hardcharger_sql_lex SYSTEM PRIVATE
+                           "${CHARGEWIRE_DUCKDB_PREFIX}/include/duckdb_third_party")
+target_link_libraries(hardcharger_sql_lex PUBLIC chargewire_duckdb)
+target_compile_options(hardcharger_sql_lex PRIVATE ${HARDCHARGER_AUTHZ_WARNINGS})
+
 # The web UI and its relay, engine-free: the server and the `hardcharger ui` command both
 # link it (platform.cc is the operating-system helpers both need).
 add_library(hardcharger_web STATIC
@@ -315,6 +326,7 @@ add_library(hardcharger_core STATIC
   src/verify_credentials.cc)
 target_include_directories(hardcharger_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_sources(hardcharger_core PRIVATE $<TARGET_OBJECTS:hardcharger_authz>)
+target_sources(hardcharger_core PRIVATE $<TARGET_OBJECTS:hardcharger_sql_lex>)
 target_link_libraries(hardcharger_core PUBLIC hardcharger_web chargewire_duckdb OpenSSL::Crypto jwt-cpp::jwt-cpp
                       yaml-cpp::yaml-cpp)
 target_compile_options(hardcharger_core PRIVATE ${HARDCHARGER_WARNINGS})
@@ -440,6 +452,7 @@ add_executable(hardcharger-unit-tests
   unit/log_level_test.cc
   unit/login_guard_test.cc
   unit/metrics_test.cc
+  unit/parse_guard_test.cc
   unit/patterns_test.cc
   unit/platform_test.cc
   unit/policy_exemption_test.cc
@@ -448,6 +461,7 @@ add_executable(hardcharger-unit-tests
   unit/system_admin_test.cc
   unit/sensitive_paths_test.cc
   unit/storage_locations_test.cc
+  unit/sql_lex_test.cc
   unit/sql_text_test.cc
   unit/startup_banner_test.cc
   unit/web_ui_test.cc)

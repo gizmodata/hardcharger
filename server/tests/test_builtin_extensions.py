@@ -63,3 +63,13 @@ def test_parquet_json_and_icu(server, tmp_path):
     assert session.scalar(sql="""SELECT json_extract_string('{"a": {"b": "json"}}', '$.a.b')""") == "json"
     assert session.scalar(sql="SELECT (TIMESTAMPTZ '2026-01-01 12:00:00+00' AT TIME ZONE 'Asia/Tokyo')::VARCHAR") \
         == "2026-01-01 21:00:00"
+
+
+def test_a_linked_in_autocomplete_extension_is_off_all_the_same(server):
+    # Builds that link the autocomplete extension in (the sanitizer fixture, iOS, Android) load it
+    # before the server starts: its functions are refused unless enable_sql_auto_complete is on.
+    detail = server.admin().error(sql="SELECT count(*) FROM sql_auto_complete('SELE')")["detail"]
+    if TSAN_EXTENSIONS:
+        assert "sql_auto_complete() is turned off on this server" in detail, detail
+    else:
+        assert "sql_auto_complete" in detail and "autocomplete" in detail, detail

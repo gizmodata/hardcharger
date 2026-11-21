@@ -19,7 +19,9 @@ def server(module_launcher, tmp_path_factory):
     cache = tmp_path_factory.mktemp("loadable-extensions")
     init = f"SET extension_directory = '{cache}'; "
     init += " ".join(f"INSTALL {name}; LOAD {name};" for name in OPTIONAL)
-    return module_launcher.start(env={"HARDCHARGER_INIT_SQL_COMMANDS": init}, startup_seconds=180)
+    # (The autocomplete extension loads only with enable_sql_auto_complete, and only during startup.)
+    return module_launcher.start(args=["--enable-sql-auto-complete"], env={"HARDCHARGER_INIT_SQL_COMMANDS": init},
+                                 startup_seconds=180)
 
 
 def test_optional_extensions_are_loaded_from_the_repository(server):

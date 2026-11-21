@@ -6,10 +6,12 @@
 #include <psapi.h>
 #include <tlhelp32.h>
 #include <iphlpapi.h>
+#include <process.h>
 
 #include <cwctype>
 #else
 #include <fnmatch.h>
+#include <pthread.h>
 #include <pwd.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
@@ -37,6 +39,8 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
+#include <exception>
 #include <iterator>
 #include <random>
 #include <stdexcept>
@@ -733,6 +737,92 @@ bool AddSystemTrustStore(ssl_ctx_st* context) { return SSL_CTX_set_default_verif
 
 bool GlobSegmentMatches(const std::string& pattern, const std::string& segment) {
   return fnmatch(pattern.c_str(), segment.c_str(), 0) == 0;
+}
+
+#endif
+
+namespace {
+
+struct StackBody {
+  const std::function<void()>* body;
+  std::exception_ptr error;
+};
+
+void RunStackBody(StackBody& run) {
+  try {
+    (*run.body)();
+  } catch (...) {
+    run.error = std::current_exception();
+  }
+}
+
+}  // namespace
+
+#ifdef _WIN32
+
+namespace {
+unsigned __stdcall StackThreadMain(void* run) {
+  RunStackBody(*static_cast<StackBody*>(run));
+  return 0;
+}
+}  // namespace
+
+void RunWithStack(std::size_t stack_bytes, const std::function<void()>& body) {
+  StackBody run{&body, nullptr};
+  // STACK_SIZE_PARAM_IS_A_RESERVATION: the size is the stack's reserve, committed as used.
+  const uintptr_t handle = _beginthreadex(nullptr, static_cast<unsigned>(stack_bytes), &StackThreadMain, &run,
+                                          STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+  if (handle == 0) throw std::runtime_error("cannot start a thread with a " + std::to_string(stack_bytes) + "-byte stack");
+  WaitForSingleObject(reinterpret_cast<HANDLE>(handle), INFINITE);
+  CloseHandle(reinterpret_cast<HANDLE>(handle));
+  if (run.error) std::rethrow_exception(run.error);
+}
+
+std::size_t CurrentThreadStackBytes() {
+  ULONG_PTR low = 0;
+  ULONG_PTR high = 0;
+  GetCurrentThreadStackLimits(&low, &high);
+  return static_cast<std::size_t>(high - low);
+}
+
+#else
+
+namespace {
+void* StackThreadMain(void* run) {
+  RunStackBody(*static_cast<StackBody*>(run));
+  return nullptr;
+}
+}  // namespace
+
+void RunWithStack(std::size_t stack_bytes, const std::function<void()>& body) {
+  StackBody run{&body, nullptr};
+  pthread_attr_t attributes;
+  int error = pthread_attr_init(&attributes);
+  if (error == 0) error = pthread_attr_setstacksize(&attributes, stack_bytes);
+  pthread_t thread{};
+  if (error == 0) error = pthread_create(&thread, &attributes, &StackThreadMain, &run);
+  pthread_attr_destroy(&attributes);
+  if (error != 0) {
+    throw std::runtime_error("cannot start a thread with a " + std::to_string(stack_bytes) +
+                             "-byte stack: " + std::strerror(error));
+  }
+  pthread_join(thread, nullptr);
+  if (run.error) std::rethrow_exception(run.error);
+}
+
+std::size_t CurrentThreadStackBytes() {
+#if defined(__APPLE__)
+  return pthread_get_stacksize_np(pthread_self());
+#elif defined(__linux__)
+  pthread_attr_t attributes;
+  if (pthread_getattr_np(pthread_self(), &attributes) != 0) return 0;
+  std::size_t bytes = 0;
+  pthread_attr_getstacksize(&attributes, &bytes);
+  pthread_attr_destroy(&attributes);
+  return bytes;
+#else
+  return 0;
+#endif
 }
 
 #endif

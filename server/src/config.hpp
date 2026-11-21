@@ -132,6 +132,16 @@ struct Config {
 
   // Statements
   int64_t query_timeout_seconds = 0;  // 0 = none
+  // The deepest nesting a statement may have (DuckDB's max_expression_depth, which sessions
+  // cannot raise past it). 0 = what the statement threads' 8 MB stacks take: 1000.
+  int64_t max_sql_nesting = 0;
+  // The most tables one FROM clause may join (and eight times that, all of a statement's FROM
+  // clauses together); 0: no limit. DuckDB's join-order search is not interrupted by a
+  // timeout or a cancel: 64 keeps it well under a second (README; hc-v214-notes join-cap).
+  int64_t max_joined_tables = 64;
+  // DuckDB's autocomplete functions (sql_auto_complete, sql_tokenize, check_peg_parser,
+  // duckdb_format_sql), for administrators: off, they are refused to everyone (parse_guard.hpp).
+  bool enable_sql_auto_complete = false;
   bool print_queries = true;
   int64_t max_concurrent_statements = 0;  // 0 = no queue
   int64_t max_queued_statements = -1;     // -1 = 8 x concurrency; 0 = unbounded
@@ -227,5 +237,11 @@ std::string Usage();
 // Every option as JSON (name, group, flag, env, yaml_key, type, default, description), for
 // generated documentation: --print-options-json.
 std::string OptionsJson();
+
+// The deepest nesting a statement may have on this server: max_sql_nesting, or, left at 0,
+// what the stack of the threads that run statements takes at 4 KB a level, at most DuckDB's
+// own default: 1000 with their 8 MB (kStatementThreadStackBytes) on every platform. DuckDB
+// recurses once per level of a statement's nesting.
+int64_t SqlNestingLimit(const Config& config);
 
 }  // namespace hardcharger

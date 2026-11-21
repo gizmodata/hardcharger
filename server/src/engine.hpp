@@ -8,9 +8,11 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
+#include "parse_guard.hpp"
 #include "authz/authz.hpp"
 #include "config.hpp"
 #include "duckdb_backend.hpp"
@@ -25,8 +27,21 @@
 
 namespace hardcharger {
 
+struct BoundSecrets;     // engine.cc
+struct MaskedSql;        // redact.hpp
+struct MaskedStatement;  // redact.hpp
+
 // The catalog with the server's own read-only views (hardcharger_index_info, ...).
 inline constexpr const char* kSystemCatalog = "_hardcharger_system";
+
+// A failure of the init SQL, with a message made loggable where it was built: the reason
+// with every credential value replaced, and the statement that failed as the log shows
+// statements. (A second reading of it as text that is not a statement would only take a
+// comparison of two credential-named columns for a key and its value.)
+class InitSqlError : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
 
 // For a LOAD that failed because the extension needs another one that isn't installed
 // (iceberg needs avro): what to run, said first; nullopt for any other error.
@@ -75,6 +90,8 @@ class Backend : public chargewire_duckdb::DuckDBBackend {
   // The server's own files, which no SQL opens (guards.hpp): shared with the file
   // system guard in the instance.
   std::shared_ptr<PrivateFiles> private_files_;
+  // DuckDB's parser hook: the limits on statement text's shape (parse_guard.hpp).
+  std::shared_ptr<ParseGuard> parse_guard_;
   std::string system_catalog_dir_;
   // The init SQL connection's current catalog and schema once the init SQL ran (unset
   // without init SQL).
@@ -237,8 +254,9 @@ class Session : public chargewire_duckdb::DuckDBSession {
   std::string StatementQueryTag() const;
   LogLevel QueryLogLevel() const;
   void LogQuery(LogLevel level, std::string_view message, const LogFields& fields) const;
-  // Logs "statement failed" for a statement of this session (`logged_error`: LoggableError's).
-  void LogFailed(const LogFields& id_fields, std::string_view sql, const std::string& logged_error);
+  // Logs "statement failed" for a statement of this session, with its text and its error
+  // as they may be logged (MaskedStatement::text, RedactError's).
+  void LogFailed(const LogFields& id_fields, std::string_view logged_sql, const std::string& logged_error);
   // A tracked execution ended (its Execution calls it).
   void FinishRunning();
 
@@ -259,14 +277,26 @@ class Session : public chargewire_duckdb::DuckDBSession {
   // Refuses what the principal may not run; returns the statement's type.
   DUCKDB_V2_STATEMENT_TYPE Authorize(const Piece& piece);
   chargewire::StatementOutcome RunCommand(const Piece& piece);
+  // A tracked statement's text for its sinks: what the request's one reading (MaskSql) made
+  // of it, and the values its errors must not quote.
+  struct TrackedText {
+    std::shared_ptr<const MaskedSql> request;  // owns `statement`
+    const MaskedStatement* statement = nullptr;  // the request, or the one of its statements that runs
+    std::string logged;  // the log's and the record's text, when not statement->text
+    std::string shown;   // hardcharger_active_connections()'s, when not `logged`
+    std::shared_ptr<BoundSecrets> bound;  // what is bound to the statement's masked placeholders
+    // An error of the statement as it may be logged and stored.
+    std::string Error(std::string_view error) const;
+  };
+  // The text of statement number `statement` (from 0) of the request read as `request`;
+  // `piece`: that statement as written.
+  TrackedText TextOf(std::shared_ptr<const MaskedSql> request, std::size_t statement, std::string_view piece);
+  std::size_t text_pieces_ = 0;  // how many statements the request being run has; engine thread only
   // Takes a queue slot (when the queue is on), runs `work`, and tracks its outcome
   // until its rows are read: running state, metrics, the slot.
-  // `shown`: the statement as hardcharger_active_connections() shows it (default: `sql`
-  // as the logs show it).
   // `ids`: what it is recorded and logged under.
-  chargewire::StatementOutcome Track(StatementKind kind, std::string_view sql, const ExecutionIds& ids,
-                                  const std::function<chargewire::StatementOutcome()>& work,
-                                  std::string_view shown = {}, bool credential_context = false);
+  chargewire::StatementOutcome Track(StatementKind kind, const TrackedText& text, const ExecutionIds& ids,
+                                  const std::function<chargewire::StatementOutcome()>& work);
   // A new statement starts: the previous one's cancellation is over.
   void BeginStatement();
   // A catalog the server owns (instrumentation, logs) and what it is called in messages.

@@ -227,6 +227,202 @@ own changelog in `python/CHANGELOG.md`.
   the Web UI and the CLI show it as running, without a percentage). `SET progress_bar_time =
   0` gives a session estimates from the start again, still computed at most every 100 ms.
 
+### Security
+
+- SQL logs mask values for columns named `token`. Error details are omitted when redaction exceeds its work budget.
+
+- **The statement log's credential masking is rebuilt on DuckDB's own tokenizer, and what it
+  masks is now written down** (README, "What the statement log masks": the statements replaced
+  whole, the forms of a credential's value, the URL parts, headers, parameters and functions,
+  and the rule for text DuckDB cannot tokenize). A masker recognises forms: a credential in a
+  form outside that list is logged as written. An independent review of 2.13.0's masking found
+  values that reached the log, the instrumentation tables, the catalog log and the audit
+  record; each is closed, with a test that reads every sink:
+  - **A connection-string password with `;`, `)`, `"` or `'` in it** was masked only up to
+    the punctuation in the keyword form (`password=Zk7;…`) and not at all in a URL
+    (`postgresql://u:Zk7"…@host`), in the statement and in the stored error. The keyword form
+    is now read as libpq reads it (to the next white space, with its quoting and backslash
+    escapes), with MySQL's `"…"`, ODBC's `{…}` and `;`-separated lists read as theirs; a URL's
+    password runs to the last `@` before the host. Any character may be in the password.
+  - **Where the masker's own lexer read a statement differently from DuckDB**, the value was
+    logged: `$` inside a name (`a$q$`, which it took for a dollar-quoted literal) and U+2060,
+    which DuckDB reads as white space. There is no second lexer now: statements are read
+    through DuckDB's tokenizer class and its parser's normalization of Unicode spaces
+    (`server/src/sql_lex.cc`), and a seeded differential test (100,000 texts, against the
+    parser's own tokenization and the C API's on a live connection) holds that in place.
+  - **Forms that were not recognised**: HTTP header maps (`Authorization`,
+    `Proxy-Authorization`, `X-API-Key`, `Cookie`, in any case, as `MAP {…}`, a struct,
+    `MAP([…], […])` or `map_from_entries`); a token as a URL's user (`https://TOKEN@host`,
+    `https://TOKEN:x-oauth-basic@host`); the URL parameters `auth`, `api-key`, `jwt`,
+    `credential`, `subscription-key`, `sessionid`; SQL given to a function as text
+    (`postgres_execute('pg', 'ALTER ROLE app PASSWORD ''…''')`, MySQL's `IDENTIFIED BY`,
+    nested to four levels); a credential built from pieces (`'… password=' || x`,
+    `format('…?token={}', x)`: the whole expression); `IN`, `LIKE`, `BETWEEN` and the other
+    comparisons of a credential column, a comparison written the other way round
+    (`'…' = password`, `upper('…') = password`) or through functions or a cast
+    (`trim(lower(password)) = '…'`), `INSERT … (name, password) VALUES …` (also behind `WITH`,
+    `EXPLAIN` or `PREPARE`, and in `MERGE`), and an option whose value is computed
+    (`ENCRYPTION_KEY (SELECT …)`, `PASSWORD upper('…')` in `COPY`); `SET <credential
+    setting> TO '…'` for every credential word (2.13.0 knew seven of them, and `=`); a
+    literal that is `Bearer <token>`.
+  - **An error message no longer re-exposes what the statement's masking hid.** The values
+    hidden in the statement, and the values bound to its masked placeholders (JSON and Arrow
+    parameters), are replaced wherever the error quotes them. 2.13.0's changelog said stored
+    errors were suppressed "for credential-bearing statements, including prepared executions";
+    that held only where the placeholder followed a credential name, and an error could still
+    quote a bound value or the tail of a password. In a request of several statements, each
+    statement's error is redacted with the values that statement hid, and a value SQL given as
+    text hid several levels down is found as itself.
+  - **A URL with a port no longer takes a later `@` for the end of a password**, so a
+    credential with an `@` in it after such a URL is masked whole: a query parameter
+    (`postgresql://h:5432/app?password=P@ss…`, `http://h:9000/f?X-Amz-Signature=…@…`), and a
+    field later in the same text (`{"url": "http://h:8080/api", "password": "P@ss…"}`). A quoted
+    URL ends at its closing quote.
+
+- **No SQL text can hold a core in DuckDB's parser, or stop the server, by its shape alone,
+  however it reaches the parser.** Any signed-in user could do either:
+  - A text with parentheses opened and never closed kept DuckDB 2.0's parser busy for time
+    quadratic in their number (8 KB of them: 17 seconds; 500 KB: hours), one core each, and
+    neither the statement timeout, `hardcharger_cancel()` nor a client's cancel took effect
+    until the parse returned. Such a text cannot parse: the server now answers it with the
+    syntax error at once (`… 8000 opening parentheses are never closed …`). The check is made
+    in DuckDB's parser hook, on every text DuckDB is asked to parse: a statement, a request of
+    several, a prepare, the init SQL, SQL built at run time and given to `query()` or
+    `query_table()` (`query('SELECT ' || repeat('(', 4000))` took 3.9 s), to
+    `json_serialize_sql()` (anyone's: 8,000 took 35 s) or `json_serialize_plan()`, on DuckDB's
+    worker threads too, and IMPORT DATABASE's `load.sql` (DuckDB parsed it with a parser no
+    hook sees: the server's `import_database` now parses it through the check, and refuses a
+    statement in it that is not a `COPY`). The count is made on DuckDB's own tokens.
+  - DuckDB recurses once per level of a statement's nesting, and its own limit
+    (`max_expression_depth`, 1000) assumes an 8 MB stack. On macOS, where the threads that
+    ran statements had 512 KB, statements DuckDB accepts by default stopped the server process:
+    `'a' || 'a' || …` with 900 terms, 460 nested lists or function calls, 300 nested
+    subqueries, a 300-table join. On every platform a session that ran `SET
+    max_expression_depth TO 10000000` first could do the same with a few thousand levels, and
+    8,000 nested subqueries or 20,000 tables in one `FROM` clause did it whatever the setting,
+    also when built at run time and parsed on one of DuckDB's own worker threads
+    (`json_serialize_sql()` over a scan). Statement threads now have an 8 MB stack on every
+    platform (Chargewire SDK), the init SQL runs on a thread with the same, and the new
+    `max_sql_nesting` option (1000, DuckDB's default, everywhere) is DuckDB's limit: no session
+    can raise `max_expression_depth` past it (`SET`, `PRAGMA`, `RESET GLOBAL`), and text whose
+    brackets nest deeper, or whose `FROM` clause names more than four times as many tables, is
+    refused before DuckDB's parser sees it.
+  - A dotted name of thousands of parts (`SELECT a.b.b.b…`) kept DuckDB's binder busy for time
+    quadratic in their number (20,000 parts, 40 KB: 45 s), uninterrupted. A name of more parts
+    than `max_sql_nesting` is refused.
+  - No session can switch the check off: `SET`, `RESET` and `PRAGMA` of
+    `allow_parser_override_extension`, in any scope and for an administrator too, are refused.
+  - **A statement can no longer hold a core for minutes in DuckDB's join-order search.** That
+    search takes time that grows steeply with the tables one `FROM` clause joins (on a busy
+    laptop, a join graph with cycles: 96 tables 1.9 s, 128 7 s, 192 82 s; a 600-table join
+    over two minutes), and no statement timeout or cancel interrupts it. The new
+    `max_joined_tables` option (64) bounds the tables one `FROM` clause joins, and eight times
+    that all of a statement's `FROM` clauses together; more is refused by the same check, before
+    DuckDB parses the text, with an error that names the option.
+  See README, "Statements refused before DuckDB parses them".
+- **DuckDB's autocomplete functions are off unless `enable_sql_auto_complete` turns them on,
+  and then they are for administrators only.** `sql_auto_complete()` takes unfinished SQL by
+  design and ran DuckDB's matcher for time exponential in the brackets it left open (14 of
+  them: 7 s; 16: 37 s; 18: over 40 s), for any signed-in user, with a statement timeout or a
+  cancel taking effect only once it returned; `sql_tokenize()` and `check_peg_parser()` run the
+  same matcher (`sql_tokenize()`: over 120 s on 2,000 open parentheses), and
+  `duckdb_format_sql()`, anyone's, took time and memory quadratic in its argument (4,000
+  nested subqueries: 3 s and a 64 MB result). Off (the default), the extension is not loaded
+  and a linked-in one refuses its functions; on, it is loaded at startup and its functions
+  answer administrators only, wherever the call is. Nothing in Hardcharger calls them. See
+  README, "DuckDB's autocomplete functions".
+
+- **Errors, query profiles and comments of ordinary statements are kept again.** Since 2.13.0
+  any statement with a comment (dbt's, Metabase's, Looker's and sqlcommenter's query tags), a
+  comparison of two credential-named columns (`a.access_token = b.access_token`) or an escaped
+  literal had its comment blanked, its stored error replaced by `[REDACTED: error of a
+  credential statement]` and its query profile dropped. A comment is now kept as written (a
+  credential inside one is still masked), a comparison with what holds no value (another
+  column, a function of columns, a subquery: `api_key IN (SELECT api_key FROM revoked)`) hides
+  nothing, and an error is redacted by value, as above: the reason it gives survives, and a
+  hidden value that is a word (`password = 'error'`) no longer replaces the error's own words.
+  Only the error of a statement that computes a credential value (`token => upper('…')`) is
+  replaced whole.
+- **Columns whose names ordinary data has too are compared and set as written.** A column, a
+  struct or MAP key, or a name/value pair now masks its value only under a name only a
+  credential has (`password`, `secret`, `api_key`, `private_key`, `access_token` and the like;
+  README, "What the statement log masks"): `token = 'cat'`, `auth = 'basic'`, `pwd = '/home'`,
+  `first_pass = 3`, `{'token': 'cat'}` and `INSERT INTO tokens (token) VALUES ('dog')` are
+  logged as written, with their errors and query profiles, as 2.13.1 logged most of them. The
+  broader list (`token`, `auth`, `sig`, `cookie`, `pwd`, …) still masks a setting's, an
+  option's and a named argument's value, and every key of a connection string or URL. A URL
+  query's `code` is no longer masked, and a URL with a port and an `@` later in the text
+  (`http://h:8080/users/bob@example.com`) is logged as written.
+- **A failed init SQL statement says which statement failed and why**: `init SQL failed:
+  <reason> (init SQL statement 2 of 5: <the statement as the log shows it>)`. With 2.13.0 a
+  failing `ATTACH` with a password, `CREATE SECRET` or `CREATE USER` stopped the server with
+  only `init SQL failed: [REDACTED: error of a credential statement]`.
+- **No wording keeps a statement's text out of the log.** A name such as `a$q$`, or the words
+  `create secret`, `create user` or `alter user` in a comment or a string, made the statement
+  log, `sql_statements` and the monitoring functions show `[REDACTED: …]` for a statement
+  that ran. What a statement is, is now decided on its own first words as DuckDB tokenizes
+  them, and in a request of several statements only the credential DDL is replaced. Text is
+  hidden whole only when DuckDB cannot tokenize it (and so cannot run it), and the placeholder
+  says why: `[REDACTED: a statement that could not be read: an unterminated string literal]`.
+  `CREATE USER` and `ALTER USER` without a password are logged as written.
+- **A statement is read once for all its sinks, in time linear in its size.** The masking ran
+  two to five times per statement, each pass costing about 0.18 s per MB, most of it in six
+  regular-expression searches: a 16 MB `INSERT` spent over 14 s in it. It is one pass of about
+  25 ms per MB now (0.4 s for a 16 MB `INSERT` or a 16 MB JSON or HTML document in one
+  literal), shared by the log, instrumentation, the monitoring functions and the audit record,
+  with no `std::regex` on statement text; error text and bound text parameters are read in
+  linear time too.
+
+### Added
+
+- `max_sql_nesting` (`--max-sql-nesting`, `HARDCHARGER_MAX_SQL_NESTING`): the deepest nesting
+  a statement may have (brackets, chained operators, joins, the parts of a dotted name; a
+  `FROM` clause may name four times as many tables). DuckDB's `max_expression_depth` is set to
+  it at startup, and no session can raise that setting past it. `0`, the default, is what the
+  8 MB stack of the threads that run statements takes: 1000, on every platform.
+- `max_joined_tables` (`--max-joined-tables`, `HARDCHARGER_MAX_JOINED_TABLES`, default 64, `0`
+  for no limit): the most tables one `FROM` clause may join (a derived table or a CTE counts as
+  one there); all of a statement's `FROM` clauses together may join eight times as many. The
+  default comes from measured planning times (README, "Statements refused before DuckDB parses
+  them").
+- `enable_sql_auto_complete` (`--enable-sql-auto-complete`,
+  `HARDCHARGER_ENABLE_SQL_AUTO_COMPLETE`, off by default): DuckDB's autocomplete functions
+  (`sql_auto_complete`, `sql_tokenize`, `check_peg_parser`, `duckdb_format_sql`), for
+  administrators only.
+
+### Notes on what these limits leave
+
+- Planning is still not interrupted by a statement timeout or a cancel. `max_joined_tables`
+  bounds the join-order search, its steepest part (64 tables in one `FROM` clause: under half a
+  second for the hardest shape measured); a server that raises it takes on longer planning.
+- With `enable_sql_auto_complete` on, an administrator's `sql_auto_complete()` still runs to
+  its end before a timeout or a cancel takes effect.
+- DuckDB's own worker threads keep the platform's default stack (512 KB on macOS); they parse
+  only what `json_serialize_sql()` and its kind are given row by row, which was measured to
+  take twice the default limit there.
+
+### Notes on the 2.13.0 entries
+
+- "Extension validation waits for asynchronous installation to finish …" (2.13.0, Fixed)
+  described a change to the test suite only (`INSTALL tpch` moved from init SQL into a session
+  statement); the server's behaviour did not change.
+- "Python package CI waits for an unpublished server release before scheduling its download
+  tests" (2.13.0, Fixed): the `real server` jobs do not wait. When the pinned server release is
+  not published they are skipped for that commit and never run for it; the package is first
+  tested against the new server by the publishing run, where they are required
+  (`docs/releasing.md` now says so). A test now holds the workflow's wiring in place
+  (`publish` needs `test`, `server` and `client` and has no status function; `server` is
+  skipped only by the release check; every publishing trigger requires the release).
+- "Comment bodies and escaped literals are concealed conservatively" (2.13.0, Security) did
+  not say that such a statement also lost its stored error and its query profile; see
+  "Changed" above.
+- 2.13.0 replaced the whole stored error of any statement with a credential in it. This release
+  redacts such an error by value instead (above), which reverses that: a value the error
+  quotes after the statement transformed it (a substring, a hash, an encoding of it) is not
+  among the values replaced, and is logged as the error gives it (README, "What the statement
+  log masks", under what is not masked). The error of a statement whose credential value is
+  computed is still replaced whole.
+
 ## [2.13.4] - 2026-11-20
 
 A security and compatibility release for access control. Tokens with `catalog_access` rules, the

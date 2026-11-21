@@ -347,19 +347,22 @@ def test_error_quoting_the_value_is_masked(probe_server, admin):
     assert m in problem["detail"], problem  # the twin: the error does quote it (to its author)
     assert_recorded_without(server=probe_server, admin=admin, tag=tag, marker_value=m, sinks=("sql_statements",))
     row = SINKS["sql_statements"](probe_server, admin, tag)[0]
-    assert row["prepare_error"] == "[REDACTED: error of a credential statement]", row
+    # The reason is kept; the value the error quoted is replaced.
+    assert row["prepare_error"] == "Parser Error: syntax error at or near \"'***'\"", row
 
 
 def test_unreadable_statement_is_recorded_redacted_whole(probe_server, admin):
     m = marker()
+    placeholder = "[REDACTED: a statement that could not be read: an unterminated string literal]"
     unreadable = ("SELECT sql_text, prepare_error FROM _hardcharger_instr.sql_statements "
-                  "WHERE sql_text = '[REDACTED: a statement that could not be read]'")
+                  f"WHERE sql_text = '{placeholder}'")
     before = admin.query(sql=unreadable).num_rows
     problem = admin.error(sql=f"SELECT probe_m(1, token => '{m}")  # the literal never ends
     assert "unterminated" in problem["detail"], problem
     rows = wait_for(read=lambda: admin.query(sql=unreadable).to_pylist()[before:])
-    assert rows == [{"sql_text": "[REDACTED: a statement that could not be read]",
-                     "prepare_error": "[REDACTED: error of a statement that could not be read]"}], rows
+    assert rows == [{"sql_text": placeholder,
+                     "prepare_error": "[REDACTED: error of a statement that could not be read: "
+                                      "an unterminated string literal]"}], rows
     for name, text in everything(server=probe_server, admin=admin).items():
         assert m not in text, f"the marker reached {name}"
 
@@ -434,13 +437,13 @@ def test_user_ddl_error_and_audit_record_under_access_control(launcher, store):
     cleo = server.user(name="cleo", password="cleo-pass-1")
     tag = tagged()
     with pytest.raises(Exception, match="Hardcharger blocked"):
-        cleo.run(sql=f"SELECT i, {{'token': '{m}'}} AS {tag} FROM guarded")
+        cleo.run(sql=f"SELECT i, {{'api_token': '{m}'}} AS {tag} FROM guarded")
     failed = wait_for(read=lambda: len(found := [line for line in server.log().splitlines()
                                                  if '"statement failed"' in line and "[REDACTED: user DDL]" in line])
                       >= len(mistyped) and found)
     assert failed and len(failed) == len(mistyped), failed
     audit = [line for line in server.log().splitlines() if '"kind":"access_control"' in line and tag in line]
-    assert len(audit) == 1 and '"status":"denied"' in audit[0] and "{'token': ***}" in audit[0], audit
+    assert len(audit) == 1 and '"status":"denied"' in audit[0] and "{'api_token': ***}" in audit[0], audit
     assert m not in server.log(), "the marker reached the log"
     errors = wait_for(read=lambda: len(found := admin.run(
         sql="SELECT error_message FROM _hardcharger_instr.sql_executions WHERE error_message IS NOT NULL").to_pylist())
@@ -449,8 +452,9 @@ def test_user_ddl_error_and_audit_record_under_access_control(launcher, store):
     statements = admin.run(sql="SELECT sql_text FROM _hardcharger_instr.sql_statements").to_pylist()
     assert m not in repr(statements) and tag in repr(statements), statements
 
-# Security-review regressions: errors may expose decoded or transformed credentials,
-# so every credential-bearing statement suppresses stored errors in their entirety.
+# Security-review regressions: an error may quote a credential decoded (E'\x4d...') or in
+# another case (upper(...)). A stored error has every value the statement's masking hid
+# replaced, whatever its case and escapes, and is dropped whole when the value is computed.
 @pytest.mark.parametrize("value,expected", [
     ("MKBARE_REVIEW", "MKBARE_REVIEW"),
     ('"MKQUOTED_REVIEW"', "MKQUOTED_REVIEW"),
