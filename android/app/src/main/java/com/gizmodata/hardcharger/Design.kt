@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -28,6 +29,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+
+/**
+ * The SQL console's font (transcript and input): JetBrains Mono NL (no ligatures, so `->`, `!=`
+ * and `==` read as typed), bundled under the SIL Open Font License. Android's own monospace font
+ * (Droid Sans Mono) has no box-drawing characters, so a result table's borders came from a
+ * fallback font about 15% wider than the text and ran past its rows (#57). Every character this
+ * one has, box drawing included, is one cell wide.
+ */
+val ConsoleFont: FontFamily = FontFamily(Font(R.font.jetbrains_mono_nl))
 
 // Match the native iOS app's neutral surfaces, blue accent and grouped hierarchy.
 // These are Android surfaces; no Apple font or platform-only material is embedded.

@@ -46,3 +46,37 @@ test("the help says how sessions and transactions work, and what stays in this b
   await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
   await expect(help).toHaveCount(0);
 });
+
+// The desktop app's text size zooms the page (#55): at 150% and 200% of the SQL workspace's
+// smallest window (880×600) the page is laid out 586×400 and 440×300 CSS pixels. The editor
+// gives way so the toolbar and the results are still there to reach, and nothing scrolls
+// sideways.
+for (const zoom of [1.5, 2]) {
+  test(`a large text size in the smallest workspace window (${zoom * 100}%) keeps Run and the results reachable`, async ({
+    browser,
+    harness,
+  }) => {
+    const context = await browser.newContext({
+      viewport: { width: Math.floor(880 / zoom), height: Math.floor(600 / zoom) },
+      deviceScaleFactor: zoom,
+    });
+    const page = await context.newPage();
+    await page.goto("/ui/");
+    await page.getByLabel("User name").fill(harness.admin.username);
+    await page.getByLabel("Password").fill(harness.admin.password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page.getByTestId("header-user")).toBeAttached();
+    await runDone(page, "SELECT range AS n, 'row ' || range AS label FROM range(30)");
+    const tab = activeTab(page);
+    const run = tab.getByRole("button", { name: "Run", exact: true });
+    await run.scrollIntoViewIfNeeded();
+    await expect(run).toBeInViewport();
+    const grid = tab.getByTestId("results-grid");
+    await grid.scrollIntoViewIfNeeded();
+    await expect(grid).toBeInViewport();
+    expect((await grid.boundingBox())!.height).toBeGreaterThan(30);
+    expect((await gridRows(page))[1]).toEqual(["0", "row 0"]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
+    await context.close();
+  });
+}

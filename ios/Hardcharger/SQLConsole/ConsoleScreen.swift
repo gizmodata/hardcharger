@@ -9,11 +9,17 @@ struct SQLConsoleScreen: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var presentation = WindowPresentation()
     @FocusState private var inputFocused: Bool
+    /// The input row's width, to decide where the prompt goes.
+    @State private var inputWidth: CGFloat = 0
 
     private var console: SQLConsole { scene.sqlConsole(for: scene.sqlTarget) }
 
     /// The console's type size: monospaced, following Dynamic Type.
-    private var uiFont: UIFont {
+    private var uiFont: UIFont { Self.font(for: typeSize) }
+
+    /// The console's font at a Dynamic Type size: SF Mono, whose box-drawing characters are as
+    /// wide as its text, so a result table's borders meet its rows (HardchargerTests checks it).
+    static func font(for typeSize: DynamicTypeSize) -> UIFont {
         UIFontMetrics(forTextStyle: .footnote).scaledFont(
             for: .monospacedSystemFont(ofSize: 13, weight: .regular), compatibleWith: UITraitCollection(
                 preferredContentSizeCategory: UIContentSizeCategory(typeSize)))
@@ -46,29 +52,36 @@ struct SQLConsoleScreen: View {
 
     private var transcript: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    banner
-                    ForEach(console.entries) { entry in
-                        EntryView(entry: entry, continuationPrompt: console.continuationPrompt, uiFont: uiFont)
-                            .id(entry.id)
-                    }
-                    if console.isRunning {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text("Running…").font(Font(uiFont)).foregroundStyle(.secondary)
-                            Button("Cancel", role: .destructive) { console.cancel() }
-                                .font(.footnote)
-                                .accessibilityIdentifier("sqlconsole.cancel")
-                        }
-                        .id("running")
-                    }
-                    Color.clear.frame(height: 1).id("end")
+            // A List (a collection view underneath): only the results on screen exist, and each
+            // row is exactly as tall as its lines. A LazyVStack in a ScrollView re-laid itself out
+            // without end once `.tables` followed a few results (a sample shows its cache
+            // invalidating its own sizes, render after render) and the app stopped responding; a
+            // VStack kept every result's text view alive and laid out, so a long session slowed
+            // every keystroke.
+            List {
+                banner.consoleRow()
+                ForEach(console.entries) { entry in
+                    EntryView(entry: entry, continuationPrompt: console.continuationPrompt, uiFont: uiFont)
+                        .id(entry.id)
+                        .consoleRow()
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                if console.isRunning {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Running…").font(Font(uiFont)).foregroundStyle(.secondary)
+                        Button("Cancel", role: .destructive) { console.cancel() }
+                            .font(.footnote)
+                            .accessibilityIdentifier("sqlconsole.cancel")
+                    }
+                    .id("running")
+                    .consoleRow()
+                }
+                Color.clear.frame(height: 1).id("end").consoleRow()
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 0)
+            .contentMargins(.vertical, 5, for: .scrollContent)
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: console.entries) { _, _ in
@@ -103,17 +116,33 @@ struct SQLConsoleScreen: View {
 
     private var inputArea: some View {
         VStack(spacing: 8) {
-            HStack(alignment: .top, spacing: 0) {
-                // A prompt per line: the catalog.schema prompt, then the continuation.
-                VStack(alignment: .trailing, spacing: 0) {
-                    ForEach(Array(promptLines.enumerated()), id: \.offset) { _, prompt in
-                        Text(prompt)
+            // The prompt sits beside the input, one per line, while it takes under 40% of the
+            // width; at the larger accessibility text sizes it would take the whole width (and
+            // push the input to nothing), so it goes above the input on a line of its own.
+            // One layout either way, so the input keeps its text view (and focus) when it flips.
+            let layout = promptAbove ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+                : AnyLayout(HStackLayout(alignment: .top, spacing: 0))
+            layout {
+                Group {
+                    if promptAbove {
+                        Text(console.prompt.trimmingCharacters(in: .whitespaces))
                             .font(Font(uiFont))
                             .foregroundStyle(.tint)
-                            .frame(height: uiFont.lineHeight)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                    } else {
+                        // A prompt per line: the catalog.schema prompt, then the continuation.
+                        VStack(alignment: .trailing, spacing: 0) {
+                            ForEach(Array(promptLines.enumerated()), id: \.offset) { _, prompt in
+                                Text(prompt)
+                                    .font(Font(uiFont))
+                                    .foregroundStyle(.tint)
+                                    .frame(height: uiFont.lineHeight)
+                            }
+                        }
+                        .fixedSize()
                     }
                 }
-                .fixedSize()
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(Text("Catalog and schema"))
                 .accessibilityValue(Text(verbatim: console.prompt.trimmingCharacters(in: CharacterSet(charactersIn: "> "))))
@@ -131,6 +160,7 @@ struct SQLConsoleScreen: View {
                     onClearTranscript: { console.clearTranscript() })
                 .focused($inputFocused)
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { inputWidth = $0 }
             HStack(spacing: 10) {
                 Button {
                     console.historyBack()
@@ -166,6 +196,7 @@ struct SQLConsoleScreen: View {
                         console.cancel()
                     } label: {
                         Label("Cancel", systemImage: "stop.fill")
+                            .labelStyle(RunLabelStyle(iconOnly: typeSize.isAccessibilitySize))
                     }
                     .hcButton()
                 } else {
@@ -173,6 +204,8 @@ struct SQLConsoleScreen: View {
                         console.submit()
                     } label: {
                         Label("Run", systemImage: "play.fill")
+                            // At accessibility sizes "Run" broke over two lines in its button.
+                            .labelStyle(RunLabelStyle(iconOnly: typeSize.isAccessibilitySize))
                     }
                     .hcProminentButton()
                     .disabled(console.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -185,6 +218,14 @@ struct SQLConsoleScreen: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(.bar)
+    }
+
+    /// Whether the prompt goes above the input: beside it, it would take 40% of the width or more.
+    private var promptAbove: Bool {
+        guard inputWidth > 0 else { return typeSize.isAccessibilitySize }
+        let widest = [console.prompt, console.continuationPrompt]
+            .map { ($0 as NSString).size(withAttributes: [.font: uiFont]).width }.max() ?? 0
+        return widest >= inputWidth * 0.4
     }
 
     private var promptLines: [String] {
@@ -321,6 +362,30 @@ enum CABundle {
     }
 }
 
+private extension View {
+    /// A transcript row: no separator, background or row chrome; the console's margins.
+    func consoleRow() -> some View {
+        frame(maxWidth: .infinity, alignment: .leading)
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 7, leading: 14, bottom: 7, trailing: 14))
+    }
+}
+
+/// The Run and Cancel buttons' labels: the icon alone at accessibility text sizes (VoiceOver
+/// still reads the title), the icon and title otherwise.
+private struct RunLabelStyle: LabelStyle {
+    let iconOnly: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        if iconOnly {
+            Label(configuration).labelStyle(.iconOnly)
+        } else {
+            Label(configuration).labelStyle(.titleAndIcon)
+        }
+    }
+}
+
 /// One run in the transcript: the prompt and input, then the output, scrolling sideways when
 /// a table is wider than the screen.
 private struct EntryView: View {
@@ -336,6 +401,7 @@ private struct EntryView: View {
                 .foregroundStyle(.tint)
                 .textSelection(.enabled)
             if !entry.output.isEmpty {
+                // Each result scrolls sideways on its own; its lines never wrap.
                 ConsoleOutputView(text: entry.output.hasSuffix("\n") ? String(entry.output.dropLast()) : entry.output,
                                   font: uiFont, color: entry.kind == .error ? .systemRed : .label)
             }

@@ -9,6 +9,37 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- **Web UI: start read-only from the sign-in page, or from a link**
+  ([#61](https://github.com/gizmodata/hardcharger/issues/61)). The sign-in page has **Start
+  sessions read-only**, for password, client-certificate and browser (single sign-on) sign-in:
+  every new editor session on the server the UI is served from (new tabs, New session, a reload,
+  the replacement for a lost session) then opens read-only, confirmed by the server before
+  anything runs, and Upload is off as on a read-only connection. It is a default for your own
+  sessions in that tab, not a restricted account: New session, then clearing **Read-only**,
+  still opens a writable one. A link with `?read_only=1` ticks the box (and makes an
+  already-signed-in page's new sessions read-only); `?sign_in=browser&read_only=1` opens a
+  read-only workspace in one click, the choice surviving the identity provider's round trip.
+  The parameter leaves the address bar at once. A server without read-only sessions refuses at
+  sign-in, with its own message, before anything runs.
+- **Desktop app: other programs on this computer can connect in Only this computer mode**
+  ([#56](https://github.com/gizmodata/hardcharger/issues/56)). The local server's administrator
+  password is generated once, kept in the macOS Keychain or Windows Credential Manager and reused
+  on every start, instead of changing at every start and never being shown. The dashboard shows
+  the user name and the masked password with **Reveal**, **Copy password** and **Generate new
+  password** (which restarts a running server after the Restart confirmation; the old password
+  stops working), and a **Connect from this computer** panel has Web UI, Python / ADBC, JDBC, CLI
+  and JavaScript examples for `127.0.0.1` over plain HTTP that read the credentials from
+  `HARDCHARGER_USER` / `HARDCHARGER_PASSWORD`. The password stays out of Export YAML, logs, the
+  command line and the examples. Upgrading users get a password on their first start.
+- **Desktop app: text size** ([#55](https://github.com/gizmodata/hardcharger/issues/55)). Every
+  window (the dashboard, the SQL workspace and query details) zooms with Safari's shortcuts:
+  ⌘+ (typed as ⌘= or ⌘⇧= on a US keyboard, or with the + key of Dutch, German and other
+  layouts), ⌘−, ⌘0 and the numeric keypad's + and −, also with the cursor in the SQL editor,
+  where they type nothing. A **View** menu has Bigger, Smaller and Actual Size, and Settings has
+  a **Text size** control. The size is remembered and applied to each window as it opens. At
+  large sizes in small windows the dashboard's sidebar keeps only its icons, and the SQL
+  workspace's editor gives way so Run and the results stay reachable. Thanks to maartenb for
+  the report.
 - `SYSTEM ADMIN`: named users act as the administrator, under their own names. `GRANT SYSTEM
   ADMIN TO alice` (or `TO ROLE dba`) lets the user say `SET ROLE SYSTEM ADMIN` in a session,
   which then does everything the administrator does (users, roles, grants, policies,
@@ -128,6 +159,14 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- **Desktop app: a network administrator password has at least 12 characters**, as 2.14.0's
+  password policy asks of every new password. Settings refuses a shorter one with a message
+  before saving. A network setup saved earlier with a shorter password keeps working; the
+  dashboard and Settings ask you to choose a longer one.
+- **Android: built with Android Gradle plugin 9.5.1 and Gradle 9.9.1**
+  ([#58](https://github.com/gizmodata/hardcharger/issues/58)), from 8.13.2 and 8.13, as Play
+  Console recommends for R8's newer optimizations. Kotlin is compiled by the plugin's built-in
+  support. Release builds still minify and shrink, and keep the native bridge's methods.
 - The iOS simulator and signed device builds now select Xcode 27 and require iOS SDK 27 or later (#63).
 
 - Changing one's own password through `ALTER USER <own name> WITH PASSWORD '…'` needs the
@@ -153,6 +192,19 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- **Android console: result tables line up**
+  ([#57](https://github.com/gizmodata/hardcharger/issues/57)). A table's borders ran past its
+  rows: Android's monospace font has no box-drawing characters, so they came from a wider
+  fallback font. The console now uses JetBrains Mono (no ligatures), bundled under the SIL Open
+  Font License, in which every character is one cell wide.
+- **iOS console: results wider than the screen scroll sideways, at every text size**
+  ([#57](https://github.com/gizmodata/hardcharger/issues/57)). A line wider than the screen
+  wrapped, so a wide table's borders broke across lines; each result now keeps its lines whole
+  and scrolls sideways on its own, from the smallest text size to the largest accessibility
+  size. The console also no longer stops responding when `.tables` follows a few other results
+  (its transcript could re-lay itself out without end, at any text size). At the larger
+  accessibility text sizes the catalog and schema prompt moves above the input instead of
+  leaving it little or no room to type, and Run and Cancel show their icons alone.
 - Queries whose plans have many parts (a UNION ALL of dozens of SELECTs, many scalar
   subqueries) run as fast as in 2.8.0 and earlier again. Since 2.9.0, which turned on DuckDB's
   progress estimate for the Web UI and the CLI, DuckDB recomputed the estimate after every

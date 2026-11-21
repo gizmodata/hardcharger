@@ -59,9 +59,27 @@ x64/Arm64. Linux packaging and testing are follow-up work.
 - **Settings → Network access** switches between **Only this computer** (the default)
   and **Allow network connections**. Stop the server, choose a listen IP (all IPv4:
   `0.0.0.0`, all IPv6: `::`, or a specific interface), enter this computer's client-facing
-  DNS name/IP, and set the administrator user name and password. The password persists
-  in the OS credential store. Save and start the server; the dashboard shows the actual
+  DNS name/IP, and set the administrator user name and password (at least 12 characters,
+  counted as characters, not bytes: 2.14.0's password policy; Settings refuses a shorter one
+  before saving). The password persists in the OS credential store. A setup saved earlier with
+  a shorter password keeps working, and the dashboard and Settings ask for a longer one
+  (`networkPasswordShort` in the status). Save and start the server; the dashboard shows the actual
   endpoint, transport, listen address, and URLs for other computers.
+- **Only this computer** keeps a generated administrator password (`hardcharger`, at least
+  12 characters) in the OS credential store (account `local-admin-password` under the app's
+  service name, `src-tauri/src/local_admin.rs`), reused on every start. The dashboard shows it
+  masked with Reveal, Copy password and Generate new password (which restarts a running server
+  after the Restart confirmation), and **Connect from this computer** gives examples for
+  `127.0.0.1` over plain HTTP. The password never enters settings, YAML, logs or the command
+  line; native commands return it only to the controller, on a click. Without a usable
+  credential store the server starts with a password for that run only, and the card says why.
+- **Text size** (`src-tauri/src/zoom.rs`): one zoom level for every window (Safari's steps,
+  50% to 300%), remembered in `view.json` and applied as each window opens. On macOS an NSEvent
+  local monitor takes ⌘= / ⌘+ / ⌘⇧= / ⌘− / ⌘0 and the keypad's + and − before any window or
+  page sees them, by the character the layout types, so they work in the SQL editor and type
+  nothing; the View menu (Bigger, Smaller, Actual Size) shows them and is the mouse's way, and
+  Settings has a Text size control. macOS's Accessibility Text size can't be read by apps, so
+  it isn't followed.
 - **Connect from another computer** has Web UI, Python/ADBC, JDBC, CLI and JavaScript
   tabs with copyable examples generated from the saved endpoint and TLS mode. Examples
   use Hardcharger URI schemes and client credential environment variables; saved secrets
@@ -144,8 +162,9 @@ x64/Arm64. Linux packaging and testing are follow-up work.
   visible as managed; listener/TLS/administrator fields are edited in Network access.
   YAML imports cannot change network sharing or its credentials, and exports leave
   desktop-managed networking/authentication out. mTLS and saved remote connections remain
-  follow-up work. Returning to local-only mode restores loopback HTTP and a freshly
-  generated private administrator password, while retaining the saved network configuration.
+  follow-up work. Returning to local-only mode restores loopback HTTP and the local
+  administrator password kept in the credential store, while retaining the saved network
+  configuration.
 - Normal close/quit is covered; crash recovery and OS logout/reboot behavior still need
   platform acceptance testing before release. Background residency does not keep a sleeping
   computer awake or make this a system service.
@@ -171,6 +190,10 @@ labeled **design preview**, with sample status and native controls disabled; it 
 Network tests also cover an IPv6 listener, persistent credential redaction, authenticated
 HTTP/TLS startup with a freshly generated short-lived test certificate, wrong passwords,
 and rejection of a mismatched TLS hostname. Test certificates never enter the OS trust store.
+The local administrator password test keeps the password in memory; set
+`HARDCHARGER_DESKTOP_TEST_KEYCHAIN=1` to also exercise the real credential store under a
+throwaway service name (never the app's own entries), and `HARDCHARGER_DESKTOP_TEST_PYTHON` to a
+Python with `adbc-driver-hardcharger` to sign in from Python/ADBC too.
 
 ## Signing and release artifacts
 

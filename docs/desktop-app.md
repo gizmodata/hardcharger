@@ -68,6 +68,34 @@ dashboard still leaves the server running in the menu bar or system tray.
 On macOS, the **Window** menu lists open workspaces and query inspectors, including
 windows behind the dashboard.
 
+## Connect other programs on this computer
+
+In the default mode, **Only this computer**, the server listens on `127.0.0.1` only, over plain
+HTTP: connections never leave the computer, so there is no certificate to trust. Its
+administrator is `hardcharger`, with a password the app generates the first time it starts the
+server (or the first start after you update from a version without one) and keeps in the macOS
+Keychain or Windows Credential Manager. It stays the same across restarts and relaunches until
+you change it.
+
+The dashboard's **Administrator credentials** card shows the user name and the password, masked:
+**Reveal** shows it, **Copy password** copies it to the clipboard without showing it, and
+**Generate new password** replaces it. While the server is running, Generate new password
+restarts it, after the same confirmation as Restart, and the old password stops working at once;
+update any program that saved it.
+
+**Connect from this computer** has the same **Web UI**, **Python / ADBC**, **JDBC**, **CLI** and
+**JavaScript** tabs as the network examples below, pointing at `127.0.0.1:<port>` with TLS off.
+The examples read the user name and password from `HARDCHARGER_USER` and `HARDCHARGER_PASSWORD`
+and never include the password itself; set those in the program's environment, or let the CLI
+prompt for it. For a browser, open the Web UI address and sign in as `hardcharger`.
+
+The password is kept out of **Export YAML**, the server log, the server's command line and the
+connection examples; the server receives it in its environment. Any program running as your user
+on this computer can reach `127.0.0.1` and sign in with these credentials, as it could read other
+files of yours: share the computer's account only with people you'd give the database to. If the
+credential store can't be used (a denied Keychain prompt, no Secret Service on Linux), the server
+still starts, with a password for that run only, and the card says so.
+
 ## Settings and logs
 
 **Settings** exposes options from the bundled server, grouped by category. Search setting
@@ -80,6 +108,14 @@ and other secrets. Desktop-managed networking and credentials are set through th
 and desktop preferences such as launch at login are not server YAML options. Sensitive
 values are stored in macOS Keychain or Windows Credential Manager. macOS may ask permission
 to read the app's saved credential, especially after an ad hoc preview rebuild.
+
+**Text size.** Make every window bigger or smaller (the dashboard, the SQL workspace and query
+details) with **View → Bigger / Smaller / Actual Size**, the same shortcuts as Safari (⌘+ or ⌘=,
+⌘−, ⌘0, and the numeric keypad's + and −; Ctrl on Windows), or **Settings → Application → Text
+size**. The shortcuts work with the cursor in the SQL editor too, and type nothing there. The
+size is remembered and applied to each window as it opens, after a relaunch too. macOS's own
+**Accessibility → Display → Text size** is not followed: macOS gives apps no way to read it, and
+web content (which the app's windows are) doesn't receive it.
 
 **Logs → Live tail** follows new output every two seconds. Turn it off to pause, or use
 **Refresh** for a single update. Scrolling up keeps your place while you read earlier lines.

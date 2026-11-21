@@ -81,6 +81,18 @@ export interface AppSession {
   registerQueryPage: (handle: QueryPageHandle) => () => void;
 }
 
+/**
+ * Whether new sessions on `server` start read-only unless a tab says otherwise: on this server,
+ * "Start sessions read-only" at sign-in; on a saved one, its "Read-only sessions".
+ */
+export function readOnlyDefault(
+  app: Pick<AppSession, "auth">,
+  server: string,
+  saved?: { readOnly?: boolean },
+): boolean {
+  return server === "" ? app.auth.readOnly === true : saved?.readOnly === true;
+}
+
 export const SessionContext = createContext<AppSession | null>(null);
 
 export function useSession(): AppSession {

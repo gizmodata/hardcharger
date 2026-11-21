@@ -238,12 +238,28 @@ pub trait PasswordStore: Send + Sync {
     fn delete(&self, account: &str) -> Result<(), String>;
 }
 
-/// The operating system's keychain, through the keyring crate.
+/// The operating system's keychain, through the keyring crate, under the app's own service name.
 pub struct Keychain;
 
 impl PasswordStore for Keychain {
     fn get(&self, account: &str) -> Result<Option<String>, String> {
-        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| e.to_string())?;
+        ServiceKeychain(KEYCHAIN_SERVICE.into()).get(account)
+    }
+    fn set(&self, account: &str, password: &str) -> Result<(), String> {
+        ServiceKeychain(KEYCHAIN_SERVICE.into()).set(account, password)
+    }
+    fn delete(&self, account: &str) -> Result<(), String> {
+        ServiceKeychain(KEYCHAIN_SERVICE.into()).delete(account)
+    }
+}
+
+/// The operating system's keychain under another service name (tests use a throwaway one, so
+/// they never touch the app's own entries).
+pub struct ServiceKeychain(pub String);
+
+impl PasswordStore for ServiceKeychain {
+    fn get(&self, account: &str) -> Result<Option<String>, String> {
+        let entry = keyring::Entry::new(&self.0, account).map_err(|e| e.to_string())?;
         match entry.get_password() {
             Ok(password) => Ok(Some(password)),
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -251,12 +267,12 @@ impl PasswordStore for Keychain {
         }
     }
     fn set(&self, account: &str, password: &str) -> Result<(), String> {
-        keyring::Entry::new(KEYCHAIN_SERVICE, account)
+        keyring::Entry::new(&self.0, account)
             .and_then(|entry| entry.set_password(password))
             .map_err(|e| format!("Could not write to the keychain: {e}"))
     }
     fn delete(&self, account: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| e.to_string())?;
+        let entry = keyring::Entry::new(&self.0, account).map_err(|e| e.to_string())?;
         match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(format!("Could not remove it from the keychain: {e}")),

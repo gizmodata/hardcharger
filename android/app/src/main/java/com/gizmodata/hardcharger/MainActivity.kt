@@ -366,7 +366,7 @@ private enum class Screen(val label: String, val icon: ImageVector) {
                 }
             } }
             SelectionContainer { Text(transcript, Modifier.verticalScroll(scroll).horizontalScroll(rememberScrollState()).padding(vertical = 10.dp),
-                fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+                fontFamily = ConsoleFont, style = MaterialTheme.typography.bodySmall) }
         }
         TextField(value = input, onValueChange = { value ->
             if (value.endsWith('\n') && !input.endsWith('\n') && NativeBridge.complete(value)) {
@@ -376,7 +376,7 @@ private enum class Screen(val label: String, val icon: ImageVector) {
             .onPreviewKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown && event.key == Key.Enter && (event.isCtrlPressed || event.isMetaPressed)) { run(); true }
                 else if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) { if (model.querying) model.cancel() else input = ""; true } else false
-            }, textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary), enabled = !model.querying,
+            }, textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = ConsoleFont, color = MaterialTheme.colorScheme.primary), enabled = !model.querying,
             shape = RoundedCornerShape(16.dp), colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surface,
                 unfocusedContainerColor = MaterialTheme.colorScheme.surface, unfocusedIndicatorColor = Color.Transparent, focusedIndicatorColor = Color.Transparent))
         Text("; completes SQL · Ctrl+Enter runs", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

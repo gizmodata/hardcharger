@@ -44,9 +44,18 @@ function narrowNoteHidden(): boolean {
   }
 }
 
-function initialTabs(user: string): StoredTabs {
+function initialTabs(user: string, localReadOnly: boolean): StoredTabs {
   const saved = loadTabs(user);
-  if (saved) return saved;
+  if (saved) {
+    if (!localReadOnly) return saved;
+    // Signed in with "Start sessions read-only": a tab on this server that an earlier page
+    // load left read-write by choice opens read-only like the rest (New session, then
+    // clearing Read-only, still makes it writable).
+    return {
+      ...saved,
+      tabs: saved.tabs.map((t) => (t.server === "" && t.readOnly === false ? { ...t, readOnly: undefined } : t)),
+    };
+  }
   const first = makeTab([], { sql: firstSql });
   return { tabs: [first], active: first.id };
 }
@@ -63,7 +72,7 @@ interface Props {
 export default function QueryPage({ theme }: Props) {
   const session = useSession();
   const user = session.identity.user;
-  const [{ tabs, active }, setTabs] = useState(() => initialTabs(user));
+  const [{ tabs, active }, setTabs] = useState(() => initialTabs(user, session.auth.readOnly === true));
   const [statuses, setStatuses] = useState<Record<string, TabStatus>>({});
   const [renaming, setRenaming] = useState<string | undefined>();
   const [runOnOpen, setRunOnOpen] = useState<Set<string>>(new Set());

@@ -47,7 +47,7 @@ import { addressLabel } from "../lib/serverAddress";
 import { sqlNameDragType } from "../lib/sqlNameDrag";
 import { uploadUnavailable } from "../lib/upload/availability";
 import { requestUpload } from "../lib/upload/request";
-import { errorMessage, useSession } from "../session";
+import { errorMessage, readOnlyDefault, useSession } from "../session";
 import { ResumeBadge } from "./ResumeStatus";
 import { AddServerDialog } from "./AddServerDialog";
 import { FloatingMenu, type MenuItem } from "./FloatingMenu";
@@ -401,7 +401,7 @@ export function DataExplorer() {
   /** Why an upload to `server` can't be offered (its sessions open read-only), or undefined. */
   const uploadOff = (server: string, followsTab = false) =>
     uploadUnavailable({
-      connectionReadOnly: serverOf(server)?.state?.saved.readOnly === true,
+      connectionReadOnly: readOnlyDefault(session, server, serverOf(server)?.state?.saved),
       tabReadOnly: followsTab && server === active.server && active.readOnly === true,
     });
   const upload = (server: string, catalog?: string, schema?: string) =>

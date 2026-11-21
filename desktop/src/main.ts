@@ -3,8 +3,9 @@ import { listen } from "@tauri-apps/api/event";
 import { stringify } from "yaml";
 import { version as appVersion } from "../package.json";
 import { connectionPanel, bindConnectionPanel } from "./connectionPanel";
+import { localAdminCard, localAdminDialog, bindLocalAdmin, forgetRevealedPassword, confirmingNewPassword, type LocalAdminStatus } from "./localAdmin";
 import { updateBadge, updateAbout, updateDialogs, bindUpdates, startUpdates } from "./updates";
-import { defaultNetwork, networkErrors, certificateCovers, lostAddress, normalHost, isGizmoDataCloudHost, type NetworkSettings, type NetworkInfo, type GeneratedCertificate, type WorkspaceTrust } from "./network";
+import { defaultNetwork, minPasswordCharacters, storedSecret, networkErrors, certificateCovers, lostAddress, normalHost, isGizmoDataCloudHost, type NetworkSettings, type NetworkInfo, type GeneratedCertificate, type WorkspaceTrust } from "./network";
 import { parseConfiguration, exportConfiguration, optionChoices, choiceValue, type ServerOption } from "./configuration";
 import "./style.css";
 import "./palette.css";
@@ -20,6 +21,10 @@ interface Status {
   pendingNetwork?: boolean | null;
   /** A server this app started in an earlier run that is still running (issue #28). */
   leftover?: { pid: number; host: string; port: number } | null;
+  /** Only this computer: the administrator's user name (the password only on Reveal or Copy). */
+  localAdmin?: LocalAdminStatus | null;
+  /** Network access with a saved administrator password under 12 characters (set before 2.14.0). */
+  networkPasswordShort?: boolean;
 }
 
 const native = isTauri();
@@ -52,6 +57,9 @@ let logScroll = 0;
 let logFollowing = true;
 let pendingImport: Record<string, unknown> | null = null;
 let theme = localStorage.getItem("hardcharger-desktop:theme") ?? "system";
+/** The app's text size (every window's zoom, #55); null until the native side answers. */
+let zoom: { level: number; levels: number[] } | null = null;
+const mac = navigator.userAgent.includes("Mac");
 document.documentElement.dataset.theme = theme;
 
 const icons: Record<string, string> = {
@@ -180,7 +188,7 @@ function readSettings(): Settings {
     enabled: data["network-mode"] === "network", listen_address: data["network-listen"].trim(),
     server_name: data["network-name"].trim(), tls: data["network-transport"] === "tls",
     tls_cert: data["network-cert"].trim(), tls_key: data["network-key"].trim(), username: data["network-user"].trim(),
-    password: data["network-password"] || (previous.password === "__HARDCHARGER_STORED_SECRET__" ? previous.password : ""),
+    password: data["network-password"] || (previous.password === storedSecret ? previous.password : ""),
   };
   const remote_servers = readRemoteServers(data);
   fieldErrors = networkErrors(network);
@@ -326,6 +334,12 @@ async function switchAddress(address: string) {
   render();
 }
 
+/** A network setup whose administrator password is under 12 characters (saved before 2.14.0). */
+function passwordNotice(s: Status | null) {
+  if (!s?.networkPasswordShort || !s.settings.network?.enabled) return "";
+  return `<div class="pending-settings password-short" role="status"><div><strong>Change the administrator password</strong><p>The network administrator password is shorter than ${minPasswordCharacters} characters, the least Hardcharger accepts for new passwords. It still works, so nothing stops; choose a longer one in Settings.${s.running ? " Stop the server to change it." : ""}</p></div><button data-change-password class="button">Change password</button></div>`;
+}
+
 function addressNotice(s: Status | null) {
   const lost = lostAddress(effectiveNetwork(), detectedNetwork);
   if (!lost) return "";
@@ -362,14 +376,14 @@ function render() {
       <div class="identity">${picture("header", "Hardcharger™")}<span class="edition">DESKTOP</span></div>
       <div class="nav-label">WORKSPACE</div>
       <nav aria-label="Main navigation">
-        <button data-tab="server" class="nav-item ${tab === "server" ? "active" : ""}">${icon("server")}Local server<span class="nav-dot ${running ? "running" : ""}"></span></button>
-        <button data-action="workspace" class="nav-item" title="${running ? "Open the SQL workspace on the local server" : "Open the SQL workspace for your remote servers (the local server is stopped)"}" ${!native || busy ? "disabled" : ""}>${icon("workspace")}SQL workspace<span class="external">↗</span></button>
-        <button data-tab="logs" class="nav-item ${tab === "logs" ? "active" : ""}">${icon("logs")}Logs</button>
+        <button data-tab="server" title="Local server" class="nav-item ${tab === "server" ? "active" : ""}">${icon("server")}<span class="nav-text">Local server</span><span class="nav-dot ${running ? "running" : ""}"></span></button>
+        <button data-action="workspace" class="nav-item" title="${running ? "Open the SQL workspace on the local server" : "Open the SQL workspace for your remote servers (the local server is stopped)"}" ${!native || busy ? "disabled" : ""}>${icon("workspace")}<span class="nav-text">SQL workspace</span><span class="external">↗</span></button>
+        <button data-tab="logs" title="Logs" class="nav-item ${tab === "logs" ? "active" : ""}">${icon("logs")}<span class="nav-text">Logs</span></button>
       </nav>
       <div class="nav-label second">APPLICATION</div>
       <nav aria-label="Application navigation">
-        <button data-tab="settings" class="nav-item ${tab === "settings" ? "active" : ""}">${icon("settings")}Settings</button>
-        <button data-tab="about" class="nav-item ${tab === "about" ? "active" : ""}">${icon("info")}About Hardcharger</button>
+        <button data-tab="settings" title="Settings" class="nav-item ${tab === "settings" ? "active" : ""}">${icon("settings")}<span class="nav-text">Settings</span></button>
+        <button data-tab="about" title="About Hardcharger" class="nav-item ${tab === "about" ? "active" : ""}">${icon("info")}<span class="nav-text">About Hardcharger</span></button>
       </nav>
       <div class="sidebar-bottom"><span class="connection"><span class="nav-dot ${running ? "running" : ""}"></span>${running ? "Local server running" : "Local server stopped"}</span><a class="by-marketing" data-marketing-link href="https://gizmodata.com" target="_blank" rel="noopener noreferrer">by <strong>GizmoData™</strong></a></div>
     </aside>
@@ -379,11 +393,11 @@ function render() {
         <div id="error" role="alert" ${error || s?.error ? "" : "hidden"}>${esc(error || s?.error || "")}</div>
         <div class="pending-settings leftover-server" role="status" ${!running && s?.leftover ? "" : "hidden"}><div><strong>A server from a previous run is still running</strong><p>Hardcharger server PID ${s?.leftover?.pid ?? ""} kept running on port ${s?.leftover?.port ?? ""} after the app closed. Stop it to free the port, then start the server.</p></div><button data-stop-leftover class="button" ${busy ? "disabled" : ""}>Stop it</button></div>
         <div class="pending-settings" role="status" ${draftDirty || s?.settingsPending ? "" : "hidden"}><div><strong>Unsaved server settings</strong><p>${draft ? draft["network-mode"] === "network" ? "Network access requested. Save and complete setup before starting; the server will not fall back to local mode." : "Save or explicitly discard your changes before starting." : "A previous setup was not saved. Review Settings or explicitly discard it before starting."}</p></div><button data-review-settings class="button">Review settings</button><button data-discard-settings class="button" ${busy ? "disabled" : ""}>Discard changes</button></div>
-        ${tab === "server" || tab === "settings" ? addressNotice(s) : ""}
+        ${tab === "server" || tab === "settings" ? addressNotice(s) + passwordNotice(s) : ""}
         ${tab === "server" ? serverView(s) : tab === "settings" ? settingsView(s) : tab === "logs" ? logsView() : aboutView()}
       </div>
       <footer><span>${esc(s?.version ?? "Hardcharger")} <span class="footer-dot">·</span> Chargewire</span><span>Fast, secure, remote DuckDB.</span></footer>
-    </main>${trustDialog()}${controlDialog()}${updateDialogs(running, s?.settings.start_on_open ?? true)}`;
+    </main>${trustDialog()}${controlDialog()}${localAdminDialog(s)}${updateDialogs(running, s?.settings.start_on_open ?? true)}`;
   const controlConfirmation = document.querySelector<HTMLDialogElement>("#server-control-confirmation");
   if (controlConfirmation) {
     controlConfirmation.showModal();
@@ -402,6 +416,7 @@ function render() {
     });
   }
   bindConnectionPanel(current, render);
+  bindLocalAdmin(render, status => { current = status as Status; render(); }, showError);
   bindUpdates(render, () => current?.running ?? false);
   const logOutput = document.querySelector<HTMLElement>("#log-output");
   if (logOutput) logOutput.scrollTop = logFollowing ? logOutput.scrollHeight : logScroll;
@@ -422,7 +437,7 @@ function render() {
       if (workspaceTrust) void invoke("show_certificate_folder", { certificate: workspaceTrust.certificate.certificate }).catch(showError);
     });
   }
-  app.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b => b.addEventListener("click", () => { tab = b.dataset.tab!; error = ""; render(); if (tab === "logs") void refreshLogs(); }));
+  app.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b => b.addEventListener("click", () => { tab = b.dataset.tab!; error = ""; forgetRevealedPassword(); render(); if (tab === "logs") void refreshLogs(); }));
   app.querySelectorAll<HTMLButtonElement>("[data-action]").forEach(b => b.addEventListener("click", () => void action(b.dataset.action!)));
   app.querySelectorAll<HTMLAnchorElement>("[data-marketing-link]").forEach(link => link.addEventListener("click", e => {
     if (!native) return;
@@ -450,6 +465,11 @@ function render() {
   form?.addEventListener("change", markChange);
   restoreDraft();
   document.querySelector("[data-review-settings]")?.addEventListener("click", () => { tab = "settings"; render(); });
+  document.querySelector("[data-change-password]")?.addEventListener("click", () => {
+    tab = "settings"; render();
+    const field = document.querySelector<HTMLInputElement>('[name="network-password"]');
+    field?.scrollIntoView({ block: "center" }); field?.focus();
+  });
   document.querySelector("[data-discard-settings]")?.addEventListener("click", () => void discardSettings());
   document.querySelector("[data-stop-leftover]")?.addEventListener("click", () => void stopLeftover());
   const updateNetwork = () => {
@@ -547,6 +567,10 @@ function render() {
     catch (e) { showFormError(e); }
   });
   document.querySelector("#cancel-import")?.addEventListener("click", () => { pendingImport = null; render(); });
+  document.querySelector("#text-size")?.addEventListener("change", e => {
+    const level = Number((e.target as HTMLSelectElement).value);
+    void invoke<{ level: number; levels: number[] }>("set_zoom_level", { level }).then(state => { zoom = state; }).catch(showError);
+  });
   document.querySelector("#launch-login")?.addEventListener("change", e => {
     const requested = (e.target as HTMLInputElement).checked;
     void invoke<boolean>("launch_at_login", { enabled: requested }).then(v => { login = v; }).catch(showError);
@@ -564,6 +588,7 @@ function serverView(s: Status | null) {
       </div>${picture("mascot", "Hardcharger charging bull mascot", "hero-mascot")}
     </section>
     <div class="stats"><section class="card stat"><span class="stat-label">SERVER ADDRESS</span><strong class="mono" title="${esc(s?.endpoint ?? "")}">${esc(s?.endpoint ?? "Loading…")}</strong><span>Chargewire endpoint${s?.settings.network?.enabled ? ` · listening on ${esc(s.settings.network.listen_address)}` : ""}</span></section><section class="card stat"><span class="stat-label">UPTIME</span><strong>${running ? uptime(s!.uptimeSeconds) : "—"}</strong><span>${running ? "Since the last start" : "Server is stopped"}</span></section><section class="card stat"><span class="stat-label">DATABASE SIZE</span><strong>${s ? bytes(s.databaseBytes) : "—"}</strong><span>Stored on this computer</span></section></div>
+    ${localAdminCard(s, busy || !native)}
     ${connectionPanel(s)}
     <section class="card detail-card"><div class="section-heading"><div><h3>Server controls</h3><p>Manage the server running on this computer.</p></div><span class="pill">${running ? `PID ${s?.pid}` : "Offline"}</span></div><div class="control-actions">${button("start", "Start", "play", false, running || !s)}${button("stop", "Stop", "stop", false, !running)}${button("restart", "Restart", "restart", false, !running)}<span class="control-note">Stopping closes the SQL workspace.</span></div><div class="database-row">${icon("folder")}<div><strong>Hardcharger.duckdb</strong><span title="${esc(s?.database ?? "")}">${esc(s?.database ?? "Loading database location…")}</span></div>${button("folder", "Show folder", "folder")}</div></section>
     <div class="resident-note">${icon("info")}<p><strong>Close the window. Keep the engine running.</strong> Hardcharger stays in your menu bar or system tray. Choose <strong>Quit Hardcharger</strong> there to stop the server and exit.</p></div>`;
@@ -585,7 +610,14 @@ function settingsView(s: Status | null) {
       </div>
     </form>
     ${remoteServersView(s)}
-    <section class="card detail-card"><div class="section-heading"><div><h3>Application</h3><p>Keep Hardcharger close at hand.</p></div></div><label class="check-row"><input id="launch-login" type="checkbox" ${login ? "checked" : ""} ${!native ? "disabled" : ""}><span><strong>Launch at login</strong><small>Open quietly in the menu bar or system tray when you sign in.</small></span></label><p class="muted">The window can close while the server keeps running. Quit Hardcharger to stop it cleanly.</p></section>`;
+    <section class="card detail-card"><div class="section-heading"><div><h3>Application</h3><p>Keep Hardcharger close at hand.</p></div></div><label class="check-row"><input id="launch-login" type="checkbox" ${login ? "checked" : ""} ${!native ? "disabled" : ""}><span><strong>Launch at login</strong><small>Open quietly in the menu bar or system tray when you sign in.</small></span></label>${textSizeField()}<p class="muted">The window can close while the server keeps running. Quit Hardcharger to stop it cleanly.</p></section>`;
+}
+
+function textSizeField() {
+  const levels = zoom?.levels ?? [0.5, 0.75, 0.85, 1, 1.15, 1.25, 1.5, 1.75, 2, 2.5, 3];
+  const level = zoom?.level ?? 1;
+  const key = mac ? "⌘" : "Ctrl+";
+  return `<label class="field text-size"><span>Text size</span><select id="text-size" ${!native || !zoom ? "disabled" : ""}>${levels.map(l => `<option value="${l}" ${l === level ? "selected" : ""}>${Math.round(l * 100)}%${l === 1 ? " (actual size)" : ""}</option>`).join("")}</select><small>Makes every Hardcharger window bigger or smaller, the SQL workspace and query details included, and is remembered. Shortcuts: ${key}+ bigger, ${key}− smaller, ${key}0 actual size (View menu).</small></label>`;
 }
 
 function networkView(s: Status | null) {
@@ -620,7 +652,7 @@ function networkView(s: Status | null) {
       </div>
       <div class="network-grid">
         <label class="field"><span>Administrator user name ${required("network-user")}</span><input name="network-user" aria-label="Administrator user name" value="${esc(n.username)}" autocomplete="off" ${disabled}>${fieldError("network-user")}</label>
-        <label class="field"><span>Administrator password ${required("network-password")}</span><input name="network-password" aria-label="Administrator password" type="password" autocomplete="new-password" placeholder="${n.password ? "Saved in OS credential store — leave blank to keep" : "Set a strong password"}" ${disabled}><small>${n.password ? "Already saved; leave blank to keep it. " : ""}Stored in the OS credential store. Other users can sign in through the server's configured access control or identity provider.</small>${fieldError("network-password")}</label>
+        <label class="field"><span>Administrator password ${required("network-password")}</span><input name="network-password" aria-label="Administrator password" type="password" autocomplete="new-password" minlength="${minPasswordCharacters}" placeholder="${n.password ? "Saved in OS credential store — leave blank to keep" : `At least ${minPasswordCharacters} characters`}" ${disabled}>${s?.networkPasswordShort ? `<p class="network-warning" role="status" id="network-password-short">The saved password is shorter than ${minPasswordCharacters} characters, the least Hardcharger accepts for new passwords. It still works; type a new one here and save to change it.</p>` : ""}<small>${n.password ? "Already saved; leave blank to keep it. " : ""}At least ${minPasswordCharacters} characters. Stored in the OS credential store. Other users can sign in through the server's configured access control or identity provider.</small>${fieldError("network-password")}</label>
       </div>
     </div>
   </section>`;
@@ -757,10 +789,11 @@ async function refresh() {
     const s = await invoke<Status>("server_status");
     // The workspace removed or renamed a remote server: Settings shows it, unless it holds edits.
     const remotesChanged = !draftDirty && !remoteRows && JSON.stringify(current?.settings.remote_servers ?? []) !== JSON.stringify(s.settings.remote_servers ?? []);
-    const changed = !current || current.running !== s.running || current.error !== s.error || current.leftover?.pid !== s.leftover?.pid || remotesChanged;
+    const changed = !current || current.running !== s.running || current.error !== s.error || current.leftover?.pid !== s.leftover?.pid || remotesChanged
+      || JSON.stringify(current.localAdmin ?? null) !== JSON.stringify(s.localAdmin ?? null);
     current = s;
     // Keep form focus, scroll position, and text selections while polling.
-    if (changed) render();
+    if (changed && !confirmingNewPassword()) render();
     else if (tab === "server") {
       const values = app.querySelectorAll<HTMLElement>(".stat strong");
       if (values[1]) values[1].textContent = s.running ? uptime(s.uptimeSeconds) : "—";
@@ -834,7 +867,7 @@ async function saveSettings(settings: Settings) {
 }
 
 if (designPreview) {
-  current = { running: true, pid: 24781, port: 31337, endpoint: "http://127.0.0.1:31337", database: "~/Library/Application Support/Hardcharger/Hardcharger.duckdb", logFile: "server.log", uptimeSeconds: 165, databaseBytes: 122683392, version: `Hardcharger ${appVersion}`, error: null, settings: { port: 31337, start_on_open: true, server_options: {} } };
+  current = { running: true, pid: 24781, port: 31337, endpoint: "http://127.0.0.1:31337", database: "~/Library/Application Support/Hardcharger/Hardcharger.duckdb", logFile: "server.log", uptimeSeconds: 165, databaseBytes: 122683392, version: `Hardcharger ${appVersion}`, error: null, settings: { port: 31337, start_on_open: true, server_options: {} }, localAdmin: { username: "hardcharger", error: null } };
 } else if (!native) {
   error = "Open the Hardcharger desktop app to control your server. Use ?preview=1 to view the design in a browser.";
 }
@@ -849,6 +882,13 @@ if (native) {
   void listen<string>("desktop-error", e => showError(e.payload));
   startUpdates(render);
   void invoke<boolean>("launch_at_login", { enabled: null }).then(v => { login = v; if (tab === "settings") render(); }).catch(showError);
+  void invoke<{ level: number; levels: number[] }>("zoom_state").then(state => { zoom = state; if (tab === "settings") render(); }).catch(showError);
+  // A shortcut or the View menu changed it: keep the control in step without re-rendering the form.
+  void listen<{ level: number; levels: number[] }>("zoom-changed", e => {
+    zoom = e.payload;
+    const select = document.querySelector<HTMLSelectElement>("#text-size");
+    if (select) select.value = String(zoom.level);
+  });
   void refresh();
   let ticks = 0;
   setInterval(() => {

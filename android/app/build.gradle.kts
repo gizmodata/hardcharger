@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    // AGP 9 compiles Kotlin itself (built-in Kotlin): no org.jetbrains.kotlin.android.
     id("org.jetbrains.kotlin.plugin.compose")
 }
 val serverCmake = rootProject.file("../server/CMakeLists.txt").readText()
@@ -30,7 +30,7 @@ android {
         ndk { abiFilters += nativeAbis.ifEmpty { listOf("arm64-v8a") } }
     }
     buildFeatures { compose = true; buildConfig = true }
-    sourceSets.getByName("main").jniLibs.setSrcDirs(listOf(nativeDirectory))
+    sourceSets.getByName("main").jniLibs.directories.apply { clear(); add(nativeDirectory) }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     packaging { jniLibs { useLegacyPackaging = false } }
     signingConfigs {
@@ -79,7 +79,7 @@ dependencies {
 }
 
 // Never produce an installable APK that would fail to load its server on launch.
-val verifyNative by tasks.registering {
+val verifyNative = tasks.register("verifyNative") {
     doLast {
         check(nativeAbis.isNotEmpty()) {
             "Build the native server first: android/scripts/build-native.sh arm64-v8a $distribution"
