@@ -222,6 +222,10 @@ endif()
 set(CHARGEWIRE_BUILD_TESTS ON)
 # SYSTEM: its headers (and DuckDB's, which it passes on) are includes of a dependency here.
 add_subdirectory(../third_party/chargewire/cpp chargewire EXCLUDE_FROM_ALL SYSTEM)
+if(MSVC)
+  # DuckDB 2.0.1's shared_ptr wrapper uses the C++20-deprecated atomic free functions.
+  target_compile_definitions(chargewire_duckdb PUBLIC _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+endif()
 
 # jwt-cpp 0.7.2 (header-only; Boost.JSON traits).
 set(JWT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
