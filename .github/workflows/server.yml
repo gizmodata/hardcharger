@@ -360,6 +360,16 @@ jobs:
       - name: The vendored client is what its pinned commit builds
         run: node scripts/vendor-chargewire.mjs --verify --rebuild
 
+  performance:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/perf-regression.yml
+    with:
+      release_gate: true
+
   # The UI's browser tests, in Chromium and WebKit, against the Linux arm64 server built in
   # this run (on an Arm runner, as production runs), which serves the UI it embeds (access control on, so PostgreSQL). They fail,
   # never skip, when the server can't start.
@@ -1448,13 +1458,13 @@ jobs:
   # already passed (changes.outputs.tested), it takes that run's Linux tarballs: the
   # binaries that were tested, not a rebuild.
   image:
-    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, windows, verify-macos, verify-windows, ios, ios-archive, android]
+    needs: [changes, build, performance, portable, sanitize, tsan, ui-checks, ui-e2e, windows, verify-macos, verify-windows, ios, ios-archive, android]
     if: >-
       ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.run_rest == 'true'
           && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
           && (needs.changes.outputs.tested == 'true' || needs.build.result == 'success')
           && (!startsWith(github.ref, 'refs/tags/v')
-              || (needs.build.result == 'success' && needs.portable.result == 'success'
+              || (needs.performance.result == 'success' && needs.build.result == 'success' && needs.portable.result == 'success'
                   && needs.sanitize.result == 'success' && needs.tsan.result == 'success'
                   && needs.ui-checks.result == 'success' && needs.ui-e2e.result == 'success'
                   && needs.windows.result == 'success'
@@ -1682,9 +1692,11 @@ jobs:
   # Store" profile, in a keychain of the run's own that is deleted afterwards.
   ios-archive:
     name: iOS app (signed device build)
-    needs: [changes, web-ui, ios]
+    needs: [changes, web-ui, ios, performance]
     if: >-
-      needs.changes.outputs.run_ios == 'true'
+      !cancelled() && needs.changes.result == 'success' && needs.web-ui.result == 'success'
+      && needs.ios.result == 'success' && needs.changes.outputs.run_ios == 'true'
+      && (!startsWith(github.ref, 'refs/tags/v') || needs.performance.result == 'success')
       && (startsWith(github.ref, 'refs/tags/v')
           || (github.event_name == 'workflow_dispatch' && (inputs.ios || inputs.only == 'ios') && inputs.sign))
     runs-on: xcode-27
@@ -1871,8 +1883,8 @@ jobs:
       warm_cache: true
 
   checksums:
-    needs: [build, windows, desktop, android]
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.windows.result == 'success' && needs.desktop.result == 'success' && (needs.android.result == 'success' || needs.android.result == 'skipped') }}
+    needs: [build, windows, desktop, android, performance]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.windows.result == 'success' && needs.desktop.result == 'success' && (needs.android.result == 'success' || needs.android.result == 'skipped') && (!startsWith(github.ref, 'refs/tags/v') || needs.performance.result == 'success') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
@@ -1889,7 +1901,10 @@ jobs:
           # Four tarballs (Linux amd64, amd64-baseline and arm64, macOS), two Windows zips and two MSIs.
           [ ${#assets[@]} -ge 12 ] || { echo "expected native and desktop release assets, found: ${assets[*]}"; exit 1; }
           test -f hardcharger-linux-amd64-baseline.tar.gz
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then test -f Hardcharger-android.aab; fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            test -f Hardcharger-android.aab
+            assets+=(performance-baseline.tar.gz)
+          fi
           sha256sum "${assets[@]}" > SHA256SUMS
           cat SHA256SUMS
           sha256sum -c SHA256SUMS
@@ -1903,7 +1918,7 @@ jobs:
   # fails unless every job it needs succeeded (none skipped) and the run signed.
   release:
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums, verify-macos, verify-windows, ios, ios-archive, desktop, android]
+    needs: [changes, build, performance, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums, verify-macos, verify-windows, ios, ios-archive, desktop, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -1917,7 +1932,7 @@ jobs:
         run: |
           echo "needed jobs: $RESULTS"
           echo "signed: $SIGN; macOS signatures: $MACOS; Windows signatures: $WINDOWS"
-          [ "$(jq -r 'length' <<< "$RESULTS")" -eq 16 ] || { echo "expected the results of 16 jobs"; exit 1; }
+          [ "$(jq -r 'length' <<< "$RESULTS")" -eq 17 ] || { echo "expected the results of 17 jobs"; exit 1; }
           [ "$(jq -r 'map(select(. != "success")) | length' <<< "$RESULTS")" -eq 0 ] || { echo "a needed job did not succeed"; exit 1; }
           [ "$SIGN" = true ] && [ "$MACOS" = success ] && [ "$WINDOWS" = success ] || { echo "the release is not signed"; exit 1; }
       - uses: actions/checkout@v7

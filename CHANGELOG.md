@@ -166,10 +166,15 @@ own changelog in `python/CHANGELOG.md`.
   10 (throughput, p50/p90/p99, errors) and the ten-client TPC-H case, with server CPU and peak
   memory. Every answer is checked, separately from timing. The report flags changes whose
   bootstrap interval is past configurable thresholds and keeps raw JSON and per-host baselines.
-  It runs by hand or weekly in GitHub Actions (`perf-regression.yml`, not a gate) and on a
-  throwaway AWS instance (`bench/regress/aws.sh`); see `docs/benchmarks.md`.
+  Release CI gates publication on comparisons with previous stable releases and a 5% warm-query
+  overhead budget against stock DuckDB. Each GitHub Release includes the measurements, thresholds
+  and verdict. The suite also runs weekly, on demand and on AWS. See `docs/benchmarks.md`.
 
 ### Changed
+
+- CI checks Clang thread-safety annotations, treats native compiler warnings as errors and
+  checks formatting on changed C/C++ lines. Linux Arm runs UBSan alongside ASan. Manual CI
+  can target a single build leg while release tags still require the full matrix.
 
 - Linux server and CLI binaries use PIE, full RELRO and stack protection. The CLI reports a failure to change to the home directory when running `.cd`.
 

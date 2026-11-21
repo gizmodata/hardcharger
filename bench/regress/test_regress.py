@@ -183,3 +183,53 @@ def test_one_repetition_is_never_judged():
     report, verdict = compare.build_report(runs=[run], thresholds=THRESHOLDS)
     assert verdict["regressions"] == [] and verdict["possible"] == []
     assert "fewer than 3 repetitions" in report
+
+
+@pytest.mark.parametrize(("factor", "blocked"), [(1.04, False), (1.06, True)])
+def test_release_gate_upstream_budget_and_replay(tmp_path, factor, blocked):
+    import subprocess
+
+    run = fake_run(slow_factor=1)
+    run["config"].update(release_gate=True, warm_passes=1, mp_runs=2)
+
+    def measurements(value):
+        return {"tpch": [{"state": "cold", "suite_s": value, "statements_s": {}},
+                         {"state": "warm", "suite_s": value,
+                          "statements_s": {f"q{i:02}": value for i in range(1, 23)}}],
+                "many-pipelines": {name: [value, value] for name in workloads.MP_QUERIES}}
+
+    for record in run["repetitions"]:
+        record.update(measurements(1))
+        if record["label"] == "new":
+            record["upstream_duckdb"] = measurements(1 / factor)
+    report, verdict = compare.build_report([run], THRESHOLDS)
+    assert "Upstream DuckDB" in report
+    assert all(metric["over_budget"] == blocked for metric in verdict["upstream_duckdb"]["metrics"].values())
+    path = tmp_path / "results.json"
+    path.write_text(json.dumps(run))
+    replay = subprocess.run([sys.executable, str(HERE / "compare.py"), str(path), "--fail-on-regression"],
+                            capture_output=True, text=True)
+    assert replay.returncode == int(blocked), replay.stderr
+    assert replay.stdout.strip() == report.strip()
+    del run["repetitions"][-1]["upstream_duckdb"]["tpch"][1]["statements_s"]["q22"]
+    with pytest.raises(ValueError, match="incomplete warm TPC-H"):
+        compare.build_report([run], THRESHOLDS)
+
+
+@pytest.mark.parametrize("problem", ["regressions", "correctness_failures", "errors"])
+def test_release_gate_rejects_prior_regression_and_errors(problem):
+    verdict = dict(regressions=[], correctness_failures=0, errors=0)
+    verdict[problem] = [{"metric": "slow"}] if problem == "regressions" else 1
+    assert compare.exit_status(verdict, fail_on_regression=True) == 1
+    assert compare.exit_status(verdict, fail_on_regression=False) == int(problem != "regressions")
+
+
+def test_select_previous_published_stable_and_anchors():
+    from previous_release import baselines
+
+    published = ["v2.14.1", "v2.14.0", "v2.14.0-rc.1", "v2.13.10", "v2.13.9", "v2.4.1", "python-v2.15.0"]
+    for tag in ("v2.14.0", "v2.14.0-rc.2"):
+        assert baselines(tag, published, ["2.4.1", "2.13.10"]) == ["2.4.1", "2.13.10"]
+        assert baselines(tag, published, ["2.4.1"]) == ["2.4.1", "2.13.10"]
+    with pytest.raises(ValueError, match="no published stable predecessor"):
+        baselines("v2.4.0", published, [])

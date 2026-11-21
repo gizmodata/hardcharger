@@ -43,6 +43,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import compare
+import duckdb_baseline
 import httpx
 import psutil
 import pyarrow
@@ -128,6 +129,9 @@ def resolve_servers(args, work: pathlib.Path) -> list[dict]:
         raise SystemExit(f"labels must differ: {labels}")
     for spec in specs:
         spec.update(servers.describe_binary(binary=spec["binary"]))
+        if (args.release_gate and spec["label"] in args.release
+                and spec["version"] != spec["label"].removeprefix("v")):
+            raise ValueError(f"requested release {spec['label']}, installed {spec['version']}")
         spec["binary"] = str(spec["binary"])
     return specs
 
@@ -330,6 +334,15 @@ def measured(server, record: dict, workload: str, run):
     return result
 
 
+def upstream_sample(server, spec, args, data_root, rep, out):
+    output = out / f"duckdb-{rep}.json"
+    options = {"config": vars(args), "version": spec["duckdb_version"], "database": str(server.database),
+               "data": str(data_root), "rep": rep, "output": str(output)}
+    subprocess.run([sys.executable, str(HERE / "duckdb_baseline.py")], input=json.dumps(options),
+                   text=True, check=True)
+    return json.loads(output.read_text())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--release", action="append", default=[], help="a published version (installed with the official installer)")
@@ -353,7 +366,15 @@ def main() -> int:
     parser.add_argument("--work", default=str(HERE / "work"), help="data, databases, installs and logs (kept between runs)")
     parser.add_argument("--out", required=True, help="directory for results.json and report.md")
     parser.add_argument("--thresholds", default=str(HERE / "thresholds.json"), help="regression thresholds (JSON)")
+    parser.add_argument("--release-gate", action="store_true",
+                        help="require prior releases and a matching upstream DuckDB wheel, enforce both budgets")
     args = parser.parse_args()
+    thresholds = compare.load_thresholds(path=pathlib.Path(args.thresholds))
+    if args.release_gate and (not args.release or len(args.server) != 1 or args.order
+                              or args.repetitions < thresholds["min_repetitions"]
+                              or args.warm_passes < 1 or args.mp_runs < 1
+                              or set(args.workloads.split(",")) != set(ALL_WORKLOADS)):
+        parser.error("the release gate requires prior releases, one candidate, full workloads and repeated measurements")
 
     selected = args.workloads.split(",")
     unknown = set(selected) - set(ALL_WORKLOADS)
@@ -372,7 +393,7 @@ def main() -> int:
         "suite": "hardcharger-perf-regress", "schema_version": SCHEMA_VERSION,
         "started_at": datetime.datetime.now(tz=datetime.UTC).isoformat(timespec="seconds"),
         "host": host_info(args=args),
-        "config": {"scale": args.scale, "threads": args.threads, "memory_limit": args.memory_limit,
+        "config": {"release_gate": args.release_gate, "scale": args.scale, "threads": args.threads, "memory_limit": args.memory_limit,
                    "server_cores": args.server_cores, "client_cores": args.client_cores,
                    "repetitions": args.repetitions, "warm_passes": args.warm_passes, "mp_runs": args.mp_runs,
                    "mp_warmup": args.mp_warmup, "clients": [int(c) for c in args.clients.split(",") if c],
@@ -405,6 +426,9 @@ def main() -> int:
             label = spec["label"]
             cache_dropped = servers.drop_os_caches() if args.drop_caches else False
             server = make_server(spec=spec, args=args, work=work)
+            direct = args.release_gate and label == results["candidate"]
+            if direct and rep % 2 == 0:
+                upstream = upstream_sample(server, spec, args, data_root, rep, out)
             server.start()
             record = {"rep": rep, "label": label, "position": position, "os_cache_dropped": cache_dropped,
                       "server_start_s": server.start_seconds,
@@ -442,17 +466,25 @@ def main() -> int:
                 record["peak_rss_bytes"] = server.peak_rss_linux() or server.sampler.peak_rss
             finally:
                 server.stop()
+            if direct:
+                if rep % 2:
+                    upstream = upstream_sample(server, spec, args, data_root, rep, out)
+                record["upstream_duckdb"] = upstream
+                recorder.checked("upstream DuckDB", upstream["correctness"]["checks"])
+                results["correctness"]["failures"].extend(upstream["correctness"]["failures"])
             results["repetitions"].append(record)
             (out / "results.json").write_text(json.dumps(results, indent=1))  # a partial run is still a record
 
     results["finished_at"] = datetime.datetime.now(tz=datetime.UTC).isoformat(timespec="seconds")
     (out / "results.json").write_text(json.dumps(results, indent=1))
     log(f"wrote {out / 'results.json'}")
-    report, verdict = compare.build_report(runs=[results], thresholds=compare.load_thresholds(path=pathlib.Path(args.thresholds)))
+    report, verdict = compare.build_report(runs=[results], thresholds=thresholds)
+    if args.release_gate and set(verdict["baselines"]) != set(args.release):
+        raise ValueError("missing a required prior release comparison")
     (out / "report.md").write_text(report)
     (out / "verdict.json").write_text(json.dumps(verdict, indent=1))
     log(f"wrote {out / 'report.md'}: {verdict['summary']}")
-    return 1 if verdict["correctness_failures"] or verdict["errors"] else 0
+    return compare.exit_status(verdict, fail_on_regression=args.release_gate)
 
 
 if __name__ == "__main__":

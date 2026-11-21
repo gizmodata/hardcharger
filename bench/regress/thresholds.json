@@ -1,4 +1,5 @@
 {
+ "duckdb_overhead": 0.05,
  "latency": 0.1,
  "suite": 0.05,
  "tail": 0.25,

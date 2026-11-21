@@ -24,6 +24,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import duckdb_baseline
 import stats
 
 # kind -> (threshold key, higher is better)
@@ -206,6 +207,11 @@ def build_report(runs: list[dict], thresholds: dict, candidate: str | None = Non
     lines.append("")
     verdict_line = (f"{len(regressions)} regression(s), {len(possible)} possible, {len(improvements)} improvement(s); "
                     f"{run['correctness']['checks']} answers checked, {len(failures)} wrong; {len(errors)} statement error(s)")
+    overhead = None
+    if config.get("release_gate") and candidate == run["candidate"]:
+        overhead = duckdb_baseline.compare_overhead(run, thresholds)
+        exceeded = sum(m["over_budget"] for m in overhead["metrics"].values())
+        verdict_line += f"; {exceeded} upstream DuckDB overhead budget(s) exceeded"
     lines += [f"**Verdict for {candidate}:** {verdict_line}.", ""]
 
     lines += ["## Correctness", ""]
@@ -296,7 +302,25 @@ def build_report(runs: list[dict], thresholds: dict, candidate: str | None = Non
                "possible": [{"metric": m, "baseline": b, **c} for m, b, c in possible],
                "improvements": [{"metric": m, "baseline": b, **c} for m, b, c in improvements],
                "correctness_failures": len(failures), "errors": len(errors)}
+    if overhead:
+        verdict["upstream_duckdb"] = overhead
+        version = run["servers"][candidate]["duckdb_version"]
+        lines += [f"### Upstream DuckDB {version}", "",
+                  f"Budget {overhead['budget']:.0%}. Intervals use {overhead['confidence']:.0%} confidence.", "",
+                  "| Warm workload | Overhead | Interval | Budget exceeded |", "|---|---:|---:|---|"]
+        for name, metric in overhead["metrics"].items():
+            lines.append(f"| {name} | {metric['ratio'] - 1:+.1%} | "
+                         f"{metric['low'] - 1:+.1%} to {metric['high'] - 1:+.1%} | "
+                         f"{'yes' if metric['over_budget'] else 'no'} |")
+        lines.append("")
     return "\n".join(lines), verdict
+
+
+def exit_status(verdict: dict, fail_on_regression: bool) -> int:
+    if verdict["correctness_failures"] or verdict["errors"]:
+        return 1
+    upstream = verdict.get("upstream_duckdb", {}).get("metrics", {})
+    return int(fail_on_regression and (bool(verdict["regressions"]) or any(m["over_budget"] for m in upstream.values())))
 
 
 def baseline_dir(run: dict, directory: pathlib.Path) -> pathlib.Path:
@@ -311,7 +335,8 @@ def save_baselines(run: dict, directory: pathlib.Path, labels: list[str] | None 
     target = baseline_dir(run=run, directory=directory)
     target.mkdir(parents=True, exist_ok=True)
     for label in labels or run["servers"]:
-        subset = {**run, "servers": {label: run["servers"][label]}, "order": [label], "candidate": label,
+        config = {**run["config"], "release_gate": bool(run["config"].get("release_gate") and label == run["candidate"])}
+        subset = {**run, "config": config, "servers": {label: run["servers"][label]}, "order": [label], "candidate": label,
                   "load": {label: run["load"].get(label, {})},
                   "repetitions": [r for r in run["repetitions"] if r["label"] == label],
                   "correctness": {"checks": run["correctness"]["checks_by_label"].get(label, 0),
@@ -348,8 +373,7 @@ def main() -> int:
         labels = args.save_labels.split(",") if args.save_labels else None
         for path in save_baselines(run=runs[0], directory=pathlib.Path(args.save_baselines), labels=labels):
             print(f"stored {path}", file=sys.stderr)
-    failed = verdict["correctness_failures"] or verdict["errors"]
-    return 1 if failed or (args.fail_on_regression and verdict["regressions"]) else 0
+    return exit_status(verdict, fail_on_regression=args.fail_on_regression)
 
 
 if __name__ == "__main__":

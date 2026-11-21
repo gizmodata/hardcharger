@@ -1010,8 +1010,8 @@ placement groups or open Spot requests.
 ## Performance regression suite (`bench/regress`, issue #6)
 
 A repeatable comparison of a candidate server with published releases: the same workloads,
-data, settings, client and transport for every version, on one machine, interleaved. It is not a
-release gate; it runs by hand or weekly, and its report is a lead to look at before a release.
+data, settings, client and transport for every Hardcharger version, interleaved on one machine.
+Release tags must pass the comparison before publication. Weekly and manual runs produce advisory reports.
 
 ### What it runs
 
@@ -1093,11 +1093,22 @@ Host classes are `aws-<instance type>`, `gha-<runner label>` or `<os>-<arch>-loc
   bench/regress/aws.sh down; bench/regress/aws.sh cost
   ```
 
-- **GitHub Actions:** `.github/workflows/perf-regression.yml`, `workflow_dispatch` (releases,
-  candidate = `main`'s latest `server.yml` build or a run id, scale, repetitions, runner) and
-  Mondays for `main`. It runs on the standard Arm runner (4 vCPUs: server 2 pinned cores, clients
-  2), puts the report in the job summary and uploads the results. A shared runner is noisy;
-  treat its flags as leads. A wrong answer fails the job; a regression only warns.
+- **GitHub Actions** runs the release tag's Linux arm64 artifact on one standard Arm runner alongside
+  the most recent earlier stable release and the 2.4.1 and 2.13.1 reference releases. Each version gets
+  five fresh starts at TPC-H scale factor 1. The tag also runs an unmodified DuckDB wheel matching
+  the candidate's engine version. Both engines read the same candidate database with the same thread
+  count, CPU affinity and memory limit. Each returns complete Arrow results. The embedded and server
+  runs alternate which goes first. The 5% overhead budget applies to the total time to execute and
+  fetch the 22 warm TPC-H queries and to the median latency of each many-pipelines statement. These
+  timings exclude answer validation. The lower bound of the 95% interval must exceed 5% to block.
+  A wrong answer, statement error, missing required comparison or confirmed regression blocks release
+  publication. Weekly and manual comparisons report changes against prior Hardcharger releases.
+- Each published tag carries `performance-baseline.tar.gz` in its GitHub Release assets, covered by
+  `SHA256SUMS`. It contains raw measurements (`results.json`), the exact policy (`thresholds.json`),
+  `verdict.json` and `report.md`. The raw data includes the runner, benchmark settings, binary hashes
+  and individual repetitions. After extraction, replay the decision with the tagged checkout's
+  `python bench/regress/compare.py results.json --thresholds thresholds.json --fail-on-regression`.
+  CI reruns the released binaries on the candidate's runner so hardware drift does not affect the gate.
 - **Locally**, for development: `--scale 0.01 --repetitions 2 --warm-passes 1 --mp-runs 5`
   finishes in a minute. A laptop under load measures the load.
 

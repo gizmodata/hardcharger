@@ -1,19 +1,14 @@
 name: Performance regression
 
-# The performance regression suite (bench/regress, issue #6): a candidate server against
-# published releases, the same workloads interleaved on one runner, with a report of flagged
-# regressions and wrong answers. Not a gate: run by hand, and weekly for main's latest build.
-#
-# Runner: GitHub's standard Arm runner (ubuntu-24.04-arm, 4 vCPUs) by default, as production
-# runs on Arm; the server gets half the CPUs (pinned) and the clients the other half. A shared
-# runner has noisy neighbours: the round-robin interleaving and the bootstrap intervals absorb
-# much of it, but treat its flags as leads. Release decisions use a dedicated instance
-# (bench/regress/aws.sh: c8a.8xlarge, 8 pinned server cores), see docs/benchmarks.md. Set
-# `runner` to a larger runner label if the organization defines one.
-#
-# A wrong answer or a failed statement fails the job; a flagged regression only warns.
+# Shared by weekly and manual reports and the tag build's mandatory publication gate.
+# All binaries are measured on one runner. Only release tags enforce the performance budgets.
 
 on:
+  workflow_call:
+    inputs:
+      release_gate:
+        required: true
+        type: boolean
   workflow_dispatch:
     inputs:
       releases:
@@ -45,7 +40,7 @@ permissions:
 # A newer run on the same branch makes an older one pointless: cancel it. Never on a tag:
 # a release run must finish.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: hardcharger-perf-${{ inputs.release_gate && 'release' || 'report' }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
@@ -56,6 +51,7 @@ jobs:
       contents: read
       actions: read  # the candidate tarball, an artifact of a server.yml run
     env:
+      RELEASE_GATE: ${{ inputs.release_gate || false }}
       RELEASES: ${{ inputs.releases || '2.4.1 2.13.1' }}
       CANDIDATE: ${{ github.event_name == 'schedule' && 'main' || inputs.candidate }}
       SCALE: ${{ inputs.scale || '1' }}
@@ -75,25 +71,43 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          [ -n "$CANDIDATE" ] || { echo "no candidate: releases only"; exit 0; }
+          if [ "$RELEASE_GATE" != true ] && [ -z "$CANDIDATE" ]; then
+            echo "no candidate: releases only"
+            exit 0
+          fi
           case "$(uname -m)" in x86_64) platform=linux-amd64 ;; aarch64) platform=linux-arm64 ;;
             *) echo "no Linux build for $(uname -m)"; exit 1 ;; esac
-          # The newest unexpired artifact of that name from main (or from the given run).
-          query=".artifacts[] | select(.expired | not)"
-          if [ "$CANDIDATE" = main ]; then
-            query="$query | select(.workflow_run.head_branch == \"main\")"
+          if [ "$RELEASE_GATE" = true ]; then
+            run=$GITHUB_RUN_ID
+            sha=$GITHUB_SHA
+          elif [ "$CANDIDATE" = main ]; then
+            found=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=hardcharger-$platform&per_page=100" \
+              --jq '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main")] |
+                    sort_by(.created_at) | last | "\(.workflow_run.id) \(.workflow_run.head_sha)"')
+            read -r run sha <<< "$found"
+            [ -n "$run" ] && [ "$run" != null ] || { echo "no candidate on main"; exit 1; }
           else
-            query="$query | select(.workflow_run.id == $CANDIDATE)"
+            run=$CANDIDATE
+            sha=$(gh run view "$run" --repo "$GITHUB_REPOSITORY" --json headSha --jq .headSha)
           fi
-          found=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=hardcharger-$platform&per_page=100" \
-            --jq "[$query] | sort_by(.created_at) | last | \"\(.workflow_run.id) \(.workflow_run.head_sha)\"")
-          read -r run sha <<< "$found"
-          [ -n "$run" ] && [ "$run" != null ] || { echo "no hardcharger-$platform artifact for '$CANDIDATE'"; exit 1; }
           gh run download "$run" --repo "$GITHUB_REPOSITORY" --name "hardcharger-$platform" --dir "$RUNNER_TEMP/candidate"
           tar -xzf "$RUNNER_TEMP/candidate/hardcharger-$platform.tar.gz" -C "$RUNNER_TEMP/candidate"
           binary="$RUNNER_TEMP/candidate/hardcharger-$platform/bin/hardcharger-server"
           "$binary" --version
-          echo "server=${sha:0:9}=$binary" >> "$GITHUB_OUTPUT"
+          label=${sha:0:9}
+          if [ "$RELEASE_GATE" = true ]; then
+            [ "$("$binary" --version)" = "Hardcharger ${GITHUB_REF_NAME#v}" ]
+            label=${GITHUB_REF_NAME#v}
+            engine=$("$binary" --print-duckdb-version)
+            [[ "$engine" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            python -m pip install --only-binary=:all: "duckdb==${engine#v}"
+            published=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')
+            read -ra anchors <<< "$RELEASES"
+            releases=$(python bench/regress/previous_release.py "$GITHUB_REF_NAME" "${anchors[@]}" <<< "$published")
+            echo "RELEASES=$releases" >> "$GITHUB_ENV"
+          fi
+          echo "server=$label=$binary" >> "$GITHUB_OUTPUT"
       - name: Run the suite
         env:
           CANDIDATE_SERVER: ${{ steps.candidate.outputs.server }}
@@ -101,6 +115,10 @@ jobs:
           cpus=$(nproc)
           half=$(( cpus / 2 ))
           args=()
+          if [ "$RELEASE_GATE" = true ]; then
+            test -n "$CANDIDATE_SERVER"
+            args+=(--release-gate)
+          fi
           for version in $RELEASES; do args+=(--release "$version"); done
           [ -z "$CANDIDATE_SERVER" ] || args+=(--server "$CANDIDATE_SERVER")
           python bench/regress/run.py "${args[@]}" --scale "$SCALE" --repetitions "$REPETITIONS" \
@@ -113,10 +131,14 @@ jobs:
           [ -f "$out/report.md" ] || { echo "no report"; exit 0; }
           cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
           python - "$out/verdict.json" <<'EOF'
-          import json, sys
+          import json, os, sys
           verdict = json.load(open(sys.argv[1]))
+          severity = "error" if os.environ["RELEASE_GATE"] == "true" else "warning"
+          for name, metric in verdict.get("upstream_duckdb", {}).get("metrics", {}).items():
+              if metric["over_budget"]:
+                  print(f"::error title=DuckDB overhead::{name}: {metric['ratio'] - 1:+.1%}")
           for item in verdict["regressions"]:
-              print(f"::warning title=Performance regression::{item['metric']} vs {item['baseline']}: {item['ratio'] - 1:+.1%}")
+              print(f"::{severity} title=Performance regression::{item['metric']} vs {item['baseline']}: {item['ratio'] - 1:+.1%}")
           EOF
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
@@ -124,3 +146,15 @@ jobs:
           name: perf-regression
           path: ${{ runner.temp }}/regress-out
           retention-days: 90
+      - name: Archive release measurements and policy
+        if: inputs.release_gate
+        run: |
+          out="$RUNNER_TEMP/regress-out"
+          cp bench/regress/thresholds.json "$out/thresholds.json"
+          tar -czf "$RUNNER_TEMP/performance-baseline.tar.gz" -C "$out" results.json verdict.json report.md thresholds.json
+      - uses: actions/upload-artifact@v7
+        if: inputs.release_gate
+        with:
+          name: hardcharger-performance-baseline
+          path: ${{ runner.temp }}/performance-baseline.tar.gz
+          if-no-files-found: error

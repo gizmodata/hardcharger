@@ -6,6 +6,10 @@ UndefinedBehaviorSanitizer) and ThreadSanitizer jobs, iOS, desktop and Android) 
 Release created. The version arithmetic lives in `.github/scripts/release.sh`, which the
 workflows call and `.github/scripts/test-release.sh` tests on every run.
 
+The tag's Linux arm64 server must also pass the performance budgets against earlier stable
+releases and upstream DuckDB. The GitHub Release includes the checksummed performance baseline
+archive. See [the benchmark workloads and thresholds](benchmarks.md#comparing).
+
 The ThreadSanitizer job uses an unshipped DuckDB fixture with its optional extensions
 compiled with TSan and linked in (`server/scripts/build-tsan-duckdb.sh`). Public extension
 modules are not instrumented, so their atomic synchronization is invisible to TSan. Native
