@@ -66,8 +66,10 @@ struct TriggerBody {
 using TriggerBodies = std::vector<TriggerBody>;
 
 // Every trigger body in `plan`, in plan order. Runs inside the statement's transaction.
+// `definer_exemptions_unverified`: the store did not answer this request, so no body's owner
+// is exempt from policies in it (Principal::policy_exemptions_unverified on each definer).
 TriggerBodies FindTriggerBodies(duckdb::ClientContext& context, const Snapshot& snapshot,
-                                duckdb::LogicalOperator& plan);
+                                duckdb::LogicalOperator& plan, bool definer_exemptions_unverified = false);
 
 // The body (or base DML) rooted at `op`, if any.
 const TriggerBody* TriggerBodyAt(const TriggerBodies& bodies, const duckdb::LogicalOperator& op);

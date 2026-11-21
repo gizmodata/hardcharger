@@ -938,6 +938,10 @@ client address, and while that pair is locked the change is refused the same way
   address the user signed in from within `login_known_address_days` (30) skips it.
 - **One address trying any users**: the same delay after `login_address_backoff_after` (20)
   failures from that address.
+- **Attempts at once** count as failures until they end, for all three: no more than the
+  threshold's worth are checked before the first of them fails, and once a delay applies, one
+  attempt is checked at a time when it ends (the others are refused with `Retry-After: 1`),
+  however many arrive together.
 - **The answer** is `429 rate_limited` with `Retry-After` (seconds) and the detail `too many
   failed sign-in attempts: try again in N s`, the same whether the user exists or not (an
   unknown name is counted like a known one). A successful sign-in resets its pair's count. An
@@ -945,7 +949,12 @@ client address, and while that pair is locked the change is refused the same way
 - **Every replica agrees**: each failure, success and clear is a record in the access-control
   store (not access-control data: writing one makes no replica reload), and replicas read each
   other's about once a second, so a lock holds on whichever replica the next attempt reaches,
-  after a restart, and in `--verify-credentials`. Decisions are made from memory: a guess never
+  after a restart, and in `--verify-credentials`. Checks by `--verify-credentials` that overlap
+  take turns per user and per client address (a lock row in the store; a DuckDB store file is
+  opened by one check at a time), each reading the records before it checks and writing its
+  own before it answers; one that can't write its failure answers undecided (exit 2), as does
+  one that waits longer than `rbac_store_timeout_seconds` for its turn (`"reason":
+  "store_busy"`). Decisions are made from memory: a guess never
   waits on the store, and while the store doesn't answer each replica counts on its own (a
   warning says so). Without a store the counts are the process's own.
 - An administrator without `catalog_access` rules sees them and clears them:
@@ -1557,7 +1566,10 @@ What she reaches is limited to what her session is, so none of these statements 
 (or anyone) authority she lacks:
 
 - **Users no more powerful than the session.** `ALTER USER` and `DROP USER` reach a user only
-  when every role it holds is one the session acts with (`SET ROLE` narrows that), every role
+  when every role it holds is one the session acts with (`SET ROLE` narrows that), and held
+  the same way: a role it holds through a membership the administrator granted (which can
+  carry an account privilege or a policy exemption) amy must hold that way too, not only through
+  one a role's admin-option holder granted (which carries neither); every role
   it holds `WITH ADMIN OPTION` is one amy could grant, every session attribute it has (which
   row and masking policies read) amy has with the same value, and, for `ALTER USER`, it owns
   no table, view or schema. A user who holds `SYSTEM ADMIN` and the server administrator are
@@ -1567,7 +1579,8 @@ What she reaches is limited to what her session is, so none of these statements 
 - **No policy attributes.** `ALTER USER … SET ATTRIBUTE` / `UNSET ATTRIBUTE` stay the
   administrator's: an attribute decides which rows and values a user sees.
 - **Roles no more powerful than the session.** `DROP ROLE` reaches a role only when
-  everything it inherits is held by the session, it is held by the session itself or holds no
+  everything it inherits is held by the session (what it inherits through the administrator's
+  memberships, held the administrator's way), it is held by the session itself or holds no
   privilege of its own, and no row policy names it and no masking policy exempts it. A new
   role (`CREATE ROLE`) holds nothing, and its creator gets no admin option on it: granting a
   role still needs the role `WITH ADMIN OPTION`, as before. A new user holds `PUBLIC` only.
@@ -1607,8 +1620,9 @@ ALTER USER carl WITH PASSWORD '…';              -- an administrator's, without
 ```
 
 A sign-in with a temporary password succeeds, but its session runs nothing (statements,
-prepared statements, metadata requests, ingest) except the change of that password, and says
-so: `Hardcharger blocked this statement: the password of user carl was set by someone else and
+prepared statements, metadata requests, ingest, partitioned ingest, changes of its session
+options) except the change of that password, and says so (it opens where the server's sessions
+start, with the options its client asked for left unapplied): `Hardcharger blocked this statement: the password of user carl was set by someone else and
 must be changed before anything else runs: ALTER USER CURRENT_USER WITH PASSWORD '<new>'
 REPLACE '<current>'`. A sign-in that does not use the password (an identity provider's token,
 a client certificate) is not held. `--verify-credentials` verifies a temporary password (a
@@ -1627,7 +1641,9 @@ ALTER USER CURRENT_USER WITH PASSWORD 'new password' REPLACE 'current password';
 ```
 
 The current password is required, so a session alone (or an access token someone took) can
-never change it; `ALTER USER <own name> WITH PASSWORD '…'` without `REPLACE` is refused to
+never change it, and the new one must differ from it (`the new password is the current one;
+choose a different password`), so a temporary or expired password never ends its hold by being
+"changed" to itself; `ALTER USER <own name> WITH PASSWORD '…'` without `REPLACE` is refused to
 everyone but the administrator. The change ends the user's sessions, as any password change
 does: sign in again with the new password. The web UI does all of this itself: signed in with
 a temporary password, it asks for a new one, changes it and signs in again. The `hardcharger`
@@ -1709,7 +1725,10 @@ exemption grants nothing else: the job still needs `SELECT`, `INSERT` and the re
   exemptions: an exempt owner lends a view nothing.
 - **Revokes.** A revoke counts at the session's next statement, prepared ones included,
   on every replica at once: a session that holds an exemption asks the store before each
-  statement (one small read), and while the store doesn't answer, no exemption applies.
+  statement (one small read), and while the store doesn't answer, no exemption applies. The
+  same holds for a trigger owner's exemption in its trigger bodies: while some trigger's owner
+  is exempt, every session asks the store before each statement, and a body run while the
+  store doesn't answer applies its owner's policies.
 - **Seen and recorded.** `SHOW GRANTS`, `hardcharger_grants()` and
   `hardcharger_effective_privileges()` list them; `hardcharger_policies()` says a policy
   doesn't apply to an exempt session; and the audit record of each statement an exemption
@@ -1732,7 +1751,12 @@ user can check what their policies will see:
 
 Each answer is worked out when the statement runs, so `SET ROLE` counts at the next
 statement, prepared ones included. For the administrator, and on a server without access
-control, every role is active and there are no attributes.
+control, every role is active and there are no attributes. Like a policy `TO` a role,
+`is_role_active()` follows `SET ROLE`: once a user acts with one of its roles, the policies `TO`
+its other roles, restrictive ones included, no longer apply to it, and `is_role_active()` is
+false for them (as in PostgreSQL). A restriction that must hold whatever role a user acts with
+is written for everyone (`TO PUBLIC`, or no `TO`), with a condition on `current_user` or
+`session_attribute()`, not on `is_role_active()`.
 
 ### When the store is down
 

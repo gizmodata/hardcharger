@@ -385,6 +385,18 @@ TEST(LoginEventStore, DuckDBFileAndItsReadOnlyOpenings) {
     auto store = RbacStore::Open(uri);
     ASSERT_TRUE(store.ok()) << store.status().ToString();
     ExerciseStore(**store);
+    // Lock rows (what --verify-credentials takes in a shared store): one holder at a time, a
+    // stale one taken over, given back only by its holder, and ignored as records (no user key).
+    EXPECT_TRUE(*(*store)->TakeLoginLock("lock:user:bob", "v1", 1000, 0));
+    EXPECT_FALSE(*(*store)->TakeLoginLock("lock:user:bob", "v2", 1100, 0));
+    EXPECT_TRUE(*(*store)->TakeLoginLock("lock:address:198.51.100.7", "v2", 1100, 0));  // another key
+    ASSERT_TRUE((*store)->ReleaseLoginLock("lock:user:bob", "v2").ok());           // not v2's: stays
+    EXPECT_FALSE(*(*store)->TakeLoginLock("lock:user:bob", "v2", 1200, 0));
+    EXPECT_TRUE(*(*store)->TakeLoginLock("lock:user:bob", "v2", 70000, 1001));    // v1's is stale
+    ASSERT_TRUE((*store)->ReleaseLoginLock("lock:user:bob", "v2").ok());
+    ASSERT_TRUE((*store)->ReleaseLoginLock("lock:address:198.51.100.7", "v2").ok());
+    EXPECT_TRUE(*(*store)->TakeLoginLock("lock:user:bob", "v3", 70100, 0));
+    ASSERT_TRUE((*store)->ReleaseLoginLock("lock:user:bob", "v3").ok());
   }
   {
     // Read-only: reads, and refuses to write.
@@ -411,6 +423,11 @@ TEST(LoginEventStore, DuckDBFileAndItsReadOnlyOpenings) {
     const auto other = (*store)->Mutate([](auto&, auto&) { return arrow::Status::OK(); });
     EXPECT_FALSE(other.ok());
     EXPECT_NE(other.message().find("opened read-only"), std::string::npos) << other.ToString();
+    // The file, held for writing by this opening alone, is the lock: nothing is written.
+    EXPECT_TRUE(*(*store)->TakeLoginLock("lock:user:bob", "v1", 1000, 0));
+    EXPECT_TRUE(*(*store)->TakeLoginLock("lock:user:bob", "v2", 1100, 0));
+    ASSERT_TRUE((*store)->ReleaseLoginLock("lock:user:bob", "v1").ok());
+    EXPECT_EQ((*store)->LoginEventsSince(0)->size(), 3u);
   }
   std::filesystem::remove_all(dir);
 }
@@ -451,6 +468,76 @@ TEST(LoginGuard, AttemptsInTheAirCountTowardTheThreshold) {
   guard->RecordFailure("alice", "203.0.113.9");
   guard->RecordFailure("alice", "203.0.113.9");
   EXPECT_TRUE(guard->Check("alice", "203.0.113.9").allowed);
+}
+
+TEST(LoginGuard, AttemptsInTheAirCountTowardTheUserDelay) {
+  // One user guessed from many addresses at once: the delay lets one guess through when it
+  // ends, not every attempt that arrives before the first of them has failed.
+  Fixture f;
+  f.settings.lockout_threshold = 0;
+  f.settings.address_backoff_after = 0;
+  auto guard = f.Guard();
+  int address = 1;
+  auto next = [&] { return "198.51.100." + std::to_string(address++); };
+  // Before any failure: up to login_user_backoff_after (5) at once, then one waits.
+  std::vector<std::string> held;
+  for (int i = 0; i < 5; ++i) {
+    held.push_back(next());
+    EXPECT_TRUE(guard->Check("joe", held.back()).allowed) << i;
+  }
+  auto sixth = guard->Check("joe", next());
+  EXPECT_FALSE(sixth.allowed);
+  EXPECT_EQ(sixth.reason, "user_backoff");
+  EXPECT_EQ(sixth.retry_after_seconds, 1);
+  for (const auto& a : held) guard->RecordFailure("joe", a);
+  // The 1 s delay: refused until it ends, then exactly one attempt is checked.
+  EXPECT_EQ(guard->Check("joe", next()).reason, "user_backoff");
+  f.Advance(1);
+  const std::string first = next();
+  EXPECT_TRUE(guard->Check("joe", first).allowed);
+  for (int i = 0; i < 40; ++i) {
+    const auto refused = guard->Check("joe", next());
+    EXPECT_FALSE(refused.allowed) << i;
+    EXPECT_EQ(refused.reason, "user_backoff");
+    EXPECT_EQ(refused.retry_after_seconds, 1);
+  }
+  guard->RecordFailure("joe", first);  // the sixth failure: a 2 s delay
+  EXPECT_EQ(guard->Check("joe", next()).retry_after_seconds, 2);
+  f.Advance(2);
+  const std::string second = next();
+  EXPECT_TRUE(guard->Check("joe", second).allowed);
+  EXPECT_FALSE(guard->Check("joe", next()).allowed);
+  // An attempt that ends without a verdict gives its place back.
+  guard->Release("joe", second);
+  EXPECT_TRUE(guard->Check("joe", next()).allowed);
+  // A name that is no user is held the same way.
+  for (int i = 0; i < 5; ++i) guard->RecordFailure("nobody", next());
+  f.Advance(1);
+  EXPECT_TRUE(guard->Check("nobody", next()).allowed);
+  const auto unknown = guard->Check("nobody", next());
+  EXPECT_FALSE(unknown.allowed);
+  EXPECT_EQ(unknown.reason, "user_backoff");
+  EXPECT_EQ(unknown.retry_after_seconds, 1);
+}
+
+TEST(LoginGuard, AttemptsInTheAirCountTowardTheAddressDelay) {
+  // One address trying many user names at once.
+  Fixture f;
+  f.settings.lockout_threshold = 0;
+  f.settings.user_backoff_after = 0;
+  auto guard = f.Guard();
+  for (int i = 0; i < 20; ++i) Fail(*guard, "user" + std::to_string(i), "203.0.113.9");
+  EXPECT_EQ(guard->Check("someone", "203.0.113.9").reason, "address_backoff");
+  f.Advance(1);
+  EXPECT_TRUE(guard->Check("user100", "203.0.113.9").allowed);
+  for (int i = 101; i < 140; ++i) {
+    const auto refused = guard->Check("user" + std::to_string(i), "203.0.113.9");
+    EXPECT_FALSE(refused.allowed) << i;
+    EXPECT_EQ(refused.reason, "address_backoff");
+  }
+  EXPECT_TRUE(guard->Check("user101", "203.0.113.10").allowed);  // another address
+  guard->RecordSuccess("user100", "203.0.113.9");  // gives the place back
+  EXPECT_TRUE(guard->Check("user102", "203.0.113.9").allowed);
 }
 
 // ---- Password expiry (password_max_age_days), on a DuckDB-file store ----

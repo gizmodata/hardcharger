@@ -297,6 +297,29 @@ arrow::Status RefuseAdministratorAccount(const std::string& name, const std::str
                             "managed with SQL");
 }
 
+// Of `roles` (held by the administrator's hand by the user or role an account statement
+// changes or drops), the ones the session holds only through a membership a role's
+// admin-option holder granted: only the administrator's memberships carry an account
+// privilege or a policy exemption, so a new password, ENABLE or DROP would hand over (or take
+// away) what the session itself does not carry. The single helper is
+// AdministratorGrantedActingRoles, which the privilege and exemption checks use.
+std::set<std::string> HeldOnlyByDelegation(const Snapshot& snap, const Principal& actor,
+                                           const std::set<std::string>& roles) {
+  const auto carried = snap.AdministratorGrantedActingRoles(actor);
+  std::set<std::string> weaker;
+  for (const auto& id : roles) {
+    if (id != kPublicRoleId && !carried.count(id)) weaker.insert(id);
+  }
+  return weaker;
+}
+
+std::string ByDelegationOnly(const Snapshot& snap, const Principal& actor, const std::set<std::string>& roles) {
+  return "role " + RoleNamesOf(snap, roles) + " through a membership an administrator granted, and user " +
+         actor.user_name +
+         " holds it in this session only through one a role's admin-option holder granted (which carries no account "
+         "privilege or policy exemption)";
+}
+
 // May a holder of ALTER USER or DROP USER change or drop `target`? Only a user that is no more
 // than the session itself, so that a new password, ENABLE or DROP never hands over (or takes
 // away) authority the session lacks: every role it holds is one the session acts with, every
@@ -317,6 +340,13 @@ arrow::Status RequireUserWithinReach(const Snapshot& snap, const Principal& acto
   if (!missing.empty()) {
     return blocked("holds role " + RoleNamesOf(snap, missing) + ", which user " + actor.user_name +
                    " does not hold in this session");
+  }
+  // How each is held, too: a membership the administrator granted carries what one a role's
+  // admin-option holder granted never does (an account privilege, a policy exemption), so a
+  // role the target holds by the administrator's hand the session must hold that way as well.
+  if (const auto weaker = HeldOnlyByDelegation(snap, actor, snap.AdministratorGrantedRolesOfStoredUser(target.id));
+      !weaker.empty()) {
+    return blocked("holds " + ByDelegationOnly(snap, actor, weaker));
   }
   std::set<std::string> options;
   for (const auto& m : snap.memberships()) {
@@ -370,6 +400,16 @@ arrow::Status RequireRoleWithinReach(const Snapshot& snap, const Principal& acto
   if (!missing.empty()) {
     return blocked("inherits role " + RoleNamesOf(snap, missing) + ", which user " + actor.user_name +
                    " does not hold in this session");
+  }
+  // How each is held: what the role (when the session acts with it) and the roles it inherits
+  // by the administrator's hand carry, the session must carry the same way.
+  std::set<std::string> carried_by_role;
+  for (const auto& id : snap.AdministratorGrantedActingRoles(Principal::Role(role.id, role.name))) {
+    if (id != role.id || acting.count(role.id)) carried_by_role.insert(id);
+  }
+  if (const auto weaker = HeldOnlyByDelegation(snap, actor, carried_by_role); !weaker.empty()) {
+    return blocked(std::string(weaker.count(role.id) ? "is, or inherits, " : "inherits ") +
+                   ByDelegationOnly(snap, actor, weaker));
   }
   if (!acting.count(role.id)) {
     const bool grants = std::any_of(snap.grants().begin(), snap.grants().end(),
@@ -1156,8 +1196,9 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                                grantor_name(g.granted_by)});
       }
     }
-    // An account privilege is listed for a user only through the roles that give it to the
-    // user (the administrator's memberships): one a delegated membership reaches gives nothing.
+    // An account privilege or a policy exemption is listed for a user only through the roles
+    // that give it to the user (the administrator's memberships): one a delegated membership
+    // reaches gives nothing.
     std::optional<std::set<std::string>> account_roles;
     if (!show->principal) {
       account_roles = snap->AccountPrivilegeRoles(actor);
@@ -1169,7 +1210,10 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       const auto* role = snap->FindRoleById(role_id);
       for (const auto& r : snap->system_privileges()) {
         if (r.role_id != role_id) continue;
-        if (IsAccountPrivilege(r.privilege) && account_roles && !account_roles->count(role_id)) continue;
+        if ((IsAccountPrivilege(r.privilege) || IsPolicyExemption(r.privilege)) && account_roles &&
+            !account_roles->count(role_id)) {
+          continue;
+        }
         result.rows.push_back({SystemPrivilegeName(r.privilege), r.location.empty() ? "SYSTEM" : "LOCATION",
                                r.location, "", role ? role->name : role_id, "ROLE", r.admin_option ? "YES" : "NO",
                                grantor_name(r.granted_by)});
@@ -1398,6 +1442,12 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
                                   " hours ago): an administrator must set a new one");
       }
       replaced = *verified;
+      // "Changing" a password to itself would end a temporary or expired password's hold and
+      // date it anew while whoever set it still knows it: a new password must be new.
+      if (c->action == Action::kSetPassword && VerifyPassword(c->password, replaced)) {
+        return AccessControlError("Hardcharger blocked ALTER USER: the new password is the current one; choose a "
+                                  "different password");
+      }
     }
     if (c->action == Action::kSetPassword) {
       ARROW_RETURN_NOT_OK(CheckNewPassword(c->password, options_.password_policy));

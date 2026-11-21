@@ -53,6 +53,13 @@ class Backend : public chargewire_duckdb::DuckDBBackend {
  protected:
   std::unique_ptr<chargewire::EngineSession> NewSession(const chargewire::Principal& principal,
                                                      const std::string& session_id) override;
+  // NewSession, then the client's options, except in a session held until its password is
+  // changed (Session::HeldUntilPasswordChanged): it opens where the server's sessions start,
+  // the options left unapplied (they would tell an existing catalog or schema from a missing
+  // one, and such a session runs nothing but the change), and the refusal audited.
+  std::unique_ptr<chargewire::EngineSession> OpenSession(const chargewire::Principal& principal,
+                                                      const std::string& session_id,
+                                                      const boost::json::object& options) override;
 
  private:
   void AttachSystemCatalog();
@@ -111,7 +118,15 @@ class Session : public chargewire_duckdb::DuckDBSession {
                  std::shared_ptr<arrow::RecordBatchReader> rows) override;
   std::shared_ptr<arrow::RecordBatchReader> Metadata(chargewire::MetadataKind kind,
                                                      const chargewire::MetadataFilter& filter) override;
+  // A partitioned ingest's opening: refused, as each part is, in a session held until its
+  // password is changed.
+  void OpeningIngest(const chargewire::IngestTarget& target) override;
   chargewire::OptionErrors SetOptions(const boost::json::object& options) override;
+  // Is the session held until its password is changed (it signed in with a temporary or
+  // expired password that is still the user's)?
+  bool HeldUntilPasswordChanged() const;
+  // Audits options a held session was opened with and did not apply (OpenSession).
+  void RefuseOptionsUntilPasswordChanged() const;
   boost::json::object Options() override;
   void SetReadOnly() override;
   void Commit() override;

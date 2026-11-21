@@ -175,29 +175,53 @@ LoginGuard::Decision LoginGuard::Check(std::string_view user_name, std::string_v
       (lock_over ? 0 : Current(pair->counter, now)) + pair->in_flight >= settings_.lockout_threshold) {
     return refuse(now + kSecond, "locked", counts_.throttled_locked);
   }
+  // An allowed attempt holds a place in its pair, its user and its address until it ends.
   auto allow = [&]() -> Decision {
     if (!address.empty()) {
       Pair& held = pairs_[{user, address}];
       ++held.in_flight;
+      ++address_in_flight_[address];
     }
+    ++user_in_flight_[user];
     return {};
   };
   if (Known(pair, now)) return allow();
-  if (auto it = users_.find(user); it != users_.end()) {
-    const int64_t until = BackoffUntil(it->second.counter, settings_.user_backoff_after, now);
+  // The per-user and per-address delays count the attempts being checked as failures too:
+  // once failures and those reach the delay's threshold, one attempt is checked at a time
+  // (the others wait a second), and only when the delay has passed. So a delay lets one
+  // guess through when it ends, however many arrive at once.
+  auto delayed_until = [&](const Counter* counter, const std::map<std::string, int64_t>& in_flight,
+                           const std::string& key, int64_t after) -> int64_t {
+    if (after <= 0 || settings_.backoff_max_seconds <= 0) return 0;
+    const auto held = in_flight.find(key);
+    const int64_t pending = held == in_flight.end() ? 0 : held->second;
+    const int64_t failures = counter ? Current(*counter, now) : 0;
+    if (failures + pending < after) return 0;
+    if (pending > 0) return now + kSecond;
+    return counter ? BackoffUntil(*counter, after, now) : 0;
+  };
+  {
+    const auto it = users_.find(user);
+    const int64_t until = delayed_until(it == users_.end() ? nullptr : &it->second.counter, user_in_flight_, user,
+                                        settings_.user_backoff_after);
     if (until > now) return refuse(until, "user_backoff", counts_.throttled_user);
   }
   if (!address.empty()) {
-    if (auto it = addresses_.find(address); it != addresses_.end()) {
-      const int64_t until = BackoffUntil(it->second, settings_.address_backoff_after, now);
-      if (until > now) return refuse(until, "address_backoff", counts_.throttled_address);
-    }
+    const auto it = addresses_.find(address);
+    const int64_t until = delayed_until(it == addresses_.end() ? nullptr : &it->second, address_in_flight_, address,
+                                        settings_.address_backoff_after);
+    if (until > now) return refuse(until, "address_backoff", counts_.throttled_address);
   }
   return allow();
 }
 
 void LoginGuard::ReleaseLocked(const std::string& user_key, const std::string& address) {
+  auto give_back = [](std::map<std::string, int64_t>& in_flight, const std::string& key) {
+    if (auto it = in_flight.find(key); it != in_flight.end() && --it->second <= 0) in_flight.erase(it);
+  };
+  give_back(user_in_flight_, user_key);
   if (address.empty()) return;
+  give_back(address_in_flight_, address);
   if (auto it = pairs_.find({user_key, address}); it != pairs_.end() && it->second.in_flight > 0) {
     --it->second.in_flight;
   }

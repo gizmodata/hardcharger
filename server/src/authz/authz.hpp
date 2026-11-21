@@ -357,6 +357,10 @@ class AccessControl {
   arrow::Status AppendLoginEvents(const std::vector<LoginEventRecord>& events);
   arrow::Result<std::vector<LoginEventRecord>> LoginEventsSince(int64_t since_ms);
   arrow::Status PruneLoginEvents(int64_t failures_before_ms, int64_t successes_before_ms);
+  // A lock row among them (RbacStore::TakeLoginLock), for --verify-credentials.
+  arrow::Result<bool> TakeLoginLock(const std::string& key, const std::string& holder, int64_t now_ms,
+                                    int64_t stale_before_ms);
+  arrow::Status ReleaseLoginLock(const std::string& key, const std::string& holder);
 
   // Where hardcharger_users() reads each user's sign-ins from (unset: no values).
   void SetSignInSummaries(SignInSummaries summaries);

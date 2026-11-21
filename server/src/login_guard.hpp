@@ -15,6 +15,8 @@
 //    places it signs in from.
 //  - per client address, across users: the same growing delay after
 //    login_address_backoff_after failures (one address spraying many names).
+// Attempts being checked count as failures until they end, under all three: once a delay
+// applies, one attempt at a time is checked when it ends, however many arrive together.
 // A refusal is "429 rate_limited" with Retry-After, the same whether the user exists or not
 // (an unknown name is counted like a known one). A successful sign-in resets its pair.
 //
@@ -135,9 +137,10 @@ class LoginGuard {
   std::string PendingProblem();
 
   // Before a password is checked: whether to check it at all. An allowed attempt holds a
-  // place in its pair until RecordFailure, RecordSuccess or Release: with the pair's failures
-  // it counts toward the threshold, so many attempts at once can't all be checked before the
-  // first of them fails (the extras wait a second).
+  // place in its pair, its user and its address until RecordFailure, RecordSuccess or
+  // Release: with the failures it counts toward the pair's threshold and toward the user's and
+  // the address's delays, so many attempts at once can't all be checked before the first of
+  // them fails (the extras wait a second), and a delay that ends lets one attempt through.
   Decision Check(std::string_view user_name, std::string_view client_address);
   void RecordFailure(std::string_view user_name, std::string_view client_address);
   void RecordSuccess(std::string_view user_name, std::string_view client_address);
@@ -205,6 +208,10 @@ class LoginGuard {
   std::map<PairKey, Pair> pairs_;
   std::map<std::string, User> users_;
   std::map<std::string, Counter> addresses_;
+  // Allowed attempts not yet ended, per user and per address (across pairs); an entry goes
+  // when its count reaches 0, so these hold no more than the attempts in the air.
+  std::map<std::string, int64_t> user_in_flight_;
+  std::map<std::string, int64_t> address_in_flight_;
   std::vector<authz::LoginEventRecord> pending_;  // to write
   std::map<std::string, int64_t> seen_;           // records read back: id -> at_ms
   int64_t read_up_to_ms_ = 0;                      // newest record read

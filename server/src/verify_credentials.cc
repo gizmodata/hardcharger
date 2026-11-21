@@ -2,6 +2,11 @@
 
 #include <boost/json.hpp>
 
+#include <algorithm>
+#include <chrono>
+#include <thread>
+#include <vector>
+
 #include <iostream>
 #include <iterator>
 #include <memory>
@@ -22,6 +27,8 @@ namespace hardcharger {
 namespace {
 
 constexpr size_t kMaxInputBytes = 64 * 1024;  // a credential, not a document
+// A lock row older than this is a check that died holding it: the next one takes it over.
+constexpr int64_t kStaleLoginLockMs = 60'000;
 
 int Answer(std::ostream& out, int exit_code, boost::json::object answer) {
   out << boost::json::serialize(answer) << "\n" << std::flush;
@@ -143,19 +150,69 @@ int VerifyCredentials(const Config& config, std::istream& in, std::ostream& out)
   // The server's login guard, from the store's records (memory only without a store).
   LoginGuardSettings guard_settings = LoginGuardSettingsFrom(config);
   guard_settings.record_routine_successes = false;  // a success is written only when it ends failures
-  auto guard = std::make_shared<LoginGuard>(guard_settings, "verify-credentials-" + RandomUuid(),
-                                            StoreLoginEvents(access));
-  if (std::string problem = guard->Load(); !problem.empty()) {
+  const std::string origin = "verify-credentials-" + RandomUuid();
+  auto guard = std::make_shared<LoginGuard>(guard_settings, origin, StoreLoginEvents(access));
+  // Checks that overlap (separate processes) take turns: a lock row in the store per user and
+  // per client address, taken before the records are read and given back once this check's
+  // own record is written, so each sees every failure recorded before it and no more than
+  // the limits allow are ever checked. (A DuckDB file is opened for writing, which admits one
+  // check at a time by itself.)
+  std::vector<std::string> held;
+  auto finish = [&] {
+    for (auto it = held.rbegin(); it != held.rend(); ++it) {
+      if (auto released = access->ReleaseLoginLock(*it, origin); !released.ok()) {
+        Log(LogLevel::kWarning, "a lock of this check's sign-in records could not be given back (it lapses)",
+            {{"error", released.message()}});
+      }
+    }
+    held.clear();
     if (access) access->Shutdown();
+  };
+  if (access && grant_type == "password") {
+    std::vector<std::string> keys{"lock:user:" + LoginGuard::UserKey(username)};
+    if (const std::string address = LoginGuard::AddressKey(client_address); !address.empty()) {
+      keys.push_back("lock:address:" + address);
+    }
+    const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(config.rbac_store_timeout_seconds);
+    for (const auto& key : keys) {
+      for (int attempt = 0;; ++attempt) {
+        const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::system_clock::now().time_since_epoch())
+                                   .count();
+        auto taken = access->TakeLoginLock(key, origin, now_ms, now_ms - kStaleLoginLockMs);
+        if (!taken.ok()) {
+          finish();
+          return Undecided(out, StoreProblem(taken.status().message()),
+                           "the store's sign-in records can't be written: " + taken.status().message());
+        }
+        if (*taken) {
+          held.push_back(key);
+          break;
+        }
+        if (std::chrono::steady_clock::now() >= give_up) {
+          finish();
+          return Undecided(out, "store_busy",
+                           "other checks of this user or client address kept the store's sign-in records for longer "
+                           "than rbac_store_timeout_seconds");
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::min(20 * (attempt + 1), 200)));
+      }
+    }
+  }
+  if (std::string problem = guard->Load(); !problem.empty()) {
+    finish();
     return Undecided(out, StoreProblem(problem), "the store's sign-in records can't be read: " + problem);
   }
-  // Writes this check's record (a failure, or a success that ends one) before the answer.
+  // Writes this check's record (a failure, or a success that ends one) before the answer;
+  // returns why it could not, or empty.
   auto record = [&] {
     guard->Sync();
-    if (std::string problem = guard->PendingProblem(); !problem.empty()) {
+    std::string problem = guard->PendingProblem();
+    if (!problem.empty()) {
       Log(LogLevel::kWarning, "the sign-in record of this check could not be written to the store",
           {{"error", problem}});
     }
+    return problem;
   };
   try {
     const IdentityProvider provider = DiscoverIdentityProvider(config);
@@ -181,11 +238,11 @@ int VerifyCredentials(const Config& config, std::istream& in, std::ostream& out)
         access->PasswordMustChange(principal.name, std::string(credential->as_string()))) {
       answer["password_must_change"] = true;
     }
-    if (access) access->Shutdown();
+    finish();
     return Answer(out, kVerifiedExit, std::move(answer));
   } catch (const chargewire::Error& e) {
-    record();
-    if (access) access->Shutdown();
+    const std::string unrecorded = record();
+    finish();
     if (e.code() == chargewire::ErrorCode::kRateLimited) {
       return Answer(out, kRefusedExit,
                     {{"verified", false},
@@ -196,13 +253,19 @@ int VerifyCredentials(const Config& config, std::istream& in, std::ostream& out)
     // The server's own refusal, with the reason it would give the client; a store that
     // stopped answering in between (permission_denied from a stale snapshot) is no answer.
     if (e.code() == chargewire::ErrorCode::kInvalidCredentials || e.code() == chargewire::ErrorCode::kInvalidToken) {
+      // A failure the store doesn't hold would be a check that counts toward no limit.
+      // (A store a server older than 2.14 made keeps no sign-in records at all: as before.)
+      if (!unrecorded.empty() && !authz::IsMissingSignInRecords(unrecorded)) {
+        return Undecided(out, StoreProblem(unrecorded),
+                         "this check's failed sign-in could not be recorded in the store: " + unrecorded);
+      }
       return Refused(out, e.reason().empty() ? std::string(chargewire::CodeName(e.code())) : e.reason(), e.what());
     }
     return Undecided(out, StoreProblem(e.what()) == "configuration" ? std::string(chargewire::CodeName(e.code()))
                                                                     : StoreProblem(e.what()),
                      e.what());
   } catch (const std::exception& e) {
-    if (access) access->Shutdown();
+    finish();
     return Undecided(out, StoreProblem(e.what()), e.what());
   }
 }

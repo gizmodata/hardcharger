@@ -414,6 +414,15 @@ arrow::Status AccessControl::PruneLoginEvents(int64_t failures_before_ms, int64_
   return engine_->PruneLoginEvents(failures_before_ms, successes_before_ms);
 }
 
+arrow::Result<bool> AccessControl::TakeLoginLock(const std::string& key, const std::string& holder, int64_t now_ms,
+                                                 int64_t stale_before_ms) {
+  return engine_->TakeLoginLock(key, holder, now_ms, stale_before_ms);
+}
+
+arrow::Status AccessControl::ReleaseLoginLock(const std::string& key, const std::string& holder) {
+  return engine_->ReleaseLoginLock(key, holder);
+}
+
 void AccessControl::SetSignInSummaries(SignInSummaries summaries) { sign_in_summaries_ = std::move(summaries); }
 
 void AccessControl::SetPasswordAttempts(PasswordAttempts attempts) { password_attempts_ = std::move(attempts); }
@@ -775,23 +784,29 @@ bool SessionGuard::system_admin() const {
 }
 
 void SessionGuard::VerifySystemAdmin() const {
-  if (unrestricted_ || user_id_.empty() || owner_.catalog_rules_only_) return;
+  if (owner_.catalog_rules_only_) return;
   auto state = StateIfAttached(mutex_, connection_);
   if (!state) return;
-  const bool system_admin = state->asks_system_admin();
+  const auto snapshot = owner_.engine_->snapshot();
+  // A trigger body runs as its owner, whoever fires it: an owner's exemption lifts the
+  // policies in it, so it is asked of the store like the session's own (any session, the
+  // administrator's included, may fire it).
+  const bool definer_exempt = snapshot->AnyTriggerOwnerExempt();
+  const bool own = !unrestricted_ && !user_id_.empty();
+  const bool system_admin = own && state->asks_system_admin();
   // A policy exemption takes away every policy of its kind at once: a session that holds
   // one (as this server last heard) asks the store too, so that a revoke on another replica
   // counts at its next statement. One that holds none has nothing to lose.
   bool exempt = false;
-  if (!system_admin) {
+  if (own && !system_admin) {
     Principal principal = state->principal();
     principal.policy_exemptions_unverified = false;
-    const auto snapshot = owner_.engine_->snapshot();
     exempt = snapshot->ExemptFromPolicies(principal, SystemPrivilege::kExemptRowPolicies) ||
              snapshot->ExemptFromPolicies(principal, SystemPrivilege::kExemptMaskingPolicies);
   }
-  if (!system_admin && !exempt) {
-    state->SetPolicyExemptionsUnverified({});
+  if (!system_admin && !exempt && !definer_exempt) {
+    if (own) state->SetPolicyExemptionsUnverified({});
+    state->SetDefinerExemptionsUnverified({});
     return;
   }
   // One round trip (the store's data version; a load when it moved). A change this finds
@@ -799,7 +814,8 @@ void SessionGuard::VerifySystemAdmin() const {
   const auto refreshed = owner_.engine_->Refresh();
   const std::string error = refreshed.ok() ? std::string() : refreshed.message();
   if (system_admin) state->SetSystemAdminUnverified(error);
-  state->SetPolicyExemptionsUnverified(error);
+  if (own) state->SetPolicyExemptionsUnverified(error);
+  state->SetDefinerExemptionsUnverified(error);
 }
 
 SessionPolicyContext SessionGuard::PolicyContextNow() const {

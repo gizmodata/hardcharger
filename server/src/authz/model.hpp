@@ -443,6 +443,10 @@ class Snapshot {
   // token with catalog_access rules, or as a tenant's user or role, and not while its
   // session's check with the store did not answer (Principal::policy_exemptions_unverified).
   bool ExemptFromPolicies(const Principal& principal, SystemPrivilege exemption) const;
+  // Is the owner of some trigger exempt from row or masking policies? Its trigger bodies then
+  // run without those policies for whoever fires them, so each statement asks the store
+  // first, as a session that holds an exemption does (SessionGuard::VerifySystemAdmin).
+  bool AnyTriggerOwnerExempt() const;
   // Does it hold the storage privilege `privilege` everywhere or on a location that covers
   // `path`? Always true for the administrator.
   bool HasStorageAccess(const Principal& principal, SystemPrivilege privilege, const StoragePath& path,
@@ -523,6 +527,13 @@ class Snapshot {
   std::set<std::string> AdministratorGrantedActingRoles(const Principal& principal) const;
   // AdministratorGrantedActingRoles for a user's session; empty for a role principal.
   std::set<std::string> AccountPrivilegeRoles(const Principal& principal) const;
+  // The roles a stored user holds through memberships the administrator granted, with what
+  // those inherit the same way (the store's part of AdministratorGrantedRolesOf: no sign-in's
+  // groups), whether or not it is enabled; never PUBLIC; empty for a tenant's user. What a new
+  // password, ENABLE or DROP USER of it hands over or takes away beyond its roles' ordinary
+  // grants: the reach rule asks that the session hold each of these the same way
+  // (AdministratorGrantedActingRoles).
+  std::set<std::string> AdministratorGrantedRolesOfStoredUser(const std::string& user_id) const;
   // Does the role hold an account privilege, itself or through a role it was granted (by
   // anyone)? Membership in it is then the administrator's to grant.
   bool RoleCarriesAccountPrivilege(const std::string& role_id) const;

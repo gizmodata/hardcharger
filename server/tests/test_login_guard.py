@@ -180,6 +180,38 @@ def test_many_addresses_guessing_one_user_are_slowed_but_never_lock_it(launcher,
     assert sign_in(server=server, user="admin", password=admin_password(server), address="198.51.100.99").status_code == 200
 
 
+def burst(server, pairs: list[tuple[str, str]]) -> list[int]:
+    """Wrong passwords for each (user, address), all at once; the answers' status codes."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(pairs)) as pool:
+        return list(pool.map(lambda pair: sign_in(server=server, user=pair[0], password="wrong-password",
+                                                  address=pair[1]).status_code, pairs))
+
+
+def test_a_delay_that_ends_lets_one_guess_through_however_many_arrive(launcher, store):
+    # Many attempts at once when a user's (or an address's) delay ends: one password is checked,
+    # the others are refused unchecked, as a single attempt sooner would be.
+    server = start(launcher=launcher, store_uri=store.new_database(),
+                   env={"HARDCHARGER_LOGIN_BACKOFF_BASE_SECONDS": "2", "HARDCHARGER_LOGIN_ADDRESS_BACKOFF_AFTER": "3"})
+    create_joe(server=server)
+    for i in range(5):
+        fail(server=server, user="joe", address=f"198.51.100.{i + 1}")
+    time.sleep(limited(sign_in(server=server, user="joe", password="wrong-password", address="198.51.100.99")))
+    statuses = burst(server=server, pairs=[("joe", f"203.0.113.{i + 1}") for i in range(30)])
+    assert statuses.count(401) == 1 and statuses.count(429) == 29, statuses
+    # Before any failure, as many as the delay's threshold at once, and not more.
+    statuses = burst(server=server, pairs=[("fresh", f"192.0.2.{i + 1}") for i in range(30)])
+    assert 1 <= statuses.count(401) <= 5 and statuses.count(401) + statuses.count(429) == 30, statuses
+    # One address, many user names.
+    for name in ("u1", "u2", "u3"):
+        fail(server=server, user=name, address="198.18.0.7")
+    time.sleep(limited(sign_in(server=server, user="u4", password="wrong-password", address="198.18.0.7")))
+    statuses = burst(server=server, pairs=[(f"other{i}", "198.18.0.7") for i in range(30)])
+    assert statuses.count(401) == 1 and statuses.count(429) == 29, statuses
+    # The twin: the right password, after the delay, is checked and signs in.
+    time.sleep(limited(sign_in(server=server, user="joe", password=JOE_PASSWORD, address="198.51.100.200")))
+    assert sign_in(server=server, user="joe", password=JOE_PASSWORD, address="198.51.100.200").status_code == 200
+
+
 # ---- Behind a proxy ----
 
 def test_a_forwarding_header_from_an_untrusted_peer_is_ignored_and_said_so(launcher, store):
@@ -382,6 +414,49 @@ def test_the_verifier_counts_its_failures_and_the_server_honours_them(launcher, 
     # The cluster starts (the wake): the lock holds there too.
     again = start(launcher=launcher, store_uri=uri)
     limited(sign_in(server=again, user="joe", password=JOE_PASSWORD, address="203.0.113.9"))
+
+
+def test_overlapping_verifiers_check_no_more_than_the_threshold_and_record_every_failure(launcher, store):
+    # Verifiers are separate processes: they take turns through the store (lock rows; a DuckDB
+    # file opened for writing), so each sees the failures recorded before it, and every
+    # failure is recorded.
+    uri = store.new_database()
+    server = start(launcher=launcher, store_uri=uri)
+    create_joe(server=server)
+    password = admin_password(server)
+    server.running.stop()
+    credentials = [joe_credential(password=f"wrong-password-{i}", address="203.0.113.9") for i in range(10)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(credentials)) as pool:
+        answers = list(pool.map(lambda c: verify(store_uri=uri, credential=c, admin_password=password), credentials))
+    reasons = [answer.get("reason") for _, answer in answers]
+    assert reasons.count("invalid_credentials") <= 5, answers
+    # The rest were refused unchecked (or, waiting too long for their turn, undecided: exit 2).
+    assert all((code, answer["reason"]) in ((1, "invalid_credentials"), (1, "rate_limited"), (2, "store_busy"))
+               for code, answer in answers), answers
+    # Every failure was recorded: once five were checked, the pair is locked, the right
+    # password included, for the verifier and for the server.
+    if reasons.count("invalid_credentials") < 5:
+        for i in range(5 - reasons.count("invalid_credentials")):
+            code, answer = verify(store_uri=uri, credential=joe_credential(password=f"wrong-again-{i}",
+                                                                           address="203.0.113.9"),
+                                  admin_password=password)
+            if answer["reason"] == "rate_limited":
+                time.sleep(answer["retry_after_seconds"])
+    code, answer = verify(store_uri=uri, credential=joe_credential(password=JOE_PASSWORD, address="203.0.113.9"),
+                          admin_password=password)
+    assert (code, answer["reason"]) == (1, "rate_limited") and answer["retry_after_seconds"] > 800, answer
+    again = start(launcher=launcher, store_uri=uri)
+    limited(sign_in(server=again, user="joe", password=JOE_PASSWORD, address="203.0.113.9"))
+    # The twin: another address, once the user's delay has passed, is verified.
+    again.running.stop()
+    for _ in range(3):
+        code, answer = verify(store_uri=uri, credential=joe_credential(password=JOE_PASSWORD, address="192.0.2.1"),
+                              admin_password=password)
+        if code == 0:
+            break
+        assert answer["reason"] == "rate_limited", answer
+        time.sleep(answer["retry_after_seconds"])
+    assert code == 0 and answer["verified"] is True, answer
 
 
 def test_a_verified_password_resets_the_pair_for_the_verifier(launcher, store):

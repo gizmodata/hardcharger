@@ -337,6 +337,12 @@ reach a user only when it is no more than the session:
   certificate administrator (`admin is the server administrator, which is set in the server's
   configuration and never managed with SQL`);
 - every role it holds (`EffectiveRoleIds`, transitively) is in the session's `RolesOf`;
+- every role it holds through the administrator's memberships
+  (`AdministratorGrantedRolesOfStoredUser`, enabled or not) is in the session's
+  `AdministratorGrantedActingRoles`: only those memberships carry an account privilege or a
+  policy exemption, so a help desk that holds a role only through a membership an admin-option
+  holder granted never takes over a user who holds it the administrator's way (and with it
+  what the role carries);
 - every role it holds `WITH ADMIN OPTION` is one the session could grant (`CanAdminRole`);
 - every session attribute it has, the actor has with the same value (attributes are what row
   and masking policies read: signing in as the user would see its rows);
@@ -348,7 +354,9 @@ than the session stays disabled), `DISABLE` and `DROP`. `ALTER USER … SET / UN
 is refused to holders outright: setting an attribute is granting data.
 
 **The target boundary for roles** (`RequireRoleWithinReach`). `DROP ROLE` reaches a role
-when everything it inherits is in the session's roles, it is itself one of them or holds no
+when everything it inherits is in the session's roles (what it inherits through the
+administrator's memberships, and the role itself when the session acts with it, in the
+session's `AdministratorGrantedActingRoles`), it is itself one of them or holds no
 object grant or system privilege of its own, and no row policy names it and no masking policy
 exempts it (dropping it would change what those policies decide; a restrictive policy left
 with no roles would even apply to everyone). Built-in roles and roles carrying `SYSTEM ADMIN`

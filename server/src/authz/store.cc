@@ -146,6 +146,11 @@ dd::Value Bool(bool b) { return dd::Value::BOOLEAN(b); }
 dd::Value BigInt(int64_t v) { return dd::Value::BIGINT(v); }
 
 // A statement failed because its table isn't there (a store an older server created).
+bool IsMissingTableMessage(const std::string& text) {
+  const std::string message = Lower(text);
+  return message.find("does not exist") != std::string::npos || message.find("not found") != std::string::npos;
+}
+
 bool IsMissingTable(const arrow::Status& status) {
   const std::string message = Lower(status.message());
   return message.find("does not exist") != std::string::npos ||
@@ -409,6 +414,10 @@ arrow::Result<std::string> PrepareStoreFile(const std::string& given) {
 
 std::string DuckDBStoreFile(const std::string& store_uri) { return RbacStore::DuckDBFile(store_uri); }
 
+bool IsMissingSignInRecords(const std::string& message) {
+  return message.find("login_events") != std::string::npos && IsMissingTableMessage(message);
+}
+
 std::string StoreConnectionWithTimeouts(const std::string& uri, std::chrono::milliseconds timeout) {
   return WithTimeouts(uri, timeout);
 }
@@ -479,8 +488,23 @@ arrow::Status RbacStore::OpenStore() {
       return arrow::Status::Invalid("Hardcharger access control: the access control store has not been initialized: "
                                     "the DuckDB store file ", file_path_, " does not exist");
     }
-    ARROW_ASSIGN_OR_RAISE(auto attach, Query(conn, "ATTACH " + Quote(file_path_) + " AS rbac_store" +
-                                                       (options_.read_only ? " (READ_ONLY)" : "")));
+    // A read-only opening that records sign-ins (--verify-credentials) opens the file for
+    // writing from the start, waiting up to the store's timeout for another such opening to
+    // close it: a DuckDB file has one writer, so overlapping checks run one after another,
+    // each reading the records of the one before and writing its own.
+    const bool exclusive = options_.read_only && options_.record_sign_ins;
+    const auto give_up = std::chrono::steady_clock::now() + options_.timeout;
+    dd::unique_ptr<dd::QueryResult> attach;
+    for (int attempt = 0;; ++attempt) {
+      ARROW_ASSIGN_OR_RAISE(attach, Query(conn, "ATTACH " + Quote(file_path_) + " AS rbac_store" +
+                                                    (options_.read_only && !exclusive ? " (READ_ONLY)" : "")));
+      if (!exclusive || !attach->HasError() || attach->GetError().find("Could not set lock") == std::string::npos ||
+          std::chrono::steady_clock::now() >= give_up) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(std::min(20 * (attempt + 1), 200)));
+    }
+    if (exclusive && !attach->HasError()) sign_ins_writable_ = exclusive_file_ = true;
     if (attach->HasError()) {
       std::string error = attach->GetError();
       if (auto nl = error.find('\n'); nl != std::string::npos) error.resize(nl);
@@ -1261,15 +1285,7 @@ arrow::Status RbacStore::AppendLoginEvents(const std::vector<LoginEventRecord>& 
   StoreTurn turn;
   ARROW_RETURN_NOT_OK(Lock(turn));
   auto& conn = *link_;
-  if (options_.read_only && !sign_ins_writable_) {
-    // A read-only opening that records sign-ins attaches for writing only now, when it has
-    // one to write: until then the store is as untouched as any read-only opening leaves it.
-    ARROW_RETURN_NOT_OK(Redacted(Exec(conn, "DETACH rbac_store")));
-    ARROW_RETURN_NOT_OK(Redacted(Exec(conn, connect_uri_.empty()
-                                                ? "ATTACH " + Quote(file_path_) + " AS rbac_store"
-                                                : "ATTACH " + Quote(connect_uri_) + " AS rbac_store (TYPE postgres)")));
-    sign_ins_writable_ = true;
-  }
+  ARROW_RETURN_NOT_OK(EnableSignInWrites());
   ARROW_RETURN_NOT_OK(Redacted(Exec(conn, "BEGIN TRANSACTION")));
   auto body = [&]() -> arrow::Status {
     for (const auto& e : events) {
@@ -1290,6 +1306,84 @@ arrow::Status RbacStore::AppendLoginEvents(const std::vector<LoginEventRecord>& 
   }
   CheckpointFile();
   return status;
+}
+
+arrow::Status RbacStore::EnableSignInWrites() {
+  if (!options_.read_only || sign_ins_writable_) return arrow::Status::OK();
+  // A read-only opening that records sign-ins attaches for writing only now, when it has
+  // one to write: until then the store is as untouched as any read-only opening leaves it.
+  auto& conn = *link_;
+  ARROW_RETURN_NOT_OK(Redacted(Exec(conn, "DETACH rbac_store")));
+  ARROW_RETURN_NOT_OK(Redacted(Exec(conn, connect_uri_.empty()
+                                              ? "ATTACH " + Quote(file_path_) + " AS rbac_store"
+                                              : "ATTACH " + Quote(connect_uri_) + " AS rbac_store (TYPE postgres)")));
+  sign_ins_writable_ = true;
+  return arrow::Status::OK();
+}
+
+arrow::Result<bool> RbacStore::TakeLoginLock(const std::string& key, const std::string& holder, int64_t now_ms,
+                                             int64_t stale_before_ms) {
+  if (options_.read_only && !options_.record_sign_ins) {
+    return arrow::Status::Invalid(
+        "Hardcharger access control: the access control store was opened read-only; nothing is written");
+  }
+  // A DuckDB file this opening holds for writing admits no other check until it closes:
+  // the file is the lock, and nothing is written for it.
+  if (exclusive_file_) return true;
+  StoreTurn turn;
+  ARROW_RETURN_NOT_OK(Lock(turn));
+  auto& conn = *link_;
+  ARROW_RETURN_NOT_OK(EnableSignInWrites());
+  ARROW_RETURN_NOT_OK(Redacted(Exec(conn, "BEGIN TRANSACTION")));
+  auto body = [&]() -> arrow::Status {
+    ARROW_RETURN_NOT_OK(Run(conn, "DELETE FROM " + T("login_events") + " WHERE event_id = $1 AND kind = 'lock' AND at_ms < $2",
+                            {Text(key), BigInt(stale_before_ms)})
+                            .status());
+    ARROW_RETURN_NOT_OK(Run(conn, "INSERT INTO " + T("login_events") +
+        " (event_id, at_ms, kind, user_key, user_name, address, origin) VALUES ($1, $2, 'lock', '', '', '', $3)",
+                            {Text(key), BigInt(now_ms), Text(holder)})
+                            .status());
+    return Exec(conn, "COMMIT");
+  };
+  auto status = Redacted(body());
+  if (status.ok()) {
+    CheckpointFile();
+    return true;
+  }
+  if (options_.read_only && IsMissingTable(status)) {
+    // A store a server older than 2.14 made keeps no sign-in records: none to take turns on.
+    (void)Query(conn, "ROLLBACK");
+    return true;
+  }
+  if (status.message().find("timed out after") == std::string::npos) (void)Query(conn, "ROLLBACK");
+  // Another holder has it: its row's key (PostgreSQL's unique violation, DuckDB's duplicate
+  // key or a write-write conflict with a holder taking it at the same moment).
+  const std::string& message = status.message();
+  if (message.find("uplicate key") != std::string::npos || message.find("unique constraint") != std::string::npos ||
+      message.find("PRIMARY KEY") != std::string::npos || IsRetryableConflict(message)) {
+    return false;
+  }
+  return status;
+}
+
+arrow::Status RbacStore::ReleaseLoginLock(const std::string& key, const std::string& holder) {
+  if (exclusive_file_) return arrow::Status::OK();
+  auto released = ReleaseLoginLockRow(key, holder);
+  if (!released.ok() && options_.read_only && IsMissingTable(released)) return arrow::Status::OK();
+  return released;
+}
+
+arrow::Status RbacStore::ReleaseLoginLockRow(const std::string& key, const std::string& holder) {
+  StoreTurn turn;
+  ARROW_RETURN_NOT_OK(Lock(turn));
+  ARROW_RETURN_NOT_OK(EnableSignInWrites());
+  ARROW_RETURN_NOT_OK(Redacted(Run(*link_,
+                                   "DELETE FROM " + T("login_events") +
+                                       " WHERE event_id = $1 AND kind = 'lock' AND origin = $2",
+                                   {Text(key), Text(holder)})
+                                   .status()));
+  CheckpointFile();
+  return arrow::Status::OK();
 }
 
 arrow::Result<std::vector<LoginEventRecord>> RbacStore::LoginEventsSince(int64_t since_ms) {

@@ -102,6 +102,17 @@ class RbacSessionState : public duckdb::ClientContextState {
     std::lock_guard<std::mutex> lock(principal_mutex_);
     policy_exemptions_unverified_ = std::move(error);
   }
+  // The same for the owners of the triggers a statement fires (trigger bodies run as their
+  // owner): while the store did not answer this request, no trigger owner's exemption applies
+  // in a body. Empty: it answered, or was not asked.
+  void SetDefinerExemptionsUnverified(std::string error) {
+    std::lock_guard<std::mutex> lock(principal_mutex_);
+    definer_exemptions_unverified_ = std::move(error);
+  }
+  bool definer_exemptions_unverified() const {
+    std::lock_guard<std::mutex> lock(principal_mutex_);
+    return !definer_exemptions_unverified_.empty();
+  }
   // What a statement of this session is told when it asked for SYSTEM ADMIN and does not
   // act as one: the store did not answer, or its user no longer holds it.
   std::string SystemAdminRefusal() const;
@@ -203,6 +214,7 @@ class RbacSessionState : public duckdb::ClientContextState {
   Principal principal_;
   std::string system_admin_unverified_;  // guarded by principal_mutex_
   std::string policy_exemptions_unverified_;  // guarded by principal_mutex_
+  std::string definer_exemptions_unverified_;  // guarded by principal_mutex_
   std::atomic<int64_t> persona_version_{0};
   std::atomic<int> bypass_depth_{0};
 

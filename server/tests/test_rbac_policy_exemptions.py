@@ -493,6 +493,95 @@ def test_a_replica_cut_off_from_the_store_applies_every_policy(launcher, pg_stor
         forwarder.close()
 
 
+TRIGGER_OWNER_SETUP = [
+    "CREATE SCHEMA app", "CREATE USER mia", "CREATE ROLE builders", "CREATE ROLE mia_loader",
+    "GRANT CREATE TABLE, CREATE TRIGGER, DROP TRIGGER, SELECT, INSERT ON SCHEMA app TO builders",
+    "GRANT builders, staff TO mia", "GRANT INSERT ON SCHEMA app TO staff",
+    f"GRANT {EXEMPTIONS} TO ROLE mia_loader", "GRANT mia_loader TO mia",
+]
+TRIGGER_OWNER_OBJECTS = [
+    "CREATE TABLE app.feed (id INT)", "CREATE TABLE app.seen (n BIGINT, ssns VARCHAR)",
+    "CREATE TRIGGER copy_feed AFTER INSERT ON app.feed FOR EACH STATEMENT "
+    "INSERT INTO app.seen SELECT count(*), string_agg(ssn, ',' ORDER BY ssn) FROM emp",
+]
+OWNER_EXEMPT = {"n": 3, "ssns": "111,222,333"}  # what mia's trigger body sees while she is exempt
+OWNER_HELD = {"n": 1, "ssns": "XXX"}            # and as staff alone
+
+
+def test_a_trigger_owners_exemption_is_asked_of_the_store_like_a_sessions(launcher, pg_store):
+    # A trigger body runs with its owner's exemptions for whoever fires it. A revoke on another
+    # replica counts at the next statement that fires it, with no wait, and a replica cut off
+    # from the store lifts no policy in it, as for a session's own exemption.
+    uri = pg_store.new_database()
+    parts = urllib.parse.urlsplit(uri)
+    forwarder = Forwarder(host=parts.hostname, port=parts.port)
+    try:
+        through = urllib.parse.urlunsplit(parts._replace(
+            netloc=parts.netloc.replace(f":{parts.port}", f":{forwarder.port}")))
+        first = start_rbac_server(launcher=launcher, store_uri=uri)
+        second = start_rbac_server(launcher=launcher, store_uri=through,
+                                   env={"HARDCHARGER_RBAC_STORE_TIMEOUT_SECONDS": "2"})
+        admin, local_admin = first.admin(), second.admin()
+        for sql in SETUP + TRIGGER_OWNER_SETUP:
+            expect_allowed(client=local_admin, sql=sql)
+        mia = second.user(name="mia")
+        for sql in TRIGGER_OWNER_OBJECTS:
+            expect_allowed(client=mia, sql=sql)
+        wait_for(condition=lambda: "mia_loader" in {r["name"] for r in rows(client=admin,
+                                                                              sql="SELECT name FROM hardcharger_roles()")},
+                 timeout=15, what="the roles to reach the first replica")
+        ann = second.user(name="ann")
+
+        def seen_after_insert(writer=ann) -> dict:
+            expect_allowed(client=writer, sql="INSERT INTO app.feed VALUES (1)")
+            return rows(client=local_admin, sql="SELECT n, ssns FROM app.seen ORDER BY rowid DESC LIMIT 1")[0]
+
+        assert seen_after_insert() == OWNER_EXEMPT
+        for _ in range(3):
+            expect_allowed(client=admin, sql=f"REVOKE {EXEMPTIONS} FROM ROLE mia_loader")
+            # No wait for the second replica to poll: the writer's statement asks the store.
+            assert seen_after_insert() == OWNER_HELD
+            assert seen_after_insert(writer=local_admin) == OWNER_HELD  # the administrator firing it too
+            expect_allowed(client=admin, sql=f"GRANT {EXEMPTIONS} TO ROLE mia_loader")
+            wait_for(condition=lambda: seen_after_insert() == OWNER_EXEMPT, timeout=15 * TIMEOUT_SCALE,
+                     what="the exemption to reach the second replica again")
+        # Cut off from the store: what the replica last heard lifts no policy in the body.
+        forwarder.cut()
+        assert seen_after_insert() == OWNER_HELD
+        # The twin: ann's own statements are served from the last grants as before.
+        assert column(client=ann, sql="SELECT id FROM emp") == [1]
+        # A revoke while it is cut off, then the store answers again: the revoke holds.
+        expect_allowed(client=admin, sql=f"REVOKE {EXEMPTIONS} FROM ROLE mia_loader")
+        assert seen_after_insert() == OWNER_HELD
+        forwarder.restore()
+        assert seen_after_insert() == OWNER_HELD
+        expect_allowed(client=admin, sql=f"GRANT {EXEMPTIONS} TO ROLE mia_loader")
+        wait_for(condition=lambda: seen_after_insert() == OWNER_EXEMPT, timeout=30 * TIMEOUT_SCALE,
+                 what="the exemption to apply in the body once the store answers")
+    finally:
+        forwarder.close()
+
+
+def test_a_trigger_owners_revoke_counts_at_the_next_statement(world):
+    # One replica (either store): the revoke reaches the very next statement that fires the trigger.
+    for sql in TRIGGER_OWNER_SETUP:
+        expect_allowed(client=world.admin, sql=sql)
+    mia = world.user(name="mia")
+    for sql in TRIGGER_OWNER_OBJECTS:
+        expect_allowed(client=mia, sql=sql)
+    ann = world.user(name="ann")
+
+    def seen_after_insert() -> dict:
+        expect_allowed(client=ann, sql="INSERT INTO app.feed VALUES (1)")
+        return rows(client=world.admin, sql="SELECT n, ssns FROM app.seen ORDER BY rowid DESC LIMIT 1")[0]
+
+    assert seen_after_insert() == OWNER_EXEMPT
+    expect_allowed(client=world.admin, sql=f"REVOKE {EXEMPTIONS} FROM ROLE mia_loader")
+    assert seen_after_insert() == OWNER_HELD
+    expect_allowed(client=world.admin, sql=f"GRANT {EXEMPTIONS} TO ROLE mia_loader")
+    assert seen_after_insert() == OWNER_EXEMPT
+
+
 # ---- Seen, and recorded ----
 
 

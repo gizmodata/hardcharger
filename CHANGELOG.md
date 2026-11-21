@@ -75,7 +75,8 @@ own changelog in `python/CHANGELOG.md`.
   desk manages accounts without reading data or holding `SYSTEM ADMIN`. A holder reaches only
   the server's own users and roles that are no more than its session: never a `SYSTEM ADMIN`
   holder or the server administrator, nor a user holding a role, admin option or session
-  attribute the session lacks, nor (for a password or `ENABLE`) one that owns objects; a role
+  attribute the session lacks (or a role the administrator granted it that the session holds
+  only through a delegated membership), nor (for a password or `ENABLE`) one that owns objects; a role
   is dropped only when nothing beyond the session goes with it and no policy names it. Session
   attributes stay the administrator's, a new role holds nothing and gives its creator no
   admin option, and tenants stay with their tenant admins. Only an unrestricted administrator
@@ -86,9 +87,10 @@ own changelog in `python/CHANGELOG.md`.
 - Temporary passwords and self-service password changes. A password a delegate sets for
   someone else (a holder of `CREATE USER` / `ALTER USER`, a tenant admin), or an administrator
   sets with `WITH PASSWORD '…' EXPIRE` (or `ALTER USER name PASSWORD EXPIRE`), must be changed
-  before anything else: its sign-in succeeds, but the session runs only `ALTER USER
+  before anything else: its sign-in succeeds, but the session (which opens with the server's
+  default options and may not change them) runs only `ALTER USER
   CURRENT_USER WITH PASSWORD '<new>' REPLACE '<current>'`, which every user may run for itself
-  and which needs the current password. `hardcharger_users()` gains `password_must_change`,
+  and which needs the current password (and a new one that differs from it). `hardcharger_users()` gains `password_must_change`,
   `--verify-credentials` says `"password_must_change": true`, and the web UI asks for a new
   password when it signs in with a temporary one. A temporary password stops working after
   `password_temporary_max_age_hours` (72; 0: no limit), and an administrator then sets a new one.
@@ -116,8 +118,9 @@ own changelog in `python/CHANGELOG.md`.
   they granted (as `SYSTEM ADMIN`); scoped tokens, tokens with `catalog_access` rules and a tenant's
   users never hold them; a user's trigger body uses its owner's exemptions, never the
   writer's. A revoke counts at the next statement, prepared ones included, on every replica at
-  once (a session that holds one asks the store before each statement, and while the store
-  doesn't answer no exemption applies). `SHOW GRANTS`, `hardcharger_grants()` and
+  once (a session that holds one asks the store before each statement, as does every session
+  while a trigger's owner holds one, and while the store doesn't answer no exemption applies,
+  in a trigger body either). `SHOW GRANTS`, `hardcharger_grants()` and
   `hardcharger_effective_privileges()` list them, `hardcharger_policies()` says which policies
   no longer apply, and the audit record of each statement an exemption let through names it. A
   2.13 replica on the same store doesn't read them, and applies every policy.
@@ -135,10 +138,12 @@ own changelog in `python/CHANGELOG.md`.
 - **Limits on failed password sign-ins.** After 5 wrong passwords for one user from one client
   address, that pair is locked for 15 minutes; per user across addresses, and per address
   across users, there is a growing delay (at most 30 s), never a lock, so no account can be
-  locked out from everywhere. Refusals are `429 rate_limited` with `Retry-After`, the same for
-  every user name. Every number is a setting (`login_*`); counts are shared through the
+  locked out from everywhere. Attempts in flight count toward each limit, so a delay lets one
+  attempt through when it ends however many arrive at once. Refusals are `429 rate_limited`
+  with `Retry-After`, the same for every user name. Every number is a setting (`login_*`); counts are shared through the
   access-control store by every replica and by `--verify-credentials`, which takes an optional
-  `client_address`. Administrators list and clear them with `hardcharger_login_locks()` and
+  `client_address`; overlapping verifications take turns through the store, so they check no
+  more than the limits allow, and one that can't record its failure answers undecided. Administrators list and clear them with `hardcharger_login_locks()` and
   `hardcharger_clear_login_lock(user, address)`; locks are logged and audited, with new metrics.
   The client address honours `trusted_proxies`. The current password a user gives in `ALTER USER
   ... REPLACE` counts the same way, as a sign-in from the session's client address.
