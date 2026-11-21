@@ -1587,9 +1587,10 @@ class SqlMasker {
     const bool attach = IsWord(first, "attach");
     // A statement whose option lists (NAME value, ...) may give a credential option a value.
     const bool options = attach || IsWord(first, "copy") || IsWord(first, "export");
-    const bool variable = IsWord(Sig(first + 1, end), "variable");
     // A setting's name is one only a credential has, or the broader kind (SET, RESET, PRAGMA).
-    const bool set = (IsWord(first, "set") || IsWord(first, "reset") || IsWord(first, "pragma")) && !variable;
+    const std::size_t second = Sig(first + 1, end);
+    const bool set = (IsWord(first, "set") || IsWord(first, "reset") || IsWord(first, "pragma")) &&
+                     second < end && !IsWord(second, "variable");
     // Values found ahead of the reading position (an INSERT's rows, a MAP's second list).
     std::vector<std::pair<std::size_t, std::size_t>> ahead = InsertedCredentials(first, end);
     std::size_t ahead_at = 0;

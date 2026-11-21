@@ -1112,6 +1112,13 @@ TEST(RedactionReview, F05OrdinaryStatementsAreKeptAsWritten) {
   }
 }
 
+TEST(Redaction, SingleTokenStatementsAreKeptAsWritten) {
+  for (const char* sql : {"BEGIN", "COMMIT", "ROLLBACK", "BEGIN /* comment */", "BEGIN; COMMIT", "SET"}) {
+    EXPECT_EQ(LoggableSql(sql), sql);
+    EXPECT_FALSE(hardcharger::IsCredentialStatement(sql)) << sql;
+  }
+}
+
 TEST(RedactionReview, F06AnOrdinaryErrorKeepsItsWords) {
   // 1. A hidden value that is a word is replaced only where it is a word of its own.
   EXPECT_EQ(LoggableError("SELECT * FROM s WHERE password = 'error' AND nope = 1",

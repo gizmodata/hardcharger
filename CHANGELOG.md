@@ -215,6 +215,7 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- SQL log redaction no longer crashes on one-token statements such as `BEGIN`, `COMMIT`, or `ROLLBACK`.
 - Read-only connections enforce sequence and table-function restrictions when DuckDB binds views and macros.
 
 - Web UI connection notices no longer move the server tree under the pointer. The iOS SQL console welcome text wraps to its full height.
