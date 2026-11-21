@@ -128,6 +128,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
+- The iOS simulator and signed device builds now select Xcode 27 and require iOS SDK 27 or later (#63).
+
 - Changing one's own password through `ALTER USER <own name> WITH PASSWORD '…'` needs the
   current one (`… REPLACE '<current>'`), for every user but the administrator; `CURRENT_USER`
   in `ALTER USER` names the session's own user (a user named `current_user` is written quoted).

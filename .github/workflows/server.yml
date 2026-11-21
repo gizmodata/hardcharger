@@ -1546,7 +1546,7 @@ jobs:
     name: iOS app (simulator build and tests)
     needs: [changes, web-ui]
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.ios)
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 180
     steps:
       - *build-checkout
@@ -1559,8 +1559,19 @@ jobs:
         name: Tools and toolchain
         id: ios-toolchain
         run: |
-          brew install ninja xcodegen
+          # The hosted image keeps several stable Xcode 27 point releases.
+          xcode=$(find /Applications -maxdepth 1 -name 'Xcode_27*.app' |
+            grep -E '/Xcode_27([.][0-9]+)*[.]app$' | sort -V | tail -1)
+          [[ -d "$xcode/Contents/Developer" ]] || { echo "::error::No stable Xcode 27 installation found"; exit 1; }
+          export DEVELOPER_DIR="$xcode/Contents/Developer"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
           xcodebuild -version
+          for sdk in iphoneos iphonesimulator; do
+            version=$(xcrun --sdk "$sdk" --show-sdk-version)
+            echo "$sdk SDK $version"
+            [[ ${version%%.*} -ge 27 ]] || { echo "::error::$sdk SDK 27 or later required"; exit 1; }
+          done
+          brew install ninja xcodegen
           echo "xcode=$(xcodebuild -version | tr '\n' ' ' | tr -s ' ')" >> "$GITHUB_OUTPUT"
           echo "CMAKE_BUILD_PARALLEL_LEVEL=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
       - &ios-deps-cache
@@ -1570,7 +1581,7 @@ jobs:
           path: |
             ios/build/iphonesimulator/deps/*-install
             ios/build/iphoneos/deps/*-install
-          key: ios-deps-${{ steps.ios-toolchain.outputs.xcode }}-${{ hashFiles('server/scripts/build-deps.sh', 'server/scripts/deps-*.sh', 'server/scripts/build-extension-deps.sh', 'server/scripts/build-replxx.sh', 'server/scripts/patch-duckdb*.cmake', 'server/scripts/retire-ducklake-patch.cmake', 'server/scripts/duckdb-extensions-ios.cmake', 'third_party/chargewire/cpp/scripts/*.sh', 'ios/cmake/ios.toolchain.cmake') }}
+          key: ios-deps-${{ github.job }}-${{ steps.ios-toolchain.outputs.xcode }}-${{ hashFiles('server/scripts/build-deps.sh', 'server/scripts/deps-*.sh', 'server/scripts/build-extension-deps.sh', 'server/scripts/build-replxx.sh', 'server/scripts/patch-duckdb*.cmake', 'server/scripts/retire-ducklake-patch.cmake', 'server/scripts/duckdb-extensions-ios.cmake', 'third_party/chargewire/cpp/scripts/*.sh', 'ios/cmake/ios.toolchain.cmake') }}
       - name: Cross-build the server for the simulator, smoke-test it in one
         run: ios/scripts/build-server-ios.sh iphonesimulator
       - name: Unit and UI tests
@@ -1612,7 +1623,7 @@ jobs:
     name: iOS app (signed device build)
     needs: [changes, web-ui, ios]
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.ios && inputs.sign)
-    runs-on: macos-26
+    runs-on: xcode-27
     environment: production
     timeout-minutes: 180
     steps:
