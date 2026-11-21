@@ -65,6 +65,13 @@ void OnViewBound(dd::ClientContext& context, dd::ViewCatalogEntry& view,
                                    ViewColumnNames(view), std::move(plan));
 }
 
+// Publish the hook before the Engine can read it on a worker thread.
+// OnViewBound uses the connection's own access-control state.
+[[maybe_unused]] const bool kViewHookInstalled = [] {
+  dd::hardcharger_bound_view_hook = &OnViewBound;
+  return true;
+}();
+
 bool IsViewMarker(const dd::LogicalOperator& op) {
   return op.type == OpType::LOGICAL_EXTENSION_OPERATOR &&
          dynamic_cast<const ViewMarker*>(&op) != nullptr;
@@ -156,11 +163,6 @@ dd::vector<dd::ColumnBinding> ResultColumns(dd::LogicalOperator& plan) {
     return root->GetColumnBindings();
   }
   return {};
-}
-
-bool InstallViewHook() {
-  dd::hardcharger_bound_view_hook = &OnViewBound;
-  return true;
 }
 
 std::unordered_map<const ViewMarker*, std::vector<std::string>> ViewColumnsUsed(

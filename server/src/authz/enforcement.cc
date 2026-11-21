@@ -3501,8 +3501,6 @@ std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(const std::string
 }
 
 void RegisterRbacEnforcement(dd::DBConfig& config) {
-  InstallViewHook();
-  InstallNameScopeHook();
   dd::OptimizerExtension extension;
   extension.pre_optimize_function = PreOptimize;
   dd::OptimizerExtension::Register(config, std::move(extension));

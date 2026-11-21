@@ -162,6 +162,13 @@ bool ScopedLookup(dd::ClientContext& context, const dd::HardchargerNameScope& sc
                                                 QuoteIdentifierIfNeeded(schema.catalog)));
 }
 
+// The Engine reads the raw hook even for unscoped lookups. Install it before
+// any database starts workers, including the access-control store.
+[[maybe_unused]] const bool kNameScopeHookInstalled = [] {
+  dd::hardcharger_scoped_lookup_hook = &ScopedLookup;
+  return true;
+}();
+
 }  // namespace
 
 bool ScopedCatalogType(dd::CatalogType type) {
@@ -253,11 +260,6 @@ std::string NotFoundUnderScope(const std::string& noun, const std::string& writt
             " and among DuckDB's own only, also inside the macros it calls. ";
   }
   return text + remedy;
-}
-
-bool InstallNameScopeHook() {
-  dd::hardcharger_scoped_lookup_hook = &ScopedLookup;
-  return true;
 }
 
 }  // namespace hardcharger::authz

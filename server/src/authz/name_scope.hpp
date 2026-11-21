@@ -56,10 +56,6 @@
 
 namespace hardcharger::authz {
 
-// Sets DuckDB's hook. Called once, when access control is set up; without it DuckDB binds as
-// it always did.
-bool InstallNameScopeHook();
-
 // Is this a kind of catalog entry a scope decides (a function of any kind, a macro, a type)?
 bool ScopedCatalogType(duckdb::CatalogType type);
 

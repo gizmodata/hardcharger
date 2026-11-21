@@ -49,10 +49,6 @@ class ViewMarker : public duckdb::LogicalExtensionOperator {
   void ResolveTypes() override;
 };
 
-// Point DuckDB's view-binding hook at access control (once, at startup).
-// Returns false when the linked DuckDB has no hook (DuckDB 1.4).
-bool InstallViewHook();
-
 // For each view marker in the plan: the view's columns the rest of the
 // statement uses. All of them when that cannot be told apart.
 std::unordered_map<const ViewMarker*, std::vector<std::string>> ViewColumnsUsed(
