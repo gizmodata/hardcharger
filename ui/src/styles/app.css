@@ -584,6 +584,7 @@ select {
 
 /* Schema browser */
 .schema-browser {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -1514,6 +1515,19 @@ th[aria-sort] .monitor-sort {
   margin: 0 10px 6px;
   color: var(--muted);
   font-size: 12px;
+}
+.schema-browser > .tree-notice {
+  position: absolute;
+  inset: auto 0 0;
+  z-index: 1;
+  width: fit-content;
+  max-width: calc(100% - 20px);
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow-wrap: anywhere;
+  pointer-events: none;
 }
 .search-results {
   max-height: 40%;

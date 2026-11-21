@@ -192,6 +192,7 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Web UI connection notices no longer move the server tree under the pointer. The iOS SQL console welcome text wraps to its full height.
 - **Android console: result tables line up**
   ([#57](https://github.com/gizmodata/hardcharger/issues/57)). A table's borders ran past its
   rows: Android's monospace font has no box-drawing characters, so they came from a wider

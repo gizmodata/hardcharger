@@ -103,6 +103,7 @@ struct SQLConsoleScreen: View {
                 Button("Try Again") { Task { await connect(force: true) } }
             } else if console.isConnected {
                 Text("Statements end with ';'. Type .help for the dot commands, ⌘↩ to run as written.")
+                    .fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(.secondary)
             } else if scene.sqlTarget == .local, server.phase != .running {
                 Text("The server on this device isn't running.").foregroundStyle(.secondary)
