@@ -33,7 +33,7 @@ fi
 duckdb_key=$(recipe_key "$ROOT/server/scripts/deps-duckdb.sh" "$ROOT/server/scripts/build-extension-deps.sh" \
   "$ROOT/server/scripts/duckdb-extensions-ios.cmake" "$ROOT/server/scripts/duckdb-extensions-android.cmake" \
   "$ROOT"/server/scripts/patch-duckdb*.cmake "$ROOT/server/scripts/retire-ducklake-patch.cmake" \
-  "$ROOT/third_party/chargewire/cpp/scripts/build-duckdb.sh")
+  "$ROOT/server/scripts/duckdb-source.sh")
 if [ ! -f "$HARDCHARGER_DEPS_DIR/duckdb-install/.android-$duckdb_key.stamp" ]; then
   "$ROOT/server/scripts/build-deps.sh" duckdb
   touch "$HARDCHARGER_DEPS_DIR/duckdb-install/.android-$duckdb_key.stamp"

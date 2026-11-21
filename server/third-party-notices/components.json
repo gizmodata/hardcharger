@@ -2,12 +2,12 @@
   "about": "The third-party code Hardcharger's release binaries contain. server/scripts/third-party-notices.py writes THIRD_PARTY_NOTICES.md from this file and the texts/ it fetched; its --check (CI) fails when a recipe pins another version than `pins` records, when a dependency is in no component, or when THIRD_PARTY_NOTICES.md is not what this file generates.",
   "pins": {
     "duckdb_commit": {
-      "file": "third_party/chargewire/cpp/scripts/build-duckdb.sh",
+      "file": "server/scripts/duckdb-source.sh",
       "pattern": "^DUCKDB_COMMIT=([0-9a-f]{40})$",
-      "value": "8d78114e90a53823803660bf821f6073ac87da8c"
+      "value": "aef3086626218f878d821f7936e3c20cc4940b12"
     },
     "duckdb_version": {
-      "file": "third_party/chargewire/cpp/scripts/build-duckdb.sh",
+      "file": "server/scripts/duckdb-source.sh",
       "pattern": "^DUCKDB_VERSION_NAME=(\\S+)$",
       "value": "v2.0.1"
     },
@@ -114,12 +114,12 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}",
       "in": [
         "hardcharger-server"
       ],
       "platforms": "all",
-      "note": "The SQL engine includes core_functions, parquet, json and icu on every platform. iOS also builds in autocomplete and tpch (each part of DuckDB\u2019s repository and licence, except for notices listed under Inside DuckDB). Native optional extensions are loaded separately.",
+      "note": "GizmoData builds Hardcharger Engine from a fork of DuckDB 2.0.1. DuckDB is a trademark of the DuckDB Foundation. The SQL engine includes core_functions, parquet, json and icu on every platform. iOS also builds in autocomplete and tpch (each part of DuckDB\u2019s repository and licence, except for notices listed under Inside DuckDB). Native optional extensions are loaded separately.",
       "covers": {
         "duckdb_extensions": [
           "core_functions",
@@ -133,7 +133,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/LICENSE"
         }
       ]
     },
@@ -253,7 +253,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/brotli",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/brotli",
       "in": [
         "hardcharger-server"
       ],
@@ -261,7 +261,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/brotli/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/brotli/LICENSE"
         }
       ]
     },
@@ -275,7 +275,7 @@
         "duckdb_version"
       ],
       "license": "BSD-2-Clause OR BSL-1.0",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/concurrentqueue",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/concurrentqueue",
       "in": [
         "hardcharger-server"
       ],
@@ -283,7 +283,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/concurrentqueue/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/concurrentqueue/LICENSE"
         }
       ]
     },
@@ -297,7 +297,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/fast_float",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/fast_float",
       "in": [
         "hardcharger-server"
       ],
@@ -305,7 +305,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/fast_float/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/fast_float/LICENSE"
         }
       ]
     },
@@ -319,7 +319,7 @@
         "duckdb_version"
       ],
       "license": "Apache-2.0",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/fastpforlib",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/fastpforlib",
       "in": [
         "hardcharger-server"
       ],
@@ -327,7 +327,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/fastpforlib/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/fastpforlib/LICENSE"
         }
       ]
     },
@@ -341,7 +341,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/fmt",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/fmt",
       "in": [
         "hardcharger-server"
       ],
@@ -349,7 +349,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/fmt/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/fmt/LICENSE"
         }
       ]
     },
@@ -363,7 +363,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/fsst",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/fsst",
       "in": [
         "hardcharger-server"
       ],
@@ -371,7 +371,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/fsst/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/fsst/LICENSE"
         }
       ]
     },
@@ -385,7 +385,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/httplib",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/httplib",
       "in": [
         "hardcharger-server"
       ],
@@ -393,7 +393,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/httplib/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/httplib/LICENSE"
         }
       ]
     },
@@ -407,7 +407,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/hyperloglog",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/hyperloglog",
       "in": [
         "hardcharger-server"
       ],
@@ -415,7 +415,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/hyperloglog/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/hyperloglog/LICENSE"
         }
       ]
     },
@@ -429,7 +429,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/jaro_winkler",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/jaro_winkler",
       "in": [
         "hardcharger-server"
       ],
@@ -437,7 +437,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/jaro_winkler/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/jaro_winkler/LICENSE"
         }
       ]
     },
@@ -451,7 +451,7 @@
         "duckdb_version"
       ],
       "license": "BSD-2-Clause",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/jemalloc",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/jemalloc",
       "in": [
         "hardcharger-server"
       ],
@@ -459,7 +459,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/jemalloc/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/jemalloc/LICENSE"
         }
       ],
       "note": "DuckDB's memory allocator on 64-bit Linux only."
@@ -474,7 +474,7 @@
         "duckdb_version"
       ],
       "license": "BSD-2-Clause",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/lz4",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/lz4",
       "in": [
         "hardcharger-server"
       ],
@@ -482,7 +482,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/lz4/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/lz4/LICENSE"
         }
       ]
     },
@@ -496,7 +496,7 @@
         "duckdb_version"
       ],
       "license": "Apache-2.0 OR GPL-2.0-or-later",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/mbedtls",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/mbedtls",
       "in": [
         "hardcharger-server"
       ],
@@ -504,7 +504,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/mbedtls/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/mbedtls/LICENSE"
         }
       ],
       "note": "Dual-licensed; Hardcharger uses it under the Apache License 2.0."
@@ -519,7 +519,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/miniz",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/miniz",
       "in": [
         "hardcharger-server"
       ],
@@ -527,7 +527,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/miniz/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/miniz/LICENSE"
         }
       ]
     },
@@ -541,7 +541,7 @@
         "duckdb_version"
       ],
       "license": "Apache-2.0",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/parquet",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/parquet",
       "in": [
         "hardcharger-server"
       ],
@@ -549,7 +549,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/parquet/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/parquet/LICENSE"
         },
         {
           "file": "NOTICE",
@@ -567,7 +567,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/pcg",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/pcg",
       "in": [
         "hardcharger-server"
       ],
@@ -575,7 +575,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/pcg/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/pcg/LICENSE"
         }
       ]
     },
@@ -589,7 +589,7 @@
         "duckdb_version"
       ],
       "license": "Zlib",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/pdqsort",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/pdqsort",
       "in": [
         "hardcharger-server"
       ],
@@ -597,7 +597,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/pdqsort/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/pdqsort/LICENSE"
         }
       ]
     },
@@ -611,7 +611,7 @@
         "duckdb_version"
       ],
       "license": "BSD-3-Clause",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/re2",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/re2",
       "in": [
         "hardcharger-server"
       ],
@@ -619,7 +619,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/re2/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/re2/LICENSE"
         }
       ]
     },
@@ -633,7 +633,7 @@
         "duckdb_version"
       ],
       "license": "BSL-1.0",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/ska_sort",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/ska_sort",
       "in": [
         "hardcharger-server"
       ],
@@ -641,7 +641,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/ska_sort/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/ska_sort/LICENSE"
         }
       ]
     },
@@ -655,7 +655,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/skiplist",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/skiplist",
       "in": [
         "hardcharger-server"
       ],
@@ -663,7 +663,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/skiplist/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/skiplist/LICENSE"
         }
       ]
     },
@@ -677,7 +677,7 @@
         "duckdb_version"
       ],
       "license": "BSD-3-Clause",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/snappy",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/snappy",
       "in": [
         "hardcharger-server"
       ],
@@ -685,7 +685,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/snappy/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/snappy/LICENSE"
         }
       ]
     },
@@ -699,7 +699,7 @@
         "duckdb_version"
       ],
       "license": "Apache-2.0",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/tdigest",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/tdigest",
       "in": [
         "hardcharger-server"
       ],
@@ -707,11 +707,11 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/tdigest/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/tdigest/LICENSE"
         },
         {
           "file": "NOTICES",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/tdigest/NOTICES"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/tdigest/NOTICES"
         }
       ]
     },
@@ -725,7 +725,7 @@
         "duckdb_version"
       ],
       "license": "Apache-2.0",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/thrift/thrift",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/thrift/thrift",
       "in": [
         "hardcharger-server"
       ],
@@ -733,7 +733,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/thrift/thrift/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/thrift/thrift/LICENSE"
         },
         {
           "file": "NOTICE",
@@ -751,7 +751,7 @@
         "duckdb_version"
       ],
       "license": "MIT AND Unicode-DFS-2015",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/utf8proc",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/utf8proc",
       "in": [
         "hardcharger-server"
       ],
@@ -759,7 +759,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/utf8proc/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/utf8proc/LICENSE"
         }
       ]
     },
@@ -773,7 +773,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/vergesort",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/vergesort",
       "in": [
         "hardcharger-server"
       ],
@@ -781,7 +781,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/vergesort/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/vergesort/LICENSE"
         }
       ]
     },
@@ -795,7 +795,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/yyjson",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/yyjson",
       "in": [
         "hardcharger-server"
       ],
@@ -803,7 +803,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/yyjson/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/yyjson/LICENSE"
         }
       ]
     },
@@ -817,7 +817,7 @@
         "duckdb_version"
       ],
       "license": "BSD-3-Clause",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/third_party/zstd",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/third_party/zstd",
       "in": [
         "hardcharger-server"
       ],
@@ -825,7 +825,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/third_party/zstd/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/third_party/zstd/LICENSE"
         }
       ]
     },
@@ -839,7 +839,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/src/include/duckdb/storage/compression/alp/algorithm",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/src/include/duckdb/storage/compression/alp/algorithm",
       "in": [
         "hardcharger-server"
       ],
@@ -847,7 +847,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/src/include/duckdb/storage/compression/alp/algorithm/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/src/include/duckdb/storage/compression/alp/algorithm/LICENSE"
         }
       ]
     },
@@ -861,7 +861,7 @@
         "duckdb_version"
       ],
       "license": "MIT",
-      "source": "https://github.com/duckdb/duckdb/blob/{duckdb_commit}/src/include/duckdb/execution/merge_sort_tree.hpp",
+      "source": "https://github.com/gizmodata/hardcharger-engine/blob/{duckdb_commit}/src/include/duckdb/execution/merge_sort_tree.hpp",
       "in": [
         "hardcharger-server"
       ],
@@ -869,7 +869,7 @@
       "texts": [
         {
           "file": "NOTICE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/src/include/duckdb/execution/merge_sort_tree.hpp",
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/src/include/duckdb/execution/merge_sort_tree.hpp",
           "between": [
             "^// MIT License Text:$",
             "^// SOFTWARE\\.$"
@@ -934,7 +934,7 @@
         "duckdb_version"
       ],
       "license": "LicenseRef-TPC-EULA-2.2",
-      "source": "https://github.com/duckdb/duckdb/tree/{duckdb_commit}/extension/tpch/dbgen",
+      "source": "https://github.com/gizmodata/hardcharger-engine/tree/{duckdb_commit}/extension/tpch/dbgen",
       "in": [
         "hardcharger-server"
       ],
@@ -943,7 +943,7 @@
       "texts": [
         {
           "file": "LICENSE",
-          "url": "https://raw.githubusercontent.com/duckdb/duckdb/{duckdb_commit}/extension/tpch/dbgen/LICENSE"
+          "url": "https://raw.githubusercontent.com/gizmodata/hardcharger-engine/{duckdb_commit}/extension/tpch/dbgen/LICENSE"
         }
       ]
     },

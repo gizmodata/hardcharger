@@ -77,7 +77,7 @@ for sdk in "$@"; do
       touch "$DEPS/arrow-install/.ios-arrow.stamp"
     fi
     # DuckDB: the stamp names the pinned commit and the recipe files, so a bump rebuilds.
-    duckdb_key=$( (sed -n 's/^DUCKDB_COMMIT=//p' "$ROOT/third_party/chargewire/cpp/scripts/build-duckdb.sh";
+    duckdb_key=$( (cat "$ROOT/server/scripts/duckdb-source.sh";
                    cat "$ROOT"/server/scripts/patch-duckdb*.cmake "$ROOT/server/scripts/duckdb-extensions-ios.cmake" \
                        "$ROOT/server/scripts/retire-ducklake-patch.cmake" \
                        "$ROOT/server/scripts/deps-duckdb.sh" "$ROOT/server/scripts/build-extension-deps.sh") \

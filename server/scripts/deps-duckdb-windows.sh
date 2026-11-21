@@ -12,30 +12,17 @@
 # CI's cache key for it covers deps-duckdb.sh too: keep the two in step.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CHARGEWIRE="$HERE/../third_party/chargewire/cpp/scripts"
 export CHARGEWIRE_DEPS_DIR="${HARDCHARGER_DEPS_DIR:-$HERE/.deps}"
 [ -n "${CMAKE_TOOLCHAIN_FILE:-}" ] || { echo "set CMAKE_TOOLCHAIN_FILE (.github/cmake/windows-vcpkg.cmake)" >&2; exit 1; }
 
-COMMIT=$(sed -n 's/^DUCKDB_COMMIT=\([0-9a-f]*\)$/\1/p' "$CHARGEWIRE/build-duckdb.sh")
-[ -n "$COMMIT" ] || { echo "no DUCKDB_COMMIT in $CHARGEWIRE/build-duckdb.sh" >&2; exit 1; }
+source "$HERE/scripts/duckdb-source.sh"
 SRC="$CHARGEWIRE_DEPS_DIR/duckdb"
-mkdir -p "$CHARGEWIRE_DEPS_DIR"
-if [ ! -e "$SRC/.git" ]; then
-  git clone --quiet --filter=blob:none https://github.com/duckdb/duckdb.git "$SRC"
-fi
-git -C "$SRC" fetch --quiet --tags origin
-git -C "$SRC" checkout --quiet "$COMMIT"
-cmake -DDUCKDB_SOURCE_DIR="$SRC" -P "$HERE/scripts/retire-ducklake-patch.cmake"
-patches=("$HERE"/scripts/patch-duckdb*.cmake)
-[ -f "${patches[0]}" ] || { echo "no scripts/patch-duckdb*.cmake" >&2; exit 1; }
-for patch in "${patches[@]}"; do
-  cmake -DDUCKDB_SOURCE_DIR="$SRC" -P "$patch"
-done
+prepare_duckdb_source
 
 # Windows keeps DuckDB's standard static-extension link behavior (DLL exports are C API).
 WINDOWS_EXTENSIONS="$CHARGEWIRE_DEPS_DIR/duckdb-extensions-windows.cmake"
 grep -v '^set(EXTENSION_STATIC_BUILD FALSE)$' "$HERE/scripts/duckdb-extensions.cmake" > "$WINDOWS_EXTENSIONS"
-CHARGEWIRE_DUCKDB_EXTENSION_CONFIGS="$WINDOWS_EXTENSIONS" "$CHARGEWIRE/build-duckdb.sh"
+build_native_duckdb "$WINDOWS_EXTENSIONS" CLI
 cmake -DDUCKDB_INSTALL_DIR="$CHARGEWIRE_DEPS_DIR/duckdb-install" -P "$HERE/scripts/prune-duckdb-install.cmake"
 
 THIRD_PARTY="$CHARGEWIRE_DEPS_DIR/duckdb-install/include/duckdb_third_party"

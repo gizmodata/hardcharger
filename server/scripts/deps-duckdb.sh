@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds DuckDB 2.0 into server/.deps/duckdb-install with chargewire's build-duckdb.sh, after
+# Builds DuckDB 2.0 into server/.deps/duckdb-install from the pinned Hardcharger Engine source, after
 # patching it with every scripts/patch-duckdb*.cmake in name order (patch-duckdb.cmake: the
 # binder hook access control needs to check views with their owner's rights;
 # Arrow HUGEINT export; the progress estimate throttle); native builds keep DuckDB’s four
@@ -9,33 +9,14 @@
 # `build-deps.sh duckdb` runs it.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CHARGEWIRE="$HERE/../third_party/chargewire/cpp/scripts"
 export CHARGEWIRE_DEPS_DIR="${HARDCHARGER_DEPS_DIR:-$HERE/.deps}"
 if [ -z "${OPENSSL_ROOT_DIR:-}" ] && [ -d "$CHARGEWIRE_DEPS_DIR/openssl-install" ]; then
   export OPENSSL_ROOT_DIR="$CHARGEWIRE_DEPS_DIR/openssl-install"
 fi
 
-# Check out the commit build-duckdb.sh pins and patch it; build-duckdb.sh then checks
-# out the same commit again, which keeps the patched file, and builds.
-COMMIT=$(sed -n 's/^DUCKDB_COMMIT=\([0-9a-f]*\)$/\1/p' "$CHARGEWIRE/build-duckdb.sh")
-[ -n "$COMMIT" ] || { echo "no DUCKDB_COMMIT in $CHARGEWIRE/build-duckdb.sh" >&2; exit 1; }
+source "$HERE/scripts/duckdb-source.sh"
 SRC="$CHARGEWIRE_DEPS_DIR/duckdb"
-mkdir -p "$CHARGEWIRE_DEPS_DIR"
-if [ ! -e "$SRC/.git" ]; then
-  git clone --quiet --filter=blob:none https://github.com/duckdb/duckdb.git "$SRC"
-fi
-if [ -n "${HARDCHARGER_ANDROID_ABI:-}" ]; then
-  git -C "$SRC" fetch --quiet --depth 1 origin "$COMMIT"
-else
-  git -C "$SRC" fetch --quiet --tags origin
-fi
-git -C "$SRC" checkout --quiet "$COMMIT"
-cmake -DDUCKDB_SOURCE_DIR="$SRC" -P "$HERE/scripts/retire-ducklake-patch.cmake"
-patches=("$HERE"/scripts/patch-duckdb*.cmake)
-[ -f "${patches[0]}" ] || { echo "no scripts/patch-duckdb*.cmake" >&2; exit 1; }
-for patch in "${patches[@]}"; do
-  cmake -DDUCKDB_SOURCE_DIR="$SRC" -P "$patch"
-done
+prepare_duckdb_source
 
 # Mobile apps build the optional extensions and their transitive libraries. Desktop builds
 # retain DuckDB's base four; INSTALL/LOAD uses signed release-compatible modules.
@@ -56,19 +37,18 @@ if [ -n "${HARDCHARGER_IOS_SDK:-}${HARDCHARGER_ANDROID_ABI:-}" ] || $BASELINE_LI
     ours=$(awk -v n="$name" '$0 ~ "duckdb_extension_load\\(" n "$" {f = 1} f && /GIT_TAG/ {print $2; exit}' "$EXTENSIONS")
     theirs=$(awk '/GIT_TAG/ {print $2; exit}' "$SRC/.github/config/extensions/$name.cmake")
     [ -n "$ours" ] && [ "$ours" = "$theirs" ] \
-      || { echo "$name: mobile pins '$ours', DuckDB $COMMIT pins '$theirs'" >&2; exit 1; }
+      || { echo "$name: mobile pins '$ours', DuckDB $DUCKDB_COMMIT pins '$theirs'" >&2; exit 1; }
   done
   if [ -n "${HARDCHARGER_ANDROID_ABI:-}" ]; then EXTENSIONS="$HERE/scripts/duckdb-extensions-android.cmake"; fi
   "$HERE/scripts/build-extension-deps.sh"
   export CMAKE_PREFIX_PATH="$CHARGEWIRE_DEPS_DIR/roaring-install:$CHARGEWIRE_DEPS_DIR/libpq-install:$CHARGEWIRE_DEPS_DIR/curl-install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 fi
 if [ -n "${HARDCHARGER_ANDROID_ABI:-}" ]; then
-  VERSION_NAME=$(sed -n 's/^DUCKDB_VERSION_NAME=\(v[^ ]*\)$/\1/p' "$CHARGEWIRE/build-duckdb.sh")
   platform=android_arm64
   [ "$HARDCHARGER_ANDROID_ABI" != x86_64 ] || platform=android_amd64
   cmake -S "$SRC" -B "$CHARGEWIRE_DEPS_DIR/duckdb-build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$CHARGEWIRE_DEPS_DIR/duckdb-install" \
-    -DOVERRIDE_GIT_DESCRIBE="$VERSION_NAME" -DDUCKDB_EXPLICIT_PLATFORM="$platform" \
+    -DOVERRIDE_GIT_DESCRIBE="$DUCKDB_VERSION_NAME" -DDUCKDB_EXPLICIT_PLATFORM="$platform" \
     -DBUILD_SHELL=OFF -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF \
     -DBUILD_EXTENSIONS="" -DDUCKDB_EXTENSION_CONFIGS="$EXTENSIONS"
   # Loadable module targets deliberately reference symbols in the host engine. They
@@ -82,23 +62,20 @@ elif [ -z "${HARDCHARGER_IOS_SDK:-}" ]; then
   # passed explicitly, so a reused build directory never keeps the other target's setting.
   PROFILE=CLI
   [ "$("$HERE/scripts/cpu-target.sh")" != baseline ] || PROFILE=NONE
-  CHARGEWIRE_DUCKDB_OPTIMIZATION_PROFILE="$PROFILE" CHARGEWIRE_DUCKDB_EXTENSION_CONFIGS="$EXTENSIONS" \
-    "$CHARGEWIRE/build-duckdb.sh"
+  build_native_duckdb "$EXTENSIONS" "$PROFILE"
 else
-  # The iOS app (ios/scripts/build-server-ios.sh): build-duckdb.sh's build of the same
+  # The iOS app (ios/scripts/build-server-ios.sh): build of the same engine
   # commit, cross-compiled with CMAKE_TOOLCHAIN_FILE (ios/cmake/ios.toolchain.cmake), and
   # without loading extensions at run time (ENABLE_EXTENSION_LOAD=OFF): iOS runs only the
   # code the app was signed with, so INSTALL and LOAD have nothing to load, and the
   # extensions above are built in. The platform is named (DuckDB would run a program it
-  # builds to find out, which can't run here). Keep the rest in step with build-duckdb.sh.
+  # builds to find out, which can't run here). Keep the extension ABI version in step with native builds.
   [ -n "${CMAKE_TOOLCHAIN_FILE:-}" ] || { echo "HARDCHARGER_IOS_SDK needs CMAKE_TOOLCHAIN_FILE" >&2; exit 2; }
-  VERSION_NAME=$(sed -n 's/^DUCKDB_VERSION_NAME=\(v[^ ]*\)$/\1/p' "$CHARGEWIRE/build-duckdb.sh")
-  [ -n "$VERSION_NAME" ] || { echo "no DUCKDB_VERSION_NAME in $CHARGEWIRE/build-duckdb.sh" >&2; exit 1; }
   cmake -S "$SRC" -B "$CHARGEWIRE_DEPS_DIR/duckdb-build" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$CHARGEWIRE_DEPS_DIR/duckdb-install" \
-    -DOVERRIDE_GIT_DESCRIBE="$VERSION_NAME" \
+    -DOVERRIDE_GIT_DESCRIBE="$DUCKDB_VERSION_NAME" \
     -DBUILD_SHELL=OFF -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF \
     -DENABLE_EXTENSION_LOAD=OFF \
     -DDUCKDB_EXPLICIT_PLATFORM="$([ "$HARDCHARGER_IOS_SDK" = iphoneos ] && echo ios_arm64 || echo ios_simulator_arm64)" \

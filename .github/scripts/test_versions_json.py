@@ -70,7 +70,7 @@ class Checkout:
         self.root = base / "hardcharger"
         chargewire = self.root / "third_party" / "chargewire"
         write(chargewire / "cpp" / "CMakeLists.txt", CHARGEWIRE_CMAKELISTS)
-        write(chargewire / "cpp" / "scripts" / "build-duckdb.sh", BUILD_DUCKDB)
+        write(self.root / "server" / "scripts" / "duckdb-source.sh", BUILD_DUCKDB)
         write(chargewire / "spec" / "openapi.yaml", OPENAPI)
         git(chargewire.parent, "init", "-q", str(chargewire))
         git(chargewire, "add", "-A")
@@ -166,14 +166,14 @@ class VersionsJson(unittest.TestCase):
         self.refused("HEAD records " + self.checkout.chargewire_commit)
 
     def test_a_malformed_or_missing_duckdb_pin_is_refused(self):
-        self.checkout.edit("third_party/chargewire/cpp/scripts/build-duckdb.sh", f"DUCKDB_COMMIT={DUCKDB_COMMIT}",
+        self.checkout.edit("server/scripts/duckdb-source.sh", f"DUCKDB_COMMIT={DUCKDB_COMMIT}",
                            "DUCKDB_COMMIT=8d78114e90")
-        self.refused("build-duckdb.sh's DUCKDB_COMMIT: expected exactly one match, found 0")
+        self.refused("duckdb-source.sh's DUCKDB_COMMIT: expected exactly one match, found 0")
 
     def test_a_malformed_duckdb_version_name_is_refused(self):
-        self.checkout.edit("third_party/chargewire/cpp/scripts/build-duckdb.sh", "DUCKDB_VERSION_NAME=v2.0.1",
+        self.checkout.edit("server/scripts/duckdb-source.sh", "DUCKDB_VERSION_NAME=v2.0.1",
                            "DUCKDB_VERSION_NAME=")
-        self.refused("build-duckdb.sh's DUCKDB_VERSION_NAME: expected exactly one match, found 0")
+        self.refused("duckdb-source.sh's DUCKDB_VERSION_NAME: expected exactly one match, found 0")
 
     def test_an_extension_pin_that_is_not_a_commit_is_refused(self):
         self.checkout.edit("server/scripts/duckdb-extensions.cmake", f"GIT_TAG {HTTPFS}", "GIT_TAG main")

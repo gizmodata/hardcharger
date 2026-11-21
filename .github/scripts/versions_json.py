@@ -10,7 +10,7 @@ Prints one JSON document, read from the checkout (never from the network):
                  checked out), its SDK version (cpp/CMakeLists.txt) and its specification
                  version (spec/openapi.yaml info.version)
     duckdb       the version name the build reports (PRAGMA version; the extension
-                 repository's path) and the commit, from chargewire's build-duckdb.sh
+                 repository's path) and the commit, from Hardcharger's duckdb-source.sh
     extensions   the extensions built into the server: DuckDB's own and in-tree ones by
                  name, the out-of-tree ones with the repository and commit
                  (server/scripts/duckdb-extensions.cmake), and the repository INSTALL
@@ -89,10 +89,10 @@ def chargewire(root: Path) -> dict:
 
 
 def duckdb(root: Path) -> dict:
-    script = read(root, "third_party/chargewire/cpp/scripts/build-duckdb.sh")
-    commit = one(r"^DUCKDB_COMMIT=([0-9a-f]{40})$", script, "build-duckdb.sh's DUCKDB_COMMIT")
+    script = read(root, "server/scripts/duckdb-source.sh")
+    commit = one(r"^DUCKDB_COMMIT=([0-9a-f]{40})$", script, "duckdb-source.sh's DUCKDB_COMMIT")
     name = one(r"^DUCKDB_VERSION_NAME=(v[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|rc|dev)[0-9]+)?)$", script,
-               "build-duckdb.sh's DUCKDB_VERSION_NAME")
+               "duckdb-source.sh's DUCKDB_VERSION_NAME")
     return {"version": name, "commit": commit}
 
 
@@ -135,7 +135,7 @@ def check_binary(binary: Path, versions: dict) -> None:
         raise Failure(f"{binary} --version says {said!r}, the checkout {versions['hardcharger']['version']}")
     said = run("--print-duckdb-version")
     if said != versions["duckdb"]["version"]:
-        raise Failure(f"{binary} --print-duckdb-version says {said!r}, build-duckdb.sh {versions['duckdb']['version']}")
+        raise Failure(f"{binary} --print-duckdb-version says {said!r}, duckdb-source.sh {versions['duckdb']['version']}")
 
 
 def build(root: Path, binary: Path | None, tag: str | None) -> dict:

@@ -22,7 +22,7 @@ cd "$ROOT"
 case "$dep" in
   arrow) recipes=(third_party/chargewire/cpp/scripts/build-arrow.sh server/scripts/deps-arrow.sh
                   server/scripts/cpu-target.sh) ;;
-  duckdb) recipes=(third_party/chargewire/cpp/scripts/build-duckdb.sh server/scripts/deps-duckdb.sh
+  duckdb) recipes=(server/scripts/duckdb-source.sh server/scripts/deps-duckdb.sh
                    server/scripts/patch-duckdb*.cmake server/scripts/duckdb-extensions.cmake
                    server/scripts/retire-ducklake-patch.cmake server/scripts/prune-duckdb-install.cmake
                    server/scripts/cpu-target.sh server/scripts/duckdb-extensions-baseline.cmake

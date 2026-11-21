@@ -11,6 +11,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Added
 
+- Hardcharger now builds its SQL engine from Hardcharger Engine at commit `aef3086626`,
+  GizmoData’s performance-tuned fork of DuckDB 2.0.1. It improves selective joins, filtered scans,
+  and repeated string operations. [Engine changes and benchmark results](https://github.com/gizmodata/hardcharger-engine/blob/22e7235bf894627ea35c6503bb049239a5d82688/docs/optimizations.md)
 - RBAC and instrumentation now record their own store format versions. Version 2.14 upgrades
   existing version 1 stores in place to format 1.1.
 - Administrators can link SSO identities to RBAC users and list accounts with both SSO and
