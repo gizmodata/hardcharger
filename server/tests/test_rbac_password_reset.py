@@ -55,7 +55,8 @@ def world(launcher, store):
                        env={"HARDCHARGER_LOG_FORMAT": "json", "HARDCHARGER_AUDIT_CHAIN_KEY": KEY})
 
 
-def test_a_password_the_help_desk_sets_is_temporary(world):
+@pytest.mark.parametrize("read_only", [False, True])
+def test_a_password_the_help_desk_sets_is_temporary(world, read_only):
     amy = world.as_user(user="amy")
     temporary, chosen = password(name="carl-temporary"), password(name="carl-chosen")
     result = rows(client=amy, sql=f"ALTER USER carl WITH PASSWORD '{temporary}'")
@@ -64,7 +65,8 @@ def test_a_password_the_help_desk_sets_is_temporary(world):
     assert rows(client=world.admin, sql="SELECT password_must_change FROM hardcharger_users() WHERE name = 'carl'") \
         == [{"password_must_change": True}]
     # carl signs in with it: the session runs only the change.
-    carl = world.server.user(name="carl", password=temporary)
+    options = {"read_only": True} if read_only else None
+    carl = world.server.client(token=world.server.password_token(user="carl", password=temporary), options=options)
     assert_restricted(client=carl, user="carl")
     expect_blocked(client=carl, sql=change(new=chosen, current="not-the-password"),
                    why="Hardcharger blocked ALTER USER: the current password given with REPLACE is not user carl's "
@@ -75,7 +77,11 @@ def test_a_password_the_help_desk_sets_is_temporary(world):
         carl.run(sql="SELECT 1")
     assert ended.value.code in ("invalid_token", "session_ended"), ended.value
     assert not signs_in(world=world, user="carl", secret=temporary)
-    carl = world.server.user(name="carl", password=chosen)
+    carl = world.server.client(token=world.server.password_token(user="carl", password=chosen), options=options)
+    if read_only:
+        with pytest.raises(ChargewireError) as refused:
+            carl.run(sql=change(new=temporary, current=chosen))
+        assert refused.value.code == "read_only", refused.value
     assert rows(client=carl, sql="SELECT 1 AS one") == [{"one": 1}]
     assert rows(client=carl, sql="SELECT name, password_must_change FROM hardcharger_users()") == \
         [{"name": "carl", "password_must_change": False}]

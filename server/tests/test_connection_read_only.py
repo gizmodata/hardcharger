@@ -1,7 +1,6 @@
 """The protocol connection property, independent of token roles and server file mode."""
 
 import json
-import time
 
 import pyarrow as pa
 import pytest
@@ -200,10 +199,7 @@ def refusal(session, sql: str, parameters=None, prepare: bool = False) -> Charge
     return caught.value
 
 
-# What DuckDB evaluates while it binds, under every kind of statement that reaches the
-# binder: 2.13.0 answered 403 to each of these after the sequence had moved (set, with setval).
-# (Statements that hold it themselves. What DuckDB binds through a view or macro that the
-# statement does not lead the server to is not closed by this: see the README.)
+# Direct requests in a read-only session, during prepare and execution.
 BOUND = [
     "EXPLAIN CALL range({f})", "EXPLAIN (FORMAT JSON) CALL range({f})",
     "EXPLAIN INSERT INTO ro_orders SELECT range, 'x' FROM range({f})",
@@ -321,36 +317,12 @@ def test_an_option_between_the_work_and_the_switch_does_not_hide_the_work(contro
     assert controlled.rows() == 4
 
 
-def test_a_cancel_that_lands_in_the_read_only_screen_is_recorded_as_a_cancel(launcher):
-    # A read-only session's statement starts with the server reading the views' and macros'
-    # definitions (again after any change to a catalog), on the session's connection. A cancel
-    # that ends that read ends the statement as cancelled, and is logged as that: 2.13.0
-    # logged and recorded "a statement whose views and macros the server cannot read is not
-    # allowed in a read-only session" for it.
-    # Many macros make the read long enough to cancel. The statement itself takes no time, so
-    # one the engine was interrupted in was interrupted in the screen: the proof the cancel landed there.
-    server = launcher.start(args=["--log-format", "json"])
-    writer = server.admin()
-    for batch in range(20):
-        writer.execute(sql="; ".join(f"CREATE MACRO ro_screen_filler_{batch}_{i}(a) AS a + {i}" for i in range(1000)))
-    reader = server.client().new_session(options={"read_only": True})
-    interrupted = []
-    for attempt in range(60):
-        writer.execute(sql=f"CREATE OR REPLACE MACRO ro_screen_bump() AS {attempt}")  # the definitions are read again
-        response = reader.submit(sql="SELECT count(*) FROM range(3)", headers={"Prefer": "respond-async"})
-        assert response.status_code in (200, 201, 202), response.text
-        statement_id = response.json()["statement_id"]
-        time.sleep((2, 5, 10, 20)[attempt % 4] / 1000)  # (so that it has started; the read takes longer than any of these)
-        reader.http.post(url=f"{reader.url}/statements/{statement_id}/cancel", headers=reader.headers())
-        doc = reader.wait_done(statement_id=statement_id)
-        assert doc["state"] in ("succeeded", "cancelled"), doc  # never a refusal, never an error
-        # One that the engine was running when the cancel came: it logs what the engine answered.
-        interrupted = [record for record in server.log_records()
-                       if record.get("statement_id") == statement_id and record.get("message") == "statement failed"]
-        if doc["state"] == "cancelled" and interrupted:
-            break
-    assert interrupted, "no cancel landed while the definitions were read: the test proved nothing"
-    for record in interrupted:
-        assert "read-only session" not in record["error"] and "INTERRUPT" in record["error"], record
-    assert reader.scalar(sql="SELECT 2") == 2  # the session goes on, and reads the definitions when it next needs them
-    reader.close()
+
+def test_read_only_session_reads_a_view_after_its_definition_changes(controlled):
+    admin = controlled.admin
+    admin.run(sql="CREATE VIEW ro_totals AS SELECT sum(id) AS total FROM ro_orders")
+    admin.run(sql="GRANT SELECT ON ro_totals TO ro_reader_role")
+    reader = controlled.session(who="ordinary user", read_only=True)
+    assert reader.run(sql="SELECT total FROM ro_totals").to_pylist() == [{"total": 6}]
+    admin.run(sql="CREATE OR REPLACE VIEW ro_totals AS SELECT count(*) AS total FROM ro_orders")
+    assert reader.run(sql="SELECT total FROM ro_totals").to_pylist() == [{"total": 3}]

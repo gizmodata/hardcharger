@@ -85,8 +85,8 @@ def must_change(server: RbacServer, user: str) -> bool:
 
 # ---- password_max_age_days: an old password signs in held ----
 
-@pytest.mark.parametrize("age_days, held", [(91, True), (89, False)])
-def test_a_password_past_its_max_age_signs_in_held_until_its_user_changes_it(launcher, store, age_days, held):
+@pytest.mark.parametrize("age_days, held, read_only", [(91, True, False), (91, True, True), (89, False, False)])
+def test_a_password_past_its_max_age_signs_in_held_until_its_user_changes_it(launcher, store, age_days, held, read_only):
     uri = store.new_database()
     env = {"HARDCHARGER_PASSWORD_MAX_AGE_DAYS": "90"}
     server = start(launcher=launcher, store_uri=uri, env=env)
@@ -99,7 +99,8 @@ def test_a_password_past_its_max_age_signs_in_held_until_its_user_changes_it(lau
     assert code == 0 and answer["verified"] is True, answer
     assert answer.get("password_must_change", False) is held, answer
     server = start(launcher=launcher, store_uri=uri, env=env)
-    session = server.user(name="joe", password=JOE_PASSWORD)  # the sign-in itself goes through
+    session = server.client(token=server.password_token(user="joe", password=JOE_PASSWORD),
+                            options={"read_only": True} if read_only else None)
     assert must_change(server=server, user="joe") is held
     if not held:
         assert session.run(sql="SELECT 1 AS one").to_pylist() == [{"one": 1}]

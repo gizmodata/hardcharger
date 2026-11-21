@@ -82,11 +82,12 @@ def assert_one_line(lines: list[dict], session_id: str, statement_id: str, user:
     return line
 
 
-def test_client_cancel_logs_one_line(server):
+@pytest.mark.parametrize("read_only", [False, True])
+def test_client_cancel_logs_one_line(server, read_only):
     """The statement was submitted before its answer came, and cancelled after the cancel
     went out: the duration covers at least the time between the two, whenever the engine
     took the statement up."""
-    session = server.admin()
+    session = server.client().new_session(options={"read_only": read_only})
     statement_id = submit_long(session=session)
     answered = time.monotonic()
     wait_in_engine(server=server, session=session, statement_id=statement_id)

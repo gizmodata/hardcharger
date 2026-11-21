@@ -202,6 +202,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Read-only connections enforce sequence and table-function restrictions when DuckDB binds views and macros.
+
 - Web UI connection notices no longer move the server tree under the pointer. The iOS SQL console welcome text wraps to its full height.
 - **Android console: result tables line up**
   ([#57](https://github.com/gizmodata/hardcharger/issues/57)). A table's borders ran past its

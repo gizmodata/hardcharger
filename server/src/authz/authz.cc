@@ -76,6 +76,12 @@ bool WritesPivotEnumName(dd::SQLStatement& statement) {
   return name.starts_with("__pivot_enum_");
 }
 
+bool ReplacesOwnPassword(const RbacCommand& command, const std::string& user_name) {
+  const auto* change = std::get_if<AlterUserCommand>(&command);
+  return change && change->action == AlterUserCommand::Action::kSetPassword && change->current_password &&
+         (change->current_user || IdentifiersEqual(change->name, user_name));
+}
+
 int64_t NowSeconds() {
   return std::chrono::duration_cast<std::chrono::seconds>(
              std::chrono::system_clock::now().time_since_epoch())
@@ -944,13 +950,7 @@ void SessionGuard::RefuseUntilPasswordChanged(std::string_view what, std::option
   if (!held.must_change()) return;
   if (sql && LooksLikeRbacStatement(std::string(*sql))) {
     auto parsed = ParseRbacStatement(std::string(*sql));
-    if (parsed.ok()) {
-      const auto* change = std::get_if<AlterUserCommand>(&*parsed);
-      if (change && change->action == AlterUserCommand::Action::kSetPassword && change->current_password &&
-          (change->current_user || IdentifiersEqual(change->name, identity_.user_name))) {
-        return;  // the one statement such a session runs
-      }
-    }
+    if (parsed.ok() && ReplacesOwnPassword(*parsed, identity_.user_name)) return;
   }
   // (Every such refusal says "must be changed before anything else runs": the web UI and
   // clients look for it.)
@@ -1503,6 +1503,9 @@ void SessionGuard::CheckBeforeBind(std::string_view sql, const boost::json::valu
 
 void SessionGuard::CheckReadOnlyCommand(const ParsedCommand& parsed) const {
   if (read_only_ && !parsed.kind.starts_with("SHOW") && parsed.kind != "SET ROLE") {
+    // A held password sign-in can only renew its own credential. RunCommand still verifies
+    // the supplied current password, and the connection keeps its read-only setting.
+    if (ReplacesOwnPassword(parsed.command, identity_.user_name) && PasswordMustChange()) return;
     throw Error(ErrorCode::kReadOnly, parsed.kind + " is not allowed in a read-only session", "25006");
   }
 }
