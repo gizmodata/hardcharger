@@ -32,3 +32,18 @@ extensions signed outside GizmoData's Apple team. This applies inside the deskto
 too: Tauri re-signs bundled sidecars. Verify it after bundling with
 `desktop/scripts/check-extension-entitlement.py`. Keep DuckDB's own extension-signature
 verification enabled; this entitlement does not replace it.
+
+## RBAC and instrumentation data models
+
+- Keep one canonical row per entity. Put single-valued properties of a user, session,
+  statement, or other entity on its existing row. Use a separate table for a distinct
+  entity, a relationship with its own cardinality, or repeated events with their own
+  identity and lifecycle. Avoid parallel tables keyed solely by the same entity ID.
+- Name the destination columns in every INSERT, including bulk, seed, backfill, and
+  INSERT ... SELECT statements. Enumerate the source columns when copying stored data.
+- Evolve existing stores in place with idempotent migrations. Preserve IDs, grants,
+  credentials, and history. Use NULL for facts older releases did not record. Exercise
+  fresh creation, upgrade from released schemas, and restart on DuckDB and PostgreSQL.
+- Model configured account sign-in methods in RBAC. Record the method used for an
+  individual session in instrumentation. Historical session activity does not establish
+  an identity-provider link.
